@@ -32,82 +32,54 @@ export function prepareTemplateText(
 export type KeyReference = { providerName: string; keyName: string }
 
 /**
- * Every `{{key:…/…}}` occurrence, well-formed or not.
+ * A well-formed vault reference: exactly one separator, neither half
+ * containing another.
  *
- * WHY it matches a malformed SPEC rather than refusing to match: the original
- * pattern excluded `/` from both halves, so `{{key:A/B/C}}` matched nothing at
- * all — invisible to collection, invisible to validation, and untouched by the
- * final `body.replace`. A typo'd reference was pasted into the prompt VERBATIM,
- * which is the silent-failure mode the header paragraph says this grammar
- * exists to avoid.
+ * WHY this pattern is NARROW, after an attempt to widen it was reverted:
  *
- * WHY the separator is still REQUIRED, which is the part that took a second
- * pass to get right: a first attempt accepted any `{{key:…}}` at all so that
- * `{{key:Provider}}` could be reported as a missing separator. That
- * over-captured ordinary text. `<Widget options={{key: value}} />` is
- * everyday JSX, and it began aborting template insertion outright — a template
- * that had always worked now failed, with no way to escape it, not even inside
- * a code fence. Pasted logs and JSON carrying `{{key: …}}` regressed the same
- * way.
+ * The narrowness has a real cost — a typo like `{{key:Brave}}` or
+ * `{{key:A/B/C}}` matches nothing and is pasted into the prompt verbatim,
+ * which is the silent failure the header paragraph above says this grammar
+ * exists to avoid. Widening it to catch those looked obviously right and was
+ * wrong: `{{key:…}}` with arbitrary contents is ordinary text.
+ * `<Widget options={{key: value}} />` is everyday JSX. So is
+ * `<Widget options={{key: "/api/v1"}} />` and `{{key: /abc/}}`, which a
+ * separator requirement does not exclude either — a slash does not establish
+ * that the author meant a vault reference. Templates that had always worked
+ * began aborting insertion outright, with no way to escape the syntax, not
+ * even inside a code fence.
  *
- * A `/` is the thing that makes an occurrence look deliberately like a vault
- * reference rather than an object literal, so it is the boundary. The cost is
- * that a separator-less typo goes back to passing through untouched, exactly
- * as it did before this file existed. That is strictly better than breaking
- * text the user did not intend as syntax.
- *
- * The `key:` prefix and the `[^{}]` body also keep this from colliding with
- * the ordinary `{{variable}}` grammar, whose placeholder pattern is
- * `[A-Za-z0-9_]+` and cannot contain a colon.
+ * Breaking text nobody intended as syntax is worse than failing to diagnose a
+ * typo. Catching typos properly needs an escape mechanism this grammar does
+ * not have, so it is not attempted here.
  */
-const KEY_REF_PATTERN = /\{\{\s*key:([^{}]*\/[^{}]*?)\s*\}\}/g
-
-type ParsedReference =
-  | { ok: true; ref: KeyReference }
-  | { ok: false; spec: string }
-
-/**
- * Exactly one separator, and both halves non-empty after trimming.
- *
- * A name containing `/` is therefore unaddressable. That is deliberate and is
- * the reason to reject rather than to guess: with two separators there is no
- * evidence for which one divides provider from key, and picking one would
- * resolve a reference the author did not write.
- */
-function parseReference(spec: string): ParsedReference {
-  const parts = spec.split('/')
-  // A spec reaches here only with at least one separator (the pattern requires
-  // it), so this rejects two-or-more, never zero.
-  if (parts.length !== 2) return { ok: false, spec }
-  const providerName = parts[0].trim()
-  const keyName = parts[1].trim()
-  if (!providerName || !keyName) return { ok: false, spec }
-  return { ok: true, ref: { providerName, keyName } }
-}
+const KEY_REF_PATTERN = /\{\{\s*key:([^/{}]+?)\/([^/{}]+?)\s*\}\}/g
 
 function referenceKey(ref: KeyReference): string {
-  // NUL separator so a provider named "a" with key "b/c" cannot collide with
-  // provider "a/b" key "c" — unreachable through parseReference today, but the
-  // map is also written from the replace callback.
+  // NUL separator so two different (provider, key) pairs cannot produce the
+  // same map key. Unreachable through this pattern, which forbids a slash in
+  // either half, but the map is also written from the replace callback.
   return `${ref.providerName}\u0000${ref.keyName}`
+}
+
+function parseAll(body: string): KeyReference[] {
+  return [...body.matchAll(KEY_REF_PATTERN)].map(match => ({
+    providerName: match[1].trim(),
+    keyName: match[2].trim(),
+  }))
 }
 
 /** Well-formed references, in first-appearance order, deduped. */
 export function collectKeyReferences(body: string): KeyReference[] {
   const seen = new Set<string>()
   const ordered: KeyReference[] = []
-  for (const parsed of parseAll(body)) {
-    if (!parsed.ok) continue
-    const dedupeKey = referenceKey(parsed.ref)
+  for (const ref of parseAll(body)) {
+    const dedupeKey = referenceKey(ref)
     if (seen.has(dedupeKey)) continue
     seen.add(dedupeKey)
-    ordered.push(parsed.ref)
+    ordered.push(ref)
   }
   return ordered
-}
-
-function parseAll(body: string): ParsedReference[] {
-  return [...body.matchAll(KEY_REF_PATTERN)].map(match => parseReference(match[1]))
 }
 
 export async function resolveKeyReferences(
@@ -122,13 +94,8 @@ export async function resolveKeyReferences(
   const failures: string[] = []
   const seen = new Set<string>()
 
-  for (const parsed of parseAll(body)) {
-    if (!parsed.ok) {
-      const label = `{{key:${parsed.spec}}}`
-      if (!failures.includes(label)) failures.push(label)
-      continue
-    }
-    const dedupeKey = referenceKey(parsed.ref)
+  for (const ref of parseAll(body)) {
+    const dedupeKey = referenceKey(ref)
     if (seen.has(dedupeKey)) continue
     seen.add(dedupeKey)
 
@@ -152,14 +119,14 @@ export async function resolveKeyReferences(
     // direct display and distinguishes "no such key" from "vault is locked".
     let value: string | null
     try {
-      value = await resolve(parsed.ref)
+      value = await resolve(ref)
     } catch (error) {
       const detail = error instanceof Error && error.message.length > 0 ? error.message : null
-      failures.push(`{{key:${parsed.ref.providerName}/${parsed.ref.keyName}}}${detail ? ` (${detail})` : ''}`)
+      failures.push(`{{key:${ref.providerName}/${ref.keyName}}}${detail ? ` (${detail})` : ''}`)
       break
     }
     if (value === null || value.length === 0) {
-      failures.push(`{{key:${parsed.ref.providerName}/${parsed.ref.keyName}}}`)
+      failures.push(`{{key:${ref.providerName}/${ref.keyName}}}`)
       continue
     }
     values.set(dedupeKey, value)
@@ -170,12 +137,6 @@ export async function resolveKeyReferences(
   }
   // A function replacer, never a string: `$&` or `$1` inside a SECRET would
   // otherwise be interpreted as a substitution pattern.
-  return body.replace(KEY_REF_PATTERN, (match, spec: string) => {
-    const parsed = parseReference(spec)
-    // Unreachable — a malformed spec threw above — but returning the original
-    // text is the safe answer if that ever stops being true, since it cannot
-    // insert a wrong secret.
-    if (!parsed.ok) return match
-    return values.get(referenceKey(parsed.ref)) ?? ''
-  })
+  return body.replace(KEY_REF_PATTERN, (_match, rawProvider: string, rawKey: string) =>
+    values.get(referenceKey({ providerName: rawProvider.trim(), keyName: rawKey.trim() })) ?? '')
 }

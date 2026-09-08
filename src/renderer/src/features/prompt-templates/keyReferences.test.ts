@@ -53,45 +53,40 @@ describe('resolveKeyReferences', () => {
   })
 })
 
-describe('malformed and failing references', () => {
-  it('leaves a separator-less occurrence alone, because it is not addressed to the vault', async () => {
-    // Reporting `{{key:Brave}}` as a malformed reference required matching
-    // ANY `{{key:…}}`, and that over-captured ordinary text: JSX like
-    // `<Widget options={{key: value}} />` began aborting insertion outright,
-    // with no way to escape it. A separator is what makes an occurrence look
-    // deliberately like a vault reference, so it is the boundary. A
-    // separator-less typo passes through as it always did.
-    await expect(resolveKeyReferences('use {{key:Brave}} now', async () => 'secret'))
-      .resolves.toBe('use {{key:Brave}} now')
-  })
-
-  it('does not touch ordinary JSX that happens to contain {{key:', async () => {
-    const body = '<Widget options={{key: value}} /> and {{key: other}}'
-    await expect(resolveKeyReferences(body, async () => 'secret')).resolves.toBe(body)
+describe('what the grammar deliberately does NOT capture', () => {
+  it('leaves ordinary JSX alone, including a slash inside the value', () => {
+    // A widened pattern that tried to diagnose typos captured all of these and
+    // aborted insertion on templates that had always worked, with no way to
+    // escape the syntax — not even inside a code fence. Breaking text nobody
+    // intended as syntax is worse than failing to diagnose a typo.
+    const bodies = [
+      '<Widget options={{key: value}} />',
+      '<Widget options={{key: "/api/v1"}} />',
+      '<Widget options={{key: /abc/}} />',
+      'log line: {{key:A/B/C}} from the pasted output',
+      'use {{key:Brave}} now',
+    ]
+    for (const body of bodies) {
+      expect(collectKeyReferences(body)).toEqual([])
+    }
   })
 
   it('still resolves a real reference sitting next to such text', async () => {
     await expect(resolveKeyReferences(
-      '<Widget options={{key: value}} /> {{key:P/K}}',
+      '<Widget options={{key: "/api/v1"}} /> {{key:P/K}}',
       async () => 'secret',
-    )).resolves.toBe('<Widget options={{key: value}} /> secret')
+    )).resolves.toBe('<Widget options={{key: "/api/v1"}} /> secret')
   })
 
-  it('aborts on a reference with two separators rather than guessing', async () => {
-    // With two separators there is no evidence for which one divides provider
-    // from key, and picking one would resolve a reference the author did not
-    // write.
-    await expect(resolveKeyReferences('{{key:A/B/C}}', async () => 'secret'))
-      .rejects.toThrow('{{key:A/B/C}}')
+  it('leaves an ordinary variable placeholder alone', async () => {
+    // The two grammars cannot collide: the placeholder pattern is
+    // [A-Za-z0-9_]+ and cannot contain a colon.
+    await expect(resolveKeyReferences('{{goal}} {{key:P/K}}', async () => 'secret'))
+      .resolves.toBe('{{goal}} secret')
   })
+})
 
-  it('aborts on an empty half', async () => {
-    await expect(resolveKeyReferences('{{key:/Key}}', async () => 'secret'))
-      .rejects.toThrow('{{key:/Key}}')
-    await expect(resolveKeyReferences('{{key:Provider/}}', async () => 'secret'))
-      .rejects.toThrow('{{key:Provider/}}')
-  })
-
+describe('failing references', () => {
   it('reports a thrown resolution failure with the service message', async () => {
     // The production adapter is typed Promise<string> and VaultService throws
     // on every failure mode, so the `value === null` branch this module was
@@ -130,12 +125,5 @@ describe('malformed and failing references', () => {
     // expanded into the matched text.
     await expect(resolveKeyReferences('{{key:P/K}}', async () => 'sk-$&-$1'))
       .resolves.toBe('sk-$&-$1')
-  })
-
-  it('leaves an ordinary variable placeholder alone', async () => {
-    // The two grammars must not collide: the placeholder pattern is
-    // [A-Za-z0-9_]+ and cannot contain a colon.
-    await expect(resolveKeyReferences('{{goal}} {{key:P/K}}', async () => 'secret'))
-      .resolves.toBe('{{goal}} secret')
   })
 })
