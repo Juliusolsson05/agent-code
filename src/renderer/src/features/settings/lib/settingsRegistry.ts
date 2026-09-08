@@ -774,9 +774,26 @@ export function getSettingsRegistry(): SettingDefinition[] {
       id: 'proxy-streaming',
       category: 'experimental',
       title: 'Proxy-Streamed Semantic Rendering',
+      // WHY the description names live output instead of the transport: the
+      // old copy ("spawn Claude sessions through a local mitmproxy") described
+      // the mechanism and left the user with no idea what turning it off
+      // costs. It costs everything the feed renders while a turn is running —
+      // the semantic channel emits only stream_phase events without the proxy,
+      // so text, thinking and tool activity arrive solely from JSONL backfill
+      // after the fact. Users read this row to decide; state the consequence.
       description:
-        'Spawn Claude sessions through a local mitmproxy and feed semantic stream events into the app. Requires local proxy setup.',
-      keywords: ['proxy', 'streaming', 'semantic', 'mitmproxy', 'claude'],
+        'Stream live model output — assistant text, extended thinking, and tool activity — as it is produced, by routing agent sessions through a local proxy. Turn this off and the feed only fills in after each turn completes. Claude uses a bundled mitmproxy; Codex uses an in-process Responses proxy.',
+      keywords: [
+        'proxy',
+        'streaming',
+        'semantic',
+        'mitmproxy',
+        'claude',
+        'codex',
+        'thinking',
+        'live',
+        'output',
+      ],
       control: {
         type: 'toggle',
         getValue: settings => settings.useProxyStreaming,

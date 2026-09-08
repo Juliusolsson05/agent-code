@@ -71,7 +71,17 @@ export function coerceSettings(value: unknown): Settings {
     showStatusMode: parsed.showStatusMode !== false,
     showWorktreeBadges: parsed.showWorktreeBadges !== false,
     dangerousAgentsEnabled: parsed.dangerousAgentsEnabled === true,
-    useProxyStreaming: parsed.useProxyStreaming === true,
+    // `!== false` and not `=== true`, and this line is load-bearing: the
+    // DEFAULT_SETTINGS spread above already seeds `true`, but an `=== true`
+    // coercion overwrites it with `false` for every blob that has no such
+    // key — i.e. every existing install and every fresh one whose settings
+    // were written before the flip. The default would have been silently
+    // undone at read time and nobody would see live model output. Same
+    // idiom as showStatusMode / autoSendPromptSuggestion below: absent key
+    // → on, explicit persisted `false` → off, which is exactly the promise
+    // that flipping the default must not break for users who turned proxy
+    // streaming off on purpose.
+    useProxyStreaming: parsed.useProxyStreaming !== false,
     dictationEnabled: parsed.dictationEnabled === true,
     dictationProvider: parsed.dictationProvider === 'deepgram'
       ? parsed.dictationProvider
