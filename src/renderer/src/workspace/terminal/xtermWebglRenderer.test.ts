@@ -82,7 +82,7 @@ describe('xtermWebglRenderer', () => {
   it('repairs a whole atlas-layout burst after the current frame, without idle repainting', async () => {
     const addon = addonHarness()
     const terminal = terminalHarness()
-    const renderer = attachXtermWebglRenderer(terminal, async () => addon)
+    const renderer = attachXtermWebglRenderer(terminal, async () => addon, true)
     await renderer.ready
     expect(terminal.refresh).not.toHaveBeenCalled()
 
@@ -111,7 +111,7 @@ describe('xtermWebglRenderer', () => {
   it.each(['unmount', 'context loss'] as const)('cancels deferred repair after %s', async reason => {
     const addon = addonHarness()
     const terminal = terminalHarness()
-    const renderer = attachXtermWebglRenderer(terminal, async () => addon)
+    const renderer = attachXtermWebglRenderer(terminal, async () => addon, true)
     await renderer.ready
     addon.removePage()
     if (reason === 'unmount') renderer.dispose()
@@ -131,7 +131,7 @@ describe('xtermWebglRenderer', () => {
     const addon = addonHarness()
     addon.onRemoveTextureAtlasCanvas.mockImplementation(() => { throw new Error('registration failed') })
     const terminal = terminalHarness()
-    const renderer = attachXtermWebglRenderer(terminal, async () => addon)
+    const renderer = attachXtermWebglRenderer(terminal, async () => addon, true)
     await expect(renderer.ready).resolves.toBe(false)
     expect(addon.disposeAddListener).toHaveBeenCalledTimes(1)
     expect(addon.disposeRemoveListener).not.toHaveBeenCalled()
@@ -148,7 +148,7 @@ describe('xtermWebglRenderer', () => {
       return false
     })
     const terminal = terminalHarness()
-    const renderer = attachXtermWebglRenderer(terminal, async () => addon)
+    const renderer = attachXtermWebglRenderer(terminal, async () => addon, true)
     await renderer.ready
     addon.removePage()
     await Promise.resolve()
@@ -162,7 +162,7 @@ describe('xtermWebglRenderer', () => {
   it('reports readiness after handing a complete addon to the live terminal', async () => {
     const addon = addonHarness()
     const terminal = terminalHarness()
-    const renderer = attachXtermWebglRenderer(terminal, async () => addon)
+    const renderer = attachXtermWebglRenderer(terminal, async () => addon, true)
 
     await expect(renderer.ready).resolves.toBe(true)
     expect(addon.construct).toHaveBeenCalledTimes(1)
@@ -180,7 +180,7 @@ describe('xtermWebglRenderer', () => {
 
   it('disposes the context listener and addon exactly once during ordinary host teardown', async () => {
     const addon = addonHarness()
-    const renderer = attachXtermWebglRenderer(terminalHarness(), async () => addon)
+    const renderer = attachXtermWebglRenderer(terminalHarness(), async () => addon, true)
     await expect(renderer.ready).resolves.toBe(true)
 
     renderer.dispose()
@@ -193,7 +193,7 @@ describe('xtermWebglRenderer', () => {
   it('loads WebGL into a live terminal and falls back by disposing it on context loss', async () => {
     const addon = addonHarness()
     const terminal = terminalHarness()
-    const renderer = attachXtermWebglRenderer(terminal, async () => addon)
+    const renderer = attachXtermWebglRenderer(terminal, async () => addon, true)
 
     await expect(renderer.ready).resolves.toBe(true)
     expect(terminal.loadAddon).toHaveBeenCalledTimes(1)
@@ -216,7 +216,7 @@ describe('xtermWebglRenderer', () => {
     const pending = deferred<ReturnType<typeof addonHarness>>()
     const terminal = terminalHarness()
     const load = vi.fn(() => pending.promise)
-    const renderer = attachXtermWebglRenderer(terminal, load)
+    const renderer = attachXtermWebglRenderer(terminal, load, true)
     // Fence a genuinely in-flight import, not only a loader that never started.
     await Promise.resolve()
     expect(load).toHaveBeenCalledTimes(1)
@@ -240,7 +240,7 @@ describe('xtermWebglRenderer', () => {
       }
       // Optional GPU support must neither throw from attachment nor reject
       // ready: both turn recoverable renderer failures into broken terminals.
-      const renderer = attachXtermWebglRenderer(terminal, load)
+      const renderer = attachXtermWebglRenderer(terminal, load, true)
       await expect(renderer.ready).resolves.toBe(false)
       expect(terminal.loadAddon).not.toHaveBeenCalled()
       expect(() => renderer.dispose()).not.toThrow()
@@ -251,7 +251,7 @@ describe('xtermWebglRenderer', () => {
     const addon = addonHarness()
     addon.construct.mockImplementation(() => { throw new Error('unsupported GPU') })
     const terminal = terminalHarness()
-    const renderer = attachXtermWebglRenderer(terminal, async () => addon)
+    const renderer = attachXtermWebglRenderer(terminal, async () => addon, true)
 
     await expect(renderer.ready).resolves.toBe(false)
     renderer.dispose()
@@ -268,7 +268,7 @@ describe('xtermWebglRenderer', () => {
       ...terminalHarness(),
       loadAddon: vi.fn(() => { throw new Error('context allocation failed') }),
     }
-    const renderer = attachXtermWebglRenderer(terminal, async () => addon)
+    const renderer = attachXtermWebglRenderer(terminal, async () => addon, true)
 
     await expect(renderer.ready).resolves.toBe(false)
     expect(terminal.loadAddon).toHaveBeenCalledTimes(1)
@@ -283,7 +283,7 @@ describe('xtermWebglRenderer', () => {
     const addon = addonHarness()
     addon.onContextLoss.mockImplementation(() => { throw new Error('registration failed') })
     const terminal = terminalHarness()
-    const renderer = attachXtermWebglRenderer(terminal, async () => addon)
+    const renderer = attachXtermWebglRenderer(terminal, async () => addon, true)
 
     await expect(renderer.ready).resolves.toBe(false)
     renderer.dispose()
@@ -296,7 +296,7 @@ describe('xtermWebglRenderer', () => {
     const addon = addonHarness()
     addon.disposeContextListener.mockImplementation(() => { throw new Error('listener cleanup failed') })
     addon.disposeAddon.mockImplementation(() => { throw new Error('GPU cleanup failed') })
-    const renderer = attachXtermWebglRenderer(terminalHarness(), async () => addon)
+    const renderer = attachXtermWebglRenderer(terminalHarness(), async () => addon, true)
     await expect(renderer.ready).resolves.toBe(true)
     const disposeHost = vi.fn()
 
@@ -315,12 +315,44 @@ describe('xtermWebglRenderer', () => {
   it('clears ownership before a disposer re-enters context-loss cleanup', async () => {
     const addon = addonHarness()
     addon.disposeContextListener.mockImplementation(() => addon.loseContext())
-    const renderer = attachXtermWebglRenderer(terminalHarness(), async () => addon)
+    const renderer = attachXtermWebglRenderer(terminalHarness(), async () => addon, true)
     await expect(renderer.ready).resolves.toBe(true)
 
     renderer.dispose()
 
     expect(addon.disposeContextListener).toHaveBeenCalledTimes(1)
     expect(addon.disposeAddon).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not attach anything by default, because the GPU renderer is off', async () => {
+    // Pins the WEBGL_RENDERER_ENABLED decision. Our pinned addon-webgl 0.19.0
+    // corrupts its own texture atlas under streaming TUI output (upstream
+    // xterm.js #5883), and the fix exists only in a 0.20.0 beta whose peer
+    // range would drag @xterm/xterm itself onto a beta. Until that is stable
+    // the DOM renderer is what ships. If this case starts failing, someone
+    // re-enabled WebGL — make sure the upgrade actually happened.
+    const addon = addonHarness()
+    const terminal = terminalHarness()
+    const load = vi.fn(async () => addon)
+
+    const renderer = attachXtermWebglRenderer(terminal, load)
+
+    await expect(renderer.ready).resolves.toBe(false)
+    // Not merely inactive: the addon module is never even imported, so a
+    // disabled renderer costs no parse, no GPU context and no listeners.
+    expect(load).not.toHaveBeenCalled()
+    expect(terminal.loadAddon).not.toHaveBeenCalled()
+    // Disposing a renderer that never attached must still be safe — every
+    // call site disposes unconditionally on unmount.
+    expect(() => renderer.dispose()).not.toThrow()
+  })
+
+  it('reports not-ready without touching the terminal when explicitly disabled', async () => {
+    const terminal = terminalHarness()
+    const renderer = attachXtermWebglRenderer(terminal, async () => addonHarness(), false)
+
+    await expect(renderer.ready).resolves.toBe(false)
+    expect(terminal.loadAddon).not.toHaveBeenCalled()
+    expect(terminal.refresh).not.toHaveBeenCalled()
   })
 })
