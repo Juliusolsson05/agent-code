@@ -679,9 +679,8 @@ Both reviewers confirmed the OpenCode jump chord's default binding and byte
 encoding are correct, and Codex reproduced the JSX and re-prompt regressions
 against the real modules rather than reasoning about them.
 
-The one objection NOT resolved by a code change is the rebinding hazard on the
-injected chord, and the reasoning is recorded next to the constant in
-`featureCapabilities.ts`: under stock config no byte we send can reach a
-destructive action, reading the user's effective binding would mean
-reimplementing OpenCode's config loader, and the rebinding-immune route needs a
-served transport this runtime does not use yet.
+Three changes were WITHDRAWN rather than defended once the reviewer's
+reproductions showed they were wrong: the terminal mode tracker, the OpenCode
+jump chord, and a widened `{{key:…}}` pattern that captured ordinary JSX. Each
+is written up above with the evidence that killed it, so the next attempt
+starts from the failure instead of repeating it.

@@ -31,9 +31,6 @@ it('follows and restores real xterm content across trimming and buffer switches'
         const term = new Terminal({ cols: 80, rows: 10, scrollback: 2000 })
         term.open(document.getElementById('terminal'))
         const termRef = { current: term }
-        // The PTY sink. A provider whose TUI owns its own transcript is jumped
-        // by sending it a key, not by moving the xterm viewport, so this trial
-        // has to be able to observe that write.
         let follow
         function Harness(props) { follow = useAgentTerminalFollow({ ...props, termRef }); return null }
         const reactRoot = createRoot(document.getElementById('react'))
