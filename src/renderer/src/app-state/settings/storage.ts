@@ -37,7 +37,13 @@ export function createSettingsStorage(): PersistStorage<PersistedSettings> | und
     // unavailable" — Zustand then skips persistence entirely, which is the
     // correct behavior in a test or on a surface with no storage, rather than
     // throwing on an unrelated store action.
-    const candidate: Storage | undefined = window?.localStorage
+    //
+    // Deliberately the BARE global rather than `window.localStorage`: the
+    // migration suites drive this through `vi.stubGlobal('localStorage', …)`,
+    // which replaces the global binding and not a `window` property. In every
+    // real surface (Electron renderer, phone bundle) the two are the same
+    // object anyway.
+    const candidate: Storage | undefined = localStorage
     if (
       !candidate ||
       typeof candidate.getItem !== 'function' ||
