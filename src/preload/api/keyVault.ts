@@ -1,4 +1,5 @@
 import { ipcRenderer } from 'electron'
+import { subscribe } from '@preload/api/ipc.js'
 
 import type { KeyVaultKeyInput, KeyVaultSnapshot, KeyVaultStatus } from '@shared/types/keyVault'
 
@@ -6,6 +7,7 @@ import type { KeyVaultKeyInput, KeyVaultSnapshot, KeyVaultStatus } from '@shared
 // the service's Error message (cancel, fail-closed, not-found) so the UI
 // can toast it verbatim.
 export const keyVaultApi = {
+  onKeyVaultLocked: (callback: () => void) => subscribe('key-vault:locked', callback),
   keyVaultStatus: (): Promise<KeyVaultStatus> => ipcRenderer.invoke('key-vault:status'),
   keyVaultList: (): Promise<KeyVaultSnapshot> => ipcRenderer.invoke('key-vault:list'),
   keyVaultUnlock: (): Promise<void> => ipcRenderer.invoke('key-vault:unlock'),

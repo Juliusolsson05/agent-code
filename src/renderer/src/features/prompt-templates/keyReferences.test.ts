@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { collectKeyReferences, resolveKeyReferences } from '@renderer/features/prompt-templates/keyReferences'
+import { collectKeyReferences, resolveKeyReferences, prepareTemplateText } from '@renderer/features/prompt-templates/keyReferences'
 
 describe('collectKeyReferences', () => {
   it('collects and dedupes references', () => {
@@ -19,6 +19,19 @@ describe('collectKeyReferences', () => {
 })
 
 describe('resolveKeyReferences', () => {
+  it('preserves source-code braces in a template without declared variables', async () => {
+    const body = 'Example: {{ count }} and {{foo}}. Key: {{key:Brave/main}}'
+    expect(await prepareTemplateText({ body, variables: [] }, {}, async () => 'credential'))
+      .toBe('Example: {{ count }} and {{foo}}. Key: credential')
+  })
+  it('fills ordinary variables before resolving vault references without mutating the saved template', async () => {
+    const template = {
+      body: 'Use {{key:Brave/main}} for {{task}}',
+      variables: [{ name: 'task', label: 'Task', description: '', defaultValue: '', required: true }],
+    }
+    expect(await prepareTemplateText(template, { task: 'search' }, async () => 'credential')).toBe('Use credential for search')
+    expect(template.body).toBe('Use {{key:Brave/main}} for {{task}}')
+  })
   it('substitutes resolved values', async () => {
     const resolved = await resolveKeyReferences(
       'Brave key: {{key:Brave/main}}',

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
+import { z } from 'zod'
 
 import { STATE_DIR } from '@main/storage/paths.js'
 import type { KeyVaultSnapshot } from '@shared/types/keyVault'
@@ -37,6 +38,19 @@ export function newVaultId(): string {
 
 type IndexFile = KeyVaultSnapshot & { version: 1 }
 
+const identifier = z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/)
+const providerSchema = z.object({
+  id: identifier, name: z.string().min(1).max(200),
+  createdAt: z.number().finite(), updatedAt: z.number().finite(),
+}).strict()
+const indexSchema = z.object({
+  version: z.literal(1),
+  providers: z.array(providerSchema).max(1000),
+  keys: z.array(providerSchema.extend({
+    providerId: identifier, note: z.string().max(4000), hint: z.string().max(4),
+  }).strict()).max(10000),
+}).strict()
+
 export type VaultStore = {
   encryptionAvailable(): boolean
   loadIndex(): Promise<KeyVaultSnapshot>
@@ -53,17 +67,27 @@ export function createFileVaultStore(
   const indexFile = join(rootDir, 'index.json')
   const keysDir = join(rootDir, 'keys')
 
+  function secretPath(keyId: string): string {
+    if (!identifier.safeParse(keyId).success) throw new Error('Invalid vault key id.')
+    return join(keysDir, `${keyId}.bin`)
+  }
+
   async function atomicWrite(
     path: string,
     data: string | Buffer,
     mode: 0o600 | undefined,
   ): Promise<void> {
-    await mkdir(dirname(path), { recursive: true })
-    const tmp = `${path}.tmp`
-    await writeFile(tmp, data, mode !== undefined ? { mode } : undefined)
-    if (mode !== undefined) await chmod(tmp, mode).catch(() => {})
-    await rename(tmp, path)
-    if (mode !== undefined) await chmod(path, mode).catch(() => {})
+    await mkdir(dirname(path), { recursive: true, mode: 0o700 })
+    // Unique across store instances too; exclusive creation avoids following
+    // an existing temporary symlink. Never publish a permissions failure.
+    const tmp = `${path}.${randomUUID()}.tmp`
+    try {
+      await writeFile(tmp, data, { mode: mode ?? 0o600, flag: 'wx' })
+      await chmod(tmp, mode ?? 0o600)
+      await rename(tmp, path)
+    } finally {
+      await rm(tmp, { force: true })
+    }
   }
 
   return {
@@ -73,21 +97,21 @@ export function createFileVaultStore(
       let raw: string
       try {
         raw = await readFile(indexFile, 'utf8')
-      } catch {
-        // Absent index = fresh vault. A CORRUPT index is treated the
-        // same way below: the vault degrades to empty rather than
-        // bricking startup. Secret blobs on disk become orphans, which
-        // is the safe direction — the metadata loss already happened
-        // when the index corrupted, and a hard failure here would make
-        // the whole app unusable over data the user cannot recover
-        // through this path anyway.
-        return { providers: [], keys: [] }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { providers: [], keys: [] }
+        throw new Error('Vault index cannot be read; the existing vault has not been changed.')
       }
       try {
-        const parsed = JSON.parse(raw) as IndexFile
-        return { providers: parsed.providers ?? [], keys: parsed.keys ?? [] }
+        const parsed = indexSchema.parse(JSON.parse(raw))
+        const providers = new Set(parsed.providers.map(p => p.id))
+        if (providers.size !== parsed.providers.length ||
+            new Set(parsed.keys.map(k => k.id)).size !== parsed.keys.length ||
+            parsed.keys.some(k => !providers.has(k.providerId))) throw new Error('Invalid references')
+        return { providers: parsed.providers, keys: parsed.keys }
       } catch {
-        return { providers: [], keys: [] }
+        // Returning an empty index here would let the next CRUD operation
+        // overwrite recoverable data. Only the vault UI fails, not app boot.
+        throw new Error('Vault index is damaged or unsupported; it has not been changed.')
       }
     },
 
@@ -102,10 +126,11 @@ export function createFileVaultStore(
     },
 
     async readSecret(keyId) {
+      const path = secretPath(keyId)
       if (!codec.isEncryptionAvailable()) return null
       let cipher: Buffer
       try {
-        cipher = await readFile(join(keysDir, `${keyId}.bin`))
+        cipher = await readFile(path)
       } catch {
         return null
       }
@@ -121,11 +146,13 @@ export function createFileVaultStore(
     },
 
     async writeSecret(keyId, value) {
-      await atomicWrite(join(keysDir, `${keyId}.bin`), codec.encrypt(value), 0o600)
+      const path = secretPath(keyId)
+      if (!codec.isEncryptionAvailable()) throw new Error('System keyring unavailable; cannot store a key.')
+      await atomicWrite(path, codec.encrypt(value), 0o600)
     },
 
     async deleteSecret(keyId) {
-      await rm(join(keysDir, `${keyId}.bin`), { force: true })
+      await rm(secretPath(keyId), { force: true })
     },
   }
 }

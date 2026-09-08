@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { encodeTerminalPaste, registerTerminalPasteTarget } from '@renderer/workspace/terminal/textPasteTarget'
 
 import { deliverTextToSession } from '@renderer/features/session-text-delivery/deliverTextToSession'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
@@ -11,9 +12,13 @@ import type { SessionId } from '@renderer/workspace/types'
 // window.api is stubbed because the real bridge only exists in the
 // packaged app.
 
-const sendInput = vi.fn(async (_id: string, _data: string) => {})
+// Typed boolean: main's sendInput resolves false when the write is dropped
+// (missing backend / reserved) — the helper must react to that.
+const sendInput = vi.fn(async (_id: string, _data: string) => true)
 const ensureSessionLive = vi.fn(async () => {})
 const setDraftInput = vi.fn()
+const registrations: (() => void)[] = []
+afterEach(() => { registrations.splice(0).forEach(dispose => dispose()) })
 
 function makeRuntime(overrides: Partial<SessionRuntime> = {}): SessionRuntime {
   return { draftInput: '', processStatus: 'started', ...overrides } as unknown as SessionRuntime
@@ -25,6 +30,12 @@ function makeWorkspace(
   sessions: Record<string, SessionFixture>,
   runtimes: Record<string, SessionRuntime>,
 ): Workspace {
+  for (const id of Object.keys(sessions)) {
+    registrations.push(registerTerminalPasteTarget(id, {
+      isActive: () => true,
+      paste: text => sendInput(id, encodeTerminalPaste(text, true)),
+    }))
+  }
   return {
     state: {
       sessions: Object.fromEntries(
@@ -41,10 +52,9 @@ function makeWorkspace(
 }
 
 beforeEach(() => {
-  sendInput.mockClear()
+  sendInput.mockReset().mockResolvedValue(true)
   ensureSessionLive.mockClear()
   setDraftInput.mockClear()
-  ;(globalThis as { window?: unknown }).window = { api: { sendInput } }
 })
 
 describe('deliverTextToSession', () => {
@@ -103,5 +113,45 @@ describe('deliverTextToSession', () => {
     const workspace = makeWorkspace({}, {})
     const result = await deliverTextToSession(workspace, 'gone' as SessionId, 'x')
     expect(result).toEqual({ delivered: false, reason: 'no-session' })
+  })
+
+  it('reports a refused write without retrying into a potentially changed process', async () => {
+    const workspace = makeWorkspace({ t: { kind: 'terminal' } }, { t: makeRuntime() })
+    sendInput.mockResolvedValueOnce(false).mockResolvedValueOnce(true)
+    const result = await deliverTextToSession(workspace, 't', 'x')
+    expect(result).toEqual({ delivered: false, reason: 'write-rejected' })
+    expect(sendInput).toHaveBeenCalledTimes(1)
+    expect(ensureSessionLive).not.toHaveBeenCalled()
+  })
+
+  it('surfaces write-rejected when the write is dropped', async () => {
+    const workspace = makeWorkspace({ t: { kind: 'terminal' } }, { t: makeRuntime() })
+    sendInput.mockResolvedValue(false)
+    const result = await deliverTextToSession(workspace, 't', 'x')
+    expect(result).toEqual({ delivered: false, reason: 'write-rejected' })
+  })
+
+  it('normalizes a legacy session without kind like TileTree does', async () => {
+    // Legacy persisted sessions can lack `kind`; undefined must not read
+    // as "rendered" (review finding). With a terminal override the text
+    // must reach the PTY.
+    const workspace = makeWorkspace(
+      { a: { kind: undefined as unknown as string, override: 'terminal' } },
+      { a: makeRuntime() },
+    )
+    const result = await deliverTextToSession(workspace, 'a', 'x')
+    expect(result).toEqual({ delivered: true, surface: 'pty' })
+  })
+
+  it('cancels a pending wake when the picker closes or the vault locks', async () => {
+    let finishWake!: () => void
+    let valid = true
+    ensureSessionLive.mockImplementationOnce(() => new Promise<void>(resolve => { finishWake = resolve }))
+    const workspace = makeWorkspace({ t: { kind: 'terminal' } }, { t: makeRuntime({ processStatus: 'idle' }) })
+    const pending = deliverTextToSession(workspace, 't', 'credential', { isCurrent: () => valid })
+    valid = false
+    finishWake()
+    expect(await pending).toEqual({ delivered: false, reason: 'cancelled' })
+    expect(sendInput).not.toHaveBeenCalled()
   })
 })

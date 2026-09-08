@@ -1,5 +1,21 @@
 # API Key Vault + Session Text Delivery Implementation Plan
 
+## Implementation Review Amendments
+
+The original task/code sketches below are a historical plan, not a second implementation. The following review corrections supersede their affected examples; the colocated code and regression tests are authoritative.
+
+- [x] Reject stale authentication and secret-read completions after lock; share one OS prompt and broadcast lock to renderer caches.
+- [x] Attempt Electron's user-presence API rather than using its biometric-only capability check as a password gate.
+- [x] Serialize complete CRUD transactions; use exclusive unique temporary files, validate identifiers/index versions, and preserve damaged indexes instead of replacing them with empty data.
+- [x] Reuse the app workspace context in the vault modal; support inline rename, retain failed edits, and prevent cached-key insertion from bypassing the main gate.
+- [x] Resolve vault references AFTER ordinary template variables at final insertion. Preserve dynamic bodies, freeze the target session, and cancel stale preparation.
+- [x] Deliver terminal text through the mounted xterm owner. Respect attach/replay, visibility and live bracketed-paste mode; reject multiline text without bracketed support and embedded terminal controls. Do not automatically retry a refused write.
+- [x] Document vault-only at-rest protection: inserted text follows ordinary plaintext draft/scrollback/transcript retention. No end-to-end prompt secrecy is claimed.
+- [x] Add service, filesystem, modal and paste regression tests; correct the permissions assertion to check file modes.
+- [ ] Finish follow-up Claude/Codex review, PR CI and manual OS-authentication/terminal smoke checks before merging.
+
+Verification during review: targeted tests and typecheck pass; the desktop/remote build succeeds. A low-concurrency full suite timed out and reported unrelated lazy-Markdown/fixture failures; it is NOT a passing full-suite gate. On this Node 25 host, use `NODE_OPTIONS=--no-experimental-webstorage` to avoid Node's experimental global localStorage interfering with browser test storage; CI uses its pinned Node version.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Ship an encrypted API Key Vault (Touch ID / Mac-password unlock, once per app launch) whose keys insert into any focused pane — composer, agent terminal view, or raw terminal — via a shared session-text delivery helper that also makes prompt templates work over terminals, including `{{key:Provider/Key}}` template references.

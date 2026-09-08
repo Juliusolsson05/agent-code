@@ -25,15 +25,17 @@
 
 ### D2 — Unlock gate in main via `systemPreferences.promptTouchID`, once per run
 
-Every secret-leaving path (reveal, copy, template ref resolution) funnels through one `ensureUnlocked()`. Production wires `promptAuth` to `systemPreferences.promptTouchID`, which presents Touch ID with the login-password fallback (the "mac password" requirement). Unsigned dev builds may skip biometry; the password path still works. If prompting is impossible, the vault fails closed — no secret leaves main. Snapshots never contain secrets; revealed plaintext exists only in ephemeral renderer component state.
+Every secret-leaving path (reveal, copy, template ref resolution) funnels through one `ensureUnlocked()`. Electron 43.1.0's `promptTouchID` uses `SecAccessControlUserPresence`; unlike `canPromptTouchID`, it is not a biometric-only capability check. Attempt the supported macOS API and fail closed on rejection. The OS authentication UI still needs manual verification on signed/unsigned builds and password-only Macs. Concurrent requests share one prompt. Lock invalidates pending auth and disk reads and broadcasts cache invalidation to all windows. Metadata CRUD/list IPC is gated too.
+
+The vault encrypts stored key values, not the prompt pipeline. Inserted keys follow normal draft autosave into plaintext `workspace.json`, terminal scrollback, and provider transcript retention after submission; copying puts the value on the system clipboard. The modal explicitly discloses this boundary. Names and notes are plaintext metadata; short values do not get a hint that would expose the entire secret. No export, transparent secret-token draft system, or general transcript redaction is promised.
 
 ### D3 — Renderer-owned `deliverTextToSession` (chosen over main-owned paste IPC)
 
-One helper dispatches by session kind + effective surface (`getEffectiveAgentSurfaceForSession`): rendered agent panes append to the composer draft via `setDraftInput`; plain terminals and agent terminal views write a bracketed paste (`ESC[200~ … ESC[201~`, no Enter) through `window.api.sendInput` — the same channel both surfaces already use for keystrokes — after a lazy-wake when the backend is missing. The renderer owns focus/workspace/surface context; main stays provider-agnostic. Bracketed-paste markers keep shells from executing multi-line payloads; the trade-off (programs that never enabled the mode print the marker bytes) is accepted over raw newlines, which shells would run immediately.
+One helper dispatches by normalized session kind and effective surface. Rendered panes edit the existing draft; bare key insertion concatenates text, while templates retain their append/replace policy. Terminal insertion uses the mounted leaf's paste target, respecting visibility, attach/replay state and xterm's current bracketed-paste mode. Single-line text works without bracketed-paste support; multiline text is refused unless the program has enabled that mode. Embedded control sequences are refused. No Enter is added, and rejected writes keep the picker open rather than silently retrying into a replacement backend. Wake never follows a disposed or changed terminal target.
 
-### D4 — Template key references by name, resolved pre-fill
+### D4 — Template key references by name, resolved at insertion
 
-`{{key:Provider Name/Key Name}}` (grammar deliberately disjoint from `{{variable}}`, so refs never become fill-pane fields). Names over ids keep templates readable; renames break references loudly. Resolution happens before variable fill so secrets never render in the fill pane; any unresolved ref aborts insertion with a toast naming all failures. Renames of providers/keys are uniqueness-checked to keep references unambiguous.
+`{{key:Provider Name/Key Name}}` is disjoint from ordinary `{{variable}}` fields. The fill pane retains the dynamic or saved body with unresolved key references, then `prepareTemplateText` fills ordinary variables and resolves keys only at final insertion. Cancellation or a missing key aborts insertion. Capture the original session, reject changes during asynchronous preparation, and never deliver after closing the palette. Provider/key names exclude syntax delimiters. Renaming breaks references loudly. The external control template API remains a draft-only API and does not expose the vault.
 
 ## Rejected / out of scope
 
@@ -50,5 +52,5 @@ One helper dispatches by session kind + effective surface (`getEffectiveAgentSur
 ## Risks
 
 - `promptTouchID` behavior on unsigned builds: password fallback expected to work; if a platform ever cannot prompt, the vault degrades to unusable-but-safe (fail closed), surfaced in the modal status line.
-- Bracketed paste into programs that never enable the mode shows marker bytes — documented trade-off (D3).
+- Programs without bracketed-paste support cannot safely receive multiline templates; the helper refuses rather than risking shell execution.
 - Renaming vault providers/keys breaks template references by design; failures are loud, never silent.

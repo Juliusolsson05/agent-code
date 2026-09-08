@@ -14,6 +14,7 @@ import {
 } from '@renderer/app-state/settings/theme'
 import { readXtermTheme, syncXtermTheme } from '@renderer/workspace/tile-tree/xtermTheme'
 import { createTerminalInputForwarder } from '@renderer/workspace/tile-tree/terminalInputForwarder'
+import { encodeTerminalPaste, registerTerminalPasteTarget } from '@renderer/workspace/terminal/textPasteTarget'
 import { subscribeToTerminalData } from '@renderer/workspace/terminal/sessionDataDispatcher'
 import { attachXtermWebglRenderer } from '@renderer/workspace/terminal/xtermWebglRenderer'
 
@@ -147,6 +148,7 @@ export function TerminalLeaf({
     let webglRenderer: ReturnType<typeof attachXtermWebglRenderer> | null = null
     let onDataDisposable: { dispose(): void } | null = null
     let offTerminalData: (() => void) | null = null
+    let offTextPaste: (() => void) | null = null
     let resizeObserver: ResizeObserver | null = null
     let resizeFrame: number | null = null
     let disposed = false
@@ -277,6 +279,13 @@ export function TerminalLeaf({
       // TUI's, but the same stale-reply hazard applies.
       const forwarder = createTerminalInputForwarder(data => {
         void window.api.sendInput(sessionId, data)
+      })
+      offTextPaste = registerTerminalPasteTarget(sessionId, {
+        isActive: () => !disposed && focusedRef.current && ownerVisibleRef.current,
+        paste: async text => {
+          if (disposed || !ownerVisibleRef.current || !attachedBackfillDone || forwarder.replaying || !term) return false
+          return window.api.sendInput(sessionId, encodeTerminalPaste(text, term.modes.bracketedPasteMode))
+        },
       })
       onDataDisposable = term.onData(data => {
         if (forwarder.replaying) return
@@ -434,6 +443,7 @@ export function TerminalLeaf({
       resizeObserver?.disconnect()
       onDataDisposable?.dispose()
       offTerminalData?.()
+      offTextPaste?.()
       webglRenderer?.dispose()
       if (onThemeChangedListenerRef) {
         window.removeEventListener(THEME_CHANGED_EVENT, onThemeChangedListenerRef)

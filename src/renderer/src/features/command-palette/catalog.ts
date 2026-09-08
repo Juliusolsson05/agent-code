@@ -80,8 +80,8 @@ export const builtInCommandCatalog: readonly CommandDef[] = Object.freeze([
   ...copyCodeBlockCommands,
   ...promptTemplateCommands,
   ...keyVaultCommands,
-  // Grouped with the prompt-template commands because it is the other
-  // composer-insertion command — registry order is the palette's
+  // Grouped with the prompt-template and vault commands because those are
+  // the other insertion commands — registry order is the palette's
   // empty-query browse order, so like things stay adjacent.
   ...replyToSelectionCommands,
   ...agentStatusCommands,

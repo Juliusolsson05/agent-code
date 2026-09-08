@@ -10,7 +10,24 @@
 // WHY this pattern is separate from the ordinary {{variable}} grammar:
 // the placeholder pattern is [A-Za-z0-9_]+ only, so these refs never
 // collide with or surface as form fields in the fill pane; they are
-// resolved BEFORE variable fill and the fill pane never sees a secret.
+// resolved only after variable fill, at insertion, so the pane never sees a secret.
+
+import { fillPromptTemplateBody } from './interpolate'
+import type { PromptTemplate, PromptTemplateVariableValueMap } from './types'
+
+// Both picker paths share this order. Resolving before the fill pane either
+// exposed credentials in its preview or discarded the resolved body entirely.
+export function prepareTemplateText(
+  template: Pick<PromptTemplate, 'body' | 'variables'>,
+  values: PromptTemplateVariableValueMap,
+  resolve: (ref: KeyReference) => Promise<string | null>,
+): Promise<string> {
+  // Dynamic worktree/transcript dumps can contain Vue/Jinja/Handlebars braces.
+  // With no declared variables the old picker inserted that source verbatim;
+  // running the filler would silently erase every unrelated {{word}}.
+  const body = template.variables.length ? fillPromptTemplateBody({ ...template, values }) : template.body
+  return resolveKeyReferences(body, resolve)
+}
 
 export type KeyReference = { providerName: string; keyName: string }
 

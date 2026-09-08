@@ -206,7 +206,10 @@ const caffeinateController = new CaffeinateController()
 const vaultService = new VaultService({
   store: createFileVaultStore(join(STATE_DIR, 'key-vault'), createSafeStorageCodec()),
   promptAuth: reason => systemPreferences.promptTouchID(reason),
-  canPromptAuth: () => systemPreferences.canPromptTouchID(),
+  // canPromptTouchID checks biometrics, not user-presence/password auth.
+  // Electron 43's promptTouchID uses SecAccessControlUserPresence; attempt
+  // that supported macOS API and let rejection keep the vault locked.
+  canPromptAuth: () => process.platform === 'darwin' && typeof systemPreferences.promptTouchID === 'function',
   copyToClipboard: text => clipboard.writeText(text),
 })
 

@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { beforeEach, describe, expect, it } from 'vitest'
@@ -52,6 +52,27 @@ describe('vaultStore', () => {
     expect(snapshot.keys).toEqual([])
   })
 
+  it('refuses to treat a corrupt or future index as an empty writable vault', async () => {
+    const store = createFileVaultStore(root, fakeCodec)
+    for (const content of ['{broken', '{"version":2,"providers":[],"keys":[]}', '{"version":1,"providers":{}}']) {
+      await writeFile(join(root, 'index.json'), content)
+      await expect(store.loadIndex()).rejects.toThrow(/index/i)
+      expect(await readFile(join(root, 'index.json'), 'utf8')).toBe(content)
+    }
+  })
+
+  it('rejects path traversal instead of reading or writing outside the vault', async () => {
+    const store = createFileVaultStore(root, fakeCodec)
+    await expect(store.writeSecret('../outside', 'value')).rejects.toThrow(/id/i)
+    await expect(store.readSecret('../outside')).rejects.toThrow(/id/i)
+    await expect(store.deleteSecret('../outside')).rejects.toThrow(/id/i)
+  })
+
+  it('refuses encryption writes when the system keyring is unavailable', async () => {
+    const store = createFileVaultStore(root, { ...fakeCodec, isEncryptionAvailable: () => false })
+    await expect(store.writeSecret('key', 'secret')).rejects.toThrow(/keyring/i)
+  })
+
   it('isolates a corrupt blob to a single key', async () => {
     const store = createFileVaultStore(root, fakeCodec)
     const snapshot = await store.loadIndex()
@@ -88,7 +109,17 @@ describe('vaultStore', () => {
   it('writes secret blobs with 0600 permissions', async () => {
     const store = createFileVaultStore(root, fakeCodec)
     await store.writeSecret('k1', 'v')
-    const stat = await readFile(join(root, 'keys', 'k1.bin'))
-    expect(stat.length).toBeGreaterThan(0)
+    const stats = await stat(join(root, 'keys', 'k1.bin'))
+    // WHY the explicit mask (review finding): this test used to assert
+    // only file length — the 0600 discipline was never actually pinned.
+    expect(stats.mode & 0o777).toBe(0o600)
+    // A replacement write through the same path must keep the mode.
+    await store.writeSecret('k1', 'longer-value')
+    const rewritten = await stat(join(root, 'keys', 'k1.bin'))
+    expect(rewritten.mode & 0o777).toBe(0o600)
+    // The index gets the same treatment.
+    await store.saveIndex(await store.loadIndex())
+    const index = await stat(join(root, 'index.json'))
+    expect(index.mode & 0o777).toBe(0o600)
   })
 })

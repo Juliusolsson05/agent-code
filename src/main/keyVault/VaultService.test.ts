@@ -4,6 +4,12 @@ import { VaultService, type VaultServiceDeps } from '@main/keyVault/VaultService
 import type { VaultStore } from '@main/keyVault/vaultStore.js'
 import type { KeyVaultSnapshot } from '@shared/types/keyVault'
 
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  const promise = new Promise<T>(done => { resolve = done })
+  return { promise, resolve }
+}
+
 // In-memory store: the file layer has its own tests (vaultStore.test.ts);
 // these tests pin the SERVICE rules — gate semantics, ordering, and
 // fail-closed behavior.
@@ -59,9 +65,98 @@ describe('VaultService unlock gate', () => {
     expect(service.getStatus().unlocked).toBe(false)
   })
 
-  it('fails closed when no auth prompt mechanism exists', async () => {
-    const service = new VaultService(makeDeps({ canPromptAuth: () => false }))
-    await expect(service.unlock()).rejects.toThrow(/authentication is unavailable/i)
+  it('fails closed when the OS prompt itself rejects (no capability pre-filter)', async () => {
+    // WHY no canPromptAuth pre-gate (review finding): canPromptTouchID()
+    // reports biometrics only and locked out password-only Macs. The
+    // service must ATTEMPT the prompt and fail closed on rejection.
+    const deps = makeDeps({
+      promptAuth: vi.fn(async () => { throw new Error('Could not authenticate') }),
+      canPromptAuth: () => false,
+    })
+    const service = new VaultService(deps)
+    await expect(service.unlock()).rejects.toThrow('Could not authenticate')
+    expect(service.getStatus().unlocked).toBe(false)
+    // canPromptAuth stays metadata-only: it must not block the attempt.
+    expect(deps.promptAuth).toHaveBeenCalledTimes(1)
+  })
+
+  it('shares one OS prompt across concurrent reveals', async () => {
+    const deps = makeDeps()
+    const service = new VaultService(deps)
+    const provider = await service.createProvider('Brave')
+    const key = await service.putKey({ providerId: provider.id, name: 'main', value: 'v', note: '' })
+    await Promise.all([
+      service.reveal(provider.id, key.id),
+      service.reveal(provider.id, key.id),
+      service.reveal(provider.id, key.id),
+    ])
+    expect(deps.promptAuth).toHaveBeenCalledTimes(1)
+  })
+
+  it('a lock issued during a pending prompt wins over its completion', async () => {
+    const prompt = deferred<void>()
+    const deps = makeDeps({
+      promptAuth: () => prompt.promise,
+    })
+    const service = new VaultService(deps)
+    const provider = await service.createProvider('Brave')
+    const key = await service.putKey({ providerId: provider.id, name: 'main', value: 'v', note: '' })
+
+    const pending = service.reveal(provider.id, key.id)
+    const rejected = expect(pending).rejects.toThrow(/locked/i)
+    service.lock() // user hits "Lock now" while the prompt is on screen
+    prompt.resolve()
+    await rejected
+    expect(service.getStatus().unlocked).toBe(false)
+  })
+
+  it('does not release a secret if locked during the disk read', async () => {
+    const store = makeStore()
+    const deps = makeDeps({ store })
+    const service = new VaultService(deps)
+    const provider = await service.createProvider('Brave')
+    const key = await service.putKey({ providerId: provider.id, name: 'main', value: 'secret', note: '' })
+    const read = deferred<string>()
+    const started = deferred<void>()
+    store.readSecret = () => { started.resolve(); return read.promise }
+    const pending = service.copyKey(provider.id, key.id)
+    const rejected = expect(pending).rejects.toThrow(/locked/i)
+    await started.promise
+    service.lock()
+    read.resolve('secret')
+    await rejected
+    expect(deps.copyToClipboard).not.toHaveBeenCalled()
+  })
+
+  it('can retry unlocking after the keyring becomes available', async () => {
+    const store = makeStore()
+    const available = vi.fn(() => false)
+    store.encryptionAvailable = available
+    const service = new VaultService(makeDeps({ store }))
+    await expect(service.unlock()).rejects.toThrow(/keyring/i)
+    available.mockReturnValue(true)
+    await service.unlock()
+    expect(service.getStatus().unlocked).toBe(true)
+  })
+
+  it('serializes concurrent provider creations without losing entries', async () => {
+    const service = new VaultService(makeDeps())
+    await Promise.all([
+      service.createProvider('Brave'),
+      service.createProvider('OpenAI'),
+      service.createProvider('Anthropic'),
+    ])
+    const names = (await service.list()).providers.map(p => p.name).sort()
+    expect(names).toEqual(['Anthropic', 'Brave', 'OpenAI'])
+  })
+
+  it('omits hints for secrets too short to survive slicing', async () => {
+    const service = new VaultService(makeDeps())
+    const provider = await service.createProvider('Brave')
+    const short = await service.putKey({ providerId: provider.id, name: 'tiny', value: 'abc', note: '' })
+    const long = await service.putKey({ providerId: provider.id, name: 'real', value: 'BSA-abcdef1234', note: '' })
+    expect(short.hint).toBe('')
+    expect(long.hint).toBe('1234')
   })
 
   it('fails closed when the OS keyring is unavailable', async () => {
@@ -120,6 +215,14 @@ describe('VaultService CRUD', () => {
     await expect(service.putKey({ providerId, name: 'main', value: 'b', note: '' })).rejects.toThrow(/already exists/i)
   })
 
+  it('cannot edit a key by pairing its id with a different provider', async () => {
+    const other = await service.createProvider('Other')
+    const key = await service.putKey({ providerId, name: 'main', value: 'original', note: '' })
+    await expect(service.putKey({ providerId: other.id, id: key.id, name: 'main', value: 'changed', note: '' }))
+      .rejects.toThrow(/not found/i)
+    expect(await service.reveal(providerId, key.id)).toBe('original')
+  })
+
   it('deleting a provider removes its keys from the index', async () => {
     await service.putKey({ providerId, name: 'main', value: 'x', note: '' })
     await service.deleteProvider(providerId)
@@ -137,14 +240,19 @@ describe('VaultService CRUD', () => {
   it('corrupt secret blob surfaces as a readable-key error', async () => {
     // Simulate the Keychain-reset corruption: metadata present, secret
     // unreadable. Contract: reveal names the key instead of returning
-    // null or throwing something opaque.
-    const nullStore = Object.assign(makeStore(), { readSecret: async () => null })
-    const service2 = new VaultService(makeDeps({ store: nullStore }))
+    // null or throwing something opaque. The secret breaks AFTER
+    // creation via a wrapping store, so putKey still sees a real write.
+    const base = makeStore()
+    const breakingStore: typeof base = {
+      ...base,
+      readSecret: async id => (id === 'known-key' ? null : base.readSecret(id)),
+    }
+    const service2 = new VaultService(makeDeps({ store: breakingStore }))
     const provider = await service2.createProvider('Brave')
     const key = await service2.putKey({ providerId: provider.id, name: 'main', value: 'y', note: '' })
-    // Break the in-memory secret AFTER creation so putKey's availability
-    // probe still saw a value.
-    ;(nullStore as unknown as { readSecret: () => Promise<string | null> }).readSecret = async () => null
+    // Put a marker id whose blob "rot" the store models as unreadable.
+    ;(breakingStore as unknown as { readSecret: (id: string) => Promise<string | null> }).readSecret =
+      async (id: string) => (id === key.id ? null : base.readSecret(id))
     await expect(service2.reveal(provider.id, key.id)).rejects.toThrow(/cannot be decrypted/i)
   })
 })

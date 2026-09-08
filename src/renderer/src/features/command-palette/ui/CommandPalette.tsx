@@ -55,11 +55,9 @@ import type { PendingCommandInvocation } from '@renderer/app-state/uiShell/types
 import {
   allPromptTemplates,
 } from '@renderer/features/prompt-templates/templates'
-import {
-  fillPromptTemplateBody,
-} from '@renderer/features/prompt-templates/interpolate'
-import { collectKeyReferences, resolveKeyReferences } from '@renderer/features/prompt-templates/keyReferences'
+import { prepareTemplateText } from '@renderer/features/prompt-templates/keyReferences'
 import { deliverTextToSession } from '@renderer/features/session-text-delivery/deliverTextToSession'
+
 import {
   createSavedPromptTemplate,
   duplicatePromptTemplate,
@@ -120,6 +118,7 @@ type BuriedPaneInfo = {
 }
 
 type PromptTemplateFillState = {
+  sessionId: string
   template: PromptTemplate
   values: PromptTemplateVariableValueMap
   insertMode: PromptTemplateInsertMode
@@ -254,6 +253,12 @@ function OpenCommandPalette({
   // are untouched, and the future provider-enumeration rewrite (#394 §7)
   // rebuilds command CONTENT, not this assembly.
   const workspace = useWorkspaceContext()
+  const templateActive = useRef(visible)
+  const templateBusy = useRef(false)
+  useEffect(() => {
+    templateActive.current = visible
+    return () => { templateActive.current = false }
+  }, [visible])
   // Injected into the execution gateway so an async command failure is
   // visible. Before the gateway, every call site was `void command.run(ctx)`
   // and a rejected promise vanished with no user-facing signal at all.
@@ -1285,29 +1290,26 @@ function OpenCommandPalette({
     async (template: PromptTemplate, originSelectedIndex = selectedIndex) => {
       const sessionId = promptTemplateSessionId
       if (!sessionId) return
+      if (templateBusy.current) return
+      templateBusy.current = true
+      const originalSession = workspace.state.sessions[sessionId]
+      const originalDraft = workspace.getRuntime(sessionId).draftInput
 
       try {
-        let body = template.buildBody
+        const body = template.buildBody
           ? await template.buildBody({ workspace, sessionId })
           : template.body
-        // Vault key references (#831): resolve BEFORE the variables check
-        // so the fill pane never displays secret values, and abort with a
-        // toast on missing refs instead of pasting placeholder text.
-        const keyRefs = collectKeyReferences(body)
-        if (keyRefs.length > 0) {
-          body = await resolveKeyReferences(body, async ref => {
-            try {
-              return await window.api.keyVaultResolveReference(ref.providerName, ref.keyName)
-            } catch {
-              // Locked/canceled/missing all mean "cannot resolve now" —
-              // the aggregate error below names the reference.
-              return null
-            }
-          })
-        }
+        if (!templateActive.current) return
         if (template.variables.length > 0) {
+          // The fill pane stores the ORIGINAL body: `{{key:…}}` references
+          // stay as visible names and are resolved only at final insertion
+          // (see resolveVaultKeyReferences) — a secret must never render
+          // in the pane, and resolving early was ALSO wrong for combined
+          // ref+variable templates because the resolved body was discarded
+          // here (review finding).
           setPromptTemplateFillState({
-            template: template.buildBody ? { ...template, body } : template,
+            sessionId,
+            template: { ...template, body },
             values: {},
             insertMode: template.insertMode,
             returnTo: promptTemplateFillReturnState(mode, query, originSelectedIndex),
@@ -1323,16 +1325,34 @@ function OpenCommandPalette({
         // paste for any PTY surface. Nothing is sent until they press
         // Enter themselves, mirroring rewind-to-prompt's "prefill, don't
         // replay" contract.
-        const result = await deliverTextToSession(workspace, sessionId, body, { insertMode: template.insertMode })
+        const text = await prepareTemplateText({ ...template, body }, {}, ref =>
+          window.api.keyVaultResolveReference(ref.providerName, ref.keyName))
+        if (!templateActive.current) return
+        if (useAppStore.getState().workspaceState.sessions[sessionId] !== originalSession ||
+            workspace.getRuntime(sessionId).draftInput !== originalDraft) {
+          throw new Error('Target pane or draft changed while preparing the template. Try again.')
+        }
+        const result = await deliverTextToSession(
+          workspace,
+          sessionId,
+          text,
+          { insertMode: template.insertMode, isCurrent: () => templateActive.current &&
+            useAppStore.getState().workspaceState.sessions[sessionId] === originalSession &&
+            workspace.getRuntime(sessionId).draftInput === originalDraft },
+        )
         if (result.delivered) {
           workspace.showPaneToast(sessionId, `Inserted template: ${template.title}`)
           onClose()
+        } else if (result.reason === 'write-rejected') {
+          workspace.showPaneToast(sessionId, 'Terminal write was rejected — pane is not ready')
         } else {
           workspace.showPaneToast(sessionId, 'Template target pane is gone')
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
         workspace.showPaneToast(sessionId, `Template failed: ${message}`)
+      } finally {
+        templateBusy.current = false
       }
     },
     [mode, onClose, promptTemplateSessionId, query, selectedIndex, workspace],
@@ -1466,24 +1486,45 @@ function OpenCommandPalette({
   const insertFilledPromptTemplate = useCallback(async () => {
     const fill = promptTemplateFillState
     if (!fill) return
-    const sessionId = commandTargetSessionId(workspace)
+    const sessionId = fill.sessionId
     if (!sessionId) return
+    if (templateBusy.current) return
+    templateBusy.current = true
+    const originalSession = workspace.state.sessions[sessionId]
+    const originalDraft = workspace.getRuntime(sessionId).draftInput
     try {
-      const resolved = fillPromptTemplateBody({
-        body: fill.template.body,
-        variables: fill.template.variables,
-        values: fill.values,
-      })
-      const result = await deliverTextToSession(workspace, sessionId, resolved, { insertMode: fill.insertMode })
+      // Key references resolve HERE, after variable fill and immediately
+      // before delivery: the fill pane showed only names, and an
+      // unresolved reference aborts with a toast naming every failure
+      // instead of pasting literal `{{key:…}}` text (review finding).
+      const text = await prepareTemplateText(fill.template, fill.values, ref =>
+        window.api.keyVaultResolveReference(ref.providerName, ref.keyName))
+      if (!templateActive.current) return
+      if (useAppStore.getState().workspaceState.sessions[sessionId] !== originalSession ||
+          workspace.getRuntime(sessionId).draftInput !== originalDraft) {
+        throw new Error('Target pane or draft changed while preparing the template. Try again.')
+      }
+      const result = await deliverTextToSession(
+        workspace,
+        sessionId,
+        text,
+        { insertMode: fill.insertMode, isCurrent: () => templateActive.current &&
+          useAppStore.getState().workspaceState.sessions[sessionId] === originalSession &&
+          workspace.getRuntime(sessionId).draftInput === originalDraft },
+      )
       if (result.delivered) {
         workspace.showPaneToast(sessionId, `Inserted template: ${fill.template.title}`)
         onClose()
+      } else if (result.reason === 'write-rejected') {
+        workspace.showPaneToast(sessionId, 'Terminal write was rejected — pane is not ready')
       } else {
         workspace.showPaneToast(sessionId, 'Template target pane is gone')
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       workspace.showPaneToast(sessionId, `Template failed: ${message}`)
+    } finally {
+      templateBusy.current = false
     }
   }, [onClose, promptTemplateFillState, workspace])
 
