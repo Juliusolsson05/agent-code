@@ -370,32 +370,45 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
   // tick — it stops being invalidated at all. This modal is a permanently
   // mounted surface (see the usage hook gate above), and `workspace.runtimes`
   // is one of the highest-churn references in the app.
-  // WHY the runtimes are read through a REF rather than as a dependency:
+  // WHY this is keyed on the session ids and reads runtimes through a REF:
   //
-  // Gating on `open` stopped this from running while the modal is closed, but
-  // while it is OPEN the memo still depended on `workspace.runtimes` — the
-  // comment directly above names it "one of the highest-churn references in
-  // the app". Every streaming tick from any pane therefore re-walked up to
-  // 2000 entries for every matching row, and the whole point of the number is
-  // a single threshold comparison that defaults one checkbox.
+  // Gating on `open` stopped the walk while the modal is closed, but while it
+  // is OPEN the number is derived from `workspace.runtimes` — which the
+  // comment directly above names "one of the highest-churn references in the
+  // app". Every streaming tick from any pane re-walked up to 2000 entries for
+  // every matching row, to produce a single threshold comparison that defaults
+  // one checkbox.
   //
-  // The estimate only needs to be right when the row set or the open state
-  // changes. Reading the freshest runtimes out of a ref at that moment gives
-  // exactly that, with no dependency on their identity.
+  // Depending on `matchingRows` instead is NOT sufficient and a first attempt
+  // that did only that changed nothing: `agentRows` lists `workspace.runtimes`
+  // in its own deps, so `matchingRows` is a fresh array on every tick too. The
+  // dependency has to be the thing that actually decides the answer, which is
+  // WHICH sessions match — not the identity of the array listing them, and not
+  // the identity of the runtime map. Joining the ids is O(rows) per render
+  // against O(rows x entries) for the walk.
+  //
+  // The estimate can therefore lag a pane's growth within one open session.
+  // That is acceptable and deliberate: it only picks the default state of a
+  // checkbox the user can see and toggle, and it is re-derived every time the
+  // modal opens.
   const runtimesRef = useRef(workspace.runtimes)
   runtimesRef.current = workspace.runtimes
+  const matchingRowsRef = useRef(matchingRows)
+  matchingRowsRef.current = matchingRows
+  const matchingSessionKey = matchingRows.map(row => row.sessionId).join('\u0000')
   const largestSourceEstimate = useMemo(() => {
     if (!open) return 0
     const runtimes = runtimesRef.current
     let largest = 0
-    for (const row of matchingRows) {
+    for (const row of matchingRowsRef.current) {
       const runtime = runtimes[row.sessionId]
       if (!runtime) continue
       const estimate = estimateLiveEntriesBytes(runtime.entries)
       if (estimate > largest) largest = estimate
     }
     return largest
-  }, [matchingRows, open])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [matchingSessionKey, open])
 
   // Claude is the only target with a compaction the renderer can drive
   // (compactAfterSwitch reports every other kind as a no-op), so the checkbox
@@ -464,7 +477,11 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
   }, [])
 
   const runSwitch = useCallback(async () => {
-    if (matchingRows.length === 0 || busy) return
+    // `locked`, not `busy`: runModelSwitch sets only `switchingModel`, so
+    // guarding on `busy` alone let a Switch start on top of an in-flight
+    // /model fan-out over the same panes — the very race the sequential loop
+    // exists to prevent, and the one the close guards below already cover.
+    if (matchingRows.length === 0 || lockedRef.current) return
     // One confirmation for the whole batch, in the modal, replacing main's
     // per-agent native dialog (spec §Renderer). It is required only on the
     // opt-in source path: that is the branch that rewrites live history and
@@ -506,7 +523,7 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
   }, [busy, compactOnArrival, compactOnSource, confirmedSessionIds, matchingRows, onClose, sourceConfirmArmed, target, workspace])
 
   const runModelSwitch = useCallback(async () => {
-    if (matchingRows.length === 0 || switchingModel || busy) return
+    if (matchingRows.length === 0 || lockedRef.current) return
     setSwitchingModel(true)
     let delivered = 0
     let failed = 0
@@ -533,11 +550,17 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
     } catch (error) {
       // WHY this catch exists: the loop had try/finally and no catch, so a
       // REJECTED deliverPrompt (a dead IPC channel, a preload shape mismatch)
-      // aborted the batch mid-way and the `finally` still announced
-      // "Sent /model … to 3 agents" with failed === 0 — reporting success for
-      // every agent the loop never reached.
+      // aborted the batch mid-way while the `finally` still ran. The count was
+      // not wrong about what it claimed — `delivered` only ever incremented
+      // after `result.ok` — but the toast said "Sent /model … to 3 agents"
+      // with no failure note at all, so every agent the loop never reached
+      // simply vanished from the report. Silence about an agent reads as
+      // "nothing to say", not as "never attempted".
+      // Clamped so the report can never claim more agents than the batch had:
+      // the loop aborted, so everything not already counted is unattempted,
+      // and at minimum the one that rejected must show up.
       const remaining = matchingRows.length - delivered - failed
-      failed += Math.max(remaining, 1)
+      failed += remaining > 0 ? remaining : 1
       if (firstFailure === null) {
         firstFailure = error instanceof Error && error.message.length > 0
           ? error.message
@@ -553,7 +576,9 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
   }, [busy, matchingRows, showToast, switchingModel])
 
   const runReturn = useCallback(async () => {
-    if (busy) return
+    // Same reason as runSwitch: a Return must not start under an in-flight
+    // /model fan-out.
+    if (lockedRef.current) return
     setBusy(true)
     try {
       // Intentionally NOT closing the modal: the banner clears itself when
@@ -582,6 +607,10 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
   // `closeBulkProviderSwitch` from anywhere else bypasses this guard for
   // `busy` as well — see the reset effect, which is the second half of the fix.
   const locked = busy || switchingModel
+  // Read by the run guards, which must see the live value without taking
+  // `locked` as a dependency and re-creating every callback on each toggle.
+  const lockedRef = useRef(locked)
+  lockedRef.current = locked
   const requestClose = useCallback(() => {
     if (locked) return
     onClose()
@@ -619,7 +648,7 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
             <button
               type="button"
               onClick={requestClose}
-              disabled={busy}
+              disabled={locked}
               className="rounded-control px-2 py-1 text-[10px] border border-border text-ink-dim hover:text-ink hover:border-border-hi disabled:opacity-50"
             >
               Esc
@@ -636,7 +665,7 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
               <button
                 type="button"
                 onClick={() => void runReturn()}
-                disabled={busy}
+                disabled={locked}
                 className="rounded-control flex-shrink-0 px-2.5 py-1 text-[11px] border border-accent/60 bg-accent/10 text-accent hover:bg-accent/20 disabled:opacity-50"
               >
                 {busy ? 'Working…' : `Return ${batch.agents.length}`}
@@ -936,7 +965,7 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
             <button
               type="button"
               onClick={requestClose}
-              disabled={busy}
+              disabled={locked}
               className="rounded-control px-3 py-1.5 text-[11px] border border-border text-ink-dim hover:text-ink hover:border-border-hi disabled:opacity-50"
             >
               Cancel

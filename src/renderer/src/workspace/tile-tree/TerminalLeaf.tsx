@@ -589,8 +589,15 @@ export function TerminalLeaf({
         ref={containerRef}
         className="flex-1 min-h-0 min-w-0 overflow-hidden relative"
       />
-      {/* Same slot and ordering as AgentTerminalLeaf: below the terminal box,
-          non-shrinking, so a toast never steals rows from xterm mid-session. */}
+      {/* Same slot and ordering as AgentTerminalLeaf: below the terminal box.
+          Note what this DOES cost, since the obvious reading is wrong — the
+          slot is a non-shrinking flex sibling, so while a toast is on screen
+          the xterm box really is shorter, its ResizeObserver fires, and the
+          PTY is resized down and then back up when the toast clears. That is
+          the same shape as AgentTerminalLeaf and is accepted for the same
+          reason: pane feedback that is never rendered is worse than a
+          transient reflow. It is also why the toast lives here rather than
+          overlaying the terminal, where it would hide output. */}
       <PaneToast message={paneToast} />
     </div>
   )
