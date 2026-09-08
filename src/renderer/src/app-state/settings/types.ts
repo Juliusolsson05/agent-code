@@ -376,6 +376,17 @@ export type Settings = {
    * split keeps app preference durable while feature lifetimes stay tied to
    * the UI state that actually requested them. */
   agentViewMode: AgentViewMode
+  /** Opt-in stable spoken names (Apollo, Jasper, …) beside agent titles, in
+   *  the Dispatch index, and in external operator observation/search.
+   *
+   *  WHY the field is `…Enabled` and not `agentNames`: `settings.reference`
+   *  publishes these identifiers to an external operator, and a boolean called
+   *  `agentNames` reads like a list of names. It is also the gate for
+   *  ALLOCATION, not only for display: while it is false no identity is
+   *  claimed and no name is reserved, so a user who never turns it on never
+   *  writes agent-names.json. Turning it back off hides names and name lookup
+   *  but keeps every assignment, so re-enabling restores the same addresses. */
+  agentNamesEnabled: boolean
   /** Built-in MCP capabilities used to seed a new agent session when its
    *  caller does not provide an explicit per-session list. This is a default,
    *  not a fleet policy: after initialization the resolved array lives in
@@ -632,6 +643,7 @@ export const DEFAULT_SETTINGS: Settings = {
   paletteMouseChord: '',
   aggressiveDebugPersistence: false,
   defaultWorkspaceMode: 'grid',
+  agentNamesEnabled: false,
   agentViewMode: 'agent',
   // Preserve today's opt-in behavior. Users choose which capabilities become
   // defaults; session commands remain available regardless of this empty seed.

@@ -89,14 +89,21 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
     }),
     defineCapability({
       id: 'agents.list', title: 'Find agents', execution: 'window', effect: 'read',
-      description: 'Search all agents by stable ID, title, directory and provider, including detached and buried records. Reading never wakes an agent.',
-      input: z.object({ query: z.string().default('').describe('Case-insensitive substring of session ID, title, working directory or provider. Empty lists all agents in this window.'), tabId: z.string().describe('Project tab ID from app.observe in the target window.').optional(), ...pageInput }).strict(),
+      description: 'Search all agents in this window by stable ID, visible label, spoken agent name, title, directory and provider, including detached and buried records. Reading never wakes an agent.',
+      input: z.object({ query: z.string().default('').describe('Case-insensitive substring of session ID, visible label, spoken agent name, title, working directory or provider. Empty lists all agents in this window.'), tabId: z.string().describe('Project tab ID from app.observe in the target window.').optional(), ...pageInput }).strict(),
       output: pageSchema(sessionReference),
       handler: input => {
         const query = input.query.trim().toLocaleLowerCase()
+        // The haystack is deliberately the SAME field set agents.search uses
+        // (globalCapabilities.ts), agentName included. These two are the one
+        // find-an-agent surface as far as an operator is concerned — the only
+        // intended difference is window scope — so a partially heard name that
+        // recovers an agent globally must also recover it in-window. Omitting
+        // agentName here made "search for apoll" answer differently depending on
+        // which tool the client happened to reach for.
         const rows = observe().sessions.filter(session => session.provider !== 'terminal'
           && (!input.tabId || session.placements.some(placement => placement.tabId === input.tabId))
-          && [session.sessionId, session.title, session.displayedTitle, session.displayLabel ?? '', session.cwd, session.provider].some(value => value.toLocaleLowerCase().includes(query)))
+          && [session.sessionId, session.title, session.displayedTitle, session.displayLabel ?? '', session.agentName ?? '', session.cwd, session.provider].some(value => value.toLocaleLowerCase().includes(query)))
         return paginate(rows, input, `agents:${query}:${input.tabId ?? ''}`)
       },
     }),

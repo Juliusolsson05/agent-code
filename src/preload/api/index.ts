@@ -4,6 +4,7 @@ import { providerApi } from '@preload/api/provider.js'
 import { sessionsApi } from '@preload/api/sessions.js'
 import { lspApi } from '@preload/api/lsp.js'
 import { workspaceApi } from '@preload/api/workspace.js'
+import { agentNamesApi } from '@preload/api/agentNames.js'
 import { windowApi } from '@preload/api/window.js'
 import { fsApi } from '@preload/api/fs.js'
 import { debugApi } from '@preload/api/debug.js'
@@ -46,8 +47,16 @@ import { agentCodeInstalledSkillsApi } from '@preload/api/agentCodeInstalledSkil
 // Method-name uniqueness across domains is enforced by the spread
 // merge: TypeScript would error on a collision. Today there are
 // none — domain modules use different name prefixes (`session*`,
-// `workspace*`, `lsp*`, etc.) and the registry in main/ipc/ mirrors
-// the split one-to-one.
+// `workspace*`, `lsp*`, etc.).
+//
+// The main-side registrar is NOT a one-to-one mirror of this split,
+// and was never a rule worth enforcing. Most domains do have their
+// counterpart under main/ipc/, but `agentNames*` is handled by
+// `src/main/agentNames/ipc.ts`, which lives beside the registry it is
+// the only consumer of rather than beside the other IPC modules. That
+// is the point of the decomposition: application identity stays out of
+// the generic IPC layer. So when adding a domain here, follow the
+// handler to wherever it actually is — do not assume main/ipc/<domain>.
 
 export const api = {
   ...controlApi,
@@ -56,6 +65,7 @@ export const api = {
   ...sessionsApi,
   ...lspApi,
   ...workspaceApi,
+  ...agentNamesApi,
   ...windowApi,
   ...fsApi,
   ...debugApi,

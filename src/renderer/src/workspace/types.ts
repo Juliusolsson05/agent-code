@@ -100,6 +100,23 @@ export type SessionMeta = {
    */
   title?: string
   /**
+   * Durable identity for this agent's spoken name — NOT the name itself.
+   *
+   * WHY the name is not stored here: workspace.json is per-window and is
+   * rewritten wholesale on every autosave, so two windows would each hold their
+   * own copy of a global allocation and would drift apart on the first
+   * conflicting save. This field carries only the opaque key; the main-process
+   * registry owns the identity→name relation for the whole application.
+   *
+   * WHY it exists at all rather than using sessionId directly: a provider
+   * switch, reload, rewind or crash recovery replaces the local session ID
+   * while the user is looking at the same pane. Reusing sessionId would rename
+   * the agent mid-conversation. This value is minted once, by the reconciler,
+   * and then carried across every replacement. Duplicating an agent creates a
+   * new session with no identity, so the copy correctly gets its own name.
+   */
+  agentNameId?: string
+  /**
    * Which backend runs in this pane. Defaults to 'claude' when
    * absent so pre-terminal workspace.json blobs keep working — the
    * tile tree is always there, but old entries never carried kind.

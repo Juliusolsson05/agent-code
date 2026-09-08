@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { DEFAULT_SETTINGS } from '@renderer/app-state/settings/types'
 import {
   getSettingsRegistry,
+  settingMetadata,
   type SettingActionContext,
   type SettingDefinition,
 } from '@renderer/features/settings/lib/settingsRegistry'
@@ -104,5 +105,27 @@ describe('prompt templates in command search setting', () => {
     expect(onChange).toHaveBeenCalledWith({
       promptTemplatesInCommandSearchEnabled: true,
     })
+  })
+})
+
+describe('agent names setting', () => {
+  it('is an immediate app-scoped workspace toggle that reads and writes agentNamesEnabled', async () => {
+    const setting = getSettingsRegistry().find(candidate => candidate.id === 'agent-names')
+    if (!setting || setting.control.type !== 'toggle') throw new Error('Missing agent-names toggle')
+    expect(setting.category).toBe('workspace')
+    // The resolved metadata is what operators read through settings.reference,
+    // and "takes effect at once" is a real claim: enabling must name the agents
+    // already on screen, not only the next session. Asserting the RESOLVED
+    // value (not `setting.metadata`) keeps the row free to stay on the default.
+    expect(settingMetadata(setting)).toEqual({ scope: 'app', apply: 'immediate', storage: 'settings' })
+    expect(setting.control.getValue(DEFAULT_SETTINGS)).toBe(false)
+    expect(setting.control.getValue({ ...DEFAULT_SETTINGS, agentNamesEnabled: true })).toBe(true)
+
+    const onChange = vi.fn()
+    const context = { settings: DEFAULT_SETTINGS, onChange } as unknown as SettingActionContext
+    await setting.control.onToggle(context, true)
+    expect(onChange).toHaveBeenLastCalledWith({ agentNamesEnabled: true })
+    await setting.control.onToggle(context, false)
+    expect(onChange).toHaveBeenLastCalledWith({ agentNamesEnabled: false })
   })
 })

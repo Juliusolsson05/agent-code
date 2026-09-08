@@ -25,6 +25,7 @@ import { useHistoryActions } from '@renderer/workspace/hook/actions/history'
 import { useUndoCloseAction } from '@renderer/workspace/hook/actions/undoClose'
 import { useDispatchActions } from '@renderer/workspace/hook/actions/dispatch'
 import { useAgentIndexNavigationActions } from '@renderer/workspace/hook/actions/agentIndexNavigation'
+import { useAgentNameReconciler } from '@renderer/workspace/agentNames/useAgentNameReconciler'
 import { createDraftChanges, WorkspaceRuntimeServices } from './persistence/WorkspaceRuntimeServices'
 import { useBootstrap } from '@renderer/workspace/hook/persistence/useBootstrap'
 import type { WorkspaceRestoreStatus } from '@renderer/workspace/hook/persistence/useBootstrap'
@@ -889,6 +890,11 @@ export function useWorkspace(
   useReaderModeSanity(readerMode, state, setReaderMode)
   useTileTabsSanity(tileTabs, state.tabs, setTileTabs)
   usePinnedSessionIdsSanity(state, setState)
+  // Beside the sanity hooks because it is the same kind of thing: a
+  // membership-driven correction that keeps an orthogonal slice consistent
+  // with the tile tree. It is last so it observes the state the sanity hooks
+  // have already settled.
+  useAgentNameReconciler(state, setState, restoreStatus)
 
   // ---- Derived values ----
   const activeTab = useMemo(
