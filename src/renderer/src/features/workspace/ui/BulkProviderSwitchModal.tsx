@@ -159,6 +159,26 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
   const [projectFilter, setProjectFilter] = useState('')
   const [busy, setBusy] = useState(false)
   const [switchingModel, setSwitchingModel] = useState(false)
+  // Refs so the open-reset effect can see the live values without depending on
+  // them — depending on them would re-run the reset the moment a loop ended.
+  const busyRef = useRef(busy)
+  busyRef.current = busy
+  const switchingModelRef = useRef(switchingModel)
+  switchingModelRef.current = switchingModel
+  /**
+   * The exact panes the source-compaction confirmation named.
+   *
+   * WHY a snapshot instead of re-reading `matchingRows` on the confirmed
+   * click: the confirmation is armed on the first click and consumed on the
+   * second, and every MANUAL way of changing the set (direction, scope,
+   * project toggle, select-all, clear, filter) disarms it. But `matchingRows`
+   * is a memo over live workspace state and changes on its own — an agent
+   * spawning, or one that was mid-turn going idle, silently joins the set
+   * between the two clicks. The user then confirms "compact 3 agents on Codex
+   * first" and four agents get their live history rewritten. Confirming a set
+   * has to mean confirming THAT set.
+   */
+  const [confirmedSessionIds, setConfirmedSessionIds] = useState<string[] | null>(null)
   // Live status (mid-turn) can change while the modal sits open. Re-tick every
   // 10s so the ⚠ skip count stays honest, matching Close Old Agents.
   const [nowTick, setNowTick] = useState(0)
@@ -209,10 +229,19 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
 
   useEffect(() => {
     if (!open) return
+    // Never reset over a loop that is still running. `open` is store state, so
+    // `closeBulkProviderSwitch` from a command or another surface can close
+    // this modal even while the guards above refuse Escape; reopening then ran
+    // this effect and cleared the very flag that single-flights the loop,
+    // letting a second batch start against the same panes. Both flags are
+    // cleared by their own `finally`, so skipping the reset here cannot strand
+    // them.
+    if (busyRef.current || switchingModelRef.current) return
     setDirectionChoice(null)
     setCompactOnArrivalChoice(null)
     setCompactOnSourceChoice(false)
     setSourceConfirmArmed(false)
+    setConfirmedSessionIds(null)
     setScopeMode('all')
     setSelectedProjects(new Set())
     setProjectFilter('')
@@ -341,17 +370,32 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
   // tick — it stops being invalidated at all. This modal is a permanently
   // mounted surface (see the usage hook gate above), and `workspace.runtimes`
   // is one of the highest-churn references in the app.
-  const runtimesForEstimate = open ? workspace.runtimes : NO_RUNTIMES
+  // WHY the runtimes are read through a REF rather than as a dependency:
+  //
+  // Gating on `open` stopped this from running while the modal is closed, but
+  // while it is OPEN the memo still depended on `workspace.runtimes` — the
+  // comment directly above names it "one of the highest-churn references in
+  // the app". Every streaming tick from any pane therefore re-walked up to
+  // 2000 entries for every matching row, and the whole point of the number is
+  // a single threshold comparison that defaults one checkbox.
+  //
+  // The estimate only needs to be right when the row set or the open state
+  // changes. Reading the freshest runtimes out of a ref at that moment gives
+  // exactly that, with no dependency on their identity.
+  const runtimesRef = useRef(workspace.runtimes)
+  runtimesRef.current = workspace.runtimes
   const largestSourceEstimate = useMemo(() => {
+    if (!open) return 0
+    const runtimes = runtimesRef.current
     let largest = 0
     for (const row of matchingRows) {
-      const runtime = runtimesForEstimate[row.sessionId]
+      const runtime = runtimes[row.sessionId]
       if (!runtime) continue
       const estimate = estimateLiveEntriesBytes(runtime.entries)
       if (estimate > largest) largest = estimate
     }
     return largest
-  }, [matchingRows, runtimesForEstimate])
+  }, [matchingRows, open])
 
   // Claude is the only target with a compaction the renderer can drive
   // (compactAfterSwitch reports every other kind as a no-op), so the checkbox
@@ -383,6 +427,7 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
   // in the confirmation.
   const toggleProject = useCallback((cwd: string) => {
     setSourceConfirmArmed(false)
+    setConfirmedSessionIds(null)
     setSelectedProjects(prev => {
       const next = new Set(prev)
       if (next.has(cwd)) next.delete(cwd)
@@ -393,16 +438,19 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
 
   const selectAllProjects = useCallback(() => {
     setSourceConfirmArmed(false)
+    setConfirmedSessionIds(null)
     setSelectedProjects(new Set(projects.map(project => project.cwd)))
   }, [projects])
 
   const clearProjects = useCallback(() => {
     setSourceConfirmArmed(false)
+    setConfirmedSessionIds(null)
     setSelectedProjects(new Set())
   }, [])
 
   const changeScopeMode = useCallback((mode: ScopeMode) => {
     setSourceConfirmArmed(false)
+    setConfirmedSessionIds(null)
     setScopeMode(mode)
   }, [])
 
@@ -411,6 +459,7 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
     // scope it hides rows the user is choosing from; disarm either way rather
     // than depend on that distinction staying true.
     setSourceConfirmArmed(false)
+    setConfirmedSessionIds(null)
     setProjectFilter(value)
   }, [])
 
@@ -423,12 +472,20 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
     // nothing and is confirmed by the button press itself.
     if (compactOnSource && !sourceConfirmArmed) {
       setSourceConfirmArmed(true)
+      setConfirmedSessionIds(matchingRows.map(row => row.sessionId))
       return
     }
+    // The confirmed set wins over the live one whenever a confirmation was
+    // required. Panes that closed in between are skipped by the action itself,
+    // which re-reads meta per iteration, so a stale id is harmless — an
+    // UNCONFIRMED id is not.
+    const sessionIds = compactOnSource && confirmedSessionIds
+      ? confirmedSessionIds
+      : matchingRows.map(row => row.sessionId)
     setBusy(true)
     try {
       await workspace.switchAgentsToProvider(
-        matchingRows.map(row => row.sessionId),
+        sessionIds,
         target,
         {
           allowSourceTurns: compactOnSource,
@@ -446,7 +503,7 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
     } finally {
       setBusy(false)
     }
-  }, [busy, compactOnArrival, compactOnSource, matchingRows, onClose, sourceConfirmArmed, target, workspace])
+  }, [busy, compactOnArrival, compactOnSource, confirmedSessionIds, matchingRows, onClose, sourceConfirmArmed, target, workspace])
 
   const runModelSwitch = useCallback(async () => {
     if (matchingRows.length === 0 || switchingModel || busy) return
@@ -472,6 +529,19 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
           failed += 1
           if (firstFailure === null) firstFailure = result.message
         }
+      }
+    } catch (error) {
+      // WHY this catch exists: the loop had try/finally and no catch, so a
+      // REJECTED deliverPrompt (a dead IPC channel, a preload shape mismatch)
+      // aborted the batch mid-way and the `finally` still announced
+      // "Sent /model … to 3 agents" with failed === 0 — reporting success for
+      // every agent the loop never reached.
+      const remaining = matchingRows.length - delivered - failed
+      failed += Math.max(remaining, 1)
+      if (firstFailure === null) {
+        firstFailure = error instanceof Error && error.message.length > 0
+          ? error.message
+          : 'Prompt delivery failed'
       }
     } finally {
       setSwitchingModel(false)
@@ -501,10 +571,21 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
   // mid-loop, a second bulk operation could start concurrently against the same
   // replaceSession mutation paths. Refusing to close while busy keeps `busy` the
   // authoritative single-flight guard without lifting it into workspace state.
+  // WHY `switchingModel` counts as locked too:
+  //
+  // `runModelSwitch` sets only `switchingModel`, and every close guard keyed on
+  // `busy` alone. Escape during the sequential /model loop was therefore
+  // allowed, the reset effect below cleared `switchingModel` on reopen, and a
+  // second click started a second loop that interleaved PTY writes on panes
+  // that had already received the prompt. That is precisely the race the
+  // sequential loop exists to prevent. `open` is store-owned, so
+  // `closeBulkProviderSwitch` from anywhere else bypasses this guard for
+  // `busy` as well — see the reset effect, which is the second half of the fix.
+  const locked = busy || switchingModel
   const requestClose = useCallback(() => {
-    if (busy) return
+    if (locked) return
     onClose()
-  }, [busy, onClose])
+  }, [locked, onClose])
 
   return (
     <Dialog
@@ -516,14 +597,14 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
       <DialogContent
         className="flex max-h-[86vh] w-[min(860px,94vw)] flex-col overflow-hidden"
         onEscapeKeyDown={event => {
-          if (busy) event.preventDefault()
+          if (locked) event.preventDefault()
         }}
         onPointerDownOutside={event => {
           // WHY an in-flight batch cannot be dismissed: the old overlay kept
           // this single-flight operation visible until it settled. Preventing
           // Radix's outside close preserves that contract while still letting
           // the primitive own all normal dismissal behavior.
-          if (busy) event.preventDefault()
+          if (locked) event.preventDefault()
         }}
       >
         <div className="flex-shrink-0 border-b border-border px-4 py-3">
@@ -593,6 +674,7 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
                     // source. Changing direction changes whose quota would be
                     // spent, so the armed second click must not carry over.
                     setSourceConfirmArmed(false)
+                    setConfirmedSessionIds(null)
                   }}
                   className="rounded-control px-2 py-1.5 bg-canvas border border-border text-[12px] text-ink outline-none focus:border-accent"
                 >
@@ -666,6 +748,7 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
                 onChange={e => {
                   setCompactOnSourceChoice(e.target.checked)
                   setSourceConfirmArmed(false)
+                  setConfirmedSessionIds(null)
                 }}
                 className="mt-0.5 accent-current disabled:opacity-50"
               />
