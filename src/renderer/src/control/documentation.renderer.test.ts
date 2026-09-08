@@ -82,4 +82,23 @@ describe('control discovery against the real app catalog and settings', () => {
     const exactTitle = typeof command.title === 'string' ? command.title : command.id
     expect(rankCommands(resolved, exactTitle, new Map(), {}).commands[0].id).toBe(command.id)
   })
+
+  it('teaches spoken agent names in the crash course and publishes the toggle that produces them', async () => {
+    // WHY the guide is asserted rather than merely written: app.describe is the
+    // only thing an external operator reads before acting, and a name it does
+    // not know about is a name it will never use. The settings assertion covers
+    // the other half — discovering WHY an agent has no name.
+    const guide = find(documentationCapabilities(), 'app.describe')
+    const lifecycle = await guide.execute({ section: 'agent-lifecycle' }, context)
+    if (!lifecycle.ok) throw new Error(lifecycle.error.message)
+    const markdown = (lifecycle.value as { items: Array<{ markdown: string }> }).items[0].markdown
+    expect(markdown).toMatch(/Agent names/)
+    expect(markdown).toMatch(/agents\.search/)
+    expect(markdown).toMatch(/stable session ID|sessionId/)
+
+    const settings = find(documentationCapabilities(), 'settings.reference')
+    const found = await settings.execute({ query: 'agent names' }, context)
+    if (!found.ok) throw new Error(found.error.message)
+    expect((found.value as { items: Array<{ id: string }> }).items.map(item => item.id)).toContain('agent-names')
+  })
 })

@@ -44,6 +44,16 @@ project, title, provider and current conversation; do not assume the focused
 window or the first search result is the target. Pass the returned `sessionId`
 to agent tools. These normally resolve their owning window automatically.
 
+If the user speaks a name — "send this to Apollo" — search `{name: "Apollo"}`.
+The match is exact and case-insensitive, never a substring, and "Apollo 2" is a
+different agent from "Apollo". A name is application-wide and stable across
+restart, reload and provider replacement, unlike a window-local label, and it is
+never reused after an agent closes: an empty result means that agent is gone, not
+that it moved. Several windows can observe the same agent, so a name search can
+still return more than one candidate; resolve to the returned `sessionId` before
+sending. Empty results with `agentName: null` everywhere mean the user has not
+enabled the "Agent names" setting — ask them rather than guessing at a label.
+
 For a window-specific operation, pass `_control.windowId`. Include
 `_control.generation` when the action depends on the exact workspace you just
 observed. A reload makes the old generation stale: refresh the observation before
