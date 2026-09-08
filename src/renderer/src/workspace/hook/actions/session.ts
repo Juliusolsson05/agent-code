@@ -25,6 +25,10 @@ import {
 } from '@renderer/workspace/idRemap'
 import { closeLeaf, collectLeaves, remapTileTreeSessionIds } from '@renderer/workspace/tile-tree/treeOps'
 import type { Tab } from '@renderer/workspace/types'
+import {
+  releaseIdentityCarry,
+  reserveIdentityCarry,
+} from '@renderer/workspace/agentNames/pendingIdentityCarry'
 import { sessionSpawnErrorMessage } from '@renderer/workspace/spawn/errorMessage'
 import {
   ghostsToPersist,
@@ -342,6 +346,25 @@ export function useSessionActions(
         sessionId = result.sessionId
         tmuxName = result.tmuxName
         startedProviderSessionId = result.providerSessionId
+        // WHY the reservation happens HERE, before this function's own commit:
+        //
+        // The gap the reconciler exploits opens the moment the successor's
+        // metadata lands in `state.sessions` without an `agentNameId`, and
+        // that is the setState a few lines below. `replaceSession` cannot
+        // reserve after `await spawn(...)` because by then React has already
+        // been given the chance to flush. Only spawn knows the id early
+        // enough.
+        //
+        // Conditional on the predecessor actually HAVING an identity, so
+        // replacements that carry nothing keep today's behaviour exactly:
+        // the reconciler claims the successor under its own id, which the
+        // replacement commit's comment already describes as the correct
+        // outcome. `predecessorSessionId` is passed by `replaceSession` and
+        // nothing else, so this cannot fire for an ordinary spawn.
+        if (opts?.predecessorSessionId
+          && refs.stateRef.current.sessions[opts.predecessorSessionId]?.agentNameId !== undefined) {
+          reserveIdentityCarry(sessionId)
+        }
         if (result.replacementTransactionId) {
           // WHY presence, not renderer inference: only main can prove the
           // successor targeted the predecessor's exact Codex rollout and
@@ -1122,160 +1145,168 @@ export function useSessionActions(
         predecessorSessionId: oldId,
         ...(builtInMcpDomains !== undefined ? { builtInMcpDomains } : {}),
       })
-      const mainHandledPredecessor =
-        pendingReplacementSuccessorsRef.current.delete(newId)
-      // A source can close or be buried while spawn awaits. Metadata alone
-      // is not ownership: committing an unplaced successor creates an invisible
-      // process and a false "completed" lifecycle receipt (#815). Read through
-      // the synchronous domain setter because React-owned refs can lag the last
-      // close action. A no-op updater preserves store identity and notifications.
-      let sourceOwned = false
-      setState(prev => { sourceOwned = canCommit(prev); return prev })
-      if (!sourceOwned) {
-        await killSession(newId, { cwd, kind: nextKind, providerRuntime })
-        return
-      }
-      if (!mainHandledPredecessor) {
-        await killSessionBackendIfOwned(refs, oldId, oldMeta)
-      }
-      // Swap the sessionId wherever this live session is placed. Grid sessions
-      // live in one tile-tree leaf; detached Dispatch sessions live in
-      // detachedSessions with no leaf at all.
-      const idMap = new Map<SessionId, SessionId>([[oldId, newId]])
+      // WHY a finally, and why it wraps EVERY exit path including the bail-outs:
+      // a stranded reservation would leave that pane permanently unnamed, which is
+      // the mirror-image bug and just as bad as the leak it prevents. Releasing an
+      // id that was never reserved is a no-op, so an ordinary spawn costs nothing.
+      try {
+        const mainHandledPredecessor =
+          pendingReplacementSuccessorsRef.current.delete(newId)
+        // A source can close or be buried while spawn awaits. Metadata alone
+        // is not ownership: committing an unplaced successor creates an invisible
+        // process and a false "completed" lifecycle receipt (#815). Read through
+        // the synchronous domain setter because React-owned refs can lag the last
+        // close action. A no-op updater preserves store identity and notifications.
+        let sourceOwned = false
+        setState(prev => { sourceOwned = canCommit(prev); return prev })
+        if (!sourceOwned) {
+          await killSession(newId, { cwd, kind: nextKind, providerRuntime })
+          return
+        }
+        if (!mainHandledPredecessor) {
+          await killSessionBackendIfOwned(refs, oldId, oldMeta)
+        }
+        // Swap the sessionId wherever this live session is placed. Grid sessions
+        // live in one tile-tree leaf; detached Dispatch sessions live in
+        // detachedSessions with no leaf at all.
+        const idMap = new Map<SessionId, SessionId>([[oldId, newId]])
 
-      let committed = false
-      setState(prev => {
-        // Backend retirement is another await. Recheck inside the actual remap
-        // commit, before touching the source draft or returning a successor ID.
-        if (!canCommit(prev)) return prev
-        committed = true
-        const sessions = { ...prev.sessions }
-        // WHY read the title from `prev` here instead of the pre-spawn
-        // snapshot: provider switches and rewinds can wait on backend work,
-        // and the user may edit or clear the pane's title during that window.
-        // The replacement is the same logical pane with a fresh transport id,
-        // so its durable glance label must follow using the latest state rather
-        // than being lost—or resurrected from a stale snapshot—on completion.
-        const replacementTitle = prev.sessions[oldId]?.title
-        // `prev.sessions[oldId]` is still readable here: only the local
-        // `sessions` copy has had oldId deleted.
-        const carriedAgentNameId = prev.sessions[oldId]?.agentNameId
-        delete sessions[oldId]
-        // Persist the replacement provider metadata immediately
-        // instead of waiting for the first transcript line to
-        // round-trip back from main. That wait window is usually
-        // short, but it is still a real race: a workspace save or
-        // pane action that snapshots SessionMeta in that gap would
-        // see "new session id, but no providerSessionId yet" and
-        // could forget how to resume the pane on the next launch.
-        //
-        // Keeping the requested resumeSessionId here makes
-        // replaceSession the single source of truth for "this pane
-        // now points at provider X's persisted transcript Y",
-        // whether the trigger was the resume picker or the new
-        // switch-provider flow.
-        sessions[newId] = {
-          ...(sessions[newId] ?? { cwd, kind: nextKind }),
-          cwd,
-          kind: nextKind,
-          providerRuntime,
-          ...(spawnOpts.resumeSessionId
-            ? {
-                providerSessionId: spawnOpts.resumeSessionId,
-                providerSessionIdSource: 'resume-request' as const,
-              }
-            : {}),
-          ...(builtInMcpDomains !== undefined ? { builtInMcpDomains } : {}),
-          ...(replacementTitle !== undefined ? { title: replacementTitle } : {}),
-          // Last on purpose. `...(sessions[newId] ?? …)` earlier in this
-          // literal is the successor's OWN freshly-spawned metadata, so any
-          // earlier position is overwritten by it — which is exactly how the
-          // sketch renamed a pane on every provider switch.
+        let committed = false
+        setState(prev => {
+          // Backend retirement is another await. Recheck inside the actual remap
+          // commit, before touching the source draft or returning a successor ID.
+          if (!canCommit(prev)) return prev
+          committed = true
+          const sessions = { ...prev.sessions }
+          // WHY read the title from `prev` here instead of the pre-spawn
+          // snapshot: provider switches and rewinds can wait on backend work,
+          // and the user may edit or clear the pane's title during that window.
+          // The replacement is the same logical pane with a fresh transport id,
+          // so its durable glance label must follow using the latest state rather
+          // than being lost—or resurrected from a stale snapshot—on completion.
+          const replacementTitle = prev.sessions[oldId]?.title
+          // `prev.sessions[oldId]` is still readable here: only the local
+          // `sessions` copy has had oldId deleted.
+          const carriedAgentNameId = prev.sessions[oldId]?.agentNameId
+          delete sessions[oldId]
+          // Persist the replacement provider metadata immediately
+          // instead of waiting for the first transcript line to
+          // round-trip back from main. That wait window is usually
+          // short, but it is still a real race: a workspace save or
+          // pane action that snapshots SessionMeta in that gap would
+          // see "new session id, but no providerSessionId yet" and
+          // could forget how to resume the pane on the next launch.
           //
-          // Conditional, not `?? oldId`: this site CARRIES an identity, it
-          // never creates one. If the predecessor had none — names were off,
-          // or the reconciler had not run — then no name was ever allocated to
-          // preserve, and inventing `oldId` here would make replacement a
-          // second minting site competing with the reconciler for that
-          // decision. Leaving it absent lets the reconciler claim the
-          // successor under its own id, which is the same outcome by the one
-          // rule the feature has.
-          ...(carriedAgentNameId !== undefined ? { agentNameId: carriedAgentNameId } : {}),
+          // Keeping the requested resumeSessionId here makes
+          // replaceSession the single source of truth for "this pane
+          // now points at provider X's persisted transcript Y",
+          // whether the trigger was the resume picker or the new
+          // switch-provider flow.
+          sessions[newId] = {
+            ...(sessions[newId] ?? { cwd, kind: nextKind }),
+            cwd,
+            kind: nextKind,
+            providerRuntime,
+            ...(spawnOpts.resumeSessionId
+              ? {
+                  providerSessionId: spawnOpts.resumeSessionId,
+                  providerSessionIdSource: 'resume-request' as const,
+                }
+              : {}),
+            ...(builtInMcpDomains !== undefined ? { builtInMcpDomains } : {}),
+            ...(replacementTitle !== undefined ? { title: replacementTitle } : {}),
+            // Last on purpose. `...(sessions[newId] ?? …)` earlier in this
+            // literal is the successor's OWN freshly-spawned metadata, so any
+            // earlier position is overwritten by it — which is exactly how the
+            // sketch renamed a pane on every provider switch.
+            //
+            // Conditional, not `?? oldId`: this site CARRIES an identity, it
+            // never creates one. If the predecessor had none — names were off,
+            // or the reconciler had not run — then no name was ever allocated to
+            // preserve, and inventing `oldId` here would make replacement a
+            // second minting site competing with the reconciler for that
+            // decision. Leaving it absent lets the reconciler claim the
+            // successor under its own id, which is the same outcome by the one
+            // rule the feature has.
+            ...(carriedAgentNameId !== undefined ? { agentNameId: carriedAgentNameId } : {}),
+          }
+          const detachedSessions = { ...prev.detachedSessions }
+          const detached = detachedSessions[oldId]
+          if (detached) {
+            delete detachedSessions[oldId]
+            detachedSessions[newId] = { ...detached, sessionId: newId }
+          }
+          return {
+            ...prev,
+            tabs: prev.tabs.map(t => {
+              if (!collectLeaves(t.root).includes(oldId)) return t
+              return {
+                ...t,
+                root: remapTileTreeSessionIds(t.root, idMap),
+                focusedSessionId:
+                  t.focusedSessionId === oldId ? newId : t.focusedSessionId,
+              }
+            }),
+            // Remap relationship pointers across ALL sessions: a linked /
+            // orchestration CHILD of the swapped session carries oldId in its
+            // linkedParentId/orchestrationParentId/orchestrationRootId, so the
+            // swap has to update those too or the child renders top-level and
+            // parent-scoped orchestration reads break. (rehydrate already does
+            // this; reload/switch/resume/rewind funnel through here and didn't.)
+            sessions: remapSessionsRelationships(sessions, idMap),
+            // A pinned agent that gets a fresh id on reload/switch must follow
+            // to the new id instead of silently dropping out of the Pinned list.
+            pinnedSessionIds: remapPinnedSessionIds(prev.pinnedSessionIds, idMap),
+            gridRelatedSelections: remapGridRelatedSelections(prev.gridRelatedSelections, idMap),
+            detachedSessions,
+            // Remap the swapped session id everywhere Dispatch holds it: the
+            // classic single-view focus AND every Tiled Dispatch lane selection
+            // (dispatchMode.tiled.lanes[].selectedSessionId). reload /
+            // provider-switch / resume / rewind all funnel through here; before
+            // this, the focused lane kept pointing at the now-dead oldId and the
+            // layout's auto-fill effect re-homed it to the first tile. Same
+            // tiled-vs-grid divergence as #266/#267/#271, fixed at the swap.
+            dispatchMode: remapTiledLanes(
+              prev.dispatchMode?.focusedSessionId === oldId
+                ? { ...prev.dispatchMode, focusedSessionId: newId }
+                : prev.dispatchMode,
+              idMap,
+            ),
+          }
+        })
+        if (!committed) {
+          await killSession(newId, { cwd, kind: nextKind, providerRuntime })
+          return
         }
-        const detachedSessions = { ...prev.detachedSessions }
-        const detached = detachedSessions[oldId]
-        if (detached) {
-          delete detachedSessions[oldId]
-          detachedSessions[newId] = { ...detached, sessionId: newId }
-        }
-        return {
-          ...prev,
-          tabs: prev.tabs.map(t => {
-            if (!collectLeaves(t.root).includes(oldId)) return t
-            return {
-              ...t,
-              root: remapTileTreeSessionIds(t.root, idMap),
-              focusedSessionId:
-                t.focusedSessionId === oldId ? newId : t.focusedSessionId,
-            }
-          }),
-          // Remap relationship pointers across ALL sessions: a linked /
-          // orchestration CHILD of the swapped session carries oldId in its
-          // linkedParentId/orchestrationParentId/orchestrationRootId, so the
-          // swap has to update those too or the child renders top-level and
-          // parent-scoped orchestration reads break. (rehydrate already does
-          // this; reload/switch/resume/rewind funnel through here and didn't.)
-          sessions: remapSessionsRelationships(sessions, idMap),
-          // A pinned agent that gets a fresh id on reload/switch must follow
-          // to the new id instead of silently dropping out of the Pinned list.
-          pinnedSessionIds: remapPinnedSessionIds(prev.pinnedSessionIds, idMap),
-          gridRelatedSelections: remapGridRelatedSelections(prev.gridRelatedSelections, idMap),
-          detachedSessions,
-          // Remap the swapped session id everywhere Dispatch holds it: the
-          // classic single-view focus AND every Tiled Dispatch lane selection
-          // (dispatchMode.tiled.lanes[].selectedSessionId). reload /
-          // provider-switch / resume / rewind all funnel through here; before
-          // this, the focused lane kept pointing at the now-dead oldId and the
-          // layout's auto-fill effect re-homed it to the first tile. Same
-          // tiled-vs-grid divergence as #266/#267/#271, fixed at the swap.
-          dispatchMode: remapTiledLanes(
-            prev.dispatchMode?.focusedSessionId === oldId
-              ? { ...prev.dispatchMode, focusedSessionId: newId }
-              : prev.dispatchMode,
-            idMap,
-          ),
-        }
-      })
-      if (!committed) {
-        await killSession(newId, { cwd, kind: nextKind, providerRuntime })
-        return
-      }
-      setRuntimes(prev => {
-        // Replacement can await spawn and backend retirement while the user
-        // keeps editing. Transfer the latest draft in the same state update
-        // that retires its owner; a pre-await snapshot silently loses edits.
-        // All replacement paths share this contract. Rewind deliberately
-        // substitutes its historical prompt afterwards and keeps an undo copy.
-        const draft = prev[oldId] ?? draftFallback
-        const next = {
-          ...prev,
-          [newId]: {
-            ...(prev[newId] ?? emptyRuntime()),
-            draftInput: draft?.draftInput ?? '',
-            // Unsupported invisible attachments participate in submit guards.
-            // Preserve images only when the destination can expose them.
-            draftImages: isAgentProviderKind(nextKind) && getRendererProviderCapabilities(nextKind).supportsImageAttachments
-              ? (draft?.draftImages ?? []) : [],
-          },
-        }
-        delete next[oldId]
-        return next
-      })
-      delete refs.seenUuidsRef.current[oldId]
-      clearLiveEntryWindowSession(oldId)
-      delete refs.latestScreenRef.current[oldId]
+        setRuntimes(prev => {
+          // Replacement can await spawn and backend retirement while the user
+          // keeps editing. Transfer the latest draft in the same state update
+          // that retires its owner; a pre-await snapshot silently loses edits.
+          // All replacement paths share this contract. Rewind deliberately
+          // substitutes its historical prompt afterwards and keeps an undo copy.
+          const draft = prev[oldId] ?? draftFallback
+          const next = {
+            ...prev,
+            [newId]: {
+              ...(prev[newId] ?? emptyRuntime()),
+              draftInput: draft?.draftInput ?? '',
+              // Unsupported invisible attachments participate in submit guards.
+              // Preserve images only when the destination can expose them.
+              draftImages: isAgentProviderKind(nextKind) && getRendererProviderCapabilities(nextKind).supportsImageAttachments
+                ? (draft?.draftImages ?? []) : [],
+            },
+          }
+          delete next[oldId]
+          return next
+        })
+        delete refs.seenUuidsRef.current[oldId]
+        clearLiveEntryWindowSession(oldId)
+        delete refs.latestScreenRef.current[oldId]
 
-      return newId
+        return newId
+      } finally {
+        releaseIdentityCarry(newId)
+      }
     },
     [
       refs.latestRuntimesRef,

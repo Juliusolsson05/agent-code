@@ -19,6 +19,18 @@ import type { WorkspaceState } from '@renderer/workspace/types'
  * agent-names.json, and enabling is what assigns names to the agents that
  * already exist.
  */
+/**
+ * How many consecutive allocation failures for the SAME identity set before
+ * this window stops asking.
+ *
+ * Three rather than one: a rejection can be a transient write collision
+ * between windows on the shared serialization tail, and giving up on the first
+ * one would leave agents unnamed for a condition that resolves itself. It
+ * resets on any successful reply, and a changed identity set is always asked
+ * again regardless.
+ */
+const MAX_CONSECUTIVE_ALLOCATION_FAILURES = 3
+
 export function useAgentNameReconciler(
   state: WorkspaceState,
   setState: WorkspaceSetState,
@@ -32,6 +44,26 @@ export function useAgentNameReconciler(
   // every identity on each state change until the reply lands, and a slow disk
   // would turn one membership change into a burst of allocations.
   const requestedRef = useRef(new Set<string>())
+  /**
+   * Consecutive rejected allocations, and the identity set that was in flight
+   * when the last one failed.
+   *
+   * WHY a circuit breaker is needed at all: the effect below clears
+   * `requestedRef` on SETTLE, and `identities` is a memo over `state` that
+   * returns a fresh array on every workspace change. So with an unreadable
+   * `agent-names.json` — a state the registry deliberately never caches, so it
+   * is retried forever — every focus change, title edit, pin, split and close
+   * fired another failing IPC round trip, indefinitely, with nothing visible
+   * to the user. The effect's own comment claimed "on failure no dep changed
+   * at all — so a broken registry cannot become a hot loop", which is true
+   * only while the workspace is completely idle.
+   *
+   * Retrying on a genuine membership change is still right: that is a new
+   * question, and the registry may have been repaired. The signature is what
+   * distinguishes it from the same question asked again.
+   */
+  const failuresRef = useRef(0)
+  const failedSignatureRef = useRef<string | null>(null)
 
   // WHY cancellation is unmount-scoped rather than a per-effect `cancelled`
   // flag: this effect's deps include `state` and `names`, so an ordinary
@@ -91,6 +123,11 @@ export function useAgentNameReconciler(
       !Object.prototype.hasOwnProperty.call(names, identity)
       && !requestedRef.current.has(identity))
     if (missing.length === 0) return
+    // Cheap because it only runs when there is something to ask for, which is
+    // exactly the case the memo's comment declined to pay for on every render.
+    const signature = [...missing].sort().join('\u0000')
+    if (failuresRef.current >= MAX_CONSECUTIVE_ALLOCATION_FAILURES
+      && failedSignatureRef.current === signature) return
     for (const identity of missing) requestedRef.current.add(identity)
 
     void window.api.resolveAgentNames(missing)
@@ -101,6 +138,9 @@ export function useAgentNameReconciler(
         // identity, and to nothing at all if the agent closed. Writing it is
         // what makes a replacement that completed mid-flight inherit its name.
         if (!mountedRef.current) return
+        // A reply of any shape means the registry is readable again.
+        failuresRef.current = 0
+        failedSignatureRef.current = null
         setNames(previous => {
           // WHY entries + spread instead of `merged[identity] = name`:
           //
@@ -137,7 +177,10 @@ export function useAgentNameReconciler(
       })
       // Never fabricate a name. A failed allocation is simply an agent with no
       // visible name until something changes.
-      .catch(() => {})
+      .catch(() => {
+        failuresRef.current += 1
+        failedSignatureRef.current = signature
+      })
       .finally(() => {
         // Clear on SETTLE, not only on rejection. Whatever this request
         // answered is now in `names` and will filter itself out; whatever it
@@ -145,7 +188,9 @@ export function useAgentNameReconciler(
         // change, rather than stranded in this set for the life of the window.
         // This does not re-run the effect on its own: on success `names`
         // changed and the recomputed `missing` is empty, and on failure no dep
-        // changed at all — so a broken registry cannot become a hot loop.
+        // changed at all. Note that the second half only holds while the
+        // workspace is idle — any state change produces a fresh `identities`
+        // array — which is what the failure circuit breaker above covers.
         for (const identity of missing) requestedRef.current.delete(identity)
       })
   }, [identities, names, setNames])

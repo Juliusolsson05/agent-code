@@ -297,4 +297,85 @@ describe('agent name reconciliation', () => {
       names: stored,
     })).toBe('Apollo')
   })
+
+  it('stops re-asking a broken registry after a few failures for the same set', async () => {
+    // `identities` is a memo over workspace state and returns a fresh array on
+    // every workspace change, and the request set is cleared on SETTLE. With an
+    // unreadable agent-names.json — a state the registry deliberately never
+    // caches — every focus change, title edit, pin, split and close therefore
+    // fired another failing IPC round trip, forever, with nothing visible to
+    // the user. The effect's own comment claimed that could not happen.
+    const resolveAgentNames = vi.fn(async () => { throw new Error('registry unreadable') })
+    const mounted = mount({ enabled: true, resolveAgentNames })
+    await waitFor(() => expect(resolveAgentNames).toHaveBeenCalled())
+    await act(async () => { await Promise.resolve() })
+
+    // Nudge the workspace repeatedly without changing WHICH identities exist.
+    for (let i = 0; i < 6; i += 1) {
+      await act(async () => {
+        mounted.control.current?.(prev => ({ ...prev, activeTabId: `tab-${i}` }))
+        await Promise.resolve()
+      })
+    }
+
+    // Three attempts, not one: a rejection can be a transient collision on the
+    // shared serialization tail, so giving up immediately would leave agents
+    // unnamed for a condition that fixes itself.
+    expect(resolveAgentNames.mock.calls.length).toBeLessThanOrEqual(3)
+  })
+
+  it('asks again once the identity set actually changes', async () => {
+    // The breaker must not become a permanent mute: a new agent is a new
+    // question, and the registry may have been repaired since.
+    const resolveAgentNames = vi.fn(async () => { throw new Error('registry unreadable') })
+    const mounted = mount({ enabled: true, resolveAgentNames })
+    await waitFor(() => expect(resolveAgentNames).toHaveBeenCalled())
+    await act(async () => { await Promise.resolve() })
+    for (let i = 0; i < 5; i += 1) {
+      await act(async () => {
+        mounted.control.current?.(prev => ({ ...prev, activeTabId: `tab-${i}` }))
+        await Promise.resolve()
+      })
+    }
+    const beforeNewAgent = resolveAgentNames.mock.calls.length
+
+    await act(async () => {
+      mounted.control.current?.(prev => ({
+        ...prev,
+        sessions: { ...prev.sessions, 'agent-two': { cwd: '/recorded', kind: 'claude' } },
+      }))
+      await Promise.resolve()
+    })
+
+    await waitFor(() =>
+      expect(resolveAgentNames.mock.calls.length).toBeGreaterThan(beforeNewAgent))
+  })
+
+  it('treats an over-long identity as absent, so one bad record cannot mute the window', async () => {
+    // main validates z.string().min(1).max(200) over the WHOLE array, so a
+    // single hand-edited identity longer than that made requestSchema.parse
+    // reject every identity in the batch — and the reconciler swallows that
+    // silently, so no agent in the window ever received a name. The renderer's
+    // own comment named main's schema verbatim but mirrored only its type half.
+    const resolveAgentNames = vi.fn(async (identities: string[]) =>
+      Object.fromEntries(identities.map(identity => [identity, 'Apollo'])))
+    const base = workspace()
+    const initial = {
+      ...base,
+      sessions: {
+        ...base.sessions,
+        'agent-long': { cwd: '/recorded', kind: 'claude', agentNameId: 'x'.repeat(201) },
+      },
+    } as unknown as WorkspaceState
+    mount({ enabled: true, resolveAgentNames, initial })
+
+    await waitFor(() => expect(resolveAgentNames).toHaveBeenCalled())
+    await act(async () => { await Promise.resolve() })
+
+    const asked = resolveAgentNames.mock.calls.flatMap(call => call[0])
+    expect(asked.some(identity => identity.length > 200)).toBe(false)
+    // And the agent heals rather than staying stuck: an unusable identity is
+    // re-claimed exactly like a malformed one.
+    expect(asked).toContain('agent-long')
+  })
 })

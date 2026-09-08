@@ -1,3 +1,5 @@
+import { AGENT_NAME_IDENTITY_MAX_LENGTH } from '@shared/types/agentNames'
+import { identityCarryIsPending } from '@renderer/workspace/agentNames/pendingIdentityCarry'
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 
 import type { SessionMeta, WorkspaceState } from '@renderer/workspace/types'
@@ -26,9 +28,20 @@ function isNameable(meta: Pick<SessionMeta, 'kind'>): boolean {
  *    naming for every agent in the window. Buried records never pass through
  *    the claim above (it walks `state.sessions` only), so that guard cannot
  *    cover this one.
+ *
+ * WHY the LENGTH bound is imported rather than written here: this comment
+ * already named main's schema verbatim, but only the type half was actually
+ * mirrored. An identity longer than 200 characters passed this check, entered
+ * the request array, and made the whole batch fail validation — the exact
+ * batch-wide outage the paragraph above describes, reachable from one
+ * hand-edited workspace.json. Sharing the constant makes the two halves
+ * impossible to drift apart again.
  */
 function identityOf(meta: Pick<SessionMeta, 'agentNameId'>): string | null {
-  return typeof meta.agentNameId === 'string' && meta.agentNameId.length > 0 ? meta.agentNameId : null
+  const identity = meta.agentNameId
+  if (typeof identity !== 'string') return null
+  if (identity.length === 0 || identity.length > AGENT_NAME_IDENTITY_MAX_LENGTH) return null
+  return identity
 }
 
 /**
@@ -49,6 +62,12 @@ export function claimMissingIdentities(state: WorkspaceState): WorkspaceState {
   const sessions = { ...state.sessions }
   for (const [sessionId, meta] of Object.entries(state.sessions)) {
     if (!isNameable(meta) || identityOf(meta)) continue
+    // A successor mid-replacement is about to inherit its predecessor's
+    // identity in this same operation. Claiming one for it here allocates a
+    // name that the very next commit overwrites and that nothing will ever
+    // reference again — and names are never recycled. See
+    // pendingIdentityCarry for why the gap is observable at all.
+    if (identityCarryIsPending(sessionId)) continue
     sessions[sessionId] = { ...meta, agentNameId: sessionId }
     changed = true
   }
