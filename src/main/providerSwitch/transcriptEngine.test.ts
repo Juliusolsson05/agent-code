@@ -109,7 +109,7 @@ describe('host transcript adapter registry', () => {
     mocks.importOpencodeSession.mockResolvedValue('ses_target')
     const value = { info: { id: 'ses_target' }, messages: [] }
 
-    await expect(getHostTranscriptAdapter('opencode').write('/project', [value]))
+    await expect(getHostTranscriptAdapter('opencode').write('/project', { values: [value] }))
       .resolves.toBe('opencode://session/ses_target')
     expect(mocks.importOpencodeSession).toHaveBeenCalledWith(
       { binary: '/tool', cwd: '/project' },

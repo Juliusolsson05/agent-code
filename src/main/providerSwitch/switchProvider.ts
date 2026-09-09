@@ -355,8 +355,8 @@ export async function switchProvider(
     now: new Date().toISOString(),
     targetProfile,
   })
-  const targetProviderSessionId = target.sessionId(projection.values)
-  const targetFilePath = await target.write(targetCwd, projection.values)
+  const targetProviderSessionId = target.sessionId(projection)
+  const targetFilePath = await target.write(targetCwd, projection)
 
   return {
     kind: 'switched',

@@ -61,3 +61,45 @@ safe app streaming; committed-only delivery is preferable to misattribution,
 but must be reported honestly. History reset/caught-up is a byte boundary, not
 provider idle. Native encrypted reasoning portability is not universally
 verified. Component CI and app CI must be reported separately.
+
+## Verified Stage Progress
+
+Component PRs are now public: grok-code-headless#1 at c3ecb63 and
+agent-transcript-parser#27 at 5c43207. Both have green package CI, including
+Node 20.19.0 and Node 24. The app branch includes main 037da45b and those exact
+source revisions; no headless file dependency or lockfile workaround was added.
+
+The host contract now carries the complete projection through switch, duplicate
+and rewind. The Grok file publisher validates native rows, counts, UUID/cwd and
+format before reserving an exclusive directory; summary.json is published last
+and atomically. Rollback never removes a directory another publisher owns.
+Reads reject changing, partial, corrupt, unsupported-format and nonregular data.
+
+Verified on Node 24: 62 switching unit tests, 9 real-filesystem/parser system
+tests, full app typecheck, and one installed-Grok loopback test using the APP
+publisher. The native test proves imported tool context reaches inference,
+native system instructions are supplied and a new reply is appended without
+re-executing historical tools. It does not prove general composer readiness.
+
+Seven read-only orchestration agents audited architecture and reviewed the
+host boundary. Verified format/FIFO findings were fixed and re-reviewed. The
+runtime audit also required raw PTY output and process identity, now exposed
+and verified in headless (150 deterministic tests). Runtime registration and
+renderer consumption are NOT implemented by this publication stage.
+
+## Source-Backed Follow-up Gates
+
+- Grok's TUI PagerArgs does not expose the agent-subcommand --plugin-dir flag
+  or a generic per-launch MCP config override. Do not invent that launch flag,
+  overwrite user config, copy auth or claim built-in MCP is already supported.
+- Empty/unfocused native composer placeholder text and transcript catch-up do
+  not prove ready input. Capture actual focused-empty, multiline human draft,
+  cleared composer and overlay states before enabling automated submission.
+- App history replacement needs a correctness-bearing transport/store reset
+  across desktop and phone. A diagnostic event cannot secretly become that
+  contract, and native JSONL records must not contain invented reset rows.
+- Upstream x-grok-session-id, x-grok-turn-idx and x-grok-req-id provide a
+  candidate streaming attribution boundary. Verify against installed-native
+  requests before enabling semantic rendering; matching output text is invalid.
+- The initial registration must respect existing directory guards, agent-name
+  identity carry, text delivery and session retirement from current main.

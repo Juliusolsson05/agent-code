@@ -25,6 +25,7 @@ vi.mock('@main/providerSwitch/transcriptEngine.js', () => ({
 }))
 
 import { duplicateSession } from './duplicateSession.js'
+import { projectGrokNativeResume } from 'agent-transcript-parser'
 
 const conversation = {
   schemaVersion: 1 as const,
@@ -65,7 +66,7 @@ describe('duplicateSession neutral integration', () => {
         targetSessionId: '00000000-0000-4000-8000-000000000098',
       }),
     )
-    expect(mocks.write).toHaveBeenCalledWith('/target', [{ sessionId: 'new-session' }])
+    expect(mocks.write).toHaveBeenCalledWith('/target', { values: [{ sessionId: 'new-session' }] })
     expect(result).toEqual({
       provider: 'claude',
       newProviderSessionId: 'new-session',
@@ -80,6 +81,19 @@ describe('duplicateSession neutral integration', () => {
       cwd: '/project',
     })).rejects.toThrow('No transcript engine adapter')
     expect(mocks.read).not.toHaveBeenCalled()
+  })
+
+  it('passes a complete native projection including sidecars to identity and storage adapters', async () => {
+    // The orchestration is provider-neutral: exercise the real Grok projector
+    // through the controlled adapter boundary before Grok UI registration.
+    const projection = projectGrokNativeResume(conversation, {
+      cwd: '/target', targetSessionId: '00000000-0000-4000-8000-000000000098',
+      now: '2026-09-08T00:00:00.000Z', model: 'fixture-model',
+    })
+    mocks.project.mockResolvedValue(projection)
+    await duplicateSession({ provider: 'claude', sourceProviderSessionId: 'source', cwd: '/target' })
+    expect(mocks.sessionId).toHaveBeenCalledWith(projection)
+    expect(mocks.write).toHaveBeenCalledWith('/target', projection)
   })
 
   it('duplicates an empty OpenCode export because blank sessions are native import values', async () => {

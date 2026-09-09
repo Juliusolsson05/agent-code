@@ -77,13 +77,13 @@ export async function rewindSession(
     targetSessionId: randomUUID(),
     now: new Date().toISOString(),
   })
-  const newProviderSessionId = adapter.sessionId(projection.values)
+  const newProviderSessionId = adapter.sessionId(projection)
   const draft = adapter.draft(rewind.draft)
 
   // All resolution, truncation, cleanup, and projection happens before this
   // single write. A stale address or incompatible target therefore cannot
   // leave a half-created provider session on disk.
-  const newFilePath = await adapter.write(request.cwd, projection.values)
+  const newFilePath = await adapter.write(request.cwd, projection)
   return {
     provider: request.provider,
     newProviderSessionId,

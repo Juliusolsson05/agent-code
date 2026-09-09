@@ -77,6 +77,14 @@ interface TranscriptSnapshot {
   prompts: PromptReference[]
 }
 
+export interface TranscriptPublication {
+  values: readonly Record<string, unknown>[]
+  // Grok owns its identity/model/counters in summary.json, not a JSONL row.
+  // Pass the projection object intact through every transformation so a host
+  // adapter can publish native sidecars without manufacturing history records.
+  summary?: Record<string, unknown>
+}
+
 export interface HostTranscriptAdapter {
   provider: string
   read(cwd: string, providerSessionId: string): Promise<ConversationDocument>
@@ -99,8 +107,8 @@ export interface HostTranscriptAdapter {
     conversation: ConversationDocument,
     context: TranscriptProjectionContext,
   ): Promise<NativeResumeProjectionResult>
-  write(cwd: string, values: readonly Record<string, unknown>[]): Promise<string>
-  sessionId(values: readonly Record<string, unknown>[]): string
+  write(cwd: string, publication: TranscriptPublication): Promise<string>
+  sessionId(publication: TranscriptPublication): string
 }
 
 const claudeAdapter: HostTranscriptAdapter = {
@@ -128,8 +136,8 @@ const claudeAdapter: HostTranscriptAdapter = {
       model: targetProfile.model,
     })
   },
-  write: writeProjectedClaudeSessionFile,
-  sessionId: projectedClaudeSessionId,
+  write: (cwd, { values }) => writeProjectedClaudeSessionFile(cwd, values),
+  sessionId: ({ values }) => projectedClaudeSessionId(values),
 }
 
 const codexAdapter: HostTranscriptAdapter = {
@@ -160,10 +168,10 @@ const codexAdapter: HostTranscriptAdapter = {
       model: targetProfile.model,
     })
   },
-  async write(_cwd, values) {
+  async write(_cwd, { values }) {
     return writeProjectedCodexRolloutFile(values)
   },
-  sessionId(values) {
+  sessionId({ values }) {
     return projectedCodexSessionMeta(values).id
   },
 }
@@ -190,7 +198,7 @@ const opencodeAdapter: HostTranscriptAdapter = {
       model: targetProfile.model,
     })
   },
-  async write(cwd, values) {
+  async write(cwd, { values }) {
     if (values.length !== 1 || !isRecord(values[0])) {
       throw new Error('Projected OpenCode resume must contain exactly one export object.')
     }
@@ -198,7 +206,7 @@ const opencodeAdapter: HostTranscriptAdapter = {
     const sessionId = await importOpencodeSession({ binary, cwd }, values[0])
     return `opencode://session/${sessionId}`
   },
-  sessionId(values) {
+  sessionId({ values }) {
     if (values.length !== 1 || !isRecord(values[0])) {
       throw new Error('Projected OpenCode resume must contain exactly one export object.')
     }

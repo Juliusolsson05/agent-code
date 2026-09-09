@@ -48,7 +48,7 @@ export async function duplicateSession(
     targetSessionId: randomUUID(),
     now: new Date().toISOString(),
   })
-  const newProviderSessionId = adapter.sessionId(projection.values)
-  const newFilePath = await adapter.write(targetCwd, projection.values)
+  const newProviderSessionId = adapter.sessionId(projection)
+  const newFilePath = await adapter.write(targetCwd, projection)
   return { provider: request.provider, newProviderSessionId, newFilePath }
 }
