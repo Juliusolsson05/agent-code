@@ -12,6 +12,7 @@ import { registerProviderIpc } from '@main/ipc/provider.js'
 import { registerLspIpc } from '@main/ipc/lsp.js'
 import { registerFsIpc } from '@main/ipc/fs.js'
 import { registerSessionsIpc } from '@main/ipc/sessions.js'
+import { registerAgentNamesIpc } from '@main/agentNames/ipc.js'
 import { registerWorkspaceIpc } from '@main/ipc/workspace.js'
 import { registerWindowIpc } from '@main/ipc/window.js'
 import type { WorkspaceFileStore } from '@main/storage/workspaceFileStore.js'
@@ -33,6 +34,8 @@ import { registerAgentManagementIpc } from '@main/ipc/agentManagement.js'
 import { registerAiWorkspaceIpc } from '@main/ipc/aiWorkspace.js'
 import { registerRenderedContentIpc } from '@main/ipc/renderedContent.js'
 import { registerCaffeinateIpc } from '@main/ipc/caffeinate.js'
+import { registerKeyVaultIpc } from '@main/ipc/keyVault.js'
+import type { VaultService } from '@main/keyVault/VaultService.js'
 import { registerRemoteIpc } from '@main/ipc/remote.js'
 import type { OrchestrationBridge } from '@main/orchestration/OrchestrationBridge.js'
 import type { AgentManagementBridge } from '@main/agentManagement/AgentManagementBridge.js'
@@ -75,6 +78,7 @@ export type IpcDeps = {
   agentManagementBridge: AgentManagementBridge
   aiWorkspaceRegistry: AiWorkspaceRegistry
   caffeinateController: CaffeinateController
+  vaultService: VaultService
   remoteController: RemoteController
   appRunJournal: AppRunJournal
   cliUpdateOrchestrator: CliUpdateOrchestrator
@@ -95,6 +99,7 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerFsIpc()
   registerSessionsIpc()
   registerWorkspaceIpc(deps.manager, deps.workspaceFileStore)
+  registerAgentNamesIpc()
   registerWindowIpc(deps.workspaceFileStore)
   registerGhostIpc(deps.ghostJournals)
   registerGitIpc()
@@ -111,6 +116,7 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerAiWorkspaceIpc(deps.aiWorkspaceRegistry)
   registerRenderedContentIpc()
   registerCaffeinateIpc(deps.caffeinateController)
+  registerKeyVaultIpc({ vaultService: deps.vaultService })
   registerRemoteIpc(deps.remoteController)
   registerIncidentIpc(deps.appRunJournal)
   // Debug export needs the lifecycle limiter's monotonic completeness state.

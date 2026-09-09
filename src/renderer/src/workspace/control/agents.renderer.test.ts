@@ -72,3 +72,30 @@ it('forwards supported attachment paths without changing the app draft, and reje
   expect(await invoke('agents.prompt', { sessionId: 'agent', prompt: 'inspect image', imagePaths: ['/tmp/operator-image.png'] })).toMatchObject({ ok: false, error: { outcome: 'not_started' } })
   expect(wake).not.toHaveBeenCalled(); expect(deliverPrompt).not.toHaveBeenCalled()
 })
+
+it('finds an agent by its spoken name from the window-local index too, not only from agents.search', async () => {
+  // WHY this belongs next to the global-search coverage in
+  // agentNames.renderer.test.ts: an operator reaches for whichever of the two
+  // find-an-agent tools its client exposes, and the only intended difference
+  // between them is window scope. agents.list omitted agentName from its
+  // free-text haystack, so "search for apoll" recovered a partially heard name
+  // globally and found nothing in the window that actually holds the agent.
+  const { invoke } = setup()
+  useAppStore.getState().setWorkspaceState(state => ({
+    ...state, sessions: { agent: { ...state.sessions.agent, agentNameId: 'identity-one' } },
+  }))
+  useAppStore.setState({ workspaceAgentNames: { 'identity-one': 'Apollo' },
+    settings: { ...useAppStore.getState().settings, agentNamesEnabled: true } })
+
+  expect(await invoke('agents.list', { query: 'apoll' })).toMatchObject({
+    ok: true, value: { total: 1, items: [{ sessionId: 'agent', agentName: 'Apollo' }] },
+  })
+  // Substring over the whole haystack, never an address: the exact-name rule
+  // stays in agents.search, and an unrelated name still matches nothing.
+  expect(await invoke('agents.list', { query: 'jasper' })).toMatchObject({ ok: true, value: { total: 0 } })
+
+  // With the setting off there is no name to match, exactly as agents.search
+  // reports — the observation is the single gate for both.
+  useAppStore.setState({ settings: { ...useAppStore.getState().settings, agentNamesEnabled: false } })
+  expect(await invoke('agents.list', { query: 'apoll' })).toMatchObject({ ok: true, value: { total: 0 } })
+})

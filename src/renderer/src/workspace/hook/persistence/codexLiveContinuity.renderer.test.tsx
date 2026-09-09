@@ -40,6 +40,22 @@ const { createSession, loadInitialHistoryForSession } = vi.hoisted(() => ({
   loadInitialHistoryForSession: vi.fn(),
 }))
 
+vi.mock('@main/workspaceDirectory.js', () => ({
+  // This suite drives a real SessionManager against the synthetic cwd
+  // '/fixture/project-1', which does not exist on disk. The spawn-path guard
+  // stats the cwd and would refuse the recover, so the session never starts
+  // and the JSONL identity this test waits for never arrives. Stubbed here for
+  // the same reason as sessionRecovery.integration.test.ts — these are the
+  // only two suites that construct the real manager.
+  MissingWorkspaceDirectoryError: class MissingWorkspaceDirectoryError extends Error {
+    constructor(readonly cwd: string) {
+      super(`Workspace folder is missing: ${cwd}`)
+      this.name = 'MissingWorkspaceDirectoryError'
+    }
+  },
+  assertWorkspaceDirectoryExists: vi.fn(async () => {}),
+}))
+
 vi.mock('@providers/registry.main.js', () => ({
   getMainProvider: () => ({ createSession }),
 }))

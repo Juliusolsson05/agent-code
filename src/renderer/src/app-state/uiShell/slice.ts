@@ -50,6 +50,7 @@ export const createUiShellSlice: StateCreator<
   closeOldAgentsOpen: false,
   bulkProviderSwitchOpen: false,
   usageModalOpen: false,
+  keyVaultOpen: false,
   providerSwitchPickerSessionId: null,
   rewindPromptSessionId: null,
   agentViewModePickerSessionId: null,
@@ -328,6 +329,10 @@ export const createUiShellSlice: StateCreator<
     set({ usageModalOpen: true }, false, 'uiShell/openUsageModal'),
   closeUsageModal: () =>
     set({ usageModalOpen: false }, false, 'uiShell/closeUsageModal'),
+  openKeyVault: () =>
+    set({ keyVaultOpen: true }, false, 'uiShell/openKeyVault'),
+  closeKeyVault: () =>
+    set({ keyVaultOpen: false }, false, 'uiShell/closeKeyVault'),
 
   openRewindPrompt: sessionId =>
     set({ rewindPromptSessionId: sessionId }, false, 'uiShell/openRewindPrompt'),

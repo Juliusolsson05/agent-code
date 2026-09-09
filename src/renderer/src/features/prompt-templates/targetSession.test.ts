@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
-import { promptTemplateTargetSessionIdForState } from '@renderer/features/prompt-templates/targetSession'
+import {
+  promptTemplateComposerSessionIdForState,
+  promptTemplateTargetSessionIdForState,
+} from '@renderer/features/prompt-templates/targetSession'
 import type { WorkspaceState } from '@renderer/workspace/types'
 
 function stateWithFocusedSession(kind: 'claude' | 'terminal'): WorkspaceState {
@@ -21,10 +24,19 @@ function stateWithFocusedSession(kind: 'claude' | 'terminal'): WorkspaceState {
 }
 
 describe('promptTemplateTargetSessionIdForState', () => {
-  it('offers template insertion only when the command target owns an agent composer', () => {
+  it('accepts agent panes and terminal panes (bracket-paste insertion, #830)', () => {
     expect(promptTemplateTargetSessionIdForState(stateWithFocusedSession('claude')))
       .toBe('session-1')
+    // Terminals are valid targets: deliverTextToSession routes them to a
+    // bracketed paste over sendInput instead of a composer draft edit.
     expect(promptTemplateTargetSessionIdForState(stateWithFocusedSession('terminal')))
+      .toBe('session-1')
+  })
+
+  it('restricts composer-draft commands to agent panes', () => {
+    expect(promptTemplateComposerSessionIdForState(stateWithFocusedSession('claude')))
+      .toBe('session-1')
+    expect(promptTemplateComposerSessionIdForState(stateWithFocusedSession('terminal')))
       .toBeNull()
   })
 

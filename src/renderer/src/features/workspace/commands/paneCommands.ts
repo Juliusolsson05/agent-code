@@ -483,8 +483,12 @@ export const paneCommands: CommandDef[] = [
     surface: 'session',
     title: 'Auto-follow Focused Agent',
     keywords: ['tail'],
-    description: '**What it does:** Toggles feed **auto-follow** for the focused target.\n\n**Use when:** You want output to stay pinned to the bottom.\n\n**Notes:** Applies to the visible command target, including **Dispatch** selection.',
-    renderedViewPolicy: { kind: 'requires-rendered-feed' },
+    description: '**What it does:** Toggles **auto-follow** for the focused target.\n\n**Use when:** You want output to stay pinned to the bottom.\n\n**Notes:** Applies to the visible command target, including **Dispatch** selection. Works in both the rendered feed and raw agent terminal views — in a terminal view the TUI output stays pinned to the bottom.',
+    // NO `renderedViewPolicy` — deliberately: this command owns follow
+    // behavior on BOTH agent surfaces now (Feed's tailMode on the rendered
+    // surface, useAgentTerminalFollow on the raw terminal). The old
+    // 'requires-rendered-feed' gate hid it on terminal surfaces, where
+    // following is exactly as meaningful.
     getState: ({ workspace, flags }) => {
       const sessionId = commandTargetSessionId(workspace)
       const tailMode = sessionId
@@ -514,11 +518,11 @@ export const paneCommands: CommandDef[] = [
     when: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return false
-      // WHY tail is agent-only even though terminals are Dispatch rows:
-      // tailMode controls the rendered transcript/feed scroll container.
-      // Terminal panes delegate scrollback to xterm.js, so toggling this
-      // runtime flag on a terminal would present a command that appears to
-      // work while changing nothing visible.
+      // WHY tail is agent-only even though plain shells are Dispatch rows:
+      // agent sessions consume tailMode on both of their surfaces since the
+      // terminal-follow work (useAgentTerminalFollow). Plain shell terminals
+      // (kind === 'terminal') delegate entirely to xterm scrollback and have
+      // no tail state.
       return workspace.state.sessions[sessionId]?.kind !== 'terminal'
     },
     run: ({ workspace }) => {
@@ -538,13 +542,13 @@ export const paneCommands: CommandDef[] = [
     surface: 'app',
     title: 'Auto-follow All Visible Agents',
     description:
-      '**What it does:** Toggles feed **auto-follow for every visible agent** at once.\n\n**Use when:** You are watching several agents work and want them all pinned to the bottom.\n\n**Notes:** Scopes to what is on screen — in **single dispatch** that is the one agent, in **tiled** every lane, in the **grid** the current tab\'s panes only. Panes you open afterward tail too, until you toggle it off. Terminals are never affected.\n\n**Caution:** A tailing feed cannot be scrolled up — this takes scrollback away from every visible pane at once, and turning it off does not restore where you were reading.',
+      '**What it does:** Toggles **auto-follow for every visible agent** at once.\n\n**Use when:** You are watching several agents work and want them all pinned to the bottom.\n\n**Notes:** Scopes to what is on screen — in **single dispatch** that is the one agent, in **tiled** every lane, in the **grid** the current tab\'s panes only. Panes you open afterward tail too, until you toggle it off. Plain shell terminals are never affected; raw agent terminal views follow too.\n\n**Caution:** A tailing pane cannot be scrolled up. Turning this off leaves individually enabled followers on; other panes restore their earlier reading position where that content is still retained. Raw terminal follow controls xterm scrollback, not a TUI\'s internal history.',
     keywords: ['tail', 'all', 'follow', 'auto-scroll', 'bulk', 'every', 'watch', 'tail all', 'tail'],
-    // WHY no `renderedViewPolicy` even though per-session Tail has one: that
-    // gate resolves ONE target session and checks whether it renders a feed.
-    // Tail All has no single target — it is a stance that applies to whatever
-    // is mounted, now and later. Gating it on the currently focused pane would
-    // hide a workspace-level command because of one pane's view mode.
+    // WHY no `renderedViewPolicy` — Tail All is a stance over whatever is
+    // mounted, on either agent surface (rendered feed or raw terminal view,
+    // both of which follow now). Gating it on the currently focused pane's
+    // view mode would hide a workspace-level command for pane-local reasons.
+    // (Per-session Tail used to carry such a policy; it no longer does.)
     //
     // WHY no `when` guard: it is meaningful in every layout mode, and with zero
     // agent panes visible it is a harmless no-op rather than a command that
@@ -557,8 +561,10 @@ export const paneCommands: CommandDef[] = [
     category: 'navigate',
     surface: 'session',
     title: 'Jump to Latest Message',
-    description: '**What it does:** Scrolls to the **latest agent message**.\n\n**Use when:** You are far up in the feed and want to return to the bottom.\n\n**Notes:** Agent panes only.',
-    renderedViewPolicy: { kind: 'requires-rendered-feed' },
+    description: '**What it does:** Scrolls to the **latest agent message**.\n\n**Use when:** You are far up in the feed and want to return to the bottom.\n\n**Notes:** Agent panes only. In a raw terminal view this scrolls the xterm viewport, which works for providers that render inline (Claude, Codex). A TUI that owns its own transcript on the alternate screen (OpenCode Terminal) keeps its history outside the viewport, so there is nothing here to scroll — use that TUI\'s own scroll keys.',
+    // NO `renderedViewPolicy` — the xterm viewport answers jump requests too
+    // (useAgentTerminalFollow); gating on a rendered feed would hide this on
+    // the surface where returning to the bottom is most often needed.
     when: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return false

@@ -121,8 +121,13 @@ export function PaneHeader({
               {paneLabel}
             </span>
           )}
-          <span className="truncate" title={projectDir ?? 'no project dir'}>
-            {shortenCwd(projectDir)}
+          {/* truncate-START: every pane shares the leading path segments, so
+              clipping the end hid the one part that identifies this agent. */}
+          <span className="truncate-start" title={projectDir ?? 'no project dir'}>
+            {/* The inner dir="ltr" is required, not decorative: the outer
+                element's rtl direction picks WHICH edge clips, and without
+                this the path's own characters are reordered with it. */}
+            <span dir="ltr">{shortenCwd(projectDir)}</span>
           </span>
         </div>
         <PaneHeaderColorFlag sessionId={sessionId} />
@@ -133,7 +138,7 @@ export function PaneHeader({
           title is the scanning aid; giving it an independent truncation slot
           keeps five narrow Tiled Dispatch lanes legible without weakening the
           existing header contract. Untitled agents render no row at all. */}
-      <AgentTitleHeader title={agentTitle} />
+      <AgentTitleHeader sessionId={sessionId} title={agentTitle} />
       {relatedAgentTabs.length > 0 && (
         <div className="flex items-center gap-1 overflow-x-auto border-t border-border/70 px-2 py-1 text-[10px]">
           {relatedAgentTabs.map((tab, index) => {

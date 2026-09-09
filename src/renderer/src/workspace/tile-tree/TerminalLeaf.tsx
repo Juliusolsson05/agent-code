@@ -7,6 +7,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import type { SessionId } from '@renderer/workspace/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { useAppStore } from '@renderer/app-state/hooks'
+import { PaneToast } from '@renderer/workspace/tile-tree/TileLeaf/PaneToast'
 import { useComposerDictation } from '@renderer/workspace/tile-tree/TileLeaf/useComposerDictation'
 import {
   THEME_CHANGED_EVENT,
@@ -14,6 +15,7 @@ import {
 } from '@renderer/app-state/settings/theme'
 import { readXtermTheme, syncXtermTheme } from '@renderer/workspace/tile-tree/xtermTheme'
 import { createTerminalInputForwarder } from '@renderer/workspace/tile-tree/terminalInputForwarder'
+import { encodeTerminalPaste, registerTerminalPasteTarget } from '@renderer/workspace/terminal/textPasteTarget'
 import { subscribeToTerminalData } from '@renderer/workspace/terminal/sessionDataDispatcher'
 import { attachXtermWebglRenderer } from '@renderer/workspace/terminal/xtermWebglRenderer'
 
@@ -98,6 +100,31 @@ export function TerminalLeaf({
     onMessage: message => workspace.showPaneToast(sessionId, message),
   })
 
+  // WHY this leaf renders a pane toast at all, and why it subscribes to the
+  // STRING rather than taking the runtime as a prop:
+  //
+  // Plain terminal panes were the one leaf kind that called showPaneToast
+  // (dictation at the top of this file, and the resume/backend messages
+  // below) without ever rendering PaneToast, so every one of those messages
+  // was written into the store and shown to nobody. #840 made that a dead
+  // command rather than a missing nicety: it opened terminal panes up as
+  // prompt-template and vault-key insertion targets, and routed ALL of that
+  // feature's feedback — success, "pane is not ready", "target pane is gone" —
+  // through showPaneToast. On a shell pane a failed insertion produced no
+  // toast, and the palette does not close on failure, so nothing happened at
+  // all.
+  //
+  // A primitive selector, not the whole runtime: this leaf deliberately does
+  // not re-render on runtime ticks (the xterm instance owns its own output
+  // path), and threading the runtime in as a prop would re-render it on every
+  // PTY chunk. Subscribing to the toast string re-renders on exactly the one
+  // transition that changes what is painted.
+  // Optional chain on the MAP as well as the entry: several renderer specs and
+  // the phone bundle mock the store with only the keys they use, and the
+  // repository's standing rule is that a keyless store must degrade, never
+  // throw (see agentNames/selectors.ts and PaneHeader.phoneCoupling).
+  const paneToast = useAppStore(state => state.workspaceRuntimes?.[sessionId]?.paneToast ?? null)
+
   const acknowledgeSession = workspace.acknowledgeSession
   const ensureSessionLiveRef = useRef(workspace.ensureSessionLive)
   ensureSessionLiveRef.current = workspace.ensureSessionLive
@@ -147,6 +174,7 @@ export function TerminalLeaf({
     let webglRenderer: ReturnType<typeof attachXtermWebglRenderer> | null = null
     let onDataDisposable: { dispose(): void } | null = null
     let offTerminalData: (() => void) | null = null
+    let offTextPaste: (() => void) | null = null
     let resizeObserver: ResizeObserver | null = null
     let resizeFrame: number | null = null
     let disposed = false
@@ -277,6 +305,13 @@ export function TerminalLeaf({
       // TUI's, but the same stale-reply hazard applies.
       const forwarder = createTerminalInputForwarder(data => {
         void window.api.sendInput(sessionId, data)
+      })
+      offTextPaste = registerTerminalPasteTarget(sessionId, {
+        isActive: () => !disposed && focusedRef.current && ownerVisibleRef.current,
+        paste: async text => {
+          if (disposed || !ownerVisibleRef.current || !attachedBackfillDone || forwarder.replaying || !term) return false
+          return window.api.sendInput(sessionId, encodeTerminalPaste(text, term.modes.bracketedPasteMode))
+        },
       })
       onDataDisposable = term.onData(data => {
         if (forwarder.replaying) return
@@ -434,6 +469,7 @@ export function TerminalLeaf({
       resizeObserver?.disconnect()
       onDataDisposable?.dispose()
       offTerminalData?.()
+      offTextPaste?.()
       webglRenderer?.dispose()
       if (onThemeChangedListenerRef) {
         window.removeEventListener(THEME_CHANGED_EVENT, onThemeChangedListenerRef)
@@ -553,6 +589,16 @@ export function TerminalLeaf({
         ref={containerRef}
         className="flex-1 min-h-0 min-w-0 overflow-hidden relative"
       />
+      {/* Same slot and ordering as AgentTerminalLeaf: below the terminal box.
+          Note what this DOES cost, since the obvious reading is wrong — the
+          slot is a non-shrinking flex sibling, so while a toast is on screen
+          the xterm box really is shorter, its ResizeObserver fires, and the
+          PTY is resized down and then back up when the toast clears. That is
+          the same shape as AgentTerminalLeaf and is accepted for the same
+          reason: pane feedback that is never rendered is worse than a
+          transient reflow. It is also why the toast lives here rather than
+          overlaying the terminal, where it would hide output. */}
+      <PaneToast message={paneToast} />
     </div>
   )
 }

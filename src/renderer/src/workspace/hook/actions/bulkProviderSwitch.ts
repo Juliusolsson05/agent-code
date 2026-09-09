@@ -47,23 +47,61 @@ export type BulkSwitchPolicy = {
   sourceCompactionConfirmed: boolean
 }
 
-/** The return path has no modal, so it hard-codes the safe policy.
+/** The return path has no modal, so it carries the batch's recorded consent.
  *
  *  `allowSourceTurns: false` because the source here is the provider the user
  *  parked on, and a return usually happens because the ORIGINAL provider's
  *  window reset — nothing licenses spending the parking provider's quota, and
  *  the whole feature exists to avoid needing to.
  *
- *  `compactOnArrival` only for a Claude destination: Claude is the one target
- *  with a compaction the renderer can drive (see compactAfterSwitch, which
- *  reports every other kind as a no-op), and a returning transcript has grown
- *  by everything the agent did while parked. */
-function returnPolicy(targetKind: AgentProviderKind): BulkSwitchPolicy {
+ *  `compactOnArrival` was previously hard-coded to `targetKind === 'claude'`,
+ *  which meant one Return click spent Claude quota once per agent and locked
+ *  every one of those composers for the arrival wait plus the compaction wait
+ *  — minutes each, no cancel — with no checkbox and none of the quota
+ *  disclosure the forward modal shows. It now reuses the consent the user gave
+ *  for this exact batch. `&& targetKind === 'claude'` still applies because
+ *  Claude is the one destination with a compaction the renderer can drive
+ *  (compactAfterSwitch reports every other kind as a no-op), so consenting to
+ *  it on a Codex return would promise something that cannot happen. */
+function returnPolicy(
+  targetKind: AgentProviderKind,
+  batchConsentedToArrivalCompaction: boolean,
+): BulkSwitchPolicy {
   return {
     allowSourceTurns: false,
-    compactOnArrival: targetKind === 'claude',
+    compactOnArrival: batchConsentedToArrivalCompaction && targetKind === 'claude',
     sourceCompactionConfirmed: false,
   }
+}
+
+/**
+ * Build the one toast a bulk operation gets.
+ *
+ * WHY the reasons ride along instead of only the counts: "Switched 0 agents to
+ * Claude (12 failed)" tells the user nothing they can act on, and the core
+ * deliberately produces strings that do — the poisoned-carrier abort names its
+ * remedy, and the shrink ladder's summary exists so no lossy step is silent.
+ * Deduped because a batch usually fails for one shared reason, and capped
+ * because PaneToast clamps to three lines and an uncapped list would push the
+ * counts out of view.
+ */
+const MAX_SUMMARY_NOTES = 2
+
+function summarize(
+  base: string,
+  counts: { skipped: number; failed: number },
+  notes: ReadonlySet<string>,
+): string {
+  const tally: string[] = []
+  if (counts.skipped > 0) tally.push(`${counts.skipped} skipped`)
+  if (counts.failed > 0) tally.push(`${counts.failed} failed`)
+  let message = tally.length > 0 ? `${base} (${tally.join(', ')})` : base
+  const shown = [...notes].slice(0, MAX_SUMMARY_NOTES)
+  if (shown.length > 0) {
+    const remaining = notes.size - shown.length
+    message += ` · ${shown.join(' · ')}${remaining > 0 ? ` · +${remaining} more` : ''}`
+  }
+  return message
 }
 
 export function useBulkProviderSwitchActions(
@@ -92,6 +130,21 @@ export function useBulkProviderSwitchActions(
       // enough that predictable mutation beats raw speed.
       const switched: ProviderSwitchBatchAgent[] = []
       let failed = 0
+      // 'skipped' used to be silently dropped here. Two of the core's most
+      // common outcomes — mid-turn, and "still finishing a provider switch" —
+      // are skips, not failures, and a batch where every agent was busy would
+      // otherwise print "Switched 0 agents" with no hint that anything was
+      // even attempted.
+      let skipped = 0
+      // WHY the strings are kept rather than only counted: the core writes
+      // messages that name the exact remedy (the poisoned-carrier abort) and
+      // the exact loss (the shrink ladder's summary, added specifically so
+      // "no lossy step is silent"). Bulk discarded both and printed
+      // "Switched 0 agents to Claude (12 failed)" / "12 raw", which is
+      // unactionable — a point the sibling model-switch function in the modal
+      // already argues in its own comment. Deduped and capped, because twenty
+      // agents usually fail for the same one reason.
+      const notes = new Set<string>()
       // Per-strategy tally, not a single "compacted" flag: a batch where nine
       // agents crossed losslessly and two had to be shrunk is a materially
       // different outcome from one where all eleven were shrunk, and the user
@@ -129,8 +182,18 @@ export function useBulkProviderSwitchActions(
         // succeeded but lost its meta mid-loop is not in `switched`, so counting
         // its strategy would produce "Switched 2 agents to Claude: 3 native" —
         // a summary that contradicts itself.
-        if (result.status === 'switched' && meta && originalKind) {
+        // Branch on status FIRST so each arm narrows cleanly. The old shape
+        // folded `&& meta && originalKind` into the success test, which pushed
+        // a switched-but-meta-less result into the skipped arm.
+        if (result.status === 'failed') {
+          failed += 1
+          notes.add(result.message)
+        } else if (result.status === 'skipped') {
+          skipped += 1
+          notes.add(result.reason)
+        } else if (meta && originalKind) {
           counts[result.strategy] += 1
+          if (result.shrinkSummary) notes.add(result.shrinkSummary)
           switched.push({
             sessionId: result.newSessionId,
             cwd: meta.cwd,
@@ -138,10 +201,14 @@ export function useBulkProviderSwitchActions(
             switchedToKind: targetKind,
             title: meta.title,
           })
-        } else if (result.status === 'failed') {
-          failed += 1
+        } else {
+          // Switched, but its meta vanished mid-loop so it cannot be recorded
+          // as a batch member. Counting its strategy would produce a summary
+          // that contradicts itself ("Switched 2 agents: 3 native"), and
+          // silently dropping it would under-report the work done.
+          skipped += 1
+          notes.add('An agent switched but was closed before it could be recorded')
         }
-        // 'skipped' (e.g. already on target) is silently not part of the batch.
       }
 
       // Replace the remembered batch outright — one level of memory only. If
@@ -157,6 +224,9 @@ export function useBulkProviderSwitchActions(
             sourceKind: switched[0].originalKind,
             targetKind,
             agents: switched,
+            // Recorded so Return can reuse this consent instead of deciding
+            // for the user. See returnPolicy.
+            compactOnArrival: policy.compactOnArrival,
           },
         }))
       }
@@ -167,7 +237,7 @@ export function useBulkProviderSwitchActions(
         counts.shrunk > 0 ? `${counts.shrunk} shrunk` : null,
       ].filter(Boolean).join(', ')
       const base = `Switched ${pluralAgents(switched.length)} to ${providerLabel(targetKind)}${tally ? `: ${tally}` : ''}`
-      showToast(failed > 0 ? `${base} (${failed} failed)` : base)
+      showToast(summarize(base, { skipped, failed }, notes))
     },
     [refs, sessionActions, setRuntimes, setState, showToast],
   )
@@ -182,6 +252,10 @@ export function useBulkProviderSwitchActions(
     let returned = 0
     let skipped = 0
     let failed = 0
+    const notes = new Set<string>()
+    // Agents that did NOT make it home. See the batch update below for why
+    // these have to survive: this modal is the only return affordance there is.
+    const unreturned: typeof batch.agents = []
 
     for (const agent of batch.agents) {
       const meta = refs.stateRef.current.sessions[agent.sessionId]
@@ -198,7 +272,7 @@ export function useBulkProviderSwitchActions(
         continue
       }
 
-      const policy = returnPolicy(agent.originalKind)
+      const policy = returnPolicy(agent.originalKind, batch.compactOnArrival)
       const result = await switchAgentProvider({
         sessionId: agent.sessionId,
         targetKind: agent.originalKind,
@@ -213,21 +287,53 @@ export function useBulkProviderSwitchActions(
         onProgress: event => showToast(event.message, 305_000),
         onArrivalFailure: message => showToast(message),
       })
-      if (result.status === 'switched') returned += 1
-      else if (result.status === 'failed') failed += 1
-      else skipped += 1
+      if (result.status === 'switched') {
+        returned += 1
+        if (result.shrinkSummary) notes.add(result.shrinkSummary)
+      } else if (result.status === 'failed') {
+        failed += 1
+        notes.add(result.message)
+        unreturned.push(agent)
+      } else {
+        notes.add(result.reason)
+        // 'skipped' here means the pane refused the switch right now — most
+        // often "still finishing a provider switch". It is still sitting on
+        // the target provider, so it is still returnable later.
+        skipped += 1
+        unreturned.push(agent)
+      }
     }
 
-    // Returning consumes the batch — there is no "return again". A future
-    // forward switch will record a fresh one.
-    setState(prev => ({ ...prev, lastProviderSwitchBatch: null }))
+    // WHY the batch is trimmed rather than dropped:
+    //
+    // "Returning consumes the batch" is right only for agents that actually
+    // returned. Dropping it wholesale meant a return in which NOTHING came
+    // back still destroyed the record, and this modal is the only return
+    // affordance in the app — there is no other way to get those agents home.
+    //
+    // That is not a rare case. Arrival compaction is on by default whenever
+    // the largest conversation exceeds 150k chars (the population this
+    // feature exists for), and it holds `providerSwitch` set for the arrival
+    // readiness wait plus the compaction wait — minutes per pane. Every agent
+    // in a batch returned during that window is refused with "This pane is
+    // still finishing a provider switch", so returned === 0, and the user
+    // lost the batch by clicking the button that was supposed to restore it.
+    // Partial returns lost the remainder the same way: 1 of 20 home, 19
+    // records discarded.
+    //
+    // Keeping the unreturned agents means Return stays available and is
+    // simply retried. The batch is cleared only once it is empty.
+    setState(prev => {
+      if (prev.lastProviderSwitchBatch?.id !== batch.id) return prev
+      if (unreturned.length === 0) return { ...prev, lastProviderSwitchBatch: null }
+      return {
+        ...prev,
+        lastProviderSwitchBatch: { ...prev.lastProviderSwitchBatch, agents: unreturned },
+      }
+    })
 
-    let message = `Returned ${pluralAgents(returned)} to ${providerLabel(batch.sourceKind)}`
-    const notes: string[] = []
-    if (skipped > 0) notes.push(`${skipped} skipped`)
-    if (failed > 0) notes.push(`${failed} failed`)
-    if (notes.length > 0) message += ` (${notes.join(', ')})`
-    showToast(message)
+    const base = `Returned ${pluralAgents(returned)} to ${providerLabel(batch.sourceKind)}`
+    showToast(summarize(base, { skipped, failed }, notes))
   }, [refs, sessionActions, setRuntimes, setState, showToast])
 
   return { switchAgentsToProvider, returnLastProviderSwitchBatch }

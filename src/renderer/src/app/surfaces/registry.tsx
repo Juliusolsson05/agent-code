@@ -29,6 +29,7 @@ import { KeyboardShortcutsSurface } from '@renderer/features/settings/surfaces/K
 import { RewindToPromptSurface } from '@renderer/features/workspace/surfaces/RewindToPromptSurface'
 import { AgentTitlePromptSurface } from '@renderer/features/workspace/surfaces/AgentTitlePromptSurface'
 import { ProviderSwitchPickerSurface } from '@renderer/features/workspace/surfaces/ProviderSwitchPickerSurface'
+import { KeyVaultModalSurface } from '@renderer/features/key-vault/surfaces/KeyVaultModalSurface'
 
 // The surface registry (issue #494). Adding a surface = write a wrapper
 // in the owning feature's surfaces/ folder + add ONE import + ONE array
@@ -87,6 +88,7 @@ export const modalSurfaces: SurfaceEntry[] = [
   // New modals append so their z-50 sibling order cannot accidentally move an
   // established surface below one it used to cover; see the registry contract.
   { id: 'provider-switch-picker', Component: ProviderSwitchPickerSurface },
+  { id: 'key-vault', Component: KeyVaultModalSurface },
 ]
 
 /**

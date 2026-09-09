@@ -467,6 +467,29 @@ export function getSettingsRegistry(): SettingDefinition[] {
       },
     },
     {
+      // WHY the description spells out the retention and overflow rules: this
+      // text is the only explanation an external operator gets through
+      // settings.reference, and both rules are surprising. Assignments survive
+      // disabling (so re-enabling does not re-address the fleet) and the pool
+      // is finite (so a large workspace will legitimately see "Apollo 2").
+      id: 'agent-names',
+      category: 'workspace',
+      title: 'Agent names',
+      description: 'Show a stable spoken name such as Apollo beside agent titles and in the Dispatch index, and expose the same name to external operator search. Names are separate from titles, are never reused after an agent closes, and are retained while this is off so re-enabling restores the same names. Past 100 names, explicit numeric suffixes such as "Apollo 2" keep every address distinct. Terminals are never named.',
+      keywords: ['voice', 'spoken', 'name', 'names', 'apollo', 'agent', 'mcp', 'operator', 'header', 'dispatch'],
+      // No explicit `metadata`. DEFAULT_SETTING_METADATA is already exactly
+      // right here — app-scoped, stored in renderer Settings, effective at
+      // once — and this file reserves an explicit block for rows where that
+      // obvious reading would be WRONG, so that the ones carrying metadata are
+      // the ones a reader should stop at. (The sketch wrote `apply: 'live'`,
+      // which is not a member of the union at all and broke the typecheck.)
+      control: {
+        type: 'toggle',
+        getValue: settings => settings.agentNamesEnabled,
+        onToggle: (ctx, value) => ctx.onChange({ agentNamesEnabled: value }),
+      },
+    },
+    {
       id: 'status-mode',
       category: 'workspace',
       title: 'Status Mode',
@@ -751,9 +774,26 @@ export function getSettingsRegistry(): SettingDefinition[] {
       id: 'proxy-streaming',
       category: 'experimental',
       title: 'Proxy-Streamed Semantic Rendering',
+      // WHY the description names live output instead of the transport: the
+      // old copy ("spawn Claude sessions through a local mitmproxy") described
+      // the mechanism and left the user with no idea what turning it off
+      // costs. It costs everything the feed renders while a turn is running —
+      // the semantic channel emits only stream_phase events without the proxy,
+      // so text, thinking and tool activity arrive solely from JSONL backfill
+      // after the fact. Users read this row to decide; state the consequence.
       description:
-        'Spawn Claude sessions through a local mitmproxy and feed semantic stream events into the app. Requires local proxy setup.',
-      keywords: ['proxy', 'streaming', 'semantic', 'mitmproxy', 'claude'],
+        'Stream live model output — assistant text, extended thinking, and tool activity — as it is produced, by routing agent sessions through a local proxy. Turn this off and the feed only fills in after each turn completes. Claude uses a bundled mitmproxy; Codex uses an in-process Responses proxy.',
+      keywords: [
+        'proxy',
+        'streaming',
+        'semantic',
+        'mitmproxy',
+        'claude',
+        'codex',
+        'thinking',
+        'live',
+        'output',
+      ],
       control: {
         type: 'toggle',
         getValue: settings => settings.useProxyStreaming,

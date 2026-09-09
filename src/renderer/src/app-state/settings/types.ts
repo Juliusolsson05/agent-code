@@ -376,6 +376,17 @@ export type Settings = {
    * split keeps app preference durable while feature lifetimes stay tied to
    * the UI state that actually requested them. */
   agentViewMode: AgentViewMode
+  /** Opt-in stable spoken names (Apollo, Jasper, …) beside agent titles, in
+   *  the Dispatch index, and in external operator observation/search.
+   *
+   *  WHY the field is `…Enabled` and not `agentNames`: `settings.reference`
+   *  publishes these identifiers to an external operator, and a boolean called
+   *  `agentNames` reads like a list of names. It is also the gate for
+   *  ALLOCATION, not only for display: while it is false no identity is
+   *  claimed and no name is reserved, so a user who never turns it on never
+   *  writes agent-names.json. Turning it back off hides names and name lookup
+   *  but keeps every assignment, so re-enabling restores the same addresses. */
+  agentNamesEnabled: boolean
   /** Built-in MCP capabilities used to seed a new agent session when its
    *  caller does not provide an explicit per-session list. This is a default,
    *  not a fleet policy: after initialization the resolved array lives in
@@ -387,17 +398,50 @@ export type Settings = {
    *  session and main-host boundaries rather than encoded as parallel
    *  per-provider preference lists. */
   defaultBuiltInMcpDomains: ConfigurableBuiltInMcpDomain[]
-  /** When true, Claude sessions are spawned through a per-session
-   *  mitmproxy that decrypts Anthropic `/v1/messages` SSE in real
-   *  time and feeds structured per-block semantic events to the
-   *  ReaderView. When false (default), screen parsing remains the
-   *  semantic source and no proxy process is spawned.
+  /** When true, agent sessions are spawned through a per-session proxy
+   *  that Agent Code owns. Claude gets a mitmproxy that decrypts Anthropic
+   *  `/v1/messages` SSE in real time; Codex gets an in-process Responses
+   *  proxy injected via `openai_base_url`. Both feed structured per-block
+   *  semantic events into the renderer. When false, no proxy process is
+   *  spawned and screen parsing / JSONL backfill is the only semantic
+   *  source.
    *
-   *  Opt-in because it requires mitmproxy installed locally (the
-   *  user must run `npm run runtime:fetch:mitmproxy` once) and because
-   *  the feature is still experimental. Toggle is per-Claude-session
-   *  at spawn time — flipping it mid-session has no effect; the next
-   *  new session picks up the new value. */
+   *  WHY this now defaults ON (changed from the original opt-in):
+   *
+   *  The SDK semantic channel does not merely get *richer* with the proxy
+   *  — it is EMPTY without it. With the proxy off the channel emits
+   *  `stream_phase` events and nothing else: no text, no thinking, no
+   *  tool events ever reach the renderer. The feed then paints purely
+   *  from JSONL backfill, so the user sees completed turns appear in
+   *  retrospect and never sees the model produce them. Every audit of
+   *  "the app renders no live model output" bottomed out here, at this
+   *  one boolean, not in the renderer chain (which is intact and
+   *  lossless). Shipping the default as `false` meant shipping the
+   *  product's central rendering feature switched off.
+   *
+   *  The original opt-in rationale was that mitmproxy had to be
+   *  installed by hand (`npm run runtime:fetch:mitmproxy`). That
+   *  constraint is gone for packaged builds: mitmdump is a bundled
+   *  runtime artifact resolved lazily out of app.asar.unpacked (#119,
+   *  `third_party/mitmproxy/`). A dev checkout without the helper and
+   *  without a PATH mitmdump still fails to spawn, and that path is
+   *  already handled — `sessionSpawnErrorMessage` rewrites the failure
+   *  into a toast naming this exact toggle as the escape hatch.
+   *
+   *  Turning it on by default is also the precondition for the Codex
+   *  transcript-continuity fix: `x-codex-window-id` (the only exact
+   *  provider-thread identity we can observe) is visible ONLY when the
+   *  Responses proxy runs, so a default-off toggle left the default
+   *  config permanently broken. See
+   *  docs/decomposition/codex-transcript-continuity.md §2.1.
+   *
+   *  Only the DEFAULT changed. A user who explicitly turned this off
+   *  keeps it off — see the `!== false` coercion in persistence.ts,
+   *  which is what makes "absent key" and "explicitly false" different
+   *  answers.
+   *
+   *  Toggle is read per-session at spawn time — flipping it mid-session
+   *  has no effect; the next new session picks up the new value. */
   useProxyStreaming: boolean
   /** Inline voice dictation for the active composer. This is intentionally
    *  an Agent Code setting instead of an agent-voice-dictation setting:
@@ -602,7 +646,7 @@ export const DEFAULT_SETTINGS: Settings = {
   showStatusMode: true,
   showWorktreeBadges: true,
   dangerousAgentsEnabled: false,
-  useProxyStreaming: false,
+  useProxyStreaming: true,
   dictationEnabled: false,
   dictationProvider: 'deepgram',
   // WHY the default binding is Cmd+Shift+D and not Fn (packaged-mode fix):
@@ -632,6 +676,7 @@ export const DEFAULT_SETTINGS: Settings = {
   paletteMouseChord: '',
   aggressiveDebugPersistence: false,
   defaultWorkspaceMode: 'grid',
+  agentNamesEnabled: false,
   agentViewMode: 'agent',
   // Preserve today's opt-in behavior. Users choose which capabilities become
   // defaults; session commands remain available regardless of this empty seed.

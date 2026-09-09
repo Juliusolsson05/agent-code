@@ -27,16 +27,16 @@ export function preferenceControlCapabilities(getWorkspace: () => Workspace) {
   }
   return [
     defineCapability({ id: 'views.preferencesRead', title: 'Read agent display and follow preferences', execution: 'window', effect: 'read', target: { kind: 'session', field: 'sessionId' },
-      description: 'Read an exact agent’s configured view override, global mode, effective rendered/terminal surface and auto-follow preference without focusing it. followEnabled includes Tail All; hidden panes may suspend scrolling and native terminal scrolling is separate. Hybrid leases can temporarily change effectiveSurface. Returns the revision used by the setters.', input: target, output, handler: input => read(input.sessionId) }),
+      description: 'Read an exact agent’s configured view override, global mode, effective rendered/terminal surface and auto-follow preference without focusing it. followEnabled includes Tail All and applies to rendered feeds and raw agent terminal viewports; hidden panes suspend forced scrolling. Hybrid leases can temporarily change effectiveSurface. Returns the revision used by the setters.', input: target, output, handler: input => read(input.sessionId) }),
     defineCapability({ id: 'views.modeSet', title: 'Set an agent display mode', execution: 'window', effect: 'mutation', target: { kind: 'session', field: 'sessionId' },
       description: 'Set an exact agent’s durable Agent/Terminal override, or null to inherit global Agent/Terminal/Hybrid mode. Requires views.preferencesRead revision. Uses the normal provider policy: structured OpenCode cannot become a native terminal, and OpenCode Terminal cannot become a rendered agent. Does not focus, reload or rearrange panes.',
       input: target.extend({ revision: z.string(), mode: z.enum(['agent', 'terminal']).nullable() }), output,
       handler: input => { guard(input); if (!getWorkspace().setSessionAgentViewModeOverride(input.sessionId, input.mode)) throw new ControlError('unavailable', 'Provider rejected this view mode'); return read(input.sessionId) } }),
     defineCapability({ id: 'views.followSet', title: 'Set an agent auto-follow preference', execution: 'window', effect: 'mutation', target: { kind: 'session', field: 'sessionId' },
-      description: 'Set the exact agent’s rendered-feed auto-follow preference using a fresh views.preferencesRead revision. Idempotent desired state; leaves other agents and pane layout untouched. Tail All can keep followEnabled true when this preference is false; use views.tailAllSet to change the window-wide override.',
+      description: 'Set the exact agent’s auto-follow preference for its rendered feed or raw terminal viewport using a fresh views.preferencesRead revision. Idempotent desired state; leaves other agents and pane layout untouched. Tail All can keep followEnabled true when this preference is false; use views.tailAllSet to change the window-wide override.',
       input: target.extend({ revision: z.string(), enabled: z.boolean() }), output,
       handler: input => { const current = guard(input); if (current.autoFollow !== input.enabled) getWorkspace().toggleTailMode(input.sessionId); return read(input.sessionId) } }),
-    defineCapability({ id: 'views.tailAllSet', title: 'Set window-wide feed auto-follow', execution: 'window', effect: 'mutation',
+    defineCapability({ id: 'views.tailAllSet', title: 'Set window-wide agent auto-follow', execution: 'window', effect: 'mutation',
       description: 'Set Tail All for the explicitly selected window. Requires expected current value from views.preferencesRead.tailAll. Turning it off restores each agent’s own follow preference; it does not disable individually enabled followers. Hidden panes may suspend scrolling. Does not focus or rearrange panes.',
       input: z.object({ expected: z.boolean(), enabled: z.boolean() }).strict(), output: z.object({ enabled: z.boolean() }),
       handler: input => {

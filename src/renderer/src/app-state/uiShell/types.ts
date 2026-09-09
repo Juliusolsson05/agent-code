@@ -198,7 +198,7 @@ export type UiShellState = {
    * leaving click interception active after restart would make the app appear
    * broken, and the captured inputs may contain developer-sensitive payloads. */
   renderingDebugMode: boolean
-  /** Workspace-wide feed auto-follow. While true, every *visible* agent pane
+  /** Workspace-wide agent auto-follow. While true, every *visible* agent pane
    *  tails, and a pane that becomes visible later (a new lane selection, a tab
    *  switch, a fresh split) is already tailing without the user re-running the
    *  command. This is a stance on the workspace, not a batch operation.
@@ -213,13 +213,12 @@ export type UiShellState = {
    *  WHY there is no "which panes are visible" query behind this: there is no
    *  canonical visible-session selector in this codebase (`resolveTabSessions`
    *  answers membership, not visibility, and says so in its own header). The OR
-   *  is resolved inside `TileLeaf`, which with one exception mounts only for
-   *  on-screen panes — so grid tab-scoping, dispatch lanes, duplicate tiled
-   *  lanes, and terminal exclusion all fall out of what React already mounts.
-   *  The exception is Global Editor fullscreen, which keeps the workspace
-   *  mounted under `display: 'none'`; the full reasoning for why that is
-   *  tolerable lives at the OR site in TileLeaf.tsx. Reader Mode is a takeover
-   *  and mounts no TileLeaf at all, so Tail All is inert there. See
+   *  is resolved inside `TileLeaf` and `AgentTerminalLeaf`, each masked by
+   *  subtree visibility. Grid tabs and Dispatch lanes therefore follow without
+   *  a second visibility enumeration. Plain shell TerminalLeaf never reads it.
+   *  Global Editor fullscreen and Reader/Spotlight/Settings retain hidden
+   *  workspace subtrees; their composed mask suspends follow until re-reveal.
+   *  The full rationale lives at the OR site in TileLeaf.tsx. See
    *  docs/superpowers/plans/2026-07-20-tail-all.md before replacing this with an
    *  enumeration; the enumeration has at least four documented ways to be wrong.
    *
@@ -297,6 +296,9 @@ export type UiShellState = {
    * and persisting it in WorkspaceState would make a quota inspection look
    * like durable workspace data. */
   usageModalOpen: boolean
+  /** When true, the API Key Vault modal is open (#831). Transient command
+   *  chrome, not workspace data — same rationale as usageModalOpen above. */
+  keyVaultOpen: boolean
   /**
    * Session captured when the single-agent Switch Provider command ran.
    *

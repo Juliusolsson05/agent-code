@@ -21,7 +21,9 @@ import { subscribeToAgentPtyData } from '@renderer/workspace/terminal/sessionDat
 import { attachXtermWebglRenderer } from '@renderer/workspace/terminal/xtermWebglRenderer'
 import { AgentTitleHeader } from '@renderer/workspace/tile-tree/AgentTitleHeader'
 import { createTerminalInputForwarder } from '@renderer/workspace/tile-tree/terminalInputForwarder'
+import { encodeTerminalPaste, registerTerminalPasteTarget } from '@renderer/workspace/terminal/textPasteTarget'
 import { AgentTerminalActions } from '@renderer/workspace/tile-tree/AgentTerminalActions'
+import { useAgentTerminalFollow } from '@renderer/workspace/tile-tree/agentTerminalFollow'
 
 type Props = {
   sessionId: SessionId
@@ -84,6 +86,23 @@ export function AgentTerminalLeaf({
   focusedRef.current = focused
   const dimensionActive = useAgentTerminalDimensionActive()
   const ownerVisible = useAgentTerminalOwnerVisible()
+  const tailAllMode = useAppStore(state => state.tailAllMode)
+  // Feed-parity tail mask (TileLeaf's effectiveTailMode): per-session Tail OR
+  // Tail All, suppressed while this subtree is hidden (editor fullscreen /
+  // Reader/Spotlight/Settings takeover) — a display:none pane cannot scroll,
+  // and folding visibility into the mask makes re-reveal a genuine transition
+  // that re-engages follow.
+  const tailActive = (runtime.tailMode || tailAllMode) && ownerVisible
+  // WHY this hook must be called BEFORE the xterm mount effect below: its
+  // effects read termRef.current at effect time and React runs passive effects
+  // in declaration order — when tail is already on at mount, the terminal does
+  // not exist yet, which is exactly the "nothing to restore" case.
+  const follow = useAgentTerminalFollow({
+    sessionId,
+    scrollToLatestRequest: runtime.scrollToLatestRequest,
+    tailActive,
+    termRef,
+  })
   const dimensionActiveRef = useRef(false)
   const dimensionOwnershipEpochRef = useRef(0)
   const onDimensionOwnershipChangeRef = useRef<((active: boolean) => void) | null>(null)
@@ -121,6 +140,10 @@ export function AgentTerminalLeaf({
     let webglRenderer: ReturnType<typeof attachXtermWebglRenderer> | null = null
     let onDataDisposable: { dispose(): void } | null = null
     let offPtyData: (() => void) | null = null
+    // Nullable like the disposables above: xterm init can throw before the
+    // follow wiring ever runs, and cleanup must survive that path.
+    let offFollowAttach: (() => void) | null = null
+    let offTextPaste: (() => void) | null = null
     let resizeObserver: ResizeObserver | null = null
     let resizeFrame: number | null = null
     let disposed = false
@@ -240,6 +263,9 @@ export function AgentTerminalLeaf({
       term.open(container)
       webglRenderer = attachXtermWebglRenderer(term)
       termRef.current = term
+      // Follow re-pin wiring lives in the hook; the mount effect only owns
+      // the terminal instance lifetime, so this attaches/detaches with it.
+      offFollowAttach = follow.attach(term)
 
       if (dimensionActiveRef.current) scheduleFitAndResizeBackend()
       resizeObserver = new ResizeObserver(scheduleFitAndResizeBackend)
@@ -250,6 +276,13 @@ export function AgentTerminalLeaf({
       // never reach the provider and why same-tick chunks share one IPC call.
       const forwarder = createTerminalInputForwarder(data => {
         void window.api.sendInput(sessionId, data)
+      })
+      offTextPaste = registerTerminalPasteTarget(sessionId, {
+        isActive: () => !disposed && focusedRef.current && dimensionActiveRef.current,
+        paste: async text => {
+          if (disposed || !dimensionActiveRef.current || !attachedBackfillDone || forwarder.replaying || !term) return false
+          return window.api.sendInput(sessionId, encodeTerminalPaste(text, term.modes.bracketedPasteMode))
+        },
       })
       // WHY the Submit button reuses the keypress pipeline instead of calling
       // window.api.sendInput directly: the leaf only forwards keystrokes AFTER
@@ -296,7 +329,25 @@ export function AgentTerminalLeaf({
           if (backlogQueue.length > 256) backlogQueue.splice(0, backlogQueue.length - 256)
           return
         }
-        term?.write(data)
+        // Tail scrolls in the write completion callback: xterm parses chunks
+        // asynchronously, so scrolling synchronously would target the pre-parse
+        // bottom and land one chunk early.
+        const liveTerm = term
+        if (follow.tailActiveRef.current) {
+          liveTerm?.write(data, () => {
+            // Fire-time re-check, not just schedule-time: xterm's WriteBuffer
+            // schedules parsing with setTimeout and yields under load, so this
+            // callback can fire long after the write — potentially after tail
+            // disengaged and restored the reading position, or after unmount
+            // disposed the terminal. An unconditional scrollToBottom would
+            // undo the restore and clear xterm's isUserScrolling latch,
+            // leaving the pane following with the TAIL pill off.
+            if (disposed || !follow.tailActiveRef.current) return
+            liveTerm.scrollToBottom()
+          })
+        } else {
+          liveTerm?.write(data)
+        }
       })
 
       // WHY this goes through refs instead of effect deps: mounting xterm is
@@ -365,8 +416,26 @@ export function AgentTerminalLeaf({
           return true
         }
         // Replay, with the forwarder holding its latch until xterm has parsed
-        // every chunk; the backlog is strictly newer than the buffer.
-        void forwarder.replay(liveTerm, [buffer, backlogQueue.join('')])
+        // every chunk; the backlog is strictly newer than the buffer. The pin
+        // chains on the replay promise — replay resolves only when xterm
+        // reports every chunk parsed, so the pin acts on the real backfill; an
+        // inline call here runs before parsing touches an empty buffer.
+        // Guards: the pane can unmount mid-parse (`disposed`) or tail can
+        // disengage before the backlog lands.
+        forwarder
+          .replay(liveTerm, [buffer, backlogQueue.join('')])
+          .then(() => {
+            if (disposed || !follow.tailActiveRef.current) return
+            if (termRef.current !== liveTerm) return
+            liveTerm.scrollToBottom()
+          })
+          .catch(error => {
+            // The detached replay promise is outside tryAttach's error path.
+            // Report parse failures on the surviving pane rather than silently
+            // swallowing them or generating an unhandled renderer rejection.
+            if (!disposed) showPaneToastRef.current(sessionId,
+              error instanceof Error ? error.message : 'Could not replay agent terminal')
+          })
         backlogQueue.length = 0
         attachedBackfillDone = true
         if (pendingResize) {
@@ -437,7 +506,9 @@ export function AgentTerminalLeaf({
       if (resizeFrame !== null) cancelAnimationFrame(resizeFrame)
       resizeObserver?.disconnect()
       onDataDisposable?.dispose()
+      offFollowAttach?.()
       offPtyData?.()
+      offTextPaste?.()
       webglRenderer?.dispose()
       if (onThemeChangedListener) {
         window.removeEventListener(THEME_CHANGED_EVENT, onThemeChangedListener)
@@ -497,15 +568,29 @@ export function AgentTerminalLeaf({
               </span>
             )}
             <span className="flex-shrink-0 text-ink">raw {provider}</span>
-            <span className="truncate" title={projectDir ?? 'no project dir'}>
-              {shortenCwd(projectDir)}
+            {/* truncate-START, matching PaneHeader: keep the project directory
+                visible and drop the shared prefix instead. */}
+            <span className="truncate-start" title={projectDir ?? 'no project dir'}>
+              {/* Inner dir="ltr" required — see PaneHeader. */}
+              <span dir="ltr">{shortenCwd(projectDir)}</span>
             </span>
           </div>
-          <span className="flex-shrink-0 text-[9px] uppercase tracking-wider text-muted">
-            terminal view
-          </span>
+          {/* TAIL pill styling copied from ScrollIndicator so both surfaces
+              read identically — without it the raw view silently follows
+              output while showing no state the palette can be checked
+              against. */}
+          <div className="flex flex-shrink-0 items-center gap-2">
+            {tailActive ? (
+              <span className="text-[10px] font-code uppercase tracking-wider text-accent">
+                TAIL
+              </span>
+            ) : null}
+            <span className="text-[9px] uppercase tracking-wider text-muted">
+              terminal view
+            </span>
+          </div>
         </div>
-        <AgentTitleHeader title={agentTitle} />
+        <AgentTitleHeader sessionId={sessionId} title={agentTitle} />
       </div>
 
       <div className="flex-1 min-h-0 min-w-0 overflow-hidden p-2">

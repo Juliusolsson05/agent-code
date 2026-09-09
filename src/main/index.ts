@@ -8,7 +8,7 @@ import { createExternalControlSettings } from './settings/externalControl'
 import { createExternalCodexIntegration } from './settings/externalCodexIntegration'
 import operatorSkillSource from '../../operator-skills/agent-code-computer-execution/SKILL.md?raw'
 
-import { app, clipboard, crashReporter, dialog, Menu } from 'electron'
+import { app, clipboard, crashReporter, dialog, Menu, systemPreferences } from 'electron'
 import { existsSync } from 'fs'
 import { readFile } from 'fs/promises'
 import { join } from 'path'
@@ -95,6 +95,9 @@ import { AgentManagementBridge } from '@main/agentManagement/AgentManagementBrid
 import { AiWorkspaceRegistry } from '@main/aiWorkspace/AiWorkspaceRegistry.js'
 import { RemoteController } from '@main/remote/RemoteController.js'
 import { CaffeinateController } from '@main/caffeinate/CaffeinateController.js'
+import { createFileVaultStore } from '@main/keyVault/vaultStore.js'
+import { createSafeStorageCodec } from '@main/keyVault/safeStorageCodec.js'
+import { VaultService } from '@main/keyVault/VaultService.js'
 import { buildAppMenu } from '@main/menu/appMenu.js'
 import { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import { installProcessCrashHooks } from '@main/incident/installCrashHooks.js'
@@ -193,6 +196,37 @@ const aiWorkspaceRegistry = new AiWorkspaceRegistry()
 // its curated editor open on the workspace that just changed.
 aiWorkspaceRegistry.on('changed', event => broadcastToWindows('ai-workspace:changed', event))
 const caffeinateController = new CaffeinateController()
+
+// API Key Vault (#831). promptTouchID presents Touch ID with the user's
+// login password as fallback, which is the "mac password" gate. Unsigned
+// dev builds may skip the biometric option but the password path still
+// works; if neither is available the service fails closed on unlock.
+// Constructed top-level (like caffeinate) because it owns no window and
+// no async boot step — only the per-run unlock boolean.
+const vaultService = new VaultService({
+  store: createFileVaultStore(join(STATE_DIR, 'key-vault'), createSafeStorageCodec()),
+  promptAuth: async reason => {
+    // WHY the platform check lives HERE and not in ensureUnlocked: the service
+    // deliberately attempts the prompt rather than pre-gating on
+    // canPromptAuth, because that flag once reported biometric capability only
+    // and pre-gating locked out every password-only Mac from the login-password
+    // path this feature promises. That reasoning is right for capability. It is
+    // NOT right for a platform that has no promptTouchID at all: there,
+    // "attempt it" meant calling undefined, and the user got a raw
+    // "systemPreferences.promptTouchID is not a function" TypeError instead of
+    // the honest platform message. Fails closed either way; only the wording
+    // was broken.
+    if (process.platform !== 'darwin' || typeof systemPreferences.promptTouchID !== 'function') {
+      throw new Error('The API key vault needs macOS Touch ID or login-password authentication, which this platform does not provide.')
+    }
+    await systemPreferences.promptTouchID(reason)
+  },
+  // canPromptTouchID checks biometrics, not user-presence/password auth.
+  // Electron 43's promptTouchID uses SecAccessControlUserPresence; attempt
+  // that supported macOS API and let rejection keep the vault locked.
+  canPromptAuth: () => process.platform === 'darwin' && typeof systemPreferences.promptTouchID === 'function',
+  copyToClipboard: text => clipboard.writeText(text),
+})
 
 // SessionManager is constructed inside whenReady so we can await
 // TmuxRegistry.detectAvailability() first — terminal sessions need
@@ -944,6 +978,7 @@ async function startApp(): Promise<void> {
     agentManagementBridge,
     aiWorkspaceRegistry,
     caffeinateController,
+    vaultService,
     appRunJournal,
     cliUpdateOrchestrator,
     workflowBridge: activeWorkflowBridge,

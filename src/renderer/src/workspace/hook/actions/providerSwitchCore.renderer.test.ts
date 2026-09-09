@@ -610,8 +610,15 @@ describe('switchAgentProvider', () => {
         replaceSession,
       } as unknown as SessionActions,
     })).resolves.toEqual({
-      status: 'failed',
-      message: 'This pane is still finishing a provider switch — wait for it to complete',
+      // 'skipped', not 'failed'. Nothing is wrong with this pane — it is busy
+      // with an operation that ends on its own, and trying again shortly is
+      // the whole remedy. Reporting it as a failure made a bulk return during
+      // arrival compaction, which is the DEFAULT for large conversations and
+      // holds this flag for minutes per pane, announce "Returned 0 agents (20
+      // failed)" for a batch where every agent was merely busy. The string is
+      // unchanged and still reaches the same pane toast.
+      status: 'skipped',
+      reason: 'This pane is still finishing a provider switch — wait for it to complete',
     })
 
     expect(switchProvider).not.toHaveBeenCalled()

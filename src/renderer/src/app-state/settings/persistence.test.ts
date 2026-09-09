@@ -61,3 +61,19 @@ describe('coerceSettings agentViewMode', () => {
     }).defaultBuiltInMcpDomains).toEqual(['workflows', 'orchestration', 'agent_management'])
   })
 })
+
+describe('coerceSettings agentNamesEnabled', () => {
+  it('defaults to off so no user starts allocating spoken names', () => {
+    // WHY this assertion is worth a test of its own: a truthy default would
+    // make every existing installation write agent-names.json on first launch
+    // and burn pool entries for agents whose owner never asked for names.
+    expect(coerceSettings({}).agentNamesEnabled).toBe(false)
+  })
+
+  it('accepts only a real boolean true', () => {
+    expect(coerceSettings({ agentNamesEnabled: true }).agentNamesEnabled).toBe(true)
+    expect(coerceSettings({ agentNamesEnabled: 'true' }).agentNamesEnabled).toBe(false)
+    expect(coerceSettings({ agentNamesEnabled: 1 }).agentNamesEnabled).toBe(false)
+    expect(coerceSettings({ agentNamesEnabled: null }).agentNamesEnabled).toBe(false)
+  })
+})
