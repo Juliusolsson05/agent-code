@@ -21,3 +21,19 @@ The private probe exported read-only, reported metadata only, and deleted output
    export through the fixed production API and report only size/identity/counts.
 4. Read-only review, fix verified findings, publish a focused PR linked to #845.
    No Grok changes, app launch, source-session mutation, or automatic merge.
+
+## Verification
+
+The large abrupt-exit export and config regressions failed at 65,536 bytes with
+the old pipe transport. The regular-file capture passes both. Coverage also
+exercises import/model compatibility, private permissions, cleanup, actual
+spawn failure, nonzero exit, invalid JSON, sparse oversized output and bounded
+stderr. Read-only review identified post-spawn error handling that could retire
+capture ownership before close; a failing lifecycle regression reproduced it.
+Errors are now recorded and settled at close, including failed-spawn close.
+
+The actual affected session passed the opted-in production export test without
+printing or retaining its contents. The 256 MiB final-size check is a memory
+bound; polling detects disk overflow during execution but is not a hard quota.
+Versioned upstream evidence: anomalyco/opencode v1.18.30,
+packages/opencode/src/cli/cmd/export.ts and packages/opencode/src/index.ts.

@@ -1,12 +1,12 @@
-import { execFile } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { fstatSync } from 'node:fs'
+import { mkdtemp, open, readFile, rm, writeFile, type FileHandle } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { promisify } from 'node:util'
 
-const execFileAsync = promisify(execFile)
 const MAX_EXPORT_BYTES = 256 * 1024 * 1024
+const MAX_STDERR_BYTES = 64 * 1024
 
 export type OpencodeCliSessionOptions = {
   binary: string
@@ -31,9 +31,9 @@ export async function exportOpencodeSession(
   let value: unknown
   try {
     value = JSON.parse(stdout)
-  } catch (error) {
+  } catch {
     throw new Error(
-      `OpenCode export for ${sessionId} did not return valid JSON: ${errorMessage(error)}`,
+      `OpenCode export for ${sessionId} did not return valid JSON (${Buffer.byteLength(stdout)} bytes captured).`,
     )
   }
   if (!isRecord(value)) {
@@ -134,21 +134,67 @@ async function runOpencode(
   options: OpencodeCliSessionOptions,
   args: string[],
 ): Promise<{ stdout: string; stderr: string }> {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-code-opencode-output-'))
+  const outputPath = join(directory, 'stdout')
+  let output: FileHandle | undefined
   try {
-    const result = await execFileAsync(options.binary, args, {
-      cwd: options.cwd,
-      env: options.env ?? process.env,
-      encoding: 'utf8',
-      maxBuffer: MAX_EXPORT_BYTES,
+    // OpenCode 1.18.30 writes stdout, then process.exit() without awaiting the
+    // pipe flush (cli/cmd/export.ts + index.ts). Raising execFile.maxBuffer
+    // cannot recover bytes the producer never delivered: a real 14.6 MB export
+    // stopped at 64 KiB. A regular-file stdout descriptor avoids that async-pipe
+    // exit race. Keep this at the CLI boundary: resolved config can be large too.
+    output = await open(outputPath, 'wx', 0o600)
+    const fd = output.fd
+    const stderrChunks: Buffer[] = []
+    let stderrBytes = 0
+    let stderrTruncated = false
+    const stderrText = () => Buffer.concat(stderrChunks).toString('utf8') + (stderrTruncated ? '\n[stderr truncated]' : '')
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn(options.binary, args, {
+        cwd: options.cwd, env: options.env ?? process.env,
+        stdio: ['ignore', fd, 'pipe'],
+      })
+      let failure: Error | undefined
+      // Detect overflow while the producer runs, then check its final size
+      // before allocating a string. Polling is a soft disk bound, not a hard
+      // quota. Overflow fails the command; never parse a truncated prefix.
+      const sizeGuard = setInterval(() => {
+        if (failure) return
+        try {
+          if (fstatSync(fd).size > MAX_EXPORT_BYTES) throw new Error('output exceeds the 256 MiB capture limit')
+        } catch (error) {
+          failure = error instanceof Error ? error : new Error('Cannot inspect CLI output')
+          child.kill('SIGKILL')
+        }
+      }, 100)
+      sizeGuard.unref()
+      child.stderr!.on('data', (chunk: Buffer) => {
+        const keep = Math.min(chunk.length, MAX_STDERR_BYTES - stderrBytes)
+        if (keep > 0) { stderrChunks.push(Buffer.from(chunk.subarray(0, keep))); stderrBytes += keep }
+        if (keep < chunk.length) stderrTruncated = true
+      })
+      // Node also emits error when a kill fails, not just on failed spawn.
+      // Retain capture ownership until close (which follows spawn errors too),
+      // otherwise cleanup could unlink output while its producer is alive.
+      child.on('error', error => { failure ??= error })
+      child.once('close', (code, signal) => {
+        clearInterval(sizeGuard)
+        if (failure) reject(failure)
+        else if (code !== 0) reject(new Error(stderrText().trim() || `exited with ${signal ?? code}`))
+        else resolve()
+      })
     })
-    return { stdout: result.stdout, stderr: result.stderr }
+    if ((await output.stat()).size > MAX_EXPORT_BYTES) throw new Error('output exceeds the 256 MiB capture limit')
+    return { stdout: await readFile(outputPath, 'utf8'), stderr: stderrText() }
   } catch (error) {
-    const detail = isRecord(error) && typeof error.stderr === 'string'
-      ? error.stderr.trim()
-      : ''
     throw new Error(
-      `OpenCode ${args[0] ?? 'command'} failed${detail ? `: ${detail}` : `: ${errorMessage(error)}`}`,
+      `OpenCode ${args[0] ?? 'command'} failed: ${errorMessage(error)}`,
     )
+  } finally {
+    // Wait for process/stdio completion before closing and deleting the private
+    // capture. Match import cleanup policy without ever touching native history.
+    try { await output?.close() }
+    finally { await rm(directory, { recursive: true, force: true }).catch(() => undefined) }
   }
 }
 
