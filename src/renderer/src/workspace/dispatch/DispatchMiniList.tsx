@@ -12,12 +12,17 @@ import {
   dispatchRowTitle,
 } from '@renderer/workspace/dispatch/DispatchAgentList'
 
-// The Tiled Dispatch lane selector, deliberately stripped to NOTHING but the
+// The Grid Dispatch lane selector, deliberately stripped to NOTHING but the
 // index chips ([A1], [A2], ★1 …) — no titles, no activity dots, no badges,
 // no section headers, no tab separators. Rationale (user's call): the rich
-// context already lives one lane over in the full pinned index; repeating any
-// of it here just wastes the narrow column. To identify what a chip refers
-// to, glance back at the index (or hover the chip for its tooltip).
+// context already lives in the row's full index at the row's left edge;
+// repeating any of it here just wastes the narrow column. To identify what a
+// chip refers to, glance back at that index (or hover the chip for its
+// tooltip).
+//
+// Every lane carries one, the row's first lane included (#850). The full index
+// fills whichever lane of its row is focused, so the strip is the only
+// selector addressed to one specific lane.
 //
 // Each chip is visually identical to the full list's index cell — same width
 // and same activity background — because it's painted with the SAME
@@ -28,8 +33,12 @@ import {
 type Props = {
   rows: DispatchAgentRow[]
   /** The grid row this strip belongs to — supplies its project binding and
-   *  child density, so two strips over the same workspace legitimately differ. */
-  gridRow?: Pick<DispatchGridRow, 'projectTabId' | 'capChildren' | 'expandedParents'>
+   *  child density, so two strips over the same workspace legitimately differ.
+   *  `projectTabIds`, not the legacy `projectTabId`: that is the field
+   *  rowScopedRows filters on, and normalizeGridShape folds the legacy one
+   *  away on read. Naming the legacy field here type-checked (every key is
+   *  optional) while promising a binding the strip never read. */
+  gridRow?: Pick<DispatchGridRow, 'projectTabIds' | 'capChildren' | 'expandedParents'>
   selectedSessionId?: SessionId
   focused: boolean
   onSelect: (row: DispatchAgentRow) => void

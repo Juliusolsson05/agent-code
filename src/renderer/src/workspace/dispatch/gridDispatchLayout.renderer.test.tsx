@@ -60,15 +60,34 @@ vi.mock('@renderer/workspace/dispatch/DispatchAgentList', () => ({
     <div data-testid="lane-empty">{message}</div>
   ),
 }))
+// The strip is mocked down to what the LAYOUT owns about it: which lane's
+// selection it was handed (the only way to tell one lane's strip from
+// another's, since the fixture's lanes hold distinct agents), whether its
+// expand control is wired, and where the layout's own `onSelect` closure sends
+// a pick. Chip rendering is DispatchColorFlags.renderer.test.tsx's job.
 vi.mock('@renderer/workspace/dispatch/DispatchMiniList', () => ({
-  DispatchMiniList: ({ onToggleExpandedParent }: {
+  DispatchMiniList: ({ rows, selectedSessionId, onSelect, onToggleExpandedParent }: {
+    rows: { sessionId: string }[]
+    selectedSessionId?: string
+    onSelect: (row: { sessionId: string }) => void
     onToggleExpandedParent?: (id: string) => void
-  }) => (
-    <div
-      data-testid="lane-strip"
-      data-can-expand={onToggleExpandedParent ? 'true' : 'false'}
-    />
-  ),
+  }) => {
+    // Stands in for clicking a chip. It picks an agent OTHER than the lane's
+    // current one, so the click is a real swap and a layout that ignored it
+    // could not pass by leaving the lane as it was.
+    const pick = rows.find(row => row.sessionId !== selectedSessionId)
+    return (
+      <div
+        data-testid="lane-strip"
+        data-selected={selectedSessionId ?? ''}
+        data-pick={pick?.sessionId ?? ''}
+        data-can-expand={onToggleExpandedParent ? 'true' : 'false'}
+        onClick={() => {
+          if (pick) onSelect(pick)
+        }}
+      />
+    )
+  },
 }))
 vi.mock('@providers/registry.renderer', () => ({
   getRendererProvider: () => ({
@@ -84,6 +103,7 @@ const FIXTURE = JSON.parse(
 
 function renderGrid(tiled: TiledDispatchState) {
   const selectTiledLaneSession = vi.fn().mockResolvedValue(undefined)
+  const setTiledFocusedLane = vi.fn()
   const state: WorkspaceState = {
     ...FIXTURE.state,
     dispatchMode: { ...FIXTURE.state.dispatchMode!, scope: 'global', tiled },
@@ -96,7 +116,7 @@ function renderGrid(tiled: TiledDispatchState) {
     focusDispatchSession: vi.fn(),
     focusSessionInTab: vi.fn(),
     selectGridRelatedSession: vi.fn(),
-    setTiledFocusedLane: vi.fn(),
+    setTiledFocusedLane,
     selectTiledLaneSession,
     setDispatchRowHeights: vi.fn(),
     setDispatchRowIndexFraction: vi.fn(),
@@ -114,6 +134,7 @@ function renderGrid(tiled: TiledDispatchState) {
       />,
     ),
     selectTiledLaneSession,
+    setTiledFocusedLane,
   }
 }
 
@@ -140,30 +161,53 @@ describe('Grid Dispatch layout', () => {
     expect(getAllByTestId('row-index')).toHaveLength(2)
   })
 
-  it('leaves each row s FIRST lane to that row s index list', () => {
-    // The row's own index sits directly beside its first lane and is that
-    // lane's selector — the pairing that giving every row an index exists for.
-    // A strip there would be a second selector for the same lane, inches from
-    // the first, eating 46px of the row's widest lane.
-    const { getAllByTestId } = renderGrid({
-      lanes: laneIds.map(id => ({ selectedSessionId: id })),
-      rows: [{ length: 2 }, { length: 2 }],
-      focusedLane: 0,
-    })
+  it('gives every lane its own strip, the first lane of each row included', () => {
+    // #850. A row's index fills whichever lane of the row is FOCUSED, so it is
+    // no single lane's selector. Any lane without a strip, which used to be
+    // each row's first lane, could only be changed in two gestures: click into
+    // it, then pick from the index. A single-lane row is included on purpose.
+    // If it had no strip, adding a second lane would slide a strip into the
+    // existing lane and shift its content by 46px.
+    const cases: { rows: TiledDispatchState['rows']; strips: number }[] = [
+      { rows: [{ length: 2 }, { length: 2 }], strips: 4 },
+      { rows: [{ length: 3 }, { length: 1 }], strips: 4 },
+    ]
+    for (const { rows, strips } of cases) {
+      const { getAllByTestId } = renderGrid({
+        lanes: laneIds.map(id => ({ selectedSessionId: id })),
+        rows,
+        focusedLane: 0,
+      })
 
-    // 2 rows x 2 lanes, minus the first lane of each row.
-    expect(getAllByTestId('lane-strip')).toHaveLength(2)
+      expect(getAllByTestId('lane-strip')).toHaveLength(strips)
+      cleanup()
+    }
   })
 
-  it('gives a strip to every lane the index does not already select', () => {
-    const { getAllByTestId } = renderGrid({
+  it('swaps the first lane from its own strip while another lane has focus', () => {
+    // The navigation #850 restores. With focus in lane 1, the row's index would
+    // fill lane 1, so lane 0's strip is the only one-click way to change lane 0.
+    // It has to write lane 0 (not the focused lane) through the waking path,
+    // and move focus there, because picking an agent for a lane means working
+    // in it next. Selecting by its current agent is what identifies lane 0's
+    // strip: the fixture's lanes hold distinct agents.
+    const { getAllByTestId, selectTiledLaneSession, setTiledFocusedLane } = renderGrid({
       lanes: laneIds.map(id => ({ selectedSessionId: id })),
-      rows: [{ length: 3 }, { length: 1 }],
-      focusedLane: 0,
+      rows: [{ length: 2 }, { length: 2 }],
+      focusedLane: 1,
     })
 
-    // Row 0 keeps strips on lanes 2 and 3; row 1's single lane has none.
-    expect(getAllByTestId('lane-strip')).toHaveLength(2)
+    const firstLaneStrip = getAllByTestId('lane-strip')
+      .find(strip => strip.getAttribute('data-selected') === laneIds[0])
+    expect(firstLaneStrip).toBeDefined()
+    const picked = firstLaneStrip!.getAttribute('data-pick')
+    expect(picked).toBeTruthy()
+    firstLaneStrip!.click()
+
+    expect(selectTiledLaneSession).toHaveBeenCalledTimes(1)
+    expect(selectTiledLaneSession).toHaveBeenCalledWith(0, picked)
+    expect(setTiledFocusedLane).toHaveBeenCalledTimes(1)
+    expect(setTiledFocusedLane).toHaveBeenCalledWith(0)
   })
 
   it('wires the strip s expand control instead of shipping a dead button', () => {
@@ -234,10 +278,11 @@ describe('Grid Dispatch layout', () => {
   })
 
   it('sends a row s index click into THAT row, not the focused one', () => {
-    // Load-bearing once each row's first lane lost its strip: with focus in
-    // row 0, clicking row 1's index must target row 1's first lane (flat 2).
-    // The earlier version of this test clicked row 0's index while focus was
-    // already in row 0, so it could not tell `focusedLaneInRow` from `start`.
+    // With focus in row 0, clicking row 1's index must target row 1's first
+    // lane (flat 2). Clicking a row's index means "I am working in this row
+    // now", so it must never reach across into the row that happens to have
+    // focus. The earlier version of this test clicked row 0's index while focus
+    // was already in row 0, so it could not tell `focusedLaneInRow` from `start`.
     const { getAllByTestId, selectTiledLaneSession } = renderGrid({
       lanes: laneIds.map(id => ({ selectedSessionId: id })),
       rows: [{ length: 2 }, { length: 2 }],
