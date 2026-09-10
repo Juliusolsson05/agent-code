@@ -24,6 +24,8 @@ import { providerChoiceLabel } from '@renderer/workspace/providerChoices'
 // rewindFocusedToPrompt   — user picks a past user prompt; pane
 //                           re-homes onto a truncated transcript with
 //                           the prompt prefilled as an unsent draft.
+// removeFocusedCyberPolicyBlock — Codex-only: drop the last model step
+//                           after a cyber_policy complete and re-home.
 
 // Domain outcomes are shared by UI commands and external control. A returned
 // Promise<void> cannot distinguish a declined operation from a replacement;
@@ -47,11 +49,13 @@ export function useProviderActions(
   reloadSessionAgent: (sourceSessionId: SessionId) => Promise<AgentLifecycleResult>
   rewindSessionToPrompt: (sourceSessionId: SessionId, anchor: RewindPromptAddress) => Promise<AgentLifecycleResult>
   undoSessionRewind: (sourceSessionId: SessionId) => Promise<AgentLifecycleResult>
+  removeCodexCyberPolicyBlock: (sourceSessionId: SessionId) => Promise<AgentLifecycleResult>
   reloadFocusedAgent: () => Promise<void>
   rewindFocusedToPrompt: (
     anchor: RewindPromptAddress,
   ) => Promise<void>
   undoLastRewind: () => Promise<void>
+  removeFocusedCyberPolicyBlock: () => Promise<void>
 } {
   const switchSessionProvider = useCallback(async (
     sourceSessionId: SessionId,
@@ -374,6 +378,97 @@ export function useProviderActions(
     const id = commandTargetSessionIdForState(refs.stateRef.current)
     if (id) await undoSessionRewind(id)
   }, [refs.stateRef, undoSessionRewind])
+
+  // Same replace-in-place transaction as rewind, with a smaller cut: keep
+  // the last user prompt and earlier assistant work, drop only the last
+  // Codex model step after a cyber_policy task_complete. Reuses
+  // pendingRewindUndo so Undo Rewind can restore the original rollout
+  // until the next submit — a second undo stack would hide the same
+  // provider-id swap behind a different name.
+  const removeCodexCyberPolicyBlock = useCallback(
+    async (sourceSessionId: SessionId): Promise<AgentLifecycleResult> => {
+      const current = refs.stateRef.current
+      const meta = current.sessions[sourceSessionId]
+      if (!meta) return { status: 'skipped', reason: 'Session no longer exists' }
+
+      const kind = meta.kind ?? DEFAULT_PROVIDER
+      if (kind !== 'codex') {
+        showPaneToast(sourceSessionId, 'Remove Cybersecurity Block is a Codex command')
+        return { status: 'skipped', reason: 'Remove Cybersecurity Block is a Codex command' }
+      }
+      const previousProviderSessionId = resumableProviderSessionId(meta)
+      if (!previousProviderSessionId) {
+        showPaneToast(sourceSessionId, 'Provider session id is not ready yet')
+        return { status: 'skipped', reason: 'Provider session id is not ready yet' }
+      }
+
+      const currentRuntime = refs.latestRuntimesRef.current[sourceSessionId]
+      if (currentRuntime?.processActive || currentRuntime?.semantic.currentTurn) {
+        showPaneToast(sourceSessionId, 'Wait for the current turn to finish before removing the cybersecurity block')
+        return { status: 'skipped', reason: 'Wait for the current turn to finish before removing the cybersecurity block' }
+      }
+
+      try {
+        const result = await window.api.stripCodexCyberPolicy({
+          provider: 'codex',
+          sourceProviderSessionId: previousProviderSessionId,
+          cwd: meta.cwd,
+        })
+
+        const newSessionId = await sessionActions.replaceSession(meta.cwd, {
+          kind: 'codex',
+          resumeSessionId: result.newProviderSessionId,
+          builtInMcpDomains: meta.builtInMcpDomains,
+          targetSessionId: sourceSessionId,
+        })
+        if (!newSessionId) return { status: 'failed', message: 'Replacement was not committed' }
+
+        setRuntimes(prev => {
+          const runtime = prev[newSessionId]
+          if (!runtime) return prev
+          return {
+            ...prev,
+            [newSessionId]: {
+              ...runtime,
+              pendingRewindUndo: {
+                createdAt: Date.now(),
+                provider: 'codex',
+                cwd: meta.cwd,
+                previousProviderSessionId,
+                rewoundProviderSessionId: result.newProviderSessionId,
+                // Not a prompt rewind. Undo restores previousProviderSessionId
+                // and previousDraftInput; this field exists because the
+                // rewind undo record requires it.
+                rewoundPromptText: '',
+                rewoundPromptTimestamp: null,
+                previousDraftInput: runtime.draftInput,
+                previousDraftImages: runtime.draftImages.slice(),
+                builtInMcpDomains: meta.builtInMcpDomains,
+              },
+            },
+          }
+        })
+
+        showPaneToast(newSessionId, 'Removed cybersecurity block — Undo Rewind available until next submit')
+        return { status: 'completed', sourceSessionId, newSessionId }
+      } catch (err) {
+        const message =
+          err instanceof Error && err.message.length > 0
+            ? err.message
+            : 'Remove cybersecurity block failed'
+        showPaneToast(sourceSessionId, message)
+        return { status: 'failed', message }
+      }
+    },
+    [refs.latestRuntimesRef, refs.stateRef, sessionActions, setRuntimes, showPaneToast],
+  )
+
+  const removeFocusedCyberPolicyBlock = useCallback(async () => {
+    const id = commandTargetSessionIdForState(refs.stateRef.current)
+    if (id) await removeCodexCyberPolicyBlock(id)
+  }, [refs.stateRef, removeCodexCyberPolicyBlock])
+
   return { switchSessionProvider, reloadSessionAgent, rewindSessionToPrompt, undoSessionRewind,
-    reloadFocusedAgent, rewindFocusedToPrompt, undoLastRewind }
+    removeCodexCyberPolicyBlock, reloadFocusedAgent, rewindFocusedToPrompt, undoLastRewind,
+    removeFocusedCyberPolicyBlock }
 }

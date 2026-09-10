@@ -152,6 +152,60 @@ export const sessionCommands: CommandDef[] = [
     },
   },
   {
+    // Remove Cybersecurity Block — Codex-only recovery that forks the
+    // focused rollout and drops the last model step after a
+    // cyber_policy task_complete. Rewind to Prompt also unblocks, but
+    // it deletes the last user prompt and the whole assistant turn.
+    // This command keeps that turn minus the tail that the next API
+    // request would resend. The source file is never edited.
+    id: 'remove-cybersecurity-block',
+    category: 'session',
+    pickerVisibility: 'advanced',
+    surface: 'session',
+    title: 'Remove Cybersecurity Block',
+    description: '**What it does:** Forks the focused **Codex** session with the last model step after a cybersecurity block removed.\n\n**Use when:** Codex ended the turn with a cybersecurity flag and you want to keep chatting without Rewind to Prompt deleting the whole assistant response.\n\n**Notes:** The original transcript is not edited. Undo Rewind restores it until the next submit.',
+    renderedViewPolicy: { kind: 'opens-rendered-feed' },
+    keywords: [
+      'cyber',
+      'cybersecurity',
+      'security',
+      'block',
+      'flag',
+      'policy',
+      'codex',
+      'remove',
+      'unblock',
+      'safety',
+    ],
+    when: ({ workspace }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return false
+      const meta = workspace.state.sessions[sessionId]
+      const kind = meta?.kind ?? DEFAULT_PROVIDER
+      return (
+        kind === 'codex' &&
+        getProviderFeatures(kind).transcriptRewind &&
+        meta?.providerRuntime !== 'terminal' &&
+        Boolean(meta?.providerSessionId)
+      )
+    },
+    run: async ({ workspace, ui }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return
+      const meta = workspace.state.sessions[sessionId]
+      // Match `when` exactly so a keybinding cannot strip a Claude pane,
+      // a Codex terminal runtime, or a provider that lost transcriptRewind.
+      if (
+        meta?.kind !== 'codex' ||
+        !getProviderFeatures(meta.kind).transcriptRewind ||
+        meta.providerRuntime === 'terminal' ||
+        !meta.providerSessionId
+      ) return
+      ui.closePalette()
+      await workspace.removeFocusedCyberPolicyBlock()
+    },
+  },
+  {
     // Undo Rewind — a runtime-only recovery affordance for the most recent
     // Rewind-to-Prompt on the focused pane. This deliberately does NOT share
     // the Undo Close stack: close undo restores tile placement from a LIFO
@@ -164,7 +218,7 @@ export const sessionCommands: CommandDef[] = [
     pickerVisibility: 'advanced',
     surface: 'session',
     title: 'Undo Rewind',
-    description: '**What it does:** Restores the focused **agent session** to the provider transcript it used before the last rewind.\n\n**Use when:** You rewound to the wrong prompt and have not submitted new work from the rewound branch.\n\n**Notes:** Runtime-only. Available until the next submit, pane close, or reload.',
+    description: '**What it does:** Restores the focused **agent session** to the provider transcript it used before the last Rewind to Prompt or Remove Cybersecurity Block.\n\n**Use when:** You rewound or stripped a cybersecurity block and have not submitted new work from that branch.\n\n**Notes:** Runtime-only. Available until the next submit, pane close, or reload.',
     keywords: [
       'undo',
       'rewind',

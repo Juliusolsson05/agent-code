@@ -125,6 +125,87 @@ describe('Duplicate Agent command', () => {
   })
 })
 
+describe('Remove Cybersecurity Block command', () => {
+  function contextFor(session: {
+    kind?: string
+    providerSessionId?: string
+    providerRuntime?: string
+  }): CommandContext {
+    return {
+      workspace: {
+        state: {
+          activeTabId: 'tab',
+          dispatchMode: null,
+          sessions: {
+            agent: {
+              cwd: '/project',
+              kind: session.kind ?? 'codex',
+              providerSessionId: session.providerSessionId,
+              providerRuntime: session.providerRuntime,
+            },
+          },
+          tabs: [{
+            id: 'tab',
+            focusedSessionId: 'agent',
+            root: { type: 'leaf', sessionId: 'agent' },
+          }],
+        },
+        removeFocusedCyberPolicyBlock: vi.fn().mockResolvedValue(undefined),
+        showPaneToast: vi.fn(),
+      } as unknown as Workspace,
+      ui: { closePalette: vi.fn() },
+      flags: {},
+    } as unknown as CommandContext
+  }
+
+  it('is available on a transcript-backed Codex pane and re-homes that pane', async () => {
+    const context = contextFor({ kind: 'codex', providerSessionId: 'native-codex' })
+    const command = sessionCommands.find(candidate => candidate.id === 'remove-cybersecurity-block')
+    if (!command) throw new Error('Remove Cybersecurity Block command is missing')
+    expect(command.when?.(context)).toBe(true)
+
+    await command.run(context)
+
+    expect(context.workspace.removeFocusedCyberPolicyBlock).toHaveBeenCalledOnce()
+    expect(context.ui.closePalette).toHaveBeenCalledOnce()
+  })
+
+  it('stays hidden for Claude, terminal OpenCode, and a Codex pane with no provider session', () => {
+    const command = sessionCommands.find(candidate => candidate.id === 'remove-cybersecurity-block')
+    if (!command) throw new Error('Remove Cybersecurity Block command is missing')
+    expect(command.when?.(contextFor({ kind: 'claude', providerSessionId: 'native-claude' }))).toBe(false)
+    expect(command.when?.(contextFor({
+      kind: 'opencode',
+      providerSessionId: 'ses_term',
+      providerRuntime: 'terminal',
+    }))).toBe(false)
+    expect(command.when?.(contextFor({ kind: 'opencode', providerSessionId: 'ses_rendered' }))).toBe(false)
+    expect(command.when?.(contextFor({ kind: 'codex' }))).toBe(false)
+  })
+
+  it('does not call the workspace action when run on a non-Codex pane', async () => {
+    const context = contextFor({ kind: 'claude', providerSessionId: 'native-claude' })
+    const command = sessionCommands.find(candidate => candidate.id === 'remove-cybersecurity-block')
+    if (!command) throw new Error('Remove Cybersecurity Block command is missing')
+    await command.run(context)
+    expect(context.workspace.removeFocusedCyberPolicyBlock).not.toHaveBeenCalled()
+  })
+
+  it('keeps run() as strict as when() when Codex loses transcriptRewind', async () => {
+    capabilityOverride.current = { transcriptRewind: false }
+    try {
+      const context = contextFor({ kind: 'codex', providerSessionId: 'native-codex' })
+      const command = sessionCommands.find(candidate => candidate.id === 'remove-cybersecurity-block')
+      if (!command) throw new Error('Remove Cybersecurity Block command is missing')
+      expect(command.when?.(context)).toBe(false)
+      await command.run(context)
+      expect(context.workspace.removeFocusedCyberPolicyBlock).not.toHaveBeenCalled()
+    } finally {
+      capabilityOverride.current = null
+    }
+  })
+})
+
 describe('Switch Provider command', () => {
   it('captures the command target and opens a picker without converting immediately', async () => {
     const openProviderSwitchPicker = vi.fn()

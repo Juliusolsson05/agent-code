@@ -12,7 +12,8 @@ import type { CommandDef } from '@renderer/features/command-palette/types'
 // This file pinned the exact 102-id before-state, then the 106-id governance
 // after-state (102 - 5 retired + 9 added), then 112 with Grid Dispatch's six
 // row commands (#681), 113 with New Window (#688), 114 with Clear
-// Agent Composer (#683), and 115 with API Key Vault (#831). Keeping ONE snapshot that moved — rather
+// Agent Composer (#683), 115 with API Key Vault (#831), and 116 with
+// Remove Cybersecurity Block (#848). Keeping ONE snapshot that moved — rather
 // than a "baseline" file and an "after" file — is what makes the plan's
 // headline count an assertion anyone can check against running code instead of
 // prose.
@@ -99,9 +100,10 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
   'create-ai-workspace',
   'clear-ai-workspace',
   'toggle-file-tree',
-  // sessionCommands (29)
+  // sessionCommands (30)
   'view-prompts',
   'rewind-to-prompt',
+  'remove-cybersecurity-block',
   'undo-rewind',
   'open-agent-activity',
   'close-old-agents',
@@ -207,7 +209,7 @@ describe('built-in command catalog — baseline characterization', () => {
     // Vault (#831). Each
     // step of that arithmetic was a deliberate edit to this line, which is the
     // entire point of pinning it.
-    expect(builtInCommandCatalog).toHaveLength(115)
+    expect(builtInCommandCatalog).toHaveLength(116)
   })
 
   it('reports no structural defects', () => {
@@ -238,11 +240,11 @@ describe('generated per-provider split commands', () => {
   })
 
   it('accounts for the difference between literal and total command count', () => {
-    // 115 total - 4 generated = 111 literal `id:` fields across the command
+    // 116 total - 4 generated = 112 literal `id:` fields across the command
     // modules. At the original baseline this read 102 - 4 = 98; it moved down by
     // the five retirements, then back up by the nine additions, Grid Dispatch's
     // six row commands, and New Window.
-    expect(builtInCommandCatalog.length - nonDefaultProviders.length * 2).toBe(111)
+    expect(builtInCommandCatalog.length - nonDefaultProviders.length * 2).toBe(112)
   })
 
   it('emits both directions for every non-default provider', () => {
@@ -359,9 +361,10 @@ describe('governance targets', () => {
     // `new-dispatch-row`, `remove-dispatch-row`, `dispatch-row-project`,
     // `dispatch-row-child-cap`, `dispatch-focus-row-up`,
     // `dispatch-focus-row-down`, `new-window` (#688), and
-    // `clear-agent-composer` (#683), and `api-key-vault` (#831).
-    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 18).toBe(102)
-    expect(builtInCommandCatalog).toHaveLength(115)
+    // `clear-agent-composer` (#683), `api-key-vault` (#831), and
+    // `remove-cybersecurity-block` (#848).
+    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 19).toBe(102)
+    expect(builtInCommandCatalog).toHaveLength(116)
   })
 })
 
