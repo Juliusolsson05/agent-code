@@ -151,6 +151,22 @@ export const providerApi = {
     params: ListRewindPromptsRequest,
   ): Promise<RewindPrompt[]> => ipcRenderer.invoke('session:list-rewind-prompts', params),
 
+  /**
+   * Fork a Codex session with the last model step after a `cyber_policy`
+   * task_complete removed. Produces a NEW provider session id. The original
+   * rollout is not modified. The caller re-homes the pane with
+   * `replaceSession(...)` and leaves the composer draft as-is.
+   */
+  stripCodexCyberPolicy: (params: {
+    provider: AgentProviderKind
+    sourceProviderSessionId: string
+    cwd: string
+  }): Promise<{
+    provider: 'codex'
+    newProviderSessionId: string
+    newFilePath: string
+  }> => ipcRenderer.invoke('session:strip-codex-cyber-policy', params),
+
   rewindToPrompt: (params: {
     provider: AgentProviderKind
     sourceProviderSessionId: string
