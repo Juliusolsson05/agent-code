@@ -61,6 +61,42 @@ drifted twice.
     WorkIndicator does, and the raw TUI draws its own spinner.
   - Related-agent chips stay off the terminal header, as today.
 
+## Review follow-ups (PR #853)
+
+Two orchestrated reviewers (one Claude, correctness; one Codex, layout and
+conventions). Every finding was adopted.
+
+- **Spotlight and Tiled Tabs ignored Status Mode and worktree badges (#856).**
+  - Cause: `TileTree`/`renderWorkspaceLeaf` defaulted both settings to `true`,
+    and neither view passed them.
+  - Fix: both are now threaded from `MainSurface`, and the defaults on the tab,
+    view mode and display settings are gone, so tsc names any surface that
+    forgets them. Fixed in this PR, since leaving it would have extended the
+    wrong default to terminal view.
+- **OpenCode Terminal runtime never lights (#857).**
+  - Cause: its session only ever emits `process-state {active:false}`, and the
+    terminal surface can't set `awaitingAssistant`. This is a missing provider
+    signal.
+  - Handling: the comment is narrowed to Claude/Codex and the gap tracked
+    separately. #851's text is corrected to match.
+- **Related-agent chips in terminal view (#858).**
+  - A persisted related selection mounts its TUI with no indicator. Adding the
+    chips changes header height, which resizes the PTY, so that needs its own
+    decision.
+  - The comment now states the gap honestly instead of calling it "unchanged".
+- **Narrow flagged panes (both reviewers).**
+  - Problem: fixed-width chrome could slide under the flag.
+  - Fix: `PaneHeader`'s label group is now an `@container`; its width already
+    excludes the flag. `terminal view` hides below 320px of text room, since
+    it is redundant with `raw <provider>`.
+- **cwd-to-TAIL gap:** `pl-1` on the trailing slot restores the 12px minimum.
+- **Lit rule duplicated in the leaf:** replaced by an exported
+  `paneHeaderStatusLit`, used by both `PaneHeader` and the slot colors.
+- **Status Mode toggle resizes terminal PTYs by up to one row:** accepted,
+  because it only happens when the setting changes. Documented at the call site.
+- **Wiring test:** a second suite enters through `renderWorkspaceLeaf`.
+  Mutation-checked: hard-coding the terminal branch's `showStatusMode` fails it.
+
 ## Tests
 
 - New `AgentTerminalLeaf.statusHeader.renderer.test.tsx`:
