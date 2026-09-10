@@ -193,8 +193,14 @@ export const sessionCommands: CommandDef[] = [
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return
       const meta = workspace.state.sessions[sessionId]
-      // Match `when` exactly so a keybinding cannot strip a Claude pane.
-      if (meta?.kind !== 'codex' || !meta.providerSessionId) return
+      // Match `when` exactly so a keybinding cannot strip a Claude pane,
+      // a Codex terminal runtime, or a provider that lost transcriptRewind.
+      if (
+        meta?.kind !== 'codex' ||
+        !getProviderFeatures(meta.kind).transcriptRewind ||
+        meta.providerRuntime === 'terminal' ||
+        !meta.providerSessionId
+      ) return
       ui.closePalette()
       await workspace.removeFocusedCyberPolicyBlock()
     },
@@ -212,7 +218,7 @@ export const sessionCommands: CommandDef[] = [
     pickerVisibility: 'advanced',
     surface: 'session',
     title: 'Undo Rewind',
-    description: '**What it does:** Restores the focused **agent session** to the provider transcript it used before the last rewind.\n\n**Use when:** You rewound to the wrong prompt and have not submitted new work from the rewound branch.\n\n**Notes:** Runtime-only. Available until the next submit, pane close, or reload.',
+    description: '**What it does:** Restores the focused **agent session** to the provider transcript it used before the last Rewind to Prompt or Remove Cybersecurity Block.\n\n**Use when:** You rewound or stripped a cybersecurity block and have not submitted new work from that branch.\n\n**Notes:** Runtime-only. Available until the next submit, pane close, or reload.',
     keywords: [
       'undo',
       'rewind',

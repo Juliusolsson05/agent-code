@@ -436,6 +436,9 @@ export function useProviderActions(
                 cwd: meta.cwd,
                 previousProviderSessionId,
                 rewoundProviderSessionId: result.newProviderSessionId,
+                // Not a prompt rewind. Undo restores previousProviderSessionId
+                // and previousDraftInput; this field exists because the
+                // rewind undo record requires it.
                 rewoundPromptText: '',
                 rewoundPromptTimestamp: null,
                 previousDraftInput: runtime.draftInput,

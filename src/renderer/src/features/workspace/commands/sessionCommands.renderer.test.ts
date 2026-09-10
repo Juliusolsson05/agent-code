@@ -179,6 +179,7 @@ describe('Remove Cybersecurity Block command', () => {
       providerSessionId: 'ses_term',
       providerRuntime: 'terminal',
     }))).toBe(false)
+    expect(command.when?.(contextFor({ kind: 'opencode', providerSessionId: 'ses_rendered' }))).toBe(false)
     expect(command.when?.(contextFor({ kind: 'codex' }))).toBe(false)
   })
 
@@ -188,6 +189,20 @@ describe('Remove Cybersecurity Block command', () => {
     if (!command) throw new Error('Remove Cybersecurity Block command is missing')
     await command.run(context)
     expect(context.workspace.removeFocusedCyberPolicyBlock).not.toHaveBeenCalled()
+  })
+
+  it('keeps run() as strict as when() when Codex loses transcriptRewind', async () => {
+    capabilityOverride.current = { transcriptRewind: false }
+    try {
+      const context = contextFor({ kind: 'codex', providerSessionId: 'native-codex' })
+      const command = sessionCommands.find(candidate => candidate.id === 'remove-cybersecurity-block')
+      if (!command) throw new Error('Remove Cybersecurity Block command is missing')
+      expect(command.when?.(context)).toBe(false)
+      await command.run(context)
+      expect(context.workspace.removeFocusedCyberPolicyBlock).not.toHaveBeenCalled()
+    } finally {
+      capabilityOverride.current = null
+    }
   })
 })
 

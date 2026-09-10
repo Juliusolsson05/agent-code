@@ -1,4 +1,9 @@
 import { describe, expect, it } from 'vitest'
+import {
+  classifyCodexDocument,
+  decodeCodexConversation,
+  decodeJsonl,
+} from 'agent-transcript-parser'
 import type { ConversationDocument, ConversationEntry } from 'agent-transcript-parser'
 
 import {
@@ -210,6 +215,41 @@ describe('stripLastCodexCyberPolicyStep', () => {
     expect(() => stripLastCodexCyberPolicyStep(conversation)).toThrow(
       /No cybersecurity block at the end of this Codex session/,
     )
+  })
+
+  it('strips a last model step decoded from real Codex JSONL bytes', () => {
+    // Hand-built ConversationEntry literals can stay green if decode ever
+    // stops copying record.raw onto source.raw. This path is the one the
+    // host actually runs: JSONL → classify → decode → cut. Shape is the
+    // redacted tail of rollout-...01a08846...jsonl (user, earlier tool
+    // cycle, last reasoning+tool cycle, item_completed/token_usage opaques,
+    // cyber_policy task_complete).
+    const jsonl = [
+      '{"timestamp":"2026-09-10T00:00:00.000Z","type":"session_meta","payload":{"id":"01a08846-936d-7dd3-a91b-0f933d0d9f29"}}',
+      '{"timestamp":"2026-09-10T00:00:01.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"continue"}]}}',
+      '{"timestamp":"2026-09-10T00:00:02.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"verified"}]}}',
+      '{"timestamp":"2026-09-10T00:00:03.000Z","type":"response_item","payload":{"type":"custom_tool_call","call_id":"call-kept","name":"exec","input":"{}"}}',
+      '{"timestamp":"2026-09-10T00:00:04.000Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call-kept","output":"ok"}}',
+      '{"timestamp":"2026-09-10T00:00:05.000Z","type":"response_item","payload":{"type":"reasoning","encrypted_content":"gAAAAABqofvzmK22","summary":[{"type":"summary_text","text":"next"}]}}',
+      '{"timestamp":"2026-09-10T00:00:06.000Z","type":"response_item","payload":{"type":"custom_tool_call","call_id":"call-last","name":"exec","input":"{}"}}',
+      '{"timestamp":"2026-09-10T00:00:07.000Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"CommandExecution"}}}',
+      '{"timestamp":"2026-09-10T00:00:08.000Z","type":"token_usage_record","payload":{}}',
+      '{"timestamp":"2026-09-10T00:00:09.000Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call-last","output":"flagged-input"}}',
+      '{"timestamp":"2026-09-10T00:00:10.000Z","type":"event_msg","payload":{"type":"task_complete","last_agent_message":null,"error":{"message":"This content was flagged for possible cybersecurity risk.","codex_error_info":"cyber_policy"}}}',
+    ].join('\n')
+
+    const conversation = decodeCodexConversation(classifyCodexDocument(decodeJsonl(jsonl)).records)
+    expect(conversationHasCodexCyberPolicyBlock(conversation)).toBe(true)
+
+    const stripped = stripLastCodexCyberPolicyStep(conversation)
+    expect(conversationHasCodexCyberPolicyBlock(stripped)).toBe(false)
+    expect(kinds(stripped)).toEqual([
+      'opaque:session_meta',
+      'user',
+      'assistant',
+      'call:call-kept',
+      'result:call-kept',
+    ])
   })
 
   it('rejects a Claude conversation and a Codex file with no cyber block', () => {
