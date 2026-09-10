@@ -42,6 +42,19 @@ import { AgentTitleHeader } from '@renderer/workspace/tile-tree/AgentTitleHeader
 // whichever surface a pane shows. So the header has one implementation, and
 // surface-specific chrome goes in through `badge` and `trailing` instead of a
 // second copy. Don't fork this markup again. Add a slot instead.
+
+/**
+ * The one rule for "the status strip is painted". PaneHeader uses it for the
+ * fill and the `data-status-lit` hook. Callers that style slot content by
+ * lit state (TAIL's `text-accent` would vanish on the accent fill) call this
+ * same function. A caller recomputing `statusMode && isSessionLive` inline
+ * would be the same kind of silent copy that caused #851, so any future
+ * gating goes here and reaches both at once.
+ */
+export function paneHeaderStatusLit(statusMode: boolean, isSessionLive: boolean): boolean {
+  return statusMode && isSessionLive
+}
+
 export function PaneHeader({
   sessionId,
   paneLabel,
@@ -74,13 +87,9 @@ export function PaneHeader({
    *  color flag (e.g. the terminal view's TAIL pill). */
   trailing?: ReactNode
 }) {
-  // The one definition of "the strip is painted". It drives the fill and the
-  // `data-status-lit` hook together, so tests and debug tooling read exactly
-  // what the user sees. Slot content that sets its own color (TAIL's
-  // `text-accent`) must check the same condition, because accent text on this
-  // accent fill is invisible. The caller passed both inputs, so it can
-  // recompute this without another prop.
-  const statusLit = statusMode && isSessionLive
+  // Drives the fill and the `data-status-lit` hook together, so tests and
+  // debug tooling read exactly what the user sees.
+  const statusLit = paneHeaderStatusLit(statusMode, isSessionLive)
   // Related agents can change without rerendering this session. Only the two
   // painted status values are dependencies; subscribing to their entire
   // runtimes would couple every related transcript delta back to this header.
@@ -144,8 +153,17 @@ export function PaneHeader({
             callers that pass no `trailing`, nothing moves: the group has no
             background and its content is left-aligned, so filling the row
             only changes where its invisible right padding sits. That padding
-            still keeps text 12px from the flag or from the pane edge. */}
-        <div className={`flex flex-1 items-center gap-2 min-w-0 px-3 ${statusMode ? 'py-0' : 'py-1'}`}>
+            still keeps text 12px from the flag or from the pane edge.
+
+            WHY `@container`: this group's width is exactly the room left for
+            text once the flag takes its quarter, whether or not a flag is set.
+            Slot content can use container-query variants to drop optional
+            labels when that room runs out. A pane-width or viewport query
+            would not know about the flag. Containment doesn't change the
+            layout here: the group is `flex-1` (basis 0%) with `min-w-0`, so
+            its size never depended on its content. Feed.tsx uses the same
+            container-query pattern for narrow tiles. */}
+        <div className={`@container flex flex-1 items-center gap-2 min-w-0 px-3 ${statusMode ? 'py-0' : 'py-1'}`}>
           {paneLabel && (
             <span className="flex-shrink-0 rounded-chip border border-current/30 px-1 leading-[14px] text-[9px] font-semibold tabular-nums">
               {paneLabel}
@@ -161,12 +179,20 @@ export function PaneHeader({
             <span dir="ltr">{shortenCwd(projectDir)}</span>
           </span>
           {/* `flex-shrink-0` on the slot, and `min-width: 0` on
-              `.truncate-start`, make the cwd the part that gives way in a
+              `.truncate-start`, make the cwd the first thing to give way in a
               narrow pane. Surface state such as TAIL answers "what is this
-              pane doing right now", so it has to stay whole. The cwd is
-              already clipped from the start by design. */}
+              pane doing right now", so it should outlast a path that is
+              already clipped from the start by design. Nothing here can
+              shrink below the chip + badge + slot, though. In a narrow enough
+              flagged pane that content still slides under the flag, so slots
+              should hide optional labels with `@container` variants (see
+              above) instead of assuming unlimited room.
+
+              `pl-1` adds to the group's `gap-2`, so identity (cwd) and state
+              (slot) sit at least 12px apart, the separation the terminal
+              header had before it shared this row. */}
           {trailing ? (
-            <span className="ml-auto flex flex-shrink-0 items-center gap-2">
+            <span className="ml-auto flex flex-shrink-0 items-center gap-2 pl-1">
               {trailing}
             </span>
           ) : null}

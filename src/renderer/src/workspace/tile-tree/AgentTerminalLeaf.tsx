@@ -13,7 +13,7 @@ import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type { SessionId, SessionKind } from '@renderer/workspace/types'
 import { isSessionExited } from '@renderer/workspace/providerSessionIdentity'
-import { PaneHeader } from '@renderer/workspace/tile-tree/TileLeaf/PaneHeader'
+import { PaneHeader, paneHeaderStatusLit } from '@renderer/workspace/tile-tree/TileLeaf/PaneHeader'
 import { PaneToast } from '@renderer/workspace/tile-tree/TileLeaf/PaneToast'
 import { useComposerDictation } from '@renderer/workspace/tile-tree/TileLeaf/useComposerDictation'
 import { useAgentTerminalDimensionActive, useAgentTerminalOwnerVisible } from '@renderer/workspace/terminal/AgentTerminalOwnership'
@@ -543,15 +543,21 @@ export function AgentTerminalLeaf({
   }
 
   // Same liveness rule TileLeaf feeds PaneHeader. `sessionStatus` is derived
-  // at workspace level from the semantic turn, `processActive` (the headless
-  // packages' own spinner detection) and exit state, none of which depend on
-  // which leaf is mounted. So a turn typed straight into the raw TUI lights
-  // this header just as a composer send lights the rendered one (#851).
+  // at workspace level from the semantic turn, `processActive` and exit state,
+  // and none of these depend on which leaf is mounted. For Claude and Codex,
+  // `processActive` comes from the main-process spinner detectors, so a turn
+  // typed straight into the raw TUI lights this header just as a composer
+  // send lights the rendered one (#851). The third input, the optimistic
+  // `awaitingAssistant`, is set only by the composer. That means this header
+  // lights on the first spinner frame or semantic turn, not on Enter.
+  //
+  // Known gap: the OpenCode Terminal runtime emits no activity at all (only
+  // `process-state {active:false}`), so its header stays unlit (#857). That
+  // is a missing provider signal, not something this surface can derive.
   const isSessionLive = runtime.sessionStatus === 'running'
-  // Recomputed rather than read back from PaneHeader, so the slot content
-  // below can drop its own accent color on the lit strip. See `statusLit` in
-  // PaneHeader.
-  const statusLit = showStatusMode && isSessionLive
+  // Uses PaneHeader's own rule instead of an inline `&&`, so the slot colors
+  // below can never disagree with the fill they sit on.
+  const statusLit = paneHeaderStatusLit(showStatusMode, isSessionLive)
 
   return (
     <div
@@ -578,9 +584,21 @@ export function AgentTerminalLeaf({
       {/* The shared header, not a copy of it. A hand-rolled copy here is how
           #851 happened: that copy never got the Status Mode fill or the color
           flag. Only the terminal-specific chrome is supplied from this file.
-          Related-agent chips are deliberately not passed, which keeps today's
-          behavior: selecting a related session re-targets the pane, and
-          remounting a raw PTY view for that is a separate design question. */}
+
+          Related-agent chips are not passed, which keeps pre-#851 behavior,
+          but that behavior has a known hole (#858). A persisted related
+          selection still mounts here (WorkspaceLeaf passes the selected
+          `renderedSessionId`), so the pane can show a child's TUI under the
+          parent's label with nothing marking it. The chips aren't simply
+          added because every header row is taken out of the PTY: a chip row
+          appearing when a child spawns would resize the live TUI. #858 tracks
+          that decision.
+
+          The same cost applies to Status Mode. `statusMode` switches the row
+          between `py-0` and `py-1`, so toggling the setting changes this
+          header by 8px and can drop or add a terminal row, which resizes the
+          provider PTY once. That is accepted because it only happens when the
+          setting changes; liveness and TAIL never change the height. */}
       <PaneHeader
         sessionId={sessionId}
         paneLabel={paneLabel}
@@ -613,8 +631,22 @@ export function AgentTerminalLeaf({
               </span>
             ) : null}
             {/* No color of its own: it inherits the row's `text-muted`, or
-                `accent-fg` on the lit strip. */}
-            <span className="text-[9px] uppercase tracking-wider">
+                `accent-fg` on the lit strip.
+
+                Hidden below 320px of header text room (PaneHeader's label
+                group is the `@container`, so the flag's quarter is already
+                subtracted). `raw <provider>` already names this surface, so
+                the label is the one piece of chrome that can go without losing
+                information. Without this, a flagged Tiled Dispatch lane
+                (~250px) had more fixed-width text than room, and the label
+                slid under the flag with TAIL next.
+
+                The threshold covers the fixed row content with every piece
+                shown, measured at the 10px code font: pane label chip
+                (~26px), `raw opencode` (~72px), TAIL (~26px), this label
+                (~76px) and the gaps, about 236px, plus roughly 80px so the cwd
+                keeps a readable tail. */}
+            <span className="hidden text-[9px] uppercase tracking-wider @min-[320px]:inline">
               terminal view
             </span>
           </>
