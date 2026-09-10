@@ -36,6 +36,8 @@
       "claude-code-headless/*": ["./packages/claude-code-headless/src/*"],
       "codex-headless": ["./packages/codex-headless/src/index.ts"],
       "codex-headless/*": ["./packages/codex-headless/src/*"],
+      "grok-code-headless": ["./packages/grok-code-headless/src/index.ts"],
+      "grok-code-headless/*": ["./packages/grok-code-headless/src/*"],
       "opencode-headless": ["./packages/opencode-headless/src/index.ts"],
       "opencode-headless/*": ["./packages/opencode-headless/src/*"],
       "agent-transcript-parser": ["./packages/agent-transcript-parser/src/index.ts"],
@@ -74,6 +76,7 @@
     "packages/agent-voice-dictation/src/speech/**/*",
     "packages/claude-code-headless/src/**/*",
     "packages/codex-headless/src/**/*",
+    "packages/grok-code-headless/src/**/*",
     "packages/opencode-headless/src/**/*",
     "packages/workflow-mcp/src/**/*"
   ],

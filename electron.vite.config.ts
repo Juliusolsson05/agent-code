@@ -17,6 +17,8 @@ const headlessAlias = [
   { find: 'claude-code-headless', replacement: resolve(__dirname, 'packages/claude-code-headless/src/index.ts') },
   { find: /^codex-headless\/(.+)$/, replacement: `${resolve(__dirname, 'packages/codex-headless/src')}/$1` },
   { find: 'codex-headless', replacement: resolve(__dirname, 'packages/codex-headless/src/index.ts') },
+  { find: /^grok-code-headless\/(.+)$/, replacement: `${resolve(__dirname, 'packages/grok-code-headless/src')}/$1` },
+  { find: 'grok-code-headless', replacement: resolve(__dirname, 'packages/grok-code-headless/src/index.ts') },
   { find: /^opencode-headless\/(.+)$/, replacement: `${resolve(__dirname, 'packages/opencode-headless/src')}/$1` },
   { find: 'opencode-headless', replacement: resolve(__dirname, 'packages/opencode-headless/src/index.ts') },
   { find: /^agent-transcript-parser\/(.+)$/, replacement: `${resolve(__dirname, 'packages/agent-transcript-parser/src')}/$1` },
@@ -55,6 +57,7 @@ const projectAlias = {
 const headlessExclude = [
   'claude-code-headless',
   'codex-headless',
+  'grok-code-headless',
   'opencode-headless',
   'agent-transcript-parser',
   'agent-voice-dictation',

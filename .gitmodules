@@ -19,3 +19,6 @@
 [submodule "packages/workflow-mcp"]
 	path = packages/workflow-mcp
 	url = https://github.com/Juliusolsson05/workflow-mcp.git
+[submodule "packages/grok-code-headless"]
+	path = packages/grok-code-headless
+	url = https://github.com/Juliusolsson05/grok-code-headless.git
