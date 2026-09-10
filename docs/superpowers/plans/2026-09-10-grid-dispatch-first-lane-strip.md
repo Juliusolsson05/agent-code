@@ -38,12 +38,21 @@ All under `src/renderer/src/workspace/dispatch/`.
    - Empty-lane hint:
      - Drop the `column === 0` "Pick an agent from the index" branch, because
        every lane now has a strip.
-     - Read `gridRow.projectTabIds` instead of the legacy `gridRow.projectTabId`.
-       `normalizeGridShape` folds the legacy field into `projectTabIds` on read
-       and nothing writes it again, so the old read was always undefined. A bound
-       row therefore got the unbound copy promising "⌥↓ for the top of the index",
-       and ⌥↓ takes the top of the *global* index, not the bound row's.
-       `02011066` split the copy to avoid exactly that promise.
+     - Delete the dead `gridRow.projectTabId` branch, so every row shows
+       "Pick an agent from the strip, or press ⌥↓ for the top of the index".
+
+     > **Amended during implementation (2026-09-10).** The first draft of this
+     > plan said to *fix* that read to `projectTabIds`, on the premise that ⌥↓
+     > takes the top of the global index and so "the top of the index" is false
+     > in a bound row. That premise is out of date. `524671b2` split the copy
+     > while ⌥↓ still walked the global list (`dispatchRows(workspace)` at that
+     > commit). `29ecd829` then made ⌥↓ walk the focused row's own filtered list
+     > (`tiledRowScopedRows` in `useKeybinds.ts`), which makes "the top of the
+     > index" true in a bound row too. The stale read happened to show that copy
+     > anyway, because `normalizeGridShape` folds `projectTabId` away. Fixing the
+     > read would have withheld a true promise, so the branch is deleted. Bound
+     > rows see no change. The hint is copy, so no test pins it; a WHY comment at
+     > the hint says not to re-add a binding branch while ⌥↓ is row-scoped.
 2. **`DispatchMiniList.tsx`**
    - Prop type `Pick<DispatchGridRow, 'projectTabId' | …>` becomes
      `'projectTabIds'`. That is the field `rowScopedRows` actually reads. Runtime
@@ -61,15 +70,14 @@ Written first, and each one must fail on `origin/main` before the fix:
   With focus on lane 1 of row 0, clicking lane 0's strip calls
   `selectTiledLaneSession(0, …)` and `setTiledFocusedLane(0)`. This is the
   one-click navigation the issue is about.
-- **A project-bound row's empty lane does not promise the top of the index.** A
-  focused empty lane in a row with `projectTabIds` shows
-  "Pick an agent from the strip, or press ⌥↓". An unbound row keeps the
-  "…for the top of the index" copy.
-
-The `DispatchMiniList` mock gains an `onSelect` click hook and the `DispatchEmpty`
-mock renders its hint, so these contracts are observable. Also update the stale
+The `DispatchMiniList` mock reports its lane's selection and forwards a click to
+the layout's real `onSelect` closure, so the tests can tell lane 0's strip from
+the others and observe which lane the layout writes. Also update the stale
 "once each row's first lane lost its strip" comment on the row-targeting test.
 That test's claim still holds.
+
+(The first draft also listed a bound-row hint test. It was dropped with the
+premise it relied on; see the amendment under Changes.)
 
 ## Out of scope
 
