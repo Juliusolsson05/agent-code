@@ -50,6 +50,29 @@ export const paneCommands: CommandDef[] = [
     run: ({ workspace }) => workspace.startNewAgentPlacement(),
   },
   {
+    // New Agent… files a Dispatch agent under whatever project the spawn
+    // resolver derives from FOCUS. With an empty lane in an unbound row that is
+    // the last agent you selected, so aiming at another project meant first
+    // selecting some unrelated agent in it purely to move the target, then
+    // coming back to the lane (#852). This asks for the project instead. It
+    // still fills the focused lane, exactly like New Agent….
+    id: 'new-agent-in',
+    category: 'create',
+    // `dispatch`, not `app`: in the grid a project is a tab one keystroke away,
+    // and a detached agent spawned from the grid lands nowhere visible — the
+    // grid has no lanes to fill and Dispatch rows are not on screen.
+    surface: 'dispatch',
+    // Title per docs/command-style.md: "New X" for creation, and the ellipsis
+    // because the command asks for more input (agent, then project).
+    title: 'New Agent In…',
+    description: '**What it does:** Starts a **new agent in a project you choose**, in the focused Dispatch lane.\n\n**Use when:** You are filling an empty lane with an agent for a different project than the one you last selected.\n\n**Notes:** Pick the agent, then the project. A row limited to certain projects only offers those.',
+    keywords: ['new', 'agent', 'project', 'lane', 'fill', 'empty', 'dispatch', 'claude', 'codex', 'opencode'],
+    // Same data gate as New Agent…. Tiled Tabs covers Dispatch, so the lane the
+    // agent would fill is not the thing on screen.
+    when: ({ workspace }) => Boolean(workspace.activeTab && !workspace.tileTabs),
+    run: ({ ui }) => ui.openNewAgentIn(),
+  },
+  {
     // `grid` surface — applies to split-vertical, split-horizontal,
     // codex-vertical, codex-horizontal, terminal-horizontal and
     // terminal-vertical below.

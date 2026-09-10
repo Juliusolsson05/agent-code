@@ -77,6 +77,9 @@ export type UiShellSlice = UiShellState & {
    *  is captured here rather than resolved at commit time. */
   openNewAgentForProject: (tabId: TabId, anchorSessionId: SessionId) => void
   closeNewAgentPlacement: () => void
+  /** Open/close the New Agent In… dialog (#852). See `newAgentInOpen`. */
+  openNewAgentIn: () => void
+  closeNewAgentIn: () => void
   openTiledDispatchPrompt: () => void
   openDispatchRowProjectPicker: (rowIndex: number) => void
   closeDispatchRowProjectPicker: () => void
