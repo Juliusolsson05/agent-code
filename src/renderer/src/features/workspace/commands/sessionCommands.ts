@@ -152,6 +152,54 @@ export const sessionCommands: CommandDef[] = [
     },
   },
   {
+    // Remove Cybersecurity Block — Codex-only recovery that forks the
+    // focused rollout and drops the last model step after a
+    // cyber_policy task_complete. Rewind to Prompt also unblocks, but
+    // it deletes the last user prompt and the whole assistant turn.
+    // This command keeps that turn minus the tail that the next API
+    // request would resend. The source file is never edited.
+    id: 'remove-cybersecurity-block',
+    category: 'session',
+    pickerVisibility: 'advanced',
+    surface: 'session',
+    title: 'Remove Cybersecurity Block',
+    description: '**What it does:** Forks the focused **Codex** session with the last model step after a cybersecurity block removed.\n\n**Use when:** Codex ended the turn with a cybersecurity flag and you want to keep chatting without Rewind to Prompt deleting the whole assistant response.\n\n**Notes:** The original transcript is not edited. Undo Rewind restores it until the next submit.',
+    renderedViewPolicy: { kind: 'opens-rendered-feed' },
+    keywords: [
+      'cyber',
+      'cybersecurity',
+      'security',
+      'block',
+      'flag',
+      'policy',
+      'codex',
+      'remove',
+      'unblock',
+      'safety',
+    ],
+    when: ({ workspace }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return false
+      const meta = workspace.state.sessions[sessionId]
+      const kind = meta?.kind ?? DEFAULT_PROVIDER
+      return (
+        kind === 'codex' &&
+        getProviderFeatures(kind).transcriptRewind &&
+        meta?.providerRuntime !== 'terminal' &&
+        Boolean(meta?.providerSessionId)
+      )
+    },
+    run: async ({ workspace, ui }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return
+      const meta = workspace.state.sessions[sessionId]
+      // Match `when` exactly so a keybinding cannot strip a Claude pane.
+      if (meta?.kind !== 'codex' || !meta.providerSessionId) return
+      ui.closePalette()
+      await workspace.removeFocusedCyberPolicyBlock()
+    },
+  },
+  {
     // Undo Rewind — a runtime-only recovery affordance for the most recent
     // Rewind-to-Prompt on the focused pane. This deliberately does NOT share
     // the Undo Close stack: close undo restores tile placement from a LIFO

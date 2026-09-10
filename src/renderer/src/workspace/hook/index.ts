@@ -833,7 +833,7 @@ export function useWorkspace(
     return off
   }, [refs, setRuntimes])
 
-  const { switchSessionProvider, reloadSessionAgent, rewindSessionToPrompt, undoSessionRewind, reloadFocusedAgent, rewindFocusedToPrompt, undoLastRewind } =
+  const { switchSessionProvider, reloadSessionAgent, rewindSessionToPrompt, undoSessionRewind, removeCodexCyberPolicyBlock, reloadFocusedAgent, rewindFocusedToPrompt, undoLastRewind, removeFocusedCyberPolicyBlock } =
     useProviderActions(refs, setRuntimes, showPaneToast, sessionActions)
 
   // Bulk provider switch (Switch Agents modal) + remembered-batch return. Uses
@@ -997,10 +997,12 @@ export function useWorkspace(
     switchSessionProvider,
     reloadSessionAgent,
     rewindSessionToPrompt,
+    removeCodexCyberPolicyBlock,
     undoSessionRewind,
     switchAgentsToProvider,
     returnLastProviderSwitchBatch,
     rewindFocusedToPrompt,
+    removeFocusedCyberPolicyBlock,
     undoLastRewind,
     reloadAgentSessions,
     setSpotlightTarget,
