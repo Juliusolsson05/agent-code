@@ -1,4 +1,4 @@
-import { cleanup, render } from '@testing-library/react'
+import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { emptyRuntime } from '@renderer/session-runtime/state'
@@ -9,6 +9,7 @@ import {
 } from '@renderer/workspace/terminal/AgentTerminalOwnership'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { AgentTerminalLeaf } from './AgentTerminalLeaf'
+import { renderWorkspaceLeaf } from './TileTree'
 
 // Regression net for #851. A terminal-view agent pane used to draw its own copy
 // of the header, so the Status Mode fill and the color flag never reached it: a
@@ -74,6 +75,46 @@ vi.mock('@renderer/workspace/tile-tree/TileLeaf/useComposerDictation', () => ({
   useComposerDictation: () => {},
 }))
 
+const withStatus = (sessionStatus: SessionRuntime['sessionStatus']): SessionRuntime =>
+  ({ ...emptyRuntime(), processStatus: 'started', sessionStatus })
+
+function statusRow(container: HTMLElement): Element {
+  const row = container.querySelector('[data-pane-header-row="true"]')
+  if (!row) throw new Error('terminal-view pane rendered no status row')
+  return row
+}
+
+beforeEach(() => {
+  settings.dispatchColorFlags = {}
+  vi.stubGlobal('requestAnimationFrame', () => 0)
+  vi.stubGlobal('cancelAnimationFrame', () => {})
+  vi.stubGlobal('ResizeObserver', class {
+    disconnect() {}
+    observe() {}
+    unobserve() {}
+  })
+  // Attach never settles: the header must not wait on the PTY, and a
+  // pending attach keeps the mount effect from issuing wake or toast calls
+  // this suite doesn't care about.
+  Object.defineProperty(window, 'api', {
+    configurable: true,
+    value: {
+      attachAgentPty: () => new Promise(() => {}),
+      detachAgentPty: () => Promise.resolve(),
+      onSessionAgentPtyData: () => () => {},
+      onSessionTerminalData: () => () => {},
+      resize: () => Promise.resolve(),
+      sendInput: () => Promise.resolve(),
+    },
+  })
+})
+
+afterEach(() => {
+  cleanup()
+  Reflect.deleteProperty(window, 'api')
+  vi.unstubAllGlobals()
+})
+
 describe('AgentTerminalLeaf status header', () => {
   const workspace = {
     acknowledgeSession: vi.fn(),
@@ -100,46 +141,6 @@ describe('AgentTerminalLeaf status header', () => {
     )
   }
 
-  const withStatus = (sessionStatus: SessionRuntime['sessionStatus']): SessionRuntime =>
-    ({ ...emptyRuntime(), processStatus: 'started', sessionStatus })
-
-  function statusRow(container: HTMLElement): Element {
-    const row = container.querySelector('[data-pane-header-row="true"]')
-    if (!row) throw new Error('terminal-view pane rendered no status row')
-    return row
-  }
-
-  beforeEach(() => {
-    settings.dispatchColorFlags = {}
-    vi.stubGlobal('requestAnimationFrame', () => 0)
-    vi.stubGlobal('cancelAnimationFrame', () => {})
-    vi.stubGlobal('ResizeObserver', class {
-      disconnect() {}
-      observe() {}
-      unobserve() {}
-    })
-    // Attach never settles: the header must not wait on the PTY, and a
-    // pending attach keeps the mount effect from issuing wake or toast calls
-    // this suite doesn't care about.
-    Object.defineProperty(window, 'api', {
-      configurable: true,
-      value: {
-        attachAgentPty: () => new Promise(() => {}),
-        detachAgentPty: () => Promise.resolve(),
-        onSessionAgentPtyData: () => () => {},
-        onSessionTerminalData: () => () => {},
-        resize: () => Promise.resolve(),
-        sendInput: () => Promise.resolve(),
-      },
-    })
-  })
-
-  afterEach(() => {
-    cleanup()
-    Reflect.deleteProperty(window, 'api')
-    vi.unstubAllGlobals()
-  })
-
   it('lights the header while the agent runs and clears it when the agent goes idle', () => {
     const { container, rerender } = render(leaf(withStatus('running'), true))
     expect(statusRow(container).getAttribute('data-status-lit')).toBe('true')
@@ -165,5 +166,43 @@ describe('AgentTerminalLeaf status header', () => {
     settings.dispatchColorFlags = { 'session-1': 'red' }
     const { container } = render(leaf(withStatus('idle'), true))
     expect(container.querySelector('[data-pane-color-flag="red"]')).not.toBeNull()
+  })
+})
+
+// WHY a second suite that enters through renderWorkspaceLeaf: #851 wasn't a
+// header bug, it was the setting never reaching the terminal branch of
+// WorkspaceLeaf. The suite above mounts the leaf with an explicit prop, so it
+// would stay green if that hop went back to a constant or a default. #856 is
+// the same bug one level up. The required prop types guard call sites under
+// tsc, but vitest doesn't type-check. This pins the runtime threading instead.
+describe('terminal-view status header wiring', () => {
+  function workspaceWith(runtime: SessionRuntime): Workspace {
+    // `getRuntime` is the fallback useSessionRuntime reads when the store has
+    // no entry for the session. The mocked store's `workspaceRuntimes` is
+    // empty, so this runtime is the one the leaf sees. `tabs: []` makes the
+    // pane label '?', which this suite doesn't assert on.
+    return {
+      state: { sessions: { 'session-1': { kind: 'claude', cwd: '/tmp/project' } }, tabs: [] },
+      getRuntime: () => runtime,
+      focusSessionInTab: vi.fn(),
+      acknowledgeSession: vi.fn(),
+      ensureSessionLive: vi.fn().mockResolvedValue(undefined),
+      showPaneToast: vi.fn(),
+    } as unknown as Workspace
+  }
+
+  it.each([true, false])('threads Status Mode=%s from the surface into a terminal-view pane', showStatusMode => {
+    const workspace = workspaceWith(withStatus('running'))
+    const { container } = render(
+      <AgentTerminalOwnershipProvider>
+        {renderWorkspaceLeaf('session-1', 'session-1', workspace, 'tab-1', 'terminal', showStatusMode, false)}
+      </AgentTerminalOwnershipProvider>,
+    )
+    // Prove the terminal branch is what rendered. The rendered TileLeaf also
+    // draws a PaneHeader with `data-status-lit`, so without this a routing
+    // change could pass the assertion below without touching the wiring
+    // under test.
+    expect(screen.getByText('raw claude')).toBeTruthy()
+    expect(statusRow(container).getAttribute('data-status-lit')).toBe(String(showStatusMode))
   })
 })
