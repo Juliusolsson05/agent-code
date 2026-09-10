@@ -13,13 +13,12 @@ import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type { SessionId, SessionKind } from '@renderer/workspace/types'
 import { isSessionExited } from '@renderer/workspace/providerSessionIdentity'
-import { shortenCwd } from '@renderer/workspace/tile-tree/TileLeaf/labels'
+import { PaneHeader } from '@renderer/workspace/tile-tree/TileLeaf/PaneHeader'
 import { PaneToast } from '@renderer/workspace/tile-tree/TileLeaf/PaneToast'
 import { useComposerDictation } from '@renderer/workspace/tile-tree/TileLeaf/useComposerDictation'
 import { useAgentTerminalDimensionActive, useAgentTerminalOwnerVisible } from '@renderer/workspace/terminal/AgentTerminalOwnership'
 import { subscribeToAgentPtyData } from '@renderer/workspace/terminal/sessionDataDispatcher'
 import { attachXtermWebglRenderer } from '@renderer/workspace/terminal/xtermWebglRenderer'
-import { AgentTitleHeader } from '@renderer/workspace/tile-tree/AgentTitleHeader'
 import { createTerminalInputForwarder } from '@renderer/workspace/tile-tree/terminalInputForwarder'
 import { encodeTerminalPaste, registerTerminalPasteTarget } from '@renderer/workspace/terminal/textPasteTarget'
 import { AgentTerminalActions } from '@renderer/workspace/tile-tree/AgentTerminalActions'
@@ -35,6 +34,11 @@ type Props = {
   runtime: SessionRuntime
   projectDir: string | null
   provider: Exclude<SessionKind, 'terminal'>
+  /** The window's Status Mode setting. It is threaded exactly like TileLeaf's
+   *  so both surfaces light the header under the same rule. Required, not
+   *  defaulted: an omitted prop is exactly how the terminal branch went unlit
+   *  in #851, and a default would let the next call site repeat that. */
+  showStatusMode: boolean
 }
 
 // AgentTerminalLeaf — full-pane raw provider terminal for PTY-backed agents.
@@ -60,6 +64,7 @@ export function AgentTerminalLeaf({
   runtime,
   projectDir,
   provider,
+  showStatusMode,
 }: Props) {
   const dictationEnabled = useAppStore(state => state.settings.dictationEnabled)
   const dictationProvider = useAppStore(state => state.settings.dictationProvider)
@@ -537,6 +542,17 @@ export function AgentTerminalLeaf({
     termRef.current?.focus()
   }
 
+  // Same liveness rule TileLeaf feeds PaneHeader. `sessionStatus` is derived
+  // at workspace level from the semantic turn, `processActive` (the headless
+  // packages' own spinner detection) and exit state, none of which depend on
+  // which leaf is mounted. So a turn typed straight into the raw TUI lights
+  // this header just as a composer send lights the rendered one (#851).
+  const isSessionLive = runtime.sessionStatus === 'running'
+  // Recomputed rather than read back from PaneHeader, so the slot content
+  // below can drop its own accent color on the lit strip. See `statusLit` in
+  // PaneHeader.
+  const statusLit = showStatusMode && isSessionLive
+
   return (
     <div
       data-pane-id={sessionId}
@@ -559,39 +575,51 @@ export function AgentTerminalLeaf({
       onPasteCapture={() => acknowledgeSession(sessionId)}
       onCompositionEndCapture={() => acknowledgeSession(sessionId)}
     >
-      <div className="border-b border-border bg-surface">
-        <div className="flex items-center justify-between gap-3 px-3 py-1 text-[10px] text-muted font-code select-none">
-          <div className="flex items-center gap-2 min-w-0">
-            {paneLabel && (
-              <span className="flex-shrink-0 rounded-chip border border-current/30 px-1 leading-[14px] text-[9px] font-semibold tabular-nums">
-                {paneLabel}
-              </span>
-            )}
-            <span className="flex-shrink-0 text-ink">raw {provider}</span>
-            {/* truncate-START, matching PaneHeader: keep the project directory
-                visible and drop the shared prefix instead. */}
-            <span className="truncate-start" title={projectDir ?? 'no project dir'}>
-              {/* Inner dir="ltr" required — see PaneHeader. */}
-              <span dir="ltr">{shortenCwd(projectDir)}</span>
-            </span>
-          </div>
-          {/* TAIL pill styling copied from ScrollIndicator so both surfaces
-              read identically — without it the raw view silently follows
-              output while showing no state the palette can be checked
-              against. */}
-          <div className="flex flex-shrink-0 items-center gap-2">
+      {/* The shared header, not a copy of it. A hand-rolled copy here is how
+          #851 happened: that copy never got the Status Mode fill or the color
+          flag. Only the terminal-specific chrome is supplied from this file.
+          Related-agent chips are deliberately not passed, which keeps today's
+          behavior: selecting a related session re-targets the pane, and
+          remounting a raw PTY view for that is a separate design question. */}
+      <PaneHeader
+        sessionId={sessionId}
+        paneLabel={paneLabel}
+        agentTitle={agentTitle}
+        projectDir={projectDir}
+        statusMode={showStatusMode}
+        isSessionLive={isSessionLive}
+        // `text-ink` lifts the surface name above the muted cwd on the plain
+        // strip. On the lit strip it inherits `accent-fg`, since ink is not
+        // guaranteed to contrast with a user-chosen accent.
+        badge={
+          <span className={`flex-shrink-0 ${statusLit ? '' : 'text-ink'}`}>
+            raw {provider}
+          </span>
+        }
+        trailing={
+          <>
+            {/* TAIL pill styling copied from ScrollIndicator so both surfaces
+                read identically — without it the raw view silently follows
+                output while showing no state the palette can be checked
+                against. The one exception is the lit strip: `text-accent` on
+                `bg-accent` makes TAIL invisible exactly when the agent is
+                producing the output being followed, so it inherits
+                `accent-fg` there. */}
             {tailActive ? (
-              <span className="text-[10px] font-code uppercase tracking-wider text-accent">
+              <span
+                className={`text-[10px] font-code uppercase tracking-wider ${statusLit ? '' : 'text-accent'}`}
+              >
                 TAIL
               </span>
             ) : null}
-            <span className="text-[9px] uppercase tracking-wider text-muted">
+            {/* No color of its own: it inherits the row's `text-muted`, or
+                `accent-fg` on the lit strip. */}
+            <span className="text-[9px] uppercase tracking-wider">
               terminal view
             </span>
-          </div>
-        </div>
-        <AgentTitleHeader sessionId={sessionId} title={agentTitle} />
-      </div>
+          </>
+        }
+      />
 
       <div className="flex-1 min-h-0 min-w-0 overflow-hidden p-2">
         <div

@@ -192,6 +192,10 @@ const WorkspaceLeaf = memo(function WorkspaceLeaf({
           runtime={runtime}
           projectDir={runtime.projectDir ?? meta?.cwd ?? null}
           provider={kind}
+          // The rendered branch below always received this. The terminal
+          // branch didn't, which is why terminal-view panes never lit their
+          // header while working (#851).
+          showStatusMode={showStatusMode}
         />
       </MountedAgentTerminalOwner>
     )

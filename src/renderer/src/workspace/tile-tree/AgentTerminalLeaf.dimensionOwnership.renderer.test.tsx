@@ -93,6 +93,7 @@ vi.mock('@renderer/app-state/hooks', () => ({
         dictationEnabled: false,
         dictationProvider: 'local',
         dictationShortcut: 'off',
+        dispatchColorFlags: {},
       },
       // Read by the follow wiring in AgentTerminalLeaf; absent it would be
       // undefined, which happens to behave as "off" but hides the contract.
@@ -241,6 +242,7 @@ describe('AgentTerminalLeaf dimension ownership', () => {
               runtime={runtime}
               projectDir="/tmp/project"
               provider="codex"
+              showStatusMode={false}
             />
           </MountedAgentTerminalOwner>
         </GlobalEditorWorkspaceSlot>
@@ -291,6 +293,7 @@ describe('AgentTerminalLeaf dimension ownership', () => {
             runtime={runtime}
             projectDir="/tmp/project"
             provider="codex"
+            showStatusMode={false}
           />
         </MountedAgentTerminalOwner>
       </AgentTerminalOwnershipProvider>,
@@ -327,6 +330,7 @@ describe('AgentTerminalLeaf dimension ownership', () => {
             runtime={{ ...emptyRuntime(), processStatus: 'started' }}
             projectDir="/tmp/project"
             provider="claude"
+            showStatusMode={false}
           />
         </MountedAgentTerminalOwner>
       </AgentTerminalOwnershipProvider>
@@ -604,6 +608,7 @@ describe('AgentTerminalLeaf dimension ownership', () => {
                 runtime={runtime}
                 projectDir="/tmp/project"
                 provider="codex"
+                showStatusMode={false}
               />
             </MountedAgentTerminalOwner>
           </GlobalEditorWorkspaceSlot>
@@ -644,6 +649,7 @@ describe('AgentTerminalLeaf dimension ownership', () => {
             runtime={runtime}
             projectDir="/tmp/project"
             provider="codex"
+            showStatusMode={false}
           />
         </MountedAgentTerminalOwner>
       </AgentTerminalOwnershipProvider>,
