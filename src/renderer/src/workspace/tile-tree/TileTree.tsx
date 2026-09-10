@@ -28,8 +28,14 @@ type Props = {
   focusedSessionId: SessionId | null
   workspace: Workspace
   agentViewMode: AgentViewMode
-  showStatusMode?: boolean
-  showWorktreeBadges?: boolean
+  // WHY both display settings are required rather than defaulted to `true`
+  // (#856): Spotlight and Tiled Tabs never passed them. They silently got the
+  // defaults, so a user who turned Status Mode or worktree badges off still
+  // saw them there. A default here only ever means "some surface forgot to
+  // read the setting". Required props make tsc name every surface that has to
+  // thread the real value.
+  showStatusMode: boolean
+  showWorktreeBadges: boolean
 }
 
 export const TileTree = memo(function TileTree({
@@ -38,8 +44,8 @@ export const TileTree = memo(function TileTree({
   focusedSessionId,
   workspace,
   agentViewMode,
-  showStatusMode = true,
-  showWorktreeBadges = true,
+  showStatusMode,
+  showWorktreeBadges,
 }: Props) {
   if (node.type === 'leaf') {
     return renderWorkspaceLeaf(
@@ -92,14 +98,17 @@ export const TileTree = memo(function TileTree({
   )
 })
 
+// No defaults for the tab, view mode or display settings, for the same reason
+// as TileTree's props (#856). Every caller is a surface that knows these
+// values, and a default would hide the one that doesn't pass them.
 export function renderWorkspaceLeaf(
   sessionId: SessionId,
   focusedSessionId: SessionId | null,
   workspace: Workspace,
-  tabId: TabId = workspace.state.activeTabId,
-  agentViewMode: AgentViewMode = 'agent',
-  showStatusMode = true,
-  showWorktreeBadges = true,
+  tabId: TabId,
+  agentViewMode: AgentViewMode,
+  showStatusMode: boolean,
+  showWorktreeBadges: boolean,
   onFocusRequest?: () => void,
   showRelatedAgentTabs = false,
   surfacePaneLabel?: string,

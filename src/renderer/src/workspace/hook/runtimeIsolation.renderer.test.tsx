@@ -46,7 +46,8 @@ function Controller({ legacy = false }: { legacy?: boolean }) {
   useRenderedLeaseHygiene(current)
   counts.controller += 1
   return <>{current.runtimeServices}<TileTree tabId="tab" node={current.activeTab!.root}
-    focusedSessionId="one" workspace={current} agentViewMode="agent" /></>
+    focusedSessionId="one" workspace={current} agentViewMode="agent"
+    showStatusMode showWorktreeBadges /></>
 }
 
 beforeEach(() => {
