@@ -224,3 +224,19 @@ Both test files pass; `tsc` for node and web is clean.
 
 - Every acceptance criterion in #855 maps to a test: panel regression (Task 1 Step 1), live handoff without duplicates (Task 1 Step 6.2), compaction (Task 1 Step 1), no renderer extractor caller (Task 2 Step 2).
 - Names are consistent: `readerMessagesFromFeedItems`, `ReaderMessage`, `assistantEntryText`, `blockContentKind`, `beginOptimisticSubmit`, `unwindOptimisticSubmit`.
+
+## Review round (PR #861, 2026-09-10)
+
+Two orchestrated reviewers (A: Reader correctness, Claude; B: removal, tests and claims, Codex) reviewed `583cda68`. Each finding was verified against a reproduction before acting.
+
+| Finding | Disposition |
+|---|---|
+| A-MAJOR: an older message the reader paged back to jumps to the newest message when its JSONL copy replaces the semantic-history copy (id `semantic-block:…` → `entry:…`) | Fixed. `features/reader/model/readerSelection.ts` follows an older selection to its committed twin by the ledger's normalised text, nearest the old position; with no twin it holds the distance from the end. |
+| B-MAJOR / A-NIT: Reader does not follow a live turn onto its next text block | Fixed. A reader on the newest message follows onto newer messages; one who chose an older message stays. |
+| A-MINOR: scroll jumps to the top when a block finishes streaming and again at the committed handoff; finished text in a turn held open for pending tools counted as live | Fixed. Scroll resets only when the reader lands on a different message (`ReaderSelection.moved`); `ReaderMessage.live` now means "still growing" (the ledger's terminal-block rule). |
+| Selection was reconciled in an effect, so a handoff painted one frame of the newest message | Fixed while addressing the above: selection is reconciled during render. |
+| B-MINOR: the streaming test's trace lacked the proxy's `turn_delta`, overstating red-first evidence | Fixed. Tests use the production trace (`text_delta` + `turn_delta`); the PR body no longer claims that test failed on `main`. |
+| A-NIT: the ReaderView "leaves thinking out" check could not catch a classifier regression | Fixed. The trace completes the thinking block with `text`, as the proxy does. |
+| A-MINOR: no view-level handoff test, no non-Claude coverage | Fixed. ReaderView "keeps its place" tests; Codex rollout, Codex proxy and OpenCode projection tests. |
+| A-NIT: two comments overstated ledger caching / identity; per-delta O(entries) text joins | Fixed. Comments reworded; committed entry text memoised in a WeakMap. |
+| A-MINOR: Claude with proxy streaming off shows no live text in Reader | Not adopted. It is the intended consequence of removing screen scraping (the user's report was the objection to it) and is disclosed in the PR. |
