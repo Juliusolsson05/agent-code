@@ -57,7 +57,7 @@ describe('xtermWebglRenderer', () => {
   it('reports readiness after handing a complete addon to the live terminal', async () => {
     const addon = addonHarness()
     const terminal = terminalHarness()
-    const renderer = attachXtermWebglRenderer(terminal, async () => addon, true)
+    const renderer = attachXtermWebglRenderer(terminal, { loadAddon: async () => addon, enabled: true })
 
     await expect(renderer.ready).resolves.toBe(true)
     expect(addon.construct).toHaveBeenCalledTimes(1)
@@ -75,7 +75,7 @@ describe('xtermWebglRenderer', () => {
 
   it('disposes the context listener and addon exactly once during ordinary host teardown', async () => {
     const addon = addonHarness()
-    const renderer = attachXtermWebglRenderer(terminalHarness(), async () => addon, true)
+    const renderer = attachXtermWebglRenderer(terminalHarness(), { loadAddon: async () => addon, enabled: true })
     await expect(renderer.ready).resolves.toBe(true)
 
     renderer.dispose()
@@ -88,7 +88,7 @@ describe('xtermWebglRenderer', () => {
   it('loads WebGL into a live terminal and falls back by disposing it on context loss', async () => {
     const addon = addonHarness()
     const terminal = terminalHarness()
-    const renderer = attachXtermWebglRenderer(terminal, async () => addon, true)
+    const renderer = attachXtermWebglRenderer(terminal, { loadAddon: async () => addon, enabled: true })
 
     await expect(renderer.ready).resolves.toBe(true)
     expect(terminal.loadAddon).toHaveBeenCalledTimes(1)
@@ -111,7 +111,7 @@ describe('xtermWebglRenderer', () => {
     const pending = deferred<ReturnType<typeof addonHarness>>()
     const terminal = terminalHarness()
     const load = vi.fn(() => pending.promise)
-    const renderer = attachXtermWebglRenderer(terminal, load, true)
+    const renderer = attachXtermWebglRenderer(terminal, { loadAddon: load, enabled: true })
     // Fence a genuinely in-flight import, not only a loader that never started.
     await Promise.resolve()
     expect(load).toHaveBeenCalledTimes(1)
@@ -135,7 +135,7 @@ describe('xtermWebglRenderer', () => {
       }
       // Optional GPU support must neither throw from attachment nor reject
       // ready: both turn recoverable renderer failures into broken terminals.
-      const renderer = attachXtermWebglRenderer(terminal, load, true)
+      const renderer = attachXtermWebglRenderer(terminal, { loadAddon: load, enabled: true })
       await expect(renderer.ready).resolves.toBe(false)
       expect(terminal.loadAddon).not.toHaveBeenCalled()
       expect(() => renderer.dispose()).not.toThrow()
@@ -146,7 +146,7 @@ describe('xtermWebglRenderer', () => {
     const addon = addonHarness()
     addon.construct.mockImplementation(() => { throw new Error('unsupported GPU') })
     const terminal = terminalHarness()
-    const renderer = attachXtermWebglRenderer(terminal, async () => addon, true)
+    const renderer = attachXtermWebglRenderer(terminal, { loadAddon: async () => addon, enabled: true })
 
     await expect(renderer.ready).resolves.toBe(false)
     renderer.dispose()
@@ -163,7 +163,7 @@ describe('xtermWebglRenderer', () => {
       ...terminalHarness(),
       loadAddon: vi.fn(() => { throw new Error('context allocation failed') }),
     }
-    const renderer = attachXtermWebglRenderer(terminal, async () => addon, true)
+    const renderer = attachXtermWebglRenderer(terminal, { loadAddon: async () => addon, enabled: true })
 
     await expect(renderer.ready).resolves.toBe(false)
     expect(terminal.loadAddon).toHaveBeenCalledTimes(1)
@@ -178,7 +178,7 @@ describe('xtermWebglRenderer', () => {
     const addon = addonHarness()
     addon.onContextLoss.mockImplementation(() => { throw new Error('registration failed') })
     const terminal = terminalHarness()
-    const renderer = attachXtermWebglRenderer(terminal, async () => addon, true)
+    const renderer = attachXtermWebglRenderer(terminal, { loadAddon: async () => addon, enabled: true })
 
     await expect(renderer.ready).resolves.toBe(false)
     renderer.dispose()
@@ -191,7 +191,7 @@ describe('xtermWebglRenderer', () => {
     const addon = addonHarness()
     addon.disposeContextListener.mockImplementation(() => { throw new Error('listener cleanup failed') })
     addon.disposeAddon.mockImplementation(() => { throw new Error('GPU cleanup failed') })
-    const renderer = attachXtermWebglRenderer(terminalHarness(), async () => addon, true)
+    const renderer = attachXtermWebglRenderer(terminalHarness(), { loadAddon: async () => addon, enabled: true })
     await expect(renderer.ready).resolves.toBe(true)
     const disposeHost = vi.fn()
 
@@ -210,13 +210,76 @@ describe('xtermWebglRenderer', () => {
   it('clears ownership before a disposer re-enters context-loss cleanup', async () => {
     const addon = addonHarness()
     addon.disposeContextListener.mockImplementation(() => addon.loseContext())
-    const renderer = attachXtermWebglRenderer(terminalHarness(), async () => addon, true)
+    const renderer = attachXtermWebglRenderer(terminalHarness(), { loadAddon: async () => addon, enabled: true })
     await expect(renderer.ready).resolves.toBe(true)
 
     renderer.dispose()
 
     expect(addon.disposeContextListener).toHaveBeenCalledTimes(1)
     expect(addon.disposeAddon).toHaveBeenCalledTimes(1)
+  })
+
+  it('asks the host to refit after WebGL takes over and again after a context-loss fallback', async () => {
+    // WebGL floors the device cell width, the DOM renderer keeps it
+    // fractional, so the same cols need a different width on each. A grid
+    // fitted under one renderer is wrong under the other: under-filled after
+    // the DOM -> WebGL upgrade, CLIPPED by the host's overflow-hidden after a
+    // WebGL -> DOM fallback (PR #873 review). The hosts' ResizeObservers watch
+    // the outer container, which does not change size when only the renderer
+    // does, so the wrapper must say when it happened.
+    const addon = addonHarness()
+    const onRendererChange = vi.fn()
+    const renderer = attachXtermWebglRenderer(terminalHarness(), {
+      loadAddon: async () => addon,
+      enabled: true,
+      onRendererChange,
+    })
+
+    await expect(renderer.ready).resolves.toBe(true)
+    expect(onRendererChange).toHaveBeenCalledTimes(1)
+
+    addon.loseContext()
+    expect(onRendererChange).toHaveBeenCalledTimes(2)
+    // The fallback's addon disposal must have happened BEFORE the host is
+    // told, or its refit would measure the renderer that is being removed.
+    expect(addon.disposeAddon.mock.invocationCallOrder[0])
+      .toBeLessThan(onRendererChange.mock.invocationCallOrder[1]!)
+    renderer.dispose()
+    expect(onRendererChange).toHaveBeenCalledTimes(2)
+  })
+
+  it('never asks for a refit when the renderer did not change or the host is gone', async () => {
+    const onRendererChange = vi.fn()
+
+    // Explicitly disabled: the DOM renderer stays, nothing changed.
+    await attachXtermWebglRenderer(terminalHarness(), { loadAddon: async () => addonHarness(), enabled: false, onRendererChange }).ready
+
+    // Construction failed: the DOM renderer stays, nothing changed.
+    const broken = addonHarness()
+    broken.construct.mockImplementation(() => { throw new Error('unsupported GPU') })
+    await attachXtermWebglRenderer(terminalHarness(), { loadAddon: async () => broken, enabled: true, onRendererChange }).ready
+
+    // Import resolved after teardown: the host is gone; a refit would touch
+    // a disposed terminal.
+    const pending = deferred<ReturnType<typeof addonHarness>>()
+    const late = attachXtermWebglRenderer(terminalHarness(), { loadAddon: () => pending.promise, enabled: true, onRendererChange })
+    await Promise.resolve()
+    late.dispose()
+    pending.resolve(addonHarness())
+    await late.ready
+
+    // Ordinary unmount after a successful attach: the host is tearing down,
+    // not changing renderer, and a queued context-loss event must stay inert.
+    const addon = addonHarness()
+    const liveRefit = vi.fn()
+    const live = attachXtermWebglRenderer(terminalHarness(), { loadAddon: async () => addon, enabled: true, onRendererChange: liveRefit })
+    await live.ready
+    expect(liveRefit).toHaveBeenCalledTimes(1) // the DOM -> WebGL upgrade itself
+    live.dispose()
+    addon.loseContext()
+    expect(liveRefit).toHaveBeenCalledTimes(1)
+
+    expect(onRendererChange).not.toHaveBeenCalled()
   })
 
   it('attaches the GPU renderer by default', async () => {
@@ -231,7 +294,7 @@ describe('xtermWebglRenderer', () => {
     const terminal = terminalHarness()
     const load = vi.fn(async () => addon)
 
-    const renderer = attachXtermWebglRenderer(terminal, load)
+    const renderer = attachXtermWebglRenderer(terminal, { loadAddon: load })
 
     await expect(renderer.ready).resolves.toBe(true)
     expect(load).toHaveBeenCalledTimes(1)
@@ -247,7 +310,7 @@ describe('xtermWebglRenderer', () => {
     // every call site disposes on unmount whether or not WebGL attached.
     const terminal = terminalHarness()
     const load = vi.fn(async () => addonHarness())
-    const renderer = attachXtermWebglRenderer(terminal, load, false)
+    const renderer = attachXtermWebglRenderer(terminal, { loadAddon: load, enabled: false })
 
     await expect(renderer.ready).resolves.toBe(false)
     expect(load).not.toHaveBeenCalled()

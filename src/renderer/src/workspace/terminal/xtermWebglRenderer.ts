@@ -58,17 +58,30 @@ const loadWebglAddon = async (): Promise<WebglAddonModule> => {
  *   could reach the first bug's symptom but not the second, nor upstream's
  *   bounded retry inside `renderRows()`.
  *
- * - 2026-09-11 (#871): turned back ON by pinning EXACTLY the line VS Code
- *   ships (`@xterm/xterm 6.1.0-beta.304`, `@xterm/addon-webgl 0.20.0-beta.300`,
- *   `@xterm/addon-fit 0.12.0-beta.301`). The only argument for staying off was
- *   "don't put the core terminal on a beta"; xterm.js publishes betas
- *   continuously from master and its largest consumer depends on these exact
- *   builds, which made waiting for a stable 0.20.0 cost more than it saved.
+ * - 2026-09-11 (#871): turned back ON by pinning EXACTLY the core + WebGL
+ *   builds VS Code's lockfile resolves to (`@xterm/xterm 6.1.0-beta.304`,
+ *   `@xterm/addon-webgl 0.20.0-beta.300`). `@xterm/addon-fit 0.12.0-beta.301`
+ *   is the matching beta because its peer range requires the new core — VS
+ *   Code itself does not use addon-fit. xterm.js publishes betas continuously
+ *   from master and its largest consumer ships these, which made waiting for a
+ *   stable 0.20.0 cost more than it saved.
+ *
+ * THE PINNED CORE IS LOCALLY PATCHED — read `scripts/patch-xterm.mjs` before
+ * bumping ANY xterm package. The beta line's `resize()` flushes the write
+ * queue through a `flushSync` that re-applies already-parsed chunks (duplicate
+ * output, write callbacks fired twice) and drops everything queued behind an
+ * empty write (upstream xterm.js #6154, not fixed as of 2026-09-11). Pane attach
+ * + re-fit hits it on every pane (see that script). The postinstall patch
+ * removes the flush from `resize()`, and
+ * `xtermResizeFlushPatch.test.ts` fails if a bump drops it. That bug is in the
+ * core, not the renderer, so flipping this switch does NOT roll it back.
  *
  * Move to stable `@xterm/xterm 6.1.0` / `@xterm/addon-webgl 0.20.0` once they
- * publish, one deliberate PR. Keep the pins exact until then: a caret on a
+ * publish, one deliberate PR — and re-check the patch then (the script's
+ * "WHEN THIS FAILS" section). Keep the pins exact until then: a caret on a
  * prerelease floats to any newer beta of the same version on the next lockfile
- * refresh, which would let an unrelated `npm install` move the core terminal.
+ * refresh, which would let an unrelated `npm install` move the core terminal
+ * out from under the patch.
  */
 const WEBGL_RENDERER_ENABLED = true
 
@@ -87,16 +100,43 @@ const WEBGL_RENDERER_ENABLED = true
  * see or type into the provider terminal, and logging once per terminal would
  * itself become noise on a large workspace.
  */
-export function attachXtermWebglRenderer(
-  terminal: TerminalAddonHost,
-  loadAddon: () => Promise<WebglAddonModule> = loadWebglAddon,
-  // WHY the gate is a parameter rather than read straight from the constant:
+export type XtermWebglRendererOptions = {
+  /**
+   * Called after the ACTIVE renderer changes while the host is alive: once
+   * when WebGL takes over from the DOM renderer, and once more if a context
+   * loss hands rendering back to the DOM. Hosts pass their existing
+   * coalesced, ownership-gated fit scheduler.
+   *
+   * WHY this exists (PR #873 review): WebGL floors the measured device cell
+   * width while the DOM renderer keeps it fractional, so the same column
+   * count occupies a different width on each. xterm's own fallback keeps the
+   * current cols/rows, so a grid fitted under WebGL becomes wider than its
+   * pane under DOM and is clipped by the host's `overflow-hidden` — and the
+   * hosts' ResizeObservers watch the outer container, which does not change
+   * size when only the renderer does. Nothing else would ever refit.
+   *
+   * Never called for a renderer that never changed (disabled, import or
+   * construction failure) or after the host disposed the wrapper.
+   */
+  onRendererChange?: () => void
+  /** Test seam for the dynamic addon import; production uses the real one. */
+  loadAddon?: () => Promise<WebglAddonModule>
+  // WHY the gate is an option rather than read straight from the constant:
   // the constant is the rollback switch, and the suite must exercise BOTH
   // sides of it regardless of which way it currently points — the attach,
   // fallback and context-loss machinery for the on side, and the zero-cost
   // off path for the day corruption forces a rollback. A hard-coded read would
   // make whichever side is not current untestable.
-  enabled: boolean = WEBGL_RENDERER_ENABLED,
+  enabled?: boolean
+}
+
+export function attachXtermWebglRenderer(
+  terminal: TerminalAddonHost,
+  {
+    onRendererChange,
+    loadAddon = loadWebglAddon,
+    enabled = WEBGL_RENDERER_ENABLED,
+  }: XtermWebglRendererOptions = {},
 ): XtermWebglRenderer {
   // Bail before the dynamic import, so a disabled renderer costs nothing at
   // all: no addon parse, no GPU context, no listeners. Callers keep their
@@ -122,6 +162,15 @@ export function attachXtermWebglRenderer(
     try { current?.dispose() } catch { /* GPU cleanup cannot strand the PTY host. */ }
   }
 
+  // Tell the host its cell metrics changed. Guarded by `disposed` so a queued
+  // GPU event or a late import can never make a torn-down host measure a
+  // disposed terminal; the host's own error handling covers anything else, so
+  // a throwing scheduler must not break the renderer state machine here.
+  const notifyRendererChange = (): void => {
+    if (disposed || !onRendererChange) return
+    try { onRendererChange() } catch { /* A host scheduler failure cannot strand rendering. */ }
+  }
+
   const ready = Promise.resolve().then(loadAddon)
     .then(module => {
       if (disposed) return false
@@ -133,10 +182,23 @@ export function attachXtermWebglRenderer(
           // context loss. Disposal hands rendering back to xterm's DOM path;
           // trying to recreate immediately can loop while the GPU process is
           // still under the same pressure that evicted the first context.
+          //
+          // Only a fallback that actually happened is a renderer change: a
+          // duplicate context-loss event queued before the listener was
+          // removed finds `addon` already null and must not trigger a second
+          // refit. Dispose FIRST, then notify, so the host's refit measures
+          // the DOM renderer that is now active, not the one being removed.
+          const wasActive = addon !== null
           disposeAddon()
+          if (wasActive) notifyRendererChange()
         })
         terminal.loadAddon(addon)
-        return addon !== null
+        const active = addon !== null
+        // The upgrade itself changes cell metrics too (DOM -> WebGL floors the
+        // cell width), so the grid the host fitted under the DOM renderer is
+        // stale the moment WebGL takes over.
+        if (active) notifyRendererChange()
+        return active
       } catch {
         disposeAddon()
         return false

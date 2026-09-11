@@ -417,7 +417,9 @@ describe('AgentTerminalLeaf dimension ownership', () => {
 
     expect(xtermHarness.attachWebgl).toHaveBeenCalledTimes(5)
     for (const [index, terminal] of xtermHarness.instances.entries()) {
-      expect(xtermHarness.attachWebgl).toHaveBeenNthCalledWith(index + 1, terminal)
+      // Every host hands the wrapper its own fit scheduler, so a renderer
+      // change (DOM <-> WebGL) refits that pane — see the renderer-change case.
+      expect(xtermHarness.attachWebgl).toHaveBeenNthCalledWith(index + 1, terminal, { onRendererChange: expect.any(Function) })
       expect(xtermHarness.attachWebgl.mock.results[index]!.value.dispose).not.toHaveBeenCalled()
     }
     view.unmount()
@@ -586,6 +588,39 @@ describe('AgentTerminalLeaf dimension ownership', () => {
     expect(xtermHarness.fit).toHaveBeenCalledTimes(4)
     expect(resize).toHaveBeenCalledTimes(3)
   })
+  it('refits when only the renderer changed, which no ResizeObserver can see', async () => {
+    // PR #873 review: WebGL floors the cell width and the DOM renderer keeps it
+    // fractional, so a WebGL -> DOM fallback after a context loss makes the
+    // same columns wider than the pane (clipped by overflow-hidden) while the
+    // container — the only thing the ResizeObserver watches — stays the same
+    // size. The host must route the wrapper's onRendererChange into its
+    // coalesced fit so the grid and the backend PTY follow the new metrics.
+    const view = render(<AgentInlineTerminal sessionId="inline-renderer" active />)
+    await act(async () => {
+      attach.resolve('')
+      await attach.promise
+    })
+    const terminal = xtermHarness.instances[0]!
+    act(() => flushAnimationFrames())
+    expect(xtermHarness.fit).toHaveBeenCalledTimes(1)
+    expect(resize.mock.calls).toEqual([['inline-renderer', 120, 40]])
+
+    const options = xtermHarness.attachWebgl.mock.calls[0]![1] as { onRendererChange: () => void }
+    // Same box, wider DOM cells: a fresh fit now yields fewer columns.
+    terminal.cols = 116
+    act(() => {
+      options.onRendererChange()
+      options.onRendererChange()
+    })
+    // Coalesced like every other layout signal: one frame, one fit, one IPC.
+    expect(frames.size).toBe(1)
+    act(() => flushAnimationFrames())
+    expect(xtermHarness.fit).toHaveBeenCalledTimes(2)
+    expect(resize).toHaveBeenLastCalledWith('inline-renderer', 116, 40)
+    expect(resize).toHaveBeenCalledTimes(2)
+    view.unmount()
+  })
+
   it('sends exactly one resize when a retained pane is revealed after a takeover', async () => {
     // #752: Reader/Spotlight/Settings hide the workspace instead of
     // unmounting it. While hidden the pane must not measure a display:none

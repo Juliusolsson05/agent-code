@@ -73,7 +73,6 @@ export const AgentInlineTerminal = memo(function AgentInlineTerminal({ sessionId
       fit = new FitAddon()
       term.loadAddon(fit)
       term.open(container)
-      webglRenderer = attachXtermWebglRenderer(term)
       termRef.current = term
 
       let lastCols = 0
@@ -105,6 +104,12 @@ export const AgentInlineTerminal = memo(function AgentInlineTerminal({ sessionId
         if (disposed || rafId !== null) return
         rafId = window.requestAnimationFrame(fitAndResizeBackend)
       }
+      // Attached here, after `scheduleFit` exists, so a renderer change (DOM ->
+      // WebGL, or back after a context loss) can request the refit the
+      // ResizeObserver never would — the container does not change size when
+      // only the renderer's cell metrics do. The attach is asynchronous (a
+      // dynamic import), so starting it a few statements later changes nothing.
+      webglRenderer = attachXtermWebglRenderer(term, { onRendererChange: scheduleFit })
       scheduleFit()
       resizeObserver = new ResizeObserver(scheduleFit)
       resizeObserver.observe(container)

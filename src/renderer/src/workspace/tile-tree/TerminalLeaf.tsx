@@ -280,7 +280,10 @@ export function TerminalLeaf({
       fit = new FitAddon()
       term.loadAddon(fit)
       term.open(container)
-      webglRenderer = attachXtermWebglRenderer(term)
+      // Renderer changes (DOM -> WebGL, or back after a context loss) change
+      // cell metrics without resizing the container, so the ResizeObserver
+      // would never refit them; see XtermWebglRendererOptions.onRendererChange.
+      webglRenderer = attachXtermWebglRenderer(term, { onRendererChange: scheduleFitAndNotifyResize })
       termRef.current = term
       fitRef.current = fit
 
