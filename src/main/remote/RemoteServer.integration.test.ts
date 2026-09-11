@@ -280,6 +280,22 @@ describe('inbound scope enforcement on a live socket', () => {
     ws.close()
   })
 
+  it('refuses submit and interrupt for a terminal session (#866)', async () => {
+    ;(manager.getSessionKind as unknown as ReturnType<typeof vi.fn>)
+      .mockImplementation((sessionId: string) => (sessionId === 'shell' ? 'terminal' : 'claude'))
+    const { ws, frames, token } = await openAuthed()
+    ws.send(JSON.stringify({ token, id: 'a', message: { type: 'submit', sessionId: 'shell' } }))
+    ws.send(JSON.stringify({ token, id: 'b', message: { type: 'interrupt', sessionId: 'shell' } }))
+    await waitFor(frames, f => framesOfType(f, 'reply').length >= 2)
+    expect(manager.submitStagedPrompt).not.toHaveBeenCalled()
+    expect(manager.write).not.toHaveBeenCalled()
+    expect(framesOfType(frames, 'reply')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'a', ok: false, error: 'not an agent session' }),
+      expect.objectContaining({ id: 'b', ok: false, error: 'not an agent session' }),
+    ]))
+    ws.close()
+  })
+
   it('custom permission-reply routes through resolveCondition', async () => {
     const { ws, frames, token } = await openAuthed()
     const action = { kind: 'custom', id: 'q', label: 'Answer', name: 'claude.auq', payload: { a: 1 } }

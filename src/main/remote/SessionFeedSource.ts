@@ -213,6 +213,12 @@ export class SessionFeedSource {
 
   private emit(channel: FeedChannel, payload: unknown): void {
     if (this.disposed) return
+    // ONE gate at the choke point, not per channel (#866). The terminal filter
+    // used to exist only on `started`, so every other channel (readiness, exit,
+    // process-state) still relayed terminal ids, and a client could act on an
+    // id it was never shown. Any future channel is covered automatically.
+    const sessionId = (payload as { sessionId?: unknown } | null)?.sessionId
+    if (typeof sessionId === 'string' && this.manager.getSessionKind(sessionId) === 'terminal') return
     for (const listener of [...this.listeners]) listener(channel, payload)
   }
 }

@@ -126,6 +126,25 @@ describe('SessionFeedSource', () => {
     source.dispose()
   })
 
+  it('never forwards any frame for a terminal session, whatever the channel (#866)', () => {
+    // The listing filter only ever ran on `started`; input-readiness, exit and
+    // process-state still relayed terminal ids, which a client could then act on.
+    const manager = makeManager()
+    ;(manager.getSessionKind as unknown as ReturnType<typeof vi.fn>)
+      .mockImplementation((sessionId: string) => (sessionId === 'shell' ? 'terminal' : 'claude'))
+    const source = new SessionFeedSource(manager)
+    const seen: Array<[string, unknown]> = []
+    source.onEvent((channel, payload) => seen.push([channel, (payload as { sessionId?: unknown }).sessionId]))
+
+    manager.emit('input-readiness', { sessionId: 'shell', input: { ready: true } })
+    manager.emit('process-state', { sessionId: 'shell', active: true })
+    manager.emit('exit', { sessionId: 'shell', exitCode: 0 })
+    manager.emit('input-readiness', { sessionId: 'agent', input: { ready: true } })
+
+    expect(seen).toEqual([['input-readiness', 'agent']])
+    source.dispose()
+  })
+
   it('dispose unsubscribes everything (no forwarding after)', () => {
     const manager = makeManager()
     const source = new SessionFeedSource(manager)
