@@ -1,6 +1,13 @@
 # Usage-limit notices in the conversation feed
 
-Status: proposed; research and implementation plan only. No production changes.
+Status: planned under agent-code-conventions; production implementation has not
+started. The user requested this implementation plan on 2026-09-11.
+
+Feature Issue: [agent-code#885](https://github.com/Juliusolsson05/agent-code/issues/885).
+Package dependency: [codex-headless#49](https://github.com/Juliusolsson05/codex-headless/issues/49).
+Branch: `feat/usage-limit-rendering`. Worktree: `.worktrees/usage-limit-rendering`.
+The first branch commit, `3ce09d1a`, contains this plan only. Continue on this
+outcome-named branch; do not restart the work on main or create a plan-only PR.
 
 ## Outcome
 
@@ -9,9 +16,8 @@ the blocking limit, precisely labelled reset information, relevant recovery
 actions, and expandable original provider text. A cap is provider status, not an
 assistant answer. Temporary throttling must not become a spending-cap warning.
 
-The initial surface is the conversation feed. A persistent composer strip is an
-optional follow-up, not a prerequisite. This is the working assumption while the
-user's placement preference is pending.
+The initial surface is the conversation feed, following the recommended design
+the user accepted. A persistent composer strip is outside the first delivery.
 
 Illustrative Claude card, using the user-supplied message:
 
@@ -110,11 +116,11 @@ Existing sources:
   mistaken for compaction), #821 (switching away from exhausted providers), and
   codex-headless #46 (typed HTTP usage-limit events).
 
-Issue searches found no dedicated usage-cap-rendering feature. Before production
-implementation, create `feat(rendering): render provider usage caps with reset
-details and recovery actions`, linking the related work. If the Codex package
-needs an event-contract change, track it in that package and update the parent
-gitlink through the normal cross-repository workflow.
+Issue searches found no existing dedicated usage-cap-rendering feature. #885 is
+now the authoritative problem/acceptance record, with #49 tracking the additive
+Codex event-contract dependency. Update these records when scope or evidence
+changes. Implementation defects discovered while delivering this feature do not
+need separate Issues unless they establish an independent meaningful problem.
 
 ## What is already present, and where the information is lost
 
@@ -124,6 +130,8 @@ gitlink through the normal cross-repository workflow.
 2. `responsesProxy.pickRateLimitHeaders` currently omits
    `x-codex-rate-limit-reached-type`; the semantic event contract also lacks
    that field. Workspace-specific UI cannot safely invent those distinctions.
+   The proxy also already has a distinct per-call `requestId`, but the API-error
+   publisher drops it. #49 preserves both facts as optional event metadata.
 3. `session-runtime/semantic/foldEvent.ts` reduces errors to `{ ts, kind,
    message }`. The bounded errors collection is consumed by debug views,
    not currently by the feed's ledger collectors.
@@ -198,9 +206,15 @@ shared `UsageLimitNoticeView` paints the ledger's selected notice; it must not
 run a second independent visibility derivation or add an overlay outside the
 ledger. Add a provider-notice render receipt and fixture-backed reason entries.
 
-Use a native request/turn association when available. Assign missing identities
-once at ingest, scoped to the session run; never key by visible row index or by
-message text alone. Idempotent redelivery should not make a second card, while
+Use the HTTP proxy's `requestId`, scoped to the session/proxy run, for new Codex
+observations. #49 forwards this existing identity rather than inventing another
+counter downstream. Preserve any native turn association separately; a failed
+request is not a model turn. Assign identities for legacy events without a
+request ID once at ingest, using the replay record/ingest sequence when available;
+never key by visible row index or message text alone. Exact deduplication of two
+unidentified legacy deliveries cannot be promised: keep both observations rather
+than accidentally merge distinct failures. Identified redelivery must not make
+a second card, while
 distinct failed requests must not be merged merely because they share a message
 and timestamp. Do not introduce a guessed temporal dedupe window. When a second
 channel later gains an evidenced correlation, one candidate supersedes the
@@ -262,73 +276,159 @@ instead of assuming in-memory events will be re-sent.
 
 ## Implementation sequence
 
-### 0. Freeze carrier evidence and route expectations
+Complete these tasks in order. Proposed new filenames below describe ownership;
+reuse an existing matching abstraction if the evidence pass finds one. Each
+implementation commit must carry the WHY comments that explain its invariants.
 
-- Create/link the feature Issue and record this plan's acceptance criteria.
-- Curate the smallest privacy-reviewed Claude carrier using the supplied text
-  and the existing corpus. Preserve discriminators that earlier redaction
-  erased; do not copy surrounding user conversation into public fixtures.
-- Add clearly labelled source-derived Codex fixtures for ordinary/pool limits,
-  workspace owner/member cases, missing reset, and generic throttling. Capture a
-  real failure when naturally available; do not spend quota to manufacture one.
-- Record installed CLI/source versions and evidence origin. Source-derived
-  fixtures verify a contract; they do not count as observed production shapes.
-- Trace a no-turn HTTP error through adapter, IPC, reducer, and feed. Inspect
-  proxy-disabled, remount, replay, and remote hydration coverage as above.
-- Produce a finite carrier-to-route table before source implementation. Keep
-  unknown shapes explicit instead of adding permissive text heuristics.
+### 0. Evidence and carrier contract
 
-### 1. Normalize and retain the necessary facts
+- [x] Inspect README/instructions, current rendering ownership, provider limits,
+  pinned upstream source, and existing related Issues.
+- [x] Create the dedicated worktree from current remote main, commit the plan
+  first, and create/link app #885 and package #49.
+- [ ] Initialize the worktree's pinned package submodules before running code.
+  Do not reuse dirty package source from another active checkout.
+- [ ] Curate the smallest Claude carrier with the supplied product text and
+  original discriminators. Keep private surrounding conversation out of fixtures.
+- [ ] Add labelled source-derived Codex cases for ordinary/pool limits, all four
+  workspace reasons, absent/unknown reason, invalid reset, and temporary 429.
+- [ ] Freeze a carrier-to-route matrix with expected category, reset subject,
+  ownership, actions, and fallback. Record source/CLI versions and fixture origin.
+- [ ] Check no-turn, proxy-disabled, renderer-remount, replay, and remote hydration
+  inputs. This is a bounded source/fixture inspection, not a quota-exhaustion run.
+  Record unsupported paths without expanding V1 into a new runtime transport or
+  durable journal. Source-derived tests do not constitute observed shape evidence.
 
-- Add the shared notice type and provider-local adapters with behavioral tests.
-- Extend `SemanticErrorEntry` / `foldSemanticEvent` to retain validated optional
-  error fields, stable identity, and association. Preserve the existing bound
-  and reference-stability behavior; keep old recordings without new fields valid.
-- If delivering workspace-specific Codex cases, extend the headless package's
-  exact header allowlist, classifier, channel type, and publisher together to
-  carry a validated `rateLimitReachedType`. Unknown enum values remain unknown.
-  No generic header forwarding. Run that package's own tests and pin the result.
-- Do not replace or broaden `limitHit` during this presentation change. Test
-  that the existing accepted-turn clearing and provider-switch guard still hold.
+Exit: the finite fixture matrix can explain every admitted route and every
+deliberate fallback. No implementation should depend on an unobserved transcript
+error, guessed screen classifier, or guessed timestamp.
 
-### 2. Integrate admission, ownership, and shared presentation
+### 1. Codex event-contract dependency (#49)
 
-- Claude: `renderer/entries/{classify,dispatch}`, provider capability types,
-  committed collector, and the shared notice protocol.
-- Codex: bounded error records through `rendering/adapter/collectLedgerInput`,
-  a notice collector, `rendering/model/{types,ledger,order}`, and the existing
-  ledger-to-feed view bridge.
-- Update input assembly in desktop and remote/replay callers together. No
-  placeholder assistant text and no dependence on a successful turn starting.
-- Thread host actions to the view with explicit session/run targets.
-- Add provider catalogs/receipts only with truthful evidence provenance. Update
-  the canonical rendering architecture where the new owner changes its rules;
-  keep per-file rationale in thick WHY comments.
+- [ ] In a separate codex-headless worktree/branch named for usage-cap metadata,
+  commit a package-local plan first. Leave the app's pinned package checkout intact.
+- [ ] Update `src/proxy/responsesProxy.ts`,
+  `src/proxy/CodexResponsesAdapter.ts`, `src/channels/types.ts`, and
+  `src/channels/SemanticChannel.ts`: exact reached-type header allowlist, validated
+  optional enum, and optional existing proxy `requestId` on HTTP API-error events.
+- [ ] Extend the colocated HTTP-failure/header-filter tests to cover all known
+  reasons, unknown values, missing metadata, different attempts, and unchanged
+  non-cap classification. Preserve Unix-second reset units at this package seam.
+- [ ] Update the package API/event reference only for the actual added fields.
+- [ ] Run package `npm run check`; review and open the fully implemented package
+  PR with `Fixes #49`. Record its exact tested commit in app #885.
 
-### 3. Verify the behavior people actually see
+Exit: new metadata survives proxy-to-publisher delivery without broadening header
+capture or breaking old consumers. App development may use that committed package
+revision for integration; package merge and app merge still require explicit
+user authorization. Do not publish an app pin whose package commit is unavailable
+to a clean CI checkout.
 
-- The exact Claude example renders a monthly-cap card and separately labelled
-  session reset. It remains correct in narrow panes and long timezone labels.
-- Quoting that sentence in normal user/assistant/tool output does not specialize
-  it. Unrecognized error wording stays readable and keeps its original text.
-- Codex ordinary/pool/workspace cases have correct actions; plain 429, overload,
-  authentication, context-window, and access errors never get a false reset claim.
-- Missing, malformed, expired, midnight-crossing, DST, and cross-timezone reset
-  values are handled without fabricated dates or a false recovery promise.
-- Pre-turn errors are visible; repeated delivery is idempotent; distinct failed
-  requests remain distinct; no duplicate message/card paints; pending user input
-  and unrelated streaming/tool rows retain their owners and order.
-- Accepted continuation clears active-limit eligibility without deleting history.
-  Resume/pagination does not stamp old Claude records as fresh failures.
-- Actions address the card's session in Grid and Dispatch, reject stale run
-  targets, and behave appropriately in Reader, preview, and remote surfaces.
-- Retained recordings and source-derived fixtures exercise the same pipeline.
-  Recorded-shape auditing must not claim synthetic profiles were observed live.
+### 2. Shared model and provider normalization
 
-Run focused adapter/ledger/reducer and renderer tests first, then the relevant
-unit/system/renderer projects, typecheck, test-contract and package checks per
-the repository's normal quality gate. The planning-only commit needs only
-document/diff verification; no production build has been run for it.
+- [ ] Add `src/shared/types/usageLimitNotice.ts` and provider-local
+  `src/providers/{claude,codex}/renderer/adapters/usageLimitNotice.ts` with
+  colocated behavioral tests. There is one canonical model, not another
+  independently defined UI variant of its fields.
+- [ ] In `src/renderer/src/session-runtime/{state.ts,semantic/foldEvent.ts}`,
+  retain validated optional error metadata and stable ingest identity. Preserve
+  bounded retention and no-op reference stability. Legacy recording fields remain
+  optional and no date/message heuristic pretends to supply a missing request ID.
+- [ ] Admit Claude's verified carrier before compact-summary classification.
+  Identify monthly-cap text only inside that carrier and retain the session-reset
+  subject. Unknown wording stays visible without an invented subtype.
+- [ ] Normalize Codex type/reason/reset/pool fields and retain original text.
+  An unknown reached type stays a generic limit, never a guessed owner/member role.
+- [ ] Prove `limitHit` and provider-switch eligibility behavior are unchanged.
+
+Exit: pure tests establish cap categories, accurate reset subjects/units,
+negative recognition, and compatible old-event behavior before UI changes.
+
+### 3. Ledger ownership and one shared card
+
+- [ ] Extend `src/shared/types/providerConfig.ts` and
+  `src/providers/registry.renderer.capabilities.ts` with provider-owned notice
+  admission. Claude's `renderer/entries/{classify.ts,dispatch.tsx}` and committed
+  collector must agree on that admission, including error/compaction precedence.
+- [ ] Add the narrow `provider-notice` owner/content contract in
+  `src/renderer/src/rendering/model/{types.ts,ledger.ts,order.ts}`. Add a notice
+  collector under `rendering/observations/` and pass bounded error input through
+  `rendering/adapter/collectLedgerInput.ts`. Preserve unrelated owner decisions.
+- [ ] Update the real view bridge at
+  `src/renderer/src/features/feed/ledger/{useLedgerFeedItems.ts,ledgerFeedItems.ts}`,
+  `features/feed/model/renderModel.ts`, and `features/feed/ui/Feed.tsx` so the
+  selected notice carries its normalized model into the row. Do not reclassify
+  raw provider input in JSX or add a second visibility calculation.
+- [ ] Implement shared `protocols/usage-limit/UsageLimitNoticeView.tsx`; use its
+  optional `model.ts` for presentation helpers only, importing the canonical
+  shared type. Use existing UI primitives, theme tokens, and accessible details.
+- [ ] Add fixture-backed ownership decisions and render receipts. Update the
+  canonical rendering design's owner rules because this changes architecture.
+  Do not rewrite unrelated design docs for routine implementation details.
+
+Exit: a Codex failure with no turn produces one visible status row, while a
+Claude committed cap replaces its ordinary assistant presentation. Earlier user
+input and unrelated streaming/tool artifacts retain their order and ownership.
+
+### 4. Session actions, surfaces, and replay
+
+- [ ] Thread explicit session/run-bound action callbacks into the shared view.
+  Open the existing provider-switch flow and existing Usage view; validate the
+  target at invocation and preserve normal eligibility checks. Do not dispatch
+  the Usage palette toggle when the intent is an explicit open.
+- [ ] Allow only known provider-settings destinations. Offer appropriate
+  owner/member guidance; opening settings must not claim that a cap was changed
+  or an admin request sent. Original text stays available verbatim.
+- [ ] Extend `RuntimeRenderInput` and all actual input producers together:
+  the desktop ledger hook, `src/remote-client/src/transcript/store.ts`,
+  `src/remote-client/src/ui/SessionView.tsx`, and
+  `src/renderer/src/rendering/replay/reconstructSlices.ts`. Verify the existing
+  recording replay harness sees the same notice inputs. Inspect
+  `src/main/remote/SessionFeedSource.ts` only for the event/hydration gap proven in
+  Task 0; no speculative persistent state transport.
+- [ ] Verify Reader and preview use the same card when source evidence exists;
+  actions are offered only by hosts that support them. A historical card must
+  never operate a replacement session run.
+
+Exit: Grid, Dispatch, Reader, preview, and connected remote clients behave
+consistently for supported source evidence; remount/reconnect limitations are
+documented precisely, with no cold-history parity claim.
+
+### 5. Verification and delivery
+
+| Behavior protected | Necessary verification |
+|---|---|
+| Monthly cap versus session reset | Exact Claude example; unknown text; quoted text in user/assistant/tool carriers; error plus compaction flags |
+| Reset accuracy | Missing/malformed/out-of-range/expired epochs, text-only times, midnight, DST and alternate viewer timezone |
+| Error taxonomy | Ordinary/pool/workspace reasons; bare 429, overload, auth, context-window and access errors never gain a false recovery claim |
+| Identity and ownership | Same identified delivery twice, distinct equal-text/equal-time requests, no-turn failure, resumed/paginated Claude history, unrelated streaming/tools |
+| Lifecycle and scope | Accepted continuation, old-event replay, exact session/run action targeting, stale/replaced session and different focused pane |
+| Shared presentation | Narrow/wide panes, original-message disclosure, keyboard access, Grid/Dispatch/Reader/preview/connected remote and recording replay |
+
+- [ ] Run focused colocated adapter, reducer, ledger and renderer tests as each
+  task lands. Do not add tests that simply mirror field assignments.
+- [ ] After integration and the committed package pin, run app `npm run check`
+  and the normal CI quality gate. The package runs its own `npm run check`; do
+  not substitute app compilation for package behavioral checks.
+- [ ] Inspect the rendered cards at narrow/wide widths and record the observed
+  results in the PR. Declare source-derived fixtures separately from real captures.
+- [ ] Review the complete diff, resolve valid feedback, synchronize #885/#49,
+  and open the app PR only with implementation, verification, and migration/
+  limitation notes complete. Suggested title:
+  `feat(rendering): show provider usage caps and recovery actions`.
+- [ ] Use `Fixes #885` only if the agreed V1 criteria are met. Link the package
+  PR and related #820/#821 with `Refs` where appropriate; do not claim to resolve
+  unrelated follow-up work. Keep the Issue and PR current if scope changes.
+- [ ] Require passing current-head CI and review before proposing either merge.
+  Never automatically merge. No code implementation or merge is authorized by
+  this planning-only request.
+
+There is no persisted workspace/settings schema change in V1. Optional new event
+fields preserve older recordings, and dropping runtime-only notice state during
+rollback follows the same existing lifetime as semantic errors. No provider
+transcript or durable account data needs migration. The planning commit itself
+requires document/diff and issue-synchronization checks only; no app build or
+tests have been run for this planning-only work.
 
 ## Explicit exclusions
 
