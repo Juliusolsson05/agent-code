@@ -198,7 +198,11 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
     defineCapability({
       id: 'agents.titleSet', target: { kind: 'session', field: 'sessionId' }, title: 'Set a session title', execution: 'window', effect: 'mutation',
       description: 'Set or clear the exact agent or terminal title using the same normalization and length policy as the UI. Does not send a prompt.',
-      input: sessionInput.extend({ title: z.string().describe('Agent display title; empty clears a custom title. Normal UI normalization applies.') }), output: z.object({ sessionId: z.string(), title: z.string().describe('Agent display title; empty clears a custom title. Normal UI normalization applies.') }),
+      // WHY "Session" not "Agent" here (M8): this capability's own description
+      // already says "agent or terminal title" — a shell's title is set through
+      // this exact same field, so calling it an "Agent display title" in the
+      // schema .describe() text contradicted the capability's own behavior.
+      input: sessionInput.extend({ title: z.string().describe('Session display title; empty clears a custom title. Normal UI normalization applies.') }), output: z.object({ sessionId: z.string(), title: z.string().describe('Session display title; empty clears a custom title. Normal UI normalization applies.') }),
       handler: ({ sessionId, title }) => {
         requireReady(); requireSession(sessionId)
         setTitle(sessionId, title)

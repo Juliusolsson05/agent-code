@@ -30,7 +30,13 @@ export function globalControlCapabilities(observe: ObserveWindows) {
       // substring query is a handful of characters, never two hundred.
       input: z.object({ label: z.string().regex(/^[A-Za-z]+[1-9]\d*$/).optional().describe('Exact visible label, e.g. C18. Scope with windowId; global matches may identify different agents in different windows. Resolve to a stable ID before acting.'),
         name: z.string().trim().min(1).max(120).optional().describe('Exact spoken agent name from the Agent names setting, e.g. "Apollo" or "Apollo 2". Case-insensitive and whitespace-normalized, never a substring; use query for partial text. Names are absent while the setting is off, in which case this matches nothing. A name identifies one allocation, but several windows can observe the same agent, so every candidate is still returned — resolve to sessionId before acting.'), query: z.string().max(200).default('').describe('Case-insensitive substring of agent ID, visible label, spoken agent name, displayed/stored title, directory or provider. Empty searches all agents and terminals.'), windowId: z.string().optional().describe('Optional stable window ID from app.windows to restrict the cross-window search.'), tabId: z.string().optional().describe('Optional project tab ID from app.observe.'),
-        provider: z.enum(['claude', 'codex', 'opencode']).optional().describe('Restrict to one provider.'), placement: z.enum(['grid', 'related', 'dispatch', 'detached', 'buried', 'reader', 'spotlight']).optional().describe('Restrict to agents with this placement; mirrored placements still identify the same agent.'), ...pageInput }).strict(),
+        // WHY 'terminal' joins this enum (M8): agents.search already returns
+        // terminals (see the WHY comment in the handler below, #865) and the
+        // observation schema's `session.provider` field is genuinely
+        // 'terminal' for a shell — filtering `provider: 'terminal'` before
+        // this fix always matched zero rows because zod rejected the input
+        // value outright, silently making "find just my shells" impossible.
+        provider: z.enum(['claude', 'codex', 'opencode', 'terminal']).optional().describe('Restrict to one provider, or `terminal` for shells.'), placement: z.enum(['grid', 'related', 'dispatch', 'detached', 'buried', 'reader', 'spotlight']).optional().describe('Restrict to agents with this placement; mirrored placements still identify the same agent.'), ...pageInput }).strict(),
       output: pageSchema(match).extend({ unavailableWindows: z.array(z.object({ windowId: z.string(), error: z.string() })) }),
       handler: async (input, context) => {
         const windows = (await observe(context)).filter(window => !input.windowId || window.windowId === input.windowId)
