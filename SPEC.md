@@ -2,7 +2,7 @@
 
 This is a reference to the implemented system: how Agent Code starts, owns processes, moves observations into a conversation view, persists state, and exposes control to agents and other clients. It describes the application at source revision `6a19e4ee`, inspected on 2026-09-11. It is not a proposal for a future architecture or a promise that every provider supports the same behavior.
 
-> Draft in progress: sections 1–14 are available for early review. The remaining sections and complete link/diagram validation are still being written.
+> Draft in progress: sections 1–23 are available for review. All 37 current diagrams pass parsing and SVG rendering with Mermaid 11.4.1. The remaining sections and final source-link/content verification are in progress.
 
 The central architectural decision is to keep interactive agents inside their native provider runtimes. Agent Code owns the surrounding desktop workspace, process lifecycle, observation, input delivery, and presentation. Native providers own model execution, their authentication, tools, and native conversation history. The workflow subsystem is a separate execution path: it runs durable workflow jobs through the Codex SDK and isolated worker processes.
 
@@ -282,16 +282,16 @@ sequenceDiagram
     participant MCP as Built-in MCP host
     participant Sessions as SessionManager
     participant Windows as Workspace store and windows
-    Boot->>State: Acquire state-process lock; begin run journal
+    Boot->>State: Acquire state-process lock, begin run journal
     Boot->>Setup: Initialize cached paths and runtime tools
-    Boot->>WF: Create service; restore bridge lineage
+    Boot->>WF: Create service, restore bridge lineage
     Note over Boot,WF: Failure here aborts startup
     Boot->>Tmux: Detect bundled tmux and reconcile persisted references
     Boot->>MCP: Listen on loopback ephemeral port
     Boot->>Sessions: Construct manager with runtime dependencies
     Boot->>MCP: Install service dependencies
     Boot->>Sessions: Wire event forwarding and lifecycle services
-    Boot->>Windows: Open workspace envelope; register IPC/control
+    Boot->>Windows: Open workspace envelope, register IPC/control
     Boot->>Windows: Create restored windows
     Windows->>Sessions: Recover individual sessions through renderer actions
 ```
@@ -313,7 +313,7 @@ sequenceDiagram
     User->>App: Quit
     App->>WF: Stop durable workflow execution
     alt Workflow stop cannot finish safely
-        WF-->>App: Failure; retain application for retry
+        WF-->>App: Failure, retain application for retry
     else Workflow stop completes
         App->>Window: Close / beforeunload
         alt Unsaved changes veto close
@@ -321,9 +321,9 @@ sequenceDiagram
         else Close is allowed
             App->>SM: will-quit: killAll and await teardown
             alt Owned process teardown fails
-                SM-->>App: Block quit; report failure
+                SM-->>App: Block quit, report failure
             else Teardown completes
-                App->>Aux: Flush queues; stop servers and helpers
+                App->>Aux: Flush queues, stop servers and helpers
                 App->>Aux: Mark clean run and release state lock
                 App-->>User: Application exits
             end
@@ -475,7 +475,7 @@ sequenceDiagram
     UI->>SM: Spawn requested kind, runtime, cwd
     SM-->>UI: Early allocated sessionId callback
     UI->>Owner: Claim session for requesting window
-    SM->>SM: Validate cwd; reserve generation; resolve executable
+    SM->>SM: Validate cwd, reserve generation, resolve executable
     SM->>MCP: Register session and enabled domains
     SM->>Adapter: Construct and wire fenced listeners
     SM->>Adapter: start()
@@ -573,7 +573,7 @@ sequenceDiagram
     Composer->>Manager: deliverPromptToAgent(text, options)
     Manager->>Manager: Reserve current live session entry
     alt Another delivery owns the session
-        Manager-->>Composer: Rejected; retry-safe before writes
+        Manager-->>Composer: Rejected, retry-safe before writes
     else Reservation granted
         Manager->>Delivery: Deliver with fenced write functions
         Delivery->>Native: Establish provider-specific readiness
@@ -978,7 +978,7 @@ Reconciliation compares persisted terminal references with managed live sessions
 
 **Current integration discrepancy:** main startup reads `parsed.workspace.sessions` to obtain tmux references, but `WorkspaceFileStore` writes the version-2 `windows[].workspace` envelope. For a normal v2 file that legacy read yields no references. With managed tmux sessions present, reconciliation can classify them as orphans. The persistence intention and the current multi-window startup behavior therefore differ; this reference does not claim reliable tmux survival across that path.
 
-The mismatch is directly visible in [startup reconciliation](src/main/index.ts), [workspace format](src/main/storage/workspaceFile.ts), and [tmux reconciliation](src/main/tmux/tmuxRecovery.ts). No runtime change is part of this documentation work.
+The mismatch is directly visible in [startup reconciliation](src/main/index.ts), [workspace format](src/main/storage/workspaceFile.ts), and [tmux reconciliation](src/main/tmux/tmuxRecovery.ts), and tracked in [issue #898](https://github.com/Juliusolsson05/agent-code/issues/898). No runtime change is part of this documentation work.
 
 ### 14.2 xterm lifecycle and patched dependency
 
@@ -987,3 +987,655 @@ WebGL renderer creation and disposal follow terminal visibility/lifetime so hidd
 At this revision, the pinned xterm core also requires a local patch to remove a resize-time queued-write flush that can replay/drop terminal writes. The patch is enforced both after installation and whenever the Electron Vite configuration loads. Version or bundle-shape mismatch aborts the build. Vite prebundling is disabled for xterm so a stale optimized copy cannot bypass the patched installed bundle during development.
 
 Sources: [tmux registry](src/main/tmux/TmuxRegistry.ts), [terminal dispatcher](src/renderer/src/workspace/terminal/sessionDataDispatcher.ts), [WebGL lifecycle](src/renderer/src/workspace/terminal/xtermWebglRenderer.ts), [xterm patch](scripts/patch-xterm.mjs), [build configuration](electron.vite.config.ts).
+
+## 15. Commands and the control SDK
+
+### 15.1 Desktop command admission
+
+The command catalog is context-free. The palette's registry resolves presentation against current context: mode, target, availability, visibility, effective keybinding and ranking. Execution passes through a separate gateway shared by palette, native-menu, keybinding and programmatic invocations.
+
+Hiding a command from the palette does not disable its native-menu or keyboard capability. Conversely, a keyboard shortcut does not bypass current availability merely because it skips the picker. The gateway rechecks surface, command conditions and rendered-view policy against fresh context, then applies single-flight protection by command ID.
+
+```mermaid
+flowchart LR
+    Palette[Palette selection] --> Dispatch[dispatchCommand]
+    Menu[Native menu] --> Dispatch
+    Key[Keybinding] --> Dispatch
+    Code[Programmatic invocation] --> Dispatch
+    Catalog[Full command catalog] --> Dispatch
+    State[Fresh command context] --> Admission[Availability and surface policy]
+    Dispatch --> Admission
+    Admission --> Guard[Command-ID single flight]
+    Guard --> Run[Command implementation]
+    Run --> Outcome[Explicit ran / unavailable / failed / in-flight outcome]
+    Outcome --> Recent[Record successful deliberate user use]
+    Visibility[Picker visibility preference] --> Palette
+```
+
+Successful deliberate user invocations update recent-use ranking; background programmatic calls do not. Admission answers whether an operation makes sense now. It does not replace mutation-time checks when a target can disappear after admission. See [execution gateway](src/renderer/src/features/command-palette/executeCommand.ts), [catalog](src/renderer/src/features/command-palette/catalog.ts), [picker registry](src/renderer/src/features/command-palette/registry.ts), and [keybindings](src/renderer/src/features/command-keybindings).
+
+### 15.2 Application capabilities
+
+The control SDK is a separate typed application capability layer. Capability descriptors specify schema, execution owner, effect, visibility and completion semantics. Main and renderer register implementations. A caller resolves a catalog and invokes a capability through a scoped host port rather than gaining arbitrary object access.
+
+Main capabilities have application-wide owners. Renderer capabilities have window/generation owners. Ownership observation can map session/project targets to windows; missing or conflicting ownership is an error, not permission to choose whichever window responds first.
+
+```mermaid
+classDiagram
+    class CapabilityDescriptor {
+        id
+        inputSchema
+        outputSchema
+        execution
+        effect
+        visibility
+    }
+    class CapabilityOwner {
+        kind
+        windowId
+        generation
+    }
+    class ControlHost {
+        registry
+        executor
+        forCaller()
+    }
+    class RendererBridge {
+        invoke()
+        retireGeneration()
+    }
+    class FileControlHistory {
+        received
+        result
+    }
+    ControlHost o-- CapabilityDescriptor
+    CapabilityDescriptor --> CapabilityOwner
+    ControlHost --> RendererBridge
+    ControlHost --> FileControlHistory
+```
+
+Registration validates a complete set before replacing an existing generation. Navigation retires the renderer owner and settles pending operations with the appropriate uncertainty. Cleanup from an old React StrictMode registration cannot remove the newer registration. Main also checks sender/main-frame identity for renderer control messages.
+
+### 15.3 Invocation, idempotency and uncertain outcomes
+
+The executor durably records receipt before dispatch. If receipt cannot be persisted, the operation does not run. A caller-supplied request key is scoped to that caller and the canonical capability/input/owner request. Reusing the key with a different request is a conflict.
+
+An identical in-flight request joins its existing promise. A completed result can be replayed from history. An interrupted request with receipt but no conclusive result is `outcome_unknown`; the executor does not automatically repeat an effect after restart.
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant Executor
+    participant History
+    participant Owner as Main or renderer owner
+    Caller->>Executor: Invoke capability with optional requestKey
+    Executor->>Executor: Validate schema, visibility and owner
+    Executor->>History: Look up canonical request identity
+    alt Existing in-flight or completed request
+        Executor-->>Caller: Join or return recorded result
+    else New admitted request
+        Executor->>History: Persist received record
+        History-->>Executor: Receipt durable
+        Executor->>Owner: Execute against resolved owner generation
+        alt Owner returns conclusive result
+            Owner-->>Executor: Completed / pending / UI opened / blocked
+            Executor->>History: Persist result
+            Executor-->>Caller: Operation result
+        else Timeout, restart or owner retirement after dispatch
+            Executor->>History: Record uncertainty where possible
+            Executor-->>Caller: outcome_unknown, no blind replay
+        end
+    end
+```
+
+Renderer bridge timeout is currently 30 seconds. A timeout means the caller lacks a conclusive result; it does not prove the UI mutation never happened. If result-history persistence fails after an effect, the executor preserves the effect result with a warning rather than pretending the operation was never executed.
+
+Completion semantics are deliberately explicit. Opening a dialog is not equivalent to completing the user's eventual choice in that dialog. Pending work can return an operation that must be observed. External callers cannot invoke capabilities marked application-only, including local connection configuration and token-copy actions.
+
+Sources: [SDK contracts](src/control-sdk/contracts.ts), [executor](src/control-sdk/core/executor.ts), [host composition](src/main/control/createControlHost.ts), [renderer bridge](src/main/control/rendererBridge.ts), [operation history](src/main/control/history/FileControlHistory.ts).
+
+## 16. Built-in MCP and agent relationships
+
+### 16.1 Host and registration lifetime
+
+The built-in host listens on `127.0.0.1` at an ephemeral port. Each managed session registration receives a fresh random bearer token and a scope containing its application session ID, working directory and enabled domains. Re-registration replaces authority; teardown revokes it.
+
+The HTTP host is application-lived, but it constructs a fresh protocol `McpServer` for each request. This avoids allowing a long-lived MCP stream to wedge tool calls on a shared server instance. Durable services such as workflows remain singleton dependencies behind the request-scoped registrar.
+
+```mermaid
+sequenceDiagram
+    participant SM as SessionManager
+    participant Host as BuiltInMcpHttpHost
+    participant Native as Native provider
+    participant Server as Request-scoped McpServer
+    participant Service as App-owned service
+    SM->>Host: Register session and permitted domains
+    Host-->>SM: Endpoint and fresh bearer token
+    SM->>Native: Launch with private MCP configuration
+    Native->>Host: Authenticated MCP request
+    Host->>Host: Resolve current session scope
+    Host->>Server: Create server with only enabled tools
+    Server->>Service: Invoke with scoped caller identity
+    Service-->>Native: Structured result through request server
+    SM->>Host: Unregister on session teardown
+    Note over Native,Host: Old token no longer authorizes calls
+```
+
+Tokens are omitted from durable workspace metadata. Launch configuration avoids putting bearer values in process arguments: Claude uses a private temporary config file retained until session disposal; Codex uses environment-backed HTTP headers; OpenCode uses process-local inline configuration with environment interpolation. Existing inline OpenCode settings are merged, with current built-in server names winning collisions.
+
+Sources: [HTTP host](src/mcp/runtime/BuiltInMcpHttpHost.ts), [tool registrar](src/mcp/runtime/createBuiltInMcpServer.ts), [launch configuration](src/providers/shared/runtime/builtInMcpLaunch.ts).
+
+### 16.2 Domains and scope
+
+| Domain | Tools/responsibility | Scope notes |
+| --- | --- | --- |
+| `ping` | Diagnostic registration probe | Not a normal configurable default capability |
+| `orchestration` | Create/send/list/read/wait/close child agents and runs | Parent/root/run relationships tracked by bridge and renderer |
+| `agent_management` | List/read/send/close existing agents | Current caller's project tab; not merely matching `cwd` |
+| `ai_workspace` | Create collections, attach/detach/list files, open/clear/delete collections | Main registry owns actual file-reference sets |
+| `agent_transcripts` | Bounded read/search/inspect of supported transcript files | Distinct file-reading contract, not management ownership |
+| `workflows` | Register package workflow tools against one durable service | Caller session/cwd seeds run association |
+
+Provider filtering is repeated at the authoritative launch boundary. Claude does not receive the workflow MCP domain because the application avoids overlapping its native workflow facility. Codex and OpenCode can receive it. User settings do not silently grant unsupported domains to a new provider. See [domain policy](src/mcp/shared/types.ts).
+
+### 16.3 Orchestration is a workspace operation
+
+Creating a child involves both main-owned execution and renderer-owned placement. The orchestration bridge serializes requests to the appropriate renderer, tracks relationships, and uses bounded status/output caches to serve callers without repeatedly interrogating every pane. Context cloning and bootstrap delivery are explicit steps, with metadata preventing accidental repeated handoff input.
+
+Closed child outputs can remain available through bounded tombstones: the current bridge caps count, output size and retention time. This preserves useful run results after pane closure without retaining all closed runtimes forever. It is not a replacement for provider-native transcript storage.
+
+```mermaid
+classDiagram
+    class OrchestrationRun {
+        rootSessionId
+        runId
+    }
+    class ManagedAgent {
+        sessionId
+        parentSessionId
+        role
+        bootstrapDeliveryState
+    }
+    class OrchestrationBridge {
+        queuedRendererRequests
+        relationshipIndex
+        closedOutputTombstones
+    }
+    class WorkspaceActions {
+        createChild()
+        placeSession()
+        closeChild()
+    }
+    OrchestrationRun "1" o-- "many" ManagedAgent
+    ManagedAgent --> ManagedAgent : parent relationship
+    OrchestrationBridge --> WorkspaceActions : serialized request
+    OrchestrationBridge --> ManagedAgent : tracks lineage
+```
+
+The bridge and the renderer both matter: main cannot infer the right project tab solely from filesystem paths, and the renderer cannot claim a backend exists solely because it placed metadata. Sources: [OrchestrationBridge](src/main/orchestration/OrchestrationBridge.ts), [renderer orchestration](src/renderer/src/workspace/orchestrationMcp.ts).
+
+### 16.4 Management of existing agents
+
+Management tools operate on the exact project tab containing the caller. Two tabs can point at the same directory yet have different session membership. Read/list operations do not wake dormant sessions; sending a prompt may wake the target and then use the normal delivery transaction.
+
+Close has explicit caller policy requiring a current user request naming the target. The tool and bridge also constrain invalid targets and self/cascade behavior. The natural-language authorization requirement is a policy contract; it is not cryptographic proof of a user's intent. Mutation handlers still validate concrete target state.
+
+Renderer request timeouts do not establish that a mutation had no effect. Bridge admission and pending-request tracking exist to avoid accepting contradictory work while a prior mutation remains unresolved. Sources: [AgentManagementBridge](src/main/agentManagement/AgentManagementBridge.ts), [renderer management](src/renderer/src/workspace/agentManagementMcp.ts), [tool descriptions and schemas](src/mcp/runtime/createBuiltInMcpServer.ts).
+
+## 17. Durable workflows
+
+### 17.1 A separate execution system
+
+Interactive panes and workflows share provider/toolchain infrastructure but have different lifecycle and persistence requirements. `WorkflowService` owns durable runs, task/attempt state, scheduler admission and cancellation. The embedded MCP registrar is one caller of that service; reopening an MCP request does not recreate the workflow engine.
+
+The application creates the service under Electron `userData/workflows`. It supplies a file store, source-approval store, Electron worker launcher, Codex provider integration, authentication broker and worktree preparation hooks. Startup awaits workflow bridge rehydration before windows expose the feature.
+
+```mermaid
+flowchart TB
+    UI[Desktop workflow client] --> Bridge[WorkflowBridge]
+    MCP[Built-in workflow MCP] --> Service[WorkflowService]
+    Bridge --> Service
+    Service --> Approval[Exact-source approval store]
+    Service --> Store[FileWorkflowStore]
+    Service --> Scheduler[Shared work-conserving scheduler]
+    Service --> Worker[Workflow utility process]
+    Worker -->|agent requests| Service
+    Scheduler --> Provider[Codex workflow provider]
+    Provider --> Broker[Authentication broker]
+    Provider --> Host[Per-attempt provider host]
+    Host --> SDK[Codex SDK and selected CLI]
+    Store --> Files[Run manifests, journals, source and results]
+    Service --> Bridge
+```
+
+### 17.2 Executable source and approval
+
+A workflow is executable source with a constrained API including agent calls, parallel/pipeline composition, phases, logs, arguments and budget access. Source approval is tied to the exact source/version hash. Approval of one version does not silently authorize a modified workflow. The application's native approval dialog defaults to denial.
+
+The workflow worker runs in an Electron utility process using a restricted execution environment. The launcher preserves killability and avoids relying on a system Node installation. The worker protocol normalizes cross-realm values to supported serialized data so a host object does not accidentally expose its prototype capabilities inside the source context.
+
+Source validation, worker limits, timeouts, cancellation and provider policy are separate controls. A Node VM by itself is not an OS sandbox. The application also constrains provider execution to read-only filesystem sandboxing, no network in that sandbox, and no approval prompting. Workflow source can request agents, so the effective provider capability evidence matters as much as the JavaScript API.
+
+Sources: [service composition](src/main/workflows/createWorkflowService.ts), [source approvals](src/main/workflows/WorkflowSourceApprovalStore.ts), [Electron launcher](src/main/workflows/ElectronWorkflowWorkerLauncher.ts), [worker implementation](packages/workflow-mcp/src/workflowWorker.ts).
+
+### 17.3 Scheduling and provider isolation
+
+One work-conserving scheduler allocates capacity across runs. It maintains fair progress among scheduling keys and reserves a permit before resolving admission. Independent runs do not each assume they own the full concurrency allowance. Available capacity is used when runnable work exists.
+
+Each Codex provider attempt runs through a separate host process with tracked descendants. The service distinguishes a request to terminate from confirmed termination. An uncertain surviving attempt cannot safely be replayed merely because a timer expired.
+
+The application resolves the selected Codex executable from setup and caches executable attestation against file metadata/hash evidence. A missing/updating CLI becomes a provider failure in the durable run path, rather than throwing out of service construction and leaving no run record.
+
+Workflow authentication uses an isolated `CODEX_HOME` under the workflow directory, prepared by a broker from the interactive authentication source before each attempt. That is separate from copying the whole interactive Codex configuration. The application does not forward a parent pane's built-in MCP connections into workflow agents, and explicitly excludes the external operator connection.
+
+Isolation is not overstated: uninspected system/administrator configuration means inherited MCP capability is marked `unknown`. Read-only settings alone do not establish that every possible inherited tool is safe to replay. Provider evidence therefore constrains automatic retry. Model aliases such as `haiku`, `sonnet` and `opus` do not map to equivalent Claude models in this Codex-backed integration; the app resolves them through its documented fallback behavior.
+
+Sources: [scheduler](packages/workflow-mcp/src/workConservingScheduler.ts), [Codex workflow provider](src/main/workflows/CodexWorkflowProvider.ts), [authentication broker](src/main/workflows/CodexWorkflowAuthenticationBroker.ts), [provider host entry](src/main/workflows/workflowProviderHostEntry.ts).
+
+### 17.4 Durable state and failure
+
+`FileWorkflowStore` journals events before publishing them. Result artifacts are made available before a completion event references them. A single-writer lease/fencing discipline prevents multiple services from appending to the same run as if each were authoritative. Journal write failure stops forward progress instead of continuing an apparently successful but unrecoverable run.
+
+```mermaid
+stateDiagram-v2
+    [*] --> queued
+    queued --> running: Admitted
+    queued --> cancellation_requested: Cancel
+    running --> cancellation_requested: Cancel
+    running --> completed: All required work succeeds
+    running --> completed_with_errors: Policy accepts terminal task gaps
+    running --> failed: Run failure
+    running --> interrupted: Execution ownership interrupted
+    cancellation_requested --> cancelled: Termination established
+    cancellation_requested --> interrupted: Cannot establish clean completion
+    completed --> [*]
+    completed_with_errors --> [*]
+    failed --> [*]
+    cancelled --> [*]
+    interrupted --> [*]
+```
+
+This is the principal conceptual run-state view; exact transitions and attempt-level evidence belong to the package service. Recovery-required UI can reflect unresolved attempt evidence without being interchangeable with every run status. Best-effort policies can preserve explicit failed-task assignments rather than fabricate successful values.
+
+Resume is lineage-aware. Matching source and arguments can reuse completed siblings; edited workflows are constrained by the reusable prefix/evidence. Manual retry of terminal gaps creates traceable subsequent work. It does not erase failure events from the original run.
+
+Per-run corruption is quarantined rather than silently decoded as an empty successful journal. Journal/result size limits and bounded caches prevent unbounded in-memory mirrors, though durable storage still has its own retention/operational concerns. Sources: [WorkflowService](packages/workflow-mcp/src/workflowService.ts), [FileWorkflowStore](packages/workflow-mcp/src/fileWorkflowStore.ts).
+
+### 17.5 Renderer synchronization
+
+The renderer does not receive every workflow event as an unsolicited full payload. `WorkflowBridge` publishes coalesced cursor hints, with one outstanding unacknowledged hint per renderer/run. The client reads bounded event pages and acknowledges progress after applying them. A durable cursor allows recovery after missed hints or window reload.
+
+At this revision, bridge hints are coalesced on a 500 ms interval; a projected read is limited to 32 events and 512 KiB. Large provider output remains in bounded projections/artifacts rather than being broadcast to every window. The bridge also associates runs with originating sessions and rehydrates that lineage on application startup.
+
+```mermaid
+sequenceDiagram
+    participant Store as Durable workflow store
+    participant Service
+    participant Bridge
+    participant UI as Workflow client
+    Service->>Store: Append event and persist
+    Store-->>Service: Durable cursor
+    Service->>Bridge: Cursor advanced
+    Bridge-->>UI: Coalesced available-cursor hint
+    UI->>Bridge: Read after applied cursor
+    Bridge->>Store: Bounded read
+    Store-->>UI: Projected events and next cursor
+    UI->>UI: Apply events to run store
+    UI->>Bridge: Acknowledge cursor
+    Note over Bridge,UI: Missed hints recover by reading durable state
+```
+
+Sources: [WorkflowBridge](src/main/workflows/WorkflowBridge.ts), [renderer workflow client](src/renderer/src/features/workflows/client), [run store](src/renderer/src/features/workflows/model/workflowRunStore.ts).
+
+## 18. External operator control
+
+External operator MCP is an independently enabled, application-wide connection. It is disabled by default, uses a configurable stable loopback port (default `47653`), and persists a private token in main-owned settings. Enabling it can reconcile a managed Codex configuration/skill integration so an external Codex client can discover the operator surface.
+
+It is not the built-in per-session MCP endpoint. Internal interactive agents and workflow provider configuration explicitly exclude the external operator server to avoid unintentionally granting general app control through inherited configuration.
+
+```mermaid
+flowchart LR
+    Local[Local settings UI] --> Settings[External control settings]
+    Settings --> Host[Loopback MCP host]
+    Settings --> Integration[Managed external Codex integration]
+    Client[External operator client] -->|Bearer-authenticated POST /mcp| Host
+    Host --> Tools[Catalog / invoke / operation tools]
+    Tools --> Port[ControlHost.forCaller]
+    Port --> Main[Main capabilities]
+    Port --> Windows[Generation-owned renderer capabilities]
+    Port --> History[Durable control history]
+```
+
+The HTTP host accepts only the intended loopback `Host` value and `/mcp` POST route, rejects requests carrying an `Origin`, compares bearer credentials in constant time, bounds request bodies to 2 MiB, and enforces header/request timeouts. Disabling it closes active connections. These defenses reduce browser-origin and local HTTP confusion; possession of the token still grants the externally exposed capability set.
+
+Connection status and invocation history omit the token. Copying connection configuration is a local clipboard action whose result reports success without returning credentials into the SDK result. The saved connection token itself is a private file value, not the same encrypted storage mechanism as the key vault.
+
+Transport records can include request/response payloads within limits; excluding credentials does not make all operator history non-sensitive. Tool results and user input may contain project information.
+
+Sources: [external host](src/main/externalControlMcp/host.ts), [MCP tools](src/main/externalControlMcp/tools.ts), [connection settings](src/main/settings/externalControl.ts), [internal-agent exclusion](src/providers/shared/runtime/externalControlExclusion.ts).
+
+## 19. Remote companion
+
+### 19.1 Enablement and deployment modes
+
+`RemoteController` lazily creates the server, transport and pairing state when enabled. Mode transitions are serialized so switching between LAN and tunnel does not leave two listeners with ambiguous ownership. Disable disposes live resources; paired-device state and the local signing secret survive toggles.
+
+LAN mode binds an ephemeral port on `0.0.0.0` and advertises a suitable physical LAN IPv4 address when available. Its transport is plain HTTP/WebSocket. Device authentication does not encrypt LAN traffic.
+
+Tunnel mode binds locally and runs bundled `cloudflared` against that loopback service, with an ephemeral `trycloudflare` HTTPS URL. This adds Cloudflare as a transport dependency. A failed tunnel startup does not silently fall back to exposing a LAN listener.
+
+```mermaid
+flowchart TB
+    subgraph LAN[LAN mode]
+        PhoneA[Paired browser] <-->|HTTP / WS| ListenerA[All-interface remote listener]
+    end
+    subgraph Tunnel[Tunnel mode]
+        PhoneB[Paired browser] <-->|HTTPS / WSS| Edge[Cloudflare tunnel endpoint]
+        Edge <--> Cloudflared[Bundled cloudflared process]
+        Cloudflared <-->|Loopback HTTP| ListenerB[Local remote listener]
+    end
+    ListenerA --> Server[RemoteServer]
+    ListenerB --> Server
+    Server --> Source[SessionFeedSource]
+    Source --> Manager[SessionManager]
+```
+
+Sources: [controller](src/main/remote/RemoteController.ts), [LAN transport](src/main/remote/transport/LanTransport.ts), [tunnel transport](src/main/remote/transport/CloudflaredTunnel.ts).
+
+### 19.2 Pairing and authentication
+
+Pairing uses an eight-character, single-use code with a five-minute lifetime. A successful exchange registers a device and returns a signed token. Token validation uses the local HMAC secret and device registry. Device revocation is explicit; the token format includes issuance time but does not implement a general automatic expiry policy.
+
+Authentication is checked at WebSocket upgrade and on subsequent messages, so revocation can affect an already established client. Signing secrets and paired-device state are stored locally with restrictive file permissions. Pairing is a remote-control grant, not merely permission to view a screenshot.
+
+Sources: [remote authentication](src/main/remote/auth), [server](src/main/remote/RemoteServer.ts).
+
+### 19.3 Protocol scope and recovery
+
+The protocol supports ping, send-prompt, submit, interrupt, condition reply and history requests. It exposes agent sessions, not a general-purpose shell or every desktop IPC method. Current snapshots seed screen, conditions, readiness and process state; committed history is loaded on demand rather than retained as another full transcript cache in the server.
+
+```mermaid
+sequenceDiagram
+    participant Device as Remote browser
+    participant Server as RemoteServer
+    participant Source as SessionFeedSource
+    participant Manager as SessionManager
+    Device->>Server: Pair with short-lived code
+    Server-->>Device: Device token
+    Device->>Server: Authenticated WebSocket upgrade
+    Server->>Source: Subscribe and obtain current snapshots
+    Source-->>Device: Session list and current state
+    Device->>Server: Request bounded history page
+    Server-->>Device: Native history projection and cursor
+    Device->>Server: Send prompt / offered condition action
+    Server->>Manager: Validate scope and use managed operation
+    Manager-->>Device: Result and subsequent observations
+```
+
+Outbound backlog and frame limits prevent an unresponsive device from accumulating unlimited buffered data. The current backlog cap is 4 MiB. The server terminates an over-budget connection so the client can reconnect/backfill, rather than silently dropping structural events while pretending the stream is complete.
+
+History is capped at 500 requested entries and a separate byte budget. Oversized pages are reduced toward the cursor-relevant suffix; an individual record that cannot fit returns an explicit error. A row count alone cannot bound payload size when tool output is large.
+
+Sources: [protocol messages](src/main/remote/protocol/messages.ts), [protocol scope](src/main/remote/protocol/scope.ts), [feed source](src/main/remote/SessionFeedSource.ts), [server](src/main/remote/RemoteServer.ts).
+
+### 19.4 Browser reuse without desktop privileges
+
+The remote client is a separate Vite build under `src/remote-client`. It reuses the shared transcript mappers, semantic reducers, stream phase, entry-window logic, ownership ledger and feed. Explicit aliases replace desktop-only dependencies: code rendering uses a lightweight browser path instead of the full Monaco integration, settings use controlled defaults, and Electron-specific diagnostics/links have browser implementations or stubs.
+
+Remote transcript state supplies the rendering inputs it actually owns. It does not fabricate desktop ghost history or optimistic submissions. Live and history ingestion keep separate mapper lifetimes, and native source changes reset the relevant conversation state.
+
+Mobile dictation posts audio to the remote server's batch transcription path. At this revision that path uses `DEEPGRAM_API_KEY` from the process environment; it does not read the desktop safeStorage-backed dictation key. Audio is not persisted by the normal remote path. This distinction matters when desktop dictation works but mobile dictation reports missing configuration.
+
+Sources: [remote Vite configuration](src/remote-client/vite.config.ts), [remote client source](src/remote-client/src), [remote controller dictation integration](src/main/remote/RemoteController.ts).
+
+## 20. Files, editors, and language servers
+
+### 20.1 Editor workspace and buffers
+
+The global editor maintains separate state per working directory. Following focus between agents can change the active editor project without discarding the previous project's tabs and buffers. AI Workspace adds a curated collection of real file references; it does not create an isolated copy of those files.
+
+Buffer operations distinguish current text, disk observation, acknowledged save version, dirty state, deletion and conflict. A file watcher reporting a change cannot simply replace dirty local text. Open-tab paths, selection and geometry can survive restart, but **unsaved buffer text is not persisted by the global editor**. Restart reopens files from disk. Before-unload and dirty-close guards are therefore necessary, not cosmetic dialogs.
+
+Monaco model ownership is centralized so multiple surfaces referring to the same logical editor content do not accidentally leak models or dispose a model still in use. Curated AI Workspace visibility is separate from identity, allowing it to hide without immediately discarding its live buffers.
+
+Sources: [global editor store](src/renderer/src/features/global-editor/store.ts), [editor persistence](src/renderer/src/features/global-editor/lib/globalEditorPersistence.ts), [buffer operations](src/renderer/src/features/editor/lib/bufferOps.ts), [Monaco model registry](src/renderer/src/features/editor/lib/editorModelRegistry.ts).
+
+### 20.2 Filesystem authority
+
+Renderer-supplied paths are not self-authorizing. `EditorFsRootRegistry` validates real paths against main-owned session working directories and grants roots to a particular renderer. Remembered grants let an editor continue using a previously authorized root after its agent exits; navigation, renderer destruction and other lifetime boundaries revoke the relevant grants.
+
+AI Workspace uses its own main-owned registry of attached file entries. A renderer cannot authorize an arbitrary file merely by presenting a plausible workspace ID or root string. The registry and editor IPC validate the actual entry/path at the privileged boundary.
+
+```mermaid
+sequenceDiagram
+    participant Editor as Renderer editor
+    participant IPC as Editor filesystem IPC
+    participant Roots as Root or AI Workspace authority
+    participant IO as Bounded file I/O
+    participant Disk
+    Editor->>IPC: Read path within requested workspace
+    IPC->>Roots: Authorize renderer and canonical target
+    Roots-->>IPC: Authorized root/entry or refusal
+    IPC->>IO: Read regular file within byte limit
+    IO->>Disk: Open and verify file identity
+    Disk-->>Editor: Text and opaque version through IPC
+    Editor->>IPC: Save text with expected version
+    IPC->>Roots: Revalidate authority
+    IPC->>IO: Serialize same-path mutation
+    IO->>Disk: Write sibling temp, sync, recheck, publish
+    IO-->>Editor: New version or conflict
+```
+
+Sources: [root registry](src/main/ipc/editorFsRootRegistry.ts), [editor filesystem IPC](src/main/ipc/editorFs.ts), [AI Workspace registry](src/main/aiWorkspace/AiWorkspaceRegistry.ts).
+
+### 20.3 Read/write guarantees and their limits
+
+Shared file I/O rejects non-regular files, bounds reads before decoding, uses fatal UTF-8 decoding, and rejects binary-like content such as NUL-containing text. On POSIX, no-follow/nonblocking open flags and stat consistency checks reduce symlink and special-file races. Windows lacks the same `O_NOFOLLOW` primitive and uses the available consistency checks.
+
+The editor version combines device/inode/size/time evidence. Save supports three meanings: a specific expected version, explicit create-only (`null`), or no version expectation. Create-only must not overwrite a file that appeared after initial preflight.
+
+Writes use a sibling temporary file, preserve intended permission bits, sync file contents, recheck the target version, and publish. New-file publication uses a no-clobber hard link. Ordinary replacement uses rename, which is atomic publication but not a portable filesystem compare-and-swap against unrelated external writers. The in-process mutation queue closes Agent Code's own races; the narrow final external-writer race remains a documented platform limit.
+
+Managed-skill publication can use a stronger capture path: move the expected inode aside, verify the captured file/hash, and publish without clobbering a concurrent creator. Recovery metadata records the operation's ownership. That specialized mechanism should not be assumed for every ordinary editor save. Directory syncing is best-effort where the platform does not support it.
+
+Source: [editorFileIO](src/main/editorFileIO.ts).
+
+### 20.4 AI Workspace registry
+
+An AI Workspace is a named, scoped collection of attached paths and metadata. Main persists the registry in `ai-workspaces.json`, loads it lazily, serializes saves, and broadcasts collection changes to windows. Opening a collection routes to an appropriate/focused editor surface.
+
+The registry deduplicates according to workspace naming/scope rules, validates attached paths, and bounds reads (8 MiB in this registry). Git metadata uses short-lived caching and bounded concurrency so listing a collection does not spawn an unbounded wave of repository probes.
+
+Deleting or clearing a collection changes its reference set. File-content mutation is a distinct editor/filesystem operation with its own checks. Sources: [AI Workspace registry](src/main/aiWorkspace/AiWorkspaceRegistry.ts), [AI Workspace MCP contracts](src/mcp/shared/aiWorkspaceTypes.ts), [renderer AI Workspace](src/renderer/src/features/ai-workspace).
+
+### 20.5 Language servers
+
+`LspManager` shares a language-server process for a workspace root/server specification and reference-counts document clients. It bridges JSON-RPC over stdio, synchronizes documents, and supplies completions, hover, diagnostics, symbols, definitions, references and semantic tokens. Diagnostics are file-scoped and may need to reach several views/windows.
+
+```mermaid
+classDiagram
+    class MonacoClient {
+        documentUri
+        clientId
+    }
+    class LspManager {
+        serversByWorkspaceAndSpec
+        documentReferences
+        requestTimeouts
+    }
+    class LspServerSpec {
+        id
+        languages
+        resolveCommand()
+    }
+    class LanguageServerProcess {
+        stdinJsonRpc
+        stdoutJsonRpc
+    }
+    MonacoClient --> LspManager : authorized document operations
+    LspManager --> LspServerSpec : resolve supported server
+    LspManager "1" o-- "many" LanguageServerProcess
+    LspManager --> MonacoClient : diagnostics and results
+```
+
+JavaScript/TypeScript use the packaged npm `typescript-language-server`, launched through Electron with `ELECTRON_RUN_AS_NODE`. Python (`pyright-langserver`), Rust (`rust-analyzer`) and Go (`gopls`) are optional executable discoveries. Availability is resolved again when a server is created, allowing installation during an app run.
+
+Virtual document URIs under an application-specific workspace path support non-file editor content without claiming those URIs are ordinary saved project files. General requests and initialization have separate timeouts. Filesystem/LSP authorization shares the root authority; a renderer does not get unrestricted language-server access by inventing a root.
+
+Sources: [LspManager](src/main/lspManager.ts), [server registry](src/main/lsp/serverRegistry.ts), [LSP IPC](src/main/ipc/lsp.ts).
+
+## 21. Git, work context, and native subagents
+
+### 21.1 Repository status and worktree identity
+
+Main runs Git status/worktree commands through a shared process queue. At this revision the global Git command limit is eight; worktree status has its own lower fan-out and a 30-second cache. Each command has a timeout. Bounded lag is preferable to hundreds of simultaneous subprocesses when several windows inspect a large worktree collection.
+
+The Git bar distinguishes a submodule gitlink change from changes inside the submodule checkout. It can compare the parent-registered revision to the submodule's current HEAD, inspect local edits, or combine both. Treating every modified submodule as a one-line parent diff would conceal the actual work.
+
+Git-unavailable state is tracked separately from empty output. On macOS, an installed `/usr/bin/git` shim without usable command-line tools is not evidence that the repository is clean. Some other Git errors still intentionally degrade to partial/empty data; a successful status view is not a universal proof that every probe succeeded.
+
+Source: [Git IPC and queue](src/main/ipc/git.ts), [shared Git contracts](src/shared/types/git.ts).
+
+### 21.2 Where an agent is working
+
+The launch `cwd` is a useful default but not a complete account of current work. A native agent may run commands or edit files in another worktree. Shared work-context extractors interpret transcript evidence, match paths to known worktrees, and track active/primary/touched context with confidence and provenance.
+
+```mermaid
+flowchart LR
+    Native[Provider transcript event] --> Extract[Work-context extractors]
+    Git[Known worktree identities] --> Match[Canonical path matching]
+    Extract --> Match
+    Match --> State[Active / primary / touched context]
+    State --> UI[Agent and worktree UI]
+    Files[Historical native transcripts] --> Index[WorktreeActivityIndex]
+    Index --> Summaries[Cached historical activity summaries]
+    Summaries --> UI
+```
+
+This is evidence-based attribution, not an OS-wide file audit. Confidence and fallback behavior remain visible in the model. The live tracker bounds its timeline and deduplication keys. Historical discovery belongs to a main service so every UI surface does not independently walk all provider history.
+
+`WorktreeActivityIndex` serves cached summaries while refreshing in the background. Discovery is freshness-gated; a forced refresh pays the scan cost explicitly. The durable index can grow beyond its 1,000-entry in-memory LRU. Full summary operations may read the durable index transiently, so a bounded hot cache does not mean every computation touches only 1,000 records.
+
+Sources: [work-context tracker](src/shared/work-context/tracker.ts), [matching/extraction](src/shared/work-context), [activity index](src/main/worktreeActivity/WorktreeActivityIndex.ts).
+
+### 21.3 Native provider subagents
+
+Native provider subagents are different from agents created by Agent Code orchestration MCP. The native runtime creates them, and the application observes evidence of their existence and progress.
+
+Claude child transcripts live beside the parent transcript in the provider's subagent layout. The watcher derives the directory from the exact parent file. Parent tool-result completion is merged through a bounded completion ledger so a child can become done/error even if its file has not grown again.
+
+Codex children are first-class rollout sessions linked by spawn output and native source metadata. They do not share Claude's directory assumption. A dedicated tracker handles Codex attribution. Stopping the parent watcher releases its watches, trackers and completion bookkeeping.
+
+Sources: [subagent manager](src/main/subagents/index.ts), [Claude watcher](src/main/subagents/SubAgentWatcher.ts), [Codex tracker](src/main/subagents/codexSubagentState.ts), [completion ledger](src/main/subagents/completionLedger.ts).
+
+### 21.4 Usage and keep-awake services
+
+Usage snapshots query Claude and Codex independently and cache the result for 30 seconds. A failure in one provider does not hide the other. Normal overlapping requests share an in-flight fetch; forced refresh starts a new authoritative fetch.
+
+Claude usage reads native credentials through the macOS Keychain path. Codex usage reads `~/.codex/auth.json` on demand. The latter is a fixed default-home path at this revision, unlike runtime paths that can honor `CODEX_HOME`; that difference can explain a usage/auth mismatch. Quota snapshots are advisory UI data, separate from live provider conditions and request failures.
+
+Keep-awake is owned by main through `/usr/bin/caffeinate -ims`. It prevents the selected idle-sleep behaviors while enabled, releases its own process on stop, and does not promise to keep the display awake or defeat every lid-close/power-state rule.
+
+Sources: [usage service](src/main/usage/usageService.ts), [Claude usage](src/main/usage/claudeUsage.ts), [Codex usage](src/main/usage/codexUsage.ts), [CaffeinateController](src/main/caffeinate/CaffeinateController.ts).
+
+## 22. Managed skills and conventions
+
+### 22.1 Desired state and materialized copies
+
+Agent Code manages a personal conventions skill, custom skills, and imported public GitHub skills. Main-owned desired state and revision/ownership journals live in `conventions.json`; imported immutable bytes live in content-addressed snapshots. Provider skill directories are materialized integration surfaces, not the authoritative configuration store.
+
+Targets come from provider policy: Claude's configured/default skill root, Codex's agent skill root, and OpenCode's supported roots. Overlapping targets are deduplicated. A directory containing an application-looking marker is not by itself proof that Agent Code may overwrite or delete it.
+
+```mermaid
+sequenceDiagram
+    participant UI as Skill settings
+    participant Service as Managed skills service
+    participant State as Desired state and ownership journal
+    participant Target as Provider skill files
+    UI->>Service: Preview/import/edit desired skill
+    Service->>Target: Inspect existing paths, versions and digests
+    Service-->>UI: Conflicts and proposed materialization
+    UI->>Service: Apply selected change
+    Service->>State: Record pending operation and ownership evidence
+    Service->>Target: Publish exact approved bytes safely
+    Service->>State: Commit materialization revision
+    Note over State,Target: Recovery reconciles pending operations against exact file evidence
+```
+
+The mutation queue serializes whole-state operations. Pending writes/deletes retain previous and intended digests, paths and revision evidence. An externally edited target cannot be removed merely because a prior version was managed. Unmanaged collisions require explicit preview/adoption policy. Invalid state can produce a recovery-required condition instead of destructive automatic repair.
+
+The pre-session audit is best-effort: a skill-materialization problem can be surfaced as health state without making every native agent launch impossible. That does not authorize the audit to overwrite unknown bytes.
+
+Sources: [managed service entry](src/main/agentCodeConventions/AgentCodeManagedSkillsService.ts), [service implementation](src/main/agentCodeConventions/AgentCodeConventionsService.ts), [ownership policy](src/main/agentCodeConventions/ownershipPolicy.ts), [path safety](src/main/agentCodeConventions/skillPathSafety.ts).
+
+### 22.2 Public GitHub acquisition
+
+Imported skills resolve a public repository ref to an exact commit and acquire bounded files from that commit. The implementation avoids a credentialed arbitrary clone: ref lookup uses constrained HTTPS Git behavior, then tree/raw acquisition verifies file evidence. Slash-containing branch/tag names and ambiguous references need deliberate resolution.
+
+Manifests constrain paths, sizes and file shapes. Immutable snapshots retain the approved package bytes and hashes. Applying a skill materializes those exact bytes; it does not silently follow the repository's moving branch on every launch. An update is another reviewable desired-state change.
+
+Content addressing proves identity of acquired bytes, not that their instructions are appropriate for every project. Managed ownership controls filesystem mutation; the native provider still interprets the installed skill instructions when it loads them.
+
+Sources: [GitHub source resolver](src/main/agentCodeConventions/githubSkillSource.ts), [package store](src/main/agentCodeConventions/installedSkillPackageStore.ts), [materializer](src/main/agentCodeConventions/installedSkillMaterializer.ts).
+
+## 23. Dictation, templates, and secrets
+
+### 23.1 Desktop dictation
+
+The renderer captures microphone audio and manages the active composer interaction. Main owns the provider connection and credentials. Audio chunks cross IPC into a streaming session or a batch fallback; transcription events return to the appropriate UI path. The application integration uses Deepgram even though the reusable package has a broader API.
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Renderer as Dictation/composer UI
+    participant Main as Dictation IPC/controller
+    participant Key as Runtime key resolver
+    participant STT as Deepgram
+    User->>Renderer: Start dictation gesture
+    Renderer->>Main: Start transcription session
+    Main->>Key: Resolve environment override or encrypted saved key
+    Renderer->>Main: Audio chunks
+    Main->>STT: Streaming or batch transcription
+    STT-->>Main: Partial/final text or provider error
+    Main-->>Renderer: Transcription result
+    Renderer->>Renderer: Integrate with owning composer draft
+    User->>Renderer: Review/submit through normal input path
+```
+
+The composer path must retain the intended target across focus and mount changes. Global hotkeys route to focused/recently focused windows; renderer ownership coordinates the active recording/composer. Audio transcription is not automatically authorization to submit a prompt to a newly focused agent.
+
+Ordinary accelerators use Electron `globalShortcut`, which provides activation rather than a physical key-up edge; that path uses toggle behavior. Fn/bare-modifier bindings require the native macOS event-tap helper and its Accessibility permission, supporting real hold/release edges. Reconfiguration drains an active recording edge before replacing the binding.
+
+Desktop key resolution prefers `DEEPGRAM_API_KEY`, then the safeStorage-encrypted settings blob. Settings status returns configuration/source/hint, not the raw key. A corrupt encrypted blob is not treated as a reason to overwrite unrelated preferences.
+
+Normal microphone audio stays off disk. `AGENT_CODE_DICTATION_DUMP=1` explicitly enables debug audio capture in the application temp directory. Text history and debug journals are separate persistence surfaces and can contain transcription content or provider error details. No-speech is a normal outcome, not a fabricated transcript.
+
+Sources: [dictation IPC](src/main/ipc/dictation.ts), [controller](src/main/dictation/controller.ts), [key store](src/main/dictation/apiKeyStore.ts), [hotkey routing](src/main/dictation/hotkey.ts), [renderer dictation](src/renderer/src/features/voice-dictation), [speech package](packages/agent-voice-dictation).
+
+### 23.2 Prompt templates
+
+Templates resolve named `{{variable}}` placeholders from explicit values or configured defaults and reject missing required values. Insertion has explicit replace/append behavior; it does not inherently execute the resulting prompt. Effective surface policy determines whether insertion targets a rendered draft or a supported terminal input path.
+
+Template interpolation is distinct from vault reference resolution. The template placeholder grammar is intentionally narrow; `{{key:Provider/Key}}` belongs to the gated vault integration rather than an arbitrary expression evaluator. Sources: [template interpolation](src/renderer/src/features/prompt-templates/interpolate.ts), [template feature](src/renderer/src/features/prompt-templates).
+
+### 23.3 Key vault
+
+The vault stores secret blobs encrypted with Electron safeStorage and a separate plaintext metadata index. Names, notes and masked hints are metadata; values are absent from ordinary snapshots. Very short secrets receive no suffix hint to avoid storing the entire value as a “mask.”
+
+Encryption at rest and permission to reveal are separate. Reveal, copy and reference resolution pass through a once-per-run user-presence gate backed by the injected macOS authentication prompt. Unsupported authentication fails closed. Concurrent unlock requests share a prompt; locking increments a generation so a prompt that finishes afterward cannot re-unlock the vault.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Locked
+    Locked --> UnlockPending: Reveal/copy/resolve requests authentication
+    UnlockPending --> Unlocked: Authentication succeeds in same generation
+    UnlockPending --> Locked: Cancel, failure or intervening lock
+    Unlocked --> Unlocked: Gated secret operation
+    Unlocked --> Locked: Explicit lock or new application run
+```
+
+CRUD operations are serialized. Secret/index write ordering avoids publishing references to nonexistent values and avoids treating a corrupt index as a new empty vault. Store IDs and file permissions constrain the on-disk layout.
+
+Resolving a reference deliberately moves plaintext out of the vault into a caller's composer or clipboard. From that point, normal prompt/draft/transcript behavior can retain it. Vault encryption is not a promise that a submitted secret remains confined to the encrypted store.
+
+Sources: [VaultService](src/main/keyVault/VaultService.ts), [vault store](src/main/keyVault/vaultStore.ts), [safeStorage codec](src/main/keyVault/safeStorageCodec.ts), [vault IPC](src/main/ipc/keyVault.ts).
