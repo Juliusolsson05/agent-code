@@ -268,10 +268,66 @@ live is disconnected it falls back to a 1 Hz primary-key lookup of
   schema. Agent Code reaches it only through the exported `readHistory` /
   `openOpencodeStore` API, never through SQL of its own.
 
+## Stage 0 results (2026-09-10)
+
+Full evidence: `packages/opencode-terminal-headless/research/census-2026-09-10.md`.
+The census covered 50 real sessions with event logs; the sandbox probe recorded
+six live scenarios on OpenCode 1.18.30. The design holds. The evidence
+sharpened these rules, which the stages now implement:
+
+1. **Turn boundaries come only from the live channel. This is now proven, not
+   chosen.**
+   - The last assistant message of a user turn has `finish: "tool-calls"` in
+     139 of 450 turns (aborts and interruptions), and no finish at all in 47.
+   - A durable-derived "turn ended" rule would be wrong about 30% of the time.
+2. **One live turn is one `busy → idle` span.**
+   - `busy` repeats 2–5 times inside a span.
+   - A prompt queued while busy runs inside the same span, so one turn can
+     commit several user messages.
+   - `session.idle` arrives together with the final `status: idle`.
+3. **Assistant commit happens on `time.completed`.**
+   - Nothing changes an assistant message after that write: 0 exceptions in
+     6,684 messages.
+   - `finish` is set one write earlier, so it is not the commit signal.
+4. **User commit happens when the first assistant with `parentID === user.id`
+   appears.**
+   - Later rewrites are ignored. 6,962 of them were seen; only `summary`
+     changes, and 4 sessions additionally rewrite a `compaction` part.
+5. **History comes from the projection, never from replaying the log.**
+   Messages seeded by `opencode import` never appear in the log (55 messages
+   in 5 sessions).
+6. **The live-event doorbell is valid.** Every recorded durable row was
+   readable before its bus event arrived.
+7. **The live channel needs a connect deadline and a visible diagnostic.**
+   - If the pre-allocated port is lost to a race, the TUI neither exits nor
+     paints (0 bytes in 25 s).
+   - Requests also block while a project instance boots.
+   - `live-state { connected: false, reason: 'server-unreachable' }` is
+     emitted after the deadline. The durable channel keeps running on its own
+     fallback poll.
+8. **Permission and question shapes are pinned by recordings.**
+   - `permission.asked { id, sessionID, permission, patterns, metadata,
+     always, tool }` / `permission.replied { requestID, reply }`.
+   - `question.asked { id, sessionID, questions[] }` /
+     `question.rejected|replied { requestID }`.
+   - The condition title is built from `permission` and `patterns`.
+9. **Startup and per-turn noise is ignored.** That covers `plugin.added` ×90,
+   `catalog.updated`, `integration.updated`, `reference.updated`,
+   `session.diff`, `message.part.delta` and `file.*`.
+
+Incidental finding for the structured runtime, not this feature:
+`opencode-headless`'s permission title lookup (`title`/`tool`/`action`) no
+longer matches the 1.18.30 payload, where `tool` is an object and the verb is
+in `permission`. The structured runtime's permission modal therefore has no
+title.
+
 ## Unknowns
 
-These are not yet enumerated. Stage 0 resolves the first nine; the rest are
-resolved in the named stage.
+Status after Stage 0:
+- **Resolved:** 1, 2, 3, 4, 5, 7, 8, 9 and 12.
+- **Still open:** 6 (child-session permission surfacing; the free model never
+  delegated), 10 (checked by the Stage 1 system test) and 11 (checked in
+  Stage 6).
 
 1. The v1.18.30 bus names and payloads for `session.status`, permission,
    question and delta events (the sibling research is from 1.14.39).
