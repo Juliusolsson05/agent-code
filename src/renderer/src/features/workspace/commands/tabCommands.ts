@@ -62,7 +62,7 @@ export const tabCommands: CommandDef[] = [
     category: 'session',
     surface: 'app',
     title: 'Resume Session',
-    description: '**What it does:** Opens the **resume session** flow.\n\n**Use when:** You want to continue an old Claude or Codex session.\n\n**Notes:** Uses the focused project folder as the default.',
+    description: '**What it does:** Opens the **resume session** flow.\n\n**Use when:** You want to continue an old Claude, Codex, or OpenCode session.\n\n**Notes:** Uses the focused project folder as the default.',
     keepPaletteOpen: true,
     run: ({ ui, flags }) => {
       // Already showing this mode? Dismiss. A mode-entering command whose

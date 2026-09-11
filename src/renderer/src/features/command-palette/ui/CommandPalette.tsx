@@ -1,8 +1,6 @@
 import { commandExecutionRequests, type CommandExecutionRequest } from '../commandExecutionRequests'
 import { useCommandExecutionRequest } from './useCommandExecutionRequest'
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
-import type { AgentProviderKind } from '@shared/types/providerKind'
-import { getProviderFeatures } from '@providers/shared/featureCapabilities'
 import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import ReactMarkdown from 'react-markdown'
 
@@ -94,7 +92,7 @@ import { dirtyAiWorkspacePaths } from '@renderer/features/ai-workspace/lib/aiWor
 import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
 import { SafeMarkdownLink } from '@renderer/features/rendered-content/SafeMarkdownLink'
 import type { AiWorkspaceSummary } from '@mcp/shared/aiWorkspaceTypes'
-import { useResumeSessionListing } from '@renderer/features/command-palette/useResumeSessionListing'
+import { resumeProviderForFocus, useResumeSessionListing } from '@renderer/features/command-palette/useResumeSessionListing'
 // Canonical session listing shape. This was a local copy that DROPPED
 // `fileSize` (and `customTitle`) — a concrete instance of the drift the
 // shared contract prevents: the palette consumes `SessionInfo[]` straight
@@ -432,21 +430,10 @@ function OpenCommandPalette({
   // kinds have no resume story, so fall back to the default provider.
   // Which provider's saved sessions the Resume picker lists.
   //
-  // The focused pane's provider, but ONLY if main can actually enumerate saved
-  // sessions for it. `listSessionsForCwd` has no index for OpenCode, so
-  // focusing an OpenCode pane and hitting Resume opened a picker that would
-  // always be empty — a dead end presented as a working feature, and the reason
-  // `savedSessionListing` existed with nothing reading it.
-  //
-  // Falling back to the default provider rather than hiding Resume entirely:
-  // the user's saved Claude sessions in this cwd are still there and still what
-  // they most likely want. Hiding the command would take a working action away
-  // because an unrelated pane happens to be focused.
-  const resumeProvider: AgentProviderKind =
-    isAgentProviderKind(focusedProvider) &&
-    getProviderFeatures(focusedProvider).savedSessionListing
-      ? focusedProvider
-      : DEFAULT_PROVIDER
+  // OpenCode's read-only store now supports the same cwd-scoped listing as
+  // the other providers. Keep the capability gate for future providers that
+  // can resume a known ID before they implement discovery.
+  const resumeProvider = resumeProviderForFocus(focusedProvider)
 
   const enterResumeMode = useCallback(async () => {
     if (!focusedCwd) return

@@ -128,12 +128,10 @@ const FEATURES_BY_KIND: Record<AgentProviderKind, ProviderFeatureCapabilities> =
     switchTargets: ['claude', 'opencode'],
     verifiedExternalResumeCommand: true,
   },
-  // OpenCode still lacks a cwd-indexed saved-session picker, but its supported
-  // CLI export/import boundary now backs prompt extraction, rewind, duplicate,
-  // and pairwise switching. Keep listing separate: being able to address a
-  // known `ses_` id does not imply main can enumerate sessions for Resume UI.
+  // The read-only store now lists root sessions by directory for Resume;
+  // the CLI export/import boundary still owns transcript transformations.
   opencode: {
-    savedSessionListing: false,
+    savedSessionListing: true,
     transcriptRewind: true,
     transcriptDuplicate: true,
     promptHistoryExtraction: true,

@@ -14,8 +14,11 @@ const session = z.object({ nativeSessionId: z.string(), summary: z.string(), las
 
 // Catalogs adapt the same provider registry and transcript engine used by the
 // native pickers. In particular, discovery failure is not an empty inventory:
-// the current OpenCode registry intentionally cannot enumerate sessions (#773),
-// although known native IDs can still be read, resumed and transformed.
+// a provider that cannot enumerate sessions says so, rather than reporting
+// "no sessions" and letting an agent conclude the user has none. Every
+// registered provider can enumerate today — OpenCode gained it with #773, by
+// listing root sessions out of its SQLite database — so the only remaining
+// refusal is a provider that needs a cwd when none was supplied.
 export function nativeHistoryControlCapabilities() {
   return [
     defineCapability({ id: 'nativeHistory.search', title: 'Search historical conversation prompts', execution: 'main', effect: 'read',
@@ -33,12 +36,11 @@ export function nativeHistoryControlCapabilities() {
       },
     }),
     defineCapability({ id: 'nativeHistory.list', title: 'Find native sessions to resume', execution: 'main', effect: 'read',
-      description: 'List recent provider-native sessions, including conversations not open in Agent Code. Select one provider and optionally an exact cwd. Discovery does not wake agents. The catalog is bounded by scanLimit; possiblyTruncated means older sessions may exist beyond it. OpenCode discovery is currently unsupported (#773), not an empty account. Use agents.resume to open a chosen native identity in an explicit project.',
+      description: 'List recent provider-native sessions, including conversations not open in Agent Code. Select one provider and optionally an exact cwd. Discovery does not wake agents. The catalog is bounded by scanLimit; possiblyTruncated means older sessions may exist beyond it. OpenCode lists root sessions from its own database; its task children are not separately resumable. Use agents.resume to open a chosen native identity in an explicit project.',
       input: z.object({ provider, cwd: z.string().min(1).optional(), scanLimit: z.number().int().min(1).max(2000).default(500).describe('Number of recent native records to load before paging; keep fixed for continuation.'), ...pageInput }).strict(),
       output: pageSchema(session).extend({ provider, possiblyTruncated: z.boolean() }),
       handler: async input => {
         const owner = getMainProvider(input.provider)
-        if (owner.sessionDiscoveryUnavailableReason) throw new ControlError('unavailable', owner.sessionDiscoveryUnavailableReason)
         if (!input.cwd && !owner.listAllSessions) throw new ControlError('unavailable', 'This provider requires a working directory for discovery')
         const rows = input.cwd ? await owner.listSessions(input.cwd, input.scanLimit) : await owner.listAllSessions!(input.scanLimit)
         const normalized = rows.map(row => ({ nativeSessionId: row.sessionId, summary: row.summary.slice(0, 4000), lastModified: row.lastModified,

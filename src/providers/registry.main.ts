@@ -3,10 +3,11 @@
 // sessionManager and IPC handlers import from HERE.
 
 import { join } from 'path'
-import { opencodeTranscriptFile, parseOpencodeTranscriptFile } from 'opencode-terminal-headless'
-import { readOpencodeSessionInfo } from '@providers/opencode/runtime/opencodeDatabase'
+import { opencodeTranscriptFile, parseOpencodeTranscriptFile, type OpencodeSessionInfo } from 'opencode-terminal-headless'
+import { opencodeDatabase, readOpencodeSessionInfo } from '@providers/opencode/runtime/opencodeDatabase'
 
 import type { MainProviderConfig } from '@shared/types/providerConfig'
+import type { SessionInfo } from '@shared/types/session'
 import { AGENT_PROVIDER_KINDS, isAgentProviderKind } from '@shared/types/providerKind'
 import type { AgentProviderKind } from '@shared/types/providerKind'
 import { ClaudeSession } from '@providers/claude/runtime/claudeSession'
@@ -24,6 +25,24 @@ import {
   getCodexSessionsDir,
   listCodexSessions,
 } from 'codex-headless'
+
+// Shared by OpenCode's cwd-scoped and global listings so the two can never
+// disagree about what the picker is told. The store row is the source of
+// truth for `cwd`: the global listing has no ambient directory to fall back
+// on, and a resumed session must be spawned in the directory it recorded.
+function toOpencodeSessionInfos(
+  rows: ReadonlyArray<Pick<OpencodeSessionInfo, 'id' | 'title' | 'directory' | 'timeUpdated'>>,
+): SessionInfo[] {
+  return rows.map(row => ({
+    sessionId: row.id,
+    summary: row.title,
+    lastModified: row.timeUpdated,
+    // SQLite rows have no per-session file size. Zero avoids attributing
+    // the entire shared database to every session in the Resume picker.
+    fileSize: 0,
+    cwd: row.directory,
+  }))
+}
 
 const claudeMain: MainProviderConfig = {
   id: 'claude',
@@ -106,12 +125,17 @@ const opencodeMain: MainProviderConfig = {
   },
   createSession: (opts) => new OpencodeSession(opts),
   createTerminalSession: (opts) => new OpencodeTerminalSession(opts),
-  // OpenCode stores sessions behind its own SQLite/API boundary and does not
-  // expose a cwd-filtered CLI list with the metadata our resume picker needs.
-  // Known `ses_` identities are fully resumable/transformable through the CLI;
-  // returning an empty list keeps only discovery unavailable.
-  listSessions: async () => [],
-  sessionDiscoveryUnavailableReason: 'OpenCode native session discovery is not implemented (#773). Known ses_ identities remain resumable.',
+  // Both runtimes share OpenCode's database. The store owns root-session
+  // filtering and newest-first ordering; the host only projects the picker
+  // contract. Discovery must use cwd, just like the eventual resumed process.
+  listSessions: async (cwd, limit) =>
+    toOpencodeSessionInfos((await opencodeDatabase.store()).listSessions({ directory: cwd, limit })),
+  // The native-history control has no cwd. OpenCode's store answers a global
+  // listing from the same statement (the directory filter is optional) and
+  // returns each row's own directory, so the picker still shows the true
+  // spawn directory per row rather than inventing one.
+  listAllSessions: async limit =>
+    toOpencodeSessionInfos((await opencodeDatabase.store()).listSessions({ limit })),
   // Opencode has no per-cwd project dir concept; the storage root is
   // server-owned. Returning cwd keeps consumers (which only display
   // it) harmless.

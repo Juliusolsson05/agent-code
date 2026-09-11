@@ -335,6 +335,12 @@ export type ProviderHistoryChunk = {
   entries: Record<string, unknown>[]
   hasMore: boolean
   totalEntries?: number
+  /**
+   * Cursor for the next older provider page, when hasMore is true. Main-only
+   * consumers cannot import the renderer mapper to extract this from a record;
+   * the source supplies the marker using its own storage identity contract.
+   */
+  oldestMarker?: string
 }
 
 export type MainProviderConfig = {
@@ -382,10 +388,18 @@ export type MainProviderConfig = {
    * runtime when the selected provider does not implement it.
    */
   createTerminalSession?: (opts: SessionOptions) => AgentSession
-  /** List resumable sessions for a cwd. */
+  /**
+   * List resumable sessions for a cwd.
+   *
+   * WHY this is required rather than optional: a provider that answered an
+   * empty array instead of enumerating would tell the Resume picker and the
+   * nativeHistory catalog that the user HAS no sessions, which is a different
+   * and more damaging claim than "this provider cannot look". OpenCode was the
+   * last registry row without discovery (#773); it now reads root sessions out
+   * of its own SQLite database, so every provider can answer honestly and the
+   * former `sessionDiscoveryUnavailableReason` escape hatch is gone.
+   */
   listSessions: (cwd: string, limit: number) => Promise<SessionInfo[]>
-  /** A placeholder list must not be advertised as a complete empty catalog. */
-  sessionDiscoveryUnavailableReason?: string
   /**
    * List resumable sessions without cwd scoping when a caller genuinely needs a
    * global debug/resume inventory.

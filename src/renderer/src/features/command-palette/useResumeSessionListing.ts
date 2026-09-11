@@ -1,7 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-import type { AgentProviderKind } from '@shared/types/providerKind'
+import { DEFAULT_PROVIDER, isAgentProviderKind, type AgentProviderKind } from '@shared/types/providerKind'
+import { getProviderFeatures } from '@providers/shared/featureCapabilities'
 import type { SessionInfo } from '@shared/types/session'
+
+/** The picker must use a provider whose main registry can actually list rows. */
+export function resumeProviderForFocus(kind: string | undefined): AgentProviderKind {
+  return isAgentProviderKind(kind) && getProviderFeatures(kind).savedSessionListing
+    ? kind
+    : DEFAULT_PROVIDER
+}
 
 export type ResumeSessionTarget = {
   cwd: string

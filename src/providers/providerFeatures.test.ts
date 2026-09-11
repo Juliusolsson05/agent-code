@@ -47,7 +47,7 @@ describe('provider feature matrix', () => {
         verifiedExternalResumeCommand: true,
       },
       opencode: {
-        savedSessionListing: false,
+        savedSessionListing: true,
         transcriptRewind: true,
         transcriptDuplicate: true,
         promptHistoryExtraction: true,
@@ -80,9 +80,9 @@ describe('provider feature matrix', () => {
     expect(getProviderFeatures('not-a-provider').switchTargets).toEqual([])
   })
 
-  it('grants OpenCode transcript operations without pretending it has a session index', () => {
+  it('grants OpenCode transcript operations and database-backed session discovery', () => {
     const opencode = getProviderFeatures('opencode')
-    expect(opencode.savedSessionListing).toBe(false)
+    expect(opencode.savedSessionListing).toBe(true)
     expect(opencode.transcriptRewind).toBe(true)
     expect(opencode.transcriptDuplicate).toBe(true)
     expect(opencode.promptHistoryExtraction).toBe(true)

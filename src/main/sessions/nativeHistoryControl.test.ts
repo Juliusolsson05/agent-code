@@ -6,8 +6,13 @@ const source = vi.hoisted(() => ({ path: '', list: vi.fn() }))
 vi.mock('@providers/claude/runtime/sessionList.js', () => ({ listSessionsForCwd: async () => [{ sessionId: 'source', cwd: '/trial', lastModified: 1, summary: 'Recorded conversation' }] }))
 vi.mock('@shared/runtime/projectDir.js', () => ({ getProjectDirForCwd: () => source.path.slice(0, source.path.lastIndexOf('/')) }))
 vi.mock('@providers/codex/runtime/projectDir.js', () => ({ getCodexSessionsDir: () => source.path + '.absent' }))
+// The 'opencode' stand-in deliberately omits the OPTIONAL global listing so the
+// no-cwd branch stays covered: a provider that cannot enumerate without a cwd
+// must refuse, never answer an empty page that reads as "you have no sessions".
+// The real OpenCode registry does implement both listings since #773 — that is
+// asserted against a real database in registry.main.opencode.system.test.ts.
 vi.mock('@providers/registry.main', () => ({ getMainProvider: (id: string) => id === 'opencode'
-  ? { sessionDiscoveryUnavailableReason: 'OpenCode discovery unavailable (#773)' } : { listSessions: source.list, listAllSessions: source.list } }))
+  ? { listSessions: source.list } : { listSessions: source.list, listAllSessions: source.list } }))
 vi.mock('@main/providerSwitch/shared.js', () => ({ getClaudeSessionFilePath: async () => source.path, writeProjectedClaudeSessionFile: vi.fn(), projectedClaudeSessionId: vi.fn() }))
 import { nativeHistoryControlCapabilities } from './nativeHistoryControl'
 import { getHostTranscriptAdapter } from '@main/providerSwitch/transcriptEngine'
@@ -40,6 +45,10 @@ it('pages exact rewind references from the recorded Claude transcript through th
 it('reports unsupported discovery and IO failures rather than a complete empty account', async () => {
   const cap = nativeHistoryControlCapabilities().find(cap => cap.descriptor.id === 'nativeHistory.list')!
   expect(await cap.execute({ provider: 'opencode' }, context)).toMatchObject({ ok: false, error: { code: 'unavailable' } })
+  // The same provider answers normally once a cwd narrows the request, which is
+  // what makes the refusal above a scoping limit rather than an empty account.
+  source.list.mockResolvedValueOnce([{ sessionId: 'scoped', cwd: '/trial', lastModified: 2, summary: 'Scoped conversation', fileSize: 0 }])
+  expect(await cap.execute({ provider: 'opencode', cwd: '/trial' }, context)).toMatchObject({ ok: true, value: { items: [{ nativeSessionId: 'scoped', cwd: '/trial' }] } })
   source.list.mockRejectedValue(new Error('Provider directory is unreadable'))
   expect(await cap.execute({ provider: 'claude' }, context)).toMatchObject({ ok: false, error: { message: 'Provider directory is unreadable' } })
 })

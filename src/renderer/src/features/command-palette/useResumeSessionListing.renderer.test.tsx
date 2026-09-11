@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import type { SessionInfo } from '@shared/types/session'
 
-import { useResumeSessionListing } from './useResumeSessionListing'
+import { resumeProviderForFocus, useResumeSessionListing } from './useResumeSessionListing'
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -24,6 +24,17 @@ const codexSession: SessionInfo = {
 }
 
 describe('useResumeSessionListing', () => {
+  it('lists OpenCode sessions when Resume is opened from an OpenCode-focused pane', async () => {
+    const rows: SessionInfo[] = [{ sessionId: 'ses_saved', summary: 'Saved OpenCode task', lastModified: 300, fileSize: 0, cwd: '/repo' }]
+    const listSessions = vi.fn(async () => rows)
+    const view = renderHook(() => useResumeSessionListing(listSessions))
+    await act(async () => {
+      await view.result.current.load({ cwd: '/repo', provider: resumeProviderForFocus('opencode') })
+    })
+    expect(listSessions).toHaveBeenCalledExactlyOnceWith('/repo', 20, 'opencode')
+    expect(view.result.current).toMatchObject({ target: { cwd: '/repo', provider: 'opencode' }, sessions: rows, error: null, loading: false })
+  })
+
   it('keeps the newest provider/cwd result when restart hydration races an older request', async () => {
     const staleClaude = deferred<SessionInfo[]>()
     const listSessions = vi.fn((cwd: string) =>
