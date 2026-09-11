@@ -103,6 +103,13 @@ export function ProviderSwitchPickerModal({
             return
           }
           if (event.key === 'Enter' && selected) {
+            // A focused footer button owns its own Enter (the rule
+            // components/ui/dialog-actions.tsx documents). preventDefault below
+            // also cancels that button's native click, so without this guard
+            // Tab to Cancel + Enter switched the agent to the highlighted
+            // provider instead of cancelling (#862). Rows are exempt from the
+            // exemption: Enter on the list means "the highlighted row".
+            if (event.target instanceof Element && event.target.closest('[data-slot="dialog-footer"]')) return
             event.preventDefault()
             choose(selected)
           }

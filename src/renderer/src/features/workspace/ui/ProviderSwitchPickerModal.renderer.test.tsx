@@ -67,6 +67,18 @@ describe('ProviderSwitchPickerModal', () => {
     )
   })
 
+  it('leaves Enter to a focused Cancel instead of switching to the highlighted provider (#862)', () => {
+    // The list's Enter handler used to preventDefault (killing Cancel's native
+    // click) and then commit the highlighted row, so Tab -> Cancel -> Enter
+    // started a provider switch. `true` = default not prevented, so the real
+    // browser still delivers Cancel's click.
+    const { switchSessionProvider } = harness()
+
+    expect(fireEvent.keyDown(screen.getByRole('button', { name: 'Cancel' }), { key: 'Enter' })).toBe(true)
+
+    expect(switchSessionProvider).not.toHaveBeenCalled()
+  })
+
   it('supports keyboard choice and cancellation without starting an implicit switch', () => {
     const first = harness()
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'ArrowDown' })
