@@ -240,3 +240,15 @@ Two orchestrated reviewers (A: Reader correctness, Claude; B: removal, tests and
 | A-MINOR: no view-level handoff test, no non-Claude coverage | Fixed. ReaderView "keeps its place" tests; Codex rollout, Codex proxy and OpenCode projection tests. |
 | A-NIT: two comments overstated ledger caching / identity; per-delta O(entries) text joins | Fixed. Comments reworded; committed entry text memoised in a WeakMap. |
 | A-MINOR: Claude with proxy streaming off shows no live text in Reader | Not adopted. It is the intended consequence of removing screen scraping (the user's report was the objection to it) and is disclosed in the PR. |
+
+### Recheck round (against `c0d6d8b8`)
+
+Both reviewers re-ran their probes. Every round-1 finding was confirmed closed; five new ones came from the round-1 fix itself:
+
+| Finding | Disposition |
+|---|---|
+| B-MAJOR: several semantic pages replaced by ONE joined committed entry (Claude whole-turn suppression by `message.id` == turn id) matched no page's text, so the selection fell back to an unrelated message | Fixed. `ReaderMessage.sourceId` (entry `message.id` / semantic turn id) leads the twin search; text is the fallback for producers whose ids differ (Codex rollout). |
+| B-MINOR: `continues()` treated a distinct new page that repeats the previous text as the same message, skipping the scroll reset | Fixed. The prefix heuristic is gone; a page whose predecessor is still in the list is always a different message. |
+| A-MINOR: following by list position misfires because the ledger sorts a committed block of the current turn below the turn's streaming blocks (F1 pulls the reader backwards, F2 fails to follow) | Fixed in Reader: follow only genuinely new ids (not in the previous list, not a copy of a page that just left it). The ledger ordering itself is pre-existing and visible in Feed: filed as #868. |
+| A-MINOR: a reader part-way through a finished newest message was pulled onto the next turn and lost their place | Fixed: only a following reader (the view's stick-to-bottom state) is carried onto new pages. |
+| A-NIT: the render-phase reconcile looped forever on an unstable `messages` identity | Fixed: state is written only when the selection changes; the rule is idempotent and a test pins both. |
