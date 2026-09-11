@@ -399,7 +399,11 @@ async function streamReadTranscript(
     }
   }
 
-  if (!sawFinalAssistant && lastAssistant?.kind === 'assistant_message') {
+  // WHY provider-owned fallback: older Claude/Codex transcripts lack final
+  // markers, so their last answer must retain the historical promotion.
+  // OpenCode explicitly completes individual tool steps as well as answers;
+  // promoting one would tell the parent a still-running first turn finished.
+  if (prepared.provider !== 'opencode' && !sawFinalAssistant && lastAssistant?.kind === 'assistant_message') {
     lastAssistant.final = true
     if (lastSelectedAssistant) lastSelectedAssistant.final = true
     // WHY the extra lastSelectedAssistant check: `selected` holds truncated
@@ -795,13 +799,28 @@ function extractOpencodeItems(raw: JsonRecord, timestamp: number | undefined): A
   if (finiteNumber(asRecord(info?.time)?.completed) === undefined) return []
 
   const items: AgentTranscriptItem[] = []
-  const text = opencodeMessageText(parts)
+  let text = opencodeMessageText(parts)
+  const error = asRecord(info?.error)
+  if (error) {
+    // WHY keep the diagnostic with the partial answer: the item contract has
+    // no error kind/flag, and a tool-output item would hide the failure from
+    // ordinary conversation reads. OpenCode's processor stamps completion
+    // even on abort/API failure; retaining those words without the diagnostic
+    // would make an interrupted answer look successful. This also preserves
+    // failures that occurred before the model emitted any text. Put the
+    // diagnostic first so per-item truncation cannot hide it behind a long
+    // partial answer while keeping that answer's text intact when unbounded.
+    const name = stringField(error, 'name') ?? 'Error'
+    const message = stringField(asRecord(error.data), 'message')
+    text = [`[OpenCode error: ${name}${message ? `: ${message}` : ''}]`, text].filter(Boolean).join('\n\n')
+  }
   if (text) {
-    // `finish` is the model's stop reason. 'tool-calls' means the step ended
-    // to run tools and the turn continues; any other reason ('stop',
-    // 'length', …) ends the turn, so that step's text is the answer.
+    // sst/opencode@v1.18.30 packages/opencode/src/cli/cmd/tui/routes/session/index.tsx
+    // excludes both tool-calls and unknown; length still ends the answer.
+    // packages/opencode/src/session/processor.ts also completes failed steps,
+    // so a finish reason cannot override the separately recorded error.
     const finish = stringField(info, 'finish')
-    items.push({ kind: 'assistant_message', timestamp, text, final: finish !== undefined && finish !== 'tool-calls' })
+    items.push({ kind: 'assistant_message', timestamp, text, final: !error && finish !== undefined && finish !== 'tool-calls' && finish !== 'unknown' })
   }
   for (const part of parts) {
     const type = stringField(part, 'type')
@@ -847,10 +866,11 @@ function extractOpencodeToolPart(part: JsonRecord, messageTimestamp: number | un
   return items
 }
 
-// OpenCode's tool ids (vendor/in_progress/opencode/.../src/tool). Classified
-// by id instead of through `classifyToolCall`, whose substring rules were
-// written for Claude and Codex names: `todowrite` contains "write" and would
-// be reported as a file write, when all it writes is the session's todo list.
+// Built-in ids: sst/opencode@v1.18.30 packages/opencode/src/tool/registry.ts.
+// WHY explicit built-ins before generic custom/MCP classification: todowrite
+// only updates session bookkeeping, despite containing "write". Conversely,
+// arbitrary plugin and MCP ids can write outside the repo, where a snapshot
+// patch cannot rescue an incorrectly classified read.
 function classifyOpencodeToolCall(
   tool: string,
   input: JsonRecord | undefined,
@@ -876,10 +896,24 @@ function classifyOpencodeToolCall(
       const files = applyPatchFiles(input, metadata)
       return { kind: 'patch', timestamp, files, summary: files.length > 0 ? `apply_patch: ${files.join(', ')}` : 'apply_patch' }
     }
-    default: {
+    case 'read':
+    case 'glob':
+    case 'grep':
+    case 'task':
+    case 'webfetch':
+    case 'websearch':
+    case 'todowrite':
+    case 'skill':
+    case 'question':
+    case 'lsp':
+    case 'plan_exit':
+    case 'execute':
+    case 'invalid': {
       const target = opencodeToolTarget(input)
       return { kind: 'tool_read', timestamp, tool, target, excerpt: target ? `${tool}: ${target}` : undefined }
     }
+    default:
+      return classifyToolCall(tool, input, timestamp, opencodeToolTarget(input) ?? toolTarget(input))
   }
 }
 
@@ -902,7 +936,13 @@ function applyPatchFiles(input: JsonRecord | undefined, metadata: JsonRecord | u
 
 function opencodeToolTarget(input: JsonRecord | undefined): string | undefined {
   if (!input) return undefined
-  for (const key of ['filePath', 'path', 'pattern', 'url', 'query', 'description', 'name']) {
+  // WHY this order: read/edit/write/lsp name filePath; glob/grep scope their
+  // pattern with path, which should remain the primary target when both are
+  // present. Custom/MCP tools also use path or file_path. With no concrete
+  // path, show glob/grep's pattern, webfetch's url, websearch's query, task's
+  // description, then skill's name. Keep this provider-specific so accepting
+  // filePath does not silently change Claude/Codex target precedence.
+  for (const key of ['filePath', 'path', 'file_path', 'pattern', 'url', 'query', 'description', 'name']) {
     const value = stringField(input, key)
     if (value) return value
   }
@@ -923,8 +963,8 @@ function classifyToolCall(
   name: string,
   input: JsonRecord | null | undefined,
   timestamp: number | undefined,
+  target = toolTarget(input),
 ): AgentTranscriptItem {
-  const target = toolTarget(input)
   const recordInput = input ?? undefined
   const command = stringField(recordInput, 'cmd') ?? stringField(recordInput, 'command')
   if (name === 'exec_command' || name === 'Bash' || command) {
@@ -1088,10 +1128,42 @@ function truncateItemText(item: AgentTranscriptItem, maxChars: number): AgentTra
     case 'shell_command':
       return { ...item, command: truncate(item.command) ?? '', outputExcerpt: truncate(item.outputExcerpt) }
     case 'patch':
-      return { ...item, summary: truncate(item.summary) }
+      return truncatePatchItem(item, maxChars)
     case 'test_run':
       return { ...item, command: truncate(item.command) ?? '', outputExcerpt: truncate(item.outputExcerpt) }
   }
+}
+
+function truncatePatchItem(item: Extract<AgentTranscriptItem, { kind: 'patch' }>, maxChars: number): AgentTranscriptItem {
+  if (itemSearchText(item).length <= maxChars) return { ...item }
+
+  // WHY filenames share the summary's budget: snapshots and apply_patch
+  // metadata can name hundreds of files even with a tiny summary. The same
+  // searchable representation used by total caps must fit the item cap too.
+  // Keep whole paths (a cut path names a different file) and reserve space
+  // for an exact omission count before accepting each one. Discard the old
+  // summary when omitting files: apply_patch summaries repeat all paths and
+  // would otherwise leak the very filenames the files array just omitted.
+  // A second tail-bounding pass is a no-op because this representation fits;
+  // recomputing its count from the shortened array would lose the truth.
+  const files: string[] = []
+  let used = 0
+  for (const file of item.files) {
+    const remaining = item.files.length - files.length - 1
+    const marker = remaining > 0 ? `…and ${remaining} more files` : ''
+    const nextSize = used + (files.length > 0 ? 1 : 0) + file.length
+    if (nextSize + (marker ? 1 + marker.length : 0) > maxChars) break
+    files.push(file)
+    used = nextSize
+  }
+  const omitted = item.files.length - files.length
+  const budget = Math.max(0, maxChars - used - (files.length > 0 ? 1 : 0))
+  const summary = omitted > 0 ? `…and ${omitted} more files` : item.summary ?? ''
+  // MCP caps are at least 50 characters, enough for the omission marker.
+  // Direct callers may supply less; still honor their bound without slicing
+  // an actual filename. Normal supported budgets retain the full count.
+  const boundedSummary = summary.length <= budget ? summary : summary.slice(0, Math.max(0, budget - 1)) + (budget > 0 ? '…' : '')
+  return { ...item, files, summary: boundedSummary || undefined }
 }
 
 function itemSearchText(item: AgentTranscriptItem): string {

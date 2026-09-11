@@ -9,11 +9,10 @@ import {
   LiveFixtureWriter,
   loadDurableFixture,
   sessionRowFor,
-  type DurableFixture,
 } from 'opencode-terminal-headless/testing/index'
 
 import { createOpencodeDatabase, type OpencodeDatabase } from '@providers/opencode/runtime/opencodeDatabase.js'
-import type { AgentTranscriptItem } from '@mcp/shared/agentTranscriptTypes.js'
+import type { AgentTranscriptItem, AgentTranscriptStats } from '@mcp/shared/agentTranscriptTypes.js'
 
 import {
   inspectAgentTranscriptFile,
@@ -33,6 +32,9 @@ import {
 // - Every recorded session in opencode-terminal-headless's fixtures, whose
 //   text is sanitized, checked against counts taken straight from the raw
 //   rows — never from the reader.
+// The literal corpus counts protect recorded traversal/completeness. The full
+// registry/custom-tool matrix in AgentTranscriptReader.opencode.contracts.system.test.ts
+// independently covers tool semantics absent from these recordings.
 
 let dir: string
 let databases: OpencodeDatabase[] = []
@@ -193,11 +195,14 @@ describe('agent transcript tools on an OpenCode session', () => {
       if (running) setImmediate(other)
     }
     setImmediate(other)
-    const result = await inspectAgentTranscriptFile({ path: locator('ses_long') }, depsFor(file))
-    running = false
-    expect(result).toMatchObject({ ok: true, stats: { totalEvents: 300, userMessages: 300 } })
-    // One pause per page of 25 messages.
-    expect(turns).toBeGreaterThanOrEqual(10)
+    try {
+      const result = await inspectAgentTranscriptFile({ path: locator('ses_long') }, depsFor(file))
+      expect(result).toMatchObject({ ok: true, stats: { totalEvents: 300, userMessages: 300 } })
+      // One pause per page of 25 messages.
+      expect(turns).toBeGreaterThanOrEqual(10)
+    } finally {
+      running = false
+    }
   })
 
   it('refuses honestly: an unknown session, no database, and a provider that does not match the locator', async () => {
@@ -219,34 +224,26 @@ describe('agent transcript tools on an OpenCode session', () => {
   })
 })
 
-// Counts a parent agent should see for a recorded session, from its raw rows.
-function expectedCounts(fixture: DurableFixture) {
-  const parse = (value: unknown) => (typeof value === 'string' ? JSON.parse(value) : value) as Record<string, any>
-  const parts: Array<Record<string, any>> = fixture.parts.map(row => ({ ...parse(row.data), messageID: row.message_id }))
-  const partsOf = (messageID: string) => parts.filter(part => part.messageID === messageID)
-  const spokenText = (messageID: string) =>
-    partsOf(messageID).some(part => part.type === 'text' && !part.synthetic && !part.ignored && typeof part.text === 'string' && part.text.trim().length > 0)
-  const counts = { totalEvents: fixture.messages.length, userMessages: 0, assistantMessages: 0, shellCommands: 0, toolWrites: 0, patches: 0, toolReads: 0 }
-  for (const row of fixture.messages) {
-    const info = parse(row.data)
-    if (info.role === 'user') {
-      if (spokenText(row.id)) counts.userMessages += 1
-      continue
-    }
-    if (info.role !== 'assistant' || typeof info.time?.completed !== 'number') continue
-    if (spokenText(row.id)) counts.assistantMessages += 1
-    for (const part of partsOf(row.id)) {
-      if (part.type === 'patch' && Array.isArray(part.files) && part.files.length > 0) counts.patches += 1
-      if (part.type !== 'tool') continue
-      if (part.tool === 'bash') counts.shellCommands += 1
-      else if (part.tool === 'write' || part.tool === 'edit') counts.toolWrites += 1
-      else if (part.tool === 'apply_patch') counts.patches += 1
-      else counts.toolReads += 1
-      if (typeof part.state?.output === 'string' && part.state.output.length > 0) counts.toolReads += 1
-      else if (typeof part.state?.error === 'string' && part.state.error.length > 0) counts.toolReads += 1
-    }
-  }
-  return counts
+// Literal census of the fixture rows, not a second extractor. The previous
+// expectedCounts walked the same role/tool rules as production and could
+// silently bless the same classification mistake. These fixtures need an
+// explicit review when changed, while the independent registry matrix covers
+// tool ids that recordings happen not to exercise.
+//
+// 5a9e: 128 messages; 9 user messages carry 12 real text parts (4 synthetic
+// parts are excluded), 82 assistants carry text; 61 bash, 12 edit + 8 write,
+// 44 other tool calls, 125 outputs/errors, and one snapshot. Its five custom
+// exec calls have only a `value` argument, so no shell command is established.
+// a6fa: two spoken assistant steps PLUS msg_070bb9da5001uZF628C7gPXXhS's
+// MessageAbortedError (no text). Dropping that third item hides the abort.
+const expectedCounts: Record<string, Partial<AgentTranscriptStats>> = {
+  ses_47fca639e3f6415791277e7c065a18ff: { totalEvents: 3, userMessages: 1, assistantMessages: 1, shellCommands: 1, toolWrites: 0, patches: 0, toolReads: 1 },
+  ses_5a9eb7438b655a5a8b1453adf276083c: { totalEvents: 128, userMessages: 9, assistantMessages: 82, shellCommands: 61, toolWrites: 20, patches: 1, toolReads: 169 },
+  ses_7d808f8696294ec782dd6fd02f6c07ac: { totalEvents: 4, userMessages: 2, assistantMessages: 2, shellCommands: 0, toolWrites: 0, patches: 0, toolReads: 0 },
+  ses_a6fac9228f234c60a7148d82f27e34c2: { totalEvents: 4, userMessages: 1, assistantMessages: 3, shellCommands: 1, toolWrites: 0, patches: 0, toolReads: 9 },
+  ses_f95eaec8cffe9MjQ00EGdkBV6a: { totalEvents: 22, userMessages: 5, assistantMessages: 15, shellCommands: 13, toolWrites: 0, patches: 0, toolReads: 45 },
+  ses_f963831c3ffeoUTd1qcWlr0Qrb: { totalEvents: 17, userMessages: 1, assistantMessages: 13, shellCommands: 15, toolWrites: 0, patches: 0, toolReads: 29 },
+  ses_f96bdb539ffe2Q22Yzk6zhDUYI: { totalEvents: 6, userMessages: 1, assistantMessages: 3, shellCommands: 0, toolWrites: 0, patches: 0, toolReads: 14 },
 }
 
 describe('agent transcript tools on recorded OpenCode sessions', () => {
@@ -260,8 +257,9 @@ describe('agent transcript tools on recorded OpenCode sessions', () => {
     for (const fixture of fixtures) {
       const result = await inspectAgentTranscriptFile({ path: locator(fixture.meta.sessionID) }, deps)
       expect(result, fixture.meta.sessionID).toMatchObject({ ok: true, provider: 'opencode' })
-      if (!result.ok) continue
-      expect(result.stats, fixture.meta.sessionID).toMatchObject(expectedCounts(fixture))
+      if (!result.ok) throw new Error(result.message)
+      expect(expectedCounts[fixture.meta.sessionID], fixture.meta.sessionID).toBeDefined()
+      expect(result.stats, fixture.meta.sessionID).toMatchObject(expectedCounts[fixture.meta.sessionID]!)
     }
     // The compaction session is longer than one read page (100 messages).
     expect(fixtures.some(fixture => fixture.messages.length > 100)).toBe(true)
