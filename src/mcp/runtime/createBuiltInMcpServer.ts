@@ -332,12 +332,15 @@ function registerAgentTranscriptTools(server: McpServer): void {
     rawToolOutputs: z.boolean().optional(),
   }).optional()
 
-  // WHY these tools take an explicit filesystem path instead of trying to
+  // WHY these tools take an explicit transcript locator instead of trying to
   // discover "the right" transcript:
   //
   // The product use case is controlled consumption of another agent's work
   // product, not a global transcript browser. The UI, orchestration metadata,
-  // or a handoff prompt already knows which Claude/Codex JSONL file matters.
+  // or a handoff prompt already knows which transcript matters: a Claude or
+  // Codex JSONL path, or an `opencode://session/<id>` locator for OpenCode,
+  // whose sessions live in one database with no file per session (Agent
+  // Management publishes whichever the agent has).
   // Discovery would force this MCP boundary to decide ownership, scoping, and
   // ranking semantics that are unrelated to projection. A path-in API keeps v1
   // auditable and predictable: the caller names the transcript, then chooses a
@@ -350,7 +353,7 @@ function registerAgentTranscriptTools(server: McpServer): void {
     {
       title: 'Read Agent Transcript File',
       description:
-        'Reads one Claude or Codex transcript JSONL file by path and returns a normalized, filtered, bounded projection of user-visible agent context.',
+        'Reads one agent transcript and returns a normalized, filtered, bounded projection of user-visible agent context. `path` is a Claude or Codex transcript JSONL path, or `opencode://session/<id>` for an OpenCode session (the locator Agent Management lists for OpenCode agents).',
       inputSchema: {
         path: z.string(),
         provider: providerSchema.optional(),
@@ -384,7 +387,7 @@ function registerAgentTranscriptTools(server: McpServer): void {
     {
       title: 'Search Agent Transcript File',
       description:
-        'Searches one Claude or Codex transcript JSONL file by path and returns bounded normalized matches with optional surrounding context.',
+        'Searches one agent transcript and returns bounded normalized matches with optional surrounding context. `path` is a Claude or Codex transcript JSONL path, or `opencode://session/<id>` for an OpenCode session.',
       inputSchema: {
         path: z.string(),
         provider: providerSchema.optional(),
@@ -416,7 +419,7 @@ function registerAgentTranscriptTools(server: McpServer): void {
     {
       title: 'Inspect Agent Transcript File',
       description:
-        'Inspects one Claude or Codex transcript JSONL file by path and returns provider, timestamp, and item-count metadata without dumping content.',
+        'Inspects one agent transcript and returns provider, timestamp, and item-count metadata without dumping content. `path` is a Claude or Codex transcript JSONL path, or `opencode://session/<id>` for an OpenCode session.',
       inputSchema: {
         path: z.string(),
         provider: providerSchema.optional(),

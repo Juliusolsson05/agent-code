@@ -6,6 +6,13 @@ import { join } from 'node:path'
 import { WebSocket } from 'ws'
 import { REMOTE_OUTPUT_MAX_BYTES } from '@shared/remoteOutputLimits.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  createProjectionDatabase,
+  listDurableFixtures,
+  loadDurableFixture,
+} from 'opencode-terminal-headless/testing/index'
+
+import { opencodeDatabase } from '@providers/opencode/runtime/opencodeDatabase.js'
 
 import { DevicePairing } from './auth/DevicePairing.js'
 import { DeviceRegistry } from './auth/deviceRegistry.js'
@@ -18,6 +25,17 @@ import type { RemoteSessionControl } from './RemoteServer.js'
 // feed fan-out, and the scope gate applied to a live connection. The
 // manager is a bare EventEmitter + spies — RemoteServer must consume
 // nothing more (RemoteSessionControl is the structural proof).
+
+// OpenCode history is read from a real database built from a recorded
+// session instead of the user's own (and without running `opencode db path`).
+const opencodeFixture = vi.hoisted(() => ({ file: '' }))
+vi.mock('@providers/opencode/runtime/opencodeDatabase.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('@providers/opencode/runtime/opencodeDatabase.js')>()
+  return {
+    ...actual,
+    opencodeDatabase: actual.createOpencodeDatabase({ resolveDbPath: async () => opencodeFixture.file }),
+  }
+})
 
 type FakeManager = RemoteSessionControl & EventEmitter
 
@@ -420,6 +438,50 @@ describe('inbound scope enforcement on a live socket', () => {
     }
     expect(contents).toEqual(['prompt 0', 'prompt 1', 'prompt 2', 'prompt 3', 'prompt 4'])
     ws.close()
+  })
+
+  it('get-history pages an OpenCode session from its database by the locator the session publishes', async () => {
+    // The compaction session: long enough for several pages, and it starts
+    // with imported messages the event log never saw.
+    const recorded = loadDurableFixture(listDurableFixtures().find(name => name.includes('ses_5a9eb743'))!)
+    opencodeFixture.file = join(dir, 'opencode.db')
+    createProjectionDatabase(recorded, opencodeFixture.file)
+    const locator = `opencode://session/${recorded.meta.sessionID}`
+    ;(manager.getSessionKind as ReturnType<typeof vi.fn>).mockReturnValue('opencode')
+    ;(manager.resolveTranscriptFile as ReturnType<typeof vi.fn>).mockResolvedValue(locator)
+    const projectionOrder = [...recorded.messages]
+      .sort((a, b) => a.time_created - b.time_created || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+      .map(row => row.id)
+
+    try {
+      const { ws, frames, token } = await openAuthed()
+      const collected: string[] = []
+      let beforeMarker: string | undefined
+      for (let page = 0; page < 10; page += 1) {
+        ws.send(JSON.stringify({ token, id: `oc-${page}`, message: {
+          type: 'get-history', sessionId: 's1', limit: 50,
+          ...(beforeMarker ? { beforeMarker } : {}),
+        } }))
+        await waitFor(frames, f => framesOfType(f, 'reply').length > page)
+        const reply = framesOfType(frames, 'reply')[page] as {
+          ok: boolean
+          result: { entries: Array<{ info: { id: string } }>; hasMore: boolean; totalEntries?: number; file: string }
+        }
+        expect(reply.ok).toBe(true)
+        expect(reply.result.file).toBe(locator)
+        if (page === 0) expect(reply.result.totalEntries).toBe(recorded.messages.length)
+        const ids = reply.result.entries.map(entry => entry.info.id)
+        collected.unshift(...ids)
+        if (!reply.result.hasMore) break
+        beforeMarker = ids[0]
+      }
+      // Every message exactly once, oldest first, as OpenCode's projection
+      // orders them.
+      expect(collected).toEqual(projectionOrder)
+      ws.close()
+    } finally {
+      opencodeDatabase.release()
+    }
   })
 
   it('get-history fails cleanly before any transcript exists', async () => {

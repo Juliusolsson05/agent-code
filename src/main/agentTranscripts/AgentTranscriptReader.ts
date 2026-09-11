@@ -1,6 +1,8 @@
 import { access } from 'node:fs/promises'
 import { constants } from 'node:fs'
 
+import { parseOpencodeTranscriptFile, type OpencodeStore } from 'opencode-terminal-headless'
+
 import { streamJsonl } from '@shared/runtime/streamJsonl.js'
 import {
   asRecord as asSharedRecord,
@@ -19,18 +21,9 @@ import type {
   AgentTranscriptSearchResult,
   AgentTranscriptStats,
 } from '@mcp/shared/agentTranscriptTypes.js'
+import { opencodeDatabase, type OpencodeDatabase } from '@providers/opencode/runtime/opencodeDatabase.js'
 
 type JsonRecord = Record<string, unknown>
-
-type ParsedTranscript = {
-  ok: true
-  provider: AgentTranscriptProvider
-  path: string
-  items: AgentTranscriptItem[]
-  stats: AgentTranscriptStats
-  firstTimestamp?: number
-  lastTimestamp?: number
-}
 
 type ReadFileOptions = {
   path: string
@@ -58,6 +51,37 @@ type InspectFileOptions = {
   provider?: AgentTranscriptProviderInput
 }
 
+/**
+ * Where OpenCode sessions are read from. Injectable so tests read a fixture
+ * database; production reads OpenCode's own through the app's shared handle.
+ */
+export type AgentTranscriptReaderDeps = {
+  opencode: OpencodeDatabase
+}
+
+const DEFAULT_DEPS: AgentTranscriptReaderDeps = { opencode: opencodeDatabase }
+
+// A transcript this reader can stream, as normalized records.
+//
+// WHY two sources behind one reducer set: Claude and Codex keep one JSONL
+// file per session; OpenCode keeps every session in one SQLite database, so
+// its transcript is named by an `opencode://session/<id>` locator (the one
+// both OpenCode runtimes publish on every committed entry). The projection,
+// search and inspect reducers only need "the session's records, oldest
+// first", so the source is the only thing that knows which it is. Each
+// OpenCode record is one whole message, `{ info, parts }`, walked a page at
+// a time so a long session is never held in memory, matching the JSONL
+// streaming the reducers were built around.
+type TranscriptSource =
+  | { kind: 'jsonl'; path: string }
+  | { kind: 'opencode'; path: string; sessionID: string; store: OpencodeStore }
+
+type PreparedTranscript = {
+  ok: true
+  source: TranscriptSource
+  provider: AgentTranscriptProvider
+}
+
 const DEFAULT_MAX_ITEMS = 100
 const DEFAULT_MAX_CHARS = 24_000
 const DEFAULT_MAX_CHARS_PER_ITEM = 4_000
@@ -65,12 +89,21 @@ const DEFAULT_SEARCH_MATCHES = 25
 const DEFAULT_SEARCH_CONTEXT_ITEMS = 1
 const DEFAULT_SEARCH_CHARS_PER_MATCH = 2_000
 
+// The `tool` of an item that carries a tool's raw OUTPUT rather than a call.
+// Hidden from projections and search unless `include.rawToolOutputs`, because
+// outputs dwarf everything else and are rarely what a reader of another
+// agent's work wants. The name is Codex's (its outputs are
+// `function_call_output` records); OpenCode's tool outputs use the same
+// marker so one flag governs every provider.
+const RAW_TOOL_OUTPUT = 'function_call_output'
+
 export async function readAgentTranscriptFile(
   options: ReadFileOptions,
+  deps: AgentTranscriptReaderDeps = DEFAULT_DEPS,
 ): Promise<AgentTranscriptReadResult | AgentTranscriptErrorResult> {
-  const prepared = await preparePath(options.path)
+  const prepared = await prepareTranscript(options.path, options.provider ?? 'auto', deps)
   if (!prepared.ok) return prepared
-  const streamed = await streamReadTranscript(prepared.path, options)
+  const streamed = await streamReadTranscript(prepared, options)
   if (!streamed.ok) return streamed
   const bounded = options.tail && options.tail > 0
     ? boundItems(streamed.items, {
@@ -83,8 +116,8 @@ export async function readAgentTranscriptFile(
 
   return {
     ok: true,
-    path: prepared.path,
-    provider: streamed.provider,
+    path: prepared.source.path,
+    provider: prepared.provider,
     projection: options.projection,
     items: bounded.items,
     truncated: streamed.truncated || bounded.truncated,
@@ -97,15 +130,16 @@ export async function readAgentTranscriptFile(
 
 export async function inspectAgentTranscriptFile(
   options: InspectFileOptions,
+  deps: AgentTranscriptReaderDeps = DEFAULT_DEPS,
 ): Promise<AgentTranscriptInspectResult | AgentTranscriptErrorResult> {
-  const prepared = await preparePath(options.path)
+  const prepared = await prepareTranscript(options.path, options.provider ?? 'auto', deps)
   if (!prepared.ok) return prepared
-  const parsed = await inspectTranscript(prepared.path, options.provider ?? 'auto')
+  const parsed = await inspectTranscript(prepared)
   if (!parsed.ok) return parsed
   return {
     ok: true,
-    path: prepared.path,
-    provider: parsed.provider,
+    path: prepared.source.path,
+    provider: prepared.provider,
     firstTimestamp: parsed.firstTimestamp,
     lastTimestamp: parsed.lastTimestamp,
     stats: parsed.stats,
@@ -114,16 +148,17 @@ export async function inspectAgentTranscriptFile(
 
 export async function searchAgentTranscriptFile(
   options: SearchFileOptions,
+  deps: AgentTranscriptReaderDeps = DEFAULT_DEPS,
 ): Promise<AgentTranscriptSearchResult | AgentTranscriptErrorResult> {
-  const prepared = await preparePath(options.path)
+  const prepared = await prepareTranscript(options.path, options.provider ?? 'auto', deps)
   if (!prepared.ok) return prepared
-  const searched = await streamSearchTranscript(prepared.path, options)
+  const searched = await streamSearchTranscript(prepared, options)
   if (!searched.ok) return searched
 
   return {
     ok: true,
-    path: prepared.path,
-    provider: searched.provider,
+    path: prepared.source.path,
+    provider: prepared.provider,
     query: options.query,
     matches: searched.matches,
     truncated: searched.truncated,
@@ -134,10 +169,14 @@ export async function searchAgentTranscriptFile(
   }
 }
 
-async function preparePath(path: string): Promise<
-  | { ok: true; path: string }
-  | AgentTranscriptErrorResult
-> {
+// Resolve a path argument to a readable source and its provider, once, before
+// any reducer runs. Location errors come before provider errors, so a caller
+// with a bad path and a bad provider fixes the path first.
+async function prepareTranscript(
+  path: string,
+  requestedProvider: AgentTranscriptProviderInput,
+  deps: AgentTranscriptReaderDeps,
+): Promise<PreparedTranscript | AgentTranscriptErrorResult> {
   if (!path.trim()) {
     return {
       ok: false,
@@ -145,9 +184,52 @@ async function preparePath(path: string): Promise<
       message: 'A transcript file path is required.',
     }
   }
+
+  const opencodeSessionID = parseOpencodeTranscriptFile(path)
+  if (opencodeSessionID) {
+    let store: OpencodeStore
+    try {
+      store = await deps.opencode.store()
+    } catch (err) {
+      return {
+        ok: false,
+        error: 'file_not_readable',
+        message: `OpenCode's database is not readable: ${err instanceof Error ? err.message : String(err)}`,
+      }
+    }
+    let exists: boolean
+    try {
+      exists = store.readSessionInfo(opencodeSessionID) !== null
+    } catch (err) {
+      return {
+        ok: false,
+        error: 'transcript_read_failed',
+        message: err instanceof Error ? err.message : String(err),
+      }
+    }
+    if (!exists) {
+      return {
+        ok: false,
+        error: 'file_not_found',
+        message: `OpenCode has no session ${opencodeSessionID}.`,
+      }
+    }
+    if (requestedProvider !== 'auto' && requestedProvider !== 'opencode') {
+      return {
+        ok: false,
+        error: 'unsupported_provider',
+        message: `${path} is an OpenCode session, not a ${requestedProvider} transcript.`,
+      }
+    }
+    return {
+      ok: true,
+      source: { kind: 'opencode', path, sessionID: opencodeSessionID, store },
+      provider: 'opencode',
+    }
+  }
+
   try {
     await access(path, constants.R_OK)
-    return { ok: true, path }
   } catch {
     return {
       ok: false,
@@ -155,51 +237,91 @@ async function preparePath(path: string): Promise<
       message: `Transcript file is missing or not readable: ${path}`,
     }
   }
+  const source: TranscriptSource = { kind: 'jsonl', path }
+  switch (requestedProvider) {
+    case 'claude':
+    case 'codex':
+      return { ok: true, source, provider: requestedProvider }
+    case 'opencode':
+      return {
+        ok: false,
+        error: 'unsupported_provider',
+        message: 'OpenCode sessions have no transcript file; pass their opencode://session/<id> locator.',
+      }
+    case 'auto': {
+      const provider = await detectJsonlProvider(path)
+      if (!provider) {
+        return {
+          ok: false,
+          error: 'provider_detection_failed',
+          message: 'Could not detect whether this transcript is Claude or Codex JSONL.',
+        }
+      }
+      return { ok: true, source, provider }
+    }
+    default:
+      return {
+        ok: false,
+        error: 'unsupported_provider',
+        message: `Unsupported transcript provider: ${String(requestedProvider)}`,
+      }
+  }
 }
 
-async function resolveProvider(
-  path: string,
-  requestedProvider: AgentTranscriptProviderInput,
-): Promise<
-  | { ok: true; provider: AgentTranscriptProvider }
-  | AgentTranscriptErrorResult
-> {
-  if (requestedProvider !== 'auto' && requestedProvider !== 'claude' && requestedProvider !== 'codex') {
-    return {
-      ok: false,
-      error: 'unsupported_provider',
-      message: `Unsupported transcript provider: ${requestedProvider}`,
-    }
+async function* transcriptRecords(source: TranscriptSource): AsyncGenerator<JsonRecord | null> {
+  switch (source.kind) {
+    case 'jsonl':
+      yield* streamJsonl<JsonRecord>(source.path)
+      return
+    case 'opencode':
+      for (const record of source.store.iterateMessages(source.sessionID)) {
+        yield record as unknown as JsonRecord
+      }
+      return
   }
-  const provider = requestedProvider === 'auto'
-    ? await detectProvider(path)
-    : requestedProvider
-  if (!provider) {
-    return {
-      ok: false,
-      error: 'provider_detection_failed',
-      message: 'Could not detect whether this transcript is Claude or Codex JSONL.',
-    }
+}
+
+// WHY exhaustive switches rather than `provider === 'claude' ? … : …`: the
+// old two-way ternaries sent every non-Claude provider through the Codex
+// extractor, so OpenCode records parsed as nothing at all without an error.
+// A new provider kind now fails to compile here until it has an extractor.
+function recordTimestamp(provider: AgentTranscriptProvider, raw: JsonRecord): number | undefined {
+  switch (provider) {
+    case 'claude':
+    case 'codex':
+      return extractTimestamp(raw)
+    case 'opencode':
+      return finiteNumber(asRecord(asRecord(raw.info)?.time)?.created)
   }
-  return { ok: true, provider }
+}
+
+function extractItems(
+  provider: AgentTranscriptProvider,
+  raw: JsonRecord,
+  timestamp: number | undefined,
+): AgentTranscriptItem[] {
+  switch (provider) {
+    case 'claude':
+      return extractClaudeItems(raw, timestamp)
+    case 'codex':
+      return extractCodexItems(raw, timestamp)
+    case 'opencode':
+      return extractOpencodeItems(raw, timestamp)
+  }
 }
 
 async function streamReadTranscript(
-  path: string,
+  prepared: PreparedTranscript,
   options: ReadFileOptions,
 ): Promise<
   | {
       ok: true
-      provider: AgentTranscriptProvider
       items: AgentTranscriptItem[]
       truncated: boolean
       stats: AgentTranscriptStats
     }
   | AgentTranscriptErrorResult
 > {
-  const resolved = await resolveProvider(path, options.provider ?? 'auto')
-  if (!resolved.ok) return resolved
-
   const stats = emptyStats()
   const maxItems = options.maxItems ?? DEFAULT_MAX_ITEMS
   const maxChars = options.maxChars ?? DEFAULT_MAX_CHARS
@@ -213,25 +335,20 @@ async function streamReadTranscript(
   let lastAssistant: AgentTranscriptItem | null = null
   let lastSelectedAssistant: AgentTranscriptItem | null = null
 
-  // WHY this is separate from parseTranscript:
-  // read/tail/final are consumption tools, not archival parsers. The old
-  // path streamed JSONL from disk but then retained every normalized item,
-  // copied them again for adjacent-dedupe, and only then applied maxItems,
-  // maxChars, tail, and projection. Parent agents commonly read large child
-  // transcripts with tiny caps. This reducer preserves full stats while
-  // retaining only the projected window that can actually be returned.
+  // WHY read/tail/final stream instead of materializing the transcript:
+  // they are consumption tools, not archival parsers. Parent agents commonly
+  // read large child transcripts with tiny caps. This reducer keeps full
+  // stats while retaining only the projected window that can actually be
+  // returned.
   try {
-    for await (const raw of streamJsonl<JsonRecord>(path)) {
+    for await (const raw of transcriptRecords(prepared.source)) {
       stats.totalEvents += 1
       if (raw === null) {
         stats.parseErrors += 1
         continue
       }
-      const timestamp = extractTimestamp(raw)
-      const extracted = resolved.provider === 'claude'
-        ? extractClaudeItems(raw, timestamp)
-        : extractCodexItems(raw, timestamp)
-      for (const rawItem of extracted) {
+      const timestamp = recordTimestamp(prepared.provider, raw)
+      for (const rawItem of extractItems(prepared.provider, raw, timestamp)) {
         const item = acceptDedupedItem(previous, rawItem)
         if (!item) continue
         previous = item
@@ -293,13 +410,22 @@ async function streamReadTranscript(
 
   return {
     ok: true,
-    provider: resolved.provider,
     items: selected,
     truncated,
     stats,
   }
 }
 
+// WHY adjacent equivalent items collapse: a single visible Codex
+// assistant/user message is commonly recorded twice, once as a high-level
+// `event_msg` used by Agent Code's runtime feed and once as a canonical
+// `response_item` from the provider rollout. Both are useful in raw
+// transcript debugging, but this MCP domain is deliberately a consumption
+// boundary for another agent's work product. Returning both makes searches
+// look like duplicate findings and makes `contextItems` echo the same
+// sentence before/after itself. Only ADJACENT equivalents collapse, and
+// equivalence includes the timestamp, so distinct repeated messages survive
+// when the transcript actually contains separate turns.
 function acceptDedupedItem(
   previous: AgentTranscriptItem | null,
   item: AgentTranscriptItem,
@@ -371,21 +497,17 @@ function addProjectedReadItem(
 }
 
 async function streamSearchTranscript(
-  path: string,
+  prepared: PreparedTranscript,
   options: SearchFileOptions,
 ): Promise<
   | {
       ok: true
-      provider: AgentTranscriptProvider
       matches: AgentTranscriptSearchResult['matches']
       truncated: boolean
       stats: AgentTranscriptStats
     }
   | AgentTranscriptErrorResult
 > {
-  const resolved = await resolveProvider(path, options.provider ?? 'auto')
-  if (!resolved.ok) return resolved
-
   const stats = emptyStats()
   const query = options.query.toLowerCase()
   const kinds = options.kinds?.length ? new Set(options.kinds) : null
@@ -399,17 +521,14 @@ async function streamSearchTranscript(
   let truncated = false
 
   try {
-    for await (const raw of streamJsonl<JsonRecord>(path)) {
+    for await (const raw of transcriptRecords(prepared.source)) {
       stats.totalEvents += 1
       if (raw === null) {
         stats.parseErrors += 1
         continue
       }
-      const timestamp = extractTimestamp(raw)
-      const extracted = resolved.provider === 'claude'
-        ? extractClaudeItems(raw, timestamp)
-        : extractCodexItems(raw, timestamp)
-      for (const rawItem of extracted) {
+      const timestamp = recordTimestamp(prepared.provider, raw)
+      for (const rawItem of extractItems(prepared.provider, raw, timestamp)) {
         const item = acceptDedupedItem(previous, rawItem)
         if (!item) continue
         previous = item
@@ -464,143 +583,46 @@ async function streamSearchTranscript(
 
   return {
     ok: true,
-    provider: resolved.provider,
     matches,
     truncated,
     stats,
   }
 }
 
-async function parseTranscript(
-  path: string,
-  requestedProvider: AgentTranscriptProviderInput,
-): Promise<ParsedTranscript | AgentTranscriptErrorResult> {
-  if (requestedProvider !== 'auto' && requestedProvider !== 'claude' && requestedProvider !== 'codex') {
-    return {
-      ok: false,
-      error: 'unsupported_provider',
-      message: `Unsupported transcript provider: ${requestedProvider}`,
-    }
-  }
-  const provider = requestedProvider === 'auto'
-    ? await detectProvider(path)
-    : requestedProvider
-  if (!provider) {
-    return {
-      ok: false,
-      error: 'provider_detection_failed',
-      message: 'Could not detect whether this transcript is Claude or Codex JSONL.',
-    }
-  }
-
-  const rawItems: AgentTranscriptItem[] = []
-  const stats = emptyStats()
-  let firstTimestamp: number | undefined
-  let lastTimestamp: number | undefined
-
-  try {
-    for await (const raw of streamJsonl<JsonRecord>(path)) {
-      stats.totalEvents += 1
-      if (raw === null) {
-        stats.parseErrors += 1
-        continue
-      }
-      const timestamp = extractTimestamp(raw)
-      if (timestamp !== undefined) {
-        firstTimestamp = firstTimestamp === undefined ? timestamp : Math.min(firstTimestamp, timestamp)
-        lastTimestamp = lastTimestamp === undefined ? timestamp : Math.max(lastTimestamp, timestamp)
-      }
-      const extracted = provider === 'claude'
-        ? extractClaudeItems(raw, timestamp)
-        : extractCodexItems(raw, timestamp)
-      for (const item of extracted) {
-        rawItems.push(item)
-      }
-    }
-  } catch (err) {
-    return {
-      ok: false,
-      error: 'transcript_read_failed',
-      message: err instanceof Error ? err.message : String(err),
-    }
-  }
-
-  const items = dedupeAdjacentTranscriptItems(rawItems)
-  for (const item of items) {
-    incrementStats(stats, item)
-  }
-  markFallbackFinal(items)
-
-  return {
-    ok: true,
-    provider,
-    path,
-    items,
-    stats,
-    firstTimestamp,
-    lastTimestamp,
-  }
-}
-
 async function inspectTranscript(
-  path: string,
-  requestedProvider: AgentTranscriptProviderInput,
+  prepared: PreparedTranscript,
 ): Promise<
   | {
       ok: true
-      provider: AgentTranscriptProvider
       stats: AgentTranscriptStats
       firstTimestamp?: number
       lastTimestamp?: number
     }
   | AgentTranscriptErrorResult
 > {
-  if (requestedProvider !== 'auto' && requestedProvider !== 'claude' && requestedProvider !== 'codex') {
-    return {
-      ok: false,
-      error: 'unsupported_provider',
-      message: `Unsupported transcript provider: ${requestedProvider}`,
-    }
-  }
-  const provider = requestedProvider === 'auto'
-    ? await detectProvider(path)
-    : requestedProvider
-  if (!provider) {
-    return {
-      ok: false,
-      error: 'provider_detection_failed',
-      message: 'Could not detect whether this transcript is Claude or Codex JSONL.',
-    }
-  }
-
   const stats = emptyStats()
   let firstTimestamp: number | undefined
   let lastTimestamp: number | undefined
   let previous: AgentTranscriptItem | null = null
 
-  // WHY inspect has its own reducer instead of calling parseTranscript:
-  // inspect only needs provider, timestamps, and counts, but parseTranscript
-  // materializes every normalized item, copies them again during dedupe, and
-  // only then counts. Agent review workflows often inspect large child-agent
+  // WHY inspect has its own reducer: it only needs provider, timestamps, and
+  // counts. Agent review workflows often inspect large child-agent
   // transcripts before deciding what to read; this reducer keeps that sizing
   // step O(1) heap while preserving the same adjacent-dedupe semantics used by
   // read/search.
   try {
-    for await (const raw of streamJsonl<JsonRecord>(path)) {
+    for await (const raw of transcriptRecords(prepared.source)) {
       stats.totalEvents += 1
       if (raw === null) {
         stats.parseErrors += 1
         continue
       }
-      const timestamp = extractTimestamp(raw)
+      const timestamp = recordTimestamp(prepared.provider, raw)
       if (timestamp !== undefined) {
         firstTimestamp = firstTimestamp === undefined ? timestamp : Math.min(firstTimestamp, timestamp)
         lastTimestamp = lastTimestamp === undefined ? timestamp : Math.max(lastTimestamp, timestamp)
       }
-      const extracted = provider === 'claude'
-        ? extractClaudeItems(raw, timestamp)
-        : extractCodexItems(raw, timestamp)
-      for (const item of extracted) {
+      for (const item of extractItems(prepared.provider, raw, timestamp)) {
         if (previous && transcriptItemsEquivalent(previous, item)) {
           if (previous.kind === 'assistant_message' && item.kind === 'assistant_message') {
             previous.final = previous.final || item.final
@@ -621,14 +643,13 @@ async function inspectTranscript(
 
   return {
     ok: true,
-    provider,
     stats,
     firstTimestamp,
     lastTimestamp,
   }
 }
 
-async function detectProvider(path: string): Promise<AgentTranscriptProvider | null> {
+async function detectJsonlProvider(path: string): Promise<'claude' | 'codex' | null> {
   for await (const raw of streamJsonl<JsonRecord>(path)) {
     if (raw === null) continue
     const type = stringField(raw, 'type')
@@ -721,12 +742,152 @@ function extractCodexResponseItem(
     return [{
       kind: 'tool_read',
       timestamp,
-      tool: 'function_call_output',
+      tool: RAW_TOOL_OUTPUT,
       excerpt: output,
     }]
   }
 
   return []
+}
+
+// OpenCode records are whole messages, `{ info, parts }`, exactly as
+// OpenCode's database holds them (see TranscriptSource).
+//
+// What counts as the conversation mirrors OpenCode's own TUI and Agent Code's
+// OpenCode feed mapper:
+// - Text parts marked `synthetic` or `ignored` are OpenCode's insertions
+//   (plan-mode instructions, "Summarize the task tool output above…", MCP
+//   resource notices), not words the user or the model wrote.
+// - Reasoning parts are dropped, as the Claude and Codex extractors drop
+//   thinking blocks: this domain returns an agent's work product.
+// - An assistant message counts once OpenCode stamps `time.completed`. Until
+//   then its parts are still streaming, and a read would return half a
+//   sentence. OpenCode starts a new assistant message for every step, so
+//   only the step in flight is left out.
+function extractOpencodeItems(raw: JsonRecord, timestamp: number | undefined): AgentTranscriptItem[] {
+  const info = asRecord(raw.info)
+  const role = stringField(info, 'role')
+  const parts = recordArray(raw.parts)
+  if (role === 'user') {
+    const text = opencodeMessageText(parts)
+    return text ? [{ kind: 'user_message', timestamp, text }] : []
+  }
+  if (role !== 'assistant') return []
+  if (finiteNumber(asRecord(info?.time)?.completed) === undefined) return []
+
+  const items: AgentTranscriptItem[] = []
+  const text = opencodeMessageText(parts)
+  if (text) {
+    // `finish` is the model's stop reason. 'tool-calls' means the step ended
+    // to run tools and the turn continues; any other reason ('stop',
+    // 'length', …) ends the turn, so that step's text is the answer.
+    const finish = stringField(info, 'finish')
+    items.push({ kind: 'assistant_message', timestamp, text, final: finish !== undefined && finish !== 'tool-calls' })
+  }
+  for (const part of parts) {
+    const type = stringField(part, 'type')
+    if (type === 'tool') {
+      items.push(...extractOpencodeToolPart(part, timestamp))
+    } else if (type === 'patch') {
+      // The step's snapshot diff: every file the step changed, however it
+      // changed it. This is the only record of files written by shell
+      // commands (formatters, codegen, `sed -i`), which no tool call names.
+      const files = stringArray(part.files)
+      if (files.length > 0) {
+        items.push({ kind: 'patch', timestamp, files, summary: `${files.length} file${files.length === 1 ? '' : 's'} changed in this step` })
+      }
+    }
+  }
+  return items
+}
+
+function opencodeMessageText(parts: JsonRecord[]): string {
+  return parts
+    .filter(part => part.type === 'text' && part.synthetic !== true && part.ignored !== true)
+    .flatMap(part => stringField(part, 'text') ?? [])
+    .join('\n')
+    .trim()
+}
+
+function extractOpencodeToolPart(part: JsonRecord, messageTimestamp: number | undefined): AgentTranscriptItem[] {
+  const tool = stringField(part, 'tool') ?? 'tool'
+  const state = asRecord(part.state)
+  const input = asRecord(state?.input)
+  const metadata = asRecord(state?.metadata)
+  const time = asRecord(state?.time)
+  // WHY each tool call carries its own start time rather than its message's:
+  // one OpenCode step often runs several tools, and adjacent-dedupe treats
+  // equal text at an equal timestamp as one item. Two identical `ls` calls
+  // in one step are two calls.
+  const startedAt = finiteNumber(time?.start) ?? messageTimestamp
+  const items: AgentTranscriptItem[] = [classifyOpencodeToolCall(tool, input, metadata, startedAt)]
+  const output = stringField(state, 'output') ?? stringField(state, 'error')
+  if (output) {
+    items.push({ kind: 'tool_read', timestamp: finiteNumber(time?.end) ?? startedAt, tool: RAW_TOOL_OUTPUT, excerpt: output })
+  }
+  return items
+}
+
+// OpenCode's tool ids (vendor/in_progress/opencode/.../src/tool). Classified
+// by id instead of through `classifyToolCall`, whose substring rules were
+// written for Claude and Codex names: `todowrite` contains "write" and would
+// be reported as a file write, when all it writes is the session's todo list.
+function classifyOpencodeToolCall(
+  tool: string,
+  input: JsonRecord | undefined,
+  metadata: JsonRecord | undefined,
+  timestamp: number | undefined,
+): AgentTranscriptItem {
+  switch (tool) {
+    case 'bash': {
+      // One id for every shell OpenCode drives (bash, pwsh, cmd).
+      const item: AgentTranscriptItem = { kind: 'shell_command', timestamp, command: stringField(input, 'command') ?? '' }
+      const cwd = stringField(input, 'workdir')
+      if (cwd) item.cwd = cwd
+      const exitCode = finiteNumber(metadata?.exit)
+      if (exitCode !== undefined) item.exitCode = exitCode
+      return item
+    }
+    case 'write':
+    case 'edit': {
+      const target = stringField(input, 'filePath')
+      return { kind: 'tool_write', timestamp, tool, target, summary: target ? `${tool}: ${target}` : tool }
+    }
+    case 'apply_patch': {
+      const files = applyPatchFiles(input, metadata)
+      return { kind: 'patch', timestamp, files, summary: files.length > 0 ? `apply_patch: ${files.join(', ')}` : 'apply_patch' }
+    }
+    default: {
+      const target = opencodeToolTarget(input)
+      return { kind: 'tool_read', timestamp, tool, target, excerpt: target ? `${tool}: ${target}` : undefined }
+    }
+  }
+}
+
+// Files an apply_patch call touched. OpenCode reports them in the result's
+// metadata once the patch applied; a call that failed before that still
+// names them in its patch text.
+function applyPatchFiles(input: JsonRecord | undefined, metadata: JsonRecord | undefined): string[] {
+  const reported = recordArray(metadata?.files)
+  if (reported.length > 0) {
+    return reported.flatMap(file => [stringField(file, 'filePath'), stringField(file, 'movePath')].filter((path): path is string => path !== undefined))
+  }
+  const patchText = stringField(input, 'patchText') ?? ''
+  const files: string[] = []
+  for (const line of patchText.split(/\r?\n/)) {
+    const match = /^\*\*\* (?:Add File|Update File|Delete File|Move to): (.+)$/.exec(line.trim())
+    if (match?.[1]) files.push(match[1].trim())
+  }
+  return files
+}
+
+function opencodeToolTarget(input: JsonRecord | undefined): string | undefined {
+  if (!input) return undefined
+  for (const key of ['filePath', 'path', 'pattern', 'url', 'query', 'description', 'name']) {
+    const value = stringField(input, key)
+    if (value) return value
+  }
+  return undefined
 }
 
 function extractClaudeToolUse(
@@ -801,23 +962,8 @@ function toolTarget(input: JsonRecord | null | undefined): string | undefined {
   return undefined
 }
 
-function projectItems(
-  items: AgentTranscriptItem[],
-  projection: AgentTranscriptProjection,
-  include: AgentTranscriptIncludeOptions | undefined,
-): AgentTranscriptItem[] {
-  const baseKinds = projectionKinds(projection)
-  return items.filter(item => {
-    if (isRawToolOutputItem(item) && include?.rawToolOutputs !== true) return false
-    if (include && includeOverride(item, include) === true) return true
-    if (include && includeOverride(item, include) === false) return false
-    if (projection === 'final') return item.kind === 'assistant_message' && item.final === true
-    return baseKinds.has(item.kind)
-  })
-}
-
 function isRawToolOutputItem(item: AgentTranscriptItem): boolean {
-  return item.kind === 'tool_read' && item.tool === 'function_call_output'
+  return item.kind === 'tool_read' && item.tool === RAW_TOOL_OUTPUT
 }
 
 function projectionKinds(projection: AgentTranscriptProjection): Set<AgentTranscriptItemKind> {
@@ -984,7 +1130,7 @@ function parseMaybeJsonObject(value: string | undefined): JsonRecord | undefined
 }
 
 // Delegates to the shared "object but not array, not null" guard so the
-// predicate has one source of truth. This reader's 10 call sites rely on an
+// predicate has one source of truth. This reader's call sites rely on an
 // `undefined` (not `null`) absence value, so we adapt with `?? undefined`
 // rather than changing the shared semantics. See @shared/lib/asRecord.
 function asRecord(value: unknown): JsonRecord | undefined {
@@ -994,6 +1140,24 @@ function asRecord(value: unknown): JsonRecord | undefined {
 function stringField(record: JsonRecord | undefined, key: string): string | undefined {
   const value = record?.[key]
   return typeof value === 'string' && value.length > 0 ? value : undefined
+}
+
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+function recordArray(value: unknown): JsonRecord[] {
+  if (!Array.isArray(value)) return []
+  const records: JsonRecord[] = []
+  for (const item of value) {
+    const record = asRecord(item)
+    if (record) records.push(record)
+  }
+  return records
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && item.length > 0) : []
 }
 
 function emptyStats(): AgentTranscriptStats {
@@ -1009,33 +1173,6 @@ function emptyStats(): AgentTranscriptStats {
     testRuns: 0,
     parseErrors: 0,
   }
-}
-
-function dedupeAdjacentTranscriptItems(items: AgentTranscriptItem[]): AgentTranscriptItem[] {
-  const deduped: AgentTranscriptItem[] = []
-  for (const item of items) {
-    const previous = deduped[deduped.length - 1]
-    if (previous && transcriptItemsEquivalent(previous, item)) {
-      // WHY Codex needs this normalization step:
-      //
-      // A single visible Codex assistant/user message is commonly recorded
-      // twice: once as a high-level `event_msg` used by Agent Code's runtime
-      // feed and once as a canonical `response_item` from the provider
-      // rollout. Both are useful in raw transcript debugging, but this MCP
-      // domain is deliberately a consumption boundary for another agent's work
-      // product. Returning both makes searches look like duplicate findings
-      // and makes `contextItems` echo the same sentence before/after itself.
-      // We only collapse adjacent equivalent normalized items so distinct
-      // repeated messages still survive when the transcript actually contains
-      // separate turns.
-      if (previous.kind === 'assistant_message' && item.kind === 'assistant_message') {
-        previous.final = previous.final || item.final
-      }
-      continue
-    }
-    deduped.push({ ...item })
-  }
-  return deduped
 }
 
 function transcriptItemsEquivalent(left: AgentTranscriptItem, right: AgentTranscriptItem): boolean {
@@ -1067,16 +1204,5 @@ function incrementStats(stats: AgentTranscriptStats, item: AgentTranscriptItem):
     case 'test_run':
       stats.testRuns += 1
       return
-  }
-}
-
-function markFallbackFinal(items: AgentTranscriptItem[]): void {
-  if (items.some(item => item.kind === 'assistant_message' && item.final)) return
-  for (let index = items.length - 1; index >= 0; index -= 1) {
-    const item = items[index]
-    if (item?.kind === 'assistant_message') {
-      item.final = true
-      return
-    }
   }
 }

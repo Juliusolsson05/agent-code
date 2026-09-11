@@ -6,6 +6,7 @@ import { extname, join, normalize, sep } from 'node:path'
 import type { Duplex } from 'node:stream'
 
 import { WebSocketServer } from 'ws'
+import { parseOpencodeTranscriptFile } from 'opencode-terminal-headless'
 import { sendBoundedRemoteOutput, boundRemoteHistory } from './outputBudget.js'
 import { REMOTE_OUTPUT_MAX_BYTES, REMOTE_HISTORY_TOO_LARGE } from '@shared/remoteOutputLimits.js'
 import type { WebSocket } from 'ws'
@@ -23,7 +24,9 @@ import { parseInboundFrame } from '@main/remote/protocol/scope.js'
 import type { InboundFrame, OutboundFrame } from '@main/remote/protocol/messages.js'
 import type { FeedChannel, SessionFeedSource } from '@main/remote/SessionFeedSource.js'
 import {
+  loadInitialHistoryChunk,
   loadInitialHistoryChunkFromFile,
+  loadOlderHistoryChunk,
   loadOlderHistoryChunkFromFile,
 } from '@main/sessions/historyLoader.js'
 import type { RemoteTransport } from '@main/remote/transport/RemoteTransport.js'
@@ -685,14 +688,31 @@ export class RemoteServer extends EventEmitter {
         if (!kind || kind === 'terminal') {
           return { ok: false, error: 'not an agent session' }
         }
-        const chunk = msg.beforeMarker
-          ? await loadOlderHistoryChunkFromFile(file, {
-              kind,
-              beforeMarker: msg.beforeMarker,
-              beforeOffset: msg.beforeOffset,
-              limit: msg.limit ?? 200,
-            })
-          : await loadInitialHistoryChunkFromFile(file, msg.limit ?? 120)
+        // OpenCode's locator (`opencode://session/<id>`) names a session in
+        // OpenCode's database, not a file, so the file readers would find
+        // nothing. It does carry the provider session id, which is all the
+        // provider's own history source needs, and that source pages by the
+        // same message-id marker the phone already echoes back.
+        const opencodeSessionId = parseOpencodeTranscriptFile(file)
+        const cwd = this.deps.manager.getSpawnCwd(msg.sessionId) ?? ''
+        const chunk = opencodeSessionId
+          ? msg.beforeMarker
+            ? await loadOlderHistoryChunk({
+                kind,
+                cwd,
+                providerSessionId: opencodeSessionId,
+                beforeMarker: msg.beforeMarker,
+                limit: msg.limit ?? 200,
+              })
+            : await loadInitialHistoryChunk({ kind, cwd, providerSessionId: opencodeSessionId, limit: msg.limit ?? 120 })
+          : msg.beforeMarker
+            ? await loadOlderHistoryChunkFromFile(file, {
+                kind,
+                beforeMarker: msg.beforeMarker,
+                beforeOffset: msg.beforeOffset,
+                limit: msg.limit ?? 200,
+              })
+            : await loadInitialHistoryChunkFromFile(file, msg.limit ?? 120)
         // Raw records, same shape as the live jsonl frames' `entry` halves,
         // so the phone runs ONE mapper path for backfill and live. `file`
         // rides along so the client can detect a transcript ROLL: after

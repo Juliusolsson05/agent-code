@@ -11,6 +11,7 @@ import {
   type DurableFixture,
 } from 'opencode-terminal-headless/testing/index'
 
+import { createOpencodeDatabase, type OpencodeDatabase } from './opencodeDatabase.js'
 import { createOpencodeHistorySource, type OpencodeHistorySource } from './opencodeHistory.js'
 
 // History for parked and reloaded OpenCode panes, read from a real SQLite file
@@ -19,14 +20,14 @@ import { createOpencodeHistorySource, type OpencodeHistorySource } from './openc
 // OpenCode itself would serve — never from the reader.
 
 let dir: string
-let sources: OpencodeHistorySource[] = []
+let databases: OpencodeDatabase[] = []
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'oc-history-'))
-  sources = []
+  databases = []
 })
 afterEach(() => {
-  for (const source of sources) source.release()
+  for (const database of databases) database.release()
   rmSync(dir, { recursive: true, force: true })
 })
 
@@ -39,9 +40,9 @@ function fixture(fragment: string): DurableFixture {
 function sourceFor(fixtures: DurableFixture[]): OpencodeHistorySource {
   const file = join(dir, 'opencode.db')
   createProjectionDatabase(fixtures, file)
-  const source = createOpencodeHistorySource({ resolveDbPath: async () => file })
-  sources.push(source)
-  return source
+  const database = createOpencodeDatabase({ resolveDbPath: async () => file })
+  databases.push(database)
+  return createOpencodeHistorySource(database)
 }
 
 function projectionOrder(f: DurableFixture): string[] {
@@ -102,14 +103,15 @@ describe('OpenCode history from the durable store', () => {
     createProjectionDatabase(session, file)
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     let attempts = 0
-    const source = createOpencodeHistorySource({
+    const database = createOpencodeDatabase({
       resolveDbPath: async () => {
         attempts += 1
         if (attempts === 1) throw new Error('opencode is not installed')
         return file
       },
     })
-    sources.push(source)
+    databases.push(database)
+    const source = createOpencodeHistorySource(database)
     await expect(source.loadHistoryChunk({ cwd: '/any', providerSessionId: session.meta.sessionID, limit: 5 })).resolves.toEqual({ entries: [], hasMore: false, totalEntries: 0 })
     const second = await source.loadHistoryChunk({ cwd: '/any', providerSessionId: session.meta.sessionID, limit: 5 })
     expect(second.entries.length).toBeGreaterThan(0)

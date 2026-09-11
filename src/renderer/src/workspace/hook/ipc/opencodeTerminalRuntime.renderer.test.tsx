@@ -27,6 +27,7 @@ import {
   type ReplayStep,
 } from 'opencode-terminal-headless/testing/index'
 
+import { createOpencodeDatabase } from '@providers/opencode/runtime/opencodeDatabase'
 import { createOpencodeHistorySource } from '@providers/opencode/runtime/opencodeHistory'
 import { OpencodeTerminalSession } from '@providers/opencode/runtime/opencodeTerminalSession'
 import type { ConditionCustomAction } from '@shared/types/providerConditions'
@@ -325,8 +326,9 @@ const seen = (entries: readonly Entry[]): Seen[] =>
   entries.map(entry => ({ uuid: (entry as { uuid?: string }).uuid, type: entry.type, text: entryTextContent(entry) }))
 
 function serveHistoryFrom(dbPath: string) {
-  const source = createOpencodeHistorySource({ resolveDbPath: async () => dbPath })
-  cleanups.push(() => source.release())
+  const database = createOpencodeDatabase({ resolveDbPath: async () => dbPath })
+  cleanups.push(() => database.release())
+  const source = createOpencodeHistorySource(database)
   const loadInitialHistory = vi.fn((request: { cwd: string; providerSessionId: string; limit: number }) =>
     source.loadHistoryChunk({ cwd: request.cwd, providerSessionId: request.providerSessionId, limit: request.limit }))
   Object.defineProperty(window, 'api', {

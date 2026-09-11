@@ -5,6 +5,8 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 
+import { opencodeTranscriptFile } from 'opencode-terminal-headless'
+
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
 import type {
   RewindPrompt,
@@ -196,7 +198,7 @@ const opencodeAdapter: HostTranscriptAdapter = {
     }
     const binary = getToolPath('opencode', 'opencode')
     const sessionId = await importOpencodeSession({ binary, cwd }, values[0])
-    return `opencode://session/${sessionId}`
+    return opencodeTranscriptFile(sessionId)
   },
   sessionId(values) {
     if (values.length !== 1 || !isRecord(values[0])) {
