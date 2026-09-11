@@ -66,14 +66,21 @@ describe('agent title workspace metadata', () => {
     })
   })
 
-  it('preserves identity for unchanged, missing, and terminal targets', () => {
+  it('preserves identity for unchanged and missing targets', () => {
     const titled = stateWithSessions({
       agent: { cwd: '/work/project', kind: 'codex', title: 'Review' },
     })
     expect(setAgentTitleInWorkspace(titled, 'agent', 'Review')).toBe(titled)
     expect(setAgentTitleInWorkspace(titled, 'missing', 'Nope')).toBe(titled)
+  })
 
+  it('titles a plain terminal with the same normalization as an agent (#865)', () => {
+    // WHY terminals are titled now: a title is session metadata the user
+    // authors to scan a busy grid, and a shell running a dev server needs a
+    // label as much as an agent does. #660 scoped shells out; #865 reverses it.
     const terminal = stateWithSessions({ shell: { cwd: '/work/project', kind: 'terminal' } })
-    expect(setAgentTitleInWorkspace(terminal, 'shell', 'Nope')).toBe(terminal)
+    const titled = setAgentTitleInWorkspace(terminal, 'shell', '  dev server  ')
+    expect(titled.sessions.shell?.title).toBe('dev server')
+    expect(buildVisibleDispatchRows(titled)[0]).toMatchObject({ agentTitle: 'dev server' })
   })
 })

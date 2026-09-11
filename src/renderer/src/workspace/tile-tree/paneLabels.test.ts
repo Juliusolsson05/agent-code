@@ -69,9 +69,19 @@ describe('resolveAgentPaneLabel', () => {
     })
   })
 
-  it('rejects terminals, incomplete labels, zero indexes, and stale coordinates', () => {
+  it('resolves a terminal by its own label (#865)', () => {
+    // #546 made labels agent-only; a shell kept its coordinate but could not be
+    // jumped to, while Dispatch ⌘N and ⌥↑/↓ already selected it. One rule now.
+    expect(resolveAgentPaneLabel(makeState(), 'A1')).toMatchObject({
+      label: 'A1',
+      sessionId: 'terminal',
+      kind: 'terminal',
+      title: 'alpha',
+    })
+  })
+
+  it('rejects incomplete labels, zero indexes, and stale coordinates', () => {
     const state = makeState()
-    expect(resolveAgentPaneLabel(state, 'A1')).toBeNull()
     expect(resolveAgentPaneLabel(state, 'A')).toBeNull()
     expect(resolveAgentPaneLabel(state, '2')).toBeNull()
     expect(resolveAgentPaneLabel(state, 'A0')).toBeNull()
@@ -82,11 +92,10 @@ describe('resolveAgentPaneLabel', () => {
     const state = makeState()
     state.dispatchMode = { scope: 'global', focusedSessionId: 'agent-a' }
 
-    const agentRows = buildVisibleDispatchRows(state).filter(
-      row => row.kind !== 'terminal',
-    )
-    expect(agentRows.map(row => row.label)).toEqual(['A2', 'A3', 'B4'])
-    for (const row of agentRows) {
+    // Every visible row resolves to itself, terminals included (#865).
+    const rows = buildVisibleDispatchRows(state)
+    expect(rows.some(row => row.kind === 'terminal')).toBe(true)
+    for (const row of rows) {
       expect(resolveAgentPaneLabel(state, row.label)?.sessionId).toBe(row.sessionId)
     }
   })

@@ -378,6 +378,22 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
       conditions: current?.conditions,
       processError: current?.processError,
       transcriptError: current?.transcriptError,
+      // Foreground monitor state (#865): terminalForeground.cwd lets a shell
+      // row's title follow `cd` the way an agent row follows its latest
+      // prompt; activityStatus is the running command shown in the subtitle
+      // ("shell running · npm").
+      terminalForeground: current?.terminalForeground,
+      // WHY gated on row.kind === 'terminal' (I3, D3 deviation): Codex's
+      // activityStatus string ticks every second ("working… 12s") while a
+      // command is running, and this selector runs useShallow — a shallow
+      // key/value diff, not a deep skip — so including the raw string for
+      // EVERY row made every live Codex/Claude row re-render on that tick
+      // even though the dispatch list never paints their activityStatus (it
+      // only reads it for the 'shell running · …' subtitle on terminal
+      // rows). Selecting undefined for non-terminal rows keeps the shallow
+      // comparison stable across those per-second updates while still
+      // giving terminal rows the live value they actually render.
+      activityStatus: row.kind === 'terminal' ? current?.activityStatus : undefined,
     }
   }))
   const onSelect = useCallback(() => {
@@ -387,7 +403,7 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
   const activity = dispatchActivity(runtime)
   const activityClasses = dispatchActivityClasses(activity, active)
   const subtitle = dispatchSubtitle(runtime, row.kind)
-  const title = dispatchRowTitle(row, runtime.entries)
+  const title = dispatchRowTitle(row, runtime.entries, runtime.terminalForeground?.cwd)
   const agentName = useAgentName(row.sessionId)
   // The hover tooltip joins name and title exactly the way AgentTitleHeader
   // does (' — ', name first, empty parts dropped). WHY it must match: the chip
@@ -509,6 +525,7 @@ export function dispatchSubtitle(runtime: {
   unreadSince?: number | null
   processStatus?: string
   transcriptError?: string | null
+  activityStatus?: string | null
 }, kind?: SessionKind): string {
   // WHY terminals get their own label path:
   // Agent subtitles describe model turn state (`thinking`, `responding`,
@@ -519,7 +536,11 @@ export function dispatchSubtitle(runtime: {
   if (kind === 'terminal') {
     if (runtime.sessionStatus === undefined) return 'shell starting'
     if (isSessionExited(runtime)) return 'shell exited'
-    if (runtime.sessionStatus === 'running') return 'shell running'
+    // The foreground command, e.g. `shell running · npm` (#865). Before the
+    // monitor this branch could never be reached: shells were never running.
+    if (runtime.sessionStatus === 'running') {
+      return runtime.activityStatus ? `shell running · ${runtime.activityStatus}` : 'shell running'
+    }
     return 'shell idle'
   }
   // A TUI session mismatch must remain visible even while the bound
@@ -561,16 +582,20 @@ export type DispatchUnreadBadgeModel = {
  * reads, keeps a test of "the user sees NEW after answering" honest: it
  * asserts this function, not the raw field.
  *
- * Plain shell terminals never badge: they have no turn whose output could be
- * unread. An OpenCode Terminal pane is not `kind === 'terminal'` (its kind is
- * `opencode`, its runtime `terminal`), so it badges like every agent.
+ * Shell terminals badge too, since #865: they used to be excluded because a
+ * shell had no "finished" signal to mark output unread, but the foreground
+ * monitor now provides one — and that same exclusion was also swallowing a
+ * failed wake's ERROR. `kind` is therefore no longer a gate here; it stays in
+ * the signature because the caller passes the row's kind and a future
+ * kind-specific rule belongs in this one place rather than at the call site.
+ * (An OpenCode Terminal pane was never `kind === 'terminal'` anyway: its kind
+ * is `opencode` and only its runtime is terminal.)
  */
 export function dispatchUnreadBadge(runtime: {
   unreadKind?: 'output' | 'attention' | null
   conditions?: ProviderConditionSnapshot | null
   processError?: string | null
-}, kind?: SessionKind): DispatchUnreadBadgeModel | null {
-  if (kind === 'terminal') return null
+}, _kind?: SessionKind): DispatchUnreadBadgeModel | null {
   const attentionLabel = dispatchAttentionLabel(runtime)
   if (attentionLabel) return { kind: 'attention', text: attentionLabel }
   if (runtime.unreadKind === 'attention' || runtime.unreadKind === 'output') {

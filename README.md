@@ -90,6 +90,11 @@ a running session can move mid-task among Claude Code, Codex, and OpenCode.
     <img src="docs/screenshots/orchestration.png" alt="Agent Code Dispatch sidebar with orchestration MCP tool calls (send_prompt, wait_agents, read_agent, close_run) running in a live session" />
   </p>
 
+- **TLDR peek** — enable **TLDR MCP** for an agent, then hold **Cmd+L** to
+  see each visible agent’s latest short status centered over its darkened pane.
+  Release to return. The **TLDR** palette command also opens the preview;
+  Escape dismisses it. Reporting is off by default, with an opt-in default for
+  new agents in Settings. The editor keeps Cmd+L Select Line.
 - **Prompt and transcript tools** — search, rewind, duplicate, resume-command
   copy, prompt templates. Reader Mode gives a paginated, distraction-free view
   of long sessions for reviewing what an agent actually did.

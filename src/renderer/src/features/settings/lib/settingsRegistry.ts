@@ -475,7 +475,7 @@ export function getSettingsRegistry(): SettingDefinition[] {
       id: 'agent-names',
       category: 'workspace',
       title: 'Agent names',
-      description: 'Show a stable spoken name such as Apollo beside agent titles and in the Dispatch index, and expose the same name to external operator search. Names are separate from titles, are never reused after an agent closes, and are retained while this is off so re-enabling restores the same names. Past 100 names, explicit numeric suffixes such as "Apollo 2" keep every address distinct. Terminals are never named.',
+      description: 'Show a stable spoken name such as Apollo beside agent titles and in the Dispatch index, and expose the same name to external operator search. Names are separate from titles, are never reused after an agent closes, and are retained while this is off so re-enabling restores the same names. Past 100 names, explicit numeric suffixes such as "Apollo 2" keep every address distinct. Terminals are named too, from the same list.',
       keywords: ['voice', 'spoken', 'name', 'names', 'apollo', 'agent', 'mcp', 'operator', 'header', 'dispatch'],
       // No explicit `metadata`. DEFAULT_SETTING_METADATA is already exactly
       // right here — app-scoped, stored in renderer Settings, effective at
@@ -610,6 +610,19 @@ export function getSettingsRegistry(): SettingDefinition[] {
       ],
       metadata: { scope: 'app', apply: 'new-session', storage: 'external-files' },
       control: { type: 'agent-code-installed-skills' },
+    },
+    {
+      id: 'default-tldr-mcp',
+      category: 'agents',
+      title: 'TLDR MCP for New Agents',
+      description:
+        'Start new agents with TLDR reporting and its managed skill. Off by default; existing agents use their own TLDR MCP command. Hold the TLDR shortcut to glance at saved summaries.',
+      keywords: ['mcp', 'tldr', 'default', 'new agents', 'claude', 'codex'],
+      control: {
+        type: 'toggle',
+        getValue: settings => settings.defaultBuiltInMcpDomains.includes('tldr'),
+        onToggle: (ctx, value) => updateDefaultBuiltInMcpDomain(ctx, 'tldr', value),
+      },
     },
     {
       id: 'default-orchestration-mcp',

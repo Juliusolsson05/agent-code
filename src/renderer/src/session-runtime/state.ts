@@ -41,7 +41,13 @@ import type {
   SessionLifecycleCorrelationIds,
   SessionLifecycleData,
 } from '@shared/lifecycle/events'
+import type { TerminalForegroundState } from '@shared/types/terminalForeground'
 export type { SubAgentState, SubAgentToolCall } from '@preload/api/types'
+
+/** One classified foreground observation for a plain terminal (#865), plus
+ *  when it last changed. `changedAt` doubles as the terminal's "last active"
+ *  time: shells have no transcript timestamps to age them by. */
+export type TerminalForegroundRuntime = TerminalForegroundState & { changedAt: number }
 
 export type PickerItem = {
   id: string
@@ -112,6 +118,9 @@ export type PendingRewindUndo = {
   provider: AgentProviderKind
   cwd: string
   previousProviderSessionId: string
+  // Undo returns to the original transcript, whose summary must be restored;
+  // the truncated branch deliberately has a different, initially empty TLDR.
+  previousTldrIdentity?: string
   rewoundProviderSessionId: string
   rewoundPromptText: string
   rewoundPromptTimestamp: string | null
@@ -298,7 +307,9 @@ export type SemanticLogEntry = {
   raw?: Record<string, unknown>
 }
 
-export type SemanticErrorEntry = {
+export type SemanticErrorEntry = import('@shared/types/usageLimitNotice').ProviderErrorMetadata & {
+  observedAtMs?: number
+  sessionRunId?: string
   ts: number
   kind: 'api_error' | 'stream_error'
   message: string
@@ -373,7 +384,6 @@ export type SessionRuntime = {
   screenMarkdown: string
   recentScreen: string
   recentScreenMarkdown: string
-  streamingBaseline: string | null
   entries: Entry[]
   /** Total count of JSONL records this session has produced — the
    *  denominator the ScrollIndicator above the composer shows.
@@ -464,6 +474,11 @@ export type SessionRuntime = {
    *  only available while it still means "undo my accidental rewind." */
   pendingRewindUndo: PendingRewindUndo | null
   activityStatus: string | null
+  /** Plain terminals only (#865): what owns the shell's foreground right now.
+   *  Null for agents and for terminals main has not sampled yet. Written only
+   *  by applyTerminalForeground, which also keeps processActive/activityStatus
+   *  in step so every status consumer lights for shells unchanged. */
+  terminalForeground: TerminalForegroundRuntime | null
   /** Unread marker for list surfaces such as Dispatch Mode.
    *
    *  WHY this lives on the runtime instead of being derived from
@@ -667,7 +682,7 @@ export type SessionRuntime = {
    *  "Thinking · 3s" vs "Calling Read · 8s" within the same turn). */
   phaseChangedAt: number | null
   /** Wall-clock timestamp the user hit submit. Set by the optimistic-
-   *  submit path (setStreamingBaseline) so 'submitting' has a start
+   *  submit path (beginOptimisticSubmit) so 'submitting' has a start
    *  time before the adapter's first 'requesting' event arrives. */
   submittedAt: number | null
   /** Pane-focused feed/render debug stream. This is not raw transport
@@ -814,7 +829,6 @@ export function emptyRuntime(): SessionRuntime {
     screenMarkdown: '',
     recentScreen: '',
     recentScreenMarkdown: '',
-    streamingBaseline: null,
     entries: [],
     totalEntries: 0,
     awaitingAssistant: false,
@@ -833,6 +847,7 @@ export function emptyRuntime(): SessionRuntime {
     providerSwitch: null,
     pendingRewindUndo: null,
     activityStatus: null,
+    terminalForeground: null,
     unreadSince: null,
     unreadKind: null,
     paneToast: null,

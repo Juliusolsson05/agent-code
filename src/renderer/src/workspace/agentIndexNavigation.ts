@@ -1,5 +1,3 @@
-import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
-
 import { buildGridRelatedAgentTabs, selectedGridRelatedSessionId } from '@renderer/workspace/gridRelatedAgents'
 import { withLaneSession } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import {
@@ -56,9 +54,12 @@ export function navigateToAgentIndexTarget(
   target: AgentPaneLabelTarget,
   intent: AgentIndexNavigationIntent = 'reuse-existing-view',
 ): AgentIndexNavigationResult | null {
+  // Any session kind is a valid navigation target (#865): this guard used to
+  // also require an AgentProviderKind, but Dispatch ⌘N and ⌥↑/↓ already moved
+  // focus onto terminals, so the label/index path only needs to confirm the
+  // session still exists — the same check every branch below already assumes.
   const meta = state.sessions[target.sessionId]
-  const kind = meta?.kind ?? DEFAULT_PROVIDER
-  if (!meta || !isAgentProviderKind(kind)) return null
+  if (!meta) return null
 
   const requiresWake = state.detachedSessions[target.sessionId] !== undefined
   const dispatchMode = state.dispatchMode

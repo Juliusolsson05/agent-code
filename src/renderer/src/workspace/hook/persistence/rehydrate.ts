@@ -1,3 +1,4 @@
+import { tldrIdentityForSession } from '@renderer/features/tldr/identity'
 import {
   DEFAULT_PROVIDER,
   isAgentProviderKind,
@@ -722,6 +723,7 @@ export async function rehydrateWorkspace(
             refs.latestRuntimesRef.current[oldId]?.sessionRunId ?? null,
           )
           const recovery = await recoverSessionBeforeDeadline(recoveryApi, {
+            tldrIdentity: tldrIdentityForSession(oldId, meta),
             sessionId: oldId,
             kind,
             providerRuntime: meta.providerRuntime,
@@ -789,6 +791,7 @@ export async function rehydrateWorkspace(
               : undefined
           const recoveredMeta: SessionMeta = {
             ...restoredMeta,
+            ...(recovery.snapshot.tldrIdentity ? { tldrIdentity: recovery.snapshot.tldrIdentity } : {}),
             ...(recoveredBuiltInMcpDomains !== undefined
               ? { builtInMcpDomains: recoveredBuiltInMcpDomains }
               : {}),

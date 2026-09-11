@@ -152,7 +152,14 @@ async function resolveHistoryTranscriptPath(
   // old history-loader-local walker returned the first lexical match; the shared
   // resolver picks newest by mtime, which is the correct tie-break when the same
   // Codex thread id appears in more than one rollout file.
-  return resolveProviderTranscriptPath(params)
+  const file = await resolveProviderTranscriptPath(params)
+  // Bulk locators must be able to report individual missing files, but a
+  // requested Claude history must not masquerade as a healthy empty replay.
+  // Keep this strict read policy at the caller, not in the shared locator.
+  if (!file && params.kind === 'claude') {
+    throw new Error(`Claude transcript not found for session ${params.providerSessionId}`)
+  }
+  return file
 }
 
 /**

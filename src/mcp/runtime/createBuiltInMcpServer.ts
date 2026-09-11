@@ -1,3 +1,4 @@
+import { TLDR_INSTRUCTIONS, TLDR_MAX_CHARACTERS } from '@shared/types/tldr.js'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 
@@ -51,6 +52,26 @@ export function createBuiltInMcpServer(
       ...(builtInInstructions(scope) ? { instructions: builtInInstructions(scope) } : {}),
     },
   )
+
+  if (scope.domains.includes('tldr')) {
+    server.registerTool('tldr_update', {
+      title: 'Update TLDR',
+      description: 'Replace your own current TLDR with one or two short sentences: required user decision first, otherwise verified outcome and next step. Update after substantial work/discussion; skip minor unchanged clarifications.',
+      inputSchema: { text: z.string().min(1).max(TLDR_MAX_CHARACTERS * 2) },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    }, async ({ text }) => {
+      try {
+        if (!dependencies.tldrStore) throw new Error('TLDR is unavailable.')
+        const record = await dependencies.tldrStore.update(
+          scope.tldrIdentity ?? scope.sessionId, text,
+          dependencies.isTldrWriteAuthorized ?? (() => false),
+        )
+        return toolText({ ok: true, ...record })
+      } catch (error) {
+        return { ...toolText({ ok: false, message: error instanceof Error ? error.message : 'TLDR update failed.' }), isError: true }
+      }
+    })
+  }
 
   if (scope.domains.includes('ping')) {
     server.registerTool(
@@ -128,6 +149,7 @@ export function createBuiltInMcpServer(
 
 function builtInInstructions(scope: McpSessionScope): string {
   return [
+    ...(scope.domains.includes('tldr') ? [TLDR_INSTRUCTIONS] : []),
     ...(scope.domains.includes('workflows') ? [WORKFLOW_MCP_INSTRUCTIONS] : []),
     ...(scope.domains.includes('agent_management') ? [AGENT_MANAGEMENT_MCP_INSTRUCTIONS] : []),
   ].join('\n\n')

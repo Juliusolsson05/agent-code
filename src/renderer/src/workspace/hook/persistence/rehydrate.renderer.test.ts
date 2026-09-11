@@ -107,6 +107,24 @@ function makeHarness() {
 }
 
 describe('rehydrateWorkspace backend reconciliation', () => {
+  it('adopts the live backend’s TLDR identity when persisted renderer metadata is stale', async () => {
+    const persisted = makePersisted()
+    persisted.sessions['stable-session']!.tldrIdentity = 'stale-renderer-summary'
+    persisted.sessions['stable-session']!.builtInMcpDomains = ['tldr']
+    const harness = makeHarness()
+    Object.defineProperty(window, 'api', { configurable: true, value: {
+      defaultCwd: vi.fn(),
+      recoverSession: vi.fn(async () => ({
+        ok: true, disposition: 'adopted', snapshot: {
+          sessionId: 'stable-session', kind: 'claude', cwd: '/tmp/project', lifecycle: 'live',
+          input: { ready: true, revision: 1 }, builtInMcpDomains: ['tldr'], tldrIdentity: 'main-summary',
+        },
+      })),
+    } })
+    await rehydrateWorkspace(persisted, harness.refs, harness.setState, harness.setRuntimes, harness.setTileTabs, vi.fn())
+    expect(harness.state().sessions['stable-session']?.tldrIdentity).toBe('main-summary')
+  })
+
   it('recovers OpenCode Terminal with its runtime selector and durable provider id intact', async () => {
     const persisted = makePersisted()
     persisted.sessions['stable-session'] = {
@@ -114,6 +132,7 @@ describe('rehydrateWorkspace backend reconciliation', () => {
       kind: 'opencode',
       providerRuntime: 'terminal',
       providerSessionId: 'ses_durable_terminal',
+      tldrIdentity: 'summary-stable',
       providerSessionIdSource: 'runtime-start',
       builtInMcpDomains: ['orchestration'],
     }
@@ -171,11 +190,13 @@ describe('rehydrateWorkspace backend reconciliation', () => {
       kind: 'opencode',
       providerRuntime: 'terminal',
       resumeSessionId: 'ses_durable_terminal',
+      tldrIdentity: 'summary-stable',
     }))
     expect(harness.state().sessions['stable-session']).toMatchObject({
       kind: 'opencode',
       providerRuntime: 'terminal',
       providerSessionId: 'ses_durable_terminal',
+      tldrIdentity: 'summary-stable',
     })
     // The conversation reloads into the runtime like any agent's: Copy Last
     // Response, View Prompts, status rows and MCP reads all read `entries`.

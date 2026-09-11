@@ -1,3 +1,4 @@
+import { tldrIdentityForReplacement, tldrIdentityForSession } from '@renderer/features/tldr/identity'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import {
   DEFAULT_PROVIDER,
@@ -85,6 +86,7 @@ export type SessionActions = {
       providerRuntime?: AgentProviderRuntime
       dangerousMode?: boolean
       recoverTmuxName?: string
+      tldrIdentity?: string
       builtInMcpDomains?: BuiltInMcpDomain[]
     },
   ) => Promise<SessionId>
@@ -101,6 +103,8 @@ export type SessionActions = {
       kind?: SessionKind
       providerRuntime?: AgentProviderRuntime
       builtInMcpDomains?: BuiltInMcpDomain[]
+      preserveTldr?: boolean
+      restoreTldrIdentity?: string
       targetSessionId?: SessionId
     },
   ) => Promise<SessionId | undefined>
@@ -346,6 +350,7 @@ export function useSessionActions(
         providerRuntime?: AgentProviderRuntime
         dangerousMode?: boolean
         recoverTmuxName?: string
+        tldrIdentity?: string
         builtInMcpDomains?: BuiltInMcpDomain[]
       },
     ): Promise<SessionId> => {
@@ -366,6 +371,8 @@ export function useSessionActions(
               defaultDomains: refs.defaultBuiltInMcpDomainsRef.current,
             })
           : undefined
+      const tldrIdentity = kind === 'terminal' ? undefined : opts?.tldrIdentity
+        ?? (builtInMcpDomains?.includes('tldr') ? crypto.randomUUID() : undefined)
       let sessionId: SessionId
       let tmuxName: string | undefined
       let startedProviderSessionId: string | undefined
@@ -380,6 +387,7 @@ export function useSessionActions(
       try {
         try {
           const result = await window.api.spawnSession({
+            tldrIdentity,
             kind,
             providerRuntime: opts?.providerRuntime,
             cwd,
@@ -448,6 +456,7 @@ export function useSessionActions(
         // restored workspace and can tell a new agent from a recovered one.
         const meta: SessionMeta = {
           ...(previousMeta ?? {}),
+          tldrIdentity,
           cwd,
           kind,
           // Write the field even when absent so a pathological reused id cannot
@@ -712,6 +721,7 @@ export function useSessionActions(
             hasResumeId: Boolean(resumeSessionId),
           })
           const recovery = await window.api.recoverSession({
+            tldrIdentity: tldrIdentityForSession(sessionId, meta),
             sessionId,
             kind,
             providerRuntime: meta.providerRuntime,
@@ -979,6 +989,7 @@ export function useSessionActions(
             : undefined
         const recoveredMeta: SessionMeta = {
           ...restoredMeta,
+          ...(recoverySnapshot?.tldrIdentity ? { tldrIdentity: recoverySnapshot.tldrIdentity } : {}),
           providerRuntime: recoverySnapshot?.providerRuntime ?? meta.providerRuntime,
           ...(recoveredBuiltInMcpDomains !== undefined
             ? { builtInMcpDomains: recoveredBuiltInMcpDomains }
@@ -1145,11 +1156,13 @@ export function useSessionActions(
         kind?: SessionKind
         providerRuntime?: AgentProviderRuntime
         builtInMcpDomains?: BuiltInMcpDomain[]
+        preserveTldr?: boolean
+        restoreTldrIdentity?: string
         targetSessionId?: SessionId
       },
     ): Promise<SessionId | undefined> => {
       const snapshot = refs.stateRef.current
-      const { targetSessionId: _targetSessionId, ...spawnOpts } = opts ?? {}
+      const { targetSessionId: _targetSessionId, preserveTldr, restoreTldrIdentity, ...spawnOpts } = opts ?? {}
       // WHY this reads Dispatch focus before tab focus:
       //
       // `replaceSession` powers resume, reload, provider-switch, and rewind.
@@ -1206,6 +1219,13 @@ export function useSessionActions(
       if (!canCommit(snapshot)) return
       const draftFallback = refs.latestRuntimesRef.current[oldId]
       const newId = await spawn(cwd, {
+        // Undo Rewind verifies its original/rewound transcript pair before
+        // supplying the saved original identity. Ordinary resume/reload must
+        // still derive continuity from the current conversation; preserving
+        // the rewound branch's identity would lose the original summary.
+        tldrIdentity: restoreTldrIdentity ?? tldrIdentityForReplacement(oldId, oldMeta, {
+          kind: nextKind, resumeSessionId: spawnOpts.resumeSessionId, preserveTldr,
+        }),
         ...spawnOpts,
         providerRuntime,
         // WHY main needs the local predecessor even though the renderer kills
@@ -1464,6 +1484,7 @@ export function useSessionActions(
           const resumeSessionId = resumableProviderSessionId(meta)
           const restoredMeta = withoutProvisionalProviderSession(meta)
           const { sessionId: newId } = await window.api.spawnSession({
+            tldrIdentity: tldrIdentityForSession(oldId, meta),
             kind,
             providerRuntime: meta.providerRuntime,
             cwd: meta.cwd,
@@ -1483,6 +1504,7 @@ export function useSessionActions(
             // this task's test pins the helper's field-preservation, which is
             // the only thing this spread relies on.
             ...restoredMeta,
+            tldrIdentity: tldrIdentityForSession(oldId, meta),
             ...(builtInMcpDomains !== undefined ? { builtInMcpDomains } : {}),
           }
         } catch {

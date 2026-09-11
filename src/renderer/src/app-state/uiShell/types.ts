@@ -83,7 +83,7 @@ export type UiShellState = {
   pinAgentsOpen: boolean
   settingsPageOpen: boolean
   /**
-   * The session captured when Set Agent Title is invoked.
+   * The session captured when Set Title is invoked.
    *
    * WHY the id is stored instead of re-reading focus at Save time: Dispatch
    * focus can move while a modal is open (especially across Tiled Dispatch
@@ -173,6 +173,24 @@ export type UiShellState = {
    * clicked group is a correct and always-present source.
    */
   newAgentProjectIntent: { tabId: TabId; anchorSessionId: SessionId } | null
+  /**
+   * The New Agent In… dialog (#852) is on screen.
+   *
+   * WHY a plain boolean when `newAgentProjectIntent` above and
+   * `dispatchRowProjectPickerRow` below capture a target up front: those are
+   * opened FROM a specific place (a project header, a row header) whose
+   * identity the later commit must not re-derive. This dialog is opened from a
+   * command and its whole job is to ASK for the project, so there is nothing
+   * to capture. The lane is deliberately not captured either — like New
+   * Agent…, the spawn fills whichever lane is focused when it commits, and the
+   * modal dialog owns app input in between, so the user cannot move lane focus
+   * under it.
+   *
+   * A separate flag rather than another `newAgentPlacementOpen` intent because
+   * it is a separate surface (NewAgentInDialog), not a mode of the placement
+   * overlay — see that component's header for why.
+   */
+  newAgentInOpen: boolean
   gitBarOpen: boolean
   worktreesBarOpen: boolean
   debugPanelOpen: boolean
@@ -213,10 +231,10 @@ export type UiShellState = {
    *  WHY there is no "which panes are visible" query behind this: there is no
    *  canonical visible-session selector in this codebase (`resolveTabSessions`
    *  answers membership, not visibility, and says so in its own header). The OR
-   *  is resolved inside `TileLeaf` and `AgentTerminalLeaf`, each masked by
+   *  is resolved inside `TileLeaf`, `AgentTerminalLeaf`, AND `TerminalLeaf`
+   *  (#865 gave plain shells parity with agent tail-follow), each masked by
    *  subtree visibility. Grid tabs and Dispatch lanes therefore follow without
-   *  a second visibility enumeration. Plain shell TerminalLeaf never reads it.
-   *  Global Editor fullscreen and Reader/Spotlight/Settings retain hidden
+   *  a second visibility enumeration. Global Editor fullscreen and Reader/Spotlight/Settings retain hidden
    *  workspace subtrees; their composed mask suspends follow until re-reveal.
    *  The full rationale lives at the OR site in TileLeaf.tsx. See
    *  docs/superpowers/plans/2026-07-20-tail-all.md before replacing this with an

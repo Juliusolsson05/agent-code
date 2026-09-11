@@ -1,6 +1,7 @@
 import { extractLatestUserPrompt } from '@renderer/features/workspace/lib/latestUserPrompts'
 import type { Entry } from '@shared/types/transcript'
 import type { DispatchAgentRow } from './dispatchSelectors'
+import { cwdBasename } from '@renderer/workspace/sessionDisplayTitle'
 
 // Shared presentation policy for the visible index and external observation.
 // Control must not reimplement the title fallback or import the index UI.
@@ -38,10 +39,14 @@ export function cachedLatestPromptTitle(
 export function dispatchRowTitle(
   row: Pick<DispatchAgentRow, 'agentTitle' | 'kind' | 'title'>,
   entries?: Entry[],
+  // Live terminal cwd from main's foreground monitor (#865). Lets a shell row
+  // follow `cd` the way an agent row follows its latest prompt.
+  liveCwd?: string | null,
 ): string {
   if (row.agentTitle) return row.agentTitle
   if (row.kind !== 'terminal' && entries) {
     return cachedLatestPromptTitle(entries, row.kind) ?? row.title
   }
+  if (row.kind === 'terminal' && liveCwd) return cwdBasename(liveCwd) || row.title
   return row.title
 }

@@ -10,6 +10,14 @@ type Props = {
   template: PromptTemplate
   values: PromptTemplateVariableValueMap
   insertMode: PromptTemplateInsertMode
+  /**
+   * Where the filled template will actually land, per `textDeliverySurface`
+   * (#865). A PTY target has no draft to replace or append to — the text is
+   * pasted at the terminal cursor — so offering the replace/append radios
+   * there described a choice that does not exist and, worse, claimed
+   * "replace" would replace something when it only pastes.
+   */
+  deliverySurface: 'composer' | 'pty'
   onValueChange: (name: string, value: string) => void
   onInsertModeChange: (mode: PromptTemplateInsertMode) => void
   onCancel: () => void
@@ -20,6 +28,7 @@ export function PromptTemplateFillPane({
   template,
   values,
   insertMode,
+  deliverySurface,
   onValueChange,
   onInsertModeChange,
   onCancel,
@@ -53,25 +62,33 @@ export function PromptTemplateFillPane({
             </label>
           ))}
 
-          <div className="pt-2 text-[11px] text-muted">Insert mode</div>
-          <div className="flex items-center gap-4 text-[11px] text-ink">
-            <label className="flex items-center gap-2">
-              <input
-                type="radio"
-                checked={insertMode === 'replace'}
-                onChange={() => onInsertModeChange('replace')}
-              />
-              Replace current draft
-            </label>
-            <label className="flex items-center gap-2">
-              <input
-                type="radio"
-                checked={insertMode === 'append'}
-                onChange={() => onInsertModeChange('append')}
-              />
-              Append to current draft
-            </label>
-          </div>
+          {deliverySurface === 'composer' ? (
+            <>
+              <div className="pt-2 text-[11px] text-muted">Insert mode</div>
+              <div className="flex items-center gap-4 text-[11px] text-ink">
+                <label className="flex items-center gap-2">
+                  <input
+                    type="radio"
+                    checked={insertMode === 'replace'}
+                    onChange={() => onInsertModeChange('replace')}
+                  />
+                  Replace current draft
+                </label>
+                <label className="flex items-center gap-2">
+                  <input
+                    type="radio"
+                    checked={insertMode === 'append'}
+                    onChange={() => onInsertModeChange('append')}
+                  />
+                  Append to current draft
+                </label>
+              </div>
+            </>
+          ) : (
+            <div className="pt-2 text-[11px] text-muted">
+              Pastes at the terminal cursor. Nothing is replaced, and nothing runs until you press Enter.
+            </div>
+          )}
         </div>
       </div>
 

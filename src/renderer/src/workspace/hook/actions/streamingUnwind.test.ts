@@ -27,7 +27,6 @@ function submittingRuntime(): SessionRuntime {
     turnStartedAt: 1_000_000,
     phaseChangedAt: 1_000_000,
     awaitingAssistant: true,
-    streamingBaseline: 'previous assistant text',
   }
 }
 

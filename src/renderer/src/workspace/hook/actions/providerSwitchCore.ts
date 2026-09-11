@@ -423,6 +423,7 @@ export async function switchAgentProvider(params: {
       kind: result.targetKind,
       ...(targetProviderRuntime ? { providerRuntime: targetProviderRuntime } : {}),
       resumeSessionId: result.targetProviderSessionId,
+      preserveTldr: true,
       builtInMcpDomains: targetBuiltInMcpDomains,
       // See the empty-pane branch above: pin to this agent so the bulk loop
       // replaces the right pane (not the focused one) and the single-pane

@@ -42,8 +42,17 @@ const PANEL_CLASS =
 
 export const PromptTemplatePreviewPanel = memo(function PromptTemplatePreviewPanel({
   template,
+  deliverySurface,
 }: {
   template: PromptTemplate | null
+  /**
+   * Optional (#865): callers outside a resolved session target — the
+   * standalone template manager, for instance — have no pane to ask
+   * `textDeliverySurface` about, so they omit this and the panel falls back
+   * to describing the template's own configured insert mode, same as before
+   * a delivery surface existed to ask.
+   */
+  deliverySurface?: 'composer' | 'pty'
 }) {
   if (!template) {
     return (
@@ -76,7 +85,7 @@ export const PromptTemplatePreviewPanel = memo(function PromptTemplatePreviewPan
           </span>
         </div>
         <div className="mt-1 text-[10px] text-muted">
-          {INSERT_MODE_LABEL[template.insertMode]}
+          {deliverySurface === 'pty' ? 'Pastes at the terminal cursor' : INSERT_MODE_LABEL[template.insertMode]}
         </div>
       </div>
 

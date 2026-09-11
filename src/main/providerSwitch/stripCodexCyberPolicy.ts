@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto'
+import { readFile } from 'node:fs/promises'
 
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
 
-import { stripLastCodexCyberPolicyStep } from '@main/providerSwitch/codexCyberPolicy.js'
+import { cloneCodexCyberPolicyRollout } from '@main/providerSwitch/cloneCodexCyberPolicyRollout.js'
 import { getHostTranscriptAdapter } from '@main/providerSwitch/transcriptEngine.js'
 
 export type StripCodexCyberPolicyRequest = {
@@ -30,22 +31,20 @@ export async function stripCodexCyberPolicy(
   }
 
   const adapter = getHostTranscriptAdapter(request.provider)
-  const conversation = await adapter.read(
-    request.cwd,
-    request.sourceProviderSessionId,
-  )
-  const stripped = stripLastCodexCyberPolicyStep(conversation)
-
-  const projection = await adapter.projectNativeResume(stripped, {
-    cwd: request.cwd,
+  if (!adapter.locate) {
+    throw new Error('Codex transcript adapter cannot locate the source rollout.')
+  }
+  const sourcePath = await adapter.locate(request.cwd, request.sourceProviderSessionId)
+  const jsonl = await readFile(sourcePath, 'utf8')
+  const values = cloneCodexCyberPolicyRollout(jsonl, {
     targetSessionId: randomUUID(),
     now: new Date().toISOString(),
   })
-  const newProviderSessionId = adapter.sessionId(projection.values)
+  const newProviderSessionId = adapter.sessionId(values)
 
-  // Same write-last rule as rewind/duplicate: a missing block or a projector
-  // rejection must not leave a half-created Codex rollout on disk.
-  const newFilePath = await adapter.write(request.cwd, projection.values)
+  // Write last: a missing block or a cut that leaves nothing must not create
+  // a half-written Codex rollout. The source file is never touched.
+  const newFilePath = await adapter.write(request.cwd, values)
   return {
     provider: 'codex',
     newProviderSessionId,

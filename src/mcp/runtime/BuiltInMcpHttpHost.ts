@@ -1,3 +1,4 @@
+import type { TldrStore } from '@main/tldr/TldrStore.js'
 import { randomBytes } from 'node:crypto'
 import { createServer } from 'node:http'
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
@@ -35,6 +36,8 @@ type BuiltInMcpServerFactory = (
 ) => McpServer
 
 export type BuiltInMcpDependencies = {
+  tldrStore?: Pick<TldrStore, 'update'>
+  isTldrWriteAuthorized?: () => boolean
   orchestrationBridge?: OrchestrationBridge
   agentManagementBridge?: AgentManagementBridge
   aiWorkspaceRegistry?: AiWorkspaceRegistry
@@ -158,6 +161,7 @@ export class BuiltInMcpHttpHost {
   }
 
   registerSession(scope: {
+    tldrIdentity?: string
     sessionId: string
     cwd: string
     providerKind: AgentProviderKind
@@ -198,6 +202,7 @@ export class BuiltInMcpHttpHost {
     this.revokeSession(scope.sessionId)
     const token = randomBytes(32).toString('base64url')
     const mcpScope = {
+      tldrIdentity: scope.tldrIdentity ?? (domains.includes('tldr') ? scope.sessionId : undefined),
       sessionId: scope.sessionId,
       cwd: scope.cwd,
       domains,
@@ -227,6 +232,11 @@ export class BuiltInMcpHttpHost {
     // assembly cannot mutate the host's authorization state.
     const config = this.serverConfig(token)
     return [{ ...config, headers: { ...config.headers } }]
+  }
+
+  sessionTldrIdentity(sessionId: string): string | undefined {
+    const token = this.tokensBySession.get(sessionId)
+    return token ? this.registrations.get(token)?.scope.tldrIdentity : undefined
   }
 
   sessionDomains(sessionId: string): BuiltInMcpDomain[] {
@@ -335,7 +345,10 @@ export class BuiltInMcpHttpHost {
     // request is cheap relative to a dead bridge. (Verified end-to-end against
     // the MCP SDK client: cached+queue => listTools times out; per-request =>
     // listTools returns.)
-    const server = this.createServerForScope(registration.scope, this.dependencies)
+    const server = this.createServerForScope(registration.scope, {
+      ...this.dependencies,
+      isTldrWriteAuthorized: () => !registration.revoked,
+    })
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
     })

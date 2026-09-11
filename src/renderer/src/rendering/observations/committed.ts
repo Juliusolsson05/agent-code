@@ -10,6 +10,7 @@ import type {
 // notification — if the two ever diverged, we'd either suppress a standalone
 // row nobody re-renders (lost background result) or double-paint one.
 import {
+  getRendererProviderCapabilities,
   isAgentSpawnTool,
   providerDurableEntryKind,
   providerTaskNotificationFromEntry,
@@ -204,6 +205,8 @@ function contentKindOf(
   // user prompt, breaking ordering/debug evidence and reopening the exact
   // compact-summary ambiguity this capability boundary removes.
   switch (durableKind) {
+    case 'provider-notice':
+      return 'provider-notice'
     case 'compact-boundary':
       return 'compact-boundary'
     case 'compact-summary':
@@ -284,6 +287,15 @@ export function collectCommittedCandidates(
     }
     if (isConversation && e.isMeta === true) {
       decisions.push({ candidateId: id, selected: false, reason: 'meta-entry', evidence: [] })
+      return
+    }
+    const notice = getRendererProviderCapabilities(provider).usageLimitNoticeFromEntry?.(e)
+    if (notice && e.isSidechain !== true) {
+      candidates.push({ id, owner: 'provider-notice', provider, sourcePlane: 'committed',
+        sessionId, contentKind: 'provider-notice', timestampMs: entryTimestampMs(e),
+        sequence: index, usageLimitNotice: notice })
+      decisions.push({ candidateId: id, selected: true, reason: 'selected',
+        evidence: ['provider-authored status carrier; not assistant output'] })
       return
     }
     const taskNotification = providerTaskNotificationFromEntry(

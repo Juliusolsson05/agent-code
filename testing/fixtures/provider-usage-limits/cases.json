@@ -1,0 +1,85 @@
+{
+  "provenance": {
+    "claude": "User-supplied product message; carrier shape from existing repository census. Envelope identifiers are synthetic.",
+    "codex": "SOURCE-DERIVED from openai/codex 47ca4619be10c20c1cec6ee9944738c5b961fa1d; not captured production traffic."
+  },
+  "claude": {
+    "type": "assistant",
+    "uuid": "fixture-claude-limit",
+    "sessionId": "fixture-native-claude",
+    "timestamp": "2026-09-11T19:00:00Z",
+    "isApiErrorMessage": true,
+    "error": "rate_limit",
+    "message": {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "You've hit your monthly spend limit \u00b7 raise it at claude.ai/settings/usage?from=cc_cli_limit_message \u00b7 your session limit resets 2:10pm (America/Los_Angeles)"
+        }
+      ]
+    }
+  },
+  "codex": [
+    {
+      "type": "api_error",
+      "errorType": "usage_limit_reached",
+      "requestId": "fixture-0",
+      "turnId": null,
+      "source": "proxy",
+      "ts": 1789153200000,
+      "message": "You've hit your usage limit. Try again later.",
+      "resetsAt": 1789157400,
+      "limitId": "codex",
+      "rateLimitReachedType": "rate_limit_reached"
+    },
+    {
+      "type": "api_error",
+      "errorType": "usage_limit_reached",
+      "requestId": "fixture-1",
+      "turnId": null,
+      "source": "proxy",
+      "ts": 1789153200000,
+      "message": "You've hit your usage limit. Try again later.",
+      "resetsAt": 1789157400,
+      "limitId": "codex",
+      "rateLimitReachedType": "workspace_owner_credits_depleted"
+    },
+    {
+      "type": "api_error",
+      "errorType": "usage_limit_reached",
+      "requestId": "fixture-2",
+      "turnId": null,
+      "source": "proxy",
+      "ts": 1789153200000,
+      "message": "You've hit your usage limit. Try again later.",
+      "resetsAt": 1789157400,
+      "limitId": "codex",
+      "rateLimitReachedType": "workspace_member_credits_depleted"
+    },
+    {
+      "type": "api_error",
+      "errorType": "usage_limit_reached",
+      "requestId": "fixture-3",
+      "turnId": null,
+      "source": "proxy",
+      "ts": 1789153200000,
+      "message": "You've hit your usage limit. Try again later.",
+      "resetsAt": 1789157400,
+      "limitId": "codex",
+      "rateLimitReachedType": "workspace_owner_usage_limit_reached"
+    },
+    {
+      "type": "api_error",
+      "errorType": "usage_limit_reached",
+      "requestId": "fixture-4",
+      "turnId": null,
+      "source": "proxy",
+      "ts": 1789153200000,
+      "message": "You've hit your usage limit. Try again later.",
+      "resetsAt": 1789157400,
+      "limitId": "codex",
+      "rateLimitReachedType": "workspace_member_usage_limit_reached"
+    }
+  ]
+}

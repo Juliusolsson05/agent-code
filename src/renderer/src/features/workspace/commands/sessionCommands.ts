@@ -14,6 +14,7 @@ import { buildProviderResumeCommand } from '@renderer/workspace/providerResumeCo
 import { providerSupportsBuiltInMcpDomain } from '@mcp/shared/types'
 import type { BuiltInMcpDomain } from '@mcp/shared/types'
 import { clearAgentComposer } from '@renderer/workspace/tile-tree/TileLeaf/clearAgentComposer'
+import { sessionHasTranscript } from '@renderer/workspace/transcriptAvailability'
 
 function targetSupportsBuiltInMcpDomain(
   workspace: CommandContext['workspace'],
@@ -86,7 +87,12 @@ export const sessionCommands: CommandDef[] = [
       // nothing looked wrong; it would have started reporting the wrong answer
       // the moment a switch edge was added for a provider whose prompts we
       // cannot parse, or an adapter for one with no switch edge.
-      return getProviderFeatures(kind).promptHistoryExtraction
+      //
+      // sessionHasTranscript additionally excludes OpenCode Terminal (kind
+      // 'opencode', providerRuntime 'terminal'): its history loaders never
+      // populate `runtime.entries`, so prompt extraction had nothing to read
+      // even though promptHistoryExtraction is true for plain OpenCode.
+      return getProviderFeatures(kind).promptHistoryExtraction && sessionHasTranscript(meta)
     },
     run: ({ workspace, ui }) => {
       const sessionId = commandTargetSessionId(workspace)
@@ -299,7 +305,9 @@ export const sessionCommands: CommandDef[] = [
     },
   },
   {
-    // Close Old Agents — batch cleanup for stale provider panes.
+    // Close Old Agents — batch cleanup for stale agent AND terminal panes
+    // (#865 gave Close Old Agents parity: terminals are inactive-sortable
+    // and closeable through this same batch flow, not just agents).
     //
     // WHY this is an app-surface command instead of a session command:
     // the user is cleaning the workspace, not acting on the focused pane.
@@ -312,7 +320,7 @@ export const sessionCommands: CommandDef[] = [
     pickerVisibility: 'advanced',
     surface: 'app',
     title: 'Close Old Agents…',
-    description: '**What it does:** Opens a batch cleanup modal for **agents** inactive longer than a chosen time.\n\n**Use when:** You want to close stale agents across all projects or selected projects.\n\n**Notes:** Defaults to 4 hours and excludes currently-running agents unless you opt in.',
+    description: '**What it does:** Opens a batch cleanup modal for **agents and terminals** inactive longer than a chosen time.\n\n**Use when:** You want to close stale agents and terminals across all projects or selected projects.\n\n**Notes:** Defaults to 4 hours and excludes currently-running sessions unless you opt in.',
     keywords: [
       'close',
       'old',
@@ -666,6 +674,57 @@ export const sessionCommands: CommandDef[] = [
           err instanceof Error && err.message.length > 0
             ? err.message
             : 'Agent Management MCP reload failed'
+        workspace.showPaneToast(sessionId, message)
+      }
+    },
+  },
+  {
+    id: 'enable-tldr-mcp',
+    category: 'session',
+    surface: 'session',
+    title: 'TLDR MCP',
+    description: '**What it does:** Reloads the focused agent with TLDR reporting on or off.\n\n**Use when:** You want this agent to keep one concise summary of progress, next steps and pending decisions.\n\n**Notes:** Deploys the managed reporting skill. Hold the TLDR shortcut to read summaries across visible agents.',
+    keywords: ['tldr', 'summary', 'status', 'mcp', 'decision', 'report'],
+    when: ({ workspace }) => {
+      return targetSupportsBuiltInMcpDomain(workspace, 'tldr')
+    },
+    getState: ctx => builtInMcpDomainState(ctx, 'tldr'),
+    run: async ({ workspace, ui }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return
+      const meta = workspace.state.sessions[sessionId]
+      const kind = meta?.kind ?? DEFAULT_PROVIDER
+      // Command visibility is advisory—the command can still be invoked by a
+      // keybinding or programmatic caller—so provider policy is repeated at the
+      // mutation boundary before we replace a live process.
+      if (
+        !isAgentProviderKind(kind) ||
+        !providerSupportsBuiltInMcpDomain(kind, 'tldr') ||
+        !meta
+      ) return
+
+      ui.closePalette()
+      try {
+        const nextDomains = toggleBuiltInMcpDomain(meta.builtInMcpDomains, 'tldr')
+        const newSessionId = await workspace.replaceSession(meta.cwd, {
+          kind,
+          targetSessionId: sessionId,
+          resumeSessionId: meta.providerSessionId,
+          builtInMcpDomains: nextDomains,
+        })
+        if (newSessionId) {
+          workspace.showPaneToast(
+            newSessionId,
+            nextDomains.includes('tldr')
+              ? 'Reloaded with TLDR MCP'
+              : 'Reloaded without TLDR MCP',
+          )
+        }
+      } catch (err) {
+        const message =
+          err instanceof Error && err.message.length > 0
+            ? err.message
+            : 'TLDR MCP reload failed'
         workspace.showPaneToast(sessionId, message)
       }
     },

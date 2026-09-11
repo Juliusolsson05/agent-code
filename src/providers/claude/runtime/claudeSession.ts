@@ -422,6 +422,10 @@ export class ClaudeSession extends EventEmitter {
       // launched with --session-id rather than --resume. The file cannot
       // preexist for a fresh random UUID, so its bounded bootstrap is empty.
       resumeSessionId: this.transcriptSessionId,
+      // Exact UUID binding is also used for fresh sessions. Only those may
+      // legitimately have no file yet; a resumed missing transcript must fail
+      // discovery instead of becoming "ready" after 250 ms of silent replay.
+      allowMissingTranscript: this.resumeSessionId === null,
       // Enabling proxy on the headless instance is what flips the
       // semantic source of truth from screen to proxy inside
       // ClaudeCodeHeadless. Even without this, subscribing to
@@ -1152,10 +1156,11 @@ export class ClaudeSession extends EventEmitter {
     try { this.pty?.kill() } catch { /* best-effort */ }
     this.pty = null
     await this.teardownProxy()
-    // Intentionally no headless.stop() here: if headless.start() threw,
-    // its internal state is undefined; calling stop() on it risks a
-    // second throw. Let GC collect it — teardownProxy already detached
-    // the proxy-event handler that would otherwise pin it.
+    // Transcript discovery may reject before PTY attachment. The constructed
+    // headless instance still owns xterm/timers, so rollback must dispose it as
+    // well as killing the consumer-owned process. Cleanup failure must not hide
+    // the original discovery error.
+    try { await this.headless?.stop() } catch { /* preserve start failure */ }
     this.headless = null
     try { await this.privateMcpConfig?.dispose() } catch { /* best-effort */ }
     this.privateMcpConfig = null

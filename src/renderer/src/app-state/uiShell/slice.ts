@@ -27,6 +27,7 @@ export const createUiShellSlice: StateCreator<
   viewPromptsSessionId: null,
   newAgentPlacementOpen: false,
   newAgentProjectIntent: null,
+  newAgentInOpen: false,
   tiledDispatchPromptOpen: false,
   dispatchRowProjectPickerRow: null,
   dispatchAttachIntent: null,
@@ -176,6 +177,10 @@ export const createUiShellSlice: StateCreator<
       false,
       'uiShell/closeNewAgentPlacement',
     ),
+  openNewAgentIn: () =>
+    set({ newAgentInOpen: true }, false, 'uiShell/openNewAgentIn'),
+  closeNewAgentIn: () =>
+    set({ newAgentInOpen: false }, false, 'uiShell/closeNewAgentIn'),
   openTiledDispatchPrompt: () =>
     set({ tiledDispatchPromptOpen: true }, false, 'uiShell/openTiledDispatchPrompt'),
   closeTiledDispatchPrompt: () =>

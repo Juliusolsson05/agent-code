@@ -120,6 +120,12 @@ export function wireSessionForwarder(
   manager.on('terminal-data', payload =>
     sendToSessionWindow(payload.sessionId, 'session:terminal-data', payload),
   )
+  // Shell activity (#865) crosses directly: the monitor already emits only on
+  // change (at most once per terminal per second), so there is no burst for a
+  // coalescer to absorb.
+  manager.on('terminal-foreground', payload =>
+    sendToSessionWindow(payload.sessionId, 'session:terminal-foreground', payload),
+  )
   manager.on('agent-pty-data', payload =>
     sendToSessionWindow(payload.sessionId, 'session:agent-pty-data', payload),
   )
