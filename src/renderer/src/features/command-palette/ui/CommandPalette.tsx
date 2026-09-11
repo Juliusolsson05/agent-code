@@ -80,6 +80,7 @@ import type {
 import { promptTemplateTargetSessionId } from '@renderer/features/prompt-templates/targetSession'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import { resolveAgentPaneLabel } from '@renderer/workspace/tile-tree/paneLabels'
+import { sessionDisplayTitle } from '@renderer/workspace/sessionDisplayTitle'
 import { useWorkspaceContext } from '@renderer/workspace/WorkspaceContext'
 import type { PaletteMode } from '@renderer/features/command-palette/paletteMode'
 import { commandOwnsOpenSurface } from '@renderer/features/command-palette/surfaceOwnership'
@@ -477,10 +478,10 @@ function OpenCommandPalette({
         .map(entry => {
           const kind = entry.sessionMeta.kind ?? DEFAULT_PROVIDER
           const cwd = entry.sessionMeta.cwd
-          const cwdBase = cwd.split('/').filter(Boolean).pop() ?? cwd
           return {
             id: entry.id,
-            label: `${kind} · ${cwdBase}`,
+            // Same title rule as every other list (#865), kind as context.
+            label: `${sessionDisplayTitle(entry.sessionMeta)} · ${kind}`,
             description: `${entry.sourceTabTitle} · ${cwd}`,
             note: entry.note,
             buriedAt: entry.buriedAt,

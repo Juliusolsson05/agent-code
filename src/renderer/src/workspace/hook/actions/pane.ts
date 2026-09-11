@@ -7,6 +7,7 @@ import {
 } from '@renderer/workspace/closeConfirmation'
 import type { CloseExpansionRuntimes, CloseTargetSnapshot } from '@renderer/workspace/closeConfirmation'
 import { requestCloseConfirmation } from '@renderer/workspace/closeConfirmationBroker'
+import { sessionDisplayTitle } from '@renderer/workspace/sessionDisplayTitle'
 import { useCallback, useRef } from 'react'
 
 import type {
@@ -2155,13 +2156,16 @@ export function usePaneActions(
       const buriedConfirmed = await requestCloseConfirmation({
         required: true,
         // Its OWN reason. Borrowing 'running' made the dialog title an idle
-        // buried session "Close a working agent?", contradicting both its body
-        // and the actual state — on the one close with no undo, where the
+        // buried session "Close a working session?", contradicting both its
+        // body and the actual state — on the one close with no undo, where the
         // dialog's credibility is the entire mechanism.
         reason: 'irreversible',
         targets: [{
           sessionId: entry.sessionId,
-          title: snapshot.sessions[entry.sessionId]?.title ?? entry.sessionId,
+          // A buried entry always carries its own sessionMeta, even after the
+          // session has left `sessions` entirely — so read from there rather
+          // than the (possibly absent) live sessions record (#865).
+          title: sessionDisplayTitle(entry.sessionMeta),
           live: isSessionLiveForClose(refs.latestRuntimesRef.current, entry.sessionId),
         }],
         summary: 'Killing a buried session is permanent — Undo Close cannot restore it.',
