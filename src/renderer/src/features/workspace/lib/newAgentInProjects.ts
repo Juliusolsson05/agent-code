@@ -54,12 +54,19 @@ const NO_ANCHOR_REASON = 'No agent in this project to take a working directory f
  * First session of the project that has a directory to borrow.
  *
  * Order comes from `resolveTabSessions`: grid leaves first, then detached rows
- * by `detachedAt`. That is the same order the Dispatch project header's "+"
- * reaches for (it passes the group's first row), so the two entry points spawn
- * a given project into the same directory. Grid leaves first also matters on
- * its own: they are usually the project's root checkout, while detached rows
- * are where worktree agents live — borrowing a worktree path would start the
- * new agent inside someone else's task branch.
+ * by `detachedAt`. That matches the Dispatch project header's "+" (it passes
+ * the group's first row) except when that row is pinned — pins are lifted out
+ * of project groups, so the "+" may then anchor on the next row. Grid leaves
+ * first matters on its own: they are usually the project's root checkout,
+ * while detached rows are where worktree agents live — borrowing a worktree
+ * path would start the new agent inside someone else's task branch.
+ *
+ * WHY the anchor deliberately ignores focus, unlike plain New Agent… (which
+ * borrows the focused lane's or last-selected agent's cwd, worktree or not):
+ * this command exists to remove focus from the decision. The user named a
+ * PROJECT; its own checkout is what "in project B" means. Inheriting whichever
+ * worktree agent in B happened to be selected last is the focus-dependence the
+ * command was built to escape.
  *
  * A grid leaf can outlive its SessionMeta (resolveTabSessions does not filter
  * grid ids by existence), and a meta can carry an empty cwd; both are skipped
@@ -96,11 +103,13 @@ export function buildNewAgentInModel(state: WorkspaceState): NewAgentInModel {
     })
   })
 
-  // Start on the project plain New Agent… would have used, so Enter, Enter is
-  // never worse than the command it sits beside — the new command only adds
-  // the ability to point somewhere else. When that project is not on offer (a
-  // bound row whose lane still shows another project's agent) or cannot be
-  // anchored, fall back to the first project that can actually take an agent.
+  // Start on the PROJECT plain New Agent… would have used, so Enter, Enter
+  // lands in the same project as the command it sits beside — the new command
+  // only adds the ability to point somewhere else. (Same project, not always
+  // the same directory: see `anchorFor` for why this one uses the project's
+  // own checkout.) When that project is not on offer (a bound row whose lane
+  // still shows another project's agent) or cannot be anchored, fall back to
+  // the first project that can actually take an agent.
   const spawnTabId = resolveDispatchSpawnTarget(state).tabId
   const enabled = projects.filter(project => project.anchorSessionId !== null)
   const initialTabId =

@@ -65,7 +65,12 @@ export const paneCommands: CommandDef[] = [
     // Title per docs/command-style.md: "New X" for creation, and the ellipsis
     // because the command asks for more input (agent, then project).
     title: 'New Agent In…',
-    description: '**What it does:** Starts a **new agent in a project you choose**, in the focused Dispatch lane.\n\n**Use when:** You are filling an empty lane with an agent for a different project than the one you last selected.\n\n**Notes:** Pick the agent, then the project. A row limited to certain projects only offers those.',
+    // The scope sentence is there because it surprised the reviewer: in
+    // project-scope Dispatch, spawning into another project makes it the active
+    // project (createDetachedDispatchAgent selects what it creates), so the
+    // other lanes read "Not in this scope" until you switch back. That is the
+    // scope contract working — the new agent has to be visible — not a bug.
+    description: '**What it does:** Starts a **new agent in a project you choose**, in the focused Dispatch lane.\n\n**Use when:** You are filling an empty lane with an agent for a different project than the one you last selected.\n\n**Notes:** Pick the agent, then the project. A row limited to certain projects only offers those. In project-scoped Dispatch, choosing another project switches to it.',
     keywords: ['new', 'agent', 'project', 'lane', 'fill', 'empty', 'dispatch', 'claude', 'codex', 'opencode'],
     // Same data gate as New Agent…. Tiled Tabs covers Dispatch, so the lane the
     // agent would fill is not the thing on screen.

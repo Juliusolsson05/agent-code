@@ -71,23 +71,22 @@ export function NewAgentInDialog({ open, workspace, onClose }: Props) {
   )
 
   useEffect(() => {
-    if (!open) return
+    if (open) return
     // The instance survives between invocations, so every piece of one-shot
-    // state resets on open. A leftover `project` step or a set latch would make
-    // the next invocation start mid-flow or refuse to spawn at all.
+    // state resets. A leftover `project` step or a set latch would make the
+    // next invocation start mid-flow or refuse to spawn at all.
+    //
+    // WHY on CLOSE rather than on open: an effect runs after the render it
+    // belongs to, so resetting on open paints one frame of the previous
+    // invocation's project step first. That frame is invisible when a click or
+    // key opens the dialog, but not when something outside a user event does
+    // (an MCP `commands.run`). Resetting while hidden means the first visible
+    // frame is always the agent step.
     setStep('agent')
     setAgentIndex(0)
     setProjectTabId(null)
     committingRef.current = false
   }, [open])
-
-  useEffect(() => {
-    if (!open) return
-    // Keep keyboard focus on the dialog surface across steps. Choosing a row
-    // with the mouse focuses that row's button, and switching steps unmounts
-    // it; without this the next arrow key would have nothing listening.
-    dialogRef.current?.focus()
-  }, [open, step])
 
   const choice = AGENT_PROVIDER_CHOICES[agentIndex] ?? null
   const enabledProjects = model.projects.filter(project => project.anchorSessionId !== null)
@@ -98,7 +97,7 @@ export function NewAgentInDialog({ open, workspace, onClose }: Props) {
     setAgentIndex(index)
     setStep('project')
     // Start on the project plain New Agent… would have used (the model owns
-    // that rule), so accepting both defaults never does worse than today.
+    // that rule), so accepting both defaults lands in the same project.
     setProjectTabId(model.initialTabId)
   }
 
@@ -148,6 +147,13 @@ export function NewAgentInDialog({ open, workspace, onClose }: Props) {
           // Focus the surface itself, not the first row: the key handler lives
           // here, and a focused row button would also turn Enter into a native
           // click on whichever row happened to be first.
+          //
+          // No focus management is needed across steps. Clicking a row focuses
+          // that row's button and the step change unmounts it; Radix's
+          // FocusScope (inside DialogContent) moves focus back to this
+          // container when the focused node is removed, so the key handler
+          // keeps listening. Focus is the primitive's job
+          // (components/ui/README.md), and an extra effect here duplicated it.
           event.preventDefault()
           dialogRef.current?.focus()
         }}
@@ -161,9 +167,24 @@ export function NewAgentInDialog({ open, workspace, onClose }: Props) {
             return
           }
           if (event.key === 'Enter') {
-            // preventDefault also cancels a focused button's native Enter-click,
-            // so a Tab-focused row cannot fire a second, different action.
+            // A FOCUSED FOOTER BUTTON OWNS ITS OWN ENTER — the rule
+            // components/ui/dialog-actions.tsx writes down. Everything below
+            // calls preventDefault, which also cancels the focused button's
+            // native Enter-click, so without this guard Tab to Cancel + Enter
+            // committed the highlighted project and SPAWNED an agent (#862 is
+            // the same bug in ProviderSwitchPickerModal, whose pattern this
+            // copied). Only the footer is exempt, not every button: the list
+            // rows are buttons too, and after Tab-to-row plus arrows the
+            // focused row and the highlighted row differ — Enter must act on
+            // the highlight, which is what the user is looking at.
+            if (event.target instanceof Element && event.target.closest('[data-slot="dialog-footer"]')) return
             event.preventDefault()
+            // Held Enter auto-repeats. Without this one long press would pick
+            // the agent and then commit the default project, starting a real
+            // agent process the user never chose a project for.
+            if (event.repeat) return
+            // preventDefault above also cancels a focused ROW's native click, so
+            // a Tab-focused row cannot fire a second, different action.
             if (step === 'agent') chooseAgent(agentIndex)
             else if (highlightedProject) commit(highlightedProject)
             return
@@ -210,8 +231,13 @@ export function NewAgentInDialog({ open, workspace, onClose }: Props) {
               )
             })
           ) : model.projects.length === 0 ? (
+            // The command needs an active tab, so an empty list can only mean
+            // the focused row is bound solely to projects that have since been
+            // closed (row bindings outlive their tab until #863 is fixed).
+            // Saying "no projects are open" would be false and leave the user
+            // stuck; name the control that fixes it instead.
             <div className="px-3 py-8 text-center text-[12px] text-muted">
-              No projects are open.
+              None of this row&rsquo;s projects are open. Change them with Row Projects&hellip;
             </div>
           ) : (
             model.projects.map(project => {
@@ -256,13 +282,15 @@ export function NewAgentInDialog({ open, workspace, onClose }: Props) {
               ? '↑↓ choose · Enter next · Esc cancel'
               : '↑↓ choose · Enter create · ⌫ back · Esc cancel'}
           </span>
+          {/* Ghost, small: the house footer shape (DialogActions renders Cancel
+              this way). Neither button is a primary action — the rows are. */}
           <div className="flex gap-2">
             {step === 'project' ? (
-              <Button type="button" variant="ghost" onClick={() => setStep('agent')}>
+              <Button type="button" variant="ghost" size="sm" onClick={() => setStep('agent')}>
                 Back
               </Button>
             ) : null}
-            <Button type="button" variant="outline" onClick={onClose}>
+            <Button type="button" variant="ghost" size="sm" onClick={onClose}>
               Cancel
             </Button>
           </div>

@@ -58,9 +58,9 @@ function harness(options: { open?: boolean; state?: WorkspaceState } = {}) {
 }
 
 describe('NewAgentInDialog', () => {
-  it('Enter, Enter creates the default agent where plain New Agent would have put it', () => {
-    // The new command must never be worse than the one beside it: accepting
-    // both defaults reproduces New Agent…'s own target (project B here).
+  it('Enter, Enter creates the default agent in the project plain New Agent would have used', () => {
+    // Accepting both defaults lands in New Agent…'s own target PROJECT (B
+    // here). The directory is B's own checkout by design — see anchorFor.
     const { createDetachedDispatchAgent, onClose, press } = harness()
 
     press('Enter')
@@ -73,7 +73,7 @@ describe('NewAgentInDialog', () => {
     )
   })
 
-  it('creates the chosen agent in the chosen project from the keyboard, without refocusing anything first', () => {
+  it('creates the chosen agent in the chosen project from the keyboard, without selecting an agent in that project first', () => {
     const { createDetachedDispatchAgent, press } = harness()
 
     press('ArrowDown') // Claude -> Codex
@@ -141,6 +141,61 @@ describe('NewAgentInDialog', () => {
     press('Enter')
 
     expect(createDetachedDispatchAgent).toHaveBeenCalledOnce()
+  })
+
+  it('leaves Enter to a focused footer button instead of advancing or creating', () => {
+    // A focused button owns its own Enter (components/ui/dialog-actions.tsx).
+    // Before this guard, Tab to Cancel + Enter on the project step SPAWNED an
+    // agent: the list handler prevented the button's native click and then
+    // committed the highlighted row. `fireEvent` returning true means the
+    // default was not prevented, so the real browser's click still happens.
+    const { createDetachedDispatchAgent, press } = harness()
+
+    expect(fireEvent.keyDown(screen.getByRole('button', { name: 'Cancel' }), { key: 'Enter' })).toBe(true)
+    expect(screen.getByText('Codex')).toBeInTheDocument() // still on the agent step
+
+    press('Enter')
+    expect(fireEvent.keyDown(screen.getByRole('button', { name: 'Back' }), { key: 'Enter' })).toBe(true)
+    expect(fireEvent.keyDown(screen.getByRole('button', { name: 'Cancel' }), { key: 'Enter' })).toBe(true)
+
+    expect(createDetachedDispatchAgent).not.toHaveBeenCalled()
+  })
+
+  it('ignores a held Enter, so one long press cannot pick the agent and spawn in the same breath', () => {
+    const { createDetachedDispatchAgent, press } = harness()
+
+    press('Enter')
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Enter', repeat: true })
+
+    expect(createDetachedDispatchAgent).not.toHaveBeenCalled()
+  })
+
+  it('reopens on the agent step with a fresh commit latch', () => {
+    const { createDetachedDispatchAgent, mounted, workspace, onClose, press } = harness()
+
+    press('Enter')
+    press('Enter') // commits and latches
+    mounted.rerender(<NewAgentInDialog open={false} workspace={workspace} onClose={onClose} />)
+    mounted.rerender(<NewAgentInDialog open workspace={workspace} onClose={onClose} />)
+
+    expect(screen.getByText('Codex')).toBeInTheDocument()
+    press('Enter')
+    press('Enter')
+    expect(createDetachedDispatchAgent).toHaveBeenCalledTimes(2)
+  })
+
+  it('says so when every project the focused row is bound to has been closed', () => {
+    // Closing a tab does not yet clear row bindings in memory (#863), so a row
+    // can be bound only to projects that no longer exist. "No projects are
+    // open" would be false — other projects are — and gives no way forward.
+    const state = workspaceState()
+    state.dispatchMode!.tiled!.rows = [{ length: 3, projectTabIds: ['tab-closed'] }]
+    const { press } = harness({ state })
+
+    press('Enter')
+
+    expect(screen.getByText(/none of this row.s projects are open/i)).toBeInTheDocument()
+    expect(screen.getByText(/row projects/i)).toBeInTheDocument()
   })
 
   it('Cancel closes without creating whichever row is highlighted', () => {

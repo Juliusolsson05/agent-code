@@ -42,7 +42,10 @@ runs **New Agent…**. Five fresh lanes means five detours.
 4. **No default keybinding.**
 5. **Initial highlight** on the project step is the project plain New Agent…
    would have used (`resolveDispatchSpawnTarget(state).tabId`) when it is
-   eligible, so Enter-Enter is never worse than today.
+   eligible, so Enter-Enter lands in the same project as today. (Same project,
+   not necessarily the same directory: the anchor is the project's first
+   session with a cwd — its own checkout — never the focused/last-selected
+   agent's worktree, because removing focus from the decision is the point.)
 6. **A dedicated dialog**, not a fifth mode on `NewAgentPlacementOverlay` (already
    four intents; its "kind picked ⇒ placement step" invariant would need another
    branch) and not a palette sub-mode (`CommandPalette.tsx` is 2.5k lines and each
@@ -78,6 +81,29 @@ runs **New Agent…**. Five fresh lanes means five detours.
    threading, catalog snapshot, control reference.
 4. **Verify once at the end** (Node 24): `npm run typecheck`, `npm test`,
    `npm run test:contract`, `npm run check:keybindings`.
+
+## Review follow-up (after the PR opened)
+
+An independent review found, and this branch fixed:
+
+- **Enter on a focused footer button** (Cancel/Back) was captured by the list
+  handler, which prevented the button's click and committed the highlighted
+  row — Tab → Cancel → Enter spawned an agent. Footer buttons now own their
+  Enter (the `dialog-actions.tsx` rule). `ProviderSwitchPickerModal`, whose
+  pattern this copied, had the same bug on `main`: filed as #862 and fixed
+  here too.
+- A **held Enter** could pick the agent and commit in one press; auto-repeat
+  is ignored.
+- One-shot state now resets on **close**, not open, so a non-user-event open
+  never paints a stale project step.
+- The redundant cross-step focus effect was removed (Radix FocusScope already
+  refocuses the container when a focused row unmounts).
+- The empty project list now says the row's projects are closed and names
+  **Row Projects…**. Root cause — `closeTab` leaves row bindings in memory —
+  predates this work and is filed as #863 (out of scope).
+- Comment accuracy (header "+" anchor differs when its first row is pinned;
+  Enter-Enter equivalence is project-level) and a project-scope note in the
+  command description.
 
 ## Out of scope
 
