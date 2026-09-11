@@ -78,6 +78,19 @@ export function useReaderActions(
   const setReaderModeSession = useCallback(
     (sessionId: SessionId) => {
       const snapshot = refs.stateRef.current
+      // WHY this needs the same guard as setReaderModeTarget/toggleReaderMode
+      // (#865): Reader Mode is agent-only by design (Design D2) because it
+      // renders a provider-registered transcript view, and a terminal has no
+      // such view. Those two siblings already refuse a non-agent kind before
+      // touching state; this one — the "switch which session Reader is
+      // showing" entry point — did not, so it was relying only on ReaderView's
+      // own filter to keep a terminal off screen. That filter is a rendering
+      // accident, not a contract: any caller reaching this action directly
+      // (e.g. the external operator's agents.show, which after #865 no longer
+      // refuses terminals for placement/metadata capabilities) could point
+      // Reader Mode at a session it cannot render. Refuse without changing
+      // reader state, exactly like the siblings.
+      if (!isAgentProviderKind(snapshot.sessions[sessionId]?.kind ?? DEFAULT_PROVIDER)) return
       const rows = snapshot.dispatchMode
         ? buildVisibleDispatchRows(snapshot)
         : []

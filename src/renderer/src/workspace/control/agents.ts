@@ -127,7 +127,22 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
       output: z.object({ session: sessionReference, mode: workspaceObservationSchema.shape.mode,
         bounds: z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() }) }),
       handler: async ({ sessionId, intent }) => {
-        requireUi(); requireSession(sessionId)
+        requireUi()
+        const session = requireSession(sessionId)
+        // Reader Mode is agent-only (Design D2): it renders a provider-
+        // registered transcript view a terminal has none of. requireSession no
+        // longer refuses terminals (#865 — they're locatable/showable/
+        // pinnable like any other session), so this capability is now the
+        // thing standing between an operator's "show" request and pointing
+        // Reader Mode at a session it can't render. Refuse BEFORE the focus
+        // call below, which would otherwise navigate the grid to the terminal
+        // while Reader still owns the screen. Spotlight has no such
+        // restriction — it shows terminals fine — so only Reader is gated
+        // here; reader.ts's own setReaderModeSession guard is the second,
+        // independent layer in case some other caller reaches it directly.
+        if (session.provider === 'terminal' && useAppStore.getState().workspaceReaderMode) {
+          throw new ControlError('unavailable', 'Reader Mode shows agent transcripts only; close it before showing a terminal')
+        }
         if (!await getWorkspace().focusAgentBySessionId(sessionId, intent)) throw new ControlError('unavailable', 'Agent could not be shown; inspect state before retrying', 'unknown')
         // Reader and Spotlight own legitimate alternate agent views. Move their
         // explicit selection too instead of reporting a hidden grid as visible.
@@ -136,15 +151,19 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
         if (store.workspaceSpotlight) getWorkspace().setSpotlightSession(sessionId)
         await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
         const state = observe()
-        const session = requireSession(sessionId)
-        if (state.focusedSessionId !== sessionId || !session.placements.some(placement => placement.visible)) throw new ControlError('failed', 'Navigation committed but the target is no longer visibly focused', 'unknown')
+        // Re-fetch after the async focus/animation-frame gap: placement can
+        // have changed underneath us, and the response must reflect what
+        // actually ended up visible, not the pre-navigation snapshot captured
+        // in `session` above (kept for the pre-focus Reader/terminal check).
+        const refreshed = requireSession(sessionId)
+        if (state.focusedSessionId !== sessionId || !refreshed.placements.some(placement => placement.visible)) throw new ControlError('failed', 'Navigation committed but the target is no longer visibly focused', 'unknown')
         const pane = [...document.querySelectorAll<HTMLElement>('[data-pane-id]')].find(element => {
           const rect = element.getBoundingClientRect()
           return element.dataset.paneId === sessionId && rect.width > 0 && rect.height > 0
         })
         if (!pane || hasAppInteractionOwner()) throw new ControlError('failed', 'The target view was not observed or another surface took input; inspect the UI', 'unknown')
         const { x, y, width, height } = pane.getBoundingClientRect()
-        return { session, mode: state.mode, bounds: { x, y, width, height } }
+        return { session: refreshed, mode: state.mode, bounds: { x, y, width, height } }
       },
     }),
     defineCapability({
