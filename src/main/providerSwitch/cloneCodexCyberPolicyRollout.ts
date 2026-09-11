@@ -52,28 +52,51 @@ function rewriteSessionMeta(
     throw new Error('Codex rollout has no session_meta to clone.')
   }
   meta.timestamp = options.now
+  const previousId = meta.payload.id
+  const previousSessionId = meta.payload.session_id
+  // Root threads store the same UUID in id and session_id. Codex resume uses
+  // session_id as the live thread identity (vendor/codex-src session.rs).
+  // Rewriting only id leaves a subagent-shaped meta (id != session_id) that
+  // resumes under the SOURCE thread. Child rollouts already differ; leave
+  // those session_id values alone.
+  const isRootThread = typeof previousSessionId !== 'string' || previousSessionId === previousId
   meta.payload = {
     ...meta.payload,
     id: options.targetSessionId,
     timestamp: options.now,
+    ...(isRootThread ? { session_id: options.targetSessionId } : {}),
   }
+}
+
+function nextOrdinal(values: readonly Record<string, unknown>[]): number | undefined {
+  for (let index = values.length - 1; index >= 0; index -= 1) {
+    const ordinal = values[index]?.ordinal
+    if (typeof ordinal === 'number' && Number.isFinite(ordinal)) return ordinal + 1
+  }
+  return undefined
 }
 
 function ensureCleanTaskComplete(
   values: Record<string, unknown>[],
-  now: string,
+  options: CloneCodexCyberPolicyOptions,
 ): void {
   if (isCleanTaskComplete(values.at(-1))) return
   // The source turn ended on a cyber_policy complete. After the last-model-step
   // cut the prefix is mid-turn. Codex would otherwise resume by sampling again
   // against the same tail and re-hit the classifier. A clean complete is the
   // one synthetic record this path is allowed to add.
+  //
+  // Paginated rollouts refuse to open for append when the LAST line has no
+  // ordinal (vendor/codex-src/codex-rs/rollout/src/ordinal.rs). Copy the
+  // envelope the source already used: last kept ordinal + 1.
+  const ordinal = nextOrdinal(values)
   values.push({
-    timestamp: now,
+    timestamp: options.now,
+    ...(ordinal !== undefined ? { ordinal } : {}),
     type: 'event_msg',
     payload: {
       type: 'task_complete',
-      turn_id: 'cyber-policy-cut',
+      turn_id: options.targetSessionId,
       last_agent_message: lastAssistantText(values),
     },
   })
@@ -108,6 +131,6 @@ export function cloneCodexCyberPolicyRollout(
     throw new Error('Nothing remains after removing the cybersecurity block.')
   }
   rewriteSessionMeta(values, options)
-  ensureCleanTaskComplete(values, options.now)
+  ensureCleanTaskComplete(values, options)
   return values
 }

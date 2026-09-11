@@ -72,7 +72,10 @@ describe('cloneCodexCyberPolicyRollout', () => {
 
     const meta = values[0]?.payload as Record<string, unknown>
     expect(meta.id).toBe('clone-session')
+    expect(meta.session_id).toBe('clone-session')
     expect(meta.timestamp).toBe('2026-09-11T02:52:59.701Z')
+    expect(meta.originator).toBe('codex-tui')
+    expect(meta.cwd).toBe('/project')
 
     const keptOutput = values.find(value => {
       const payload = value.payload as Record<string, unknown> | undefined
@@ -80,10 +83,13 @@ describe('cloneCodexCyberPolicyRollout', () => {
     })?.payload as Record<string, unknown>
     expect(Array.isArray(keptOutput.output)).toBe(true)
 
-    const last = values.at(-1)?.payload as Record<string, unknown>
+    const lastRecord = values.at(-1) as Record<string, unknown>
+    const last = lastRecord.payload as Record<string, unknown>
     expect(last.type).toBe('task_complete')
     expect(last.error).toBeUndefined()
     expect(last.last_agent_message).toBe('I’m writing the database and CLI contracts now.')
+    expect(last.turn_id).toBe('clone-session')
+    expect(lastRecord.ordinal).toBe(11)
     expect(JSON.stringify(values)).not.toContain('cyber_policy')
     expect(JSON.stringify(values)).not.toContain('call-last')
   })
