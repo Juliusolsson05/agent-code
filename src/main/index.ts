@@ -1022,7 +1022,7 @@ async function startApp(): Promise<void> {
   })
   const controlManager = manager
   const controlHost = createControlHost({ getBrowserWindow, windowIdFor, listWindowIds }, join(STATE_DIR, 'control-history'), ({ invokeTask }) => [
-    ...workflowControlCapabilities(activeWorkflowService, invokeTask), ...usageControlCapabilities(), ...applicationIdentityCapabilities(), ...sessionHistoryControlCapabilities(), ...nativeHistoryControlCapabilities(), ...conditionBackendCapabilities(controlManager), ...terminalBackendCapabilities(controlManager), ...windowLifecycleControlCapabilities(), ...externalSettings.capabilities,
+    ...workflowControlCapabilities(activeWorkflowService, invokeTask), ...usageControlCapabilities(), ...applicationIdentityCapabilities(), ...sessionHistoryControlCapabilities(), ...nativeHistoryControlCapabilities(conversationService), ...conditionBackendCapabilities(controlManager), ...terminalBackendCapabilities(controlManager), ...windowLifecycleControlCapabilities(), ...externalSettings.capabilities,
   ])
   externalHost = new ExternalControlMcpHost(controlHost.forCaller({ kind: 'external', id: 'agent-code-control' }))
   await externalSettings.initialize()
