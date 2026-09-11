@@ -25,6 +25,7 @@ import {
   DispatchEmpty,
 } from '@renderer/workspace/dispatch/DispatchAgentList'
 import { DispatchMiniList } from '@renderer/workspace/dispatch/DispatchMiniList'
+import { rowScopedRows } from '@renderer/workspace/dispatch/rowScopedRows'
 import type { DispatchGridRow, SessionId, TabId } from '@renderer/workspace/types'
 
 type Props = {
@@ -254,6 +255,16 @@ function GridRowView({
   const indexFraction = clampIndexFraction(gridRow.indexFraction ?? DEFAULT_INDEX_FRACTION)
   const focusedLaneInRow =
     grid.focusedLane >= start && grid.focusedLane < end ? grid.focusedLane : null
+  // Whether this row's strips and ⌥↓ have anything to pick from. It asks the
+  // SAME filter both of them use (rowScopedRows: project binding + child cap;
+  // ⌥↓ reaches it through tiledRowScopedRows in useKeybinds), so the empty-lane
+  // hint below can never promise a pick the row does not actually offer. A
+  // hand-rolled "any row in a bound tab" check here would be a second
+  // definition of "what this row offers", and would drift from the first.
+  const rowOffersAgents = useMemo(
+    () => rowScopedRows(rows, gridRow).some(item => item.kind === 'agent'),
+    [rows, gridRow],
+  )
 
   const rowRef = useRef<HTMLDivElement | null>(null)
   const laneRegionRef = useRef<HTMLDivElement | null>(null)
@@ -443,8 +454,15 @@ function GridRowView({
                     // this copy anyway. Do not re-add a binding branch unless ⌥↓
                     // stops being row-scoped: "fixing" that read to
                     // `projectTabIds` would withhold a promise that is true.
+                    //
+                    // And none at all when the row offers no agents (a row
+                    // bound to projects that currently have none). Its strip is
+                    // empty and ⌥↓ returns without doing anything, so either
+                    // half of the hint would promise a pick that cannot happen.
+                    // The bare "Empty lane" stays; the row's index is where the
+                    // user sees why.
                     hint={
-                      focused && !lane?.selectedSessionId
+                      focused && !lane?.selectedSessionId && rowOffersAgents
                         ? 'Pick an agent from the strip, or press ⌥↓ for the top of the index'
                         : undefined
                     }

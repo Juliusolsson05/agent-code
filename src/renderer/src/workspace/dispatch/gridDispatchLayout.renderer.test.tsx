@@ -56,8 +56,11 @@ vi.mock('@renderer/workspace/dispatch/DispatchAgentList', () => ({
       />
     )
   },
-  DispatchEmpty: ({ message }: { message: string }) => (
-    <div data-testid="lane-empty">{message}</div>
+  // The hint is exposed as data, not asserted as copy: the layout decides
+  // WHETHER an empty lane may advertise a pick, and that decision is the
+  // behavior worth pinning. The wording is a design choice.
+  DispatchEmpty: ({ message, hint }: { message: string; hint?: string }) => (
+    <div data-testid="lane-empty" data-hint={hint ?? ''}>{message}</div>
   ),
 }))
 // The strip is mocked down to what the LAYOUT owns about it:
@@ -373,6 +376,31 @@ describe('Grid Dispatch layout', () => {
     expect(selectTiledLaneSession).toHaveBeenCalledTimes(1)
     expect(selectTiledLaneSession.mock.calls[0]![0]).toBe(1)
     expect(setTiledFocusedLane.mock.calls).toEqual([[1]])
+  })
+
+  it('withholds the empty-lane hint when the row offers no agents', () => {
+    // The hint advertises two gestures: pick from the strip, or press ⌥↓. Both
+    // act on the ROW's offered set (rowScopedRows; ⌥↓ via tiledRowScopedRows).
+    // In a row whose projects currently have no agents, the strip is empty and
+    // ⌥↓ returns without doing anything, so the hint would promise a pick that
+    // cannot happen. The contrasting unbound row pins the other half, so the fix
+    // cannot be "never show a hint". The tab id is deliberately one no session
+    // belongs to.
+    const cases = [
+      { rows: [{ length: 2 }], hinted: true },
+      { rows: [{ length: 2, projectTabIds: ['tab-with-no-agents'] }], hinted: false },
+    ]
+    for (const { rows, hinted } of cases) {
+      const { getByTestId } = renderGrid({
+        // Lane 1 empty AND focused: the only lane the hint may appear in.
+        lanes: [{ selectedSessionId: laneIds[0] }, {}],
+        rows,
+        focusedLane: 1,
+      })
+
+      expect(getByTestId('lane-empty').getAttribute('data-hint') !== '').toBe(hinted)
+      cleanup()
+    }
   })
 
   it('gives a row bound to two projects both their index sections', () => {
