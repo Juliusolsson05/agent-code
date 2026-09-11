@@ -85,8 +85,9 @@ export function ViewPromptsModal({
     }))
   }, [meta, runtime])
 
-  // The catalog returns document order; the list reads newest first.
-  const prompts = useMemo(() => (fromDisk ? [...fromDisk].reverse() : fromFeed), [fromDisk, fromFeed])
+  // Both come newest first: the catalog's folder returns prompts in that
+  // order and extractLatestUserPrompts reverses its chronological walk.
+  const prompts = fromDisk ?? fromFeed
 
   if (!meta || !runtime) return null
 
