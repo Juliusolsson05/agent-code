@@ -112,8 +112,9 @@ starts expanded.
 
 ### D5 — Regression tests
 
-- `streaming.actions.test.ts` (unit): D1 preserves phase fields over a live
-  turn and still stamps them on an idle pane; D2 resets only `submitting`.
+- `streamingQueuedSubmit.renderer.test.tsx` (drives the real hook): D1
+  preserves phase fields over a live turn and still stamps them on an idle
+  pane; D2 resets only `submitting`.
 - `useComposerKeybinds.queueAcceptance.renderer.test.tsx` (renderer, real
   workspace controller + real hook + fake feed): queue acceptance with a draft
   image clears text and image, leaves `promptDelivery` idle, and leaves the
