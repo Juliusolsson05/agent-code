@@ -10,7 +10,7 @@ import type { SessionId } from '@renderer/workspace/types'
 
 import { usePinAgentsKeybinds } from './usePinAgentsKeybinds'
 
-// Modal for the `Pin Agents…` command. Multi-select: Space toggles
+// Modal for the `Pin Sessions…` command. Multi-select: Space toggles
 // the focused row, Enter commits, Escape cancels. Mouse click also
 // toggles; hover moves focus so a mouse user gets the same
 // selection-cursor feedback as a keyboard user.

@@ -291,7 +291,9 @@ export const sessionCommands: CommandDef[] = [
     },
   },
   {
-    // Close Old Agents — batch cleanup for stale provider panes.
+    // Close Old Agents — batch cleanup for stale agent AND terminal panes
+    // (#865 gave Close Old Agents parity: terminals are inactive-sortable
+    // and closeable through this same batch flow, not just agents).
     //
     // WHY this is an app-surface command instead of a session command:
     // the user is cleaning the workspace, not acting on the focused pane.
@@ -304,7 +306,7 @@ export const sessionCommands: CommandDef[] = [
     pickerVisibility: 'advanced',
     surface: 'app',
     title: 'Close Old Agents…',
-    description: '**What it does:** Opens a batch cleanup modal for **agents** inactive longer than a chosen time.\n\n**Use when:** You want to close stale agents across all projects or selected projects.\n\n**Notes:** Defaults to 4 hours and excludes currently-running agents unless you opt in.',
+    description: '**What it does:** Opens a batch cleanup modal for **agents and terminals** inactive longer than a chosen time.\n\n**Use when:** You want to close stale agents and terminals across all projects or selected projects.\n\n**Notes:** Defaults to 4 hours and excludes currently-running sessions unless you opt in.',
     keywords: [
       'close',
       'old',

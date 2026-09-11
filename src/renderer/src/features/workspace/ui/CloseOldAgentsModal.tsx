@@ -421,7 +421,7 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
             <div>
               <DialogTitle>Close Old Agents</DialogTitle>
               <DialogDescription>
-                Close Claude and Codex agents that have been inactive past the threshold.
+                Close agents and terminals that have been inactive past the threshold.
               </DialogDescription>
             </div>
             <button
@@ -543,7 +543,7 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
             <div className="flex-1 min-h-0 overflow-y-auto">
               {projects.length === 0 ? (
                 <div className="px-3 py-6 text-center text-[11px] text-muted">
-                  No open agents.
+                  No open agents or terminals.
                 </div>
               ) : (
                 filteredProjects.map(project => {

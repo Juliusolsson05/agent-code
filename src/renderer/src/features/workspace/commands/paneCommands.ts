@@ -188,7 +188,7 @@ export const paneCommands: CommandDef[] = [
     // now hides this in the grid.
     surface: 'dispatch',
     title: 'Pin Sessions…',
-    description: '**What it does:** Opens the multi-select Pin modal to choose which **Dispatch** agents and terminals stay pinned at the top of the agent list.\n\n**Use when:** You want a few favorite agents to always be one keystroke away regardless of project or scope.\n\n**Notes:** Space toggles, Enter commits, Esc cancels. The order you Space through the rows is the order pins render in. Pins survive project↔global scope toggles.',
+    description: '**What it does:** Opens the multi-select Pin modal to choose which **Dispatch** agents and terminals stay pinned at the top of the agent list.\n\n**Use when:** You want a few favorite agents or terminals to always be one keystroke away regardless of project or scope.\n\n**Notes:** Space toggles, Enter commits, Esc cancels. The order you Space through the rows is the order pins render in. Pins survive project↔global scope toggles.',
     keywords: ['pin', 'pins', 'pinned', 'favorite', 'star', 'top', 'dispatch', 'terminal'],
     getState: ({ flags }) => panel(flags.pinAgentsOpen),
     run: ({ ui, flags }) => {
@@ -202,14 +202,14 @@ export const paneCommands: CommandDef[] = [
   {
     // Quick-remove counterpart to pin-agents. Targets the currently
     // dispatch-focused row so the keyboard-driven flow is "navigate
-    // to a pinned row, run Unpin Agent." We use the same
+    // to a pinned row, run Unpin Session." We use the same
     // commandTargetSessionId resolver the rest of this file uses
     // for dispatch-aware target picking, so the highlighted row in
     // the dispatch list IS the unpin target.
     //
     // The `when` guard is intentionally strict: only show the
     // command if the focused row is currently pinned. Showing it
-    // unconditionally would lead users to "Unpin Agent" on a
+    // unconditionally would lead users to "Unpin Session" on a
     // non-pinned row, which silently no-ops in the reducer — bad
     // affordance.
     id: 'unpin-agent',

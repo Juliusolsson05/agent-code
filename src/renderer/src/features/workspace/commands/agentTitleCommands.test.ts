@@ -38,7 +38,7 @@ function baseState(): WorkspaceState {
   }
 }
 
-describe('Set Agent Title command targeting', () => {
+describe('Set Title command targeting', () => {
   it('captures the focused Grid agent', () => {
     const harness = context(baseState())
 

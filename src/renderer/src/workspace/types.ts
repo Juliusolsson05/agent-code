@@ -65,8 +65,11 @@ export type Tab = {
  *                screen scrape.
  *   'terminal' — a plain shell child process. The pane renders an
  *                xterm.js instance that receives raw PTY bytes and
- *                forwards keystrokes back. VS Code-style integrated
- *                terminal with no Agent Code chrome.
+ *                forwards keystrokes back, underneath the SAME shared
+ *                PaneHeader every agent kind uses (#865 terminal-session
+ *                parity): title/name row, color flag, Status Mode fill,
+ *                and TAIL apply exactly as for an agent pane. Only the
+ *                body differs — a raw PTY view, not a provider transcript.
  *
  * Persisted in SessionMeta so a reload restores each pane to the
  * right component. Absent (= undefined) in pre-terminal workspace.json
