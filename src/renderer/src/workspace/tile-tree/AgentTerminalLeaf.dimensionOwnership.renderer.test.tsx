@@ -621,6 +621,81 @@ describe('AgentTerminalLeaf dimension ownership', () => {
     view.unmount()
   })
 
+  // The same contract for the two full-pane hosts (PR #873 round-2 review:
+  // only the inline host was exercised behaviourally). Each has its own
+  // scheduler and fences, so each must prove its callback is the real one.
+  it.each([
+    { host: 'agent pane (AgentTerminalLeaf)', mount: (id: string) => agentPane(id) },
+    { host: 'shell pane (TerminalLeaf)', mount: (id: string) => shellPane(id) },
+  ])('refits the $host when only its renderer changed', async ({ mount }) => {
+    const view = render(mount('renderer-host'))
+    await act(async () => {
+      attach.resolve('')
+      await attach.promise
+    })
+    act(() => flushAnimationFrames())
+    const terminal = xtermHarness.instances[0]!
+    const fitsBefore = xtermHarness.fit.mock.calls.length
+    const resizesBefore = resize.mock.calls.length
+    const options = xtermHarness.attachWebgl.mock.calls[0]![1] as { onRendererChange: () => void }
+
+    // WebGL -> DOM after a context loss: same container, wider cells.
+    terminal.cols = 116
+    act(() => {
+      options.onRendererChange()
+      options.onRendererChange()
+    })
+    expect(frames.size).toBe(1)
+    act(() => flushAnimationFrames())
+    expect(xtermHarness.fit.mock.calls.length).toBe(fitsBefore + 1)
+    expect(resize.mock.calls.length).toBe(resizesBefore + 1)
+    expect(resize).toHaveBeenLastCalledWith('renderer-host', 116, 40)
+    view.unmount()
+  })
+
+  it('does not let a non-owning agent pane resize the shared PTY on a renderer change', async () => {
+    // The fence that matters most: a pane that has lost dimension ownership
+    // (here to the fullscreen editor's inline terminal) must stay inert on a
+    // renderer change exactly as it does for container resizes, or its fallback
+    // refit would shrink or grow the PTY the actual owner is driving.
+    const runtime = { ...emptyRuntime(), processStatus: 'started' as const }
+    const tree = (editorFullscreen: boolean) => (
+      <AgentTerminalOwnershipProvider>
+        <GlobalEditorWorkspaceSlot open editorFullscreen={editorFullscreen} splitWorkspaceWidth="60%">
+          <MountedAgentTerminalOwner sessionId="non-owner">
+            <AgentTerminalLeaf
+              sessionId="non-owner"
+              focused
+              onFocusRequest={() => {}}
+              workspace={workspace}
+              runtime={runtime}
+              projectDir="/tmp/project"
+              provider="codex"
+              showStatusMode={false}
+            />
+          </MountedAgentTerminalOwner>
+        </GlobalEditorWorkspaceSlot>
+      </AgentTerminalOwnershipProvider>
+    )
+    const view = render(tree(true))
+    await act(async () => {
+      attach.resolve('')
+      await attach.promise
+    })
+    act(() => flushAnimationFrames())
+    const fitsBefore = xtermHarness.fit.mock.calls.length
+    resize.mockClear()
+    const options = xtermHarness.attachWebgl.mock.calls[0]![1] as { onRendererChange: () => void }
+
+    xtermHarness.instances[0]!.cols = 116
+    act(() => options.onRendererChange())
+    act(() => flushAnimationFrames())
+
+    expect(xtermHarness.fit.mock.calls.length).toBe(fitsBefore)
+    expect(resize).not.toHaveBeenCalled()
+    view.unmount()
+  })
+
   it('sends exactly one resize when a retained pane is revealed after a takeover', async () => {
     // #752: Reader/Spotlight/Settings hide the workspace instead of
     // unmounting it. While hidden the pane must not measure a display:none
