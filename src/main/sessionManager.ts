@@ -87,6 +87,8 @@ import {
   type CodexReplacementRedirect,
   type CodexReplacementReservation,
 } from '@main/sessions/codexReplacementLedger.js'
+import { TerminalForegroundMonitor } from '@main/sessions/terminalForeground.js'
+import type { TerminalForegroundEvent, TerminalForegroundState } from '@shared/types/terminalForeground.js'
 
 function codexObservationEnumOrUnknown(
   name: CodexTranscriptObservationEventName,
@@ -166,6 +168,7 @@ type ManagerEvents = {
   'jsonl-error': [{ sessionId: string; error: Error }]
   'transcript-diagnostic': [{ sessionId: string; diagnostic: unknown }]
   'process-state': [{ sessionId: string; active: boolean; status?: string }]
+  'terminal-foreground': [TerminalForegroundEvent]
   'trust-dialog': [{ sessionId: string; visible: boolean; workspace?: string }]
   'resume-prompt': [{
     sessionId: string
@@ -633,6 +636,23 @@ export class SessionManager extends EventEmitter {
   private readonly terminalBuffers = new Map<string, CappedTextBuffer>()
   private readonly terminalAttached = new Set<string>()
 
+  // Shell activity producer (#865). Emits on a channel of its own, NOT
+  // 'process-state': the remote tap and the recorder subscribe to
+  // process-state and must never learn about terminals (#866).
+  private readonly terminalForeground = new TerminalForegroundMonitor({
+    listTmuxPanes: async () => this.tmuxRegistry?.listPaneForeground() ?? new Map(),
+    sampleDirect: sessionId => {
+      const entry = this.sessions.get(sessionId)
+      if (entry?.kind !== 'terminal') return null
+      const command = entry.session.getForegroundProcessName()
+      return command === null ? null : { command, cwd: null }
+    },
+    onChange: (sessionId, state) => {
+      this.markActivity(sessionId)
+      this.emit('terminal-foreground', { sessionId, ...state })
+    },
+  })
+
   // Agent PTY terminal replay state. Agent sessions already publish
   // parsed screen snapshots to the renderer, which is perfect for the
   // structured feed but not enough for a real inline terminal: xterm
@@ -880,6 +900,7 @@ export class SessionManager extends EventEmitter {
     if (kind === 'terminal') {
       this.terminalBuffers.delete(sessionId)
       this.terminalAttached.delete(sessionId)
+      this.terminalForeground.untrack(sessionId)
     } else {
       this.agentPtyBuffers.delete(sessionId)
       this.agentPtyAttachCounts.delete(sessionId)
@@ -3102,6 +3123,12 @@ export class SessionManager extends EventEmitter {
         ready: true,
         reason: 'ready',
       })
+      // Start observing only once the shell is really up, so a failed start
+      // never leaves a tracked id behind (cleanupSessionState untracks).
+      this.terminalForeground.track(
+        sessionId,
+        tmuxSessionName ? { kind: 'tmux', tmuxName: tmuxSessionName } : { kind: 'direct' },
+      )
       performanceService.record({
         kind: 'span_end',
         process: 'main',
@@ -4668,14 +4695,39 @@ export class SessionManager extends EventEmitter {
     return this.spawnInfo.get(sessionId)?.cwd ?? null
   }
 
+  /**
+   * Kind captured at spawn time, before the session is a live registry entry.
+   *
+   * WHY this exists alongside getSessionKind: spawnInfo is set (~:2484) and
+   * `input-readiness {reason:'starting'}` is emitted (~:2501) BEFORE the
+   * RegistryEntry is inserted into `this.sessions` — the terminal path in
+   * particular constructs its tmux/PTY backend and only registers the entry
+   * once that succeeds (~:3113). During that window getSessionKind returns
+   * null for a session that IS a terminal, so any caller gating on
+   * getSessionKind alone (e.g. SessionFeedSource's terminal filter) misses
+   * the pre-registration frames. getSpawnKind reads the earlier-populated
+   * spawnInfo map instead, and spawnInfo is deleted in cleanupSessionState
+   * at the same point sessions are, so this never outlives a session's
+   * lifecycle.
+   */
+  getSpawnKind(sessionId: string): SessionKind | null {
+    return this.spawnInfo.get(sessionId)?.kind ?? null
+  }
+
   /** Epoch ms of the last observed activity (any relayed session event). */
   getLastActivityAt(sessionId: string): number | null {
     return this.lastActivityAt.get(sessionId) ?? null
   }
 
+  /** Current foreground state of every tracked terminal (#865). */
+  getTerminalForegrounds(): Record<string, TerminalForegroundState> {
+    return this.terminalForeground.snapshot()
+  }
+
   /** Kill every live session. Called on app quit. */
   async killAll(): Promise<void> {
     this.shuttingDown = true
+    this.terminalForeground.dispose()
     // Recoveries can still be in the pre-entry tool/tmux/MCP phase and are not
     // visible in list(). Shutdown must mark those claims cancelled too so they
     // cannot publish a provider after the app has begun quitting.

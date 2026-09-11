@@ -55,7 +55,7 @@ vi.mock('@xterm/xterm', () => ({
       this.onDataListener = listener
       return { dispose: this.inputDispose }
     }
-    // Follow wiring (agentTerminalFollow) subscribes to viewport movement on
+    // Follow wiring (terminalFollow) subscribes to viewport movement on
     // mount; these scroll surfaces exist so the ownership harness exercises
     // the same Terminal API the real component consumes.
     onScroll(listener: (line: number) => void) {
@@ -344,6 +344,7 @@ describe('AgentTerminalLeaf dimension ownership', () => {
         focused
         onFocusRequest={() => {}}
         workspace={workspace}
+        showStatusMode={false}
       />
     )
   }

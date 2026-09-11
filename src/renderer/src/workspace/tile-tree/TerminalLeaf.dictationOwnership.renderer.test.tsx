@@ -24,12 +24,21 @@ vi.mock('@xterm/xterm', () => ({
     cols = 120
     rows = 40
     options: Record<string, unknown> = {}
+    // Minimal shape the shared useTerminalFollow hook needs to attach without
+    // throwing (#865: TerminalLeaf now always wires it, not just on tail).
+    // This file never engages tail, so onScroll is only ever registered —
+    // never fired — but attach() itself calls it unconditionally on mount.
+    buffer = { active: { type: 'normal', viewportY: 0, baseY: 0, cursorY: 0 } }
     loadAddon() {}
     open() {}
     onData(listener: (data: string) => void) {
       xtermHarness.onData = listener
       return { dispose() {} }
     }
+    onScroll() { return { dispose() {} } }
+    scrollToBottom() {}
+    scrollToLine() {}
+    registerMarker() { return null }
     write(_data: string, callback?: () => void) { callback?.() }
     focus() {}
     dispose() {}
@@ -49,6 +58,11 @@ vi.mock('@renderer/app-state/hooks', () => ({
         dictationEnabled: true,
         dictationProvider: 'local',
         dictationShortcut: 'off',
+        // TerminalLeaf renders the shared PaneHeader since #865, and its
+        // color-flag chunk reads this key unconditionally (unlike the other
+        // header selectors, which optional-chain). A keyless mock would throw
+        // on `undefined[sessionId]` before this file's own assertions run.
+        dispatchColorFlags: {},
       },
     }),
 }))
@@ -120,7 +134,7 @@ describe('TerminalLeaf dictation ownership', () => {
   it('registers dictation only while the pane is visible, even when focused', async () => {
     const tree = (hidden: boolean) => (
       <RetainedWorkspaceSurface hidden={hidden}>
-        <TerminalLeaf sessionId="shell-1" focused onFocusRequest={() => {}} workspace={workspace} />
+        <TerminalLeaf sessionId="shell-1" focused onFocusRequest={() => {}} workspace={workspace} showStatusMode={false} />
       </RetainedWorkspaceSurface>
     )
     const view = render(tree(false))

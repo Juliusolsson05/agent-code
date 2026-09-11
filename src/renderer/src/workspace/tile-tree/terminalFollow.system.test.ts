@@ -25,14 +25,14 @@ it('follows and restores real xterm content across trimming and buffer switches'
       import { flushSync } from '${resolve(root, 'node_modules/react-dom/index.js')}'
       import { Terminal } from '${resolve(root, 'node_modules/@xterm/xterm/lib/xterm.js')}'
       import '${resolve(root, 'node_modules/@xterm/xterm/css/xterm.css')}'
-      import { useAgentTerminalFollow } from '${resolve(root, 'src/renderer/src/workspace/tile-tree/agentTerminalFollow.ts')}'
+      import { useTerminalFollow } from '${resolve(root, 'src/renderer/src/workspace/tile-tree/terminalFollow.ts')}'
 
       window.followTrial = (async () => {
         const term = new Terminal({ cols: 80, rows: 10, scrollback: 2000 })
         term.open(document.getElementById('terminal'))
         const termRef = { current: term }
         let follow
-        function Harness(props) { follow = useAgentTerminalFollow({ ...props, termRef }); return null }
+        function Harness(props) { follow = useTerminalFollow({ ...props, termRef }); return null }
         const reactRoot = createRoot(document.getElementById('react'))
         let tailActive = false
         let scrollToLatestRequest = 0

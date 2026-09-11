@@ -37,7 +37,8 @@ import type { KeyVaultKey, KeyVaultStatus } from '@shared/types/keyVault'
 //      exactly like a manual paste.
 //   5. If proxy streaming is on, the mitm addon base64-encodes outbound
 //      request bodies into the proxy events journal under
-//      ~/.config/agent-code/proxy, which nothing prunes or rotates.
+//      ~/.config/agent-code/proxy, kept until debug-storage retention prunes
+//      it (main/storage/debugRetention.ts).
 //
 // Anything meant to stay secret should be given to the agent by a path
 // that does not go through a prompt at all.

@@ -56,7 +56,7 @@ import {
   allPromptTemplates,
 } from '@renderer/features/prompt-templates/templates'
 import { prepareTemplateText } from '@renderer/features/prompt-templates/keyReferences'
-import { deliverTextToSession } from '@renderer/features/session-text-delivery/deliverTextToSession'
+import { deliverTextToSession, textDeliverySurface } from '@renderer/features/session-text-delivery/deliverTextToSession'
 
 import {
   createSavedPromptTemplate,
@@ -80,6 +80,7 @@ import type {
 import { promptTemplateTargetSessionId } from '@renderer/features/prompt-templates/targetSession'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import { resolveAgentPaneLabel } from '@renderer/workspace/tile-tree/paneLabels'
+import { sessionDisplayTitle } from '@renderer/workspace/sessionDisplayTitle'
 import { useWorkspaceContext } from '@renderer/workspace/WorkspaceContext'
 import type { PaletteMode } from '@renderer/features/command-palette/paletteMode'
 import { commandOwnsOpenSurface } from '@renderer/features/command-palette/surfaceOwnership'
@@ -419,6 +420,15 @@ function OpenCommandPalette({
   const promptTemplateSessionId = promptTemplateTargetSessionId(workspace)
   const promptTemplatesInCommandSearch =
     promptTemplatesInCommandSearchEnabled && promptTemplateSessionId !== null
+  // Both PromptTemplatePreviewPanel renders below (commands mode and
+  // dedicated prompt-template mode) share ONE target session — the command
+  // target — so this is computed once here rather than per render site.
+  // `?? undefined` narrows `textDeliverySurface`'s `null` ("no session") to
+  // the panel's optional-prop convention: undefined means "no answer, fall
+  // back to the template's own configured insert mode" (#865).
+  const templateDeliverySurface = promptTemplateSessionId
+    ? textDeliverySurface(workspace, promptTemplateSessionId) ?? undefined
+    : undefined
   const focusedCwd = focusedMeta?.cwd ?? null
   const focusedProvider = focusedMeta?.kind ?? DEFAULT_PROVIDER
   const customPromptTemplates = settings.savedPromptTemplates
@@ -478,10 +488,10 @@ function OpenCommandPalette({
         .map(entry => {
           const kind = entry.sessionMeta.kind ?? DEFAULT_PROVIDER
           const cwd = entry.sessionMeta.cwd
-          const cwdBase = cwd.split('/').filter(Boolean).pop() ?? cwd
           return {
             id: entry.id,
-            label: `${kind} · ${cwdBase}`,
+            // Same title rule as every other list (#865), kind as context.
+            label: `${sessionDisplayTitle(entry.sessionMeta)} · ${kind}`,
             description: `${entry.sourceTabTitle} · ${cwd}`,
             note: entry.note,
             buriedAt: entry.buriedAt,
@@ -986,9 +996,8 @@ function OpenCommandPalette({
       historyScore: historyScoreMap,
       starred: commandStarred,
       sortMode: commandSortMode,
-      // A terminal is a valid generic command target but has no agent
-      // composer. Hiding templates there matches the dedicated picker and
-      // prevents an actionable-looking result whose execution can only no-op.
+      // Templates are valid for every target since #830: a terminal receives
+      // a bracketed paste (never Enter), so there is no dead result to hide.
       includePromptTemplates: promptTemplatesInCommandSearch,
     }),
     [
@@ -1969,6 +1978,7 @@ function OpenCommandPalette({
                 template={promptTemplateFillState.template}
                 values={promptTemplateFillState.values}
                 insertMode={promptTemplateFillState.insertMode}
+                deliverySurface={textDeliverySurface(workspace, promptTemplateFillState.sessionId) ?? 'composer'}
                 onValueChange={(name, value) => {
                   setPromptTemplateFillState(state => state ? {
                     ...state,
@@ -2394,7 +2404,7 @@ function OpenCommandPalette({
 
           {mode === 'commands' && (
             selectedPaletteRow?.kind === 'prompt-template' ? (
-              <PromptTemplatePreviewPanel template={selectedPaletteRow.template} />
+              <PromptTemplatePreviewPanel template={selectedPaletteRow.template} deliverySurface={templateDeliverySurface} />
             ) : (
               <CommandDescriptionPanel
                 command={selectedCommand}
@@ -2408,7 +2418,7 @@ function OpenCommandPalette({
               template. Same breakpoint policy as the command description panel
               (hidden below md) so the narrow layout stays list-only. */}
           {mode === 'prompt-template' && (
-            <PromptTemplatePreviewPanel template={selectedPromptTemplate} />
+            <PromptTemplatePreviewPanel template={selectedPromptTemplate} deliverySurface={templateDeliverySurface} />
           )}
 
           {/* Resume mode — conversation preview for the highlighted

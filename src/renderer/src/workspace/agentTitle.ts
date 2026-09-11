@@ -1,4 +1,3 @@
-import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
 
 /**
@@ -28,8 +27,13 @@ export function normalizeAgentTitle(value: string): string | null {
  *
  * WHY this returns the original object for an invalid/no-op edit: workspace
  * autosave keys off state identity. Opening the prompt and saving an unchanged
- * value should not schedule a disk write, while a missing or terminal session
- * must not acquire agent-only metadata through a stale captured modal.
+ * value should not schedule a disk write, and a session that closed while its
+ * prompt was open must not be recreated through a stale captured modal.
+ *
+ * WHY every session kind is accepted (#865): titles used to be agent-only
+ * (#660). A title is session metadata the user writes for scanning, and every
+ * reader of `SessionMeta.title` (Dispatch, observe, close confirmation)
+ * already handles terminals. The kind check was the only thing in the way.
  *
  * WHY clearing deletes the key instead of persisting an empty string:
  * `SessionMeta.title` predates this UI and is read by Dispatch, orchestration,
@@ -44,7 +48,7 @@ export function setAgentTitleInWorkspace(
   value: string,
 ): WorkspaceState {
   const meta = state.sessions[sessionId]
-  if (!meta || !isAgentProviderKind(meta.kind ?? DEFAULT_PROVIDER)) return state
+  if (!meta) return state
 
   const title = normalizeAgentTitle(value)
   if (title === null && meta.title === undefined) return state

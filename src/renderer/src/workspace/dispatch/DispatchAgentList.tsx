@@ -377,17 +377,32 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
       unreadKind: current?.unreadKind,
       conditions: current?.conditions,
       processError: current?.processError,
+      // Foreground monitor state (#865): terminalForeground.cwd lets a shell
+      // row's title follow `cd` the way an agent row follows its latest
+      // prompt; activityStatus is the running command shown in the subtitle
+      // ("shell running · npm").
+      terminalForeground: current?.terminalForeground,
+      // WHY gated on row.kind === 'terminal' (I3, D3 deviation): Codex's
+      // activityStatus string ticks every second ("working… 12s") while a
+      // command is running, and this selector runs useShallow — a shallow
+      // key/value diff, not a deep skip — so including the raw string for
+      // EVERY row made every live Codex/Claude row re-render on that tick
+      // even though the dispatch list never paints their activityStatus (it
+      // only reads it for the 'shell running · …' subtitle on terminal
+      // rows). Selecting undefined for non-terminal rows keeps the shallow
+      // comparison stable across those per-second updates while still
+      // giving terminal rows the live value they actually render.
+      activityStatus: row.kind === 'terminal' ? current?.activityStatus : undefined,
     }
   }))
   const onSelect = useCallback(() => {
     if (disabled) return
     focusSessionInTab(row.tabId, row.sessionId)
   }, [disabled, focusSessionInTab, row.sessionId, row.tabId])
-  const isTerminal = row.kind === 'terminal'
   const activity = dispatchActivity(runtime)
   const activityClasses = dispatchActivityClasses(activity, active)
   const subtitle = dispatchSubtitle(runtime, row.kind)
-  const title = dispatchRowTitle(row, runtime.entries)
+  const title = dispatchRowTitle(row, runtime.entries, runtime.terminalForeground?.cwd)
   const agentName = useAgentName(row.sessionId)
   // The hover tooltip joins name and title exactly the way AgentTitleHeader
   // does (' — ', name first, empty parts dropped). WHY it must match: the chip
@@ -398,13 +413,14 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
   // re-addressing #816 is about, even when it is only a tooltip.
   const nameAndTitle = [agentName, title].filter(Boolean).join(' — ')
   const attentionLabel = dispatchAttentionLabel(runtime)
-  const unreadKind = isTerminal
-    ? null
-    : attentionLabel
-      ? 'attention'
-      : runtime.unreadKind === 'attention'
-        ? 'output'
-        : runtime.unreadKind
+  // Terminals get NEW and ERROR like every row (#865). NEW used to be hidden
+  // because shells had no "finished" signal, which also hid a failed wake's
+  // ERROR. The foreground monitor now marks a finished command unread.
+  const unreadKind = attentionLabel
+    ? 'attention'
+    : runtime.unreadKind === 'attention'
+      ? 'output'
+      : runtime.unreadKind
 
   return (
     <button
@@ -511,6 +527,7 @@ function dispatchSubtitle(runtime: {
   exited?: number | null
   unreadSince?: number | null
   processStatus?: string
+  activityStatus?: string | null
 }, kind?: SessionKind): string {
   // WHY terminals get their own label path:
   // Agent subtitles describe model turn state (`thinking`, `responding`,
@@ -521,7 +538,11 @@ function dispatchSubtitle(runtime: {
   if (kind === 'terminal') {
     if (runtime.sessionStatus === undefined) return 'shell starting'
     if (isSessionExited(runtime)) return 'shell exited'
-    if (runtime.sessionStatus === 'running') return 'shell running'
+    // The foreground command, e.g. `shell running · npm` (#865). Before the
+    // monitor this branch could never be reached: shells were never running.
+    if (runtime.sessionStatus === 'running') {
+      return runtime.activityStatus ? `shell running · ${runtime.activityStatus}` : 'shell running'
+    }
     return 'shell idle'
   }
   if (runtime.sessionStatus === undefined) return 'starting'

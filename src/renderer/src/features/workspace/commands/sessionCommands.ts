@@ -14,6 +14,7 @@ import { buildProviderResumeCommand } from '@renderer/workspace/providerResumeCo
 import { providerSupportsBuiltInMcpDomain } from '@mcp/shared/types'
 import type { BuiltInMcpDomain } from '@mcp/shared/types'
 import { clearAgentComposer } from '@renderer/workspace/tile-tree/TileLeaf/clearAgentComposer'
+import { sessionHasTranscript } from '@renderer/workspace/transcriptAvailability'
 
 function targetSupportsBuiltInMcpDomain(
   workspace: CommandContext['workspace'],
@@ -86,7 +87,12 @@ export const sessionCommands: CommandDef[] = [
       // nothing looked wrong; it would have started reporting the wrong answer
       // the moment a switch edge was added for a provider whose prompts we
       // cannot parse, or an adapter for one with no switch edge.
-      return getProviderFeatures(kind).promptHistoryExtraction
+      //
+      // sessionHasTranscript additionally excludes OpenCode Terminal (kind
+      // 'opencode', providerRuntime 'terminal'): its history loaders never
+      // populate `runtime.entries`, so prompt extraction had nothing to read
+      // even though promptHistoryExtraction is true for plain OpenCode.
+      return getProviderFeatures(kind).promptHistoryExtraction && sessionHasTranscript(meta)
     },
     run: ({ workspace, ui }) => {
       const sessionId = commandTargetSessionId(workspace)
@@ -285,7 +291,9 @@ export const sessionCommands: CommandDef[] = [
     },
   },
   {
-    // Close Old Agents — batch cleanup for stale provider panes.
+    // Close Old Agents — batch cleanup for stale agent AND terminal panes
+    // (#865 gave Close Old Agents parity: terminals are inactive-sortable
+    // and closeable through this same batch flow, not just agents).
     //
     // WHY this is an app-surface command instead of a session command:
     // the user is cleaning the workspace, not acting on the focused pane.
@@ -298,7 +306,7 @@ export const sessionCommands: CommandDef[] = [
     pickerVisibility: 'advanced',
     surface: 'app',
     title: 'Close Old Agents…',
-    description: '**What it does:** Opens a batch cleanup modal for **agents** inactive longer than a chosen time.\n\n**Use when:** You want to close stale agents across all projects or selected projects.\n\n**Notes:** Defaults to 4 hours and excludes currently-running agents unless you opt in.',
+    description: '**What it does:** Opens a batch cleanup modal for **agents and terminals** inactive longer than a chosen time.\n\n**Use when:** You want to close stale agents and terminals across all projects or selected projects.\n\n**Notes:** Defaults to 4 hours and excludes currently-running sessions unless you opt in.',
     keywords: [
       'close',
       'old',

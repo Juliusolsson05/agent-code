@@ -17,6 +17,16 @@ const target: AgentPaneLabelTarget = {
   kind: 'codex',
 }
 
+const terminalTarget: AgentPaneLabelTarget = {
+  label: 'A1',
+  sessionId: 'session-a1',
+  tabId: 'tab-a',
+  tabTitle: 'renderer',
+  title: 'renderer',
+  cwd: '/work/renderer',
+  kind: 'terminal',
+}
+
 describe('agent index palette command', () => {
   it.each([
     ['A2', { label: 'A2', intent: 'reuse-existing-view' }],
@@ -63,5 +73,17 @@ describe('agent index palette command', () => {
       'B5',
       'open-in-focused-tiled-dispatch-lane',
     )
+  })
+
+  it('names a terminal target as a terminal, never as an agent (#865)', () => {
+    const focusAgentByPaneLabel = vi.fn(async () => true)
+    const command = buildAgentIndexCommand(terminalTarget, focusAgentByPaneLabel)
+
+    expect(command.description).toContain('live terminal **A1**')
+    expect(command.description).not.toContain('agent')
+    // Resume/clone are provider-process semantics; a terminal has no provider
+    // process to resume, so the lifecycle note must not claim otherwise.
+    expect(command.description).toContain('It does not clone, restart, or kill the terminal.')
+    expect(command.description).not.toContain('resume')
   })
 })

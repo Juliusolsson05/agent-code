@@ -1,4 +1,5 @@
 import type { SessionId } from '@renderer/workspace/types'
+import { sessionDisplayTitle } from '@renderer/workspace/sessionDisplayTitle'
 
 
 // ---------------------------------------------------------------------------
@@ -254,7 +255,7 @@ export function describePartialClose(outcome: PartialCloseOutcome): string | nul
 /** The slice of workspace state expansion needs. Narrowed so these functions
  *  stay pure and testable without constructing a whole store. */
 export type CloseExpansionState = {
-  sessions: Record<string, { title?: string; kind?: string; linkedParentId?: string } | undefined>
+  sessions: Record<string, { title?: string; cwd?: string; kind?: string; linkedParentId?: string } | undefined>
 }
 
 /** The slice of runtime state that decides "is this session live". Mirrors what
@@ -289,7 +290,12 @@ function snapshot(
 ): CloseTargetSnapshot {
   return {
     sessionId,
-    title: state.sessions[sessionId]?.title ?? sessionId,
+    // Folder, not the session UUID, for untitled sessions (#865): shells
+    // reach this dialog now that a running job counts as working.
+    title: (() => {
+      const meta = state.sessions[sessionId]
+      return meta?.cwd !== undefined ? sessionDisplayTitle({ title: meta.title, cwd: meta.cwd }) : (meta?.title ?? sessionId)
+    })(),
     live: isLive(runtimes, sessionId),
   }
 }

@@ -1,5 +1,5 @@
-import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
-import type { AgentProviderKind } from '@shared/types/providerKind'
+import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
+import type { SessionKind } from '@shared/types/providerKind'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   describePartialClose,
@@ -39,7 +39,7 @@ type AgentRow = {
   tabId: string
   tabTitle: string
   tabIndex: number
-  kind: AgentProviderKind
+  kind: SessionKind
   cwd: string
   cwdBase: string
   isLive: boolean
@@ -63,8 +63,11 @@ type ProjectRow = {
  * could not see the two criteria that actually put a row in the list — its age
  * and its project. An agent that received a message after the preview and went
  * idle again passed a liveness check while no longer being an OLD agent.
+ *
+ * Exported for its colocated test; still the one derivation the render memo
+ * and the close loop share.
  */
-function buildAgentRows(
+export function buildAgentRows(
   state: Workspace['state'],
   runtimes: Workspace['runtimes'],
   now: number,
@@ -80,16 +83,15 @@ function buildAgentRows(
       const meta = state.sessions[sessionId]
       if (!meta) continue
       const kind = meta.kind ?? DEFAULT_PROVIDER
-      // Registry-driven: the modal shows every agent provider so a user in
-      // a big multi-provider session can bulk-close inactive agents across
-      // Claude, Codex, and OpenCode alike. Skipping OpenCode here would
-      // silently hide those agents from the modal (and the bulk-close
-      // preview counter would report the wrong number).
-      if (!isAgentProviderKind(kind)) continue
 
       const runtime = runtimes[sessionId]
+      // Every session kind can be old (#865). Agents age by transcript
+      // timestamps; shells by their last foreground change (a command
+      // starting/finishing or a cd), which is the only activity a shell has.
       const lastActiveAt = runtime
-        ? extractLatestEntryTs(runtime.entries) ?? runtime.turnStartedAt ?? null
+        ? kind === 'terminal'
+          ? runtime.terminalForeground?.changedAt ?? null
+          : extractLatestEntryTs(runtime.entries) ?? runtime.turnStartedAt ?? null
         : null
 
       rows.push({
@@ -419,7 +421,7 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
             <div>
               <DialogTitle>Close Old Agents</DialogTitle>
               <DialogDescription>
-                Close Claude and Codex agents that have been inactive past the threshold.
+                Close agents and terminals that have been inactive past the threshold.
               </DialogDescription>
             </div>
             <button
@@ -541,7 +543,7 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
             <div className="flex-1 min-h-0 overflow-y-auto">
               {projects.length === 0 ? (
                 <div className="px-3 py-6 text-center text-[11px] text-muted">
-                  No open agents.
+                  No open agents or terminals.
                 </div>
               ) : (
                 filteredProjects.map(project => {
@@ -652,7 +654,7 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
 
         <div className="flex-shrink-0 border-t border-border px-4 py-3 flex items-center justify-between gap-3">
           <div className="text-[10px] text-muted">
-            Running agents are excluded unless explicitly included. Terminals are never included.
+            Running agents and terminals with a command in progress are excluded unless explicitly included.
           </div>
           <div className="flex items-center gap-2">
             <button

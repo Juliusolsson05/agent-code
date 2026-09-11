@@ -177,6 +177,7 @@ const WorkspaceLeaf = memo(function WorkspaceLeaf({
         focused={sessionId === focusedSessionId}
         onFocusRequest={requestFocus}
         workspace={workspace}
+        showStatusMode={showStatusMode}
       />
     )
   }
@@ -205,6 +206,16 @@ const WorkspaceLeaf = memo(function WorkspaceLeaf({
           // branch didn't, which is why terminal-view panes never lit their
           // header while working (#851).
           showStatusMode={showStatusMode}
+          // #858: same related-agent identity the rendered branch below
+          // passes to LeafComponent, so a persisted related selection that
+          // lands here (raw-terminal surface) is named in the status row
+          // instead of silently swapping which agent's TUI this pane shows.
+          ownerSessionId={sessionId}
+          relatedAgentTabs={relatedTabs}
+          onSelectRelatedSession={(nextSessionId: SessionId) => {
+            workspace.selectGridRelatedSession(sessionId, nextSessionId)
+            workspace.focusSessionInTab(tabId, sessionId)
+          }}
         />
       </MountedAgentTerminalOwner>
     )

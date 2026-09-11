@@ -1,5 +1,5 @@
-import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
-import type { AgentProviderKind } from '@shared/types/providerKind'
+import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
+import type { SessionKind } from '@shared/types/providerKind'
 import type { WorktreeActivityIndexStatus, WorktreeActivitySummary } from '@preload/index'
 import type { GitWorktreeStatus, WorktreeIdentity } from '@shared/types/git'
 import { matchWorktree } from '@shared/work-context/matching'
@@ -9,7 +9,7 @@ import type { Workspace } from '@renderer/workspace/workspaceStore'
 
 export type WorktreeLiveAgent = {
   sessionId: SessionId
-  kind: AgentProviderKind
+  kind: SessionKind
   tabTitle: string
   live: boolean
   focused: boolean
@@ -131,12 +131,10 @@ export function collectLiveAgentsByWorktree(
     for (const sessionId of resolveTabSessions(workspace.state, tab.id)) {
       const meta = workspace.state.sessions[sessionId]
       const kind = meta?.kind ?? DEFAULT_PROVIDER
-      // Registry-driven: the worktree activity view lists live agents per
-      // worktree regardless of provider — a running OpenCode session
-      // consumes the worktree just as much as a Claude or Codex one. The
-      // hardcoded pair here would silently hide OpenCode sessions from
-      // per-worktree activity even though they're on-disk in the tab.
-      if (!isAgentProviderKind(kind)) continue
+      // Every session kind occupies a worktree (#865): a shell running a dev
+      // server in one is using it as much as an agent is. Shells fall back to
+      // their cwd below (no transcript-derived workActivity), which is exact
+      // for where they were started.
       const runtime = workspace.runtimes[sessionId]
       // WHY this surface selects active before the compatibility workContext:
       // workContext intentionally represents the historically dominant

@@ -5,6 +5,7 @@ import {
   normalizeGridShape,
   rowIndexForLane,
 } from '@renderer/workspace/dispatch/gridShape'
+import { sessionDisplayTitle } from '@renderer/workspace/sessionDisplayTitle'
 
 export type DispatchAgentRow = {
   key: string
@@ -45,9 +46,7 @@ export function buildDispatchGroups(
   // to the same sessionId) and would lie about the visual hierarchy
   // ("this is in two places at once"). Same exclusivity invariant as
   // detached-vs-grid: each row belongs to exactly one bucket.
-  const pinnedSet = new Set(
-    state.pinnedSessionIds.filter(id => state.sessions[id]?.kind !== 'terminal'),
-  )
+  const pinnedSet = new Set(state.pinnedSessionIds.filter(id => state.sessions[id] !== undefined))
 
   // The tab letter answers "which project group owns this row"; the
   // number answers "which visible dispatch item will cmd+N select".
@@ -250,7 +249,7 @@ export function buildPinnedDispatchRows(
   let pinnedIndex = 1
   for (const sessionId of state.pinnedSessionIds) {
     const meta = state.sessions[sessionId]
-    if (!meta || meta.kind === 'terminal') continue
+    if (!meta) continue
     // Locate the owning tab. A pinned agent that's detached has its
     // tab id on `detachedSessions[sessionId].projectTabId`; a
     // grid-placed pinned agent is a leaf in some tab's tree. We do
@@ -423,18 +422,31 @@ export function resolveDispatchSpawnTarget(state: WorkspaceState): DispatchSpawn
 function sessionTitle(
   meta: WorkspaceState['sessions'][SessionId] | undefined,
 ): string {
-  const title = explicitAgentTitle(meta)
-  if (title) return title
-  return basename(meta?.cwd ?? 'agent')
+  // WHY sessionDisplayTitle instead of a locally duplicated basename rule
+  // (M6): this used to reimplement its own title→spawn-folder→cwd fallback
+  // (a bare `path.split('/').filter(Boolean)` basename lookup), which
+  // is exactly the "D6 title rule" — sessionDisplayTitle.ts's WHY comment
+  // — that already exists as the one shared source of truth other
+  // workspace-layer readers (pane labels, close confirmation, control
+  // observation) all agree with. Dispatch rows never have a live tmux cwd
+  // to pass as sessionDisplayTitle's second argument — that only exists in
+  // zustand runtime state, not the WorkspaceState this selector reads — so
+  // this resolves exactly the title → spawn folder → raw cwd chain, with no
+  // live-cwd override; DispatchAgentList layers the live cwd back on top
+  // via dispatchRowTitle for the actual rendered row.
+  //
+  // 'agent' stays as a LOCAL fallback for the case sessionDisplayTitle
+  // cannot itself handle: meta undefined (a dangling sessionId — a row
+  // built from tab-tree membership can race the session leaving
+  // state.sessions). sessionDisplayTitle dereferences meta.title/meta.cwd
+  // unconditionally, so passing it undefined would throw rather than
+  // degrade.
+  if (!meta) return 'agent'
+  return sessionDisplayTitle(meta)
 }
 
 function explicitAgentTitle(
   meta: WorkspaceState['sessions'][SessionId] | undefined,
 ): string | undefined {
   return meta?.title?.trim() || undefined
-}
-
-function basename(path: string): string {
-  const parts = path.split('/').filter(Boolean)
-  return parts[parts.length - 1] ?? path
 }

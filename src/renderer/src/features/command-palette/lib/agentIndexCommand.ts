@@ -41,6 +41,17 @@ export function buildAgentIndexCommand(
   intent: AgentIndexNavigationIntent = 'reuse-existing-view',
 ): ResolvedCommand {
   const opensHere = intent === 'open-in-focused-tiled-dispatch-lane'
+  // A terminal has no provider process to resume/clone/restart — it is a
+  // plain shell pane, not an agent session. Before #865 `buildAgentPaneLabelTarget`
+  // filtered terminals out with `isAgentProviderKind`, so this row could only
+  // ever describe an agent and the copy hardcoded that word. Terminals now
+  // reach this exact function, so the copy must name the actual kind or it
+  // reads as a lie for a shell ("Focuses live agent A1" pointing at a shell).
+  const isTerminal = target.kind === 'terminal'
+  const subject = isTerminal ? 'terminal' : 'agent'
+  const lifecycleNote = isTerminal
+    ? `It does not clone, restart, or kill the ${subject}.`
+    : `It does not clone, resume, restart, or kill the ${subject}.`
   return {
     id: `${AGENT_INDEX_COMMAND_PREFIX}${target.sessionId}`,
     title: opensHere
@@ -48,20 +59,20 @@ export function buildAgentIndexCommand(
       : `Go to ${target.label} · ${target.title}`,
     description: opensHere
       ? [
-          `**What it does:** Shows live agent **${target.label}** in the currently focused Tiled Dispatch lane, even when another lane already shows it.`,
+          `**What it does:** Shows live ${subject} **${target.label}** in the currently focused Tiled Dispatch lane, even when another lane already shows it.`,
           '',
           `**Target:** ${target.title} · ${target.tabTitle} · ${target.cwd}`,
           '',
-          '**Notes:** Mirrors the same running session. It does not clone, resume, restart, or kill the agent.',
+          `**Notes:** Mirrors the same running session. ${lifecycleNote}`,
         ].join('\n')
       : [
-          `**What it does:** Focuses live agent **${target.label}** in its existing view, or shows it in the currently focused view slot.`,
+          `**What it does:** Focuses live ${subject} **${target.label}** in its existing view, or shows it in the currently focused view slot.`,
           '',
           `**Target:** ${target.title} · ${target.tabTitle} · ${target.cwd}`,
           '',
-          '**Notes:** Reuses the running session. It does not clone, resume, restart, or kill the agent.',
+          `**Notes:** Reuses the running session. ${lifecycleNote}`,
           '',
-          `**Tip:** Type \`${target.label}!\` to show this same agent in the currently focused Tiled Dispatch lane.`,
+          `**Tip:** Type \`${target.label}!\` to show this same ${subject} in the currently focused Tiled Dispatch lane.`,
         ].join('\n'),
     surface: 'app',
     keywords: [],
