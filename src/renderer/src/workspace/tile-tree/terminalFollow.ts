@@ -2,11 +2,12 @@ import { useEffect, useMemo, useRef } from 'react'
 import type { RefObject } from 'react'
 import type { IMarker, Terminal } from '@xterm/xterm'
 
-// AgentTerminalLeaf keeps its expensive PTY/xterm attachment keyed on sessionId.
-// Follow intent changes independently of that lifetime: consuming it in this
-// hook avoids remounting the terminal and losing scrollback on every toggle.
-// The hook runs before the leaf's mount effect, so a fresh terminal has no
-// pre-tail position to restore. The leaf pins once its attach replay is parsed.
+// Both xterm leaves (AgentTerminalLeaf, and TerminalLeaf since #865) keep their
+// expensive PTY/xterm attachment keyed on sessionId. Follow intent changes
+// independently of that lifetime: consuming it in this hook avoids remounting
+// the terminal and losing scrollback on every toggle. The hook runs before the
+// leaf's mount effect, so a fresh terminal has no pre-tail position to
+// restore. The leaf pins once its attach replay is parsed.
 type FollowArgs = {
   sessionId: string
   scrollToLatestRequest: number
@@ -18,7 +19,7 @@ function isAtBottom(term: Terminal): boolean {
   return term.buffer.active.viewportY >= term.buffer.active.baseY
 }
 
-export function useAgentTerminalFollow({
+export function useTerminalFollow({
   sessionId, scrollToLatestRequest, tailActive, termRef,
 }: FollowArgs) {
   // The mount-owned PTY subscriber reads the latest verdict at callback time,

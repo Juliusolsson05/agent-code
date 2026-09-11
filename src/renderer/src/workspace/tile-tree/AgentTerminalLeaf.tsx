@@ -23,7 +23,7 @@ import { attachXtermWebglRenderer } from '@renderer/workspace/terminal/xtermWebg
 import { createTerminalInputForwarder } from '@renderer/workspace/tile-tree/terminalInputForwarder'
 import { encodeTerminalPaste, registerTerminalPasteTarget } from '@renderer/workspace/terminal/textPasteTarget'
 import { AgentTerminalActions } from '@renderer/workspace/tile-tree/AgentTerminalActions'
-import { useAgentTerminalFollow } from '@renderer/workspace/tile-tree/agentTerminalFollow'
+import { useTerminalFollow } from '@renderer/workspace/tile-tree/terminalFollow'
 
 type Props = {
   sessionId: SessionId
@@ -103,7 +103,7 @@ export function AgentTerminalLeaf({
   // effects read termRef.current at effect time and React runs passive effects
   // in declaration order — when tail is already on at mount, the terminal does
   // not exist yet, which is exactly the "nothing to restore" case.
-  const follow = useAgentTerminalFollow({
+  const follow = useTerminalFollow({
     sessionId,
     scrollToLatestRequest: runtime.scrollToLatestRequest,
     tailActive,

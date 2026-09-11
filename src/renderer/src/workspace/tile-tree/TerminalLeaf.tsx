@@ -18,14 +18,18 @@ import { createTerminalInputForwarder } from '@renderer/workspace/tile-tree/term
 import { encodeTerminalPaste, registerTerminalPasteTarget } from '@renderer/workspace/terminal/textPasteTarget'
 import { subscribeToTerminalData } from '@renderer/workspace/terminal/sessionDataDispatcher'
 import { attachXtermWebglRenderer } from '@renderer/workspace/terminal/xtermWebglRenderer'
+import { PaneHeader } from '@renderer/workspace/tile-tree/TileLeaf/PaneHeader'
+import { paneHeaderStatusLit } from '@renderer/workspace/tile-tree/TileLeaf/paneHeaderStatus'
+import { useTerminalFollow } from '@renderer/workspace/tile-tree/terminalFollow'
 
 // TerminalLeaf — one pane that hosts a plain shell session.
 //
-// Counterpart to TileLeaf. Where TileLeaf owns the elaborate Claude
-// Code UI (feed, composer, slash picker, streaming card, todo
-// rendering, diff slabs, …), TerminalLeaf is the minimal VS Code-
-// style integrated terminal: a single <div> containing an xterm.js
-// instance. No feed, no composer, no overlays.
+// Counterpart to TileLeaf. Where TileLeaf owns the elaborate agent UI (feed,
+// composer, slash picker, …), TerminalLeaf is the minimal VS Code-style
+// integrated terminal: one xterm.js instance under the SHARED pane header. No
+// feed, no composer. Since #865 the header, title/name row, color flag,
+// Status Mode fill and auto-follow are the same ones agents get; only
+// transcript and composer features stay agent-only.
 //
 // Data flow:
 //   main spawns a TerminalSession (shell PTY)
@@ -60,6 +64,11 @@ type Props = {
   focused: boolean
   onFocusRequest: () => void
   workspace: Workspace
+  /** The window's Status Mode setting. Required, not defaulted, mirroring
+   *  #853's decision for AgentTerminalLeaf: an omitted prop is exactly how a
+   *  header goes unlit by accident, and a default would let the next call
+   *  site repeat that. */
+  showStatusMode: boolean
 }
 
 export function TerminalLeaf({
@@ -68,6 +77,7 @@ export function TerminalLeaf({
   focused,
   onFocusRequest,
   workspace,
+  showStatusMode,
 }: Props) {
   // Dictation target registration (issue #421). Plain terminal panes were the
   // ONE leaf kind that never called useComposerDictation, so a focused
@@ -138,6 +148,27 @@ export function TerminalLeaf({
   const termRef = useRef<Terminal | null>(null)
   const focusedRef = useRef(focused)
   focusedRef.current = focused
+  // Session metadata and activity as PRIMITIVE selectors (#865). This leaf
+  // deliberately never takes the runtime as a prop: the xterm owns its output
+  // path, and a runtime prop would re-render the leaf on every PTY chunk. Each
+  // value below changes only on the transition that changes what is painted.
+  const title = useAppStore(state => state.workspaceState?.sessions?.[sessionId]?.title)
+  const spawnCwd = useAppStore(state => state.workspaceState?.sessions?.[sessionId]?.cwd ?? null)
+  const liveCwd = useAppStore(state => state.workspaceRuntimes?.[sessionId]?.terminalForeground?.cwd ?? null)
+  const foregroundCommand = useAppStore(state => {
+    const foreground = state.workspaceRuntimes?.[sessionId]?.terminalForeground
+    return foreground?.busy ? foreground.command : null
+  })
+  const isSessionLive = useAppStore(state => state.workspaceRuntimes?.[sessionId]?.sessionStatus === 'running')
+  const tailMode = useAppStore(state => state.workspaceRuntimes?.[sessionId]?.tailMode === true)
+  const tailAllMode = useAppStore(state => state.tailAllMode === true)
+  const scrollToLatestRequest = useAppStore(state => state.workspaceRuntimes?.[sessionId]?.scrollToLatestRequest ?? 0)
+  // Same mask AgentTerminalLeaf uses: a display:none pane cannot scroll, and
+  // folding visibility in makes re-reveal a real transition that re-engages.
+  const tailActive = (tailMode || tailAllMode) && ownerVisible
+  // Must run BEFORE the mount effect below: its effects read termRef at effect
+  // time and React runs passive effects in declaration order.
+  const follow = useTerminalFollow({ sessionId, scrollToLatestRequest, tailActive, termRef })
   // WHY a shell pane tracks visibility itself (#752 review): agent panes get
   // their "may I measure / who owns the PTY size" answer from
   // MountedAgentTerminalOwner, which TerminalLeaf never had — a shell has no
@@ -174,6 +205,9 @@ export function TerminalLeaf({
     let webglRenderer: ReturnType<typeof attachXtermWebglRenderer> | null = null
     let onDataDisposable: { dispose(): void } | null = null
     let offTerminalData: (() => void) | null = null
+    // Nullable like the disposables above: xterm init can throw before the
+    // follow wiring ever runs, and cleanup must survive that path.
+    let offFollowAttach: (() => void) | null = null
     let offTextPaste: (() => void) | null = null
     let resizeObserver: ResizeObserver | null = null
     let resizeFrame: number | null = null
@@ -283,6 +317,9 @@ export function TerminalLeaf({
       webglRenderer = attachXtermWebglRenderer(term)
       termRef.current = term
       fitRef.current = fit
+      // Follow re-pin wiring lives in the hook; the mount effect only owns
+      // the terminal instance lifetime, so this attaches/detaches with it.
+      offFollowAttach = follow.attach(term)
 
       // Initial fit is deferred one frame. Reason: React's commit
       // phase has just run; the container's box has been inserted
@@ -366,7 +403,18 @@ export function TerminalLeaf({
           backlogQueue.push(data)
           return
         }
-        term?.write(data)
+        const liveTerm = term
+        if (follow.tailActiveRef.current) {
+          // Scroll in the write-completion callback: xterm parses chunks
+          // asynchronously, so a synchronous scroll lands one chunk early.
+          // Re-check at fire time: tail can disengage or the pane unmount first.
+          liveTerm?.write(data, () => {
+            if (disposed || !follow.tailActiveRef.current) return
+            liveTerm.scrollToBottom()
+          })
+        } else {
+          liveTerm?.write(data)
+        }
       })
       // WHY wake uses callback refs instead of making workspace an effect
       // dependency: this effect owns xterm's lifetime. The workspace object is
@@ -393,7 +441,17 @@ export function TerminalLeaf({
           // the buffer's last byte because main buffered silently until we
           // called attach. The forwarder drops whatever xterm answers while
           // parsing either.
-          void forwarder.replay(liveTerm, [buffer, backlogQueue.join('')])
+          forwarder
+            .replay(liveTerm, [buffer, backlogQueue.join('')])
+            .then(() => {
+              // Pin once the backfill is really parsed, not before it lands.
+              if (disposed || !follow.tailActiveRef.current || termRef.current !== liveTerm) return
+              liveTerm.scrollToBottom()
+            })
+            .catch(error => {
+              if (!disposed) showPaneToastRef.current(sessionId,
+                error instanceof Error ? error.message : 'Could not replay terminal')
+            })
           backlogQueue.length = 0
           attachedBackfillDone = true
           if (pendingResize) {
@@ -469,6 +527,7 @@ export function TerminalLeaf({
       resizeObserver?.disconnect()
       onDataDisposable?.dispose()
       offTerminalData?.()
+      offFollowAttach?.()
       offTextPaste?.()
       webglRenderer?.dispose()
       if (onThemeChangedListenerRef) {
@@ -525,8 +584,15 @@ export function TerminalLeaf({
     termRef.current?.focus()
   }
 
+  // PaneHeader's own rule, so the badge/TAIL colors can never disagree with
+  // the fill they sit on (same reason as AgentTerminalLeaf).
+  const statusLit = paneHeaderStatusLit(showStatusMode, isSessionLive)
+
   return (
     <div
+      // data-pane-id: agents.show, the HTML debug capture and the debug
+      // bundle locate panes by it; plain terminals were the one leaf without it.
+      data-pane-id={sessionId}
       className={`
         flex flex-col h-full min-h-0 min-w-0
         border ${focused ? 'border-accent' : 'border-border'}
@@ -558,20 +624,31 @@ export function TerminalLeaf({
       onPasteCapture={() => acknowledgeSession(sessionId)}
       onCompositionEndCapture={() => acknowledgeSession(sessionId)}
     >
-      {/* Compact header to match TileLeaf's status strip so a
-          mixed layout doesn't look ragged. We don't have CC-style
-          live state to show, so just a static "terminal" label. */}
-      <div className="flex items-center justify-between px-3 py-1 border-b border-border bg-surface text-[10px] text-muted font-code select-none">
-        <div className="flex items-center gap-2 min-w-0">
-          {paneLabel && (
-            <span className="flex-shrink-0 rounded-chip border border-current/30 px-1 leading-[14px] text-[9px] font-semibold tabular-nums">
-              {paneLabel}
-            </span>
-          )}
-          <span>terminal</span>
-        </div>
-        <span className="text-ink-dim">$</span>
-      </div>
+      {/* The shared header, not a copy (#865). The old hand-drawn strip
+          predated every header feature and received none of them: no cwd,
+          no color flag, no title/name row, no Status Mode fill. #851 was the
+          same drift in AgentTerminalLeaf. Terminal chrome goes in via slots. */}
+      <PaneHeader
+        sessionId={sessionId}
+        paneLabel={paneLabel}
+        agentTitle={title}
+        // runtime.projectDir is always undefined for shells (main emits
+        // started without one). The live tmux cwd follows `cd`; the spawn
+        // cwd is the fallback for direct PTYs and before the first sample.
+        projectDir={liveCwd ?? spawnCwd}
+        statusMode={showStatusMode}
+        isSessionLive={isSessionLive}
+        badge={
+          <span className={`flex-shrink-0 ${statusLit ? '' : 'text-ink'}`}>
+            {foregroundCommand ?? 'terminal'}
+          </span>
+        }
+        trailing={tailActive ? (
+          <span className={`text-[10px] font-code uppercase tracking-wider ${statusLit ? '' : 'text-accent'}`}>
+            TAIL
+          </span>
+        ) : null}
+      />
 
       {/* xterm.js mounts here.
           `relative` is load-bearing: xterm creates absolutely-

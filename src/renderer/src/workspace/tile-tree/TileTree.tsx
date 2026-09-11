@@ -177,6 +177,7 @@ const WorkspaceLeaf = memo(function WorkspaceLeaf({
         focused={sessionId === focusedSessionId}
         onFocusRequest={requestFocus}
         workspace={workspace}
+        showStatusMode={showStatusMode}
       />
     )
   }
