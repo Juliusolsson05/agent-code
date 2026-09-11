@@ -79,6 +79,18 @@ describe('ProviderSwitchPickerModal', () => {
     expect(switchSessionProvider).not.toHaveBeenCalled()
   })
 
+  it('never lets keyboard focus rest on a provider row (#862)', () => {
+    // Tab to a row, ArrowDown to move the highlight, Space: the browser clicks
+    // the FOCUSED row, so the switch went to a provider other than the
+    // highlighted one. happy-dom does not synthesize keyboard clicks, so the
+    // pin is the structure that makes the path impossible.
+    harness()
+
+    const rows = document.querySelectorAll('[data-provider-switch-choice]')
+    expect(rows.length).toBeGreaterThan(0)
+    rows.forEach(row => expect(row).toHaveAttribute('tabindex', '-1'))
+  })
+
   it('supports keyboard choice and cancellation without starting an implicit switch', () => {
     const first = harness()
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'ArrowDown' })

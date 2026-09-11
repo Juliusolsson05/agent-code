@@ -9,6 +9,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
+import { focusedControlOwnsEnter } from '@renderer/components/ui/dialog-actions'
 import {
   providerChoiceLabel,
   providerSwitchChoices,
@@ -103,13 +104,13 @@ export function ProviderSwitchPickerModal({
             return
           }
           if (event.key === 'Enter' && selected) {
-            // A focused footer button owns its own Enter (the rule
-            // components/ui/dialog-actions.tsx documents). preventDefault below
-            // also cancels that button's native click, so without this guard
-            // Tab to Cancel + Enter switched the agent to the highlighted
-            // provider instead of cancelling (#862). Rows are exempt from the
-            // exemption: Enter on the list means "the highlighted row".
-            if (event.target instanceof Element && event.target.closest('[data-slot="dialog-footer"]')) return
+            // A focused button owns its own Enter (focusedControlOwnsEnter —
+            // the rule components/ui/dialog-actions.tsx documents).
+            // preventDefault below also cancels that button's native click, so
+            // without this guard Tab to Cancel + Enter switched the agent to the
+            // highlighted provider instead of cancelling (#862). Rows are not
+            // tab stops (below), so the only focusable buttons are the footer's.
+            if (focusedControlOwnsEnter(event.target)) return
             event.preventDefault()
             choose(selected)
           }
@@ -139,6 +140,13 @@ export function ProviderSwitchPickerModal({
               <button
                 key={`${choice.kind}:${choice.providerRuntime ?? 'structured'}`}
                 type="button"
+                // Not a tab stop (#862). Keyboard selection is the arrow-driven
+                // highlight; a Tab-focused row kept DOM focus while the arrows
+                // moved the highlight, and Space — a native click on the FOCUSED
+                // button — then switched to a provider other than the one
+                // highlighted. Mouse clicks still work; keyboard focus now only
+                // rests on the dialog surface or the footer.
+                tabIndex={-1}
                 data-provider-switch-choice={`${choice.kind}:${choice.providerRuntime ?? 'structured'}`}
                 onMouseEnter={() => setSelectedIndex(index)}
                 onClick={() => choose(choice)}
