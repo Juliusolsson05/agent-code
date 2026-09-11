@@ -52,3 +52,9 @@
 ### Task 2: PR
 
 - [ ] Full `npm test` once (known local env failures: see memory; compare against origin/main if anything else fails), push, open the PR with `Fixes #868`. Do not merge.
+
+## Implementation note (scope extended during Task 1)
+
+The first version anchored only committed rows whose `messageId` matched the live turn. The rendering corpus flagged two real bundles (`2026-06-22 …7733b0fc`, `2026-06-29 …1b2b5e96`): Claude Code **executes a tool as soon as its tool_use block completes, while the message still streams**. In 7733b0fc the tool_use line lands at 42.238s, its tool_result 9ms later, the next tool_use at 44.141s, and block 2 is still live. Tool results are user rows with no `message.id`, so they stayed at their own time and sank below the live block, separated from their tool calls.
+
+The anchor now also covers a committed row whose `ownedToolResultIds` answer a tool_use id of the live turn (from its committed tool_use lines or live tool blocks). With every anchored row tied at the turn's slot, `sequence` orders them in transcript order. Both bundles then match their recorded triage exactly, with no re-bless, which independently confirms the order is the transcript's. The added ledger test encodes the 7733b0fc shape.
