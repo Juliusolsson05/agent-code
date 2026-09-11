@@ -59,8 +59,14 @@ describe('historyLoader with a provider-owned history source', () => {
 
   it('keeps file-backed providers on the JSONL path', async () => {
     registry.resolveTranscriptPath.mockResolvedValue(null)
+    // The assertion that matters is the ROUTING: a provider without its own
+    // history source never reaches `loadHistoryChunk`, it goes to the file
+    // resolver. What that resolver then does with a missing file is the file
+    // path's own contract — for Claude it is deliberately a rejection rather
+    // than an empty chunk, so a requested history cannot masquerade as a
+    // healthy empty replay (see resolveHistoryTranscriptPath).
     await expect(loadInitialHistoryChunk({ kind: 'claude', cwd: '/w', providerSessionId: 'x', limit: 5 }))
-      .resolves.toEqual({ entries: [], hasMore: false, totalEntries: 0 })
+      .rejects.toThrow('Claude transcript not found for session x')
     expect(registry.loadHistoryChunk).not.toHaveBeenCalled()
     expect(registry.resolveTranscriptPath).toHaveBeenCalledOnce()
   })

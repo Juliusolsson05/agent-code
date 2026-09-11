@@ -21,6 +21,15 @@ it('delivers understood records before a fatal error through both real coalescer
   // actual main-process wire contract rather than reproducing a renderer reducer.
   const manager = new EventEmitter() as SessionManager & EventEmitter
   manager.list = () => []
+  // The remote feed drops frames for PLAIN shell terminals (#865), which have
+  // no transcript a phone could show. An OpenCode Terminal pane must not be
+  // caught by that filter: its kind is the provider ('opencode') and only its
+  // runtime is terminal, so both lookups answer 'opencode' here. If a future
+  // change made either one report 'terminal' for this pane, every committed
+  // record below would vanish from the phone with no error — so this stub is
+  // a deliberate assertion about the filter, not incidental scaffolding.
+  manager.getSessionKind = () => 'opencode'
+  manager.getSpawnKind = () => 'opencode'
   const remote = new SessionFeedSource(manager)
   const remoteEvents: Array<{ channel: string; payload: unknown }> = []
   const desktopEvents: Array<{ channel: string; payload: unknown }> = []
