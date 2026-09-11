@@ -13,6 +13,7 @@ import { getRendererProviderCapabilities } from '@providers/registry.renderer.ca
 import type { TranscriptEntryMapper } from '@shared/types/providerConfig'
 import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { QueuedMessage, SessionRuntime } from '@renderer/session-runtime/state'
+import { withUnread } from '@renderer/session-runtime/unread'
 import { appendFeedDebugLog } from '@renderer/session-runtime/feedDebug'
 import type { FeedDebugInput } from '@renderer/session-runtime/feedDebug'
 import type { SessionId } from '@renderer/workspace/types'
@@ -645,33 +646,6 @@ export function useIpcSubscriptions(
       // does not await decorative Git metadata and therefore cannot delay a
       // SessionFeed event or turn a failed probe into an unhandled rejection.
       void worktreeReconciler.refresh(cwd)
-    }
-
-    const withUnread = (
-      runtime: SessionRuntime,
-      kind: 'output' | 'attention',
-    ): SessionRuntime => {
-      // Unread is an acknowledgement marker, not a focus marker.
-      // Dispatch navigation, tab restore, and automatic focus sync can all
-      // make a session "focused" without the user reading or acting on it.
-      // Writers therefore mark only meaningful milestones unread: ordinary
-      // output waits until the agent turn finishes, while attention prompts
-      // still surface immediately. Explicit engagement handlers (composer
-      // edit/click/paste, feed scroll/click, terminal click/input, action
-      // sends) clear it via acknowledgeSession().
-      // Attention outranks ordinary output: once a permission/trust
-      // prompt appears, the list should keep showing ACTION until
-      // the user opens that agent or the prompt resolves. A later
-      // transcript append must not downgrade the marker to NEW.
-      const unreadKind =
-        runtime.unreadKind === 'attention' || kind === 'attention'
-          ? 'attention'
-          : 'output'
-      return {
-        ...runtime,
-        unreadSince: runtime.unreadSince ?? Date.now(),
-        unreadKind,
-      }
     }
 
     const quarantinesSessionFeed = (sessionId: string): boolean =>

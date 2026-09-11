@@ -41,7 +41,13 @@ import type {
   SessionLifecycleCorrelationIds,
   SessionLifecycleData,
 } from '@shared/lifecycle/events'
+import type { TerminalForegroundState } from '@shared/types/terminalForeground'
 export type { SubAgentState, SubAgentToolCall } from '@preload/api/types'
+
+/** One classified foreground observation for a plain terminal (#865), plus
+ *  when it last changed. `changedAt` doubles as the terminal's "last active"
+ *  time: shells have no transcript timestamps to age them by. */
+export type TerminalForegroundRuntime = TerminalForegroundState & { changedAt: number }
 
 export type PickerItem = {
   id: string
@@ -464,6 +470,11 @@ export type SessionRuntime = {
    *  only available while it still means "undo my accidental rewind." */
   pendingRewindUndo: PendingRewindUndo | null
   activityStatus: string | null
+  /** Plain terminals only (#865): what owns the shell's foreground right now.
+   *  Null for agents and for terminals main has not sampled yet. Written only
+   *  by applyTerminalForeground, which also keeps processActive/activityStatus
+   *  in step so every status consumer lights for shells unchanged. */
+  terminalForeground: TerminalForegroundRuntime | null
   /** Unread marker for list surfaces such as Dispatch Mode.
    *
    *  WHY this lives on the runtime instead of being derived from
@@ -825,6 +836,7 @@ export function emptyRuntime(): SessionRuntime {
     providerSwitch: null,
     pendingRewindUndo: null,
     activityStatus: null,
+    terminalForeground: null,
     unreadSince: null,
     unreadKind: null,
     paneToast: null,
