@@ -117,6 +117,7 @@ Owners (the candidate kinds of the ledger):
 
 | owner | paints | notes |
 |---|---|---|
+| `provider-notice` | provider-authored usage/cap status, never assistant prose | durable Claude error carrier or bounded typed Codex request errors; no fabricated turn, text dedupe, or account-state claim |
 | `committed` | durable transcript rows | JSONL / rollout / opencode assembled messages |
 | `semantic-current` | the one live streaming turn | strictly one per session |
 | `semantic-history` | completed live turns bridging committed lag | bounded, temporary |
@@ -175,7 +176,9 @@ a true chronological merge. `semantic-history.endedAt < user-entry.timestamp
 prompt sorts after it. Timestamp trust hierarchy: committed `entry.timestamp`
 (producer clock) > semantic `startedAt/endedAt` (local receipt, best
 available) > channel `ts` (diagnostics only, never transcript order). Null
-timestamps sort after timestamped content. Five-way tiebreak from
+timestamps sort after timestamped content. Request-status notices are the narrow
+exception: a validated producer observation time dates the refusal itself when
+no model turn exists; it never dates assistant prose. Five-way tiebreak from
 feed-render-item-plan carried verbatim. **Tests assert final order, not row
 existence** — that is #172's rewritten acceptance bar.
 

@@ -1158,7 +1158,7 @@ export function useIpcSubscriptions(
           return { ...prev, [sessionId]: updated }
         }
 
-        const nextSemantic = foldSemanticEvent(current.semantic, semanticEvent, sessionKind)
+        const nextSemantic = foldSemanticEvent(current.semantic, semanticEvent, sessionKind, current.sessionRunId)
         const eventType = typeof semanticEvent.type === 'string' ? semanticEvent.type : ''
         const clearOptimisticAwaiting =
           isSemanticTurnRunning(nextSemantic.currentTurn) ||

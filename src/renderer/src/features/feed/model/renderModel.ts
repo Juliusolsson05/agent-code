@@ -1,3 +1,4 @@
+import type { UsageLimitNotice } from '@shared/types/usageLimitNotice'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import type { Entry } from '@shared/types/transcript'
 
@@ -38,6 +39,7 @@ export type FeedRenderItemOrder = {
 }
 
 export type FeedRenderItem =
+  | { type: 'provider-notice'; key: string; sourcePlane: 'committed' | 'semantic'; notice: UsageLimitNotice; sessionRunId?: string; order: FeedRenderItemOrder }
   | {
       type: 'entry'
       key: string
@@ -114,6 +116,8 @@ export type FeedRenderItem =
 
 function labelForItem(item: FeedRenderItem, provider: AgentProvider): string {
   switch (item.type) {
+    case 'provider-notice':
+      return `${item.notice.provider} ${item.notice.title}`
     case 'entry':
     case 'absorbed-entry':
       return debugLabelForEntry(item.entry)
@@ -138,6 +142,8 @@ function labelForItem(item: FeedRenderItem, provider: AgentProvider): string {
 
 function slotForItem(item: FeedRenderItem): DebugVisibleRow['slot'] {
   switch (item.type) {
+    case 'provider-notice':
+      return 'entry'
     case 'entry':
     case 'absorbed-entry':
       return 'entry'

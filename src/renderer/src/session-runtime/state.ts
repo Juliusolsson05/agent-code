@@ -304,7 +304,9 @@ export type SemanticLogEntry = {
   raw?: Record<string, unknown>
 }
 
-export type SemanticErrorEntry = {
+export type SemanticErrorEntry = import('@shared/types/usageLimitNotice').ProviderErrorMetadata & {
+  observedAtMs?: number
+  sessionRunId?: string
   ts: number
   kind: 'api_error' | 'stream_error'
   message: string

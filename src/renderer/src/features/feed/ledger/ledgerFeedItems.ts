@@ -239,6 +239,11 @@ export function ledgerToFeedItems(
 
   for (const row of ledger.rows) {
     const c = row.candidate
+    if (c.usageLimitNotice) {
+      items.push({ type: 'provider-notice', key: c.id, sourcePlane: c.sourcePlane === 'committed' ? 'committed' : 'semantic', notice: c.usageLimitNotice,
+        sessionRunId: c.sessionRunId, order: orderAt(items.length, 'content') })
+      continue
+    }
     switch (c.sourcePlane) {
       case 'committed':
       case 'local-submit':

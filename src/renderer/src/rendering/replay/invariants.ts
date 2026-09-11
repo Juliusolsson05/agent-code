@@ -252,7 +252,13 @@ function checkVanish(prev: ReplayTick, cur: ReplayTick, out: InvariantViolation[
       continue
     }
 
-    // Neither explanation holds: the row disappeared and nothing accounts for
+    // Explanation D: the bounded request-error history evicted its source.
+    // This does not excuse a missing card while its error is still retained,
+    // nor any durable Claude carrier disappearing from committed history.
+    if (prevRow.candidate.owner === 'provider-notice' && prevRow.candidate.sourcePlane === 'semantic' &&
+      !cur.slices.semanticErrors?.some(error => `notice:${cur.slices.sessionId}:${error.id}` === id)) continue
+
+    // No explanation holds: the row disappeared and nothing accounts for
     // it. This is the #469 "queue-desync / row silently vanished" class.
     unexplainedDrops += 1
     out.push({
@@ -289,7 +295,7 @@ function checkVanish(prev: ReplayTick, cur: ReplayTick, out: InvariantViolation[
 /** True iff the two ticks fed adapter-identical slices — i.e. every plane the
  *  ledger keys on is the SAME reference/value. The pending-tool fields feed the
  *  VIEW, not the ledger, so they are intentionally excluded: the ledger object
- *  identity contract is about the six adapter inputs only. */
+ *  identity contract is about adapter inputs only. */
 function ledgerInputsUnchanged(prev: ReplayTick, cur: ReplayTick): boolean {
   return (
     prev.slices.provider === cur.slices.provider &&
@@ -297,6 +303,7 @@ function ledgerInputsUnchanged(prev: ReplayTick, cur: ReplayTick): boolean {
     prev.slices.entries === cur.slices.entries &&
     prev.slices.semanticCurrent === cur.slices.semanticCurrent &&
     prev.slices.semanticHistory === cur.slices.semanticHistory &&
+    prev.slices.semanticErrors === cur.slices.semanticErrors &&
     prev.slices.ghosts === cur.slices.ghosts &&
     prev.slices.streamPhase === cur.slices.streamPhase &&
     prev.slices.lastJsonlEntryAtMs === cur.slices.lastJsonlEntryAtMs
