@@ -5144,7 +5144,7 @@ git commit -m "feat(picker): list every prompt with relative time in View Prompt
 **Interfaces:**
 - Produces: `nativeHistoryControlCapabilities(service: ConversationService)`. `nativeHistory.list` and `nativeHistory.search` keep their output schemas except `coverage.exhaustive` becomes `z.boolean()` (true now) and `candidatesPerProvider` reports the number of candidates considered; `nativeHistory.prompts` is unchanged.
 
-- [ ] **Step 1: Update the tests first**
+- [x] **Step 1: Update the tests first**
 
 In `nativeHistoryControl.test.ts` remove the `vi.mock` lines for `sessionList.js`, `projectDir.js` (both) and `registry.main` and instead construct a fake service:
 
@@ -5164,7 +5164,7 @@ pass `nativeHistoryControlCapabilities(service as never)` everywhere, keep the `
 Run: `NODE_ENV=test npx vitest run --project unit src/main/sessions/nativeHistoryControl.test.ts`
 Expected: FAIL (signature and behaviour differ).
 
-- [ ] **Step 2: Rewrite the capabilities**
+- [x] **Step 2: Rewrite the capabilities**
 
 ```ts
 // src/main/sessions/nativeHistoryControl.ts
@@ -5231,7 +5231,7 @@ void ControlError
 
 Drop the trailing `void ControlError` and its import if nothing throws it; it is listed so the executor sees the original imports.
 
-- [ ] **Step 3: Wire, run, commit**
+- [x] **Step 3: Wire, run, commit**
 
 In `src/main/index.ts` change `...nativeHistoryControlCapabilities()` to `...nativeHistoryControlCapabilities(conversationService)`.
 
@@ -5251,7 +5251,7 @@ git commit -m "feat(control): serve native history from the conversation catalog
 **Interfaces:**
 - Runs only with `AGENT_CODE_LIVE_CONVERSATIONS=1`; reads the developer's real stores through `createConversationService`.
 
-- [ ] **Step 1: Write the live test**
+- [x] **Step 1: Write the live test**
 
 ```ts
 // src/main/conversations/conversations.live.test.ts
@@ -5324,12 +5324,12 @@ describe.skipIf(!enabled)('conversations against the live stores', () => {
 
 Add to `package.json` scripts: `"test:live:conversations": "npm run workflow-mcp:build && NODE_ENV=test AGENT_CODE_LIVE_CONVERSATIONS=1 vitest run --config vitest.live.config.ts src/main/conversations/conversations.live.test.ts"`.
 
-- [ ] **Step 2: Run it on the author's machine and record the numbers in the PR body**
+- [x] **Step 2: Run it on the author's machine and record the numbers in the PR body**
 
 Run: `npm run test:live:conversations`
 Expected: PASS with the printed timings. The first search runs the bounded prompt fold for the newest 200 non-Claude rows, which is why its budget is 750 ms rather than 50 ms; the second search of the same scope should print under 50 ms, and the PR body must show both.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add src/main/conversations/conversations.live.test.ts package.json

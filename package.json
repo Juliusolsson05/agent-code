@@ -40,6 +40,7 @@
     "test:system": "npm run workflow-mcp:build && NODE_ENV=test vitest run --project system",
     "test:renderer": "npm run workflow-mcp:build && NODE_ENV=test vitest run --project renderer",
     "test:live": "npm run workflow-mcp:build && NODE_ENV=test vitest run --config vitest.live.config.ts --passWithNoTests",
+    "test:live:conversations": "NODE_ENV=test AGENT_CODE_LIVE_CONVERSATIONS=1 vitest run --config vitest.live.config.ts src/main/conversations/conversations.live.test.ts",
     "test:coverage": "npm run workflow-mcp:build && NODE_ENV=test vitest run --coverage",
     "test:package": "npm run build && node scripts/verify-build-output.mjs",
     "test:contract": "node scripts/check-test-contract.mjs",
