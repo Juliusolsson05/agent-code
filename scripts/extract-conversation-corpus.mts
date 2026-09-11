@@ -105,6 +105,10 @@ async function extractClaude(counts: Json): Promise<void> {
     .filter(d => !d.startsWith(sanitizedRoot) && !sanitizedWorktrees.includes(d) && d.startsWith('-Users-'))
     .map(d => ({ d, n: readdirSync(join(projects, d)).filter(n => n.endsWith('.jsonl')).length }))
     .sort((a, b) => b.n - a.n)[0]?.d ?? null
+  // The control's fixture name is derived from its path form (the directory
+  // name with `-` read back as `/`) so a stub without a cwd lands in the same
+  // directory as the control's cwd-bearing transcripts.
+  const controlFixtureDir = control ? sanitizePath(paths.rewrite(control.replace(/-/g, '/'))) : null
   for (const dir of dirs) {
     const candidate = dir === sanitizedRoot || dir.startsWith(sanitizedRoot + '-') || sanitizedWorktrees.includes(dir) || dir === control
     if (!candidate) continue
@@ -116,7 +120,14 @@ async function extractClaude(counts: Json): Promise<void> {
       const records = parseLines(raw)
       transcripts++
       const cwd = records.find(r => typeof r.cwd === 'string')?.cwd as string | undefined
-      const isFamily = inFamily(cwd) || (!cwd && dir === sanitizedRoot)
+      // WHY exact directories only for a transcript without a cwd (a
+      // bridge-session stub that never got a prompt): the adapter
+      // (src/main/conversations/sources/claude.ts) keeps such a file only when
+      // its directory IS the root or a worktree, never a `-` continuation and
+      // never another project. The manifest must count what the adapter
+      // returns, or the count assertion argues from a different rule.
+      const exactFamilyDir = dir === sanitizedRoot || sanitizedWorktrees.includes(dir)
+      const isFamily = inFamily(cwd) || (!cwd && exactFamilyDir)
       if (isFamily) {
         family++
         familySessionIds.add(name.slice(0, -6))
@@ -130,7 +141,19 @@ async function extractClaude(counts: Json): Promise<void> {
       const local = kept.map(r => JSON.stringify(r)).join('\n') + '\n'
       // The fixture dir name must be what sanitizePath yields for the REWRITTEN
       // cwd, or the adapter's directory resolution cannot find it.
-      const fixtureDir = cwd ? sanitizePath(paths.rewrite(cwd)) : sanitizePath('/fixture/repo')
+      // Claude names the directory from the REALPATH, so a case-variant cwd
+      // still lives in the canonical directory.
+      // Without a cwd the file stays in the translated form of the directory
+      // it came from. Defaulting to the family root filed a control-project
+      // stub (e3d5cfc8, from another project's directory) into the family,
+      // so the fixture held a family transcript the real store never had.
+      const fixtureDir = cwd
+        ? sanitizePath(paths.rewrite(cwd).replace(/^\/fixture\/REPO/, '/fixture/repo'))
+        : dir === control
+          ? controlFixtureDir!
+          : dir.startsWith(sanitizedRoot)
+            ? '-fixture-repo' + dir.slice(sanitizedRoot.length)
+            : sanitizePath(paths.rewrite(join(projects, dir)).replace(/^.*\/\.claude\/projects\//, '/'))
       const s = await stat(file)
       const sidecar = JSON.stringify({ mtimeMs: s.mtimeMs, size: s.size, records: records.length })
       await writeBoth(join('claude', 'projects', fixtureDir, name), redacted, local)
@@ -144,7 +167,7 @@ async function extractClaude(counts: Json): Promise<void> {
   await writeBoth(join('claude', 'history.jsonl'), slice.map(h => JSON.stringify(redactRecord(h, paths))).join('\n') + '\n', slice.map(h => JSON.stringify(h)).join('\n') + '\n')
   const porcelain = worktreePaths.map(p => `worktree ${paths.rewrite(p)}\n`).join('')
   await writeBoth(join('claude', 'worktrees.porcelain'), porcelain, worktreePaths.map(p => `worktree ${p}\n`).join(''))
-  counts.claude = { projectDirs, transcripts, inFamily: family, orchestrationChildren: children, historyRecords: slice.length, control: control ? sanitizePath(paths.rewrite(control.replace(/-/g, '/'))) : null }
+  counts.claude = { projectDirs, transcripts, inFamily: family, orchestrationChildren: children, historyRecords: slice.length, control: controlFixtureDir }
 }
 
 // ----------------------------------------------------------------- Codex
@@ -182,13 +205,24 @@ async function extractCodex(counts: Json): Promise<void> {
     out.exec('create table _sqlx_migrations (version bigint primary key, description text not null, installed_on timestamp not null, success boolean not null, checksum blob not null, execution_time bigint not null);')
     const insert = out.prepare(`insert into threads (${columns.map(c => `"${c}"`).join(', ')}) values (${columns.map(() => '?').join(', ')})`)
     for (const row of kept) {
-      const value = variant === 'redacted' ? (redactRecord(row, paths) as Json) : row
+      const value = variant === 'redacted' ? (redactRecord(row, paths) as Json) : { ...row }
+      // Codex fills `name` with a truncation of the first prompt unless the
+      // user renamed the thread, and the adapter tells the two apart by
+      // `title.startsWith(name)`. Hashing the two columns separately would
+      // destroy that relation, so a name that prefixed the title becomes a
+      // prefix of the redacted title instead.
+      if (variant === 'redacted' && typeof row.name === 'string' && row.name && typeof row.title === 'string' && row.title.startsWith(row.name) && typeof value.title === 'string') {
+        value.name = value.title.slice(0, Math.max(1, Math.min(value.title.length - 1, row.name.length)))
+      }
       insert.run(...columns.map(c => (value[c] === undefined ? null : value[c]) as null | number | string | Uint8Array))
     }
     const insertEdge = out.prepare('insert into thread_spawn_edges values (?, ?, ?)')
     for (const e of keptEdges) insertEdge.run(String(e.parent_thread_id), String(e.child_thread_id), String(e.status))
     const insertMigration = out.prepare('insert into _sqlx_migrations values (?, ?, ?, ?, ?, ?)')
     for (const m of migrations) insertMigration.run(Number(m.version), String(m.description), String(m.installed_on), Number(m.success), m.checksum as Uint8Array, Number(m.execution_time))
+    // The real index carries these; without them a fixture query plans
+    // differently and timings measured on the corpus stop meaning anything.
+    out.exec('create index idx_threads_updated_at on threads(updated_at desc, id desc); create index idx_threads_source on threads(source); create index idx_thread_spawn_edges_parent_status on thread_spawn_edges(parent_thread_id, status);')
     out.close()
   }
   // Sample rollouts for the fallback path: newest family rows across kinds,
@@ -200,13 +234,26 @@ async function extractCodex(counts: Json): Promise<void> {
     ...byKind(r => r.originator === 'agent-transcript-parser', 1),
     ...byKind(r => r.source === 'exec', 1),
   ]
+  // A rollout is recorded with a stat sidecar for the same reason a Claude
+  // transcript is: the adapter's last-resort activity is the file's mtime,
+  // and a fixture copy's mtime is the moment the corpus was written. Without
+  // it an unindexed rollout with no user event (553bf83c, synthesized by
+  // agent-transcript-parser) sorted to the top of every listing, dated by the
+  // extraction run. The installer applies the sidecar and removes it.
+  const recordRollout = async (file: string) => {
+    const all = parseLines(await readFile(file, 'utf8'))
+    const records = all.slice(0, ROLLOUT_HEAD_RECORDS)
+    const relative = file.slice(codexHome.length + 1)
+    await writeBoth(join('codex', relative), records.map(r => JSON.stringify(redactRecord(r, paths))).join('\n') + '\n', records.map(r => JSON.stringify(r)).join('\n') + '\n')
+    const s = await stat(file)
+    const sidecar = JSON.stringify({ mtimeMs: s.mtimeMs, size: s.size, records: all.length })
+    await writeBoth(join('codex', relative + '.stat.json'), sidecar, sidecar)
+  }
   let sampledCount = 0
   for (const row of sampled) {
     const file = row.rollout_path as string
     if (!existsSync(file)) continue
-    const records = parseLines(await readFile(file, 'utf8')).slice(0, ROLLOUT_HEAD_RECORDS)
-    const relative = file.slice(codexHome.length + 1)
-    await writeBoth(join('codex', relative), records.map(r => JSON.stringify(redactRecord(r, paths))).join('\n') + '\n', records.map(r => JSON.stringify(r)).join('\n') + '\n')
+    await recordRollout(file)
     sampledCount++
   }
   // Unindexed rollouts: count only, plus the newest three as fixtures so the
@@ -221,13 +268,14 @@ async function extractCodex(counts: Json): Promise<void> {
     }
   }
   walk(join(codexHome, 'sessions'), 0)
+  // "Unindexed" means the index has never seen the THREAD, not merely this
+  // file: the store holds a second copy of one rollout under another filename
+  // timestamp, and the adapter deduplicates by thread id.
   const indexedPaths = new Set(rows.map(r => r.rollout_path as string))
-  const unindexed = onDisk.filter(p => !indexedPaths.has(p)).sort().reverse()
-  for (const file of unindexed.slice(0, 3)) {
-    const records = parseLines(await readFile(file, 'utf8')).slice(0, ROLLOUT_HEAD_RECORDS)
-    const relative = file.slice(codexHome.length + 1)
-    await writeBoth(join('codex', relative), records.map(r => JSON.stringify(redactRecord(r, paths))).join('\n') + '\n', records.map(r => JSON.stringify(r)).join('\n') + '\n')
-  }
+  const indexedIds = new Set(rows.map(r => r.id as string))
+  const idOf = (p: string) => /-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i.exec(p)?.[1] ?? ''
+  const unindexed = onDisk.filter(p => !indexedPaths.has(p) && !indexedIds.has(idOf(p))).sort().reverse()
+  for (const file of unindexed.slice(0, 3)) await recordRollout(file)
   counts.codex = {
     indexed: rows.length, inFamily: familyRows.length, control: control.length,
     exec: familyRows.filter(r => r.source === 'exec').length,
@@ -289,6 +337,9 @@ async function extractOpencode(counts: Json): Promise<void> {
     write('project', projects)
     write('message', messages)
     write('part', parts)
+    // Same indexes as opencode.db (drizzle migrations), for the same reason
+    // as the Codex fixture above.
+    out.exec('create index session_project_idx on session(project_id); create index session_parent_idx on session(parent_id); create index message_session_time_created_id_idx on message(session_id, time_created, id); create index part_session_idx on part(session_id); create index part_message_id_id_idx on part(message_id, id);')
     out.close()
   }
   counts.opencode = { sessions: sessions.length, inFamily: familySessions.length, control: control.length, children: familySessions.filter(s => s.parent_id).length, messages: messages.length, parts: parts.length }

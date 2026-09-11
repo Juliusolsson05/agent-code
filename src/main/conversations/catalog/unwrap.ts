@@ -25,6 +25,9 @@ const NOT_A_PROMPT_PREFIXES: readonly string[] = [
   '<user_instructions>',
   '<system-reminder>',
   '<task-notification>',
+  // Claude Code's own compaction summary, written as an isCompactSummary
+  // user record after /compact or auto-compaction.
+  'This session is being continued from a previous conversation',
 ]
 
 const PROJECTED_PREFIXES: readonly string[] = ['# Handoff Summary', '# Portable handoff summary']

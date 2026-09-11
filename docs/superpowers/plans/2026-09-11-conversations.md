@@ -3217,7 +3217,7 @@ git commit -m "feat(conversations): classify, label with provenance and order by
 **Interfaces:**
 - Produces: `normalizeConversation(source, ledger, family): Conversation`; `matchConversation(row, prompts: readonly string[], queryLower: string): ConversationMatch | null`; `buildListing(input: { sources: SourceConversation[]; ledger: ReadonlyMap<string, LedgerRow>; family: RepositoryFamily; request: ConversationListRequest; promptsFor?: (row: Conversation) => readonly string[]; startedAt: number }): ConversationListResponse`.
 
-- [ ] **Step 1: Write the failing listing test over the corpus**
+- [x] **Step 1: Write the failing listing test over the corpus**
 
 ```ts
 // src/main/conversations/catalog/listing.system.test.ts
@@ -3344,7 +3344,7 @@ describe('buildListing over the recorded corpus', () => {
 })
 ```
 
-- [ ] **Step 2: Write the import-boundary test**
+- [x] **Step 2: Write the import-boundary test**
 
 ```ts
 // src/main/conversations/importBoundaries.test.ts
@@ -3390,12 +3390,12 @@ describe('conversation catalog boundaries', () => {
 })
 ```
 
-- [ ] **Step 3: Run both to verify they fail**
+- [x] **Step 3: Run both to verify they fail**
 
 Run: `NODE_ENV=test npx vitest run --project system src/main/conversations/catalog/listing.system.test.ts; NODE_ENV=test npx vitest run --project unit src/main/conversations/importBoundaries.test.ts`
 Expected: listing FAILS (modules missing); boundaries PASS trivially (no catalog files yet violate).
 
-- [ ] **Step 4: Write normalize, search and listing**
+- [x] **Step 4: Write normalize, search and listing**
 
 ```ts
 // src/main/conversations/catalog/normalize.ts
@@ -3562,12 +3562,12 @@ export function buildListing(input: BuildListingInput): ConversationListResponse
 }
 ```
 
-- [ ] **Step 5: Run the listing test until the expectations agree**
+- [x] **Step 5: Run the listing test until the expectations agree**
 
 Run: `NODE_ENV=test npx vitest run --project system src/main/conversations/catalog/listing.system.test.ts`
 Expected: PASS. A kind or label mismatch here is a finding against either the rules or the expectations: show the mismatch list to the user and change only what they decide. Never edit `expectations.json` to match the code without that decision.
 
-- [ ] **Step 6: Run the boundary test and typecheck, then commit**
+- [x] **Step 6: Run the boundary test and typecheck, then commit**
 
 Run: `NODE_ENV=test npx vitest run --project unit src/main/conversations/importBoundaries.test.ts src/main/conversations/catalog && npx tsc -p tsconfig.node.json --pretty false`
 
@@ -3577,6 +3577,12 @@ git commit -m "feat(conversations): build one ordered, explained listing from ev
 ```
 
 ---
+
+**Findings while making the expectations agree (2026-09-11):**
+- The redaction policy hashed empty strings into `p:e3b0c442:0`, so 46 Codex exec threads gained a first prompt the real index never had. Empty and whitespace-only text, and empty branches, now stay empty.
+- The extractor filed a cwd-less bridge-session stub from another project (`e3d5cfc8`) into the family root. Such files now keep their translated original directory, and the family count uses the adapter's exact-directory rule.
+- Codex rollouts carried no mtime sidecar, so an unindexed synthesized rollout (`553bf83c`) sorted first, dated by the extraction run. Rollouts now carry `.stat.json`; the installer applies every recorded mtime and removes the sidecars.
+- The draft never enumerated unindexed rollouts and lacked the `native-id` label rung; both added. The corpus is now 1,393 conversations.
 
 ## Stage 3 — Agent Code conversation ledger
 
@@ -3593,7 +3599,7 @@ git commit -m "feat(conversations): build one ordered, explained listing from ev
 - Consumes: `PersistedWindow` (`@main/storage/workspaceFile.js`), `LedgerRow` (Task 12).
 - Produces: `class ConversationLedger { static open(path: string): Promise<ConversationLedger>; get(provider, nativeId): LedgerRow | null; rows(): ReadonlyMap<string, LedgerRow>; projectWindows(windows: readonly PersistedWindow[], agentNames: Readonly<Record<string, string>>, now?: number): Promise<void> }`, `readAgentNameAssignments(path: string): Promise<Record<string, string>>`, `WorkspaceFileStore.observe(listener: (windows: readonly PersistedWindow[]) => void): () => void`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```ts
 // src/main/conversations/ledger/ledger.system.test.ts
@@ -3672,12 +3678,12 @@ describe('conversation ledger', () => {
 })
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `NODE_ENV=test npx vitest run --project system src/main/conversations/ledger/ledger.system.test.ts`
 Expected: FAIL, `./ledger.js` not found.
 
-- [ ] **Step 3: Write the ledger**
+- [x] **Step 3: Write the ledger**
 
 ```ts
 // src/main/conversations/ledger/ledger.ts
@@ -3846,7 +3852,7 @@ export class ConversationLedger {
 }
 ```
 
-- [ ] **Step 4: Add the store observer and the paths**
+- [x] **Step 4: Add the store observer and the paths**
 
 In `src/main/storage/paths.ts` append:
 
@@ -3911,12 +3917,12 @@ In `src/main/index.ts`, right after `const workspaceFileStore = await WorkspaceF
 
 with imports `import { ConversationLedger, readAgentNameAssignments } from '@main/conversations/ledger/ledger.js'`, `import { CONVERSATIONS_LEDGER_FILE } from '@main/storage/paths.js'` (extend the existing paths import), `import { AGENT_NAMES_FILE } from '@main/agentNames/ipc.js'`, and `import type { PersistedWindow } from '@main/storage/workspaceFile.js'`. `conversationLedger` is passed to the service in Task 15.
 
-- [ ] **Step 5: Run the ledger test, the store tests and the typecheck**
+- [x] **Step 5: Run the ledger test, the store tests and the typecheck**
 
 Run: `NODE_ENV=test npx vitest run --project system src/main/conversations/ledger/ledger.system.test.ts src/main/storage && npx tsc -p tsconfig.node.json --pretty false`
 Expected: PASS; tsc clean.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/main/conversations/ledger src/main/storage/workspaceFileStore.ts src/main/storage/paths.ts src/main/index.ts

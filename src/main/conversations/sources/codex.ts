@@ -197,6 +197,11 @@ export class CodexConversationSource implements ConversationSource {
     this.downgradeReason = null
     const rows: SourceConversation[] = []
     const indexedPaths = new Set<string>()
+    // WHY ids are tracked as well as paths: the recorded store holds two
+    // rollout files for one thread id (a copy with a different filename
+    // timestamp). The index knows one path; the other would otherwise be
+    // unioned as a second conversation with the same identity.
+    const indexedIds = new Set<string>()
     try {
       const parents = new Map<string, string>()
       for (const edge of opened.db.prepare('select parent_thread_id, child_thread_id from thread_spawn_edges').all() as Array<{ parent_thread_id: string; child_thread_id: string }>) {
@@ -220,6 +225,7 @@ export class CodexConversationSource implements ConversationSource {
       const columns = CODEX_INDEX_COLUMNS.threads.map(c => `"${c}"`).join(', ')
       for (const row of opened.db.prepare(`select ${columns} from threads ${where}`).all(...args) as unknown as IndexRow[]) {
         indexedPaths.add(row.rollout_path)
+        indexedIds.add(row.id)
         const title = (row.title ?? '').trim() || (row.first_user_message ?? '').trim() || (row.preview ?? '').trim()
         const name = (row.name ?? '').trim()
         rows.push({
@@ -253,7 +259,7 @@ export class CodexConversationSource implements ConversationSource {
     // Union with rollouts the index never recorded.
     const files = await this.walkRollouts()
     for (const [file, meta] of files) {
-      if (indexedPaths.has(file)) continue
+      if (indexedPaths.has(file) || indexedIds.has(meta.id)) continue
       const row = await this.fromHead(file, meta.mtime, meta.id, scope)
       if (row) rows.push(row)
     }

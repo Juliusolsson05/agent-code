@@ -21,6 +21,11 @@ export function classifyConversation(
     return 'orchestration-child'
   }
   if (first?.wrapper === 'projected-handoff' || source.originator === 'agent-transcript-parser') return 'projected'
-  if (!first && !source.aiTitle && !source.customTitle && !ledger?.title) return 'empty'
+  // Empty means NOTHING to show: no user text of any kind and no title. A
+  // conversation whose only visible text is an injected wrapper (a Codex
+  // thread opened with `/compact`, or one whose index title is the AGENTS.md
+  // message) is still a real session with later prompts the head cannot see;
+  // it stays a user conversation and its label falls to the cwd rung.
+  if (source.userTexts.length === 0 && !source.aiTitle && !source.customTitle && !ledger?.title) return 'empty'
   return 'user'
 }

@@ -50,6 +50,9 @@ describe('conversation corpus policy', () => {
     // The family repo keeps its own subdirectory names.
     const c = redactRecord({ cwd: '/Users/me/Desktop/Development/agent-code/packages/codex-headless' }, paths) as Record<string, string>
     expect(c.cwd).toBe('/fixture/repo/packages/codex-headless')
+    // A case-variant of the repo path (one real transcript) stays the repo, visibly.
+    const d = redactRecord({ cwd: '/Users/me/Desktop/development/agent-code' }, paths) as Record<string, string>
+    expect(d.cwd).toBe('/fixture/REPO')
   })
 
   it('rewrites object keys that are paths and hashes overlong keys', () => {
@@ -90,6 +93,15 @@ describe('conversation corpus policy', () => {
     expect(agents.title.startsWith('# AGENTS.md instructions for')).toBe(true)
     // An exact app-authored constant survives whole, with no empty placeholder appended.
     expect((redactRecord({ title: 'Agent Code terminal session' }, paths) as { title: string }).title).toBe('Agent Code terminal session')
+  })
+
+  it('keeps empty and whitespace-only text empty instead of inventing a value', () => {
+    // Codex exec rows carry first_user_message = ''. A placeholder there would
+    // give the catalog a first prompt the real index does not have.
+    expect(placeholder('')).toBe('')
+    expect(placeholder('  \n')).toBe('  \n')
+    expect((redactRecord({ first_user_message: '', title: '' }, paths) as { first_user_message: string; title: string })).toEqual({ first_user_message: '', title: '' })
+    expect((redactRecord({ gitBranch: '' }, paths) as { gitBranch: string }).gitBranch).toBe('')
   })
 
   it('never leaves a string outside the allowlist unhashed, recursively', () => {

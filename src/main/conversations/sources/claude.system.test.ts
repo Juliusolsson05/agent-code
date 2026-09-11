@@ -1,14 +1,18 @@
 import { readdir } from 'node:fs/promises'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { resolveFamily } from '../family.js'
 import { ClaudeHistoryIndex } from './claudeHistory.js'
 import { ClaudeConversationSource } from './claude.js'
 import { corpusWorktreesPorcelain, installConversationCorpus } from '../../../../testing/support/conversations/installCorpus.js'
 
+// One corpus per file: installing it costs seconds, and discovery is
+// read-only, so every test can share the same adapter and index.
 const cleanups: Array<() => Promise<void>> = []
-afterEach(async () => { for (const c of cleanups.splice(0)) await c() })
+let shared: Awaited<ReturnType<typeof setup>>
+beforeAll(async () => { shared = await setup() })
+afterAll(async () => { for (const c of cleanups.splice(0)) await c() })
 
 async function setup() {
   const corpus = await installConversationCorpus()
@@ -24,7 +28,7 @@ async function setup() {
 
 describe('Claude conversation source', () => {
   it('discovers every family transcript across the recorded worktree dirs and nothing from the control project', async () => {
-    const { corpus, source, listWorktrees } = await setup()
+    const { corpus, source, listWorktrees } = shared
     const family = await resolveFamily('/fixture/repo', 'repository', { listWorktrees })
     const rows = await source.discover({ scope: 'repository', family })
     const counts = corpus.manifest.counts as { claude: { inFamily: number; orchestrationChildren: number } }
@@ -37,7 +41,7 @@ describe('Claude conversation source', () => {
   })
 
   it('reads titles from the tail, the first prompts from a record-bounded head, and activity from history', async () => {
-    const { source, listWorktrees } = await setup()
+    const { source, listWorktrees } = shared
     const family = await resolveFamily('/fixture/repo', 'repository', { listWorktrees })
     const rows = await source.discover({ scope: 'repository', family })
     const titled = rows.filter(r => r.aiTitle !== null)
@@ -57,7 +61,7 @@ describe('Claude conversation source', () => {
   })
 
   it('returns the exact-cwd directory only for cwd scope', async () => {
-    const { corpus, source, listWorktrees } = await setup()
+    const { corpus, source, listWorktrees } = shared
     const family = await resolveFamily('/fixture/repo', 'cwd', { listWorktrees })
     const rows = await source.discover({ scope: 'cwd', family })
     const dir = join(corpus.claudeConfigDir, 'projects', '-fixture-repo')
@@ -66,7 +70,7 @@ describe('Claude conversation source', () => {
   })
 
   it('lists prompts newest first for one conversation', async () => {
-    const { source, listWorktrees } = await setup()
+    const { source, listWorktrees } = shared
     const family = await resolveFamily('/fixture/repo', 'cwd', { listWorktrees })
     const rows = await source.discover({ scope: 'cwd', family })
     const row = rows.find(r => (r.promptCount ?? 0) > 2)!

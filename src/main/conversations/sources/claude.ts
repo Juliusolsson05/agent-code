@@ -31,6 +31,11 @@ import type { ConversationSource, SourceConversation, SourceScope } from './type
 
 const HEAD_RECORD_LIMIT = 200
 const HEAD_USER_TEXTS = 6
+// One positioned read covers the head of almost every transcript (the first
+// user record sits at index 6–8, a few KB in). Streaming line by line costs
+// ~11 ms per file on the recorded corpus; a block read costs under 1 ms, and
+// the stream only runs for the rare transcript whose head is larger.
+const HEAD_BLOCK_BYTES = 64 * 1024
 const TAIL_BYTES = 64 * 1024
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -50,7 +55,12 @@ type SummaryCacheEntry = { mtimeMs: number; size: number; summary: ClaudeSummary
 function userText(record: Record<string, unknown>): string | null {
   if (record.type !== 'user') return null
   if (record.isMeta === true) return null
-  if (record.isCompactSummary === true) return null
+  // WHY compact summaries are NOT skipped here: agent-transcript-parser
+  // writes a provider-switch handoff as a `isCompactSummary` user record
+  // (`# Handoff Summary…`), and that record is the only evidence a transcript
+  // is a projected continuation. Claude's own compaction summaries are user
+  // records too; the catalog's unwrapper rejects those by their fixed opening
+  // line, so neither becomes a label.
   const message = asRecord(record.message)
   if (!message || message.role !== 'user') return null
   const content = message.content
@@ -68,20 +78,58 @@ function timestampOf(record: Record<string, unknown>): number | null {
   return Number.isFinite(ts) ? ts : null
 }
 
-async function readHead(file: string): Promise<Pick<ClaudeSummary, 'cwd' | 'gitBranch' | 'createdAt' | 'userTexts'>> {
-  const out = { cwd: null as string | null, gitBranch: null as string | null, createdAt: null as number | null, userTexts: [] as string[] }
+type HeadSummary = Pick<ClaudeSummary, 'cwd' | 'gitBranch' | 'createdAt' | 'userTexts'>
+
+function foldHeadRecord(out: HeadSummary, record: Record<string, unknown>): void {
+  if (out.cwd === null && typeof record.cwd === 'string' && record.cwd) out.cwd = record.cwd
+  if (out.gitBranch === null && typeof record.gitBranch === 'string' && record.gitBranch) out.gitBranch = record.gitBranch
+  if (out.createdAt === null) out.createdAt = timestampOf(record)
+  const text = userText(record)
+  if (text) out.userTexts.push(text)
+}
+
+async function readHead(file: string, size: number): Promise<HeadSummary> {
+  const out: HeadSummary = { cwd: null, gitBranch: null, createdAt: null, userTexts: [] }
   let records = 0
+  // Fast path: one block, complete lines only.
+  const handle = await open(file, 'r')
+  let coveredWholeFile = false
+  try {
+    const len = Math.min(HEAD_BLOCK_BYTES, size)
+    const buf = Buffer.allocUnsafe(len)
+    let offset = 0
+    while (offset < len) {
+      const { bytesRead } = await handle.read(buf, offset, len - offset, offset)
+      if (bytesRead === 0) break
+      offset += bytesRead
+    }
+    coveredWholeFile = offset >= size
+    const lastNewline = buf.lastIndexOf(0x0a, offset - 1)
+    const text = (coveredWholeFile ? buf.subarray(0, offset) : buf.subarray(0, Math.max(0, lastNewline + 1))).toString('utf8')
+    for (const line of text.split('\n')) {
+      if (!line.trim()) continue
+      const record = parseJsonRecord(line)
+      if (!record) continue
+      records++
+      foldHeadRecord(out, record)
+      if (out.userTexts.length >= HEAD_USER_TEXTS || records >= HEAD_RECORD_LIMIT) return out
+    }
+  } finally {
+    await handle.close()
+  }
+  if (coveredWholeFile) return out
+  // Slow path: the block ended before the limits were reached (a head padded
+  // with oversized attachments). Stream from the start; correctness over the
+  // block's partial view is what matters here, not the repeated bytes.
+  const streamed: HeadSummary = { cwd: null, gitBranch: null, createdAt: null, userTexts: [] }
+  let streamedRecords = 0
   for await (const record of streamJsonl<Record<string, unknown>>(file)) {
     if (!record) continue
-    records++
-    if (out.cwd === null && typeof record.cwd === 'string' && record.cwd) out.cwd = record.cwd
-    if (out.gitBranch === null && typeof record.gitBranch === 'string' && record.gitBranch) out.gitBranch = record.gitBranch
-    if (out.createdAt === null) out.createdAt = timestampOf(record)
-    const text = userText(record)
-    if (text) out.userTexts.push(text)
-    if (out.userTexts.length >= HEAD_USER_TEXTS || records >= HEAD_RECORD_LIMIT) break
+    streamedRecords++
+    foldHeadRecord(streamed, record)
+    if (streamed.userTexts.length >= HEAD_USER_TEXTS || streamedRecords >= HEAD_RECORD_LIMIT) break
   }
-  return out
+  return streamed
 }
 
 async function readTail(file: string, size: number): Promise<Pick<ClaudeSummary, 'aiTitle' | 'customTitle' | 'tailUserAt' | 'gitBranch'>> {
@@ -149,7 +197,7 @@ export class ClaudeConversationSource implements ConversationSource {
   private async summarize(file: string, mtimeMs: number, size: number): Promise<ClaudeSummary> {
     const cached = this.summaries.get(file)
     if (cached && cached.mtimeMs === mtimeMs && cached.size === size) return cached.summary
-    const head = await readHead(file)
+    const head = await readHead(file, size)
     const tail = await readTail(file, size)
     const summary: ClaudeSummary = {
       cwd: head.cwd,

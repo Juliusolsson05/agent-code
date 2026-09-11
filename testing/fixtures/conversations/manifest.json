@@ -1,17 +1,18 @@
 {
   "version": 1,
-  "capturedAt": "2026-09-11T21:34:03.905Z",
+  "capturedAt": "2026-09-11T22:22:32.741Z",
   "repoRoot": "/fixture/repo",
   "worktrees": [
     "/fixture/repo",
-    "/fixture/other-7/p:67aed750:23",
-    "/fixture/other-7/p:19d86ec2:22",
-    "/fixture/other-7/p:6c669661:25",
-    "/fixture/other-7/p:ef23fbef:20",
-    "/fixture/other-7/p:3532a0fe:31",
-    "/fixture/other-7/p:8fbc700a:28",
+    "/fixture/other-6/p:67aed750:23",
+    "/fixture/other-6/p:19d86ec2:22",
+    "/fixture/other-6/p:6c669661:25",
+    "/fixture/other-6/p:ef23fbef:20",
+    "/fixture/other-6/p:3532a0fe:31",
+    "/fixture/other-6/p:8fbc700a:28",
+    "/fixture/other-7",
     "/fixture/other-8",
-    "/fixture/other-9",
+    "/fixture/repo/.worktrees/application-architecture",
     "/fixture/repo/.worktrees/claude-transcript-relocation",
     "/fixture/repo/.worktrees/composer-placeholder-detection",
     "/fixture/repo/.worktrees/dependency-alerts-root",
@@ -44,7 +45,7 @@
     "/fixture/repo/.worktrees/tldr-agent-summaries",
     "/fixture/repo/.worktrees/usage-limit-rendering",
     "/fixture/repo/.worktrees/xterm-webgl-beta",
-    "/fixture/other-10/p:91ddffa8:10"
+    "/fixture/other-9/p:91ddffa8:10"
   ],
   "otherProjects": 22,
   "counts": {
@@ -53,18 +54,18 @@
       "transcripts": 215,
       "inFamily": 163,
       "orchestrationChildren": 109,
-      "historyRecords": 1514,
-      "control": "-fixture-other-6"
+      "historyRecords": 1527,
+      "control": "-fixture-other-1"
     },
     "codex": {
-      "indexed": 2022,
-      "inFamily": 1134,
+      "indexed": 2023,
+      "inFamily": 1135,
       "control": 25,
       "exec": 381,
       "subagents": 265,
       "orchestrationChildren": 239,
       "sampledRollouts": 7,
-      "unindexedOnDisk": 22,
+      "unindexedOnDisk": 5,
       "unindexedSampled": 3,
       "columns": [
         "id",

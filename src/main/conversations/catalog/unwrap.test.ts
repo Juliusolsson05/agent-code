@@ -40,6 +40,7 @@ describe('unwrapUserText', () => {
     '<user_instructions>x</user_instructions>',
     '<system-reminder>x</system-reminder>',
     '<task-notification>\n<task-id>x</task-id>',
+    'This session is being continued from a previous conversation that ran out of context.',
     '<unknown-wrapper>anything</unknown-wrapper>',
     '   ',
   ])('is not a prompt: %s', raw => {

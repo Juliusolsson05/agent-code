@@ -68,6 +68,13 @@ const BRANCH_PLACEHOLDER_RE = /^b:[0-9a-f]{8}$/
  *  itself. */
 export function placeholder(text: string): string {
   if (PLACEHOLDER_RE.test(text)) return text
+  // Whitespace-only text stays as it is. There is nothing to hide in an empty
+  // string, and hashing it would INVENT a value: the Codex index stores '' in
+  // first_user_message for exec runs, and the catalog read `p:e3b0c442:0` as
+  // a real first prompt (label source first-prompt) where the unredacted
+  // store has none (label source cwd). The corpus must keep emptiness, or the
+  // expectations drafted from the unredacted mirror argue about different data.
+  if (text.trim() === '') return text
   const sha8 = createHash('sha256').update(text).digest('hex').slice(0, 8)
   return `p:${sha8}:${text.length}`
 }
@@ -102,6 +109,13 @@ export function createPathRewriter(home: string, repoRoot: string): PathRewriter
     // Already rewritten (verification pass over the committed corpus).
     if (path === '/fixture' || path.startsWith('/fixture/')) return raw
     if (path === REPO || path.startsWith(REPO + '/')) return fileScheme + '/fixture/repo' + path.slice(REPO.length)
+    // darwin's filesystem is case-insensitive and one real transcript records
+    // the repo with a lowercased segment. It IS this repository; the fixture
+    // keeps the variance visible as /fixture/REPO so the case rule stays
+    // exercised by real data.
+    if (path.toLowerCase() === REPO.toLowerCase() || path.toLowerCase().startsWith(REPO.toLowerCase() + '/')) {
+      return fileScheme + '/fixture/REPO' + path.slice(REPO.length)
+    }
     if (path === HOME) return fileScheme + '/fixture/home'
     if (path.startsWith(HOME + '/')) {
       const rest = path.slice(HOME.length + 1)
@@ -158,7 +172,11 @@ function redactString(key: string, value: string, paths: PathRewriter): string {
   if (KEEP_VERBATIM_KEYS.has(key)) return value
   if (PATH_KEYS.has(key)) return value.startsWith('/') || value.startsWith('file://') ? paths.rewrite(value) : placeholder(value)
   if (BRANCH_KEYS.has(key)) {
-    if (value === 'main' || BRANCH_PLACEHOLDER_RE.test(value)) return value
+    // An empty branch (detached HEAD, or a record written before git was
+    // asked) stays empty for the same reason an empty prompt does: `b:` with
+    // nothing after it is a value the store never held, and the second pass
+    // of --verify-checked-in would hash it into a drift.
+    if (value === 'main' || value.trim() === '' || BRANCH_PLACEHOLDER_RE.test(value)) return value
     return 'b:' + placeholder(value).slice(2, 10)
   }
   for (const prefix of KEPT_WRAPPER_PREFIXES) {

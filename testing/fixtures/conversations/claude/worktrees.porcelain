@@ -1,12 +1,13 @@
 worktree /fixture/repo
-worktree /fixture/other-7/p:67aed750:23
-worktree /fixture/other-7/p:19d86ec2:22
-worktree /fixture/other-7/p:6c669661:25
-worktree /fixture/other-7/p:ef23fbef:20
-worktree /fixture/other-7/p:3532a0fe:31
-worktree /fixture/other-7/p:8fbc700a:28
+worktree /fixture/other-6/p:67aed750:23
+worktree /fixture/other-6/p:19d86ec2:22
+worktree /fixture/other-6/p:6c669661:25
+worktree /fixture/other-6/p:ef23fbef:20
+worktree /fixture/other-6/p:3532a0fe:31
+worktree /fixture/other-6/p:8fbc700a:28
+worktree /fixture/other-7
 worktree /fixture/other-8
-worktree /fixture/other-9
+worktree /fixture/repo/.worktrees/application-architecture
 worktree /fixture/repo/.worktrees/claude-transcript-relocation
 worktree /fixture/repo/.worktrees/composer-placeholder-detection
 worktree /fixture/repo/.worktrees/dependency-alerts-root
@@ -39,4 +40,4 @@ worktree /fixture/repo/.worktrees/terminal-view-status-header
 worktree /fixture/repo/.worktrees/tldr-agent-summaries
 worktree /fixture/repo/.worktrees/usage-limit-rendering
 worktree /fixture/repo/.worktrees/xterm-webgl-beta
-worktree /fixture/other-10/p:91ddffa8:10
+worktree /fixture/other-9/p:91ddffa8:10

@@ -29,7 +29,7 @@ describe('classifyConversation', () => {
     expect(classifyConversation(source({ userTexts: ['<orchestration-handoff>…'] }), null, child)).toBe('orchestration-child')
     expect(classifyConversation(source({}), ledger({ orchestration: { parentNativeId: 'p', role: 'reviewer', runId: null } }), null)).toBe('orchestration-child')
     // The ledger says it was a plain user session even though someone pasted a handoff manually.
-    expect(classifyConversation(source({}), ledger({ orchestration: null }), child)).toBe('user')
+    expect(classifyConversation(source({ userTexts: ['<orchestration-handoff>…'] }), ledger({ orchestration: null }), child)).toBe('user')
   })
   it('classifies native subagents, exec runs, projected handoffs and empty transcripts', () => {
     expect(classifyConversation(source({ provider: 'codex', isNativeSubagent: true }), null, { text: 'x', wrapper: null })).toBe('native-subagent')
