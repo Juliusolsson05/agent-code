@@ -19,9 +19,13 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
   const setTitle = (sessionId: string, title: string) => useAppStore.getState().setWorkspaceState(
     state => setAgentTitleInWorkspace(state, sessionId, title),
   )
-  const requireSession = (sessionId: string, allowBuried = false, allowTerminal = false) => {
+  // WHY every session kind passes (#865): locate/show/close/restore/titleSet/
+  // pinSet act on metadata and placement, which a shell has exactly like an
+  // agent. The single capability that must refuse a shell, agents.prompt,
+  // checks provider itself because its refusal has to name the right route.
+  const requireSession = (sessionId: string, allowBuried = false) => {
     const current = observe().sessions.find(session => session.sessionId === sessionId)
-    if (!current || (!allowTerminal && current.provider === 'terminal')) throw new ControlError('unavailable', 'Agent does not exist in this window')
+    if (!current) throw new ControlError('unavailable', 'Agent does not exist in this window')
     if (!allowBuried && current.placements.some(placement => placement.kind === 'buried')) {
       throw new ControlError('unavailable', 'Agent is buried; restore it explicitly before acting')
     }
@@ -73,14 +77,14 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
       output: sessionReference,
       handler: async ({ sessionId, tabId, anchorSessionId, targetId, revision }) => {
         requireUi()
-        const session = requireSession(sessionId, false, true)
+        const session = requireSession(sessionId)
         if (!session.placements.some(placement => placement.kind === 'detached')) throw new ControlError('unavailable', 'Agent is already attached')
         const targets = placements(tabId, anchorSessionId)
         if (paginate(targets, { limit: 200 }, `placement:${tabId}:${anchorSessionId}`).revision !== revision) throw new ControlError('stale_cursor', 'Placement changed; list targets again')
         const target = targets.find(target => target.id === targetId)
         if (!target) throw new ControlError('unavailable', 'Placement target no longer exists')
         await getWorkspace().attachDetachedToGrid(sessionId, tabId, target)
-        const placed = requireSession(sessionId, false, true)
+        const placed = requireSession(sessionId)
         if (!placed.placements.some(placement => placement.kind === 'grid' && placement.tabId === tabId)) {
           throw new ControlError('failed', 'Attachment was not observed; inspect current placement', 'unknown')
         }
@@ -89,8 +93,8 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
     }),
     defineCapability({
       id: 'agents.list', title: 'Find agents', execution: 'window', effect: 'read',
-      description: 'Search all agents in this window by stable ID, visible label, spoken agent name, title, directory and provider, including detached and buried records. Reading never wakes an agent.',
-      input: z.object({ query: z.string().default('').describe('Case-insensitive substring of session ID, visible label, spoken agent name, title, working directory or provider. Empty lists all agents in this window.'), tabId: z.string().describe('Project tab ID from app.observe in the target window.').optional(), ...pageInput }).strict(),
+      description: 'Search all agents and terminals in this window by stable ID, visible label, spoken agent name, title, directory and provider, including detached and buried records. Reading never wakes an agent.',
+      input: z.object({ query: z.string().default('').describe('Case-insensitive substring of session ID, visible label, spoken agent name, title, working directory or provider. Empty lists every agent and terminal in this window.'), tabId: z.string().describe('Project tab ID from app.observe in the target window.').optional(), ...pageInput }).strict(),
       output: pageSchema(sessionReference),
       handler: input => {
         const query = input.query.trim().toLocaleLowerCase()
@@ -101,8 +105,12 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
         // recovers an agent globally must also recover it in-window. Omitting
         // agentName here made "search for apoll" answer differently depending on
         // which tool the client happened to reach for.
-        const rows = observe().sessions.filter(session => session.provider !== 'terminal'
-          && (!input.tabId || session.placements.some(placement => placement.tabId === input.tabId))
+        //
+        // WHY terminals are included (#865): a shell is a session an operator
+        // can locate, title, pin and navigate to exactly like an agent — only
+        // agents.prompt draws the provider-only line, and it does so itself.
+        const rows = observe().sessions.filter(session =>
+          (!input.tabId || session.placements.some(placement => placement.tabId === input.tabId))
           && [session.sessionId, session.title, session.displayedTitle, session.displayLabel ?? '', session.agentName ?? '', session.cwd, session.provider].some(value => value.toLocaleLowerCase().includes(query)))
         return paginate(rows, input, `agents:${query}:${input.tabId ?? ''}`)
       },
@@ -152,8 +160,8 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
       },
     }),
     defineCapability({
-      id: 'agents.titleSet', target: { kind: 'session', field: 'sessionId' }, title: 'Set an agent title', execution: 'window', effect: 'mutation',
-      description: 'Set or clear the exact agent title using the same normalization and length policy as the UI. Does not send a prompt.',
+      id: 'agents.titleSet', target: { kind: 'session', field: 'sessionId' }, title: 'Set a session title', execution: 'window', effect: 'mutation',
+      description: 'Set or clear the exact agent or terminal title using the same normalization and length policy as the UI. Does not send a prompt.',
       input: sessionInput.extend({ title: z.string().describe('Agent display title; empty clears a custom title. Normal UI normalization applies.') }), output: z.object({ sessionId: z.string(), title: z.string().describe('Agent display title; empty clears a custom title. Normal UI normalization applies.') }),
       handler: ({ sessionId, title }) => {
         requireReady(); requireSession(sessionId)
@@ -218,6 +226,12 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
       handler: async ({ sessionId, prompt, imagePaths }) => {
         requireReady()
         const session = requireSession(sessionId)
+        // Terminals are sessions, not prompt targets (#865): provider delivery
+        // needs a readiness gate and an acceptance signal a shell cannot give.
+        // Point at the route that exists instead of a bare "unavailable".
+        if (session.provider === 'terminal') {
+          throw new ControlError('unavailable', 'This session is a terminal. Send text with terminals.input; agents.prompt only drives provider agents')
+        }
         // Codex's text-only delivery currently ignores imagePaths. Refuse
         // unsupported attachments BEFORE wake/write instead of silently sending
         // a different task from the one the operator supplied.

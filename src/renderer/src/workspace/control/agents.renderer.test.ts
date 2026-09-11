@@ -99,3 +99,27 @@ it('finds an agent by its spoken name from the window-local index too, not only 
   useAppStore.setState({ settings: { ...useAppStore.getState().settings, agentNamesEnabled: false } })
   expect(await invoke('agents.list', { query: 'apoll' })).toMatchObject({ ok: true, value: { total: 0 } })
 })
+
+it('treats a terminal as a session for metadata and navigation, but never as a prompt target (#865)', async () => {
+  const { invoke, deliverPrompt } = setup()
+  useAppStore.getState().setWorkspaceState(state => ({
+    ...state,
+    sessions: { ...state.sessions, shell: { cwd: '/trial', kind: 'terminal' } },
+    tabs: [{ ...state.tabs[0], root: { type: 'split', direction: 'vertical', ratio: 0.5,
+      a: { type: 'leaf', sessionId: 'agent' }, b: { type: 'leaf', sessionId: 'shell' } } }],
+  }))
+
+  expect(await invoke('agents.titleSet', { sessionId: 'shell', title: 'dev server' }))
+    .toMatchObject({ ok: true, value: { title: 'dev server' } })
+  expect(await invoke('agents.locate', { sessionId: 'shell' }))
+    .toMatchObject({ ok: true, value: { provider: 'terminal', title: 'dev server' } })
+  expect(await invoke('agents.list', { query: 'dev server' }))
+    .toMatchObject({ ok: true, value: { items: [expect.objectContaining({ sessionId: 'shell' })] } })
+
+  // The refusal carries the route an operator should take instead, and it
+  // happens before any wake or provider write.
+  const refused = await invoke('agents.prompt', { sessionId: 'shell', prompt: 'ls' })
+  expect(refused).toMatchObject({ ok: false, error: { code: 'unavailable' } })
+  expect(JSON.stringify(refused)).toContain('terminals.input')
+  expect(deliverPrompt).not.toHaveBeenCalled()
+})
