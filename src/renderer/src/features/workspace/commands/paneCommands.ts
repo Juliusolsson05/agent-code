@@ -70,7 +70,7 @@ export const paneCommands: CommandDef[] = [
     // project (createDetachedDispatchAgent selects what it creates), so the
     // other lanes read "Not in this scope" until you switch back. That is the
     // scope contract working — the new agent has to be visible — not a bug.
-    description: '**What it does:** Starts a **new agent in a project you choose**, in the focused Dispatch lane.\n\n**Use when:** You are filling an empty lane with an agent for a different project than the one you last selected.\n\n**Notes:** Pick the agent, then the project. A row limited to certain projects only offers those. In project-scoped Dispatch, choosing another project switches to it.',
+    description: '**What it does:** Starts a **new agent in a project you choose** — in the focused lane in Grid Dispatch, or as a new Dispatch row.\n\n**Use when:** You want an agent for a different project than the one you last selected, e.g. to fill an empty lane.\n\n**Notes:** Pick the agent, then the project. A row limited to certain projects only offers those. In project-scoped Dispatch, choosing another project switches to it.',
     keywords: ['new', 'agent', 'project', 'lane', 'fill', 'empty', 'dispatch', 'claude', 'codex', 'opencode'],
     // Same data gate as New Agent…. Tiled Tabs covers Dispatch, so the lane the
     // agent would fill is not the thing on screen.

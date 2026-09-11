@@ -105,6 +105,34 @@ An independent review found, and this branch fixed:
   Enter-Enter equivalence is project-level) and a project-scope note in the
   command description.
 
+## Review round 2 (two orchestrated reviewers: A correctness/Codex, B integration/Claude)
+
+Both verdicts "ready with fixes"; all valid findings fixed on this branch:
+
+- **Space activated the Tab-focused row, not the highlighted one** (A1/B1), in
+  both this dialog and Switch Provider: arrows moved the highlight while DOM
+  focus stayed on the row, and Space is a native click on the focused button.
+  Rows in both dialogs are no longer tab stops (`tabIndex={-1}`), so keyboard
+  focus is only ever the dialog surface or the footer; row `onFocus` sync is
+  gone. #862 was widened to cover this path.
+- The focused-control Enter rule is now one exported predicate,
+  `focusedControlOwnsEnter` in `components/ui/dialog-actions.tsx`, used by
+  `DialogActions` and both list dialogs instead of a copied footer-slot guard
+  (B2). Three more pre-existing dialogs with the pattern (Agent View Mode,
+  Reorder Tabs, Pin Agents) are filed as #867 — out of scope here.
+- The reopen test could not fail (B3): replaced by one that watches the DOM
+  during reopen and fails if the stale project step mounts even briefly
+  (verified red with reset-on-open, green with reset-on-close).
+- The resolver's bound-row branch WAS covered, in `rowScopedRows.test.ts`
+  (B4): the duplicate resolver tests were dropped and the comment corrected.
+- Eligibility is an explicit discriminant (`enabled`) on the project model
+  rather than re-derived from the anchor in three places (B7); the disabled
+  row test asserts the native `disabled` attribute (B6).
+- The dialog's keys are declared in `controlInteractions.ts` (B5); the command
+  description covers classic Dispatch rows as well as Grid lanes (B9); a stale
+  "103 + 4 = 107" comment in `catalog.test.ts` was pointed at the assertion
+  instead (B8).
+
 ## Out of scope
 
 - A default chord.

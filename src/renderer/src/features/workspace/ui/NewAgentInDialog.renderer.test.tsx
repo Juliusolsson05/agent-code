@@ -118,6 +118,10 @@ describe('NewAgentInDialog', () => {
 
     press('Enter')
     expect(screen.getByText(/no agent in this project/i)).toBeInTheDocument()
+    // The native attribute, not just the commit guard: it is what assistive
+    // tech announces as unavailable, and the click assertion below would pass
+    // on the guard alone.
+    expect(screen.getByText('C · project-c').closest('button')).toBeDisabled()
     fireEvent.click(screen.getByText('C · project-c').closest('button')!)
     expect(createDetachedDispatchAgent).not.toHaveBeenCalled()
 
@@ -170,14 +174,55 @@ describe('NewAgentInDialog', () => {
     expect(createDetachedDispatchAgent).not.toHaveBeenCalled()
   })
 
-  it('reopens on the agent step with a fresh commit latch', () => {
+  it('never lets keyboard focus rest on a list row, on either step', () => {
+    // Rows are buttons (so a click works), but they must not be tab stops.
+    // A Tab-focused row kept DOM focus while the arrows moved the highlight,
+    // so Space — which the browser delivers as a click on the FOCUSED button —
+    // created the agent in a project other than the highlighted one (and, on
+    // step one, picked a different agent). happy-dom does not synthesize a
+    // keyboard click, so the honest pin is the structure that makes the bug
+    // impossible: no row can receive keyboard focus.
+    const { press } = harness()
+
+    const agentRows = document.querySelectorAll('[data-new-agent-in-choice]')
+    expect(agentRows.length).toBeGreaterThan(0)
+    agentRows.forEach(row => expect(row).toHaveAttribute('tabindex', '-1'))
+
+    press('Enter')
+    const projectRows = document.querySelectorAll('[data-new-agent-in-project]')
+    expect(projectRows.length).toBe(3)
+    projectRows.forEach(row => expect(row).toHaveAttribute('tabindex', '-1'))
+  })
+
+  it('reopens on the agent step without ever mounting the previous project step, and with a fresh latch', () => {
+    // Resetting on OPEN also ends on the agent step — but only after first
+    // mounting the stale project step for one render, which a non-user-event
+    // open (an MCP commands.run) can paint. Watching the DOM during the reopen
+    // is what tells reset-on-close apart from reset-on-open.
     const { createDetachedDispatchAgent, mounted, workspace, onClose, press } = harness()
 
     press('Enter')
-    press('Enter') // commits and latches
+    press('Enter') // commits and latches, leaving the dialog on the project step
     mounted.rerender(<NewAgentInDialog open={false} workspace={workspace} onClose={onClose} />)
-    mounted.rerender(<NewAgentInDialog open workspace={workspace} onClose={onClose} />)
 
+    const observer = new MutationObserver(() => {})
+    observer.observe(document.body, { childList: true, subtree: true })
+    mounted.rerender(<NewAgentInDialog open workspace={workspace} onClose={onClose} />)
+    // Scan REMOVED nodes too. `rerender` runs inside act(), so by the time the
+    // records are read, reset-on-open has already replaced the stale project
+    // rows — an added portal root no longer contains them. The replaced rows
+    // themselves, though, appear in `removedNodes` with their attributes
+    // intact, which is the evidence that the stale step was mounted.
+    const isProjectRowTree = (node: Node) =>
+      node instanceof Element &&
+      (node.matches('[data-new-agent-in-project]') || node.querySelector('[data-new-agent-in-project]') !== null)
+    const staleProjectStepMounted = observer.takeRecords().some(record =>
+      Array.from(record.addedNodes).some(isProjectRowTree) ||
+      Array.from(record.removedNodes).some(isProjectRowTree),
+    )
+    observer.disconnect()
+
+    expect(staleProjectStepMounted).toBe(false)
     expect(screen.getByText('Codex')).toBeInTheDocument()
     press('Enter')
     press('Enter')

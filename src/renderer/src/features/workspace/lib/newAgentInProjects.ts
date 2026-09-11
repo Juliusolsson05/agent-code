@@ -18,7 +18,7 @@ import type { SessionId, TabId, WorkspaceState } from '@renderer/workspace/types
 // dumb list and the rules below are testable without React.
 // ---------------------------------------------------------------------------
 
-export type NewAgentInProject = {
+type NewAgentInProjectBase = {
   tabId: TabId
   /**
    * A/B/C — the tab's position in the FULL tab list, never re-lettered after
@@ -28,19 +28,39 @@ export type NewAgentInProject = {
    */
   label: string
   title: string
-  /**
-   * The existing session whose cwd the new agent borrows, or null when the
-   * project has none.
-   *
-   * WHY an anchor session at all: a Tab has no directory of its own — cwd lives
-   * on sessions — and `createDetachedDispatchAgent` deliberately takes the
-   * override as `{ tabId, anchorSessionId }` for exactly this reason (see the
-   * WHY on `newAgentProjectIntent` in uiShell/types.ts).
-   */
-  anchorSessionId: SessionId | null
-  /** Set exactly when `anchorSessionId` is null; shown on the disabled row. */
-  disabledReason: string | null
 }
+
+/**
+ * One row of the project step.
+ *
+ * WHY a union discriminated on `enabled` rather than a nullable anchor the
+ * consumer inspects: eligibility is the MODEL's decision, and the dialog used
+ * to re-derive it from `anchorSessionId !== null` in three places. A future
+ * second reason to disable a project (one that still has an anchor) would then
+ * have been disabled in the model and committable in the dialog. With the
+ * union, `enabled` is the only thing consumers branch on, and TypeScript only
+ * hands out an anchor on the enabled branch.
+ */
+export type NewAgentInProject =
+  | (NewAgentInProjectBase & {
+      enabled: true
+      /**
+       * The existing session whose cwd the new agent borrows.
+       *
+       * WHY an anchor session at all: a Tab has no directory of its own — cwd
+       * lives on sessions — and `createDetachedDispatchAgent` deliberately
+       * takes the override as `{ tabId, anchorSessionId }` for exactly this
+       * reason (see the WHY on `newAgentProjectIntent` in uiShell/types.ts).
+       */
+      anchorSessionId: SessionId
+      disabledReason: null
+    })
+  | (NewAgentInProjectBase & {
+      enabled: false
+      anchorSessionId: null
+      /** Shown on the disabled row, so the user learns why it cannot be picked. */
+      disabledReason: string
+    })
 
 export type NewAgentInModel = {
   projects: NewAgentInProject[]
@@ -93,14 +113,13 @@ export function buildNewAgentInModel(state: WorkspaceState): NewAgentInModel {
     // is a set the user built by clicking, and its insertion order means
     // nothing to someone scanning A, B, C.
     if (bound.size > 0 && !bound.has(tab.id)) return
+    const base = { tabId: tab.id, label: tabIndexLabel(tabIndex), title: tab.title }
     const anchorSessionId = anchorFor(state, tab.id)
-    projects.push({
-      tabId: tab.id,
-      label: tabIndexLabel(tabIndex),
-      title: tab.title,
-      anchorSessionId,
-      disabledReason: anchorSessionId ? null : NO_ANCHOR_REASON,
-    })
+    projects.push(
+      anchorSessionId
+        ? { ...base, enabled: true, anchorSessionId, disabledReason: null }
+        : { ...base, enabled: false, anchorSessionId: null, disabledReason: NO_ANCHOR_REASON },
+    )
   })
 
   // Start on the PROJECT plain New Agent… would have used, so Enter, Enter
@@ -111,7 +130,7 @@ export function buildNewAgentInModel(state: WorkspaceState): NewAgentInModel {
   // still shows another project's agent) or cannot be anchored, fall back to
   // the first project that can actually take an agent.
   const spawnTabId = resolveDispatchSpawnTarget(state).tabId
-  const enabled = projects.filter(project => project.anchorSessionId !== null)
+  const enabled = projects.filter(project => project.enabled)
   const initialTabId =
     enabled.find(project => project.tabId === spawnTabId)?.tabId ??
     enabled[0]?.tabId ??

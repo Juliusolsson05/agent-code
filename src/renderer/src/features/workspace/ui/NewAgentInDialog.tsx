@@ -9,6 +9,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
+import { focusedControlOwnsEnter } from '@renderer/components/ui/dialog-actions'
 import {
   buildNewAgentInModel,
   type NewAgentInModel,
@@ -89,7 +90,7 @@ export function NewAgentInDialog({ open, workspace, onClose }: Props) {
   }, [open])
 
   const choice = AGENT_PROVIDER_CHOICES[agentIndex] ?? null
-  const enabledProjects = model.projects.filter(project => project.anchorSessionId !== null)
+  const enabledProjects = model.projects.filter(project => project.enabled)
   const highlightedProject =
     enabledProjects.find(project => project.tabId === projectTabId) ?? null
 
@@ -102,7 +103,7 @@ export function NewAgentInDialog({ open, workspace, onClose }: Props) {
   }
 
   const commit = (project: NewAgentInProject) => {
-    if (!choice || !project.anchorSessionId || committingRef.current) return
+    if (!choice || !project.enabled || committingRef.current) return
     committingRef.current = true
     // Close before the spawn: it awaits an IPC round trip, and the agent is
     // about to appear in the lane underneath. createDetachedDispatchAgent owns
@@ -167,24 +168,21 @@ export function NewAgentInDialog({ open, workspace, onClose }: Props) {
             return
           }
           if (event.key === 'Enter') {
-            // A FOCUSED FOOTER BUTTON OWNS ITS OWN ENTER — the rule
-            // components/ui/dialog-actions.tsx writes down. Everything below
-            // calls preventDefault, which also cancels the focused button's
+            // A FOCUSED BUTTON OWNS ITS OWN ENTER (focusedControlOwnsEnter, the
+            // rule components/ui/dialog-actions.tsx writes down). Everything
+            // below calls preventDefault, which also cancels that button's
             // native Enter-click, so without this guard Tab to Cancel + Enter
             // committed the highlighted project and SPAWNED an agent (#862 is
             // the same bug in ProviderSwitchPickerModal, whose pattern this
-            // copied). Only the footer is exempt, not every button: the list
-            // rows are buttons too, and after Tab-to-row plus arrows the
-            // focused row and the highlighted row differ — Enter must act on
-            // the highlight, which is what the user is looking at.
-            if (event.target instanceof Element && event.target.closest('[data-slot="dialog-footer"]')) return
+            // copied). Because list rows are not tab stops (see the rows below),
+            // the only buttons that can hold keyboard focus are the footer's —
+            // so "any focused button" and "a footer button" are the same set.
+            if (focusedControlOwnsEnter(event.target)) return
             event.preventDefault()
             // Held Enter auto-repeats. Without this one long press would pick
             // the agent and then commit the default project, starting a real
             // agent process the user never chose a project for.
             if (event.repeat) return
-            // preventDefault above also cancels a focused ROW's native click, so
-            // a Tab-focused row cannot fire a second, different action.
             if (step === 'agent') chooseAgent(agentIndex)
             else if (highlightedProject) commit(highlightedProject)
             return
@@ -208,6 +206,21 @@ export function NewAgentInDialog({ open, workspace, onClose }: Props) {
           </DialogDescription>
         </DialogHeader>
 
+        {/*
+          ROWS ARE BUTTONS BUT NOT TAB STOPS (tabIndex -1 on both steps).
+          Buttons, so a mouse click works and a disabled row is really
+          disabled. Not tab stops, because keyboard selection here is the
+          arrow-driven HIGHLIGHT, and a Tab-focused row splits it in two: the
+          arrows move the highlight while DOM focus stays behind, and Space —
+          which the browser delivers as a click on the FOCUSED button, with no
+          way for an Enter handler to intercept it — then created the agent in
+          a project other than the highlighted one (and picked a different
+          agent on step one). With rows out of the tab order, keyboard focus is
+          only ever on the dialog surface (arrows + Enter act on the highlight)
+          or on the footer buttons (which own their own Enter and Space). A row
+          can still take focus from a mouse click, but that click immediately
+          advances the step or commits, so the split can never persist.
+        */}
         <div className="rounded-slab mx-4 my-4 overflow-hidden border border-border bg-canvas">
           {step === 'agent' ? (
             AGENT_PROVIDER_CHOICES.map((option, index) => {
@@ -216,9 +229,9 @@ export function NewAgentInDialog({ open, workspace, onClose }: Props) {
                 <button
                   key={`${option.kind}:${option.providerRuntime ?? 'structured'}`}
                   type="button"
+                  tabIndex={-1}
                   data-new-agent-in-choice={`${option.kind}:${option.providerRuntime ?? 'structured'}`}
                   onMouseEnter={() => setAgentIndex(index)}
-                  onFocus={() => setAgentIndex(index)}
                   onClick={() => chooseAgent(index)}
                   className={`
                     w-full cursor-pointer border-b border-border px-3 py-3 text-left last:border-b-0
@@ -241,19 +254,18 @@ export function NewAgentInDialog({ open, workspace, onClose }: Props) {
             </div>
           ) : (
             model.projects.map(project => {
-              const enabled = project.anchorSessionId !== null
-              const focused = enabled && project.tabId === highlightedProject?.tabId
+              const focused = project.enabled && project.tabId === highlightedProject?.tabId
               return (
                 <button
                   key={project.tabId}
                   type="button"
+                  tabIndex={-1}
                   // A real `disabled`, not a styled no-op: React drops clicks on
                   // it and assistive tech announces it, while the row (and its
                   // reason) stays in the list.
-                  disabled={!enabled}
+                  disabled={!project.enabled}
                   data-new-agent-in-project={project.tabId}
-                  onMouseEnter={() => { if (enabled) setProjectTabId(project.tabId) }}
-                  onFocus={() => { if (enabled) setProjectTabId(project.tabId) }}
+                  onMouseEnter={() => { if (project.enabled) setProjectTabId(project.tabId) }}
                   onClick={() => commit(project)}
                   className={`
                     w-full border-b border-border px-3 py-3 text-left last:border-b-0

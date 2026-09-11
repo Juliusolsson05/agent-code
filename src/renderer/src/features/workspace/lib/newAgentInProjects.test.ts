@@ -83,7 +83,7 @@ describe('buildNewAgentInModel', () => {
 
     // The grid leaf is the project's own directory; the detached worktree
     // agent is only the fallback. Same order the Dispatch header "+" uses.
-    expect(projectB).toMatchObject({ anchorSessionId: 'b1', disabledReason: null })
+    expect(projectB).toMatchObject({ enabled: true, anchorSessionId: 'b1', disabledReason: null })
   })
 
   it('falls back to a detached row when the grid leaf has no live session behind it', () => {
@@ -110,7 +110,10 @@ describe('buildNewAgentInModel', () => {
 
     const projectC = buildNewAgentInModel(state).projects.find(p => p.tabId === 'tabC')
 
-    expect(projectC?.anchorSessionId).toBeNull()
+    // `enabled` is the one field consumers branch on; anchor and reason follow
+    // from it, so a future second disabled reason cannot leave a project that
+    // the model calls disabled but the dialog can still commit.
+    expect(projectC).toMatchObject({ enabled: false, anchorSessionId: null })
     expect(projectC?.disabledReason).toMatch(/no agent/i)
   })
 
