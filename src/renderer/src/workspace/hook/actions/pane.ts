@@ -381,8 +381,21 @@ export function usePaneActions(
   startNewAgentPlacement: () => void
   commitNewAgentPlacement: (selection: SessionSpawnSelection, target: PlacementTarget) => Promise<void>
   createDetachedSession: (selection: SessionSpawnSelection, projectOverride?: { tabId: TabId; anchorSessionId: SessionId }, continuation?: SplitFocusedContinuation, placement?: { selectCreated: boolean }) => Promise<SessionId | null>
+  // WHY `kind` is the full SessionKind here (unlike createLinkedAgent right
+  // below, which stays narrowed to agent providers): Dispatch's "New Agent…"
+  // picker now offers Terminal (#865), and files it through this exact
+  // creator so the project-header "+" override (`projectOverride`, honored
+  // here and NOT by splitFocused) applies to shells too. This was a type-only
+  // restriction, not a runtime one — proof is two lines below the useCallback:
+  // `createDetachedSession: createDetachedDispatchAgent` exposes the SAME
+  // function under a second name, and that name's declared type (just above,
+  // unchanged) already accepted every SessionKind — `control/terminals.ts`'s
+  // `terminals.create` capability has been passing `{ kind: 'terminal' }`
+  // through it since terminals existed. Narrowing only THIS name's type was
+  // an artifact of when this alias was agent-only; it never matched what the
+  // underlying implementation actually does.
   createDetachedDispatchAgent: (
-    selection: SessionSpawnSelection & { kind: Exclude<SessionKind, 'terminal'> },
+    selection: SessionSpawnSelection,
     projectOverride?: { tabId: TabId; anchorSessionId: SessionId },
     continuation?: SplitFocusedContinuation,
     placement?: { selectCreated: boolean },

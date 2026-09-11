@@ -17,6 +17,7 @@ import { resolveDispatchAttachTarget } from '@renderer/workspace/dispatch/dispat
 import { dispatchFocusedSessionId } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 import { submitActiveComposer } from '@renderer/workspace/tile-tree/TileLeaf/composerEnterRegistry'
+import { sessionHasTranscript } from '@renderer/workspace/transcriptAvailability'
 
 /**
  * Buried panes visible from the CURRENT tab.
@@ -584,7 +585,9 @@ export const paneCommands: CommandDef[] = [
       // transcript, and extractLastAssistantText intentionally reads provider
       // entries. Showing the command on a shell row would imply there is an
       // assistant response to copy when there is only PTY scrollback.
-      return workspace.state.sessions[sessionId]?.kind !== 'terminal'
+      // sessionHasTranscript also excludes OpenCode Terminal, which never has
+      // entries to copy.
+      return sessionHasTranscript(workspace.state.sessions[sessionId])
     },
     run: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
@@ -649,10 +652,14 @@ export const paneCommands: CommandDef[] = [
     description:
       '**What it does:** Restores the draft removed by the last **Clear Composer** in this agent.\n\n**Use when:** You cleared the composer by mistake.\n\n**Notes:** Text only — attached images are not restored. Survives further typing, so it is still available after you start over.',
     keywords: ['undo', 'restore', 'composer', 'draft', 'clear', 'recover'],
-    // NO `when` guard, matching `undo-close`: the stash lives in module state
-    // that the command registry does not re-derive on, so a guard reading it
-    // would go stale. `undoClearDraft` returns false when there is nothing to
-    // restore and the command stays quiet.
+    // Plain terminals have no composer at all; the rendered-view policy cannot
+    // hide this for them because it answers "allowed" for non-agent kinds.
+    // This guard reads only the session kind, never the module-level stash,
+    // so the staleness concern that kept this command guard-free does not apply.
+    when: ({ workspace }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      return sessionId !== null && workspace.state.sessions[sessionId]?.kind !== 'terminal'
+    },
     run: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return

@@ -80,14 +80,17 @@ export function getEffectiveAgentSurface(args: {
   if (mode === 'terminal') return 'terminal'
 
   // WHY draft input promotes Hybrid even without an explicit lease:
-  // the composer is part of the rendered Agent Code surface. Commands like
-  // Prompt Template intentionally stop at "prefill the draft, do not send";
-  // if Hybrid stayed on the raw terminal after that write, the command would
-  // technically succeed while hiding the only UI where the user can inspect,
-  // edit, or submit the inserted text. Tying promotion to non-empty draft
-  // state also gives Hybrid a natural release point: once the draft is cleared
-  // or submitted, the pane falls back to the terminal without each composer
-  // feature needing its own bespoke lease bookkeeping.
+  // the composer is part of the rendered Agent Code surface. Draft writers
+  // (operator templates.insert, Rewind to Prompt, restored drafts)
+  // intentionally stop at "prefill the draft, do not send". Prompt Template
+  // itself pastes into the PTY when Hybrid rests on the terminal
+  // (deliverTextToSession); if Hybrid stayed on the raw terminal after that
+  // write, the command would technically succeed while hiding the only UI
+  // where the user can inspect, edit, or submit the inserted text. Tying
+  // promotion to non-empty draft state also gives Hybrid a natural release
+  // point: once the draft is cleared or submitted, the pane falls back to
+  // the terminal without each composer feature needing its own bespoke
+  // lease bookkeeping.
   if (
     runtime.draftInput.trim().length > 0 ||
     runtime.draftImages.length > 0 ||

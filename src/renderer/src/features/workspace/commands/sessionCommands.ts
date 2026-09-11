@@ -14,6 +14,7 @@ import { buildProviderResumeCommand } from '@renderer/workspace/providerResumeCo
 import { providerSupportsBuiltInMcpDomain } from '@mcp/shared/types'
 import type { BuiltInMcpDomain } from '@mcp/shared/types'
 import { clearAgentComposer } from '@renderer/workspace/tile-tree/TileLeaf/clearAgentComposer'
+import { sessionHasTranscript } from '@renderer/workspace/transcriptAvailability'
 
 function targetSupportsBuiltInMcpDomain(
   workspace: CommandContext['workspace'],
@@ -86,7 +87,12 @@ export const sessionCommands: CommandDef[] = [
       // nothing looked wrong; it would have started reporting the wrong answer
       // the moment a switch edge was added for a provider whose prompts we
       // cannot parse, or an adapter for one with no switch edge.
-      return getProviderFeatures(kind).promptHistoryExtraction
+      //
+      // sessionHasTranscript additionally excludes OpenCode Terminal (kind
+      // 'opencode', providerRuntime 'terminal'): its history loaders never
+      // populate `runtime.entries`, so prompt extraction had nothing to read
+      // even though promptHistoryExtraction is true for plain OpenCode.
+      return getProviderFeatures(kind).promptHistoryExtraction && sessionHasTranscript(meta)
     },
     run: ({ workspace, ui }) => {
       const sessionId = commandTargetSessionId(workspace)
