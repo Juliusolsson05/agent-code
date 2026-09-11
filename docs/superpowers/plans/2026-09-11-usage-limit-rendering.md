@@ -1,7 +1,7 @@
 # Usage-limit notices in the conversation feed
 
-Status: V1 implemented and locally reviewed; production-build verification and
-app PR/CI delivery are in progress. Both PRs remain subject to explicit merge approval.
+Status: V1 implemented, locally reviewed, and production-build verified.
+App PR/CI status is tracked in #885; both PRs require explicit merge approval.
 
 Feature Issue: [agent-code#885](https://github.com/Juliusolsson05/agent-code/issues/885).
 Package dependency: [codex-headless#49](https://github.com/Juliusolsson05/codex-headless/issues/49).
@@ -407,14 +407,13 @@ documented precisely, with no cold-history parity claim.
 
 - [x] Run focused colocated adapter, reducer, ledger and renderer tests as each
   task lands. Do not add tests that simply mirror field assignments.
-- [ ] After integration and the committed package pin, run app `npm run check`
+- [x] After integration and the committed package pin, run app `npm run check`
   and the normal CI quality gate. The package runs its own `npm run check`; do
   not substitute app compilation for package behavioral checks.
 - [x] Inspect the rendered cards at narrow/wide widths and record the observed
   results in the PR. Declare source-derived fixtures separately from real captures.
-- [ ] Review the complete diff, resolve valid feedback, synchronize #885/#49,
-  and open the app PR only with implementation, verification, and migration/
-  limitation notes complete. Suggested title:
+- [x] Review the complete diff, synchronize #885/#49, and prepare the app PR
+  with implementation, verification, and migration/limitation notes complete. Suggested title:
   `feat(rendering): show provider usage caps and recovery actions`.
 - [x] Use `Fixes #885` only if the agreed V1 criteria are met. Link the package
   PR and related #820/#821 with `Refs` where appropriate; do not claim to resolve
@@ -482,3 +481,9 @@ the shared session runtime survives. No new journal/transport is introduced.
   the pre-existing missing personal image transcript assertion tracked by #839.
   The latter reproduces in the unchanged image test and remains outside this PR;
   it is not skipped or weakened. Final build/check details live in the PR.
+
+Final local verification: app typecheck and `npm run test:package` pass, including
+the remote client, desktop renderer, main/preload, universal hotkey helper, and
+required build-entry verification. The final focused Reader/rendering/control
+suite passed 92 tests, followed by 39 provider/ledger tests including the new
+Reader follow-versus-history regression. No source changes remain uncommitted.
