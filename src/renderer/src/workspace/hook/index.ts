@@ -231,8 +231,8 @@ export function useWorkspace(
   }, [refs.stateRef, setRuntimes, setState, showToast])
 
   const setAgentTitle = useCallback((sessionId: SessionId, title: string): boolean => {
-    const meta = refs.stateRef.current.sessions[sessionId]
-    if (!meta || !isAgentProviderKind(meta.kind ?? DEFAULT_PROVIDER)) return false
+    // Any existing session can carry a title (#865); only a vanished one is refused.
+    if (!refs.stateRef.current.sessions[sessionId]) return false
 
     // WHY the mutation is delegated to a pure workspace helper rather than
     // written inline here: `SessionMeta.title` is already consumed by several

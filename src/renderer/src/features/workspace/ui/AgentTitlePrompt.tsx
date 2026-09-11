@@ -43,7 +43,7 @@ export function AgentTitlePrompt({
       <DialogContent className="w-[440px] max-w-[calc(100vw-64px)]">
         <form onSubmit={submit}>
           <DialogHeader>
-            <DialogTitle>Set Agent Title</DialogTitle>
+            <DialogTitle>Set Title</DialogTitle>
             <DialogDescription>
               {description || 'Give this agent a short glance label.'}
             </DialogDescription>

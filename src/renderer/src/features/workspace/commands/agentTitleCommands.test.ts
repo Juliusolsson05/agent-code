@@ -72,13 +72,19 @@ describe('Set Agent Title command targeting', () => {
     expect(harness.openAgentTitlePrompt).toHaveBeenCalledWith('b')
   })
 
-  it('does not advertise agent titles for a plain terminal target', () => {
+  it('offers titles for a plain terminal target too (#865)', () => {
     const state = baseState()
     state.sessions.a = { cwd: '/work/a', kind: 'terminal' }
     const harness = context(state)
 
-    expect(command.when?.(harness.value)).toBe(false)
+    expect(command.when?.(harness.value)).toBe(true)
     command.run(harness.value)
-    expect(harness.openAgentTitlePrompt).not.toHaveBeenCalled()
+    expect(harness.openAgentTitlePrompt).toHaveBeenCalledWith('a')
+  })
+
+  it('uses a session-neutral title while keeping the stable command id', () => {
+    // The id keys saved visibility/keybinding settings; only the label moves.
+    expect(command.id).toBe('agent.title.set')
+    expect(command.title).toBe('Set Title…')
   })
 })
