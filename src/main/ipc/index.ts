@@ -12,6 +12,8 @@ import { registerProviderIpc } from '@main/ipc/provider.js'
 import { registerLspIpc } from '@main/ipc/lsp.js'
 import { registerFsIpc } from '@main/ipc/fs.js'
 import { registerSessionsIpc } from '@main/ipc/sessions.js'
+import { registerConversationsIpc } from '@main/ipc/conversations.js'
+import type { ConversationService } from '@main/conversations/service.js'
 import { registerAgentNamesIpc } from '@main/agentNames/ipc.js'
 import { registerWorkspaceIpc } from '@main/ipc/workspace.js'
 import { registerWindowIpc } from '@main/ipc/window.js'
@@ -85,6 +87,7 @@ export type IpcDeps = {
   workflowBridge: WorkflowBridge
   agentCodeConventionsService: AgentCodeConventionsService
   workspaceFileStore: WorkspaceFileStore
+  conversationService: ConversationService
 }
 
 export function registerAllIpc(deps: IpcDeps): void {
@@ -98,6 +101,7 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerLspIpc(deps.lspManager, editorFsRoots, deps.aiWorkspaceRegistry)
   registerFsIpc()
   registerSessionsIpc()
+  registerConversationsIpc(deps.conversationService, deps.appRunJournal)
   registerWorkspaceIpc(deps.manager, deps.workspaceFileStore)
   registerAgentNamesIpc()
   registerWindowIpc(deps.workspaceFileStore)

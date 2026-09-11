@@ -4235,7 +4235,7 @@ git commit -m "feat(conversations): serve listings, search, prompts and children
 **Interfaces:**
 - Produces: channels `conversations:list` (`ConversationListRequest` → `ConversationListResponse`), `conversations:prompts` (`ConversationPromptsRequest` → `ConversationPrompt[]`), `conversations:children` (`ConversationChildrenRequest` → `Conversation[]`); preload `listConversations`, `listConversationPrompts`, `listConversationChildren` on `window.api`; breadcrumbs `conversations.list.complete` / `conversations.list.error` in area `conversations.list` with `{ scope, providers, targetFingerprint, resultCount, hiddenChildren, total, ms, outcome }` and never a cwd.
 
-- [ ] **Step 1: Write the failing IPC test**
+- [x] **Step 1: Write the failing IPC test**
 
 ```ts
 // src/main/ipc/conversations.test.ts
@@ -4287,12 +4287,12 @@ describe('conversations IPC', () => {
 })
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `NODE_ENV=test npx vitest run --project unit src/main/ipc/conversations.test.ts`
 Expected: FAIL, `./conversations.js` not found.
 
-- [ ] **Step 3: Write the IPC module and the preload API**
+- [x] **Step 3: Write the IPC module and the preload API**
 
 ```ts
 // src/main/ipc/conversations.ts
@@ -4379,12 +4379,12 @@ In `src/main/ipc/index.ts`: import `registerConversationsIpc` and `type Conversa
 
 In `src/main/index.ts`, before `registerAllIpc({`: `const conversationService = createConversationService({ ledger: conversationLedger })` (import from `@main/conversations/service.js`) and add `conversationService,` to the deps object.
 
-- [ ] **Step 4: Run the test and both typechecks**
+- [x] **Step 4: Run the test and both typechecks**
 
 Run: `NODE_ENV=test npx vitest run --project unit src/main/ipc/conversations.test.ts && npx tsc -p tsconfig.node.json --pretty false && npx tsc -p tsconfig.web.json --pretty false`
 Expected: 3 PASS; both clean (`window.api` gains the three methods through the preload type).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/main/ipc/conversations.ts src/main/ipc/conversations.test.ts src/preload/api/conversations.ts src/preload/api/index.ts src/main/ipc/index.ts src/main/index.ts

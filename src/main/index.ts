@@ -80,6 +80,8 @@ import { captureWindowGeometry, restorableBounds } from '@main/window/windowGeom
 import { WorkspaceFileStore } from '@main/storage/workspaceFileStore.js'
 import type { PersistedWindow } from '@main/storage/workspaceFile.js'
 import { ConversationLedger, readAgentNameAssignments } from '@main/conversations/ledger/ledger.js'
+import { createConversationService } from '@main/conversations/service.js'
+import { listWorktreesForCwd } from '@main/ipc/git.js'
 import { AGENT_NAMES_FILE } from '@main/agentNames/ipc.js'
 import { CONVERSATIONS_LEDGER_FILE } from '@main/storage/paths.js'
 import { isSessionRecordingEnabled, isSessionRecordingAutoStart } from '@main/ipc/devDebug.js'
@@ -987,6 +989,10 @@ async function startApp(): Promise<void> {
         console.warn('[window] geometry save failed:', err)
       })
   })
+  // The conversation service reads the provider stores on demand and joins
+  // the ledger; it is constructed here, after the ledger, so the IPC surface
+  // and the external nativeHistory catalog share one set of caches.
+  const conversationService = createConversationService({ ledger: conversationLedger, listWorktrees: listWorktreesForCwd })
   registerAllIpc({
     manager,
     remoteController,
@@ -1006,6 +1012,7 @@ async function startApp(): Promise<void> {
     workflowBridge: activeWorkflowBridge,
     agentCodeConventionsService,
     workspaceFileStore,
+    conversationService,
   })
   let externalHost: ExternalControlMcpHost
   const externalSettings = createExternalControlSettings(STATE_DIR, {
