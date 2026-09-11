@@ -172,9 +172,12 @@ describe('AgentTerminalLeaf status header', () => {
 // WHY a second suite that enters through renderWorkspaceLeaf: #851 wasn't a
 // header bug, it was the setting never reaching the terminal branch of
 // WorkspaceLeaf. The suite above mounts the leaf with an explicit prop, so it
-// would stay green if that hop went back to a constant or a default. #856 is
-// the same bug one level up. The required prop types guard call sites under
-// tsc, but vitest doesn't type-check. This pins the runtime threading instead.
+// would stay green if that hop went back to a constant or a default. This
+// suite pins that one hop (WorkspaceLeaf → AgentTerminalLeaf) at runtime.
+//
+// It does NOT cover the surface-level hops from #856 (MainSurface →
+// Spotlight / Tiled Tabs → renderWorkspaceLeaf / TileTree). Those are guarded
+// only by the required prop types under tsc; vitest doesn't type-check.
 describe('terminal-view status header wiring', () => {
   function workspaceWith(runtime: SessionRuntime): Workspace {
     // `getRuntime` is the fallback useSessionRuntime reads when the store has

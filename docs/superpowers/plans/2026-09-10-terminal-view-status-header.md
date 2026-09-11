@@ -90,8 +90,11 @@ conventions). Every finding was adopted.
     excludes the flag. `terminal view` hides below 320px of text room, since
     it is redundant with `raw <provider>`.
 - **cwd-to-TAIL gap:** `pl-1` on the trailing slot restores the 12px minimum.
-- **Lit rule duplicated in the leaf:** replaced by an exported
-  `paneHeaderStatusLit`, used by both `PaneHeader` and the slot colors.
+- **Lit rule duplicated in the leaf:** replaced by `paneHeaderStatusLit`,
+  used by both `PaneHeader` and the slot colors. It lives in its own module
+  (`TileLeaf/paneHeaderStatus.ts`), because exporting a non-component from
+  `PaneHeader.tsx` would cost that file React Fast Refresh (verification
+  round).
 - **Status Mode toggle resizes terminal PTYs by up to one row:** accepted,
   because it only happens when the setting changes. Documented at the call site.
 - **Wiring test:** a second suite enters through `renderWorkspaceLeaf`.

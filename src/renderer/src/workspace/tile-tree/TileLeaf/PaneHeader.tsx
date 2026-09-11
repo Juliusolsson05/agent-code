@@ -8,6 +8,7 @@ import { dispatchAttentionLabelFromConditions } from '@renderer/workspace/condit
 import type { SessionId } from '@renderer/workspace/types'
 import type { SessionRuntime } from '@renderer/workspace/workspaceStore'
 import { AgentTitleHeader } from '@renderer/workspace/tile-tree/AgentTitleHeader'
+import { paneHeaderStatusLit } from '@renderer/workspace/tile-tree/TileLeaf/paneHeaderStatus'
 
 // Pane header: compact status strip.
 //
@@ -42,19 +43,6 @@ import { AgentTitleHeader } from '@renderer/workspace/tile-tree/AgentTitleHeader
 // whichever surface a pane shows. So the header has one implementation, and
 // surface-specific chrome goes in through `badge` and `trailing` instead of a
 // second copy. Don't fork this markup again. Add a slot instead.
-
-/**
- * The one rule for "the status strip is painted". PaneHeader uses it for the
- * fill and the `data-status-lit` hook. Callers that style slot content by
- * lit state (TAIL's `text-accent` would vanish on the accent fill) call this
- * same function. A caller recomputing `statusMode && isSessionLive` inline
- * would be the same kind of silent copy that caused #851, so any future
- * gating goes here and reaches both at once.
- */
-export function paneHeaderStatusLit(statusMode: boolean, isSessionLive: boolean): boolean {
-  return statusMode && isSessionLive
-}
-
 export function PaneHeader({
   sessionId,
   paneLabel,
