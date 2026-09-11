@@ -63,8 +63,10 @@
 // WHY A SCRIPT AND NOT patch-package
 //
 // Both bundles are minified: lib/xterm.js is ONE 391 KB line, lib/xterm.mjs is
-// 27 lines of the same. A patch-package diff would carry those whole lines
-// twice (~0.8 MB of unreviewable patch). This script replaces one exact,
+// 27 lines of the same. A patch-package diff carries each changed line twice
+// (removed + added): about 1.1 MB of unreviewable patch across the two
+// bundles (782 KB for lib/xterm.js + 350 KB for lib/xterm.mjs, measured in the
+// PR #873 round-2 review). This script replaces one exact,
 // verified string and refuses to do anything else, which is both smaller and
 // safer: every precondition below fails the install loudly rather than
 // shipping an unpatched terminal.
@@ -90,13 +92,30 @@
 // - Version mismatch: someone bumped @xterm/xterm. Do not just update the
 //   version constant. First check whether upstream fixed the bug: look at
 //   `CoreTerminal.resize` / `WriteBuffer.flushSync` in the new version and at
-//   xterm.js #6154. If resize no longer flushes, or flushSync now drains from
-//   `_bufferOffset` by index and does not stop at empty chunks: delete this
-//   script, its `postinstall` entry, and the patch-marker assertion in
-//   src/renderer/src/workspace/terminal/xtermResizeFlushPatch.test.ts (keep
-//   the three behaviour cases — they are the regression net). Otherwise
-//   update PATCHED_XTERM_VERSION and the exact RESIZE_* strings below, then
-//   run that test file.
+//   xterm.js #6154. Then either:
+//
+//   (a) Upstream FIXED it (resize no longer flushes, or flushSync drains from
+//       `_bufferOffset` by index and does not stop at empty chunks) — REMOVE
+//       THE PATCH, all of it, in one PR:
+//         1. delete this file;
+//         2. `package.json`: drop `node scripts/patch-xterm.mjs && ` from
+//            `postinstall`;
+//         3. `electron.vite.config.ts`: delete the `execFileSync(...
+//            scripts/patch-xterm.mjs ...)` gate and its comment block (dev and
+//            build crash with ENOENT otherwise), and the
+//            `exclude: ['@xterm/xterm']` optimizeDeps entry and its comment
+//            (it only exists so dev never serves a pre-patch cache);
+//         4. `src/renderer/src/workspace/terminal/xtermResizeFlushPatch.test.ts`:
+//            delete the module-level read of this file (test collection fails
+//            with ENOENT otherwise) and the whole "is applied to both shipped
+//            bundles" case (marker + no-flush assertions — the latter would
+//            also be wrong if upstream kept a now-correct flush). KEEP the three
+//            behaviour cases against both bundles: they are the regression
+//            net for upstream's fix, and rename the file/describe accordingly;
+//         5. the renderer header in xtermWebglRenderer.ts: drop the "PINNED
+//            CORE IS LOCALLY PATCHED" paragraph.
+//   (b) Upstream did NOT fix it — update PATCHED_XTERM_VERSION and the exact
+//       RESIZE_* strings below for the new bundles, then run that test file.
 // - Snippet not found exactly once: the minified shape changed for the pinned
 //   version (e.g. a different minifier run). Re-derive RESIZE_BEFORE from the
 //   bundle (`grep -o 'resize([a-z],[a-z]){[^}]*}' lib/xterm.mjs`).

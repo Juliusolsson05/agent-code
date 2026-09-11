@@ -139,7 +139,7 @@ have (no parser handlers registered in `src/`).
   against the exact pin; refuses to run on any other version or bundle shape
   (fails the install loudly), idempotent, self-verifying. A script instead of
   patch-package because both bundles are minified (a single 391 KB line), so a
-  diff would be ~0.8 MB of unreviewable patch. Its header is the documentation:
+  diff would be about 1.1 MB of unreviewable patch across both bundles. Its header is the documentation:
   bug, trigger, app impact, and exactly what to do on a bump.
 - `xtermResizeFlushPatch.test.ts`: marker in both bundles + three
   deterministic behaviour cases (resize inside a write callback; empty write
@@ -173,3 +173,26 @@ renderer (flip the switch back), a dirty one means the data path.
 
 - `@xterm/headless` upgrade.
 - Any other renderer or perf change from #768 (dispatcher registry etc.).
+
+## Review round 2 (orchestrated; Reviewer B's Claude session hit the account spend limit mid-run and was replaced by a Codex reviewer on the same brief)
+
+- A (runtime) — no correctness defect in the patch or refit; removing the flush
+  is safe on beta.304 (upstream's separate resize-during-write fix #5598 is
+  present; nothing newer relies on resize draining the queue; patched stress:
+  650 resizes, 1,126 callbacks exactly once). Two enforcement gaps, both
+  reproduced and fixed in `b00fc5d1`:
+  1. installs that skip lifecycle scripts bundled the unpatched core with no
+     error — `electron.vite.config.ts` now runs the idempotent patch script at
+     config evaluation (every dev/build/preview, direct invocations included);
+  2. Vite's dev pre-bundle cache is keyed on the lockfile, not file contents, so
+     a pre-patch copy could be served forever — the renderer now excludes
+     `@xterm/xterm` from `optimizeDeps` (plain ESM, no imports, safe).
+- B (docs/tests) — Minor: the removal procedure now names every piece (config
+  gate, optimizeDeps exclusion, the test's source read and patch-presence case,
+  the renderer header); behavioural refit coverage extended to the two
+  full-pane hosts; patch-size figure corrected (about 1.1 MB, not 0.8 MB).
+  The new host cases were mutation-checked: a no-op `onRendererChange` in
+  AgentTerminalLeaf / TerminalLeaf fails the "refits the … pane" cases, and a
+  callback that skips the agent pane's ownership fence fails the non-owner
+  case.
+
