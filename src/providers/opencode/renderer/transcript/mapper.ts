@@ -97,6 +97,14 @@ export function mapOpencodeMessageToFeedEntries(
     const kind = normalizeOpencodePartKind(str(part.type) ?? str(part.kind))
 
     if (kind === 'text') {
+      // `synthetic` and `ignored` text is OpenCode's own insertion into a
+      // message (plan-mode instructions, "Summarize the task tool output
+      // above…", MCP resource notices), not words the user or the model
+      // wrote. OpenCode's TUI hides it everywhere it shows a conversation
+      // (vendor/in_progress/opencode/.../cli/cmd/tui/util/transcript.ts);
+      // showing it here made those instructions look like user prompts in
+      // the feed, View Prompts and Dispatch titles.
+      if (part.synthetic === true || part.ignored === true) continue
       const text = str(part.text) ?? str(part.content)
       if (text) messageContent.push({ type: 'text', text })
       continue
