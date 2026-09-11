@@ -5,11 +5,11 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import {
-  __resetSessionIndexCacheForTests,
-  __sessionIndexCacheEntryForTests,
-  __sessionIndexCacheSizeForTests,
+  __resetPromptFolderCacheForTests,
+  __promptFolderCacheEntryForTests,
+  __promptFolderCacheSizeForTests,
   extractPromptsFromFile,
-} from './sessionIndex.js'
+} from './promptFolder.js'
 
 // Incremental transcript reads for the session picker (#735). The contracts
 // that MUST hold: a listing folds only the tail it needs, growth folds only
@@ -20,7 +20,7 @@ let root: string
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'session-index-'))
-  __resetSessionIndexCacheForTests()
+  __resetPromptFolderCacheForTests()
 })
 afterEach(() => {
   rmSync(root, { recursive: true, force: true })
@@ -87,7 +87,7 @@ describe('extractPromptsFromFile', () => {
     expect(prompts.slice(0, 4).map(p => p.text)).toEqual(['prompt 299', 'prompt 298', 'prompt 297', 'prompt 296'])
     expect(prompts[0]?.ts).toBe(T0 + 299 * 1000)
     expect(cwd).toBe('/project')
-    const entry = __sessionIndexCacheEntryForTests('claude', 'a')!
+    const entry = __promptFolderCacheEntryForTests('claude', 'a')!
     expect(entry.parsedFrom).toBeGreaterThan(0)
     expect(entry.prompts).toBeGreaterThanOrEqual(4)
     expect(entry.prompts).toBeLessThan(300)
@@ -97,14 +97,14 @@ describe('extractPromptsFromFile', () => {
     const file = join(root, 'b.jsonl')
     writeLargeClaudeTranscript(file)
     await extractPromptsFromFile('claude', 'b', file, 4)
-    const before = __sessionIndexCacheEntryForTests('claude', 'b')!
+    const before = __promptFolderCacheEntryForTests('claude', 'b')!
 
     const partial = '{"type":"user","uuid":"u-partial","permissionMode":"default"'
     appendFileSync(file, claudeUser('prompt 300', 300) + claudeUser('prompt 301', 301) + partial)
 
     const grown = await extractPromptsFromFile('claude', 'b', file, 4)
     expect(grown.prompts.slice(0, 3).map(p => p.text)).toEqual(['prompt 301', 'prompt 300', 'prompt 299'])
-    const after = __sessionIndexCacheEntryForTests('claude', 'b')!
+    const after = __promptFolderCacheEntryForTests('claude', 'b')!
     // The head of the parsed range did not move: nothing older was re-read,
     // and the bytes actually read are the appended bytes plus the 64-byte
     // seam check.
@@ -129,7 +129,7 @@ describe('extractPromptsFromFile', () => {
     expect(all.prompts).toHaveLength(300)
     expect(all.prompts.at(-1)?.text).toBe('prompt 0')
     expect(all.prompts[0]?.text).toBe('prompt 299')
-    expect(__sessionIndexCacheEntryForTests('claude', 'c')!.parsedFrom).toBe(0)
+    expect(__promptFolderCacheEntryForTests('claude', 'c')!.parsedFrom).toBe(0)
 
     appendFileSync(file, claudeUser('prompt 300', 300))
     const again = await extractPromptsFromFile('claude', 'c', file, 'all')
@@ -170,7 +170,7 @@ describe('extractPromptsFromFile', () => {
     const { prompts, cwd } = await extractPromptsFromFile('codex', 'x', file, 2)
     expect(prompts.map(p => p.text)).toEqual(['codex prompt 2', 'codex prompt 1'])
     expect(cwd).toBe('/codex-project')
-    expect(__sessionIndexCacheEntryForTests('codex', 'x')!.parsedFrom).toBeGreaterThan(0)
+    expect(__promptFolderCacheEntryForTests('codex', 'x')!.parsedFrom).toBeGreaterThan(0)
   })
 
   it('re-parses from scratch when the file was rewritten shorter', async () => {
@@ -181,7 +181,7 @@ describe('extractPromptsFromFile', () => {
     writeFileSync(file, claudeUser('fresh 0', 0) + claudeUser('fresh 1', 1))
     const { prompts } = await extractPromptsFromFile('claude', 'e', file, 'all')
     expect(prompts.map(p => p.text)).toEqual(['fresh 1', 'fresh 0'])
-    expect(__sessionIndexCacheEntryForTests('claude', 'e')!.parsedFrom).toBe(0)
+    expect(__promptFolderCacheEntryForTests('claude', 'e')!.parsedFrom).toBe(0)
   })
 
   it('returns nothing for a missing file and keeps the cache bounded as an LRU', async () => {
@@ -197,10 +197,10 @@ describe('extractPromptsFromFile', () => {
       // would not.
       if (i === total - 8) await extractPromptsFromFile('claude', 'tiny-0', join(root, 'tiny-0.jsonl'), 4)
     }
-    expect(__sessionIndexCacheSizeForTests()).toBeLessThanOrEqual(1024)
-    expect(__sessionIndexCacheEntryForTests('claude', `tiny-${total - 1}`)).not.toBeNull()
-    expect(__sessionIndexCacheEntryForTests('claude', 'tiny-0')).not.toBeNull()
-    expect(__sessionIndexCacheEntryForTests('claude', 'tiny-1')).toBeNull()
+    expect(__promptFolderCacheSizeForTests()).toBeLessThanOrEqual(1024)
+    expect(__promptFolderCacheEntryForTests('claude', `tiny-${total - 1}`)).not.toBeNull()
+    expect(__promptFolderCacheEntryForTests('claude', 'tiny-0')).not.toBeNull()
+    expect(__promptFolderCacheEntryForTests('claude', 'tiny-1')).toBeNull()
   })
 
   it('serialises overlapping extractions of the same transcript', async () => {
@@ -224,7 +224,7 @@ describe('extractPromptsFromFile', () => {
     ])
     expect(c.prompts.slice(0, 2).map(p => p.text)).toEqual(['prompt 300', 'prompt 299'])
     expect(d.prompts.slice(0, 2).map(p => p.text)).toEqual(['prompt 300', 'prompt 299'])
-    expect(__sessionIndexCacheEntryForTests('claude', 'f')!.parsedTo).toBe(statSync(file).size)
+    expect(__promptFolderCacheEntryForTests('claude', 'f')!.parsedTo).toBe(statSync(file).size)
   })
 
   it('folds a record far longer than the tail window without quadratic re-reads', async () => {
@@ -236,7 +236,7 @@ describe('extractPromptsFromFile', () => {
     expect(prompts.map(p => p.text)).toEqual(['also before', 'before'])
     // Geometric widening: the total bytes read stay within a small multiple
     // of the file size instead of re-reading the prefix per step.
-    expect(__sessionIndexCacheEntryForTests('claude', 'g')!.lastBytesRead).toBeLessThan(3 * statSync(file).size)
+    expect(__promptFolderCacheEntryForTests('claude', 'g')!.lastBytesRead).toBeLessThan(3 * statSync(file).size)
   })
 
   it('re-parses when the mtime moved with the size unchanged', async () => {
@@ -281,5 +281,11 @@ describe('extractPromptsFromFile', () => {
     writeFileSync(seam, claudeUser(`first ${emoji}`, 0) + claudeFiller(1, 300 * 1024) + claudeUser('last', 2))
     const { prompts } = await extractPromptsFromFile('claude', 'seam', seam, 'all')
     expect(prompts.map(p => p.text)).toEqual(['last', `first ${emoji}`])
+  })
+  it('reports an angle-bracket-prefixed prompt instead of dropping it (the catalog decides what it means)', async () => {
+    const file = join(root, 'stt.jsonl')
+    writeFileSync(file, claudeUser('<stt note="Speech-to-text; may contain transcription mistakes.">\nship it\n</stt>', 1) + claudeUser('and now plain', 2))
+    const { prompts } = await extractPromptsFromFile('claude', 'stt', file, 'all')
+    expect(prompts.map(p => p.text)).toEqual(['and now plain', '<stt note="Speech-to-text; may contain transcription mistakes.">\nship it\n</stt>'])
   })
 })
