@@ -45,7 +45,8 @@ export const createUiShellSlice: StateCreator<
   performancePanelOpen: false,
   remotePanelOpen: false,
   globalEditorOpen: false,
-  promptSearchOpen: false,
+  conversationsOpen: false,
+  conversationsFocusSearch: false,
   agentActivityOpen: false,
   keyboardShortcutsOpen: false,
   closeOldAgentsOpen: false,
@@ -297,10 +298,10 @@ export const createUiShellSlice: StateCreator<
       'uiShell/setDispatchListRatio',
     ),
 
-  openPromptSearch: () =>
-    set({ promptSearchOpen: true }, false, 'uiShell/openPromptSearch'),
-  closePromptSearch: () =>
-    set({ promptSearchOpen: false }, false, 'uiShell/closePromptSearch'),
+  openConversations: ({ focusSearch }) =>
+    set({ conversationsOpen: true, conversationsFocusSearch: focusSearch }, false, 'uiShell/openConversations'),
+  closeConversations: () =>
+    set({ conversationsOpen: false, conversationsFocusSearch: false }, false, 'uiShell/closeConversations'),
 
   openAgentActivity: () =>
     set({ agentActivityOpen: true }, false, 'uiShell/openAgentActivity'),

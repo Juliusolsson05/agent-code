@@ -191,3 +191,22 @@ describe('provider switch picker intent', () => {
     expect(useAppStore.getState().providerSwitchPickerSessionId).toBeNull()
   })
 })
+
+describe('conversations picker state', () => {
+  beforeEach(() => {
+    vi.resetModules()
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('opens with a focus intent and resets it on close', async () => {
+    vi.stubGlobal('localStorage', createStorageMock())
+    const { useAppStore } = await import('@renderer/app-state/store')
+    useAppStore.getState().openConversations({ focusSearch: true })
+    expect(useAppStore.getState()).toMatchObject({ conversationsOpen: true, conversationsFocusSearch: true })
+    useAppStore.getState().closeConversations()
+    expect(useAppStore.getState()).toMatchObject({ conversationsOpen: false, conversationsFocusSearch: false })
+  })
+})

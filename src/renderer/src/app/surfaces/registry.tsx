@@ -19,7 +19,7 @@ import { PinAgentsSurface } from '@renderer/features/dispatch-pin/surfaces/PinAg
 import { BuryPanePromptSurface } from '@renderer/features/workspace/surfaces/BuryPanePromptSurface'
 import { CloseConfirmationSurface } from '@renderer/features/workspace/surfaces/CloseConfirmationSurface'
 import { ViewPromptsSurface } from '@renderer/features/workspace/surfaces/ViewPromptsSurface'
-import { PromptSearchSurface } from '@renderer/features/workspace/surfaces/PromptSearchSurface'
+import { ConversationsSurface } from '@renderer/features/conversations/surfaces/ConversationsSurface'
 import { AgentActivitySurface } from '@renderer/features/workspace/surfaces/AgentActivitySurface'
 import { CloseOldAgentsSurface } from '@renderer/features/workspace/surfaces/CloseOldAgentsSurface'
 import { BulkProviderSwitchSurface } from '@renderer/features/workspace/surfaces/BulkProviderSwitchSurface'
@@ -77,7 +77,7 @@ export const modalSurfaces: SurfaceEntry[] = [
   { id: 'debug-bundle-note', Component: DebugBundleNoteSurface },
   { id: 'recording-note', Component: RecordingNoteSurface },
   { id: 'view-prompts', Component: ViewPromptsSurface },
-  { id: 'prompt-search', Component: PromptSearchSurface },
+  { id: 'conversations', Component: ConversationsSurface },
   { id: 'agent-activity', Component: AgentActivitySurface },
   { id: 'close-old-agents', Component: CloseOldAgentsSurface },
   { id: 'bulk-provider-switch', Component: BulkProviderSwitchSurface },

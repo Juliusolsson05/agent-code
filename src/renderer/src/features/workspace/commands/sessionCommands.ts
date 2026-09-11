@@ -376,8 +376,8 @@ export const sessionCommands: CommandDef[] = [
     category: 'workspace-tools',
     pickerVisibility: 'advanced',
     surface: 'app',
-    title: 'Search Conversation Prompts',
-    description: '**What it does:** Searches saved conversations by **prompt text**.\n\n**Use when:** You remember what you asked, but not where it was.\n\n**Notes:** Searches sessions on disk, not only visible panes.',
+    title: 'Search Conversations…',
+    description: '**What it does:** Finds a past conversation by **title, name or prompt text** across every worktree of this repository and all providers.\n\n**Use when:** You remember what you asked or what it was called, but not where it was.\n\n**Notes:** Same picker as Resume Session…, opened with the search field focused.',
     keywords: [
       'search',
       'prompt',
@@ -388,14 +388,15 @@ export const sessionCommands: CommandDef[] = [
       'sessions',
       'recent',
       'history',
+      'resume',
     ],
-    getState: ({ flags }) => panel(flags.promptSearchOpen),
+    getState: ({ flags }) => panel(flags.conversationsOpen),
     run: ({ ui, flags }) => {
-      if (flags.promptSearchOpen) {
-        ui.closePromptSearch()
+      if (flags.conversationsOpen) {
+        ui.closeConversations()
         return
       }
-      ui.openPromptSearch()
+      ui.openConversations({ focusSearch: true })
       ui.closePalette()
     },
   },

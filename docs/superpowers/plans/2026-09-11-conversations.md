@@ -4410,7 +4410,7 @@ git commit -m "feat(conversations): expose listing, prompts and children over on
 - Produces (uiShell): `conversationsOpen: boolean`, `conversationsFocusSearch: boolean`, `openConversations(opts: { focusSearch: boolean }): void`, `closeConversations(): void`.
 - Produces (commands): `resume-session` and `search-conversation-prompts` (id kept for keybinding continuity; title `Search Conversations…`) both call `ui.openConversations`.
 
-- [ ] **Step 1: Write the failing store test**
+- [x] **Step 1: Write the failing store test**
 
 Append to `src/renderer/src/app-state/store.test.ts`:
 
@@ -4428,7 +4428,7 @@ describe('conversations picker state', () => {
 Run: `NODE_ENV=test npx vitest run --project unit src/renderer/src/app-state/store.test.ts`
 Expected: FAIL, `openConversations` is not a function.
 
-- [ ] **Step 2: Update the UI shell**
+- [x] **Step 2: Update the UI shell**
 
 In `types.ts`, replace the `promptSearchOpen` block with:
 
@@ -4462,7 +4462,7 @@ In `control.ts` replace the `promptSearch` route with:
 
 (Also rename the surface id in any external-operator docs or the `ac_app_describe` text that lists `promptSearch`; grep `promptSearch` across `src/` and update every reference, including `flags.promptSearchOpen` in the palette's `flags` object → `conversationsOpen`.)
 
-- [ ] **Step 3: Update commands, the palette's `ui` object and surface ownership**
+- [x] **Step 3: Update commands, the palette's `ui` object and surface ownership**
 
 `types.ts` `CommandContext.ui`: replace `openPromptSearch: () => void` with `openConversations: (opts: { focusSearch: boolean }) => void`; remove `enterResumeMode`. In `CommandPalette.tsx` provide `openConversations: opts => { useAppStore.getState().openConversations(opts) }` in the `ui` object and remove `enterResumeMode` from the object and from the `useMemo` deps (leave the `enterResumeMode` callback and the resume-mode JSX in place until Task 23 deletes them; TypeScript will flag it unused only if `noUnusedLocals` is on, in which case prefix it with `void enterResumeMode` at the bottom of the component for this task).
 
@@ -4508,7 +4508,7 @@ In `control.ts` replace the `promptSearch` route with:
 
 (`panel` is imported the same way `sessionCommands.ts` imports it.) `surfaceOwnership.ts`: change `'search-conversation-prompts': 'promptSearchOpen'` to `'search-conversation-prompts': 'conversationsOpen'`, add `'resume-session': 'conversationsOpen'` to `SURFACE_OWNER_FLAGS`, and remove `'resume-session': 'resume'` from `PALETTE_MODE_COMMANDS`.
 
-- [ ] **Step 4: Register the surface with a minimal picker shell**
+- [x] **Step 4: Register the surface with a minimal picker shell**
 
 ```tsx
 // src/renderer/src/features/conversations/surfaces/ConversationsSurface.tsx
@@ -4529,12 +4529,12 @@ In `registry.tsx` replace the `prompt-search` entry with `{ id: 'conversations',
 
 Create `ConversationsPicker.tsx` as the Task 18 component; if Task 18 is executed by a different worker, this task ships the file with the full implementation from Task 18 Step 3 rather than a stub, because a stub would be a placeholder.
 
-- [ ] **Step 5: Run the store, keybinding-baseline and catalog tests plus the web typecheck**
+- [x] **Step 5: Run the store, keybinding-baseline and catalog tests plus the web typecheck**
 
 Run: `NODE_ENV=test npx vitest run --project unit src/renderer/src/app-state/store.test.ts src/renderer/src/features/command-palette && npm run check:keybindings && npx tsc -p tsconfig.web.json --pretty false`
 Expected: PASS; `check:keybindings` green (no new chords); tsc clean.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/renderer/src/app-state src/renderer/src/features/command-palette src/renderer/src/features/workspace/commands src/renderer/src/app/surfaces/registry.tsx src/renderer/src/features/conversations
@@ -4554,7 +4554,7 @@ git commit -m "feat(picker): route Resume Session and Search Conversations to on
 - Consumes: `window.api.listConversations` (Task 16), `SessionPreviewPane` + `PreviewTarget`, `workspace.replaceSession(cwd, { resumeSessionId, kind })` and `workspace.newTab(cwd, resumeSessionId, kind)`, `relativeTime`, `providerGlyph`, `useResizableSplitter` from `@renderer/features/shared/useResizableSplitter`.
 - Produces: `useConversationList(params: { open: boolean; cwd: string | null; scope: ConversationScope; providers: AgentProviderKind[]; includeChildren: boolean; query: string }): { response: ConversationListResponse | null; loading: boolean; error: string | null; loadMore(): void }`; `ConversationRow` props `{ row: Conversation; selected: boolean; onHover(): void; onSelect(): void; index: number }`; `ConversationsPicker` props `{ open: boolean; focusSearch: boolean; workspace: Workspace; onClose(): void }`; `SessionPreviewPane` gains optional `turnCount?: number | null`.
 
-- [ ] **Step 1: Write the failing renderer test**
+- [x] **Step 1: Write the failing renderer test**
 
 ```tsx
 // src/renderer/src/features/conversations/ui/ConversationsPicker.renderer.test.tsx
@@ -4658,12 +4658,12 @@ describe('ConversationsPicker', () => {
 })
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `NODE_ENV=test npx vitest run --project renderer src/renderer/src/features/conversations/ui/ConversationsPicker.renderer.test.tsx`
 Expected: FAIL, modules not found.
 
-- [ ] **Step 3: Write the hook, the row and the picker**
+- [x] **Step 3: Write the hook, the row and the picker**
 
 ```ts
 // src/renderer/src/features/conversations/useConversationList.ts
@@ -4950,12 +4950,12 @@ export function ConversationsPicker({ open, focusSearch, workspace, onClose }: P
 
 In `SessionPreviewPane.tsx`: add `turnCount?: number | null` to the component props, pass it to `PaneHeader`, and in `PaneHeader` compute `const turns = turnCount ?? (state.status === 'ready' ? countUserTurns(state.model.entries) : null)` with a comment: the pane loads a 40-record tail, so its own count is a floor; the catalog's prompt count is the whole conversation, which is what "1 turn" on a long planning session got wrong in the user's screenshot.
 
-- [ ] **Step 4: Run the renderer test and the web typecheck**
+- [x] **Step 4: Run the renderer test and the web typecheck**
 
 Run: `NODE_ENV=test npx vitest run --project renderer src/renderer/src/features/conversations && npx tsc -p tsconfig.web.json --pretty false`
 Expected: 5 PASS; tsc clean. If `useResizableSplitter`'s return shape differs (`onMouseDown`, `dragging`, `cursorLock` are what `PromptSearchModal.tsx` uses today), match that file.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/renderer/src/features/conversations src/renderer/src/features/session-preview/ui/SessionPreviewPane.tsx

@@ -278,7 +278,7 @@ function OpenCommandPalette({
   const onSettingsRequest = useAppStore(state => state.openSettingsPage)
   const openPaletteAction = useAppStore(state => state.openCommandPalette)
   const openViewPrompts = useAppStore(state => state.openViewPrompts)
-  const openPromptSearch = useAppStore(state => state.openPromptSearch)
+  const openConversations = useAppStore(state => state.openConversations)
   const openAgentActivity = useAppStore(state => state.openAgentActivity)
   const openKeyboardShortcuts = useAppStore(state => state.openKeyboardShortcuts)
   const openCloseOldAgents = useAppStore(state => state.openCloseOldAgents)
@@ -293,7 +293,7 @@ function OpenCommandPalette({
   const closeAgentActivity = useAppStore(state => state.closeAgentActivity)
   const closeCloseOldAgents = useAppStore(state => state.closeCloseOldAgents)
   const closeBulkProviderSwitch = useAppStore(state => state.closeBulkProviderSwitch)
-  const closePromptSearch = useAppStore(state => state.closePromptSearch)
+  const closeConversations = useAppStore(state => state.closeConversations)
   const closeReorderTabs = useAppStore(state => state.closeReorderTabs)
   const closePinAgents = useAppStore(state => state.closePinAgents)
   const closePathPicker = useAppStore(state => state.closePathPicker)
@@ -361,7 +361,7 @@ function OpenCommandPalette({
   const agentActivityOpen = useAppStore(state => state.agentActivityOpen)
   const closeOldAgentsOpen = useAppStore(state => state.closeOldAgentsOpen)
   const bulkProviderSwitchOpen = useAppStore(state => state.bulkProviderSwitchOpen)
-  const promptSearchOpen = useAppStore(state => state.promptSearchOpen)
+  const conversationsOpen = useAppStore(state => state.conversationsOpen)
   const remotePanelOpen = useAppStore(state => state.remotePanelOpen)
   const reorderTabsOpen = useAppStore(state => state.reorderTabsOpen)
   const pinAgentsOpen = useAppStore(state => state.pinAgentsOpen)
@@ -456,6 +456,10 @@ function OpenCommandPalette({
     setSelectedIndex(0)
     await loadResumeSessions({ cwd: focusedCwd, provider: resumeProvider })
   }, [focusedCwd, loadResumeSessions, resumeProvider])
+  // No command reaches this any more: Resume Session… opens the Conversations
+  // picker (features/conversations). The palette's resume mode stays until the
+  // conversations plan's last task deletes it with the listers it reads from.
+  void enterResumeMode
 
   // Buried panes are scoped to the ACTIVE TAB. The natural temptation
   // is to show every buried pane in the workspace ("they're paused
@@ -616,7 +620,7 @@ function OpenCommandPalette({
         // structural rather than a visibility tier.
         openCommandPalette: openPaletteAction,
         openViewPrompts,
-        openPromptSearch,
+        openConversations,
         openAgentActivity,
         openKeyboardShortcuts,
         openCloseOldAgents,
@@ -631,7 +635,7 @@ function OpenCommandPalette({
         closeAgentActivity,
         closeCloseOldAgents,
         closeBulkProviderSwitch,
-        closePromptSearch,
+        closeConversations,
         closeReorderTabs,
         closePinAgents,
         closePathPicker,
@@ -663,7 +667,6 @@ function OpenCommandPalette({
         openNewAgentIn,
         openPinAgents,
         setAggressiveDebugPersistence,
-        enterResumeMode,
         enterBuriedMode,
         enterKillBuriedMode,
         enterPromptTemplateMode,
@@ -688,7 +691,7 @@ function OpenCommandPalette({
         agentActivityOpen,
         closeOldAgentsOpen,
         bulkProviderSwitchOpen,
-        promptSearchOpen,
+        conversationsOpen,
         remotePanelOpen,
         reorderTabsOpen,
         pinAgentsOpen,
@@ -728,7 +731,7 @@ function OpenCommandPalette({
       onReorderTabsRequest,
       onSettingsRequest,
       openViewPrompts,
-      openPromptSearch,
+      openConversations,
       openAgentActivity,
       openCloseOldAgents,
       openBulkProviderSwitch,
@@ -741,7 +744,7 @@ function OpenCommandPalette({
       closeAgentActivity,
       closeCloseOldAgents,
       closeBulkProviderSwitch,
-      closePromptSearch,
+      closeConversations,
       closeReorderTabs,
       closePinAgents,
       closePathPicker,
@@ -773,7 +776,6 @@ function OpenCommandPalette({
       openNewAgentIn,
       openPinAgents,
       setAggressiveDebugPersistence,
-      enterResumeMode,
       enterBuriedMode,
       enterKillBuriedMode,
       enterPromptTemplateMode,
@@ -796,7 +798,7 @@ function OpenCommandPalette({
       agentActivityOpen,
       closeOldAgentsOpen,
       bulkProviderSwitchOpen,
-      promptSearchOpen,
+      conversationsOpen,
       remotePanelOpen,
       reorderTabsOpen,
       pinAgentsOpen,
