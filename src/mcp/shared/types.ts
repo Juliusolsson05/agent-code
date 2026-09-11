@@ -1,6 +1,7 @@
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
 
 export type BuiltInMcpDomain =
+  | 'tldr'
   | 'ping'
   | 'orchestration'
   | 'ai_workspace'
@@ -9,6 +10,7 @@ export type BuiltInMcpDomain =
   | 'workflows'
 
 export const BUILT_IN_MCP_DOMAINS = [
+  'tldr',
   'ping',
   'orchestration',
   'ai_workspace',
@@ -27,6 +29,7 @@ export const BUILT_IN_MCP_DOMAINS = [
  * normal model-visible capability on every new session.
  */
 export const CONFIGURABLE_BUILT_IN_MCP_DOMAINS = [
+  'tldr',
   'orchestration',
   'ai_workspace',
   'agent_transcripts',
@@ -53,6 +56,7 @@ export type ConfigurableBuiltInMcpDomain =
  */
 const BUILT_IN_MCP_DOMAINS_BY_PROVIDER = {
   claude: [
+    'tldr',
     'ping',
     'orchestration',
     'ai_workspace',
@@ -81,6 +85,7 @@ export type BuiltInMcpServerConfig = {
 }
 
 export type McpSessionScope = {
+  tldrIdentity?: string
   sessionId: string
   cwd: string
   domains: BuiltInMcpDomain[]

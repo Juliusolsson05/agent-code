@@ -1,6 +1,6 @@
 # TLDR agent summaries
 
-Status: implementation in progress. Issue: #888.
+Status: implemented; full repository validation and PR checks in progress. Issue: #888.
 
 ## Outcome
 
@@ -29,6 +29,11 @@ toggle/Escape route to the same view. Reading summaries never calls a model.
 5. Add explicit hold handling through the effective keybinding table; release
    and blur cleanup must remain live even when a modal takes input. Ignore
    repeats, preserve editor input ownership, and stop shortcut text leakage.
+   A macOS Electron probe confirmed that AppKit drops Cmd-letter keyUp before
+   either main or renderer receives it. Add a release-only mode to the existing
+   packaged native helper: query just the accepted hold's physical key while
+   held, without an event tap or Accessibility prompt, and cancel on blur or
+   renderer navigation. This does not share dictation's global shortcut owner.
 
 ## Validation
 
@@ -52,3 +57,20 @@ MCP tool identity comes from authentication, never a model-supplied target ID.
 Summaries describe verified outcomes and pending decisions in one or two short
 sentences; minor unchanged clarifications do not require an update. Use a hard
 character bound rather than unreliable punctuation-based sentence counting.
+
+## Validation evidence
+
+Focused suites exercise actual MCP SDK clients over both in-memory and loopback
+HTTP transports, temporary-file persistence, revoked in-flight writers, managed
+skill restart/collision behavior, the real session action hooks and workspace
+leaf selection, and renderer hold/subscription races. Generated skill validation
+and the universal native-helper build pass. An offscreen Electron fixture checks
+pane geometry and the actual overlay CSS without opening another visible window.
+
+Four deliberately broken safeguards each fail their corresponding tests:
+removing native release observation, selecting the physical parent's summary,
+dropping reload/provider-translation identity carry, and permitting an in-flight
+revoked caller to write over its successor. Mutation files were restored before
+running the full repository gate. Provider-model compliance with the reporting
+instructions remains a live-use check, not something these deterministic tests
+claim to prove.

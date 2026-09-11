@@ -612,6 +612,19 @@ export function getSettingsRegistry(): SettingDefinition[] {
       control: { type: 'agent-code-installed-skills' },
     },
     {
+      id: 'default-tldr-mcp',
+      category: 'agents',
+      title: 'TLDR MCP for New Agents',
+      description:
+        'Start new agents with TLDR reporting and its managed skill. Off by default; existing agents use their own TLDR MCP command. Hold the TLDR shortcut to glance at saved summaries.',
+      keywords: ['mcp', 'tldr', 'default', 'new agents', 'claude', 'codex'],
+      control: {
+        type: 'toggle',
+        getValue: settings => settings.defaultBuiltInMcpDomains.includes('tldr'),
+        onToggle: (ctx, value) => updateDefaultBuiltInMcpDomain(ctx, 'tldr', value),
+      },
+    },
+    {
       id: 'default-orchestration-mcp',
       category: 'agents',
       title: 'Orchestration MCP for New Agents',

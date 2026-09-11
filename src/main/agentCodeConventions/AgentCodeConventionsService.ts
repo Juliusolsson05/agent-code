@@ -1,3 +1,4 @@
+import { TLDR_INSTRUCTIONS, TLDR_SKILL_NAME, TLDR_SKILL_DESCRIPTION } from '@shared/types/tldr.js'
 import { randomUUID } from 'crypto'
 import { homedir } from 'os'
 import { isAbsolute, relative, resolve, sep } from 'path'
@@ -342,7 +343,7 @@ export class AgentCodeManagedSkillsService {
         return { ok: false, code: 'validation', message: 'The review contains duplicate skill names.' }
       }
       const managedNames = this.managedSkillNames()
-      const collision = selectedNames.find(name => managedNames.has(name))
+      const collision = selectedNames.find(name => name === TLDR_SKILL_NAME || managedNames.has(name))
       if (collision) {
         return {
           ok: false,
@@ -714,6 +715,42 @@ export class AgentCodeManagedSkillsService {
     })
   }
 
+  /** TLDR is product-owned content but uses the same write-ahead ownership
+   * journal as personal instruction skills. Never write its provider files
+   * from a launcher: that would bypass collision checks and recovery. Once
+   * installed it stays discoverable, but its instructions are explicitly
+   * inactive without the current session's TLDR tool. Disabling one session
+   * must not delete a file another running session still depends on. */
+  ensureTldrSkill(): Promise<void> {
+    return this.serialize(async () => {
+      await this.ensureInitializedLocked()
+      if (this.recovery) throw new Error('Managed skills require recovery in Settings before TLDR can start.')
+      const id = 'builtin:agent-code-tldr'
+      const existing = this.document.customSkills[id]
+      if (existing && existing.name !== TLDR_SKILL_NAME) throw new Error('TLDR skill identity conflicts with existing managed state.')
+      if (Object.values(this.document.customSkills).some(skill => skill.name === TLDR_SKILL_NAME && skill.id !== id)
+        || Object.values(this.document.installedSkills).some(skill => skill.name === TLDR_SKILL_NAME)) {
+        throw new Error('A managed skill already uses the reserved TLDR name.')
+      }
+      const timestamp = this.now().toISOString()
+      const desired: AgentCodeCustomSkillRecord = {
+        id, name: TLDR_SKILL_NAME, description: TLDR_SKILL_DESCRIPTION,
+        markdown: TLDR_INSTRUCTIONS, enabled: true,
+        createdAt: existing?.createdAt ?? timestamp, updatedAt: timestamp,
+      }
+      if (existing?.enabled && existing.description === desired.description && existing.markdown === desired.markdown) {
+        await this.reconcileCustomEnabledLocked(existing)
+      } else {
+        const result = await this.enableCustomLocked(desired, this.document.revision + 1)
+        if (!result.ok) throw new Error('TLDR skill deployment failed. Review managed skill health in Settings.')
+      }
+      const skill = this.document.customSkills[id]
+      if (!skill || this.customHealth(skill, this.customTargetStatuses.get(id) ?? []) !== 'active') {
+        throw new Error('TLDR skill is unavailable or conflicts with an existing file. Review managed skill health in Settings.')
+      }
+    })
+  }
+
   createCustomSkill(
     request: CreateAgentCodeCustomSkillRequest,
   ): Promise<AgentCodeCustomSkillsMutationResult> {
@@ -727,6 +764,9 @@ export class AgentCodeManagedSkillsService {
           code: 'validation',
           message: `Agent Code manages at most ${AGENT_CODE_CUSTOM_SKILL_MAX_COUNT} custom skills.`,
         }
+      }
+      if (request.name.trim() === TLDR_SKILL_NAME) {
+        return { ok: false, code: 'validation', message: 'That name is reserved for TLDR MCP.' }
       }
       const normalized = normalizeAgentCodeCustomSkill(request, {
         requireContent: request.enabled,
@@ -798,6 +838,9 @@ export class AgentCodeManagedSkillsService {
   ): Promise<AgentCodeCustomSkillsMutationResult> {
     return this.serialize(async () => {
       await this.ensureInitializedLocked()
+      if (request.skillId === 'builtin:agent-code-tldr') {
+        return { ok: false, code: 'validation', message: 'This skill is managed by TLDR MCP. Enable or disable TLDR for the agent instead.' }
+      }
       const unavailable = this.customMutationUnavailable(request.expectedRevision)
       if (unavailable) return unavailable
       const existing = this.document.customSkills[request.skillId]
@@ -873,6 +916,9 @@ export class AgentCodeManagedSkillsService {
   ): Promise<AgentCodeCustomSkillsMutationResult> {
     return this.serialize(async () => {
       await this.ensureInitializedLocked()
+      if (request.skillId === 'builtin:agent-code-tldr') {
+        return { ok: false, code: 'validation', message: 'This skill is managed by TLDR MCP. Enable or disable TLDR for the agent instead.' }
+      }
       const unavailable = this.customMutationUnavailable(request.expectedRevision)
       if (unavailable) return unavailable
       const skill = this.document.customSkills[request.skillId]
@@ -894,6 +940,9 @@ export class AgentCodeManagedSkillsService {
   ): Promise<AgentCodeCustomSkillsMutationResult> {
     return this.serialize(async () => {
       await this.ensureInitializedLocked()
+      if (request.skillId === 'builtin:agent-code-tldr') {
+        return { ok: false, code: 'validation', message: 'This skill is managed by TLDR MCP. Enable or disable TLDR for the agent instead.' }
+      }
       const unavailable = this.customMutationUnavailable(request.expectedRevision)
       if (unavailable) return unavailable
       let skill = this.document.customSkills[request.skillId]
@@ -2882,6 +2931,7 @@ export class AgentCodeManagedSkillsService {
             .sort((left, right) => left.id.localeCompare(right.id))
           return {
             ...skill,
+            ...(skill.id === 'builtin:agent-code-tldr' ? { managedBy: 'tldr' as const } : {}),
             health: this.customHealth(skill, targets),
             targets,
           } satisfies AgentCodeCustomSkill

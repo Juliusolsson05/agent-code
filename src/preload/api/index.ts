@@ -1,3 +1,4 @@
+import { tldrApi } from '@preload/api/tldr.js'
 import { sessionApi } from '@preload/api/session.js'
 import { controlApi } from '@preload/api/control.js'
 import { providerApi } from '@preload/api/provider.js'
@@ -59,6 +60,7 @@ import { agentCodeInstalledSkillsApi } from '@preload/api/agentCodeInstalledSkil
 // handler to wherever it actually is — do not assume main/ipc/<domain>.
 
 export const api = {
+  ...tldrApi,
   ...controlApi,
   ...sessionApi,
   ...providerApi,

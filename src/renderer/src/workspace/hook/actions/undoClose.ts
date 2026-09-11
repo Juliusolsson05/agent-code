@@ -147,6 +147,7 @@ export function useUndoCloseAction(
           // WHY capability intent is restored but credentials are not: closing a pane revokes its
           // session token. Undo must ask main to mint a fresh token from these durable domain names;
           // dropping them makes an undo-restored transcript silently lose tools after restart.
+          tldrIdentity: meta.tldrIdentity,
           builtInMcpDomains: meta.builtInMcpDomains,
         })
       } catch {
@@ -245,6 +246,7 @@ export function useUndoCloseAction(
             ...(meta.providerRuntime ? { providerRuntime: meta.providerRuntime } : {}),
             resumeSessionId: kind !== 'terminal' ? resumableProviderSessionId(meta) : undefined,
             recoverTmuxName: kind === 'terminal' ? meta.tmuxName : undefined,
+            tldrIdentity: meta.tldrIdentity,
             builtInMcpDomains: meta.builtInMcpDomains,
           })
           idMap.set(oldId, newId)
@@ -312,6 +314,7 @@ export function useUndoCloseAction(
               ? resumableProviderSessionId(detached.meta)
               : undefined,
             recoverTmuxName: kind === 'terminal' ? detached.meta.tmuxName : undefined,
+            tldrIdentity: detached.meta.tldrIdentity,
             builtInMcpDomains: detached.meta.builtInMcpDomains,
           })
           // A detached child restored with its tab is the same population
@@ -398,6 +401,7 @@ export function useUndoCloseAction(
             ? resumableProviderSessionId(meta)
             : undefined,
           recoverTmuxName: kind === 'terminal' ? meta.tmuxName : undefined,
+          tldrIdentity: meta.tldrIdentity,
           builtInMcpDomains: meta.builtInMcpDomains,
         })
       } catch {

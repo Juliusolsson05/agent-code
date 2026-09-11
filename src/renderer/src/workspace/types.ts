@@ -91,6 +91,10 @@ export type SessionSpawnSelection = {
 }
 
 export type SessionMeta = {
+  /** Opaque TLDR storage key. Keep it across reload/provider handoff, but mint
+   * a new one for duplicates, unrelated resumes and rewinds: their old status
+   * may describe work that is absent from the new conversation. */
+  tldrIdentity?: string
   /** cwd the session was spawned with — needed to respawn on relaunch. */
   cwd: string
   /**
