@@ -2,9 +2,15 @@ import { excludeExternalControlFromOpencode } from '@providers/shared/runtime/ex
 import { EventEmitter } from 'events'
 import { spawn as ptySpawn } from 'node-pty'
 import type { IPty } from 'node-pty'
+import {
+  OpencodeTerminalHeadless,
+  prepareOpencodeTerminalLaunch,
+  type OpencodeTerminalHeadlessOptions,
+} from 'opencode-terminal-headless'
 
 import { addOpencodeBuiltInMcpLaunchConfig } from '@providers/shared/runtime/builtInMcpLaunch.js'
 import { createEmptyOpencodeSession } from './opencodeCliSessions.js'
+import type { ConditionCustomAction } from '@shared/types/providerConditions.js'
 import type {
   AgentSession,
   AgentSessionEvents,
@@ -19,15 +25,39 @@ class OpencodeTerminalNotReadyError extends Error {
 }
 
 /**
+ * Injection seams. Production uses the defaults; tests replace the PTY spawn
+ * (no real TUI) and the launch step (point the reader at a recorded replay).
+ * The headless itself is always the real package, so adapter tests exercise
+ * the same reader Agent Code ships.
+ */
+export type OpencodeTerminalSessionDeps = {
+  spawnPty?: typeof ptySpawn
+  prepareLaunch?: typeof prepareOpencodeTerminalLaunch
+  headlessOptions?: Partial<Omit<OpencodeTerminalHeadlessOptions, 'pty' | 'cwd' | 'launch'>>
+}
+
+/**
  * Native OpenCode TUI runtime.
  *
- * WHY this is not part of opencode-headless: that package deliberately owns
- * OpenCode's HTTP/SSE `serve` integration and produces structured events. This
- * runtime exists precisely because the native TUI is currently the more mature
- * rendering surface. Keeping the PTY wrapper here lets Agent Code reuse its
- * existing raw-agent terminal attachment while still entering through the same
- * SessionManager path that grants skills, scoped MCP tools, ownership, and
- * lifecycle cleanup.
+ * This class is a thin translator, the job ClaudeSession does for Claude: it
+ * spawns the TUI in a PTY and maps `opencode-terminal-headless` events onto the
+ * AgentSession contract SessionManager already speaks. Everything about HOW the
+ * native TUI is observed — OpenCode's durable event log for committed messages,
+ * the TUI's own server for activity, turns and permission/question prompts —
+ * lives in that package (see its README and Agent Code
+ * docs/decomposition/opencode-terminal-headless.md).
+ *
+ * WHY this is not part of opencode-headless: that package owns OpenCode's
+ * `serve` integration for the structured runtime and is deliberately not a
+ * terminal wrapper. The native TUI is a different process shape (caller-owned
+ * PTY), so it gets its own headless package, like Claude and Codex.
+ *
+ * What this wrapper still owns, unchanged from the PR #755 runtime:
+ * - session identity: fresh panes pre-create a `ses_` id through the supported
+ *   `opencode import` boundary, because the TUI never prints its id
+ * - skills and scoped built-in MCP config through `OPENCODE_CONFIG_CONTENT`
+ * - composer readiness (first paint + grace) and bracketed-paste delivery
+ * - generation fencing against stop() racing start()
  */
 export interface OpencodeTerminalSession {
   on<K extends keyof AgentSessionEvents>(
@@ -50,6 +80,7 @@ export interface OpencodeTerminalSession {
 
 export class OpencodeTerminalSession extends EventEmitter implements AgentSession {
   private pty: IPty | null = null
+  private headless: OpencodeTerminalHeadless | null = null
   private exited = false
   private startGeneration = 0
   private providerSessionId: string | null = null
@@ -65,8 +96,9 @@ export class OpencodeTerminalSession extends EventEmitter implements AgentSessio
   private readonly resumeSessionId: string | null
   private readonly dangerousMode: boolean
   private readonly builtInMcpServers: NonNullable<SessionOptions['builtInMcpServers']>
+  private readonly deps: Required<Pick<OpencodeTerminalSessionDeps, 'spawnPty' | 'prepareLaunch'>> & Pick<OpencodeTerminalSessionDeps, 'headlessOptions'>
 
-  constructor(options: SessionOptions) {
+  constructor(options: SessionOptions, deps: OpencodeTerminalSessionDeps = {}) {
     super()
     this.cwd = options.cwd
     this.cols = options.cols ?? 120
@@ -76,6 +108,11 @@ export class OpencodeTerminalSession extends EventEmitter implements AgentSessio
     this.resumeSessionId = options.resumeSessionId ?? null
     this.dangerousMode = options.dangerousMode === true
     this.builtInMcpServers = options.builtInMcpServers ?? []
+    this.deps = {
+      spawnPty: deps.spawnPty ?? ptySpawn,
+      prepareLaunch: deps.prepareLaunch ?? prepareOpencodeTerminalLaunch,
+      headlessOptions: deps.headlessOptions,
+    }
   }
 
   async start(): Promise<void> {
@@ -118,18 +155,26 @@ export class OpencodeTerminalSession extends EventEmitter implements AgentSessio
       return
     }
     this.providerSessionId = providerSessionId
-    const args: string[] = ['--session', providerSessionId]
-    // OpenCode calls this flag `--auto`, while Agent Code intentionally exposes
-    // one provider-neutral dangerous-mode toggle. Mapping happens here, at the
-    // provider boundary, so SessionManager does not learn CLI-specific flags.
-    if (this.dangerousMode) args.push('--auto')
 
-    const pty = ptySpawn(this.binary, args, {
+    // The launch step adds what makes the TUI observable: a loopback server
+    // with a per-spawn password (env only, never argv), and the database path
+    // the durable reader tails. OpenCode's `--auto` still carries Agent Code's
+    // provider-neutral dangerous mode.
+    const launch = await this.deps.prepareLaunch({
+      binary: this.binary,
+      cwd: this.cwd,
+      env,
+      sessionID: providerSessionId,
+      dangerousMode: this.dangerousMode,
+    })
+    if (generation !== this.startGeneration) return
+
+    const pty = this.deps.spawnPty(launch.binary, launch.args, {
       name: 'xterm-256color',
       cols: this.cols,
       rows: this.rows,
       cwd: this.cwd,
-      env,
+      env: launch.env,
     })
     this.pty = pty
 
@@ -153,13 +198,62 @@ export class OpencodeTerminalSession extends EventEmitter implements AgentSessio
         }, TUI_READY_GRACE_MS)
       }
     })
-    pty.onExit(({ exitCode, signal }) => {
+
+    const headless = new OpencodeTerminalHeadless({
+      ...this.deps.headlessOptions,
+      pty,
+      cwd: this.cwd,
+      launch,
+    })
+    this.headless = headless
+    this.forwardHeadless(headless, pty)
+
+    // A terminal runtime renders no condition UI of its own. The headless
+    // publishes an explicit empty snapshot during start(), which clears any
+    // renderer cache left under a stable pane id before recovery/replacement.
+    await headless.start()
+
+    // The TUI does not expose its session id as a structured startup event.
+    // Emit an identity-only transcript envelope through the existing durable
+    // identity path: OpenCode's mapper deliberately renders no row for this
+    // shape, while its extractor records the id for reload/switch/recovery.
+    this.emit('jsonl-entry', { sessionID: providerSessionId }, headless.getTranscriptFile())
+    this.emit('process-state', { active: false })
+    this.emit('started', {})
+  }
+
+  /**
+   * Map the package's events onto the AgentSession contract.
+   *
+   * WHY exit is taken from the headless and not straight from node-pty: when
+   * the TUI dies mid-turn the headless first commits what is readable and
+   * closes the turn (turn_completed, idle phase, inactive activity, cleared
+   * conditions). Forwarding node-pty's exit directly would let SessionManager
+   * tear the session down before those closing events arrive, leaving a pane
+   * that was busy at the moment of death looking busy in every snapshot taken
+   * from its last state.
+   */
+  private forwardHeadless(headless: OpencodeTerminalHeadless, pty: IPty): void {
+    headless.on('activity', ({ active, status }) => {
+      this.emit('process-state', status ? { active, status } : { active })
+    })
+    headless.on('semantic', event => this.emit('semantic-event', event))
+    headless.on('entry', record => this.emit('jsonl-entry', record, headless.getTranscriptFile()))
+    headless.on('conditions', snapshot => this.emit('conditions', snapshot))
+    headless.on('transcript-error', error => {
+      this.emit('jsonl-error', Object.assign(new Error(`OpenCode ${error.channel} channel: ${error.message}`), { code: error.code }))
+    })
+    // Live-channel health is diagnostic, never a correctness input: the pane
+    // keeps working on the durable channel while the server is unreachable.
+    headless.on('live-state', state => this.emit('transcript-diagnostic', { kind: 'opencode-terminal-live-state', ...state }))
+    headless.on('exit', ({ exitCode, signal }) => {
       // Ignore a stale callback if this wrapper is ever restarted. Production
       // creates a new wrapper per backend generation, but identity fencing here
       // costs nothing and prevents a stopped PTY from retiring a later one in
       // direct tests or future reuse.
       if (this.pty !== pty) return
       this.pty = null
+      this.headless = null
       this.exited = true
       this.clearReadinessTimer()
       this.setReady(false)
@@ -167,22 +261,6 @@ export class OpencodeTerminalSession extends EventEmitter implements AgentSessio
       this.emit('process-state', { active: false })
       this.emit('exit', { exitCode, signal })
     })
-
-    // A terminal runtime has no app-rendered condition model. Publishing the
-    // explicit empty snapshot clears any renderer cache left under a stable
-    // pane id before recovery/replacement and keeps the provider identity true.
-    this.emit('conditions', { provider: 'opencode', conditions: {}, ts: Date.now() })
-    // The TUI does not expose its session id as a structured startup event.
-    // Emit an identity-only transcript envelope through the existing durable
-    // identity path: OpenCode's mapper deliberately renders no row for this
-    // shape, while its extractor records the id for reload/switch/recovery.
-    this.emit(
-      'jsonl-entry',
-      { sessionID: providerSessionId },
-      `opencode://session/${providerSessionId}`,
-    )
-    this.emit('process-state', { active: false })
-    this.emit('started', {})
   }
 
   write(data: string): void {
@@ -223,7 +301,24 @@ export class OpencodeTerminalSession extends EventEmitter implements AgentSessio
         'OpenCode terminal did not become ready for prompt input',
       )
     }
-    pty.write(`\x1b[200~${text}\x1b[201~\r`)
+    if (this.headless) this.headless.pasteAndSubmit(text)
+    else pty.write(`\x1b[200~${text}\x1b[201~\r`)
+  }
+
+  /**
+   * Answer an OpenCode permission or reject a question through the TUI's own
+   * server. The kinds and action names are the structured runtime's, so the
+   * Dispatch badge and external condition control treat both runtimes alike.
+   */
+  async resolveCondition(
+    action: ConditionCustomAction,
+  ): Promise<
+    | { ok: true; state?: unknown }
+    | { ok: false; reason: string; lastState?: unknown; failedAtStep?: string }
+  > {
+    const headless = this.headless
+    if (!headless) return { ok: false, reason: 'no-headless' }
+    return await headless.resolveConditionAction(action)
   }
 
   resize(cols: number, rows: number): void {
@@ -253,8 +348,11 @@ export class OpencodeTerminalSession extends EventEmitter implements AgentSessio
     this.exited = true
     this.clearReadinessTimer()
     this.setReady(false)
+    const headless = this.headless
+    this.headless = null
     const pty = this.pty
     this.pty = null
+    await headless?.stop()
     try {
       pty?.kill()
     } catch {
