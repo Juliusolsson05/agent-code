@@ -21,10 +21,16 @@ tools and permission UI remain Grok-owned.
 - Ordinary single-line typing avoids that conversion in audited macOS source;
   arbitrary multiline bursts can become synthetic paste. Modified-Enter behavior
   depends on native multiline mode; tabs are structural keys, not literal text.
-- Inline --agents is ignored in the native TUI. The native ACP session/new and
-  session/load interfaces accept mcpServers; x.ai/session/update_mcp_servers is
-  a source-backed live update interface. A private leader/control connection is
-  needed to verify those capabilities against the installed CLI.
+- Inline --agents is ignored in the native TUI. Installed 1.0.25 now passes an
+  isolated production-control proof for session/new, session/load, literal ACP
+  prompts, live TUI echo, MCP update/readiness/invocation and session isolation.
+- Production control uses direct length-framed leader IPC with protocol/PID
+  verification. The native stdio helper reconnects/replays automatically and is
+  therefore unsuitable as the owner of an app control lifetime.
+- Both permission variants pass: ACP cancellation and a native TUI reject-once
+  key. TUI resolution retires the other control client's stale request token.
+  Normal cleanup awaits TUI/leader exit and verifies process absence by private
+  socket path. Headless verification: 180 tests, typecheck/build/packed exports.
 
 ## D: Intended End State
 
@@ -79,11 +85,20 @@ Headless owns native transport/session identity; the parser owns portable
 conversation semantics; Agent Code owns pane lifetimes and rendered history.
 Do not put correctness on diagnostic events or invent native JSONL reset rows.
 
-Still to prove: installed leader framing/handshake, whether a supported control
-client can coexist with the TUI, which requests own permissions, reconnect/MCP
-seed behavior, and safe handling of native session-changing commands. If an
-owned-session invariant requires constraining native new/load commands inside
-an app pane, make that explicit and direct users to app session actions.
+Next blocking gate: [grok-code-headless#3](https://github.com/Juliusolsson05/grok-code-headless/issues/3).
+Independent public-source audits found that the native TUI uses unbounded
+connect_or_spawn, can create a replacement immediately after leader loss, and
+can fall back to an embedded agent after initial connection timeout. There is
+no supported connect-only TUI flag in that source. A deliberate installed-binary
+crash/respawn experiment has not been run; source and binary evidence remain
+distinct. Normal-path coexistence does not establish crash containment.
+
+The headless owner stops an attached TUI before terminating its leader and
+retains the owned leader if dependent cleanup fails. Full app integration needs
+an agreed, verified TUI lifetime boundary for unexpected loss plus safe handling
+of native session-changing commands. A stable app-owned TUI socket boundary is
+a candidate design to evaluate, not an implemented guarantee. MCP model-driven
+discovery and native reload/reconnect reseeding also remain verification gates.
 
 Until the protocol stage is approved and verified, keep the app and headless
 input work draft. Do not claim general clipboard-independent automated prompt
