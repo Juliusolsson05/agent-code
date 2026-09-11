@@ -19,6 +19,10 @@ const headlessAlias = [
   { find: 'codex-headless', replacement: resolve(__dirname, 'packages/codex-headless/src/index.ts') },
   { find: /^opencode-headless\/(.+)$/, replacement: `${resolve(__dirname, 'packages/opencode-headless/src')}/$1` },
   { find: 'opencode-headless', replacement: resolve(__dirname, 'packages/opencode-headless/src/index.ts') },
+  // The native-TUI OpenCode runtime's reader. Main-only like its siblings: it
+  // loads node:sqlite and talks HTTP/SSE to the TUI's own server.
+  { find: /^opencode-terminal-headless\/(.+)$/, replacement: `${resolve(__dirname, 'packages/opencode-terminal-headless/src')}/$1` },
+  { find: 'opencode-terminal-headless', replacement: resolve(__dirname, 'packages/opencode-terminal-headless/src/index.ts') },
   { find: /^agent-transcript-parser\/(.+)$/, replacement: `${resolve(__dirname, 'packages/agent-transcript-parser/src')}/$1` },
   { find: 'agent-transcript-parser', replacement: resolve(__dirname, 'packages/agent-transcript-parser/src/index.ts') },
   // `agent-voice-dictation` is a git submodule like the other local packages,
@@ -56,6 +60,7 @@ const headlessExclude = [
   'claude-code-headless',
   'codex-headless',
   'opencode-headless',
+  'opencode-terminal-headless',
   'agent-transcript-parser',
   'agent-voice-dictation',
   // Compile the submodule from source so a recursive clone does not have a
