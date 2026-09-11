@@ -292,16 +292,17 @@ await headless.start()
 
 ### Task 6: Verification and PRs
 
-- [ ] **Step 1: Run the package gate.** `cd packages/opencode-terminal-headless && npm run check`, on Node 24 and 22.12 if available.
-- [ ] **Step 2: Run the Agent Code gates:**
+- [x] **Step 1: Run the package gate.** `cd packages/opencode-terminal-headless && npm run check`, on Node 24 and 22.12 if available.
+- [x] **Step 2: Run the Agent Code gates:**
   - `npm run typecheck`
   - `npm run test:contract`
   - `node scripts/sync-conditions-core.mjs --check`
   - `npm test`, run once (Node 24)
   - `npm run test:package`
-- [ ] **Step 3: Review the diff.** Run `git diff origin/main...HEAD --stat` and read every hunk for unrelated changes.
-- [ ] **Step 4: Open the PRs.**
+- [x] **Step 3: Review the diff.** Run `git diff origin/main...HEAD --stat` and read every hunk for unrelated changes.
+- [x] **Step 4: Open the PRs.**
   - Package PR first.
   - Then the Agent Code PR: `Fixes #864`, `Fixes #857`, `Refs #843`, `Refs Juliusolsson05/opencode-headless#3`, and a link to the package PR.
   - Mark the decomposition's Status and this plan's checkboxes.
-- [ ] **Step 5: Report and stop.** No merge without explicit confirmation. Merge order once confirmed: the package PR, then bump the pointer to the merged package commit, re-run CI, then the Agent Code PR.
+- [x] **Step 5: Report and stop.** Opened Juliusolsson05/opencode-terminal-headless#1 and #882; not merged.
+  Original step: No merge without explicit confirmation. Merge order once confirmed: the package PR, then bump the pointer to the merged package commit, re-run CI, then the Agent Code PR.
