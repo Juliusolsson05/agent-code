@@ -84,6 +84,27 @@ against how our 9 importing files use xterm (options, `loadAddon`, `refresh`,
 buffer APIs, `onRender`, theme). tsc catches type-level breaks; behavior-level
 changes need this read plus the manual soak.
 
+### Result (2026-09-11)
+
+xterm.js PRs labelled `breaking-change` merged after 6.0.0 (published
+2025-12-22) and before 6.1.0-beta.304 (2026-08-30): #5487 (move `customGlyphs`
+into the webgl addon), #5840 (APC parser rework, `registerApcHandler` identifier
+change), #5874 (clipboard addon). `git grep` finds no use of `customGlyphs`,
+APC handlers, the clipboard addon, or the options removed in #5462
+(`windowsMode`, `fastScrollModifier`) anywhere in `src/` — none of them touches
+this app. `codex-headless` (submodule) declares `@xterm/xterm ^6.0.0` but is
+compiled from source via Vite alias, not npm-installed, and its source only
+imports `@xterm/headless`, so no second `@xterm/xterm` enters the tree.
+
+## Lockfile: surgical, not whatever `npm install` wrote
+
+`npm install --save-exact <the three betas>` also pruned vitest's nested
+`esbuild 0.28.2` (28 lock entries) in favour of the root `esbuild 0.25.12` — an
+arborist dedupe unrelated to xterm that could change test-runner behaviour. The
+committed lockfile is `main`'s with ONLY the three `@xterm/*` entries and the
+root dependency specs replaced, validated with a clean `npm ci` (which also
+reinstalled vitest's nested `esbuild 0.28.2`). Diff: 23+/17- lines.
+
 ## Manual soak (required before merge — the user; agents never launch the app)
 
 Heavy Claude Code / Codex output in terminal view, OpenCode Terminal, a plain
