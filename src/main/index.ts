@@ -78,6 +78,10 @@ import { SessionRecorderManager } from '@main/recording/SessionRecorderManager.j
 import { setOutboundObserver } from '@main/window/windowRegistry.js'
 import { captureWindowGeometry, restorableBounds } from '@main/window/windowGeometry.js'
 import { WorkspaceFileStore } from '@main/storage/workspaceFileStore.js'
+import type { PersistedWindow } from '@main/storage/workspaceFile.js'
+import { ConversationLedger, readAgentNameAssignments } from '@main/conversations/ledger/ledger.js'
+import { AGENT_NAMES_FILE } from '@main/agentNames/ipc.js'
+import { CONVERSATIONS_LEDGER_FILE } from '@main/storage/paths.js'
 import { isSessionRecordingEnabled, isSessionRecordingAutoStart } from '@main/ipc/devDebug.js'
 import { registerAllIpc } from '@main/ipc/index.js'
 import { AgentCodeManagedSkillsService } from '@main/agentCodeConventions/AgentCodeManagedSkillsService.js'
@@ -890,6 +894,24 @@ async function startApp(): Promise<void> {
   // renderer-driven `workspace:load` could not answer that — it required a
   // renderer, which requires a window.
   const workspaceFileStore = await WorkspaceFileStore.open()
+  // Conversation ledger (docs/decomposition/conversations.md, Stage 3): a
+  // projection of every window's sessions keyed by native id, so the picker
+  // can name and classify conversations after their panes are gone. Boots
+  // from the store's current document, then follows every commit.
+  const conversationLedger = await ConversationLedger.open(CONVERSATIONS_LEDGER_FILE).catch((error: unknown) => {
+    // eslint-disable-next-line no-console
+    console.warn('[conversations] ledger unavailable', error)
+    return null
+  })
+  if (conversationLedger) {
+    const projectConversations = (windows: readonly PersistedWindow[]) => {
+      void readAgentNameAssignments(AGENT_NAMES_FILE)
+        .then(names => conversationLedger.projectWindows(windows, names))
+        .catch(() => undefined)
+    }
+    workspaceFileStore.observe(projectConversations)
+    projectConversations(workspaceFileStore.windows())
+  }
   // Dragging a window to the other monitor changes nothing the renderer knows
   // about, so it triggers no autosave. Without this, the feature's central
   // promise — it comes back where you left it — would depend on the user
