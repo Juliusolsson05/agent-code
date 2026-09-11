@@ -613,6 +613,11 @@ export const SESSION_LIFECYCLE_DATA_KEYS = [
   'hasResumeId',
   'deliveryInFlight',
   'subagentHeaderPresent',
+  // How main accepted a delivered prompt: 'user' (a turn starts), 'queue'
+  // (Claude holds it behind the running turn), 'transport' (OpenCode HTTP).
+  // The `queue` value is what makes the #889 stuck-`Sending` shape
+  // attributable from the journal alone.
+  'acceptance',
 
   // shape / volume
   'tabs',
@@ -775,6 +780,7 @@ export function pickCodexTranscriptObservationData(
     case 'submit.result':
       provider()
       boolean('ok')
+      string('acceptance', ['user', 'queue', 'transport'])
       deliveryCode()
       deliveryStage()
       boolean('bodyWritten')

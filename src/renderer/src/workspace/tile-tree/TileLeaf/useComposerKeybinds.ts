@@ -282,7 +282,7 @@ export function useComposerKeybinds({
       // paste-commit wait / plain fast path) live in
       // providers/<kind>/renderer/composerSubmit.ts with their race
       // rationale. This site keeps only the kind-agnostic machinery.
-      await caps.composerSubmit({
+      const acceptance = await caps.composerSubmit({
         sessionId,
         input,
         draftImages: caps.supportsImageAttachments ? draftImages : [],
@@ -329,6 +329,14 @@ export function useComposerKeybinds({
         setInputText(acceptedDraft)
       }
       workspace.updateRuntime(sessionId, { promptDelivery: { kind: 'idle' } })
+      // A `queue` acceptance means the provider held the prompt behind a
+      // running turn: no turn will start for it, so the optimistic
+      // `submitting` phase stamped above would otherwise stand until the
+      // RUNNING turn's next stream_phase event (#889). Settle it here — this
+      // is the only place that both owns the stamp and sees the acceptance.
+      // beginOptimisticSubmit already skips the stamp when the renderer can
+      // see the live turn; this covers the pane the renderer believed idle.
+      if (acceptance?.kind === 'queue') workspace.settleQueuedSubmit(sessionId)
       if (caps.supportsImageAttachments && draftImages.length > 0) {
         workspace.setDraftImages(
           sessionId,
@@ -349,6 +357,10 @@ export function useComposerKeybinds({
       reportLifecycle('submit.result', sessionId, {
         provider: submitProvider,
         ok: true,
+        // The acceptance kind is what separates "a turn started" from "Claude
+        // queued it" in the journal. Without it the 2026-09-11 incident needed
+        // the paste-debug journal to explain a pane that looked stuck.
+        acceptance: acceptance?.kind ?? null,
         durationMs: Date.now() - submitStartedAt,
       }, {
         submissionId: pasteId,

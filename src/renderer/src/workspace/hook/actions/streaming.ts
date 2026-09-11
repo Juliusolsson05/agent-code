@@ -144,6 +144,7 @@ export function useStreamingActions(
 ): {
   beginOptimisticSubmit: (sessionId: SessionId) => void
   unwindOptimisticSubmit: (sessionId: SessionId) => void
+  settleQueuedSubmit: (sessionId: SessionId) => void
   clearPendingRewindUndo: (sessionId: SessionId) => void
   addOptimisticCodexUserEntry: (
     sessionId: SessionId,
@@ -261,11 +262,98 @@ export function useStreamingActions(
     [setRuntimes],
   )
 
+  /**
+   * Settle a stamped `submitting` phase after main reports that the provider
+   * accepted the prompt into its QUEUE rather than starting a turn (#889).
+   *
+   * WHY this exists next to `unwindOptimisticSubmit` instead of reusing it:
+   * unwind means "nothing reached the provider" and therefore also drops
+   * `awaitingAssistant`. A queued prompt DID reach the provider — Claude holds
+   * it and will drain it into the running turn — so the only false claim is
+   * the phase. `awaitingAssistant` and `queuedMessages` are owned by the
+   * queue-operation reducer, whose enqueue burst can land a few milliseconds
+   * before or after this acceptance; touching them here would race it.
+   *
+   * WHY the phase has to be settled at all: a queued prompt starts no turn, so
+   * the `turn_started` bridge in streamPhaseMachine never fires for it, and
+   * the machine deliberately refuses to stomp `submitting` from screen
+   * signals. Left alone, the WorkIndicator paints `Sending · Ns` until the
+   * RUNNING turn happens to emit its next `stream_phase` event — 21 s and 46 s
+   * in the 2026-09-11 recordings, over a turn that was visibly thinking.
+   *
+   * Only ever reverts `submitting`. If a real event moved the phase between
+   * the stamp and the acceptance, that phase is the truth (same rule as
+   * unwind).
+   */
+  const settleQueuedSubmit = useCallback(
+    (sessionId: SessionId) => {
+      setRuntimes(prev => {
+        const current = prev[sessionId]
+        if (!current) return prev
+        if (current.streamPhase !== 'submitting') return prev
+        return {
+          ...prev,
+          [sessionId]: withDerivedSessionStatus(
+            appendFeedDebugLog(
+              {
+                ...current,
+                streamPhase: 'idle',
+                streamPhasePendingToolName: null,
+                streamPhasePendingToolUseId: null,
+                submittedAt: null,
+                turnStartedAt: null,
+                phaseChangedAt: null,
+              },
+              {
+                layer: 'STATE',
+                kind: 'submit',
+                summary: 'submit queued: provider accepted the prompt into its queue, optimistic phase settled',
+              },
+            ),
+          ),
+        }
+      })
+    },
+    [setRuntimes],
+  )
+
   const beginOptimisticSubmit = useCallback(
     (sessionId: SessionId) => {
       const now = Date.now()
       setRuntimes(prev => {
         const current = prev[sessionId] ?? emptyRuntime()
+        // WHY the phase stamp is skipped over a live turn (#889): a submit into
+        // a pane whose turn is still running is not going to START a turn —
+        // Claude queues it and drains it into the running turn later. Painting
+        // `submitting` here overwrote the turn's real phase and its real
+        // clock (`turnStartedAt`) with `Sending · 0s`, and because nothing
+        // downstream ever corrects that (see settleQueuedSubmit), the pane lied
+        // for as long as the turn stayed quiet. Both live signals are checked:
+        // the phase machine can lag the semantic turn (first deltas arrive
+        // before the first stream_phase), and the semantic turn can be closed
+        // while the phase still reports a pending tool.
+        //
+        // Everything that is not a phase claim still happens on this branch —
+        // continuing from a rewound branch retires Undo Rewind whether or not
+        // the prompt is queued.
+        const turnIsLive =
+          current.streamPhase !== 'idle' ||
+          isSemanticTurnRunning(current.semantic.currentTurn)
+        if (turnIsLive) {
+          return {
+            ...prev,
+            [sessionId]: withDerivedSessionStatus(
+              appendFeedDebugLog(
+                { ...current, pendingRewindUndo: null },
+                {
+                  layer: 'STATE',
+                  kind: 'submit',
+                  summary: 'submit started · behind a live turn (provider will queue it)',
+                },
+              ),
+            ),
+          }
+        }
         const next = withDerivedSessionStatus(
           appendFeedDebugLog(
             {
@@ -550,6 +638,7 @@ export function useStreamingActions(
   return {
     beginOptimisticSubmit,
     unwindOptimisticSubmit,
+    settleQueuedSubmit,
     clearPendingRewindUndo,
     addOptimisticCodexUserEntry,
     removeOptimisticCodexUserEntry,

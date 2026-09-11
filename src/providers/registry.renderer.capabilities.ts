@@ -1,4 +1,5 @@
 import type { ConditionView } from '@shared/conditions-core/view'
+import type { PromptAcceptance } from '@shared/types/providerConfig'
 import type { Entry, ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 import type { ProviderConditionSnapshot } from '@shared/types/providerConditions'
 import type { SemanticLiveBlock, SemanticLiveTurn } from '@renderer/session-runtime/state'
@@ -151,8 +152,18 @@ export type RendererProviderCapabilities = {
    * providers/claude/renderer/composerSubmit.ts). The call site keeps
    * the kind-agnostic machinery: pasteId minting, streaming-baseline
    * capture, composer clearing, draft preservation on throw.
+   *
+   * Resolves with main's acceptance when the protocol has a structured
+   * delivery result (Claude, OpenCode) and `null` when it does not (Codex
+   * submits are raw PTY writes). WHY the kind is surfaced at all (#889): a
+   * `queue` acceptance means the provider held the prompt behind a running
+   * turn and no turn will start for it, so the optimistic `submitting` phase
+   * the call site stamped before delivery is a claim nothing downstream can
+   * ever correct — the call site has to settle it, and this is its only
+   * evidence. Swallowing the result here painted `Sending · 46s` over a turn
+   * that was busy thinking in the 2026-09-11 recording.
    */
-  composerSubmit: (io: ComposerSubmitIo) => Promise<void>
+  composerSubmit: (io: ComposerSubmitIo) => Promise<PromptAcceptance | null>
   /**
    * Whether this provider's composer accepts inline image
    * attachments. Gates draft-image accumulation (paste handler), the

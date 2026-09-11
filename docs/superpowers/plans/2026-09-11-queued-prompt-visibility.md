@@ -1,6 +1,6 @@
 # Queued Prompt Visibility Implementation Plan
 
-> Status: in progress on `fix/queued-prompt-visibility`. Fixes #889 and #890.
+> Status: IMPLEMENTED on `fix/queued-prompt-visibility`. Fixes #889 and #890. §6 records the verification.
 
 **Goal:** When Claude accepts a prompt into its queue instead of starting a
 turn, the pane must tell the truth about it: the WorkIndicator keeps showing
@@ -151,3 +151,25 @@ starts expanded.
   already say "queued"; a toast on ~23% of this user's submits is noise.
 - Whatever put the text back into the composer in the two incidents. Not
   recoverable from the journals; revisit only if it recurs with the fixes in.
+
+## 6. Result
+
+Implemented as designed; no deviation from §2.
+
+- `beginOptimisticSubmit` skips the phase stamp when `streamPhase !== 'idle'`
+  or the semantic turn is running; `settleQueuedSubmit` reverts only a stamped
+  `submitting`. `composerSubmit` returns `PromptAcceptance | null`; the composer
+  settles on `queue` and records `acceptance` on `submit.result`, which needed
+  the key added to `SESSION_LIFECYCLE_DATA_KEYS` and to the Codex observation
+  picker. `QueueStrip` resets `collapsed` when the queue drains.
+- Tests written first and confirmed red (10 new assertions failing, 10
+  pre-existing passing), then green: `streamingQueuedSubmit.renderer.test.tsx`,
+  `useComposerKeybinds.queueAcceptance.renderer.test.tsx`,
+  `QueueStrip.renderer.test.tsx` (+1), `opencode/composerSubmit.test.ts` (+1).
+- `npm run typecheck` clean (control-sdk, workflow-mcp build, `tsc -b`); raw
+  `tsc -p tsconfig.node.json` and `tsc -p tsconfig.web.json` clean.
+- Full `npm test`: 463 files / 3185 tests passed; 6 failures in
+  `app-state/store.test.ts` (4 × "timed out in 5000ms") and
+  `media/imageAttachment.test.ts` (1 × census cites a Claude session file
+  deleted from this machine) are the known local-environment failures that
+  also fail on `origin/main`; CI is the gate for those.
