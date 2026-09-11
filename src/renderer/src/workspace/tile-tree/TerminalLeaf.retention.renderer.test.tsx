@@ -31,6 +31,15 @@ vi.mock('@xterm/xterm', () => ({
   },
 }))
 
+// Keep this suite about the leaf: without this, every mount would run the real
+// attachXtermWebglRenderer and evaluate the real @xterm/addon-webgl bundle in
+// happy-dom now that WebGL is on (#871) — hidden coverage this suite never
+// asserts on, with failures swallowed by the wrapper's DOM fallback. The
+// AgentTerminalLeaf suites mock it the same way.
+vi.mock('@renderer/workspace/terminal/xtermWebglRenderer', () => ({
+  attachXtermWebglRenderer: () => ({ ready: Promise.resolve(false), dispose() {} }),
+}))
+
 vi.mock('@xterm/addon-fit', () => ({
   FitAddon: class {
     fit() {}
