@@ -40,13 +40,62 @@
 
 ---
 
+## Execution notes (2026-09-11)
+
+Tasks 0–5 are implemented and committed on `feat/opencode-terminal-headless`:
+`3b1f6449` (plan), `6d274bad` (Stage 0 evidence), `0fc879ad` (wiring),
+`f0b170b8` (adapter), `81929238` (renderer end-to-end test), `2a99d6c0`
+(history source), `e9d6c0b5` (terminal-pane history), `c58ab1e9` (MCP
+transcript tools).
+
+- The "confirm it fails" steps are left unticked on purpose. Each task's
+  tests were run green before its commit, but a red run before the
+  implementation was not recorded, so it is not claimed.
+- Task 4 touched eight skip sites, not four: spawn seeding and load,
+  wake, rehydrate seeding and load, reload-all seeding, older-history
+  paging, and the initial loader itself. Adoption was already calling the
+  loader and got stuck on `loading` because of the skip.
+- Task 5 went further than planned:
+  - The package gained `iterateMessages` (a forward walk, one read
+    transaction per page) and owns the `opencode://session/<id>` format
+    through `opencodeTranscriptFile` and `parseOpencodeTranscriptFile`.
+  - A shared `opencodeDatabase` handle replaced the history source's
+    private one.
+  - `transcriptLocator` routes locators for Agent Management.
+  - Remote get-history reads OpenCode.
+  - `provider_managed` is retired, and the reader's dead `parseTranscript`
+    path is removed.
+
+After Task 5, before the PRs:
+
+- **`186f19e6`**: View Prompts, Dispatch titles and composer history were
+  empty for every OpenCode session. A Claude-only `permissionMode` filter
+  caused it, and it would have made Task 4's stated benefit false. The
+  OpenCode feed mapper also stopped rendering OpenCode's synthetic text.
+- **An independent review of the branch** found five defects. Four are fixed,
+  in package `13b9f5c` and Agent Code `44a5677c`:
+  - MCP reads of long sessions blocked the main process.
+  - History could land out of order.
+  - A transient BUSY disabled the durable channel for good.
+  - The live re-sync could apply stale or partial state.
+  - The fifth, a pane silently dead after losing its port, has a smaller
+    window now, and surfacing it is filed as #881.
+- **Bugs found along the way, verified against current code and filed:**
+  - #877: prompts pasted into a just-started OpenCode Terminal pane are lost.
+  - #878: the structured runtime's permission/question text is empty on 1.18.30.
+  - #879: `replaceSession` strips orchestration metadata.
+  - #875: `observations.wait` never settles for agents.
+  - #880: a missing runtime is counted as running.
+
+---
+
 ### Task 0: Decomposition and plan
 
 **Files:**
 - Create: `docs/decomposition/opencode-terminal-headless.md`
 - Create: `docs/superpowers/plans/2026-09-10-opencode-terminal-headless.md`
 
-- [ ] **Step 1: Commit both documents as the branch's first commit**
+- [x] **Step 1: Commit both documents as the branch's first commit**
 
 ```bash
 git add docs/decomposition/opencode-terminal-headless.md docs/superpowers/plans/2026-09-10-opencode-terminal-headless.md
@@ -67,14 +116,14 @@ git commit -m "docs(opencode): plan the OpenCode Terminal headless read pipeline
 **Interfaces:**
 - Produces: the import specifier `opencode-terminal-headless`, which resolves to `packages/opencode-terminal-headless/src/index.ts` in main, preload and tests. The renderer never imports it; it uses `node:sqlite` and `node-pty` types.
 
-- [ ] **Step 1: Add the submodule at the package branch's pushed commit**
+- [x] **Step 1: Add the submodule at the package branch's pushed commit**
 
 ```bash
 git submodule add https://github.com/Juliusolsson05/opencode-terminal-headless.git packages/opencode-terminal-headless
 git -C packages/opencode-terminal-headless checkout <pushed feat/initial-runtime sha>
 ```
 
-- [ ] **Step 2: Add aliases.** Copy the existing `opencode-headless` entries in each of the four config files and rename them. In `electron.vite.config.ts`, the subpath regex goes *before* the bare specifier, matching the siblings, because alias order matters.
+- [x] **Step 2: Add aliases.** Copy the existing `opencode-headless` entries in each of the four config files and rename them. In `electron.vite.config.ts`, the subpath regex goes *before* the bare specifier, matching the siblings, because alias order matters.
 
 ```ts
 { find: /^opencode-terminal-headless\/(.+)$/, replacement: `${resolve(__dirname, 'packages/opencode-terminal-headless/src')}/$1` },
@@ -83,7 +132,7 @@ git -C packages/opencode-terminal-headless checkout <pushed feat/initial-runtime
 
 Also add `'opencode-terminal-headless'` to `headlessExclude`, so main compiles it from source instead of externalizing it.
 
-- [ ] **Step 3: Add the conditions-core target and run the sync**
+- [x] **Step 3: Add the conditions-core target and run the sync**
 
 ```js
 {
@@ -96,12 +145,12 @@ Also add `'opencode-terminal-headless'` to `headlessExclude`, so main compiles i
 Run: `node scripts/sync-conditions-core.mjs && node scripts/sync-conditions-core.mjs --check`
 Expected: the check exits 0.
 
-- [ ] **Step 4: Type-check**
+- [x] **Step 4: Type-check**
 
 Run: `npm run typecheck`
 Expected: exit 0 (nothing imports the package yet, so this proves only that the config parses).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add .gitmodules packages/opencode-terminal-headless electron.vite.config.ts tsconfig.node.json tsconfig.web.json vitest.config.ts scripts/sync-conditions-core.mjs
@@ -131,7 +180,7 @@ git commit -m "build(opencode): wire the opencode-terminal-headless submodule in
   - Headless methods: `resolveConditionAction(action: ConditionCustomAction): Promise<{ ok: true } | { ok: false; reason: string; failedAtStep?: string }>`, `start(): Promise<void>`, `stop(): Promise<void>`, `write(data)`, `resize(cols, rows)`, `pasteAndSubmit(text)`.
 - Produces: the unchanged `AgentSession` surface, plus `resolveCondition` (new for this runtime).
 
-- [ ] **Step 1: Write the failing adapter tests.** Inject a fake headless factory and a fake PTY spawner (both constructor options that default to the real ones). Assert:
+- [x] **Step 1: Write the failing adapter tests.** Inject a fake headless factory and a fake PTY spawner (both constructor options that default to the real ones). Assert:
   - headless `activity {active:true,status:'busy'}` → `process-state {active:true,status:'busy'}`
   - headless `entry(record)` → `jsonl-entry(record, 'opencode://session/ses_x')`
   - headless `semantic(ev)` → `semantic-event(ev)`
@@ -143,7 +192,7 @@ git commit -m "build(opencode): wire the opencode-terminal-headless submodule in
 
 - [ ] **Step 2: Run the tests.** `NODE_ENV=test npx vitest run --project unit src/providers/opencode/runtime/opencodeTerminalSession.test.ts` fails, because the adapter has no headless yet.
 
-- [ ] **Step 3: Rewrite the adapter.**
+- [x] **Step 3: Rewrite the adapter.**
   - Keep: env assembly, `addOpencodeBuiltInMcpLaunchConfig`, `excludeExternalControlFromOpencode`, `createEmptyOpencodeSession` for fresh sessions, the generation fence, readiness (first byte + 250 ms), `deliverPromptText` (now calls `headless.pasteAndSubmit`), and its `OpencodeTerminalNotReadyError`.
   - Replace the bare `ptySpawn(binary, args)` with the sequence below, and forward the headless events per Step 1.
   - `stop()`: `headless.stop()`, then `pty.kill()`. Both are idempotent.
@@ -155,9 +204,9 @@ const headless = new OpencodeTerminalHeadless({ pty, cwd, launch })
 await headless.start()
 ```
 
-- [ ] **Step 4: Run the tests.** They pass.
+- [x] **Step 4: Run the tests.** They pass.
 
-- [ ] **Step 5: Commit** `feat(opencode): read OpenCode Terminal status and transcript through opencode-terminal-headless` (`Refs #864`, `Refs #857`).
+- [x] **Step 5: Commit** `feat(opencode): read OpenCode Terminal status and transcript through opencode-terminal-headless` (`Refs #864`, `Refs #857`).
 
 ---
 
@@ -173,15 +222,15 @@ await headless.start()
 - Consumes (package root): `openOpencodeStore(dbPath: string): OpencodeStore`, `resolveOpencodeDbPath({ binary, env }): Promise<string>`, and `OpencodeStore.readHistory(sessionID, { limit, beforeMessageID? }): { records: OpencodeMessageRecord[]; hasOlder: boolean }`.
 - Produces: `loadOpencodeHistoryChunk({ cwd, providerSessionId, limit, beforeMessageID? }): Promise<HistoryChunk>`. The `entries` are `{ info, parts }` records, which is exactly what the renderer's OpenCode mapper already folds.
 
-- [ ] **Step 1: Write the failing system test.** Create a temporary SQLite database with the production DDL (copied from the package's `testing/fixtures/schema.sql`), load one Stage 0 durable fixture, and point the resolver at it. Then:
+- [x] **Step 1: Write the failing system test.** Create a temporary SQLite database with the production DDL (copied from the package's `testing/fixtures/schema.sql`), load one Stage 0 durable fixture, and point the resolver at it. Then:
   - `loadInitialHistoryChunk({ kind: 'opencode', providerSessionId, cwd, limit: 2 })` returns the two newest completed records with `hasMore: true`.
   - A second call with the oldest id returns the rest with `hasMore: false`.
 - [ ] **Step 2: Run it** and confirm it fails.
-- [ ] **Step 3: Implement.**
+- [x] **Step 3: Implement.**
   - Stores are memoized per db path and released on app quit.
   - Store errors become an empty chunk plus a `performanceService` span failure. The loader never throws into the renderer, matching the missing-file behavior.
-- [ ] **Step 4: Run it** and confirm it passes.
-- [ ] **Step 5: Commit** `feat(opencode): load OpenCode history from the durable store` (`Refs #864`).
+- [x] **Step 4: Run it** and confirm it passes.
+- [x] **Step 5: Commit** `feat(opencode): load OpenCode history from the durable store` (`Refs #864`).
 
 ---
 
@@ -197,17 +246,17 @@ await headless.start()
 **Interfaces:**
 - Consumes: Task 3's loader, through the existing `session:load-initial-history` IPC. No new IPC.
 
-- [ ] **Step 1: Write the failing renderer test.**
+- [x] **Step 1: Write the failing renderer test.**
   - An OpenCode session meta with `providerRuntime: 'terminal'` and a `providerSessionId` calls `loadInitialHistoryForSession`.
   - The runtime ends with the mapped entries.
   - `resolveAgentDisplayMode` still returns `'terminal'`, so no feed is mounted.
   - Commands gated by `commandAllowedByRenderedViewPolicy` stay hidden.
 - [ ] **Step 2: Run it** and confirm it fails.
-- [ ] **Step 3: Remove the `providerRuntime === 'terminal'` skip** from the four history sites.
+- [x] **Step 3: Remove the `providerRuntime === 'terminal'` skip** from the four history sites.
   - Replace each skip's WHY comment with the new reason: the terminal pane stays raw, but agents, Dispatch and MCP readers need the conversation in `runtime.entries`, and the durable store makes loading it cheap (no CLI process).
   - Keep the spawn-seed for terminal (`transcriptStatus: 'ready'`, `hasOlderHistory: false`) only where history is genuinely absent.
-- [ ] **Step 4: Run it** and confirm it passes.
-- [ ] **Step 5: Commit** `feat(workspace): load conversation history for OpenCode Terminal panes` (`Refs #864`).
+- [x] **Step 4: Run it** and confirm it passes.
+- [x] **Step 5: Commit** `feat(workspace): load conversation history for OpenCode Terminal panes` (`Refs #864`).
 
 ---
 
@@ -227,7 +276,7 @@ await headless.start()
 **Interfaces:**
 - Consumes: `OpencodeStore.readHistory(sessionID, { limit: Infinity })`, or a streaming `iterateMessages(sessionID)` if Stage 1 provides one for large sessions.
 
-- [ ] **Step 1: Write the failing tests** over a fixture database. For `read_file` / `search_file` / `inspect_file` with `opencode://session/<id>`, the extracted items must be:
+- [x] **Step 1: Write the failing tests** over a fixture database. For `read_file` / `search_file` / `inspect_file` with `opencode://session/<id>`, the extracted items must be:
   - user text
   - assistant text
   - tool calls with name and target: `filePath` for read/edit/write, `command` for bash, the patch for `apply_patch`
@@ -235,9 +284,9 @@ await headless.start()
 
   Also assert `todowrite` is not classified as a file write.
 - [ ] **Step 2: Run them** and confirm they fail.
-- [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run them** and confirm they pass.
-- [ ] **Step 5: Commit** `feat(mcp): read OpenCode sessions through the agent transcript tools` (`Refs #864`).
+- [x] **Step 3: Implement.**
+- [x] **Step 4: Run them** and confirm they pass.
+- [x] **Step 5: Commit** `feat(mcp): read OpenCode sessions through the agent transcript tools` (`Refs #864`).
 
 ---
 

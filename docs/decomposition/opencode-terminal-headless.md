@@ -1,9 +1,10 @@
 # OpenCode Terminal headless — stage decomposition
 
-Status: approved 2026-09-10. The user approved the read pipeline and package
-layout, then instructed "build all of this". Stage 0 findings are presented as
-they land, not gated; any Stage 0 finding that contradicts this document stops
-implementation and revises it here first.
+Status: stages 0–6 built (2026-09-11), in review. Approved 2026-09-10: the
+user approved the read pipeline and package layout, then instructed "build all
+of this". Stage 0 findings were presented as they landed, not gated; none
+contradicted this document. The plan's execution notes list the commits and
+where the build went beyond the plan.
 
 Issue: #864 (feature), #857 (runtime never reports running).
 Plans: `docs/superpowers/plans/2026-09-10-opencode-terminal-headless.md`
@@ -328,6 +329,20 @@ Status after Stage 0:
 - **Still open:** 6 (child-session permission surfacing; the free model never
   delegated), 10 (checked by the Stage 1 system test) and 11 (checked in
   Stage 6).
+
+Status after Stage 6 (2026-09-11):
+- **11 resolved.** Loading history into a terminal pane's runtime cannot leak
+  the feed. `getEffectiveAgentSurface` pins the runtime to the terminal
+  surface in every view mode, and `commandAllowedByRenderedViewPolicy` hides
+  every feed-only command for it whatever `entries` holds. The renderer test
+  replays a recorded session live, reloads the pane from the same database,
+  and checks all three facts: the reloaded entries equal the live ones, the
+  surface stays `terminal`, and feed commands stay hidden.
+- **10 mitigated, not measured.** A busy read is classified (`busy`) and
+  retried on the reader's next wake instead of failing the channel. The
+  replay rig writes with immediate transactions beside the reader, and the
+  live TUI test passed, but neither counts how often BUSY happens.
+- **6 still open.**
 
 1. The v1.18.30 bus names and payloads for `session.status`, permission,
    question and delta events (the sibling research is from 1.14.39).
