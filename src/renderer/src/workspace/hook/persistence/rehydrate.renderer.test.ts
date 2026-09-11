@@ -78,6 +78,7 @@ function makeHarness() {
     stateRef: ref(state),
     latestStateRef: ref(state),
     latestRuntimesRef: ref(runtimes),
+    seenUuidsRef: ref({}),
   } as unknown as WorkspaceRefs
 
   return {
@@ -130,9 +131,30 @@ describe('rehydrateWorkspace backend reconciliation', () => {
         builtInMcpDomains: ['orchestration' as const],
       },
     }))
+    // One committed exchange in the `{ info, parts }` shape OpenCode's
+    // database serves through main's history loader.
+    const loadInitialHistory = vi.fn(async () => ({
+      entries: [
+        {
+          info: { id: 'msg_user', sessionID: 'ses_durable_terminal', role: 'user', time: { created: 1_000 } },
+          parts: [{ id: 'prt_1', type: 'text', text: 'what changed?' }],
+        },
+        {
+          info: { id: 'msg_answer', sessionID: 'ses_durable_terminal', role: 'assistant', parentID: 'msg_user', time: { created: 2_000, completed: 3_000 } },
+          parts: [{ id: 'prt_2', type: 'text', text: 'Nothing yet.' }],
+        },
+      ],
+      hasMore: false,
+      totalEntries: 2,
+    }))
     Object.defineProperty(window, 'api', {
       configurable: true,
-      value: { recoverSession, defaultCwd: vi.fn() },
+      value: {
+        recoverSession,
+        defaultCwd: vi.fn(),
+        loadInitialHistory,
+        gitWorktrees: vi.fn(async () => ({ ok: true, worktrees: [] })),
+      },
     })
 
     await rehydrateWorkspace(
@@ -155,14 +177,23 @@ describe('rehydrateWorkspace backend reconciliation', () => {
       providerRuntime: 'terminal',
       providerSessionId: 'ses_durable_terminal',
     })
-    // Structured-history bootstrap must remain off. The raw terminal owns the
-    // pixels even though the same provider id remains available to conversion,
-    // duplication, and future crash recovery.
-    expect(harness.runtimes()['stable-session']).toMatchObject({
-      processStatus: 'started',
-      transcriptStatus: 'ready',
-      hasOlderHistory: false,
+    // The conversation reloads into the runtime like any agent's: Copy Last
+    // Response, View Prompts, status rows and MCP reads all read `entries`.
+    // The raw TUI still owns the pane (agentDisplayMode pins it).
+    await vi.waitFor(() => {
+      expect(harness.runtimes()['stable-session']).toMatchObject({
+        processStatus: 'started',
+        transcriptStatus: 'ready',
+        hasOlderHistory: false,
+        totalEntries: 2,
+      })
     })
+    expect(loadInitialHistory).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      kind: 'opencode',
+      providerSessionId: 'ses_durable_terminal',
+    }))
+    expect(harness.runtimes()['stable-session']!.entries.map(entry => (entry as { uuid?: string }).uuid))
+      .toEqual(['msg_user', 'msg_answer'])
   })
 
   it('does not reapply enabled defaults to a persisted explicit empty list', async () => {

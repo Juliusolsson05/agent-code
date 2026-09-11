@@ -90,10 +90,22 @@ export async function loadInitialHistoryForSession({
 }): Promise<void> {
   const meta = metaOverride ?? refs.stateRef.current.sessions[sessionId]
   const kind = meta?.kind ?? DEFAULT_PROVIDER
-  // Native terminal flavours replay inside their own TUI. Loading the same
-  // export into the unmounted rendered runtime wastes a CLI process and can
-  // make hidden feed state influence terminal-only command availability.
-  if (!meta || !isAgentProviderKind(kind) || meta.providerRuntime === 'terminal') return
+  // WHY provider-native terminal runtimes (OpenCode Terminal) load history
+  // like every other agent: the pane stays a raw TUI, but the conversation in
+  // `runtime.entries` is what the rest of the app reads — Copy Last Response,
+  // View Prompts, agent status rows, Close Old Agents, and the agent
+  // management MCP's `hydrateTranscriptWithoutWaking`. Skipping it left a
+  // reloaded terminal pane with no history until its next turn, and a parked
+  // one with none at all.
+  //
+  // The two reasons this used to be skipped no longer hold. History came from
+  // `opencode export`, a Bun child that serializes the whole session per call;
+  // it is now two indexed reads of OpenCode's database (see
+  // `@providers/opencode/runtime/opencodeHistory`). And the rendered feed
+  // cannot leak onto the terminal: `getEffectiveAgentSurface` pins the
+  // runtime to the terminal surface and `commandAllowedByRenderedViewPolicy`
+  // hides every feed-only command for it, whatever `entries` holds.
+  if (!meta || !isAgentProviderKind(kind)) return
 
   if (!hasDurableProviderSession(meta)) {
     setRuntimes(prev => {
@@ -165,13 +177,27 @@ export async function loadInitialHistoryForSession({
 
   try {
     const releaseHistorySlot = await acquireInitialHistorySlot()
+    // WHY an async wrapper instead of `.finally()` on the IPC promise: if the
+    // bridge call throws before returning a promise (a missing or broken
+    // `window.api` method), `.finally` is never attached and the slot is
+    // never released. With two module-level slots, two such throws stall
+    // every later history load in the window, and nothing reports it. The
+    // slot still frees as soon as the history read settles, not after
+    // `gitWorktrees`.
+    const historyRead = (async () => {
+      try {
+        return await window.api.loadInitialHistory({
+          kind,
+          cwd: meta.cwd,
+          providerSessionId: meta.providerSessionId,
+          limit,
+        })
+      } finally {
+        releaseHistorySlot()
+      }
+    })()
     const [chunk, worktreesResult] = await Promise.all([
-      window.api.loadInitialHistory({
-        kind,
-        cwd: meta.cwd,
-        providerSessionId: meta.providerSessionId,
-        limit,
-      }).finally(releaseHistorySlot),
+      historyRead,
       window.api.gitWorktrees(meta.cwd),
     ])
     const worktrees = worktreesResult.ok ? worktreesResult.worktrees : []

@@ -27,14 +27,23 @@ import {
   type ReplayStep,
 } from 'opencode-terminal-headless/testing/index'
 
+import { createOpencodeHistorySource } from '@providers/opencode/runtime/opencodeHistory'
 import { OpencodeTerminalSession } from '@providers/opencode/runtime/opencodeTerminalSession'
 import type { ConditionCustomAction } from '@shared/types/providerConditions'
+import type { Entry } from '@shared/types/transcript'
 import { createFakeSessionFeed, type FakeSessionFeed } from '@renderer/features/sessionFeed/FakeSessionFeed'
 import { entryTextContent } from '@renderer/session-runtime/entries'
 import { emptyRuntime, type SessionRuntime } from '@renderer/session-runtime/state'
+import {
+  commandAllowedByRenderedViewPolicy,
+  getEffectiveAgentSurfaceForSession,
+  type RenderedViewPolicy,
+} from '@renderer/workspace/agentDisplayMode'
 import { dispatchAttentionLabelFromConditions } from '@renderer/workspace/conditions/selectors'
+import { loadInitialHistoryForSession } from '@renderer/workspace/hook/actions/initialHistory'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import { listOrchestrationAgents } from '@renderer/workspace/orchestrationMcp'
+import { seedResumedRuntimeFields } from '@renderer/workspace/providerSessionIdentity'
 import type { SessionId, SessionMeta, WorkspaceState } from '@renderer/workspace/types'
 
 import { makeWorkspaceRefsForTest } from './testing/workspaceRefsForTest'
@@ -97,8 +106,8 @@ type View = {
   lifecycle: string | undefined
 }
 
-function mountPane(recording: LiveFixture) {
-  const meta = {
+function paneMeta(recording: LiveFixture): SessionMeta {
+  return {
     cwd: '/sandbox/project',
     kind: 'opencode',
     providerRuntime: 'terminal',
@@ -109,6 +118,10 @@ function mountPane(recording: LiveFixture) {
     orchestrationRunId: 'run-1',
     orchestrationRole: 'child',
   } as unknown as SessionMeta
+}
+
+function mountPane(recording: LiveFixture) {
+  const meta = paneMeta(recording)
   let state = { sessions: { [SESSION_ID]: meta } } as unknown as WorkspaceState
   let runtimes: Record<SessionId, SessionRuntime> = { [SESSION_ID]: emptyRuntime() }
   let refs!: WorkspaceRefs
@@ -152,7 +165,7 @@ function mountPane(recording: LiveFixture) {
       lifecycle: record?.lifecycleState,
     }
   }
-  return { feed, runtime: () => runtimes[SESSION_ID]!, view }
+  return { feed, meta, refs: () => refs, setRuntimes: commitRuntimes, runtime: () => runtimes[SESSION_ID]!, view }
 }
 
 // Forward AgentSession events exactly as SessionManager's forwarder does, in
@@ -208,7 +221,7 @@ async function runPane(recording: LiveFixture) {
   await waitUntil(() => connected, 5000, 'live channel')
   await waitUntil(() => server.calls.some(call => call.path === '/question'), 5000, 're-sync')
   await settle(20)
-  return { pane, timeline, session, writer, server, pty, script: buildReplayScript(recording) }
+  return { pane, timeline, session, writer, server, pty, dbPath, script: buildReplayScript(recording) }
 }
 
 const recordedPrompt = (recording: LiveFixture) => recording.prompts[0]!.text
@@ -297,5 +310,99 @@ describe('an OpenCode Terminal pane driven by a recorded TUI session, end to end
     expect(pane.view().sessionStatus).not.toBe('running')
     expect(pane.view().streamPhase).toBe('idle')
     expect(pane.view().lifecycle).toBe('closed')
+  })
+})
+
+// After a reload, a restart or a park, the pane's conversation comes back
+// from OpenCode's database through the real history source — the path main's
+// history loader delegates to — and the real renderer loader. The oracle is
+// what the SAME pane showed live for the same recorded session: a reloaded
+// agent must read (to the user's features and to MCP) exactly as it did
+// before the reload, and the TUI must keep the pane.
+
+type Seen = { uuid: string | undefined; type: string; text: string | null }
+const seen = (entries: readonly Entry[]): Seen[] =>
+  entries.map(entry => ({ uuid: (entry as { uuid?: string }).uuid, type: entry.type, text: entryTextContent(entry) }))
+
+function serveHistoryFrom(dbPath: string) {
+  const source = createOpencodeHistorySource({ resolveDbPath: async () => dbPath })
+  cleanups.push(() => source.release())
+  const loadInitialHistory = vi.fn((request: { cwd: string; providerSessionId: string; limit: number }) =>
+    source.loadHistoryChunk({ cwd: request.cwd, providerSessionId: request.providerSessionId, limit: request.limit }))
+  Object.defineProperty(window, 'api', {
+    configurable: true,
+    value: { ...window.api, loadInitialHistory },
+  })
+  return loadInitialHistory
+}
+
+describe('an OpenCode Terminal pane after a reload', () => {
+  it('loads the conversation it showed live, and still never mounts the rendered feed', async () => {
+    const recording = loadLiveFixture('queued.json')
+    const live = await runPane(recording)
+    await playReplay(live.script, live.writer, live.server)
+    await waitUntil(() => live.pane.view().sessionStatus === 'idle' && live.timeline.some(view => view.sessionStatus === 'running'), 5000, 'turn end')
+    await settle(60)
+    const shownLive = seen(live.pane.runtime().entries)
+    expect(shownLive.some(entry => entry.type === 'assistant')).toBe(true)
+
+    // The reloaded pane: same metadata, a runtime seeded the way rehydrate
+    // seeds every durable agent (transcript `loading`).
+    const loadInitialHistory = serveHistoryFrom(live.dbPath)
+    const meta = paneMeta(recording)
+    let runtimes: Record<SessionId, SessionRuntime> = {
+      [SESSION_ID]: { ...emptyRuntime(), ...seedResumedRuntimeFields(undefined, meta) },
+    }
+    expect(runtimes[SESSION_ID]!.transcriptStatus).toBe('loading')
+    const refs = makeWorkspaceRefsForTest({ sessions: { [SESSION_ID]: meta } } as unknown as WorkspaceState)
+    refs.latestRuntimesRef.current = runtimes
+    await loadInitialHistoryForSession({
+      sessionId: SESSION_ID,
+      meta,
+      refs,
+      setRuntimes: updater => {
+        runtimes = typeof updater === 'function' ? updater(runtimes) : updater
+        refs.latestRuntimesRef.current = runtimes
+      },
+    })
+
+    expect(loadInitialHistory).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ kind: 'opencode', providerSessionId: recording.sessionID }))
+    const reloaded = runtimes[SESSION_ID]!
+    expect(reloaded.transcriptStatus).toBe('ready')
+    expect(reloaded.hasOlderHistory).toBe(false)
+    expect(seen(reloaded.entries)).toEqual(shownLive)
+
+    // The history is for the app, not for display: whatever the global view
+    // mode, the TUI keeps the pane and no feed-only command appears.
+    for (const globalMode of ['agent', 'hybrid', 'terminal'] as const) {
+      expect(getEffectiveAgentSurfaceForSession({ kind: 'opencode', providerRuntime: 'terminal', globalMode, override: undefined, runtime: reloaded })).toBe('terminal')
+    }
+    const feedPolicies: RenderedViewPolicy[] = [
+      { kind: 'requires-rendered-feed' },
+      { kind: 'opens-rendered-feed' },
+      { kind: 'leases-rendered-feed', feature: 'copy-assistant-message' },
+    ]
+    for (const policy of feedPolicies) {
+      expect(commandAllowedByRenderedViewPolicy({ policy, kind: 'opencode', providerRuntime: 'terminal', mode: 'agent', runtime: reloaded })).toBe(false)
+    }
+  })
+
+  it('adds nothing when history lands on a pane the live stream already filled', async () => {
+    // The spawn race (history resolving after the first live entries) and
+    // the MCP read's hydrate of a live pane both take this path.
+    const recording = loadLiveFixture('plain.json')
+    const live = await runPane(recording)
+    await playReplay(live.script, live.writer, live.server)
+    await waitUntil(() => live.pane.view().sessionStatus === 'idle' && live.timeline.some(view => view.sessionStatus === 'running'), 5000, 'turn end')
+    await settle(60)
+    const before = seen(live.pane.runtime().entries)
+
+    serveHistoryFrom(live.dbPath)
+    await act(async () => {
+      await loadInitialHistoryForSession({ sessionId: SESSION_ID, meta: live.pane.meta, refs: live.pane.refs(), setRuntimes: live.pane.setRuntimes })
+    })
+
+    expect(seen(live.pane.runtime().entries)).toEqual(before)
+    expect(live.pane.runtime().transcriptStatus).toBe('ready')
   })
 })

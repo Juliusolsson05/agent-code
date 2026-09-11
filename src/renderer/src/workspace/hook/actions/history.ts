@@ -49,11 +49,11 @@ export function useHistoryActions(
       }
 
       const kind = meta.kind ?? DEFAULT_PROVIDER
-      if (
-        !isAgentProviderKind(kind) ||
-        meta.providerRuntime === 'terminal' ||
-        !meta.providerSessionId
-      ) {
+      // No providerRuntime check: a terminal-runtime pane never mounts the
+      // Feed that pages, but its runtime holds the same durable history as
+      // any agent's (see loadInitialHistoryForSession), so a caller that
+      // does page it gets the same answer.
+      if (!isAgentProviderKind(kind) || !meta.providerSessionId) {
         span.end({ skipped: 'unsupported-or-missing-provider-session', kind })
         return
       }
