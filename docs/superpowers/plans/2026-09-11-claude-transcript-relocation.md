@@ -1,6 +1,6 @@
 # Claude worktree transcript continuity
 
-Status: implementation planned.
+Status: implemented and locally verified; coordinated PR review/CI next.
 
 ## Problem and constraints
 
@@ -20,4 +20,11 @@ Package system tests own resolver/watcher behavior. App system tests own history
 
 ## Completion record
 
-Update with final design decisions, checks, limitations, linked Issues and PRs before delivery.
+Issue: https://github.com/Juliusolsson05/agent-code/issues/883. Package fix: https://github.com/Juliusolsson05/claude-code-headless/pull/58 (commit dc352b7). This resolves a specific relocation cause within #290, not that issue's entire disconnected-transcript scope.
+
+- The package owns exact-session discovery and cursor-preserving relocation. Agent Code consumes its public resolver for initial/older history and rewind/provider-switch source reads, while new projected transcripts still write to their target cwd.
+- Fresh assigned UUIDs explicitly allow a missing first file. Missing resumed transcripts reject startup/history loading; startup rollback disposes the constructed headless instance as well as its PTY.
+- Six new app system cases exercise real filesystem reads, the real headless package, screen parsing and durable prompt delivery through public APIs. Only the OS/provider process boundary is simulated. Assertions include exactly one Enter, no copied user replay, missing-resume failure, fresh startup and rewind source resolution.
+- Targeted regression cases were observed red before the fixes. Final targeted verification passes 79 tests across 11 files. Typecheck, contract, retained worktree fixtures, keybindings, live-resume-probe types, conditions-core sync and the complete application build/output verification pass.
+- The broad app coverage run passed 3,185 tests and failed only the known personal-transcript dependency tracked by #641. That same test fails on untouched main; it is unchanged here. The final additional rewind-source case and affected suites pass separately. Package check/coverage passes all 132 tests.
+- Local verification used Node 25.5.0; CI supplies supported-version checks. No signed release or full live native CLI/UI run was performed. The resolver was also checked read-only against the actual incident file; private captures are not committed. No merge is authorized.
