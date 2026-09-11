@@ -60,14 +60,18 @@ vi.mock('@renderer/workspace/dispatch/DispatchAgentList', () => ({
     <div data-testid="lane-empty">{message}</div>
   ),
 }))
-// The strip is mocked down to what the LAYOUT owns about it: which lane's
-// selection it was handed (the only way to tell one lane's strip from
-// another's, since the fixture's lanes hold distinct agents), whether its
-// expand control is wired, and where the layout's own `onSelect` closure sends
-// a pick. Chip rendering is DispatchColorFlags.renderer.test.tsx's job.
+// The strip is mocked down to what the LAYOUT owns about it:
+// - which lane's selection it was handed (the only way to tell one lane's
+//   strip from another's, since the fixture's lanes hold distinct agents);
+// - which grid row's binding it was handed;
+// - where the layout's own `onSelect` and `onToggleExpandedParent` closures
+//   send a pick or an expand.
+// Chip rendering is DispatchColorFlags.renderer.test.tsx's job, and the row
+// filtering the real strip applies is rowScopedRows.test.ts's.
 vi.mock('@renderer/workspace/dispatch/DispatchMiniList', () => ({
-  DispatchMiniList: ({ rows, selectedSessionId, onSelect, onToggleExpandedParent }: {
+  DispatchMiniList: ({ rows, gridRow, selectedSessionId, onSelect, onToggleExpandedParent }: {
     rows: { sessionId: string }[]
+    gridRow?: { projectTabIds?: string[] }
     selectedSessionId?: string
     onSelect: (row: { sessionId: string }) => void
     onToggleExpandedParent?: (id: string) => void
@@ -81,11 +85,22 @@ vi.mock('@renderer/workspace/dispatch/DispatchMiniList', () => ({
         data-testid="lane-strip"
         data-selected={selectedSessionId ?? ''}
         data-pick={pick?.sessionId ?? ''}
-        data-can-expand={onToggleExpandedParent ? 'true' : 'false'}
+        data-project={(gridRow?.projectTabIds ?? []).join(',')}
         onClick={() => {
           if (pick) onSelect(pick)
         }}
-      />
+      >
+        {/* Stands in for the strip's "+N more" control. It stops propagation
+            so that expanding never doubles as a chip pick. */}
+        <button
+          type="button"
+          data-testid="lane-strip-expand"
+          onClick={event => {
+            event.stopPropagation()
+            onToggleExpandedParent?.('parent-under-cap')
+          }}
+        />
+      </div>
     )
   },
 }))
@@ -104,6 +119,7 @@ const FIXTURE = JSON.parse(
 function renderGrid(tiled: TiledDispatchState) {
   const selectTiledLaneSession = vi.fn().mockResolvedValue(undefined)
   const setTiledFocusedLane = vi.fn()
+  const toggleDispatchRowExpandedParent = vi.fn()
   const state: WorkspaceState = {
     ...FIXTURE.state,
     dispatchMode: { ...FIXTURE.state.dispatchMode!, scope: 'global', tiled },
@@ -122,7 +138,7 @@ function renderGrid(tiled: TiledDispatchState) {
     setDispatchRowIndexFraction: vi.fn(),
     setDispatchLaneWeights: vi.fn(),
     setDispatchRowCapChildren: vi.fn(),
-    toggleDispatchRowExpandedParent: vi.fn(),
+    toggleDispatchRowExpandedParent,
   } as unknown as Workspace
   return {
     ...render(
@@ -135,7 +151,18 @@ function renderGrid(tiled: TiledDispatchState) {
     ),
     selectTiledLaneSession,
     setTiledFocusedLane,
+    toggleDispatchRowExpandedParent,
   }
+}
+
+/** The strip handed `sessionId` as its lane's selection. Fails loudly unless
+ *  exactly one strip matches: identifying a lane by its agent relies on the
+ *  fixture's lanes holding distinct agents, and a silent first match would let
+ *  a changed fixture click the wrong lane's strip and still pass. */
+function stripSelecting(strips: HTMLElement[], sessionId: string): HTMLElement {
+  const matches = strips.filter(strip => strip.getAttribute('data-selected') === sessionId)
+  expect(matches).toHaveLength(1)
+  return matches[0]!
 }
 
 const laneIds = FIXTURE.state.dispatchMode!.tiled!.lanes.map(
@@ -184,45 +211,61 @@ describe('Grid Dispatch layout', () => {
     }
   })
 
-  it('swaps the first lane from its own strip while another lane has focus', () => {
-    // The navigation #850 restores. With focus in lane 1, the row's index would
-    // fill lane 1, so lane 0's strip is the only one-click way to change lane 0.
-    // It has to write lane 0 (not the focused lane) through the waking path,
-    // and move focus there, because picking an agent for a lane means working
-    // in it next. Selecting by its current agent is what identifies lane 0's
-    // strip: the fixture's lanes hold distinct agents.
-    const { getAllByTestId, selectTiledLaneSession, setTiledFocusedLane } = renderGrid({
-      lanes: laneIds.map(id => ({ selectedSessionId: id })),
-      rows: [{ length: 2 }, { length: 2 }],
-      focusedLane: 1,
-    })
+  it('writes each strip s own lane and focuses it, wherever focus is', () => {
+    // The navigation #850 restores: a strip is the selector addressed to ONE
+    // lane, so a pick must land in that lane (through the waking path) and move
+    // focus there, never into whichever lane happens to be focused. The first
+    // case is the #850 gesture itself. With focus in lane 1, the row's index
+    // would fill lane 1, so lane 0's strip is the only one-click way to change
+    // lane 0.
+    //
+    // Why three cases: in flat lane 0, `laneIndex`, `column` and `start` are
+    // all 0, so a strip wired to the wrong one would pass there. Lane 2 (row 1,
+    // column 0, focus in the other row) catches `column`. Lane 3 (row 1,
+    // column 1, focus in the same row) catches `start` and `grid.focusedLane`.
+    const cases = [
+      { lane: 0, focusedLane: 1 },
+      { lane: 2, focusedLane: 1 },
+      { lane: 3, focusedLane: 2 },
+    ]
+    for (const { lane, focusedLane } of cases) {
+      const { getAllByTestId, selectTiledLaneSession, setTiledFocusedLane } = renderGrid({
+        lanes: laneIds.map(id => ({ selectedSessionId: id })),
+        rows: [{ length: 2 }, { length: 2 }],
+        focusedLane,
+      })
 
-    const firstLaneStrip = getAllByTestId('lane-strip')
-      .find(strip => strip.getAttribute('data-selected') === laneIds[0])
-    expect(firstLaneStrip).toBeDefined()
-    const picked = firstLaneStrip!.getAttribute('data-pick')
-    expect(picked).toBeTruthy()
-    firstLaneStrip!.click()
+      const strip = stripSelecting(getAllByTestId('lane-strip'), laneIds[lane]!)
+      const picked = strip.getAttribute('data-pick')
+      expect(picked).toBeTruthy()
+      strip.click()
 
-    expect(selectTiledLaneSession).toHaveBeenCalledTimes(1)
-    expect(selectTiledLaneSession).toHaveBeenCalledWith(0, picked)
-    expect(setTiledFocusedLane).toHaveBeenCalledTimes(1)
-    expect(setTiledFocusedLane).toHaveBeenCalledWith(0)
+      expect(selectTiledLaneSession.mock.calls).toEqual([[lane, picked]])
+      expect(setTiledFocusedLane.mock.calls).toEqual([[lane]])
+      cleanup()
+    }
   })
 
-  it('wires the strip s expand control instead of shipping a dead button', () => {
-    // The strip renders "+N more" as a real button and optional-calls this
-    // handler. Omitting it shipped an affordance that promises an action and
-    // silently does nothing — in the exact case the cap exists for.
-    const { getAllByTestId } = renderGrid({
+  it('expands a capped parent in the strip s own row', () => {
+    // The strip's "+N more" expands a parent in ITS row only (expandedParents
+    // is per-row state). Before, this test checked only that a handler was
+    // present, so a no-op handler, or one hardcoded to row 0, still passed and
+    // shipped a button that expands the wrong row or nothing at all. DOM order
+    // is row-major: two strips in row 0, then two in row 1.
+    const { getAllByTestId, toggleDispatchRowExpandedParent } = renderGrid({
       lanes: laneIds.map(id => ({ selectedSessionId: id })),
       rows: [{ length: 2 }, { length: 2 }],
       focusedLane: 0,
     })
 
-    for (const strip of getAllByTestId('lane-strip')) {
-      expect(strip.getAttribute('data-can-expand')).toBe('true')
-    }
+    for (const expand of getAllByTestId('lane-strip-expand')) expand.click()
+
+    expect(toggleDispatchRowExpandedParent.mock.calls).toEqual([
+      [0, 'parent-under-cap'],
+      [0, 'parent-under-cap'],
+      [1, 'parent-under-cap'],
+      [1, 'parent-under-cap'],
+    ])
   })
 
   it('renders uneven rows without evening them out', () => {
@@ -255,6 +298,23 @@ describe('Grid Dispatch layout', () => {
     expect(indexes[1]!.getAttribute('data-project')).toBe('')
   })
 
+  it('passes each strip its own row s project binding', () => {
+    // A strip lists what its ROW offers (rowScopedRows filters by the row's
+    // binding). If a strip were handed another row's descriptor, or none, it
+    // would offer agents its row's index excludes, and a pick from it would
+    // place a project-A agent in a row bound to project B. Row-major DOM order:
+    // row 0's two strips first.
+    const boundTab = FIXTURE.state.activeTabId
+    const { getAllByTestId } = renderGrid({
+      lanes: laneIds.map(id => ({ selectedSessionId: id })),
+      rows: [{ length: 2, projectTabIds: [boundTab] }, { length: 2 }],
+      focusedLane: 0,
+    })
+
+    expect(getAllByTestId('lane-strip').map(strip => strip.getAttribute('data-project')))
+      .toEqual([boundTab, boundTab, '', ''])
+  })
+
   it('selects through the waking path, never the raw lane writer', () => {
     // #690: rehydrate deliberately does not respawn detached sessions, so a
     // hibernated agent placed straight into a lane renders fine and then
@@ -281,8 +341,9 @@ describe('Grid Dispatch layout', () => {
     // With focus in row 0, clicking row 1's index must target row 1's first
     // lane (flat 2). Clicking a row's index means "I am working in this row
     // now", so it must never reach across into the row that happens to have
-    // focus. The earlier version of this test clicked row 0's index while focus
-    // was already in row 0, so it could not tell `focusedLaneInRow` from `start`.
+    // focus. This case cannot tell `focusedLaneInRow ?? start` from a bare
+    // `start` (focus is outside the clicked row, so both give 2); the next test
+    // is the one that pins follow-focus.
     const { getAllByTestId, selectTiledLaneSession } = renderGrid({
       lanes: laneIds.map(id => ({ selectedSessionId: id })),
       rows: [{ length: 2 }, { length: 2 }],
@@ -293,6 +354,25 @@ describe('Grid Dispatch layout', () => {
 
     expect(selectTiledLaneSession).toHaveBeenCalledTimes(1)
     expect(selectTiledLaneSession.mock.calls[0]![0]).toBe(2)
+  })
+
+  it('fills the focused lane from a row s index when focus is already in that row', () => {
+    // The premise of #850. The index follows focus within its row, so it is no
+    // single lane's selector, and every lane needs its own strip for that
+    // reason. If the index ever goes back to always filling the row's first
+    // lane, this fails. At that point the first lane's strip is a duplicate
+    // selector and #850's reasoning should be revisited, not silently kept.
+    const { getAllByTestId, selectTiledLaneSession, setTiledFocusedLane } = renderGrid({
+      lanes: laneIds.map(id => ({ selectedSessionId: id })),
+      rows: [{ length: 2 }, { length: 2 }],
+      focusedLane: 1,
+    })
+
+    getAllByTestId('row-index')[0]!.click()
+
+    expect(selectTiledLaneSession).toHaveBeenCalledTimes(1)
+    expect(selectTiledLaneSession.mock.calls[0]![0]).toBe(1)
+    expect(setTiledFocusedLane.mock.calls).toEqual([[1]])
   })
 
   it('gives a row bound to two projects both their index sections', () => {
