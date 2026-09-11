@@ -8,9 +8,12 @@ import { CodeRenderContext } from '@renderer/features/feed/context'
 import { SafeInlineCode } from '@renderer/features/rendered-content/SafeInlineCode'
 import { SafeMarkdownLink } from '@renderer/features/rendered-content/SafeMarkdownLink'
 import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
-import { extractAssistantInProgress } from '@shared/parsers/extractAssistant'
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
-import { assistantUuidsWithText, extractAssistantByUuid } from '@renderer/lib/copyAssistant'
+import { useLedgerFeedItems } from '@renderer/features/feed/ledger/useLedgerFeedItems'
+import {
+  readerMessagesFromFeedItems,
+  type ReaderMessage,
+} from '@renderer/features/reader/model/readerMessages'
 import { resolveTabSessions } from '@renderer/workspace/queries'
 import { useSessionRuntime } from '@renderer/workspace/useSessionRuntime'
 import { dispatchSessionIdsForTab } from '@renderer/workspace/dispatch/dispatchSelectors'
@@ -19,10 +22,11 @@ import { PaneToast } from '@renderer/workspace/tile-tree/TileLeaf/PaneToast'
 
 // ReaderView — single-message read mode for a focused session.
 //
-// Renders ONLY the most recent assistant text (markdown, no tool
-// chrome, no composer, no streaming card scaffolding). Live-updates
-// while the agent is still typing by switching to the streaming
-// extractor; falls back to the JSONL-derived final text otherwise.
+// Renders one assistant message at a time (markdown, no tool chrome, no
+// composer), paging through exactly the assistant prose the session's Feed
+// paints: committed transcript text plus the ledger's live semantic text
+// while a turn streams. See features/reader/model/readerMessages.ts for why
+// that is the only source — Reader never reads the terminal screen (#855).
 //
 // The point: when the user has 5 panes open and just wants to read
 // the plan one specific agent wrote, dropping into Reader Mode gives
@@ -85,12 +89,6 @@ const MARKDOWN_COMPONENTS: import('react-markdown').Options['components'] = {
   a: SafeMarkdownLink,
 }
 
-type ReaderAssistantMessage = {
-  id: string
-  text: string
-  live: boolean
-}
-
 type Props = {
   workspace: Workspace
 }
@@ -138,15 +136,11 @@ function ReaderBody({
 }) {
   const runtime = useSessionRuntime(workspace, sessionId)
   const meta = workspace.state.sessions[sessionId]
-  // Use the pane's actual provider for the screen extractor rather than
-  // the old `=== 'codex' ? 'codex' : 'claude'` negation, which collapsed
-  // opencode (a registered provider since phase 7) to Claude. This is
-  // Structured OpenCode has no PTY and supplies semantic SSE text. OpenCode
-  // Terminal is deliberately forced onto its raw surface, so there is still no
-  // supported OpenCode screen-scraping path here. Keeping the real provider is
-  // nevertheless important: a future parser must be an explicit exhaustive
-  // addition rather than silently receiving Claude's rules. Terminal / unknown
-  // kinds fall back to the default provider.
+  // The pane's real provider, never a `=== 'codex' ? 'codex' : 'claude'`
+  // negation (that collapsed opencode to Claude). It selects the provider
+  // capabilities the ledger uses to correlate committed tool carriers, which
+  // decides whether an entry paints. Terminal / unknown kinds are filtered out
+  // by ReaderView above; the default only covers pre-kind persisted sessions.
   const provider = isAgentProviderKind(meta?.kind) ? meta.kind : DEFAULT_PROVIDER
   const workspaceRoot = meta?.cwd ?? null
   const reader = workspace.readerMode
@@ -154,52 +148,31 @@ function ReaderBody({
     ? reader.focusedSessionId
     : sessionIds[0] ?? sessionId
 
-  // Semantic-channel live text for this session. Preferred over the
-  // screen extractor: when proxy is on this is decrypted Anthropic
-  // text and arrives as markdown-ready prose; when proxy is off the
-  // channel STILL fires (source='screen'), so we get screen text
-  // without calling the extractor directly. Returns null when no
-  // turn is currently streaming.
-  const semanticLive = runtime.semantic.currentTurn
-  const hasLiveActivity = runtime.sessionStatus === 'running'
-
-  const messages = useMemo<ReaderAssistantMessage[]>(() => {
-    const historical = assistantUuidsWithText(runtime.entries)
-      .map(uuid => {
-        const text = extractAssistantByUuid(runtime.entries, uuid)
-        if (!text) return null
-        return { id: uuid, text, live: false }
-      })
-      .filter((message): message is ReaderAssistantMessage => message !== null)
-
-    if (hasLiveActivity) {
-      // Prefer the semantic channel; fall back to the direct screen
-      // extractor when no semantic event has arrived yet. The screen
-      // fallback catches the edge case where a session was spawned
-      // through an older code path that doesn't emit semantic events
-      // yet — shouldn't happen in production but keeps the reader
-      // from going blank during migrations.
-      const semanticText = semanticLive?.text?.trim() ?? ''
-      const live = semanticText
-        || (runtime.recentScreen
-          ? extractAssistantInProgress(runtime.recentScreen, provider)?.trim() ?? ''
-          : '')
-      if (live) {
-        const newest = historical[historical.length - 1]
-        if (!newest || newest.text !== live) {
-          historical.push({ id: '__live__', text: live, live: true })
-        }
-      }
-    }
-
-    return historical
-  }, [
-    hasLiveActivity,
-    runtime.entries,
-    runtime.recentScreen,
-    semanticLive?.text,
-    provider,
-  ])
+  // The same ledger plan the session's Feed paints, with the same arguments
+  // TileLeaf passes. WHY a second instance instead of sharing Feed's: Feed's
+  // plan lives inside the (hidden but still mounted, #752) TileLeaf and is not
+  // in the store; lifting it would be a cross-cutting refactor for one
+  // consumer. The ledger's per-mount caches keep this instance incremental, and
+  // it only exists while Reader is open on this one session.
+  //
+  // WHY no `sessionStatus === 'running'` gate any more: liveness is the
+  // ledger's `semantic-current` ownership, i.e. text in the turn the semantic
+  // runtime still holds open (streaming, or retained by the Claude fold while
+  // its tool results are pending). The old gate was what opened the
+  // screen-scrape path for every running turn that had no open text block —
+  // tool calls, waiting on background agents — which is the whole of #855.
+  const ledgerFeedPlan = useLedgerFeedItems(runtime, provider, sessionId, {
+    toolUseIndex: runtime.toolUseIndex,
+    toolResultIndex: runtime.toolResultIndex,
+    version: runtime.toolIndexVersion,
+  })
+  // Keyed on the items array alone: the ledger returns the same array when
+  // nothing it reads changed (D11 identity chain), so unrelated runtime ticks
+  // (screen frames, scroll state) no longer rebuild Reader's message list.
+  const messages = useMemo<ReaderMessage[]>(
+    () => readerMessagesFromFeedItems(ledgerFeedPlan.items),
+    [ledgerFeedPlan.items],
+  )
 
   const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null)
   const selectedMessageIdRef = useRef<string | null>(null)
@@ -223,10 +196,10 @@ function ReaderBody({
       return
     }
     if (messages.some(message => message.id === previous)) return
-    // Whatever we were pointing at (a real uuid that's gone, or the
-    // transient '__live__' sentinel whose text was just archived
-    // into a historical entry) — snap to the newest message. These
-    // two cases used to be split, but they both land here.
+    // Whatever we were pointing at is gone: an entry that left the loaded
+    // window, or a live semantic block the ledger just handed over to its
+    // committed entry (the item key changes from `semantic-block:…` to
+    // `entry:…` at that moment). Both land on the newest message.
     setSelectedMessageId(messages[messages.length - 1]!.id)
   }, [messages])
 
@@ -244,8 +217,8 @@ function ReaderBody({
 
   // WHY selection is read through refs inside the keydown handler
   // instead of closing over `messages`/`selectedIndex` directly:
-  //   messages recomputes on every semantic text delta (a new
-  //   `__live__` entry is pushed per frame). Closing over
+  //   messages recomputes on every semantic text delta (the live
+  //   block's text grows per frame). Closing over
   //   `selectOlder`/`selectNewer` callbacks in the effect below
   //   would then re-register the document listener on every delta —
   //   not a crash, but a lot of `addEventListener`/`removeEventListener`
