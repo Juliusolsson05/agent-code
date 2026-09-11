@@ -1,0 +1,256 @@
+import { open, readdir, stat } from 'node:fs/promises'
+import { join } from 'node:path'
+
+import type { ConversationPrompt } from '@shared/conversations/types.js'
+import { asRecord, parseJsonRecord } from '@shared/lib/asRecord.js'
+import { sanitizePath } from '@shared/runtime/projectDir.js'
+import { streamJsonl } from '@shared/runtime/streamJsonl.js'
+import { performanceService } from '@main/performance/PerformanceService.js'
+import { extractPromptsFromFile } from '@main/conversations/prompts/promptFolder.js'
+import type { ClaudeHistoryIndex } from './claudeHistory.js'
+import type { ConversationSource, SourceConversation, SourceScope } from './types.js'
+
+// Claude Code stores one directory per cwd under ~/.claude/projects, named by
+// sanitizePath(cwd), and one `<uuid>.jsonl` per session inside it. There is
+// no cross-directory index, so discovery is: pick the directories the family
+// can own, stat every transcript, then read a bounded head and tail of each.
+//
+// WHY the head read is RECORD-bounded and not byte-bounded: modern transcripts
+// open with `last-prompt`, `mode`, `permission-mode`, `bridge-session` and
+// several multi-kilobyte `attachment` records (hook output, environment
+// snapshot, deferred tool list) before the first `user` record, which sits at
+// index 6–8 on the recorded corpus. A 16 KB byte head, the old lister's
+// assumption, can end inside those attachments. JSONL frames by line; so do
+// we, and we stop at the first six user texts or 200 records, whichever
+// comes first.
+//
+// WHY the tail read is BYTE-bounded: `ai-title`, `customTitle` and the newest
+// user timestamp are re-appended near the end of the file, so the last 64 KB
+// holds them; the first complete line inside the window is where parsing
+// starts.
+
+const HEAD_RECORD_LIMIT = 200
+const HEAD_USER_TEXTS = 6
+const TAIL_BYTES = 64 * 1024
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+type ClaudeSummary = {
+  cwd: string | null
+  gitBranch: string | null
+  createdAt: number | null
+  userTexts: string[]
+  aiTitle: string | null
+  customTitle: string | null
+  tailUserAt: number | null
+  empty: boolean
+}
+
+type SummaryCacheEntry = { mtimeMs: number; size: number; summary: ClaudeSummary }
+
+function userText(record: Record<string, unknown>): string | null {
+  if (record.type !== 'user') return null
+  if (record.isMeta === true) return null
+  if (record.isCompactSummary === true) return null
+  const message = asRecord(record.message)
+  if (!message || message.role !== 'user') return null
+  const content = message.content
+  if (typeof content === 'string') return content.trim() || null
+  if (!Array.isArray(content)) return null
+  for (const block of content) {
+    const b = asRecord(block)
+    if (b?.type === 'text' && typeof b.text === 'string' && b.text.trim()) return b.text.trim()
+  }
+  return null
+}
+
+function timestampOf(record: Record<string, unknown>): number | null {
+  const ts = typeof record.timestamp === 'string' ? Date.parse(record.timestamp) : NaN
+  return Number.isFinite(ts) ? ts : null
+}
+
+async function readHead(file: string): Promise<Pick<ClaudeSummary, 'cwd' | 'gitBranch' | 'createdAt' | 'userTexts'>> {
+  const out = { cwd: null as string | null, gitBranch: null as string | null, createdAt: null as number | null, userTexts: [] as string[] }
+  let records = 0
+  for await (const record of streamJsonl<Record<string, unknown>>(file)) {
+    if (!record) continue
+    records++
+    if (out.cwd === null && typeof record.cwd === 'string' && record.cwd) out.cwd = record.cwd
+    if (out.gitBranch === null && typeof record.gitBranch === 'string' && record.gitBranch) out.gitBranch = record.gitBranch
+    if (out.createdAt === null) out.createdAt = timestampOf(record)
+    const text = userText(record)
+    if (text) out.userTexts.push(text)
+    if (out.userTexts.length >= HEAD_USER_TEXTS || records >= HEAD_RECORD_LIMIT) break
+  }
+  return out
+}
+
+async function readTail(file: string, size: number): Promise<Pick<ClaudeSummary, 'aiTitle' | 'customTitle' | 'tailUserAt' | 'gitBranch'>> {
+  const out = { aiTitle: null as string | null, customTitle: null as string | null, tailUserAt: null as number | null, gitBranch: null as string | null }
+  if (size === 0) return out
+  const handle = await open(file, 'r')
+  try {
+    const start = Math.max(0, size - TAIL_BYTES)
+    const buf = Buffer.allocUnsafe(size - start)
+    let offset = 0
+    while (offset < buf.length) {
+      const { bytesRead } = await handle.read(buf, offset, buf.length - offset, start + offset)
+      if (bytesRead === 0) break
+      offset += bytesRead
+    }
+    let text = buf.subarray(0, offset).toString('utf8')
+    if (start > 0) {
+      const firstNewline = text.indexOf('\n')
+      text = firstNewline < 0 ? '' : text.slice(firstNewline + 1)
+    }
+    for (const line of text.split('\n')) {
+      if (!line.trim()) continue
+      const record = parseJsonRecord(line)
+      if (!record) continue
+      if (typeof record.aiTitle === 'string' && record.aiTitle.trim()) out.aiTitle = record.aiTitle.trim()
+      if (typeof record.customTitle === 'string' && record.customTitle.trim()) out.customTitle = record.customTitle.trim()
+      if (typeof record.gitBranch === 'string' && record.gitBranch) out.gitBranch = record.gitBranch
+      if (userText(record)) {
+        const ts = timestampOf(record)
+        if (ts !== null) out.tailUserAt = ts
+      }
+    }
+  } finally {
+    await handle.close()
+  }
+  return out
+}
+
+export class ClaudeConversationSource implements ConversationSource {
+  readonly provider = 'claude' as const
+  private readonly summaries = new Map<string, SummaryCacheEntry>()
+
+  constructor(private readonly deps: { projectsDir: string; history: ClaudeHistoryIndex }) {}
+
+  private async candidateDirs(scope: SourceScope): Promise<Array<{ dir: string; exact: boolean }>> {
+    let names: string[]
+    try {
+      names = (await readdir(this.deps.projectsDir, { withFileTypes: true })).filter(d => d.isDirectory()).map(d => d.name)
+    } catch {
+      return []
+    }
+    if (scope.scope === 'everywhere') return names.map(dir => ({ dir, exact: false }))
+    const sanitizedRoots = scope.family.rawRoots.map(sanitizePath)
+    const out: Array<{ dir: string; exact: boolean }> = []
+    for (const dir of names) {
+      const exact = sanitizedRoots.includes(dir)
+      // The `-` continuation catches `.worktrees/<name>` (`--worktrees-<name>`),
+      // `packages/<x>` and pruned worktrees; a transcript's recorded cwd then
+      // decides membership, so `<repo>-other` cannot slip in on the prefix.
+      if (exact || (scope.scope === 'repository' && sanitizedRoots.some(r => dir.startsWith(r + '-')))) out.push({ dir, exact })
+    }
+    return out
+  }
+
+  private async summarize(file: string, mtimeMs: number, size: number): Promise<ClaudeSummary> {
+    const cached = this.summaries.get(file)
+    if (cached && cached.mtimeMs === mtimeMs && cached.size === size) return cached.summary
+    const head = await readHead(file)
+    const tail = await readTail(file, size)
+    const summary: ClaudeSummary = {
+      cwd: head.cwd,
+      gitBranch: tail.gitBranch ?? head.gitBranch,
+      createdAt: head.createdAt,
+      userTexts: head.userTexts,
+      aiTitle: tail.aiTitle,
+      customTitle: tail.customTitle,
+      tailUserAt: tail.tailUserAt,
+      empty: size === 0,
+    }
+    this.summaries.set(file, { mtimeMs, size, summary })
+    return summary
+  }
+
+  async discover(scope: SourceScope): Promise<SourceConversation[]> {
+    const span = performanceService.span('conversations.claude.discover', { scope: scope.scope })
+    await this.deps.history.refresh()
+    const dirs = await this.candidateDirs(scope)
+    const rows: SourceConversation[] = []
+    const seen = new Set<string>()
+    for (const { dir, exact } of dirs) {
+      let names: string[]
+      try {
+        names = await readdir(join(this.deps.projectsDir, dir))
+      } catch {
+        continue
+      }
+      for (const name of names) {
+        if (!name.endsWith('.jsonl')) continue
+        const nativeId = name.slice(0, -6)
+        if (!UUID_RE.test(nativeId) || seen.has(nativeId)) continue
+        const file = join(this.deps.projectsDir, dir, name)
+        let s
+        try {
+          s = await stat(file)
+        } catch {
+          continue
+        }
+        const summary = await this.summarize(file, s.mtimeMs, s.size)
+        // Membership: the recorded cwd wins; a transcript that never recorded
+        // one (the 0-byte session) belongs only to an exactly-matching dir.
+        if (scope.scope !== 'everywhere') {
+          if (summary.cwd ? !scope.family.matches(summary.cwd) : !exact) continue
+        }
+        seen.add(nativeId)
+        const history = this.deps.history.bySession(nativeId)
+        const historyLast = history.length > 0 ? history[history.length - 1]!.timestamp : null
+        rows.push({
+          provider: 'claude',
+          nativeId,
+          cwd: summary.cwd,
+          gitBranch: summary.gitBranch,
+          customTitle: summary.customTitle,
+          aiTitle: summary.aiTitle,
+          userTexts: summary.userTexts,
+          createdAt: summary.createdAt,
+          lastUserActivityAt: historyLast ?? summary.tailUserAt,
+          activitySource: historyLast !== null ? 'history' : summary.tailUserAt !== null ? 'tail' : null,
+          mtime: s.mtimeMs,
+          promptCount: history.length > 0 ? history.length : null,
+          parentNativeId: null,
+          isNativeSubagent: false,
+          isExec: false,
+          originator: null,
+          origin: 'scan',
+          available: !summary.empty,
+          file,
+        })
+      }
+    }
+    span.end({ dirs: dirs.length, rows: rows.length })
+    return rows
+  }
+
+  async prompts(nativeId: string, cwd: string): Promise<ConversationPrompt[]> {
+    const direct = join(this.deps.projectsDir, sanitizePath(cwd), `${nativeId}.jsonl`)
+    let file: string | null = null
+    try {
+      await stat(direct)
+      file = direct
+    } catch {
+      // A conversation listed from a worktree dir is asked for with its own
+      // cwd, so the direct path is the common case; the walk is the rare one.
+      try {
+        for (const dir of await readdir(this.deps.projectsDir)) {
+          const candidate = join(this.deps.projectsDir, dir, `${nativeId}.jsonl`)
+          try {
+            await stat(candidate)
+            file = candidate
+            break
+          } catch {
+            // keep looking
+          }
+        }
+      } catch {
+        file = null
+      }
+    }
+    if (!file) return []
+    const { prompts } = await extractPromptsFromFile('claude', nativeId, file, 'all')
+    return prompts.map(p => ({ text: p.text, timestamp: p.ts }))
+  }
+}
