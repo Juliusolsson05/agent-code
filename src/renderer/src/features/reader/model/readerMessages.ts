@@ -40,6 +40,18 @@ export type ReaderMessage = {
    *  results are pending, and treating that finished text as live pinned a
    *  reader to the bottom of a message that would never grow again. */
   live: boolean
+  /** The provider message this text belongs to: a committed entry's
+   *  `message.id`, or a semantic item's turn id. For Claude the two are the
+   *  same value — the ledger suppresses a finished semantic turn by exactly
+   *  that match (ownership.ts whole-turn rule) — which is how
+   *  readerSelection.ts follows a page into an entry that joins several pages
+   *  and so matches none of their texts. Null when the entry carries no id. */
+  sourceId: string | null
+}
+
+function entrySourceId(entry: FeedRenderItem & { type: 'entry' }): string | null {
+  const id = (entry.entry as { message?: { id?: unknown } }).message?.id
+  return typeof id === 'string' ? id : null
 }
 
 // assistantEntryText joins every text block of an entry; during streaming the
@@ -74,7 +86,7 @@ export function readerMessagesFromFeedItems(
         // User prompts, system rows and tool-only assistant carriers return
         // null here. Reader is a reading view of what the agent SAID.
         const text = memoAssistantEntryText(item)
-        if (text) messages.push({ id: item.key, text, live: false })
+        if (text) messages.push({ id: item.key, text, live: false, sourceId: entrySourceId(item) })
         break
       }
       case 'semantic-text': {
@@ -82,7 +94,14 @@ export function readerMessagesFromFeedItems(
         // There is no block to ask whether it finished, so the open turn is
         // the best liveness signal these producers give.
         const text = item.text.trim()
-        if (text) messages.push({ id: item.key, text, live: item.owner === 'semantic-current' })
+        if (text) {
+          messages.push({
+            id: item.key,
+            text,
+            live: item.owner === 'semantic-current',
+            sourceId: item.turnId,
+          })
+        }
         break
       }
       case 'semantic-block': {
@@ -95,6 +114,7 @@ export function readerMessagesFromFeedItems(
             id: item.key,
             text,
             live: item.owner === 'semantic-current' && blockStillGrowing(item.block),
+            sourceId: item.turnId,
           })
         }
         break

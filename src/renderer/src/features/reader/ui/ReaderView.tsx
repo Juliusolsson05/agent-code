@@ -192,6 +192,13 @@ function ReaderBody({
   // message (see ReaderSelection.moved): user navigation, a session switch,
   // following the agent onto a new page. A message growing, finishing, or being
   // handed to its committed twin keeps the user's scroll position.
+  //
+  // `stickToBottom` is declared here, ahead of the selection, because it is
+  // also the "is the reader following the agent" input to the selection rule:
+  // it is set when the reader lands on a growing message, cleared when they
+  // scroll up or land on a finished one, and it survives the pinned message
+  // finishing. Only a following reader is carried onto new pages.
+  const [stickToBottom, setStickToBottom] = useState(true)
   const [selection, setSelection] = useState<{
     messages: readonly ReaderMessage[]
     sessionId: SessionId
@@ -204,16 +211,27 @@ function ReaderBody({
     scrollResetToken: 0,
   }))
   if (selection.messages !== messages || selection.sessionId !== sessionId) {
-    const next = selection.sessionId !== sessionId
+    const sessionChanged = selection.sessionId !== sessionId
+    const next = sessionChanged
       // A different session's list has no relation to the old selection.
       ? { id: messages[messages.length - 1]?.id ?? null, moved: true }
-      : nextReaderSelection(selection.messages, selection.id, messages)
-    setSelection({
-      messages,
-      sessionId,
-      id: next.id,
-      scrollResetToken: next.moved ? selection.scrollResetToken + 1 : selection.scrollResetToken,
-    })
+      : nextReaderSelection(selection.messages, selection.id, messages, stickToBottom)
+    // WHY state is written only when the answer changes: a render-phase update
+    // re-renders immediately, so writing on every new `messages` identity would
+    // never settle if a caller ever handed Reader an unstable list (a test
+    // fixture whose getRuntime built a fresh runtime per call did exactly that
+    // and hit "Too many re-renders"). The cost is that `selection.messages` can
+    // lag behind a list that changed without changing the selection; the rule
+    // only uses it to tell new pages and departed pages apart, and navigation
+    // below refreshes it.
+    if (sessionChanged || next.id !== selection.id || next.moved) {
+      setSelection({
+        messages,
+        sessionId,
+        id: next.id,
+        scrollResetToken: next.moved ? selection.scrollResetToken + 1 : selection.scrollResetToken,
+      })
+    }
   }
   const selectedMessageId = selection.id
   const scrollResetToken = selection.scrollResetToken
@@ -245,11 +263,13 @@ function ReaderBody({
   selectedIndexRef.current = selectedIndex
 
   // Explicit navigation is always a move to a different message, so it resets
-  // the scroll like any other landing. The list it was chosen from is the one
-  // the selection already tracks, so only the id and the token change.
+  // the scroll like any other landing. It also records the list the id was
+  // chosen from: the selection rule looks the selected id up in
+  // `selection.messages`, which may lag (see above) and might not contain it.
   const selectMessage = useCallback((id: string) => {
     setSelection(current => ({
       ...current,
+      messages: messagesRef.current,
       id,
       scrollResetToken: current.scrollResetToken + 1,
     }))
@@ -271,7 +291,6 @@ function ReaderBody({
   // sticky-bottom heuristic as the Feed component but simpler because
   // there's only one growing block, not a list of entries.
   const scrollerRef = useRef<HTMLDivElement>(null)
-  const [stickToBottom, setStickToBottom] = useState(true)
   const lastScrollTopRef = useRef(0)
   const selectedMessageRef = useRef(selectedMessage)
   selectedMessageRef.current = selectedMessage

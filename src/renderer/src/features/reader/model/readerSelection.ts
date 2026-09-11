@@ -8,88 +8,149 @@ import type { ReaderMessage } from '@renderer/features/reader/model/readerMessag
 // ReaderView did until the PR #861 review):
 //
 // Reader's list comes from the render ledger (see readerMessages.ts), and the
-// ledger reshapes it in two ways an id check cannot follow:
+// ledger reshapes it in ways an id check cannot follow:
 //
 //   1. A live turn grows NEW pages. A Claude turn that writes text, calls a
 //      tool, then writes more text produces a second `semantic-block` message.
-//      A reader who was keeping up with the agent (sitting on the newest
-//      message) has to be carried onto it, or Reader freezes on the first page
-//      while the answer continues underneath.
+//      A reader who is keeping up with the agent has to be carried onto it, or
+//      Reader freezes on the first page while the answer continues underneath.
 //
 //   2. A message changes id without changing content. A finished turn waits in
 //      semantic history until its JSONL line lands (a soak bundle measured ~19s
-//      of lag), then the ledger hands its text to the committed entry: the id
-//      goes from `semantic-block:<turn>:<i>` to `entry:<uuid>`. Treating that
-//      as "the message vanished" threw a reader who had paged back to it onto
-//      the live end of the conversation.
+//      of lag), then the ledger hands it to the committed entry: the id goes
+//      from `semantic-block:<turn>:<i>` to `entry:<uuid>`. For Claude that
+//      handoff is by identity (committed `message.id` == turn id), so one
+//      joined entry can replace several pages at once, and its text equals none
+//      of them.
 //
-// The old screen-sourced Reader never hit either case: its single `__live__`
-// sentinel absorbed every live page, and every older message was a committed
+//   3. Position is not recency. The ledger stamps every block of the current
+//      turn with the turn's start time and a committed line with its own later
+//      time, so block 0's entry can sort BELOW the still-streaming block 2.
+//      "The last message in the list" is therefore not "the newest content",
+//      and a rule that follows the list's end pulls the reader backwards.
+//
+// So the rule reasons about what is genuinely NEW (ids that were not in the
+// previous list and are not the committed copy of something that just left it)
+// and follows only a reader who is actually following — the view's
+// stick-to-bottom state, which is set when the reader lands on a growing
+// message and cleared when they scroll away or land on a finished one. A reader
+// half-way down a finished plan keeps their place when the next turn starts.
+//
+// The old screen-sourced Reader never faced any of this: its single `__live__`
+// sentinel absorbed every live page and every older message was a committed
 // uuid that could not change. Those were properties of a sentinel that also
-// painted Claude's background-agent panel as the answer (#855), so the rule has
-// to be explicit now.
+// painted Claude's background-agent panel as the answer (#855).
 // ---------------------------------------------------------------------------
 
 export type ReaderSelection = {
   id: string | null
   /** True when the reader is now looking at a DIFFERENT message, so the view
-   *  should start it from the top. A handoff of the same text to its committed
-   *  twin, or a message growing in place, is not a move: resetting the scroll
-   *  there yanked the user out of the paragraph they were reading. */
+   *  should start it from the top. A message growing, finishing, or being
+   *  handed to its committed copy is not a move: resetting the scroll there
+   *  yanked the user out of the paragraph they were reading. */
   moved: boolean
 }
 
+/**
+ * @param previous  the list the current selection was made against
+ * @param previousId the selected message id in that list
+ * @param next      the new list
+ * @param following whether the reader is pinned to the growing end (the view's
+ *                  stick-to-bottom state)
+ *
+ * Idempotent by construction: reconciling again with the result's id against
+ * the same `previous` returns that id with `moved: false`. ReaderView relies on
+ * that — it reconciles during render and re-renders immediately after applying
+ * the result, so a second, different answer would loop the render.
+ */
 export function nextReaderSelection(
   previous: readonly ReaderMessage[],
   previousId: string | null,
   next: readonly ReaderMessage[],
+  following: boolean,
 ): ReaderSelection {
   const newest = next[next.length - 1]
   if (!newest) return { id: null, moved: previousId !== null }
   if (previousId === null) return { id: newest.id, moved: true }
 
-  const previousIndex = previous.findIndex(message => message.id === previousId)
-  const selected = previousIndex >= 0 ? previous[previousIndex]! : null
-
-  // Following: the reader was on the newest message, so they stay on the
-  // newest one — whether it grew in place, gained a next page, or was handed
-  // to its committed twin. `continues` (not equality) because the last paint
-  // may have shown a partial live block before the final text and its JSONL
-  // entry landed in the same update.
-  if (selected && previousIndex === previous.length - 1) {
-    if (newest.id === previousId) return { id: previousId, moved: false }
-    return { id: newest.id, moved: !continues(selected.text, newest.text) }
+  const previousIds = new Set(previous.map(message => message.id))
+  const nextIds = new Set(next.map(message => message.id))
+  const departed = previous.filter(message => !nextIds.has(message.id))
+  // New content: not in the previous list, and not a committed copy of a page
+  // that just left it (same source message, or the same normalised text — the
+  // ledger's own handoff keys, see ownership.ts whole-turn and text rules).
+  const fresh = next.filter(message =>
+    !previousIds.has(message.id) &&
+    !departed.some(gone => sameSource(gone, message) || sameText(gone, message)),
+  )
+  // The most recently appended new page. Position among the fresh ones still
+  // tracks append order: the misordering above only moves committed copies,
+  // which are never fresh.
+  const newestFresh = fresh[fresh.length - 1]
+  const followOnto = (current: string): ReaderSelection | null => {
+    if (!following || !newestFresh) return null
+    return newestFresh.id === current
+      ? { id: current, moved: false }
+      : { id: newestFresh.id, moved: true }
   }
 
-  if (next.some(message => message.id === previousId)) return { id: previousId, moved: false }
-  if (!selected) return { id: newest.id, moved: true }
+  if (nextIds.has(previousId)) {
+    return followOnto(previousId) ?? { id: previousId, moved: false }
+  }
 
-  // The reader chose an older message and it changed id. Its committed twin
-  // carries the same text — the ledger only hands text over on an exact or
-  // normalised match (observations/semantic.ts textKey / normalizedTextKey) —
-  // so find it by text. The same text can legitimately appear twice ("Done."),
-  // so take the match nearest the old position, measured from the end because
-  // that is the end the ledger appends to and the loaded window trims from.
+  // The selection left the list: a handoff, an eviction, or a trim.
+  const followed = followOnto(previousId)
+  if (followed) return followed
+
+  const previousIndex = previous.findIndex(message => message.id === previousId)
+  if (previousIndex < 0) return { id: newest.id, moved: true }
+  const selected = previous[previousIndex]!
   const distanceFromEnd = previous.length - 1 - previousIndex
-  const selectedKey = normalizeTextKey(selected.text)
-  let twin: ReaderMessage | null = null
-  let twinGap = Number.POSITIVE_INFINITY
-  next.forEach((message, index) => {
-    if (normalizeTextKey(message.text) !== selectedKey) return
-    const gap = Math.abs(next.length - 1 - index - distanceFromEnd)
-    if (gap < twinGap) {
-      twin = message
-      twinGap = gap
-    }
-  })
-  if (twin) return { id: (twin as ReaderMessage).id, moved: false }
 
-  // No twin (a history turn evicted by the cap, an entry trimmed from the
-  // window): hold the distance from the end so the reader stays near where they
-  // were rather than being thrown to the live end.
+  const twin = findTwin(selected, next, distanceFromEnd)
+  if (twin) return { id: twin.id, moved: false }
+
+  // No copy of it survives (a history turn evicted by the cap, an entry trimmed
+  // from the window): hold the distance from the end so the reader stays near
+  // where they were rather than being thrown to the live end.
   return { id: next[Math.max(0, next.length - 1 - distanceFromEnd)]!.id, moved: true }
 }
 
-function continues(before: string, after: string): boolean {
-  return normalizeTextKey(after).startsWith(normalizeTextKey(before))
+/** The message that now carries the selected page's content. Identity first:
+ *  a joined committed entry shares the turn's source id but not any single
+ *  page's text. Among same-source messages prefer one that contains the page's
+ *  text (the per-block entry, or the joined one); only without a shared source
+ *  fall back to equal normalised text (Codex rollout turn ids and committed
+ *  response ids differ). Ties go to the candidate nearest the old position. */
+function findTwin(
+  selected: ReaderMessage,
+  next: readonly ReaderMessage[],
+  distanceFromEnd: number,
+): ReaderMessage | null {
+  const key = normalizeTextKey(selected.text)
+  const sameSourceCandidates = next.filter(message => sameSource(selected, message))
+  const containing = sameSourceCandidates.filter(message => normalizeTextKey(message.text).includes(key))
+  const pool = containing.length > 0
+    ? containing
+    : sameSourceCandidates.length > 0
+      ? sameSourceCandidates
+      : next.filter(message => normalizeTextKey(message.text) === key)
+  let best: ReaderMessage | null = null
+  let bestGap = Number.POSITIVE_INFINITY
+  for (const message of pool) {
+    const gap = Math.abs(next.length - 1 - next.indexOf(message) - distanceFromEnd)
+    if (gap < bestGap) {
+      best = message
+      bestGap = gap
+    }
+  }
+  return best
+}
+
+function sameSource(a: ReaderMessage, b: ReaderMessage): boolean {
+  return a.sourceId !== null && a.sourceId === b.sourceId
+}
+
+function sameText(a: ReaderMessage, b: ReaderMessage): boolean {
+  return normalizeTextKey(a.text) === normalizeTextKey(b.text)
 }

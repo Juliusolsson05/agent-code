@@ -401,3 +401,66 @@ describe('Reader keeps its place', () => {
     expect(pagerText()).toBe('2 / 2')
   })
 })
+
+// Second review round: following is a reader state, not a list position.
+describe('Reader follows only a reader who is following', () => {
+  it('stays on a finished message the reader opened when the agent starts its next turn', () => {
+    // Review F3: the reader landed on a finished answer (so is not pinned to a
+    // growing end); a new turn must not pull them off it and lose their place.
+    const view = render(<ReaderView workspace={makeReaderWorkspace(committedRuntime())} />)
+    expect(pagerText()).toBe('1 / 1')
+
+    const nextTurn = foldClaude(
+      { ...committedRuntime(), sessionStatus: 'running' },
+      proxyTextTurn('msg_next', 'Now I will run the tests.'),
+      T + 1_000,
+    )
+    view.rerender(<ReaderView workspace={makeReaderWorkspace(nextTurn)} />)
+
+    expect(screen.getByText(COMMITTED_ANSWER)).toBeTruthy()
+    expect(pagerText()).toBe('1 / 2')
+  })
+
+  it('keeps following a live block when an earlier block of the same turn commits below it', () => {
+    // Review F1: the ledger stamps current-turn blocks with the turn start and
+    // the committed line with its own later time, so block 0's entry sorts
+    // after the streaming block 2. The list end is then older content.
+    const first = foldClaude({ ...committedRuntime(), sessionStatus: 'running' }, [
+      { type: 'turn_started', turnId: 'msg_live', role: 'assistant', source: 'proxy' },
+      ...proxyTextBlock('msg_live', 0, 'First live block', 'First live block'),
+    ], T + 1_000)
+    const view = render(<ReaderView workspace={makeReaderWorkspace(first)} />)
+
+    const second = foldClaude(first, [
+      { type: 'block_completed', turnId: 'msg_live', blockIndex: 0, kind: 'text', text: 'First live block', source: 'proxy' },
+      { type: 'block_started', turnId: 'msg_live', blockIndex: 1, kind: 'tool_use', toolName: 'Edit', toolUseId: 'toolu_edit', source: 'proxy' },
+      ...proxyTextBlock('msg_live', 2, 'Second live block', 'First live blockSecond live block'),
+    ], T + 1_100)
+    view.rerender(<ReaderView workspace={makeReaderWorkspace(second)} />)
+    expect(screen.getByText('Second live block')).toBeTruthy()
+
+    const blockZeroCommitted: SessionRuntime = {
+      ...second,
+      entries: [...second.entries, datedAssistantEntry('a_b0', 'msg_live', T + 1_050, 'First live block')],
+      lastJsonlEntryAt: T + 1_050,
+    }
+    view.rerender(<ReaderView workspace={makeReaderWorkspace(blockZeroCommitted)} />)
+
+    expect(screen.getByText('Second live block')).toBeTruthy()
+    expect(screen.queryByText('First live block')).toBeNull()
+  })
+
+  it('settles when a caller hands it a fresh but identical runtime on every read', () => {
+    // Selection is reconciled during render; writing state on every new list
+    // identity would never settle. Review A-2c reproduced "Too many
+    // re-renders" with exactly this workspace shape.
+    const workspace = {
+      ...makeReaderWorkspace(),
+      getRuntime: () => emptyRuntime(),
+    } as unknown as Workspace
+    const view = render(<ReaderView workspace={workspace} />)
+    view.rerender(<ReaderView workspace={workspace} />)
+
+    expect(screen.getByText('no assistant message yet')).toBeTruthy()
+  })
+})
