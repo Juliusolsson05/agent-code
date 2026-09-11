@@ -111,6 +111,26 @@ describe('TerminalForegroundMonitor', () => {
     expect(listTmuxPanes).not.toHaveBeenCalled()
   })
 
+  it('reports a direct terminal even while a tmux listing is still pending (M1)', async () => {
+    // listTmuxPanes never resolves — standing in for a hung/wedged tmux
+    // server. Before M1 the single combined loop ran only AFTER the tmux
+    // await, so a stalled tmux listing delayed every direct-PTY terminal's
+    // foreground update too, even though direct sampling has nothing to do
+    // with tmux. The fix samples direct sessions first and unconditionally,
+    // so 'a' must report even though the tmux half of this very tick never
+    // completes (and never will, for the life of this test).
+    const neverResolves = new Promise<ReadonlyMap<string, TerminalForegroundSample>>(() => {})
+    const { monitor, changes } = harness({ panes: () => neverResolves, direct: { a: 'npm' } })
+    monitor.track('a', { kind: 'direct' })
+    monitor.track('b', { kind: 'tmux', tmuxName: 'agentcode-1' })
+    // Deliberately not awaited: tick() suspends forever at the tmux await,
+    // so awaiting it here would hang the test. The direct half of the loop
+    // runs synchronously before that suspension point, so it has already
+    // happened by the time this call returns a pending promise.
+    void monitor.tick()
+    expect(changes).toEqual([['a', { busy: true, command: 'npm', cwd: null }]])
+  })
+
   it('forgets state on untrack so a re-tracked session reports again', async () => {
     const { monitor, changes } = harness({ direct: { a: 'zsh' } })
     monitor.track('a', { kind: 'direct' })

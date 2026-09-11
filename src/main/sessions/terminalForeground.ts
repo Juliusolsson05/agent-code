@@ -106,25 +106,62 @@ export class TerminalForegroundMonitor {
     if (this.inFlight || this.disposed || this.sources.size === 0) return
     this.inFlight = true
     try {
+      // WHY direct PTYs are sampled and emitted BEFORE the tmux await (M1):
+      // sampleDirect is a synchronous local read (node-pty's own process
+      // table), while listTmuxPanes spawns a real child process that can
+      // stall — a slow/hung tmux server, or `list-panes -a` piling up
+      // behind other tmux traffic. Iterating a single combined loop AFTER
+      // awaiting tmux (the old shape) meant every direct-PTY terminal's
+      // foreground update waited on tmux's health even though direct
+      // sampling has nothing to do with tmux. Doing the direct half first
+      // and unconditionally means a hung tmux listing can only ever delay
+      // tmux-backed terminals, never direct ones.
+      for (const [sessionId, source] of this.sources) {
+        if (source.kind !== 'direct') continue
+        const sample = this.deps.sampleDirect(sessionId)
+        // No sample means "unknown this tick" (PTY mid-exit). Keep the last
+        // answer rather than flapping the header idle and back.
+        if (!sample) continue
+        this.applySample(sessionId, sample)
+      }
+
       const needsTmux = [...this.sources.values()].some(source => source.kind === 'tmux')
-      const panes = needsTmux ? await this.deps.listTmuxPanes().catch(() => null) : null
+      if (!needsTmux) return
+      const panes = await this.deps.listTmuxPanes().catch(() => null)
       if (this.disposed) return
       // Iterates the live map after the await, so a session untracked while
       // tmux answered is simply absent here and never resurrected.
       for (const [sessionId, source] of this.sources) {
-        const sample = source.kind === 'tmux'
-          ? panes?.get(source.tmuxName) ?? null
-          : this.deps.sampleDirect(sessionId)
-        // No sample means "unknown this tick" (tmux hiccup, PTY mid-exit). Keep
-        // the last answer rather than flapping the header idle and back.
+        if (source.kind !== 'tmux') continue
+        const sample = panes?.get(source.tmuxName) ?? null
+        // No sample means "unknown this tick" (tmux hiccup). Keep the last
+        // answer rather than flapping the header idle and back.
         if (!sample) continue
-        const next = classifyForeground(sample)
-        if (sameForeground(this.last.get(sessionId), next)) continue
-        this.last.set(sessionId, next)
-        this.deps.onChange(sessionId, next)
+        this.applySample(sessionId, sample)
       }
     } finally {
       this.inFlight = false
+    }
+  }
+
+  /** Classify one sample, dedupe against the last known state, and notify
+   *  the subscriber. Shared by the direct and tmux halves of tick() so the
+   *  dedupe/notify discipline can't drift between the two. */
+  private applySample(sessionId: string, sample: TerminalForegroundSample): void {
+    const next = classifyForeground(sample)
+    if (sameForeground(this.last.get(sessionId), next)) return
+    this.last.set(sessionId, next)
+    // WHY wrapped in try/catch (M7): the interval driver calls `void
+    // this.tick()`, so a throw here would surface as an unhandled promise
+    // rejection in main rather than a caught error anywhere a developer is
+    // looking. onChange is a subscriber's renderer-forwarding callback, and
+    // one subscriber's bug (or a transiently torn-down IPC channel) must not
+    // stop foreground polling for every other tracked terminal — the poll
+    // loop is the one thing every terminal's activity badge depends on.
+    try {
+      this.deps.onChange(sessionId, next)
+    } catch (err) {
+      console.warn(`[terminalForeground] onChange threw for session ${sessionId}:`, err)
     }
   }
 
