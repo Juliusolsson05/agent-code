@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import type { Entry } from '@shared/types/transcript'
+import type { AgentProviderKind } from '@shared/types/providerKind'
 import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
 import { foldSemanticEvent } from '@renderer/session-runtime/semantic/foldEvent'
@@ -41,15 +42,32 @@ const assistantEntry = (uuid: string, msgId: string, ms: number, content: unknow
     message: { id: msgId, role: 'assistant', content },
   }) as unknown as Entry
 
-function foldClaude(runtime: SessionRuntime, events: Record<string, unknown>[]): SessionRuntime {
-  let semantic = runtime.semantic
-  for (const event of events) semantic = foldSemanticEvent(semantic, event, 'claude')
-  return { ...runtime, semantic }
+// Folds through the given provider's reducer policy with Date.now pinned: the
+// reducer stamps turn times with Date.now() and the ledger orders turns against
+// committed entries by them, so an unpinned clock would make ordering depend on
+// the machine running the test.
+function fold(
+  runtime: SessionRuntime,
+  events: Record<string, unknown>[],
+  options: { kind?: AgentProviderKind; nowMs?: number } = {},
+): SessionRuntime {
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(options.nowMs ?? T + 1_000)
+  try {
+    let semantic = runtime.semantic
+    for (const event of events) semantic = foldSemanticEvent(semantic, event, options.kind ?? 'claude')
+    return { ...runtime, semantic }
+  } finally {
+    clock.mockRestore()
+  }
 }
 
-function readerMessages(runtime: SessionRuntime) {
+function foldClaude(runtime: SessionRuntime, events: Record<string, unknown>[]): SessionRuntime {
+  return fold(runtime, events, { kind: 'claude' })
+}
+
+function readerMessages(runtime: SessionRuntime, provider: AgentProviderKind = 'claude') {
   const ledger = createSessionLedger()(createLedgerInputAdapter()({
-    provider: 'claude',
+    provider,
     sessionId: 's1',
     entries: runtime.entries,
     semanticCurrent: runtime.semantic.currentTurn,
@@ -58,7 +76,7 @@ function readerMessages(runtime: SessionRuntime) {
     streamPhase: runtime.streamPhase,
     lastJsonlEntryAtMs: runtime.lastJsonlEntryAt,
   }).input)
-  const { context } = providerLedgerFeedContextFromRuntime(runtime, 'claude')
+  const { context } = providerLedgerFeedContextFromRuntime(runtime, provider)
   const { items, dropped } = ledgerToFeedItems(ledger, context)
   // A dropped candidate would mean the scenario itself is malformed, and the
   // assertions below would be about a broken pipeline instead of Reader.
@@ -171,6 +189,119 @@ describe('readerMessagesFromFeedItems', () => {
 
     expect(readerMessages(runtime)).toEqual([
       { id: 'entry:a1', text: answer, live: false },
+    ])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Non-Claude producers and liveness. Reader has no provider branches of its
+// own, so these pin that the one projection is right for every producer shape
+// the ledger admits (review of PR #861: the first two tests were Claude-only).
+// ---------------------------------------------------------------------------
+describe('readerMessagesFromFeedItems across producers', () => {
+  it('reads a Codex rollout blockless turn live, then as its committed entry', () => {
+    // CodexHeadless publishes rollout agent messages as turn-level text with an
+    // empty block map, then clears the turn text once the response_item entry
+    // is committed (the rollout entry is emitted before the '' clear).
+    const base: SessionRuntime = { ...emptyRuntime(), entries: [userEntry('u1', T, 'q')], lastJsonlEntryAt: T }
+    const live = fold(base, [
+      { type: 'turn_started', turnId: 'turn-1', role: 'assistant', source: 'rollout' },
+      { type: 'turn_delta', turnId: 'turn-1', fullText: 'Codex answer', source: 'rollout' },
+    ], { kind: 'codex', nowMs: T + 1_000 })
+    expect(readerMessages(live, 'codex')).toEqual([
+      { id: 'semantic-text:turn-1', text: 'Codex answer', live: true },
+    ])
+
+    const committed = fold({
+      ...live,
+      entries: [...live.entries, assistantEntry('codex-a1', 'resp_1', T + 1_200, [{ type: 'text', text: 'Codex answer' }])],
+      lastJsonlEntryAt: T + 1_200,
+    }, [
+      { type: 'turn_delta', turnId: 'turn-1', fullText: '', source: 'rollout' },
+      { type: 'turn_completed', turnId: 'turn-1', source: 'rollout' },
+    ], { kind: 'codex', nowMs: T + 1_200 })
+    expect(readerMessages(committed, 'codex')).toEqual([
+      { id: 'entry:codex-a1', text: 'Codex answer', live: false },
+    ])
+  })
+
+  it('keeps Codex proxy message text and drops its reasoning and tool calls', () => {
+    const base: SessionRuntime = { ...emptyRuntime(), entries: [userEntry('u1', T, 'q')], lastJsonlEntryAt: T }
+    const runtime = fold(base, [
+      { type: 'turn_started', turnId: 'resp_1', role: 'assistant', source: 'proxy' },
+      { type: 'block_started', turnId: 'resp_1', blockIndex: 0, kind: 'reasoning', source: 'proxy' },
+      {
+        type: 'block_completed',
+        turnId: 'resp_1',
+        blockIndex: 0,
+        kind: 'reasoning',
+        reasoningSummary: 'private plan',
+        status: 'completed',
+        source: 'proxy',
+      },
+      {
+        type: 'block_started',
+        turnId: 'resp_1',
+        blockIndex: 1,
+        kind: 'message',
+        messagePhase: 'commentary',
+        source: 'proxy',
+      },
+      { type: 'text_delta', turnId: 'resp_1', blockIndex: 1, textSoFar: 'Looking at files', source: 'proxy' },
+      {
+        type: 'block_started',
+        turnId: 'resp_1',
+        blockIndex: 2,
+        kind: 'function_call',
+        toolName: 'shell',
+        callId: 'call_1',
+        source: 'proxy',
+      },
+    ], { kind: 'codex' })
+
+    expect(readerMessages(runtime, 'codex')).toEqual([
+      { id: 'semantic-block:resp_1:1', text: 'Looking at files', live: true },
+    ])
+  })
+
+  it('reads an OpenCode SSE blockless turn as live prose', () => {
+    const base: SessionRuntime = { ...emptyRuntime(), entries: [userEntry('u1', T, 'q')], lastJsonlEntryAt: T }
+    const runtime = fold(base, [
+      { type: 'turn_started', turnId: 'msg_oc', role: 'assistant', source: 'opencode-sse' },
+      { type: 'turn_delta', turnId: 'msg_oc', fullText: 'OpenCode answer', source: 'opencode-sse' },
+    ], { kind: 'opencode' })
+
+    expect(readerMessages(runtime, 'opencode')).toEqual([
+      { id: 'semantic-text:msg_oc', text: 'OpenCode answer', live: true },
+    ])
+  })
+
+  it('does not call finished text live while its turn stays open for a pending tool', () => {
+    // The Claude fold keeps currentTurn after turn_completed while a tool
+    // result is outstanding (hasPendingSemanticTools). The text block in it is
+    // done; calling it live pinned Reader to the bottom of a message that
+    // would never grow again.
+    const base: SessionRuntime = { ...emptyRuntime(), entries: [userEntry('u1', T, 'q')], lastJsonlEntryAt: T }
+    const runtime = foldClaude(base, [
+      { type: 'turn_started', turnId: 'msg_t', role: 'assistant', source: 'proxy' },
+      { type: 'block_started', turnId: 'msg_t', blockIndex: 0, kind: 'text', source: 'proxy' },
+      { type: 'text_delta', turnId: 'msg_t', blockIndex: 0, textSoFar: 'Running the tests now.', source: 'proxy' },
+      { type: 'block_completed', turnId: 'msg_t', blockIndex: 0, kind: 'text', text: 'Running the tests now.', source: 'proxy' },
+      {
+        type: 'block_started',
+        turnId: 'msg_t',
+        blockIndex: 1,
+        kind: 'tool_use',
+        toolName: 'Bash',
+        toolUseId: 'toolu_tests',
+        source: 'proxy',
+      },
+      { type: 'turn_completed', turnId: 'msg_t', source: 'proxy' },
+    ])
+    expect(runtime.semantic.currentTurn?.turnId).toBe('msg_t')
+
+    expect(readerMessages(runtime)).toEqual([
+      { id: 'semantic-block:msg_t:0', text: 'Running the tests now.', live: false },
     ])
   })
 })

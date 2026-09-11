@@ -26,18 +26,42 @@ import { blockContentKind } from '@renderer/rendering/observations/semantic'
 // ---------------------------------------------------------------------------
 
 export type ReaderMessage = {
-  /** The feed item's key. Stable for as long as the ledger attributes the text
-   *  to the same painted unit, which is what keeps the pager's selection put
-   *  while a live block grows; it changes when the ledger hands a live block
-   *  over to its committed entry, and ReaderView snaps to the newest message
-   *  at that moment. */
+  /** The feed item's key. Stable while the ledger attributes the text to the
+   *  same painted unit (a live block keeps its id as it grows); it changes
+   *  when the ledger hands finished text to its committed entry
+   *  (`semantic-block:…` -> `entry:…`). readerSelection.ts follows that
+   *  handoff by text so the reader keeps their place. */
   id: string
   text: string
-  /** True while the text belongs to the semantic runtime's open turn (still
-   *  streaming, or held open by the Claude fold while its tool results are
-   *  pending). Drives Reader's follow-the-bottom scrolling, nothing else, so a
-   *  retained-but-finished block being "live" costs nothing. */
+  /** True while the text is still growing: a block in the open semantic turn
+   *  that has not reached its terminal state. Drives Reader's
+   *  follow-the-bottom scrolling. WHY not simply "owned by the current turn":
+   *  the Claude fold keeps a turn current after its text finished while tool
+   *  results are pending, and treating that finished text as live pinned a
+   *  reader to the bottom of a message that would never grow again. */
   live: boolean
+}
+
+// assistantEntryText joins every text block of an entry; during streaming the
+// projection re-runs on each semantic delta and would redo that join for every
+// committed entry in the session. Entries are immutable objects the ledger
+// hands back by reference (the D11 identity chain), so a WeakMap memo makes the
+// committed part of the projection a lookup and frees itself with the entries.
+const entryTextMemo = new WeakMap<object, string | null>()
+
+function memoAssistantEntryText(entry: FeedRenderItem & { type: 'entry' }): string | null {
+  const cached = entryTextMemo.get(entry.entry)
+  if (cached !== undefined) return cached
+  const text = assistantEntryText(entry.entry)
+  entryTextMemo.set(entry.entry, text)
+  return text
+}
+
+/** The ledger's "this text block is done" rule, restated for liveness: a
+ *  Codex message can reach status 'completed' without finalized:true, so both
+ *  count (mirrors `textTerminal` in rendering/observations/semantic.ts). */
+function blockStillGrowing(block: { finalized?: boolean; status?: string }): boolean {
+  return block.finalized !== true && block.status !== 'completed'
 }
 
 export function readerMessagesFromFeedItems(
@@ -49,12 +73,14 @@ export function readerMessagesFromFeedItems(
       case 'entry': {
         // User prompts, system rows and tool-only assistant carriers return
         // null here. Reader is a reading view of what the agent SAID.
-        const text = assistantEntryText(item.entry)
+        const text = memoAssistantEntryText(item)
         if (text) messages.push({ id: item.key, text, live: false })
         break
       }
       case 'semantic-text': {
         // Blockless turns (Codex / OpenCode deliver prose only on turn.text).
+        // There is no block to ask whether it finished, so the open turn is
+        // the best liveness signal these producers give.
         const text = item.text.trim()
         if (text) messages.push({ id: item.key, text, live: item.owner === 'semantic-current' })
         break
@@ -64,7 +90,13 @@ export function readerMessagesFromFeedItems(
         // prose. Thinking, tool calls and tool results are Feed furniture.
         if (blockContentKind(item.block) !== 'assistant-text') break
         const text = item.block.text?.trim()
-        if (text) messages.push({ id: item.key, text, live: item.owner === 'semantic-current' })
+        if (text) {
+          messages.push({
+            id: item.key,
+            text,
+            live: item.owner === 'semantic-current' && blockStillGrowing(item.block),
+          })
+        }
         break
       }
       // 'absorbed-entry' paints nothing in Feed either (its blocks belong to a

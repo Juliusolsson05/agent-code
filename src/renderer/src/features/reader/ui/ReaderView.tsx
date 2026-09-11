@@ -14,6 +14,7 @@ import {
   readerMessagesFromFeedItems,
   type ReaderMessage,
 } from '@renderer/features/reader/model/readerMessages'
+import { nextReaderSelection } from '@renderer/features/reader/model/readerSelection'
 import { resolveTabSessions } from '@renderer/workspace/queries'
 import { useSessionRuntime } from '@renderer/workspace/useSessionRuntime'
 import { dispatchSessionIdsForTab } from '@renderer/workspace/dispatch/dispatchSelectors'
@@ -152,56 +153,70 @@ function ReaderBody({
   // TileLeaf passes. WHY a second instance instead of sharing Feed's: Feed's
   // plan lives inside the (hidden but still mounted, #752) TileLeaf and is not
   // in the store; lifting it would be a cross-cutting refactor for one
-  // consumer. The ledger's per-mount caches keep this instance incremental, and
-  // it only exists while Reader is open on this one session.
+  // consumer. The cost is real but bounded: while Reader is open, every
+  // semantic delta for this one session is walked twice (Feed's hidden
+  // instance and this one), each an O(entries) pass. That is still far below
+  // what it replaced — an O(n²) entry rescan plus a screen parse on every
+  // screen frame.
   //
-  // WHY no `sessionStatus === 'running'` gate any more: liveness is the
-  // ledger's `semantic-current` ownership, i.e. text in the turn the semantic
-  // runtime still holds open (streaming, or retained by the Claude fold while
-  // its tool results are pending). The old gate was what opened the
-  // screen-scrape path for every running turn that had no open text block —
-  // tool calls, waiting on background agents — which is the whole of #855.
+  // WHY no `sessionStatus === 'running'` gate any more: liveness comes from the
+  // ledger (text still growing in the open semantic turn, see
+  // ReaderMessage.live). The old gate was what opened the screen-scrape path
+  // for every running turn that had no open text block — tool calls, waiting
+  // on background agents — which is the whole of #855.
   const ledgerFeedPlan = useLedgerFeedItems(runtime, provider, sessionId, {
     toolUseIndex: runtime.toolUseIndex,
     toolResultIndex: runtime.toolResultIndex,
     version: runtime.toolIndexVersion,
   })
-  // Keyed on the items array alone: the ledger returns the same array when
-  // nothing it reads changed (D11 identity chain), so unrelated runtime ticks
-  // (screen frames, scroll state) no longer rebuild Reader's message list.
+  // Keyed on the items array alone. useLedgerFeedItems memoises its plan on
+  // the runtime slices the ledger reads (entries, semantic turns, ghosts,
+  // stream phase), so screen frames and other unrelated runtime ticks keep the
+  // same array and do not rebuild Reader's message list; a semantic delta or a
+  // stream-phase change does.
   const messages = useMemo<ReaderMessage[]>(
     () => readerMessagesFromFeedItems(ledgerFeedPlan.items),
     [ledgerFeedPlan.items],
   )
 
-  const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null)
-  const selectedMessageIdRef = useRef<string | null>(null)
-
-  useEffect(() => {
-    selectedMessageIdRef.current = selectedMessageId
-  }, [selectedMessageId])
-
-  useEffect(() => {
-    setSelectedMessageId(messages[messages.length - 1]?.id ?? null)
-  }, [sessionId])
-
-  useEffect(() => {
-    const previous = selectedMessageIdRef.current
-    if (messages.length === 0) {
-      setSelectedMessageId(null)
-      return
-    }
-    if (!previous) {
-      setSelectedMessageId(messages[messages.length - 1]!.id)
-      return
-    }
-    if (messages.some(message => message.id === previous)) return
-    // Whatever we were pointing at is gone: an entry that left the loaded
-    // window, or a live semantic block the ledger just handed over to its
-    // committed entry (the item key changes from `semantic-block:…` to
-    // `entry:…` at that moment). Both land on the newest message.
-    setSelectedMessageId(messages[messages.length - 1]!.id)
-  }, [messages])
+  // Selection state carries the message list and session it was computed
+  // against, so a list change can be reconciled DURING render (React's
+  // "adjusting state when a prop changes" pattern) instead of in an effect.
+  // WHY not an effect: an effect runs after a commit in which the old id is
+  // already missing, and `selectedIndex` below falls back to the newest
+  // message for that frame — every live -> committed handoff flashed the live
+  // end of the conversation before snapping back. A render-phase update is
+  // applied before anything paints.
+  //
+  // `scrollResetToken` changes only when the reader lands on a DIFFERENT
+  // message (see ReaderSelection.moved): user navigation, a session switch,
+  // following the agent onto a new page. A message growing, finishing, or being
+  // handed to its committed twin keeps the user's scroll position.
+  const [selection, setSelection] = useState<{
+    messages: readonly ReaderMessage[]
+    sessionId: SessionId
+    id: string | null
+    scrollResetToken: number
+  }>(() => ({
+    messages,
+    sessionId,
+    id: messages[messages.length - 1]?.id ?? null,
+    scrollResetToken: 0,
+  }))
+  if (selection.messages !== messages || selection.sessionId !== sessionId) {
+    const next = selection.sessionId !== sessionId
+      // A different session's list has no relation to the old selection.
+      ? { id: messages[messages.length - 1]?.id ?? null, moved: true }
+      : nextReaderSelection(selection.messages, selection.id, messages)
+    setSelection({
+      messages,
+      sessionId,
+      id: next.id,
+      scrollResetToken: next.moved ? selection.scrollResetToken + 1 : selection.scrollResetToken,
+    })
+  }
+  const selectedMessageId = selection.id
+  const scrollResetToken = selection.scrollResetToken
 
   const selectedIndex = useMemo(() => {
     if (messages.length === 0) return -1
@@ -229,17 +244,27 @@ function ReaderBody({
   const selectedIndexRef = useRef(selectedIndex)
   selectedIndexRef.current = selectedIndex
 
+  // Explicit navigation is always a move to a different message, so it resets
+  // the scroll like any other landing. The list it was chosen from is the one
+  // the selection already tracks, so only the id and the token change.
+  const selectMessage = useCallback((id: string) => {
+    setSelection(current => ({
+      ...current,
+      id,
+      scrollResetToken: current.scrollResetToken + 1,
+    }))
+  }, [])
   const selectOlder = useCallback(() => {
     const idx = selectedIndexRef.current
     if (idx <= 0) return
-    setSelectedMessageId(messagesRef.current[idx - 1]!.id)
-  }, [])
+    selectMessage(messagesRef.current[idx - 1]!.id)
+  }, [selectMessage])
   const selectNewer = useCallback(() => {
     const idx = selectedIndexRef.current
     const list = messagesRef.current
     if (idx < 0 || idx >= list.length - 1) return
-    setSelectedMessageId(list[idx + 1]!.id)
-  }, [])
+    selectMessage(list[idx + 1]!.id)
+  }, [selectMessage])
 
   // Auto-scroll to bottom while content grows during streaming. Only
   // pin to the bottom if the user hasn't manually scrolled away — same
@@ -248,6 +273,8 @@ function ReaderBody({
   const scrollerRef = useRef<HTMLDivElement>(null)
   const [stickToBottom, setStickToBottom] = useState(true)
   const lastScrollTopRef = useRef(0)
+  const selectedMessageRef = useRef(selectedMessage)
+  selectedMessageRef.current = selectedMessage
   useEffect(() => {
     if (!stickToBottom || !selectedMessage?.live) return
     const el = scrollerRef.current
@@ -256,13 +283,20 @@ function ReaderBody({
     lastScrollTopRef.current = el.scrollTop
   }, [selectedMessage?.live, text, stickToBottom])
 
+  // Start a newly landed message from the top — and ONLY a newly landed one.
+  // WHY keyed on the token and not on `selectedMessageId` / `live` (what this
+  // effect used to key on): with ledger-sourced messages the id changes when a
+  // finished message is handed to its committed entry, and `live` flips when a
+  // block finishes streaming. Both happen under a reader who is mid-paragraph,
+  // and resetting there scrolled them back to the top twice for one message.
+  // `stickToBottom` restarts only for a message that is still growing.
   useEffect(() => {
     const el = scrollerRef.current
     if (!el) return
     el.scrollTop = 0
     lastScrollTopRef.current = 0
-    setStickToBottom(Boolean(selectedMessage?.live))
-  }, [selectedMessageId, sessionId, selectedMessage?.live])
+    setStickToBottom(Boolean(selectedMessageRef.current?.live))
+  }, [scrollResetToken])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
