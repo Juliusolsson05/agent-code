@@ -30,6 +30,7 @@ import { RewindToPromptSurface } from '@renderer/features/workspace/surfaces/Rew
 import { AgentTitlePromptSurface } from '@renderer/features/workspace/surfaces/AgentTitlePromptSurface'
 import { ProviderSwitchPickerSurface } from '@renderer/features/workspace/surfaces/ProviderSwitchPickerSurface'
 import { KeyVaultModalSurface } from '@renderer/features/key-vault/surfaces/KeyVaultModalSurface'
+import { NewAgentInSurface } from '@renderer/features/workspace/surfaces/NewAgentInSurface'
 
 // The surface registry (issue #494). Adding a surface = write a wrapper
 // in the owning feature's surfaces/ folder + add ONE import + ONE array
@@ -89,6 +90,10 @@ export const modalSurfaces: SurfaceEntry[] = [
   // established surface below one it used to cover; see the registry contract.
   { id: 'provider-switch-picker', Component: ProviderSwitchPickerSurface },
   { id: 'key-vault', Component: KeyVaultModalSurface },
+  // Appended per the contract above. It is only opened from a command, which
+  // closes the palette first, so it has no stacking relationship to reason
+  // about beyond "a new modal paints over the established ones".
+  { id: 'new-agent-in', Component: NewAgentInSurface },
 ]
 
 /**

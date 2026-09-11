@@ -173,6 +173,24 @@ export type UiShellState = {
    * clicked group is a correct and always-present source.
    */
   newAgentProjectIntent: { tabId: TabId; anchorSessionId: SessionId } | null
+  /**
+   * The New Agent In… dialog (#852) is on screen.
+   *
+   * WHY a plain boolean when `newAgentProjectIntent` above and
+   * `dispatchRowProjectPickerRow` below capture a target up front: those are
+   * opened FROM a specific place (a project header, a row header) whose
+   * identity the later commit must not re-derive. This dialog is opened from a
+   * command and its whole job is to ASK for the project, so there is nothing
+   * to capture. The lane is deliberately not captured either — like New
+   * Agent…, the spawn fills whichever lane is focused when it commits, and the
+   * modal dialog owns app input in between, so the user cannot move lane focus
+   * under it.
+   *
+   * A separate flag rather than another `newAgentPlacementOpen` intent because
+   * it is a separate surface (NewAgentInDialog), not a mode of the placement
+   * overlay — see that component's header for why.
+   */
+  newAgentInOpen: boolean
   gitBarOpen: boolean
   worktreesBarOpen: boolean
   debugPanelOpen: boolean

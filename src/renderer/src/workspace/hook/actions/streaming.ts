@@ -24,11 +24,13 @@ import {
 
 import type { WorkspaceSetRuntimes } from '@renderer/workspace/hook/context'
 
-// Streaming baseline + optimistic-codex-user entry.
+// Optimistic submit state + optimistic-codex-user entry.
 //
-// setStreamingBaseline is called by TileLeaf on submit. It pairs the
-// baseline write with a synthetic `submitting` phase and a
-// `submittedAt` timestamp. This covers the gap between the user
+// beginOptimisticSubmit is called by TileLeaf on submit. It sets a
+// synthetic `submitting` phase and a `submittedAt` timestamp. (It was
+// `setStreamingBaseline` while it also stored an assistant block scraped
+// off the TUI screen for the old screen-driven streaming card; that card
+// and its baseline are gone, see #855.) This covers the gap between the user
 // pressing Enter and the adapter's first `requesting` event landing
 // (can be 100-500ms on a cold proxy). Without it the in-feed
 // WorkIndicator would render nothing during that window, making the
@@ -57,8 +59,8 @@ export function optimisticCodexQueueReason(
   >,
 ): OptimisticQueueReason | null {
   // WHY this deliberately ignores `streamPhase`:
-  // TileLeaf calls setStreamingBaseline() and addOptimisticCodexUserEntry()
-  // in the same submit handler. setStreamingBaseline moves streamPhase to
+  // TileLeaf calls beginOptimisticSubmit() and addOptimisticCodexUserEntry()
+  // in the same submit handler. beginOptimisticSubmit moves streamPhase to
   // "submitting" before this function runs, so treating any non-idle
   // streamPhase as "previous turn is live" queues the *first* prompt of an
   // idle Codex session and makes the optimistic feed row path unreachable.
@@ -140,8 +142,8 @@ export function useStreamingActions(
   setRuntimes: WorkspaceSetRuntimes,
   isCodexSession: (sessionId: SessionId) => boolean,
 ): {
-  setStreamingBaseline: (sessionId: SessionId, baseline: string | null) => void
-  unwindStreamingBaseline: (sessionId: SessionId) => void
+  beginOptimisticSubmit: (sessionId: SessionId) => void
+  unwindOptimisticSubmit: (sessionId: SessionId) => void
   clearPendingRewindUndo: (sessionId: SessionId) => void
   addOptimisticCodexUserEntry: (
     sessionId: SessionId,
@@ -162,7 +164,7 @@ export function useStreamingActions(
       setRuntimes(prev => {
         const current = prev[sessionId]
         if (!current?.pendingRewindUndo) return prev
-        // WHY this exists separately from setStreamingBaseline:
+        // WHY this exists separately from beginOptimisticSubmit:
         // Normal composer submits already have a rich optimistic-submit path
         // that can clear Undo Rewind while updating streaming state. Slash-mode
         // commits write directly to the provider PTY and may start a real turn
@@ -188,7 +190,7 @@ export function useStreamingActions(
    *
    * ── THE BUG THIS FIXES ──
    *
-   * `setStreamingBaseline` sets `streamPhase: 'submitting'` BEFORE the delivery
+   * `beginOptimisticSubmit` sets `streamPhase: 'submitting'` BEFORE the delivery
    * attempt. When delivery failed, the catch in `useComposerKeybinds` recorded
    * the failure and showed a toast — but never touched the phase. And nothing
    * else could: there are exactly three paths back to `'idle'`, and under a
@@ -221,7 +223,7 @@ export function useStreamingActions(
    * in `streamPhaseMachine`. That guard is a shipped regression's tombstone.
    * The unwind belongs at the site that OWNS the optimistic set.
    */
-  const unwindStreamingBaseline = useCallback(
+  const unwindOptimisticSubmit = useCallback(
     (sessionId: SessionId) => {
       setRuntimes(prev => {
         const current = prev[sessionId]
@@ -245,7 +247,6 @@ export function useStreamingActions(
                 turnStartedAt: null,
                 phaseChangedAt: null,
                 awaitingAssistant: false,
-                streamingBaseline: null,
               },
               {
                 layer: 'STATE',
@@ -260,8 +261,8 @@ export function useStreamingActions(
     [setRuntimes],
   )
 
-  const setStreamingBaseline = useCallback(
-    (sessionId: SessionId, baseline: string | null) => {
+  const beginOptimisticSubmit = useCallback(
+    (sessionId: SessionId) => {
       const now = Date.now()
       setRuntimes(prev => {
         const current = prev[sessionId] ?? emptyRuntime()
@@ -269,7 +270,6 @@ export function useStreamingActions(
           appendFeedDebugLog(
             {
               ...current,
-              streamingBaseline: baseline,
               awaitingAssistant: true,
               // Rewind undo is intentionally valid only until the user starts
               // continuing from the rewound branch. Clearing here, at the same
@@ -286,8 +286,7 @@ export function useStreamingActions(
             {
               layer: 'STATE',
               kind: 'submit',
-              summary: baseline ? 'submit started with baseline' : 'submit started',
-              data: { hasBaseline: baseline !== null, baselineLength: baseline?.length ?? 0 },
+              summary: 'submit started',
             },
           ),
         )
@@ -549,8 +548,8 @@ export function useStreamingActions(
   )
 
   return {
-    setStreamingBaseline,
-    unwindStreamingBaseline,
+    beginOptimisticSubmit,
+    unwindOptimisticSubmit,
     clearPendingRewindUndo,
     addOptimisticCodexUserEntry,
     removeOptimisticCodexUserEntry,

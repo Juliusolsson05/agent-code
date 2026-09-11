@@ -67,6 +67,30 @@ export type DialogActionsProps = {
   children?: React.ReactNode
 }
 
+/**
+ * Whether the element an Enter keydown landed on owns that Enter itself.
+ *
+ * A focused button or link activates on Enter (the browser synthesizes a
+ * click), and a textarea inserts a newline. Any dialog-level Enter handler that
+ * calls `preventDefault` suppresses those, so it must ask this first — or Tab to
+ * Cancel + Enter CONFIRMS, which for a destructive dialog means Enter-on-Cancel
+ * performs the destructive action.
+ *
+ * Exported (rather than living only inside DialogActions' listener) because
+ * list-style dialogs handle Enter on `DialogContent` themselves — New Agent In
+ * and Switch Provider did, and both committed the highlighted row when Cancel
+ * had focus (#862). One predicate keeps "which controls own Enter" in one place
+ * instead of a guard copied into every list dialog.
+ *
+ * Such dialogs must also keep their list rows out of the tab order: a
+ * Tab-focused row would own Enter here and diverge from the arrow-driven
+ * highlight (and Space would click it regardless of any Enter handling).
+ */
+export function focusedControlOwnsEnter(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false
+  return target.tagName === 'BUTTON' || target.tagName === 'A' || target.tagName === 'TEXTAREA'
+}
+
 export function DialogActions({
   confirmLabel,
   onConfirm,
@@ -97,17 +121,14 @@ export function DialogActions({
       // Shift+Enter is newline everywhere in this app; a modifier means the
       // user is composing, not committing.
       if (event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return
-      const target = event.target as HTMLElement | null
-      // A textarea owns its own Enter. Without this the footer would commit
-      // the dialog while the user was trying to start a new line — the exact
-      // reason several dialogs previously hand-rolled `!shiftKey` checks.
-      if (target?.tagName === 'TEXTAREA') return
-      // A FOCUSED BUTTON OWNS ITS OWN ENTER. This is the important one:
-      // calling preventDefault below suppresses the synthesized click that
-      // Enter would have sent to the focused control, so without this guard
-      // tabbing to Cancel and pressing Enter would CONFIRM — and for a
-      // destructive dialog that means Enter-on-Cancel performs the deletion.
-      if (target?.tagName === 'BUTTON' || target?.tagName === 'A') return
+      // A FOCUSED BUTTON OWNS ITS OWN ENTER, and a textarea owns its newline.
+      // This is the important one: calling preventDefault below suppresses the
+      // synthesized click that Enter would have sent to the focused control, so
+      // without this guard tabbing to Cancel and pressing Enter would CONFIRM —
+      // and for a destructive dialog that means Enter-on-Cancel performs the
+      // deletion. The textarea half is the reason several dialogs previously
+      // hand-rolled `!shiftKey` checks. See `focusedControlOwnsEnter`.
+      if (focusedControlOwnsEnter(event.target)) return
       if (blocked) return
       event.preventDefault()
       onConfirm()

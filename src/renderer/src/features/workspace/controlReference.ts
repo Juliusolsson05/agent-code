@@ -47,7 +47,8 @@ export const controlReference = [
       "global-dispatch",
       "tiled-dispatch",
       "new-dispatch-row",
-      "new-tiled-lane"
+      "new-tiled-lane",
+      "new-agent-in"
     ]
   },
   {

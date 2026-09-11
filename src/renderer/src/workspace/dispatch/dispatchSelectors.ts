@@ -339,6 +339,30 @@ export type DispatchSpawnTarget = {
   laneIndex: number | null
 }
 
+/**
+ * The projects the focused Grid Dispatch lane's ROW is bound to, or `[]` when
+ * that row is unbound, the layout is classic Dispatch, or Dispatch is off.
+ *
+ * WHY this is its own selector rather than staying inline in
+ * `resolveDispatchSpawnTarget`: two creation paths must agree on it. The spawn
+ * resolver uses it to pick where plain New Agent… lands, and New Agent In…
+ * (#852) uses it to decide which projects it may OFFER for that lane. If the
+ * two re-derived it separately, a change to how bindings are read (the legacy
+ * single `projectTabId` fold, zero-length row repair) could make the picker
+ * offer a project the resolver would refuse — or hide one it would pick.
+ *
+ * Reads through `normalizeGridShape` for the same reason every row reader does:
+ * persisted rows can be stale or hand-edited, and the normalizer is the one
+ * place that folds the legacy field and repairs lengths.
+ */
+export function focusedLaneBoundProjectTabIds(state: WorkspaceState): readonly TabId[] {
+  const tiled = state.dispatchMode?.tiled
+  if (!tiled) return []
+  const grid = normalizeGridShape(tiled)
+  const rowIndex = rowIndexForLane(grid.rows, tiled.focusedLane)
+  return (rowIndex >= 0 ? grid.rows[rowIndex]?.projectTabIds : undefined) ?? []
+}
+
 export function resolveDispatchSpawnTarget(state: WorkspaceState): DispatchSpawnTarget {
   const dm = state.dispatchMode
   if (!dm) {
@@ -365,15 +389,14 @@ export function resolveDispatchSpawnTarget(state: WorkspaceState): DispatchSpawn
     // stale classic focus would file the new agent under a project the row does
     // not even list. Bindings constrain what may live in a row, and a spawn is
     // something coming to live there.
-    const grid = normalizeGridShape(dm.tiled)
-    const rowIndex = rowIndexForLane(grid.rows, laneIndex)
+    //
     // A row can be bound to SEVERAL projects, so "which project does a new
     // agent belong to" needs a rule rather than a lookup. The active tab when
     // it is one of them, otherwise the first: deterministic, and "the project
     // you were last in" is the least surprising answer. The per-group `+` in
     // the index is unaffected — it already carries an explicit tabId.
-    const bound = rowIndex >= 0 ? grid.rows[rowIndex]?.projectTabIds : undefined
-    if (bound && bound.length > 0) {
+    const bound = focusedLaneBoundProjectTabIds(state)
+    if (bound.length > 0) {
       const tabId = bound.includes(state.activeTabId) ? state.activeTabId : bound[0]!
       return { tabId, cwdSessionId: null, laneIndex }
     }

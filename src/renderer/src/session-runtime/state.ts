@@ -379,7 +379,6 @@ export type SessionRuntime = {
   screenMarkdown: string
   recentScreen: string
   recentScreenMarkdown: string
-  streamingBaseline: string | null
   entries: Entry[]
   /** Total count of JSONL records this session has produced — the
    *  denominator the ScrollIndicator above the composer shows.
@@ -670,7 +669,7 @@ export type SessionRuntime = {
    *  "Thinking · 3s" vs "Calling Read · 8s" within the same turn). */
   phaseChangedAt: number | null
   /** Wall-clock timestamp the user hit submit. Set by the optimistic-
-   *  submit path (setStreamingBaseline) so 'submitting' has a start
+   *  submit path (beginOptimisticSubmit) so 'submitting' has a start
    *  time before the adapter's first 'requesting' event arrives. */
   submittedAt: number | null
   /** Pane-focused feed/render debug stream. This is not raw transport
@@ -817,7 +816,6 @@ export function emptyRuntime(): SessionRuntime {
     screenMarkdown: '',
     recentScreen: '',
     recentScreenMarkdown: '',
-    streamingBaseline: null,
     entries: [],
     totalEntries: 0,
     awaitingAssistant: false,

@@ -15,6 +15,42 @@ type AssistantMessage = {
   content?: unknown
 }
 
+/**
+ * The prose of ONE assistant entry: its text blocks joined, or null when it is
+ * not an assistant entry or carries no text (a tool_use-only carrier).
+ *
+ * WHY this is its own export: Reader Mode walks the ledger's feed items, which
+ * hand it the entry itself, not a uuid to look up. Before this existed the only
+ * way to get an entry's text was `extractAssistantByUuid`, which re-scans the
+ * whole list per call; Reader called it once per assistant uuid, so a long
+ * session paid O(entries × assistant entries) on every transcript change.
+ */
+export function assistantEntryText(entry: Entry): string | null {
+  if (entry.type !== 'assistant') return null
+
+  const msg = (entry as { message?: AssistantMessage }).message
+  if (!msg || msg.role !== 'assistant') return null
+
+  if (typeof msg.content === 'string') {
+    const trimmed = msg.content.trim()
+    return trimmed || null
+  }
+
+  if (Array.isArray(msg.content)) {
+    const parts: string[] = []
+    for (const block of msg.content) {
+      const b = block as { type?: string; text?: string }
+      if (b.type === 'text' && typeof b.text === 'string') {
+        const t = b.text.trim()
+        if (t) parts.push(t)
+      }
+    }
+    return parts.length > 0 ? parts.join('\n\n') : null
+  }
+
+  return null
+}
+
 export function extractAssistantByUuid(
   entries: readonly Entry[],
   uuid: string,
@@ -22,28 +58,9 @@ export function extractAssistantByUuid(
   for (const entry of entries) {
     if (entry.type !== 'assistant') continue
     if ((entry as { uuid?: string }).uuid !== uuid) continue
-
-    const msg = (entry as { message?: AssistantMessage }).message
-    if (!msg || msg.role !== 'assistant') return null
-
-    if (typeof msg.content === 'string') {
-      const trimmed = msg.content.trim()
-      return trimmed || null
-    }
-
-    if (Array.isArray(msg.content)) {
-      const parts: string[] = []
-      for (const block of msg.content) {
-        const b = block as { type?: string; text?: string }
-        if (b.type === 'text' && typeof b.text === 'string') {
-          const t = b.text.trim()
-          if (t) parts.push(t)
-        }
-      }
-      return parts.length > 0 ? parts.join('\n\n') : null
-    }
-
-    return null
+    // The first assistant entry with this uuid is the answer even when it has
+    // no text: uuids are unique per entry, so there is nothing later to find.
+    return assistantEntryText(entry)
   }
   return null
 }
@@ -59,10 +76,12 @@ export function assistantUuidsWithText(
 ): string[] {
   const out: string[] = []
   for (const entry of entries) {
-    if (entry.type !== 'assistant') continue
     const uuid = (entry as { uuid?: string }).uuid
     if (typeof uuid !== 'string') continue
-    if (!extractAssistantByUuid(entries, uuid)) continue
+    // Read the entry in hand rather than re-finding it by uuid: the lookup was
+    // a full rescan per assistant entry (quadratic on long sessions) and could
+    // only ever return this same entry.
+    if (!assistantEntryText(entry)) continue
     out.push(uuid)
   }
   return out

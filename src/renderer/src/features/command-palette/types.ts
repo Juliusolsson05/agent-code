@@ -250,6 +250,10 @@ export type CommandContext = {
      *  session id is the parent agent; the overlay only asks for
      *  Claude/Codex and then delegates to workspace.createLinkedAgent. */
     openLinkedAgent: (sessionId: string) => void
+    /** Open the New Agent In… dialog (#852): agent, then project, into the
+     *  focused Dispatch lane. Takes no target — choosing one is the dialog's
+     *  job; see uiShell `newAgentInOpen`. */
+    openNewAgentIn: () => void
     /** Open the Pin Agents multi-select modal. Lives on uiShell as a
      *  transient flag — the draft selection state is owned by the
      *  modal itself, not the store. */
