@@ -327,6 +327,10 @@ export type MainProviderConfig = {
   /** Provider identity — see RendererProviderConfig.id. */
   id: AgentProviderKind
   name: string
+  /** Read-only native skill discovery; never grants installation ownership. */
+  discoverSkillRoots?: (
+    context: import('./agentSkills.js').AgentSkillDiscoveryContext,
+  ) => Promise<import('./agentSkills.js').AgentSkillDiscovery>
   /**
    * Provider-owned discovery capability for native personal Agent Skills.
    *

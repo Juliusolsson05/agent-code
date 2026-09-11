@@ -72,6 +72,26 @@ async function writeFileWithParents(filePath: string, text: string): Promise<voi
 }
 
 describe('Agent Code custom skill management', () => {
+  it('exposes provider-scoped installed locations without reconciling or returning skill bodies', async () => {
+    const { targets, service, stateFilePath } = await harness()
+    await service.createCustomSkill({
+      expectedRevision: 0, name: 'inspect-code', description: 'Inspect code',
+      markdown: 'PRIVATE skill instructions', enabled: true,
+    })
+    const file = customPath(targets[0]!, 'inspect-code')
+    const originalState = await readFile(stateFilePath, 'utf8')
+    await rm(file)
+    const locations = await service.getInstalledSkillLocations('codex')
+    expect(locations.paths).toContain(file)
+    expect(JSON.stringify(locations)).not.toContain('PRIVATE')
+    expect(await service.getInstalledSkillLocations('claude')).toEqual({ paths: [], notices: [] })
+    // Deleting the file makes a subsequent Settings audit repair it. Status
+    // must not: its locations are attribution evidence for the disk collector,
+    // which omits missing files rather than turning observation into a write.
+    await expect(stat(file)).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(await readFile(stateFilePath, 'utf8')).toBe(originalState)
+  })
+
   it('keeps drafts app-owned and independently materializes multiple enabled skills', async () => {
     const { targets, service } = await harness()
     const drafted = await service.createCustomSkill({

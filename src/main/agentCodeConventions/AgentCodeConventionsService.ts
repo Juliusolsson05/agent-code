@@ -1,5 +1,7 @@
 import { TLDR_INSTRUCTIONS, TLDR_SKILL_NAME, TLDR_SKILL_DESCRIPTION } from '@shared/types/tldr.js'
 import { randomUUID } from 'crypto'
+import type { AgentProviderKind } from '@shared/types/providerKind.js'
+import type { ManagedAgentSkillLocations } from '@shared/types/agentSkills.js'
 import { homedir } from 'os'
 import { isAbsolute, relative, resolve, sep } from 'path'
 
@@ -255,6 +257,35 @@ export class AgentCodeManagedSkillsService {
       // status list during an awaited provider write.
       await this.ensureInitializedLocked()
       return this.snapshot()
+    })
+  }
+
+  getInstalledSkillLocations(provider: AgentProviderKind): Promise<ManagedAgentSkillLocations> {
+    return this.serialize(async () => {
+      // Status is strictly observational. Unlike Settings' audit, it must not
+      // initialize/reconcile or repair provider files. Main initializes this
+      // service before registering IPC; callers arriving earlier get an honest
+      // unavailable result. The mutation queue still gives us coherent state.
+      if (!this.initialized || this.recovery) {
+        return { paths: [], notices: ['Agent Code skill deployment status is unavailable.'] }
+      }
+      const targets = [
+        ...this.targetStatuses,
+        ...[...this.customTargetStatuses.values()].flat(),
+        ...[...this.installedTargetStatuses.values()].flat(),
+      ].filter(target => target.providers.includes(provider))
+      const paths = targets.filter(target => target.state === 'installed').map(target => {
+        const directory = target.displayPath.startsWith('~/')
+          ? resolve(this.homeDirectory, target.displayPath.slice(2))
+          : target.displayPath
+        return resolve(directory, 'SKILL.md')
+      })
+      return {
+        paths: [...new Set(paths)],
+        notices: targets.some(target => ['missing', 'conflict', 'error'].includes(target.state))
+          ? ['Some Agent Code skills need attention in Settings; only files found on disk are listed here.']
+          : [],
+      }
     })
   }
 

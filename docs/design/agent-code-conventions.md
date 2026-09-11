@@ -61,6 +61,14 @@ Provider modules declare discovery capabilities only. This single-consumer
 shape is intentional: duplicating even one deletion or collision rule in a
 consumer would create a second source of ownership truth.
 
+Agent Status uses the service's read-only `getInstalledSkillLocations` projection
+to attribute known deployments. It neither initializes nor audits the service.
+The separate `src/main/agentSkills/` collector reads metadata from native skill
+directories declared by provider discovery adapters and labels matching files
+as Agent Code-managed. Missing files are omitted, never repaired by inspection;
+unmanaged files remain outside this service's ownership. The inventory reports
+installation evidence, not the running provider's activation or loaded context.
+
 `githubSkillSource.ts` and `installedSkillPackageStore.ts` are focused helpers,
 not additional authorities. Acquisition returns inert, bounded package bytes;
 the service alone decides whether those bytes may enter canonical state or a
