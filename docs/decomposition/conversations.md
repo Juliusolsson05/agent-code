@@ -2,7 +2,7 @@
 
 > Stage decomposition, written before implementation per `staged-decomposition`.
 > Revised in place when a stage disproves it. Status: **implemented on
-> `feat/session-picker`** (approved by the user on 2026-09-11 with the defaults
+> `feat/session-picker`, PR #899** (approved by the user on 2026-09-11 with the defaults
 > in §8). Live numbers on the author's machine under a load average of about
 > twenty from other sessions: cold list 762 ms (was 8.5 s before the union and
 > head bounds), warm 45 ms, first search 1.4 s, second search under 100 ms.
