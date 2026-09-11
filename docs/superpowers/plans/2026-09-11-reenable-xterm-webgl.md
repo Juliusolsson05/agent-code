@@ -103,7 +103,63 @@ imports `@xterm/headless`, so no second `@xterm/xterm` enters the tree.
 arborist dedupe unrelated to xterm that could change test-runner behaviour. The
 committed lockfile is `main`'s with ONLY the three `@xterm/*` entries and the
 root dependency specs replaced, validated with a clean `npm ci` (which also
-reinstalled vitest's nested `esbuild 0.28.2`). Diff: 23+/17- lines.
+reinstalled vitest's nested `esbuild 0.28.2`). Diff: lockfile 20+/14-,
+manifest 3+/3-.
+
+## Scope change after review (2026-09-11, user-approved): local core patch
+
+Two orchestrated reviewers (A runtime/Codex, B integration/Claude) reviewed
+the first version. A found — and independent source reading, a web/GitHub
+research pass and integration runs confirmed — an **upstream core bug in the
+pinned beta**: `CoreTerminal.resize()` calls `WriteBuffer.flushSync()`
+(xterm.js bf7c95b6 / #5599, since 6.1.0-beta.96), which re-applies chunks
+the async writer already parsed (duplicate output, write callbacks fired
+twice) and stops at an empty-string chunk, discarding everything behind it.
+Known upstream in open xterm.js #6154 (maintainer: "resize is a sync action
+and may not call WriteBuffer.flushSync"); Superset patches the same bug
+(superset-sh/superset#7188). It predates the atlas fix, so no beta avoids it.
+
+Evidence gathered (scratchpad harnesses, not committed):
+- Generic streaming (Node, both versions, differential): rare — 0 replays in
+  32 compact runs; 11 replayed chunks in one 6 MB smoke run on the beta, 0 on
+  6.0.0. It needs a slow-to-parse chunk followed by a resize.
+- Agent Code's pane attach IS that shape (`replay(term, [512 KiB buffer,
+  backlog])` + `fit()`): with the REAL `terminalInputForwarder`, 7/20
+  simulated attaches leaked terminal query replies into the agent's stdin and
+  left the #745 latch broken for the next replay; 0/20 on 6.0.0; 0/20 patched.
+
+Decision (user): keep the beta line, apply the fix locally, lock and document.
+Implemented as the maintainer-endorsed narrow form — remove the flush from
+`resize()` (stable 6.0.0 semantics) — rather than Superset's larger rewrite of
+`flushSync`/`_innerWrite`, which targets an async image-decoder case we do not
+have (no parser handlers registered in `src/`).
+
+- `scripts/patch-xterm.mjs` (postinstall, before electron-rebuild): exact-
+  string edit of `resize()` in `lib/xterm.mjs` + `lib/xterm.js`, verified
+  against the exact pin; refuses to run on any other version or bundle shape
+  (fails the install loudly), idempotent, self-verifying. A script instead of
+  patch-package because both bundles are minified (a single 391 KB line), so a
+  diff would be ~0.8 MB of unreviewable patch. Its header is the documentation:
+  bug, trigger, app impact, and exactly what to do on a bump.
+- `xtermResizeFlushPatch.test.ts`: marker in both bundles + three
+  deterministic behaviour cases (resize inside a write callback; empty write
+  + resize; resize after the writer yielded). All 7 failed on the unpatched
+  beta, pass patched, and the three behaviours pass on stable 6.0.0.
+
+Also fixed from the same review round:
+- A2 — context-loss fallback kept the WebGL grid (WebGL floors the cell width,
+  DOM keeps it fractional) so text could clip; `attachXtermWebglRenderer` now
+  takes an options object with `onRendererChange`, fired after WebGL takes
+  over and after a real fallback (never when disabled/failed/after teardown),
+  and the three hosts route it into their existing ownership-gated fit.
+- B1 — the Electron pixel harness (`scripts/smoke-terminal-renderer.mjs`)
+  asserted `--control` MUST reproduce corruption, which is guaranteed to fail
+  on the fixed addon; both modes now must render clean.
+- B2 — header no longer claims VS Code ships addon-fit; B3 — lockfile numbers;
+  B4 — the two TerminalLeaf suites mock the renderer module like the
+  AgentTerminalLeaf suites. B5 (upstream-watch entry for xterm) not taken: the
+  watcher and its issue checklist are provider-CLI specific; the patch script's
+  version guard is the trigger on any bump.
 
 ## Manual soak (required before merge — the user; agents never launch the app)
 
