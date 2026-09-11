@@ -22,7 +22,7 @@ beforeAll(async () => {
       sources: [
         new ClaudeConversationSource({ projectsDir: join(corpus.claudeConfigDir, 'projects'), history: claudeHistory }),
         new CodexConversationSource({ codexHome: corpus.codexHome }),
-        new OpencodeConversationSource({ dataDir: corpus.opencodeDataDir, listPrompts: async () => [] }),
+        new OpencodeConversationSource({ dataDir: corpus.opencodeDataDir }),
       ],
       ledger: null,
       listWorktrees: async () => worktrees,

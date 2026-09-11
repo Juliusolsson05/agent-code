@@ -8,7 +8,7 @@ import { streamJsonl } from '@shared/runtime/streamJsonl.js'
 import { performanceService } from '@main/performance/PerformanceService.js'
 import { extractPromptsFromFile } from '@main/conversations/prompts/promptFolder.js'
 import type { ClaudeHistoryIndex } from './claudeHistory.js'
-import type { ConversationSource, SourceConversation, SourceScope } from './types.js'
+import type { ConversationSource, SourceConversation, SourceScope, PromptReadOptions } from './types.js'
 
 // Claude Code stores one directory per cwd under ~/.claude/projects, named by
 // sanitizePath(cwd), and one `<uuid>.jsonl` per session inside it. There is
@@ -273,7 +273,7 @@ export class ClaudeConversationSource implements ConversationSource {
     return rows
   }
 
-  async prompts(nativeId: string, cwd: string): Promise<ConversationPrompt[]> {
+  async prompts(nativeId: string, cwd: string, options: PromptReadOptions = {}): Promise<ConversationPrompt[]> {
     const direct = join(this.deps.projectsDir, sanitizePath(cwd), `${nativeId}.jsonl`)
     let file: string | null = null
     try {
@@ -298,7 +298,7 @@ export class ClaudeConversationSource implements ConversationSource {
       }
     }
     if (!file) return []
-    const { prompts } = await extractPromptsFromFile('claude', nativeId, file, 'all')
+    const { prompts } = await extractPromptsFromFile('claude', nativeId, file, options.need ?? 'all', { maxBytes: options.maxBytes })
     return prompts.map(p => ({ text: p.text, timestamp: p.ts }))
   }
 }

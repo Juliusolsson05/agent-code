@@ -52,14 +52,26 @@ describe('Codex conversation source', () => {
     expect(row.customTitle).toBe(named.title.startsWith(named.name) ? null : named.name)
   })
 
-  it('unions rollouts on disk that the index does not know about', async () => {
+  it('unions rollouts on disk that the index does not know about, and only those', async () => {
     const { corpus, source, listWorktrees } = await setup()
-    const counts = corpus.manifest.counts as { codex: { unindexedSampled: number } }
-    const family = await resolveFamily('/fixture/repo', 'everywhere', { listWorktrees })
-    const rows = await source.discover({ scope: 'everywhere', family })
-    const scanned = rows.filter(r => r.origin === 'scan')
-    expect(scanned.length).toBe(counts.codex.unindexedSampled)
-    for (const r of scanned) expect(r.available).toBe(true)
+    const counts = corpus.manifest.counts as { codex: { unindexedSampled: number; controlRollouts: number; archivedRollouts: number } }
+    // The corpus keeps rollout files for indexed threads of OTHER projects
+    // (and of an archived family thread when one exists). Neither may be
+    // re-listed as unindexed: treating them so read nine hundred rollout
+    // heads per discovery on the author's machine (seven seconds) and would
+    // resurrect archived threads.
+    expect(counts.codex.controlRollouts + counts.codex.archivedRollouts).toBeGreaterThan(0)
+    for (const scope of ['repository', 'everywhere'] as const) {
+      const family = await resolveFamily('/fixture/repo', scope, { listWorktrees })
+      const rows = await source.discover({ scope, family })
+      const scanned = rows.filter(r => r.origin === 'scan')
+      expect(scanned.length).toBeLessThanOrEqual(counts.codex.unindexedSampled)
+      for (const r of scanned) expect(r.available).toBe(true)
+      const ids = rows.map(r => r.nativeId)
+      expect(new Set(ids).size).toBe(ids.length)
+    }
+    const everywhere = await source.discover({ scope: 'everywhere', family: await resolveFamily('/fixture/repo', 'everywhere', { listWorktrees }) })
+    expect(everywhere.filter(r => r.origin === 'scan')).toHaveLength(counts.codex.unindexedSampled)
   })
 
   it('falls back to the rollout scan when the index is missing and reports why', async () => {

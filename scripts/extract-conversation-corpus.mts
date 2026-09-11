@@ -276,12 +276,30 @@ async function extractCodex(counts: Json): Promise<void> {
   const idOf = (p: string) => /-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i.exec(p)?.[1] ?? ''
   const unindexed = onDisk.filter(p => !indexedPaths.has(p) && !indexedIds.has(idOf(p))).sort().reverse()
   for (const file of unindexed.slice(0, 3)) await recordRollout(file)
+  // Rollout files of indexed threads OUTSIDE the family, and of an archived
+  // family thread, must exist on disk too: the adapter's union path treated
+  // both as unindexed when its known-id set came from the family query, and
+  // the fixture could not show it while only family rollouts were recorded.
+  let controlRollouts = 0
+  for (const row of control.slice(0, 3)) {
+    const file = row.rollout_path as string
+    if (!existsSync(file)) continue
+    await recordRollout(file)
+    controlRollouts++
+  }
+  let archivedRollouts = 0
+  for (const row of familyRows.filter(r => Number(r.archived) === 1).sort((a, b) => Number(b.recency_at_ms ?? 0) - Number(a.recency_at_ms ?? 0)).slice(0, 1)) {
+    const file = row.rollout_path as string
+    if (!existsSync(file)) continue
+    await recordRollout(file)
+    archivedRollouts++
+  }
   counts.codex = {
     indexed: rows.length, inFamily: familyRows.length, control: control.length,
     exec: familyRows.filter(r => r.source === 'exec').length,
     subagents: familyRows.filter(r => r.thread_source === 'subagent').length,
     orchestrationChildren: familyRows.filter(r => String(r.title).startsWith('<orchestration-handoff>')).length,
-    sampledRollouts: sampledCount, unindexedOnDisk: unindexed.length, unindexedSampled: Math.min(3, unindexed.length), columns,
+    sampledRollouts: sampledCount, unindexedOnDisk: unindexed.length, unindexedSampled: Math.min(3, unindexed.length), controlRollouts, archivedRollouts, columns,
   }
 }
 

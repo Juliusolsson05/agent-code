@@ -8,7 +8,6 @@ import { conversationKey } from '@shared/conversations/types.js'
 import { getCodexHome } from '@providers/codex/runtime/projectDir.js'
 import { getClaudeConfigHomeDir, getProjectsDir } from '@shared/runtime/projectDir.js'
 import { performanceService } from '@main/performance/PerformanceService.js'
-import { getHostTranscriptAdapter } from '@main/providerSwitch/transcriptEngine.js'
 import { buildListing } from './catalog/listing.js'
 import { normalizeConversation } from './catalog/normalize.js'
 import { unwrapUserText } from './catalog/unwrap.js'
@@ -32,11 +31,13 @@ import type { ConversationSource, SourceConversation } from './sources/types.js'
 // discovery after the window is what makes a session started in another
 // terminal appear without a restart.
 //
-// WHY prompt search for Codex and OpenCode is bounded to the newest rows:
-// their prompts live in the transcripts, not in an index. The incremental
-// folder reads a tail window per file; two hundred files is one bounded pass
-// and the result is cached here by the row's activity stamp, so a second
-// keystroke costs nothing. Claude prompts come from history.jsonl for free.
+// WHY prompt search for Codex is bounded in rows AND bytes: its prompts
+// live in rollouts, not in an index, and the newest two hundred rollouts of
+// one repository total 1.2 GB on the author's machine. The incremental folder
+// reads at most SEARCH_BYTES_PER_ROW from the tail of each of the newest
+// SEARCH_PROMPT_ROWS files, and the result is cached here by the row's
+// activity stamp, so a second keystroke costs nothing. Claude prompts come
+// from history.jsonl and OpenCode's from its database, both for free.
 //
 // WHY `@main/ipc/git.js` is not imported here: its first line imports
 // electron, and the system tests run this file under plain Node against the
@@ -45,6 +46,7 @@ import type { ConversationSource, SourceConversation } from './sources/types.js'
 const DISCOVERY_FRESH_MS = 3_000
 const SEARCH_PROMPT_ROWS = 200
 const SEARCH_PROMPTS_PER_ROW = 40
+const SEARCH_BYTES_PER_ROW = 256 * 1024
 
 type Discovery = { at: number; key: string; family: RepositoryFamily; sources: SourceConversation[] }
 
@@ -126,7 +128,7 @@ export class ConversationService {
       const source = this.source(row.provider)
       if (!source || !row.available || !row.cwd) return
       try {
-        const prompts = await source.prompts(row.nativeId, row.cwd)
+        const prompts = await source.prompts(row.nativeId, row.cwd, { need: SEARCH_PROMPTS_PER_ROW, maxBytes: SEARCH_BYTES_PER_ROW })
         const texts = prompts.slice(0, SEARCH_PROMPTS_PER_ROW).map(p => p.text)
         this.promptCache.set(key, { at: row.lastUserActivityAt, texts })
         out.set(key, texts)
@@ -154,10 +156,11 @@ export class ConversationService {
     })
   }
 
+  /** Every prompt of one conversation, newest first (the folder's order). */
   async prompts(request: ConversationPromptsRequest): Promise<ConversationPrompt[]> {
     const source = this.source(request.provider)
     if (!source) return []
-    const raw = await source.prompts(request.nativeId, request.cwd)
+    const raw = await source.prompts(request.nativeId, request.cwd, { need: 'all' })
     // The folder reports wrappers verbatim; the prompt list shows what the
     // user typed, so unwrap here and drop injected messages.
     return raw.flatMap(p => {
@@ -183,12 +186,7 @@ export function createConversationService(deps: { ledger: ConversationLedger | n
     sources: [
       new ClaudeConversationSource({ projectsDir: getProjectsDir(), history: claudeHistory }),
       new CodexConversationSource({ codexHome: getCodexHome() }),
-      new OpencodeConversationSource({
-        dataDir: defaultOpencodeDataDir(),
-        // OpenCode prompts are listed by its transcript adapter, which speaks
-        // to the CLI's own session store; the source only needs the rows.
-        listPrompts: (cwd, id) => getHostTranscriptAdapter('opencode').listPrompts(cwd, id).then(rows => rows.map(r => ({ text: r.text, timestamp: r.timestamp }))),
-      }),
+      new OpencodeConversationSource({ dataDir: defaultOpencodeDataDir() }),
     ],
     ledger: deps.ledger,
     listWorktrees: deps.listWorktrees,

@@ -9,7 +9,7 @@ import { performanceService } from '@main/performance/PerformanceService.js'
 import { extractPromptsFromFile } from '@main/conversations/prompts/promptFolder.js'
 import { findCodexRolloutPathByThreadId } from 'codex-headless'
 import { newestCodexStateDb, openReadOnlySqlite } from './sqlite.js'
-import type { ConversationSource, SourceConversation, SourceScope } from './types.js'
+import type { ConversationSource, SourceConversation, SourceScope, PromptReadOptions } from './types.js'
 
 // Codex keeps its own index at ~/.codex/state_N.sqlite (`threads`,
 // `thread_spawn_edges`), maintained by the CLI and backfilled from rollouts.
@@ -106,7 +106,11 @@ async function readRolloutHead(file: string): Promise<RolloutHead> {
       const ts = typeof record.timestamp === 'string' ? Date.parse(record.timestamp) : NaN
       if (Number.isFinite(ts)) out.lastUserAt = ts
     }
-    if (records >= HEAD_RECORD_LIMIT && out.userTexts.length > 0) break
+    // WHY the limit is unconditional: a rollout whose first two hundred
+    // records hold no user event (exec runs, synthesized transcripts) has
+    // nothing further up the file the head can label it by, and reading such
+    // files to the end made discovery cost the size of the store.
+    if (records >= HEAD_RECORD_LIMIT) break
   }
   return out
 }
@@ -114,7 +118,7 @@ async function readRolloutHead(file: string): Promise<RolloutHead> {
 export class CodexConversationSource implements ConversationSource {
   readonly provider = 'codex' as const
   private downgradeReason: string | null = null
-  private walk: { at: number; files: Map<string, { mtime: number; id: string }> } | null = null
+  private walk: { at: number; files: Map<string, { mtime: number | null; id: string }> } | null = null
   private readonly heads = new Map<string, { mtime: number; head: RolloutHead }>()
 
   constructor(private readonly deps: { codexHome: string; walkTtlMs?: number }) {}
@@ -123,29 +127,27 @@ export class CodexConversationSource implements ConversationSource {
     return this.downgradeReason
   }
 
-  private async walkRollouts(): Promise<Map<string, { mtime: number; id: string }>> {
+  // WHY the walk never stats: two thousand rollouts on the author's machine
+  // are two thousand sequential stat calls (200 ms) to learn mtimes that
+  // only the handful of unindexed files ever use. The directory entries say
+  // what is a file; fromHead stats the file it is about to read.
+  private async walkRollouts(): Promise<Map<string, { mtime: number | null; id: string }>> {
     const ttl = this.deps.walkTtlMs ?? DEFAULT_WALK_TTL_MS
     if (this.walk && Date.now() - this.walk.at < ttl) return this.walk.files
-    const files = new Map<string, { mtime: number; id: string }>()
+    const files = new Map<string, { mtime: number | null; id: string }>()
     const visit = async (dir: string, depth: number): Promise<void> => {
-      let names: string[]
+      let entries
       try {
-        names = await readdir(dir)
+        entries = await readdir(dir, { withFileTypes: true })
       } catch {
         return
       }
-      for (const name of names) {
-        const full = join(dir, name)
-        let s
-        try {
-          s = await stat(full)
-        } catch {
-          continue
-        }
-        if (s.isDirectory() && depth < 3) await visit(full, depth + 1)
-        else if (s.isFile()) {
-          const m = ROLLOUT_RE.exec(name)
-          if (m) files.set(full, { mtime: s.mtimeMs, id: m[2]! })
+      for (const entry of entries) {
+        const full = join(dir, entry.name)
+        if (entry.isDirectory() && depth < 3) await visit(full, depth + 1)
+        else if (entry.isFile()) {
+          const m = ROLLOUT_RE.exec(entry.name)
+          if (m) files.set(full, { mtime: null, id: m[2]! })
         }
       }
     }
@@ -154,7 +156,15 @@ export class CodexConversationSource implements ConversationSource {
     return files
   }
 
-  private async fromHead(file: string, mtime: number, id: string, scope: SourceScope): Promise<SourceConversation | null> {
+  private async fromHead(file: string, knownMtime: number | null, id: string, scope: SourceScope): Promise<SourceConversation | null> {
+    let mtime = knownMtime
+    if (mtime === null) {
+      try {
+        mtime = (await stat(file)).mtimeMs
+      } catch {
+        return null
+      }
+    }
     const cached = this.heads.get(file)
     const head = cached && cached.mtime === mtime ? cached.head : await readRolloutHead(file)
     this.heads.set(file, { mtime, head })
@@ -196,13 +206,20 @@ export class CodexConversationSource implements ConversationSource {
     }
     this.downgradeReason = null
     const rows: SourceConversation[] = []
+    // WHY the known set covers EVERY indexed thread, not the family's rows:
+    // "unindexed" means the index has never seen the thread. The first cut
+    // filled this set from the family-filtered query, so every rollout of
+    // another project or an archived thread looked unindexed and had its head
+    // read on each cold discovery: nine hundred files, seven seconds. Ids are
+    // tracked as well as paths because the recorded store holds two rollout
+    // files for one thread id (a copy under another filename timestamp).
     const indexedPaths = new Set<string>()
-    // WHY ids are tracked as well as paths: the recorded store holds two
-    // rollout files for one thread id (a copy with a different filename
-    // timestamp). The index knows one path; the other would otherwise be
-    // unioned as a second conversation with the same identity.
     const indexedIds = new Set<string>()
     try {
+      for (const known of opened.db.prepare('select id, rollout_path from threads').all() as Array<{ id: string; rollout_path: string | null }>) {
+        indexedIds.add(known.id)
+        if (known.rollout_path) indexedPaths.add(known.rollout_path)
+      }
       const parents = new Map<string, string>()
       for (const edge of opened.db.prepare('select parent_thread_id, child_thread_id from thread_spawn_edges').all() as Array<{ parent_thread_id: string; child_thread_id: string }>) {
         parents.set(edge.child_thread_id, edge.parent_thread_id)
@@ -224,8 +241,6 @@ export class CodexConversationSource implements ConversationSource {
       const where = predicates.length > 0 ? `where archived = 0 and (${predicates.join(' or ')})` : 'where archived = 0'
       const columns = CODEX_INDEX_COLUMNS.threads.map(c => `"${c}"`).join(', ')
       for (const row of opened.db.prepare(`select ${columns} from threads ${where}`).all(...args) as unknown as IndexRow[]) {
-        indexedPaths.add(row.rollout_path)
-        indexedIds.add(row.id)
         const title = (row.title ?? '').trim() || (row.first_user_message ?? '').trim() || (row.preview ?? '').trim()
         const name = (row.name ?? '').trim()
         rows.push({
@@ -279,7 +294,7 @@ export class CodexConversationSource implements ConversationSource {
     return rows
   }
 
-  async prompts(nativeId: string, _cwd: string): Promise<ConversationPrompt[]> {
+  async prompts(nativeId: string, _cwd: string, options: PromptReadOptions = {}): Promise<ConversationPrompt[]> {
     let file: string | null = null
     const dbPath = newestCodexStateDb(this.deps.codexHome)
     const opened = dbPath ? openReadOnlySqlite(dbPath, { threads: ['id', 'rollout_path'] }) : null
@@ -299,7 +314,7 @@ export class CodexConversationSource implements ConversationSource {
       }
     }
     if (!file) return []
-    const { prompts } = await extractPromptsFromFile('codex', nativeId, file, 'all')
+    const { prompts } = await extractPromptsFromFile('codex', nativeId, file, options.need ?? 'all', { maxBytes: options.maxBytes })
     return prompts.map(p => ({ text: p.text, timestamp: p.ts }))
   }
 }

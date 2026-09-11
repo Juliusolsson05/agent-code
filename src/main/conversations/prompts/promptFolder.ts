@@ -156,6 +156,7 @@ export async function extractPromptsFromFile(
   sessionId: string,
   file: string,
   need: number | 'all' = 'all',
+  options: { maxBytes?: number } = {},
 ): Promise<{ prompts: FoldedPrompt[]; cwd: string }> {
   // WHY calls for the same transcript are serialised: the cached entry is
   // mutated in place across awaits (fold ranges, prompts). Two overlapping
@@ -169,7 +170,7 @@ export async function extractPromptsFromFile(
   const previous = inflight.get(key) ?? Promise.resolve()
   const run = previous
     .catch(() => undefined)
-    .then(() => extractPromptsUnlocked(kind, sessionId, file, need))
+    .then(() => extractPromptsUnlocked(kind, sessionId, file, need, options.maxBytes))
   inflight.set(key, run)
   try {
     return await run
@@ -185,6 +186,7 @@ async function extractPromptsUnlocked(
   sessionId: string,
   file: string,
   need: number | 'all',
+  maxBytes?: number,
 ): Promise<{ prompts: FoldedPrompt[]; cwd: string }> {
   const span = performanceService.span('sessionIndex.extractPrompts', {
     kind,
@@ -241,8 +243,14 @@ async function extractPromptsUnlocked(
     if (size > entry.parsedTo) {
       bytesRead += await foldForward(entry, kind, file, size)
     }
+    // WHY a byte budget as well as a prompt count: a rollout with fewer
+    // prompts than `need` would otherwise be folded to its head, and the
+    // newest two hundred rollouts of one repository total 1.2 GB on the
+    // author's machine. Search wants "the prompts in the recent tail" and
+    // stops when the budget is spent; the entry keeps parsedFrom > 0, so a
+    // later 'all' read (View Prompts) continues backward from there.
     let window = TAIL_WINDOW_BYTES
-    while (entry.parsedFrom > 0 && entry.prompts.length < wanted) {
+    while (entry.parsedFrom > 0 && entry.prompts.length < wanted && (maxBytes === undefined || bytesRead < maxBytes)) {
       bytesRead += await foldBackward(entry, kind, file, window)
       window *= 4
     }

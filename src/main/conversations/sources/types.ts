@@ -37,9 +37,18 @@ export type SourceScope = {
   family: RepositoryFamily
 }
 
+/** How much of a transcript a prompt read may cost. Search asks for a bounded
+ *  tail (the newest `need` prompts within `maxBytes`); View Prompts asks for
+ *  everything. Sources that read an index ignore both. */
+export type PromptReadOptions = {
+  need?: number | 'all'
+  maxBytes?: number
+}
+
 export interface ConversationSource {
   readonly provider: AgentProviderKind
   discover(scope: SourceScope): Promise<SourceConversation[]>
   /** Every user prompt of one conversation, newest first. */
-  prompts(nativeId: string, cwd: string): Promise<ConversationPrompt[]>
+  /** Newest first. */
+  prompts(nativeId: string, cwd: string, options?: PromptReadOptions): Promise<ConversationPrompt[]>
 }

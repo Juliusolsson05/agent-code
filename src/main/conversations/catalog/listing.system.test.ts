@@ -40,7 +40,7 @@ async function loadCorpus(): Promise<Corpus> {
   const sources = [
     new ClaudeConversationSource({ projectsDir: join(corpus.claudeConfigDir, 'projects'), history }),
     new CodexConversationSource({ codexHome: corpus.codexHome }),
-    new OpencodeConversationSource({ dataDir: corpus.opencodeDataDir, listPrompts: async () => [] }),
+    new OpencodeConversationSource({ dataDir: corpus.opencodeDataDir }),
   ]
   const all = (await Promise.all(sources.map(s => s.discover({ scope: 'repository', family })))).flat()
   const expectations = JSON.parse(await readFile('testing/fixtures/conversations/expectations.json', 'utf8')) as Expectations

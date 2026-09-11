@@ -55,10 +55,7 @@ type SessionRow = {
 export class OpencodeConversationSource implements ConversationSource {
   readonly provider = 'opencode' as const
 
-  constructor(private readonly deps: {
-    dataDir: string
-    listPrompts(cwd: string, id: string): Promise<Array<{ text: string; timestamp: string | null }>>
-  }) {}
+  constructor(private readonly deps: { dataDir: string }) {}
 
   async discover(scope: SourceScope): Promise<SourceConversation[]> {
     const span = performanceService.span('conversations.opencode.discover', { scope: scope.scope })
@@ -128,10 +125,30 @@ export class OpencodeConversationSource implements ConversationSource {
     return rows
   }
 
-  async prompts(nativeId: string, cwd: string): Promise<ConversationPrompt[]> {
-    const prompts = await this.deps.listPrompts(cwd, nativeId)
-    return prompts
-      .map(p => ({ text: p.text, timestamp: p.timestamp && Number.isFinite(Date.parse(p.timestamp)) ? Date.parse(p.timestamp) : null }))
-      .reverse()
+  // WHY the database and not the CLI export the transcript engine uses: an
+  // export spawns the opencode binary once per session, and search asks for
+  // the prompts of two hundred sessions at a time. The same indexed join that
+  // discovery reads gives every user text part in one statement. Rewind keeps
+  // the export because it needs the export's message positions as addresses.
+  async prompts(nativeId: string, _cwd: string): Promise<ConversationPrompt[]> {
+    const opened = openReadOnlySqlite(join(this.deps.dataDir, 'opencode.db'), OPENCODE_COLUMNS)
+    if (!opened.ok) return []
+    try {
+      const rows = opened.db.prepare(
+        `select p.data as part, m.data as message, m.time_created as created from part p join message m on m.id = p.message_id
+         where m.session_id = ? order by m.time_created desc, p.time_created desc`,
+      ).all(nativeId) as unknown as Array<{ part: string; message: string; created: number | null }>
+      const out: ConversationPrompt[] = []
+      for (const r of rows) {
+        const message = parseJsonRecord(r.message)
+        const part = parseJsonRecord(r.part)
+        if (message?.role !== 'user' || part?.type !== 'text' || part.synthetic === true) continue
+        if (typeof part.text !== 'string' || !part.text.trim()) continue
+        out.push({ text: part.text.trim(), timestamp: typeof r.created === 'number' ? r.created : null })
+      }
+      return out
+    } finally {
+      opened.close()
+    }
   }
 }

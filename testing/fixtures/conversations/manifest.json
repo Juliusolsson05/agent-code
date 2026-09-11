@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "capturedAt": "2026-09-11T22:22:32.741Z",
+  "capturedAt": "2026-09-11T22:53:45.825Z",
   "repoRoot": "/fixture/repo",
   "worktrees": [
     "/fixture/repo",
@@ -67,6 +67,8 @@
       "sampledRollouts": 7,
       "unindexedOnDisk": 5,
       "unindexedSampled": 3,
+      "controlRollouts": 3,
+      "archivedRollouts": 0,
       "columns": [
         "id",
         "rollout_path",

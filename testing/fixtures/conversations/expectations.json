@@ -2,11 +2,11 @@
   "version": 1,
   "family": "/fixture/repo",
   "kinds": {
+    "codex:01a09276-e877-7851-b54b-3bb16d98c8b4": "user",
     "codex:01a09240-352c-7730-8609-3180833f82a9": "user",
     "claude:7863b7de-1945-4947-b0d1-707cee228b89": "orchestration-child",
     "claude:0150d4a1-2e90-4026-8cb1-930af27c3a80": "user",
     "claude:a82bb4eb-9fbc-4b0b-849b-826624aacd49": "orchestration-child",
-    "codex:01a09276-e877-7851-b54b-3bb16d98c8b4": "user",
     "codex:01a091bf-4079-7a92-8002-347cced36051": "orchestration-child",
     "codex:01a091bf-3547-7b63-a74c-2abc29692f4a": "orchestration-child",
     "claude:7528282f-501f-4a53-ae7a-86c17d08eb4f": "orchestration-child",
@@ -1397,11 +1397,11 @@
     "codex:019e1d16-6ab6-7500-9c70-4fcc0c8f130f": "user"
   },
   "labelSources": {
+    "codex:01a09276-e877-7851-b54b-3bb16d98c8b4": "first-prompt",
     "codex:01a09240-352c-7730-8609-3180833f82a9": "first-prompt",
     "claude:7863b7de-1945-4947-b0d1-707cee228b89": "ai-title",
     "claude:0150d4a1-2e90-4026-8cb1-930af27c3a80": "ai-title",
     "claude:a82bb4eb-9fbc-4b0b-849b-826624aacd49": "ai-title",
-    "codex:01a09276-e877-7851-b54b-3bb16d98c8b4": "first-prompt",
     "codex:01a091bf-4079-7a92-8002-347cced36051": "provider-name",
     "codex:01a091bf-3547-7b63-a74c-2abc29692f4a": "provider-name",
     "claude:7528282f-501f-4a53-ae7a-86c17d08eb4f": "ai-title",
@@ -2792,9 +2792,9 @@
     "codex:019e1d16-6ab6-7500-9c70-4fcc0c8f130f": "first-prompt"
   },
   "defaultOrderTop": [
+    "codex:01a09276-e877-7851-b54b-3bb16d98c8b4",
     "codex:01a09240-352c-7730-8609-3180833f82a9",
     "claude:0150d4a1-2e90-4026-8cb1-930af27c3a80",
-    "codex:01a09276-e877-7851-b54b-3bb16d98c8b4",
     "codex:01a091cf-dfb3-7161-8a18-15c7a2de4a44",
     "claude:e22387d9-73df-4d48-87d8-eaa798cbdedc",
     "codex:01a091e0-846d-79a0-a9b1-acd364dc4302",

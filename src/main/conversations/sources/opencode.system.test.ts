@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 
 import { resolveFamily } from '../family.js'
 import { OPENCODE_PLACEHOLDER_TITLE, OpencodeConversationSource } from './opencode.js'
@@ -14,8 +14,7 @@ describe('OpenCode conversation source', () => {
     const counts = corpus.manifest.counts as { opencode: { inFamily: number; control: number; children: number } }
     const porcelain = await corpusWorktreesPorcelain()
     const worktrees = porcelain.split('\n').filter(l => l.startsWith('worktree ')).map(l => ({ path: l.slice('worktree '.length) }))
-    const listPrompts = vi.fn(async () => [{ text: 'p:x:1', timestamp: '2026-09-11T00:00:00.000Z' }])
-    const source = new OpencodeConversationSource({ dataDir: corpus.opencodeDataDir, listPrompts })
+    const source = new OpencodeConversationSource({ dataDir: corpus.opencodeDataDir })
     const family = await resolveFamily('/fixture/repo', 'repository', { listWorktrees: async () => worktrees })
     const rows = await source.discover({ scope: 'repository', family })
     expect(rows).toHaveLength(counts.opencode.inFamily)
@@ -29,13 +28,17 @@ describe('OpenCode conversation source', () => {
     for (const r of rows) expect(r.aiTitle).not.toBe(OPENCODE_PLACEHOLDER_TITLE)
     const everywhere = await source.discover({ scope: 'everywhere', family: await resolveFamily('/fixture/repo', 'everywhere', { listWorktrees: async () => worktrees }) })
     expect(everywhere).toHaveLength(counts.opencode.inFamily + counts.opencode.control)
-    const prompts = await source.prompts(rows[0]!.nativeId, rows[0]!.cwd!)
-    expect(prompts).toEqual([{ text: 'p:x:1', timestamp: Date.parse('2026-09-11T00:00:00.000Z') }])
-    expect(listPrompts).toHaveBeenCalledWith(rows[0]!.cwd, rows[0]!.nativeId)
+    // Prompts come from the database, newest first, and the oldest of them is
+    // the first user text discovery already read for the same session.
+    const withTexts = rows.find(r => r.userTexts.length > 0)!
+    const prompts = await source.prompts(withTexts.nativeId, withTexts.cwd!)
+    expect(prompts.length).toBeGreaterThanOrEqual(withTexts.userTexts.length)
+    expect(prompts.at(-1)!.text).toBe(withTexts.userTexts[0])
+    for (let i = 1; i < prompts.length; i++) expect(prompts[i]!.timestamp ?? 0).toBeLessThanOrEqual(prompts[i - 1]!.timestamp ?? Number.POSITIVE_INFINITY)
   })
 
   it('is empty, not broken, when the database is absent', async () => {
-    const source = new OpencodeConversationSource({ dataDir: '/nonexistent/opencode', listPrompts: async () => [] })
+    const source = new OpencodeConversationSource({ dataDir: '/nonexistent/opencode' })
     const family = await resolveFamily('/fixture/repo', 'everywhere', { listWorktrees: async () => [] })
     await expect(source.discover({ scope: 'everywhere', family })).resolves.toEqual([])
   })
