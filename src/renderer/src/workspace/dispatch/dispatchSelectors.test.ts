@@ -117,8 +117,10 @@ describe('resolveDispatchSpawnTarget with a detached focused lane', () => {
 // Grid Dispatch row bindings (#681). Two consumers must agree on "which
 // projects may this lane hold": the spawn resolver (where plain New Agent…
 // lands) and New Agent In…'s project list (#852). Both read the SAME selector,
-// and these cases pin the resolver's bound-row branch that had no coverage
-// before it was routed through that selector.
+// pinned here. The resolver's bound-row RULES (binding over the active tab,
+// active tab preferred among several bound projects, first bound otherwise)
+// are covered on the real persisted fixture in rowScopedRows.test.ts, which
+// guarded the selector extraction — they are deliberately not restated here.
 describe('focusedLaneBoundProjectTabIds', () => {
   it('returns the binding of the row that owns the focused lane', () => {
     const state = makeState({
@@ -146,36 +148,6 @@ describe('focusedLaneBoundProjectTabIds', () => {
     expect(focusedLaneBoundProjectTabIds(unbound)).toEqual([])
     expect(focusedLaneBoundProjectTabIds(makeState({ scope: 'global', focusedSessionId: 'a1' }))).toEqual([])
     expect(focusedLaneBoundProjectTabIds(makeState(null))).toEqual([])
-  })
-})
-
-describe('resolveDispatchSpawnTarget with a bound row', () => {
-  it('files an empty bound lane under the bound project, not the stale classic focus', () => {
-    const state = makeState({
-      scope: 'global',
-      focusedSessionId: 'a1',
-      tiled: {
-        focusedLane: 1,
-        lanes: [{ selectedSessionId: 'a1' }, {}],
-        rows: [{ length: 1 }, { length: 1, projectTabIds: ['tabB'] }],
-      },
-    })
-    expect(resolveDispatchSpawnTarget(state)).toEqual({ tabId: 'tabB', cwdSessionId: null, laneIndex: 1 })
-  })
-
-  it('prefers the active tab when it is one of several bound projects', () => {
-    const state = makeState({
-      scope: 'global',
-      focusedSessionId: 'b1',
-      tiled: {
-        focusedLane: 1,
-        lanes: [{ selectedSessionId: 'b1' }, {}],
-        rows: [{ length: 1 }, { length: 1, projectTabIds: ['tabB', 'tabA'] }],
-      },
-    })
-    // activeTabId is tabA (see makeState), and tabA is bound — it wins over the
-    // first-listed tabB and over the classic focus b1.
-    expect(resolveDispatchSpawnTarget(state)).toEqual({ tabId: 'tabA', cwdSessionId: null, laneIndex: 1 })
   })
 })
 

@@ -232,7 +232,10 @@ describe('built-in command catalog — baseline characterization', () => {
 })
 
 describe('generated per-provider split commands', () => {
-  // The arithmetic is 103 literal ids + 4 generated = 107. If a provider
+  // The current literal + generated arithmetic is asserted by "accounts for the
+  // difference between literal and total command count" below — not restated
+  // here, because a number in this comment is what drifted to "103 + 4 = 107"
+  // while the assertions moved on. If a provider
   // is ever added to AGENT_PROVIDER_KINDS, this invariant is what tells the
   // author that the catalog count moved for a legitimate reason, and forces the
   // baseline snapshot above to be updated deliberately.
