@@ -469,6 +469,24 @@ describe('agent index navigation', () => {
     ])
   })
 
+  it('focuses a grid terminal through the same navigation as an agent (#865)', () => {
+    const state: WorkspaceState = {
+      tabs: [{
+        id: 'tab', title: 'project',
+        root: { type: 'split', direction: 'vertical', ratio: 0.5, a: { type: 'leaf', sessionId: 'agent' }, b: { type: 'leaf', sessionId: 'shell' } },
+        focusedSessionId: 'agent',
+      }],
+      activeTabId: 'tab', dispatchMode: null, gridRelatedSelections: {},
+      sessions: { agent: { cwd: '/w', kind: 'claude' }, shell: { cwd: '/w', kind: 'terminal' } },
+      detachedSessions: {}, buried: [], pinnedSessionIds: [],
+    }
+    const target = resolveAgentPaneLabel(state, 'A2')
+    expect(target?.sessionId).toBe('shell')
+    const result = navigateToAgentIndexTarget(state, null, target!)
+    expect(result?.kind).toBe('focus-grid-pane')
+    expect(result?.state.tabs[0].focusedSessionId).toBe('shell')
+  })
+
   it('follows visible Tiled Tabs when stale restored state also contains Dispatch', () => {
     const state = makeState()
     state.dispatchMode = {
