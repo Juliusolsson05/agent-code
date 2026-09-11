@@ -4695,6 +4695,25 @@ export class SessionManager extends EventEmitter {
     return this.spawnInfo.get(sessionId)?.cwd ?? null
   }
 
+  /**
+   * Kind captured at spawn time, before the session is a live registry entry.
+   *
+   * WHY this exists alongside getSessionKind: spawnInfo is set (~:2484) and
+   * `input-readiness {reason:'starting'}` is emitted (~:2501) BEFORE the
+   * RegistryEntry is inserted into `this.sessions` — the terminal path in
+   * particular constructs its tmux/PTY backend and only registers the entry
+   * once that succeeds (~:3113). During that window getSessionKind returns
+   * null for a session that IS a terminal, so any caller gating on
+   * getSessionKind alone (e.g. SessionFeedSource's terminal filter) misses
+   * the pre-registration frames. getSpawnKind reads the earlier-populated
+   * spawnInfo map instead, and spawnInfo is deleted in cleanupSessionState
+   * at the same point sessions are, so this never outlives a session's
+   * lifecycle.
+   */
+  getSpawnKind(sessionId: string): SessionKind | null {
+    return this.spawnInfo.get(sessionId)?.kind ?? null
+  }
+
   /** Epoch ms of the last observed activity (any relayed session event). */
   getLastActivityAt(sessionId: string): number | null {
     return this.lastActivityAt.get(sessionId) ?? null

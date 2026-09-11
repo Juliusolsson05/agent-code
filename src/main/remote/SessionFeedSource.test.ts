@@ -16,6 +16,11 @@ function makeManager(live: string[] = []): SessionManager & EventEmitter {
   anyEmitter.getSessionKind = vi.fn(() => 'claude')
   anyEmitter.list = vi.fn(() => live)
   anyEmitter.getSpawnCwd = vi.fn(() => null)
+  // WHY default to null rather than mirroring getSessionKind: real callers
+  // only need getSpawnKind for the pre-registration window where
+  // getSessionKind is still null (see SessionFeedSource.emit's gate) — tests
+  // that don't care about that window should see the fallback stay inert.
+  anyEmitter.getSpawnKind = vi.fn(() => null)
   anyEmitter.getLastActivityAt = vi.fn(() => null)
   return emitter
 }
@@ -140,6 +145,33 @@ describe('SessionFeedSource', () => {
     manager.emit('process-state', { sessionId: 'shell', active: true })
     manager.emit('exit', { sessionId: 'shell', exitCode: 0 })
     manager.emit('input-readiness', { sessionId: 'agent', input: { ready: true } })
+
+    expect(seen).toEqual([['input-readiness', 'agent']])
+    source.dispose()
+  })
+
+  it('gates on getSpawnKind during the pre-registration window (#866)', () => {
+    // A spawning terminal emits its first input-readiness frame BEFORE
+    // SessionManager registers the RegistryEntry that getSessionKind reads
+    // (sessionManager.ts: spawnInfo set ~:2484 / 'starting' emitted ~:2501,
+    // both before the terminal's registry insert ~:3113). getSessionKind
+    // returns null for 'shell' during that window; only getSpawnKind knows
+    // it's a terminal. Without the fallback this frame would leak through
+    // and get stuck forever in RemoteServer.lastInputReadiness, since the
+    // session's later exit/removed events ARE filtered once it IS registered.
+    const manager = makeManager()
+    ;(manager.getSessionKind as unknown as ReturnType<typeof vi.fn>).mockReturnValue(null)
+    ;(manager.getSpawnKind as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      (sessionId: string) => (sessionId === 'shell' ? 'terminal' : null),
+    )
+    const source = new SessionFeedSource(manager)
+    const seen: Array<[string, unknown]> = []
+    source.onEvent((channel, payload) =>
+      seen.push([channel, (payload as { sessionId?: unknown }).sessionId]),
+    )
+
+    manager.emit('input-readiness', { sessionId: 'shell', ready: false, reason: 'starting' })
+    manager.emit('input-readiness', { sessionId: 'agent', ready: false, reason: 'starting' })
 
     expect(seen).toEqual([['input-readiness', 'agent']])
     source.dispose()
