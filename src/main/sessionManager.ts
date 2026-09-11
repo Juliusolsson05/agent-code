@@ -4649,6 +4649,13 @@ export class SessionManager extends EventEmitter {
     const kind = this.getSessionKind(sessionId)
     if (!info?.resumeSessionId || !kind || kind === 'terminal') return null
     try {
+      // Resume metadata is available before any new committed entry. Providers
+      // with their own history mint the durable locator from that identity;
+      // a file-only resolver would strand database history until the TUI emits.
+      const provider = getMainProvider(kind)
+      if (provider.loadHistoryChunk && provider.transcriptLocator) {
+        return provider.transcriptLocator(info.resumeSessionId)
+      }
       return await resolveProviderTranscriptPath({
         kind,
         cwd: info.cwd,

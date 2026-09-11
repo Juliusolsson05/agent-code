@@ -384,8 +384,9 @@ function assertStableOpencodeExport(
     Number.isFinite(time.completed)
   if (settled) return
 
-  // The native TUI emits no machine-readable busy/idle signal. Its supported
-  // export boundary does expose the durable distinction we need: an idle turn
+  // Live activity describes the running process, not the exported snapshot
+  // (and parked sessions have no live channel). Validate the durable export
+  // before a transformation can replace the source: a settled turn
   // ends with an assistant message carrying `time.completed`; an in-flight
   // export ends with a user message or an incomplete assistant. Refuse that
   // snapshot before rewind/duplicate/switch can project partial work and kill

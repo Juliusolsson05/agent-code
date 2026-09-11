@@ -83,6 +83,8 @@ export class OpencodeTerminalSession extends EventEmitter implements AgentSessio
   private headless: OpencodeTerminalHeadless | null = null
   private exited = false
   private startGeneration = 0
+  private importAbort: AbortController | null = null
+  private ptyDataSubscription: { dispose(): void } | null = null
   private providerSessionId: string | null = null
   private readinessPromise: Promise<boolean> | null = null
   private resolveReadiness: ((ready: boolean) => void) | null = null
@@ -142,18 +144,28 @@ export class OpencodeTerminalSession extends EventEmitter implements AgentSessio
     addOpencodeBuiltInMcpLaunchConfig(this.builtInMcpServers, env)
     excludeExternalControlFromOpencode(env)
 
-    const providerSessionId = this.resumeSessionId ?? await createEmptyOpencodeSession({
-      binary: this.binary,
-      cwd: this.cwd,
-      env,
-    })
-    if (generation !== this.startGeneration) {
-      // stop() may win while the CLI import is still running. The import is a
-      // short-lived child we cannot cancel through node-pty, but the generation
-      // fence prevents it from materializing a TUI after SessionManager has
-      // already released ownership of this wrapper.
-      return
+    let providerSessionId = this.resumeSessionId
+    if (!providerSessionId) {
+      const controller = new AbortController()
+      this.importAbort = controller
+      try {
+        providerSessionId = await createEmptyOpencodeSession({
+          binary: this.binary,
+          cwd: this.cwd,
+          env,
+          signal: controller.signal,
+        })
+      } catch (error) {
+        // Cancellation is an expected stop outcome, not a failed pane startup.
+        // The CLI helper owns killing its child and removing the import file;
+        // this generation may never proceed into launch after that cleanup.
+        if (controller.signal.aborted) return
+        throw error
+      } finally {
+        if (this.importAbort === controller) this.importAbort = null
+      }
     }
+    if (generation !== this.startGeneration) return
     this.providerSessionId = providerSessionId
 
     // The launch step adds what makes the TUI observable: a loopback server
@@ -178,7 +190,8 @@ export class OpencodeTerminalSession extends EventEmitter implements AgentSessio
     })
     this.pty = pty
 
-    pty.onData(data => {
+    this.ptyDataSubscription = pty.onData(data => {
+      if (generation !== this.startGeneration || this.pty !== pty || this.exited) return
       // SessionManager already owns a capped attach/replay buffer for agent PTY
       // bytes. Forwarding the native stream through that channel is what makes
       // a TUI launched before React mounts appear complete instead of blank.
@@ -212,6 +225,10 @@ export class OpencodeTerminalSession extends EventEmitter implements AgentSessio
     // publishes an explicit empty snapshot during start(), which clears any
     // renderer cache left under a stable pane id before recovery/replacement.
     await headless.start()
+    // start() yields after publishing initial conditions. A stop, replacement
+    // or early PTY exit can win there; identity and idle events from this
+    // continuation would otherwise resurrect a backend its owner retired.
+    if (generation !== this.startGeneration || this.headless !== headless || this.pty !== pty || this.exited) return
 
     // The TUI does not expose its session id as a structured startup event.
     // Emit an identity-only transcript envelope through the existing durable
@@ -241,10 +258,13 @@ export class OpencodeTerminalSession extends EventEmitter implements AgentSessio
     headless.on('entry', record => this.emit('jsonl-entry', record, headless.getTranscriptFile()))
     headless.on('conditions', snapshot => this.emit('conditions', snapshot))
     headless.on('transcript-error', error => {
-      this.emit('jsonl-error', Object.assign(new Error(`OpenCode ${error.channel} channel: ${error.message}`), { code: error.code }))
+      // Custom Error properties disappear across IPC; include the category in
+      // the message too so the renderer/phone can retain the actual diagnosis.
+      this.emit('jsonl-error', Object.assign(new Error(`OpenCode ${error.channel} channel (${error.code}): ${error.message}`), { code: error.code }))
     })
-    // Live-channel health is diagnostic, never a correctness input: the pane
-    // keeps working on the durable channel while the server is unreachable.
+    // This event reports transport health; activity and conditions still come
+    // from the live channel and may be stale while disconnected. Durable
+    // polling can continue, but it cannot prove the TUI's current busy state.
     headless.on('live-state', state => this.emit('transcript-diagnostic', { kind: 'opencode-terminal-live-state', ...state }))
     headless.on('exit', ({ exitCode, signal }) => {
       // Ignore a stale callback if this wrapper is ever restarted. Production
@@ -255,6 +275,8 @@ export class OpencodeTerminalSession extends EventEmitter implements AgentSessio
       this.pty = null
       this.headless = null
       this.exited = true
+      this.ptyDataSubscription?.dispose()
+      this.ptyDataSubscription = null
       this.clearReadinessTimer()
       this.setReady(false)
       this.emit('input-readiness', { ready: false, reason: 'provider-not-ready' })
@@ -318,7 +340,14 @@ export class OpencodeTerminalSession extends EventEmitter implements AgentSessio
   > {
     const headless = this.headless
     if (!headless) return { ok: false, reason: 'no-headless' }
-    return await headless.resolveConditionAction(action)
+    const generation = this.startGeneration
+    const result = await headless.resolveConditionAction(action)
+    // HTTP acceptance may arrive after stop/replacement. It describes the old
+    // server only; never acknowledge it as a successful action on this backend.
+    if (generation !== this.startGeneration || this.headless !== headless || this.exited) {
+      return { ok: false, reason: 'cancelled' }
+    }
+    return result
   }
 
   resize(cols: number, rows: number): void {
@@ -339,12 +368,20 @@ export class OpencodeTerminalSession extends EventEmitter implements AgentSessio
     return this.exited
   }
 
+  getTranscriptFile(): string | null {
+    return this.headless?.getTranscriptFile() ?? null
+  }
+
   getProviderSessionId(): string | null {
     return this.providerSessionId
   }
 
   async stop(): Promise<void> {
     this.startGeneration += 1
+    this.importAbort?.abort()
+    this.importAbort = null
+    this.ptyDataSubscription?.dispose()
+    this.ptyDataSubscription = null
     this.exited = true
     this.clearReadinessTimer()
     this.setReady(false)

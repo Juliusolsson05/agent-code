@@ -6,7 +6,7 @@ import { extname, join, normalize, sep } from 'node:path'
 import type { Duplex } from 'node:stream'
 
 import { WebSocketServer } from 'ws'
-import { parseOpencodeTranscriptFile } from 'opencode-terminal-headless'
+import { getMainProvider } from '@providers/registry.main.js'
 import { sendBoundedRemoteOutput, boundRemoteHistory } from './outputBudget.js'
 import { REMOTE_OUTPUT_MAX_BYTES, REMOTE_HISTORY_TOO_LARGE } from '@shared/remoteOutputLimits.js'
 import type { WebSocket } from 'ws'
@@ -688,23 +688,25 @@ export class RemoteServer extends EventEmitter {
         if (!kind || kind === 'terminal') {
           return { ok: false, error: 'not an agent session' }
         }
-        // OpenCode's locator (`opencode://session/<id>`) names a session in
-        // OpenCode's database, not a file, so the file readers would find
-        // nothing. It does carry the provider session id, which is all the
-        // provider's own history source needs, and that source pages by the
-        // same message-id marker the phone already echoes back.
-        const opencodeSessionId = parseOpencodeTranscriptFile(file)
+        // Routing belongs to the registry capability, not a URI prefix. The
+        // provider also owns decoding its minted locator: resume history can
+        // be requested before any live entry has announced the native id.
+        const provider = getMainProvider(kind)
+        const providerSessionId = provider.parseTranscriptLocator?.(file)
+        if (provider.loadHistoryChunk && !providerSessionId) {
+          return { ok: false, error: 'provider transcript locator has no session identity' }
+        }
         const cwd = this.deps.manager.getSpawnCwd(msg.sessionId) ?? ''
-        const chunk = opencodeSessionId
+        const chunk = provider.loadHistoryChunk
           ? msg.beforeMarker
             ? await loadOlderHistoryChunk({
                 kind,
                 cwd,
-                providerSessionId: opencodeSessionId,
+                providerSessionId: providerSessionId!,
                 beforeMarker: msg.beforeMarker,
                 limit: msg.limit ?? 200,
               })
-            : await loadInitialHistoryChunk({ kind, cwd, providerSessionId: opencodeSessionId, limit: msg.limit ?? 120 })
+            : await loadInitialHistoryChunk({ kind, cwd, providerSessionId: providerSessionId!, limit: msg.limit ?? 120 })
           : msg.beforeMarker
             ? await loadOlderHistoryChunkFromFile(file, {
                 kind,

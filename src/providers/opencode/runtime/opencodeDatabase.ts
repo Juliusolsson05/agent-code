@@ -1,5 +1,6 @@
 import {
   openOpencodeStore,
+  OpencodeStoreError,
   resolveOpencodeDbPath,
   type OpencodeSessionInfo,
   type OpencodeStore,
@@ -21,7 +22,7 @@ import { getToolPath } from '@main/setup/toolchain.js'
 // WHY a failed open is not cached: the next caller retries, so installing
 // OpenCode or fixing its data directory takes effect without restarting
 // Agent Code. The failure itself is thrown to each caller, which decides
-// what "no database" means for it (empty history, an unreadable transcript,
+// what "no database" means for it (unavailable history, an unreadable transcript,
 // an unavailable locator).
 
 export type OpencodeDatabaseDeps = {
@@ -38,22 +39,38 @@ export type OpencodeDatabase = {
 export function createOpencodeDatabase(deps: OpencodeDatabaseDeps): OpencodeDatabase {
   let pending: Promise<OpencodeStore> | null = null
   let opened: OpencodeStore | null = null
+  let generation = 0
 
   return {
     async store() {
       if (opened) return opened
       if (!pending) {
-        pending = deps.resolveDbPath().then(path => {
-          opened = (deps.openStore ?? openOpencodeStore)(path)
-          return opened
+        const openingGeneration = generation
+        // A store() result is borrowed from this facade, not a new lease.
+        // release() invalidates outstanding opens as well as borrowed handles;
+        // a late resolver must neither leak a connection nor replace a newer
+        // generation's pending/opened state after release-and-reacquire.
+        const opening = deps.resolveDbPath().then(path => {
+          if (generation !== openingGeneration) {
+            throw new OpencodeStoreError('open_failed', 'OpenCode database open cancelled by release')
+          }
+          const store = (deps.openStore ?? openOpencodeStore)(path)
+          if (generation !== openingGeneration) {
+            store.release()
+            throw new OpencodeStoreError('open_failed', 'OpenCode database open cancelled by release')
+          }
+          opened = store
+          return store
         })
-        pending.catch(() => {
-          pending = null
+        pending = opening
+        void opening.catch(() => {
+          if (pending === opening) pending = null
         })
       }
       return await pending
     },
     release() {
+      generation += 1
       opened?.release()
       opened = null
       pending = null

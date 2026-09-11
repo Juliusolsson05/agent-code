@@ -3,6 +3,8 @@
 // sessionManager and IPC handlers import from HERE.
 
 import { join } from 'path'
+import { opencodeTranscriptFile, parseOpencodeTranscriptFile } from 'opencode-terminal-headless'
+import { readOpencodeSessionInfo } from '@providers/opencode/runtime/opencodeDatabase'
 
 import type { MainProviderConfig } from '@shared/types/providerConfig'
 import { AGENT_PROVIDER_KINDS, isAgentProviderKind } from '@shared/types/providerKind'
@@ -122,6 +124,17 @@ const opencodeMain: MainProviderConfig = {
   // adapter.
   resolveTranscriptPath: async () => null,
   loadHistoryChunk: loadOpencodeHistoryChunk,
+  // OpenCode names a session by `opencode://session/<id>`, a locator the
+  // package mints and parses; it names a database row, not a file.
+  transcriptLocator: opencodeTranscriptFile,
+  parseTranscriptLocator: parseOpencodeTranscriptFile,
+  // The session row's time_updated stands in for a JSONL file's mtime.
+  // OpenCode rewrites that row when a prompt is submitted and again as each
+  // step's summary lands, so it tracks the conversation, not just renames:
+  // in every recorded session under opencode-terminal-headless's
+  // testing/fixtures/durable it sits within seconds of the newest part write.
+  // Null (session gone, database unreadable) means "do not publish".
+  transcriptLastModifiedAt: async id => (await readOpencodeSessionInfo(id))?.timeUpdated ?? null,
   deliverPrompt: deliverOpencodePrompt,
 }
 

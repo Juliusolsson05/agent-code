@@ -1,4 +1,6 @@
-import { OpencodeStoreError, type OpencodeStore } from 'opencode-terminal-headless'
+import { setTimeout as delay } from 'node:timers/promises'
+
+import { OpencodeStoreError } from 'opencode-terminal-headless'
 
 import type { ProviderHistoryChunk, ProviderHistoryRequest } from '@shared/types/providerConfig.js'
 
@@ -24,33 +26,45 @@ export type OpencodeHistorySource = {
   loadHistoryChunk(request: ProviderHistoryRequest): Promise<ProviderHistoryChunk>
 }
 
-const EMPTY: ProviderHistoryChunk = { entries: [], hasMore: false, totalEntries: 0 }
+// SQLite BUSY is transient, unlike a missing file or a refused schema. Three
+// attempts spaced over 75 ms absorb a short writer lock without leaving an IPC
+// history request retrying forever. The final typed failure stays visible to
+// the loader span, renderer and remote reply; empty is only a successful read.
+const BUSY_RETRY_DELAYS_MS = [25, 50] as const
 
 export function createOpencodeHistorySource(database: OpencodeDatabase): OpencodeHistorySource {
   return {
     async loadHistoryChunk(request) {
-      let store: OpencodeStore
-      try {
-        store = await database.store()
-      } catch (error) {
-        // No database (OpenCode not installed, unsupported schema): history is
-        // empty, the same answer the file loader gives for a missing file.
-        // The reason is still visible to anyone who looks.
-        console.warn(
-          `[opencodeHistory] OpenCode history unavailable: ${error instanceof OpencodeStoreError ? `${error.code}: ` : ''}${error instanceof Error ? error.message : String(error)}`,
-        )
-        return EMPTY
-      }
-      const page = store.readHistory(request.providerSessionId, {
-        limit: request.limit,
-        beforeMessageID: request.beforeMarker && request.beforeMarker.length > 0 ? request.beforeMarker : undefined,
-      })
-      return {
-        entries: page.records as unknown as Record<string, unknown>[],
-        hasMore: page.hasOlder,
-        // Initial-load chunks carry the durable total, as the JSONL loader's
-        // newline count does; older pages omit it.
-        ...(request.beforeMarker ? {} : { totalEntries: store.countMessages(request.providerSessionId) }),
+      for (let attempt = 0; ; attempt += 1) {
+        let opening = true
+        try {
+          const store = await database.store()
+          opening = false
+          const page = store.readHistory(request.providerSessionId, {
+            limit: request.limit,
+            beforeMessageID: request.beforeMarker || undefined,
+          })
+          return {
+            entries: page.records as unknown as Record<string, unknown>[],
+            hasMore: page.hasOlder,
+            // Counts belong to initial hydration; older windows retain its total.
+            ...(request.beforeMarker ? {} : { totalEntries: store.countMessages(request.providerSessionId) }),
+          }
+        } catch (cause) {
+          const error = cause instanceof OpencodeStoreError ? cause : new OpencodeStoreError(
+            opening ? 'open_failed' : 'read_failed',
+            `OpenCode history unavailable: ${cause instanceof Error ? cause.message : String(cause)}`,
+            cause,
+          )
+          const retryDelay = BUSY_RETRY_DELAYS_MS[attempt]
+          if (error.code !== 'busy' || retryDelay === undefined) {
+            // Electron transports Error.message, but not a custom .code. Keep
+            // the typed category for main callers and repeat it in the message
+            // so renderer history hydration retains the diagnosis.
+            throw new OpencodeStoreError(error.code, `${error.code}: ${error.message}`, error)
+          }
+          await delay(retryDelay)
+        }
       }
     },
   }

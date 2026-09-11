@@ -1,8 +1,6 @@
 import { stat } from 'node:fs/promises'
 
-import { opencodeTranscriptFile, parseOpencodeTranscriptFile } from 'opencode-terminal-headless'
-
-import { readOpencodeSessionInfo } from '@providers/opencode/runtime/opencodeDatabase.js'
+import { getMainProvider, listMainProviders } from '@providers/registry.main.js'
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
 
 // A transcript LOCATOR is the one string Agent Code publishes for "this
@@ -23,13 +21,7 @@ import type { AgentProviderKind } from '@shared/types/providerKind.js'
  * file-backed providers (their path comes from the provider's resolver).
  */
 export function providerSessionLocator(kind: AgentProviderKind, providerSessionId: string): string | null {
-  switch (kind) {
-    case 'opencode':
-      return opencodeTranscriptFile(providerSessionId)
-    case 'claude':
-    case 'codex':
-      return null
-  }
+  return getMainProvider(kind).transcriptLocator?.(providerSessionId) ?? null
 }
 
 /**
@@ -38,15 +30,14 @@ export function providerSessionLocator(kind: AgentProviderKind, providerSessionI
  * means "do not publish this locator": a reader handed it would fail.
  */
 export async function transcriptLastModifiedAt(locator: string): Promise<number | null> {
-  const opencodeSessionID = parseOpencodeTranscriptFile(locator)
-  if (opencodeSessionID) {
-    // The session row's time_updated stands in for a JSONL file's mtime.
-    // OpenCode rewrites that row when a prompt is submitted and again as each
-    // step's summary lands, so it tracks the conversation, not just
-    // renames: in every recorded session under opencode-terminal-headless's
-    // testing/fixtures/durable it sits within seconds of the newest part
-    // write.
-    return (await readOpencodeSessionInfo(opencodeSessionID))?.timeUpdated ?? null
+  for (const provider of listMainProviders()) {
+    const id = provider.parseTranscriptLocator?.(locator)
+    if (id) {
+      // A provider-minted locator cannot be stat'ed. Its owner supplies durable
+      // modification evidence (for OpenCode, session.time_updated) or refuses
+      // publication; falling back to filesystem lookup would hide that policy.
+      return await provider.transcriptLastModifiedAt?.(id) ?? null
+    }
   }
   try {
     return (await stat(locator)).mtimeMs

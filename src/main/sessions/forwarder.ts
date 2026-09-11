@@ -104,12 +104,16 @@ export function wireSessionForwarder(
     enqueueJsonl(payload.sessionId, payload.entry, payload.file, payload.observation)
     subAgents.observeParentEntry(payload.sessionId, payload.entry, payload.file)
   })
-  manager.on('jsonl-error', ({ sessionId, error }) =>
+  manager.on('jsonl-error', ({ sessionId, error }) => {
+    // A failed drain can still commit earlier records. Preserve that order
+    // across the asynchronous batch boundary or those records clear the
+    // renderer's error after the durable channel has already stopped.
+    flushJsonl(sessionId)
     sendToSessionWindow(sessionId, 'session:jsonl-error', {
       sessionId,
       message: String(error.message ?? error),
-    }),
-  )
+    })
+  })
   manager.on('transcript-diagnostic', payload =>
     sendToSessionWindow(payload.sessionId, 'session:transcript-diagnostic', payload),
   )

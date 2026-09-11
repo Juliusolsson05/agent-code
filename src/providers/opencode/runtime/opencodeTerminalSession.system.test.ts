@@ -1,4 +1,5 @@
 import { mkdtempSync, rmSync } from 'node:fs'
+import { DatabaseSync } from './opencodeDatabase.testSupport.js'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -13,8 +14,6 @@ import {
   playReplay,
   ReplayServer,
   sessionRowFor,
-  settle,
-  waitUntil,
   type LiveFixture,
   type ReplayStep,
 } from 'opencode-terminal-headless/testing/index'
@@ -59,17 +58,25 @@ let cleanups: Array<() => Promise<void> | void> = []
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'oc-terminal-adapter-'))
-  cleanups = []
+  cleanups = [() => rmSync(dir, { recursive: true, force: true })]
 })
 afterEach(async () => {
-  for (const cleanup of cleanups.reverse()) await cleanup()
-  rmSync(dir, { recursive: true, force: true })
+  // Teardown failures must not prevent the independent socket/database/file
+  // releases. Registration follows acquisition, so setup failures clean up too.
+  const failures: unknown[] = []
+  for (const cleanup of cleanups.reverse()) {
+    try { await cleanup() } catch (error) { failures.push(error) }
+  }
+  if (failures.length) throw new AggregateError(failures, 'adapter cleanup failed')
 })
 
-async function launchAdapter(recording: LiveFixture) {
+async function launchAdapter(recording: LiveFixture, seed?: (path: string) => void) {
   const dbPath = join(dir, `${recording.scenario}-${cleanups.length}.db`)
   const writer = new LiveFixtureWriter(dbPath, recording.sessionID, sessionRowFor(recording.sessionID))
+  cleanups.push(() => writer.close())
+  seed?.(dbPath)
   const server = new ReplayServer({ username: 'opencode', password: PASSWORD })
+  cleanups.push(() => server.close())
   await server.listen()
   const pty = new AdapterPty()
   const session = new OpencodeTerminalSession(
@@ -89,15 +96,10 @@ async function launchAdapter(recording: LiveFixture) {
   )
   const events: Event[] = []
   for (const name of EVENT_NAMES) session.on(name as never, ((...args: unknown[]) => events.push({ name, args })) as never)
-  cleanups.push(async () => {
-    await session.stop()
-    await server.close()
-    writer.close()
-  })
+  cleanups.push(() => session.stop())
   await session.start()
   await waitUntil(() => events.some(e => e.name === 'transcript-diagnostic' && (e.args[0] as { connected?: boolean }).connected === true), 5000, 'live channel')
   await waitUntil(() => server.calls.some(c => c.path === '/question'), 5000, 're-sync')
-  await settle(20)
   return { session, events, writer, server, pty, script: buildReplayScript(recording) }
 }
 
@@ -141,7 +143,6 @@ describe('OpencodeTerminalSession over recorded TUI sessions (real package, real
       const { session, events, writer, server, script } = await launchAdapter(recording)
       await playReplay(script, writer, server)
       await waitUntil(() => processStates(events).at(-1)?.active === false && semanticOf(events).some(e => e.type === 'turn_completed'), 5000, 'turn end')
-      await settle(60)
 
       expect(events.filter(e => e.name === 'jsonl-error')).toEqual([])
       expect(events.filter(e => e.name === 'started')).toHaveLength(1)
@@ -206,7 +207,7 @@ describe('OpencodeTerminalSession over recorded TUI sessions (real package, real
       beforeStep: async (step: ReplayStep) => {
         if (answered || step.kind !== 'sse' || step.event.type !== 'permission.replied') return
         answered = true
-        await settle(30)
+        await waitUntil(() => events.some(e => e.name === 'conditions' && !!(e.args[0] as ProviderConditionSnapshot).conditions['opencode.permission']), 3000, 'permission snapshot')
         const snapshot = events.filter(e => e.name === 'conditions').map(e => e.args[0] as ProviderConditionSnapshot).at(-1)!
         const once = snapshot.conditions['opencode.permission']!.actions.find(action => action.label === 'Allow once') as ConditionCustomAction
         await expect(session.resolveCondition(once)).resolves.toEqual({ ok: true })
@@ -225,7 +226,7 @@ describe('OpencodeTerminalSession over recorded TUI sessions (real package, real
     await playReplay(script.slice(0, busyAt + 1), writer, server)
     await waitUntil(() => processStates(events).some(state => state.active), 3000, 'busy')
     pty.exit(137, 9)
-    await settle(30)
+    await waitUntil(() => events.some(e => e.name === 'exit'), 3000, 'exit')
     const names = events.map(e => (e.name === 'semantic-event' ? `semantic:${(e.args[0] as { type: string }).type}` : e.name))
     const exitAt = names.indexOf('exit')
     expect(exitAt).toBeGreaterThan(names.indexOf('semantic:turn_completed'))
@@ -233,4 +234,97 @@ describe('OpencodeTerminalSession over recorded TUI sessions (real package, real
     expect(events[exitAt]!.args[0]).toEqual({ exitCode: 137, signal: 9 })
     expect(names.filter(name => name === 'exit')).toHaveLength(1)
   })
+
+  it('resumes projection-only history without re-emitting it as new committed rows', async () => {
+    const recording = loadLiveFixture('plain.json')
+    const { session, events, writer, server, script } = await launchAdapter(recording, path => {
+      const db = new DatabaseSync(path)
+      try {
+        db.prepare('INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, 1, 2, ?)')
+          .run('msg_imported', recording.sessionID, JSON.stringify({ role: 'assistant', time: { created: 1, completed: 2 } }))
+        db.prepare('INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, 1, 2, ?)')
+          .run('prt_imported', 'msg_imported', recording.sessionID, JSON.stringify({ type: 'text', text: 'Imported prior answer' }))
+      } finally { db.close() }
+    })
+    expect(session.getTranscriptFile()).toBe(`opencode://session/${recording.sessionID}`)
+    await playReplay(script, writer, server)
+    await waitUntil(() => semanticOf(events).some(e => e.type === 'turn_completed'), 5000, 'resumed turn')
+    const ids = committed(events).map(row => row.record.info.id)
+    expect(ids).not.toContain('msg_imported')
+    expect(new Set(ids)).toEqual(committableIds(recording))
+    expect(ids.length).toBe(new Set(ids).size)
+  })
+
+  it.each([
+    ['permission-once.json', 'Allow always', 'always'],
+    ['permission-reject.json', 'Reject', 'reject'],
+    ['question-reject.json', 'Reject', null],
+  ] as const)('resolves %s with the offered %s action', async (name, label, reply) => {
+    const recording = loadLiveFixture(name)
+    const { session, events, server } = await launchAdapter(recording)
+    const asked = recording.sse.find(({ event }) => event.type.endsWith('.asked'))!.event
+    server.send(asked)
+    const kind = reply === null ? 'opencode.question' : 'opencode.permission'
+    await waitUntil(() => events.some(e => e.name === 'conditions' && !!(e.args[0] as ProviderConditionSnapshot).conditions[kind]), 3000, 'offered condition')
+    const snapshot = events.filter(e => e.name === 'conditions').at(-1)!.args[0] as ProviderConditionSnapshot
+    const action = snapshot.conditions[kind]!.actions.find(a => a.label === label) as ConditionCustomAction
+    expect(action).toBeDefined()
+    await expect(session.resolveCondition(action)).resolves.toEqual({ ok: true })
+    expect(server.calls.filter(call => call.method === 'POST')).toEqual([{
+      method: 'POST', authorized: true,
+      path: reply === null ? `/question/${asked.properties!.id}/reject` : `/permission/${asked.properties!.id}/reply`,
+      body: reply === null ? '{}' : JSON.stringify({ reply }),
+    }])
+  })
+
+  it('keeps a condition on HTTP failure and fences a reply accepted after stop', async () => {
+    const recording = loadLiveFixture('permission-once.json')
+    const { session, events, server } = await launchAdapter(recording)
+    const asked = recording.sse.find(({ event }) => event.type === 'permission.asked')!.event
+    server.send(asked)
+    await waitUntil(() => events.some(e => e.name === 'conditions' && !!(e.args[0] as ProviderConditionSnapshot).conditions['opencode.permission']), 3000, 'permission')
+    const snapshots = () => events.filter(e => e.name === 'conditions').at(-1)!.args[0] as ProviderConditionSnapshot
+    const action = snapshots().conditions['opencode.permission']!.actions[0] as ConditionCustomAction
+    const path = `/permission/${asked.properties!.id}/reply`
+    server.setFailing(path, true)
+    await expect(session.resolveCondition(action)).resolves.toMatchObject({ ok: false })
+    expect(snapshots().conditions['opencode.permission']).toBeDefined()
+    server.setFailing(path, false)
+    const held = server.holdNext(path)
+    let released = false
+    try {
+      const resolving = session.resolveCondition(action)
+      let arrived = false
+      void held.arrived.then(() => { arrived = true })
+      await waitUntil(() => arrived, 3000, 'held condition reply')
+      await session.stop()
+      const stoppedEvents = events.length
+      held.release()
+      released = true
+      await expect(resolving).resolves.toMatchObject({ ok: false, reason: 'cancelled' })
+      expect(events).toHaveLength(stoppedEvents)
+    } finally { if (!released) held.release() }
+  })
+
+  it.each([
+    ['opencode.permission.reply', { requestID: '', reply: 'once' }],
+    ['opencode.permission.reply', { requestID: 42, reply: 'once' }],
+    ['opencode.permission.reply', { requestID: 'per_1', reply: 'invalid' }],
+    ['opencode.question.reject', { questionID: '' }],
+    ['unknown-action', {}],
+  ])('refuses invalid resolver input %s %j without HTTP writes', async (name, payload) => {
+    const { session, server } = await launchAdapter(loadLiveFixture('plain.json'))
+    await expect(session.resolveCondition({ kind: 'custom', id: 'invalid', label: 'invalid', name, payload }))
+      .resolves.toMatchObject({ ok: false })
+    expect(server.calls.filter(call => call.method === 'POST')).toEqual([])
+  })
+
 })
+
+async function waitUntil(predicate: () => boolean, timeoutMs: number, label: string): Promise<void> {
+  const deadline = performance.now() + timeoutMs
+  while (!predicate()) {
+    if (performance.now() >= deadline) throw new Error(`timed out waiting for ${label}`)
+    await new Promise(resolve => setImmediate(resolve))
+  }
+}

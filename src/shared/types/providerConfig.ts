@@ -429,6 +429,16 @@ export type MainProviderConfig = {
    */
   loadHistoryChunk?: (request: ProviderHistoryRequest) => Promise<ProviderHistoryChunk>
   /**
+   * Non-file transcript identity. Minting and parsing stay with the provider:
+   * remote backfill has the locator even before a resumed process emits an
+   * entry, and must recover its native id without knowing a provider's URI
+   * grammar. A provider-owned source should supply both halves together.
+   */
+  transcriptLocator?: (providerSessionId: string) => string
+  parseTranscriptLocator?: (locator: string) => string | null
+  /** Database-backed modification evidence for inventory, in place of stat(). */
+  transcriptLastModifiedAt?: (providerSessionId: string) => Promise<number | null>
+  /**
    * Provider-owned prompt delivery protocol (#394 phase 2c).
    *
    * WHY this is a capability and not inline branches: prompt delivery

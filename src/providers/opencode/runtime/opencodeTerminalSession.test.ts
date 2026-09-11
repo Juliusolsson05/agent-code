@@ -32,7 +32,7 @@ function fakePty() {
     write: vi.fn(),
     resize: vi.fn(),
     kill: vi.fn(),
-    onData: vi.fn((listener: (data: string) => void) => { onData = listener }),
+    onData: vi.fn((listener: (data: string) => void) => { onData = listener; return { dispose: vi.fn(() => { onData = null }) } }),
     onExit: vi.fn((listener: (event: { exitCode: number; signal: number }) => void) => {
       exitListeners.push(listener)
       return { dispose: () => exitListeners.splice(exitListeners.indexOf(listener), 1) }
@@ -150,6 +150,7 @@ describe('OpencodeTerminalSession', () => {
     await session.start()
     expect(started).toHaveBeenCalledOnce()
     expect(errors.map(error => (error as Error & { code?: string }).code)).toEqual(['db_path_unavailable'])
+    expect(errors[0].message).toContain('db_path_unavailable')
   })
 
   it('forwards exit once, after the reader closed the turn, and makes repeated stop safe', async () => {
@@ -214,6 +215,42 @@ describe('OpencodeTerminalSession', () => {
     expect(session.isExited()).toBe(true)
   })
 
+  it('does not spawn when stop wins during launch preparation', async () => {
+    let finish!: (launch: OpencodeTerminalLaunch) => void
+    const prepare = fakePrepareLaunch()
+    const launch = await prepare({ binary: 'opencode', cwd: '/w', env: {}, sessionID: 'ses_resume', dangerousMode: false })
+    prepare.mockImplementation(() => new Promise(resolve => { finish = resolve }))
+    const { session } = create({ cwd: '/w', resumeSessionId: 'ses_resume' }, prepare)
+    const starting = session.start()
+    await session.stop()
+    finish(launch)
+    await starting
+    expect(ptyState.spawn).not.toHaveBeenCalled()
+  })
+
+  it.each(['stop', 'exit'] as const)('suppresses startup events when %s wins during headless start', async outcome => {
+    const pty = fakePty()
+    ptyState.spawn.mockReturnValue(pty)
+    const { session } = create({ cwd: '/w', resumeSessionId: 'ses_resume' })
+    const started = vi.fn()
+    const identity = vi.fn()
+    const output = vi.fn()
+    session.on('started', started)
+    session.on('jsonl-entry', identity)
+    session.on('pty-data', output)
+    session.once('conditions', () => {
+      if (outcome === 'stop') void session.stop()
+      else queueMicrotask(() => pty.emitExit({ exitCode: 7, signal: 0 }))
+    })
+    await session.start()
+    expect(session.isExited()).toBe(true)
+    expect(started).not.toHaveBeenCalled()
+    expect(identity).not.toHaveBeenCalled()
+    expect(pty.onData.mock.results[0].value.dispose).toHaveBeenCalledOnce()
+    pty.emitData('late paint')
+    expect(output).not.toHaveBeenCalled()
+  })
+
   it('kills the TUI and silences the reader on stop', async () => {
     const pty = fakePty()
     ptyState.spawn.mockReturnValue(pty)
@@ -223,6 +260,7 @@ describe('OpencodeTerminalSession', () => {
     await session.start()
     await session.stop()
     expect(pty.kill).toHaveBeenCalledOnce()
+    expect(pty.onData.mock.results[0].value.dispose).toHaveBeenCalledOnce()
     // node-pty reports the kill as an exit; a stopped wrapper forwards nothing.
     pty.emitExit({ exitCode: 0, signal: 15 })
     expect(exit).not.toHaveBeenCalled()

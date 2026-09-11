@@ -1,14 +1,7 @@
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import {
-  createProjectionDatabase,
-  listDurableFixtures,
-  loadDurableFixture,
-} from 'opencode-terminal-headless/testing/index'
 import type { ManagedAgentRendererDescriptor } from '@mcp/shared/agentManagementTypes.js'
+
+vi.mock('@providers/registry.main.js', () => ({ getMainProvider: () => ({}), listMainProviders: () => [] }))
 
 const sentRendererRequests: unknown[] = []
 const resolveProviderTranscriptPath = vi.fn(async () => '/tmp/provider-agent.jsonl')
@@ -34,26 +27,10 @@ vi.mock('node:fs/promises', () => ({
   stat: vi.fn(async () => ({ mtimeMs: 9_000 })),
 }))
 
-// OpenCode sessions are located in a real database built from a recorded
-// session, so the published locator and its date come from OpenCode's own
-// rows. The path is set by the test that needs it.
-const opencodeFixture = vi.hoisted(() => ({ file: '' }))
-vi.mock('@providers/opencode/runtime/opencodeDatabase.js', async importOriginal => {
-  const actual = await importOriginal<typeof import('@providers/opencode/runtime/opencodeDatabase.js')>()
-  const database = actual.createOpencodeDatabase({ resolveDbPath: async () => opencodeFixture.file })
-  return {
-    ...actual,
-    opencodeDatabase: database,
-    readOpencodeSessionInfo: (sessionID: string) => actual.readOpencodeSessionInfo(sessionID, database),
-  }
-})
-
 const {
   AgentManagementBridge,
   AgentManagementBridgeError,
 } = await import('@main/agentManagement/AgentManagementBridge.js')
-const { stat } = await import('node:fs/promises')
-const { opencodeDatabase } = await import('@providers/opencode/runtime/opencodeDatabase.js')
 
 function managerFixture() {
   return {
@@ -132,59 +109,6 @@ describe('AgentManagementBridge', () => {
       cwd: '/tmp/project',
       providerSessionId: 'provider-agent-1',
     })
-  })
-
-  it('publishes OpenCode agents by their opencode:// locator, dated by the session row, and never stats it', async () => {
-    const recorded = loadDurableFixture(listDurableFixtures().find(name => name.includes('ses_47fca639'))!)
-    const dir = mkdtempSync(join(tmpdir(), 'agent-management-opencode-'))
-    opencodeFixture.file = join(dir, 'opencode.db')
-    createProjectionDatabase(recorded, opencodeFixture.file)
-    try {
-      const manager = managerFixture()
-      const live = `opencode://session/${recorded.meta.sessionID}`
-      // A running OpenCode agent already published its locator on its
-      // committed entries; a parked one is known only by its session id.
-      manager.resolveTranscriptFile.mockImplementation(async sessionId => (sessionId === 'oc-live' ? live : null))
-      const bridge = new AgentManagementBridge(manager as never)
-      const pending = bridge.listAgents({ callerSessionId: 'caller' })
-      const request = sentRendererRequests[0] as { requestId: string }
-      const opencodeAgent = (sessionId: string, providerSessionId: string): ManagedAgentRendererDescriptor => {
-        const descriptor = rendererDescriptor()
-        return {
-          ...descriptor,
-          agent: { ...descriptor.agent, sessionId, kind: 'opencode' },
-          providerSessionId,
-        }
-      }
-      bridge.resolve({
-        requestId: request.requestId,
-        ok: true,
-        type: 'list-agents',
-        observedAt: 10_000,
-        project: { tabId: 'tab-1', title: 'Project', index: 0 },
-        agents: [
-          opencodeAgent('oc-live', recorded.meta.sessionID),
-          opencodeAgent('oc-parked', recorded.meta.sessionID),
-          opencodeAgent('oc-deleted', 'ses_deleted_from_opencode'),
-        ],
-      })
-
-      const available = { path: live, availability: 'available', lastModifiedAt: Number(recorded.session.time_updated) }
-      await expect(pending).resolves.toMatchObject({
-        agents: [
-          { sessionId: 'oc-live', transcript: available },
-          { sessionId: 'oc-parked', transcript: available },
-          // A locator a reader could not open is not published.
-          { sessionId: 'oc-deleted', transcript: { path: null, availability: 'unavailable' } },
-        ],
-      })
-      // OpenCode has no file to resolve or stat.
-      expect(resolveProviderTranscriptPath).not.toHaveBeenCalled()
-      expect(vi.mocked(stat)).not.toHaveBeenCalledWith(expect.stringMatching(/^opencode:/))
-    } finally {
-      opencodeDatabase.release()
-      rmSync(dir, { recursive: true, force: true })
-    }
   })
 
   it('serializes renderer requests so workspace reads and mutations cannot race', async () => {

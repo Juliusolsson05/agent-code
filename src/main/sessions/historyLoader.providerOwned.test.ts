@@ -20,10 +20,15 @@ vi.mock('@main/providerSwitch/shared.js', () => ({
   resolveProviderTranscriptPath: registry.resolveTranscriptPath,
 }))
 
+const span = vi.hoisted(() => ({ end: vi.fn(), fail: vi.fn() }))
+vi.mock('@main/performance/PerformanceService.js', () => ({ performanceService: { span: () => span } }))
+
 import { loadInitialHistoryChunk, loadOlderHistoryChunk } from './historyLoader.js'
 
 describe('historyLoader with a provider-owned history source', () => {
   beforeEach(() => {
+    span.end.mockReset()
+    span.fail.mockReset()
     registry.loadHistoryChunk.mockReset()
     registry.resolveTranscriptPath.mockReset()
   })
@@ -39,6 +44,17 @@ describe('historyLoader with a provider-owned history source', () => {
     // A byte offset means nothing to a database page; only the marker is passed.
     expect(registry.loadHistoryChunk).toHaveBeenLastCalledWith({ cwd: '/w', providerSessionId: 'ses_1', limit: 200, beforeMarker: 'msg_b' })
     expect(registry.resolveTranscriptPath).not.toHaveBeenCalled()
+  })
+
+  it.each(['initial', 'older'] as const)('fails the %s span and rethrows the source rejection', async mode => {
+    const error = Object.assign(new Error('schema refused'), { code: 'unsupported_schema' })
+    registry.loadHistoryChunk.mockRejectedValue(error)
+    const params = { kind: 'opencode' as const, cwd: '/w', providerSessionId: 'ses_1', limit: 5 }
+    const loading = mode === 'initial' ? loadInitialHistoryChunk(params)
+      : loadOlderHistoryChunk({ ...params, beforeMarker: 'msg_b' })
+    await expect(loading).rejects.toBe(error)
+    expect(span.fail).toHaveBeenCalledExactlyOnceWith(error)
+    expect(span.end).not.toHaveBeenCalled()
   })
 
   it('keeps file-backed providers on the JSONL path', async () => {
