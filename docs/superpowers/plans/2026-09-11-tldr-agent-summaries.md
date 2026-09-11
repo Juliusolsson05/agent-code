@@ -1,6 +1,6 @@
 # TLDR agent summaries
 
-Status: implemented; full repository validation and PR checks in progress. Issue: #888.
+Status: implemented. Issue: #888. PR #892 carries the final validation status.
 
 ## Outcome
 
@@ -74,3 +74,9 @@ revoked caller to write over its successor. Mutation files were restored before
 running the full repository gate. Provider-model compliance with the reporting
 instructions remains a live-use check, not something these deterministic tests
 claim to prove.
+
+The full local suite ran 3,222 tests: 3,220 passed; the missing TLDR feature
+reference was added and its targeted test passes. The remaining image-fixture
+provenance failure reproduces on the unchanged base revision `07fec7ec`: a
+cited private Claude recording no longer exists on this machine. No fixture,
+expectation, private recording, or skip rule was changed to mask that failure.
