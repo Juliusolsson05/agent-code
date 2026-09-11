@@ -175,6 +175,31 @@ describe('agent transcript tools on an OpenCode session', () => {
     expect(inspect.ok && inspect.stats).toMatchObject({ totalEvents: 5, userMessages: 1, assistantMessages: 2, patches: 3 })
   })
 
+  it('lets the main process run other work while it reads a long session', async () => {
+    const file = join(dir, 'long.db')
+    const writer = new LiveFixtureWriter(file, 'ses_long', sessionRowFor('ses_long'))
+    for (let index = 0; index < 300; index += 1) {
+      const id = `msg_${String(index).padStart(4, '0')}`
+      writer.apply('message.updated.1', { sessionID: 'ses_long', info: { id, sessionID: 'ses_long', role: 'user', time: { created: 1_000 + index } } })
+      writer.apply('message.part.updated.1', { sessionID: 'ses_long', part: { id: `prt_${index}`, messageID: id, sessionID: 'ses_long', type: 'text', text: `prompt ${index}` } })
+    }
+    writer.close()
+    // Stand-in for everything else the main process does (PTY forwarding,
+    // IPC): a chain of macrotasks that only advances when the read yields.
+    let turns = 0
+    let running = true
+    const other = () => {
+      turns += 1
+      if (running) setImmediate(other)
+    }
+    setImmediate(other)
+    const result = await inspectAgentTranscriptFile({ path: locator('ses_long') }, depsFor(file))
+    running = false
+    expect(result).toMatchObject({ ok: true, stats: { totalEvents: 300, userMessages: 300 } })
+    // One pause per page of 25 messages.
+    expect(turns).toBeGreaterThanOrEqual(10)
+  })
+
   it('refuses honestly: an unknown session, no database, and a provider that does not match the locator', async () => {
     const { deps } = knownSession()
     await expect(readAgentTranscriptFile({ path: locator('ses_nobody'), projection: 'final' }, deps))

@@ -68,6 +68,53 @@ function releaseInitialHistorySlot(): void {
   activeInitialHistoryLoads = Math.max(0, activeInitialHistoryLoads - 1)
 }
 
+// A history chunk in its own (durable) order: entries the pane does not have
+// yet, and uuids of entries it already holds, which act as anchors.
+type HistoryPlacement = { fresh: Entry } | { anchor: string }
+
+/**
+ * Merge a history chunk's new entries into the pane's existing entries,
+ * keeping the chunk's order.
+ *
+ * WHY not `[...fresh, ...existing]`: that assumes every new history entry is
+ * older than everything the pane already shows, i.e. the live stream is
+ * always AHEAD of the durable read. It can be behind:
+ * - OpenCode Terminal holds a queued prompt until its answer commits.
+ * - A durable reader that stopped (an event version it refuses) leaves the
+ *   pane frozen while OpenCode's tables keep growing; the next history load
+ *   (an MCP read re-hydrating a pane in `error`) then brings newer turns.
+ * - Any provider's history read can land while a live burst is mid-flight.
+ * Prepending put those newer entries above older ones, and since their uuids
+ * were then "seen", the live copies were dropped and the misorder was
+ * permanent. Anchoring each new entry just before the next entry the pane
+ * already holds places it where the durable order says it belongs.
+ *
+ * When the chunk shares no entry with the pane, or all its new entries
+ * precede the first shared one, the result is exactly the old prepend.
+ * Existing entries never move relative to each other.
+ */
+function placeHistoryEntries(placement: HistoryPlacement[], existing: Entry[]): Entry[] {
+  const position = new Map<string, number>()
+  existing.forEach((entry, index) => {
+    const uuid = (entry as { uuid?: string }).uuid
+    if (uuid && !position.has(uuid)) position.set(uuid, index)
+  })
+  const merged: Entry[] = []
+  let next = 0
+  for (const item of placement) {
+    if ('fresh' in item) {
+      merged.push(item.fresh)
+      continue
+    }
+    const index = position.get(item.anchor)
+    // Seen but not in the window (trimmed), or already emitted: no anchor.
+    if (index === undefined || index < next) continue
+    while (next <= index) merged.push(existing[next++]!)
+  }
+  while (next < existing.length) merged.push(existing[next++]!)
+  return merged
+}
+
 function seedSeenFromRuntime(runtime: SessionRuntime, seen: Set<string>): void {
   for (const entry of runtime.entries) {
     const uuid = (entry as { uuid?: string }).uuid
@@ -213,6 +260,7 @@ export async function loadInitialHistoryForSession({
       seedSeenFromRuntime(current, seen)
 
       const initialEntries: Entry[] = []
+      const placement: HistoryPlacement[] = []
       let initialOldestMarker: string | null = null
       // Byte offset of the marker's line (chunk.offsets is parallel to
       // chunk.entries); echoed to the loader so the first older page is
@@ -258,13 +306,17 @@ export async function loadInitialHistoryForSession({
           // up here means the window trimmed past it — re-appending it
           // out of order would corrupt the feed. Only loadOlderHistory
           // may readmit trimmed uuids.
-          if (uuid && (seen.has(uuid) || isUuidTrimmed(sessionId, uuid))) continue
+          if (uuid && (seen.has(uuid) || isUuidTrimmed(sessionId, uuid))) {
+            placement.push({ anchor: uuid })
+            continue
+          }
           if (uuid) seen.add(uuid)
           // Pagination-marker rider — see liveEntryWindow.ts. Stamped at
           // every ingest site so a future trim can re-anchor
           // historyOldestMarker at whatever entry ends up oldest-retained.
           stampHistoryMarker(entry, marker)
           initialEntries.push(entry)
+          placement.push({ fresh: entry })
           if (indexEntryIntoMaps(entry, toolUseIndex, toolResultIndex)) {
             toolIndexChanged = true
           }
@@ -309,7 +361,7 @@ export async function loadInitialHistoryForSession({
         {
           ...current,
           entries: initialEntries.length > 0
-            ? [...initialEntries, ...current.entries]
+            ? placeHistoryEntries(placement, current.entries)
             : current.entries,
           // Seed totalEntries from the loader. The loader counts every
           // usable JSONL record at read time (parsed.entries.length

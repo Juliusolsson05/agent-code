@@ -30,6 +30,7 @@ import {
 import { createOpencodeDatabase } from '@providers/opencode/runtime/opencodeDatabase'
 import { createOpencodeHistorySource } from '@providers/opencode/runtime/opencodeHistory'
 import { OpencodeTerminalSession } from '@providers/opencode/runtime/opencodeTerminalSession'
+import { mapOpencodeMessageToFeedEntries } from '@providers/opencode/renderer/transcript/mapper'
 import type { ConditionCustomAction } from '@shared/types/providerConditions'
 import type { Entry } from '@shared/types/transcript'
 import { createFakeSessionFeed, type FakeSessionFeed } from '@renderer/features/sessionFeed/FakeSessionFeed'
@@ -387,6 +388,50 @@ describe('an OpenCode Terminal pane after a reload', () => {
     for (const policy of feedPolicies) {
       expect(commandAllowedByRenderedViewPolicy({ policy, kind: 'opencode', providerRuntime: 'terminal', mode: 'agent', runtime: reloaded })).toBe(false)
     }
+  })
+
+  it('places history the live stream has not delivered yet after what it has, not above it', async () => {
+    // The pane saw one turn live. OpenCode's tables also hold an older turn
+    // (from before the pane started) and a newer one the live stream has not
+    // delivered: a queued prompt, or a durable reader that stopped.
+    const record = (id: string, role: 'user' | 'assistant', created: number, text: string) => ({
+      info: { id, sessionID: 'ses_order', role, time: role === 'assistant' ? { created, completed: created + 1 } : { created }, ...(role === 'assistant' ? { finish: 'stop' } : {}) },
+      parts: [{ id: `prt_${id}`, type: 'text', text }],
+    })
+    const durable = [
+      record('msg_a', 'user', 1, 'before the pane started'),
+      record('msg_b', 'assistant', 2, 'old answer'),
+      record('msg_c', 'user', 3, 'seen live'),
+      record('msg_d', 'assistant', 4, 'answer seen live'),
+      record('msg_e', 'user', 5, 'queued, not yet live'),
+      record('msg_f', 'assistant', 6, 'its answer'),
+    ]
+    const meta = paneMeta(loadLiveFixture('plain.json'))
+    let runtimes: Record<SessionId, SessionRuntime> = {
+      [SESSION_ID]: {
+        ...emptyRuntime(),
+        transcriptStatus: 'error',
+        entries: [durable[2]!, durable[3]!].flatMap(item => mapOpencodeMessageToFeedEntries(item).entries),
+      },
+    }
+    const refs = makeWorkspaceRefsForTest({ sessions: { [SESSION_ID]: meta } } as unknown as WorkspaceState)
+    refs.latestRuntimesRef.current = runtimes
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: { ...window.api, loadInitialHistory: vi.fn(async () => ({ entries: durable, hasMore: false, totalEntries: durable.length })) },
+    })
+    await loadInitialHistoryForSession({
+      sessionId: SESSION_ID,
+      meta,
+      refs,
+      setRuntimes: updater => {
+        runtimes = typeof updater === 'function' ? updater(runtimes) : updater
+        refs.latestRuntimesRef.current = runtimes
+      },
+    })
+    expect(runtimes[SESSION_ID]!.entries.map(entry => (entry as { uuid?: string }).uuid))
+      .toEqual(['msg_a', 'msg_b', 'msg_c', 'msg_d', 'msg_e', 'msg_f'])
+    expect(runtimes[SESSION_ID]!.transcriptStatus).toBe('ready')
   })
 
   it('adds nothing when history lands on a pane the live stream already filled', async () => {

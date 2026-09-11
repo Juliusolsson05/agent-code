@@ -268,16 +268,35 @@ async function prepareTranscript(
   }
 }
 
+// Messages read from OpenCode's database per page, and the point at which the
+// walk gives the event loop back.
+const OPENCODE_PAGE_SIZE = 25
+
 async function* transcriptRecords(source: TranscriptSource): AsyncGenerator<JsonRecord | null> {
   switch (source.kind) {
     case 'jsonl':
       yield* streamJsonl<JsonRecord>(source.path)
       return
-    case 'opencode':
-      for (const record of source.store.iterateMessages(source.sessionID)) {
+    case 'opencode': {
+      // WHY an explicit yield between pages: `node:sqlite` is synchronous and
+      // the reducers never wait on I/O, so without one a read, search or
+      // inspect of a long OpenCode session runs start to finish without
+      // letting go of the main process. A review measured 600 ms for 1,500
+      // messages with 8 KB tool outputs, and PTY forwarding and IPC stall for
+      // every pane meanwhile. The JSONL path yields naturally between file
+      // chunks. The store reads each page in its own transaction, so pausing
+      // between pages pins nothing in OpenCode's WAL.
+      let sincePause = 0
+      for (const record of source.store.iterateMessages(source.sessionID, { pageSize: OPENCODE_PAGE_SIZE })) {
         yield record as unknown as JsonRecord
+        sincePause += 1
+        if (sincePause >= OPENCODE_PAGE_SIZE) {
+          sincePause = 0
+          await new Promise<void>(resolve => setImmediate(resolve))
+        }
       }
       return
+    }
   }
 }
 
