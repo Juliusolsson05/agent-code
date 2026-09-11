@@ -67,11 +67,11 @@ type CacheEntry = {
 // thread to show four prompts. With a parsed range the entry extends by the
 // appended bytes on growth, and a listing that only needs the newest K
 // prompts folds the tail first and stops.
-// WHY the cache is larger than the search bound: a search folds up to
-// SEARCH_CANDIDATES_PER_PROVIDER transcripts per provider, and every one of
-// them must still be cached when the next keystroke arrives or the search
-// thrashes the LRU and re-reads everything. Keep this above the sum of the
-// per-provider bounds plus the listing's ten.
+// WHY the cache is larger than the search bound: a search folds the tails of
+// up to SEARCH_PROMPT_ROWS transcripts (src/main/conversations/service.ts),
+// and every one of them must still be cached when the next keystroke arrives
+// or the search thrashes the LRU and re-reads everything. Keep this well
+// above that bound plus whatever View Prompts and Rewind hold open.
 const PROMPT_CACHE_MAX_ENTRIES = 1024
 const SEAM_BYTES = 64
 const TAIL_WINDOW_BYTES = 256 * 1024

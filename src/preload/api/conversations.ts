@@ -7,7 +7,7 @@ import type {
 
 // The Conversations picker, the path picker's session list, View Prompts and
 // Rewind all read through these three calls. Types come from @shared so the
-// renderer and main cannot drift apart (the old SessionIndexEntry lived twice).
+// renderer and main cannot drift apart (the old listing row type lived twice).
 export const conversationsApi = {
   listConversations: (request: ConversationListRequest): Promise<ConversationListResponse> =>
     ipcRenderer.invoke('conversations:list', request),

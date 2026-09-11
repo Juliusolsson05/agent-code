@@ -1,8 +1,8 @@
 import { isAgentProviderKind } from '@shared/types/providerKind'
 import type { SessionKind } from '@shared/types/providerKind'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
-// Small display helpers shared by the workspace's search and
-// activity modals (PromptSearchModal, AgentActivityModal).
+// Small display helpers shared by the conversation rows (ConversationRow)
+// and the activity modal (AgentActivityModal).
 //
 // WHY this is scoped to those modal surfaces and not a generic
 // "providerLabel" module: tile-tree pane headers use slightly
@@ -37,7 +37,7 @@ export function cwdBasename(cwd: string): string {
 // claude/codex: AgentActivityModal renders terminal sessions in the
 // same list, so widening the signature means the modal doesn't have
 // to special-case its row renderer. Callers that only deal with
-// agent providers (PromptSearchModal) can still pass the narrower
+// agent providers (ConversationRow) can still pass the narrower
 // 'claude' | 'codex' subset — TypeScript will accept it.
 export function providerGlyph(kind: SessionKind): string {
   // Registry-derived for agent kinds (#394 phase 2c-2); terminal is

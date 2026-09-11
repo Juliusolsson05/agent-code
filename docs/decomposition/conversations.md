@@ -1,9 +1,13 @@
 # Conversations: discovery, listing, search, and prompt history
 
 > Stage decomposition, written before implementation per `staged-decomposition`.
-> Revised in place when a stage disproves it. Status: **approved by the user
-> on 2026-09-11 with the defaults in §8**. Owner: the `feat/session-picker`
-> branch.
+> Revised in place when a stage disproves it. Status: **implemented on
+> `feat/session-picker`** (approved by the user on 2026-09-11 with the defaults
+> in §8). Live numbers on the author's machine under a load average of about
+> twenty from other sessions: cold list 762 ms (was 8.5 s before the union and
+> head bounds), warm 45 ms, first search 1.4 s, second search under 100 ms.
+> The 500 ms cold and 750 ms search budgets are not yet met on that machine;
+> see the PR for the per-source breakdown.
 >
 > Umbrella issue: #874. Supersedes the direction of PR #701 (label identity
 > only, closed 2026-09-11) and the plan in

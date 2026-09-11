@@ -1,14 +1,11 @@
 import { ipcMain } from 'electron'
-import { createHash, createHmac, randomBytes } from 'node:crypto'
-import { resolve as resolvePath } from 'node:path'
+import { createHash } from 'node:crypto'
 
 import type { SessionManager } from '@main/sessionManager.js'
 import type { PasteDebugJournalRegistry } from '@main/pasteDebugJournal.js'
 import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import { sha8FromDigestBytes } from '@shared/code/sha8.js'
 import type { ConditionCustomAction } from '@shared/types/providerConditions.js'
-import { getMainProvider } from '@providers/registry.main.js'
-import { AGENT_PROVIDER_KINDS, DEFAULT_PROVIDER } from '@shared/types/providerKind.js'
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
 import {
   loadInitialHistoryChunk,
@@ -33,15 +30,6 @@ import {
 // reader from dictionary-guessing common repository paths. Cross-run joins are
 // deliberately unsupported: the breadcrumb answers whether two requests in
 // THIS launch targeted the same cwd without retaining the cwd itself.
-const RESUME_LIST_TARGET_FINGERPRINT_KEY = randomBytes(32)
-
-function resumeListTargetFingerprint(normalizedCwd: string): string {
-  return createHmac('sha256', RESUME_LIST_TARGET_FINGERPRINT_KEY)
-    .update('session.resume-list.target\0')
-    .update(normalizedCwd)
-    .digest('hex')
-}
-
 // Session lifecycle + I/O IPC.
 //
 // Every channel here takes a sessionId (or returns one) and operates
@@ -302,102 +290,6 @@ export function registerSessionIpc(
       opts?: { timeoutMs?: number; pollIntervalMs?: number },
     ) => {
       return manager.awaitClaudePastePlaceholder(sessionId, opts)
-    },
-  )
-
-  // Session listing for the resume picker.
-  //
-  // Called by PathPickerModal when the user types a cwd — returns a
-  // list of previous sessions in that directory so they can resume
-  // one instead of starting fresh. Empty array when the cwd has no
-  // recorded history yet. Per-provider listing routes through the
-  // provider registry so each format reads its own storage.
-  ipcMain.handle(
-    'session:list-for-cwd',
-    async (
-      _evt,
-      cwd: string,
-      limit?: number,
-      provider: AgentProviderKind = DEFAULT_PROVIDER,
-    ) => {
-      const normalizedCwd = resolvePath(cwd)
-      const targetFingerprint = resumeListTargetFingerprint(normalizedCwd)
-      try {
-        const providerConfig = getMainProvider(provider)
-        const sessions = await providerConfig.listSessions(cwd, limit ?? 20)
-        // WHY record a correlated target and count here, rather than only the
-        // generic IPC duration: the captured failure proved the handler ran but
-        // could not distinguish wrong provider/cwd, a successful empty list, a
-        // thrown disk read, or rows lost later in the renderer. No transcript
-        // content, session ids, or reversible filesystem paths are retained in
-        // this always-on breadcrumb.
-        appRunJournal?.record({
-          area: 'session.resume-list',
-          name: 'session.resume-list.complete',
-          data: {
-            provider,
-            targetFingerprint,
-            limit: limit ?? 20,
-            resultCount: sessions.length,
-            outcome: 'success',
-          },
-        })
-        return sessions
-      } catch (err) {
-        // WHY reject instead of converting every failure to []: an empty list
-        // means the disk scan succeeded and found nothing. Returning the same
-        // value for I/O/provider failures made the UI say "No matching
-        // sessions" and erased the only distinction needed to diagnose #718.
-        // Both renderer callers catch this and keep their surfaces usable.
-        // eslint-disable-next-line no-console
-        console.warn('[session:list-for-cwd] failed:', err)
-        // Do not pass the provider exception to the persistent journal: file
-        // system errors routinely embed the raw path in both message and
-        // stack. The console still carries local debugging detail; the
-        // retained breadcrumb needs only the safe target join and outcome.
-        appRunJournal?.record({
-          area: 'session.resume-list',
-          name: 'session.resume-list.error',
-          severity: 'warn',
-          data: {
-            provider,
-            targetFingerprint,
-            limit: limit ?? 20,
-            outcome: 'error',
-          },
-        })
-        throw err
-      }
-    },
-  )
-
-  // Global session listing (used by the rendering-debug harness).
-  // The main app routes through `session:list-for-cwd` because it
-  // filters by the focused pane's cwd; the harness has no notion of
-  // "current cwd" and needs everything tagged with provider.
-  ipcMain.handle(
-    'session:list-all',
-    async (_evt, limit?: number) => {
-      const cap = typeof limit === 'number' && limit > 0 ? limit : 200
-      try {
-        // Derived list: a newly registered provider is automatically
-        // included in the global inventory (#394 phase 1 — this was a
-        // hand-rolled pair that would silently omit a third provider).
-        const providers = AGENT_PROVIDER_KINDS
-        const listed = await Promise.all(providers.map(async provider => {
-          const providerConfig = getMainProvider(provider)
-          if (!providerConfig.listAllSessions) return []
-          const sessions = await providerConfig.listAllSessions(cap).catch(() => [])
-          return sessions.map(s => ({ ...s, provider }))
-        }))
-        const tagged = listed.flat()
-        tagged.sort((a, b) => b.lastModified - a.lastModified)
-        return tagged.slice(0, cap)
-      } catch (err) {
-        // eslint-disable-next-line no-console
-        console.warn('[session:list-all] failed:', err)
-        return []
-      }
     },
   )
 

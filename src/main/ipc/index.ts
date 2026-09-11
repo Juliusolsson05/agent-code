@@ -11,7 +11,6 @@ import { registerSessionIpc } from '@main/ipc/session.js'
 import { registerProviderIpc } from '@main/ipc/provider.js'
 import { registerLspIpc } from '@main/ipc/lsp.js'
 import { registerFsIpc } from '@main/ipc/fs.js'
-import { registerSessionsIpc } from '@main/ipc/sessions.js'
 import { registerConversationsIpc } from '@main/ipc/conversations.js'
 import type { ConversationService } from '@main/conversations/service.js'
 import { registerAgentNamesIpc } from '@main/agentNames/ipc.js'
@@ -100,7 +99,6 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerProviderIpc(deps.manager)
   registerLspIpc(deps.lspManager, editorFsRoots, deps.aiWorkspaceRegistry)
   registerFsIpc()
-  registerSessionsIpc()
   registerConversationsIpc(deps.conversationService, deps.appRunJournal)
   registerWorkspaceIpc(deps.manager, deps.workspaceFileStore)
   registerAgentNamesIpc()

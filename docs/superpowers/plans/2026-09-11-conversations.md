@@ -5346,7 +5346,7 @@ git commit -m "test(conversations): measure the live picker budget against real 
 - Delete: `src/providers/claude/runtime/sessionList.ts`, `src/main/sessionIndex.ts`, `src/main/ipc/sessions.ts`, `src/preload/api/sessions.ts`, `src/renderer/src/features/command-palette/useResumeSessionListing.ts`, `src/renderer/src/features/command-palette/useResumeSessionListing.renderer.test.tsx`, `src/renderer/src/features/workspace/ui/PromptSearchModal.tsx`, `src/renderer/src/features/workspace/surfaces/PromptSearchSurface.tsx`
 - Modify: `src/renderer/src/features/command-palette/ui/CommandPalette.tsx` (remove the `resume` mode: `useResumeSessionListing` import and hook call, `resumeProvider`, `enterResumeMode`, `executeResume`, `resumePreviewTarget`, `filteredSessions`, every `mode === 'resume'` branch, the `SessionPreviewPane` import if unused), `src/renderer/src/features/command-palette/paletteMode.ts` (drop `'resume'`), `src/renderer/src/features/command-palette/types.ts` (drop `enterResumeMode`), `src/main/ipc/session.ts:328-405` (delete `session:list-for-cwd` and `session:list-all`, `resumeListTargetFingerprint`, `RESUME_LIST_TARGET_FINGERPRINT_KEY`), `src/main/ipc/session.test.ts:106-175` (delete the two resume-listing tests; their contract lives in `ipc/conversations.test.ts`), `src/preload/api/session.ts:161-180` (delete `listSessionsForCwd`, `listAllSessions`), `src/preload/api/index.ts` (drop `sessionsApi`), `src/main/ipc/index.ts` (drop `registerSessionsIpc`), `src/shared/types/providerConfig.ts:380-390` (delete `listSessions`, `listAllSessions`, `sessionDiscoveryUnavailableReason`), `src/providers/registry.main.ts` (delete those three members from all three configs and the now-unused imports), `src/providers/shared/featureCapabilities.ts` (delete `savedSessionListing` and its uses; `providerFeatures.test.ts` accordingly), `src/preload/api/types.ts:244-268` (delete `SessionIndexPrompt`, `SessionIndexEntry`), `src/renderer/src/features/workspace/lib/sessionDisplay.ts` header comment (it now serves `ConversationRow`), `src/shared/types/session.ts:645-664` (`SessionInfo` stays only if `packages/*` or `nativeHistoryControl` still import it; otherwise delete), `docs/decomposition/conversations.md` (Status line → implemented, with the live numbers), `docs/design/README.md` (no new design doc: the decomposition is the source of truth; add one line pointing at it under "Current files")
 
-- [ ] **Step 1: Delete and fix the compile**
+- [x] **Step 1: Delete and fix the compile**
 
 ```bash
 git rm src/providers/claude/runtime/sessionList.ts src/main/sessionIndex.ts src/main/ipc/sessions.ts src/preload/api/sessions.ts src/renderer/src/features/command-palette/useResumeSessionListing.ts src/renderer/src/features/command-palette/useResumeSessionListing.renderer.test.tsx src/renderer/src/features/workspace/ui/PromptSearchModal.tsx src/renderer/src/features/workspace/surfaces/PromptSearchSurface.tsx
@@ -5358,17 +5358,17 @@ Run: `npx tsc -p tsconfig.node.json --pretty false && npx tsc -p tsconfig.web.js
 
 Every remaining reference to a deleted symbol is a compile error; fix each at its call site by consuming the catalog, never by re-adding the symbol.
 
-- [ ] **Step 2: Grep for dead references and stale comments**
+- [x] **Step 2: Grep for dead references and stale comments**
 
 Run: `grep -rn "listSessionsForCwd\|listAllSessions\|searchSessionPrompts\|listRecentSessionsWithPrompts\|SessionIndexEntry\|savedSessionListing\|PromptSearchModal\|promptSearchOpen\|paletteMode === 'resume'\|'resume'" src packages/*/src --include='*.ts' --include='*.tsx' | grep -v "packages/claude-code-headless\|packages/codex-headless"`
 Expected: no output. (`claude-code-headless`'s own `SessionList.ts` and `codex-headless`'s `listCodexSessions` stay: they are package APIs with their own consumers; only Agent Code's use of them as the picker source is gone.)
 
-- [ ] **Step 3: Run the whole gate once**
+- [x] **Step 3: Run the whole gate once**
 
 Run: `npm run test:contract && npm run check:conversation-fixtures && npm run check:keybindings && npm run typecheck && npm test`
 Expected: all green except the known pre-existing local failures listed in memory (`imageAttachment`, `store.performance`, `lazy-prose` timeouts). Report any other failure verbatim; do not raise timeouts.
 
-- [ ] **Step 4: Update the decomposition status and commit**
+- [x] **Step 4: Update the decomposition status and commit**
 
 In `docs/decomposition/conversations.md` change the Status line to `**implemented on \`feat/session-picker\` (PR #<n>)**; live numbers on the author's machine: cold <x> ms, warm <y> ms, search <z> ms` with the values from Task 22.
 
@@ -5377,7 +5377,7 @@ git add -A
 git commit -m "refactor(conversations): delete the four transcript listers and the three old pickers"
 ```
 
-- [ ] **Step 5: Push and open the PR (do not merge)**
+- [x] **Step 5: Push and open the PR (do not merge)**
 
 ```bash
 git push -u origin feat/session-picker

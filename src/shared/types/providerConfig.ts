@@ -14,7 +14,7 @@
 // RendererProviderConfig, and nothing re-joins them.
 
 import type { ComponentType, ReactNode } from 'react'
-import type { SessionOptions, SessionInfo, AgentSession } from '@shared/types/session.js'
+import type { SessionOptions, AgentSession } from '@shared/types/session.js'
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
 import type { Entry, ToolResultBlock, ToolUseBlock } from '@shared/types/transcript.js'
 
@@ -367,23 +367,10 @@ export type MainProviderConfig = {
    * runtime when the selected provider does not implement it.
    */
   createTerminalSession?: (opts: SessionOptions) => AgentSession
-  /** List resumable sessions for a cwd. */
-  listSessions: (cwd: string, limit: number) => Promise<SessionInfo[]>
-  /** A placeholder list must not be advertised as a complete empty catalog. */
-  sessionDiscoveryUnavailableReason?: string
-  /**
-   * List resumable sessions without cwd scoping when a caller genuinely needs a
-   * global debug/resume inventory.
-   *
-   * WHY this is optional and provider-owned: the normal app flow should prefer
-   * `listSessions(cwd, limit)` so resume choices match the cwd Agent Code will
-   * spawn in. The rendering-debug harness is different: it has no focused cwd
-   * and needs a cross-provider inventory. Routing that exceptional path through
-   * the main provider registry prevents IPC adapters from importing provider
-   * storage walkers directly while still allowing Claude to keep its app-local
-   * global walker until the package grows an equivalent API.
-   */
-  listAllSessions?: (limit: number) => Promise<SessionInfo[]>
+  // Session listing is not a provider-registry concern any more: the
+  // conversation catalog (src/main/conversations) reads each provider's
+  // native index directly and serves every picker and the external
+  // nativeHistory capabilities from one place.
   /** Resolve the on-disk project dir for a cwd. */
   getProjectDir: (cwd: string) => Promise<string>
   /**

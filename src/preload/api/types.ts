@@ -17,7 +17,6 @@ import type {
 import type { AgentTranscriptEntry } from '@shared/types/session.js'
 export type { ProviderConditionSnapshot } from '@shared/types/providerConditions.js'
 export type { BuiltInMcpDomain } from '@mcp/shared/types.js'
-export type { SessionInfo } from '@shared/types/session.js'
 export type {
   WorkflowCancelRequest,
   WorkflowCancelResult,
@@ -251,21 +250,6 @@ export type SessionAgentPtyDataEvent = { sessionId: string; data: string }
 // row (provider icon, summary, relative time) and show the most
 // recent user prompts for visual recognition. `matchCount` is only
 // meaningful on search results — zero on the default listing.
-
-export type SessionIndexPrompt = {
-  text: string
-  ts: number | null
-}
-
-export type SessionIndexEntry = {
-  providerSessionId: string
-  kind: AgentProviderKind
-  cwd: string
-  lastModified: number
-  summary: string
-  recentUserPrompts: SessionIndexPrompt[]
-  matchCount: number
-}
 
 export type SessionHistoryChunk = {
   entries: JsonlEntry[]
