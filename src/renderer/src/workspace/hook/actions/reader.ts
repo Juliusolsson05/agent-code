@@ -7,6 +7,7 @@ import {
   buildVisibleDispatchRows,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
 import { resolveFocusSurfaceTarget } from '@renderer/workspace/hook/actions/focusSurfaceTarget'
+import { sessionHasTranscript } from '@renderer/workspace/transcriptAvailability'
 
 import type {
   WorkspaceSetReaderMode,
@@ -90,7 +91,16 @@ export function useReaderActions(
       // refuses terminals for placement/metadata capabilities) could point
       // Reader Mode at a session it cannot render. Refuse without changing
       // reader state, exactly like the siblings.
-      if (!isAgentProviderKind(snapshot.sessions[sessionId]?.kind ?? DEFAULT_PROVIDER)) return
+      //
+      // WHY sessionHasTranscript instead of isAgentProviderKind (M5): the two
+      // predicates diverged. isAgentProviderKind admits OpenCode Terminal
+      // (kind 'opencode', providerRuntime 'terminal') — it IS an agent-kind
+      // session — but it never loads a transcript (see
+      // transcriptAvailability.ts's WHY), so Reader would accept it here and
+      // then render nothing. readerCommands.ts already gates on
+      // sessionHasTranscript for the same reason; this guard must agree with
+      // its own command's own visibility rule.
+      if (!sessionHasTranscript(snapshot.sessions[sessionId])) return
       const rows = snapshot.dispatchMode
         ? buildVisibleDispatchRows(snapshot)
         : []

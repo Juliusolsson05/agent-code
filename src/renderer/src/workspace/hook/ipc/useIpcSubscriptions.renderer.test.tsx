@@ -1013,6 +1013,65 @@ describe('useIpcSubscriptions with an injected SessionFeed', () => {
     expect(runtimes.s1?.sessionRunId).toBe('77777777-7777-4777-8777-777777777777')
   })
 
+  it('clears terminalForeground on exit so a dead shell cannot keep a stale badge (M3)', () => {
+    // terminalForeground itself is written by a SEPARATE hook
+    // (useTerminalForeground.ts, driven by window.api.onTerminalForeground),
+    // not by anything in useIpcSubscriptions — so this test seeds it
+    // directly on the runtime map rather than through the fake feed, the
+    // same way it would already be sitting in state by the time a real
+    // exit event arrives.
+    const fake = createFakeSessionFeed()
+    const state = { sessions: {} } as WorkspaceState
+    let runtimes: Record<SessionId, SessionRuntime> = {}
+
+    function Harness(): React.JSX.Element {
+      const refs = useRef<WorkspaceRefs | null>(null)
+      if (refs.current === null) refs.current = makeRefs(state)
+      useIpcSubscriptions(
+        fake,
+        refs.current,
+        () => {},
+        updater => {
+          runtimes = typeof updater === 'function' ? updater(runtimes) : updater
+        },
+        (sessionId, patch) => {
+          const current = runtimes[sessionId] ?? emptyRuntime()
+          runtimes = { ...runtimes, [sessionId]: { ...current, ...patch } }
+          refs.current!.latestRuntimesRef.current = runtimes
+        },
+        () => {},
+      )
+      return <div />
+    }
+
+    render(<Harness />)
+
+    act(() => {
+      fake.emitStarted({ sessionId: 's1', kind: 'terminal' })
+    })
+    // Simulate the foreground monitor having already reported "npm is
+    // running in this shell" before the process exits.
+    runtimes = {
+      ...runtimes,
+      s1: {
+        ...(runtimes.s1 ?? emptyRuntime()),
+        terminalForeground: { busy: true, command: 'npm', cwd: '/work', changedAt: 1 },
+      },
+    }
+
+    act(() => {
+      fake.emitExit({ sessionId: 's1', exitCode: 0 })
+    })
+
+    // A same-id respawn's very first idle sample is deduped against
+    // TerminalForegroundMonitor's OWN `last` map (a different structure,
+    // keyed by sessionId, that this handler cannot reach) — but that map
+    // only reflects reality if renderer-visible state agrees a dead process
+    // has no foreground. Leaving `busy: true` here would show a live "npm"
+    // badge on a pane with nothing running in it.
+    expect(runtimes.s1?.terminalForeground).toBeNull()
+  })
+
   // Live entries window (#375 part B) — the burst handler applying a trim
   // plan. The pure planner's constraint matrix is covered in
   // session-runtime/entries.test.ts; this exercises the wiring: window

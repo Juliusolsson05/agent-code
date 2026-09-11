@@ -382,7 +382,17 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
       // prompt; activityStatus is the running command shown in the subtitle
       // ("shell running · npm").
       terminalForeground: current?.terminalForeground,
-      activityStatus: current?.activityStatus,
+      // WHY gated on row.kind === 'terminal' (I3, D3 deviation): Codex's
+      // activityStatus string ticks every second ("working… 12s") while a
+      // command is running, and this selector runs useShallow — a shallow
+      // key/value diff, not a deep skip — so including the raw string for
+      // EVERY row made every live Codex/Claude row re-render on that tick
+      // even though the dispatch list never paints their activityStatus (it
+      // only reads it for the 'shell running · …' subtitle on terminal
+      // rows). Selecting undefined for non-terminal rows keeps the shallow
+      // comparison stable across those per-second updates while still
+      // giving terminal rows the live value they actually render.
+      activityStatus: row.kind === 'terminal' ? current?.activityStatus : undefined,
     }
   }))
   const onSelect = useCallback(() => {

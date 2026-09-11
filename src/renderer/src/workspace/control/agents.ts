@@ -9,6 +9,7 @@ import type { Workspace } from '@renderer/workspace/hook'
 import { AGENT_PROVIDER_RUNTIMES } from '@shared/types/providerKind'
 import { buildPlacementTargets } from '@renderer/features/workspace/lib/newAgentPlacement'
 import { setAgentTitleInWorkspace } from '@renderer/workspace/agentTitle'
+import { sessionHasTranscript } from '@renderer/workspace/transcriptAvailability'
 
 const sessionInput = z.object({ sessionId: z.string().min(1).describe('Stable agent sessionId from agents.search/list; not a provider-native transcript ID or numbered tile.') }).strict()
 const sessionReference = workspaceObservationSchema.shape.sessions.element
@@ -140,8 +141,24 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
         // restriction — it shows terminals fine — so only Reader is gated
         // here; reader.ts's own setReaderModeSession guard is the second,
         // independent layer in case some other caller reaches it directly.
-        if (session.provider === 'terminal' && useAppStore.getState().workspaceReaderMode) {
-          throw new ControlError('unavailable', 'Reader Mode shows agent transcripts only; close it before showing a terminal')
+        //
+        // WHY sessionHasTranscript instead of `session.provider === 'terminal'`
+        // (M5): a plain terminal is not the only kind Reader can't render.
+        // OpenCode Terminal (provider 'opencode', providerRuntime 'terminal')
+        // is agent-provider-kind but also never loads a transcript — see
+        // transcriptAvailability.ts. readerCommands.ts and reader.ts's own
+        // setReaderModeSession guard already use sessionHasTranscript; this
+        // refusal has to agree with them or an OpenCode Terminal could slip
+        // past this check and hit the exact same "can't render" failure one
+        // layer down. Read from raw workspace state (not the sessionReference
+        // `session` above) because sessionHasTranscript's shape is keyed on
+        // SessionMeta's `kind`/`providerRuntime` fields, not the observation
+        // schema's renamed `provider` field.
+        if (
+          !sessionHasTranscript(useAppStore.getState().workspaceState.sessions[sessionId]) &&
+          useAppStore.getState().workspaceReaderMode
+        ) {
+          throw new ControlError('unavailable', 'Reader Mode shows agent transcripts only; close it before showing this session')
         }
         if (!await getWorkspace().focusAgentBySessionId(sessionId, intent)) throw new ControlError('unavailable', 'Agent could not be shown; inspect state before retrying', 'unknown')
         // Reader and Spotlight own legitimate alternate agent views. Move their

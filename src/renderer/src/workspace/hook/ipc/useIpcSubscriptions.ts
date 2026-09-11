@@ -910,6 +910,21 @@ export function useIpcSubscriptions(
               processActive: false,
               processStatus: 'exited',
               processError: null,
+              // WHY terminalForeground is also cleared on exit (M3): the
+              // foreground monitor (#865) only emits ON CHANGE, so a dead
+              // shell's last-known command/cwd would otherwise survive
+              // forever in runtime state with nothing left to correct it —
+              // e.g. a `npm` badge staying lit on a pane whose process has
+              // already exited. This matters doubly for a same-id respawn:
+              // the NEW process's first foreground sample is compared
+              // against `last` in TerminalForegroundMonitor for dedup, but
+              // that map is keyed by sessionId and untrack() (which clears
+              // it) only fires on explicit teardown, not on exit. Leaving a
+              // stale busy sample here risks the respawn's first genuinely
+              // idle read being suppressed as "no change" against a ghost
+              // "busy" state from the dead predecessor — a spurious missed
+              // NEW-work signal on a pane that just came back.
+              terminalForeground: null,
               inputReady: false,
               // Restamped on exit for the same reason as every other readiness
               // write: without it the pane would report how long ago the DEAD
