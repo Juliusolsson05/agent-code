@@ -14,6 +14,33 @@ import { spawn as childSpawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 
 import { TMUX_SESSION_FLAGS } from '@main/tmux/tmuxConfig.js'
+import type { TerminalForegroundSample } from '@shared/types/terminalForeground.js'
+
+// One `list-panes -a` answers for every session on the server. Tab-separated
+// because none of the first three fields can contain a tab (session names are
+// prefix + UUID, pane_active is 0/1, command names are process names), so a
+// path containing tabs is recovered by joining whatever follows the third tab.
+const PANE_FOREGROUND_FORMAT = '#{session_name}\t#{pane_active}\t#{pane_current_command}\t#{pane_current_path}'
+
+export function parsePaneForegroundListing(
+  output: string,
+  namePrefix: string,
+): Map<string, TerminalForegroundSample> {
+  const panes = new Map<string, TerminalForegroundSample & { active: boolean }>()
+  for (const line of output.split('\n')) {
+    if (!line) continue
+    const [name, active, command, ...pathParts] = line.split('\t')
+    // The default tmux server is shared with the user's own sessions; only
+    // prefixed names are ours to report.
+    if (!name?.startsWith(namePrefix) || command === undefined) continue
+    const isActive = active === '1'
+    // Agent Code sessions have one pane, but a user can split one with the
+    // prefix key. The active pane is the one the attached client shows.
+    if (panes.get(name)?.active && !isActive) continue
+    panes.set(name, { command: command || null, cwd: pathParts.join('\t') || null, active: isActive })
+  }
+  return new Map([...panes].map(([name, { command, cwd }]) => [name, { command, cwd }]))
+}
 
 export type TmuxRegistryOptions = {
   /** All new session names this registry manages will start with this
@@ -186,6 +213,14 @@ export class TmuxRegistry {
         return { name, createdAt: Number(createdStr) * 1000 }
       })
       .filter(s => s.name.startsWith(this.namePrefix))
+  }
+
+  /** Foreground command + cwd for every managed session, from ONE tmux spawn
+   *  (#865). Empty when tmux is unavailable or the server has no sessions. */
+  async listPaneForeground(): Promise<Map<string, TerminalForegroundSample>> {
+    if (!this.isAvailable()) return new Map()
+    const out = await this.runTmuxCapture(['list-panes', '-a', '-F', PANE_FOREGROUND_FORMAT]).catch(() => '')
+    return parsePaneForegroundListing(out, this.namePrefix)
   }
 
   /** Run a tmux command, resolving with stdout. Reject on non-zero. */

@@ -25,6 +25,7 @@ import { aliasScreenSnapshotForWire } from '@shared/types/session.js'
 import {
   claimSessionForWindow,
   releaseSession,
+  sessionsOwnedBy,
   windowIdFor,
 } from '@main/window/windowRegistry.js'
 
@@ -145,6 +146,19 @@ export function registerSessionIpc(
   // being fixed.
   ipcMain.handle('session:terminal-attach', (_evt, sessionId: string) => {
     return manager.attachTerminal(sessionId)
+  })
+
+  // Snapshot for a renderer that restored after the last change event. The
+  // monitor emits on change only, so without this a reload would show every
+  // busy shell idle until its foreground moved again. Filtered to the caller's
+  // own sessions: every window invokes this, and another window's terminals must
+  // not grow runtimes here.
+  ipcMain.handle('session:terminal-foregrounds', evt => {
+    const windowId = windowIdFor(evt.sender)
+    const owned = new Set(windowId === null ? [] : sessionsOwnedBy(windowId))
+    return Object.fromEntries(
+      Object.entries(manager.getTerminalForegrounds()).filter(([sessionId]) => owned.has(sessionId)),
+    )
   })
 
   // Agent PTY attach/replay. DebugPanel uses this for Claude
