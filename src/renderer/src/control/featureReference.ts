@@ -88,6 +88,7 @@ export const referenceOwnership = {
   "command-keybindings": "keybindings",
   "workflows": "workflows",
   "usage": "usage",
+  "usage-limit": "usage",
   "rendered-content": "rendered-content",
   "dispatch-pin": "pins",
   "command-palette": "command-palette",

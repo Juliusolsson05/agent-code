@@ -669,8 +669,11 @@ export class TranscriptStore {
       // We did not see the prefix of the interrupted semantic turn. Rendering
       // its suffix as a complete live answer is misleading. Durable JSONL
       // still flows; live semantic painting resumes at the next turn boundary.
-      if (record.type !== 'turn_started') return
-      state.awaitingSemanticStart = false
+      // A refusal is a complete request-status fact even when the reconnect
+      // missed the assistant prefix. Keep waiting for a real turn_started for
+      // prose, while admitting a no-turn API error into the shared notice fold.
+      if (record.type !== 'turn_started' && record.type !== 'api_error') return
+      if (record.type === 'turn_started') state.awaitingSemanticStart = false
     }
 
     // Desktop order: fold first, then the shared phase machine over the

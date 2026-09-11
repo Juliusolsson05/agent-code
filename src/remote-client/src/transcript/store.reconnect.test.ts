@@ -1,3 +1,4 @@
+import { collectProviderNotices } from '@renderer/rendering/observations/providerNotices'
 import { describe, expect, it, vi } from 'vitest'
 import type { WebSocketSessionFeed } from '../WebSocketSessionFeed'
 import type { HistoryChunkResult } from '../wire'
@@ -114,4 +115,26 @@ describe('remote transcript reconnect recovery', () => {
     expect(f.getHistory).not.toHaveBeenCalled()
     f.store.dispose()
   })
+})
+
+
+it('admits a complete no-turn usage refusal after reconnect while withholding an interrupted answer suffix', () => {
+  const f = fixture()
+  f.list[0]!.kind = 'codex'
+  const unsub = f.store.subscribe('s', () => {})
+  try {
+    f.emit('onConnectionState', 'closed')
+    const event = { type: 'api_error', source: 'proxy', errorType: 'usage_limit_reached', requestId: 'refused-1', ts: 1789153200000, message: "You've hit your usage limit.", resetsAt: 1789157400 }
+    f.emit('onSessionSemanticEvent', { sessionId: 's', event })
+    const before = f.store.getSnapshot('s')
+    expect(collectProviderNotices(before.semantic.errors, 'codex', 's')).toHaveLength(1)
+    expect(before.semantic.currentTurn).toBeNull()
+    f.emit('onSessionSemanticEvent', { sessionId: 's', event })
+    expect(f.store.getSnapshot('s')).toBe(before)
+    f.emit('onSessionSemanticEvent', { sessionId: 's', event: { type: 'turn_delta', source: 'proxy', turnId: 'missed-prefix', fullText: 'An incomplete answer suffix' } })
+    expect(f.store.getSnapshot('s')).toBe(before)
+    f.emit('onSessionSemanticEvent', { sessionId: 's', event: { type: 'turn_started', source: 'proxy', turnId: 'accepted' } })
+    expect(f.store.getSnapshot('s').semantic.currentTurn?.turnId).toBe('accepted')
+    expect(f.store.getSnapshot('s').semantic.errors).toHaveLength(1)
+  } finally { unsub(); f.store.dispose() }
 })
