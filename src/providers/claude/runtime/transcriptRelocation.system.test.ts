@@ -12,6 +12,7 @@ vi.mock('node-pty', () => ({ spawn }))
 import { getProjectDirForCwd } from 'claude-code-headless'
 import { loadInitialHistoryChunk } from '@main/sessions/historyLoader'
 import { getHostTranscriptAdapter } from '@main/providerSwitch/transcriptEngine'
+import { resolveTranscriptPaths } from '@main/sessions/transcriptPaths'
 import { ClaudeSession } from './claudeSession'
 import { deliverClaudePrompt } from './promptDelivery'
 
@@ -88,6 +89,40 @@ describe('Claude worktree transcript host integration', () => {
   it('surfaces a missing resumed transcript instead of reporting healthy empty history', async () => {
     await expect(loadInitialHistoryChunk({ kind: 'claude', cwd, providerSessionId: ID, limit: 20 }))
       .rejects.toThrow(/transcript.*not found/i)
+  })
+
+  it('returns available transcripts when another active-tab transcript is missing', async () => {
+    await writeFile(await pathFor(worktree), relocated() + user('historical-user'))
+    const request = { kind: 'claude' as const, cwd, providerSessionId: ID, sessionId: 'available' }
+    expect(await resolveTranscriptPaths([
+      request,
+      { ...request, sessionId: 'missing', providerSessionId: '33333333-3333-4333-8333-333333333333' },
+    ])).toMatchObject([
+      { sessionId: 'available', exists: true },
+      { sessionId: 'missing', transcriptPath: null, exists: false },
+    ])
+  })
+
+  it('loads and resumes legacy fork ancestry while accepting only a new live prompt', async () => {
+    const file = await pathFor(cwd)
+    const ancestor = { ...JSON.parse(user('ancestor')), sessionId: 'source-session' }
+    const leaf = { ...JSON.parse(user('fork-leaf')), parentUuid: ancestor.uuid }
+    await writeFile(file, JSON.stringify(ancestor) + '\n' + JSON.stringify(leaf) + '\n')
+    const history = await loadInitialHistoryChunk({ kind: 'claude', cwd, providerSessionId: ID, limit: 20 })
+    expect(history.entries.map(entry => entry.uuid)).toEqual(['ancestor', 'fork-leaf'])
+    const pty = provider(() => file); spawn.mockReturnValue(pty)
+    const session = new ClaudeSession({ cwd, resumeSessionId: ID, binary: 'fixture', useProxy: false, snapshotIntervalMs: 1 })
+    sessions.push(session)
+    const errors: unknown[] = []; session.on('jsonl-error', error => errors.push(error))
+    await session.start(); pty.paint()
+    await waitFor(() => session.isPromptAcceptanceReady())
+    const result = await deliverClaudePrompt({
+      sessionId: 'fork-app-session', session, prompt: PROMPT,
+      write: data => { session.write(data); return true },
+    })
+    expect(result).toMatchObject({ ok: true, acceptance: { kind: 'user', entryId: 'new-user' } })
+    expect(pty.writes.filter(write => write === '\r')).toHaveLength(1)
+    expect(errors).toEqual([])
   })
 
   it('uses relocated history for rewind and provider-switch source reads', async () => {

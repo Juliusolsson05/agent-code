@@ -42,14 +42,15 @@ const claudeMain: MainProviderConfig = {
   // providers still need app-local compatibility shims.
   listAllSessions: (limit) => listAllClaudeSessions({ limit }),
   getProjectDir: getProjectDirForCwd,
-  resolveTranscriptPath: async (cwd, providerSessionId) => {
+  resolveTranscriptPath: (cwd, providerSessionId) => {
     // Native EnterWorktree moves the durable file without changing its UUID.
     // History, rewind and the live tailer must share the package's exact-session
     // resolver; reconstructing the launch-cwd path here silently returned empty
     // history while a real prompt was accepted in the relocated transcript.
-    const file = await resolveClaudeTranscriptPath(cwd, providerSessionId)
-    if (!file) throw new Error(`Claude transcript not found for session ${providerSessionId}`)
-    return file
+    // Absence is a normal locator result for inventory/batch consumers. The
+    // history/resume boundaries require a durable file and throw there instead;
+    // throwing here made one absent pane abort every active-tab transcript path.
+    return resolveClaudeTranscriptPath(cwd, providerSessionId)
   },
   deliverPrompt: deliverClaudePrompt,
 }
