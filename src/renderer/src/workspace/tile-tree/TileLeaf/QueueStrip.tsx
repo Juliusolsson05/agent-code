@@ -102,6 +102,18 @@ export function QueueStrip({
 }) {
   const listId = useId()
   const [collapsed, setCollapsed] = useState(false)
+  // WHY collapse resets when the queue drains (#890): TileLeaf keeps this
+  // component mounted while the queue is empty (it renders null), so a single
+  // "hide" survived into every later queue episode. The 2026-09-11 screenshot
+  // shows exactly that — a freshly queued prompt behind a strip the user had
+  // collapsed minutes earlier, while the pane also painted `Sending` (#889).
+  // During the queued window the strip is the ONLY place the prompt exists in
+  // Agent Code (the durable feed row paints at the drain, #665), so a new
+  // episode must always start expanded. Collapsing stays a per-episode gesture.
+  const queueEmpty = queuedMessages.length === 0
+  useEffect(() => {
+    if (queueEmpty) setCollapsed(false)
+  }, [queueEmpty])
   const [selectedPrompt, setSelectedPrompt] = useState<QueuedMessage | null>(null)
   const displayItems = useMemo(() => queuedMessages.map(message => {
     // WHY content sniffing is Claude-only: task notifications are a Claude

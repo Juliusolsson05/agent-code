@@ -140,3 +140,32 @@ describe('QueueStrip', () => {
     expect(screen.queryByText(/delivering to agent/)).toBeNull()
   })
 })
+
+describe('QueueStrip collapse is a per-episode gesture (#890)', () => {
+  it('starts every queue episode expanded, even after the user collapsed an earlier one', () => {
+    const view = render(
+      <QueueStrip
+        provider="claude"
+        queuedMessages={[{ content: 'first episode prompt', timestamp: '1' }]}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: '1 queued' }))
+    expect(screen.getByRole('button', { name: '1 queued' })).toHaveAttribute('aria-expanded', 'false')
+
+    // The queue drains. TileLeaf keeps the strip mounted (it renders null), so
+    // component state survives into the next episode — which is exactly how
+    // the 2026-09-11 screenshot ended up with a collapsed strip over a prompt
+    // the user had never seen queued.
+    view.rerender(<QueueStrip provider="claude" queuedMessages={[]} />)
+    expect(screen.queryByRole('group', { name: 'queued messages' })).toBeNull()
+
+    view.rerender(
+      <QueueStrip
+        provider="claude"
+        queuedMessages={[{ content: 'second episode prompt', timestamp: '2' }]}
+      />,
+    )
+    expect(screen.getByRole('button', { name: '1 queued' })).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByRole('list', { name: 'queued prompt list' })).toHaveTextContent('second episode prompt')
+  })
+})
