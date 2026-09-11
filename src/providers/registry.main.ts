@@ -10,7 +10,7 @@ import type { AgentProviderKind } from '@shared/types/providerKind'
 import { ClaudeSession } from '@providers/claude/runtime/claudeSession'
 import { listAllClaudeSessions } from '@providers/claude/runtime/sessionList'
 import { deliverClaudePrompt } from '@providers/claude/runtime/promptDelivery'
-import { listSessionsForCwd, getProjectDirForCwd } from 'claude-code-headless'
+import { listSessionsForCwd, getProjectDirForCwd, resolveClaudeTranscriptPath } from 'claude-code-headless'
 import { CodexSession } from '@providers/codex/runtime/codexSession'
 import { deliverCodexPrompt } from '@providers/codex/runtime/promptDelivery'
 import { OpencodeSession } from '@providers/opencode/runtime/opencodeSession'
@@ -42,8 +42,16 @@ const claudeMain: MainProviderConfig = {
   // providers still need app-local compatibility shims.
   listAllSessions: (limit) => listAllClaudeSessions({ limit }),
   getProjectDir: getProjectDirForCwd,
-  resolveTranscriptPath: async (cwd, providerSessionId) =>
-    join(await getProjectDirForCwd(cwd), `${providerSessionId}.jsonl`),
+  resolveTranscriptPath: (cwd, providerSessionId) => {
+    // Native EnterWorktree moves the durable file without changing its UUID.
+    // History, rewind and the live tailer must share the package's exact-session
+    // resolver; reconstructing the launch-cwd path here silently returned empty
+    // history while a real prompt was accepted in the relocated transcript.
+    // Absence is a normal locator result for inventory/batch consumers. The
+    // history/resume boundaries require a durable file and throw there instead;
+    // throwing here made one absent pane abort every active-tab transcript path.
+    return resolveClaudeTranscriptPath(cwd, providerSessionId)
+  },
   deliverPrompt: deliverClaudePrompt,
 }
 
