@@ -2,6 +2,21 @@ import ApplicationServices
 import CoreGraphics
 import Foundation
 
+// Cmd-letter keyUp is swallowed by AppKit before Electron's before-input-event
+// and the renderer both see it. TLDR therefore asks this existing bundled
+// helper to watch ONE physical key, only for a hold already accepted by the
+// focused renderer. Querying key state needs no event tap, global shortcut or
+// Accessibility prompt. Keep this branch before the dictation permission code:
+// a read-only pane preview must never acquire dictation's system permissions.
+if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--watch-release" {
+  guard let code = UInt16(CommandLine.arguments[2]), code < 128 else { exit(65) }
+  let deadline = Date().addingTimeInterval(300)
+  while CGEventSource.keyState(.combinedSessionState, key: code) && Date() < deadline {
+    Thread.sleep(forTimeInterval: 0.025)
+  }
+  exit(0)
+}
+
 // This helper is copied in spirit from the standalone dictation app because
 // bare Fn is not a normal Electron accelerator. Electron/Chromium often never
 // delivers a renderer key event for Fn, and `globalShortcut` is shaped around

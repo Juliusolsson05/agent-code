@@ -98,6 +98,7 @@ describe('switchAgentProvider', () => {
     expect(replaceSession).toHaveBeenCalledWith('/project', {
       kind: 'codex',
       resumeSessionId: 'target-provider-session',
+      preserveTldr: true,
       builtInMcpDomains: ['workflows'],
       targetSessionId: 'source-pane',
     })
@@ -198,6 +199,7 @@ describe('switchAgentProvider', () => {
     expect(replaceSession).toHaveBeenCalledWith('/project', {
       kind: 'codex',
       resumeSessionId: 'target-provider-session',
+      preserveTldr: true,
       builtInMcpDomains: [],
       targetSessionId: 'source-pane',
     })
@@ -409,6 +411,7 @@ describe('switchAgentProvider', () => {
       kind: 'opencode',
       providerRuntime: 'terminal',
       resumeSessionId: 'ses_translated_target',
+      preserveTldr: true,
       builtInMcpDomains: [],
       targetSessionId: 'source-pane',
     })

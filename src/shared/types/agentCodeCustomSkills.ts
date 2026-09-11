@@ -12,6 +12,7 @@ export const AGENT_CODE_CUSTOM_SKILL_MAX_BYTES = 32 * 1024
 export const AGENT_CODE_CUSTOM_SKILL_MAX_COUNT = 50
 
 export type AgentCodeCustomSkill = {
+  managedBy?: 'tldr'
   id: string
   name: string
   description: string

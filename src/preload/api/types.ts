@@ -203,6 +203,8 @@ export type SessionSpawnOptions = {
   useProxy?: boolean
   /** Terminal + tmux only: attach to an existing managed tmux session if alive. */
   recoverTmuxName?: string
+  /** Stable summary key carried only when continuing a logical conversation. */
+  tldrIdentity?: string
   /** Agent sessions only: built-in Agent Code MCP domains exposed to the child. */
   builtInMcpDomains?: BuiltInMcpDomain[]
 }

@@ -3,6 +3,8 @@
 // reads env flags at module load) is imported. See
 // `./loadEnv.ts` for the rationale.
 import '@main/loadEnv.js'
+import { TldrStore } from '@main/tldr/TldrStore.js'
+import { registerTldrIpc } from '@main/tldr/ipc.js'
 import { ExternalControlMcpHost } from './externalControlMcp/host'
 import { createExternalControlSettings } from './settings/externalControl'
 import { createExternalCodexIntegration } from './settings/externalCodexIntegration'
@@ -787,7 +789,10 @@ async function startApp(): Promise<void> {
     tmuxAvailable ? tmuxRegistry : null,
     builtInMcpHost,
     appRunJournal,
-    async () => { await agentCodeConventionsService.audit() },
+    async options => {
+      await agentCodeConventionsService.audit()
+      if (options.builtInMcpDomains?.includes('tldr')) await agentCodeConventionsService.ensureTldrSkill()
+    },
     (sessionId, sessionRunId, observation) => {
       sessionRecorders?.recordCodexTranscriptObservation(
         sessionId,
@@ -840,7 +845,10 @@ async function startApp(): Promise<void> {
     // workflow surface (MCP without IPC, or IPC without a durable owner).
     throw new Error('Workflow service was not initialized before app composition')
   }
+  const tldrStore = new TldrStore(join(STATE_DIR, 'tldr.json'))
+  registerTldrIpc(tldrStore)
   builtInMcpHost.setDependencies({
+    tldrStore,
     orchestrationBridge,
     agentManagementBridge,
     aiWorkspaceRegistry,

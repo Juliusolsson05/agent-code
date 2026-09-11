@@ -31,6 +31,7 @@ import { controlReference as reference28 } from '@renderer/features/usage/contro
 import { controlReference as reference29 } from '@renderer/features/voice-dictation/controlReference'
 import { controlReference as reference30 } from '@renderer/features/workflows/controlReference'
 import { controlReference as reference31 } from '@renderer/features/worktrees/controlReference'
+import { controlReference as tldrReference } from '@renderer/features/tldr/controlReference'
 
 export const featureReferences = [
   ...reference0,
@@ -66,6 +67,7 @@ export const featureReferences = [
   ...reference30,
   ...reference31,
   ...reference32,
+  ...tldrReference,
 ]
 
 // These directories implement shared infrastructure rather than separate UI
@@ -74,6 +76,7 @@ export const referenceOwnership = {
   "reader": "reader",
   "settings": "settings",
   "spotlight": "spotlight",
+  "tldr": "tldr",
   "caffeinate": "caffeinate",
   "session-preview": "session-preview",
   "voice-dictation": "dictation",

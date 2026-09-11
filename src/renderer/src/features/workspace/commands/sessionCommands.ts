@@ -665,6 +665,57 @@ export const sessionCommands: CommandDef[] = [
     },
   },
   {
+    id: 'enable-tldr-mcp',
+    category: 'session',
+    surface: 'session',
+    title: 'TLDR MCP',
+    description: '**What it does:** Reloads the focused agent with TLDR reporting on or off.\n\n**Use when:** You want this agent to keep one concise summary of progress, next steps and pending decisions.\n\n**Notes:** Deploys the managed reporting skill. Hold the TLDR shortcut to read summaries across visible agents.',
+    keywords: ['tldr', 'summary', 'status', 'mcp', 'decision', 'report'],
+    when: ({ workspace }) => {
+      return targetSupportsBuiltInMcpDomain(workspace, 'tldr')
+    },
+    getState: ctx => builtInMcpDomainState(ctx, 'tldr'),
+    run: async ({ workspace, ui }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return
+      const meta = workspace.state.sessions[sessionId]
+      const kind = meta?.kind ?? DEFAULT_PROVIDER
+      // Command visibility is advisory—the command can still be invoked by a
+      // keybinding or programmatic caller—so provider policy is repeated at the
+      // mutation boundary before we replace a live process.
+      if (
+        !isAgentProviderKind(kind) ||
+        !providerSupportsBuiltInMcpDomain(kind, 'tldr') ||
+        !meta
+      ) return
+
+      ui.closePalette()
+      try {
+        const nextDomains = toggleBuiltInMcpDomain(meta.builtInMcpDomains, 'tldr')
+        const newSessionId = await workspace.replaceSession(meta.cwd, {
+          kind,
+          targetSessionId: sessionId,
+          resumeSessionId: meta.providerSessionId,
+          builtInMcpDomains: nextDomains,
+        })
+        if (newSessionId) {
+          workspace.showPaneToast(
+            newSessionId,
+            nextDomains.includes('tldr')
+              ? 'Reloaded with TLDR MCP'
+              : 'Reloaded without TLDR MCP',
+          )
+        }
+      } catch (err) {
+        const message =
+          err instanceof Error && err.message.length > 0
+            ? err.message
+            : 'TLDR MCP reload failed'
+        workspace.showPaneToast(sessionId, message)
+      }
+    },
+  },
+  {
     id: 'enable-workflow-mcp',
     category: 'session',
     pickerVisibility: 'advanced',
