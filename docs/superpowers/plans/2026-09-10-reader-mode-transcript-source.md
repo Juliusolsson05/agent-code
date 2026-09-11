@@ -252,3 +252,14 @@ Both reviewers re-ran their probes. Every round-1 finding was confirmed closed; 
 | A-MINOR: following by list position misfires because the ledger sorts a committed block of the current turn below the turn's streaming blocks (F1 pulls the reader backwards, F2 fails to follow) | Fixed in Reader: follow only genuinely new ids (not in the previous list, not a copy of a page that just left it). The ledger ordering itself is pre-existing and visible in Feed: filed as #868. |
 | A-MINOR: a reader part-way through a finished newest message was pulled onto the next turn and lost their place | Fixed: only a following reader (the view's stick-to-bottom state) is carried onto new pages. |
 | A-NIT: the render-phase reconcile looped forever on an unstable `messages` identity | Fixed: state is written only when the selection changes; the rule is idempotent and a test pins both. |
+
+### Final round (against `d05354f4`)
+
+Both reviewers confirmed the recheck findings closed (F1, F2′, F3, L1, H1, H2, C1 all pass) and found that the "genuinely new" definition still misfired on real producer orders:
+
+| Finding | Disposition |
+|---|---|
+| A-MAJOR: a committed row listed BESIDE its live copy counted as new (OpenCode publishes the committed message before `completeTurn()`; Codex rollout and a Claude JSONL-before-proxy race do the same), so a following reader jumped onto it, lost scroll and stopped following | Fixed by narrowing the rule: a reader follows only onto a new SEMANTIC page (`ReaderMessage.committed` is false and the id is unseen). Committed rows are never followed; the twin search still carries a reader across a handoff. |
+| B-MAJOR: block 0's commit and block 2's start in one update share a turn id, so "copy of a departed page" hid block 2 | Fixed by the same narrowing (block 2 is a new semantic page; the entry is committed). |
+| A/B-MINOR: older history prepended above the list counted as new output | Fixed by the same narrowing (history rows are committed). |
+| A-MINOR: `selection.messages` froze while the selection did not change, so a no-twin fallback measured distance in a stale list | Fixed: every real list change is recorded; only a content-identical list (the L1 unstable-identity case) skips the write. |
