@@ -77,7 +77,7 @@ export function PinAgentsModal({
         onKeyDown={onKeyDown}
         className="flex max-h-[80vh] w-[520px] max-w-[calc(100vw-64px)] flex-col p-5"
       >
-        <DialogTitle className="mb-1 flex-shrink-0 font-semibold">Pin Agents</DialogTitle>
+        <DialogTitle className="mb-1 flex-shrink-0 font-semibold">Pin Sessions</DialogTitle>
         <DialogDescription className="sr-only">
           Choose the agents pinned in Dispatch. Space toggles and Enter commits.
         </DialogDescription>

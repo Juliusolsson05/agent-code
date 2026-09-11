@@ -114,8 +114,16 @@ export class TerminalForegroundMonitor {
       // awaiting tmux (the old shape) meant every direct-PTY terminal's
       // foreground update waited on tmux's health even though direct
       // sampling has nothing to do with tmux. Doing the direct half first
-      // and unconditionally means a hung tmux listing can only ever delay
-      // tmux-backed terminals, never direct ones.
+      // and unconditionally means a slow/hung tmux listing never delays
+      // THIS tick's direct samples. It does not fully insulate direct
+      // terminals from a hung tmux server, though: the in-flight guard at
+      // the top of tick() skips the WHOLE next tick (direct half included)
+      // while a listing from a previous tick is still pending, so a
+      // stalled listing can still hold back later ticks' direct samples.
+      // What bounds that is listPaneForeground's own 2000ms timeout
+      // (TmuxRegistry.ts) — the longest any one stalled listing can hold
+      // the in-flight guard, and therefore the longest it can delay
+      // subsequent ticks.
       for (const [sessionId, source] of this.sources) {
         if (source.kind !== 'direct') continue
         const sample = this.deps.sampleDirect(sessionId)

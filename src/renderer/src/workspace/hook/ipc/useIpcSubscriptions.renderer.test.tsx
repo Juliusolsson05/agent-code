@@ -1063,12 +1063,16 @@ describe('useIpcSubscriptions with an injected SessionFeed', () => {
       fake.emitExit({ sessionId: 's1', exitCode: 0 })
     })
 
-    // A same-id respawn's very first idle sample is deduped against
-    // TerminalForegroundMonitor's OWN `last` map (a different structure,
-    // keyed by sessionId, that this handler cannot reach) — but that map
-    // only reflects reality if renderer-visible state agrees a dead process
-    // has no foreground. Leaving `busy: true` here would show a live "npm"
-    // badge on a pane with nothing running in it.
+    // Main DOES untrack the session on exit (cleanupSessionState calls
+    // terminalForeground.untrack(sessionId) in sessionManager.ts), but that
+    // clears TerminalForegroundMonitor's OWN `last`-emitted map — a separate
+    // structure this handler cannot reach — not this renderer-side runtime
+    // field. Left uncleared, a same-id respawn's very first (idle) sample
+    // would diff against this stale `busy: true` in applyTerminalForeground:
+    // busy genuinely differs, so that is a real busy→idle transition, not a
+    // suppressed no-op, and it fires a SPURIOUS "new work" mark for a pane
+    // where nothing happened. It would also show a live "npm" badge on a
+    // pane with nothing running in it.
     expect(runtimes.s1?.terminalForeground).toBeNull()
   })
 

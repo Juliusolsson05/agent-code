@@ -910,20 +910,25 @@ export function useIpcSubscriptions(
               processActive: false,
               processStatus: 'exited',
               processError: null,
-              // WHY terminalForeground is also cleared on exit (M3): the
-              // foreground monitor (#865) only emits ON CHANGE, so a dead
-              // shell's last-known command/cwd would otherwise survive
-              // forever in runtime state with nothing left to correct it —
-              // e.g. a `npm` badge staying lit on a pane whose process has
-              // already exited. This matters doubly for a same-id respawn:
-              // the NEW process's first foreground sample is compared
-              // against `last` in TerminalForegroundMonitor for dedup, but
-              // that map is keyed by sessionId and untrack() (which clears
-              // it) only fires on explicit teardown, not on exit. Leaving a
-              // stale busy sample here risks the respawn's first genuinely
-              // idle read being suppressed as "no change" against a ghost
-              // "busy" state from the dead predecessor — a spurious missed
-              // NEW-work signal on a pane that just came back.
+              // WHY terminalForeground is also cleared on exit (M3): main DOES
+              // untrack the session on exit — the terminal exit handler
+              // (main/sessionManager.ts ~3110) calls cleanupSessionState,
+              // which calls this.terminalForeground.untrack(sessionId) (~903)
+              // — but that clears a SEPARATE structure: TerminalForegroundMonitor's
+              // own `last`-emitted map, which only decides when main should
+              // emit at all. It says nothing about this renderer-side runtime
+              // field, a second independent copy that applyTerminalForeground
+              // (session-runtime/terminalForeground.ts ~42) diffs every new
+              // sample against. Left uncleared, a same-id respawn's first
+              // (idle) sample would be compared against the dead
+              // predecessor's stale `busy: true` sitting here — busy
+              // genuinely differs, so that is NOT a suppressed no-op, it is a
+              // real busy→idle transition, and applyTerminalForeground fires
+              // withUnread on it: a SPURIOUS "new work" mark on a pane where
+              // nothing actually happened, the shell just started. Clearing
+              // it here also stops a dead shell's last command (e.g. `npm`)
+              // from lingering as a badge with no live process left to
+              // correct it.
               terminalForeground: null,
               inputReady: false,
               // Restamped on exit for the same reason as every other readiness

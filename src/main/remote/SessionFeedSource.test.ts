@@ -7,8 +7,9 @@ import type { SessionManager } from '@main/sessionManager.js'
 // SessionFeedSource is the remote subsystem's ONLY tap into SessionManager's
 // event stream — a second subscriber alongside the renderer forwarder, never
 // a replacement for it. These tests drive a bare EventEmitter standing in
-// for the manager, which is honest: the source consumes nothing but `on()`
-// and `getSessionKind()`.
+// for the manager, which is honest: the source consumes nothing but `on()`,
+// `getSessionKind()`, and `getSpawnKind()` (the latter used by the emit gate
+// for the pre-registration window, before getSessionKind is populated).
 
 function makeManager(live: string[] = []): SessionManager & EventEmitter {
   const emitter = new EventEmitter() as SessionManager & EventEmitter

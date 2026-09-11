@@ -401,7 +401,7 @@ function sessionTitle(
 ): string {
   // WHY sessionDisplayTitle instead of a locally duplicated basename rule
   // (M6): this used to reimplement its own title→spawn-folder→cwd fallback
-  // (a bare `path.split('/')` basename with no trailing-slash trim), which
+  // (a bare `path.split('/').filter(Boolean)` basename lookup), which
   // is exactly the "D6 title rule" — sessionDisplayTitle.ts's WHY comment
   // — that already exists as the one shared source of truth other
   // workspace-layer readers (pane labels, close confirmation, control

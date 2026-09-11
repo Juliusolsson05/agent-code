@@ -79,7 +79,7 @@ export function useReaderActions(
   const setReaderModeSession = useCallback(
     (sessionId: SessionId) => {
       const snapshot = refs.stateRef.current
-      // WHY this needs the same guard as setReaderModeTarget/toggleReaderMode
+      // WHY this needs a guard like setReaderModeTarget/toggleReaderMode's
       // (#865): Reader Mode is agent-only by design (Design D2) because it
       // renders a provider-registered transcript view, and a terminal has no
       // such view. Those two siblings already refuse a non-agent kind before
@@ -90,7 +90,9 @@ export function useReaderActions(
       // (e.g. the external operator's agents.show, which after #865 no longer
       // refuses terminals for placement/metadata capabilities) could point
       // Reader Mode at a session it cannot render. Refuse without changing
-      // reader state, exactly like the siblings.
+      // reader state — though, as the M5 note below explains, the predicate
+      // this guard refuses on is now STRICTER than the siblings' own guard,
+      // not identical to it.
       //
       // WHY sessionHasTranscript instead of isAgentProviderKind (M5): the two
       // predicates diverged. isAgentProviderKind admits OpenCode Terminal
