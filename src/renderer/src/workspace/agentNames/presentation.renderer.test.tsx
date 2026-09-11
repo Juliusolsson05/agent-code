@@ -95,10 +95,10 @@ describe('agent name presentation', () => {
     expect(container.querySelector('[data-agent-name-badge="true"]')).toHaveTextContent('Apollo')
   })
 
-  it('renders nothing for an untitled shell, even one with a stale identity', () => {
+  it('names a shell in the shared header (#865)', () => {
     seed()
     const { container } = render(<AgentTitleHeader sessionId={SHELL} />)
-    expect(container.firstChild).toBeNull()
+    expect(container.querySelector('[data-agent-name-badge="true"]')).toHaveTextContent('Jasper')
   })
 
   it('renders nothing at all while the setting is off', () => {
@@ -131,13 +131,13 @@ describe('agent name presentation', () => {
     expect(container.querySelector('[data-agent-title-header="true"]')).toHaveTextContent('')
   })
 
-  it('reserves nothing for a shell, which never receives a name', () => {
-    // The reservation is keyed on provider kind, so a plain terminal pane must
-    // not gain a row it will never fill.
+  it('holds the row open for a shell whose name has not arrived yet', () => {
+    // Same SIGWINCH hazard as agents: a row appearing mid-life would resize the
+    // live shell and garble a TUI running in it (vim, htop).
     seed()
     appState.workspaceAgentNames = {}
     const { container } = render(<AgentTitleHeader sessionId={SHELL} />)
-    expect(container.firstChild).toBeNull()
+    expect(container.querySelector('[data-agent-name-placeholder="true"]')).not.toBeNull()
   })
 
   it('reserves nothing while the setting is off, so unnamed users lose no space', () => {
@@ -148,14 +148,14 @@ describe('agent name presentation', () => {
     expect(container.firstChild).toBeNull()
   })
 
-  it('chips the name on the agent row of the Dispatch index and leaves shells bare', () => {
+  it('chips the name on every Dispatch row, shells included', () => {
     seed()
     const { container } = renderIndex()
 
     const rows = container.querySelectorAll<HTMLElement>('[data-dispatch-row="true"]')
     expect(rows).toHaveLength(2)
     expect(rows[0].querySelector('[data-dispatch-agent-name="true"]')).toHaveTextContent('Apollo')
-    expect(rows[1].querySelector('[data-dispatch-agent-name="true"]')).toBeNull()
+    expect(rows[1].querySelector('[data-dispatch-agent-name="true"]')).toHaveTextContent('Jasper')
     // The title must keep its own truncation slot; the chip is a sibling, not
     // a prefix inside the truncating span.
     expect(rows[0]).toHaveTextContent('A1 workflow')
@@ -164,7 +164,7 @@ describe('agent name presentation', () => {
     // tooltip that omitted the name answered "what is this agent called"
     // differently from the pane header showing the same agent.
     expect(rows[0].getAttribute('title')).toBe('Apollo — A1 workflow')
-    expect(rows[1].getAttribute('title')).toBe('A2 workflow')
+    expect(rows[1].getAttribute('title')).toBe('Jasper — A2 workflow')
   })
 
   it('drops every Dispatch chip when the setting is off', () => {

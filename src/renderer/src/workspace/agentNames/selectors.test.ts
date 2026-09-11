@@ -16,12 +16,12 @@ describe('agent name selector', () => {
       .toBeNull()
   })
 
-  it('never names a shell terminal', () => {
-    // A terminal has no provider conversation to address, and the header
-    // component it shares refuses terminal targets at the mutation boundary
-    // too. Giving one a spoken name would advertise an unroutable target.
+  it('names a shell terminal from the same pool (#865)', () => {
+    // A named shell is routable since the operator gained terminals.input
+    // (#793): the guide sends a spoken shell name to terminals.input, never
+    // agents.prompt. The old "unroutable target" reason no longer holds.
     expect(resolveAgentName({ enabled: true, meta: { kind: 'terminal', agentNameId: 'identity-one' }, names }))
-      .toBeNull()
+      .toBe('Apollo')
   })
 
   it('treats a missing provider kind as the default agent provider', () => {

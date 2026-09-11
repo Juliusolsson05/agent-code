@@ -1,12 +1,7 @@
 import { AGENT_NAME_IDENTITY_MAX_LENGTH } from '@shared/types/agentNames'
 import { identityCarryIsPending } from '@renderer/workspace/agentNames/pendingIdentityCarry'
-import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 
 import type { SessionMeta, WorkspaceState } from '@renderer/workspace/types'
-
-function isNameable(meta: Pick<SessionMeta, 'kind'>): boolean {
-  return isAgentProviderKind(meta.kind ?? DEFAULT_PROVIDER)
-}
 
 /**
  * The usable identity on a session's metadata, or null.
@@ -60,8 +55,11 @@ function identityOf(meta: Pick<SessionMeta, 'agentNameId'>): string | null {
 export function claimMissingIdentities(state: WorkspaceState): WorkspaceState {
   let changed = false
   const sessions = { ...state.sessions }
+  // Every session kind is claimed (#865). Terminals used to be skipped because
+  // a spoken shell name "would advertise an unroutable target"; the operator
+  // routes shell names to terminals.input now, so the reason no longer holds.
   for (const [sessionId, meta] of Object.entries(state.sessions)) {
-    if (!isNameable(meta) || identityOf(meta)) continue
+    if (identityOf(meta)) continue
     // A successor mid-replacement is about to inherit its predecessor's
     // identity in this same operation. Claiming one for it here allocates a
     // name that the very next commit overwrites and that nothing will ever
@@ -88,11 +86,11 @@ export function claimMissingIdentities(state: WorkspaceState): WorkspaceState {
 export function agentNameIdentities(state: WorkspaceState): string[] {
   const identities = new Set<string>()
   for (const meta of Object.values(state.sessions)) {
-    const identity = isNameable(meta) ? identityOf(meta) : null
+    const identity = identityOf(meta)
     if (identity) identities.add(identity)
   }
   for (const record of state.buried) {
-    const identity = isNameable(record.sessionMeta) ? identityOf(record.sessionMeta) : null
+    const identity = identityOf(record.sessionMeta)
     if (identity) identities.add(identity)
   }
   return [...identities]
