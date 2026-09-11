@@ -63,6 +63,21 @@ beforeEach(() => {
 afterEach(() => { cleanup(); dismissTldr() })
 
 describe('TLDR hold input', () => {
+  it.each(['Cmd+L', 'Cmd+B'])('peeks in Spotlight through the real keyboard router with %s', async binding => {
+    harness.appState.settings = { agentViewMode: 'agent', commandKeybindingOverrides: { 'tldr-preview': [binding] } }
+    const model = workspace()
+    model.spotlight = { tabId: 'tab', focusedSessionId: 'a' }
+    render(<><Harness model={model} /><TldrPane identity="spotlight-agent" enabled><div>Visible Spotlight feed</div></TldrPane></>)
+    keyDown(document, binding === 'Cmd+B' ? { key: 'b', code: 'KeyB' } : {})
+    await screen.findByText('Summary for spotlight-agent.')
+    expect(harness.appState.requestCommandInvocation).not.toHaveBeenCalled()
+    const token = api.startTldrHold.mock.calls.at(-1)![1]
+    act(() => { for (const listener of releaseListeners) listener(token) })
+    expect(screen.queryByRole('note')).toBeNull()
+    expect(screen.getByText('Visible Spotlight feed')).toBeTruthy()
+    expect(useTldrView.getState()).toMatchObject({ held: false, latched: false })
+  })
+
   it('handles the native L release and ignores a release token from an earlier gesture', () => {
     render(<Harness />)
     keyDown()

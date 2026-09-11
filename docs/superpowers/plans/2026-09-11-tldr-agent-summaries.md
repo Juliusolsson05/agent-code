@@ -80,3 +80,12 @@ reference was added and its targeted test passes. The remaining image-fixture
 provenance failure reproduces on the unchanged base revision `07fec7ec`: a
 cited private Claude recording no longer exists on this machine. No fixture,
 expectation, private recording, or skip rule was changed to mask that failure.
+
+Two independent Codex reviews found a Spotlight shortcut-admission gap and loss
+of the original summary on Undo Rewind. Spotlight now shares the synchronous
+hold path; Reader retains its existing ownership boundary. Rewind undo records
+the original TLDR identity alongside the original native transcript and restores
+both together, including the other transcript edit that uses Undo Rewind.
+Regression tests failed before these fixes and pass afterward: default/rebound
+Spotlight press plus native release, and the complete rewind/edit-to-undo action
+sequence with the original saved summary visible again.

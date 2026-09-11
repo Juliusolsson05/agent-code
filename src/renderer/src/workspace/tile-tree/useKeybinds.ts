@@ -651,6 +651,19 @@ export function useKeybinds(
         return
       }
 
+      const handleTldrHold = (commandId: string | null): boolean => {
+        if (commandId !== 'tldr-preview') return false
+        // The editor owns Select Line, including after a rebind. Both ordinary
+        // panes and Spotlight must start synchronously: queueing the palette
+        // toggle could reopen the preview after keyup, leaving it latched.
+        if (!editorOwnsTarget && !fullscreenEditorOwnsWorkspace) {
+          e.preventDefault()
+          e.stopPropagation()
+          tldrHold.start(e)
+        }
+        return true
+      }
+
       // Reader and Spotlight are inline full-screen takeovers rather than
       // Radix dialogs, so they deliberately do not stamp the DOM interaction-
       // owner marker handled at the top of this router. Their workspace state
@@ -688,6 +701,10 @@ export function useKeybinds(
           bindingIndex,
           focusModeContexts,
         )
+        // Spotlight owns a mounted agent pane and its TLDR overlay. Reader
+        // does not, so it keeps its existing narrow shortcut admission. This
+        // special path shares the hold controller, not the async toggle list.
+        if (workspace.spotlight && !workspace.readerMode && handleTldrHold(focusModeCommandId)) return
         if (focusModeCommandId && focusModeCommandIds.has(focusModeCommandId)) {
           e.preventDefault()
           requestCommandInvocation(focusModeCommandId, 'keybinding')
@@ -728,16 +745,7 @@ export function useKeybinds(
         ),
       })
       const routedCommandId = routedCommandForEvent(e, bindingIndex, activeContexts)
-      if (routedCommandId === 'tldr-preview') {
-        // The editor owns Select Line, including after a rebind. Handle the
-        // press synchronously: the ordinary async command-invocation queue can
-        // run AFTER keyup and would otherwise reopen an already released peek.
-        if (editorOwnsTarget || fullscreenEditorOwnsWorkspace) return
-        e.preventDefault()
-        e.stopPropagation()
-        tldrHold.start(e)
-        return
-      }
+      if (handleTldrHold(routedCommandId)) return
       if (routedCommandId) {
         e.preventDefault()
         requestCommandInvocation(routedCommandId, 'keybinding')

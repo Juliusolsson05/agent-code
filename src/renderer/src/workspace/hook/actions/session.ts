@@ -103,6 +103,7 @@ export type SessionActions = {
       providerRuntime?: AgentProviderRuntime
       builtInMcpDomains?: BuiltInMcpDomain[]
       preserveTldr?: boolean
+      restoreTldrIdentity?: string
       targetSessionId?: SessionId
     },
   ) => Promise<SessionId | undefined>
@@ -1149,11 +1150,12 @@ export function useSessionActions(
         providerRuntime?: AgentProviderRuntime
         builtInMcpDomains?: BuiltInMcpDomain[]
         preserveTldr?: boolean
+        restoreTldrIdentity?: string
         targetSessionId?: SessionId
       },
     ): Promise<SessionId | undefined> => {
       const snapshot = refs.stateRef.current
-      const { targetSessionId: _targetSessionId, preserveTldr, ...spawnOpts } = opts ?? {}
+      const { targetSessionId: _targetSessionId, preserveTldr, restoreTldrIdentity, ...spawnOpts } = opts ?? {}
       // WHY this reads Dispatch focus before tab focus:
       //
       // `replaceSession` powers resume, reload, provider-switch, and rewind.
@@ -1210,7 +1212,11 @@ export function useSessionActions(
       if (!canCommit(snapshot)) return
       const draftFallback = refs.latestRuntimesRef.current[oldId]
       const newId = await spawn(cwd, {
-        tldrIdentity: tldrIdentityForReplacement(oldId, oldMeta, {
+        // Undo Rewind verifies its original/rewound transcript pair before
+        // supplying the saved original identity. Ordinary resume/reload must
+        // still derive continuity from the current conversation; preserving
+        // the rewound branch's identity would lose the original summary.
+        tldrIdentity: restoreTldrIdentity ?? tldrIdentityForReplacement(oldId, oldMeta, {
           kind: nextKind, resumeSessionId: spawnOpts.resumeSessionId, preserveTldr,
         }),
         ...spawnOpts,

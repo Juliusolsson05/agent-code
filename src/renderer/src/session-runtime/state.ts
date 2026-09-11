@@ -118,6 +118,9 @@ export type PendingRewindUndo = {
   provider: AgentProviderKind
   cwd: string
   previousProviderSessionId: string
+  // Undo returns to the original transcript, whose summary must be restored;
+  // the truncated branch deliberately has a different, initially empty TLDR.
+  previousTldrIdentity?: string
   rewoundProviderSessionId: string
   rewoundPromptText: string
   rewoundPromptTimestamp: string | null
