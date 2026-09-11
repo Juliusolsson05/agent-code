@@ -418,6 +418,19 @@ export function useUndoCloseAction(
         const tabIndex = prev.tabs.findIndex(tab => tab.id === entry.record.projectTabId)
         if (tabIndex < 0) return prev
         refiled = true
+        const tab = prev.tabs[tabIndex]
+        const promoted = entry.replacedRoot
+        const restoreRoot = promoted && tab.root.type === 'leaf' &&
+          tab.root.sessionId === promoted.sessionId && prev.sessions[promoted.sessionId]
+        // Undo changes the root role back only if nobody has rearranged it.
+        // The survivor stays the same live backend and regains its exact old
+        // Dispatch record. A later split wins; then restore just the row.
+        const detachedSessions = { ...prev.detachedSessions }
+        if (restoreRoot) detachedSessions[promoted.sessionId] = promoted
+        else detachedSessions[newSessionId] = {
+          ...entry.record, sessionId: newSessionId,
+          projectTabTitle: tab.title, projectTabIndex: tabIndex,
+        }
         return {
           ...prev,
           // Every other path that files a detached row makes its tab active in
@@ -446,21 +459,10 @@ export function useUndoCloseAction(
             ...prev.sessions,
             [newSessionId]: carryDurableMeta(prev.sessions[newSessionId], meta),
           },
-          detachedSessions: {
-            ...prev.detachedSessions,
-            [newSessionId]: {
-              ...entry.record,
-              // The spawn minted a new local id; everything else about the
-              // record — project affinity and, critically, `detachedAt` —
-              // is restored verbatim so the row returns to its old position
-              // in the Dispatch list rather than jumping to the bottom.
-              sessionId: newSessionId,
-              // projectTabIndex is a display ordinal recomputed on render;
-              // refresh it so a record read before the next render is not
-              // stale if tabs moved while the entry sat on the stack.
-              projectTabIndex: tabIndex,
-            },
-          },
+          detachedSessions,
+          tabs: restoreRoot ? prev.tabs.map(current => current.id === tab.id
+            ? { ...current, root: { type: 'leaf' as const, sessionId: newSessionId }, focusedSessionId: newSessionId }
+            : current) : prev.tabs,
           // Focus the restored row when Dispatch is up. NOTE this is the
           // classic focus only: in Tiled Dispatch `dispatchFocusedSessionId`
           // reads the focused LANE first, and the close already cleared that

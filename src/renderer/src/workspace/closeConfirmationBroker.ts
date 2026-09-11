@@ -25,7 +25,7 @@ export type PendingCloseConfirmation = {
 type Listener = (pending: PendingCloseConfirmation | null) => void
 
 let pending: PendingCloseConfirmation | null = null
-let resolver: ((confirmed: boolean) => void) | null = null
+let resolver: ((confirmed: boolean | 'agent') => void) | null = null
 const listeners = new Set<Listener>()
 
 function emit(): void {
@@ -55,6 +55,22 @@ export function currentCloseConfirmation(): PendingCloseConfirmation | null {
 export function requestCloseConfirmation(
   request: PendingCloseConfirmation['request'],
 ): Promise<boolean> {
+  return requestCloseAnswer(request).then(answer => answer === true)
+}
+
+/** Root-close choice shares the same slot as ordinary confirmations, so a
+ * second close cancels the first instead of leaving two destructive grants. */
+export function requestRootCloseConfirmation(
+  request: PendingCloseConfirmation['request'],
+): Promise<'agent' | 'tab' | null> {
+  return requestCloseAnswer(request).then(answer =>
+    answer === 'agent' ? 'agent' : answer === true ? 'tab' : null,
+  )
+}
+
+function requestCloseAnswer(
+  request: PendingCloseConfirmation['request'],
+): Promise<boolean | 'agent'> {
   // Resolve the superseded request BEFORE clearing the slot, then install the
   // new resolver BEFORE notifying listeners. The earlier order emitted while
   // `resolver` still pointed at the already-resolved function, so a listener
@@ -65,7 +81,7 @@ export function requestCloseConfirmation(
   resolver = null
   previous?.(false)
 
-  return new Promise<boolean>(resolve => {
+  return new Promise<boolean | 'agent'>(resolve => {
     resolver = resolve
     pending = { request }
     emit()
@@ -73,7 +89,7 @@ export function requestCloseConfirmation(
 }
 
 /** Answer the open request. Safe to call with nothing pending. */
-export function resolveCloseConfirmation(confirmed: boolean): void {
+export function resolveCloseConfirmation(confirmed: boolean | 'agent'): void {
   const resolve = resolver
   pending = null
   resolver = null

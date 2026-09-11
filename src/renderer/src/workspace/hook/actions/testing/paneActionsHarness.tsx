@@ -24,22 +24,11 @@ import type { WorkspaceState } from '@renderer/workspace/types'
 // makes the difference between two specs be the SCENARIO rather than a hundred
 // lines of scaffolding.
 //
-// Two fidelity properties, one faithful and one deliberately NOT:
-//
-//  - FAITHFUL: `stateWriter` applies functional updates synchronously, exactly
-//    as the real zustand setter does (app-state/workspace/slice.ts). Action
-//    code that reads a flag set inside a `setState` updater is therefore
-//    exercised the way it runs in the app.
-//
-//  - DELIBERATELY MORE CURRENT THAN PRODUCTION: it also writes the result
-//    straight back into `stateRef`. Production does not — that ref is a
-//    render-body mirror (workspace/hook/index.ts), so after an awaited call it
-//    can still hold pre-await state. This harness therefore CANNOT reproduce
-//    stateRef-lag bugs: a post-`await` `refs.stateRef` read will look correct
-//    here and no-op in the app. That class has already bitten twice (the
-//    orphan-guard kill in pane.ts and the undo bail in undoClose.ts), so if
-//    you are testing one, this harness is not the tool — assert on the state
-//    the writer holds, not on what a ref reports.
+// The writer applies functional updates synchronously, like Zustand, and
+// refreshes the action refs in the same call. Production now subscribes to
+// workspaceState as well as runtime state synchronously (#886), so repeated
+// closes see ownership changes before React commits another render. The real
+// controller subscription is covered separately in runtimeIsolation's tests.
 
 export function makeRefs(state: WorkspaceState): WorkspaceRefs {
   const ref = <T,>(value: T): MutableRefObject<T> => ({ current: value })

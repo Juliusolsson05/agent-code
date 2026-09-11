@@ -47,7 +47,7 @@ export function CloseConfirmationDialog() {
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle>
-            {request?.reason === 'running'
+            {request?.agentOnly ? 'Close the agent or the tab?' : request?.reason === 'running'
               // "session" not "agent": a shell running a job reaches this
               // dialog too now that terminal foreground state counts as
               // working (#865), and it isn't an agent.
@@ -58,6 +58,14 @@ export function CloseConfirmationDialog() {
           </DialogTitle>
           <DialogDescription>{request?.summary}</DialogDescription>
         </DialogHeader>
+
+        {request?.agentOnly ? (
+          <p className="text-xs text-ink-dim">
+            Close Agent ends {request.agentOnly.title}
+            {request.agentOnly.targets.length > 1 ? ` and ${request.agentOnly.targets.length - 1} linked session(s)` : ''}.
+            {' '}Other agents stay open. Close Tab ends every session listed below.
+          </p>
+        ) : null}
 
         {request && request.targets.length > 1 ? (
           <div className="rounded-slab max-h-56 overflow-auto border border-border">
@@ -87,8 +95,13 @@ export function CloseConfirmationDialog() {
           <Button variant="ghost" onClick={() => resolveCloseConfirmation(false)}>
             Cancel
           </Button>
+          {request?.agentOnly ? (
+            <Button variant="secondary" onClick={() => resolveCloseConfirmation('agent')}>
+              Close Agent
+            </Button>
+          ) : null}
           <Button variant="destructive" onClick={() => resolveCloseConfirmation(true)}>
-            {request && request.targets.length > 1
+            {request?.agentOnly ? `Close Tab (${request.targets.length})` : request && request.targets.length > 1
               ? `Close ${request.targets.length}`
               : 'Close'}
           </Button>

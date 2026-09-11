@@ -2,11 +2,13 @@ import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
 import {
   expandSessionCloseTargets,
   expandTabCloseTargets,
+  grantStillMatches,
   isSessionLiveForClose,
   runCloseConfirmationGate,
 } from '@renderer/workspace/closeConfirmation'
+import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type { CloseExpansionRuntimes, CloseTargetSnapshot } from '@renderer/workspace/closeConfirmation'
-import { requestCloseConfirmation } from '@renderer/workspace/closeConfirmationBroker'
+import { requestCloseConfirmation, requestRootCloseConfirmation } from '@renderer/workspace/closeConfirmationBroker'
 import { sessionDisplayTitle } from '@renderer/workspace/sessionDisplayTitle'
 import { useCallback, useRef } from 'react'
 
@@ -96,27 +98,21 @@ function forgetClosedSessionDebugState(refs: WorkspaceRefs, sessionId: SessionId
 }
 
 /**
- * The one way to skip `closeSession`'s confirmation gate.
- *
- * Setting `preConfirmed` is an ASSERTION, and it has a precise meaning: the
- * caller has already put the full expanded target set in front of the user,
- * received an explicit approval, and re-validated that set against live state
- * immediately before this call. Three callers qualify today —
- * `closeLinkedChildren` (cascade children, already named in the parent's
- * dialog), `closeFocused` (delegating a target it just gated), and the Close
- * Old Agents modal (whose whole UI is a preview-and-approve surface, and which
- * re-runs its eligibility predicate before every kill).
- *
- * It is deliberately NOT a convenience for "this close feels safe". The default
- * — omit it — is the gated path, and the Agent Activity modal's Close button is
- * exactly the case that must keep paying for it: a single button in a list, no
- * preview of the cascade it triggers.
- *
- * A fourth caller does NOT qualify and must not assert it: orchestration MCP.
- * See `silentIfSoleTarget` below for what it uses instead and why.
+ * Preconfirmation is a grant for a SESSION close, never implicit tab intent.
+ * Cascade children may reuse the parent's expanded grant. Bulk cleanup pairs
+ * preConfirmed with onlyIf, which narrows the operation to one still-eligible
+ * session and refuses linked descendants. Human row/keybinding closes omit
+ * it and share the same scope-choice and working-session confirmation path.
+ * Automation uses silentIfSoleTarget / requireConfirmation instead: permission
+ * to name a session is not permission to kill user-created linked children.
  */
 export type CloseSessionOptions = {
   preConfirmed?: boolean
+  /** Bulk grants are single-session only. Re-read action-owned state at the
+   * kill boundary; refuse any linked cascade rather than widening the user's
+   * preview. This callback is intentionally synchronous: no await may separate
+   * its verdict from dispatching the ownership-checked kill request. */
+  onlyIf?: (state: WorkspaceState, runtimes: Record<SessionId, SessionRuntime>) => boolean
   /**
    * Skip pushing an Undo Close entry for this close. Defaults to capturing.
    *
@@ -147,24 +143,13 @@ export type CloseSessionOptions = {
    * and a dialog per close devalues the confirmations that matter. But the
    * ownership gate that authorizes the call only scopes WHICH SESSION MAY BE
    * NAMED — it says nothing about WHICH SESSIONS DIE. `closeSession` kills a
-   * SET, and two real shapes reach beyond the named target:
+   * SET when linked children exist. A user may attach a linked agent to an
+   * orchestration child; that agent has no orchestration ownership fields, so
+   * only the expanded close gate can explain the additional impact.
    *
-   *   - `closeLinkedChildren` takes every session linked to the target. A user
-   *     can run "Linked Agent…" on an orchestration child, and that linked
-   *     agent carries no orchestration fields at all — so the gate cannot see
-   *     it, and asserting preConfirmed would kill a session the user built by
-   *     hand, silently.
-   *   - Closing a tab's SOLE grid leaf takes every detached session in that
-   *     tab. Orchestration children live detached in the root's tab, so that
-   *     set can include the caller itself, its siblings, and Dispatch agents
-   *     the user parked there.
-   *
-   * Agent Management refuses both shapes outright (`additionalCloseImpact`)
-   * even though it has a dialog available. Orchestration cannot refuse — a
-   * fleet must be able to clean up — so it confirms instead, but only for the
-   * shapes that actually reach further than advertised. The routine case (a
-   * detached child with no linked children) expands to exactly one and stays
-   * silent, which is the entire point.
+   * A sole grid leaf used to take the entire project with it too (#886).
+   * Session-only scope now promotes a survivor instead. Automation never gets
+   * the human-only Close Tab choice and cannot turn this flag into tab intent.
    */
   silentIfSoleTarget?: { headline: string }
   /**
@@ -210,29 +195,35 @@ function detachedTabChildren(state: WorkspaceState, tabId: string): DetachedTabC
   }
 }
 
+/** The next displayed Dispatch row becomes the grid root. Object insertion
+ * order is not row order after persistence/undo; reuse the list's ordering so
+ * closing the first agent does not shuffle the remaining project. */
+function detachedRootReplacement(
+  state: WorkspaceState,
+  tabId: TabId,
+  closing: readonly SessionId[],
+): DetachedSessionRecord | undefined {
+  const id = detachedDispatchSessionIdsForTab(state, tabId).find(id => !closing.includes(id))
+  return id === undefined ? undefined : state.detachedSessions[id]
+}
+
 /**
- * Every session a PANE close will actually end.
- *
- * Deliberately not just `expandSessionCloseTargets`. Both grid close paths take
- * the tab's DETACHED children with them when the closing pane is the tab's last
- * one — see `detachedTabChildren`, and the `!parentInfo` branches below that
- * build `closedSessionIds` from it. Those sessions have no tile anywhere, so a
- * cascade-only enumeration reported "1 session" for a close that killed seven,
- * which is the exact class of surprise the confirmation exists to prevent.
- *
- * The rule this encodes: the gate must count what the mutation counts. When
- * that stops being true the dialog becomes a lie, and a dialog nobody can trust
- * is worse than no dialog at all — it trains the user to click through.
+ * The confirmation and the mutation share an explicit scope. Session is the
+ * default even for the final grid leaf: layout ownership does not authorize
+ * killing its detached siblings. Only the human root-scope dialog can choose
+ * tab scope. Keeping that distinction here prevents the old preview-one /
+ * terminate-project mismatch from reappearing in another close entry point.
  */
 function paneCloseTargets(
   state: WorkspaceState,
   runtimes: CloseExpansionRuntimes,
   targetId: SessionId,
+  scope: 'session' | 'tab' = 'session',
 ): CloseTargetSnapshot[] {
   const owningTab = state.tabs.find(tab => collectLeaves(tab.root).includes(targetId))
   // A detached target, or a pane inside a split: the tab survives, so only the
   // linked cascade dies.
-  if (!owningTab || findParentSplitInfo(owningTab.root, targetId)) {
+  if (scope === 'session' || !owningTab || findParentSplitInfo(owningTab.root, targetId)) {
     return expandSessionCloseTargets(state, runtimes, targetId)
   }
   return expandTabCloseTargets(
@@ -243,16 +234,9 @@ function paneCloseTargets(
   )
 }
 
-/**
- * Resolve which session `closeFocused` would act on, from a given state.
- *
- * Extracted so the SAME derivation runs before the dialog and again after it.
- * The pre-dialog answer is what the user approved; if re-running it against the
- * post-dialog workspace yields a different session, focus moved while they were
- * reading and closing now would kill something they never saw.
- */
+/** Capture the command's explicit target once. closeSession carries that ID
+ * through the dialog rather than rereading whichever row gains focus later. */
 function resolveFocusedCloseTarget(state: WorkspaceState): {
-  dispatchTargetId: SessionId | null
   targetId: SessionId | undefined
 } {
   const dispatchTargetId = state.dispatchMode
@@ -261,7 +245,7 @@ function resolveFocusedCloseTarget(state: WorkspaceState): {
   const targetId = dispatchTargetId
     ?? commandTargetSessionIdForState(state)
     ?? state.tabs.find(tab => tab.id === state.activeTabId)?.focusedSessionId
-  return { dispatchTargetId, targetId }
+  return { targetId }
 }
 
 /**
@@ -1008,9 +992,8 @@ export function usePaneActions(
   // closed, every session that named it as `linkedParentId` is
   // closed too. Recursion via closeSessionRef means a (rare) chain
   // unwinds fully even though createLinkedAgent never builds one.
-  // Called from BOTH close paths — closeSession (explicit / dispatch
-  // / modal closes) and closeFocused's grid path — because a parent
-  // can be either a detached dispatch agent or a grid pane.
+  // closeSession owns this for both grid and detached targets; focused
+  // commands delegate there too. Guarded cleanup refuses this cascade.
   const closeLinkedChildren = useCallback(async (parentId: SessionId) => {
     const sessions = refs.stateRef.current.sessions
     const childIds = Object.keys(sessions).filter(
@@ -1351,211 +1334,13 @@ export function usePaneActions(
     ],
   )
 
-  // Removes the leaf from the tree and kills its session. If the
-  // tree collapses to nothing, closes the whole tab. If that was
-  // the last tab, leaves the workspace in an empty state — the UI
-  // shows a welcome screen prompting for a new tab.
-  //
-  // Before destroying anything, we capture undo info and push it
-  // onto the undo-close stack so the user can restore the pane (or
-  // tab) with a single command within the next 2 minutes.
+  // One close implementation owns both row buttons and the keyboard command.
+  // The former focused-grid copy silently made the sole leaf a tab close;
+  // delegating by stable ID ensures every human entry sees the scope choice.
   const closeFocused = useCallback(async () => {
-    // CONFIRMATION GATE. Runs before ANY mutation, and before the branch below
-    // picks a close path — the user's answer must cover the whole operation,
-    // not one arm of it.
-    //
-    // The gate expands the target set to everything the mutation will actually
-    // remove (`paneCloseTargets`) and re-checks it after the dialog, so an idle
-    // single close still falls straight through with no dialog and no re-work.
-    const approved = resolveFocusedCloseTarget(refs.stateRef.current)
-    if (approved.targetId) {
-      const targetId = approved.targetId
-      const gate = await runCloseConfirmationGate({
-        enumerate: () =>
-          paneCloseTargets(refs.stateRef.current, refs.latestRuntimesRef.current, targetId),
-        ask: requestCloseConfirmation,
-      })
-      if (!gate.ok) {
-        if (gate.reason === 'changed') showToast(CLOSE_CHANGED_TOAST)
-        return
-      }
-    }
-
-    // Re-read AFTER the gate. When nothing was prompted this is the same state
-    // the gate just read; when a dialog was shown it may be seconds old, and
-    // every derivation below — the owning tab, the undo entry, the detached
-    // children — was previously taken from the pre-dialog snapshot. That is how
-    // a confirmed close came to remove a leaf that had already gone and leave
-    // detached children pointing at a `projectTabId` with no tab behind it.
-    const snapshot = refs.stateRef.current
-    const resolved = resolveFocusedCloseTarget(snapshot)
-    if (resolved.targetId !== approved.targetId) {
-      // Focus moved under the dialog. The approved target is not the target any
-      // more, and closing "whatever is focused now" is precisely the bug the
-      // gate exists to stop.
-      showToast(CLOSE_CHANGED_TOAST)
-      return
-    }
-    const dispatchTargetId = resolved.dispatchTargetId
-    if (dispatchTargetId) {
-      // WHY Dispatch Mode delegates by the visible row's explicit id:
-      //
-      // Tab.focusedSessionId is intentionally grid-only. Dispatch selection can
-      // point at a detached agent that has no tile-tree leaf, or at a grid
-      // agent without mutating the underlying tab focus. The old close path
-      // always read activeTab.focusedSessionId, so closing from Dispatch could
-      // kill whichever grid pane happened to be focused underneath the visible
-      // dispatch row. `closeSession` already owns the explicit-id close
-      // semantics for both detached and grid sessions.
-      //
-      // We still cannot trust dispatchMode.focusedSessionId blindly: after a
-      // scope switch, rehydrate miss, or rapid close, it may point at an id that
-      // is no longer present in the visible Dispatch rows. DispatchLayout falls
-      // back to grid focus and then the first visible row in that case, so close
-      // must use the same row-derived target or the highlighted pane and the
-      // destructive target diverge again.
-      await closeSessionRef.current?.(dispatchTargetId, { preConfirmed: true })
-      return
-    }
-    if (snapshot.dispatchMode) return
-
-    const activeTab = snapshot.tabs.find(t => t.id === snapshot.activeTabId)
-    const tab = activeTab
-    if (!tab) return
-    const commandTargetId = commandTargetSessionIdForState(snapshot)
-    if (commandTargetId && commandTargetId !== tab.focusedSessionId) {
-      // WHY related child close delegates to explicit closeSession:
-      // the grid leaf is still physically owned by the parent, but the visible
-      // feed/composer can be a detached linked/orchestration child. Continuing
-      // through the normal grid close path would remove the parent tile and,
-      // for linked children, cascade-kill the very child the user intended to
-      // close. closeSession already owns detached explicit-id semantics.
-      await closeSessionRef.current?.(commandTargetId, { preConfirmed: true })
-      return
-    }
-    const targetId = tab.focusedSessionId
-    const sessionMeta = snapshot.sessions[targetId]
-
-    // Cascade-close any linked agents whose parent is this grid pane.
-    // The dispatch close path above already routes through
-    // closeSession (which cascades on its own); this covers the
-    // case where the parent is an ordinary grid pane closed from the
-    // normal grid layout.
-    await closeLinkedChildren(targetId)
-
-    // WHY this snapshot is taken after linked-child closure: closing a linked
-    // child mutates detachedSessions synchronously. Capturing from the earlier
-    // command snapshot would put already-closed children back into the tab's
-    // Undo Close entry and could issue a second destructive kill for the same
-    // backend. The post-cascade workspace is the ownership source of truth.
-    const closeSnapshot = refs.stateRef.current
-
-    // Capture undo info BEFORE mutating the tree. Two cases:
-    //   1. Pane inside a split → record the parent split's geometry
-    //      and the surviving sibling's anchor leaf so we can
-    //      re-split.
-    //   2. Last pane in a tab → record the whole tab so we can
-    //      re-insert it at the same index.
-    const parentInfo = findParentSplitInfo(tab.root, targetId)
-    const detachedChildren = parentInfo
-      ? { records: [], ids: [], entries: [] }
-      : detachedTabChildren(closeSnapshot, tab.id)
-    const closedSessionIds = [targetId, ...detachedChildren.ids]
-    if (parentInfo && sessionMeta) {
-      refs.undoStackRef.current.push({
-        type: 'pane',
-        closedAt: Date.now(),
-        tabId: tab.id,
-        sessionMeta,
-        direction: parentInfo.direction,
-        ratio: parentInfo.ratio,
-        side: parentInfo.side,
-        siblingLeafId: parentInfo.siblingLeafId,
-      })
-      // Pane-level close — show the kind+cwd basename so the user
-      // can recognize which pane they killed when several look
-      // alike.
-      const kindLabel = sessionMeta.kind ?? DEFAULT_PROVIDER
-      const cwdBase = sessionMeta.cwd.split('/').filter(Boolean).pop() ?? sessionMeta.cwd
-      showToast(`Closed ${kindLabel} pane (${cwdBase}) — ⌘⇧T Undo Close; repeat for earlier closes`)
-    } else if (!parentInfo && sessionMeta) {
-      // This pane IS the root — closing it kills the tab. Capture
-      // the tab-level undo entry.
-      const tabIdx = closeSnapshot.tabs.findIndex(t => t.id === tab.id)
-      const allMetas: Record<SessionId, SessionMeta> = {}
-      for (const leafId of collectLeaves(tab.root)) {
-        if (closeSnapshot.sessions[leafId]) allMetas[leafId] = closeSnapshot.sessions[leafId]
-      }
-      refs.undoStackRef.current.push({
-        type: 'tab',
-        closedAt: Date.now(),
-        tab: { ...tab },
-        tabIndex: tabIdx,
-        sessionMetas: allMetas,
-        detachedEntries: detachedChildren.entries.length > 0
-          ? detachedChildren.entries
-          : undefined,
-      })
-      showToast(`Closed “${tab.title}” — ⌘⇧T Undo Close; repeat for earlier closes`)
-    }
-
-    await Promise.all(closedSessionIds.map(id => killSessionBackendIfOwned(refs, id)))
-
-    setRuntimes(prev => {
-      const next = { ...prev }
-      for (const id of closedSessionIds) delete next[id]
-      return next
-    })
-    for (const id of closedSessionIds) forgetClosedSessionDebugState(refs, id)
-
-    setState(prev => {
-      const tabs = [...prev.tabs]
-      const tabIdx = tabs.findIndex(t => t.id === prev.activeTabId)
-      if (tabIdx === -1) return prev
-      const currentTab = tabs[tabIdx]
-      const nextRoot = closeLeaf(currentTab.root, targetId)
-
-      if (nextRoot === null) {
-        // Tab is now empty — close it and activate another tab.
-        const remaining = tabs.filter((_, i) => i !== tabIdx)
-        const sessions = { ...prev.sessions }
-        for (const id of closedSessionIds) delete sessions[id]
-        const detachedSessions = { ...prev.detachedSessions }
-        for (const id of detachedChildren.ids) delete detachedSessions[id]
-        const removed = new Set(closedSessionIds)
-        return {
-          ...prev,
-          tabs: remaining,
-          activeTabId: remaining[Math.max(0, tabIdx - 1)]?.id ?? '',
-          sessions,
-          detachedSessions,
-          dispatchMode: dispatchModeAfterSessionRemovals(prev.dispatchMode, removed),
-        }
-      }
-
-      const nextFocused =
-        findBestRemainingFocus(currentTab.root, nextRoot, targetId) ??
-        collectLeaves(nextRoot)[0]
-      tabs[tabIdx] = {
-        ...currentTab,
-        root: nextRoot,
-        focusedSessionId: nextFocused,
-      }
-      const sessions = { ...prev.sessions }
-      delete sessions[targetId]
-      return { ...prev, tabs, sessions }
-    })
-  }, [
-    closeLinkedChildren,
-    refs.latestRuntimesRef,
-    refs.latestScreenRef,
-    refs.seenUuidsRef,
-    refs.stateRef,
-    refs.undoStackRef,
-    setRuntimes,
-    setState,
-    showToast,
-  ])
+    const { targetId } = resolveFocusedCloseTarget(refs.stateRef.current)
+    if (targetId) await closeSessionRef.current?.(targetId)
+  }, [refs.stateRef])
 
   // Mirrors closeFocused but operates on a caller-specified session
   // instead of the active tab's focused pane. Exists so UI surfaces
@@ -1582,13 +1367,36 @@ export function usePaneActions(
       // made it the way around the policy rather than an implementation of it:
       // the Agent Activity modal's Close button and every MCP-driven close ran
       // straight through, cascade and all, with no dialog. `closeFocused`
-      // delegates here for its Dispatch and detached-child arms and passes
-      // preConfirmed, so those still ask exactly once.
+      // delegates here for every surface, so they ask exactly once.
       // Resolve the orchestration mode into the two existing ones, HERE, where
       // paneCloseTargets is in scope — it is the only code that computes the
       // full set a close destroys, which is exactly what the caller cannot
       // know from the outside.
+      let scope: 'session' | 'tab' = 'session'
       let effectivePreConfirmed = options?.preConfirmed === true
+      const rootTab = initial.tabs.find(tab => tab.root.type === 'leaf' && tab.root.sessionId === targetId)
+      if (rootTab && detachedTabChildren(initial, rootTab.id).ids.length > 0 &&
+          !effectivePreConfirmed && !options?.silentIfSoleTarget && !options?.requireConfirmation) {
+        const agentTargets = paneCloseTargets(initial, refs.latestRuntimesRef.current, targetId)
+        const tabTargets = paneCloseTargets(initial, refs.latestRuntimesRef.current, targetId, 'tab')
+        const choice = await requestRootCloseConfirmation({
+          required: true, reason: 'multi', targets: tabTargets,
+          summary: `“${rootTab.title}” contains ${tabTargets.length} sessions.`,
+          agentOnly: { title: agentTargets[0]?.title ?? targetId, targets: agentTargets },
+        })
+        if (!choice) return false
+        scope = choice === 'tab' ? 'tab' : 'session'
+        const current = refs.stateRef.current
+        // A changed root role/tab invalidates even an unchanged list of IDs.
+        // Never let the scope choice transfer to another project under a dialog.
+        if (!current.tabs.some(tab => tab.id === rootTab.id && tab.root.type === 'leaf' && tab.root.sessionId === targetId) ||
+            !grantStillMatches(choice === 'tab' ? tabTargets : agentTargets,
+              paneCloseTargets(current, refs.latestRuntimesRef.current, targetId, scope))) {
+          showToast(CLOSE_CHANGED_TOAST)
+          return false
+        }
+        effectivePreConfirmed = true
+      }
       let effectiveRequireConfirmation = options?.requireConfirmation
       if (options?.silentIfSoleTarget) {
         const expanded = paneCloseTargets(
@@ -1607,7 +1415,7 @@ export function usePaneActions(
       if (!effectivePreConfirmed) {
         const gate = await runCloseConfirmationGate({
           enumerate: () =>
-            paneCloseTargets(refs.stateRef.current, refs.latestRuntimesRef.current, targetId),
+            paneCloseTargets(refs.stateRef.current, refs.latestRuntimesRef.current, targetId, scope),
           ask: requestCloseConfirmation,
           force: effectiveRequireConfirmation,
         })
@@ -1617,7 +1425,7 @@ export function usePaneActions(
         }
       }
 
-      // Read AFTER the gate, for the same reason closeFocused does: a dialog is
+      // Read AFTER the gate: a dialog is
       // an await, and the undo entry, the detached-children list and the
       // session metadata below must describe the workspace we are about to
       // mutate, not the one that existed when the user was asked.
@@ -1630,7 +1438,17 @@ export function usePaneActions(
       // Linked agents are lifecycle-bound to their parent — close
       // any session that named `targetId` as its linkedParentId
       // before we close the parent itself.
-      await closeLinkedChildren(targetId)
+      if (options?.onlyIf) {
+        // Bulk cleanup never inherits the lifecycle cascade. Eligible children
+        // are closed first by the caller; a surviving child makes its parent
+        // ineligible, including children born after the preview was approved.
+        if (paneCloseTargets(snapshot, refs.latestRuntimesRef.current, targetId).length !== 1 ||
+            !options.onlyIf(snapshot, refs.latestRuntimesRef.current)) return false
+      } else if (scope !== 'tab') {
+        await closeLinkedChildren(targetId)
+      }
+      // Whole-tab close captures all detached/linked rows in one undo entry;
+      // pre-closing linked children would erase them before that capture.
       const closeSnapshot = refs.stateRef.current
 
       if (!owningTab && detached) {
@@ -1691,7 +1509,7 @@ export function usePaneActions(
         // promising ⌘⇧T when `sessionMeta` was missing would advertise a
         // recovery that cannot happen.
         showToast(
-          sessionMeta
+          sessionMeta && options?.captureUndo !== false
             ? `Closed detached ${kindLabel} session (${cwdBase}) — ⌘⇧T Undo Close; repeat for earlier closes`
             : `Closed detached ${kindLabel} session (${cwdBase})`,
         )
@@ -1699,15 +1517,17 @@ export function usePaneActions(
       }
       if (!owningTab) return false
 
-      // Same two-case undo capture as closeFocused: pane-in-split
-      // vs. last-pane-in-tab. Keeps ⌘⇧T working for modal-driven
-      // closes.
+      // Capture the operation that actually happened: split leaf, root
+      // replacement within a surviving project, or an emptied/explicit tab.
       const parentInfo = findParentSplitInfo(owningTab.root, targetId)
-      const detachedChildren = parentInfo
+      const detachedChildren = parentInfo || scope === 'session'
         ? { records: [], ids: [], entries: [] }
         : detachedTabChildren(closeSnapshot, owningTab.id)
       const closedSessionIds = [targetId, ...detachedChildren.ids]
-      if (parentInfo && sessionMeta) {
+      const replacement = !parentInfo && scope === 'session'
+        ? detachedRootReplacement(closeSnapshot, owningTab.id, closedSessionIds)
+        : undefined
+      if (parentInfo && sessionMeta && options?.captureUndo !== false) {
         refs.undoStackRef.current.push({
           type: 'pane',
           closedAt: Date.now(),
@@ -1721,7 +1541,16 @@ export function usePaneActions(
         const kindLabel = sessionMeta.kind ?? DEFAULT_PROVIDER
         const cwdBase = sessionMeta.cwd.split('/').filter(Boolean).pop() ?? sessionMeta.cwd
         showToast(`Closed ${kindLabel} pane (${cwdBase}) — ⌘⇧T Undo Close; repeat for earlier closes`)
-      } else if (!parentInfo && sessionMeta) {
+      } else if (replacement && sessionMeta && options?.captureUndo !== false) {
+        // The project survives. Undo restores this agent within that project,
+        // never respawns the surviving worker or duplicates the whole tab.
+        refs.undoStackRef.current.push({
+          type: 'detached', closedAt: Date.now(), sessionMeta,
+          record: detachedDispatchRecord(targetId, owningTab, closeSnapshot.tabs.indexOf(owningTab)),
+          replacedRoot: replacement,
+        })
+        showToast(`Closed agent — ⌘⇧T Undo Close; repeat for earlier closes`)
+      } else if (!parentInfo && sessionMeta && options?.captureUndo !== false) {
         const tabIdx = closeSnapshot.tabs.findIndex(t => t.id === owningTab.id)
         const allMetas: Record<SessionId, SessionMeta> = {}
         for (const leafId of collectLeaves(owningTab.root)) {
@@ -1759,6 +1588,21 @@ export function usePaneActions(
         const currentTab = tabs[tabIdx]
         const nextRoot = closeLeaf(currentTab.root, targetId)
 
+        if (nextRoot === null && scope === 'session') {
+          // A nonempty project must keep its identity. Promote an existing
+          // detached backend into the mandatory grid leaf; never spawn a shell
+          // or restart a working agent just to satisfy the layout type.
+          const survivor = detachedRootReplacement(prev, currentTab.id, closedSessionIds)
+          if (survivor) {
+            tabs[tabIdx] = { ...currentTab, root: { type: 'leaf', sessionId: survivor.sessionId }, focusedSessionId: survivor.sessionId }
+            const sessions = { ...prev.sessions }
+            delete sessions[targetId]
+            const detachedSessions = { ...prev.detachedSessions }
+            delete detachedSessions[survivor.sessionId]
+            const next = { ...prev, tabs, sessions, detachedSessions }
+            return { ...next, dispatchMode: dispatchModeAfterSessionRemoval(prev, next, targetId) }
+          }
+        }
         if (nextRoot === null) {
           const remaining = tabs.filter((_, i) => i !== tabIdx)
           const sessions = { ...prev.sessions }

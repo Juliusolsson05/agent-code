@@ -80,6 +80,30 @@ afterEach(() => {
 })
 
 describe('runtime updates below the workspace controller', () => {
+  it('closes against synchronously updated ownership before React renders again', async () => {
+    render(<Controller />)
+    const killOwnedSession = vi.fn(async () => true)
+    Object.assign(window.api, { killOwnedSession })
+    const close = current.closeSession
+    await act(async () => {
+      useAppStore.getState().setWorkspaceState(prev => ({
+        ...prev,
+        sessions: { ...prev.sessions, three: { cwd: '/repo', kind: 'claude' } },
+        detachedSessions: { ...prev.detachedSessions, three: {
+          sessionId: 'three', surface: 'dispatch', projectTabId: 'tab',
+          projectTabTitle: 'Test', projectTabIndex: 0, detachedAt: 1,
+        } },
+      }))
+      // This is the same timing as a prior cleanup changing root ownership.
+      // A render-body mirror still sees the old set and silently skips/misroutes
+      // the next close; the real store subscription must update it immediately.
+      const closed = close('three', { preConfirmed: true, captureUndo: false, onlyIf: () => true })
+      expect(killOwnedSession).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'three', cwd: '/repo' }))
+      expect(await closed).toBe(true)
+    })
+    expect(useAppStore.getState().workspaceState.sessions.three).toBeUndefined()
+  })
+
   it.each([false, true])('isolates unrelated panes; legacy control=%s', legacy => {
     const view = render(<Controller legacy={legacy} />)
     const before = { controller: counts.controller, one: counts.panes.one, two: counts.panes.two }

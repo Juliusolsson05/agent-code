@@ -20,6 +20,7 @@ import {
 } from '@renderer/components/ui/dialog'
 import { relativeTime } from '@renderer/lib/relativeTime'
 import { cwdBasename, providerGlyph } from '@renderer/features/workspace/lib/sessionDisplay'
+import { sessionDisplayTitle } from '@renderer/workspace/sessionDisplayTitle'
 import { resolveTabSessions } from '@renderer/workspace/queries'
 import type { SessionId, Tab } from '@renderer/workspace/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
@@ -27,7 +28,7 @@ import type { Entry } from '@shared/types/transcript'
 
 type Props = {
   open: boolean
-  workspace: Workspace
+  workspace: Pick<Workspace, 'state' | 'runtimes' | 'closeSession'>
   onClose: () => void
 }
 
@@ -38,6 +39,7 @@ type AgentRow = {
   sessionId: SessionId
   tabId: string
   tabTitle: string
+  title: string
   tabIndex: number
   kind: SessionKind
   cwd: string
@@ -91,13 +93,14 @@ export function buildAgentRows(
       const lastActiveAt = runtime
         ? kind === 'terminal'
           ? runtime.terminalForeground?.changedAt ?? null
-          : extractLatestEntryTs(runtime.entries) ?? runtime.turnStartedAt ?? null
+          : latestAgentActivityAt(runtime)
         : null
 
       rows.push({
         sessionId,
         tabId: tab.id,
         tabTitle: tab.title,
+        title: sessionDisplayTitle(meta),
         tabIndex,
         kind,
         cwd: meta.cwd,
@@ -129,7 +132,7 @@ function filterEligibleRows(
   if (criteria.thresholdMs == null) return []
   const thresholdMs = criteria.thresholdMs
   return rows.filter(row => {
-    if (row.ageMs == null || row.ageMs < thresholdMs) return false
+    if (row.ageMs == null || !Number.isFinite(row.ageMs) || row.ageMs < thresholdMs) return false
     if (!criteria.includeLive && row.isLive) return false
     return true
   })
@@ -163,19 +166,33 @@ function absoluteTime(ts: number): string {
   })
 }
 
-// Same activity source as AgentActivityModal: transcript timestamps are the
-// only durable provider-agnostic signal the renderer already has for both
-// Claude and Codex. Main tracks PTY activity too, but the workspace command
-// needs to preview and filter before it asks main to kill anything; keeping the
-// derivation local makes the modal deterministic from the state it displays.
+// Cleanup uses renderer evidence from both durable history and live work. PTY
+// screen receipt alone is not activity: cursor redraws must not make an idle
+// agent look new. Unknown/bootstrap history remains ineligible until observed.
+function latestAgentActivityAt(runtime: Workspace['runtimes'][string]): number | null {
+  // A replayed transcript is historical evidence, not proof that this live
+  // agent has been idle since then. Submission/phase clocks survive the gap
+  // before the provider commits new history; use the newest evidence, never
+  // `oldTranscript ?? newerTurn`. An in-flight bootstrap cannot prove age.
+  if (runtime.bootstrapping || runtime.processStatus === 'spawning' || runtime.transcriptStatus === 'loading') return null
+  const turns = [runtime.semantic.currentTurn, ...runtime.semantic.history]
+  const timestamps = [
+    extractLatestEntryTs(runtime.entries), runtime.lastJsonlEntryAt,
+    runtime.turnStartedAt, runtime.phaseChangedAt, runtime.submittedAt,
+    ...turns.flatMap(turn => turn ? [turn.startedAt, turn.endedAt] : []),
+  ].filter((value): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0)
+  return timestamps.length ? Math.max(...timestamps) : null
+}
+
 function extractLatestEntryTs(entries: Entry[]): number | null {
+  let latest: number | null = null
   for (let i = entries.length - 1; i >= 0; i--) {
     const raw = (entries[i] as { timestamp?: unknown }).timestamp
     if (typeof raw !== 'string') continue
     const parsed = Date.parse(raw)
-    if (!Number.isNaN(parsed)) return parsed
+    if (Number.isFinite(parsed)) latest = Math.max(latest ?? parsed, parsed)
   }
-  return null
+  return latest
 }
 
 function formatDuration(ms: number): string {
@@ -336,7 +353,7 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
     return filterMatchingRows(eligible, { scopeMode, selectedProjects: selectedProjectSet })
       .map(row => ({
         sessionId: row.sessionId,
-        title: `${row.tabTitle} · ${row.cwdBase}`,
+        title: `${row.title} · ${row.cwdBase}`,
         live: row.isLive,
       }))
   }, [thresholdMs, includeLive, scopeMode, selectedProjectSet])
@@ -353,12 +370,26 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
       // THE GRANT. What the user saw and approved, captured at click time.
       const granted = matchingRows.map(row => ({
         sessionId: row.sessionId,
-        title: `${row.tabTitle} · ${row.cwdBase}`,
+        title: `${row.title} · ${row.cwdBase}`,
         live: row.isLive,
       }))
 
       const outcome: PartialCloseOutcome = { closed: [], failed: [], skipped: [] }
 
+      // Close linked descendants first. A parent whose child is still present
+      // is skipped by closeSession's single-target guard, even if the child
+      // woke up or failed to close. This preserves the lifecycle edge without
+      // implicitly granting the parent permission to kill more sessions.
+      const sessions = workspaceRef.current.state.sessions
+      const depth = (id: SessionId): number => {
+        const seen = new Set<SessionId>()
+        while (sessions[id]?.linkedParentId && !seen.has(id)) {
+          seen.add(id)
+          id = sessions[id].linkedParentId!
+        }
+        return seen.size
+      }
+      granted.sort((a, b) => depth(b.sessionId) - depth(a.sessionId))
       for (const target of granted) {
         // RE-ENUMERATE BEFORE EVERY KILL, not once after confirmation.
         //
@@ -387,11 +418,21 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
           // Dispatch-heavy workspace are overwhelmingly detached rows. Capturing one
           // entry each would flush the user's real close history out of the 10-entry
           // stack, so ⌘⇧T would resurrect something they just deliberately cleared.
-          await workspaceRef.current.closeSession(target.sessionId, {
+          const closed = await workspaceRef.current.closeSession(target.sessionId, {
             preConfirmed: true,
             captureUndo: false,
+            onlyIf: (state, runtimes) => {
+              const rows = buildAgentRows(state, runtimes, Date.now())
+              const eligible = filterMatchingRows(
+                filterEligibleRows(rows, { thresholdMs, includeLive }),
+                { scopeMode, selectedProjects: selectedProjectSet },
+              )
+              const row = eligible.find(row => row.sessionId === target.sessionId)
+              return row !== undefined && (!row.isLive || target.live)
+            },
           })
-          outcome.closed.push(target.sessionId)
+          if (closed) outcome.closed.push(target.sessionId)
+          else outcome.skipped.push(target.sessionId)
         } catch (error) {
           // One backend refusing must not abandon the rest of the batch — the
           // user asked for twelve agents closed, and nine succeeding is a
@@ -401,12 +442,12 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
       }
 
       const report = describePartialClose(outcome)
-      if (report) showToast(report, 6000)
+      showToast(report ?? `Closed ${outcome.closed.length} session${outcome.closed.length === 1 ? '' : 's'}.`, 6000)
       onClose()
     } finally {
       setClosing(false)
     }
-  }, [buildCloseTargets, closing, matchingRows, onClose, showToast])
+  }, [buildCloseTargets, closing, matchingRows, onClose, showToast, thresholdMs, includeLive, scopeMode, selectedProjectSet])
 
   return (
     <Dialog
@@ -622,7 +663,7 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className="text-[12px] text-ink truncate">
-                        {row.cwdBase}
+                        {row.title}
                       </div>
                       <div className="mt-0.5 text-[10px] text-muted truncate">
                         tab {row.tabIndex + 1} · {row.tabTitle} · {row.cwd}

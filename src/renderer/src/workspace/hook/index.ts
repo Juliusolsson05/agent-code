@@ -124,10 +124,21 @@ export function useWorkspace(
   refs.latestStateRef.current = state
   refs.latestRuntimesRef.current = runtimes
   useLayoutEffect(() => {
-    refs.latestRuntimesRef.current = useAppStore.getState().workspaceRuntimes
-    return useAppStore.subscribe(store => store.workspaceRuntimes, next => {
+    const current = useAppStore.getState()
+    refs.latestRuntimesRef.current = current.workspaceRuntimes
+    refs.stateRef.current = current.workspaceState
+    refs.latestStateRef.current = current.workspaceState
+    // Sequential bulk closes resume before React necessarily commits a render.
+    // Keep both ownership and activity current synchronously; a render-body
+    // mirror can otherwise re-close a promoted root using yesterday's layout.
+    const unsubscribeRuntime = useAppStore.subscribe(store => store.workspaceRuntimes, next => {
       refs.latestRuntimesRef.current = next
     })
+    const unsubscribeState = useAppStore.subscribe(store => store.workspaceState, next => {
+      refs.stateRef.current = next
+      refs.latestStateRef.current = next
+    })
+    return () => { unsubscribeRuntime(); unsubscribeState() }
   }, [refs])
   refs.latestTileTabsRef.current = tileTabs
   refs.dangerousAgentsRef.current = dangerousAgentsEnabled

@@ -43,6 +43,9 @@ export type CloseConfirmationRequest =
       targets: readonly CloseTargetSnapshot[]
       /** One-line summary naming the exact count. */
       summary: string
+      /** Root rows also own a project. The choice must spell out both scopes;
+       * approving the tab list must never be inferred from an agent close. */
+      agentOnly?: { title: string; targets: readonly CloseTargetSnapshot[] }
     }
 
 /** The count-and-liveness sentence, shared by the judged and forced paths so
@@ -118,8 +121,13 @@ export function grantStillMatches(
   current: readonly CloseTargetSnapshot[],
 ): boolean {
   if (granted.length !== current.length) return false
-  const currentIds = new Set(current.map(target => target.sessionId))
-  return granted.every(target => currentIds.has(target.sessionId))
+  const currentById = new Map(current.map(target => [target.sessionId, target]))
+  // A matching ID does not authorize newly started work. A user who approved
+  // an idle agent must see a new confirmation if it wakes under the dialog.
+  return granted.every(target => {
+    const now = currentById.get(target.sessionId)
+    return now !== undefined && (!now.live || target.live)
+  })
 }
 
 export type CloseGateOutcome =
@@ -262,7 +270,12 @@ export type CloseExpansionState = {
  *  CloseOldAgentsModal already uses, so preview and confirmation agree. */
 export type CloseExpansionRuntimes = Record<
   string,
-  { sessionStatus?: string; streamPhase?: string | null } | undefined
+  {
+    sessionStatus?: string
+    streamPhase?: string | null
+    processActive?: boolean
+    terminalForeground?: { busy: boolean } | null
+  } | undefined
 >
 
 /** Exported so paths that judge ONE session (Kill Buried) use the same
@@ -280,7 +293,9 @@ function isLive(runtimes: CloseExpansionRuntimes, sessionId: string): boolean {
   if (!runtime) return false
   const running = runtime.sessionStatus === 'running'
   const streaming = runtime.streamPhase != null && runtime.streamPhase !== 'idle'
-  return Boolean(running || streaming)
+  // Process/foreground events can lead the derived status. For destructive
+  // decisions, positive evidence of work from either channel must win.
+  return Boolean(running || streaming || runtime.processActive || runtime.terminalForeground?.busy)
 }
 
 function snapshot(

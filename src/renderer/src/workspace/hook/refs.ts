@@ -19,8 +19,8 @@ import type { ConfigurableBuiltInMcpDomain } from '@mcp/shared/types'
 // need 15 separate useRef lines. Ref identity is stable across renders
 // (useRef contract), so putting them together doesn't cost anything.
 //
-// Layout/settings mirrors are refreshed in the caller's render body. Runtime
-// state additionally has a synchronous store subscription there: runtime-only
+// Settings mirrors are refreshed in the caller's render body. Workspace and
+// runtime state additionally have synchronous store subscriptions: runtime-only
 // updates no longer render the controller, but IPC/actions must see them before
 // React commits any subscribed pane. Keep that subscription and its cleanup
 // coupled to this identity-stable ref bundle.

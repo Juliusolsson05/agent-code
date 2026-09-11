@@ -1,6 +1,6 @@
 # Dispatch agent close safety
 
-Status: implementation planned.
+Status: implemented and locally verified; awaiting PR review and CI. Do not merge without user approval.
 
 ## Problem and intended behavior
 
@@ -26,3 +26,12 @@ Bulk cleanup may only close previewed sessions that remain eligible immediately 
 - Preserve provider/runtime and renderer/main boundaries; do not exercise real session-kill APIs during verification.
 - Add thick WHY comments for close scope, promotions, grant revalidation, and activity provenance.
 - Do not broaden this work into unrelated Dispatch row-binding repairs (#863).
+
+## Implementation and verification
+
+- Manual root closure now uses the shared dialog to choose agent or tab scope. Agent scope promotes the next displayed detached row without restarting it; undo restores the root and row order unless a later layout edit takes precedence. Focused keyboard closes delegate to the same explicit-session action.
+- Bulk cleanup keeps single-session scope, closes eligible linked descendants first, and skips any parent whose linked children remain. Eligibility is checked synchronously from current action refs immediately before requesting a kill. Workspace ownership refs now subscribe synchronously to Zustand alongside runtimes so sequential closes do not reuse stale layout ownership.
+- Activity uses the newest transcript, submission, phase, turn, or semantic evidence; incomplete bootstrap history stays ineligible. Process/terminal activity counts as live. Cleanup reports actual closed, skipped, and failed results.
+- Focused regression run: 39 tests passed across five files, including the real modal/action integration, dialog choices, root promotion/undo, and the actual controller ownership subscription. The root-scope regressions failed before implementation.
+- Type checking and application build/package verification passed. The deterministic full gate passed 3,210 tests and failed one existing local image-fixture provenance check because its personal source transcript is missing. The failing file is unchanged; existing issue #684 documents this exact environment-dependent failure. The full gate stopped before packaging, so the package check was run separately and passed.
+- All destructive APIs were mocked in verification; no live user sessions were closed. Issues #153 and #886 track the two reported defects.

@@ -159,6 +159,10 @@ export type ClosedDetached = {
   sessionMeta: SessionMeta
   /** The detached record as it stood at close time, `detachedAt` included. */
   record: DetachedSessionRecord
+  /** Closing the last grid agent can promote a detached survivor. Restore the
+   * original root only if that survivor still occupies the whole grid; later
+   * user layout edits win, with the recovered agent restored as a row. */
+  replacedRoot?: DetachedSessionRecord
 }
 
 export type ClosedEntry = ClosedPane | ClosedTab | ClosedDetached
