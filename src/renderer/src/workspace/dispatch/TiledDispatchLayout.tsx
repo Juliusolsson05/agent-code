@@ -25,6 +25,7 @@ import {
   DispatchEmpty,
 } from '@renderer/workspace/dispatch/DispatchAgentList'
 import { DispatchMiniList } from '@renderer/workspace/dispatch/DispatchMiniList'
+import { rowScopedRows } from '@renderer/workspace/dispatch/rowScopedRows'
 import type { DispatchGridRow, SessionId, TabId } from '@renderer/workspace/types'
 
 type Props = {
@@ -254,6 +255,16 @@ function GridRowView({
   const indexFraction = clampIndexFraction(gridRow.indexFraction ?? DEFAULT_INDEX_FRACTION)
   const focusedLaneInRow =
     grid.focusedLane >= start && grid.focusedLane < end ? grid.focusedLane : null
+  // Whether this row's strips and ⌥↓ have anything to pick from. It asks the
+  // SAME filter both of them use (rowScopedRows: project binding + child cap;
+  // ⌥↓ reaches it through tiledRowScopedRows in useKeybinds), so the empty-lane
+  // hint below can never promise a pick the row does not actually offer. A
+  // hand-rolled "any row in a bound tab" check here would be a second
+  // definition of "what this row offers", and would drift from the first.
+  const rowOffersAgents = useMemo(
+    () => rowScopedRows(rows, gridRow).some(item => item.kind === 'agent'),
+    [rows, gridRow],
+  )
 
   const rowRef = useRef<HTMLDivElement | null>(null)
   const laneRegionRef = useRef<HTMLDivElement | null>(null)
@@ -358,33 +369,52 @@ function GridRowView({
                   workspace={workspace}
                 />
               )}
-              {/* The row's FIRST lane has no strip: the row's own index list
-                  sits directly beside it and is its selector. That pairing is
-                  the point of giving every row its own index — a strip there
-                  would be a second selector for the same lane, six inches from
-                  the first, and it costs 46px of the widest lane in the row.
-                  Every OTHER lane needs its own, because the index is already
-                  spoken for. */}
-              {column > 0 && (
-                <div className="flex-shrink-0 min-h-0">
-                  <DispatchMiniList
-                    rows={rows}
-                    gridRow={gridRow}
-                    selectedSessionId={lane?.selectedSessionId}
-                    focused={focused}
-                    onSelect={row => {
-                      void workspace.selectTiledLaneSession(laneIndex, row.sessionId)
-                      workspace.setTiledFocusedLane(laneIndex)
-                    }}
-                    // Without this the strip's "+N more" renders as a button and
-                    // does nothing — an affordance that promises an action it
-                    // cannot perform, in the exact case the cap exists for.
-                    onToggleExpandedParent={sessionId =>
-                      workspace.toggleDispatchRowExpandedParent(rowIndex, sessionId)
-                    }
-                  />
-                </div>
-              )}
+              {/* EVERY lane gets its own strip, the row's first lane included
+                  (#850). The row's index fills whichever lane of the row is
+                  FOCUSED (selectIntoRow above), so it is no single lane's
+                  selector.
+
+                  History, because this rule has flipped twice. Before Grid
+                  Dispatch, one sidebar index always wrote lane 0, so lane 0
+                  correctly had no strip. #687 (524671b2) made the index
+                  per-row and follow focus, and gave every lane a strip for
+                  exactly that reason. #691 (1eb9a472, a lane-wake fix) then
+                  removed the first lane's strip as a side change, arguing that
+                  the index "IS its selector". That was already false, because
+                  the index followed focus, and it left the first lane as the
+                  only one that took two gestures to change (click into it, then
+                  pick from the index). Re-removing this strip is only right if
+                  the index stops following focus; the renderer test "fills the
+                  focused lane from a row's index…" fails first if it does.
+
+                  Single-lane rows get a strip too, although their index can
+                  only ever fill that one lane. A strip that appeared only when
+                  a second lane was added would shove the existing lane's content
+                  46px sideways at the moment the user is rearranging the row.
+                  One rule for every lane also keeps the chip column in the same
+                  place in every lane, which is what makes it scannable. */}
+              <div className="flex-shrink-0 min-h-0">
+                <DispatchMiniList
+                  rows={rows}
+                  gridRow={gridRow}
+                  selectedSessionId={lane?.selectedSessionId}
+                  focused={focused}
+                  // This lane's index, never `grid.focusedLane`: the strip is
+                  // the lane-addressed selector, and the index is the one that
+                  // follows focus. If both followed focus, the first lane would
+                  // lose its one-click selector again (#850).
+                  onSelect={row => {
+                    void workspace.selectTiledLaneSession(laneIndex, row.sessionId)
+                    workspace.setTiledFocusedLane(laneIndex)
+                  }}
+                  // Without this the strip's "+N more" renders as a button and
+                  // does nothing — an affordance that promises an action it
+                  // cannot perform, in the exact case the cap exists for.
+                  onToggleExpandedParent={sessionId =>
+                    workspace.toggleDispatchRowExpandedParent(rowIndex, sessionId)
+                  }
+                />
+              </div>
               <div
                 className="relative flex-1 min-w-0 min-h-0"
                 onMouseDownCapture={() => {
@@ -412,16 +442,28 @@ function GridRowView({
                     // Advertising it in an unfocused lane would tell the user
                     // to press something that yanks the agent they are working
                     // with and leaves this lane untouched.
-                    // The FIRST lane of a row has no strip (its index list is
-                    // its selector), so naming one there points the user at
-                    // something that is not on screen.
+                    //
+                    // One copy for every lane. Every lane has a strip (#850),
+                    // and ⌥↓ walks the focused ROW's own filtered list
+                    // (tiledRowScopedRows in useKeybinds, since 29ecd829), so
+                    // "the top of the index" is true in a project-bound row too.
+                    // An older branch withheld that phrase from bound rows
+                    // because ⌥↓ used to walk the global list. It keyed off the
+                    // legacy `projectTabId`, which normalizeGridShape folds into
+                    // `projectTabIds` on read, so it was already dead and showed
+                    // this copy anyway. Do not re-add a binding branch unless ⌥↓
+                    // stops being row-scoped: "fixing" that read to
+                    // `projectTabIds` would withhold a promise that is true.
+                    //
+                    // And none at all when the row offers no agents (a row
+                    // bound to projects that currently have none). Its strip is
+                    // empty and ⌥↓ returns without doing anything, so either
+                    // half of the hint would promise a pick that cannot happen.
+                    // The bare "Empty lane" stays; the row's index is where the
+                    // user sees why.
                     hint={
-                      focused && !lane?.selectedSessionId
-                        ? column === 0
-                          ? 'Pick an agent from the index, or press ⌥↓'
-                          : gridRow.projectTabId
-                            ? 'Pick an agent from the strip, or press ⌥↓'
-                            : 'Pick an agent from the strip, or press ⌥↓ for the top of the index'
+                      focused && !lane?.selectedSessionId && rowOffersAgents
+                        ? 'Pick an agent from the strip, or press ⌥↓ for the top of the index'
                         : undefined
                     }
                   />
