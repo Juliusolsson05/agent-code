@@ -322,6 +322,21 @@ export type PersonalAgentSkillLocation = {
   }) => string
 }
 
+/** One page of provider-owned durable history, newest window or older page. */
+export type ProviderHistoryRequest = {
+  cwd: string
+  providerSessionId: string
+  limit: number
+  /** The renderer's pagination cursor (the provider mapper's history marker). */
+  beforeMarker?: string
+}
+
+export type ProviderHistoryChunk = {
+  entries: Record<string, unknown>[]
+  hasMore: boolean
+  totalEntries?: number
+}
+
 export type MainProviderConfig = {
   /** Provider identity — see RendererProviderConfig.id. */
   id: AgentProviderKind
@@ -397,6 +412,22 @@ export type MainProviderConfig = {
    * `getProjectDir`.
    */
   resolveTranscriptPath: (cwd: string, providerSessionId: string) => Promise<string | null>
+  /**
+   * Optional provider-owned history source, for providers whose durable
+   * transcript is not a JSONL file the shared loader can walk.
+   *
+   * WHY a capability instead of a branch in historyLoader: OpenCode keeps its
+   * transcript in SQLite, which the backwards JSONL reader cannot use. A
+   * `kind === 'opencode'` branch in shared history code is exactly the
+   * third-provider special-casing #394 removed; the registry already owns
+   * "where is this provider's transcript", so it also owns "read a page of it"
+   * when the answer is not a file. When absent, the shared loader keeps
+   * resolving `resolveTranscriptPath` and reading the JSONL file.
+   *
+   * Entries must be the raw records the provider's renderer mapper folds, and
+   * `beforeMarker` is that mapper's history marker, so paging works unchanged.
+   */
+  loadHistoryChunk?: (request: ProviderHistoryRequest) => Promise<ProviderHistoryChunk>
   /**
    * Provider-owned prompt delivery protocol (#394 phase 2c).
    *

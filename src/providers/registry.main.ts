@@ -15,6 +15,7 @@ import { CodexSession } from '@providers/codex/runtime/codexSession'
 import { deliverCodexPrompt } from '@providers/codex/runtime/promptDelivery'
 import { OpencodeSession } from '@providers/opencode/runtime/opencodeSession'
 import { OpencodeTerminalSession } from '@providers/opencode/runtime/opencodeTerminalSession'
+import { loadOpencodeHistoryChunk } from '@providers/opencode/runtime/opencodeHistory'
 import { deliverOpencodePrompt } from '@providers/opencode/runtime/promptDelivery'
 import {
   findCodexRolloutPathByThreadId,
@@ -113,11 +114,14 @@ const opencodeMain: MainProviderConfig = {
   // server-owned. Returning cwd keeps consumers (which only display
   // it) harmless.
   getProjectDir: async (cwd) => cwd,
-  // No durable transcript FILE exists: structured history arrives via the
-  // HTTP runtime replay, while offline transforms use `opencode export` in the
-  // transcript adapter. Returning null prevents generic file consumers from
-  // reaching into OpenCode's private database.
+  // No durable transcript FILE exists, so generic file consumers get null.
+  // History reads go through `loadHistoryChunk` instead: OpenCode's database,
+  // opened read-only by opencode-terminal-headless, serves both runtimes'
+  // parked panes, reloads and MCP reads. Writes and transforms (switch,
+  // duplicate, rewind) stay on `opencode import`/`export` in the transcript
+  // adapter.
   resolveTranscriptPath: async () => null,
+  loadHistoryChunk: loadOpencodeHistoryChunk,
   deliverPrompt: deliverOpencodePrompt,
 }
 
