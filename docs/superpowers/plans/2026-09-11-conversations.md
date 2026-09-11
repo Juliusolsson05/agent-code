@@ -83,7 +83,7 @@ Modified files are named in each task.
 **Interfaces:**
 - Produces: `redactValue(key: string, value: unknown, paths: PathRewriter): unknown`, `redactRecord(record: unknown, paths: PathRewriter): unknown`, `createPathRewriter(home: string, repoRoot: string): PathRewriter`, `KEEP_VERBATIM_KEYS`, `KEPT_WRAPPER_PREFIXES`, `placeholder(text: string): string`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```ts
 // src/main/conversations/corpusPolicy.test.ts
@@ -157,12 +157,12 @@ describe('conversation corpus policy', () => {
 })
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `NODE_ENV=test npx vitest run --project unit src/main/conversations/corpusPolicy.test.ts`
 Expected: FAIL, cannot resolve `scripts/conversation-corpus-policy.js`.
 
-- [ ] **Step 3: Write the policy**
+- [x] **Step 3: Write the policy**
 
 ```ts
 // scripts/conversation-corpus-policy.ts
@@ -299,7 +299,7 @@ export function redactRecord(record: unknown, paths: PathRewriter): unknown {
 }
 ```
 
-- [ ] **Step 4: Add the script files to the node tsconfig**
+- [x] **Step 4: Add the script files to the node tsconfig**
 
 In `tsconfig.node.json`, inside `"include": [`, after `"src/mcp/**/*",` add:
 
@@ -312,12 +312,12 @@ In `tsconfig.node.json`, inside `"include": [`, after `"src/mcp/**/*",` add:
     "scripts/extract-conversation-corpus.mts",
 ```
 
-- [ ] **Step 5: Run the test and the node typecheck**
+- [x] **Step 5: Run the test and the node typecheck**
 
 Run: `NODE_ENV=test npx vitest run --project unit src/main/conversations/corpusPolicy.test.ts && npx tsc -p tsconfig.node.json --pretty false`
 Expected: 5 tests PASS; tsc clean (the extractor does not exist yet; tsc ignores a missing include glob entry only if it is a glob, so create the extractor in Task 2 before running tsc again if it complains about the literal path; if it does, temporarily create an empty `scripts/extract-conversation-corpus.mts` with `export {}` and commit it with this task).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add scripts/conversation-corpus-policy.ts src/main/conversations/corpusPolicy.test.ts tsconfig.node.json scripts/extract-conversation-corpus.mts
@@ -342,7 +342,7 @@ git commit -m "test(corpus): add the conversation corpus redaction policy"
   - `opencode/opencode.sqlite` (tables `session`, `project`, `message`, `part` for the family, redacted)
   - `local/` mirrors the same layout unredacted (git-ignored)
 
-- [ ] **Step 1: Write the extractor**
+- [x] **Step 1: Write the extractor**
 
 ```ts
 // scripts/extract-conversation-corpus.mts
@@ -675,7 +675,7 @@ async function main(): Promise<void> {
 await main()
 ```
 
-- [ ] **Step 2: Add the README, the gitignore rule and the scripts**
+- [x] **Step 2: Add the README, the gitignore rule and the scripts**
 
 `testing/fixtures/conversations/README.md`:
 
@@ -719,22 +719,22 @@ In `package.json` scripts, after `"check:worktree-live-fixtures": …`, add:
 
 and add `npm run check:conversation-fixtures &&` to the `check` script right after `npm run check:worktree-live-fixtures &&`.
 
-- [ ] **Step 3: Run the extractor against the real stores**
+- [x] **Step 3: Run the extractor against the real stores**
 
 Run: `UPDATE_FIXTURES=1 npm run extract:conversations`
 Expected: prints counts; `testing/fixtures/conversations/manifest.json` exists with `counts.claude.inFamily` ≥ 150, `counts.codex.inFamily` ≥ 1100, `counts.opencode.inFamily` > 0. `git status` shows only files under `testing/fixtures/conversations/` (not `local/`).
 
-- [ ] **Step 4: Verify determinism and the policy gate**
+- [x] **Step 4: Verify determinism and the policy gate**
 
 Run: `cp -r testing/fixtures/conversations /tmp/corpus-a && UPDATE_FIXTURES=1 npm run extract:conversations >/dev/null && diff -r --exclude=local --exclude=manifest.json /tmp/corpus-a testing/fixtures/conversations && npm run check:conversation-fixtures`
 Expected: no diff (manifest differs only by `capturedAt`); "Conversation corpus verified".
 
-- [ ] **Step 5: Eyeball one redacted transcript and one sqlite row for leaks**
+- [x] **Step 5: Eyeball one redacted transcript and one sqlite row for leaks**
 
 Run: `head -c 1500 testing/fixtures/conversations/claude/projects/-fixture-repo/$(ls testing/fixtures/conversations/claude/projects/-fixture-repo | head -1) && sqlite3 testing/fixtures/conversations/codex/threads.sqlite "select substr(title,1,60), cwd, git_branch from threads limit 5;"`
 Expected: no readable prompt text; wrapper prefixes intact; paths under `/fixture/`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add scripts/extract-conversation-corpus.mts testing/fixtures/conversations .gitignore package.json
@@ -758,7 +758,7 @@ git commit -m "test(corpus): record the conversation corpus from real provider s
     "defaultOrderTop": ["codex:<id>", "claude:<uuid>"] }
   ```
 
-- [ ] **Step 1: Write the corpus installer**
+- [x] **Step 1: Write the corpus installer**
 
 ```ts
 // testing/support/conversations/installCorpus.ts
@@ -814,7 +814,7 @@ export async function corpusWorktreesPorcelain(): Promise<string> {
 }
 ```
 
-- [ ] **Step 2: Write the manifest test**
+- [x] **Step 2: Write the manifest test**
 
 ```ts
 // src/main/conversations/corpus.system.test.ts
@@ -855,12 +855,12 @@ describe('conversation corpus', () => {
 })
 ```
 
-- [ ] **Step 3: Run it**
+- [x] **Step 3: Run it**
 
 Run: `NODE_ENV=test npx vitest run --project system src/main/conversations/corpus.system.test.ts`
 Expected: PASS.
 
-- [ ] **Step 4: Write the expectations draft generator**
+- [x] **Step 4: Write the expectations draft generator**
 
 ```ts
 // scripts/draft-conversation-expectations.mts
@@ -934,12 +934,12 @@ const expectations = {
 import('node:fs').then(fs => fs.writeFileSync(OUT, JSON.stringify(expectations, null, 2) + '\n'))
 ```
 
-- [ ] **Step 5: Generate the draft and review it with the user**
+- [x] **Step 5: Generate the draft and review it with the user**
 
 Run: `npx tsx --tsconfig tsconfig.node.json scripts/draft-conversation-expectations.mts`
 Expected: a readable table of the top 30 default rows with labels the user recognises. Paste the table to the user and ask for corrections to kinds or order. Apply corrections by editing `expectations.json` by hand (never by changing the draft script to match the implementation). The task is complete only after the user confirms.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add testing/support/conversations/installCorpus.ts src/main/conversations/corpus.system.test.ts scripts/draft-conversation-expectations.mts testing/fixtures/conversations/expectations.json
@@ -961,7 +961,7 @@ git commit -m "test(corpus): install the corpus under a temp HOME and record the
 - Produces (shared): `Conversation`, `ConversationKind`, `ConversationLabelSource`, `ConversationScope`, `ConversationActivitySource`, `ConversationMatch`, `ConversationListRequest`, `ConversationListResponse`, `ConversationPromptsRequest`, `ConversationPrompt`, `ConversationChildrenRequest`, `conversationKey(provider, nativeId): string`.
 - Produces (family): `RepositoryFamily = { scope, cwd, root: string | null, roots: string[], rawRoots: string[], matches(candidate: string | null): boolean }`, `resolveFamily(cwd, scope, deps: { listWorktrees(cwd): Promise<Array<{ path: string }>> }): Promise<RepositoryFamily>`, `normalizeCwd(path): string`.
 
-- [ ] **Step 1: Write the shared types**
+- [x] **Step 1: Write the shared types**
 
 ```ts
 // src/shared/conversations/types.ts
@@ -1070,7 +1070,7 @@ export function conversationKey(provider: AgentProviderKind, nativeId: string): 
 }
 ```
 
-- [ ] **Step 2: Write the failing family test**
+- [x] **Step 2: Write the failing family test**
 
 ```ts
 // src/main/conversations/family.system.test.ts
@@ -1162,12 +1162,12 @@ describe('repository family', () => {
 })
 ```
 
-- [ ] **Step 3: Run it to verify it fails**
+- [x] **Step 3: Run it to verify it fails**
 
 Run: `NODE_ENV=test npx vitest run --project system src/main/conversations/family.system.test.ts`
 Expected: FAIL, `./family.js` not found.
 
-- [ ] **Step 4: Write the family module**
+- [x] **Step 4: Write the family module**
 
 ```ts
 // src/main/conversations/family.ts
@@ -1260,12 +1260,12 @@ export async function resolveFamily(
 }
 ```
 
-- [ ] **Step 5: Run the test and typecheck**
+- [x] **Step 5: Run the test and typecheck**
 
 Run: `NODE_ENV=test npx vitest run --project system src/main/conversations/family.system.test.ts && npx tsc -p tsconfig.node.json --pretty false`
 Expected: 4 PASS; tsc clean.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/shared/conversations/types.ts src/main/conversations/family.ts src/main/conversations/family.system.test.ts
@@ -1281,7 +1281,7 @@ git commit -m "feat(conversations): add the shared record and repository family 
 **Interfaces:**
 - Produces: `openReadOnlySqlite(path: string, required: Record<string, string[]>): { ok: true; db: DatabaseSync; close(): void } | { ok: false; reason: string }`, `newestCodexStateDb(codexHome: string): string | null`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```ts
 // src/main/conversations/sources/sqlite.system.test.ts
@@ -1321,12 +1321,12 @@ describe('read-only sqlite helper', () => {
 })
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `NODE_ENV=test npx vitest run --project system src/main/conversations/sources/sqlite.system.test.ts`
 Expected: FAIL, `./sqlite.js` not found.
 
-- [ ] **Step 3: Write the helper**
+- [x] **Step 3: Write the helper**
 
 ```ts
 // src/main/conversations/sources/sqlite.ts
@@ -1395,12 +1395,12 @@ export function newestCodexStateDb(codexHome: string): string | null {
 }
 ```
 
-- [ ] **Step 4: Run the test**
+- [x] **Step 4: Run the test**
 
 Run: `NODE_ENV=test npx vitest run --project system src/main/conversations/sources/sqlite.system.test.ts`
 Expected: 2 PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/main/conversations/sources/sqlite.ts src/main/conversations/sources/sqlite.system.test.ts
@@ -1418,7 +1418,7 @@ git commit -m "feat(conversations): open provider sqlite indexes read-only with 
 - Produces: `extractPromptsFromFile(kind: 'claude' | 'codex', sessionId: string, file: string, need: number | 'all'): Promise<{ prompts: Array<{ text: string; ts: number | null }>; cwd: string }>` (newest first), `__resetPromptFolderCacheForTests()`, `__promptFolderCacheEntryForTests(kind, sessionId)`, `__promptFolderCacheSizeForTests()`.
 - Behaviour change, deliberate: the Claude and Codex record folds no longer drop texts that start with `<`. The catalog's unwrapper (Task 11) decides what a wrapper means, because `<stt …>` IS a user prompt and `<orchestration-handoff>` carries the child's task. Everything else about the folder (byte ranges, seams, LRU, serialisation) is unchanged; the 12 tests move with it.
 
-- [ ] **Step 1: Move the module**
+- [x] **Step 1: Move the module**
 
 ```bash
 mkdir -p src/main/conversations/prompts
@@ -1479,7 +1479,7 @@ export {
 
 and keep the rest of the file compiling (its `foldClaudeRecord` callers are gone; `listRecentSessionsWithPrompts` / `searchSessionPrompts` call `extractPromptsFromFile` as before). Because the old search filtered `<`-prefixed prompts implicitly, add `.filter(p => !p.text.startsWith('<'))` to the two `prompts` uses in `sessionIndex.ts` so the legacy modal behaves identically until it is deleted.
 
-- [ ] **Step 2: Update the moved test's imports and hook names**
+- [x] **Step 2: Update the moved test's imports and hook names**
 
 In `promptFolder.test.ts` change the import to `from './promptFolder.js'` with the three renamed hooks, and add one test for the behaviour change:
 
@@ -1492,12 +1492,12 @@ In `promptFolder.test.ts` change the import to `from './promptFolder.js'` with t
   })
 ```
 
-- [ ] **Step 3: Run the moved tests, the legacy index tests and the typecheck**
+- [x] **Step 3: Run the moved tests, the legacy index tests and the typecheck**
 
 Run: `NODE_ENV=test npx vitest run --project unit src/main/conversations/prompts/promptFolder.test.ts src/main/sessions/nativeHistoryControl.test.ts && npx tsc -p tsconfig.node.json --pretty false`
 Expected: 13 + existing PASS; tsc clean.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/main/conversations/prompts src/main/sessionIndex.ts
@@ -1513,7 +1513,7 @@ git commit -m "refactor(conversations): move the incremental prompt folder out o
 **Interfaces:**
 - Produces: `class ClaudeHistoryIndex { constructor(file: string); refresh(): Promise<void>; bySession(sessionId: string): readonly HistoryPrompt[]; sessionIds(): Iterable<string> }`, `HistoryPrompt = { text: string; timestamp: number; project: string; sessionId: string }`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```ts
 // src/main/conversations/sources/claudeHistory.system.test.ts
@@ -1573,12 +1573,12 @@ describe('Claude history index', () => {
 })
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `NODE_ENV=test npx vitest run --project system src/main/conversations/sources/claudeHistory.system.test.ts`
 Expected: FAIL, `./claudeHistory.js` not found.
 
-- [ ] **Step 3: Write the reader**
+- [x] **Step 3: Write the reader**
 
 ```ts
 // src/main/conversations/sources/claudeHistory.ts
@@ -1699,12 +1699,12 @@ export class ClaudeHistoryIndex {
 }
 ```
 
-- [ ] **Step 4: Run the test**
+- [x] **Step 4: Run the test**
 
 Run: `NODE_ENV=test npx vitest run --project system src/main/conversations/sources/claudeHistory.system.test.ts`
 Expected: 3 PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/main/conversations/sources/claudeHistory.ts src/main/conversations/sources/claudeHistory.system.test.ts
@@ -1721,7 +1721,7 @@ git commit -m "feat(conversations): index Claude prompt history incrementally"
 **Interfaces:**
 - Produces: `SourceConversation`, `SourceScope = { scope: ConversationScope; family: RepositoryFamily }`, `ConversationSource { provider; discover(scope: SourceScope): Promise<SourceConversation[]>; prompts(nativeId: string, cwd: string): Promise<ConversationPrompt[]> }`, `class ClaudeConversationSource implements ConversationSource` with `constructor(deps: { projectsDir: string; history: ClaudeHistoryIndex })`.
 
-- [ ] **Step 1: Write the source types**
+- [x] **Step 1: Write the source types**
 
 ```ts
 // src/main/conversations/sources/types.ts
@@ -1772,7 +1772,7 @@ export interface ConversationSource {
 }
 ```
 
-- [ ] **Step 2: Write the failing test**
+- [x] **Step 2: Write the failing test**
 
 ```ts
 // src/main/conversations/sources/claude.system.test.ts
@@ -1857,12 +1857,12 @@ describe('Claude conversation source', () => {
 })
 ```
 
-- [ ] **Step 3: Run it to verify it fails**
+- [x] **Step 3: Run it to verify it fails**
 
 Run: `NODE_ENV=test npx vitest run --project system src/main/conversations/sources/claude.system.test.ts`
 Expected: FAIL, `./claude.js` not found.
 
-- [ ] **Step 4: Write the adapter**
+- [x] **Step 4: Write the adapter**
 
 ```ts
 // src/main/conversations/sources/claude.ts
@@ -2124,12 +2124,12 @@ export class ClaudeConversationSource implements ConversationSource {
 }
 ```
 
-- [ ] **Step 5: Run the test and typecheck**
+- [x] **Step 5: Run the test and typecheck**
 
 Run: `NODE_ENV=test npx vitest run --project system src/main/conversations/sources/claude.system.test.ts && npx tsc -p tsconfig.node.json --pretty false`
 Expected: 4 PASS; tsc clean. If the `<stt` assertion fails because the corpus has no dictated prompt in the exact-cwd dir, widen that test to `repository` scope; the real corpus has two (`bcc80949`, `dd3de2a3`).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/main/conversations/sources/types.ts src/main/conversations/sources/claude.ts src/main/conversations/sources/claude.system.test.ts
@@ -2146,7 +2146,7 @@ git commit -m "feat(conversations): discover Claude conversations across worktre
 - Consumes: `openReadOnlySqlite`, `newestCodexStateDb` (Task 5), `extractPromptsFromFile` (Task 6), `listCodexSessions` and `findCodexRolloutPathByThreadId` from `codex-headless`.
 - Produces: `class CodexConversationSource implements ConversationSource` with `constructor(deps: { codexHome: string; walkTtlMs?: number })`, plus `lastDowngradeReason(): string | null` for diagnostics.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```ts
 // src/main/conversations/sources/codex.system.test.ts
@@ -2235,12 +2235,12 @@ describe('Codex conversation source', () => {
 })
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `NODE_ENV=test npx vitest run --project system src/main/conversations/sources/codex.system.test.ts`
 Expected: FAIL, `./codex.js` not found.
 
-- [ ] **Step 3: Write the adapter**
+- [x] **Step 3: Write the adapter**
 
 ```ts
 // src/main/conversations/sources/codex.ts
@@ -2546,12 +2546,12 @@ export class CodexConversationSource implements ConversationSource {
 export { listCodexSessions as codexFallbackLister }
 ```
 
-- [ ] **Step 4: Run the test and typecheck**
+- [x] **Step 4: Run the test and typecheck**
 
 Run: `NODE_ENV=test npx vitest run --project system src/main/conversations/sources/codex.system.test.ts && npx tsc -p tsconfig.node.json --pretty false`
 Expected: 5 PASS; tsc clean. If `findCodexRolloutPathByThreadId`'s signature differs from `(sessionsDir, id)`, read `packages/codex-headless/src/index.ts` and adapt the call; do not change the package.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/main/conversations/sources/codex.ts src/main/conversations/sources/codex.system.test.ts
@@ -2567,7 +2567,7 @@ git commit -m "feat(conversations): list Codex threads from the native sqlite in
 **Interfaces:**
 - Produces: `class OpencodeConversationSource implements ConversationSource` with `constructor(deps: { dataDir: string; listPrompts(cwd: string, id: string): Promise<Array<{ text: string; timestamp: string | null }>> })`, `defaultOpencodeDataDir(): string`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```ts
 // src/main/conversations/sources/opencode.system.test.ts
@@ -2610,12 +2610,12 @@ describe('OpenCode conversation source', () => {
 })
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `NODE_ENV=test npx vitest run --project system src/main/conversations/sources/opencode.system.test.ts`
 Expected: FAIL, `./opencode.js` not found.
 
-- [ ] **Step 3: Write the adapter**
+- [x] **Step 3: Write the adapter**
 
 ```ts
 // src/main/conversations/sources/opencode.ts
@@ -2753,12 +2753,12 @@ void asRecord
 
 Remove the trailing `void asRecord` line and the unused import if `asRecord` is not needed after the code is typed; the plan keeps the import list explicit so the executor does not guess.
 
-- [ ] **Step 4: Run the test and typecheck**
+- [x] **Step 4: Run the test and typecheck**
 
 Run: `NODE_ENV=test npx vitest run --project system src/main/conversations/sources/opencode.system.test.ts && npx tsc -p tsconfig.node.json --pretty false`
 Expected: 2 PASS; tsc clean.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/main/conversations/sources/opencode.ts src/main/conversations/sources/opencode.system.test.ts
@@ -2778,7 +2778,7 @@ git commit -m "feat(conversations): list OpenCode sessions from its database"
 **Interfaces:**
 - Produces: `unwrapUserText(raw: string): UnwrappedUserText | null` where `UnwrappedUserText = { text: string; wrapper: 'stt' | 'orchestration-handoff' | 'projected-handoff' | null }`; `null` means "not a prompt a human typed". `firstUnwrappedPrompt(userTexts: readonly string[]): { text: string; wrapper: UnwrappedUserText['wrapper'] } | null` walks the list and returns the first non-null.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Every literal below is the opening of a real record from the corpus (ids in comments) with its private remainder replaced; the assertions are about the prefix rule, which is exactly what the redaction preserves.
 
@@ -2844,12 +2844,12 @@ describe('firstUnwrappedPrompt', () => {
 })
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `NODE_ENV=test npx vitest run --project unit src/main/conversations/catalog/unwrap.test.ts`
 Expected: FAIL, `./unwrap.js` not found.
 
-- [ ] **Step 3: Write the unwrapper**
+- [x] **Step 3: Write the unwrapper**
 
 ```ts
 // src/main/conversations/catalog/unwrap.ts
@@ -2940,12 +2940,12 @@ export function firstUnwrappedPrompt(userTexts: readonly string[]): UnwrappedUse
 }
 ```
 
-- [ ] **Step 4: Run the test**
+- [x] **Step 4: Run the test**
 
 Run: `NODE_ENV=test npx vitest run --project unit src/main/conversations/catalog/unwrap.test.ts`
 Expected: all PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/main/conversations/catalog/unwrap.ts src/main/conversations/catalog/unwrap.test.ts
@@ -2965,7 +2965,7 @@ git commit -m "feat(conversations): decide what each injected prompt wrapper mea
 - Consumes: `UnwrappedUserText` (Task 11), `SourceConversation` (Task 8).
 - Produces: `LedgerRow` (`src/main/conversations/ledger/types.ts`): `{ provider; nativeId; localSessionId: string | null; cwd: string | null; title: string | null; agentName: string | null; orchestration: { parentNativeId: string | null; role: string | null; runId: string | null } | null; firstSeenAt: number; lastSeenAt: number; closedAt: number | null }`; `classifyConversation(source, ledger: LedgerRow | null, first: UnwrappedUserText | null): ConversationKind`; `resolveLabel(source, ledger, first, cwdBasename: string | null): { label: string; labelSource: ConversationLabelSource }`; `activityOf(source): { at: number; source: ConversationActivitySource }`; `compareByActivity(a: Conversation, b: Conversation): number`; `encodeCursor(row: Conversation): string`; `decodeCursor(cursor: string): { at: number; key: string } | null`.
 
-- [ ] **Step 1: Write the ledger row type**
+- [x] **Step 1: Write the ledger row type**
 
 ```ts
 // src/main/conversations/ledger/types.ts
@@ -2991,7 +2991,7 @@ export type LedgerRow = {
 }
 ```
 
-- [ ] **Step 2: Write the failing rules test**
+- [x] **Step 2: Write the failing rules test**
 
 ```ts
 // src/main/conversations/catalog/rules.test.ts
@@ -3075,12 +3075,12 @@ describe('ordering', () => {
 })
 ```
 
-- [ ] **Step 3: Run it to verify it fails**
+- [x] **Step 3: Run it to verify it fails**
 
 Run: `NODE_ENV=test npx vitest run --project unit src/main/conversations/catalog/rules.test.ts`
 Expected: FAIL, modules not found.
 
-- [ ] **Step 4: Write classify, label and order**
+- [x] **Step 4: Write classify, label and order**
 
 ```ts
 // src/main/conversations/catalog/classify.ts
@@ -3193,12 +3193,12 @@ export function decodeCursor(cursor: string): { at: number; key: string } | null
 }
 ```
 
-- [ ] **Step 5: Run the test**
+- [x] **Step 5: Run the test**
 
 Run: `NODE_ENV=test npx vitest run --project unit src/main/conversations/catalog/rules.test.ts`
 Expected: all PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/main/conversations/catalog/classify.ts src/main/conversations/catalog/label.ts src/main/conversations/catalog/order.ts src/main/conversations/catalog/rules.test.ts src/main/conversations/ledger/types.ts
@@ -3943,7 +3943,7 @@ git commit -m "feat(ledger): remember conversation identity and orchestration pr
 - Consumes: sources (Tasks 8–10), `buildListing` (Task 13), `ConversationLedger` (Task 14), `listWorktreesForCwd` from `@main/ipc/git.js`.
 - Produces: `class ConversationService { constructor(deps: { sources: ConversationSource[]; ledger: ConversationLedger | null; listWorktrees: (cwd: string) => Promise<ReadonlyArray<{ path: string }>>; claudeHistory: ClaudeHistoryIndex | null }); list(req): Promise<ConversationListResponse>; prompts(req): Promise<ConversationPrompt[]>; children(req): Promise<Conversation[]> }`, `createConversationService(deps: { ledger: ConversationLedger | null }): ConversationService` (production wiring with the real roots).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```ts
 // src/main/conversations/service.system.test.ts
@@ -4018,12 +4018,12 @@ describe('ConversationService', () => {
 })
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `NODE_ENV=test npx vitest run --project system src/main/conversations/service.system.test.ts`
 Expected: FAIL, `./service.js` not found.
 
-- [ ] **Step 3: Write the service**
+- [x] **Step 3: Write the service**
 
 ```ts
 // src/main/conversations/service.ts
@@ -4210,12 +4210,12 @@ void homedir
 
 Remove the trailing `void homedir` and its import once the file compiles; both exist only so the import list above is complete for the executor.
 
-- [ ] **Step 4: Run the test and typecheck**
+- [x] **Step 4: Run the test and typecheck**
 
 Run: `NODE_ENV=test npx vitest run --project system src/main/conversations/service.system.test.ts && npx tsc -p tsconfig.node.json --pretty false`
 Expected: 3 PASS; tsc clean. If `listWorktreesForCwd` is not exported from `@main/ipc/git.js`, it is (line 213); if importing `@main/ipc/git.js` pulls `electron` into the system test, move the import behind the `createConversationService` factory by passing `listWorktrees` from `index.ts` instead and keep the service free of `@main/ipc`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/main/conversations/service.ts src/main/conversations/service.system.test.ts
