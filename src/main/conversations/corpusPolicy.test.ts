@@ -88,6 +88,8 @@ describe('conversation corpus policy', () => {
     const agents = redactRecord({ title: '# AGENTS.md instructions for /Users/me/x\n\n<INSTRUCTIONS>' }, paths) as { title: string }
     expect(plain.title).toMatch(/^p:[0-9a-f]{8}:23$/)
     expect(agents.title.startsWith('# AGENTS.md instructions for')).toBe(true)
+    // An exact app-authored constant survives whole, with no empty placeholder appended.
+    expect((redactRecord({ title: 'Agent Code terminal session' }, paths) as { title: string }).title).toBe('Agent Code terminal session')
   })
 
   it('never leaves a string outside the allowlist unhashed, recursively', () => {

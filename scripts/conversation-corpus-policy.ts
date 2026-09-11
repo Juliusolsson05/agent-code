@@ -21,6 +21,7 @@ export const KEEP_VERBATIM_KEYS: ReadonlySet<string> = new Set([
   // identity and time
   'uuid', 'parentUuid', 'promptId', 'leafUuid', 'sessionId', 'session_id', 'id',
   'thread_id', 'parent_thread_id', 'child_thread_id', 'forked_from_id', 'messageId',
+  'message_id', 'parent_id', 'project_id', 'workspace_id',
   'timestamp', 'created_at', 'updated_at', 'recency_at', 'created_at_ms', 'updated_at_ms',
   'recency_at_ms', 'time_created', 'time_updated', 'time_archived', 'time', 'created',
   'durationMs', 'messageCount', 'mtime', 'size', 'fileSize',
@@ -53,6 +54,10 @@ export const KEPT_WRAPPER_PREFIXES: readonly string[] = [
   '# AGENTS.md instructions for',
   '# Handoff Summary',
   '# Portable handoff summary',
+  // App-authored, not private: the title Agent Code gives an OpenCode Terminal
+  // session before the user types (src/providers/opencode/runtime/
+  // opencodeCliSessions.ts). The adapter classifies on it.
+  'Agent Code terminal session',
 ]
 
 const PLACEHOLDER_RE = /^p:[0-9a-f]{8}:\d+$/
@@ -157,6 +162,7 @@ function redactString(key: string, value: string, paths: PathRewriter): string {
     return 'b:' + placeholder(value).slice(2, 10)
   }
   for (const prefix of KEPT_WRAPPER_PREFIXES) {
+    if (value === prefix) return value
     if (value.startsWith(prefix)) return prefix + placeholder(value.slice(prefix.length))
   }
   return placeholder(value)

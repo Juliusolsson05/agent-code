@@ -10,6 +10,7 @@ worktree /fixture/other-9
 worktree /fixture/repo/.worktrees/claude-transcript-relocation
 worktree /fixture/repo/.worktrees/composer-placeholder-detection
 worktree /fixture/repo/.worktrees/dependency-alerts-root
+worktree /fixture/repo/.worktrees/dispatch-agent-close-safety
 worktree /fixture/repo/.worktrees/extension-platform
 worktree /fixture/repo/.worktrees/feed-debug-batch
 worktree /fixture/repo/.worktrees/feed-render-rewrite
@@ -28,11 +29,14 @@ worktree /fixture/repo/.worktrees/opencode-rendering-support
 worktree /fixture/repo/.worktrees/opencode-terminal-headless
 worktree /fixture/repo/.worktrees/overlay-reland
 worktree /fixture/repo/.worktrees/portability-hardening
+worktree /fixture/repo/.worktrees/queued-prompt-visibility
 worktree /fixture/repo/.worktrees/reader-mode-transcript-source
 worktree /fixture/repo/.worktrees/rendering-slice16
 worktree /fixture/repo/.worktrees/session-picker
 worktree /fixture/repo/.worktrees/session-picker-identity
 worktree /fixture/repo/.worktrees/terminal-session-parity
 worktree /fixture/repo/.worktrees/terminal-view-status-header
+worktree /fixture/repo/.worktrees/tldr-agent-summaries
+worktree /fixture/repo/.worktrees/usage-limit-rendering
 worktree /fixture/repo/.worktrees/xterm-webgl-beta
 worktree /fixture/other-10/p:91ddffa8:10
