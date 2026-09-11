@@ -2,6 +2,8 @@
 
 Status: In progress.
 
+Progress: source investigation covers the application services and pinned package boundaries. Sections 1–14 of `SPEC.md` are drafted. At the user's request, open a draft PR now and update it while the remaining sections and verification are completed. This explicitly supersedes the normal fully-built-before-opening convention for this task.
+
 ## Outcome
 
 Write a root `SPEC.md` describing the implemented application architecture at
