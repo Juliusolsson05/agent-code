@@ -7,9 +7,13 @@ import type { Workspace } from '@renderer/workspace/workspaceStore'
 type Props = {
   workspace: Workspace
   agentViewMode: AgentViewMode
+  // Threaded from settings like every other workspace surface (#856). Tiled
+  // Tabs renders ordinary TileTrees, so it must honor the same toggles.
+  showStatusMode: boolean
+  showWorktreeBadges: boolean
 }
 
-export function TileTabsView({ workspace, agentViewMode }: Props) {
+export function TileTabsView({ workspace, agentViewMode, showStatusMode, showWorktreeBadges }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const dragRef = useRef<{
     dividerIndex: number
@@ -114,6 +118,8 @@ export function TileTabsView({ workspace, agentViewMode }: Props) {
                     focusedSessionId={focused ? tab.focusedSessionId : null}
                     workspace={workspace}
                     agentViewMode={agentViewMode}
+                    showStatusMode={showStatusMode}
+                    showWorktreeBadges={showWorktreeBadges}
                   />
                 </div>
               </section>

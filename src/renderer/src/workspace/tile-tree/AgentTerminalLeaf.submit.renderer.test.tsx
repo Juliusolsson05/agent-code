@@ -30,6 +30,7 @@ const settings = vi.hoisted(() => ({
   dictationProvider: 'local',
   dictationShortcut: 'off',
   mouseModeEnabled: false,
+  dispatchColorFlags: {},
 }))
 
 // Read by the follow wiring in AgentTerminalLeaf; absent it would be
@@ -141,6 +142,7 @@ describe('AgentTerminalLeaf Mouse Mode Submit', () => {
             runtime={{ ...emptyRuntime(), processStatus: 'started' }}
             projectDir="/tmp/project"
             provider="codex"
+            showStatusMode={false}
           />
         </MountedAgentTerminalOwner>
       </AgentTerminalOwnershipProvider>

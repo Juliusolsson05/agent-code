@@ -13,13 +13,13 @@ import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type { SessionId, SessionKind } from '@renderer/workspace/types'
 import { isSessionExited } from '@renderer/workspace/providerSessionIdentity'
-import { shortenCwd } from '@renderer/workspace/tile-tree/TileLeaf/labels'
+import { PaneHeader } from '@renderer/workspace/tile-tree/TileLeaf/PaneHeader'
+import { paneHeaderStatusLit } from '@renderer/workspace/tile-tree/TileLeaf/paneHeaderStatus'
 import { PaneToast } from '@renderer/workspace/tile-tree/TileLeaf/PaneToast'
 import { useComposerDictation } from '@renderer/workspace/tile-tree/TileLeaf/useComposerDictation'
 import { useAgentTerminalDimensionActive, useAgentTerminalOwnerVisible } from '@renderer/workspace/terminal/AgentTerminalOwnership'
 import { subscribeToAgentPtyData } from '@renderer/workspace/terminal/sessionDataDispatcher'
 import { attachXtermWebglRenderer } from '@renderer/workspace/terminal/xtermWebglRenderer'
-import { AgentTitleHeader } from '@renderer/workspace/tile-tree/AgentTitleHeader'
 import { createTerminalInputForwarder } from '@renderer/workspace/tile-tree/terminalInputForwarder'
 import { encodeTerminalPaste, registerTerminalPasteTarget } from '@renderer/workspace/terminal/textPasteTarget'
 import { AgentTerminalActions } from '@renderer/workspace/tile-tree/AgentTerminalActions'
@@ -35,6 +35,11 @@ type Props = {
   runtime: SessionRuntime
   projectDir: string | null
   provider: Exclude<SessionKind, 'terminal'>
+  /** The window's Status Mode setting. It is threaded exactly like TileLeaf's
+   *  so both surfaces light the header under the same rule. Required, not
+   *  defaulted: an omitted prop is exactly how the terminal branch went unlit
+   *  in #851, and a default would let the next call site repeat that. */
+  showStatusMode: boolean
 }
 
 // AgentTerminalLeaf — full-pane raw provider terminal for PTY-backed agents.
@@ -60,6 +65,7 @@ export function AgentTerminalLeaf({
   runtime,
   projectDir,
   provider,
+  showStatusMode,
 }: Props) {
   const dictationEnabled = useAppStore(state => state.settings.dictationEnabled)
   const dictationProvider = useAppStore(state => state.settings.dictationProvider)
@@ -537,6 +543,23 @@ export function AgentTerminalLeaf({
     termRef.current?.focus()
   }
 
+  // Same liveness rule TileLeaf feeds PaneHeader. `sessionStatus` is derived
+  // at workspace level from the semantic turn, `processActive` and exit state,
+  // and none of these depend on which leaf is mounted. For Claude and Codex,
+  // `processActive` comes from the main-process spinner detectors, so a turn
+  // typed straight into the raw TUI lights this header just as a composer
+  // send lights the rendered one (#851). The third input, the optimistic
+  // `awaitingAssistant`, is set only by the composer. That means this header
+  // lights on the first spinner frame or semantic turn, not on Enter.
+  //
+  // Known gap: the OpenCode Terminal runtime emits no activity at all (only
+  // `process-state {active:false}`), so its header stays unlit (#857). That
+  // is a missing provider signal, not something this surface can derive.
+  const isSessionLive = runtime.sessionStatus === 'running'
+  // Uses PaneHeader's own rule instead of an inline `&&`, so the slot colors
+  // below can never disagree with the fill they sit on.
+  const statusLit = paneHeaderStatusLit(showStatusMode, isSessionLive)
+
   return (
     <div
       data-pane-id={sessionId}
@@ -559,39 +582,77 @@ export function AgentTerminalLeaf({
       onPasteCapture={() => acknowledgeSession(sessionId)}
       onCompositionEndCapture={() => acknowledgeSession(sessionId)}
     >
-      <div className="border-b border-border bg-surface">
-        <div className="flex items-center justify-between gap-3 px-3 py-1 text-[10px] text-muted font-code select-none">
-          <div className="flex items-center gap-2 min-w-0">
-            {paneLabel && (
-              <span className="flex-shrink-0 rounded-chip border border-current/30 px-1 leading-[14px] text-[9px] font-semibold tabular-nums">
-                {paneLabel}
-              </span>
-            )}
-            <span className="flex-shrink-0 text-ink">raw {provider}</span>
-            {/* truncate-START, matching PaneHeader: keep the project directory
-                visible and drop the shared prefix instead. */}
-            <span className="truncate-start" title={projectDir ?? 'no project dir'}>
-              {/* Inner dir="ltr" required — see PaneHeader. */}
-              <span dir="ltr">{shortenCwd(projectDir)}</span>
-            </span>
-          </div>
-          {/* TAIL pill styling copied from ScrollIndicator so both surfaces
-              read identically — without it the raw view silently follows
-              output while showing no state the palette can be checked
-              against. */}
-          <div className="flex flex-shrink-0 items-center gap-2">
+      {/* The shared header, not a copy of it. A hand-rolled copy here is how
+          #851 happened: that copy never got the Status Mode fill or the color
+          flag. Only the terminal-specific chrome is supplied from this file.
+
+          Related-agent chips are not passed, which keeps pre-#851 behavior,
+          but that behavior has a known hole (#858). A persisted related
+          selection still mounts here (WorkspaceLeaf passes the selected
+          `renderedSessionId`), so the pane can show a child's TUI under the
+          parent's label with nothing marking it. The chips aren't simply
+          added because every header row is taken out of the PTY: a chip row
+          appearing when a child spawns would resize the live TUI. #858 tracks
+          that decision.
+
+          The same cost applies to Status Mode. `statusMode` switches the row
+          between `py-0` and `py-1`, so toggling the setting changes this
+          header by 8px and can drop or add a terminal row, which resizes the
+          provider PTY once. That is accepted because it only happens when the
+          setting changes; liveness and TAIL never change the height. */}
+      <PaneHeader
+        sessionId={sessionId}
+        paneLabel={paneLabel}
+        agentTitle={agentTitle}
+        projectDir={projectDir}
+        statusMode={showStatusMode}
+        isSessionLive={isSessionLive}
+        // `text-ink` lifts the surface name above the muted cwd on the plain
+        // strip. On the lit strip it inherits `accent-fg`, since ink is not
+        // guaranteed to contrast with a user-chosen accent.
+        badge={
+          <span className={`flex-shrink-0 ${statusLit ? '' : 'text-ink'}`}>
+            raw {provider}
+          </span>
+        }
+        trailing={
+          <>
+            {/* TAIL pill styling copied from ScrollIndicator so both surfaces
+                read identically — without it the raw view silently follows
+                output while showing no state the palette can be checked
+                against. The one exception is the lit strip: `text-accent` on
+                `bg-accent` makes TAIL invisible exactly when the agent is
+                producing the output being followed, so it inherits
+                `accent-fg` there. */}
             {tailActive ? (
-              <span className="text-[10px] font-code uppercase tracking-wider text-accent">
+              <span
+                className={`text-[10px] font-code uppercase tracking-wider ${statusLit ? '' : 'text-accent'}`}
+              >
                 TAIL
               </span>
             ) : null}
-            <span className="text-[9px] uppercase tracking-wider text-muted">
+            {/* No color of its own: it inherits the row's `text-muted`, or
+                `accent-fg` on the lit strip.
+
+                Hidden below 320px of header text room (PaneHeader's label
+                group is the `@container`, so the flag's quarter is already
+                subtracted). `raw <provider>` already names this surface, so
+                the label is the one piece of chrome that can go without losing
+                information. Without this, a flagged Tiled Dispatch lane
+                (~250px) had more fixed-width text than room, and the label
+                slid under the flag with TAIL next.
+
+                The threshold covers the fixed row content with every piece
+                shown, measured at the 10px code font: pane label chip
+                (~26px), `raw opencode` (~72px), TAIL (~26px), this label
+                (~76px) and the gaps, about 236px, plus roughly 80px so the cwd
+                keeps a readable tail. */}
+            <span className="hidden text-[9px] uppercase tracking-wider @min-[320px]:inline">
               terminal view
             </span>
-          </div>
-        </div>
-        <AgentTitleHeader sessionId={sessionId} title={agentTitle} />
-      </div>
+          </>
+        }
+      />
 
       <div className="flex-1 min-h-0 min-w-0 overflow-hidden p-2">
         <div
