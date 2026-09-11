@@ -44,9 +44,13 @@ import type { ConversationSource, SourceConversation } from './sources/types.js'
 // recorded corpus. The worktree lister is a dependency the boot code passes.
 
 const DISCOVERY_FRESH_MS = 3_000
-const SEARCH_PROMPT_ROWS = 200
+// WHY 150 rows and 128 KB: measured on the author's store, 200 rows at
+// 256 KB read 50 MB of rollout tails for one keystroke (1.5-3 s under load);
+// half the bytes keeps the first search near the budget, and everything the
+// tail window misses is still searchable by label, first prompt and title.
+const SEARCH_PROMPT_ROWS = 150
 const SEARCH_PROMPTS_PER_ROW = 40
-const SEARCH_BYTES_PER_ROW = 256 * 1024
+const SEARCH_BYTES_PER_ROW = 128 * 1024
 
 type Discovery = { at: number; key: string; family: RepositoryFamily; sources: SourceConversation[] }
 

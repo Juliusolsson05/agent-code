@@ -30,12 +30,26 @@ import type { ConversationSource, SourceConversation, SourceScope, PromptReadOpt
 // starts.
 
 const HEAD_RECORD_LIMIT = 200
-const HEAD_USER_TEXTS = 6
+// WHY four: the classifier needs the first real prompt and skips injected
+// messages before it (a slash-command echo, a caveat, a system reminder); the
+// corpus never needed more than three skips, and every extra text is another
+// block's worth of tool output to parse for a hundred and sixty transcripts.
+const HEAD_USER_TEXTS = 4
 // One positioned read covers the head of almost every transcript (the first
 // user record sits at index 6–8, a few KB in). Streaming line by line costs
 // ~11 ms per file on the recorded corpus; a block read costs under 1 ms, and
 // the stream only runs for the rare transcript whose head is larger.
 const HEAD_BLOCK_BYTES = 64 * 1024
+// WHY a second, larger block instead of streaming the file: the first block
+// rarely holds six user texts (tool results pad the head), so nearly every
+// transcript reached the stream, which parsed up to two hundred records of
+// any size. On the author's store that was most of a 1.5 s cold discovery.
+// A byte bound keeps the cost proportional to the corpus, and a transcript
+// whose first prompts sit beyond a quarter megabyte is labelled by its cwd.
+const HEAD_MAX_BYTES = 256 * 1024
+// Transcripts are summarised a few at a time: each costs two file opens and
+// two parses, and doing 163 of them one after another serialises the disk.
+const SUMMARY_CONCURRENCY = 8
 const TAIL_BYTES = 64 * 1024
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -88,48 +102,60 @@ function foldHeadRecord(out: HeadSummary, record: Record<string, unknown>): void
   if (text) out.userTexts.push(text)
 }
 
+async function mapWithConcurrency<T, R>(items: readonly T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length)
+  let next = 0
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    for (;;) {
+      const index = next++
+      if (index >= items.length) return
+      results[index] = await fn(items[index]!)
+    }
+  })
+  await Promise.all(workers)
+  return results
+}
+
 async function readHead(file: string, size: number): Promise<HeadSummary> {
   const out: HeadSummary = { cwd: null, gitBranch: null, createdAt: null, userTexts: [] }
-  let records = 0
-  // Fast path: one block, complete lines only.
   const handle = await open(file, 'r')
-  let coveredWholeFile = false
   try {
-    const len = Math.min(HEAD_BLOCK_BYTES, size)
-    const buf = Buffer.allocUnsafe(len)
-    let offset = 0
-    while (offset < len) {
-      const { bytesRead } = await handle.read(buf, offset, len - offset, offset)
-      if (bytesRead === 0) break
-      offset += bytesRead
+    // Complete lines only: a record cut by the block boundary is folded on the
+    // next, larger pass, which starts again from byte zero so the fold sees
+    // every record once in order.
+    for (const blockBytes of [HEAD_BLOCK_BYTES, HEAD_MAX_BYTES]) {
+      const len = Math.min(blockBytes, size)
+      const buf = Buffer.allocUnsafe(len)
+      let offset = 0
+      while (offset < len) {
+        const { bytesRead } = await handle.read(buf, offset, len - offset, offset)
+        if (bytesRead === 0) break
+        offset += bytesRead
+      }
+      const coveredWholeFile = offset >= size
+      const lastNewline = buf.lastIndexOf(0x0a, offset - 1)
+      const text = (coveredWholeFile ? buf.subarray(0, offset) : buf.subarray(0, Math.max(0, lastNewline + 1))).toString('utf8')
+      const pass: HeadSummary = { cwd: null, gitBranch: null, createdAt: null, userTexts: [] }
+      let records = 0
+      let done = false
+      for (const line of text.split('\n')) {
+        if (!line.trim()) continue
+        const record = parseJsonRecord(line)
+        if (!record) continue
+        records++
+        foldHeadRecord(pass, record)
+        if (pass.userTexts.length >= HEAD_USER_TEXTS || records >= HEAD_RECORD_LIMIT) {
+          done = true
+          break
+        }
+      }
+      Object.assign(out, pass)
+      if (done || coveredWholeFile || blockBytes === HEAD_MAX_BYTES) return out
     }
-    coveredWholeFile = offset >= size
-    const lastNewline = buf.lastIndexOf(0x0a, offset - 1)
-    const text = (coveredWholeFile ? buf.subarray(0, offset) : buf.subarray(0, Math.max(0, lastNewline + 1))).toString('utf8')
-    for (const line of text.split('\n')) {
-      if (!line.trim()) continue
-      const record = parseJsonRecord(line)
-      if (!record) continue
-      records++
-      foldHeadRecord(out, record)
-      if (out.userTexts.length >= HEAD_USER_TEXTS || records >= HEAD_RECORD_LIMIT) return out
-    }
+    return out
   } finally {
     await handle.close()
   }
-  if (coveredWholeFile) return out
-  // Slow path: the block ended before the limits were reached (a head padded
-  // with oversized attachments). Stream from the start; correctness over the
-  // block's partial view is what matters here, not the repeated bytes.
-  const streamed: HeadSummary = { cwd: null, gitBranch: null, createdAt: null, userTexts: [] }
-  let streamedRecords = 0
-  for await (const record of streamJsonl<Record<string, unknown>>(file)) {
-    if (!record) continue
-    streamedRecords++
-    foldHeadRecord(streamed, record)
-    if (streamed.userTexts.length >= HEAD_USER_TEXTS || streamedRecords >= HEAD_RECORD_LIMIT) break
-  }
-  return streamed
 }
 
 async function readTail(file: string, size: number): Promise<Pick<ClaudeSummary, 'aiTitle' | 'customTitle' | 'tailUserAt' | 'gitBranch'>> {
@@ -219,6 +245,10 @@ export class ClaudeConversationSource implements ConversationSource {
     const dirs = await this.candidateDirs(scope)
     const rows: SourceConversation[] = []
     const seen = new Set<string>()
+    // Every candidate file first, deduplicated by id in directory order so a
+    // transcript copied into two project dirs is claimed by the first, then
+    // summarised through a small pool.
+    const candidates: Array<{ file: string; nativeId: string; exact: boolean }> = []
     for (const { dir, exact } of dirs) {
       let names: string[]
       try {
@@ -230,44 +260,49 @@ export class ClaudeConversationSource implements ConversationSource {
         if (!name.endsWith('.jsonl')) continue
         const nativeId = name.slice(0, -6)
         if (!UUID_RE.test(nativeId) || seen.has(nativeId)) continue
-        const file = join(this.deps.projectsDir, dir, name)
-        let s
-        try {
-          s = await stat(file)
-        } catch {
-          continue
-        }
-        const summary = await this.summarize(file, s.mtimeMs, s.size)
-        // Membership: the recorded cwd wins; a transcript that never recorded
-        // one (the 0-byte session) belongs only to an exactly-matching dir.
-        if (scope.scope !== 'everywhere') {
-          if (summary.cwd ? !scope.family.matches(summary.cwd) : !exact) continue
-        }
         seen.add(nativeId)
-        const history = this.deps.history.bySession(nativeId)
-        const historyLast = history.length > 0 ? history[history.length - 1]!.timestamp : null
-        rows.push({
-          provider: 'claude',
-          nativeId,
-          cwd: summary.cwd,
-          gitBranch: summary.gitBranch,
-          customTitle: summary.customTitle,
-          aiTitle: summary.aiTitle,
-          userTexts: summary.userTexts,
-          createdAt: summary.createdAt,
-          lastUserActivityAt: historyLast ?? summary.tailUserAt,
-          activitySource: historyLast !== null ? 'history' : summary.tailUserAt !== null ? 'tail' : null,
-          mtime: s.mtimeMs,
-          promptCount: history.length > 0 ? history.length : null,
-          parentNativeId: null,
-          isNativeSubagent: false,
-          isExec: false,
-          originator: null,
-          origin: 'scan',
-          available: !summary.empty,
-          file,
-        })
+        candidates.push({ file: join(this.deps.projectsDir, dir, name), nativeId, exact })
       }
+    }
+    const summarized = await mapWithConcurrency(candidates, SUMMARY_CONCURRENCY, async candidate => {
+      try {
+        const s = await stat(candidate.file)
+        return { ...candidate, mtimeMs: s.mtimeMs, summary: await this.summarize(candidate.file, s.mtimeMs, s.size) }
+      } catch {
+        return null
+      }
+    })
+    for (const item of summarized) {
+      if (!item) continue
+      const { file, nativeId, exact, summary, mtimeMs } = item
+      // Membership: the recorded cwd wins; a transcript that never recorded
+      // one (the 0-byte session) belongs only to an exactly-matching dir.
+      if (scope.scope !== 'everywhere') {
+        if (summary.cwd ? !scope.family.matches(summary.cwd) : !exact) continue
+      }
+      const history = this.deps.history.bySession(nativeId)
+      const historyLast = history.length > 0 ? history[history.length - 1]!.timestamp : null
+      rows.push({
+        provider: 'claude',
+        nativeId,
+        cwd: summary.cwd,
+        gitBranch: summary.gitBranch,
+        customTitle: summary.customTitle,
+        aiTitle: summary.aiTitle,
+        userTexts: summary.userTexts,
+        createdAt: summary.createdAt,
+        lastUserActivityAt: historyLast ?? summary.tailUserAt,
+        activitySource: historyLast !== null ? 'history' : summary.tailUserAt !== null ? 'tail' : null,
+        mtime: mtimeMs,
+        promptCount: history.length > 0 ? history.length : null,
+        parentNativeId: null,
+        isNativeSubagent: false,
+        isExec: false,
+        originator: null,
+        origin: 'scan',
+        available: !summary.empty,
+        file,
+      })
     }
     span.end({ dirs: dirs.length, rows: rows.length })
     return rows
