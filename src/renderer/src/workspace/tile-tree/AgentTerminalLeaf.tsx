@@ -284,7 +284,12 @@ export function AgentTerminalLeaf({
       fit = new FitAddon()
       term.loadAddon(fit)
       term.open(container)
-      webglRenderer = attachXtermWebglRenderer(term)
+      // A renderer change (DOM -> WebGL upgrade, or WebGL -> DOM after a
+      // context loss) changes cell metrics without resizing the container, so
+      // the ResizeObserver below would never refit it. Route it through the
+      // same coalesced, ownership-gated scheduler: a non-owner pane stays
+      // inert exactly as it does for container resizes.
+      webglRenderer = attachXtermWebglRenderer(term, { onRendererChange: scheduleFitAndResizeBackend })
       termRef.current = term
       // Follow re-pin wiring lives in the hook; the mount effect only owns
       // the terminal instance lifetime, so this attaches/detaches with it.
