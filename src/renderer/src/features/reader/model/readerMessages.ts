@@ -30,7 +30,8 @@ export type ReaderMessage = {
    *  same painted unit (a live block keeps its id as it grows); it changes
    *  when the ledger hands finished text to its committed entry
    *  (`semantic-block:…` -> `entry:…`). readerSelection.ts follows that
-   *  handoff by text so the reader keeps their place. */
+   *  handoff (by `sourceId`, then by normalised text) so the reader keeps
+   *  their place. */
   id: string
   text: string
   /** True while the text is still growing: a block in the open semantic turn
@@ -47,6 +48,13 @@ export type ReaderMessage = {
    *  readerSelection.ts follows a page into an entry that joins several pages
    *  and so matches none of their texts. Null when the entry carries no id. */
   sourceId: string | null
+  /** True for a committed transcript row (a feed `entry`), false for a
+   *  semantic page. readerSelection.ts only ever follows a reader onto a NEW
+   *  SEMANTIC page: a committed row is either the copy of a page the reader
+   *  has already seen (OpenCode and Codex rollout publish it before the turn
+   *  completes, so both are listed together) or older history loaded above
+   *  the list — never the agent's next page. */
+  committed: boolean
 }
 
 function entrySourceId(entry: FeedRenderItem & { type: 'entry' }): string | null {
@@ -86,7 +94,7 @@ export function readerMessagesFromFeedItems(
         // User prompts, system rows and tool-only assistant carriers return
         // null here. Reader is a reading view of what the agent SAID.
         const text = memoAssistantEntryText(item)
-        if (text) messages.push({ id: item.key, text, live: false, sourceId: entrySourceId(item) })
+        if (text) messages.push({ id: item.key, text, live: false, sourceId: entrySourceId(item), committed: true })
         break
       }
       case 'semantic-text': {
@@ -100,6 +108,7 @@ export function readerMessagesFromFeedItems(
             text,
             live: item.owner === 'semantic-current',
             sourceId: item.turnId,
+            committed: false,
           })
         }
         break
@@ -115,6 +124,7 @@ export function readerMessagesFromFeedItems(
             text,
             live: item.owner === 'semantic-current' && blockStillGrowing(item.block),
             sourceId: item.turnId,
+            committed: false,
           })
         }
         break

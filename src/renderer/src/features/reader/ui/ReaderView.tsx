@@ -14,7 +14,10 @@ import {
   readerMessagesFromFeedItems,
   type ReaderMessage,
 } from '@renderer/features/reader/model/readerMessages'
-import { nextReaderSelection } from '@renderer/features/reader/model/readerSelection'
+import {
+  nextReaderSelection,
+  sameReaderList,
+} from '@renderer/features/reader/model/readerSelection'
 import { resolveTabSessions } from '@renderer/workspace/queries'
 import { useSessionRuntime } from '@renderer/workspace/useSessionRuntime'
 import { dispatchSessionIdsForTab } from '@renderer/workspace/dispatch/dispatchSelectors'
@@ -210,28 +213,28 @@ function ReaderBody({
     id: messages[messages.length - 1]?.id ?? null,
     scrollResetToken: 0,
   }))
-  if (selection.messages !== messages || selection.sessionId !== sessionId) {
-    const sessionChanged = selection.sessionId !== sessionId
+  const sessionChanged = selection.sessionId !== sessionId
+  // WHY the write is skipped only for an identical list, not for an unchanged
+  // selection: a render-phase update re-renders immediately, so writing on
+  // every new `messages` IDENTITY would never settle if a caller handed Reader
+  // an unstable-but-identical list (a test fixture whose getRuntime built a
+  // fresh runtime per call hit "Too many re-renders"). But the rule also needs
+  // `selection.messages` to be the list the reader last saw: the previous
+  // version skipped the write whenever the selection did not change, and a
+  // reader who paged back and then watched ten answers arrive was later placed
+  // by "distance from the end" in a list ten answers out of date. So every
+  // real change is recorded, and only a content-identical list is ignored.
+  if (sessionChanged || (selection.messages !== messages && !sameReaderList(selection.messages, messages))) {
     const next = sessionChanged
       // A different session's list has no relation to the old selection.
       ? { id: messages[messages.length - 1]?.id ?? null, moved: true }
       : nextReaderSelection(selection.messages, selection.id, messages, stickToBottom)
-    // WHY state is written only when the answer changes: a render-phase update
-    // re-renders immediately, so writing on every new `messages` identity would
-    // never settle if a caller ever handed Reader an unstable list (a test
-    // fixture whose getRuntime built a fresh runtime per call did exactly that
-    // and hit "Too many re-renders"). The cost is that `selection.messages` can
-    // lag behind a list that changed without changing the selection; the rule
-    // only uses it to tell new pages and departed pages apart, and navigation
-    // below refreshes it.
-    if (sessionChanged || next.id !== selection.id || next.moved) {
-      setSelection({
-        messages,
-        sessionId,
-        id: next.id,
-        scrollResetToken: next.moved ? selection.scrollResetToken + 1 : selection.scrollResetToken,
-      })
-    }
+    setSelection({
+      messages,
+      sessionId,
+      id: next.id,
+      scrollResetToken: next.moved ? selection.scrollResetToken + 1 : selection.scrollResetToken,
+    })
   }
   const selectedMessageId = selection.id
   const scrollResetToken = selection.scrollResetToken

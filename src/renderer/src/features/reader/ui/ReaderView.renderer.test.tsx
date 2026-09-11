@@ -6,6 +6,7 @@ import type { SessionRuntime } from '@renderer/session-runtime/state'
 import { foldSemanticEvent } from '@renderer/session-runtime/semantic/foldEvent'
 import { APP_INTERACTION_OWNER_ATTRIBUTE } from '@renderer/lib/interaction-ownership'
 import type { Entry } from '@shared/types/transcript'
+import type { AgentProviderKind } from '@shared/types/providerKind'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { ReaderView } from './ReaderView'
 
@@ -85,7 +86,8 @@ const BACKGROUND_AGENT_PANEL_SCREEN = [
 // Date.now(), and the ledger orders semantic turns against committed entries by
 // those times. Pinning them keeps a multi-turn scenario in the order a real
 // session produces instead of whatever the test machine's clock says.
-function foldClaude(
+function foldAs(
+  kind: AgentProviderKind,
   runtime: SessionRuntime,
   events: Record<string, unknown>[],
   nowMs: number = Date.now(),
@@ -93,11 +95,19 @@ function foldClaude(
   const clock = vi.spyOn(Date, 'now').mockReturnValue(nowMs)
   try {
     let semantic = runtime.semantic
-    for (const event of events) semantic = foldSemanticEvent(semantic, event, 'claude')
+    for (const event of events) semantic = foldSemanticEvent(semantic, event, kind)
     return { ...runtime, semantic }
   } finally {
     clock.mockRestore()
   }
+}
+
+function foldClaude(
+  runtime: SessionRuntime,
+  events: Record<string, unknown>[],
+  nowMs: number = Date.now(),
+): SessionRuntime {
+  return foldAs('claude', runtime, events, nowMs)
 }
 
 // One Claude proxy text block, in the order ClaudeProxyAdapter publishes it:
@@ -141,7 +151,7 @@ function makeReaderWorkspace(runtime: SessionRuntime = {
     assistantEntry('older-message', 'Older answer'),
     assistantEntry('newer-message', 'Newer answer'),
   ],
-}): Workspace {
+}, kind: AgentProviderKind = 'claude'): Workspace {
   const tab = {
     id: 'tab-1',
     title: 'Project',
@@ -153,7 +163,7 @@ function makeReaderWorkspace(runtime: SessionRuntime = {
       activeTabId: tab.id,
       tabs: [tab],
       sessions: {
-        'session-1': { cwd: '/project', title: 'Agent', kind: 'claude' },
+        'session-1': { cwd: '/project', title: 'Agent', kind },
       },
       detachedSessions: {},
       buried: [],
@@ -462,5 +472,113 @@ describe('Reader follows only a reader who is following', () => {
     view.rerender(<ReaderView workspace={workspace} />)
 
     expect(screen.getByText('no assistant message yet')).toBeTruthy()
+  })
+})
+
+// Final review round: only a NEW STREAMING PAGE is followed. Committed rows —
+// a transcript copy of the page being read, or older history loaded above the
+// list — are never "the agent's next page".
+describe('Reader follows only new streaming pages', () => {
+  // OpenCode's committed rows carry no message.id (the selection falls back to
+  // text for them), exactly like the entries the review probed.
+  const openCodeEntry = (uuid: string, ms: number, text: string) =>
+    ({
+      uuid,
+      type: 'assistant',
+      timestamp: iso(ms),
+      message: { role: 'assistant', content: [{ type: 'text', text }] },
+    }) as unknown as Entry
+
+  it('keeps following an OpenCode answer whose committed copy lands before its turn completes', () => {
+    // OpenCode's EventDispatcher publishes the committed message BEFORE
+    // completeTurn(), and the main-process forwarder preserves that order, so
+    // the entry and its live copy are listed together for at least a render.
+    const base: SessionRuntime = {
+      ...emptyRuntime(),
+      entries: [datedUserEntry('u1', T, 'q')],
+      lastJsonlEntryAt: T,
+      sessionStatus: 'running',
+    }
+    const live = foldAs('opencode', base, [
+      { type: 'turn_started', turnId: 'msg_oc1', role: 'assistant', source: 'opencode-sse' },
+      { type: 'turn_delta', turnId: 'msg_oc1', fullText: 'OpenCode answer one', source: 'opencode-sse' },
+    ], T + 1_000)
+    const view = render(<ReaderView workspace={makeReaderWorkspace(live, 'opencode')} />)
+    const scroller = document.querySelector('article')!.parentElement as HTMLDivElement
+    scroller.scrollTop = 321
+
+    const committedFirst: SessionRuntime = {
+      ...live,
+      entries: [...live.entries, openCodeEntry('oc-a1', T + 1_200, 'OpenCode answer one')],
+      lastJsonlEntryAt: T + 1_200,
+    }
+    view.rerender(<ReaderView workspace={makeReaderWorkspace(committedFirst, 'opencode')} />)
+    expect(screen.getByText('OpenCode answer one')).toBeTruthy()
+    expect(scroller.scrollTop).toBe(321)
+
+    const completed = foldAs('opencode', committedFirst, [
+      { type: 'turn_completed', turnId: 'msg_oc1', source: 'opencode-sse' },
+    ], T + 1_300)
+    view.rerender(<ReaderView workspace={makeReaderWorkspace(completed, 'opencode')} />)
+    const nextAnswer = foldAs('opencode', completed, [
+      { type: 'turn_started', turnId: 'msg_oc2', role: 'assistant', source: 'opencode-sse' },
+      { type: 'turn_delta', turnId: 'msg_oc2', fullText: 'OpenCode answer two', source: 'opencode-sse' },
+    ], T + 2_000)
+    view.rerender(<ReaderView workspace={makeReaderWorkspace(nextAnswer, 'opencode')} />)
+
+    expect(screen.getByText('OpenCode answer two')).toBeTruthy()
+  })
+
+  it('stays on the streaming answer when older history loads above it', () => {
+    // loadOlderHistory prepends entries the reader has never seen; they are
+    // the past, not new output.
+    const streaming = foldClaude(
+      { ...committedRuntime(), sessionStatus: 'running' },
+      proxyTextTurn('msg_now', 'Streaming now'),
+      T + 1_000,
+    )
+    const view = render(<ReaderView workspace={makeReaderWorkspace(streaming)} />)
+    expect(screen.getByText('Streaming now')).toBeTruthy()
+
+    const withOlderHistory: SessionRuntime = {
+      ...streaming,
+      entries: [
+        datedUserEntry('u0', T - 2_000, 'an older question'),
+        datedAssistantEntry('a0', 'msg_old', T - 1_900, 'Old answer'),
+        ...streaming.entries,
+      ],
+    }
+    view.rerender(<ReaderView workspace={makeReaderWorkspace(withOlderHistory)} />)
+
+    expect(screen.getByText('Streaming now')).toBeTruthy()
+    expect(pagerText()).toBe('3 / 3')
+  })
+
+  it('lands near where the reader was when the message they paged back to is trimmed away', () => {
+    // Review A final (T1): the selection compared against a reference list
+    // that stopped updating while the selection itself did not change, so the
+    // no-twin fallback measured "distance from the end" in a list ten answers
+    // out of date and threw the reader near the live end.
+    const answer = (i: number) => datedAssistantEntry(`a${i}`, `msg_${i}`, T + i * 100, `Answer ${i}`)
+    const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, k) => answer(from + k))
+    const first: SessionRuntime = {
+      ...emptyRuntime(),
+      entries: [datedUserEntry('u1', T, 'q'), ...range(1, 5)],
+      lastJsonlEntryAt: T + 500,
+    }
+    const view = render(<ReaderView workspace={makeReaderWorkspace(first)} />)
+    pressOptionArrow('ArrowUp')
+    pressOptionArrow('ArrowUp')
+    expect(screen.getByText('Answer 3')).toBeTruthy()
+
+    const grown: SessionRuntime = { ...first, entries: [...first.entries, ...range(6, 15)], lastJsonlEntryAt: T + 1_500 }
+    view.rerender(<ReaderView workspace={makeReaderWorkspace(grown)} />)
+    expect(pagerText()).toBe('3 / 15')
+
+    const trimmed: SessionRuntime = { ...grown, entries: [datedUserEntry('u1', T, 'q'), ...range(4, 15)] }
+    view.rerender(<ReaderView workspace={makeReaderWorkspace(trimmed)} />)
+
+    expect(screen.getByText('Answer 4')).toBeTruthy()
+    expect(pagerText()).toBe('1 / 12')
   })
 })

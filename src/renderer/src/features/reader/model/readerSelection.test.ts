@@ -3,11 +3,21 @@ import { describe, expect, it } from 'vitest'
 import type { ReaderMessage } from './readerMessages'
 import { nextReaderSelection } from './readerSelection'
 
-const msg = (id: string, text: string, sourceId: string | null = null, live = false): ReaderMessage => ({
+// `committed` defaults from the id convention the fixtures use ('entry:…' is a
+// committed transcript row, anything else a semantic page) so each case reads
+// like the feed item list it models; pass it explicitly to override.
+const msg = (
+  id: string,
+  text: string,
+  sourceId: string | null = null,
+  live = false,
+  committed = id.startsWith('entry:'),
+): ReaderMessage => ({
   id,
   text,
   live,
   sourceId,
+  committed,
 })
 
 describe('nextReaderSelection', () => {
@@ -57,6 +67,46 @@ describe('nextReaderSelection', () => {
       const before = [msg('entry:a1', 'one', 'm1'), msg('entry:b0', 'First live block', 'm')]
       const after = [msg('entry:a1', 'one', 'm1'), msg('sb:2', 'Second', 'm', true), msg('entry:b0', 'First live block', 'm')]
       expect(nextReaderSelection(before, 'entry:b0', after, true)).toEqual({ id: 'sb:2', moved: true })
+    })
+
+    it('follows the next live block when its predecessor commits in the same update', () => {
+      // Review B final: block 0's entry and block 2 share the departed page's
+      // turn id. Only the ENTRY is a copy of the departed page; the new
+      // semantic block is new output and must be followed.
+      const before = [msg('entry:a1', 'one', 'm1'), msg('sb:0', 'First live block', 'm', true)]
+      const after = [
+        msg('entry:a1', 'one', 'm1'),
+        msg('sb:2', 'Second live block', 'm', true, false),
+        msg('entry:b0', 'First live block', 'm', false, true),
+      ]
+      expect(nextReaderSelection(before, 'sb:0', after, true)).toEqual({ id: 'sb:2', moved: true })
+    })
+
+    it('stays on the live page while its committed copy is listed beside it', () => {
+      // Review A final: OpenCode publishes the committed message BEFORE it
+      // completes the turn (and Codex rollout / a Claude JSONL-before-proxy
+      // race do the same), so the entry and its live copy coexist for a
+      // render. The entry is not the agent's next page; following onto it reset
+      // the scroll, cleared stick-to-bottom and stopped following for good.
+      const before = [msg('semantic-text:oc1', 'OpenCode answer one', 'oc1', true)]
+      const after = [
+        msg('entry:oc1', 'OpenCode answer one', null),
+        msg('semantic-text:oc1', 'OpenCode answer one', 'oc1', true),
+      ]
+      expect(nextReaderSelection(before, 'semantic-text:oc1', after, true))
+        .toEqual({ id: 'semantic-text:oc1', moved: false })
+    })
+
+    it('does not treat older history loaded above the list as new output', () => {
+      // Review B final: loadOlderHistory prepends entries with ids the reader
+      // has never seen. They are the past, not the agent's next page.
+      const before = [msg('entry:a1', 'one', 'm1'), msg('sb:live', 'Streaming', 'm2', true)]
+      const after = [
+        msg('entry:old0', 'An older answer', 'm0', false, true),
+        msg('entry:a1', 'one', 'm1', false, true),
+        msg('sb:live', 'Streaming more', 'm2', true),
+      ]
+      expect(nextReaderSelection(before, 'sb:live', after, true)).toEqual({ id: 'sb:live', moved: false })
     })
 
     it('prefers a new page over the committed twin when both arrive together', () => {

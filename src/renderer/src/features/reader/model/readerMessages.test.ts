@@ -143,8 +143,8 @@ describe('readerMessagesFromFeedItems', () => {
     ])
 
     expect(readerMessages(runtime)).toEqual([
-      { id: 'entry:a1', text: 'Committed answer', live: false, sourceId: 'msg_1' },
-      { id: 'semantic-block:msg_live:2', text: 'Streaming answer so far', live: true, sourceId: 'msg_live' },
+      { id: 'entry:a1', text: 'Committed answer', live: false, sourceId: 'msg_1', committed: true },
+      { id: 'semantic-block:msg_live:2', text: 'Streaming answer so far', live: true, sourceId: 'msg_live', committed: false },
     ])
   })
 
@@ -188,7 +188,7 @@ describe('readerMessagesFromFeedItems', () => {
     expect(runtime.semantic.history).toHaveLength(1)
 
     expect(readerMessages(runtime)).toEqual([
-      { id: 'entry:a1', text: answer, live: false, sourceId: 'msg_final' },
+      { id: 'entry:a1', text: answer, live: false, sourceId: 'msg_final', committed: true },
     ])
   })
 })
@@ -209,7 +209,7 @@ describe('readerMessagesFromFeedItems across producers', () => {
       { type: 'turn_delta', turnId: 'turn-1', fullText: 'Codex answer', source: 'rollout' },
     ], { kind: 'codex', nowMs: T + 1_000 })
     expect(readerMessages(live, 'codex')).toEqual([
-      { id: 'semantic-text:turn-1', text: 'Codex answer', live: true, sourceId: 'turn-1' },
+      { id: 'semantic-text:turn-1', text: 'Codex answer', live: true, sourceId: 'turn-1', committed: false },
     ])
 
     const committed = fold({
@@ -224,7 +224,7 @@ describe('readerMessagesFromFeedItems across producers', () => {
     // differ, which is why the Reader selection rule keeps a normalised-text
     // fallback behind its source-identity match.
     expect(readerMessages(committed, 'codex')).toEqual([
-      { id: 'entry:codex-a1', text: 'Codex answer', live: false, sourceId: 'resp_1' },
+      { id: 'entry:codex-a1', text: 'Codex answer', live: false, sourceId: 'resp_1', committed: true },
     ])
   })
 
@@ -263,7 +263,7 @@ describe('readerMessagesFromFeedItems across producers', () => {
     ], { kind: 'codex' })
 
     expect(readerMessages(runtime, 'codex')).toEqual([
-      { id: 'semantic-block:resp_1:1', text: 'Looking at files', live: true, sourceId: 'resp_1' },
+      { id: 'semantic-block:resp_1:1', text: 'Looking at files', live: true, sourceId: 'resp_1', committed: false },
     ])
   })
 
@@ -275,7 +275,7 @@ describe('readerMessagesFromFeedItems across producers', () => {
     ], { kind: 'opencode' })
 
     expect(readerMessages(runtime, 'opencode')).toEqual([
-      { id: 'semantic-text:msg_oc', text: 'OpenCode answer', live: true, sourceId: 'msg_oc' },
+      { id: 'semantic-text:msg_oc', text: 'OpenCode answer', live: true, sourceId: 'msg_oc', committed: false },
     ])
   })
 
@@ -304,7 +304,7 @@ describe('readerMessagesFromFeedItems across producers', () => {
     expect(runtime.semantic.currentTurn?.turnId).toBe('msg_t')
 
     expect(readerMessages(runtime)).toEqual([
-      { id: 'semantic-block:msg_t:0', text: 'Running the tests now.', live: false, sourceId: 'msg_t' },
+      { id: 'semantic-block:msg_t:0', text: 'Running the tests now.', live: false, sourceId: 'msg_t', committed: false },
     ])
   })
 })

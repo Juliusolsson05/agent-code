@@ -29,9 +29,8 @@ import type { ReaderMessage } from '@renderer/features/reader/model/readerMessag
 //      "The last message in the list" is therefore not "the newest content",
 //      and a rule that follows the list's end pulls the reader backwards.
 //
-// So the rule reasons about what is genuinely NEW (ids that were not in the
-// previous list and are not the committed copy of something that just left it)
-// and follows only a reader who is actually following — the view's
+// So the rule follows only onto a genuinely new SEMANTIC page (see
+// `newPages`), and only for a reader who is actually following — the view's
 // stick-to-bottom state, which is set when the reader lands on a growing
 // message and cleared when they scroll away or land on a finished one. A reader
 // half-way down a finished plan keeps their place when the next turn starts.
@@ -75,23 +74,28 @@ export function nextReaderSelection(
 
   const previousIds = new Set(previous.map(message => message.id))
   const nextIds = new Set(next.map(message => message.id))
-  const departed = previous.filter(message => !nextIds.has(message.id))
-  // New content: not in the previous list, and not a committed copy of a page
-  // that just left it (same source message, or the same normalised text — the
-  // ledger's own handoff keys, see ownership.ts whole-turn and text rules).
-  const fresh = next.filter(message =>
-    !previousIds.has(message.id) &&
-    !departed.some(gone => sameSource(gone, message) || sameText(gone, message)),
-  )
-  // The most recently appended new page. Position among the fresh ones still
-  // tracks append order: the misordering above only moves committed copies,
-  // which are never fresh.
-  const newestFresh = fresh[fresh.length - 1]
+  // The agent's next page is a SEMANTIC page the reader has not seen. That is
+  // the whole definition, and it is deliberately narrow. Earlier rounds tried
+  // "any unseen id that is not a copy of something that just left", and every
+  // clause of it misfired on a real producer order:
+  //   - a committed row can be listed BESIDE its live copy (OpenCode and Codex
+  //     rollout publish it before completing the turn; a Claude JSONL line can
+  //     beat the proxy's block_completed) — following it reset the scroll and
+  //     cleared stick-to-bottom, so the reader stopped following for good;
+  //   - older history loaded above the list has unseen ids too;
+  //   - a next block and its predecessor's commit can arrive in one update and
+  //     share a turn id, so "same source as a departed page" hid the new block.
+  // Committed rows are never followed; the twin search below still carries a
+  // reader across a live page's handoff to its committed row.
+  const newPages = next.filter(message => !message.committed && !previousIds.has(message.id))
+  // Among new semantic pages list order is production order (the ledger's
+  // misordering, #868, only moves committed rows below the live turn).
+  const newestPage = newPages[newPages.length - 1]
   const followOnto = (current: string): ReaderSelection | null => {
-    if (!following || !newestFresh) return null
-    return newestFresh.id === current
+    if (!following || !newestPage) return null
+    return newestPage.id === current
       ? { id: current, moved: false }
-      : { id: newestFresh.id, moved: true }
+      : { id: newestPage.id, moved: true }
   }
 
   if (nextIds.has(previousId)) {
@@ -147,10 +151,20 @@ function findTwin(
   return best
 }
 
-function sameSource(a: ReaderMessage, b: ReaderMessage): boolean {
-  return a.sourceId !== null && a.sourceId === b.sourceId
+/** Whether two lists would read identically: same messages, same order, same
+ *  text and liveness. ReaderView uses it to tell a genuinely changed list from
+ *  a fresh array with the same content, which must not trigger a render-phase
+ *  state write (see the reconcile in ReaderView). */
+export function sameReaderList(a: readonly ReaderMessage[], b: readonly ReaderMessage[]): boolean {
+  if (a.length !== b.length) return false
+  for (let index = 0; index < a.length; index += 1) {
+    const left = a[index]!
+    const right = b[index]!
+    if (left.id !== right.id || left.text !== right.text || left.live !== right.live) return false
+  }
+  return true
 }
 
-function sameText(a: ReaderMessage, b: ReaderMessage): boolean {
-  return normalizeTextKey(a.text) === normalizeTextKey(b.text)
+function sameSource(a: ReaderMessage, b: ReaderMessage): boolean {
+  return a.sourceId !== null && a.sourceId === b.sourceId
 }
