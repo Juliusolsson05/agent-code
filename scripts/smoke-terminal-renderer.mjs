@@ -2,7 +2,14 @@
 // Real GPU coverage is intentionally opt-in: happy-dom cannot exercise texture
 // uploads, and a headless CI worker without a display must not silently bless it.
 // Run: node scripts/smoke-terminal-renderer.mjs [--control]
-// --control bypasses our wrapper and must expose the pinned addon's corruption.
+// Both modes must render CLEAN pixels (exit 0) and must exercise atlas merges.
+// --control bypasses our wrapper and loads the bare addon. History: on
+// @xterm/addon-webgl 0.19.0 the bare addon reproduced the atlas corruption
+// (#789; 33 frame mismatches on 2026-09-05) and the control run was expected to
+// FAIL. Since #871 pins the 0.20.0 beta line, which fixes it inside the addon
+// (xterm.js #5883), a corrupt control means the pinned addon regressed — so it
+// is a second oracle now, not a reproducer. Run both before soaking a new
+// xterm/addon-webgl pin; this is the only automated pixel-level check we have.
 import { mkdtemp, writeFile, copyFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -80,7 +87,10 @@ if (!process.versions.electron) {
       console.log(JSON.stringify(report))
       const corrupt = report.differences.length > 0 || report.referenceDifference > 0
       if (report.removedPages === 0) throw new Error('Workload did not exercise atlas merges')
-      if (control ? !corrupt : corrupt) throw new Error(control ? 'Control did not reproduce corruption' : 'Rendered pixels differ from unchanged buffer')
+      // Clean in BOTH modes (see header): the wrapper path is what ships, and the
+      // bare-addon control catches a pinned-addon regression the wrapper might
+      // one day mask again.
+      if (corrupt) throw new Error(control ? 'Bare addon (control) rendered corrupted pixels — the pinned addon regressed' : 'Rendered pixels differ from unchanged buffer')
       status = 0
     } catch (error) {
       console.error(error)
