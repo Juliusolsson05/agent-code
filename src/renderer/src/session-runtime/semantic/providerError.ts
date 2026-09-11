@@ -18,8 +18,13 @@ export function retainProviderError(
   const source = string('source')
   const observedAtMs = number('ts')
   const validObservedAt = observedAtMs !== undefined && observedAtMs >= 1_000_000_000_000 && observedAtMs <= 8_640_000_000_000_000 ? observedAtMs : undefined
+  // The sequence is local to one runtime too. Even an older producer without
+  // requestId must not reuse a previous run's React/Reader identity when reset
+  // and the first refusal of the new run arrive in one batched render.
   return {
-    id: requestId ? `request:${JSON.stringify([sessionRunId ?? validObservedAt ?? null, source, kind, requestId])}` : `error:${sequence}`,
+    id: requestId
+      ? `request:${JSON.stringify([sessionRunId ?? validObservedAt ?? null, source, kind, requestId])}`
+      : `error:${JSON.stringify([sessionRunId ?? null, source, kind, sequence])}`,
     kind, ts: validObservedAt ?? receivedAt,
     // A legacy record without producer time keeps a debug receipt time, but
     // cannot invent a chronological place in a historical replay.

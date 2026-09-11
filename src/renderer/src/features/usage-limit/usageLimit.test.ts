@@ -100,6 +100,9 @@ describe('request identity, ledger ownership, and replay', () => {
     expect(new Set(state.errors.map(error => error.id)).size).toBe(3)
     expect(state.errors[0]).toBe(first)
     const old = { type: 'api_error', errorType: 'usage_limit_reached', source: 'proxy', message: 'old recording' }
+    const priorRun = foldSemanticEvent(emptySemanticRuntime(), old, 'codex', 'run-a')
+    const replacement = foldSemanticEvent(emptySemanticRuntime(), old, 'codex', 'run-b')
+    expect(replacement.errors[0]?.id).not.toBe(priorRun.errors[0]?.id)
     state = foldSemanticEvent(state, old, 'codex')
     expect(state.errors.at(-1)?.observedAtMs).toBeUndefined()
     expect(state.errors.at(-1)?.id).toBeTruthy()
