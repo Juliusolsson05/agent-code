@@ -361,12 +361,20 @@ function GridRowView({
               {/* EVERY lane gets its own strip, the row's first lane included
                   (#850). The row's index fills whichever lane of the row is
                   FOCUSED (selectIntoRow above), so it is no single lane's
-                  selector. Before #687 the index always wrote lane 0, which is
-                  why the first lane used to skip the strip. Once the index
-                  began following focus, that lane was left without a one-click
-                  selector of its own: changing it took two gestures, click into
-                  the lane and then pick from the index, while every other lane
-                  took one.
+                  selector.
+
+                  History, because this rule has flipped twice. Before Grid
+                  Dispatch, one sidebar index always wrote lane 0, so lane 0
+                  correctly had no strip. #687 (524671b2) made the index
+                  per-row and follow focus, and gave every lane a strip for
+                  exactly that reason. #691 (1eb9a472, a lane-wake fix) then
+                  removed the first lane's strip as a side change, arguing that
+                  the index "IS its selector". That was already false, because
+                  the index followed focus, and it left the first lane as the
+                  only one that took two gestures to change (click into it, then
+                  pick from the index). Re-removing this strip is only right if
+                  the index stops following focus; the renderer test "fills the
+                  focused lane from a row's index…" fails first if it does.
 
                   Single-lane rows get a strip too, although their index can
                   only ever fill that one lane. A strip that appeared only when
