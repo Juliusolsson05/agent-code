@@ -4972,21 +4972,21 @@ git commit -m "feat(picker): list every conversation of the repository with filt
 - Consumes: `window.api.listConversations`, `ConversationRow` (Task 18).
 - Produces: `onResume(expandedPath, nativeId, provider)` unchanged for the caller; rows are `Conversation` and the list is the typed path's family (`scope: 'cwd'` when the provider toggle is set, since the path picker is about one directory).
 
-- [ ] **Step 1: Rewrite the resume-target coherence test against the new API**
+- [x] **Step 1: Rewrite the resume-target coherence test against the new API**
 
 In `PathPickerModal.renderer.test.tsx`, replace `installApi(listSessionsForCwd)` with `installApi(listConversations)`, replace `session(id, summary)` with a `Conversation` builder (copy `row()` from Task 18's test, minus `match`), and change every `listSessionsForCwd` assertion to `listConversations` receiving `{ cwd: '/repo', scope: 'cwd', providers: [provider], includeChildren: false, limit: 50 }`. Keep the test's contract sentence by sentence: an accepted Claude row must disappear before a pending Codex refresh resolves, and a failure must render the listing error rather than "no previous sessions".
 
 Run: `NODE_ENV=test npx vitest run --project renderer src/renderer/src/features/path-picker`
 Expected: FAIL (the modal still calls `listSessionsForCwd`).
 
-- [ ] **Step 2: Migrate the modal**
+- [x] **Step 2: Migrate the modal**
 
 - State: `const [sessions, setSessions] = useState<Conversation[]>([])`.
 - The debounced effect: replace `window.api.listSessionsForCwd(result.path, 20, provider)` with `(await window.api.listConversations({ cwd: result.path, scope: 'cwd', providers: [provider], includeChildren: false, limit: 50 })).rows`.
 - `resume(sessionId)` keeps its signature; it finds the row by `nativeId` and calls `onResume(listingTarget.cwd, row.nativeId, row.provider)`.
 - `ResumeSection` renders `ConversationRow` for each row (`selected={false}`, `index={i}`, `onSelect={() => void onResume(row.nativeId)}`, `onHover={() => {}}`) and deletes `ResumeRow`. Remove the `SessionInfo` and `relativeTime` imports that become unused.
 
-- [ ] **Step 3: Run the renderer tests and the web typecheck, then commit**
+- [x] **Step 3: Run the renderer tests and the web typecheck, then commit**
 
 Run: `NODE_ENV=test npx vitest run --project renderer src/renderer/src/features/path-picker && npx tsc -p tsconfig.web.json --pretty false`
 

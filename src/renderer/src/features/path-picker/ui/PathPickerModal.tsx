@@ -11,12 +11,11 @@ import {
   DialogTitle,
 } from '@renderer/components/ui/dialog'
 import { PathInput } from '@renderer/features/path-picker/ui/PathInput'
-import { relativeTime } from '@renderer/lib/relativeTime'
-// Canonical session listing shape — was a local duplicate of the preload
-// SessionInfo. The renderer tsconfig already includes `src/shared/types/**`,
-// so importing the shared type needs no preload reach-across. See
-// @shared/types/session.
-import type { SessionInfo } from '@shared/types/session'
+import { ConversationRow } from '@renderer/features/conversations/ui/ConversationRow'
+// Rows are the catalog's Conversation: the same shape the Conversations
+// picker renders, so a session looks the same in both places and the label,
+// provenance and ordering decisions live in main, not here.
+import type { Conversation } from '@shared/conversations/types'
 
 // PathPickerModal — modal that asks the user for a working directory
 // when they press ⌘T (or click the + button in the tab bar).
@@ -24,9 +23,9 @@ import type { SessionInfo } from '@shared/types/session'
 // Responsibilities:
 //   - Let the user type a path (with completion via PathInput).
 //   - Validate the path via window.api.expandCwd on submit/interaction.
-//   - Show the recent sessions recorded in that cwd (read from
-//     ~/.claude/projects/<sanitized-cwd>/) so the user can RESUME an
-//     existing session instead of starting fresh.
+//   - Show the conversations recorded in that cwd for the toggled provider
+//     (through the conversation catalog, scope 'cwd') so the user can
+//     RESUME an existing session instead of starting fresh.
 //   - On open: start a fresh session in the validated cwd.
 //   - On resume click: spawn with --resume <sessionId>.
 //
@@ -68,7 +67,7 @@ export function PathPickerModal({
   // changes and resolves to a valid directory — gives the user live
   // feedback as they type (e.g. "ah, no recorded sessions in this
   // folder yet, I'll start fresh").
-  const [sessions, setSessions] = useState<SessionInfo[]>([])
+  const [sessions, setSessions] = useState<Conversation[]>([])
   const [sessionsLoading, setSessionsLoading] = useState(false)
   const [listingError, setListingError] = useState<string | null>(null)
   const [listingTarget, setListingTarget] = useState<{
@@ -115,9 +114,9 @@ export function PathPickerModal({
   }, [open, defaultValue])
 
   // Refresh the sessions list whenever the typed path changes. Run
-  // expandCwd to both validate the path AND get the absolute form we
-  // use as the key for listSessionsForCwd. Debounced 150ms so we don't
-  // hammer main on every keystroke.
+  // expandCwd to both validate the path AND get the absolute form the
+  // catalog is asked about. Debounced 150ms so we don't hammer main on
+  // every keystroke.
   useEffect(() => {
     if (!open) return
     const v = ++reqVersion.current
@@ -156,9 +155,12 @@ export function PathPickerModal({
       setPendingCreatePath(null)
       setResolvedPath(result.path)
       try {
-        const list = await window.api.listSessionsForCwd(result.path, 20, provider)
+        // Scope 'cwd', not 'repository': this picker is about one typed
+        // directory, and a worktree's sessions listed under the main checkout
+        // would resume in the wrong tree.
+        const listing = await window.api.listConversations({ cwd: result.path, scope: 'cwd', providers: [provider], includeChildren: false, limit: 50 })
         if (v !== reqVersion.current) return
-        setSessions(list)
+        setSessions(listing.rows)
         setListingTarget({ cwd: result.path, provider })
         setListingError(null)
       } catch {
@@ -224,11 +226,12 @@ export function PathPickerModal({
     // Rows exist only with an accepted listing target. Keeping this explicit
     // makes a stale closure or synthetic click fail closed instead of pairing
     // a historical session id with today's provider toggle.
-    if (!listingTarget || !sessions.some(session => session.sessionId === sessionId)) return
+    const row = sessions.find(session => session.nativeId === sessionId)
+    if (!listingTarget || !row) return
     setBusy(true)
     setError(null)
     try {
-      await onResume(listingTarget.cwd, sessionId, listingTarget.provider)
+      await onResume(listingTarget.cwd, row.nativeId, row.provider)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -377,7 +380,7 @@ function ResumeSection({
   disabled,
 }: {
   resolvedPath: string | null
-  sessions: SessionInfo[]
+  sessions: Conversation[]
   loading: boolean
   onResume: (sessionId: string) => void | Promise<void>
   disabled: boolean
@@ -400,62 +403,19 @@ function ResumeSection({
           no previous sessions recorded in this directory
         </div>
       ) : (
-        <div className="flex-1 min-h-0 overflow-auto -mx-2">
-          {sessions.map(s => (
-            <ResumeRow
-              key={s.sessionId}
-              session={s}
-              disabled={disabled}
-              onClick={() => void onResume(s.sessionId)}
+        <div className={`flex-1 min-h-0 overflow-auto -mx-2 ${disabled ? 'pointer-events-none opacity-50' : ''}`} role="listbox" aria-label="Previous sessions">
+          {sessions.map((row, i) => (
+            <ConversationRow
+              key={`${row.provider}:${row.nativeId}`}
+              row={row}
+              index={i}
+              selected={false}
+              onHover={() => {}}
+              onSelect={() => void onResume(row.nativeId)}
             />
           ))}
         </div>
       )}
     </div>
-  )
-}
-
-function ResumeRow({
-  session,
-  disabled,
-  onClick,
-}: {
-  session: SessionInfo
-  disabled: boolean
-  onClick: () => void
-}) {
-  const age = relativeTime(session.lastModified)
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className="
-        group w-full
-        flex items-baseline gap-3
-        text-left
-        px-2 py-2
-        hover:bg-surface-hi
-        transition-colors duration-120
-        disabled:opacity-50
-        border-b border-border last:border-b-0
-      "
-    >
-      <div className="flex-1 min-w-0">
-        <div className="text-[12px] text-ink truncate">{session.summary}</div>
-        <div className="text-[10px] text-muted mt-0.5 flex items-center gap-2">
-          <span className="font-code">{session.sessionId.slice(0, 8)}</span>
-          {session.gitBranch && (
-            <>
-              <span className="opacity-40">·</span>
-              <span className="truncate max-w-[140px]">{session.gitBranch}</span>
-            </>
-          )}
-        </div>
-      </div>
-      <div className="flex-shrink-0 text-[10px] text-muted tabular-nums">
-        {age}
-      </div>
-    </button>
   )
 }
