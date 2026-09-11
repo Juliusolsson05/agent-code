@@ -487,6 +487,73 @@ describe('agent index navigation', () => {
     expect(result?.state.tabs[0].focusedSessionId).toBe('shell')
   })
 
+  it('moves a detached terminal into the focused Tiled Dispatch lane (#865)', () => {
+    // Mirrors "replaces only the focused Tiled Dispatch lane when the agent is
+    // absent" above, but with a terminal target: #865 widened the label/index
+    // guard from AgentProviderKind to SessionKind, and Tiled Dispatch lanes
+    // must accept a terminal exactly like an agent — there is nothing in the
+    // lane-selection path that is agent-specific.
+    const state = makeState()
+    state.sessions.a4 = { cwd: '/work/alpha/term', kind: 'terminal' }
+    state.detachedSessions.a4 = {
+      sessionId: 'a4',
+      surface: 'dispatch',
+      projectTabId: 'tab-a',
+      projectTabTitle: 'alpha',
+      projectTabIndex: 0,
+      detachedAt: 20,
+    }
+    state.dispatchMode = {
+      scope: 'global',
+      focusedSessionId: 'a1',
+      tiled: {
+        focusedLane: 1,
+        lanes: [
+          { selectedSessionId: 'a1' },
+          { selectedSessionId: 'b1' },
+        ],
+      },
+    }
+
+    const result = navigateToAgentIndexTarget(state, null, target(state, 'A4'))
+    expect(result?.kind).toBe('replace-focused-tiled-dispatch-lane')
+    expect(result?.state.dispatchMode?.tiled?.lanes).toEqual([
+      { selectedSessionId: 'a1' },
+      { selectedSessionId: 'a4' },
+    ])
+    expect(result?.state.dispatchMode?.tiled?.focusedLane).toBe(1)
+    expect(result?.requiresWake).toBe(true)
+  })
+
+  it('swaps a detached terminal into the focused grid pane (#865)', () => {
+    // Mirrors "swaps a detached target into the focused grid leaf without
+    // reshaping the grid" above, but with a terminal target: the swap logic
+    // only cares about SessionId/detached-record bookkeeping, never about
+    // provider kind, so a terminal must land exactly like an agent would.
+    const state = makeState()
+    state.sessions.a4 = { cwd: '/work/alpha/term', kind: 'terminal' }
+    state.detachedSessions.a4 = {
+      sessionId: 'a4',
+      surface: 'dispatch',
+      projectTabId: 'tab-a',
+      projectTabTitle: 'alpha',
+      projectTabIndex: 0,
+      detachedAt: 20,
+    }
+
+    const result = navigateToAgentIndexTarget(state, null, target(state, 'A4'))
+    expect(result?.kind).toBe('swap-detached-into-focused-grid-pane')
+    expect(result?.requiresWake).toBe(true)
+    expect(result?.state.tabs[0].root).toEqual({
+      type: 'split',
+      direction: 'vertical',
+      ratio: 0.37,
+      a: leaf('a4'),
+      b: leaf('a2'),
+    })
+    expect(result?.state.tabs[0].focusedSessionId).toBe('a4')
+  })
+
   it('follows visible Tiled Tabs when stale restored state also contains Dispatch', () => {
     const state = makeState()
     state.dispatchMode = {
