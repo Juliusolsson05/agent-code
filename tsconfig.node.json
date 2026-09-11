@@ -70,6 +70,9 @@
     // fails the normal gate instead of surfacing months later on regeneration.
     "scripts/conversation-corpus-policy.ts",
     "scripts/extract-conversation-corpus.mts",
+    // The corpus installer is imported by system tests under src/main; a
+    // composite project must list every module its files reach.
+    "testing/support/conversations/**/*",
     "packages/agent-transcript-parser/src/**/*",
     // Pull only the Node-safe dictation package surfaces into the app
     // typecheck. The package root also exports browser recording helpers, and
