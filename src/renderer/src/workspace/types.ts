@@ -530,10 +530,7 @@ export type WorkspaceState = {
    * session can never linger in the Pinned section as a phantom row
    * or in workspace.json as a stale entry.
    *
-   * Terminals are never pinned: they're per-tab infrastructure, not
-   * a unit the user "pins to favorites." setPinnedSessionIds rejects
-   * terminal session ids defensively, and the modal filters them out
-   * of its candidate row list.
+   * Any session kind can be pinned, terminals included (#865).
    */
   pinnedSessionIds: SessionId[]
   /**

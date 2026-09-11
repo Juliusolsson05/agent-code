@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  buildPinnedDispatchRows,
   dispatchSessionIdsForTab,
   resolveDispatchSpawnTarget,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
@@ -291,5 +292,18 @@ describe('nextTiledRowIndex', () => {
     const up = nextTiledRowIndex(-1, -1, 4)
     expect(up).toBe(0)
     expect(nextTiledRowIndex(up, -1, 4)).toBe(3)
+  })
+})
+
+describe('buildPinnedDispatchRows', () => {
+  it('pins a terminal like any other session (#865)', () => {
+    // Pins were agent-only since before terminals were Dispatch rows (#152
+    // deferred them "for v1"). Since #671 a shell is a full row, and a pinned
+    // dev-server shell is exactly the one-keystroke-away session pins exist for.
+    const state = makeState({ scope: 'global', focusedSessionId: 'a1' })
+    state.sessions.shell = { cwd: '/work/project-a', kind: 'terminal' }
+    state.tabs[0] = { ...state.tabs[0], root: { type: 'split', direction: 'vertical', ratio: 0.5, a: leaf('a1'), b: leaf('shell') } }
+    state.pinnedSessionIds = ['shell']
+    expect(buildPinnedDispatchRows(state).map(row => [row.sessionId, row.kind])).toEqual([['shell', 'terminal']])
   })
 })

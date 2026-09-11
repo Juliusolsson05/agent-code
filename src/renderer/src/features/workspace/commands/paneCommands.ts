@@ -186,9 +186,9 @@ export const paneCommands: CommandDef[] = [
     // guard — pins are a Dispatch-list concept and the registry gate
     // now hides this in the grid.
     surface: 'dispatch',
-    title: 'Pin Agents…',
-    description: '**What it does:** Opens the multi-select Pin modal to choose which **Dispatch** agents stay pinned at the top of the agent list.\n\n**Use when:** You want a few favorite agents to always be one keystroke away regardless of project or scope.\n\n**Notes:** Space toggles, Enter commits, Esc cancels. The order you Space through the rows is the order pins render in. Pins survive project↔global scope toggles.',
-    keywords: ['pin', 'pins', 'pinned', 'favorite', 'star', 'top', 'dispatch'],
+    title: 'Pin Sessions…',
+    description: '**What it does:** Opens the multi-select Pin modal to choose which **Dispatch** agents and terminals stay pinned at the top of the agent list.\n\n**Use when:** You want a few favorite agents to always be one keystroke away regardless of project or scope.\n\n**Notes:** Space toggles, Enter commits, Esc cancels. The order you Space through the rows is the order pins render in. Pins survive project↔global scope toggles.',
+    keywords: ['pin', 'pins', 'pinned', 'favorite', 'star', 'top', 'dispatch', 'terminal'],
     getState: ({ flags }) => panel(flags.pinAgentsOpen),
     run: ({ ui, flags }) => {
       if (flags.pinAgentsOpen) {
@@ -216,7 +216,7 @@ export const paneCommands: CommandDef[] = [
     // `dispatch` surface carries the mode gate; `when` keeps only the
     // data condition (the focused row is currently pinned).
     surface: 'dispatch',
-    title: 'Unpin Agent',
+    title: 'Unpin Session',
     description: '**What it does:** Removes the currently-focused **Dispatch** row from the Pinned section.\n\n**Use when:** You want to quickly drop a single pin without opening the Pin modal.\n\n**Notes:** Only appears when the focused dispatch row is currently pinned.',
     keywords: ['unpin', 'remove', 'pin', 'pinned', 'star'],
     when: ({ workspace }) => {
