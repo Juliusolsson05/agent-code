@@ -5009,7 +5009,7 @@ git commit -m "feat(picker): list the typed folder's conversations in the path p
 - Produces: `PromptList` props `{ prompts: Array<{ text: string; timestamp: number | null }>; selectedIndex?: number | null; onSelect?(index: number): void; emptyMessage: string }`; `formatPromptTime(timestamp: number | null): { relative: string; absolute: string | null }`.
 - `listRewindPrompts(request)`: when `request.limit` is undefined return every prompt newest first; a finite limit still caps.
 
-- [ ] **Step 1: Write the failing PromptList test**
+- [x] **Step 1: Write the failing PromptList test**
 
 ```tsx
 // src/renderer/src/features/conversations/ui/PromptList.renderer.test.tsx
@@ -5046,7 +5046,7 @@ describe('PromptList', () => {
 Run: `NODE_ENV=test npx vitest run --project renderer src/renderer/src/features/conversations/ui/PromptList.renderer.test.tsx`
 Expected: FAIL, module not found.
 
-- [ ] **Step 2: Write PromptList**
+- [x] **Step 2: Write PromptList**
 
 ```tsx
 // src/renderer/src/features/conversations/ui/PromptList.tsx
@@ -5098,7 +5098,7 @@ export function PromptList({ prompts, selectedIndex = null, onSelect, emptyMessa
 }
 ```
 
-- [ ] **Step 3: Rewrite ViewPromptsModal on the catalog**
+- [x] **Step 3: Rewrite ViewPromptsModal on the catalog**
 
 Replace the body of `ViewPromptsModal.tsx` so that:
 - it resolves `const providerSessionId = resumableProviderSessionId(meta)` (import from `@renderer/workspace/providerSessionIdentity`, the same helper `RewindToPromptModal` uses) and `const provider = meta.kind`;
@@ -5107,7 +5107,7 @@ Replace the body of `ViewPromptsModal.tsx` so that:
 - it renders `<PromptList prompts={prompts} emptyMessage="No visible user prompts found for this session." />` inside the existing scroller, and the footer reads `${prompts.length} prompts` or `Loading prompts…`;
 - `PROMPT_LIMIT`, `formatPromptTimestamp` and the older-history paging effect are deleted.
 
-- [ ] **Step 4: Uncap Rewind**
+- [x] **Step 4: Uncap Rewind**
 
 In `rewindSession.ts` replace the limit block with:
 
@@ -5122,12 +5122,12 @@ In `rewindSession.ts` replace the limit block with:
 
 Update the corresponding expectation in `rewindSession.test.ts` (an undefined limit returns all, reversed). In `RewindToPromptModal.tsx` delete `PROMPT_LIMIT`, call `listRewindPrompts` without `limit`, and render the rows through `PromptList` with `selectedIndex`/`onSelect` wired to the existing keyboard model (map `RewindPrompt.timestamp` strings with `Date.parse`, keeping `address` in a parallel array indexed the same way).
 
-- [ ] **Step 5: Run the affected tests and both typechecks**
+- [x] **Step 5: Run the affected tests and both typechecks**
 
 Run: `NODE_ENV=test npx vitest run --project renderer src/renderer/src/features/conversations src/renderer/src/features/workspace/ui && NODE_ENV=test npx vitest run --project unit src/main/providerSwitch/rewindSession.test.ts && npx tsc -p tsconfig.node.json --pretty false && npx tsc -p tsconfig.web.json --pretty false`
 Expected: PASS; both clean.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/renderer/src/features/conversations/ui/PromptList.tsx src/renderer/src/features/conversations/ui/PromptList.renderer.test.tsx src/renderer/src/features/workspace/ui/ViewPromptsModal.tsx src/renderer/src/features/workspace/ui/RewindToPromptModal.tsx src/main/providerSwitch/rewindSession.ts src/main/providerSwitch/rewindSession.test.ts
