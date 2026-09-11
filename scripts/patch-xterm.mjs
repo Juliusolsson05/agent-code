@@ -69,6 +69,22 @@
 // safer: every precondition below fails the install loudly rather than
 // shipping an unpatched terminal.
 //
+// WHERE IT RUNS (three places, each closing a different gap)
+//
+// 1. `postinstall` (package.json) — every `npm ci` / `npm install` /
+//    `npm rebuild`, in CI and release installs too, before anything bundles.
+// 2. `electron.vite.config.ts`, at config evaluation — every
+//    `electron-vite dev|build|preview`, including direct invocations. Covers
+//    installs that skipped lifecycle scripts (`--ignore-scripts`, an
+//    interrupted install), which would otherwise bundle the unpatched core
+//    with no error (PR #873 round-2 review, reproduced).
+// 3. The renderer's `optimizeDeps.exclude: ['@xterm/xterm']` in the same
+//    config — not a patch step but the reason 1 and 2 are sufficient in dev:
+//    Vite's pre-bundle cache is keyed on the lockfile, not file contents, so a
+//    copy pre-bundled before patching would otherwise be served forever.
+// The guard test (xtermResizeFlushPatch.test.ts) checks node_modules; the
+// packaged app bundles from node_modules after step 1 (CI/release) or step 2.
+//
 // WHEN THIS FAILS (by design) — READ BEFORE "FIXING" IT
 //
 // - Version mismatch: someone bumped @xterm/xterm. Do not just update the
