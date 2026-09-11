@@ -33,13 +33,17 @@ import { asRecord, parseJsonRecord } from '@shared/lib/asRecord.js'
 //     a given file mtime. Cache the (mtime, prompts) tuple per session
 //     so a second query doesn't re-read the file. Invalidate when
 //     stat().mtimeMs changes.
-//   - Filtering mirrors the in-conversation filter the Feed uses
-//     (`isConversationEntry` + role=user + not compact-summary + not
-//     meta + not `<`-prefixed synthetic). The shared lib at
-//     renderer/.../latestUserPrompts.ts already encapsulates this, but
-//     it assumes pre-parsed Entry[] — we operate on raw JSONL lines
-//     here and re-implement the predicates inline. Same shape, same
-//     filters.
+//   - Filtering follows the renderer's "what did the user type" rule
+//     (renderer/.../latestUserPrompts.ts: role=user, not compact-summary,
+//     not meta, then the provider's `isTypedUserPrompt` capability in
+//     registry.renderer.capabilities.ts). That code works on mapped
+//     Entry[]; this module reads raw JSONL lines, so it re-implements the
+//     per-provider rule inline: foldClaudeRecord mirrors Claude's
+//     (`permissionMode` stamp, no `<` scaffolding), foldCodexRecord
+//     mirrors Codex's (no `<` context blocks). Change a provider's rule in
+//     one place and the other must follow. OpenCode sessions live in a
+//     database, not a JSONL file, so they are not indexed here at all
+//     (#874's provider-native indexes cover that).
 
 export type SessionIndexPrompt = {
   text: string

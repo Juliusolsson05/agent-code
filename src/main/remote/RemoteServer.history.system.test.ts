@@ -236,7 +236,12 @@ describe('remote history backfill', () => {
       try { db.exec("DELETE FROM message WHERE id = 'msg_2'") } finally { db.close() }
       request('deleted', 'msg_2')
       await waitFor(frames, f => framesOfType(f, 'reply').length === 2)
-      expect(framesOfType(frames, 'reply')[1]).toMatchObject({ ok: true, result: { entries: [], hasMore: false } })
+      // Revert removed the cursor's row, not all older history. The provider
+      // resumes below its native id, and the byte budget keeps one row per page.
+      expect(framesOfType(frames, 'reply')[1]).toMatchObject({ ok: true, result: { entries: [{ info: { id: 'msg_1' } }], hasMore: true } })
+      request('oldest', 'msg_1')
+      await waitFor(frames, f => framesOfType(f, 'reply').length === 3)
+      expect(framesOfType(frames, 'reply')[2]).toMatchObject({ ok: true, result: { entries: [{ info: { id: 'msg_0' } }], hasMore: false } })
     } else if (scenario === 'oversized-newest') {
       request('oversize')
       await waitFor(frames, f => framesOfType(f, 'reply').length === 1)

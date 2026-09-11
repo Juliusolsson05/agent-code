@@ -21,6 +21,7 @@ import type { BuiltInMcpDomain, McpSessionScope } from '@mcp/shared/types.js'
 import type { SessionKind } from '@main/sessionManager.js'
 import {
   AGENT_PROVIDER_KINDS,
+  AGENT_PROVIDER_RUNTIMES,
   DEFAULT_PROVIDER,
   isAgentProviderKind,
 } from '@shared/types/providerKind.js'
@@ -652,9 +653,11 @@ function registerOrchestrationTools(
           'Creates a distinct Agent Code orchestration child agent in Dispatch, optionally bootstrapped with an initial prompt.',
           'Use this only when the user explicitly asks for delegated, parallel, or orchestrated agent work.',
           'The child currently starts from a clean provider conversation; include any necessary parent context directly in the prompt.',
+          'Choose providerRuntime: "terminal" when the owner or user wants the provider\'s native TUI in the pane; the provider must support that runtime. Omit providerRuntime for the default structured runtime.',
         ].join(' '),
       inputSchema: {
         kind: z.enum(AGENT_PROVIDER_KINDS).default(DEFAULT_PROVIDER),
+        providerRuntime: z.enum(AGENT_PROVIDER_RUNTIMES).optional(),
         prompt: z.string().optional(),
         cwd: z.string().optional(),
         title: z.string().optional(),
@@ -687,6 +690,7 @@ function registerOrchestrationTools(
       const agent = await bridge.createAgent({
         parentSessionId: scope.sessionId,
         kind: args.kind as OrchestrationAgentKind,
+        ...(args.providerRuntime ? { providerRuntime: args.providerRuntime } : {}),
         cwd: args.cwd,
         title: args.title,
         role: args.role,
