@@ -132,11 +132,13 @@ describe('OpencodeTerminalSession', () => {
     pty.emitData('\x1b[2JOpenCode')
     expect(output).toHaveBeenCalledWith('\x1b[2JOpenCode')
 
-    const delivery = session.deliverPromptText('one\ntwo')
-    expect(pty.write).not.toHaveBeenCalled()
+    const readiness = vi.fn()
+    session.on('input-readiness', readiness)
     await vi.advanceTimersByTimeAsync(250)
-    await delivery
-    expect(pty.write).toHaveBeenCalledWith('\x1b[200~one\ntwo\x1b[201~\r')
+    expect(readiness).toHaveBeenCalledWith({ ready: true, reason: 'ready' })
+    // UI readiness never writes a prompt; HTTP receipt is covered with the
+    // real replay server in the prompt system tests.
+    expect(pty.write).not.toHaveBeenCalled()
   })
 
   it('reports a disabled durable channel instead of failing the pane', async () => {
@@ -183,18 +185,10 @@ describe('OpencodeTerminalSession', () => {
     expect(pty.kill).not.toHaveBeenCalled()
   })
 
-  it('does not inject an orchestration prompt before the native TUI paints', async () => {
-    const pty = fakePty()
-    ptyState.spawn.mockReturnValue(pty)
+  it('refuses a prompt before a backend exists with the retry-safe marker', async () => {
     const { session } = create({ cwd: '/workspace' })
-    await session.start()
-
-    const delivery = session.deliverPromptText('too early')
-    const rejected = expect(delivery).rejects.toThrow('did not become ready')
-    await vi.advanceTimersByTimeAsync(15_000)
-
-    await rejected
-    expect(pty.write).not.toHaveBeenCalled()
+    await expect(session.deliverPromptText('too early')).rejects.toMatchObject({ code: 'opencode-terminal-not-ready' })
+    expect(ptyState.spawn).not.toHaveBeenCalled()
   })
 
   it('does not spawn a TUI when stop wins during empty-session import', async () => {

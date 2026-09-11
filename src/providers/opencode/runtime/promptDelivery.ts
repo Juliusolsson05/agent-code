@@ -1,15 +1,12 @@
-// OpenCode prompt delivery (#406 step 5). The structured runtime's prompt() is
-// an HTTP POST that the server accepts synchronously. The native-terminal
-// runtime implements the same narrow `deliverPromptText` capability with a
-// readiness gate followed by one atomic bracketed-paste+Enter PTY write. That
-// keeps the manager provider-oriented while allowing two transports behind the
-// same OpenCode identity; only the HTTP path can claim synchronous provider
-// acceptance, while the PTY path honestly reports transport acceptance.
+// Both OpenCode runtimes deliver prompts through their server's HTTP API.
+// The native terminal waits for its own server to connect and re-sync; it no
+// longer relies on composer readiness or PTY paste consumption (#877).
+// Keep `transport` acceptance: a successful HTTP submission acknowledges the
+// handoff, not a committed user message or completed turn in the transcript.
 //
 // WHY this ignores io.write entirely: runtime choice belongs to the concrete
-// AgentSession. Calling its capability avoids duplicating runtime inspection
-// inside the provider delivery policy. A throw becomes ok:false so the caller
-// retains the draft when neither HTTP nor PTY transport accepted it.
+// AgentSession. Its capability owns server selection and startup waiting,
+// while this policy maps acceptance/failure for callers retaining a draft.
 
 import type {
   PromptDeliveryIo,
@@ -53,7 +50,7 @@ export async function deliverOpencodePrompt(
     }
     return {
       ok: false,
-      // Both supported transports can throw after crossing a non-transactional
+      // Both runtimes can throw after crossing a non-transactional
       // boundary, so retrying could duplicate an already accepted prompt.
       stage: 'after-enter',
       code: 'transport-failed',

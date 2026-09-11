@@ -18,7 +18,6 @@ import type {
 } from '@shared/types/session.js'
 
 const TUI_READY_GRACE_MS = 250
-const PROMPT_READY_TIMEOUT_MS = 15_000
 
 class OpencodeTerminalNotReadyError extends Error {
   readonly code = 'opencode-terminal-not-ready'
@@ -56,7 +55,7 @@ export type OpencodeTerminalSessionDeps = {
  * - session identity: fresh panes pre-create a `ses_` id through the supported
  *   `opencode import` boundary, because the TUI never prints its id
  * - skills and scoped built-in MCP config through `OPENCODE_CONFIG_CONTENT`
- * - composer readiness (first paint + grace) and bracketed-paste delivery
+ * - UI input readiness (first paint + grace) and server-acknowledged prompts
  * - generation fencing against stop() racing start()
  */
 export interface OpencodeTerminalSession {
@@ -86,8 +85,6 @@ export class OpencodeTerminalSession extends EventEmitter implements AgentSessio
   private importAbort: AbortController | null = null
   private ptyDataSubscription: { dispose(): void } | null = null
   private providerSessionId: string | null = null
-  private readinessPromise: Promise<boolean> | null = null
-  private resolveReadiness: ((ready: boolean) => void) | null = null
   private readinessTimer: ReturnType<typeof setTimeout> | null = null
 
   private readonly cwd: string
@@ -121,9 +118,6 @@ export class OpencodeTerminalSession extends EventEmitter implements AgentSessio
     if (this.pty) throw new Error('OpencodeTerminalSession already started')
     const generation = ++this.startGeneration
     this.exited = false
-    this.readinessPromise = new Promise(resolve => {
-      this.resolveReadiness = resolve
-    })
     this.emit('input-readiness', { ready: false, reason: 'starting' })
 
     // Start from the complete inherited environment: a GUI-launched app still
@@ -201,12 +195,11 @@ export class OpencodeTerminalSession extends EventEmitter implements AgentSessio
         // event. First output proves the process reached its terminal UI; one
         // short fixed grace lets the initial layout and key handlers mount.
         // This is deliberately NOT a quiet-period debounce: animated spinners
-        // can redraw forever and would make an otherwise usable TUI permanently
-        // reject MCP/linked-agent prompt delivery.
+        // can redraw forever. This is only a UI hint: programmatic delivery
+        // waits for the server, never for this heuristic (#877).
         this.readinessTimer = setTimeout(() => {
           this.readinessTimer = null
           if (generation !== this.startGeneration || this.pty !== pty || this.exited) return
-          this.setReady(true)
           this.emit('input-readiness', { ready: true, reason: 'ready' })
         }, TUI_READY_GRACE_MS)
       }
@@ -257,6 +250,16 @@ export class OpencodeTerminalSession extends EventEmitter implements AgentSessio
     headless.on('semantic', event => this.emit('semantic-event', event))
     headless.on('entry', record => this.emit('jsonl-entry', record, headless.getTranscriptFile()))
     headless.on('conditions', snapshot => this.emit('conditions', snapshot))
+    headless.on('session-switched', ({ to }) => {
+      // The package reports the TUI's navigation, but this adapter and its
+      // durable reader remain bound to the launch identity (#894). Always
+      // name that bound identity: on a second switch the package's `from`
+      // names the last TUI screen, not the transcript this pane still reads.
+      const from = this.providerSessionId
+      this.emit('jsonl-error', Object.assign(new Error(
+        `OpenCode switched to session ${to} inside the TUI. This pane still follows ${from}. Resume ${to} from the Resume picker to follow it. (provider_session_switched)`,
+      ), { code: 'provider_session_switched' }))
+    })
     headless.on('transcript-error', error => {
       // Custom Error properties disappear across IPC; include the category in
       // the message too so the renderer/phone can retain the actual diagnosis.
@@ -278,7 +281,6 @@ export class OpencodeTerminalSession extends EventEmitter implements AgentSessio
       this.ptyDataSubscription?.dispose()
       this.ptyDataSubscription = null
       this.clearReadinessTimer()
-      this.setReady(false)
       this.emit('input-readiness', { ready: false, reason: 'provider-not-ready' })
       this.emit('process-state', { active: false })
       this.emit('exit', { exitCode, signal })
@@ -290,41 +292,29 @@ export class OpencodeTerminalSession extends EventEmitter implements AgentSessio
   }
 
   /**
-   * Keep provider-owned prompt delivery usable for orchestration callers.
-   *
-   * WHY bracketed paste is one PTY write: OpenCode's TUI can distinguish a
-   * pasted multi-line prompt from command keystrokes, and keeping paste plus
-   * Enter atomic prevents another renderer input from interleaving between the
-   * content and submission boundary. Unlike the HTTP runtime, acceptance here
-   * means transport write, not a durable transcript acknowledgement.
+   * WHY programmatic prompts use the TUI's server: first paint plus 250 ms
+   * proves neither that the composer mounted nor that it consumed a paste.
+   * A booting TUI silently dropped orchestration prompts after we reported
+   * success (#877). The package waits for connection/re-sync and submits via
+   * prompt_async; only its HTTP acknowledgement completes this capability.
+   * The input-readiness grace remains a UI hint and cannot gate delivery.
    */
   async deliverPromptText(text: string): Promise<void> {
-    const readiness = this.readinessPromise
-    if (!readiness) throw new Error('OpenCode terminal is not running')
-    const ready = await new Promise<boolean>(resolve => {
-      let timeout: ReturnType<typeof setTimeout> | null = null
-      let settled = false
-      const finish = (value: boolean) => {
-        if (settled) return
-        settled = true
-        if (timeout) clearTimeout(timeout)
-        resolve(value)
-      }
-      void readiness.then(finish)
-      timeout = setTimeout(() => finish(false), PROMPT_READY_TIMEOUT_MS)
-    })
-    const pty = this.pty
-    if (!ready || !pty || this.exited) {
-      // The provider delivery policy distinguishes this proven pre-write
-      // refusal from a PTY write that may have crossed the process boundary.
-      // Without a stable marker it must conservatively label every throw as
-      // do-not-retry, stranding orchestration on a harmless startup timeout.
-      throw new OpencodeTerminalNotReadyError(
-        'OpenCode terminal did not become ready for prompt input',
-      )
+    const headless = this.headless
+    if (!headless || this.exited) {
+      throw new OpencodeTerminalNotReadyError('OpenCode terminal is not running')
     }
-    if (this.headless) this.headless.pasteAndSubmit(text)
-    else pty.write(`\x1b[200~${text}\x1b[201~\r`)
+    const result = await headless.submitPrompt(text)
+    if (result.ok) return
+    if (result.reason === 'no-live-channel' || result.reason === 'unreachable') {
+      // These failures prove that submission never reached an accepting
+      // server. Preserve the existing pre-write marker so orchestration can
+      // retain the draft and retry this same pane once its server is ready.
+      throw new OpencodeTerminalNotReadyError(result.detail ?? `OpenCode server is not ready (${result.reason})`)
+    }
+    // A server refusal is not a startup delay. Leave it on the conservative
+    // non-retry path rather than repeatedly sending an invalid prompt.
+    throw new Error(result.detail ?? 'OpenCode server rejected the prompt')
   }
 
   /**
@@ -384,7 +374,6 @@ export class OpencodeTerminalSession extends EventEmitter implements AgentSessio
     this.ptyDataSubscription = null
     this.exited = true
     this.clearReadinessTimer()
-    this.setReady(false)
     const headless = this.headless
     this.headless = null
     const pty = this.pty
@@ -396,12 +385,6 @@ export class OpencodeTerminalSession extends EventEmitter implements AgentSessio
       // Idempotent teardown: node-pty throws when the process won the race and
       // exited between the registry lookup and this kill request.
     }
-  }
-
-  private setReady(ready: boolean): void {
-    const resolve = this.resolveReadiness
-    this.resolveReadiness = null
-    resolve?.(ready)
   }
 
   private clearReadinessTimer(): void {
