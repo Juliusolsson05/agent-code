@@ -47,6 +47,7 @@ export function createOpencodeHistorySource(database: OpencodeDatabase): Opencod
           return {
             entries: page.records as unknown as Record<string, unknown>[],
             hasMore: page.hasOlder,
+            ...(page.hasOlder && page.records[0] ? { oldestMarker: page.records[0].info.id } : {}),
             // Counts belong to initial hydration; older windows retain its total.
             ...(request.beforeMarker ? {} : { totalEntries: store.countMessages(request.providerSessionId) }),
           }

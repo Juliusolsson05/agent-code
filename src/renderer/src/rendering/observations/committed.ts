@@ -124,8 +124,9 @@ function textOf(e: RawCommittedEntry): string | null {
  * local-command scaffolding as NON-meta user rows — `<command-name>`,
  * `<local-command-stdout>`, `<environment_context>` — which rendered as if
  * the user typed them ("we are so often spitting out commands into the user
- * prompts"). The stronger predicate already existed in latestUserPrompts.ts
- * and sessionIndex.ts but feed visibility never adopted it; this collector
+ * prompts"). The stronger predicate already existed for prompt lists (now
+ * Claude's `isTypedUserPrompt` capability, which latestUserPrompts.ts routes
+ * through) and sessionIndex.ts, but feed visibility never adopted it; this collector
  * is now the single home. Claude-only: other providers don't emit
  * angle-bracket scaffolding as user rows, and a codex/opencode user message
  * legitimately starting with '<' (pasted HTML) must not be hidden.

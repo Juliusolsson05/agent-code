@@ -552,9 +552,15 @@ export function AgentTerminalLeaf({
   // `awaitingAssistant`, is set only by the composer. That means this header
   // lights on the first spinner frame or semantic turn, not on Enter.
   //
-  // Known gap: the OpenCode Terminal runtime emits no activity at all (only
-  // `process-state {active:false}`), so its header stays unlit (#857). That
-  // is a missing provider signal, not something this surface can derive.
+  // OpenCode Terminal lights it the same way, from a different source: it has
+  // no spinner detector, so `process-state` and the semantic turn come from
+  // the TUI's own server (busy/idle over `/event`) through
+  // opencode-terminal-headless (#864). Before that package it emitted only
+  // `process-state {active:false}` and this header never lit (#857). If it
+  // stops lighting again, look for a lost live channel (`live-state`
+  // diagnostics) before suspecting this surface: nothing here is runtime
+  // specific. opencodeTerminalRuntime.renderer.test.tsx replays a recorded
+  // TUI turn through this exact `paneHeaderStatusLit` rule.
   const isSessionLive = runtime.sessionStatus === 'running'
   // Uses PaneHeader's own rule instead of an inline `&&`, so the slot colors
   // below can never disagree with the fill they sit on.

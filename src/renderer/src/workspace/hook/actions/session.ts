@@ -70,9 +70,10 @@ import type { WakeCaller } from '@shared/lifecycle/events'
 // replaceSession     — kill current focused session + spawn a new one in
 //                      the same tile-tree slot. Used by resume picker and
 //                      provider switch.
-// reloadAgentSessions — recreate every Claude/Codex session with fresh
-//                       dangerous-mode settings. Remaps panes + buried
-//                       records onto the new ids.
+// reloadAgentSessions — recreate every live agent session (any provider,
+//                       either runtime) with fresh dangerous-mode settings.
+//                       Remaps panes + buried records onto the new ids and
+//                       reloads each durable session's history.
 // -----------------------------------------------------------------------------
 
 export type SessionActions = {
@@ -270,9 +271,12 @@ function softReloadRuntime(current: SessionRuntime, hasProviderSession: boolean)
     phaseChangedAt: current.phaseChangedAt,
     submittedAt: current.submittedAt,
     hasOlderHistory: true,
-    transcriptStatus: 'loading',
+    // A soft reload keeps the same backend. Rebuilding the view cannot
+    // restart a stopped channel or undo navigation inside the provider TUI.
+    transcriptChannelError: current.transcriptChannelError,
+    transcriptStatus: current.transcriptChannelError ? 'error' : 'loading',
     transcriptStatusChangedAt: Date.now(),
-    transcriptError: null,
+    transcriptError: current.transcriptChannelError ?? null,
   }
 }
 

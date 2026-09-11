@@ -100,10 +100,21 @@ export function mapOpencodeMessageToFeedEntries(
       // `synthetic` and `ignored` text is OpenCode's own insertion into a
       // message (plan-mode instructions, "Summarize the task tool output
       // above…", MCP resource notices), not words the user or the model
-      // wrote. OpenCode's TUI hides it everywhere it shows a conversation
-      // (vendor/in_progress/opencode/.../cli/cmd/tui/util/transcript.ts);
-      // showing it here made those instructions look like user prompts in
-      // the feed, View Prompts and Dispatch titles.
+      // wrote. OpenCode's TUI hides it wherever it shows a conversation:
+      // the visible-message filter keeps only
+      // `part.type === "text" && !part.synthetic && !part.ignored`
+      // (sst/opencode@v1.18.30
+      // packages/opencode/src/cli/cmd/tui/routes/session/index.tsx), and
+      // the transcript export skips synthetic text
+      // (sst/opencode@v1.18.30 packages/opencode/src/cli/cmd/tui/util/transcript.ts).
+      // Both filters were read in the vendored 1.14.39 source and confirmed
+      // present in the shipped 1.18.30 binary. Showing this text made those
+      // instructions look like user prompts in the feed, View Prompts and
+      // Dispatch titles.
+      //
+      // Only text parts are filtered. `synthetic` on any other part kind is
+      // not a flag OpenCode writes (it is set on user text parts only), so a
+      // tool or reasoning part keeps its row whatever it carries.
       if (part.synthetic === true || part.ignored === true) continue
       const text = str(part.text) ?? str(part.content)
       if (text) messageContent.push({ type: 'text', text })
@@ -227,6 +238,23 @@ function str(value: unknown): string | undefined {
 
 function num(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+/**
+ * Is this text-bearing OpenCode user row a prompt the user typed? Always.
+ *
+ * OpenCode has neither Claude's `permissionMode` stamp nor Codex's
+ * `<`-prefixed context blocks. Its own insertions into a user message are
+ * `synthetic`/`ignored` text parts, which `mapOpencodeMessageToFeedEntries`
+ * already drops (an all-synthetic message maps to no entry at all), and a
+ * tool result is a separate row with no text block. So every text-bearing
+ * user row that survives the mapper is typed input, including one that
+ * starts with '<' (pasted HTML or JSX). The optimistic echo row the composer
+ * seeds is also what the user typed, and is replaced when the committed row
+ * lands.
+ */
+export function isOpencodeTypedUserPrompt(): boolean {
+  return true
 }
 
 export function extractOpencodeProviderSessionId(

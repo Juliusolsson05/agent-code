@@ -89,16 +89,41 @@ type HistoryPlacement = { fresh: Entry } | { anchor: string }
  * permanent. Anchoring each new entry just before the next entry the pane
  * already holds places it where the durable order says it belongs.
  *
- * When the chunk shares no entry with the pane, or all its new entries
- * precede the first shared one, the result is exactly the old prepend.
- * Existing entries never move relative to each other.
+ * When all the chunk's new entries precede the first shared one, the result is
+ * exactly the old prepend. Existing entries never move relative to each other.
+ *
+ * A chunk that shares NO entry with the pane has no anchor to go by, and the
+ * stopped-reader case above produces exactly that once the database has grown
+ * by more than one chunk (`limit`, 120) since the pane's last live entry: the
+ * newest-N chunk no longer reaches back to anything the pane holds. Prepending
+ * it put the newest turns ABOVE the pane's older ones, permanently (their
+ * uuids are then seen), and everything that reads the tail (Agent
+ * Management's activity state, Dispatch titles, Copy Last Response) read an
+ * old turn as the latest. So with no anchor, timestamps decide: a chunk whose
+ * first entry is strictly newer than the pane's last goes AFTER the window.
+ * Anything else (older, equal, or undated on either side) keeps the prepend,
+ * which is right for every provider whose live stream is ahead of its
+ * durable read (Claude and Codex resume). Appending leaves an unloaded gap
+ * between the two when the chunk did not reach back far enough; that is
+ * missing rows in order, not rows out of order, and the caller keeps the
+ * pagination cursor on the window's oldest entry rather than the chunk's.
  */
-function placeHistoryEntries(placement: HistoryPlacement[], existing: Entry[]): Entry[] {
+function placeHistoryEntries(
+  placement: HistoryPlacement[],
+  existing: Entry[],
+): { entries: Entry[]; appendedAfterWindow: boolean } {
   const position = new Map<string, number>()
   existing.forEach((entry, index) => {
     const uuid = (entry as { uuid?: string }).uuid
     if (uuid && !position.has(uuid)) position.set(uuid, index)
   })
+  const anchored = placement.some(item => 'anchor' in item && position.has(item.anchor))
+  if (!anchored && existing.length > 0) {
+    const fresh = placement.flatMap(item => ('fresh' in item ? [item.fresh] : []))
+    if (isStrictlyNewer(fresh, existing)) {
+      return { entries: [...existing, ...fresh], appendedAfterWindow: true }
+    }
+  }
   const merged: Entry[] = []
   let next = 0
   for (const item of placement) {
@@ -112,7 +137,30 @@ function placeHistoryEntries(placement: HistoryPlacement[], existing: Entry[]): 
     while (next <= index) merged.push(existing[next++]!)
   }
   while (next < existing.length) merged.push(existing[next++]!)
-  return merged
+  return { entries: merged, appendedAfterWindow: false }
+}
+
+function entryTime(entry: Entry | undefined): number | null {
+  const ts = (entry as { timestamp?: unknown } | undefined)?.timestamp
+  if (typeof ts !== 'string') return null
+  const ms = Date.parse(ts)
+  return Number.isFinite(ms) ? ms : null
+}
+
+// The chunk's oldest dated entry against the window's newest dated entry.
+// Both sides are in their own chronological order (the chunk in durable
+// order, the window as displayed), so comparing the two ends is enough.
+function isStrictlyNewer(chunk: readonly Entry[], window: readonly Entry[]): boolean {
+  let chunkFirst: number | null = null
+  for (const entry of chunk) {
+    chunkFirst = entryTime(entry)
+    if (chunkFirst !== null) break
+  }
+  let windowLast: number | null = null
+  for (let index = window.length - 1; index >= 0 && windowLast === null; index -= 1) {
+    windowLast = entryTime(window[index])
+  }
+  return chunkFirst !== null && windowLast !== null && chunkFirst > windowLast
 }
 
 function seedSeenFromRuntime(runtime: SessionRuntime, seen: Set<string>): void {
@@ -166,10 +214,10 @@ export async function loadInitialHistoryForSession({
         ...prev,
         [sessionId]: {
           ...current,
-          transcriptStatus: isProvisional ? 'disconnected' : 'ready',
-          transcriptError: isProvisional
+          transcriptStatus: current.transcriptChannelError ? 'error' : isProvisional ? 'disconnected' : 'ready',
+          transcriptError: current.transcriptChannelError ?? (isProvisional
             ? 'Provider session was observed in proxy traffic, but no committed transcript is known yet.'
-            : null,
+            : null),
         },
       }
     })
@@ -215,9 +263,9 @@ export async function loadInitialHistoryForSession({
       ...prev,
       [sessionId]: {
         ...current,
-        transcriptStatus: 'loading',
+        transcriptStatus: current.transcriptChannelError ? 'error' : 'loading',
         transcriptStatusChangedAt: Date.now(),
-        transcriptError: null,
+        transcriptError: current.transcriptChannelError ?? null,
       },
     }
   })
@@ -357,12 +405,20 @@ export async function loadInitialHistoryForSession({
         }
       }
 
+      const placed = initialEntries.length > 0
+        ? placeHistoryEntries(placement, current.entries)
+        : { entries: current.entries, appendedAfterWindow: false }
+      // When the chunk went AFTER the window (see placeHistoryEntries), the
+      // oldest entry the pane holds is still the window's first, so older
+      // pages must keep starting from the window's cursor. Moving it to the
+      // chunk's head would page the gap in ABOVE the window: the misorder the
+      // append exists to prevent.
+      const keepWindowCursor = placed.appendedAfterWindow
+
       const nextRuntime = appendFeedDebugLog(
         {
           ...current,
-          entries: initialEntries.length > 0
-            ? placeHistoryEntries(placement, current.entries)
-            : current.entries,
+          entries: placed.entries,
           // Seed totalEntries from the loader. The loader counts every
           // usable JSONL record at read time (parsed.entries.length
           // before the tail slice), so this is the honest denominator
@@ -371,14 +427,19 @@ export async function loadInitialHistoryForSession({
           // didn't supply a count — e.g. when initial-history was
           // called for a session with no on-disk transcript yet.
           totalEntries: resolvedTotalEntries,
-          historyOldestMarker: initialOldestMarker ?? current.historyOldestMarker,
-          historyOldestOffset: initialOldestMarker !== null
+          historyOldestMarker: keepWindowCursor
+            ? current.historyOldestMarker
+            : initialOldestMarker ?? current.historyOldestMarker,
+          historyOldestOffset: !keepWindowCursor && initialOldestMarker !== null
             ? initialOldestOffset
             : current.historyOldestOffset,
           hasOlderHistory: chunk.hasMore,
-          transcriptStatus: 'ready',
+          // The projection can remain readable after the event reader stops
+          // for good. Snapshot success repairs a history failure only; it
+          // cannot certify ongoing observation or follow TUI navigation.
+          transcriptStatus: current.transcriptChannelError ? 'error' : 'ready',
           transcriptStatusChangedAt: Date.now(),
-          transcriptError: null,
+          transcriptError: current.transcriptChannelError ?? null,
           workActivity,
           workContext,
           toolUseIndex,

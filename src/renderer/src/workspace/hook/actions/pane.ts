@@ -1,4 +1,5 @@
 import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
+import { AGENT_PROVIDER_CHOICES } from '@renderer/workspace/providerChoices'
 import {
   expandSessionCloseTargets,
   expandTabCloseTargets,
@@ -867,6 +868,7 @@ export function usePaneActions(
     async (params: {
       parentId: SessionId
       kind: OrchestrationAgentKind
+      providerRuntime?: AgentProviderRuntime
       cwd?: string
       title?: string
       role?: string
@@ -874,6 +876,13 @@ export function usePaneActions(
       builtInMcpDomains?: BuiltInMcpDomain[]
       inheritParentContext?: boolean
     }): Promise<OrchestrationAgentRecord> => {
+      // WHY also check the renderer launch choices: this action can be called
+      // without the MCP bridge. Reuse the picker's supported combinations so
+      // direct calls cannot silently launch a structured child after the user
+      // requested a TUI. Main separately validates the actual factory.
+      if (!AGENT_PROVIDER_CHOICES.some(choice => choice.kind === params.kind && choice.providerRuntime === params.providerRuntime)) {
+        throw new Error(`${params.kind} does not support the requested ${params.providerRuntime ?? 'structured'} runtime`)
+      }
       const snapshot = refs.stateRef.current
       const parentMeta = snapshot.sessions[params.parentId]
       if (!parentMeta) {
@@ -934,6 +943,7 @@ export function usePaneActions(
 
       const sessionId = await sessionActions.spawn(cwd, {
         kind: params.kind,
+        ...(params.providerRuntime ? { providerRuntime: params.providerRuntime } : {}),
         resumeSessionId,
         builtInMcpDomains: params.builtInMcpDomains,
       })
