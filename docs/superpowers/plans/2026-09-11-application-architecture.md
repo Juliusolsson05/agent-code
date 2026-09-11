@@ -6,6 +6,12 @@ Progress: source investigation and the full application reference are complete. 
 
 Rendering adjustment: Mermaid sequence-label semicolons caused syntax errors and were repaired. Local parsing/rendering then passed, but GitHub still displayed `svg element not in render tree` and layout failures for valid diagrams. Keep the Mermaid source in the document as plain-text disclosures and commit generated SVG previews, with a pinned reproducible render/check script. This adds documentation assets/tooling without changing application behavior.
 
+Opening-copy review: the user narrowed their feedback to the passage below the
+opening diagram. Explain that map through a familiar action (sending a prompt),
+define main/preload when introduced, and explain the separate storage areas.
+Move documentation-format and notation details to Appendix B. Keep the existing
+architecture sections and diagrams; this is a focused editorial revision.
+
 ## Outcome
 
 Write a root `ARCHITECTURE.md` describing the implemented application architecture at
@@ -54,3 +60,7 @@ reference requested explicitly by the user, not a proposal to redesign the app.
   Issue #898 records the evidence and impact; this PR documents the limitation
   without changing runtime behavior. PR #897 also references documentation
   issue #100.
+- Opening-copy revision: Markdown links/anchors and `git diff --check` pass.
+  Compared all 42 diagram sources and Contents through Appendix A against the
+  preceding commit; those portions are unchanged. No diagram regeneration or
+  application runtime tests are needed for this prose-only revision.

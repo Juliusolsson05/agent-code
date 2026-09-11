@@ -70,15 +70,17 @@ flowchart TB
 
 </details>
 
-Read from the desktop through the typed preload bridge into main-owned services, native execution and storage. Blue boxes are interfaces, green boxes are main services, purple boxes execute native work, gold boxes hold local data, and coral boxes are external services. Main owns the shared services and routes observations to the appropriate windows. Storage areas have independent owners and recovery guarantees. This orientation map combines several levels of detail; the C4 and UML views below separate system boundaries and interaction sequences. Build and release infrastructure is covered in section 7.
+Agent Code brings Claude Code, Codex and OpenCode into one desktop workspace. The providers' own software handles model requests, tool execution, sign-in and conversation history. Agent Code manages the workspace around them: starting agents, delivering prompts, showing their progress, and keeping editors and terminals alongside the conversation.
 
-This reference follows the [arc42 architecture documentation structure](https://arc42.org/overview/), using the [C4 model](https://c4model.com/diagrams) to distinguish system, container and component views. UML sequence, state and class diagrams describe behavior and selected code relationships.
+To follow the diagram, start with sending a prompt. The desktop window passes your request to Electron's **main process**, the shared part of the application that manages agents and accesses files. The **preload bridge** is the set of calls the window can use to reach it. Main forwards the prompt to the selected agent and sends progress back to the window that owns the session.
 
-It describes the implemented system: how Agent Code starts, owns processes, moves observations into a conversation view, persists state, and exposes control to agents and other clients. It describes the application at source revision `6a19e4ee`, inspected on 2026-09-11. It is not a proposal for a future architecture or a promise that every provider supports the same behavior.
+The lower part of the map shows where work runs and where data lives. Agents, shells and helper programs run in separate processes. Agent Code saves workspace layouts and settings; each provider keeps its own conversation history; your project files stay in their working directories. Restoring a window's layout and resuming an agent's conversation therefore involve different parts of the system.
 
-The central architectural decision is to keep interactive agents inside their native provider runtimes. Agent Code owns the surrounding desktop workspace, process lifecycle, observation, input delivery, and presentation. Native providers own model execution, their authentication, tools, and native conversation history. The workflow subsystem is a separate execution path: it runs durable workflow jobs through the Codex SDK and isolated worker processes.
+Remote clients connect to a limited set of app features. Automated workflows use a separate execution path: they run tasks through the Codex SDK and record progress so interrupted runs can be inspected and, when safe, resumed.
 
-Application source links are relative to this file; package source links use the inspected submodule revisions. They point to implementation owners, not necessarily to a public API. UML class diagrams show selected relationships, not every field. Sequence diagrams show important admission and failure boundaries. State diagrams marked *conceptual* combine several actual state fields for explanation. Component and deployment views use Mermaid flowcharts because Mermaid does not implement UML component or deployment notation. Each diagram has a versioned SVG preview and its editable Mermaid source in a disclosure below it. The previews avoid GitHub's runtime rendering failures on this long document; the source remains readable in this file.
+*Map colors: blue = interfaces; green = shared app services; purple = running tools; gold = local data; coral = external services.*
+
+This reference describes the implementation at source revision `6a19e4ee`, inspected on 2026-09-11.
 
 ## Contents
 
@@ -2529,6 +2531,12 @@ Sources: [Vitest configuration](vitest.config.ts), [live configuration](vitest.l
 | Crash has incomplete evidence | [run journal](src/main/incident/AppRunJournal.ts), [recorder](src/main/recording/SessionRecorder.ts), [retention](src/main/storage/debugRetention.ts) | Completeness counters, protected active artifacts and bounded diagnostic overhead |
 
 ## Appendix B: Maintaining this reference
+
+The document follows the [arc42 architecture documentation structure](https://arc42.org/overview/). Its [C4 views](https://c4model.com/diagrams) show the system's surroundings, its applications and data stores, and the components within them. The opening map combines these levels to give a first overview. The sections that follow examine them separately.
+
+UML class diagrams show selected code relationships; sequence diagrams show how an operation passes between components; state diagrams show how a session or operation changes over time. Diagrams marked *conceptual* combine implementation details to explain a behavior. Component and deployment diagrams use Mermaid flowcharts because Mermaid does not support those UML diagram types. Each diagram has a committed SVG preview and editable Mermaid source below it. The SVGs avoid GitHub's runtime rendering failures on this long document.
+
+Source links lead to the code responsible for each behavior. Application links are relative to this file; package links point to the inspected submodule commits.
 
 Update this file when a boundary, ownership rule, durable format, execution path or supported provider capability changes. Routine symbol moves can update source links; tuning a constant can update its cited table. A behavioral change should update the corresponding prose and diagram together.
 
