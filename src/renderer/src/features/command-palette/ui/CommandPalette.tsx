@@ -317,6 +317,7 @@ function OpenCommandPalette({
   const openTiledDispatchPrompt = useAppStore(state => state.openTiledDispatchPrompt)
   const openDispatchAttach = useAppStore(state => state.openDispatchAttach)
   const openLinkedAgent = useAppStore(state => state.openLinkedAgent)
+  const openNewAgentIn = useAppStore(state => state.openNewAgentIn)
   const openPinAgents = useAppStore(state => state.openPinAgents)
   const toggleCaffeinate = useCaffeinateStore(state => state.toggle)
   const caffeinateStatus = useCaffeinateStore(state => state.status)
@@ -659,6 +660,7 @@ function OpenCommandPalette({
         openTiledDispatchPrompt,
         openDispatchAttach,
         openLinkedAgent,
+        openNewAgentIn,
         openPinAgents,
         setAggressiveDebugPersistence,
         enterResumeMode,
@@ -768,6 +770,7 @@ function OpenCommandPalette({
       openTiledDispatchPrompt,
       openDispatchAttach,
       openLinkedAgent,
+      openNewAgentIn,
       openPinAgents,
       setAggressiveDebugPersistence,
       enterResumeMode,

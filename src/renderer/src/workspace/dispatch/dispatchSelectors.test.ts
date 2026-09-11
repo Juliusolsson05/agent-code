@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   dispatchSessionIdsForTab,
+  focusedLaneBoundProjectTabIds,
   resolveDispatchSpawnTarget,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
 import { resolveDispatchAttachTarget } from '@renderer/workspace/dispatch/dispatchTarget'
@@ -110,6 +111,43 @@ describe('resolveDispatchSpawnTarget with a detached focused lane', () => {
       cwdSessionId: 'b2',
       laneIndex: 1,
     })
+  })
+})
+
+// Grid Dispatch row bindings (#681). Two consumers must agree on "which
+// projects may this lane hold": the spawn resolver (where plain New Agent…
+// lands) and New Agent In…'s project list (#852). Both read the SAME selector,
+// pinned here. The resolver's bound-row RULES (binding over the active tab,
+// active tab preferred among several bound projects, first bound otherwise)
+// are covered on the real persisted fixture in rowScopedRows.test.ts, which
+// guarded the selector extraction — they are deliberately not restated here.
+describe('focusedLaneBoundProjectTabIds', () => {
+  it('returns the binding of the row that owns the focused lane', () => {
+    const state = makeState({
+      scope: 'global',
+      focusedSessionId: 'a1',
+      tiled: {
+        focusedLane: 1,
+        lanes: [{ selectedSessionId: 'a1' }, {}],
+        rows: [{ length: 1 }, { length: 1, projectTabIds: ['tabB'] }],
+      },
+    })
+    expect(focusedLaneBoundProjectTabIds(state)).toEqual(['tabB'])
+  })
+
+  it('returns nothing for an unbound row, classic Dispatch, or no Dispatch at all', () => {
+    const unbound = makeState({
+      scope: 'global',
+      focusedSessionId: 'a1',
+      tiled: {
+        focusedLane: 0,
+        lanes: [{ selectedSessionId: 'a1' }, {}],
+        rows: [{ length: 1 }, { length: 1, projectTabIds: ['tabB'] }],
+      },
+    })
+    expect(focusedLaneBoundProjectTabIds(unbound)).toEqual([])
+    expect(focusedLaneBoundProjectTabIds(makeState({ scope: 'global', focusedSessionId: 'a1' }))).toEqual([])
+    expect(focusedLaneBoundProjectTabIds(makeState(null))).toEqual([])
   })
 })
 
