@@ -2515,7 +2515,7 @@ export function useIpcSubscriptions(
           //      Evidence: scripts/diag-stuck-running.mjs against
           //      production debug bundles, Claude case
           //      `sessionStatusSource: "submit"` with
-          //      `submittedAt: null` (setStreamingBaseline never
+          //      `submittedAt: null` (beginOptimisticSubmit never
           //      ran — only the queue-op path could have set the
           //      flag).
           //

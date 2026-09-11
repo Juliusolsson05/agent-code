@@ -271,8 +271,8 @@ export function useWorkspace(
     draftChanges.bump,
   )
   const {
-    setStreamingBaseline,
-    unwindStreamingBaseline,
+    beginOptimisticSubmit,
+    unwindOptimisticSubmit,
     clearPendingRewindUndo,
     addOptimisticCodexUserEntry,
     removeOptimisticCodexUserEntry,
@@ -973,8 +973,8 @@ export function useWorkspace(
     resizeFocusedDirectional,
     setSplitRatio,
     setSplitRatioInTab,
-    setStreamingBaseline,
-    unwindStreamingBaseline,
+    beginOptimisticSubmit,
+    unwindOptimisticSubmit,
     clearPendingRewindUndo,
     acknowledgeSession,
     appendFeedDebug,

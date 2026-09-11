@@ -129,7 +129,15 @@ export function isKnownBlockKind(kind: string): boolean {
   )
 }
 
-function blockContentKind(b: SemanticBlockLike): RenderCandidate['contentKind'] {
+/** Classify one semantic block the way the ledger does.
+ *
+ *  WHY exported: Reader Mode projects the ledger's feed items down to assistant
+ *  prose and must decide which semantic blocks ARE prose. A second, local kind
+ *  list in Reader would drift from this one the first time a provider adds
+ *  vocabulary (the Codex tool kinds above arrived exactly that way), and then
+ *  Reader and Feed would disagree about what the agent said. One classifier
+ *  keeps "what counts as assistant text" a single decision. */
+export function blockContentKind(b: SemanticBlockLike): RenderCandidate['contentKind'] {
   if (TOOL_USE_KINDS.has(b.kind)) return 'tool-use'
   if (TOOL_RESULT_KINDS.has(b.kind)) return 'tool-result'
   if (THINKING_KINDS.has(b.kind)) return 'thinking'
