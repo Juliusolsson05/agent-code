@@ -24,6 +24,7 @@ import { createTerminalInputForwarder } from '@renderer/workspace/tile-tree/term
 import { encodeTerminalPaste, registerTerminalPasteTarget } from '@renderer/workspace/terminal/textPasteTarget'
 import { AgentTerminalActions } from '@renderer/workspace/tile-tree/AgentTerminalActions'
 import { useTerminalFollow } from '@renderer/workspace/tile-tree/terminalFollow'
+import type { GridRelatedAgentTab } from '@renderer/workspace/gridRelatedAgents'
 
 type Props = {
   sessionId: SessionId
@@ -40,6 +41,19 @@ type Props = {
    *  defaulted: an omitted prop is exactly how the terminal branch went unlit
    *  in #851, and a default would let the next call site repeat that. */
   showStatusMode: boolean
+  /** The pane's OWN session — as opposed to `sessionId`, which is whichever
+   *  session is actually mounted here (the parent, or a persisted related
+   *  selection). Optional because WorkspaceLeaf is the only caller that has a
+   *  distinct owner to report; when omitted or equal to `sessionId` this pane
+   *  is simply showing its own agent, and #858's identity chrome stays off. */
+  ownerSessionId?: SessionId
+  /** The owner's related-agent set, so this pane can look up which relation
+   *  and label describe whatever `sessionId` currently is. Same shape
+   *  WorkspaceLeaf already builds for the rendered `LeafComponent` branch. */
+  relatedAgentTabs?: GridRelatedAgentTab[]
+  /** Same callback the rendered branch's `parent`/related chips call. Wired
+   *  here to the `parent` button described in the #858 comment below. */
+  onSelectRelatedSession?: (sessionId: SessionId) => void
 }
 
 // AgentTerminalLeaf — full-pane raw provider terminal for PTY-backed agents.
@@ -66,6 +80,9 @@ export function AgentTerminalLeaf({
   projectDir,
   provider,
   showStatusMode,
+  ownerSessionId,
+  relatedAgentTabs,
+  onSelectRelatedSession,
 }: Props) {
   const dictationEnabled = useAppStore(state => state.settings.dictationEnabled)
   const dictationProvider = useAppStore(state => state.settings.dictationProvider)
@@ -560,6 +577,14 @@ export function AgentTerminalLeaf({
   // below can never disagree with the fill they sit on.
   const statusLit = paneHeaderStatusLit(showStatusMode, isSessionLive)
 
+  // #858: WorkspaceLeaf mounts a persisted related selection here, so this pane
+  // can be showing a CHILD's TUI under the PARENT's pane label. Say which one,
+  // in the status row that already exists, and offer the way back. No chip row:
+  // every header row is taken out of the PTY, and a row appearing when a child
+  // spawns would resize the live TUI.
+  const showingRelated = ownerSessionId !== undefined && ownerSessionId !== sessionId
+  const relatedTab = showingRelated ? relatedAgentTabs?.find(tab => tab.sessionId === sessionId) : undefined
+
   return (
     <div
       data-pane-id={sessionId}
@@ -586,14 +611,10 @@ export function AgentTerminalLeaf({
           #851 happened: that copy never got the Status Mode fill or the color
           flag. Only the terminal-specific chrome is supplied from this file.
 
-          Related-agent chips are not passed, which keeps pre-#851 behavior,
-          but that behavior has a known hole (#858). A persisted related
-          selection still mounts here (WorkspaceLeaf passes the selected
-          `renderedSessionId`), so the pane can show a child's TUI under the
-          parent's label with nothing marking it. The chips aren't simply
-          added because every header row is taken out of the PTY: a chip row
-          appearing when a child spawns would resize the live TUI. #858 tracks
-          that decision.
+          Related agents (#858): the chip row is still not rendered here,
+          because a row appearing when a child spawns would resize the live TUI.
+          Instead the status row's badge names the displayed related agent and
+          a `parent` button returns to the owner.
 
           The same cost applies to Status Mode. `statusMode` switches the row
           between `py-0` and `py-1`, so toggling the setting changes this
@@ -613,10 +634,25 @@ export function AgentTerminalLeaf({
         badge={
           <span className={`flex-shrink-0 ${statusLit ? '' : 'text-ink'}`}>
             raw {provider}
+            {relatedTab ? ` · ${relatedTab.relation} ${relatedTab.label}` : null}
           </span>
         }
         trailing={
           <>
+            {showingRelated && onSelectRelatedSession ? (
+              <button
+                type="button"
+                // Keep xterm focused: a mousedown here must not steal it.
+                onMouseDown={event => event.preventDefault()}
+                onClick={event => {
+                  event.stopPropagation()
+                  onSelectRelatedSession(ownerSessionId!)
+                }}
+                className="rounded-control border border-current/30 px-1 leading-[14px] text-[9px] uppercase tracking-wider"
+              >
+                parent
+              </button>
+            ) : null}
             {/* TAIL pill styling copied from ScrollIndicator so both surfaces
                 read identically — without it the raw view silently follows
                 output while showing no state the palette can be checked
