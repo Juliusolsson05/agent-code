@@ -65,7 +65,7 @@
     "conditions-core:sync": "node scripts/sync-conditions-core.mjs",
     "conditions-core:check": "node scripts/sync-conditions-core.mjs --check",
     "runtime:prepare:mac": "npm run runtime:fetch:mitmproxy -- --all && npm run runtime:fetch:tmux -- --all && node scripts/runtime-tools/verify-mitmproxy.mjs --strict && node scripts/runtime-tools/verify-tmux.mjs --strict && npm run runtime:fetch:cloudflared -- --all && node scripts/runtime-tools/verify-cloudflared.mjs --strict",
-    "postinstall": "electron-rebuild -f -w node-pty"
+    "postinstall": "node scripts/patch-xterm.mjs && electron-rebuild -f -w node-pty"
   },
   "dependencies": {
     "@iarna/toml": "^2.2.5",
