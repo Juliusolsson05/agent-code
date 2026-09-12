@@ -34,7 +34,7 @@ Full build and independent review remain in progress.
 Review corrections: only explicit Electron suspend/resume suppresses gap evidence;
 terminal monitoring teardown moved into the admitted shutdown callback; native
 ELD windows retain a bounded five-second journal rollup (weighted mean, exact
-peak, explicitly labelled worst-window p99 upper bound because supported Node
+peak, explicitly labelled worst-window p99 because supported Node
 cannot merge ELD histograms); coordinator deadlines/freshness use monotonic time;
 main's live sample stays authoritative; window membership is reconciled in every
 transport frame independently of lossy data; the helper receives a minimal

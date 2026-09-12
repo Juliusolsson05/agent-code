@@ -522,3 +522,36 @@ describe('product-owned TLDR skill', () => {
     expect(await readFile(file, 'utf8')).toBe('User owned instructions')
   })
 })
+
+describe('product-owned Goal skill', () => {
+  it('deploys beside the TLDR skill under Goal ownership and refuses user management', async () => {
+    const { service, targets } = await harness()
+    await service.ensureTldrSkill()
+    await service.ensureGoalSkill()
+    const snapshot = await service.getCustomSkillsSnapshot()
+    expect(snapshot.skills.map(skill => [skill.name, skill.managedBy, skill.health]).sort()).toEqual([
+      ['agent-code-goal', 'goal', 'active'], ['agent-code-tldr', 'tldr', 'active'],
+    ])
+    for (const target of targets) {
+      const text = await readFile(customPath(target, 'agent-code-goal'), 'utf8')
+      expect(text).toContain('name: agent-code-goal')
+      expect(text).toContain('goal_set')
+      expect(text).toContain('this skill is inactive')
+    }
+    const goal = snapshot.skills.find(skill => skill.name === 'agent-code-goal')!
+    const refusal = { ok: false, code: 'validation', message: expect.stringContaining('managed by Goal MCP') }
+    expect(await service.deleteCustomSkill({ expectedRevision: snapshot.revision, skillId: goal.id })).toMatchObject(refusal)
+    expect(await service.setCustomSkillEnabled({ expectedRevision: snapshot.revision, skillId: goal.id, enabled: false })).toMatchObject(refusal)
+    expect(await service.createCustomSkill({ expectedRevision: snapshot.revision, name: 'agent-code-goal', description: 'Mine', markdown: '# Mine', enabled: false }))
+      .toMatchObject({ ok: false, code: 'validation', message: 'That name is reserved for Goal MCP.' })
+    expect((await service.getCustomSkillsSnapshot()).revision).toBe(snapshot.revision)
+  })
+
+  it('refuses to overwrite an unmanaged skill with the Goal name', async () => {
+    const { service, targets } = await harness()
+    const file = customPath(targets[0]!, 'agent-code-goal')
+    await writeFileWithParents(file, 'User owned instructions')
+    await expect(service.ensureGoalSkill()).rejects.toThrow('Goal skill deployment failed')
+    expect(await readFile(file, 'utf8')).toBe('User owned instructions')
+  })
+})

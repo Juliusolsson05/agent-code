@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-const probe = vi.hoisted(() => ({ enable: vi.fn(), disable: vi.fn(), reset: vi.fn(), percentile: () => 30e6, mean: 22e6, max: 40e6, count: 50 }))
+const probe = vi.hoisted(() => ({ enable: vi.fn(), disable: vi.fn(), reset: vi.fn(), percentile: vi.fn(() => 30e6), mean: 22e6, max: 40e6, count: 50 }))
 vi.mock('node:perf_hooks', () => ({ monitorEventLoopDelay: () => probe, performance: { now: () => Date.now() } }))
 import { MainProbe } from './MainProbe.js'
 
@@ -56,6 +56,24 @@ describe('shared main sample ownership', () => {
     expect(sampler.readJournalWindow()?.maxMs).toBe(500)
     expect(sampler.readJournalWindow()?.windowMs).toBeGreaterThanOrEqual(5000)
     sampler.stop()
+  })
+
+  it('labels rounded per-window p99 separately while retaining the actual peak', () => {
+    vi.useFakeTimers()
+    const sampler = new MainProbe()
+    // Node rounds rank for 51 observations: fifty 20ms values plus one 1000ms
+    // value have a native p99 near 20ms, although five merged windows have a
+    // p99 near 1000ms. Worst-window p99 therefore cannot be called a bound.
+    probe.count = 51
+    probe.max = 1000e6
+    probe.percentile.mockReturnValue(20e6)
+    sampler.start()
+    vi.advanceTimersByTime(5000)
+    expect(sampler.readJournalWindow()).toMatchObject({ p99WorstWindowMs: 20, maxMs: 1000 })
+    expect(sampler.readJournalWindow()).not.toHaveProperty('p99UpperBoundMs')
+    sampler.stop()
+    probe.count = 50
+    probe.percentile.mockReturnValue(30e6)
   })
 
 })

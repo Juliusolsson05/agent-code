@@ -1,7 +1,8 @@
+import type { MainProbeSample } from './MainProbe.js'
 import { EventEmitter } from 'node:events'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-const harness = vi.hoisted(() => ({ launch: vi.fn(), subscribe: vi.fn(() => vi.fn()), start: vi.fn() }))
+const harness = vi.hoisted(() => ({ launch: vi.fn(), subscribe: vi.fn((_listener: (sample: MainProbeSample) => void) => vi.fn()), start: vi.fn() }))
 vi.mock('electron', () => ({ utilityProcess: { fork: harness.launch } }))
 vi.mock('./MainProbe.js', () => ({ mainProbe: harness }))
 vi.mock('@main/incident/appRunIds.js', () => ({ getAppRunId: () => 'run-test' }))
@@ -83,14 +84,37 @@ describe('monitor worker isolation', () => {
     coordinator.closeWindow(1)
     for (let i = 0; i < 5000; i++) coordinator.operation(operation)
     vi.advanceTimersByTime(1000)
+    harness.subscribe.mock.calls[0][0]({ loopSampledAt: 200, cpuPercent: 1, rss: 100, heapUsed: 10,
+      heapLimit: 100, sleepGap: false, eventLoopDelay: { meanMs: 20, maxMs: 40, p99Ms: 30 } } as MainProbeSample)
     const sent = child.postMessage.mock.calls[0][0]
     expect(sent.liveWindowIds).toEqual([])
     child.emit('message', { sequence: sent.sequence, snapshot: {
-      schemaVersion: 1, sampledAt: Date.now(), main: { at: -1 }, windows: [{ windowId: 1 }],
+      schemaVersion: 1, sampledAt: Date.now(), main: { at: 100, cpuPercent: 1, rss: 100, heapUsed: 10,
+        heapLimit: 100, loopMeanMs: 20, loopP99Ms: 30, loopMaxMs: 40, sleepGap: false },
+      windows: [{ kind: 'heartbeat', windowId: 1, receivedAt: 100, monotonicMs: 50, timeOriginMs: 50,
+        lagMs: 0, visibility: 'visible', longTaskCount: 0, longTaskTotalMs: 0, longTaskMaxMs: 0,
+        heapUsedBytes: null, heapLimitBytes: null, inputCount: 0, inputMaxMs: 0,
+        longTasksSupported: false, inputSupported: false }],
       recent: [], operations: [], workerRss: 0,
     } })
-    expect(coordinator.read().main).toBeNull()
+    expect(coordinator.read().main?.at).toBe(200)
+    expect(coordinator.read().collector).toBe('healthy')
     expect(coordinator.read().windows).toEqual([])
+    coordinator.stop()
+  })
+
+  it('contains a malformed acknowledged snapshot without losing the existing cache', () => {
+    vi.useFakeTimers()
+    const child = new FakeChild()
+    harness.launch.mockReturnValue(child)
+    const coordinator = new MonitorCoordinator(() => Date.now())
+    coordinator.start()
+    coordinator.operation(operation)
+    vi.advanceTimersByTime(1000)
+    const sequence = child.postMessage.mock.calls[0][0].sequence
+    expect(() => child.emit('message', { sequence, snapshot: { schemaVersion: 1, sampledAt: Date.now() } })).not.toThrow()
+    expect(coordinator.read().collector).toBe('degraded')
+    expect(coordinator.read().droppedRecords).toBe(1)
     coordinator.stop()
   })
 

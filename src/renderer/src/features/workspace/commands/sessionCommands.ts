@@ -694,6 +694,38 @@ export const sessionCommands: CommandDef[] = [
     },
   },
   {
+    id: 'enable-goal-mcp',
+    category: 'session',
+    surface: 'session',
+    title: 'Goal MCP',
+    description: '**What it does:** Reloads the focused agent with goal recording on or off.\n\n**Use when:** You want this agent to record what its work is for, so you can see its purpose at a glance.\n\n**Notes:** Deploys the managed goal skill. Hold the Goal shortcut to read goals across visible agents. Works with or without TLDR.',
+    keywords: ['goal', 'purpose', 'objective', 'intent', 'mcp', 'why'],
+    when: ({ workspace }) => {
+      return targetSupportsBuiltInMcpDomain(workspace, 'goal')
+    },
+    getState: ctx => builtInMcpDomainState(ctx, 'goal'),
+    run: async ({ workspace, ui }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return
+      const meta = workspace.state.sessions[sessionId]
+      const kind = meta?.kind ?? DEFAULT_PROVIDER
+      // Provider policy is repeated at the mutation boundary: visibility is
+      // advisory and the command stays reachable from keybindings and control.
+      if (
+        !isAgentProviderKind(kind) ||
+        !providerSupportsBuiltInMcpDomain(kind, 'goal') ||
+        !meta
+      ) return
+
+      ui.closePalette()
+      const enable = !meta.builtInMcpDomains?.includes('goal')
+      await reloadSessionWithBuiltInMcpChoice(workspace, sessionId, 'goal', enable, {
+        reloaded: enable ? 'Reloaded with Goal MCP' : 'Reloaded without Goal MCP',
+        failed: 'Goal MCP reload failed',
+      })
+    },
+  },
+  {
     id: 'enable-workflow-mcp',
     category: 'session',
     pickerVisibility: 'advanced',

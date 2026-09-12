@@ -1,3 +1,4 @@
+import { parseMonitorSnapshot } from '@shared/performance/parseMonitorSnapshot.js'
 import { utilityProcess } from 'electron'
 import type { UtilityProcess } from 'electron'
 import { fileURLToPath } from 'node:url'
@@ -118,20 +119,18 @@ export class MonitorCoordinator {
       })
       this.child = child
       child.on('message', (message: MonitorWorkerResponse) => {
-        if (this.child !== child || !this.pending || message?.sequence !== this.pending.sequence) return
-        // The worker is our own bundled code, but a protocol/version mismatch
-        // must degrade monitoring rather than overwrite the cache with junk.
-        if (message.snapshot?.schemaVersion !== 1 || !Number.isFinite(message.snapshot.sampledAt)) {
-          this.fail(child)
-          return
-        }
-        this.pending = null
-        this.lastReplyAt = this.monotonicNow()
-        this.cache = {
-          ...this.cache, ...message.snapshot, main: this.cache.main,
-          windows: message.snapshot.windows.filter(window => this.liveWindows.has(window.windowId)),
-          collector: 'healthy',
-        }
+        try {
+          if (this.child !== child || !this.pending || message?.sequence !== this.pending.sequence) return
+          const snapshot = parseMonitorSnapshot(message.snapshot)
+          if (!snapshot) { this.fail(child); return }
+          this.pending = null
+          this.lastReplyAt = this.monotonicNow()
+          this.cache = {
+            ...this.cache, ...snapshot, main: this.cache.main,
+            windows: snapshot.windows.filter(window => this.liveWindows.has(window.windowId)),
+            collector: 'healthy',
+          }
+        } catch { this.fail(child) }
       })
       child.on('exit', () => this.fail(child))
       child.on('error', () => this.fail(child))
@@ -141,7 +140,7 @@ export class MonitorCoordinator {
   private fail(child: UtilityProcess | null): void {
     if (child !== this.child) return
     this.child = null
-    child?.kill()
+    try { child?.kill() } catch { /* Exiting helpers can reject native handle access. */ }
     this.lost += this.pending?.count ?? 0
     this.pending = null
     this.retryAt = this.monotonicNow() + 5000 * this.launches
