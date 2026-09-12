@@ -302,6 +302,7 @@ function OpenCommandPalette({
   const toggleHtmlDebugPanel = useAppStore(state => state.toggleHtmlDebugPanel)
   const toggleRenderingDebugMode = useAppStore(state => state.toggleRenderingDebugMode)
   const toggleTailAllMode = useAppStore(state => state.toggleTailAllMode)
+  const toggleTailWorkingMode = useAppStore(state => state.toggleTailWorkingMode)
   const toggleDevDebugPanel = useAppStore(state => state.toggleDevDebugPanel)
   const toggleAgentStatusPanel = useAppStore(state => state.toggleAgentStatusPanel)
   const togglePerformancePanel = useAppStore(state => state.togglePerformancePanel)
@@ -370,6 +371,7 @@ function OpenCommandPalette({
   const htmlDebugPanelOpen = useAppStore(state => state.htmlDebugPanelOpen)
   const renderingDebugMode = useAppStore(state => state.renderingDebugMode)
   const tailAllMode = useAppStore(state => state.tailAllMode)
+  const tailWorkingMode = useAppStore(state => state.tailWorkingMode)
   const devDebugPanelOpen = useAppStore(state => state.devDebugPanelOpen)
   const agentStatusPanelOpen = useAppStore(state => state.agentStatusPanelOpen)
   const performancePanelOpen = useAppStore(state => state.performancePanelOpen)
@@ -612,6 +614,7 @@ function OpenCommandPalette({
         toggleHtmlDebugPanel,
         toggleRenderingDebugMode,
         toggleTailAllMode,
+        toggleTailWorkingMode,
         toggleDevDebugPanel,
         toggleAgentStatusPanel,
         togglePerformancePanel,
@@ -668,6 +671,7 @@ function OpenCommandPalette({
         htmlDebugPanelOpen,
         renderingDebugMode,
         tailAllMode,
+        tailWorkingMode,
         devDebugEnabled,
         sessionRecordingEnabled,
         devDebugPanelOpen,
@@ -726,6 +730,7 @@ function OpenCommandPalette({
       toggleHtmlDebugPanel,
       toggleRenderingDebugMode,
       toggleTailAllMode,
+      toggleTailWorkingMode,
       toggleDevDebugPanel,
       toggleAgentStatusPanel,
       togglePerformancePanel,
@@ -780,6 +785,7 @@ function OpenCommandPalette({
       htmlDebugPanelOpen,
       renderingDebugMode,
       tailAllMode,
+      tailWorkingMode,
       devDebugEnabled,
       sessionRecordingEnabled,
       devDebugPanelOpen,

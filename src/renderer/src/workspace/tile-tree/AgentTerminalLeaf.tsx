@@ -4,6 +4,7 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 
 import { useAppStore } from '@renderer/app-state/hooks'
+import { agentFollowEnabled } from '@renderer/workspace/agentFollow'
 import {
   THEME_CHANGED_EVENT,
   getActiveAppFontFamily,
@@ -110,12 +111,13 @@ export function AgentTerminalLeaf({
   const dimensionActive = useAgentTerminalDimensionActive()
   const ownerVisible = useAgentTerminalOwnerVisible()
   const tailAllMode = useAppStore(state => state.tailAllMode)
+  const tailWorkingMode = useAppStore(state => state.tailWorkingMode)
   // Feed-parity tail mask (TileLeaf's effectiveTailMode): per-session Tail OR
-  // Tail All, suppressed while this subtree is hidden (editor fullscreen /
+  // the active bulk policy, suppressed while this subtree is hidden (editor fullscreen /
   // Reader/Spotlight/Settings takeover) — a display:none pane cannot scroll,
   // and folding visibility into the mask makes re-reveal a genuine transition
   // that re-engages follow.
-  const tailActive = (runtime.tailMode || tailAllMode) && ownerVisible
+  const tailActive = agentFollowEnabled(provider, runtime, { tailAllMode, tailWorkingMode }) && ownerVisible
   // WHY this hook must be called BEFORE the xterm mount effect below: its
   // effects read termRef.current at effect time and React runs passive effects
   // in declaration order — when tail is already on at mount, the terminal does
