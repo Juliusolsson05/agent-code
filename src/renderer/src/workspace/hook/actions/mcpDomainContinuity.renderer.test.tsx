@@ -37,7 +37,7 @@ describe('built-in MCP continuity at session resurrection boundaries', () => {
     await act(async () => {
       await harness.actions.splitFocused('vertical', 'codex', {
         resumeSessionId: 'provider-clone',
-        builtInMcpDomains: ['workflows'],
+        builtInMcpOverrides: { workflows: true },
         cwd: '/projects/related-child',
       })
     })
@@ -48,7 +48,7 @@ describe('built-in MCP continuity at session resurrection boundaries', () => {
     expect(harness.spawn).toHaveBeenCalledWith('/projects/related-child', {
       kind: 'codex',
       resumeSessionId: 'provider-clone',
-      builtInMcpDomains: ['workflows'],
+      builtInMcpOverrides: { workflows: true },
     })
     harness.mounted.unmount()
   })
@@ -62,7 +62,7 @@ describe('built-in MCP continuity at session resurrection boundaries', () => {
     await act(async () => {
       await harness.actions.splitFocused('vertical', 'codex', {
         resumeSessionId: 'provider-clone',
-        builtInMcpDomains: ['workflows'],
+        builtInMcpOverrides: { workflows: true },
         cwd: '/projects/related-child',
       })
     })
@@ -70,7 +70,7 @@ describe('built-in MCP continuity at session resurrection boundaries', () => {
     expect(harness.spawn).toHaveBeenCalledWith('/projects/related-child', {
       kind: 'codex',
       resumeSessionId: 'provider-clone',
-      builtInMcpDomains: ['workflows'],
+      builtInMcpOverrides: { workflows: true },
     })
     harness.mounted.unmount()
   })
@@ -81,7 +81,7 @@ describe('built-in MCP continuity at session resurrection boundaries', () => {
     await act(async () => {
       await harness.actions.splitFocused('vertical', 'opencode', {
         resumeSessionId: 'ses_clone',
-        builtInMcpDomains: ['orchestration'],
+        builtInMcpOverrides: { orchestration: true },
         providerRuntime: 'terminal',
         cwd: '/projects/opencode-child',
       })
@@ -91,7 +91,7 @@ describe('built-in MCP continuity at session resurrection boundaries', () => {
       kind: 'opencode',
       providerRuntime: 'terminal',
       resumeSessionId: 'ses_clone',
-      builtInMcpDomains: ['orchestration'],
+      builtInMcpOverrides: { orchestration: true },
     })
     harness.mounted.unmount()
   })
@@ -132,7 +132,8 @@ describe('built-in MCP continuity at session resurrection boundaries', () => {
       kind: 'codex',
       resumeSessionId: 'provider-old',
       recoverTmuxName: undefined,
-      builtInMcpDomains: ['workflows'],
+      builtInMcpOverrides: { workflows: true },
+      tldrIdentity: undefined,
     })
     mounted.unmount()
   })
@@ -152,6 +153,7 @@ describe('built-in MCP continuity at session resurrection boundaries', () => {
         kind: 'codex',
         providerSessionId: 'provider-old',
         builtInMcpDomains: [],
+        builtInMcpOverrides: { orchestration: false },
       },
       direction: 'vertical',
       ratio: 0.5,
@@ -174,7 +176,8 @@ describe('built-in MCP continuity at session resurrection boundaries', () => {
       kind: 'codex',
       resumeSessionId: 'provider-old',
       recoverTmuxName: undefined,
-      builtInMcpDomains: [],
+      builtInMcpOverrides: { orchestration: false },
+      tldrIdentity: undefined,
     })
     mounted.unmount()
   })
@@ -230,13 +233,15 @@ describe('built-in MCP continuity at session resurrection boundaries', () => {
       kind: 'codex',
       resumeSessionId: 'provider-grid',
       recoverTmuxName: undefined,
-      builtInMcpDomains: ['workflows'],
+      builtInMcpOverrides: { workflows: true },
+      tldrIdentity: undefined,
     })
     expect(spawn).toHaveBeenNthCalledWith(2, '/projects/detached', {
       kind: 'claude',
       resumeSessionId: 'provider-detached',
       recoverTmuxName: undefined,
-      builtInMcpDomains: ['workflows'],
+      builtInMcpOverrides: { workflows: true },
+      tldrIdentity: undefined,
     })
     mounted.unmount()
   })

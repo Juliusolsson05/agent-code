@@ -72,6 +72,10 @@ export type UiShellState = {
    * autosave from recording half-finished reorder attempts that the
    * user later cancels with Escape. */
   reorderTabsOpen: boolean
+  /** When true, the Merge Project Tabs modal is open (#913). Same rationale
+   *  as reorderTabsOpen: the target/source draft is modal-local; the merge
+   *  lands on WorkspaceState only when the user confirms. */
+  mergeProjectTabsOpen: boolean
   /** When true, the Pin Agents multi-select modal is open.
    *
    * Same rationale for living on uiShell as reorderTabsOpen above:
@@ -92,6 +96,13 @@ export type UiShellState = {
    */
   agentTitlePromptSessionId: SessionId | null
   buryPromptSessionId: SessionId | null
+  /**
+   * Session awaiting the Root Agent Code Management confirmation (#906), or
+   * null. Stored like the bury and title prompts: the grant must land on the
+   * agent the command was invoked for, not whichever Dispatch lane is focused
+   * by the time the user finishes reading the warning.
+   */
+  rootManagementPromptSessionId: SessionId | null
   debugBundleNotePrompt: {
     bundlePath: string
     sessionId: SessionId
@@ -107,6 +118,7 @@ export type UiShellState = {
     title: string
   } | null
   viewPromptsSessionId: SessionId | null
+  tldrHistorySessionId: SessionId | null
   newAgentPlacementOpen: boolean
   /**
    * Non-null when the placement overlay is open in "attach detached
@@ -270,11 +282,14 @@ export type UiShellState = {
    *  surface is active without replacing it. Tracking it as a toggle
    *  flag keeps the mode-state machine untouched. */
   globalEditorOpen: boolean
-  /** When true, the Search Conversation Prompts modal is open. Lives
-   *  on the uiShell slice (not the workspace slice) because it's
-   *  a cross-session concern: the modal reads prompts from ALL
-   *  sessions on disk, not just those currently mounted. */
-  promptSearchOpen: boolean
+  /** When true, the Conversations picker is open (Resume Session… and
+   *  Search Conversations… both open it). Lives on uiShell because it
+   *  reads every conversation on disk, not only mounted panes. */
+  conversationsOpen: boolean
+  /** Whether the picker should start with the search field focused. Set
+   *  by the command that opened it; reset on close so a chord never
+   *  inherits the previous invocation's intent. */
+  conversationsFocusSearch: boolean
   /** When true, the Agent Activity modal is open. Lists every
    *  visible agent/terminal session grouped by tab with last-
    *  activity timestamps so the user can triage and close unused

@@ -9,8 +9,17 @@ export const controlOwnerSchema = z.discriminatedUnion('kind', [
 ])
 export type ControlOwner = z.infer<typeof controlOwnerSchema>
 
+// WHY three caller kinds rather than two: `external` is a client outside the
+// app (the opt-in operator server), `application` is the app acting on its own
+// behalf (settings actions, main's task journal), and `agent` is a provider
+// session running INSIDE Agent Code that a user deliberately granted the
+// operator catalog (Root Agent Code Management, #906). The executor's
+// visibility rule allows application-only capabilities for `application`
+// alone, so an agent can never reach the external-server switch or the task
+// journal no matter how a projection lists tools. History records the kind and
+// id together, which is the audit trail for a grant this broad.
 export type ControlCaller = Readonly<{
-  kind: 'external' | 'application'
+  kind: 'external' | 'application' | 'agent'
   id: string
 }>
 

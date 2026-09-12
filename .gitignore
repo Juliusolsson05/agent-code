@@ -41,10 +41,11 @@ temp.txt
 # rules below are defensive: if someone reverts the outDir or runs
 # tsc with different flags, we still refuse to stage the drift.
 #
-# We have exactly TWO hand-authored `.d.ts` files tracked under src/
+# We have exactly THREE hand-authored `.d.ts` files tracked under src/
 # (`src/preload/index.d.ts` augments `window.api`; `src/renderer/src/
-# vite-env.d.ts` is vite's default client types). Plus one under
-# testing/. Those are explicitly re-included.
+# vite-env.d.ts` is vite's default client types; `src/shared/types/
+# node-sqlite.d.ts` types Node 24's built-in sqlite that @types/node 20
+# lacks). Plus one under testing/. Those are explicitly re-included.
 /.tsc-out/
 /electron.vite.config.js
 /electron.vite.config.d.ts
@@ -52,6 +53,7 @@ temp.txt
 /src/**/*.d.ts
 !/src/preload/index.d.ts
 !/src/renderer/src/vite-env.d.ts
+!/src/shared/types/node-sqlite.d.ts
 /testing/**/*.js
 /testing/**/*.mjs
 /testing/**/*.d.ts
@@ -85,3 +87,7 @@ file-dumps/
 # Kept hidden + ignored so `git status` from the main checkout never
 # tries to track the contents of sibling branches.
 .worktrees/
+
+# Unredacted mirror of the conversation corpus (real prompts, titles, paths).
+# The committed corpus next to it is the redacted recording.
+/testing/fixtures/conversations/local/

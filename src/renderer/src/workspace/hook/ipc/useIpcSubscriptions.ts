@@ -876,9 +876,18 @@ export function useIpcSubscriptions(
       flushSemanticEventQueue()
       // eslint-disable-next-line no-console
       console.warn(`[jsonl ${sessionId.slice(0, 8)}]`, message)
+      // These adapter diagnostics name a channel that cannot recover by
+      // loading a snapshot. Electron preserves the message, not Error.code.
+      // The two nonfatal durable diagnostics deliberately remain transient:
+      // sink delivery can recover, and exit-drain exhaustion ends the backend.
+      const channelStopped = message.startsWith('OpenCode durable channel (')
+        && !message.includes('(sink_failed)')
+        && !message.includes('(final_drain_incomplete)')
+      const sessionSwitched = message.includes('(provider_session_switched)')
       updateRuntime(sessionId, {
         transcriptStatus: 'error',
         transcriptError: message,
+        ...((channelStopped || sessionSwitched) ? { transcriptChannelError: message } : {}),
       })
     })
 
@@ -1158,7 +1167,7 @@ export function useIpcSubscriptions(
           return { ...prev, [sessionId]: updated }
         }
 
-        const nextSemantic = foldSemanticEvent(current.semantic, semanticEvent, sessionKind)
+        const nextSemantic = foldSemanticEvent(current.semantic, semanticEvent, sessionKind, current.sessionRunId)
         const eventType = typeof semanticEvent.type === 'string' ? semanticEvent.type : ''
         const clearOptimisticAwaiting =
           isSemanticTurnRunning(nextSemantic.currentTurn) ||
@@ -2353,8 +2362,10 @@ export function useIpcSubscriptions(
               bootstrapping: true,
               queuedMessages,
               awaitingAssistant,
-              transcriptStatus: 'ready',
-              transcriptError: null,
+              // A later record proves data arrived, not that a stopped
+              // channel or a TUI session mismatch repaired itself.
+              transcriptStatus: current.transcriptChannelError ? 'error' : 'ready',
+              transcriptError: current.transcriptChannelError ?? null,
               workContext,
               workActivity,
               toolUseIndex,

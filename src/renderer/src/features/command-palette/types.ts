@@ -189,12 +189,15 @@ export type CommandContext = {
     openNewTabPicker: () => void
     openTileTabs: () => void
     openReorderTabs: () => void
+    /** Open the Merge Project Tabs modal (#913); the modal performs the merge. */
+    openMergeProjectTabs: () => void
     openSettings: () => void
     /** Open the command palette. Exists so ⌘⇧P has a command to name instead
      *  of a hard-coded callback that nothing could rebind or collision-check. */
     openCommandPalette: () => void
     openViewPrompts: (sessionId: string) => void
-    openPromptSearch: () => void
+    openTldrHistory: (sessionId: string) => void
+    openConversations: (opts: { focusSearch: boolean }) => void
     openAgentActivity: () => void
     /** Open the read-only Keyboard Shortcuts reference. */
     openKeyboardShortcuts: () => void
@@ -207,6 +210,10 @@ export type CommandContext = {
     openColorFlagPicker: (sessionId: string) => void
     /** Open the title editor for the captured command-target agent. */
     openAgentTitlePrompt: (sessionId: string) => void
+    /** Open the Root Agent Code Management confirmation for the captured
+     *  command-target agent (#906). The dialog, not the command, performs the
+     *  reload, so a declined warning leaves the session untouched. */
+    openRootManagementPrompt: (sessionId: string) => void
     openUsageModal: () => void
     openKeyVault: () => void
     toggleGitBar: () => void
@@ -259,7 +266,6 @@ export type CommandContext = {
      *  modal itself, not the store. */
     openPinAgents: () => void
     setAggressiveDebugPersistence: (enabled: boolean) => void
-    enterResumeMode: () => void
     enterBuriedMode: () => void
     enterKillBuriedMode: () => void
     enterPromptTemplateMode: () => void
@@ -280,8 +286,9 @@ export type CommandContext = {
     closeAgentActivity: () => void
     closeCloseOldAgents: () => void
     closeBulkProviderSwitch: () => void
-    closePromptSearch: () => void
+    closeConversations: () => void
     closeReorderTabs: () => void
+    closeMergeProjectTabs: () => void
     closePinAgents: () => void
     closePathPicker: () => void
     closePalette: () => void
@@ -328,12 +335,14 @@ export type CommandContext = {
     closeOldAgentsOpen: boolean
     /** The Switch Agents modal is on screen. */
     bulkProviderSwitchOpen: boolean
-    /** The Prompt Search modal is on screen. */
-    promptSearchOpen: boolean
+    /** The Conversations picker is on screen. */
+    conversationsOpen: boolean
     /** The Remote Control panel is on screen. */
     remotePanelOpen: boolean
     /** The Reorder Tabs modal is on screen. */
     reorderTabsOpen: boolean
+    /** The Merge Project Tabs modal is on screen. */
+    mergeProjectTabsOpen: boolean
     /** The Pin Agents modal is on screen. */
     pinAgentsOpen: boolean
     /** The path picker (New Tab / Resume) is on screen. */

@@ -6,5 +6,5 @@ export const transcriptPageInput = z.object({
 }).strict()
 export const transcriptPageOutput = z.object({
   entries: z.array(z.record(z.string(), z.json())), olderCursor: z.string().nullable(),
-  sourceIdentity: z.string(), source: z.enum(['provider-file', 'provider-export']),
+  sourceIdentity: z.string(), source: z.enum(['provider-file', 'provider-export', 'provider-history']),
 })

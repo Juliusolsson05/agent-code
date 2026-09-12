@@ -1,3 +1,4 @@
+import { TldrPane } from '@renderer/features/tldr/TldrOverlay'
 import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
 import { memo, useCallback, useRef } from 'react'
 import { useSessionRuntime } from '@renderer/workspace/useSessionRuntime'
@@ -191,55 +192,59 @@ const WorkspaceLeaf = memo(function WorkspaceLeaf({
     runtime,
   }) === 'terminal') {
     return (
-      <MountedAgentTerminalOwner sessionId={renderedSessionId}>
-        <AgentTerminalLeaf
-          sessionId={renderedSessionId}
-          paneLabel={paneLabel}
-          agentTitle={meta?.title}
-          focused={sessionId === focusedSessionId}
-          onFocusRequest={requestFocus}
-          workspace={workspace}
-          runtime={runtime}
-          projectDir={runtime.projectDir ?? meta?.cwd ?? null}
-          provider={kind}
-          // The rendered branch below always received this. The terminal
-          // branch didn't, which is why terminal-view panes never lit their
-          // header while working (#851).
-          showStatusMode={showStatusMode}
-          // #858: same related-agent identity the rendered branch below
-          // passes to LeafComponent, so a persisted related selection that
-          // lands here (raw-terminal surface) is named in the status row
-          // instead of silently swapping which agent's TUI this pane shows.
-          ownerSessionId={sessionId}
-          relatedAgentTabs={relatedTabs}
-          onSelectRelatedSession={(nextSessionId: SessionId) => {
-            workspace.selectGridRelatedSession(sessionId, nextSessionId)
-            workspace.focusSessionInTab(tabId, sessionId)
-          }}
-        />
-      </MountedAgentTerminalOwner>
+      <TldrPane runtime={runtime} provider={kind} identity={meta?.tldrIdentity ?? renderedSessionId} enabled={Boolean(meta?.builtInMcpDomains?.includes('tldr'))}>
+        <MountedAgentTerminalOwner sessionId={renderedSessionId}>
+          <AgentTerminalLeaf
+            sessionId={renderedSessionId}
+            paneLabel={paneLabel}
+            agentTitle={meta?.title}
+            focused={sessionId === focusedSessionId}
+            onFocusRequest={requestFocus}
+            workspace={workspace}
+            runtime={runtime}
+            projectDir={runtime.projectDir ?? meta?.cwd ?? null}
+            provider={kind}
+            // The rendered branch below always received this. The terminal
+            // branch didn't, which is why terminal-view panes never lit their
+            // header while working (#851).
+            showStatusMode={showStatusMode}
+            // #858: same related-agent identity the rendered branch below
+            // passes to LeafComponent, so a persisted related selection that
+            // lands here (raw-terminal surface) is named in the status row
+            // instead of silently swapping which agent's TUI this pane shows.
+            ownerSessionId={sessionId}
+            relatedAgentTabs={relatedTabs}
+            onSelectRelatedSession={(nextSessionId: SessionId) => {
+              workspace.selectGridRelatedSession(sessionId, nextSessionId)
+              workspace.focusSessionInTab(tabId, sessionId)
+            }}
+          />
+        </MountedAgentTerminalOwner>
+      </TldrPane>
     )
   }
 
   const LeafComponent = provider.TileLeaf
   return (
-    <LeafComponent
-      sessionId={renderedSessionId}
-      runtime={runtime}
-      paneLabel={paneLabel}
-      focused={sessionId === focusedSessionId}
-      onFocusRequest={requestFocus}
-      workspace={workspace}
-      showStatusMode={showStatusMode}
-      showWorktreeBadges={showWorktreeBadges}
-      ownerSessionId={sessionId}
-      relatedAgentTabs={relatedTabs}
-      selectedRelatedSessionId={renderedSessionId}
-      onSelectRelatedSession={(nextSessionId: SessionId) => {
-        workspace.selectGridRelatedSession(sessionId, nextSessionId)
-        workspace.focusSessionInTab(tabId, sessionId)
-      }}
-    />
+    <TldrPane runtime={runtime} provider={kind} identity={meta?.tldrIdentity ?? renderedSessionId} enabled={Boolean(meta?.builtInMcpDomains?.includes('tldr'))}>
+      <LeafComponent
+        sessionId={renderedSessionId}
+        runtime={runtime}
+        paneLabel={paneLabel}
+        focused={sessionId === focusedSessionId}
+        onFocusRequest={requestFocus}
+        workspace={workspace}
+        showStatusMode={showStatusMode}
+        showWorktreeBadges={showWorktreeBadges}
+        ownerSessionId={sessionId}
+        relatedAgentTabs={relatedTabs}
+        selectedRelatedSessionId={renderedSessionId}
+        onSelectRelatedSession={(nextSessionId: SessionId) => {
+          workspace.selectGridRelatedSession(sessionId, nextSessionId)
+          workspace.focusSessionInTab(tabId, sessionId)
+        }}
+      />
+    </TldrPane>
   )
 })
 

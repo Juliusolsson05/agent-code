@@ -1,4 +1,6 @@
+import { sessionMcpOverrides } from '@renderer/workspace/mcpDomains'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
+import { tldrIdentityForSession } from '@renderer/features/tldr/identity'
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 import type { AgentProviderKind, AgentProviderRuntime } from '@shared/types/providerKind'
 import type { RewindPromptAddress } from '@shared/types/transcriptRewind'
@@ -128,7 +130,6 @@ export function useProviderActions(
         kind,
         targetSessionId: sourceSessionId,
         resumeSessionId,
-        builtInMcpDomains: meta.builtInMcpDomains,
       })
       if (!newSessionId) return { status: 'failed', message: 'Replacement was not committed' }
       showPaneToast(
@@ -211,7 +212,6 @@ export function useProviderActions(
         const newSessionId = await sessionActions.replaceSession(meta.cwd, {
           kind,
           resumeSessionId: result.newProviderSessionId,
-          builtInMcpDomains: meta.builtInMcpDomains,
           targetSessionId: sourceSessionId,
         })
         if (!newSessionId) return { status: 'failed', message: 'Replacement was not committed' }
@@ -269,6 +269,7 @@ export function useProviderActions(
                 provider: kind,
                 cwd: meta.cwd,
                 previousProviderSessionId,
+                previousTldrIdentity: tldrIdentityForSession(sourceSessionId, meta),
                 rewoundProviderSessionId: result.newProviderSessionId,
                 rewoundPromptText: result.promptText,
                 rewoundPromptTimestamp: result.promptTimestamp,
@@ -277,7 +278,9 @@ export function useProviderActions(
                 // native rewind/spawn awaited must remain recoverable by Undo.
                 previousDraftInput: runtime.draftInput,
                 previousDraftImages: runtime.draftImages.slice(),
-                builtInMcpDomains: meta.builtInMcpDomains,
+                // The ORIGINAL conversation's choices, beside its original
+                // transcript: undo restores the pane the user actually had.
+                builtInMcpOverrides: sessionMcpOverrides(meta),
               },
             },
           }
@@ -327,7 +330,8 @@ export function useProviderActions(
       const newSessionId = await sessionActions.replaceSession(pending.cwd, {
         kind: pending.provider,
         resumeSessionId: pending.previousProviderSessionId,
-        builtInMcpDomains: pending.builtInMcpDomains,
+        restoreTldrIdentity: pending.previousTldrIdentity,
+        builtInMcpOverrides: pending.builtInMcpOverrides,
         targetSessionId: sourceSessionId,
       })
       if (!newSessionId) return { status: 'failed', message: 'Replacement was not committed' }
@@ -418,7 +422,6 @@ export function useProviderActions(
         const newSessionId = await sessionActions.replaceSession(meta.cwd, {
           kind: 'codex',
           resumeSessionId: result.newProviderSessionId,
-          builtInMcpDomains: meta.builtInMcpDomains,
           targetSessionId: sourceSessionId,
         })
         if (!newSessionId) return { status: 'failed', message: 'Replacement was not committed' }
@@ -435,6 +438,7 @@ export function useProviderActions(
                 provider: 'codex',
                 cwd: meta.cwd,
                 previousProviderSessionId,
+                previousTldrIdentity: tldrIdentityForSession(sourceSessionId, meta),
                 rewoundProviderSessionId: result.newProviderSessionId,
                 // Not a prompt rewind. Undo restores previousProviderSessionId
                 // and previousDraftInput; this field exists because the
@@ -443,7 +447,9 @@ export function useProviderActions(
                 rewoundPromptTimestamp: null,
                 previousDraftInput: runtime.draftInput,
                 previousDraftImages: runtime.draftImages.slice(),
-                builtInMcpDomains: meta.builtInMcpDomains,
+                // The ORIGINAL conversation's choices, beside its original
+                // transcript: undo restores the pane the user actually had.
+                builtInMcpOverrides: sessionMcpOverrides(meta),
               },
             },
           }

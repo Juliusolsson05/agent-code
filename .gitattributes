@@ -1,0 +1,4 @@
+# Review Mermaid source in ARCHITECTURE.md; these previews are reproducible
+# outputs. Collapse them by default so generated SVG paths do not obscure the
+# architecture changes in GitHub's diff. Images remain available for review.
+docs/architecture/diagrams/*.svg linguist-generated=true

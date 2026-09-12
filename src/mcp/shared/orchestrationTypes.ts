@@ -1,5 +1,5 @@
 import type { BuiltInMcpDomain } from '@mcp/shared/types.js'
-import type { AgentProviderKind } from '@shared/types/providerKind.js'
+import type { AgentProviderKind, AgentProviderRuntime } from '@shared/types/providerKind.js'
 
 // Alias, not a re-declared union: orchestration can drive any registered
 // agent provider. Keeping the local name preserves this module's public
@@ -12,6 +12,9 @@ export type OrchestrationCreateAgentRequest = {
   type: 'create-agent'
   parentSessionId: string
   kind: OrchestrationAgentKind
+  // Runtime is a launch choice, not a different provider identity. Absence
+  // deliberately selects structured children even for a terminal parent.
+  providerRuntime?: AgentProviderRuntime
   cwd?: string
   title?: string
   role?: string

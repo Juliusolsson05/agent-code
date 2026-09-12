@@ -8,7 +8,6 @@ import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import type { WorkspaceSetRuntimes } from '@renderer/workspace/hook/context'
 import type { SessionActions } from '@renderer/workspace/hook/actions/session'
 import { resumableProviderSessionId } from '@renderer/workspace/providerSessionIdentity'
-import { resolveSessionBuiltInMcpDomains } from '@renderer/workspace/mcpDomains'
 import {
   providerChoiceLabel,
   providerSwitchChoices,
@@ -177,20 +176,6 @@ export async function switchAgentProvider(params: {
     }
   }
 
-  const resolveTargetBuiltInMcpDomains = (
-    effectiveSourceDomains: unknown,
-    effectiveTargetKind: AgentProviderKind,
-  ) => resolveSessionBuiltInMcpDomains({
-    provider: effectiveTargetKind,
-    // WHY original undefined provenance bypasses the source-filtered value:
-    // this legacy pane has never captured a per-session choice, so the target
-    // provider must seed current Settings. Once a list exists, including [],
-    // it is authoritative and only its source-supported subset may cross.
-    sessionDomains:
-      meta.builtInMcpDomains === undefined ? undefined : effectiveSourceDomains,
-    defaultDomains: refs.defaultBuiltInMcpDomainsRef.current,
-  })
-
   const replaceTranscriptlessPane = async (): Promise<SwitchAgentProviderResult> => {
     // A freshly-spawned pane can be transcript-less either because its
     // provider has not announced a durable id yet (Claude/Codex) OR because it
@@ -198,21 +183,9 @@ export async function switchAgentProvider(params: {
     // Both states need the same pane replacement. Keeping that operation in
     // one closure prevents the two identity models from drifting on draft and
     // MCP-domain preservation.
-    const effectiveSourceDomains =
-      meta.builtInMcpDomains === undefined
-        ? undefined
-        : resolveSessionBuiltInMcpDomains({
-            provider: sourceKind,
-            sessionDomains: meta.builtInMcpDomains,
-            defaultDomains: [],
-          })
     const newSessionId = await sessionActions.replaceSession(meta.cwd, {
       kind: targetKind,
       ...(targetProviderRuntime ? { providerRuntime: targetProviderRuntime } : {}),
-      builtInMcpDomains: resolveTargetBuiltInMcpDomains(
-        effectiveSourceDomains,
-        targetKind,
-      ),
       // Pin the replacement to THIS agent. Without it, bulk switching can
       // replace whichever pane became focused while an earlier conversion was
       // awaiting main-process work.
@@ -407,23 +380,11 @@ export async function switchAgentProvider(params: {
       return await replaceTranscriptlessPane()
     }
 
-    // WHY target domains distinguish legacy `undefined` from an explicit list:
-    // waking initializes renderer metadata under the SOURCE provider. A legacy
-    // undefined Claude pane can therefore become `[]` merely because its
-    // configured default is Codex-only Workflow MCP; that must still seed the
-    // Codex target. Conversely, a stale explicit `['workflows']` is narrowed
-    // to `[]` during the Claude wake and must not be resurrected just because
-    // Codex supports it. Preserve original initialization provenance, but use
-    // the post-wake list for every session that already had an explicit policy.
-    const targetBuiltInMcpDomains = resolveTargetBuiltInMcpDomains(
-      wakeResult.builtInMcpDomains,
-      result.targetKind,
-    )
     const newSessionId = await sessionActions.replaceSession(meta.cwd, {
       kind: result.targetKind,
       ...(targetProviderRuntime ? { providerRuntime: targetProviderRuntime } : {}),
       resumeSessionId: result.targetProviderSessionId,
-      builtInMcpDomains: targetBuiltInMcpDomains,
+      preserveTldr: true,
       // See the empty-pane branch above: pin to this agent so the bulk loop
       // replaces the right pane (not the focused one) and the single-pane
       // caller is immune to focus changing during the translate await.

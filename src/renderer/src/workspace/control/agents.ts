@@ -3,7 +3,7 @@ import { startControlTask } from './startTask'
 import { ControlError, defineCapability, pageInput, pageSchema, paginate } from '@control-sdk'
 import { useAppStore } from '@renderer/app-state/store'
 import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
-import { resolveTabSessions } from '@renderer/workspace/queries'
+import { findTabsHoldingDirectory, resolveTabSessions } from '@renderer/workspace/queries'
 import { observeWorkspace, workspaceObservationSchema } from '@renderer/workspace/control'
 import type { Workspace } from '@renderer/workspace/hook'
 import { AGENT_PROVIDER_RUNTIMES } from '@shared/types/providerKind'
@@ -229,7 +229,9 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
       handler: async ({ cwd, provider: kind, createDuplicate }) => {
         requireUi()
         const state = useAppStore.getState().workspaceState
-        const matches = state.tabs.filter(tab => resolveTabSessions(state, tab.id).some(id => state.sessions[id]?.cwd === cwd))
+        // One rule with the path picker (#913): a tab holds a directory when one
+        // of its sessions runs there.
+        const matches = findTabsHoldingDirectory(state, cwd)
         if (!createDuplicate && matches.length > 1) throw new ControlError('ambiguous_owner', 'Several project tabs use this directory; select a tab ID')
         if (!createDuplicate && matches.length === 1) {
           const tab = matches[0]

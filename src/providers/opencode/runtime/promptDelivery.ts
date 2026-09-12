@@ -1,15 +1,12 @@
-// OpenCode prompt delivery (#406 step 5). The structured runtime's prompt() is
-// an HTTP POST that the server accepts synchronously. The native-terminal
-// runtime implements the same narrow `deliverPromptText` capability with a
-// readiness gate followed by one atomic bracketed-paste+Enter PTY write. That
-// keeps the manager provider-oriented while allowing two transports behind the
-// same OpenCode identity; only the HTTP path can claim synchronous provider
-// acceptance, while the PTY path honestly reports transport acceptance.
+// Both OpenCode runtimes deliver prompts through their server's HTTP API.
+// The native terminal waits for its own server to connect and re-sync; it no
+// longer relies on composer readiness or PTY paste consumption (#877).
+// Keep `transport` acceptance: a successful HTTP submission acknowledges the
+// handoff, not a committed user message or completed turn in the transcript.
 //
 // WHY this ignores io.write entirely: runtime choice belongs to the concrete
-// AgentSession. Calling its capability avoids duplicating runtime inspection
-// inside the provider delivery policy. A throw becomes ok:false so the caller
-// retains the draft when neither HTTP nor PTY transport accepted it.
+// AgentSession. Its capability owns server selection and startup waiting,
+// while this policy maps acceptance/failure for callers retaining a draft.
 
 import type {
   PromptDeliveryIo,
@@ -39,6 +36,20 @@ export async function deliverOpencodePrompt(
     await io.session.deliverPromptText(io.prompt)
     return { ok: true, acceptance: { kind: 'transport', acceptedAt: Date.now() } }
   } catch (err) {
+    if (isTerminalRejectedError(err)) {
+      return {
+        ok: false,
+        // A refusal is the one failure that proves nothing was written: the
+        // server declined the request rather than forking a turn.
+        stage: 'before-write',
+        code: 'transport-failed',
+        message: `opencode prompt delivery refused for session ${io.sessionId}: ${err.message}`,
+        retrySafe: false,
+        disposition: 'do-not-retry',
+        promptWritten: false,
+        enterWritten: false,
+      }
+    }
     if (isTerminalNotReadyError(err)) {
       return {
         ok: false,
@@ -53,8 +64,10 @@ export async function deliverOpencodePrompt(
     }
     return {
       ok: false,
-      // Both supported transports can throw after crossing a non-transactional
-      // boundary, so retrying could duplicate an already accepted prompt.
+      // Everything else, including the package's `unknown`: the request was
+      // dispatched and its outcome was never learned. OpenCode forks the
+      // prompt work before it acknowledges, so retrying could duplicate a turn
+      // that is already running. Report the write as possibly-performed.
       stage: 'after-enter',
       code: 'transport-failed',
       message: `opencode prompt delivery failed for session ${io.sessionId}: ${
@@ -66,6 +79,12 @@ export async function deliverOpencodePrompt(
       enterWritten: false,
     }
   }
+}
+
+function isTerminalRejectedError(
+  error: unknown,
+): error is Error & { code: 'opencode-terminal-rejected' } {
+  return error instanceof Error && (error as { code?: unknown }).code === 'opencode-terminal-rejected'
 }
 
 function isTerminalNotReadyError(

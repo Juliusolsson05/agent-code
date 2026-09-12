@@ -1,3 +1,6 @@
+import type { UsageLimitNotice } from '@shared/types/usageLimitNotice'
+import { claudeUsageLimitNotice } from '@providers/claude/renderer/adapters/usageLimitNotice'
+import { codexUsageLimitNotice } from '@providers/codex/renderer/adapters/usageLimitNotice'
 import type { ConditionView } from '@shared/conditions-core/view'
 import type { PromptAcceptance } from '@shared/types/providerConfig'
 import type { Entry, ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
@@ -48,6 +51,7 @@ import { OPENCODE_VIEWS } from '@providers/opencode/renderer/conditions/views'
 import {
   createOpencodeTranscriptEntryMapper,
   extractOpencodeProviderSessionId,
+  isOpencodeTypedUserPrompt,
 } from '@providers/opencode/renderer/transcript/mapper'
 import { opencodeComposerSubmit } from '@providers/opencode/renderer/composerSubmit'
 import { renderOpencodeOperation } from '@providers/opencode/renderer/rows/dispatch'
@@ -56,10 +60,12 @@ import { CODEX_IDENTITY } from '@providers/codex/renderer/identity'
 import {
   createClaudeTranscriptEntryMapper,
   extractClaudeProviderSessionId,
+  isClaudeTypedUserPrompt,
 } from '@providers/claude/renderer/transcript/mapper'
 import {
   createCodexTranscriptEntryMapper,
   extractCodexProviderSessionId,
+  isCodexTypedUserPrompt,
 } from '@providers/codex/renderer/transcript/mapper'
 
 export type RendererProviderCapabilities = {
@@ -91,6 +97,10 @@ export type RendererProviderCapabilities = {
     entries: readonly Entry[]
   }) => ProviderConditionSnapshot | null
   renderOperation: (input: ProviderOperationInput) => ProviderOperationDecision
+  /** Provider status admission is data-only so the ledger and shared card use
+   * the same interpretation; a quoted error in ordinary prose is never enough. */
+  usageLimitNoticeFromEntry?: (entry: unknown) => UsageLimitNotice | null
+  usageLimitNoticeFromError?: (error: unknown) => UsageLimitNotice | null
   renderDurableEntry?: (
     input: ProviderDurableEntryInput,
   ) => ProviderDurableEntryDecision | undefined
@@ -144,6 +154,22 @@ export type RendererProviderCapabilities = {
    * Codex: session_meta `payload.id`.
    */
   extractProviderSessionId: (raw: Record<string, unknown>) => string | null
+  /**
+   * Is this user row (text-bearing, not isMeta, not a compact summary) a
+   * prompt the user actually typed, rather than provider scaffolding?
+   * View Prompts, Dispatch titles and composer ↑ history all ask this
+   * through `extractLatestUserPrompts`.
+   *
+   * WHY a capability and not a switch in that shared helper: each provider
+   * marks its non-typed user rows differently (Claude: no `permissionMode`
+   * stamp; Codex: `<`-prefixed context blocks; OpenCode: `synthetic` parts
+   * its mapper already drops). The shared helper used to encode Claude's and
+   * Codex's rules as `kind !== 'codex' && permissionMode === undefined`,
+   * which silently treated every OpenCode prompt as Claude scaffolding and
+   * left View Prompts and Dispatch titles empty for OpenCode (#394 §4's
+   * failure class). A new provider now has to answer this to compile.
+   */
+  isTypedUserPrompt: (entry: Entry, text: string) => boolean
   /**
    * Composer submit protocol (#394 phase 2c-4). Owns the provider's
    * paste/submit discipline (Codex: one atomic bracketed-paste+Enter;
@@ -269,6 +295,7 @@ const claudeCapabilities: RendererProviderCapabilities = {
   renderOperation: renderClaudeOperation,
   renderDurableEntry: renderClaudeDurableEntry,
   classifyDurableEntry: classifyClaudeDurableEntry,
+  usageLimitNoticeFromEntry: claudeUsageLimitNotice,
   collectTaskNotifications: collectClaudeTaskNotifications,
   classifyTaskNotificationEntry: taskNotificationFromEntry,
   renderSemanticBlock: renderClaudeSemanticBlock,
@@ -278,6 +305,7 @@ const claudeCapabilities: RendererProviderCapabilities = {
   ),
   createTranscriptEntryMapper: () => createClaudeTranscriptEntryMapper(),
   extractProviderSessionId: extractClaudeProviderSessionId,
+  isTypedUserPrompt: isClaudeTypedUserPrompt,
   composerSubmit: claudeComposerSubmit,
   supportsImageAttachments: true,
   usesOptimisticUserEcho: false,
@@ -293,6 +321,7 @@ const codexCapabilities: RendererProviderCapabilities = {
   renderOperation: renderCodexOperation,
   renderDurableEntry: renderCodexDurableEntry,
   classifyDurableEntry: classifyCodexDurableEntry,
+  usageLimitNoticeFromError: codexUsageLimitNotice,
   renderSemanticBlock: renderCodexSemanticBlock,
   isSpawnTool: block => Boolean(
     fromCodexNativeSpawnUse(block) ||
@@ -301,6 +330,7 @@ const codexCapabilities: RendererProviderCapabilities = {
   createTranscriptEntryMapper: (initialTurnCursor) =>
     createCodexTranscriptEntryMapper(initialTurnCursor ?? null),
   extractProviderSessionId: extractCodexProviderSessionId,
+  isTypedUserPrompt: isCodexTypedUserPrompt,
   composerSubmit: codexComposerSubmit,
   supportsImageAttachments: false,
   usesOptimisticUserEcho: true,
@@ -321,6 +351,7 @@ const opencodeCapabilities: RendererProviderCapabilities = {
   isSpawnTool: () => false,
   createTranscriptEntryMapper: () => createOpencodeTranscriptEntryMapper(),
   extractProviderSessionId: extractOpencodeProviderSessionId,
+  isTypedUserPrompt: isOpencodeTypedUserPrompt,
   composerSubmit: opencodeComposerSubmit,
   supportsImageAttachments: false,
   usesOptimisticUserEcho: true,

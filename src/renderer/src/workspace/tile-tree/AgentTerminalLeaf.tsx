@@ -284,7 +284,12 @@ export function AgentTerminalLeaf({
       fit = new FitAddon()
       term.loadAddon(fit)
       term.open(container)
-      webglRenderer = attachXtermWebglRenderer(term)
+      // A renderer change (DOM -> WebGL upgrade, or WebGL -> DOM after a
+      // context loss) changes cell metrics without resizing the container, so
+      // the ResizeObserver below would never refit it. Route it through the
+      // same coalesced, ownership-gated scheduler: a non-owner pane stays
+      // inert exactly as it does for container resizes.
+      webglRenderer = attachXtermWebglRenderer(term, { onRendererChange: scheduleFitAndResizeBackend })
       termRef.current = term
       // Follow re-pin wiring lives in the hook; the mount effect only owns
       // the terminal instance lifetime, so this attaches/detaches with it.
@@ -569,9 +574,15 @@ export function AgentTerminalLeaf({
   // `awaitingAssistant`, is set only by the composer. That means this header
   // lights on the first spinner frame or semantic turn, not on Enter.
   //
-  // Known gap: the OpenCode Terminal runtime emits no activity at all (only
-  // `process-state {active:false}`), so its header stays unlit (#857). That
-  // is a missing provider signal, not something this surface can derive.
+  // OpenCode Terminal lights it the same way, from a different source: it has
+  // no spinner detector, so `process-state` and the semantic turn come from
+  // the TUI's own server (busy/idle over `/event`) through
+  // opencode-terminal-headless (#864). Before that package it emitted only
+  // `process-state {active:false}` and this header never lit (#857). If it
+  // stops lighting again, look for a lost live channel (`live-state`
+  // diagnostics) before suspecting this surface: nothing here is runtime
+  // specific. opencodeTerminalRuntime.renderer.test.tsx replays a recorded
+  // TUI turn through this exact `paneHeaderStatusLit` rule.
   const isSessionLive = runtime.sessionStatus === 'running'
   // Uses PaneHeader's own rule instead of an inline `&&`, so the slot colors
   // below can never disagree with the fill they sit on.
@@ -689,6 +700,42 @@ export function AgentTerminalLeaf({
           </>
         }
       />
+
+      {/* WHY the raw pane carries its own transcript diagnostic:
+          every other surface that shows one (Agent Status, the Dispatch row)
+          can be closed, and this pane is the one the user is actually looking
+          at. The case that forced it is a TUI session switch: the user runs
+          /new or picks another session inside the TUI, this pane goes on
+          following the session it launched with, and with Dispatch and Agent
+          Status closed nothing on screen said so. A pane that quietly names
+          the wrong conversation is the failure the whole signal exists to
+          prevent, so it must be visible HERE.
+
+          It takes layout space rather than overlaying: the terminal is the
+          content, and covering a line of it to report a problem would be its
+          own small lie. xterm's fit addon reflows on the resulting resize.
+          Nothing here is focusable, so the terminal keeps keyboard focus.
+
+          WHY `transcriptChannelError` and not `transcriptError`: the latter
+          also carries transient diagnostics — a `sink_failed` delivery hiccup,
+          a history read that the next read fixes — which the user can do
+          nothing about and which clear themselves. Standing a warning over
+          someone's terminal for those trains them to ignore the banner, which
+          costs exactly the one case it exists for. This field is the lifetime
+          marker: a channel that stopped for good, or a TUI that moved to
+          another session. Both stay true until something real changes. */}
+      {runtime.transcriptChannelError ? (
+        <div
+          data-terminal-transcript-error="true"
+          role="status"
+          className="
+            mx-2 mt-1 flex-shrink-0 rounded-control border border-warning-border
+            bg-warning-soft px-2 py-1 text-[10px] leading-snug text-warning
+          "
+        >
+          {runtime.transcriptChannelError}
+        </div>
+      ) : null}
 
       <div className="flex-1 min-h-0 min-w-0 overflow-hidden p-2">
         <div
