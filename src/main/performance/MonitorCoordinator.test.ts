@@ -118,4 +118,28 @@ describe('monitor worker isolation', () => {
     coordinator.stop()
   })
 
+  it('publishes process generations atomically and rejects missing chunks', () => {
+    vi.useFakeTimers()
+    const child = new FakeChild()
+    harness.launch.mockReturnValue(child)
+    const coordinator = new MonitorCoordinator(() => Date.now())
+    coordinator.start()
+    coordinator.operation(operation)
+    const row = { identity: '1:100', pid: 1, parentPid: 0, creationTime: 100, type: 'main',
+      sessionIds: [], sharedSessionCount: 0, cpuPercent: 1, memoryBytes: 1024, quality: 'ok' }
+    const summary = { sampledAt: 100, count: 2, cpuPercent: 2, memoryBytes: 2048, quality: 'ok', sessionCount: 0, missingRoots: 0, truncated: false }
+    vi.advanceTimersByTime(250)
+    child.emit('message', { sequence: 1, processChunk: { generation: 1, offset: 0, complete: false, rows: [row], summary } })
+    expect(coordinator.readProcesses().rows).toEqual([])
+    vi.advanceTimersByTime(250)
+    child.emit('message', { sequence: 2, processChunk: { generation: 1, offset: 1, complete: true, rows: [{ ...row, identity: '2:100', pid: 2 }], summary } })
+    expect(coordinator.readProcesses().rows).toHaveLength(2)
+    coordinator.operation(operation)
+    vi.advanceTimersByTime(250)
+    child.emit('message', { sequence: 3, processChunk: { generation: 2, offset: 1, complete: true, rows: [row], summary } })
+    expect(coordinator.read().collector).toBe('degraded')
+    expect(coordinator.readProcesses().rows).toHaveLength(2)
+    coordinator.stop()
+  })
+
 })

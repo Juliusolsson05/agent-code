@@ -18,3 +18,12 @@ Issue #951, part of #944. Stacked on collector PR #953.
    settings/command discovery. Typecheck/build and inspect the real UI before
    two independent Agent Code orchestration reviews. History, incidents and
    explicit captures are subsequent stages of the full monitoring plan.
+
+Implementation evidence: full main/renderer TypeScript check passed. Attribution,
+transport atomicity, parser, preload credit, and monitor lifecycle tests pass
+(15 final focused tests, plus settings/command catalog coverage). A real isolated
+Electron helper discovers its native process and acknowledges operation evidence;
+the smoke measured 63,700,992 bytes RSS, a single sample rather than an overhead
+qualification. Browser accessibility inspection confirms the overview and table
+semantics; screenshot/interaction inspection was interrupted by an unattached
+browser debugger. Full production build and CI/review remain in progress.

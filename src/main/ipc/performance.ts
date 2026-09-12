@@ -17,6 +17,11 @@ import type {
 
 export function registerPerformanceIpc(manager: SessionManager): void {
   const processTelemetry = new ProcessTelemetry(manager)
+  monitorCoordinator.startProcesses(() => manager.getProcessTelemetryTargets())
+  ipcMain.handle('performance:monitor-processes', (event, offset?: number, sort?: unknown) => {
+    if (!BrowserWindow.fromWebContents(event.sender)) return null
+    return monitorCoordinator.readProcesses(offset, sort === 'memory' ? 'memory' : 'cpu')
+  })
 
   ipcMain.handle('performance:monitor-snapshot', event => {
     if (!BrowserWindow.fromWebContents(event.sender)) return null

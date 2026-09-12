@@ -1,4 +1,8 @@
+import { parseProcessChunk } from '@shared/performance/parseProcessChunk.js'
 import { parseMonitorSnapshot } from '@shared/performance/parseMonitorSnapshot.js'
+import { ElectronProcessSource } from './ElectronProcessSource.js'
+import type { MonitorProcessTarget, MonitorProcessPage, MonitorProcessRow } from '@shared/performance/processSnapshot.js'
+import { EMPTY_PROCESS_SUMMARY } from './NativeProcessSampler.js'
 import { utilityProcess } from 'electron'
 import type { UtilityProcess } from 'electron'
 import { fileURLToPath } from 'node:url'
@@ -24,6 +28,11 @@ export class MonitorCoordinator {
   private retryAt = 0
   private stopped = false
   private lastReplyAt = 0
+  private processSource: ElectronProcessSource | null = null
+  private processPage: MonitorProcessPage = { summary: EMPTY_PROCESS_SUMMARY, rows: [], total: 0 }
+  private processTransfer: { generation: number; rows: MonitorProcessRow[] } | null = null
+  private moreProcesses = false
+  private processReceivedAt = 0
   private liveWindows = new Set<number>()
   private cache: MonitorSnapshot = {
     schemaVersion: 1, runId: getAppRunId(), enabled: true, sampledAt: 0,
@@ -48,13 +57,32 @@ export class MonitorCoordinator {
       this.enqueue({ kind: 'main', sample: main })
     })
     this.launch()
-    this.timer = setInterval(() => this.pump(), 1000)
+    this.timer = setInterval(() => this.pump(), 250)
     this.timer.unref()
+  }
+
+  startProcesses(targets: () => MonitorProcessTarget[]): void {
+    if (this.processSource) return
+    this.processSource = new ElectronProcessSource(targets, record => this.enqueue(record))
+    this.processSource.start()
+  }
+
+  readAllProcesses(): MonitorProcessPage { return this.processPage }
+
+  readProcesses(offset = 0, sort: 'cpu' | 'memory' = 'cpu'): MonitorProcessPage {
+    const start = Number.isSafeInteger(offset) && offset >= 0 ? Math.min(offset, MONITOR_POLICY.processLimit) : 0
+    const rows = sort === 'memory' ? [...this.processPage.rows].sort((a, b) => (b.memoryBytes ?? -1) - (a.memoryBytes ?? -1)) : this.processPage.rows
+    return { summary: this.processSummary(), total: rows.length, rows: rows.slice(start, start + 50) }
+  }
+
+  private processSummary() {
+    const summary = this.processPage.summary
+    return { ...summary, quality: summary.sampledAt > 0 && this.monotonicNow() - this.processReceivedAt > 15000 ? 'stale' as const : summary.quality }
   }
 
   read(): MonitorSnapshot {
     return {
-      ...this.cache, queuedBytes: this.queue.stats.bytes,
+      ...this.cache, processes: this.processSummary(), queuedBytes: this.queue.stats.bytes,
       droppedRecords: this.queue.stats.dropped + this.lost,
       restarts: Math.max(0, this.launches - 1),
       collector: this.stopped ? 'stopped'
@@ -94,6 +122,7 @@ export class MonitorCoordinator {
 
   stop(): void {
     this.stopped = true
+    this.processSource?.stop()
     if (this.timer) clearInterval(this.timer)
     this.timer = null
     this.unsubscribe?.()
@@ -121,14 +150,29 @@ export class MonitorCoordinator {
       child.on('message', (message: MonitorWorkerResponse) => {
         try {
           if (this.child !== child || !this.pending || message?.sequence !== this.pending.sequence) return
-          const snapshot = parseMonitorSnapshot(message.snapshot)
-          if (!snapshot) { this.fail(child); return }
+          const snapshot = message.snapshot === undefined ? null : parseMonitorSnapshot(message.snapshot)
+          const chunk = message.processChunk === undefined ? null : parseProcessChunk(message.processChunk)
+          if ((message.snapshot !== undefined && !snapshot) || (message.processChunk !== undefined && !chunk)) {
+            this.fail(child); return
+          }
+          if (chunk) {
+            if (chunk.offset === 0) this.processTransfer = { generation: chunk.generation, rows: [] }
+            const transfer = this.processTransfer
+            if (!transfer || transfer.generation !== chunk.generation || transfer.rows.length !== chunk.offset
+              || transfer.rows.length + chunk.rows.length > MONITOR_POLICY.processLimit) { this.fail(child); return }
+            transfer.rows.push(...chunk.rows)
+            this.moreProcesses = !chunk.complete
+            if (chunk.complete) {
+              this.processPage = { summary: chunk.summary, rows: transfer.rows, total: transfer.rows.length }
+              this.processReceivedAt = this.monotonicNow()
+              this.processTransfer = null
+            }
+          }
           this.pending = null
           this.lastReplyAt = this.monotonicNow()
-          this.cache = {
+          if (snapshot) this.cache = {
             ...this.cache, ...snapshot, main: this.cache.main,
-            windows: snapshot.windows.filter(window => this.liveWindows.has(window.windowId)),
-            collector: 'healthy',
+            windows: snapshot.windows.filter(window => this.liveWindows.has(window.windowId)), collector: 'healthy',
           }
         } catch { this.fail(child) }
       })
@@ -143,6 +187,8 @@ export class MonitorCoordinator {
     try { child?.kill() } catch { /* Exiting helpers can reject native handle access. */ }
     this.lost += this.pending?.count ?? 0
     this.pending = null
+    this.processTransfer = null
+    this.moreProcesses = false
     this.retryAt = this.monotonicNow() + 5000 * this.launches
     this.cache = { ...this.cache, collector: 'degraded' }
   }
@@ -153,7 +199,7 @@ export class MonitorCoordinator {
       if (!this.child && this.monotonicNow() >= this.retryAt) this.launch()
       if (!this.child || this.pending) return
       const records = this.queue.drain(MONITOR_POLICY.rendererBatchRecords, MONITOR_POLICY.batchBytes - 1024)
-      if (!records.length) return
+      if (!records.length && !this.moreProcesses) return
       const sequence = ++this.sequence
       // One credit means a suspended worker cannot accumulate an invisible
       // Electron message-port queue. Timeout discards the in-flight evidence,

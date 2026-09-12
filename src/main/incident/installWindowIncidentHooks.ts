@@ -1,3 +1,4 @@
+import { readElectronProcesses } from '@main/performance/ElectronProcessSource.js'
 import { app, ipcMain } from 'electron'
 import type { BrowserWindow, WebContents } from 'electron'
 import { execFile } from 'node:child_process'
@@ -450,17 +451,7 @@ function logFreezeSnapshot(input: {
         eventLoop: mainMemory.eventLoopDelay,
       },
       outboundIpc: getOutboundIpcDiagnostics(),
-      electronProcesses: app.getAppMetrics().map(metric => ({
-        pid: metric.pid,
-        type: metric.type,
-        name: metric.name,
-        serviceName: metric.serviceName,
-        cpuPercent: Math.round(metric.cpu.percentCPUUsage * 100) / 100,
-        idleWakeupsPerSecond: metric.cpu.idleWakeupsPerSecond,
-        workingSetKb: metric.memory.workingSetSize,
-        peakWorkingSetKb: metric.memory.peakWorkingSetSize,
-        privateBytes: metric.memory.privateBytes,
-      })),
+      electronProcesses: readElectronProcesses(),
     })
   } catch (error) {
     terminalFreezeLog('renderer freeze snapshot failed', diagnosticFailureMetadata(error))

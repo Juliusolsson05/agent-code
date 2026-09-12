@@ -355,12 +355,12 @@ export const layoutCommands: CommandDef[] = [
   // duplicates a durable preference gives the same setting two owners and two
   // places to look when it is wrong.
   {
+    // Preserve this ID so saved bindings keep opening the promoted product surface.
     id: 'toggle-performance-panel',
-    category: 'developer',
-    pickerVisibility: 'debug',
-    surface: 'debug',
-    title: 'Performance Stats',
-    description: '**What it does:** Shows or hides the performance stats panel.\n\n**Use when:** You want render, pane, or runtime performance details.\n\n**Notes:** Mostly useful while debugging the app.',
+    category: 'workspace-tools',
+    surface: 'app',
+    title: 'Performance Monitor',
+    description: '**What it does:** Opens live CPU, memory, responsiveness and agent process monitoring.\n\n**Use when:** Agent Code feels slow or you want to understand resource use.\n\n**Notes:** Local baseline collection is always on; opening this view shows the existing measurements.',
     keywords: ['performance', 'stats', 'cpu', 'memory', 'panes'],
     getState: ({ flags }) => toggle(flags.performancePanelOpen),
     run: ({ ui }) => ui.togglePerformancePanel(),
