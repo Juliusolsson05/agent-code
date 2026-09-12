@@ -38,6 +38,8 @@
       "codex-headless/*": ["./packages/codex-headless/src/*"],
       "opencode-headless": ["./packages/opencode-headless/src/index.ts"],
       "opencode-headless/*": ["./packages/opencode-headless/src/*"],
+      "opencode-terminal-headless": ["./packages/opencode-terminal-headless/src/index.ts"],
+      "opencode-terminal-headless/*": ["./packages/opencode-terminal-headless/src/*"],
       "agent-transcript-parser": ["./packages/agent-transcript-parser/src/index.ts"],
       "agent-transcript-parser/*": ["./packages/agent-transcript-parser/src/*"],
       "agent-voice-dictation": ["./packages/agent-voice-dictation/src/index.ts"],
@@ -45,6 +47,8 @@
       "workflow-mcp": ["./packages/workflow-mcp/src/index.ts"],
       "workflow-mcp/state": ["./packages/workflow-mcp/src/state.ts"],
       "workflow-mcp/worker": ["./packages/workflow-mcp/src/worker.ts"],
+      "@control-sdk": ["./src/control-sdk/index.ts"],
+      "@control-sdk/host": ["./src/control-sdk/host.ts"],
       "@main/*": ["./src/main/*"],
       "@preload/*": ["./src/preload/*"],
       "@renderer/*": ["./src/renderer/src/*"],
@@ -54,6 +58,7 @@
     }
   },
   "include": [
+    "src/control-sdk/**/*",
     "electron.vite.config.ts",
     "src/main/**/*",
     "src/preload/**/*",
@@ -61,6 +66,15 @@
     "src/shared/**/*",
     "src/providers/**/*",
     "src/mcp/**/*",
+    // The corpus policy is imported by the extractor script AND by a unit test
+    // under src/. Composite tsc needs every imported module listed; keeping the
+    // policy in the authoritative typecheck means a key added to the allowlist
+    // fails the normal gate instead of surfacing months later on regeneration.
+    "scripts/conversation-corpus-policy.ts",
+    "scripts/extract-conversation-corpus.mts",
+    // The corpus installer is imported by system tests under src/main; a
+    // composite project must list every module its files reach.
+    "testing/support/conversations/**/*",
     "packages/agent-transcript-parser/src/**/*",
     // Pull only the Node-safe dictation package surfaces into the app
     // typecheck. The package root also exports browser recording helpers, and
@@ -72,6 +86,7 @@
     "packages/claude-code-headless/src/**/*",
     "packages/codex-headless/src/**/*",
     "packages/opencode-headless/src/**/*",
+    "packages/opencode-terminal-headless/src/**/*",
     "packages/workflow-mcp/src/**/*"
   ],
   "exclude": [

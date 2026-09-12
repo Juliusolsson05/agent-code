@@ -1,5 +1,5 @@
 import type { ResolvedCommand } from '@renderer/features/command-palette/types'
-import { primary, rankEntries, secondary } from '@renderer/features/command-palette/lib/rankEntries'
+import { body, primary, rankEntries, secondary } from '@renderer/features/command-palette/lib/rankEntries'
 // EMPTY_HEADERS is shared rather than re-declared: search results are never
 // sectioned either, and headers describe a browse structure a relevance-ordered
 // list does not have.
@@ -18,10 +18,8 @@ import type { BrowseOrder, CommandSortMode } from '@renderer/features/command-pa
 // docs/plans_and_ideas/2026-07-22-palette-search-relevance-plan.md. One
 // definition of "relevance", one place to fix it.
 //
-// Field mapping: title is primary, keywords are secondary, commands have
-// no body field. Under `rankEntries`' tier table that reproduces the old
-// 4/3/2/1 tiers as 5/4/3/1 — the numbers shift, the ordering between any
-// two commands does not.
+// Descriptions are literal body matches: the operator can search by purpose
+// without scattered letters in a paragraph defeating precise title matches.
 //
 // The cardinal design rule still holds and is now enforced inside
 // `rankEntries`: a text match always beats history. History is passed as
@@ -70,7 +68,7 @@ export function rankCommands(
   const ranked = rankEntries(
     commands,
     query,
-    command => [primary(command.title), ...command.keywords.map(keyword => secondary(keyword))],
+    commandSearchFields,
     command => (starred[command.id] ? STAR_WEIGHT : 0) + (historyScore.get(command.id) ?? 0),
   )
 
@@ -111,4 +109,10 @@ export function rankCommands(
   // 'catalog' — that order is a declared user-visible invariant (catalog.ts)
   // and remains the default.
   return browseOrder(ranked, sortMode, historyScore, starred)
+}
+
+// Shared with the control catalog. Both surfaces must agree what an intention
+// matches, while the UI retains its existing stars/history/browse ordering.
+export function commandSearchFields(command: { title: string; description: string; keywords: readonly string[] }) {
+  return [primary(command.title), ...command.keywords.map(keyword => secondary(keyword)), body(command.description)]
 }

@@ -75,8 +75,12 @@ export const AgentInlineTerminal = memo(function AgentInlineTerminal({ sessionId
       fit = new FitAddon()
       term.loadAddon(fit)
       term.open(container)
+      // Attached on the host (the parent of xterm's `.xterm` element) right
+      // after open() so it bubbles AFTER every xterm wheel listener — see
+      // terminalWheelBoundary.ts. The WebGL attach moved below `scheduleFit`
+      // on main (#873); the boundary is renderer-independent, so it does not
+      // follow it there.
       wheelBoundary = attachTerminalWheelBoundary(container)
-      webglRenderer = attachXtermWebglRenderer(term)
       termRef.current = term
 
       let lastCols = 0
@@ -108,6 +112,12 @@ export const AgentInlineTerminal = memo(function AgentInlineTerminal({ sessionId
         if (disposed || rafId !== null) return
         rafId = window.requestAnimationFrame(fitAndResizeBackend)
       }
+      // Attached here, after `scheduleFit` exists, so a renderer change (DOM ->
+      // WebGL, or back after a context loss) can request the refit the
+      // ResizeObserver never would — the container does not change size when
+      // only the renderer's cell metrics do. The attach is asynchronous (a
+      // dynamic import), so starting it a few statements later changes nothing.
+      webglRenderer = attachXtermWebglRenderer(term, { onRendererChange: scheduleFit })
       scheduleFit()
       resizeObserver = new ResizeObserver(scheduleFit)
       resizeObserver.observe(container)

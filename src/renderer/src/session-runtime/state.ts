@@ -34,14 +34,20 @@ import type { ProviderConditionSnapshot } from '@shared/types/providerConditions
 import type { SessionRecoverFailureCode,
   SessionInputReadiness,
 } from '@shared/types/session'
-import type { BuiltInMcpDomain } from '@mcp/shared/types'
+import type { BuiltInMcpOverrides } from '@mcp/shared/types'
 import type { SubAgentState } from '@preload/api/types'
 import type {
   CodexTranscriptObservationEventName,
   SessionLifecycleCorrelationIds,
   SessionLifecycleData,
 } from '@shared/lifecycle/events'
+import type { TerminalForegroundState } from '@shared/types/terminalForeground'
 export type { SubAgentState, SubAgentToolCall } from '@preload/api/types'
+
+/** One classified foreground observation for a plain terminal (#865), plus
+ *  when it last changed. `changedAt` doubles as the terminal's "last active"
+ *  time: shells have no transcript timestamps to age them by. */
+export type TerminalForegroundRuntime = TerminalForegroundState & { changedAt: number }
 
 export type PickerItem = {
   id: string
@@ -112,12 +118,19 @@ export type PendingRewindUndo = {
   provider: AgentProviderKind
   cwd: string
   previousProviderSessionId: string
+  // Undo returns to the original transcript, whose summary must be restored;
+  // the truncated branch deliberately has a different, initially empty TLDR.
+  previousTldrIdentity?: string
   rewoundProviderSessionId: string
   rewoundPromptText: string
   rewoundPromptTimestamp: string | null
   previousDraftInput: string
   previousDraftImages: ClaudeDraftImage[]
-  builtInMcpDomains?: BuiltInMcpDomain[]
+  /** The original conversation's per-domain MCP choices. The effective list is
+   * deliberately NOT stored: undo re-resolves against current Settings like
+   * every other replacement, so returning to a transcript cannot resurrect a
+   * capability the user has since turned off globally. */
+  builtInMcpOverrides?: BuiltInMcpOverrides
 }
 
 export type SemanticLiveBlock = {
@@ -298,7 +311,9 @@ export type SemanticLogEntry = {
   raw?: Record<string, unknown>
 }
 
-export type SemanticErrorEntry = {
+export type SemanticErrorEntry = import('@shared/types/usageLimitNotice').ProviderErrorMetadata & {
+  observedAtMs?: number
+  sessionRunId?: string
   ts: number
   kind: 'api_error' | 'stream_error'
   message: string
@@ -348,7 +363,11 @@ export type StreamPhase =
   | 'awaiting-tool'
 
 export type ProviderSwitchRuntimeState = {
-  phase: 'preparing' | 'compacting' | 'summarizing' | 'projecting'
+  // `shrinking` is the quota-independent path's phase (#821): the source is out
+  // of quota, so nothing is compacted anywhere and the deterministic ladder
+  // trims the conversation locally instead. It is a main-process phase like the
+  // other three — `preparing` is the only one the renderer writes itself.
+  phase: 'preparing' | 'compacting' | 'summarizing' | 'shrinking' | 'projecting'
   message: string
 }
 
@@ -369,7 +388,6 @@ export type SessionRuntime = {
   screenMarkdown: string
   recentScreen: string
   recentScreenMarkdown: string
-  streamingBaseline: string | null
   entries: Entry[]
   /** Total count of JSONL records this session has produced — the
    *  denominator the ScrollIndicator above the composer shows.
@@ -460,6 +478,11 @@ export type SessionRuntime = {
    *  only available while it still means "undo my accidental rewind." */
   pendingRewindUndo: PendingRewindUndo | null
   activityStatus: string | null
+  /** Plain terminals only (#865): what owns the shell's foreground right now.
+   *  Null for agents and for terminals main has not sampled yet. Written only
+   *  by applyTerminalForeground, which also keeps processActive/activityStatus
+   *  in step so every status consumer lights for shells unchanged. */
+  terminalForeground: TerminalForegroundRuntime | null
   /** Unread marker for list surfaces such as Dispatch Mode.
    *
    *  WHY this lives on the runtime instead of being derived from
@@ -550,6 +573,23 @@ export type SessionRuntime = {
   // current selection.
   codeBlockPicker: { selectedId: string } | null
   processActive: boolean
+  /** Set when the provider reported a usage limit (Claude: an
+   *  `isApiErrorMessage` / `error: "rate_limit"` transcript record; Codex: a
+   *  `usage_limit_reached` api error on the semantic stream). Compared against
+   *  `turnStartedAt` so a pane that is "active" only because it shows the
+   *  provider's wait banner can still be switched away — see `isLimitIdle` in
+   *  workspace/hook/actions/providerSwitchCore.ts. Cleared when the next turn
+   *  completes, because a turn that finished is proof the limit episode is
+   *  over.
+   *
+   *  WHY a timestamped record and not a boolean: the guard has to distinguish
+   *  "the limit stopped THIS turn" from "the limit stopped an earlier turn the
+   *  user has since resumed past", and only an ordering against turnStartedAt
+   *  can do that. `source` is diagnostic — the two providers prove the same
+   *  fact through completely different channels (durable transcript vs live
+   *  semantic event) and a bug report that says which one fired is worth the
+   *  one extra field. */
+  limitHit: { at: number; source: 'transcript' | 'api_error' } | null
   sessionStatus: SessionStatus
   sessionStatusSource: SessionStatusSource
   /** Transcript readiness is deliberately separate from process
@@ -558,6 +598,14 @@ export type SessionRuntime = {
    *  usable even if an optional tail-read failed. */
   transcriptStatus: TranscriptStatus
   transcriptError: string | null
+  /**
+   * A stopped observation channel (or a TUI following a different session)
+   * stays unhealthy even when a snapshot read succeeds. History and live
+   * entries may still be useful, but neither can repair that channel. Keep
+   * its diagnostic until the backend is replaced and gets a fresh runtime;
+   * optional for older runtime snapshots that predate this field.
+   */
+  transcriptChannelError?: string | null
   /** Backend process lifecycle for send gating. `sessionStatus` is
    *  "is the agent doing work right now"; `processStatus` is "does a
    *  writable backend exist for this pane". Keeping them separate
@@ -638,7 +686,7 @@ export type SessionRuntime = {
    *  "Thinking · 3s" vs "Calling Read · 8s" within the same turn). */
   phaseChangedAt: number | null
   /** Wall-clock timestamp the user hit submit. Set by the optimistic-
-   *  submit path (setStreamingBaseline) so 'submitting' has a start
+   *  submit path (beginOptimisticSubmit) so 'submitting' has a start
    *  time before the adapter's first 'requesting' event arrives. */
   submittedAt: number | null
   /** Pane-focused feed/render debug stream. This is not raw transport
@@ -785,7 +833,6 @@ export function emptyRuntime(): SessionRuntime {
     screenMarkdown: '',
     recentScreen: '',
     recentScreenMarkdown: '',
-    streamingBaseline: null,
     entries: [],
     totalEntries: 0,
     awaitingAssistant: false,
@@ -804,6 +851,7 @@ export function emptyRuntime(): SessionRuntime {
     providerSwitch: null,
     pendingRewindUndo: null,
     activityStatus: null,
+    terminalForeground: null,
     unreadSince: null,
     unreadKind: null,
     paneToast: null,
@@ -821,6 +869,7 @@ export function emptyRuntime(): SessionRuntime {
     assistantPicker: null,
     codeBlockPicker: null,
     processActive: false,
+    limitHit: null,
     sessionStatus: 'idle',
     sessionStatusSource: 'none',
     transcriptStatus: 'ready',

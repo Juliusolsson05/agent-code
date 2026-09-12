@@ -41,6 +41,7 @@ const SOURCE_RANK: Record<string, number> = {
   'semantic-history': 1,
   'ghost-fallback': 1, // recovery rows order like the history they replace
   'semantic-current': 2,
+  'provider-notice': 3, // status follows equal-time conversation, never owns it
 }
 
 /**

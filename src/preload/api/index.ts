@@ -1,8 +1,11 @@
+import { tldrApi } from '@preload/api/tldr.js'
 import { sessionApi } from '@preload/api/session.js'
+import { controlApi } from '@preload/api/control.js'
 import { providerApi } from '@preload/api/provider.js'
-import { sessionsApi } from '@preload/api/sessions.js'
+import { conversationsApi } from '@preload/api/conversations.js'
 import { lspApi } from '@preload/api/lsp.js'
 import { workspaceApi } from '@preload/api/workspace.js'
+import { agentNamesApi } from '@preload/api/agentNames.js'
 import { windowApi } from '@preload/api/window.js'
 import { fsApi } from '@preload/api/fs.js'
 import { debugApi } from '@preload/api/debug.js'
@@ -21,6 +24,7 @@ import { agentManagementApi } from '@preload/api/agentManagement.js'
 import { aiWorkspaceApi } from '@preload/api/aiWorkspace.js'
 import { renderedContentApi } from '@preload/api/renderedContent.js'
 import { caffeinateApi } from '@preload/api/caffeinate.js'
+import { keyVaultApi } from '@preload/api/keyVault.js'
 import { menuApi } from '@preload/api/menu.js'
 import { incidentApi } from '@preload/api/incident.js'
 import { lifecycleApi } from '@preload/api/lifecycle.js'
@@ -31,6 +35,7 @@ import { workflowsApi } from '@preload/api/workflows.js'
 import { agentCodeConventionsApi } from '@preload/api/agentCodeConventions.js'
 import { agentCodeCustomSkillsApi } from '@preload/api/agentCodeCustomSkills.js'
 import { agentCodeInstalledSkillsApi } from '@preload/api/agentCodeInstalledSkills.js'
+import { agentSkillsApi } from '@preload/api/agentSkills.js'
 
 // Composed preload API surface.
 //
@@ -44,15 +49,26 @@ import { agentCodeInstalledSkillsApi } from '@preload/api/agentCodeInstalledSkil
 // Method-name uniqueness across domains is enforced by the spread
 // merge: TypeScript would error on a collision. Today there are
 // none — domain modules use different name prefixes (`session*`,
-// `workspace*`, `lsp*`, etc.) and the registry in main/ipc/ mirrors
-// the split one-to-one.
+// `workspace*`, `lsp*`, etc.).
+//
+// The main-side registrar is NOT a one-to-one mirror of this split,
+// and was never a rule worth enforcing. Most domains do have their
+// counterpart under main/ipc/, but `agentNames*` is handled by
+// `src/main/agentNames/ipc.ts`, which lives beside the registry it is
+// the only consumer of rather than beside the other IPC modules. That
+// is the point of the decomposition: application identity stays out of
+// the generic IPC layer. So when adding a domain here, follow the
+// handler to wherever it actually is — do not assume main/ipc/<domain>.
 
 export const api = {
+  ...tldrApi,
+  ...controlApi,
   ...sessionApi,
   ...providerApi,
-  ...sessionsApi,
+  ...conversationsApi,
   ...lspApi,
   ...workspaceApi,
+  ...agentNamesApi,
   ...windowApi,
   ...fsApi,
   ...debugApi,
@@ -71,6 +87,7 @@ export const api = {
   ...aiWorkspaceApi,
   ...renderedContentApi,
   ...caffeinateApi,
+  ...keyVaultApi,
   ...menuApi,
   ...incidentApi,
   ...lifecycleApi,
@@ -81,6 +98,7 @@ export const api = {
   ...agentCodeConventionsApi,
   ...agentCodeCustomSkillsApi,
   ...agentCodeInstalledSkillsApi,
+  ...agentSkillsApi,
 }
 
 export type Api = typeof api

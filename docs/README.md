@@ -6,6 +6,9 @@ live.
 
 ## Live
 
+- **[Application architecture](../ARCHITECTURE.md)** — arc42 reference with a large
+  overview, C4 structure views, UML runtime diagrams, and implementation links.
+  `architecture/diagrams/` contains its generated SVG previews.
 - **`rendering/`** — the current rendering engine. `rendering-rewrite-plan-2026-07.md`
   is canonical; `residue-plan-2026-07.md` and `session-recording-plan-2026-07.md`
   are its live follow-ons; `legacy-deletion-manifest.md` is the cutover contract;

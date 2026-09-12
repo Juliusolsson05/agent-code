@@ -1,0 +1,296 @@
+import { randomUUID } from 'node:crypto'
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { dirname } from 'node:path'
+import { z } from 'zod'
+
+import { agentNameAt, normalizeAgentName } from '@shared/agentNames/names.js'
+
+// WHY `nextIndex` is persisted rather than derived from the assignment count:
+// deriving it would recycle a name the moment an assignment is ever removed,
+// and "never recycle a spoken address" is the invariant that makes a delayed
+// voice request safe. The counter only ever moves forward.
+//
+// WHY this schema validates but does NOT supply the assignment map: zod's
+// `z.record()` silently drops a "__proto__" key (verified against zod ^4.4.3 —
+// JSON.parse keeps it as an own property, zod's output does not). Reading the
+// map out of zod's result would therefore forget any assignment stored under
+// that identity on the next launch and re-allocate a second name for the same
+// agent. Identities come from a workspace file the user can edit, so that is
+// reachable, not theoretical. The schema is the SHAPE gate; `load()` takes the
+// data from the raw parsed JSON.
+//
+// The duplicate-name check lives in `load()` for the same reason: run here it
+// would inspect the map zod already pruned and miss exactly the entry that
+// motivated all of this. So does the per-value check — the `z.string().trim()
+// .min(1).max(100)` below is real for every ordinary key and a no-op for
+// "__proto__", so `load()` restates it over the raw entries.
+//
+// WHY `.strict()` plus `version: z.literal(1)` is a ONE-WAY DOOR, and must be
+// treated as one: anything this pair does not recognise is routed to the
+// "unreadable, refuse to overwrite" path, which is correct for corruption and
+// brutal for a downgrade. A v2 store written by a newer build makes an older
+// build refuse to allocate at all — the user's names simply stop working until
+// they upgrade back. That is the deliberate trade (silent data loss is worse),
+// but it means a future v2 MUST ship as an ADDITIVE reader that accepts 1 and
+// 2 and keeps writing what the older build can still read, for at least one
+// release. Bumping this literal to 2 is the one change that breaks every
+// installation that has ever run an older build, which on a desktop app with
+// downgrades and two-machine sync is not a hypothetical.
+const stateSchema = z.object({
+  version: z.literal(1),
+  nextIndex: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER - 1_000_000),
+  assignments: z.record(z.string(), z.string().trim().min(1).max(100)),
+}).strict()
+
+type RegistryState = { version: 1; nextIndex: number; assignments: Record<string, string> }
+
+// WHY a null-prototype map instead of a plain object: identities are opaque
+// strings that originate in a workspace file the user can edit. Writing
+// `assignments['__proto__'] = name` on a normal object invokes the prototype
+// SETTER — the assignment silently vanishes and the next call allocates a
+// second name for the same identity, forever. A null-prototype map makes every
+// key an ordinary data property, and also makes `assignments[identity]` safe to
+// read without an Object.hasOwn dance.
+function emptyAssignments(): Record<string, string> {
+  return Object.create(null) as Record<string, string>
+}
+
+function adoptAssignments(source: Record<string, string>): Record<string, string> {
+  return Object.assign(emptyAssignments(), source)
+}
+
+/**
+ * The single process-wide allocator of spoken agent names.
+ *
+ * WHY this lives in main and not in the renderer: a renderer-local counter
+ * gives two windows the same "Apollo", and a name derived at render time
+ * changes when an agent is closed or the list is re-sorted. There is exactly
+ * one of these per application process, constructed by the IPC adapter, and
+ * nothing else may import it — the decomposition keeps MCP and feature code
+ * away from application identity on purpose.
+ *
+ * WHAT THIS CLASS DOES NOT ENFORCE: that one process owns the file. The promise
+ * tail below serializes callers WITHIN a process; it knows nothing about a
+ * second one. Single ownership is inherited from the application's single
+ * instance lock (`src/main/index.ts:280`, the same assumption
+ * `src/main/dictation/historyStore.ts:211` writes down for its own store), and
+ * if that ever stopped holding, two processes over one file would be
+ * last-writer-wins on `nextIndex` — both could publish "Apollo" and the loser's
+ * assignments would vanish on the next commit. There is no file lock here
+ * because adding one would be a real cross-platform cost to defend against a
+ * configuration the app does not have; the point of this paragraph is that the
+ * invariant lives THERE, so anything that weakens the instance lock has to come
+ * back and read this.
+ *
+ * That cited line is not an unconditional lock — it reads
+ * `packagingSmoke || app.requestSingleInstanceLock()`, so the `--packaging-smoke`
+ * launch deliberately runs WITHOUT the lock. It is still not a second writer:
+ * that branch only stats packaged resources and calls `app.exit`, opening no
+ * window, so no renderer exists to invoke `agent-names:resolve` and allocation
+ * is never reached. Anything that gives that flag (or any future one) a real
+ * window is the change that breaks the invariant above.
+ *
+ * WHY the renderer, not this class, decides which agent keeps an identity
+ * across a provider switch: only the renderer knows that a new local session ID
+ * is the same logical pane. This module owns exactly one relation, identity to
+ * name, and has no opinion about sessions, windows, panes or the setting.
+ */
+export class AgentNameRegistry {
+  private state: RegistryState | undefined
+
+  /**
+   * Normalized spoken names currently assigned, kept alongside `state`.
+   *
+   * WHY it is cached instead of rebuilt: `allocate` used to walk every value
+   * and normalize it on EVERY call, purely to answer "has a hand-edited file
+   * already used this name". That is O(assignments) work per allocation for a
+   * question whose answer only changes when this process assigns something,
+   * and this process is the single writer after the first load. `load` already
+   * builds exactly this set for its duplicate check, so caching it there costs
+   * nothing and makes the common path proportional to the NEW names.
+   *
+   * WHY there is still no prune path, which would bound the file properly:
+   * assignments can only be dropped by knowing which identities are still
+   * live, and no single window knows that. A window holds its own workspace,
+   * not the others', so pruning against one window's identity set would delete
+   * names belonging to agents open in another window and hand those names out
+   * again. That is a correctness bug traded for a size nicety. The growth rate
+   * was the real problem and it is fixed at the source: successors mid-replace
+   * no longer burn an allocation each (see the renderer's
+   * pendingIdentityCarry), so the file now grows once per genuinely new agent
+   * rather than once per reload, resume, rewind and provider switch.
+   */
+  private usedNames: Set<string> | undefined
+
+  // WHY one promise tail rather than a mutex or a per-identity lock: every
+  // allocation reads the whole counter and writes the whole file, so the
+  // critical section is the entire operation. Two windows starting agents in
+  // the same frame is the ordinary case, not the edge case, and interleaving
+  // them is how both get told "Apollo".
+  private tail: Promise<unknown> = Promise.resolve()
+
+  constructor(private readonly path: string) {}
+
+  resolve(identities: readonly string[]): Promise<Record<string, string>> {
+    const next = this.tail.then(() => this.allocate(identities))
+    // Swallow on the TAIL only. The caller still sees the rejection through
+    // `next`; the tail must stay resolvable or one disk failure would wedge
+    // every later request behind a permanently rejected promise.
+    this.tail = next.catch(() => {})
+    return next
+  }
+
+  private async load(): Promise<RegistryState> {
+    if (this.state) return this.state
+
+    let raw: string
+    try {
+      raw = await readFile(this.path, 'utf8')
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        // A permission or I/O error is NOT an empty registry. Starting fresh
+        // here would hand out names that a readable file already owns.
+        throw new Error(`Agent name registry at ${this.path} is unreadable; refusing to overwrite it`, { cause: error })
+      }
+      this.state = { version: 1, nextIndex: 0, assignments: emptyAssignments() }
+      this.usedNames = new Set()
+      return this.state
+    }
+
+    let assignments: Record<string, string>
+    let nextIndex: number
+    try {
+      const json: unknown = JSON.parse(raw)
+      // Validate through zod, then deliberately IGNORE its copy of the map and
+      // read the raw object instead — see the schema comment for why.
+      nextIndex = stateSchema.parse(json).nextIndex
+      assignments = adoptAssignments((json as { assignments: Record<string, string> }).assignments)
+      // Re-check every VALUE here, because the schema above could not see them
+      // all. zod skips a "__proto__" key entirely, so the value check it
+      // declares never runs for exactly the key we went to the raw JSON to
+      // recover. Measured against the pinned zod (4.4.3), all three of these
+      // parse clean:
+      //
+      //   {"assignments":{"__proto__":123}}                 -> number
+      //   {"assignments":{"__proto__":""}}                  -> empty string
+      //   {"assignments":{"__proto__":"<140 chars>"}}       -> over-length
+      //
+      // Left unchecked, each fails differently and none of them fail well: a
+      // number would blow up later inside normalizeAgentName as an incidental
+      // TypeError rather than a decision; an empty string would be adopted,
+      // satisfy `!== undefined` in allocate(), and make that identity
+      // permanently unnameable — recorded as assigned while rendering nothing;
+      // an over-length string would reach the badge. All three are corruption,
+      // and this module answers corruption exactly one way.
+      for (const [identity, name] of Object.entries(assignments)) {
+        if (typeof name !== 'string' || name.trim().length === 0 || name.length > 100) {
+          throw new Error(`Assignment for ${identity} is not a usable name`)
+        }
+      }
+      // The duplicate check the schema cannot do either, over every key
+      // including the ones zod pruned. A file mapping two identities to one
+      // name makes every later lookup ambiguous with no evidence for choosing
+      // between them.
+      const spoken = Object.values(assignments).map(normalizeAgentName)
+      const distinct = new Set(spoken)
+      if (distinct.size !== spoken.length) throw new Error('Two identities share one spoken name')
+      // Assigned here rather than after the try, so a file that fails
+      // validation leaves BOTH `state` and this cache unset — the refusal has
+      // to be all-or-nothing or a later allocation would consult a set that
+      // describes a registry we refused to load.
+      this.usedNames = distinct
+    } catch (error) {
+      // WHY this is not cached and not repaired: leaving `this.state` unset
+      // means every later call re-reads and re-fails, so the user gets a
+      // consistent refusal instead of a registry that silently forgot every
+      // assignment. Repairing would mean choosing which of two colliding
+      // identities keeps the name, and there is no evidence with which to
+      // choose. The fix belongs to the user's file, not to this process.
+      throw new Error(`Agent name registry at ${this.path} is unreadable; refusing to overwrite it`, { cause: error })
+    }
+
+    this.state = { version: 1, nextIndex, assignments }
+    return this.state
+  }
+
+  private async allocate(identities: readonly string[]): Promise<Record<string, string>> {
+    const loaded = await this.load()
+    // Work on a copy so a failed commit leaves the cached state untouched. If
+    // we mutated in place, a write error would leave this process believing it
+    // had published names that are not on disk.
+    const draft: RegistryState = { ...loaded, assignments: adoptAssignments(loaded.assignments) }
+    // `load` guarantees this alongside `state`; the fallback keeps the type
+    // honest without pretending an unloaded registry is an empty one.
+    const used = this.usedNames ?? new Set<string>()
+    // Every name this call adds, so a failed commit can undo its effect on the
+    // shared cache. The draft's assignments are already a copy and roll back
+    // for free; this set is not, because copying it per allocation is the cost
+    // being removed.
+    const added: string[] = []
+    let changed = false
+
+    for (const identity of identities) {
+      if (draft.assignments[identity] !== undefined) continue
+      let name = agentNameAt(draft.nextIndex++)
+      // The counter alone cannot guarantee freshness: a user could have
+      // hand-written "Apollo" into the file at a lower index. Skipping forward
+      // is cheap and keeps the never-duplicate invariant local to this loop.
+      //
+      // SCOPE of "we never overwrite what the user wrote": it holds at the
+      // FIRST load only. After that this process is the single writer and
+      // `this.state` is the truth it commits, so a hand edit made while the app
+      // is running is silently discarded by the next allocation — it was never
+      // read, and `commit()` rewrites the whole file from memory. That is the
+      // price of caching, and caching is what keeps the promise tail from
+      // re-reading the file under every burst of window spawns. Editing the
+      // file by hand is therefore a quit-first operation; there is no reload
+      // path and this module deliberately does not grow one, because a reload
+      // would have to reconcile two divergent counters with no evidence.
+      while (used.has(normalizeAgentName(name))) name = agentNameAt(draft.nextIndex++)
+      draft.assignments[identity] = name
+      const normalized = normalizeAgentName(name)
+      used.add(normalized)
+      added.push(normalized)
+      changed = true
+    }
+
+    if (changed) {
+      try {
+        await this.commit(draft)
+      } catch (error) {
+        // Same contract as the draft copy above: a write that did not land
+        // must leave this process believing nothing was published. Leaving the
+        // names in the cache would make the retry skip past them and burn the
+        // vocabulary for allocations that never happened.
+        for (const name of added) used.delete(name)
+        throw error
+      }
+    }
+    return Object.fromEntries(identities.map(identity => [identity, draft.assignments[identity]]))
+  }
+
+  private async commit(draft: RegistryState): Promise<void> {
+    // 0o700/0o600: the file records which agents exist and what they are
+    // called. It is not a secret, but it is this user's workspace shape and has
+    // no reason to be world-readable.
+    await mkdir(dirname(this.path), { recursive: true, mode: 0o700 })
+    // WHY a UUID temp name rather than a fixed `.tmp` sibling: two commits can
+    // overlap across an unclean shutdown, and a shared scratch path turns that
+    // into an ENOENT race on rename. The unique name also means cleanup never
+    // has to scan for siblings.
+    const temporary = `${this.path}.${randomUUID()}.tmp`
+    try {
+      await writeFile(temporary, JSON.stringify({
+        version: draft.version,
+        nextIndex: draft.nextIndex,
+        assignments: { ...draft.assignments },
+      }), { mode: 0o600 })
+      await rename(temporary, this.path)
+    } finally {
+      await rm(temporary, { force: true }).catch(() => {})
+    }
+    // Only after a successful rename. A failed persistence must not poison the
+    // cache with names that were never reserved.
+    this.state = draft
+  }
+}

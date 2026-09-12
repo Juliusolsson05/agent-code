@@ -1,4 +1,4 @@
-import type { BuiltInMcpDomain } from '@mcp/shared/types'
+import type { BuiltInMcpDomain, BuiltInMcpOverrides } from '@mcp/shared/types'
 // Local binding for in-file uses (SessionMeta.kind, etc.). The
 // `export type { SessionKind }` re-export below does not bind the name
 // locally, so this import is also required.
@@ -65,8 +65,11 @@ export type Tab = {
  *                screen scrape.
  *   'terminal' — a plain shell child process. The pane renders an
  *                xterm.js instance that receives raw PTY bytes and
- *                forwards keystrokes back. VS Code-style integrated
- *                terminal with no Agent Code chrome.
+ *                forwards keystrokes back, underneath the SAME shared
+ *                PaneHeader every agent kind uses (#865 terminal-session
+ *                parity): title/name row, color flag, Status Mode fill,
+ *                and TAIL apply exactly as for an agent pane. Only the
+ *                body differs — a raw PTY view, not a provider transcript.
  *
  * Persisted in SessionMeta so a reload restores each pane to the
  * right component. Absent (= undefined) in pre-terminal workspace.json
@@ -88,6 +91,10 @@ export type SessionSpawnSelection = {
 }
 
 export type SessionMeta = {
+  /** Opaque TLDR storage key. Keep it across reload/provider handoff, but mint
+   * a new one for duplicates, unrelated resumes and rewinds: their old status
+   * may describe work that is absent from the new conversation. */
+  tldrIdentity?: string
   /** cwd the session was spawned with — needed to respawn on relaunch. */
   cwd: string
   /**
@@ -99,6 +106,23 @@ export type SessionMeta = {
    * restarts. Some creators also seed this field before the user edits it.
    */
   title?: string
+  /**
+   * Durable identity for this agent's spoken name — NOT the name itself.
+   *
+   * WHY the name is not stored here: workspace.json is per-window and is
+   * rewritten wholesale on every autosave, so two windows would each hold their
+   * own copy of a global allocation and would drift apart on the first
+   * conflicting save. This field carries only the opaque key; the main-process
+   * registry owns the identity→name relation for the whole application.
+   *
+   * WHY it exists at all rather than using sessionId directly: a provider
+   * switch, reload, rewind or crash recovery replaces the local session ID
+   * while the user is looking at the same pane. Reusing sessionId would rename
+   * the agent mid-conversation. This value is minted once, by the reconciler,
+   * and then carried across every replacement. Duplicating an agent creates a
+   * new session with no identity, so the copy correctly gets its own name.
+   */
+  agentNameId?: string
   /**
    * Which backend runs in this pane. Defaults to 'claude' when
    * absent so pre-terminal workspace.json blobs keep working — the
@@ -221,18 +245,13 @@ export type SessionMeta = {
    * would inject a second bootstrap block mid-conversation.
    */
   orchestrationBootstrapPromptDelivered?: boolean
-  /**
-   * Built-in MCP domains this agent should receive when it is spawned.
-   *
-   * WHY this is session metadata, not only a transient spawn option:
-   * enabling an Agent Code MCP server is a property of the live agent
-   * contract. Reloading dangerous-mode settings, restoring a workspace,
-   * switching focus, or duplicating UI placement should not silently strip
-   * those tools from the provider process. Persisting the domain names keeps
-   * the renderer as the source of truth for "this pane is MCP-augmented" while
-   * the main process owns the short-lived URL/token material.
-   */
+  /** The effective capabilities of the last known provider process. UI reads
+   * this snapshot until an actual restart/adoption confirms different tools;
+   * changing Settings alone must never pretend a live model has new tools. */
   builtInMcpDomains?: BuiltInMcpDomain[]
+  /** Durable per-domain choices. {} inherits every global preference; missing
+   * maps belong to legacy snapshots and migrate via sessionMcpOverrides. */
+  builtInMcpOverrides?: BuiltInMcpOverrides
 }
 
 export type BuriedPaneRecord = {
@@ -513,10 +532,7 @@ export type WorkspaceState = {
    * session can never linger in the Pinned section as a phantom row
    * or in workspace.json as a stale entry.
    *
-   * Terminals are never pinned: they're per-tab infrastructure, not
-   * a unit the user "pins to favorites." setPinnedSessionIds rejects
-   * terminal session ids defensively, and the modal filters them out
-   * of its candidate row list.
+   * Any session kind can be pinned, terminals included (#865).
    */
   pinnedSessionIds: SessionId[]
   /**
@@ -568,6 +584,22 @@ export type ProviderSwitchBatch = {
   sourceKind: AgentProviderKind
   targetKind: AgentProviderKind
   agents: ProviderSwitchBatchAgent[]
+  /**
+   * Whether the user agreed to compaction-on-arrival for THIS batch, captured
+   * from the modal that asked.
+   *
+   * WHY the return path needs it rather than deciding for itself: arrival
+   * compaction spends the destination provider's quota and locks every
+   * affected composer for the arrival wait plus the compaction wait — minutes
+   * per pane, with no cancel. The forward flow puts that behind an explicit
+   * checkbox and a quota disclosure. The return flow had no modal at all and
+   * hard-coded it on for any Claude destination, so a single "Return 20" click
+   * spent Claude quota twenty times and locked twenty composers with nothing
+   * asked and nothing disclosed. Returning is the mirror of the switch the
+   * user consented to, so it reuses that consent instead of inventing new
+   * consent on the user's behalf.
+   */
+  compactOnArrival: boolean
 }
 
 export const RATIO_MIN = 0.1

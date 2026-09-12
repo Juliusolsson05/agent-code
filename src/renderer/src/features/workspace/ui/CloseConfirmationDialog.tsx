@@ -48,7 +48,10 @@ export function CloseConfirmationDialog() {
         <DialogHeader>
           <DialogTitle>
             {request?.reason === 'running'
-              ? 'Close a working agent?'
+              // "session" not "agent": a shell running a job reaches this
+              // dialog too now that terminal foreground state counts as
+              // working (#865), and it isn't an agent.
+              ? 'Close a working session?'
               : request?.reason === 'irreversible'
                 ? 'Kill this session permanently?'
                 : 'Close these sessions?'}

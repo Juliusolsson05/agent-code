@@ -18,6 +18,7 @@ type MockTerminal = {
   rows: number
   container: HTMLElement | null
   onDataListener: ((data: string) => void) | null
+  onScrollListener: ((line: number) => void) | null
   writes: string[]
   dispose: ReturnType<typeof vi.fn>
   inputDispose: ReturnType<typeof vi.fn>
@@ -43,8 +44,10 @@ vi.mock('@xterm/xterm', () => ({
     container: HTMLElement | null = null
     writes: string[] = []
     onDataListener: ((data: string) => void) | null = null
+    onScrollListener: ((line: number) => void) | null = null
     dispose = vi.fn()
     inputDispose = vi.fn(() => { this.onDataListener = null })
+    scrollDispose = vi.fn(() => { this.onScrollListener = null })
     constructor() { xtermHarness.instances.push(this) }
     loadAddon() {}
     open(container: HTMLElement) { this.container = container }
@@ -52,6 +55,15 @@ vi.mock('@xterm/xterm', () => ({
       this.onDataListener = listener
       return { dispose: this.inputDispose }
     }
+    // Follow wiring (terminalFollow) subscribes to viewport movement on
+    // mount; these scroll surfaces exist so the ownership harness exercises
+    // the same Terminal API the real component consumes.
+    onScroll(listener: (line: number) => void) {
+      this.onScrollListener = listener
+      return { dispose: this.scrollDispose }
+    }
+    scrollToBottom() {}
+    scrollToLine(_line: number) {}
     // Real xterm reports each write parsed via the callback; the input
     // forwarder (#745) holds its replay latch until then, so a mock that
     // never calls back would model a pane that is deaf forever.
@@ -81,7 +93,11 @@ vi.mock('@renderer/app-state/hooks', () => ({
         dictationEnabled: false,
         dictationProvider: 'local',
         dictationShortcut: 'off',
+        dispatchColorFlags: {},
       },
+      // Read by the follow wiring in AgentTerminalLeaf; absent it would be
+      // undefined, which happens to behave as "off" but hides the contract.
+      tailAllMode: false,
     }),
 }))
 
@@ -226,6 +242,7 @@ describe('AgentTerminalLeaf dimension ownership', () => {
               runtime={runtime}
               projectDir="/tmp/project"
               provider="codex"
+              showStatusMode={false}
             />
           </MountedAgentTerminalOwner>
         </GlobalEditorWorkspaceSlot>
@@ -276,6 +293,7 @@ describe('AgentTerminalLeaf dimension ownership', () => {
             runtime={runtime}
             projectDir="/tmp/project"
             provider="codex"
+            showStatusMode={false}
           />
         </MountedAgentTerminalOwner>
       </AgentTerminalOwnershipProvider>,
@@ -312,6 +330,7 @@ describe('AgentTerminalLeaf dimension ownership', () => {
             runtime={{ ...emptyRuntime(), processStatus: 'started' }}
             projectDir="/tmp/project"
             provider="claude"
+            showStatusMode={false}
           />
         </MountedAgentTerminalOwner>
       </AgentTerminalOwnershipProvider>
@@ -325,6 +344,7 @@ describe('AgentTerminalLeaf dimension ownership', () => {
         focused
         onFocusRequest={() => {}}
         workspace={workspace}
+        showStatusMode={false}
       />
     )
   }
@@ -398,7 +418,9 @@ describe('AgentTerminalLeaf dimension ownership', () => {
 
     expect(xtermHarness.attachWebgl).toHaveBeenCalledTimes(5)
     for (const [index, terminal] of xtermHarness.instances.entries()) {
-      expect(xtermHarness.attachWebgl).toHaveBeenNthCalledWith(index + 1, terminal)
+      // Every host hands the wrapper its own fit scheduler, so a renderer
+      // change (DOM <-> WebGL) refits that pane — see the renderer-change case.
+      expect(xtermHarness.attachWebgl).toHaveBeenNthCalledWith(index + 1, terminal, { onRendererChange: expect.any(Function) })
       expect(xtermHarness.attachWebgl.mock.results[index]!.value.dispose).not.toHaveBeenCalled()
     }
     view.unmount()
@@ -586,6 +608,114 @@ describe('AgentTerminalLeaf dimension ownership', () => {
     expect(xtermHarness.fit).toHaveBeenCalledTimes(4)
     expect(resize).toHaveBeenCalledTimes(3)
   })
+  it('refits when only the renderer changed, which no ResizeObserver can see', async () => {
+    // PR #873 review: WebGL floors the cell width and the DOM renderer keeps it
+    // fractional, so a WebGL -> DOM fallback after a context loss makes the
+    // same columns wider than the pane (clipped by overflow-hidden) while the
+    // container — the only thing the ResizeObserver watches — stays the same
+    // size. The host must route the wrapper's onRendererChange into its
+    // coalesced fit so the grid and the backend PTY follow the new metrics.
+    const view = render(<AgentInlineTerminal sessionId="inline-renderer" active />)
+    await act(async () => {
+      attach.resolve('')
+      await attach.promise
+    })
+    const terminal = xtermHarness.instances[0]!
+    act(() => flushAnimationFrames())
+    expect(xtermHarness.fit).toHaveBeenCalledTimes(1)
+    expect(resize.mock.calls).toEqual([['inline-renderer', 120, 40]])
+
+    const options = xtermHarness.attachWebgl.mock.calls[0]![1] as { onRendererChange: () => void }
+    // Same box, wider DOM cells: a fresh fit now yields fewer columns.
+    terminal.cols = 116
+    act(() => {
+      options.onRendererChange()
+      options.onRendererChange()
+    })
+    // Coalesced like every other layout signal: one frame, one fit, one IPC.
+    expect(frames.size).toBe(1)
+    act(() => flushAnimationFrames())
+    expect(xtermHarness.fit).toHaveBeenCalledTimes(2)
+    expect(resize).toHaveBeenLastCalledWith('inline-renderer', 116, 40)
+    expect(resize).toHaveBeenCalledTimes(2)
+    view.unmount()
+  })
+
+  // The same contract for the two full-pane hosts (PR #873 round-2 review:
+  // only the inline host was exercised behaviourally). Each has its own
+  // scheduler and fences, so each must prove its callback is the real one.
+  it.each([
+    { host: 'agent pane (AgentTerminalLeaf)', mount: (id: string) => agentPane(id) },
+    { host: 'shell pane (TerminalLeaf)', mount: (id: string) => shellPane(id) },
+  ])('refits the $host when only its renderer changed', async ({ mount }) => {
+    const view = render(mount('renderer-host'))
+    await act(async () => {
+      attach.resolve('')
+      await attach.promise
+    })
+    act(() => flushAnimationFrames())
+    const terminal = xtermHarness.instances[0]!
+    const fitsBefore = xtermHarness.fit.mock.calls.length
+    const resizesBefore = resize.mock.calls.length
+    const options = xtermHarness.attachWebgl.mock.calls[0]![1] as { onRendererChange: () => void }
+
+    // WebGL -> DOM after a context loss: same container, wider cells.
+    terminal.cols = 116
+    act(() => {
+      options.onRendererChange()
+      options.onRendererChange()
+    })
+    expect(frames.size).toBe(1)
+    act(() => flushAnimationFrames())
+    expect(xtermHarness.fit.mock.calls.length).toBe(fitsBefore + 1)
+    expect(resize.mock.calls.length).toBe(resizesBefore + 1)
+    expect(resize).toHaveBeenLastCalledWith('renderer-host', 116, 40)
+    view.unmount()
+  })
+
+  it('does not let a non-owning agent pane resize the shared PTY on a renderer change', async () => {
+    // The fence that matters most: a pane that has lost dimension ownership
+    // (here to the fullscreen editor's inline terminal) must stay inert on a
+    // renderer change exactly as it does for container resizes, or its fallback
+    // refit would shrink or grow the PTY the actual owner is driving.
+    const runtime = { ...emptyRuntime(), processStatus: 'started' as const }
+    const tree = (editorFullscreen: boolean) => (
+      <AgentTerminalOwnershipProvider>
+        <GlobalEditorWorkspaceSlot open editorFullscreen={editorFullscreen} splitWorkspaceWidth="60%">
+          <MountedAgentTerminalOwner sessionId="non-owner">
+            <AgentTerminalLeaf
+              sessionId="non-owner"
+              focused
+              onFocusRequest={() => {}}
+              workspace={workspace}
+              runtime={runtime}
+              projectDir="/tmp/project"
+              provider="codex"
+              showStatusMode={false}
+            />
+          </MountedAgentTerminalOwner>
+        </GlobalEditorWorkspaceSlot>
+      </AgentTerminalOwnershipProvider>
+    )
+    const view = render(tree(true))
+    await act(async () => {
+      attach.resolve('')
+      await attach.promise
+    })
+    act(() => flushAnimationFrames())
+    const fitsBefore = xtermHarness.fit.mock.calls.length
+    resize.mockClear()
+    const options = xtermHarness.attachWebgl.mock.calls[0]![1] as { onRendererChange: () => void }
+
+    xtermHarness.instances[0]!.cols = 116
+    act(() => options.onRendererChange())
+    act(() => flushAnimationFrames())
+
+    expect(xtermHarness.fit.mock.calls.length).toBe(fitsBefore)
+    expect(resize).not.toHaveBeenCalled()
+    view.unmount()
+  })
+
   it('sends exactly one resize when a retained pane is revealed after a takeover', async () => {
     // #752: Reader/Spotlight/Settings hide the workspace instead of
     // unmounting it. While hidden the pane must not measure a display:none
@@ -608,6 +738,7 @@ describe('AgentTerminalLeaf dimension ownership', () => {
                 runtime={runtime}
                 projectDir="/tmp/project"
                 provider="codex"
+                showStatusMode={false}
               />
             </MountedAgentTerminalOwner>
           </GlobalEditorWorkspaceSlot>
@@ -648,6 +779,7 @@ describe('AgentTerminalLeaf dimension ownership', () => {
             runtime={runtime}
             projectDir="/tmp/project"
             provider="codex"
+            showStatusMode={false}
           />
         </MountedAgentTerminalOwner>
       </AgentTerminalOwnershipProvider>,

@@ -128,7 +128,7 @@ describe('palette sub-mode', () => {
 
   it('resets to the command list on close, so reopening never resumes a sub-flow', async () => {
     const { useAppStore } = await import('@renderer/app-state/store')
-    useAppStore.getState().setPaletteMode('resume')
+    useAppStore.getState().setPaletteMode('buried')
     useAppStore.getState().closeCommandPalette()
     expect(useAppStore.getState().paletteMode).toBe('commands')
 
@@ -189,5 +189,24 @@ describe('provider switch picker intent', () => {
 
     useAppStore.getState().closeProviderSwitchPicker()
     expect(useAppStore.getState().providerSwitchPickerSessionId).toBeNull()
+  })
+})
+
+describe('conversations picker state', () => {
+  beforeEach(() => {
+    vi.resetModules()
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('opens with a focus intent and resets it on close', async () => {
+    vi.stubGlobal('localStorage', createStorageMock())
+    const { useAppStore } = await import('@renderer/app-state/store')
+    useAppStore.getState().openConversations({ focusSearch: true })
+    expect(useAppStore.getState()).toMatchObject({ conversationsOpen: true, conversationsFocusSearch: true })
+    useAppStore.getState().closeConversations()
+    expect(useAppStore.getState()).toMatchObject({ conversationsOpen: false, conversationsFocusSearch: false })
   })
 })

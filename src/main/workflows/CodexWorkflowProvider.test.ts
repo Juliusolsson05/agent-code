@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { realpathSync } from 'node:fs'
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -88,6 +89,12 @@ describe('createCodexWorkflowProvider', () => {
 
     expect(codexConstructor).toHaveBeenCalledWith({
       codexPathOverride: '/opt/agent-code/bin/codex',
+      config: { mcp_servers: { 'agent-code-control': { enabled: false, url: 'http://127.0.0.1:1/disabled-agent-code-control' } },
+        skills: { config: [
+          { path: join(realpathSync('/tmp'), 'agent-code-workflow-codex/skills/agent-code-computer-execution/SKILL.md'), enabled: false },
+          { path: join(realpathSync('/tmp'), 'interactive-codex/skills/agent-code-computer-execution/SKILL.md'), enabled: false },
+        ] },
+      },
       providerHostFilePath: '/opt/agent-code/workflowProviderHost.js',
       configurationIsolation: {
         codexHome: '/tmp/agent-code-workflow-codex',

@@ -5,6 +5,7 @@ import {
   normalizeGridShape,
   rowIndexForLane,
 } from '@renderer/workspace/dispatch/gridShape'
+import { sessionDisplayTitle } from '@renderer/workspace/sessionDisplayTitle'
 
 export type DispatchAgentRow = {
   key: string
@@ -45,9 +46,7 @@ export function buildDispatchGroups(
   // to the same sessionId) and would lie about the visual hierarchy
   // ("this is in two places at once"). Same exclusivity invariant as
   // detached-vs-grid: each row belongs to exactly one bucket.
-  const pinnedSet = new Set(
-    state.pinnedSessionIds.filter(id => state.sessions[id]?.kind !== 'terminal'),
-  )
+  const pinnedSet = new Set(state.pinnedSessionIds.filter(id => state.sessions[id] !== undefined))
 
   // The tab letter answers "which project group owns this row"; the
   // number answers "which visible dispatch item will cmd+N select".
@@ -250,7 +249,7 @@ export function buildPinnedDispatchRows(
   let pinnedIndex = 1
   for (const sessionId of state.pinnedSessionIds) {
     const meta = state.sessions[sessionId]
-    if (!meta || meta.kind === 'terminal') continue
+    if (!meta) continue
     // Locate the owning tab. A pinned agent that's detached has its
     // tab id on `detachedSessions[sessionId].projectTabId`; a
     // grid-placed pinned agent is a leaf in some tab's tree. We do
@@ -340,6 +339,30 @@ export type DispatchSpawnTarget = {
   laneIndex: number | null
 }
 
+/**
+ * The projects the focused Grid Dispatch lane's ROW is bound to, or `[]` when
+ * that row is unbound, the layout is classic Dispatch, or Dispatch is off.
+ *
+ * WHY this is its own selector rather than staying inline in
+ * `resolveDispatchSpawnTarget`: two creation paths must agree on it. The spawn
+ * resolver uses it to pick where plain New Agent… lands, and New Agent In…
+ * (#852) uses it to decide which projects it may OFFER for that lane. If the
+ * two re-derived it separately, a change to how bindings are read (the legacy
+ * single `projectTabId` fold, zero-length row repair) could make the picker
+ * offer a project the resolver would refuse — or hide one it would pick.
+ *
+ * Reads through `normalizeGridShape` for the same reason every row reader does:
+ * persisted rows can be stale or hand-edited, and the normalizer is the one
+ * place that folds the legacy field and repairs lengths.
+ */
+export function focusedLaneBoundProjectTabIds(state: WorkspaceState): readonly TabId[] {
+  const tiled = state.dispatchMode?.tiled
+  if (!tiled) return []
+  const grid = normalizeGridShape(tiled)
+  const rowIndex = rowIndexForLane(grid.rows, tiled.focusedLane)
+  return (rowIndex >= 0 ? grid.rows[rowIndex]?.projectTabIds : undefined) ?? []
+}
+
 export function resolveDispatchSpawnTarget(state: WorkspaceState): DispatchSpawnTarget {
   const dm = state.dispatchMode
   if (!dm) {
@@ -366,15 +389,14 @@ export function resolveDispatchSpawnTarget(state: WorkspaceState): DispatchSpawn
     // stale classic focus would file the new agent under a project the row does
     // not even list. Bindings constrain what may live in a row, and a spawn is
     // something coming to live there.
-    const grid = normalizeGridShape(dm.tiled)
-    const rowIndex = rowIndexForLane(grid.rows, laneIndex)
+    //
     // A row can be bound to SEVERAL projects, so "which project does a new
     // agent belong to" needs a rule rather than a lookup. The active tab when
     // it is one of them, otherwise the first: deterministic, and "the project
     // you were last in" is the least surprising answer. The per-group `+` in
     // the index is unaffected — it already carries an explicit tabId.
-    const bound = rowIndex >= 0 ? grid.rows[rowIndex]?.projectTabIds : undefined
-    if (bound && bound.length > 0) {
+    const bound = focusedLaneBoundProjectTabIds(state)
+    if (bound.length > 0) {
       const tabId = bound.includes(state.activeTabId) ? state.activeTabId : bound[0]!
       return { tabId, cwdSessionId: null, laneIndex }
     }
@@ -400,18 +422,31 @@ export function resolveDispatchSpawnTarget(state: WorkspaceState): DispatchSpawn
 function sessionTitle(
   meta: WorkspaceState['sessions'][SessionId] | undefined,
 ): string {
-  const title = explicitAgentTitle(meta)
-  if (title) return title
-  return basename(meta?.cwd ?? 'agent')
+  // WHY sessionDisplayTitle instead of a locally duplicated basename rule
+  // (M6): this used to reimplement its own title→spawn-folder→cwd fallback
+  // (a bare `path.split('/').filter(Boolean)` basename lookup), which
+  // is exactly the "D6 title rule" — sessionDisplayTitle.ts's WHY comment
+  // — that already exists as the one shared source of truth other
+  // workspace-layer readers (pane labels, close confirmation, control
+  // observation) all agree with. Dispatch rows never have a live tmux cwd
+  // to pass as sessionDisplayTitle's second argument — that only exists in
+  // zustand runtime state, not the WorkspaceState this selector reads — so
+  // this resolves exactly the title → spawn folder → raw cwd chain, with no
+  // live-cwd override; DispatchAgentList layers the live cwd back on top
+  // via dispatchRowTitle for the actual rendered row.
+  //
+  // 'agent' stays as a LOCAL fallback for the case sessionDisplayTitle
+  // cannot itself handle: meta undefined (a dangling sessionId — a row
+  // built from tab-tree membership can race the session leaving
+  // state.sessions). sessionDisplayTitle dereferences meta.title/meta.cwd
+  // unconditionally, so passing it undefined would throw rather than
+  // degrade.
+  if (!meta) return 'agent'
+  return sessionDisplayTitle(meta)
 }
 
 function explicitAgentTitle(
   meta: WorkspaceState['sessions'][SessionId] | undefined,
 ): string | undefined {
   return meta?.title?.trim() || undefined
-}
-
-function basename(path: string): string {
-  const parts = path.split('/').filter(Boolean)
-  return parts[parts.length - 1] ?? path
 }

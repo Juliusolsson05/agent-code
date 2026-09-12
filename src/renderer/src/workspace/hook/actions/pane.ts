@@ -1,4 +1,5 @@
 import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
+import { AGENT_PROVIDER_CHOICES } from '@renderer/workspace/providerChoices'
 import {
   expandSessionCloseTargets,
   expandTabCloseTargets,
@@ -7,6 +8,7 @@ import {
 } from '@renderer/workspace/closeConfirmation'
 import type { CloseExpansionRuntimes, CloseTargetSnapshot } from '@renderer/workspace/closeConfirmation'
 import { requestCloseConfirmation } from '@renderer/workspace/closeConfirmationBroker'
+import { sessionDisplayTitle } from '@renderer/workspace/sessionDisplayTitle'
 import { useCallback, useRef } from 'react'
 
 import type {
@@ -50,7 +52,7 @@ import {
 } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import { commandTargetSessionIdForState } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import type { PlacementTarget } from '@renderer/features/workspace/lib/newAgentPlacement'
-import type { BuiltInMcpDomain } from '@mcp/shared/types'
+import type { BuiltInMcpDomain, BuiltInMcpOverrides } from '@mcp/shared/types'
 import type {
   OrchestrationAgentKind,
   OrchestrationAgentRecord,
@@ -347,7 +349,10 @@ type SplitFocusedContinuation = {
   // class of bug where a related child's transcript is resumed with its physical parent's token.
   resumeSessionId: string
   cwd: string
-  builtInMcpDomains?: BuiltInMcpDomain[]
+  /** Per-domain MCP choices the clone should adopt. The source pane's effective
+   * capability list is deliberately not carried: a clone is a new provider
+   * process and resolves these against current Settings. */
+  builtInMcpOverrides?: BuiltInMcpOverrides
   /** Preserve an alternate provider transport when cloning a conversation. */
   providerRuntime?: AgentProviderRuntime
 }
@@ -379,10 +384,26 @@ export function usePaneActions(
   ) => Promise<void>
   startNewAgentPlacement: () => void
   commitNewAgentPlacement: (selection: SessionSpawnSelection, target: PlacementTarget) => Promise<void>
+  createDetachedSession: (selection: SessionSpawnSelection, projectOverride?: { tabId: TabId; anchorSessionId: SessionId }, continuation?: SplitFocusedContinuation, placement?: { selectCreated: boolean }) => Promise<SessionId | null>
+  // WHY `kind` is the full SessionKind here (unlike createLinkedAgent right
+  // below, which stays narrowed to agent providers): Dispatch's "New Agent…"
+  // picker now offers Terminal (#865), and files it through this exact
+  // creator so the project-header "+" override (`projectOverride`, honored
+  // here and NOT by splitFocused) applies to shells too. This was a type-only
+  // restriction, not a runtime one — proof is two lines below the useCallback:
+  // `createDetachedSession: createDetachedDispatchAgent` exposes the SAME
+  // function under a second name, and that name's declared type (just above,
+  // unchanged) already accepted every SessionKind — `control/terminals.ts`'s
+  // `terminals.create` capability has been passing `{ kind: 'terminal' }`
+  // through it since terminals existed. Narrowing only THIS name's type was
+  // an artifact of when this alias was agent-only; it never matched what the
+  // underlying implementation actually does.
   createDetachedDispatchAgent: (
-    selection: SessionSpawnSelection & { kind: Exclude<SessionKind, 'terminal'> },
+    selection: SessionSpawnSelection,
     projectOverride?: { tabId: TabId; anchorSessionId: SessionId },
-  ) => Promise<void>
+    continuation?: SplitFocusedContinuation,
+    placement?: { selectCreated: boolean },
+  ) => Promise<SessionId | null>
   createLinkedAgent: (
     selection: SessionSpawnSelection & { kind: Exclude<SessionKind, 'terminal'> },
     parentId: SessionId,
@@ -398,6 +419,7 @@ export function usePaneActions(
   }) => Promise<OrchestrationAgentRecord>
   attachDetachedToGrid: (sessionId: SessionId, targetTabId: string, target: PlacementTarget) => Promise<void>
   attachAllDetachedForTab: (tabId: string) => Promise<void>
+  detachSessionToDispatch: (sessionId: SessionId) => void
   detachFocusedToDispatch: () => void
   closeFocused: () => Promise<void>
   /** Resolves true when the session was actually closed, false when it did
@@ -427,7 +449,7 @@ export function usePaneActions(
       continuation?: SplitFocusedContinuation,
     ) => {
       const resumeSessionId = continuation?.resumeSessionId
-      const builtInMcpDomains = continuation?.builtInMcpDomains
+      const builtInMcpOverrides = continuation?.builtInMcpOverrides
       const providerRuntime = continuation?.providerRuntime
       const dispatchSnapshot = refs.stateRef.current
       // ONE Dispatch creation flow for every session kind.
@@ -497,8 +519,9 @@ export function usePaneActions(
           // passed through unguarded, but they are NOT symmetric and it is
           // worth being precise about which is which:
           //
-          //  - `builtInMcpDomains` really is dropped for a terminal —
-          //    `sessionActions.spawn` gates it behind `isAgentProviderKind`.
+          //  - `builtInMcpOverrides` really is dropped for a terminal —
+          //    `sessionActions.spawn` gates the resolved capability list it
+          //    produces behind `isAgentProviderKind`.
           //  - `resumeSessionId` is NOT dropped. It is forwarded to
           //    `window.api.spawnSession` for every kind; only the value written
           //    back into the durable `SessionMeta` is kind-gated. It is inert
@@ -518,7 +541,7 @@ export function usePaneActions(
             kind,
             ...(providerRuntime ? { providerRuntime } : {}),
             resumeSessionId,
-            builtInMcpDomains,
+            builtInMcpOverrides,
           })
         } catch (err) {
           showToast(
@@ -611,7 +634,7 @@ export function usePaneActions(
           kind,
           ...(providerRuntime ? { providerRuntime } : {}),
           resumeSessionId,
-          builtInMcpDomains,
+          builtInMcpOverrides,
         })
       } catch (err) {
         showToast(
@@ -654,7 +677,7 @@ export function usePaneActions(
 
   const createDetachedDispatchAgent = useCallback(
     async (
-      selection: SessionSpawnSelection & { kind: Exclude<SessionKind, 'terminal'> },
+      selection: SessionSpawnSelection,
       // Explicit project override, supplied by the Dispatch header "+".
       //
       // WHY it must override BOTH halves rather than just the tab: cwd is
@@ -665,6 +688,8 @@ export function usePaneActions(
       // whose grid leaves are all closed has no leaf cwd to fall back on and
       // Dispatch agents are never inserted into tab.root.
       projectOverride?: { tabId: TabId; anchorSessionId: SessionId },
+      continuation?: SplitFocusedContinuation,
+      placement?: { selectCreated: boolean },
     ) => {
       const { kind, providerRuntime } = selection
       const snapshot = refs.stateRef.current
@@ -682,10 +707,12 @@ export function usePaneActions(
         ? { ...resolved, tabId: projectOverride.tabId, cwdSessionId: projectOverride.anchorSessionId }
         : resolved
       const tab = snapshot.tabs.find(t => t.id === target.tabId)
-      if (!tab) return
+      if (!tab) return null
 
       const leafIds = collectLeaves(tab.root)
-      const cwd =
+      // A native continuation owns its cwd; the project only owns placement.
+      // Reusing the anchor cwd here can resume a transcript in another repo.
+      const cwd = continuation?.cwd ??
         (target.cwdSessionId ? snapshot.sessions[target.cwdSessionId]?.cwd : null) ??
         // Do NOT fall back to tab.focusedSessionId: in Tiled Dispatch that's
         // stale grid focus (the focused lane's session is already
@@ -694,25 +721,27 @@ export function usePaneActions(
         leafIds.map(id => snapshot.sessions[id]?.cwd).find(Boolean)
       if (!cwd) {
         showToast('Could not create dispatch agent: no project directory found')
-        return
+        return null
       }
 
       let sessionId: SessionId
       try {
-        sessionId = await sessionActions.spawn(cwd, { kind, providerRuntime })
+        sessionId = await sessionActions.spawn(cwd, { kind, providerRuntime, resumeSessionId: continuation?.resumeSessionId, builtInMcpOverrides: continuation?.builtInMcpOverrides })
       } catch (err) {
         showToast(
           err instanceof Error && err.message.length > 0
             ? err.message
             : 'Failed to create dispatch agent',
         )
-        return
+        return null
       }
 
+      let placed = false
       setState(prev => {
         const latestTab = prev.tabs.find(t => t.id === tab.id)
         const projectTabIndex = prev.tabs.findIndex(t => t.id === tab.id)
         if (!latestTab) return prev
+        placed = true
         // Detached sessions are live workspace sessions with project affinity,
         // not children of Dispatch Mode. We deliberately do not insert this id
         // into latestTab.root, because the whole point is that creating ten
@@ -720,15 +749,28 @@ export function usePaneActions(
         // Mode is turned off.
         return {
           ...prev,
-          activeTabId: latestTab.id,
+          // Detached describes grid membership, not focus. UI creation has
+          // always selected the captured lane; external operators can preserve
+          // the entire current view, then explicitly assign the returned ID to
+          // a chosen lane using a fresh layout revision.
+          activeTabId: placement?.selectCreated === false ? prev.activeTabId : latestTab.id,
           detachedSessions: {
             ...prev.detachedSessions,
             [sessionId]: detachedDispatchRecord(sessionId, latestTab, projectTabIndex),
           },
-          dispatchMode: applyDispatchSpawnFocus(prev.dispatchMode, sessionId, target.laneIndex),
+          dispatchMode: placement?.selectCreated === false ? prev.dispatchMode : applyDispatchSpawnFocus(prev.dispatchMode, sessionId, target.laneIndex),
         }
       })
-      closeNewAgentPlacement()
+      // A caller needs the exact spawned ID; comparing a before/after census
+      // could accidentally claim an agent created concurrently by the UI.
+      // If the owning project disappeared during spawn, retire only this new
+      // process instead of leaving an unowned live session behind.
+      if (!placed) {
+        await sessionActions.killSession(sessionId, { cwd, kind, providerRuntime })
+        return null
+      }
+      if (placement?.selectCreated !== false) closeNewAgentPlacement()
+      return sessionId
     },
     [closeNewAgentPlacement, refs.stateRef, sessionActions, setState, showToast],
   )
@@ -844,6 +886,7 @@ export function usePaneActions(
     async (params: {
       parentId: SessionId
       kind: OrchestrationAgentKind
+      providerRuntime?: AgentProviderRuntime
       cwd?: string
       title?: string
       role?: string
@@ -851,6 +894,13 @@ export function usePaneActions(
       builtInMcpDomains?: BuiltInMcpDomain[]
       inheritParentContext?: boolean
     }): Promise<OrchestrationAgentRecord> => {
+      // WHY also check the renderer launch choices: this action can be called
+      // without the MCP bridge. Reuse the picker's supported combinations so
+      // direct calls cannot silently launch a structured child after the user
+      // requested a TUI. Main separately validates the actual factory.
+      if (!AGENT_PROVIDER_CHOICES.some(choice => choice.kind === params.kind && choice.providerRuntime === params.providerRuntime)) {
+        throw new Error(`${params.kind} does not support the requested ${params.providerRuntime ?? 'structured'} runtime`)
+      }
       const snapshot = refs.stateRef.current
       const parentMeta = snapshot.sessions[params.parentId]
       if (!parentMeta) {
@@ -911,6 +961,7 @@ export function usePaneActions(
 
       const sessionId = await sessionActions.spawn(cwd, {
         kind: params.kind,
+        ...(params.providerRuntime ? { providerRuntime: params.providerRuntime } : {}),
         resumeSessionId,
         builtInMcpDomains: params.builtInMcpDomains,
       })
@@ -1186,13 +1237,8 @@ export function usePaneActions(
   //      return null and the tab.root type cannot represent an empty
   //      tree. We don't want to silently close the tab either, so we
   //      refuse and ask the user to add another pane first.
-  const detachFocusedToDispatch = useCallback(() => {
+  const detachSessionToDispatch = useCallback((sessionId: SessionId) => {
     const snapshot = refs.stateRef.current
-    const sessionId = commandTargetSessionIdForState(snapshot)
-    if (!sessionId) {
-      showToast('No focused session to detach')
-      return
-    }
     const meta = snapshot.sessions[sessionId]
     if (!meta) return
     const tab = snapshot.tabs.find(t => collectLeaves(t.root).includes(sessionId))
@@ -1253,6 +1299,12 @@ export function usePaneActions(
     showToast(`Detached "${cwdBase}" to Dispatch`)
   }, [refs.stateRef, setState, showToast])
 
+
+  const detachFocusedToDispatch = useCallback(() => {
+    const id = commandTargetSessionIdForState(refs.stateRef.current)
+    if (id) detachSessionToDispatch(id)
+    else showToast('No focused session to detach')
+  }, [refs.stateRef, detachSessionToDispatch, showToast])
 
   const commitNewAgentPlacement = useCallback(
     async (selection: SessionSpawnSelection, target: PlacementTarget) => {
@@ -2131,13 +2183,16 @@ export function usePaneActions(
       const buriedConfirmed = await requestCloseConfirmation({
         required: true,
         // Its OWN reason. Borrowing 'running' made the dialog title an idle
-        // buried session "Close a working agent?", contradicting both its body
-        // and the actual state — on the one close with no undo, where the
+        // buried session "Close a working session?", contradicting both its
+        // body and the actual state — on the one close with no undo, where the
         // dialog's credibility is the entire mechanism.
         reason: 'irreversible',
         targets: [{
           sessionId: entry.sessionId,
-          title: snapshot.sessions[entry.sessionId]?.title ?? entry.sessionId,
+          // A buried entry always carries its own sessionMeta, even after the
+          // session has left `sessions` entirely — so read from there rather
+          // than the (possibly absent) live sessions record (#865).
+          title: sessionDisplayTitle(entry.sessionMeta),
           live: isSessionLiveForClose(refs.latestRuntimesRef.current, entry.sessionId),
         }],
         summary: 'Killing a buried session is permanent — Undo Close cannot restore it.',
@@ -2249,11 +2304,15 @@ export function usePaneActions(
     splitFocused,
     startNewAgentPlacement,
     commitNewAgentPlacement,
+    // Shells and agents share detached placement and post-spawn ownership
+    // checks. Preserve the narrower agent entry point for existing pickers.
+    createDetachedSession: createDetachedDispatchAgent,
     createDetachedDispatchAgent,
     createLinkedAgent,
     createOrchestrationAgent,
     attachDetachedToGrid,
     attachAllDetachedForTab,
+    detachSessionToDispatch,
     detachFocusedToDispatch,
     closeFocused,
     closeSession,

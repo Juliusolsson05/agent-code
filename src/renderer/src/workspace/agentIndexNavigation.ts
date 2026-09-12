@@ -1,6 +1,4 @@
-import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
-
-import { selectedGridRelatedSessionId } from '@renderer/workspace/gridRelatedAgents'
+import { buildGridRelatedAgentTabs, selectedGridRelatedSessionId } from '@renderer/workspace/gridRelatedAgents'
 import { withLaneSession } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import {
   collectLeaves,
@@ -56,9 +54,12 @@ export function navigateToAgentIndexTarget(
   target: AgentPaneLabelTarget,
   intent: AgentIndexNavigationIntent = 'reuse-existing-view',
 ): AgentIndexNavigationResult | null {
+  // Any session kind is a valid navigation target (#865): this guard used to
+  // also require an AgentProviderKind, but Dispatch ⌘N and ⌥↑/↓ already moved
+  // focus onto terminals, so the label/index path only needs to confirm the
+  // session still exists — the same check every branch below already assumes.
   const meta = state.sessions[target.sessionId]
-  const kind = meta?.kind ?? DEFAULT_PROVIDER
-  if (!meta || !isAgentProviderKind(kind)) return null
+  if (!meta) return null
 
   const requiresWake = state.detachedSessions[target.sessionId] !== undefined
   const dispatchMode = state.dispatchMode
@@ -268,6 +269,17 @@ function findExistingGridViewSlot(
         selectedGridRelatedSessionId(state, tab.id, ownerSessionId) ===
         targetSessionId
       ) {
+        return { tabId: tab.id, ownerSessionId }
+      }
+    }
+  }
+  // A hidden related mini-tab is an existing view route too. Prefer physical
+  // and already selected slots above; then reveal a valid related child in its
+  // owner's pane before considering a detached-to-grid swap. Both UI labels
+  // and stable-ID navigation must agree about this placement ownership.
+  for (const tab of state.tabs) {
+    for (const ownerSessionId of collectLeaves(tab.root)) {
+      if (buildGridRelatedAgentTabs(state, tab.id, ownerSessionId).some(child => child.sessionId === targetSessionId)) {
         return { tabId: tab.id, ownerSessionId }
       }
     }

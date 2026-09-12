@@ -389,6 +389,12 @@ describe('LiveWorktreeReconciler recorded cache ordering', () => {
       cacheState: 'missing',
       catalogCount: 0,
       recentEvidenceCount: 2,
+      // These four recorded Codex records are relevant evidence and the window
+      // holds two, so the other two are exactly the records #822 used to drop
+      // on the floor: no catalog has arrived, so they wait in the deferred
+      // list. The bound is the same 2, so nothing is lost yet.
+      deferredEvidenceCount: 2,
+      droppedBeforeCatalog: 0,
       activeSource: null,
       primarySource: null,
       projectedPath: null,
@@ -402,5 +408,56 @@ describe('LiveWorktreeReconciler recorded cache ordering', () => {
     resolveCatalog({ ok: true, worktrees: catalog() })
     expect(await refreshing).toBe('disposed')
     expect(onCatalogReady).not.toHaveBeenCalled()
+  })
+
+  it('folds evidence evicted before the first catalog once the catalog arrives (#822)', async () => {
+    const claude = fixture<RecordedFixture>('claude-cwd-tool-branch-conflict.json')
+    let resolveCatalog!: (value: { ok: true; worktrees: ReturnType<typeof catalog> }) => void
+    const pendingCatalog = new Promise<{ ok: true; worktrees: ReturnType<typeof catalog> }>(
+      resolve => { resolveCatalog = resolve },
+    )
+    let projection = emptyProjection()
+    let reconciler!: LiveWorktreeReconciler
+    reconciler = new LiveWorktreeReconciler({
+      loadWorktrees: () => pendingCatalog,
+      // A window of one guarantees the first write is evicted by the second
+      // while Git IPC is still pending, which is the #822 loss path.
+      recentRawLimit: 1,
+      onCatalogReady: cwd => {
+        projection = reconciler.project({ sessionId: 'evicted-early', cwd, projection })
+      },
+    })
+
+    const refreshing = reconciler.refresh(claude.git.main.path)
+    projection = reconciler.observe('evicted-early', claude.git.main.path, [{ entry: claude.records[0] }], projection)
+    projection = reconciler.observe('evicted-early', claude.git.main.path, [{ entry: claude.records[1] }], projection)
+    expect(reconciler.summarize({ sessionId: 'evicted-early', cwd: claude.git.main.path, projection }))
+      .toMatchObject({ recentEvidenceCount: 1, deferredEvidenceCount: 1, droppedBeforeCatalog: 0 })
+
+    resolveCatalog({ ok: true, worktrees: catalog() })
+    expect(await refreshing).toBe('ready')
+
+    const writes = projection.workActivity?.timeline.filter(event => event.kind === 'file-write') ?? []
+    expect(writes).toHaveLength(2)
+    expect(writes.every(event => event.resolvedWorktreePath === claude.git.grid?.path)).toBe(true)
+    expect(reconciler.summarize({ sessionId: 'evicted-early', cwd: claude.git.main.path, projection }))
+      .toMatchObject({ deferredEvidenceCount: 0, droppedBeforeCatalog: 0 })
+  })
+
+  it('bounds the deferred window and reports what it dropped', async () => {
+    const claude = fixture<RecordedFixture>('claude-cwd-tool-branch-conflict.json')
+    const reconciler = new LiveWorktreeReconciler({
+      loadWorktrees: () => new Promise(() => undefined),   // catalog never arrives
+      recentRawLimit: 1,
+      onCatalogReady: () => undefined,
+    })
+    let projection = emptyProjection()
+    void reconciler.refresh(claude.git.main.path)
+    for (let i = 0; i < 3; i += 1) {
+      projection = reconciler.observe('never-catalog', claude.git.main.path, [{ entry: claude.records[i % 2] }], projection)
+    }
+    // Three relevant records, window of one: one live, one deferred, one dropped.
+    expect(reconciler.summarize({ sessionId: 'never-catalog', cwd: claude.git.main.path, projection }))
+      .toMatchObject({ recentEvidenceCount: 1, deferredEvidenceCount: 1, droppedBeforeCatalog: 1 })
   })
 })

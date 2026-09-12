@@ -122,14 +122,17 @@ export class SessionFeedSource {
     sub('input-readiness', (payload: { sessionId: string }) =>
       this.emit('input-readiness', payload),
     )
-    sub('jsonl-error', (payload: { sessionId: string; error: Error }) =>
+    sub('jsonl-error', (payload: { sessionId: string; error: Error }) => {
+      // The reader emits understood records before refusing a later row. The
+      // phone must receive that same order even while a burst is buffered.
+      this.flushJsonl(payload.sessionId)
       this.emit('jsonl-error', {
         sessionId: payload.sessionId,
         // Match the forwarder's serialization: Errors don't survive
         // structured clone/JSON, the message string does.
         message: String(payload.error?.message ?? payload.error),
-      }),
-    )
+      })
+    })
     sub('semantic-event', (payload: { sessionId: string }) =>
       this.emit('semantic-event', payload),
     )
@@ -213,6 +216,28 @@ export class SessionFeedSource {
 
   private emit(channel: FeedChannel, payload: unknown): void {
     if (this.disposed) return
+    // ONE gate at the choke point, not per channel (#866). The terminal filter
+    // used to exist only on `started`, so every other channel (readiness, exit,
+    // process-state) still relayed terminal ids, and a client could act on an
+    // id it was never shown. Any future channel is covered automatically.
+    //
+    // WHY the gate falls back to getSpawnKind (#866 follow-up): a spawn
+    // publishes `input-readiness {ready:false, reason:'starting'}` (main
+    // sessionManager.ts ~:2501) BEFORE inserting the RegistryEntry that
+    // getSessionKind reads (~:3113 for terminals). In that pre-registration
+    // window getSessionKind returns null even for a terminal spawn, so the
+    // gate above alone let the very first readiness frame for every new
+    // terminal leak through — and because later `exit`/`removed` frames for
+    // that id ARE filtered (the entry is registered by then), the leaked
+    // frame stuck around forever in RemoteServer.lastInputReadiness with no
+    // event to ever evict it. getSpawnKind reads spawnInfo, which is set at
+    // the same moment as the 'starting' emit, so it never has this gap.
+    const sessionId = (payload as { sessionId?: unknown } | null)?.sessionId
+    if (
+      typeof sessionId === 'string' &&
+      (this.manager.getSessionKind(sessionId) ?? this.manager.getSpawnKind(sessionId)) === 'terminal'
+    )
+      return
     for (const listener of [...this.listeners]) listener(channel, payload)
   }
 }

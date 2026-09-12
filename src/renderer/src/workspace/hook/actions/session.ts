@@ -1,3 +1,5 @@
+import { tldrIdentityForReplacement, tldrIdentityForSession } from '@renderer/features/tldr/identity'
+import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import {
   DEFAULT_PROVIDER,
   isAgentProviderKind,
@@ -10,9 +12,9 @@ import { useCallback, useRef } from 'react'
 import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
 import { clearLiveEntryWindowSession } from '@renderer/session-runtime/liveEntryWindow'
-import type { SessionId, SessionKind, SessionMeta, TileNode } from '@renderer/workspace/types'
-import type { BuiltInMcpDomain } from '@mcp/shared/types'
-import { resolveSessionBuiltInMcpDomains } from '@renderer/workspace/mcpDomains'
+import type { SessionId, SessionKind, SessionMeta, TileNode, WorkspaceState } from '@renderer/workspace/types'
+import type { BuiltInMcpDomain, BuiltInMcpOverrides } from '@mcp/shared/types'
+import { resolveSessionBuiltInMcpDomains, sessionMcpOverrides, spawnMcpOverrides } from '@renderer/workspace/mcpDomains'
 import {
   clearTiledLaneSessions,
   remapTiledLanes,
@@ -24,6 +26,10 @@ import {
 } from '@renderer/workspace/idRemap'
 import { closeLeaf, collectLeaves, remapTileTreeSessionIds } from '@renderer/workspace/tile-tree/treeOps'
 import type { Tab } from '@renderer/workspace/types'
+import {
+  releaseIdentityCarry,
+  reserveIdentityCarry,
+} from '@renderer/workspace/agentNames/pendingIdentityCarry'
 import { sessionSpawnErrorMessage } from '@renderer/workspace/spawn/errorMessage'
 import {
   ghostsToPersist,
@@ -65,9 +71,10 @@ import type { WakeCaller } from '@shared/lifecycle/events'
 // replaceSession     — kill current focused session + spawn a new one in
 //                      the same tile-tree slot. Used by resume picker and
 //                      provider switch.
-// reloadAgentSessions — recreate every Claude/Codex session with fresh
-//                       dangerous-mode settings. Remaps panes + buried
-//                       records onto the new ids.
+// reloadAgentSessions — recreate every live agent session (any provider,
+//                       either runtime) with fresh dangerous-mode settings.
+//                       Remaps panes + buried records onto the new ids and
+//                       reloads each durable session's history.
 // -----------------------------------------------------------------------------
 
 export type SessionActions = {
@@ -79,6 +86,8 @@ export type SessionActions = {
       providerRuntime?: AgentProviderRuntime
       dangerousMode?: boolean
       recoverTmuxName?: string
+      tldrIdentity?: string
+      builtInMcpOverrides?: BuiltInMcpOverrides
       builtInMcpDomains?: BuiltInMcpDomain[]
     },
   ) => Promise<SessionId>
@@ -87,14 +96,17 @@ export type SessionActions = {
     caller: WakeCaller,
     options?: SessionWakeOptions,
   ) => Promise<SessionWakeResult>
-  killSession: (sessionId: SessionId) => Promise<void>
+  killSession: (sessionId: SessionId, capturedOwner?: Pick<SessionMeta, 'cwd' | 'kind' | 'providerRuntime'>) => Promise<void>
   replaceSession: (
     cwd: string,
     opts?: {
       resumeSessionId?: string
       kind?: SessionKind
       providerRuntime?: AgentProviderRuntime
-      builtInMcpDomains?: BuiltInMcpDomain[]
+      /** Per-domain MCP choices to ADOPT; omit to continue the pane's own. */
+      builtInMcpOverrides?: BuiltInMcpOverrides
+      preserveTldr?: boolean
+      restoreTldrIdentity?: string
       targetSessionId?: SessionId
     },
   ) => Promise<SessionId | undefined>
@@ -104,7 +116,6 @@ export type SessionActions = {
 
 export type SessionWakeResult = {
   sessionId: SessionId
-  builtInMcpDomains: BuiltInMcpDomain[] | undefined
 }
 
 export type SessionWakeOptions = {
@@ -118,8 +129,12 @@ export type SessionWakeOptions = {
 export async function killSessionBackendIfOwned(
   refs: WorkspaceRefs,
   sessionId: SessionId,
+  capturedOwner?: Pick<SessionMeta, 'cwd' | 'kind' | 'providerRuntime'>,
 ): Promise<boolean> {
-  const meta = refs.stateRef.current.sessions[sessionId]
+  // Spawn cleanup may run before React refreshes stateRef. Its caller already
+  // knows the exact scope it just created; main still performs the atomic
+  // ownership check. Ordinary close paths continue using the live metadata.
+  const meta = capturedOwner ?? refs.stateRef.current.sessions[sessionId]
   if (!meta) return false
   // WHY this proof lives in main as one atomic check+kill: renderer runtime
   // flags are advisory and can be reset by retry, soft reload, or a delayed
@@ -131,6 +146,70 @@ export async function killSessionBackendIfOwned(
     providerRuntime: meta.providerRuntime,
     cwd: meta.cwd,
   })
+}
+
+/**
+ * Shallow value-equality over two session-meta records.
+ *
+ * WHY this exists rather than letting the spread decide: several callers use
+ * the meta object's IDENTITY as a "is my target still the same pane?" token
+ * across an await (deliverTextToSession's isCurrent, both prompt-template
+ * insertion paths). A wake that changed nothing but still produced a new
+ * object read to them as "the pane was replaced", so the first insertion into
+ * any pane that needed waking always failed and the retry always worked.
+ *
+ * Compared over the union of both key sets rather than over `next` alone.
+ * That is defensive rather than load-bearing AT THIS CALL SITE: the caller
+ * builds `next` as `{...current, ...recoveredMeta}`, which is always a
+ * superset of `current`'s keys, so nothing can actually disappear here. It is
+ * written this way so the function stays correct for a caller that composes a
+ * meta object differently — a field vanishing must count as a change, or a
+ * holder gets a token that outlived the fact it stood for.
+ *
+ * (Worth knowing, and NOT introduced here: that superset property also means
+ * the wake's `withoutProvisionalProviderSession` is inert. It strips
+ * `providerSessionId`/`providerSessionIdSource` from `restoredMeta` and the
+ * spread puts them straight back from `current`. The same helper does take
+ * effect where it is spread into a FRESH object instead. Pre-existing, out of
+ * scope for a comparison function, but this is where someone will next look
+ * for it.)
+ *
+ * Values are primitives except for the domain array and flat override map;
+ * `metaValuesEqual` compares their leaves because wake rebuilds both.
+ */
+function metaValuesEqual(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true
+  // WHY arrays need an element-wise pass rather than reference equality:
+  //
+  // `builtInMcpDomains` is the one array field on SessionMeta, and the wake
+  // path REBUILDS it every time — `resolveSessionBuiltInMcpDomains` ends in a
+  // filter, so it returns a fresh array even when the contents are identical.
+  // A pure `Object.is` comparison therefore reported "changed" on every wake
+  // of every agent pane, which is precisely the population this whole
+  // comparison exists to protect, and would have left the bug fixed only for
+  // plain terminals.
+  //
+  // Elements are a string union, so a shallow pass is exact. The flat MCP
+  // override map receives its own leaf comparison below.
+  if (Array.isArray(a) && Array.isArray(b)) {
+    return a.length === b.length && a.every((value, index) => Object.is(value, b[index]))
+  }
+  if (a && b && typeof a === 'object' && typeof b === 'object' && !Array.isArray(a) && !Array.isArray(b)) {
+    // The only object-valued metadata is the flat MCP override map. Compare
+    // its boolean leaves so an idempotent wake cannot rerender every pane.
+    const left = a as Record<string, unknown>, right = b as Record<string, unknown>
+    return Object.keys(left).length === Object.keys(right).length
+      && Object.keys(left).every(key => Object.prototype.hasOwnProperty.call(right, key) && Object.is(left[key], right[key]))
+  }
+  return false
+}
+
+function metaIsUnchanged(current: SessionMeta, next: SessionMeta): boolean {
+  const a = current as unknown as Record<string, unknown>
+  const b = next as unknown as Record<string, unknown>
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)])
+  for (const key of keys) if (!metaValuesEqual(a[key], b[key])) return false
+  return true
 }
 
 function softReloadRuntime(current: SessionRuntime, hasProviderSession: boolean): SessionRuntime {
@@ -201,9 +280,12 @@ function softReloadRuntime(current: SessionRuntime, hasProviderSession: boolean)
     phaseChangedAt: current.phaseChangedAt,
     submittedAt: current.submittedAt,
     hasOlderHistory: true,
-    transcriptStatus: 'loading',
+    // A soft reload keeps the same backend. Rebuilding the view cannot
+    // restart a stopped channel or undo navigation inside the provider TUI.
+    transcriptChannelError: current.transcriptChannelError,
+    transcriptStatus: current.transcriptChannelError ? 'error' : 'loading',
     transcriptStatusChangedAt: Date.now(),
-    transcriptError: null,
+    transcriptError: current.transcriptChannelError ?? null,
   }
 }
 
@@ -273,6 +355,8 @@ export function useSessionActions(
         providerRuntime?: AgentProviderRuntime
         dangerousMode?: boolean
         recoverTmuxName?: string
+        tldrIdentity?: string
+        builtInMcpOverrides?: BuiltInMcpOverrides
         builtInMcpDomains?: BuiltInMcpDomain[]
       },
     ): Promise<SessionId> => {
@@ -285,178 +369,241 @@ export function useSessionActions(
       // proxy via `openai_base_url`.
       const useProxy =
         kind !== 'terminal' ? refs.useProxyStreamingRef.current : undefined
+      const builtInMcpOverrides = spawnMcpOverrides(opts)
       const builtInMcpDomains =
         isAgentProviderKind(kind)
           ? resolveSessionBuiltInMcpDomains({
               provider: kind,
-              sessionDomains: opts?.builtInMcpDomains,
+              sessionOverrides: builtInMcpOverrides,
               defaultDomains: refs.defaultBuiltInMcpDomainsRef.current,
             })
           : undefined
+      const tldrIdentity = kind === 'terminal' ? undefined : opts?.tldrIdentity
+        ?? (builtInMcpDomains?.includes('tldr') ? crypto.randomUUID() : undefined)
       let sessionId: SessionId
       let tmuxName: string | undefined
       let startedProviderSessionId: string | undefined
+      // What this spawn reserved, if anything. `replaceSession` owns the
+      // release for every path AFTER spawn resolves, but it never sees an id
+      // when spawn THROWS — and by then the successor may already be
+      // committed to state.sessions, so a stranded reservation would leave a
+      // real pane permanently unnamed. That is the mirror-image bug of the
+      // name leak this reservation exists to stop, so spawn owns its own
+      // failure path.
+      let reservedIdentityCarry: SessionId | null = null
       try {
-        const result = await window.api.spawnSession({
-          kind,
-          providerRuntime: opts?.providerRuntime,
+        try {
+          const result = await window.api.spawnSession({
+            tldrIdentity,
+            kind,
+            providerRuntime: opts?.providerRuntime,
+            cwd,
+            resumeSessionId: opts?.resumeSessionId,
+            ...(opts?.predecessorSessionId
+              ? { predecessorSessionId: opts.predecessorSessionId }
+              : {}),
+            dangerousMode,
+            useProxy,
+            recoverTmuxName: opts?.recoverTmuxName,
+            builtInMcpDomains,
+          })
+          sessionId = result.sessionId
+          tmuxName = result.tmuxName
+          startedProviderSessionId = result.providerSessionId
+          // WHY the reservation happens HERE, before this function's own commit:
+          //
+          // The gap the reconciler exploits opens the moment the successor's
+          // metadata lands in `state.sessions` without an `agentNameId`, and
+          // that is the setState a few lines below. `replaceSession` cannot
+          // reserve after `await spawn(...)` because by then React has already
+          // been given the chance to flush. Only spawn knows the id early
+          // enough.
+          //
+          // WHY this is NOT also gated on the predecessor already HAVING an
+          // identity, which a first version tried:
+          //
+          // The gate has to match the predicate the CARRY uses, and the carry
+          // reads `prev.sessions[oldId]?.agentNameId` at COMMIT time, which is
+          // later. A predecessor that is still unnamed when spawn runs can be
+          // claimed by the reconciler during the await — at which point there
+          // IS an identity to carry — and the narrower gate had left the
+          // successor claimable in that same window. It allocates a name, the
+          // commit overwrites it, and that name is orphaned forever. That is
+          // the exact leak this reservation exists to close, one step
+          // narrower.
+          //
+          // Reserving for every replacement costs nothing when there is
+          // nothing to carry: the successor simply claims after release, on
+          // the next state change, under its own id — the outcome the
+          // replacement commit's comment already describes as correct.
+          //
+          // `predecessorSessionId` is passed by `replaceSession` and nothing
+          // else, so this cannot fire for an ordinary spawn.
+          if (opts?.predecessorSessionId) {
+            reserveIdentityCarry(sessionId)
+            reservedIdentityCarry = sessionId
+          }
+          if (result.replacementTransactionId) {
+            // WHY presence, not renderer inference: only main can prove the
+            // successor targeted the predecessor's exact Codex rollout and
+            // therefore consumed the destructive handoff. replaceSession uses
+            // this marker to suppress its legacy predecessor kill; workspace
+            // persistence later commits the still-pending main transaction.
+            pendingReplacementSuccessorsRef.current.add(sessionId)
+          }
+        } catch (err) {
+          throw new Error(sessionSpawnErrorMessage(kind, err, useProxy === true))
+        }
+        const previousMeta = refs.stateRef.current.sessions[sessionId]
+        const requestedProviderSessionId = opts?.resumeSessionId ?? startedProviderSessionId
+        // WHY spawn does NOT mint agentNameId: replaceSession spawns through this
+        // same function, so a seed here lands on the SUCCESSOR and then wins the
+        // spread in the replacement commit, renaming a pane that only changed
+        // backends. Minting lives in one place — the reconciler — which sees the
+        // restored workspace and can tell a new agent from a recovered one.
+        const meta: SessionMeta = {
+          ...(previousMeta ?? {}),
+          tldrIdentity,
           cwd,
-          resumeSessionId: opts?.resumeSessionId,
-          ...(opts?.predecessorSessionId
-            ? { predecessorSessionId: opts.predecessorSessionId }
+          kind,
+          // Write the field even when absent so a pathological reused id cannot
+          // inherit an alternate runtime from stale metadata.
+          providerRuntime: opts?.providerRuntime,
+          ...(tmuxName ? { tmuxName } : {}),
+          ...(kind !== 'terminal' && requestedProviderSessionId
+            ? {
+                providerSessionId: requestedProviderSessionId,
+                providerSessionIdSource: opts?.resumeSessionId
+                  ? 'resume-request' as const
+                  : 'runtime-start' as const,
+              }
             : {}),
-          dangerousMode,
-          useProxy,
-          recoverTmuxName: opts?.recoverTmuxName,
-          builtInMcpDomains,
-        })
-        sessionId = result.sessionId
-        tmuxName = result.tmuxName
-        startedProviderSessionId = result.providerSessionId
-        if (result.replacementTransactionId) {
-          // WHY presence, not renderer inference: only main can prove the
-          // successor targeted the predecessor's exact Codex rollout and
-          // therefore consumed the destructive handoff. replaceSession uses
-          // this marker to suppress its legacy predecessor kill; workspace
-          // persistence later commits the still-pending main transaction.
-          pendingReplacementSuccessorsRef.current.add(sessionId)
+          ...(isAgentProviderKind(kind) && builtInMcpDomains !== undefined
+            ? { builtInMcpDomains, builtInMcpOverrides }
+            : {}),
         }
-      } catch (err) {
-        throw new Error(sessionSpawnErrorMessage(kind, err, useProxy === true))
-      }
-      const previousMeta = refs.stateRef.current.sessions[sessionId]
-      const requestedProviderSessionId = opts?.resumeSessionId ?? startedProviderSessionId
-      const meta: SessionMeta = {
-        ...(previousMeta ?? {}),
-        cwd,
-        kind,
-        // Write the field even when absent so a pathological reused id cannot
-        // inherit an alternate runtime from stale metadata.
-        providerRuntime: opts?.providerRuntime,
-        ...(tmuxName ? { tmuxName } : {}),
-        ...(kind !== 'terminal' && requestedProviderSessionId
-          ? {
-              providerSessionId: requestedProviderSessionId,
-              providerSessionIdSource: opts?.resumeSessionId
-                ? 'resume-request' as const
-                : 'runtime-start' as const,
-            }
-          : {}),
-        ...(isAgentProviderKind(kind) && builtInMcpDomains !== undefined
-          ? { builtInMcpDomains }
-          : {}),
-      }
-      setState(prev => ({
-        ...prev,
-        sessions: {
-          ...prev.sessions,
-          // Persist tmuxName when main returns one — that's the
-          // signal that this terminal got tmux backing and is
-          // eligible for cross-restart recovery on next launch.
-          [sessionId]: meta,
-        },
-      }))
-      setRuntimes(prev => {
-        const current = prev[sessionId]
-        const base = emptyRuntime()
-        return {
+        setState(prev => ({
           ...prev,
-          [sessionId]: {
-            ...base,
-            ...(kind !== 'terminal' && opts?.providerRuntime !== 'terminal'
-              ? seedResumedRuntimeFields(current, meta)
-              : {
-                  hasOlderHistory: false,
-                  transcriptStatus: 'ready' as const,
-                  transcriptError: null,
-                  processStatus: 'started' as const,
-                  processError: null,
-                  inputReady: current?.inputReady ?? false,
-                  inputReadinessRevision: current?.inputReadinessRevision ?? -1,
-                }),
-            exited: current?.exited ?? null,
+          sessions: {
+            ...prev.sessions,
+            // Persist tmuxName when main returns one — that's the
+            // signal that this terminal got tmux backing and is
+            // eligible for cross-restart recovery on next launch.
+            [sessionId]: meta,
           },
-        }
-      })
-      if (kind !== 'terminal' && meta.providerRuntime !== 'terminal' && meta.providerSessionId) {
-        void loadInitialHistoryForSession({
-          sessionId,
-          meta,
-          refs,
-          setRuntimes,
+        }))
+        setRuntimes(prev => {
+          const current = prev[sessionId]
+          const base = emptyRuntime()
+          return {
+            ...prev,
+            [sessionId]: {
+              ...base,
+              // Provider-native terminal runtimes seed like any agent: their
+              // durable history loads into `entries` below (see
+              // loadInitialHistoryForSession for why). Only plain shells
+              // have no transcript to load.
+              ...(kind !== 'terminal'
+                ? seedResumedRuntimeFields(current, meta)
+                : {
+                    hasOlderHistory: false,
+                    transcriptStatus: 'ready' as const,
+                    transcriptError: null,
+                    processStatus: 'started' as const,
+                    processError: null,
+                    inputReady: current?.inputReady ?? false,
+                    inputReadinessRevision: current?.inputReadinessRevision ?? -1,
+                  }),
+              exited: current?.exited ?? null,
+            },
+          }
         })
-      }
+        if (kind !== 'terminal' && meta.providerSessionId) {
+          void loadInitialHistoryForSession({
+            sessionId,
+            meta,
+            refs,
+            setRuntimes,
+          })
+        }
 
-      // Ghost log bootstrap — fire-and-forget, no await. If a prior
-      // run of Agent Code persisted ghosts for this sessionId, replay
-      // them through the atp reducer and merge into the runtime's
-      // ghost map. The renderer then sees the same merged feed after
-      // reload as it saw before. A missing file is not an error.
-      //
-      // WHY behind a setTimeout 0: spawnSession above set the fresh
-      // runtime via setRuntimes(prev => ...) — that update is queued
-      // and will land on the next tick. Reading the ghost log and
-      // applying it synchronously would run against the PREVIOUS
-      // runtime snapshot and its setRuntimes would clobber the
-      // fresh empty runtime. Deferring by one tick lets the empty
-      // runtime land first, then the bootstrap merge runs on top.
-      setTimeout(() => {
-        void window.api
-          .ghostRead(sessionId)
-          .then(rawEntries => {
-            if (!rawEntries || rawEntries.length === 0) return
-            const bootstrapped = reduceGhostLog(rawEntries as never[])
-            if (bootstrapped.size === 0) return
-            setRuntimes(prev => {
-              const current = prev[sessionId]
-              if (!current) return prev
-              // Merge — disk ghosts only fill slots the runtime
-              // hasn't already produced in this session. If a ghost
-              // for the same uuid exists in-memory (rare; would mean
-              // a live event beat the bootstrap read), prefer the
-              // in-memory one because it's strictly fresher.
-              let merged = new Map(current.ghosts)
-              for (const [uuid, ghost] of bootstrapped) {
-                if (!merged.has(uuid)) merged.set(uuid, ghost)
-              }
-              // Reconcile against whatever JSONL entries already
-              // landed during the initial bootstrap burst. Without
-              // this, ghosts for turns that already have committed
-              // entries in `current.entries` would stay
-              // un-superseded forever: the live JSONL ingest already
-              // ran `reconcileUpstream` against the PREVIOUS (empty)
-              // ghost map and found no matches; now that the real
-              // ghosts are landing, nothing re-checks the
-              // already-ingested entries. This pass fixes the
-              // "crashed mid-turn, resumed with an orphan ghost that
-              // actually got committed" case. See Task 7 of the
-              // 2026-04-20 rendering-fixes plan.
-              for (const entry of current.entries) {
-                merged = reconcileUpstream(entry, merged)
-              }
-              // Persist any supersedes we just produced so the next
-              // resume reads the ghosts already in their reconciled
-              // state. `ghostsToPersist` diffs by updatedAt so it
-              // only emits ghosts whose state actually changed in
-              // this pass.
-              for (const ghost of ghostsToPersist(current.ghosts, merged)) {
-                window.api.ghostAppend(sessionId, ghost)
-              }
-              return {
-                ...prev,
-                [sessionId]: { ...current, ghosts: merged },
-              }
+        // Ghost log bootstrap — fire-and-forget, no await. If a prior
+        // run of Agent Code persisted ghosts for this sessionId, replay
+        // them through the atp reducer and merge into the runtime's
+        // ghost map. The renderer then sees the same merged feed after
+        // reload as it saw before. A missing file is not an error.
+        //
+        // WHY behind a setTimeout 0: spawnSession above set the fresh
+        // runtime via setRuntimes(prev => ...) — that update is queued
+        // and will land on the next tick. Reading the ghost log and
+        // applying it synchronously would run against the PREVIOUS
+        // runtime snapshot and its setRuntimes would clobber the
+        // fresh empty runtime. Deferring by one tick lets the empty
+        // runtime land first, then the bootstrap merge runs on top.
+        setTimeout(() => {
+          void window.api
+            .ghostRead(sessionId)
+            .then(rawEntries => {
+              if (!rawEntries || rawEntries.length === 0) return
+              const bootstrapped = reduceGhostLog(rawEntries as never[])
+              if (bootstrapped.size === 0) return
+              setRuntimes(prev => {
+                const current = prev[sessionId]
+                if (!current) return prev
+                // Merge — disk ghosts only fill slots the runtime
+                // hasn't already produced in this session. If a ghost
+                // for the same uuid exists in-memory (rare; would mean
+                // a live event beat the bootstrap read), prefer the
+                // in-memory one because it's strictly fresher.
+                let merged = new Map(current.ghosts)
+                for (const [uuid, ghost] of bootstrapped) {
+                  if (!merged.has(uuid)) merged.set(uuid, ghost)
+                }
+                // Reconcile against whatever JSONL entries already
+                // landed during the initial bootstrap burst. Without
+                // this, ghosts for turns that already have committed
+                // entries in `current.entries` would stay
+                // un-superseded forever: the live JSONL ingest already
+                // ran `reconcileUpstream` against the PREVIOUS (empty)
+                // ghost map and found no matches; now that the real
+                // ghosts are landing, nothing re-checks the
+                // already-ingested entries. This pass fixes the
+                // "crashed mid-turn, resumed with an orphan ghost that
+                // actually got committed" case. See Task 7 of the
+                // 2026-04-20 rendering-fixes plan.
+                for (const entry of current.entries) {
+                  merged = reconcileUpstream(entry, merged)
+                }
+                // Persist any supersedes we just produced so the next
+                // resume reads the ghosts already in their reconciled
+                // state. `ghostsToPersist` diffs by updatedAt so it
+                // only emits ghosts whose state actually changed in
+                // this pass.
+                for (const ghost of ghostsToPersist(current.ghosts, merged)) {
+                  window.api.ghostAppend(sessionId, ghost)
+                }
+                return {
+                  ...prev,
+                  [sessionId]: { ...current, ghosts: merged },
+                }
+              })
             })
-          })
-          .catch(err => {
-            // Ghost bootstrap failures are non-fatal — the session
-            // still works, we just lose crash-recovered provisional
-            // state. Log and move on.
-            console.warn('[ghost] bootstrap read failed:', err)
-          })
-      }, 0)
+            .catch(err => {
+              // Ghost bootstrap failures are non-fatal — the session
+              // still works, we just lose crash-recovered provisional
+              // state. Log and move on.
+              console.warn('[ghost] bootstrap read failed:', err)
+            })
+        }, 0)
 
-      return sessionId
+        return sessionId
+      } catch (error) {
+        // Release ONLY on failure. On success the reservation must survive
+        // until replaceSession has committed the carried identity, which is
+        // the entire point of it.
+        if (reservedIdentityCarry) releaseIdentityCarry(reservedIdentityCarry)
+        throw error
+      }
     },
     [refs.dangerousAgentsRef, refs.useProxyStreamingRef, setRuntimes, setState],
   )
@@ -510,11 +657,12 @@ export function useSessionActions(
         }
         const kind: SessionKind = meta.kind ?? DEFAULT_PROVIDER
 
+        const builtInMcpOverrides = sessionMcpOverrides(meta)
         const builtInMcpDomains =
           isAgentProviderKind(kind)
             ? resolveSessionBuiltInMcpDomains({
                 provider: kind,
-                sessionDomains: meta.builtInMcpDomains,
+                sessionOverrides: builtInMcpOverrides,
                 defaultDomains: refs.defaultBuiltInMcpDomainsRef.current,
               })
             : undefined
@@ -581,6 +729,7 @@ export function useSessionActions(
             hasResumeId: Boolean(resumeSessionId),
           })
           const recovery = await window.api.recoverSession({
+            tldrIdentity: tldrIdentityForSession(sessionId, meta),
             sessionId,
             kind,
             providerRuntime: meta.providerRuntime,
@@ -848,6 +997,8 @@ export function useSessionActions(
             : undefined
         const recoveredMeta: SessionMeta = {
           ...restoredMeta,
+          builtInMcpOverrides,
+          ...(recoverySnapshot?.tldrIdentity ? { tldrIdentity: recoverySnapshot.tldrIdentity } : {}),
           providerRuntime: recoverySnapshot?.providerRuntime ?? meta.providerRuntime,
           ...(recoveredBuiltInMcpDomains !== undefined
             ? { builtInMcpDomains: recoveredBuiltInMcpDomains }
@@ -871,18 +1022,43 @@ export function useSessionActions(
         setState(prev => {
           const current = prev.sessions[sessionId]
           if (!current) return prev
+          const next = { ...current, ...recoveredMeta }
+          // WHY a no-op wake must preserve the meta object's IDENTITY:
+          //
+          // Callers that survive an await across a wake use this object as
+          // their "is my target still the same pane?" token —
+          // deliverTextToSession's isCurrent(), and both prompt-template
+          // insertion paths, all compare
+          // `workspaceState.sessions[id] === originalSession`. This setState
+          // ran unconditionally, so ANY wake replaced the object even when
+          // every field was unchanged, and those guards then read "the pane
+          // changed underneath me" and cancelled.
+          //
+          // The user-visible bug: inserting a prompt template or a vault key
+          // into a pane that was exited, parked, or still spawning ALWAYS
+          // failed the first time with "target pane is gone" / "Focused pane
+          // is no longer available", then worked on the retry — because by
+          // then the session was 'started', no wake ran, and no replacement
+          // happened. That is the whole "flaky, works the second time"
+          // signature.
+          //
+          // Comparing content rather than trusting the spread is the correct
+          // fix and not merely the local one: recoveredMeta genuinely changes
+          // fields some of the time (withoutProvisionalProviderSession can
+          // drop them), so a real change must still produce a new object and
+          // still invalidate those guards. Only a no-op is made free.
+          if (metaIsUnchanged(current, next)) return prev
           return {
             ...prev,
             sessions: {
               ...prev.sessions,
-              [sessionId]: { ...current, ...recoveredMeta },
+              [sessionId]: next,
             },
           }
         })
 
         if (
           kind !== 'terminal' &&
-          recoveredMeta.providerRuntime !== 'terminal' &&
           resumeSessionId &&
           refs.stateRef.current.sessions[sessionId] &&
           refs.latestRuntimesRef.current[sessionId]
@@ -899,16 +1075,16 @@ export function useSessionActions(
           })
         }
 
-        // WHY the authoritative scope travels in the return value instead of
-        // requiring callers to re-read stateRef: Zustand updates the store
-        // synchronously, but React may not refresh render-owned refs before an
-        // awaiting command continues. Provider switching is one such command;
-        // returning the recovery fact closes that batching window without
-        // making imperative callers depend on a render having happened.
-        return {
-          sessionId,
-          builtInMcpDomains: recoveredBuiltInMcpDomains,
-        }
+        // This used to also return the recovered capability list, because
+        // provider switching resolved MCP itself and could not safely re-read
+        // `stateRef` straight after an await: Zustand updates the store
+        // synchronously, but React may not have refreshed a render-owned ref
+        // yet. That batching window no longer matters for MCP. Replacement
+        // resolves from the pane's CHOICES, and a wake never changes those — it
+        // only refreshes the observed list — so reading the pre- or post-wake
+        // meta produces the same decision. If a future caller needs a fact this
+        // wake established, return it here rather than re-reading the ref.
+        return { sessionId }
       })()
 
       wakeInFlightRef.current.set(sessionId, wake)
@@ -930,8 +1106,8 @@ export function useSessionActions(
   )
 
   const killSession = useCallback(
-    async (sessionId: SessionId) => {
-      await killSessionBackendIfOwned(refs, sessionId)
+    async (sessionId: SessionId, capturedOwner?: Pick<SessionMeta, 'cwd' | 'kind' | 'providerRuntime'>) => {
+      await killSessionBackendIfOwned(refs, sessionId, capturedOwner)
       setRuntimes(prev => {
         const next = { ...prev }
         delete next[sessionId]
@@ -988,12 +1164,17 @@ export function useSessionActions(
         resumeSessionId?: string
         kind?: SessionKind
         providerRuntime?: AgentProviderRuntime
-        builtInMcpDomains?: BuiltInMcpDomain[]
+        /** Per-domain choices this replacement should ADOPT. Omit to continue
+         * the pane's existing choices; replacement never takes the previous
+         * process's effective capability list as intent. */
+        builtInMcpOverrides?: BuiltInMcpOverrides
+        preserveTldr?: boolean
+        restoreTldrIdentity?: string
         targetSessionId?: SessionId
       },
     ): Promise<SessionId | undefined> => {
       const snapshot = refs.stateRef.current
-      const { targetSessionId: _targetSessionId, ...spawnOpts } = opts ?? {}
+      const { targetSessionId: _targetSessionId, preserveTldr, restoreTldrIdentity, ...spawnOpts } = opts ?? {}
       // WHY this reads Dispatch focus before tab focus:
       //
       // `replaceSession` powers resume, reload, provider-switch, and rewind.
@@ -1024,24 +1205,48 @@ export function useSessionActions(
           ? oldMeta.providerRuntime
           : undefined
       )
-      // WHY replaceSession inherits MCP domains by default:
+      // WHY replacement resolves MCP here instead of trusting a caller-supplied
+      // list: every path through here (reload, resume, provider switch, rewind,
+      // undo, a capability toggle) CONTINUES one pane, so the pane's own
+      // per-domain choices are the intent, and the effective capability list of
+      // the process being replaced is merely an observation of how it happened
+      // to launch. Treating that observation as intent is exactly what froze
+      // agents at their creation-time defaults (#904) — a Settings change could
+      // reach new agents and never existing ones. Callers that genuinely change
+      // the intent (the capability toggles, Use Global MCP Settings, Undo
+      // Rewind restoring a captured choice) pass `builtInMcpOverrides`; nobody
+      // needs to restate the domains, so there is one source of truth.
       //
-      // Reload, provider switch, resume, and rewind all funnel through this
-      // path. Most callers think in terms of "keep this pane, replace the
-      // provider process" and therefore do not know they must restate every
-      // enabled MCP domain. Treating the old session metadata as the default
-      // keeps MCP enablement a durable property of the agent pane instead of a
-      // transient spawn flag that disappears on the next routine reload.
+      // Resolving against nextKind rather than the source provider matters on a
+      // switch: Claude cannot advertise Workflow MCP, so a Claude-filtered
+      // snapshot would otherwise record "refused" and permanently strip the
+      // capability from the Codex pane the user switched to.
+      const builtInMcpOverrides = spawnOpts.builtInMcpOverrides ?? sessionMcpOverrides(oldMeta)
       const builtInMcpDomains =
         isAgentProviderKind(nextKind)
           ? resolveSessionBuiltInMcpDomains({
               provider: nextKind,
-              sessionDomains: spawnOpts.builtInMcpDomains ?? oldMeta?.builtInMcpDomains,
+              sessionOverrides: builtInMcpOverrides,
               defaultDomains: refs.defaultBuiltInMcpDomainsRef.current,
             })
           : undefined
-      const oldDraft = refs.latestRuntimesRef.current[oldId]?.draftInput ?? ''
+      const canCommit = (state: WorkspaceState) => {
+        const current = state.sessions[oldId]
+        return Boolean(current && current.cwd === oldMeta.cwd && current.kind === oldMeta.kind
+          && current.providerRuntime === oldMeta.providerRuntime
+          && !state.buried.some(row => row.sessionId === oldId)
+          && collectOwnedSessionIds(state).has(oldId))
+      }
+      if (!canCommit(snapshot)) return
+      const draftFallback = refs.latestRuntimesRef.current[oldId]
       const newId = await spawn(cwd, {
+        // Undo Rewind verifies its original/rewound transcript pair before
+        // supplying the saved original identity. Ordinary resume/reload must
+        // still derive continuity from the current conversation; preserving
+        // the rewound branch's identity would lose the original summary.
+        tldrIdentity: restoreTldrIdentity ?? tldrIdentityForReplacement(oldId, oldMeta, {
+          kind: nextKind, resumeSessionId: spawnOpts.resumeSessionId, preserveTldr,
+        }),
         ...spawnOpts,
         providerRuntime,
         // WHY main needs the local predecessor even though the renderer kills
@@ -1052,117 +1257,170 @@ export function useSessionActions(
         // same-rollout handoff; Claude, OpenCode, fresh Codex, and different-
         // transcript swaps retain the rollback-friendly ordering here.
         predecessorSessionId: oldId,
-        ...(builtInMcpDomains !== undefined ? { builtInMcpDomains } : {}),
+        ...(builtInMcpDomains !== undefined ? { builtInMcpDomains, builtInMcpOverrides } : {}),
       })
-      const mainHandledPredecessor =
-        pendingReplacementSuccessorsRef.current.delete(newId)
-      setRuntimes(prev => ({
-        ...prev,
-        [newId]: {
-          ...(prev[newId] ?? emptyRuntime()),
-          draftInput: oldDraft,
-        },
-      }))
+      // WHY a finally, and why it wraps EVERY exit path including the bail-outs:
+      // a stranded reservation would leave that pane permanently unnamed, which is
+      // the mirror-image bug and just as bad as the leak it prevents. Releasing an
+      // id that was never reserved is a no-op, so an ordinary spawn costs nothing.
+      try {
+        const mainHandledPredecessor =
+          pendingReplacementSuccessorsRef.current.delete(newId)
+        // A source can close or be buried while spawn awaits. Metadata alone
+        // is not ownership: committing an unplaced successor creates an invisible
+        // process and a false "completed" lifecycle receipt (#815). Read through
+        // the synchronous domain setter because React-owned refs can lag the last
+        // close action. A no-op updater preserves store identity and notifications.
+        let sourceOwned = false
+        setState(prev => { sourceOwned = canCommit(prev); return prev })
+        if (!sourceOwned) {
+          await killSession(newId, { cwd, kind: nextKind, providerRuntime })
+          return
+        }
+        if (!mainHandledPredecessor) {
+          await killSessionBackendIfOwned(refs, oldId, oldMeta)
+        }
+        // Swap the sessionId wherever this live session is placed. Grid sessions
+        // live in one tile-tree leaf; detached Dispatch sessions live in
+        // detachedSessions with no leaf at all.
+        const idMap = new Map<SessionId, SessionId>([[oldId, newId]])
 
-      if (!mainHandledPredecessor) {
-        await killSessionBackendIfOwned(refs, oldId)
-      }
-      setRuntimes(prev => {
-        const next = { ...prev }
-        delete next[oldId]
-        return next
-      })
-      delete refs.seenUuidsRef.current[oldId]
-      clearLiveEntryWindowSession(oldId)
-      delete refs.latestScreenRef.current[oldId]
-
-      // Swap the sessionId wherever this live session is placed. Grid sessions
-      // live in one tile-tree leaf; detached Dispatch sessions live in
-      // detachedSessions with no leaf at all.
-      const idMap = new Map<SessionId, SessionId>([[oldId, newId]])
-
-      setState(prev => {
-        const sessions = { ...prev.sessions }
-        // WHY read the title from `prev` here instead of the pre-spawn
-        // snapshot: provider switches and rewinds can wait on backend work,
-        // and the user may edit or clear the pane's title during that window.
-        // The replacement is the same logical pane with a fresh transport id,
-        // so its durable glance label must follow using the latest state rather
-        // than being lost—or resurrected from a stale snapshot—on completion.
-        const replacementTitle = prev.sessions[oldId]?.title
-        delete sessions[oldId]
-        // Persist the replacement provider metadata immediately
-        // instead of waiting for the first transcript line to
-        // round-trip back from main. That wait window is usually
-        // short, but it is still a real race: a workspace save or
-        // pane action that snapshots SessionMeta in that gap would
-        // see "new session id, but no providerSessionId yet" and
-        // could forget how to resume the pane on the next launch.
-        //
-        // Keeping the requested resumeSessionId here makes
-        // replaceSession the single source of truth for "this pane
-        // now points at provider X's persisted transcript Y",
-        // whether the trigger was the resume picker or the new
-        // switch-provider flow.
-        sessions[newId] = {
-          ...(sessions[newId] ?? { cwd, kind: nextKind }),
-          cwd,
-          kind: nextKind,
-          providerRuntime,
-          ...(spawnOpts.resumeSessionId
-            ? {
-                providerSessionId: spawnOpts.resumeSessionId,
-                providerSessionIdSource: 'resume-request' as const,
+        let committed = false
+        setState(prev => {
+          // Backend retirement is another await. Recheck inside the actual remap
+          // commit, before touching the source draft or returning a successor ID.
+          if (!canCommit(prev)) return prev
+          committed = true
+          const sessions = { ...prev.sessions }
+          // WHY read the title from `prev` here instead of the pre-spawn
+          // snapshot: provider switches and rewinds can wait on backend work,
+          // and the user may edit or clear the pane's title during that window.
+          // The replacement is the same logical pane with a fresh transport id,
+          // so its durable glance label must follow using the latest state rather
+          // than being lost—or resurrected from a stale snapshot—on completion.
+          const replacementTitle = prev.sessions[oldId]?.title
+          // `prev.sessions[oldId]` is still readable here: only the local
+          // `sessions` copy has had oldId deleted.
+          const carriedAgentNameId = prev.sessions[oldId]?.agentNameId
+          delete sessions[oldId]
+          // Persist the replacement provider metadata immediately
+          // instead of waiting for the first transcript line to
+          // round-trip back from main. That wait window is usually
+          // short, but it is still a real race: a workspace save or
+          // pane action that snapshots SessionMeta in that gap would
+          // see "new session id, but no providerSessionId yet" and
+          // could forget how to resume the pane on the next launch.
+          //
+          // Keeping the requested resumeSessionId here makes
+          // replaceSession the single source of truth for "this pane
+          // now points at provider X's persisted transcript Y",
+          // whether the trigger was the resume picker or the new
+          // switch-provider flow.
+          sessions[newId] = {
+            ...(sessions[newId] ?? { cwd, kind: nextKind }),
+            cwd,
+            kind: nextKind,
+            providerRuntime,
+            ...(spawnOpts.resumeSessionId
+              ? {
+                  providerSessionId: spawnOpts.resumeSessionId,
+                  providerSessionIdSource: 'resume-request' as const,
+                }
+              : {}),
+            ...(builtInMcpDomains !== undefined ? { builtInMcpDomains, builtInMcpOverrides } : {}),
+            ...(replacementTitle !== undefined ? { title: replacementTitle } : {}),
+            // Last on purpose. `...(sessions[newId] ?? …)` earlier in this
+            // literal is the successor's OWN freshly-spawned metadata, so any
+            // earlier position is overwritten by it — which is exactly how the
+            // sketch renamed a pane on every provider switch.
+            //
+            // Conditional, not `?? oldId`: this site CARRIES an identity, it
+            // never creates one. If the predecessor had none — names were off,
+            // or the reconciler had not run — then no name was ever allocated to
+            // preserve, and inventing `oldId` here would make replacement a
+            // second minting site competing with the reconciler for that
+            // decision. Leaving it absent lets the reconciler claim the
+            // successor under its own id, which is the same outcome by the one
+            // rule the feature has.
+            ...(carriedAgentNameId !== undefined ? { agentNameId: carriedAgentNameId } : {}),
+          }
+          const detachedSessions = { ...prev.detachedSessions }
+          const detached = detachedSessions[oldId]
+          if (detached) {
+            delete detachedSessions[oldId]
+            detachedSessions[newId] = { ...detached, sessionId: newId }
+          }
+          return {
+            ...prev,
+            tabs: prev.tabs.map(t => {
+              if (!collectLeaves(t.root).includes(oldId)) return t
+              return {
+                ...t,
+                root: remapTileTreeSessionIds(t.root, idMap),
+                focusedSessionId:
+                  t.focusedSessionId === oldId ? newId : t.focusedSessionId,
               }
-            : {}),
-          ...(builtInMcpDomains !== undefined ? { builtInMcpDomains } : {}),
-          ...(replacementTitle !== undefined ? { title: replacementTitle } : {}),
+            }),
+            // Remap relationship pointers across ALL sessions: a linked /
+            // orchestration CHILD of the swapped session carries oldId in its
+            // linkedParentId/orchestrationParentId/orchestrationRootId, so the
+            // swap has to update those too or the child renders top-level and
+            // parent-scoped orchestration reads break. (rehydrate already does
+            // this; reload/switch/resume/rewind funnel through here and didn't.)
+            sessions: remapSessionsRelationships(sessions, idMap),
+            // A pinned agent that gets a fresh id on reload/switch must follow
+            // to the new id instead of silently dropping out of the Pinned list.
+            pinnedSessionIds: remapPinnedSessionIds(prev.pinnedSessionIds, idMap),
+            gridRelatedSelections: remapGridRelatedSelections(prev.gridRelatedSelections, idMap),
+            detachedSessions,
+            // Remap the swapped session id everywhere Dispatch holds it: the
+            // classic single-view focus AND every Tiled Dispatch lane selection
+            // (dispatchMode.tiled.lanes[].selectedSessionId). reload /
+            // provider-switch / resume / rewind all funnel through here; before
+            // this, the focused lane kept pointing at the now-dead oldId and the
+            // layout's auto-fill effect re-homed it to the first tile. Same
+            // tiled-vs-grid divergence as #266/#267/#271, fixed at the swap.
+            dispatchMode: remapTiledLanes(
+              prev.dispatchMode?.focusedSessionId === oldId
+                ? { ...prev.dispatchMode, focusedSessionId: newId }
+                : prev.dispatchMode,
+              idMap,
+            ),
+          }
+        })
+        if (!committed) {
+          await killSession(newId, { cwd, kind: nextKind, providerRuntime })
+          return
         }
-        const detachedSessions = { ...prev.detachedSessions }
-        const detached = detachedSessions[oldId]
-        if (detached) {
-          delete detachedSessions[oldId]
-          detachedSessions[newId] = { ...detached, sessionId: newId }
-        }
-        return {
-          ...prev,
-          tabs: prev.tabs.map(t => {
-            if (!collectLeaves(t.root).includes(oldId)) return t
-            return {
-              ...t,
-              root: remapTileTreeSessionIds(t.root, idMap),
-              focusedSessionId:
-                t.focusedSessionId === oldId ? newId : t.focusedSessionId,
-            }
-          }),
-          // Remap relationship pointers across ALL sessions: a linked /
-          // orchestration CHILD of the swapped session carries oldId in its
-          // linkedParentId/orchestrationParentId/orchestrationRootId, so the
-          // swap has to update those too or the child renders top-level and
-          // parent-scoped orchestration reads break. (rehydrate already does
-          // this; reload/switch/resume/rewind funnel through here and didn't.)
-          sessions: remapSessionsRelationships(sessions, idMap),
-          // A pinned agent that gets a fresh id on reload/switch must follow
-          // to the new id instead of silently dropping out of the Pinned list.
-          pinnedSessionIds: remapPinnedSessionIds(prev.pinnedSessionIds, idMap),
-          gridRelatedSelections: remapGridRelatedSelections(prev.gridRelatedSelections, idMap),
-          detachedSessions,
-          // Remap the swapped session id everywhere Dispatch holds it: the
-          // classic single-view focus AND every Tiled Dispatch lane selection
-          // (dispatchMode.tiled.lanes[].selectedSessionId). reload /
-          // provider-switch / resume / rewind all funnel through here; before
-          // this, the focused lane kept pointing at the now-dead oldId and the
-          // layout's auto-fill effect re-homed it to the first tile. Same
-          // tiled-vs-grid divergence as #266/#267/#271, fixed at the swap.
-          dispatchMode: remapTiledLanes(
-            prev.dispatchMode?.focusedSessionId === oldId
-              ? { ...prev.dispatchMode, focusedSessionId: newId }
-              : prev.dispatchMode,
-            idMap,
-          ),
-        }
-      })
-      return newId
+        setRuntimes(prev => {
+          // Replacement can await spawn and backend retirement while the user
+          // keeps editing. Transfer the latest draft in the same state update
+          // that retires its owner; a pre-await snapshot silently loses edits.
+          // All replacement paths share this contract. Rewind deliberately
+          // substitutes its historical prompt afterwards and keeps an undo copy.
+          const draft = prev[oldId] ?? draftFallback
+          const next = {
+            ...prev,
+            [newId]: {
+              ...(prev[newId] ?? emptyRuntime()),
+              draftInput: draft?.draftInput ?? '',
+              // Unsupported invisible attachments participate in submit guards.
+              // Preserve images only when the destination can expose them.
+              draftImages: isAgentProviderKind(nextKind) && getRendererProviderCapabilities(nextKind).supportsImageAttachments
+                ? (draft?.draftImages ?? []) : [],
+            },
+          }
+          delete next[oldId]
+          return next
+        })
+        delete refs.seenUuidsRef.current[oldId]
+        clearLiveEntryWindowSession(oldId)
+        delete refs.latestScreenRef.current[oldId]
+
+        return newId
+      } finally {
+        releaseIdentityCarry(newId)
+      }
     },
     [
       refs.latestRuntimesRef,
@@ -1172,6 +1430,7 @@ export function useSessionActions(
       setRuntimes,
       setState,
       spawn,
+      killSession,
     ],
   )
 
@@ -1235,17 +1494,19 @@ export function useSessionActions(
 
         try {
           const kind: SessionKind = meta.kind ?? DEFAULT_PROVIDER
+          const builtInMcpOverrides = sessionMcpOverrides(meta)
           const builtInMcpDomains =
             isAgentProviderKind(kind)
               ? resolveSessionBuiltInMcpDomains({
                   provider: kind,
-                  sessionDomains: meta.builtInMcpDomains,
+                  sessionOverrides: builtInMcpOverrides,
                   defaultDomains: refs.defaultBuiltInMcpDomainsRef.current,
                 })
               : undefined
           const resumeSessionId = resumableProviderSessionId(meta)
           const restoredMeta = withoutProvisionalProviderSession(meta)
           const { sessionId: newId } = await window.api.spawnSession({
+            tldrIdentity: tldrIdentityForSession(oldId, meta),
             kind,
             providerRuntime: meta.providerRuntime,
             cwd: meta.cwd,
@@ -1256,8 +1517,17 @@ export function useSessionActions(
           })
           idMap.set(oldId, newId)
           freshSessions[newId] = {
+            // `agentNameId` needs no line here: withoutProvisionalProviderSession
+            // is field-preserving, so `...restoredMeta` carries the identity from
+            // the pre-reload session onto its new local id. Do not add a
+            // `?? oldId` fallback — a workspace with no identity has no
+            // allocated name to lose, and minting here would put a second
+            // author on the one decision the reconciler owns. The unit case in
+            // this task's test pins the helper's field-preservation, which is
+            // the only thing this spread relies on.
             ...restoredMeta,
-            ...(builtInMcpDomains !== undefined ? { builtInMcpDomains } : {}),
+            tldrIdentity: tldrIdentityForSession(oldId, meta),
+            ...(builtInMcpDomains !== undefined ? { builtInMcpDomains, builtInMcpOverrides } : {}),
           }
         } catch {
           failedIds.add(oldId)
@@ -1283,19 +1553,10 @@ export function useSessionActions(
           const existing = prev[newId]
           const restored: SessionRuntime = { ...(existing ?? emptyRuntime()) }
           restored.draftInput = oldRuntimes[oldId]?.draftInput ?? existing?.draftInput ?? ''
-          if (freshSessions[newId]?.providerRuntime === 'terminal') {
-            // A global dangerous-mode/MCP restart must not convert native
-            // OpenCode TUI state into a rendered-history bootstrap. The raw
-            // PTY is the only visual authority for this runtime; its durable
-            // provider id is still retained in freshSessions for resume.
-            Object.assign(restored, {
-              hasOlderHistory: false,
-              transcriptStatus: 'ready' as const,
-              transcriptError: null,
-            })
-          } else {
-            Object.assign(restored, seedResumedRuntimeFields(existing, freshSessions[newId]))
-          }
+          // Terminal-runtime agents included: their history reloads into
+          // `entries` with everyone else's below, and the pane stays on the
+          // raw TUI regardless (see loadInitialHistoryForSession).
+          Object.assign(restored, seedResumedRuntimeFields(existing, freshSessions[newId]))
           next[newId] = restored
         }
         return next

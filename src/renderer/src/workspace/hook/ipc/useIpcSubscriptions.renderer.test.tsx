@@ -2,14 +2,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { render } from '@testing-library/react'
 import { act } from 'react'
 import { useRef } from 'react'
-import type { MutableRefObject } from 'react'
 import recordedQueueHandoffBundle from '../../../../../../testing/fixtures/rendering-bundles/2026-06-14T14-25-07-012-a8ad1ebb.json'
 import recordedTaskNotificationBundle from '../../../../../../testing/fixtures/rendering-bundles/2026-06-21T20-14-23-131-62432945.json'
 import recordedCodexWorktreeWindow from '../../../../../../testing/fixtures/worktree-live-attribution/codex-0151-worktree-window.json'
 import recordedGitWorktrees from '../../../../../../testing/fixtures/worktree-live-attribution/git-worktree-identities.json'
 
 import { createFakeSessionFeed } from '@renderer/features/sessionFeed/FakeSessionFeed'
-import { UndoCloseStack } from '@renderer/lib/undoClose'
 import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
 import {
@@ -24,6 +22,7 @@ import { isOptimisticCodexUserEntry } from '@providers/codex/renderer/transcript
 import { entryTextContent } from '@renderer/session-runtime/entries'
 
 import { useIpcSubscriptions } from './useIpcSubscriptions'
+import { makeWorkspaceRefsForTest as makeRefs } from './testing/workspaceRefsForTest'
 
 const originalWindowApi = window.api
 
@@ -57,30 +56,8 @@ afterEach(() => {
 // fire on paths this test does not drive (ghost changes, session-started
 // worktree refresh).
 
-function makeRefs(state: WorkspaceState): WorkspaceRefs {
-  // Plain object refs are fine outside React's render cycle — the hook only
-  // ever reads/writes `.current`.
-  const ref = <T,>(v: T): MutableRefObject<T> => ({ current: v })
-  return {
-    stateRef: ref(state),
-    latestStateRef: ref(state),
-    latestRuntimesRef: ref({}),
-    latestTileTabsRef: ref(null),
-    dangerousAgentsRef: ref(false),
-    useProxyStreamingRef: ref(false),
-    defaultBuiltInMcpDomainsRef: ref([]),
-    seenUuidsRef: ref({}),
-    latestScreenRef: ref({}),
-    undoStackRef: ref(new UndoCloseStack()),
-    bootstrapTimersRef: ref(new Map()),
-    persistedFeedDebugIdRef: ref({}),
-    inFlightFeedDebugIdRef: ref({}),
-    paneToastTimers: ref({}),
-    pendingAdoptionWindowIdsRef: ref<string[]>([]),
-    saveTimerRef: ref(null),
-    bootRef: ref(false),
-  }
-}
+// The harness refs now live in ./testing/workspaceRefsForTest so every
+// subscription test builds the same minimal workspace (imported as makeRefs).
 
 describe('useIpcSubscriptions with an injected SessionFeed', () => {
   it('persists fresh Codex identity while handing a queued prompt to its rollout row', () => {
@@ -1013,6 +990,69 @@ describe('useIpcSubscriptions with an injected SessionFeed', () => {
     expect(runtimes.s1?.sessionRunId).toBe('77777777-7777-4777-8777-777777777777')
   })
 
+  it('clears terminalForeground on exit so a dead shell cannot keep a stale badge (M3)', () => {
+    // terminalForeground itself is written by a SEPARATE hook
+    // (useTerminalForeground.ts, driven by window.api.onTerminalForeground),
+    // not by anything in useIpcSubscriptions — so this test seeds it
+    // directly on the runtime map rather than through the fake feed, the
+    // same way it would already be sitting in state by the time a real
+    // exit event arrives.
+    const fake = createFakeSessionFeed()
+    const state = { sessions: {} } as WorkspaceState
+    let runtimes: Record<SessionId, SessionRuntime> = {}
+
+    function Harness(): React.JSX.Element {
+      const refs = useRef<WorkspaceRefs | null>(null)
+      if (refs.current === null) refs.current = makeRefs(state)
+      useIpcSubscriptions(
+        fake,
+        refs.current,
+        () => {},
+        updater => {
+          runtimes = typeof updater === 'function' ? updater(runtimes) : updater
+        },
+        (sessionId, patch) => {
+          const current = runtimes[sessionId] ?? emptyRuntime()
+          runtimes = { ...runtimes, [sessionId]: { ...current, ...patch } }
+          refs.current!.latestRuntimesRef.current = runtimes
+        },
+        () => {},
+      )
+      return <div />
+    }
+
+    render(<Harness />)
+
+    act(() => {
+      fake.emitStarted({ sessionId: 's1', kind: 'terminal' })
+    })
+    // Simulate the foreground monitor having already reported "npm is
+    // running in this shell" before the process exits.
+    runtimes = {
+      ...runtimes,
+      s1: {
+        ...(runtimes.s1 ?? emptyRuntime()),
+        terminalForeground: { busy: true, command: 'npm', cwd: '/work', changedAt: 1 },
+      },
+    }
+
+    act(() => {
+      fake.emitExit({ sessionId: 's1', exitCode: 0 })
+    })
+
+    // Main DOES untrack the session on exit (cleanupSessionState calls
+    // terminalForeground.untrack(sessionId) in sessionManager.ts), but that
+    // clears TerminalForegroundMonitor's OWN `last`-emitted map — a separate
+    // structure this handler cannot reach — not this renderer-side runtime
+    // field. Left uncleared, a same-id respawn's very first (idle) sample
+    // would diff against this stale `busy: true` in applyTerminalForeground:
+    // busy genuinely differs, so that is a real busy→idle transition, not a
+    // suppressed no-op, and it fires a SPURIOUS "new work" mark for a pane
+    // where nothing happened. It would also show a live "npm" badge on a
+    // pane with nothing running in it.
+    expect(runtimes.s1?.terminalForeground).toBeNull()
+  })
+
   // Live entries window (#375 part B) — the burst handler applying a trim
   // plan. The pure planner's constraint matrix is covered in
   // session-runtime/entries.test.ts; this exercises the wiring: window
@@ -1217,5 +1257,312 @@ describe('useIpcSubscriptions with an injected SessionFeed', () => {
       vi.advanceTimersByTime(6_000)
     })
     expect(runtimes[sessionId]?.ghosts.size).toBe(0)
+  })
+
+  // ---- Usage-limit signal (#821) ----
+  //
+  // Both providers prove "this pane is parked on an exhausted quota" through
+  // completely different channels, and `isLimitIdle` (providerSwitchCore.ts)
+  // reads the single runtime field both of them write. These two cases pin the
+  // reducers, because the field's whole value is its ORDERING against
+  // `turnStartedAt` — a limit hit stamped at the wrong time is worse than none
+  // at all: it arms the provider-switch guard's exception for a pane that may
+  // be mid-turn.
+
+  it('records a Claude rate-limit carrier at the record\'s own time and never re-arms it on replay', () => {
+    const fake = createFakeSessionFeed()
+    const sessionId = 'claude-usage-limit-carrier' as SessionId
+    const state = {
+      sessions: { [sessionId]: { cwd: '/repo', kind: 'claude' } },
+    } as unknown as WorkspaceState
+    let runtimes: Record<SessionId, SessionRuntime> = {}
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: {
+        gitWorktrees: vi.fn(async () => ({ ok: false })),
+        ghostAppend: vi.fn(),
+      },
+    })
+
+    function Harness(): React.JSX.Element {
+      const refs = useRef<WorkspaceRefs | null>(null)
+      if (refs.current === null) refs.current = makeRefs(state)
+      useIpcSubscriptions(
+        fake,
+        refs.current,
+        () => {},
+        updater => {
+          runtimes = typeof updater === 'function' ? updater(runtimes) : updater
+        },
+        () => {},
+        () => {},
+      )
+      return <div />
+    }
+
+    render(<Harness />)
+
+    // A live-shaped carrier. The literal is minimal on purpose: the census
+    // (docs/decomposition/evidence/provider-switch/census.md §#820) documents
+    // these field names from seven real transcripts, and `error: "rate_limit"`
+    // does NOT survive fixture redaction — so the live wire is the only place
+    // this predicate can be exercised at all.
+    const carrierTimestamp = '2026-09-01T10:00:00.000Z'
+    const burst = [{
+      file: 'transcript.jsonl',
+      entry: {
+        type: 'assistant',
+        uuid: 'rate-limit-carrier-1',
+        parentUuid: null,
+        timestamp: carrierTimestamp,
+        isApiErrorMessage: true,
+        error: 'rate_limit',
+        apiErrorStatus: 429,
+        message: {
+          role: 'assistant',
+          content: [{
+            type: 'text',
+            text: "You've hit your monthly spend limit · your session limit resets 3pm",
+          }],
+        },
+      },
+    }]
+
+    act(() => {
+      fake.emitJsonlEntries({ sessionId, entries: burst })
+    })
+
+    // The record's OWN timestamp, not the wall clock. A resumed pane replays
+    // its last ~200 lines through this same channel, so `Date.now()` here would
+    // make a days-old episode look newer than any turn.
+    expect(runtimes[sessionId]?.limitHit).toEqual({
+      at: Date.parse(carrierTimestamp),
+      source: 'transcript',
+    })
+    const firstHit = runtimes[sessionId]!.limitHit
+
+    // Exactly what a restart does. The uuid is already in `seenUuids`, so the
+    // carrier never reaches `appended` again and the field keeps its identity —
+    // proving the change test is a value comparison rather than "a record was
+    // present in this burst".
+    act(() => {
+      fake.emitJsonlEntries({ sessionId, entries: burst })
+    })
+    expect(runtimes[sessionId]?.limitHit).toBe(firstHit)
+
+    // An ordinary API failure is not a quota signal: the predicate must keep
+    // both fields.
+    act(() => {
+      fake.emitJsonlEntries({
+        sessionId,
+        entries: [{
+          file: 'transcript.jsonl',
+          entry: {
+            type: 'assistant',
+            uuid: 'ordinary-api-error',
+            parentUuid: null,
+            timestamp: '2026-09-02T10:00:00.000Z',
+            isApiErrorMessage: true,
+            error: 'overloaded_error',
+            message: { role: 'assistant', content: [{ type: 'text', text: 'API Error: 529' }] },
+          },
+        }],
+      })
+    })
+    expect(runtimes[sessionId]?.limitHit).toBe(firstHit)
+  })
+
+  it('records a Codex usage_limit_reached api error and clears it only when a turn completes', () => {
+    const fake = createFakeSessionFeed()
+    const sessionId = 'codex-usage-limit-event' as SessionId
+    const state = {
+      sessions: { [sessionId]: { cwd: '/repo', kind: 'codex' } },
+    } as unknown as WorkspaceState
+    let runtimes: Record<SessionId, SessionRuntime> = {}
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: {
+        gitWorktrees: vi.fn(async () => ({ ok: false })),
+        ghostAppend: vi.fn(),
+      },
+    })
+
+    function Harness(): React.JSX.Element {
+      const refs = useRef<WorkspaceRefs | null>(null)
+      if (refs.current === null) refs.current = makeRefs(state)
+      useIpcSubscriptions(
+        fake,
+        refs.current,
+        () => {},
+        updater => {
+          runtimes = typeof updater === 'function' ? updater(runtimes) : updater
+        },
+        () => {},
+        () => {},
+      )
+      return <div />
+    }
+
+    render(<Harness />)
+    // A real wall clock, as every provider emits (`ts: Date.now()`): the field
+    // is compared against `turnStartedAt`, which is always one.
+    const limitTs = Date.parse('2026-09-01T11:00:00.000Z')
+
+    act(() => {
+      fake.emitSemantic({
+        sessionId,
+        event: { type: 'turn_started', turnId: 'turn-1', source: 'proxy', ts: limitTs - 1_000 },
+      })
+      fake.emitSemantic({
+        sessionId,
+        event: {
+          type: 'api_error',
+          turnId: 'turn-1',
+          errorType: 'usage_limit_reached',
+          message: 'You have hit your usage limit.',
+          resetsAt: limitTs + 3_600_000,
+          limitId: 'primary',
+          limitName: '5h',
+          source: 'proxy',
+          ts: limitTs,
+        },
+      })
+    })
+    expect(runtimes[sessionId]?.limitHit).toEqual({ at: limitTs, source: 'api_error' })
+
+    // A stop is NOT proof the episode is over — a turn can stop precisely
+    // because the limit was hit, and clearing here would erase the signal in
+    // the same tick it arrived.
+    act(() => {
+      fake.emitSemantic({
+        sessionId,
+        event: { type: 'turn_stopped', turnId: 'turn-1', stopReason: null, isRefusal: false, source: 'proxy', ts: limitTs + 1 },
+      })
+    })
+    expect(runtimes[sessionId]?.limitHit).toEqual({ at: limitTs, source: 'api_error' })
+
+    // A completed turn is: the provider answered.
+    act(() => {
+      fake.emitSemantic({
+        sessionId,
+        event: { type: 'turn_completed', turnId: 'turn-1', source: 'proxy', ts: limitTs + 2 },
+      })
+    })
+    expect(runtimes[sessionId]?.limitHit).toBeNull()
+
+    // A retryable 429 is a different classification and must not arm anything.
+    act(() => {
+      fake.emitSemantic({
+        sessionId,
+        event: {
+          type: 'api_error',
+          turnId: 'turn-1',
+          errorType: 'rate_limited',
+          message: 'Slow down.',
+          source: 'proxy',
+          ts: limitTs + 3,
+        },
+      })
+    })
+    expect(runtimes[sessionId]?.limitHit).toBeNull()
+  })
+
+  it('clears the limit signal when the provider accepts a new turn after the window resets', () => {
+    // The hazard this covers: a pane hits a limit, waits, and the provider
+    // auto-continues once the window resets. `turnStartedAt` is stamped only
+    // when it is null (session-runtime/semantic/streamPhaseMachine.ts), so it
+    // still belongs to the turn that hit the limit and stays OLDER than
+    // `limitHit.at`. If `turn_completed` were the only thing that cleared the
+    // signal, `isLimitIdle` would keep reading true for the whole of the new
+    // answer, the switch modal would label a working pane idle, and switching
+    // would kill a live turn. A turn the provider ACCEPTED is the earliest
+    // honest proof that the episode is over.
+    const fake = createFakeSessionFeed()
+    const sessionId = 'codex-limit-then-resume' as SessionId
+    const state = {
+      sessions: { [sessionId]: { cwd: '/repo', kind: 'codex' } },
+    } as unknown as WorkspaceState
+    let runtimes: Record<SessionId, SessionRuntime> = {}
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: {
+        gitWorktrees: vi.fn(async () => ({ ok: false })),
+        ghostAppend: vi.fn(),
+      },
+    })
+
+    function Harness(): React.JSX.Element {
+      const refs = useRef<WorkspaceRefs | null>(null)
+      if (refs.current === null) refs.current = makeRefs(state)
+      useIpcSubscriptions(
+        fake,
+        refs.current,
+        () => {},
+        updater => {
+          runtimes = typeof updater === 'function' ? updater(runtimes) : updater
+        },
+        () => {},
+        () => {},
+      )
+      return <div />
+    }
+
+    render(<Harness />)
+    const limitTs = Date.parse('2026-09-01T11:00:00.000Z')
+    const resetTs = limitTs + 3_600_000
+
+    act(() => {
+      fake.emitSemantic({
+        sessionId,
+        event: { type: 'turn_started', turnId: 'turn-1', source: 'proxy', ts: limitTs - 1_000 },
+      })
+      fake.emitSemantic({
+        sessionId,
+        event: {
+          type: 'api_error',
+          turnId: 'turn-1',
+          errorType: 'usage_limit_reached',
+          message: 'You have hit your usage limit.',
+          resetsAt: resetTs,
+          limitId: 'primary',
+          limitName: '5h',
+          source: 'proxy',
+          ts: limitTs,
+        },
+      })
+    })
+    expect(runtimes[sessionId]?.limitHit).toEqual({ at: limitTs, source: 'api_error' })
+
+    // The window reset and the provider accepted a request. No `turn_completed`
+    // has arrived and none may ever arrive — this turn can run for minutes.
+    act(() => {
+      fake.emitSemantic({
+        sessionId,
+        event: { type: 'turn_started', turnId: 'turn-2', source: 'proxy', ts: resetTs },
+      })
+    })
+    expect(runtimes[sessionId]?.limitHit).toBeNull()
+
+    // Clearing on acceptance is weaker proof than clearing on completion, which
+    // is exactly why it is safe: a request that 429s mid-flight re-arms the
+    // signal with a NEWER timestamp, so the guard's ordering against a stale
+    // `turnStartedAt` comes back on its own.
+    act(() => {
+      fake.emitSemantic({
+        sessionId,
+        event: {
+          type: 'api_error',
+          turnId: 'turn-2',
+          errorType: 'usage_limit_reached',
+          message: 'You have hit your usage limit.',
+          resetsAt: resetTs + 3_600_000,
+          limitId: 'primary',
+          limitName: '5h',
+          source: 'proxy',
+          ts: resetTs + 500,
+        },
+      })
+    })
+    expect(runtimes[sessionId]?.limitHit).toEqual({ at: resetTs + 500, source: 'api_error' })
   })
 })

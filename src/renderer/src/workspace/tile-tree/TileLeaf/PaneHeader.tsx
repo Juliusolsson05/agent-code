@@ -1,10 +1,14 @@
+import type { ReactNode } from 'react'
 import { shortenCwd } from '@renderer/workspace/tile-tree/TileLeaf/labels'
+import { useAppStore } from '@renderer/app-state/hooks'
+import { useShallow } from 'zustand/react/shallow'
 import { PaneHeaderColorFlag } from '@renderer/workspace/tile-tree/TileLeaf/PaneHeaderColorFlag'
 import type { GridRelatedAgentTab } from '@renderer/workspace/gridRelatedAgents'
 import { dispatchAttentionLabelFromConditions } from '@renderer/workspace/conditions/selectors'
 import type { SessionId } from '@renderer/workspace/types'
 import type { SessionRuntime } from '@renderer/workspace/workspaceStore'
 import { AgentTitleHeader } from '@renderer/workspace/tile-tree/AgentTitleHeader'
+import { paneHeaderStatusLit } from '@renderer/workspace/tile-tree/TileLeaf/paneHeaderStatus'
 
 // Pane header: compact status strip.
 //
@@ -29,6 +33,16 @@ import { AgentTitleHeader } from '@renderer/workspace/tile-tree/AgentTitleHeader
 // the only person who can see it. If flags ever become automatic — assigned by
 // a rule, a provider, or an agent — this reasoning expires and the overlap
 // must be revisited.
+//
+// WHY every agent surface renders THIS header, including the raw terminal view
+// (#851): AgentTerminalLeaf used to draw its own copy of this markup. The copy
+// was taken before the color flag existed and never received `statusMode`, so
+// a turn started from the raw TUI ran under a header that looked idle, and a
+// flagged pane lost its flag when switched to Terminal view. The status fill
+// and the flag are pane-level signals, meant to be read across the whole grid
+// whichever surface a pane shows. So the header has one implementation, and
+// surface-specific chrome goes in through `badge` and `trailing` instead of a
+// second copy. Don't fork this markup again. Add a slot instead.
 export function PaneHeader({
   sessionId,
   paneLabel,
@@ -41,6 +55,8 @@ export function PaneHeader({
   runtimes,
   ownerSessionId,
   onSelectRelatedSession,
+  badge,
+  trailing,
 }: {
   sessionId: SessionId
   paneLabel?: string
@@ -53,17 +69,41 @@ export function PaneHeader({
   runtimes?: Record<string, SessionRuntime>
   ownerSessionId?: string
   onSelectRelatedSession?: (sessionId: string) => void
+  /** Surface identity shown right after the pane label (e.g. `raw claude`). */
+  badge?: ReactNode
+  /** Surface state pinned to the right end of the status row, left of the
+   *  color flag (e.g. the terminal view's TAIL pill). */
+  trailing?: ReactNode
 }) {
+  // Drives the fill and the `data-status-lit` hook together, so tests and
+  // debug tooling read exactly what the user sees.
+  const statusLit = paneHeaderStatusLit(statusMode, isSessionLive)
+  // Related agents can change without rerendering this session. Only the two
+  // painted status values are dependencies; subscribing to their entire
+  // runtimes would couple every related transcript delta back to this header.
+  //
+  // WHY the store read is optional-chained instead of a bare index: the phone
+  // shares this header, and the phone bundle stubs @renderer/app-state/hooks
+  // to a `{ settings }`-only store
+  // (src/remote-client/src/stubs/appStateHooks.ts) that has NO
+  // `workspaceRuntimes` key. SessionView passes `relatedAgentTabs={[]}`, so
+  // today the flatMap body never runs and the key is never touched; the `?.`
+  // keeps a hypothetical future phone caller that passes chips from throwing
+  // on the missing key, degrading to the `runtimes` prop and then to
+  // "unknown" instead. Un-optional-chained, this whole header is sound on the
+  // phone only by the empty-array accident of one call site.
+  const relatedStatus = useAppStore(useShallow(state => relatedAgentTabs.flatMap(tab => {
+    const runtime = state.workspaceRuntimes?.[tab.sessionId] ?? runtimes?.[tab.sessionId]
+    return [runtime?.sessionStatus === 'running',
+      dispatchAttentionLabelFromConditions(runtime?.conditions ?? null) ?? (runtime?.processError ? 'ERROR' : null)]
+  })))
   return (
     <div className="border-b border-border bg-surface text-muted font-code select-none">
       <div
         data-pane-header-row="true"
+        data-status-lit={statusLit ? 'true' : 'false'}
         className={`flex items-center justify-between text-[10px] ${
-          statusMode
-            ? isSessionLive
-              ? 'bg-accent text-accent-fg'
-              : 'bg-surface text-muted'
-            : 'bg-surface text-muted'
+          statusLit ? 'bg-accent text-accent-fg' : 'bg-surface text-muted'
         } ${statusMode ? 'min-h-[5px]' : ''}`}
       >
         {/* WHY ALL of the row's padding moved down onto this group — the row
@@ -93,16 +133,57 @@ export function PaneHeader({
 
             It also makes the chunk's `w-1/4` a true quarter of the header:
             percentage widths resolve against the row's content box, so with
-            `pl-3` still on the row the chunk was 25% of (W − 12px). */}
-        <div className={`flex items-center gap-2 min-w-0 px-3 ${statusMode ? 'py-0' : 'py-1'}`}>
+            `pl-3` still on the row the chunk was 25% of (W − 12px).
+
+            WHY `flex-1` on this group: `trailing` has to sit at the right
+            edge, just left of the flag. A content-sized group ends right after
+            the cwd, so `ml-auto` would have no free space to push into. For
+            callers that pass no `trailing`, nothing moves: the group has no
+            background and its content is left-aligned, so filling the row
+            only changes where its invisible right padding sits. That padding
+            still keeps text 12px from the flag or from the pane edge.
+
+            WHY `@container`: this group's width is exactly the room left for
+            text once the flag takes its quarter, whether or not a flag is set.
+            Slot content can use container-query variants to drop optional
+            labels when that room runs out. A pane-width or viewport query
+            would not know about the flag. Containment doesn't change the
+            layout here: the group is `flex-1` (basis 0%) with `min-w-0`, so
+            its size never depended on its content. Feed.tsx uses the same
+            container-query pattern for narrow tiles. */}
+        <div className={`@container flex flex-1 items-center gap-2 min-w-0 px-3 ${statusMode ? 'py-0' : 'py-1'}`}>
           {paneLabel && (
             <span className="flex-shrink-0 rounded-chip border border-current/30 px-1 leading-[14px] text-[9px] font-semibold tabular-nums">
               {paneLabel}
             </span>
           )}
-          <span className="truncate" title={projectDir ?? 'no project dir'}>
-            {shortenCwd(projectDir)}
+          {badge}
+          {/* truncate-START: every pane shares the leading path segments, so
+              clipping the end hid the one part that identifies this agent. */}
+          <span className="truncate-start" title={projectDir ?? 'no project dir'}>
+            {/* The inner dir="ltr" is required, not decorative: the outer
+                element's rtl direction picks WHICH edge clips, and without
+                this the path's own characters are reordered with it. */}
+            <span dir="ltr">{shortenCwd(projectDir)}</span>
           </span>
+          {/* `flex-shrink-0` on the slot, and `min-width: 0` on
+              `.truncate-start`, make the cwd the first thing to give way in a
+              narrow pane. Surface state such as TAIL answers "what is this
+              pane doing right now", so it should outlast a path that is
+              already clipped from the start by design. Nothing here can
+              shrink below the chip + badge + slot, though. In a narrow enough
+              flagged pane that content still slides under the flag, so slots
+              should hide optional labels with `@container` variants (see
+              above) instead of assuming unlimited room.
+
+              `pl-1` adds to the group's `gap-2`, so identity (cwd) and state
+              (slot) sit at least 12px apart, the separation the terminal
+              header had before it shared this row. */}
+          {trailing ? (
+            <span className="ml-auto flex flex-shrink-0 items-center gap-2 pl-1">
+              {trailing}
+            </span>
+          ) : null}
         </div>
         <PaneHeaderColorFlag sessionId={sessionId} />
       </div>
@@ -112,15 +193,13 @@ export function PaneHeader({
           title is the scanning aid; giving it an independent truncation slot
           keeps five narrow Tiled Dispatch lanes legible without weakening the
           existing header contract. Untitled agents render no row at all. */}
-      <AgentTitleHeader title={agentTitle} />
+      <AgentTitleHeader sessionId={sessionId} title={agentTitle} />
       {relatedAgentTabs.length > 0 && (
         <div className="flex items-center gap-1 overflow-x-auto border-t border-border/70 px-2 py-1 text-[10px]">
-          {relatedAgentTabs.map(tab => {
+          {relatedAgentTabs.map((tab, index) => {
             const active = tab.sessionId === selectedRelatedSessionId
-            const runtime = runtimes?.[tab.sessionId]
-            const running = runtime?.sessionStatus === 'running'
-            const attention = dispatchAttentionLabelFromConditions(runtime?.conditions ?? null)
-              ?? (runtime?.processError ? 'ERROR' : null)
+            const running = relatedStatus[index * 2]
+            const attention = relatedStatus[index * 2 + 1]
             const title = `${tab.relation}: ${tab.title}${tab.placement === 'detached' ? ' (detached)' : ''}`
             return (
               <button
@@ -142,6 +221,15 @@ export function PaneHeader({
                 ].join(' ')}
               >
                 <span
+                  // WHY a data attribute and not a role or aria-label: the dot
+                  // is decorative (the chip's `title` already carries the
+                  // relation and name for assistive tech), but tests need a
+                  // hook that does not depend on Tailwind class names. The
+                  // header row already uses `data-pane-header-row` for the
+                  // same reason, so this follows that precedent.
+                  data-related-status={
+                    attention === 'ERROR' ? 'error' : attention ? 'attention' : running ? 'running' : 'idle'
+                  }
                   className={[
                     'h-1.5 w-1.5 flex-shrink-0 rounded-full',
                     attention === 'ERROR'

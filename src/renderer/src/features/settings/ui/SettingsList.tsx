@@ -1,3 +1,4 @@
+import { ExternalControlRow } from './ExternalControlRow'
 import type { Settings } from '@renderer/app-state/settings/types'
 import type {
   SettingActionContext,
@@ -11,6 +12,7 @@ import { settingMetadata } from '@renderer/features/settings/lib/settingsRegistr
 import { CliUpdateBehaviorRow } from '@renderer/features/cli-updates/CliUpdateBehaviorRow'
 import { DictationApiKeyRow } from '@renderer/features/voice-dictation/DictationApiKeyRow'
 import { DictationHistoryRow } from '@renderer/features/voice-dictation/DictationHistoryRow'
+import { DictationAudioInputRow } from '@renderer/features/voice-dictation/DictationAudioInputRow'
 import { ThemePickerRow } from '@renderer/features/settings/ui/ThemePickerRow'
 import { AgentCodeConventionsRow } from '@renderer/features/settings/ui/AgentCodeConventionsRow'
 import { AgentCodeCustomSkillsRow } from '@renderer/features/settings/ui/AgentCodeCustomSkillsRow'
@@ -212,6 +214,8 @@ function SettingRow({
               because the value lives in setup.json (main-owned), not
               in the renderer Settings store. See
               features/cli-updates/CliUpdateBehaviorRow.tsx. */}
+          {control.type === 'external-control' ? <ExternalControlRow /> : null}
+
           {control.type === 'command-keybindings' ? <CommandKeybindingsRow /> : null}
 
           {control.type === 'cli-update-behavior' ? <CliUpdateBehaviorRow /> : null}
@@ -221,6 +225,13 @@ function SettingRow({
               safeStorage-backed main state, so the row owns the IPC
               round-trip. See features/voice-dictation/DictationApiKeyRow.tsx. */}
           {control.type === 'dictation-api-key' ? <DictationApiKeyRow /> : null}
+
+          {control.type === 'dictation-audio-input' ? (
+            <DictationAudioInputRow
+              value={settings.dictationAudioInput}
+              onChange={dictationAudioInput => actionContext.onChange({ dictationAudioInput })}
+            />
+          ) : null}
 
           {/* Same marker-row rationale: the transcripts and lifetime totals
               live in a main-owned JSON store, not in Settings. */}
@@ -291,6 +302,7 @@ const SCOPE_LABELS = {
 
 const APPLY_LABELS = {
   immediate: 'Immediate',
+  'next-recording': 'Next recording',
   'new-session': 'Next session',
   'reload-live-sessions': 'Reloads live agents',
   'restart-required': 'Restart required',

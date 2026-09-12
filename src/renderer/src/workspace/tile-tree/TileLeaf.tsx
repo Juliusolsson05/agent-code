@@ -1,3 +1,4 @@
+import { useUsageLimitActions } from '@renderer/features/usage-limit/useUsageLimitActions'
 import { conditionStateByKind } from '@shared/types/providerConditions'
 import type { ClaudeAskUserQuestionState } from '@shared/types/providerConditions'
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
@@ -441,6 +442,7 @@ export function TileLeaf({
   // (The Stage-2 shadow that diffed this against the legacy renderer is gone:
   // its job — proving parity before cutover — is done, and the legacy renderer
   // it diffed against has been deleted.)
+  const usageLimitActions = useUsageLimitActions(workspace, sessionId, runtime.sessionRunId)
   const ledgerFeedPlan = useLedgerFeedItems(runtime, provider, sessionId, {
     toolUseIndex: runtime.toolUseIndex,
     toolResultIndex: runtime.toolResultIndex,
@@ -810,7 +812,6 @@ export function TileLeaf({
         isSessionLive={isSessionLive}
         relatedAgentTabs={relatedAgentTabs}
         selectedRelatedSessionId={selectedRelatedSessionId ?? sessionId}
-        runtimes={workspace.runtimes}
         ownerSessionId={ownerSessionId ?? sessionId}
         onSelectRelatedSession={onSelectRelatedSession}
       />
@@ -828,6 +829,7 @@ export function TileLeaf({
           />
         ) : (
           <Feed
+            usageLimitActions={usageLimitActions}
             renderItemsOverride={ledgerFeedPlan.items}
             committedOperationDecisionOverride={ledgerFeedPlan.resolveOperation}
             sessionId={sessionId}
@@ -850,10 +852,13 @@ export function TileLeaf({
           // former `streamingScreen` / `streamingScreenMarkdown` /
           // `streamingBaseline` props are gone — Feed no longer
           // parses the TUI buffer at render time. Screen-derived
-          // live text now arrives via the semantic channel tagged
-          // `source: 'screen'`, published by the headless packages
-          // with a baseline gate that prevents the previous turn's
-          // text from leaking into the new turn's first delta.
+          // text never reaches `runtime.semantic` at all: since the
+          // 2026-04-18 headless redesign both headless packages
+          // publish it only on their debug `semanticShadow` channel.
+          // Live prose comes from the Claude proxy, the Codex rollout
+          // and OpenCode SSE; with none open, nothing is live, and
+          // that is the correct answer rather than a gap to fill
+          // from the screen (#855 was Reader filling it).
           // (The dead `activityStatus={runtime.activityStatus}` pass-through was
           // removed here — Feed no longer reads it; feed audit Deletion
           // Candidate 1. runtime.activityStatus stays for DebugPanel.)
@@ -1016,6 +1021,7 @@ export function TileLeaf({
           workspace.updateRuntime(sessionId, { promptDelivery: { kind: 'idle' } })
         }
         providerSwitchMessage={runtime.providerSwitch?.message ?? null}
+        providerSwitchPhase={runtime.providerSwitch?.phase ?? null}
       />
 
       {/* Mouse Mode only. Rendered as a sibling BELOW the composer rather than

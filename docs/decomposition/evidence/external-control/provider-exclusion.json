@@ -1,0 +1,25 @@
+{
+  "date": "2026-09-05",
+  "purpose": "Narrow provider-configuration observations for the external operator exclusion. No provider generation or user configuration mutation.",
+  "reservedName": "agent-code-control",
+  "claude": {
+    "source": "Installed CLI, disposable CLAUDE_CONFIG_DIR and cwd, dummy loopback HTTP MCP entry",
+    "baseline": "mcp get recognized the configured entry and dummy URL",
+    "launchOverride": "--settings deniedMcpServers with the reserved serverName",
+    "observed": "mcp list exited 0 and reported no configured servers",
+    "documentation": "https://code.claude.com/docs/en/managed-mcp"
+  },
+  "codex": {
+    "source": "Installed CLI, disposable provider configuration home and cwd; mcp list --json only",
+    "cases": ["no initial MCP entry", "configured enabled HTTP entry"],
+    "observed": "Both returned exactly one reserved entry with enabled=false",
+    "limitation": "The published control connection is HTTP. A conflicting stdio entry under the reserved name fails provider configuration validation rather than receiving control access."
+  },
+  "opencode": {
+    "source": "Official MCP/config precedence documentation and the existing structured/native launch seams",
+    "observed": "Local configuration-merge probe preserves other servers and overrides the reserved entry with enabled=false",
+    "limitation": "No native OpenCode CLI connection trial was performed here.",
+    "documentation": "https://opencode.ai/docs/mcp-servers/"
+  },
+  "continuity": "Overrides are placed in provider start paths shared by fresh/resume/recovery. Workflow Codex receives the same disabled entry through its existing SDK config port."
+}

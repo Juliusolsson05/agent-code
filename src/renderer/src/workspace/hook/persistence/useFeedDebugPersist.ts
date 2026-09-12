@@ -42,10 +42,7 @@ export function selectFeedDebugAppendBatch(
   }
 }
 
-export function useFeedDebugPersist(
-  _runtimes: Record<SessionId, SessionRuntime>,
-  refs: WorkspaceRefs,
-): void {
+export function useFeedDebugPersist(refs: WorkspaceRefs): void {
   useEffect(() => {
     const flushSession = (sessionId: SessionId, runtime: SessionRuntime): void => {
       if (runtime.feedDebugLog.length === 0) return

@@ -7,6 +7,11 @@ export type AgentStatusField = {
 }
 
 export function formatProviderSession(model: AgentStatusModel): string {
+  // The saved identity remains the reader's source of truth after TUI
+  // navigation. Label it as what we follow, not what is currently on screen.
+  if (model.providerSessionId && model.runtime.transcriptError?.includes('(provider_session_switched)')) {
+    return `following · ${shortId(model.providerSessionId)} · TUI switched session`
+  }
   return model.providerSessionId ? `present · ${shortId(model.providerSessionId)}` : 'missing'
 }
 

@@ -128,11 +128,6 @@ export function DebugPanel({
           </Section>
         )}
 
-        {/* Streaming baseline */}
-        <Section title="streaming baseline">
-          <Pre>{runtime.streamingBaseline ?? '(null)'}</Pre>
-        </Section>
-
         {/* Queued messages */}
         {runtime.queuedMessages.length > 0 && (
           <Section title={`queued messages (${runtime.queuedMessages.length})`}>

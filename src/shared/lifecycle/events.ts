@@ -521,6 +521,12 @@ export const WAKE_CALLERS = [
   // storm here means an orchestration loop rather than a UI remount.
   'orchestration.read-agent',
   'orchestration.send-prompt',
+  'control.send-prompt',
+  // Programmatic text delivery (#830: prompt templates / API key vault
+  // inserting into a PTY surface). Same family as the MCP-driven callers
+  // above — not a direct human gesture, but always downstream of one
+  // (a palette action), and rare enough that a storm means a stuck loop.
+  'session-text-delivery',
 ] as const
 
 export type WakeCaller = (typeof WAKE_CALLERS)[number]

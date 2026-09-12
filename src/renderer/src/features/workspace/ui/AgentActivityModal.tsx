@@ -32,13 +32,17 @@ import { cwdBasename, providerGlyph } from '@renderer/features/workspace/lib/ses
 //   No new tracking — we piggyback on existing transcript data.
 //   For each agent session we look at `runtime.entries` (already in
 //   memory for every mounted session) and take the newest entry's
-//   timestamp. For terminal sessions there's no transcript, so we
-//   fall back to sessionStatus only.
+//   timestamp. Terminals have no transcript; they use
+//   `runtime.terminalForeground.changedAt` instead (#865) — the last
+//   time a command started, finished, or the shell cd'd, which is the
+//   only activity signal a shell has.
 //
 //   The "live" detection uses `runtime.sessionStatus === 'running'`
 //   plus `streamPhase !== 'idle'` so a currently-working agent
 //   shows as active-now regardless of whether its latest
-//   transcript entry has landed yet.
+//   transcript entry has landed yet. Terminals have no stream phase,
+//   so their liveness is `sessionStatus === 'running'` alone — the
+//   same signal Close Old Agents and Agent Status use for a shell.
 
 type Props = {
   open: boolean
@@ -141,10 +145,12 @@ export function AgentActivityModal({ open, workspace, onClose }: Props) {
         let statusTone: Row['statusTone'] = 'idle'
 
         if (kind === 'terminal') {
-          // No transcript for terminals. If we've observed a PTY exit
-          // we surface that explicitly; otherwise just label them.
-          statusLabel = runtime?.exited != null ? 'Exited' : 'Terminal'
-          statusTone = runtime?.exited != null ? 'exited' : 'terminal'
+          // Same liveness rule as agents via sessionStatus (#865); a shell's
+          // last activity is its last foreground change.
+          isLive = runtime?.sessionStatus === 'running'
+          lastActiveAt = runtime?.terminalForeground?.changedAt ?? null
+          statusLabel = runtime?.exited != null ? 'Exited' : isLive ? 'Active now' : 'Terminal'
+          statusTone = runtime?.exited != null ? 'exited' : isLive ? 'active' : 'terminal'
         } else if (runtime) {
           // Live = the adapter has an in-flight turn right now.
           // streamPhase is the canonical "what is the agent doing"
@@ -289,11 +295,9 @@ export function AgentActivityModal({ open, workspace, onClose }: Props) {
 
   const buryRow = useCallback(
     (row: Row) => {
-      // Agent sessions only — bury keeps the process alive so the
-      // user can revive from the Revive Buried Pane command. Codex
-      // and Claude both support this; terminal doesn't (no notion
-      // of a resumable conversation).
-      if (row.kind === 'terminal') return
+      // Any session can be buried (#865). Bury keeps the process alive, and a
+      // terminal revives by re-attaching its tmux session. The old comment
+      // ("no notion of a resumable conversation") confused bury with resume.
       // Close our modal before the bury-note prompt opens so the
       // two dialogs don't stack visually. buryFocused(note, id)
       // already accepts an explicit target id, so the note prompt
@@ -425,7 +429,7 @@ export function AgentActivityModal({ open, workspace, onClose }: Props) {
               </div>
             </>
           )}
-          {row.lastActiveAt == null && row.kind !== 'terminal' && !row.isLive && (
+          {row.lastActiveAt == null && !row.isLive && (
             <div className="text-[10px] text-muted">no activity yet</div>
           )}
         </div>
@@ -438,16 +442,14 @@ export function AgentActivityModal({ open, workspace, onClose }: Props) {
           `}
           onClick={e => e.stopPropagation()}
         >
-          {row.kind !== 'terminal' && (
-            <button
-              type="button"
-              onClick={() => buryRow(row)}
-              className="rounded-control px-2 py-0.5 text-[10px] border border-border text-ink-dim hover:border-border-hi hover:text-ink"
-              title="Bury (b)"
-            >
-              bury
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={() => buryRow(row)}
+            className="rounded-control px-2 py-0.5 text-[10px] border border-border text-ink-dim hover:border-border-hi hover:text-ink"
+            title="Bury (b)"
+          >
+            bury
+          </button>
           <button
             type="button"
             onClick={() => void closeRow(row)}

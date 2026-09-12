@@ -28,6 +28,8 @@ import { defineConfig } from 'vitest/config'
 const root = import.meta.dirname
 
 export const alias = [
+  { find: '@control-sdk/host', replacement: resolve(root, 'src/control-sdk/host.ts') },
+  { find: '@control-sdk', replacement: resolve(root, 'src/control-sdk/index.ts') },
   { find: /^claude-code-headless\/(.+)$/, replacement: `${resolve(root, 'packages/claude-code-headless/src')}/$1` },
   { find: 'claude-code-headless', replacement: resolve(root, 'packages/claude-code-headless/src/index.ts') },
   { find: /^codex-headless\/(.+)$/, replacement: `${resolve(root, 'packages/codex-headless/src')}/$1` },
@@ -38,6 +40,8 @@ export const alias = [
   // providers/registry.main.ts needs it.
   { find: /^opencode-headless\/(.+)$/, replacement: `${resolve(root, 'packages/opencode-headless/src')}/$1` },
   { find: 'opencode-headless', replacement: resolve(root, 'packages/opencode-headless/src/index.ts') },
+  { find: /^opencode-terminal-headless\/(.+)$/, replacement: `${resolve(root, 'packages/opencode-terminal-headless/src')}/$1` },
+  { find: 'opencode-terminal-headless', replacement: resolve(root, 'packages/opencode-terminal-headless/src/index.ts') },
   { find: /^agent-transcript-parser\/(.+)$/, replacement: `${resolve(root, 'packages/agent-transcript-parser/src')}/$1` },
   { find: 'agent-transcript-parser', replacement: resolve(root, 'packages/agent-transcript-parser/src/index.ts') },
   { find: /^agent-voice-dictation\/(.+)$/, replacement: `${resolve(root, 'packages/agent-voice-dictation/src')}/$1/index.ts` },

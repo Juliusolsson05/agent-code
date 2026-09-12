@@ -13,15 +13,19 @@ import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type { SessionId, SessionKind } from '@renderer/workspace/types'
 import { isSessionExited } from '@renderer/workspace/providerSessionIdentity'
-import { shortenCwd } from '@renderer/workspace/tile-tree/TileLeaf/labels'
+import { PaneHeader } from '@renderer/workspace/tile-tree/TileLeaf/PaneHeader'
+import { paneHeaderStatusLit } from '@renderer/workspace/tile-tree/TileLeaf/paneHeaderStatus'
 import { PaneToast } from '@renderer/workspace/tile-tree/TileLeaf/PaneToast'
 import { useComposerDictation } from '@renderer/workspace/tile-tree/TileLeaf/useComposerDictation'
 import { useAgentTerminalDimensionActive, useAgentTerminalOwnerVisible } from '@renderer/workspace/terminal/AgentTerminalOwnership'
 import { subscribeToAgentPtyData } from '@renderer/workspace/terminal/sessionDataDispatcher'
 import { attachXtermWebglRenderer } from '@renderer/workspace/terminal/xtermWebglRenderer'
 import { attachTerminalWheelBoundary } from '@renderer/workspace/terminal/terminalWheelBoundary'
-import { AgentTitleHeader } from '@renderer/workspace/tile-tree/AgentTitleHeader'
 import { createTerminalInputForwarder } from '@renderer/workspace/tile-tree/terminalInputForwarder'
+import { encodeTerminalPaste, registerTerminalPasteTarget } from '@renderer/workspace/terminal/textPasteTarget'
+import { AgentTerminalActions } from '@renderer/workspace/tile-tree/AgentTerminalActions'
+import { useTerminalFollow } from '@renderer/workspace/tile-tree/terminalFollow'
+import type { GridRelatedAgentTab } from '@renderer/workspace/gridRelatedAgents'
 
 type Props = {
   sessionId: SessionId
@@ -33,6 +37,24 @@ type Props = {
   runtime: SessionRuntime
   projectDir: string | null
   provider: Exclude<SessionKind, 'terminal'>
+  /** The window's Status Mode setting. It is threaded exactly like TileLeaf's
+   *  so both surfaces light the header under the same rule. Required, not
+   *  defaulted: an omitted prop is exactly how the terminal branch went unlit
+   *  in #851, and a default would let the next call site repeat that. */
+  showStatusMode: boolean
+  /** The pane's OWN session — as opposed to `sessionId`, which is whichever
+   *  session is actually mounted here (the parent, or a persisted related
+   *  selection). Optional because WorkspaceLeaf is the only caller that has a
+   *  distinct owner to report; when omitted or equal to `sessionId` this pane
+   *  is simply showing its own agent, and #858's identity chrome stays off. */
+  ownerSessionId?: SessionId
+  /** The owner's related-agent set, so this pane can look up which relation
+   *  and label describe whatever `sessionId` currently is. Same shape
+   *  WorkspaceLeaf already builds for the rendered `LeafComponent` branch. */
+  relatedAgentTabs?: GridRelatedAgentTab[]
+  /** Same callback the rendered branch's `parent`/related chips call. Wired
+   *  here to the `parent` button described in the #858 comment below. */
+  onSelectRelatedSession?: (sessionId: SessionId) => void
 }
 
 // AgentTerminalLeaf — full-pane raw provider terminal for PTY-backed agents.
@@ -58,10 +80,15 @@ export function AgentTerminalLeaf({
   runtime,
   projectDir,
   provider,
+  showStatusMode,
+  ownerSessionId,
+  relatedAgentTabs,
+  onSelectRelatedSession,
 }: Props) {
   const dictationEnabled = useAppStore(state => state.settings.dictationEnabled)
   const dictationProvider = useAppStore(state => state.settings.dictationProvider)
   const dictationShortcut = useAppStore(state => state.settings.dictationShortcut)
+  const mouseModeEnabled = useAppStore(state => state.settings.mouseModeEnabled)
   const acknowledgeSession = workspace.acknowledgeSession
   const ensureSessionLiveRef = useRef(workspace.ensureSessionLive)
   ensureSessionLiveRef.current = workspace.ensureSessionLive
@@ -71,6 +98,11 @@ export function AgentTerminalLeaf({
   runtimeRef.current = runtime
   const showPaneToastRef = useRef(workspace.showPaneToast)
   showPaneToastRef.current = workspace.showPaneToast
+  // Published by the mount effect (which owns the forwarder and the pre-attach
+  // queue) so the Mouse Mode Submit button can inject Enter exactly as the
+  // Enter key would. A no-op until the effect has run; the effect always
+  // overwrites it on (re)mount, keyed as it is on sessionId alone.
+  const submitEnterRef = useRef<() => void>(() => {})
 
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
@@ -78,6 +110,23 @@ export function AgentTerminalLeaf({
   focusedRef.current = focused
   const dimensionActive = useAgentTerminalDimensionActive()
   const ownerVisible = useAgentTerminalOwnerVisible()
+  const tailAllMode = useAppStore(state => state.tailAllMode)
+  // Feed-parity tail mask (TileLeaf's effectiveTailMode): per-session Tail OR
+  // Tail All, suppressed while this subtree is hidden (editor fullscreen /
+  // Reader/Spotlight/Settings takeover) — a display:none pane cannot scroll,
+  // and folding visibility into the mask makes re-reveal a genuine transition
+  // that re-engages follow.
+  const tailActive = (runtime.tailMode || tailAllMode) && ownerVisible
+  // WHY this hook must be called BEFORE the xterm mount effect below: its
+  // effects read termRef.current at effect time and React runs passive effects
+  // in declaration order — when tail is already on at mount, the terminal does
+  // not exist yet, which is exactly the "nothing to restore" case.
+  const follow = useTerminalFollow({
+    sessionId,
+    scrollToLatestRequest: runtime.scrollToLatestRequest,
+    tailActive,
+    termRef,
+  })
   const dimensionActiveRef = useRef(false)
   const dimensionOwnershipEpochRef = useRef(0)
   const onDimensionOwnershipChangeRef = useRef<((active: boolean) => void) | null>(null)
@@ -116,6 +165,10 @@ export function AgentTerminalLeaf({
     let wheelBoundary: ReturnType<typeof attachTerminalWheelBoundary> | null = null
     let onDataDisposable: { dispose(): void } | null = null
     let offPtyData: (() => void) | null = null
+    // Nullable like the disposables above: xterm init can throw before the
+    // follow wiring ever runs, and cleanup must survive that path.
+    let offFollowAttach: (() => void) | null = null
+    let offTextPaste: (() => void) | null = null
     let resizeObserver: ResizeObserver | null = null
     let resizeFrame: number | null = null
     let disposed = false
@@ -233,9 +286,19 @@ export function AgentTerminalLeaf({
       fit = new FitAddon()
       term.loadAddon(fit)
       term.open(container)
+      // Host-level, after open(): bubbles after every xterm wheel listener so
+      // xterm keeps first refusal — see terminalWheelBoundary.ts.
       wheelBoundary = attachTerminalWheelBoundary(container)
-      webglRenderer = attachXtermWebglRenderer(term)
+      // A renderer change (DOM -> WebGL upgrade, or WebGL -> DOM after a
+      // context loss) changes cell metrics without resizing the container, so
+      // the ResizeObserver below would never refit it. Route it through the
+      // same coalesced, ownership-gated scheduler: a non-owner pane stays
+      // inert exactly as it does for container resizes.
+      webglRenderer = attachXtermWebglRenderer(term, { onRendererChange: scheduleFitAndResizeBackend })
       termRef.current = term
+      // Follow re-pin wiring lives in the hook; the mount effect only owns
+      // the terminal instance lifetime, so this attaches/detaches with it.
+      offFollowAttach = follow.attach(term)
 
       if (dimensionActiveRef.current) scheduleFitAndResizeBackend()
       resizeObserver = new ResizeObserver(scheduleFitAndResizeBackend)
@@ -247,6 +310,30 @@ export function AgentTerminalLeaf({
       const forwarder = createTerminalInputForwarder(data => {
         void window.api.sendInput(sessionId, data)
       })
+      offTextPaste = registerTerminalPasteTarget(sessionId, {
+        isActive: () => !disposed && focusedRef.current && dimensionActiveRef.current,
+        paste: async text => {
+          if (disposed || !dimensionActiveRef.current || !attachedBackfillDone || forwarder.replaying || !term) return false
+          return window.api.sendInput(sessionId, encodeTerminalPaste(text, term.modes.bracketedPasteMode))
+        },
+      })
+      // WHY the Submit button reuses the keypress pipeline instead of calling
+      // window.api.sendInput directly: the leaf only forwards keystrokes AFTER
+      // attach (pendingInput) and only outside the replay window (the
+      // forwarder latch). A direct call would skip both, so its Enter could
+      // hit the provider before the PTY exists or while xterm is still parsing
+      // the attach replay — more powerful than the Enter key it replaces.
+      // Pushing '\r' down the same path keeps a mouse click and a real keypress
+      // indistinguishable to the backend. '\r' is xterm's Enter byte here
+      // because this terminal is created with convertEol: false below.
+      submitEnterRef.current = () => {
+        if (forwarder.replaying) return
+        if (!attachedBackfillDone) {
+          pendingInput.push('\r')
+          return
+        }
+        forwarder.onData('\r')
+      }
       onDataDisposable = term.onData(data => {
         // Transport output also includes xterm-generated query responses. DOM
         // engagement below owns unread acknowledgement, never these bytes.
@@ -275,7 +362,25 @@ export function AgentTerminalLeaf({
           if (backlogQueue.length > 256) backlogQueue.splice(0, backlogQueue.length - 256)
           return
         }
-        term?.write(data)
+        // Tail scrolls in the write completion callback: xterm parses chunks
+        // asynchronously, so scrolling synchronously would target the pre-parse
+        // bottom and land one chunk early.
+        const liveTerm = term
+        if (follow.tailActiveRef.current) {
+          liveTerm?.write(data, () => {
+            // Fire-time re-check, not just schedule-time: xterm's WriteBuffer
+            // schedules parsing with setTimeout and yields under load, so this
+            // callback can fire long after the write — potentially after tail
+            // disengaged and restored the reading position, or after unmount
+            // disposed the terminal. An unconditional scrollToBottom would
+            // undo the restore and clear xterm's isUserScrolling latch,
+            // leaving the pane following with the TAIL pill off.
+            if (disposed || !follow.tailActiveRef.current) return
+            liveTerm.scrollToBottom()
+          })
+        } else {
+          liveTerm?.write(data)
+        }
       })
 
       // WHY this goes through refs instead of effect deps: mounting xterm is
@@ -344,8 +449,26 @@ export function AgentTerminalLeaf({
           return true
         }
         // Replay, with the forwarder holding its latch until xterm has parsed
-        // every chunk; the backlog is strictly newer than the buffer.
-        void forwarder.replay(liveTerm, [buffer, backlogQueue.join('')])
+        // every chunk; the backlog is strictly newer than the buffer. The pin
+        // chains on the replay promise — replay resolves only when xterm
+        // reports every chunk parsed, so the pin acts on the real backfill; an
+        // inline call here runs before parsing touches an empty buffer.
+        // Guards: the pane can unmount mid-parse (`disposed`) or tail can
+        // disengage before the backlog lands.
+        forwarder
+          .replay(liveTerm, [buffer, backlogQueue.join('')])
+          .then(() => {
+            if (disposed || !follow.tailActiveRef.current) return
+            if (termRef.current !== liveTerm) return
+            liveTerm.scrollToBottom()
+          })
+          .catch(error => {
+            // The detached replay promise is outside tryAttach's error path.
+            // Report parse failures on the surviving pane rather than silently
+            // swallowing them or generating an unhandled renderer rejection.
+            if (!disposed) showPaneToastRef.current(sessionId,
+              error instanceof Error ? error.message : 'Could not replay agent terminal')
+          })
         backlogQueue.length = 0
         attachedBackfillDone = true
         if (pendingResize) {
@@ -416,7 +539,9 @@ export function AgentTerminalLeaf({
       if (resizeFrame !== null) cancelAnimationFrame(resizeFrame)
       resizeObserver?.disconnect()
       onDataDisposable?.dispose()
+      offFollowAttach?.()
       offPtyData?.()
+      offTextPaste?.()
       webglRenderer?.dispose()
       wheelBoundary?.dispose()
       if (onThemeChangedListener) {
@@ -446,6 +571,37 @@ export function AgentTerminalLeaf({
     termRef.current?.focus()
   }
 
+  // Same liveness rule TileLeaf feeds PaneHeader. `sessionStatus` is derived
+  // at workspace level from the semantic turn, `processActive` and exit state,
+  // and none of these depend on which leaf is mounted. For Claude and Codex,
+  // `processActive` comes from the main-process spinner detectors, so a turn
+  // typed straight into the raw TUI lights this header just as a composer
+  // send lights the rendered one (#851). The third input, the optimistic
+  // `awaitingAssistant`, is set only by the composer. That means this header
+  // lights on the first spinner frame or semantic turn, not on Enter.
+  //
+  // OpenCode Terminal lights it the same way, from a different source: it has
+  // no spinner detector, so `process-state` and the semantic turn come from
+  // the TUI's own server (busy/idle over `/event`) through
+  // opencode-terminal-headless (#864). Before that package it emitted only
+  // `process-state {active:false}` and this header never lit (#857). If it
+  // stops lighting again, look for a lost live channel (`live-state`
+  // diagnostics) before suspecting this surface: nothing here is runtime
+  // specific. opencodeTerminalRuntime.renderer.test.tsx replays a recorded
+  // TUI turn through this exact `paneHeaderStatusLit` rule.
+  const isSessionLive = runtime.sessionStatus === 'running'
+  // Uses PaneHeader's own rule instead of an inline `&&`, so the slot colors
+  // below can never disagree with the fill they sit on.
+  const statusLit = paneHeaderStatusLit(showStatusMode, isSessionLive)
+
+  // #858: WorkspaceLeaf mounts a persisted related selection here, so this pane
+  // can be showing a CHILD's TUI under the PARENT's pane label. Say which one,
+  // in the status row that already exists, and offer the way back. No chip row:
+  // every header row is taken out of the PTY, and a row appearing when a child
+  // spawns would resize the live TUI.
+  const showingRelated = ownerSessionId !== undefined && ownerSessionId !== sessionId
+  const relatedTab = showingRelated ? relatedAgentTabs?.find(tab => tab.sessionId === sessionId) : undefined
+
   return (
     <div
       data-pane-id={sessionId}
@@ -468,25 +624,124 @@ export function AgentTerminalLeaf({
       onPasteCapture={() => acknowledgeSession(sessionId)}
       onCompositionEndCapture={() => acknowledgeSession(sessionId)}
     >
-      <div className="border-b border-border bg-surface">
-        <div className="flex items-center justify-between gap-3 px-3 py-1 text-[10px] text-muted font-code select-none">
-          <div className="flex items-center gap-2 min-w-0">
-            {paneLabel && (
-              <span className="flex-shrink-0 rounded-chip border border-current/30 px-1 leading-[14px] text-[9px] font-semibold tabular-nums">
-                {paneLabel}
-              </span>
-            )}
-            <span className="flex-shrink-0 text-ink">raw {provider}</span>
-            <span className="truncate" title={projectDir ?? 'no project dir'}>
-              {shortenCwd(projectDir)}
-            </span>
-          </div>
-          <span className="flex-shrink-0 text-[9px] uppercase tracking-wider text-muted">
-            terminal view
+      {/* The shared header, not a copy of it. A hand-rolled copy here is how
+          #851 happened: that copy never got the Status Mode fill or the color
+          flag. Only the terminal-specific chrome is supplied from this file.
+
+          Related agents (#858): the chip row is still not rendered here,
+          because a row appearing when a child spawns would resize the live TUI.
+          Instead the status row's badge names the displayed related agent and
+          a `parent` button returns to the owner.
+
+          The same cost applies to Status Mode. `statusMode` switches the row
+          between `py-0` and `py-1`, so toggling the setting changes this
+          header by 8px and can drop or add a terminal row, which resizes the
+          provider PTY once. That is accepted because it only happens when the
+          setting changes; liveness and TAIL never change the height. */}
+      <PaneHeader
+        sessionId={sessionId}
+        paneLabel={paneLabel}
+        agentTitle={agentTitle}
+        projectDir={projectDir}
+        statusMode={showStatusMode}
+        isSessionLive={isSessionLive}
+        // `text-ink` lifts the surface name above the muted cwd on the plain
+        // strip. On the lit strip it inherits `accent-fg`, since ink is not
+        // guaranteed to contrast with a user-chosen accent.
+        badge={
+          <span className={`flex-shrink-0 ${statusLit ? '' : 'text-ink'}`}>
+            raw {provider}
+            {relatedTab ? ` · ${relatedTab.relation} ${relatedTab.label}` : null}
           </span>
+        }
+        trailing={
+          <>
+            {showingRelated && onSelectRelatedSession ? (
+              <button
+                type="button"
+                // Keep xterm focused: a mousedown here must not steal it.
+                onMouseDown={event => event.preventDefault()}
+                onClick={event => {
+                  event.stopPropagation()
+                  onSelectRelatedSession(ownerSessionId!)
+                }}
+                className="rounded-control border border-current/30 px-1 leading-[14px] text-[9px] uppercase tracking-wider"
+              >
+                parent
+              </button>
+            ) : null}
+            {/* TAIL pill styling copied from ScrollIndicator so both surfaces
+                read identically — without it the raw view silently follows
+                output while showing no state the palette can be checked
+                against. The one exception is the lit strip: `text-accent` on
+                `bg-accent` makes TAIL invisible exactly when the agent is
+                producing the output being followed, so it inherits
+                `accent-fg` there. */}
+            {tailActive ? (
+              <span
+                className={`text-[10px] font-code uppercase tracking-wider ${statusLit ? '' : 'text-accent'}`}
+              >
+                TAIL
+              </span>
+            ) : null}
+            {/* No color of its own: it inherits the row's `text-muted`, or
+                `accent-fg` on the lit strip.
+
+                Hidden below 320px of header text room (PaneHeader's label
+                group is the `@container`, so the flag's quarter is already
+                subtracted). `raw <provider>` already names this surface, so
+                the label is the one piece of chrome that can go without losing
+                information. Without this, a flagged Tiled Dispatch lane
+                (~250px) had more fixed-width text than room, and the label
+                slid under the flag with TAIL next.
+
+                The threshold covers the fixed row content with every piece
+                shown, measured at the 10px code font: pane label chip
+                (~26px), `raw opencode` (~72px), TAIL (~26px), this label
+                (~76px) and the gaps, about 236px, plus roughly 80px so the cwd
+                keeps a readable tail. */}
+            <span className="hidden text-[9px] uppercase tracking-wider @min-[320px]:inline">
+              terminal view
+            </span>
+          </>
+        }
+      />
+
+      {/* WHY the raw pane carries its own transcript diagnostic:
+          every other surface that shows one (Agent Status, the Dispatch row)
+          can be closed, and this pane is the one the user is actually looking
+          at. The case that forced it is a TUI session switch: the user runs
+          /new or picks another session inside the TUI, this pane goes on
+          following the session it launched with, and with Dispatch and Agent
+          Status closed nothing on screen said so. A pane that quietly names
+          the wrong conversation is the failure the whole signal exists to
+          prevent, so it must be visible HERE.
+
+          It takes layout space rather than overlaying: the terminal is the
+          content, and covering a line of it to report a problem would be its
+          own small lie. xterm's fit addon reflows on the resulting resize.
+          Nothing here is focusable, so the terminal keeps keyboard focus.
+
+          WHY `transcriptChannelError` and not `transcriptError`: the latter
+          also carries transient diagnostics — a `sink_failed` delivery hiccup,
+          a history read that the next read fixes — which the user can do
+          nothing about and which clear themselves. Standing a warning over
+          someone's terminal for those trains them to ignore the banner, which
+          costs exactly the one case it exists for. This field is the lifetime
+          marker: a channel that stopped for good, or a TUI that moved to
+          another session. Both stay true until something real changes. */}
+      {runtime.transcriptChannelError ? (
+        <div
+          data-terminal-transcript-error="true"
+          role="status"
+          className="
+            mx-2 mt-1 flex-shrink-0 rounded-control border border-warning-border
+            bg-warning-soft px-2 py-1 text-[10px] leading-snug text-warning
+          "
+        >
+          {runtime.transcriptChannelError}
         </div>
-        <AgentTitleHeader title={agentTitle} />
-      </div>
+      ) : null}
 
       <div className="flex-1 min-h-0 min-w-0 overflow-hidden p-2">
         <div
@@ -494,6 +749,14 @@ export function AgentTerminalLeaf({
           className="h-full min-h-0 min-w-0 overflow-hidden relative"
         />
       </div>
+      {/* Mouse Mode only, mirroring ComposerActions' gating in TileLeaf. A raw
+          terminal has no composer or draft, so Submit is this surface's only
+          action — the Enter byte a keyboard user presses after dictating or
+          pasting. Gated on the setting because the row costs pane height in
+          every agent pane and a keyboard user gets nothing from it. */}
+      {mouseModeEnabled ? (
+        <AgentTerminalActions onSubmit={() => submitEnterRef.current()} />
+      ) : null}
       {/* WHY terminal mode still renders PaneToast:
         Pane toasts are runtime feedback from commands/actions, not a feed-only
         visual. Hybrid can legitimately fall back to AgentTerminalLeaf right

@@ -1,3 +1,4 @@
+import { retainProviderError } from './providerError'
 import type { SessionKind } from '@shared/types/providerKind'
 import type {
   SemanticLiveBlock,
@@ -223,6 +224,7 @@ export function foldSemanticEvent(
   state: SemanticRuntimeState,
   ev: Record<string, unknown>,
   sessionKind: SessionKind,
+  sessionRunId?: string | null,
 ): SemanticRuntimeState {
   const now = Date.now()
   const policy = resolveFoldPolicy(sessionKind)
@@ -1020,14 +1022,11 @@ export function foldSemanticEvent(
     }
     case 'api_error':
     case 'stream_error': {
-      errors = [
-        ...errors,
-        {
-          ts: now,
-          kind: t,
-          message: String(ev.message ?? '(no message)'),
-        },
-      ].slice(-SEMANTIC_ERROR_CAP)
+      const error = retainProviderError(ev, t, state.nextLogId, now, sessionRunId)
+      // The same transport event can be replayed. Distinct attempts still have
+      // distinct request IDs even when the provider repeats identical prose.
+      if (error.requestId && errors.some(prior => prior.id === error.id)) break
+      errors = [...errors, error].slice(-SEMANTIC_ERROR_CAP)
       break
     }
   }

@@ -7,6 +7,7 @@ import {
   buildVisibleDispatchRows,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
 import { resolveFocusSurfaceTarget } from '@renderer/workspace/hook/actions/focusSurfaceTarget'
+import { sessionHasTranscript } from '@renderer/workspace/transcriptAvailability'
 
 import type {
   WorkspaceSetReaderMode,
@@ -26,9 +27,25 @@ export function useReaderActions(
   setState: WorkspaceSetState,
   refs: WorkspaceRefs,
 ): {
+  setReaderModeTarget: (sessionId: SessionId | null) => boolean
   toggleReaderMode: () => void
   setReaderModeSession: (sessionId: SessionId) => void
 } {
+  // Explicit desired state lets command clients select a non-focused agent
+  // without a focus-then-toggle race. Ownership uses the same placement query
+  // as UI toggles, including detached and related sessions.
+  const setReaderModeTarget = useCallback((sessionId: SessionId | null) => {
+    if (sessionId === null) { setReaderMode(null); return true }
+    const current = refs.stateRef.current
+    const target = resolveFocusSurfaceTarget(current, sessionId)
+    if (!target) return false
+    if (!isAgentProviderKind(current.sessions[sessionId]?.kind ?? DEFAULT_PROVIDER)) return false
+    setSpotlight(null)
+    setState(prev => ({ ...prev, activeTabId: target.tabId }))
+    setReaderMode({ tabId: target.tabId, focusedSessionId: sessionId })
+    return true
+  }, [refs.stateRef, setReaderMode, setState, setSpotlight])
+
   const toggleReaderMode = useCallback(() => {
     const current = refs.stateRef.current
     const target = resolveFocusSurfaceTarget(current)
@@ -62,6 +79,30 @@ export function useReaderActions(
   const setReaderModeSession = useCallback(
     (sessionId: SessionId) => {
       const snapshot = refs.stateRef.current
+      // WHY this needs a guard like setReaderModeTarget/toggleReaderMode's
+      // (#865): Reader Mode is agent-only by design (Design D2) because it
+      // renders a provider-registered transcript view, and a terminal has no
+      // such view. Those two siblings already refuse a non-agent kind before
+      // touching state; this one — the "switch which session Reader is
+      // showing" entry point — did not, so it was relying only on ReaderView's
+      // own filter to keep a terminal off screen. That filter is a rendering
+      // accident, not a contract: any caller reaching this action directly
+      // (e.g. the external operator's agents.show, which after #865 no longer
+      // refuses terminals for placement/metadata capabilities) could point
+      // Reader Mode at a session it cannot render. Refuse without changing
+      // reader state — though, as the M5 note below explains, the predicate
+      // this guard refuses on is now STRICTER than the siblings' own guard,
+      // not identical to it.
+      //
+      // WHY sessionHasTranscript instead of isAgentProviderKind (M5): the two
+      // predicates diverged. isAgentProviderKind admits OpenCode Terminal
+      // (kind 'opencode', providerRuntime 'terminal') — it IS an agent-kind
+      // session — but it never loads a transcript (see
+      // transcriptAvailability.ts's WHY), so Reader would accept it here and
+      // then render nothing. readerCommands.ts already gates on
+      // sessionHasTranscript for the same reason; this guard must agree with
+      // its own command's own visibility rule.
+      if (!sessionHasTranscript(snapshot.sessions[sessionId])) return
       const rows = snapshot.dispatchMode
         ? buildVisibleDispatchRows(snapshot)
         : []
@@ -108,5 +149,5 @@ export function useReaderActions(
     [refs.stateRef, setReaderMode, setState],
   )
 
-  return { toggleReaderMode, setReaderModeSession }
+  return { setReaderModeTarget, toggleReaderMode, setReaderModeSession }
 }

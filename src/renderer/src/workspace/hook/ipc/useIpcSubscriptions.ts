@@ -13,6 +13,7 @@ import { getRendererProviderCapabilities } from '@providers/registry.renderer.ca
 import type { TranscriptEntryMapper } from '@shared/types/providerConfig'
 import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { QueuedMessage, SessionRuntime } from '@renderer/session-runtime/state'
+import { withUnread } from '@renderer/session-runtime/unread'
 import { appendFeedDebugLog } from '@renderer/session-runtime/feedDebug'
 import type { FeedDebugInput } from '@renderer/session-runtime/feedDebug'
 import type { SessionId } from '@renderer/workspace/types'
@@ -363,6 +364,18 @@ const SEMANTIC_DELTA_FLUSH_MS = 100
 // reconcile, rather than reacting to any single edge.
 const QUEUE_IDLE_RECONCILE_MS = 2000
 
+/** Epoch-ms sanity floor (2001-09-09) for provider-supplied timestamps that are
+ *  typed only as `number`.
+ *
+ *  WHY it exists: `limitHit.at` is compared against `turnStartedAt`, which is
+ *  always a `Date.now()` wall clock. A semantic event whose `ts` is a small
+ *  relative counter — every provider emits `Date.now()` today, but the wire
+ *  type does not say so, and this repo's own test doubles use `ts: 1` — would
+ *  write an `at` that loses every such comparison, silently disarming the
+ *  provider-switch guard's usage-limit exception. Anything below the floor is
+ *  treated as "not a wall clock" and replaced with the local one. */
+const WALL_CLOCK_MS_FLOOR = 1_000_000_000_000
+
 function applyConditionSnapshot(
   runtime: SessionRuntime,
   snapshot: ProviderConditionSnapshot,
@@ -635,33 +648,6 @@ export function useIpcSubscriptions(
       void worktreeReconciler.refresh(cwd)
     }
 
-    const withUnread = (
-      runtime: SessionRuntime,
-      kind: 'output' | 'attention',
-    ): SessionRuntime => {
-      // Unread is an acknowledgement marker, not a focus marker.
-      // Dispatch navigation, tab restore, and automatic focus sync can all
-      // make a session "focused" without the user reading or acting on it.
-      // Writers therefore mark only meaningful milestones unread: ordinary
-      // output waits until the agent turn finishes, while attention prompts
-      // still surface immediately. Explicit engagement handlers (composer
-      // edit/click/paste, feed scroll/click, terminal click/input, action
-      // sends) clear it via acknowledgeSession().
-      // Attention outranks ordinary output: once a permission/trust
-      // prompt appears, the list should keep showing ACTION until
-      // the user opens that agent or the prompt resolves. A later
-      // transcript append must not downgrade the marker to NEW.
-      const unreadKind =
-        runtime.unreadKind === 'attention' || kind === 'attention'
-          ? 'attention'
-          : 'output'
-      return {
-        ...runtime,
-        unreadSince: runtime.unreadSince ?? Date.now(),
-        unreadKind,
-      }
-    }
-
     const quarantinesSessionFeed = (sessionId: string): boolean =>
       refs.latestRuntimesRef.current[sessionId]?.recoveryFailureCode ===
       'ownership-conflict'
@@ -890,9 +876,18 @@ export function useIpcSubscriptions(
       flushSemanticEventQueue()
       // eslint-disable-next-line no-console
       console.warn(`[jsonl ${sessionId.slice(0, 8)}]`, message)
+      // These adapter diagnostics name a channel that cannot recover by
+      // loading a snapshot. Electron preserves the message, not Error.code.
+      // The two nonfatal durable diagnostics deliberately remain transient:
+      // sink delivery can recover, and exit-drain exhaustion ends the backend.
+      const channelStopped = message.startsWith('OpenCode durable channel (')
+        && !message.includes('(sink_failed)')
+        && !message.includes('(final_drain_incomplete)')
+      const sessionSwitched = message.includes('(provider_session_switched)')
       updateRuntime(sessionId, {
         transcriptStatus: 'error',
         transcriptError: message,
+        ...((channelStopped || sessionSwitched) ? { transcriptChannelError: message } : {}),
       })
     })
 
@@ -924,6 +919,26 @@ export function useIpcSubscriptions(
               processActive: false,
               processStatus: 'exited',
               processError: null,
+              // WHY terminalForeground is also cleared on exit (M3): main DOES
+              // untrack the session on exit — the terminal exit handler
+              // (main/sessionManager.ts ~3110) calls cleanupSessionState,
+              // which calls this.terminalForeground.untrack(sessionId) (~903)
+              // — but that clears a SEPARATE structure: TerminalForegroundMonitor's
+              // own `last`-emitted map, which only decides when main should
+              // emit at all. It says nothing about this renderer-side runtime
+              // field, a second independent copy that applyTerminalForeground
+              // (session-runtime/terminalForeground.ts ~42) diffs every new
+              // sample against. Left uncleared, a same-id respawn's first
+              // (idle) sample would be compared against the dead
+              // predecessor's stale `busy: true` sitting here — busy
+              // genuinely differs, so that is NOT a suppressed no-op, it is a
+              // real busy→idle transition, and applyTerminalForeground fires
+              // withUnread on it: a SPURIOUS "new work" mark on a pane where
+              // nothing actually happened, the shell just started. Clearing
+              // it here also stops a dead shell's last command (e.g. `npm`)
+              // from lingering as a badge with no live process left to
+              // correct it.
+              terminalForeground: null,
               inputReady: false,
               // Restamped on exit for the same reason as every other readiness
               // write: without it the pane would report how long ago the DEAD
@@ -1100,6 +1115,31 @@ export function useIpcSubscriptions(
         })
         return
       }
+      // ---- Usage-limit signal (#821), the live channel ----
+      // Codex reports an exhausted subscription window as an `api_error` with
+      // `errorType: 'usage_limit_reached'` — classified in codex-headless
+      // precisely so it is distinguishable from a plain retryable 429 (see
+      // packages/codex-headless/src/channels/types.ts). The conversation stays
+      // open afterward, so this event is the only thing that separates "the
+      // agent is thinking" from "the agent cannot think until 14:32".
+      //
+      // Computed outside the updater for the same reason as the JSONL path: one
+      // Date.now() per event, not one per React re-invocation.
+      //
+      // The event's own `ts` wins when it is a wall clock. Unlike the JSONL
+      // path this is a LIVE event, never a replay, so `Date.now()` is a correct
+      // fallback rather than a lie — but the event's own time is still better,
+      // because a backpressured queue can hold an event for a while before it
+      // is folded. The plausibility floor exists because `ts` is only typed
+      // `number`: a provider (or a test) that emits a small relative counter
+      // would otherwise write `limitHit.at = 3`, which loses every comparison
+      // against `turnStartedAt` and silently disarms the guard's exception.
+      const semanticLimitHitAt =
+        semanticEvent.type === 'api_error' && semanticEvent.errorType === 'usage_limit_reached'
+          ? (typeof semanticEvent.ts === 'number' && semanticEvent.ts >= WALL_CLOCK_MS_FLOOR
+              ? semanticEvent.ts
+              : Date.now())
+          : null
       // Captured by the updater, committed after setRuntimes returns.
       let pendingStaleQueue: ClaudeQueueState | null = null
       setRuntimes(prev => {
@@ -1127,7 +1167,7 @@ export function useIpcSubscriptions(
           return { ...prev, [sessionId]: updated }
         }
 
-        const nextSemantic = foldSemanticEvent(current.semantic, semanticEvent, sessionKind)
+        const nextSemantic = foldSemanticEvent(current.semantic, semanticEvent, sessionKind, current.sessionRunId)
         const eventType = typeof semanticEvent.type === 'string' ? semanticEvent.type : ''
         const clearOptimisticAwaiting =
           isSemanticTurnRunning(nextSemantic.currentTurn) ||
@@ -1259,13 +1299,49 @@ export function useIpcSubscriptions(
         const staleChanged = markedQueue !== null && markedQueue !== existingQueue
         if (staleChanged) pendingStaleQueue = markedQueue
 
+        // A completed turn is the one unambiguous proof that the limit episode
+        // is over: the provider answered. `turn_stopped` deliberately does NOT
+        // clear it — a turn can stop precisely BECAUSE the limit was hit, and
+        // clearing there would erase the signal in the same tick it arrived.
+        //
+        // `turn_started` clears it too, and that is the fix for a pane the
+        // guard would otherwise get killed. A Claude pane that hit a limit and
+        // then auto-continues once the window resets keeps its ORIGINAL
+        // `turnStartedAt` — `streamPhaseMachine` only assigns that field when
+        // it is null (semantic/streamPhaseMachine.ts, the `turnStartedAt ===
+        // null` guards), so the timestamp still belongs to the turn that hit
+        // the limit, and it is necessarily OLDER than `limitHit.at`. With
+        // `limitHit` still armed, `isLimitIdle` therefore keeps reading true
+        // while Claude is busy answering again, the switch modal labels the
+        // pane idle, and switching kills a live turn — the one thing the
+        // exception was written not to do.
+        //
+        // A turn the provider ACCEPTED is proof enough: the request got past
+        // the limit. It is weaker proof than a completed turn (the request
+        // could still 429 mid-flight), which is exactly why this is safe — a
+        // fresh 429 re-arms `limitHit` with a newer `at`, and that timestamp
+        // now beats the same stale `turnStartedAt` again.
+        //
+        // Same value comparison as the JSONL path: a redelivered event carries
+        // the same `ts`, so it must not manufacture a runtime change.
+        const nextLimitHit: SessionRuntime['limitHit'] =
+          semanticLimitHitAt !== null
+            ? (current.limitHit?.at === semanticLimitHitAt && current.limitHit.source === 'api_error'
+                ? current.limitHit
+                : { at: semanticLimitHitAt, source: 'api_error' })
+            : eventType === 'turn_completed' || eventType === 'turn_started'
+              ? null
+              : current.limitHit
+        const limitHitChanged = nextLimitHit !== current.limitHit
+
         if (
           semanticUnchanged &&
           phaseUnchanged &&
           ghostsUnchanged &&
           awaitingUnchanged &&
           !shouldClearIdleQueue &&
-          !staleChanged
+          !staleChanged &&
+          !limitHitChanged
         ) {
           closeSpan({
             sessionId,
@@ -1298,6 +1374,7 @@ export function useIpcSubscriptions(
               phaseChangedAt,
               submittedAt,
               ghosts: nextGhosts,
+              limitHit: nextLimitHit,
             },
             {
               layer: 'SEM',
@@ -2010,6 +2087,64 @@ export function useIpcSubscriptions(
           }
         }
 
+        // ---- Usage-limit carrier (#821) ----
+        // Claude persists an exhausted-quota turn as an assistant record with
+        // `isApiErrorMessage: true` and `error: "rate_limit"`. That is the ONLY
+        // durable evidence the renderer gets: no semantic event is emitted for
+        // it, and the pane keeps its process (and its "continuing
+        // automatically" banner) so nothing else in the runtime changes.
+        // Recording the hit lets `isLimitIdle` release the provider-switch
+        // guard for exactly these panes (providerSwitchCore.ts).
+        //
+        // The predicate matches the census: seven local transcripts carry this
+        // record and every one of them has both fields
+        // (docs/decomposition/evidence/provider-switch/census.md §#820). The
+        // literal `rate_limit` code does NOT survive fixture redaction, which
+        // is why it is checked against LIVE records here — do not "fix" a
+        // fixture test by loosening this to `isApiErrorMessage` alone, which
+        // also matches ordinary API failures that have nothing to do with
+        // quota.
+        //
+        // WHY it scans `appended` and not the raw burst: `appended` is the
+        // post-dedupe set (uuids already in `seen` never reach it), and a
+        // RESUMED pane replays its last ~200 lines through this exact channel
+        // (main/sessions/jsonlCoalescer.ts). Scanning the burst meant every
+        // restart re-detected old carriers — and the census found one session
+        // with 63 consecutive rate-limit records, so a replay could re-arm the
+        // guard's exception dozens of times for an episode that ended days ago.
+        // The Claude mapper passes conversation records through unchanged, so
+        // the carrier's own fields survive into `appended`.
+        //
+        // WHY the timestamp comes from the record and NEVER from the wall
+        // clock — the same rule `lastJsonlEntryAt` follows immediately above:
+        // `limitHit.at` is compared against `turnStartedAt` to decide whether a
+        // pane is parked or working, and stamping a replayed days-old record
+        // with `Date.now()` makes it look newer than any turn. A carrier with
+        // no parseable timestamp is deliberately ignored rather than stamped
+        // with now: an unplaceable event cannot be ordered against a turn, and
+        // a wrong order is worse than no signal.
+        let limitHitAt: number | null = null
+        for (const entry of appended) {
+          const record = asRecord(entry)
+          if (
+            record?.type !== 'assistant' ||
+            record.isApiErrorMessage !== true ||
+            record.error !== 'rate_limit'
+          ) continue
+          const ts = record.timestamp
+          if (typeof ts !== 'string') continue
+          const ms = Date.parse(ts)
+          if (!Number.isFinite(ms)) continue
+          if (limitHitAt === null || ms > limitHitAt) limitHitAt = ms
+        }
+        // Monotonic and idempotent: a replayed burst reproduces the same `at`
+        // and therefore the same object identity, so the noChange bail below
+        // still fires. Only a strictly newer carrier replaces the record.
+        const nextLimitHit: SessionRuntime['limitHit'] =
+          limitHitAt !== null && (current.limitHit === null || limitHitAt > current.limitHit.at)
+            ? { at: limitHitAt, source: 'transcript' }
+            : current.limitHit
+
         // Ghost reconciliation — when authoritative entries land,
         // supersede any live ghost whose `(turnId, blockIndex)`
         // they replace. Runs per appended entry so ghost→real
@@ -2073,6 +2208,11 @@ export function useIpcSubscriptions(
         // queuedMessages and the rest of this guard.
         const ghostsChanged = nextGhosts !== current.ghosts
         const lastJsonlChanged = lastJsonlEntryAt !== current.lastJsonlEntryAt
+        // A VALUE comparison, not "a carrier was present": the carrier arrives
+        // as an appended entry, so this is normally implied by appended.length
+        // — but it must not be able to defeat the bootstrap-burst bail below on
+        // every single replay of a transcript that happens to contain one.
+        const limitHitChanged = nextLimitHit !== current.limitHit
         const noChange =
           appended.length === 0 &&
           reconciledOptimisticTexts.size === 0 &&
@@ -2082,6 +2222,7 @@ export function useIpcSubscriptions(
           workActivity === current.workActivity &&
           !ghostsChanged &&
           !lastJsonlChanged &&
+          !limitHitChanged &&
           // A tool-index mutation with no other change must still force a
           // runtime update so the version bump below reaches Feed's context.
           // (In practice toolIndexChanged implies an appended entry, but this
@@ -2221,8 +2362,10 @@ export function useIpcSubscriptions(
               bootstrapping: true,
               queuedMessages,
               awaitingAssistant,
-              transcriptStatus: 'ready',
-              transcriptError: null,
+              // A later record proves data arrived, not that a stopped
+              // channel or a TUI session mismatch repaired itself.
+              transcriptStatus: current.transcriptChannelError ? 'error' : 'ready',
+              transcriptError: current.transcriptChannelError ?? null,
               workContext,
               workActivity,
               toolUseIndex,
@@ -2234,6 +2377,12 @@ export function useIpcSubscriptions(
                 : current.toolIndexVersion,
               ghosts: nextGhosts,
               lastJsonlEntryAt,
+              // Only ever SET here. Clearing belongs to `turn_completed` in the
+              // semantic handler: a burst that carries no limit record is not
+              // evidence the limit is over (Claude writes 63 consecutive
+              // rate-limit records in one session — census RL-6), it is just a
+              // burst about something else.
+              limitHit: nextLimitHit,
             },
             {
               layer: 'JSONL',
@@ -2371,7 +2520,7 @@ export function useIpcSubscriptions(
           //      Evidence: scripts/diag-stuck-running.mjs against
           //      production debug bundles, Claude case
           //      `sessionStatusSource: "submit"` with
-          //      `submittedAt: null` (setStreamingBaseline never
+          //      `submittedAt: null` (beginOptimisticSubmit never
           //      ran — only the queue-op path could have set the
           //      flag).
           //

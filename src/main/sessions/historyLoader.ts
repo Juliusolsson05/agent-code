@@ -1,10 +1,12 @@
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
 import type { FileHandle } from 'fs/promises'
 import { open, stat } from 'fs/promises'
+import { createHash } from 'node:crypto'
 
 import { performanceService } from '@main/performance/PerformanceService.js'
 import { makeStringPool, internEntryFields } from '@main/sessions/internEntry.js'
 import { resolveProviderTranscriptPath } from '@main/providerSwitch/shared.js'
+import { getMainProvider } from '@providers/registry.main.js'
 
 // Loader for the bootstrap tail and for older history chunks.
 //
@@ -96,8 +98,9 @@ export type HistoryChunk = {
 // single records to hundreds of KB or more; the line assembly below handles
 // those by carrying chunks across blocks, so a larger block would only buy
 // fewer syscalls on an already-rare path while every ordinary load would read
-// (and allocate) more than it needs. The same size the session picker's tail
-// window uses (sessionIndex.ts), for the same reason.
+// (and allocate) more than it needs. The same size the conversation prompt
+// folder's tail window uses (conversations/prompts/promptFolder.ts), for the
+// same reason.
 const TAIL_BLOCK_BYTES = 256 * 1024
 
 // WHY a bigger block for the newline count: that pass touches every byte
@@ -122,6 +125,27 @@ function extractCodexHistoryMarker(entry: Record<string, unknown>): string {
   return `${String(entry.timestamp ?? '')}:${String(payload?.id ?? payload?.call_id ?? payload?.type ?? entry.type)}`
 }
 
+/**
+ * Run a provider-owned history read with the same performance-journal span
+ * the file path records, so a slow or failing OpenCode page shows up in the
+ * same place a slow JSONL page does.
+ */
+async function loadProviderOwnedChunk(
+  spanName: string,
+  kind: AgentProviderKind,
+  read: () => Promise<HistoryChunk>,
+): Promise<HistoryChunk> {
+  const span = performanceService.span(spanName, { kind, providerOwned: true })
+  try {
+    const chunk = await read()
+    span.end({ result: chunk.entries.length > 0 ? 'loaded' : 'empty', returned: chunk.entries.length, hasMore: chunk.hasMore })
+    return chunk
+  } catch (err) {
+    span.fail(err)
+    throw err
+  }
+}
+
 async function resolveHistoryTranscriptPath(
   params: InitialHistoryChunkRequest,
 ): Promise<string | null> {
@@ -129,7 +153,14 @@ async function resolveHistoryTranscriptPath(
   // old history-loader-local walker returned the first lexical match; the shared
   // resolver picks newest by mtime, which is the correct tie-break when the same
   // Codex thread id appears in more than one rollout file.
-  return resolveProviderTranscriptPath(params)
+  const file = await resolveProviderTranscriptPath(params)
+  // Bulk locators must be able to report individual missing files, but a
+  // requested Claude history must not masquerade as a healthy empty replay.
+  // Keep this strict read policy at the caller, not in the shared locator.
+  if (!file && params.kind === 'claude') {
+    throw new Error(`Claude transcript not found for session ${params.providerSessionId}`)
+  }
+  return file
 }
 
 /**
@@ -372,6 +403,7 @@ async function readInitialTranscriptTail(
   filePath: string,
   limit: number,
   blockBytes: number = TAIL_BLOCK_BYTES,
+  strict = false,
 ): Promise<{
   bytes: number
   // Bytes read (and parsed) to assemble the window — proportional to the
@@ -387,14 +419,15 @@ async function readInitialTranscriptTail(
   entries: Record<string, unknown>[]
   offsets: number[]
 }> {
-  const size = await stat(filePath).then(s => s.size).catch(() => 0)
+  const size = await stat(filePath).then(s => s.size).catch(error => { if (strict) throw error; return 0 })
   const empty = { bytes: size, tailBytes: 0, parseErrors: 0, parsed: 0, entries: [], offsets: [] }
   if (size === 0 || limit <= 0) return empty
 
   let handle: FileHandle
   try {
     handle = await open(filePath, 'r')
-  } catch {
+  } catch (error) {
+    if (strict) throw error
     return empty
   }
   try {
@@ -438,7 +471,8 @@ async function readInitialTranscriptTail(
       entries: newestFirst.reverse(),
       offsets: offsetsNewestFirst.reverse(),
     }
-  } catch {
+  } catch (error) {
+    if (strict) throw error
     return empty
   } finally {
     await handle.close().catch(() => {})
@@ -463,7 +497,13 @@ type OlderWindowRequest = {
   beforeMarker: string
   beforeOffset?: number
   limit: number
+  // Control readers must also traverse records without a UI message marker.
+  // Their exact byte cursor carries this parsed-record digest; unlike the UI's
+  // recovery fallback, a changed anchor must explicitly invalidate that cursor.
+  beforeRecordHash?: string
 }
+
+export class HistoryCursorChangedError extends Error {}
 
 async function readOlderTranscriptWindow(
   filePath: string,
@@ -494,8 +534,11 @@ async function readOlderTranscriptWindow(
     entries: [],
     offsets: [],
   }
-  if (size === 0) return empty
-  const markerOf = params.kind === 'claude'
+  if (size === 0) {
+    if (params.beforeRecordHash) throw new HistoryCursorChangedError('Transcript cursor boundary is no longer readable')
+    return empty
+  }
+  const markerOf = params.beforeRecordHash ? (entry: Record<string, unknown>) => createHash('sha256').update(JSON.stringify(entry)).digest('hex') : params.kind === 'claude'
     ? extractClaudeHistoryMarker
     : extractCodexHistoryMarker
   const limit = Math.max(0, params.limit)
@@ -503,7 +546,8 @@ async function readOlderTranscriptWindow(
   let handle: FileHandle
   try {
     handle = await open(filePath, 'r')
-  } catch {
+  } catch (error) {
+    if (params.beforeRecordHash) throw error
     return empty
   }
   try {
@@ -516,7 +560,7 @@ async function readOlderTranscriptWindow(
 
     if (
       isValidOffset(params.beforeOffset, size) &&
-      (await anchorLineCarriesMarker(handle, params.beforeOffset, size, blockBytes, markerOf, params.beforeMarker))
+      (await anchorLineCarriesMarker(handle, params.beforeOffset, size, blockBytes, markerOf, params.beforeRecordHash ?? params.beforeMarker))
     ) {
       // Exact path: the cursor line is where the renderer says it is, so the
       // page is simply the records before that byte. Newest first, reversed
@@ -535,6 +579,8 @@ async function readOlderTranscriptWindow(
       kept.reverse()
       return finishWindow(size, tailBytes, parseErrors, parsed, true, 'offset', kept, limit)
     }
+
+    if (params.beforeRecordHash) throw new HistoryCursorChangedError('Transcript cursor no longer identifies the recorded boundary')
 
     // Marker-only path: the forward scan the loader always had, anchored on
     // the OLDEST occurrence of the marker. WHY forward and oldest, given
@@ -567,7 +613,8 @@ async function readOlderTranscriptWindow(
       return false
     })
     return finishWindow(size, tailBytes, parseErrors, parsed, found, found ? 'marker' : 'tail', kept, limit)
-  } catch {
+  } catch (error) {
+    if (params.beforeRecordHash) throw error
     return empty
   } finally {
     await handle.close().catch(() => {})
@@ -613,6 +660,18 @@ function finishWindow(
 export async function loadOlderHistoryChunk(
   params: HistoryChunkRequest,
 ): Promise<HistoryChunk> {
+  // Providers without a transcript file (OpenCode: SQLite) own their pages.
+  const providerSource = getMainProvider(params.kind).loadHistoryChunk
+  if (providerSource) {
+    return await loadProviderOwnedChunk('historyLoader.loadOlderChunk', params.kind, () =>
+      providerSource({
+        cwd: params.cwd,
+        providerSessionId: params.providerSessionId,
+        limit: params.limit,
+        beforeMarker: params.beforeMarker,
+      }),
+    )
+  }
   // Thin resolver wrapper — the reading work, span bookkeeping, and
   // return shaping all live in the FromFile variant so the two entrypoints
   // cannot drift (review finding: the first extraction duplicated the span
@@ -651,6 +710,7 @@ export async function loadOlderHistoryChunkFromFile(
       kind: params.kind,
       beforeMarker: params.beforeMarker,
       beforeOffset: params.beforeOffset,
+      beforeRecordHash: params.beforeRecordHash,
       limit: params.limit,
     })
     return finishOlderChunk(span, parsed, filePath)
@@ -696,6 +756,12 @@ function finishOlderChunk(
 export async function loadInitialHistoryChunk(
   params: InitialHistoryChunkRequest,
 ): Promise<HistoryChunk> {
+  const providerSource = getMainProvider(params.kind).loadHistoryChunk
+  if (providerSource) {
+    return await loadProviderOwnedChunk('historyLoader.loadInitialChunk', params.kind, () =>
+      providerSource({ cwd: params.cwd, providerSessionId: params.providerSessionId, limit: params.limit }),
+    )
+  }
   const span = performanceService.span('historyLoader.loadInitialChunk', {
     kind: params.kind,
     limit: params.limit,
@@ -719,13 +785,14 @@ export async function loadInitialHistoryChunk(
 export async function loadInitialHistoryChunkFromFile(
   filePath: string,
   limit: number,
+  strict = false,
 ): Promise<HistoryChunk> {
   const span = performanceService.span('historyLoader.loadInitialChunk', {
     limit,
     fromFile: true,
   })
   try {
-    const parsed = await readInitialTranscriptTail(filePath, limit)
+    const parsed = await readInitialTranscriptTail(filePath, limit, TAIL_BLOCK_BYTES, strict)
     return finishInitialChunk(span, parsed, limit, filePath)
   } catch (err) {
     span.fail(err)

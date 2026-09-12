@@ -1,3 +1,5 @@
+import { UsageLimitNoticeView } from '@providers/shared/renderer/protocols/usage-limit/UsageLimitNoticeView'
+import { useUsageLimitActions } from '@renderer/features/usage-limit/useUsageLimitActions'
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import ReactMarkdown from 'react-markdown'
@@ -8,20 +10,29 @@ import { CodeRenderContext } from '@renderer/features/feed/context'
 import { SafeInlineCode } from '@renderer/features/rendered-content/SafeInlineCode'
 import { SafeMarkdownLink } from '@renderer/features/rendered-content/SafeMarkdownLink'
 import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
-import { extractAssistantInProgress } from '@shared/parsers/extractAssistant'
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
-import { assistantUuidsWithText, extractAssistantByUuid } from '@renderer/lib/copyAssistant'
+import { useLedgerFeedItems } from '@renderer/features/feed/ledger/useLedgerFeedItems'
+import {
+  readerMessagesFromFeedItems,
+  type ReaderMessage,
+} from '@renderer/features/reader/model/readerMessages'
+import {
+  nextReaderSelection,
+  sameReaderList,
+} from '@renderer/features/reader/model/readerSelection'
 import { resolveTabSessions } from '@renderer/workspace/queries'
+import { useSessionRuntime } from '@renderer/workspace/useSessionRuntime'
 import { dispatchSessionIdsForTab } from '@renderer/workspace/dispatch/dispatchSelectors'
 import type { SessionId, Workspace } from '@renderer/workspace/workspaceStore'
 import { PaneToast } from '@renderer/workspace/tile-tree/TileLeaf/PaneToast'
 
 // ReaderView — single-message read mode for a focused session.
 //
-// Renders ONLY the most recent assistant text (markdown, no tool
-// chrome, no composer, no streaming card scaffolding). Live-updates
-// while the agent is still typing by switching to the streaming
-// extractor; falls back to the JSONL-derived final text otherwise.
+// Renders one assistant message at a time (markdown, no tool chrome, no
+// composer), paging through exactly the assistant prose the session's Feed
+// paints: committed transcript text plus the ledger's live semantic text
+// while a turn streams. See features/reader/model/readerMessages.ts for why
+// that is the only source — Reader never reads the terminal screen (#855).
 //
 // The point: when the user has 5 panes open and just wants to read
 // the plan one specific agent wrote, dropping into Reader Mode gives
@@ -84,12 +95,6 @@ const MARKDOWN_COMPONENTS: import('react-markdown').Options['components'] = {
   a: SafeMarkdownLink,
 }
 
-type ReaderAssistantMessage = {
-  id: string
-  text: string
-  live: boolean
-}
-
 type Props = {
   workspace: Workspace
 }
@@ -135,17 +140,14 @@ function ReaderBody({
   sessionId: SessionId
   sessionIds: SessionId[]
 }) {
-  const runtime = workspace.getRuntime(sessionId)
+  const runtime = useSessionRuntime(workspace, sessionId)
+  const usageLimitActions = useUsageLimitActions(workspace, sessionId, runtime.sessionRunId)
   const meta = workspace.state.sessions[sessionId]
-  // Use the pane's actual provider for the screen extractor rather than
-  // the old `=== 'codex' ? 'codex' : 'claude'` negation, which collapsed
-  // opencode (a registered provider since phase 7) to Claude. This is
-  // Structured OpenCode has no PTY and supplies semantic SSE text. OpenCode
-  // Terminal is deliberately forced onto its raw surface, so there is still no
-  // supported OpenCode screen-scraping path here. Keeping the real provider is
-  // nevertheless important: a future parser must be an explicit exhaustive
-  // addition rather than silently receiving Claude's rules. Terminal / unknown
-  // kinds fall back to the default provider.
+  // The pane's real provider, never a `=== 'codex' ? 'codex' : 'claude'`
+  // negation (that collapsed opencode to Claude). It selects the provider
+  // capabilities the ledger uses to correlate committed tool carriers, which
+  // decides whether an entry paints. Terminal / unknown kinds are filtered out
+  // by ReaderView above; the default only covers pre-kind persisted sessions.
   const provider = isAgentProviderKind(meta?.kind) ? meta.kind : DEFAULT_PROVIDER
   const workspaceRoot = meta?.cwd ?? null
   const reader = workspace.readerMode
@@ -153,81 +155,92 @@ function ReaderBody({
     ? reader.focusedSessionId
     : sessionIds[0] ?? sessionId
 
-  // Semantic-channel live text for this session. Preferred over the
-  // screen extractor: when proxy is on this is decrypted Anthropic
-  // text and arrives as markdown-ready prose; when proxy is off the
-  // channel STILL fires (source='screen'), so we get screen text
-  // without calling the extractor directly. Returns null when no
-  // turn is currently streaming.
-  const semanticLive = runtime.semantic.currentTurn
-  const hasLiveActivity = runtime.sessionStatus === 'running'
+  // The same ledger plan the session's Feed paints, with the same arguments
+  // TileLeaf passes. WHY a second instance instead of sharing Feed's: Feed's
+  // plan lives inside the (hidden but still mounted, #752) TileLeaf and is not
+  // in the store; lifting it would be a cross-cutting refactor for one
+  // consumer. The cost is real but bounded: while Reader is open, every
+  // semantic delta for this one session is walked twice (Feed's hidden
+  // instance and this one), each an O(entries) pass. That is still far below
+  // what it replaced — an O(n²) entry rescan plus a screen parse on every
+  // screen frame.
+  //
+  // WHY no `sessionStatus === 'running'` gate any more: liveness comes from the
+  // ledger (text still growing in the open semantic turn, see
+  // ReaderMessage.live). The old gate was what opened the screen-scrape path
+  // for every running turn that had no open text block — tool calls, waiting
+  // on background agents — which is the whole of #855.
+  const ledgerFeedPlan = useLedgerFeedItems(runtime, provider, sessionId, {
+    toolUseIndex: runtime.toolUseIndex,
+    toolResultIndex: runtime.toolResultIndex,
+    version: runtime.toolIndexVersion,
+  })
+  // Keyed on the items array alone. useLedgerFeedItems memoises its plan on
+  // the runtime slices the ledger reads (entries, semantic turns, ghosts,
+  // stream phase), so screen frames and other unrelated runtime ticks keep the
+  // same array and do not rebuild Reader's message list; a semantic delta or a
+  // stream-phase change does.
+  const messages = useMemo<ReaderMessage[]>(
+    () => readerMessagesFromFeedItems(ledgerFeedPlan.items),
+    [ledgerFeedPlan.items],
+  )
 
-  const messages = useMemo<ReaderAssistantMessage[]>(() => {
-    const historical = assistantUuidsWithText(runtime.entries)
-      .map(uuid => {
-        const text = extractAssistantByUuid(runtime.entries, uuid)
-        if (!text) return null
-        return { id: uuid, text, live: false }
-      })
-      .filter((message): message is ReaderAssistantMessage => message !== null)
-
-    if (hasLiveActivity) {
-      // Prefer the semantic channel; fall back to the direct screen
-      // extractor when no semantic event has arrived yet. The screen
-      // fallback catches the edge case where a session was spawned
-      // through an older code path that doesn't emit semantic events
-      // yet — shouldn't happen in production but keeps the reader
-      // from going blank during migrations.
-      const semanticText = semanticLive?.text?.trim() ?? ''
-      const live = semanticText
-        || (runtime.recentScreen
-          ? extractAssistantInProgress(runtime.recentScreen, provider)?.trim() ?? ''
-          : '')
-      if (live) {
-        const newest = historical[historical.length - 1]
-        if (!newest || newest.text !== live) {
-          historical.push({ id: '__live__', text: live, live: true })
-        }
-      }
-    }
-
-    return historical
-  }, [
-    hasLiveActivity,
-    runtime.entries,
-    runtime.recentScreen,
-    semanticLive?.text,
-    provider,
-  ])
-
-  const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null)
-  const selectedMessageIdRef = useRef<string | null>(null)
-
-  useEffect(() => {
-    selectedMessageIdRef.current = selectedMessageId
-  }, [selectedMessageId])
-
-  useEffect(() => {
-    setSelectedMessageId(messages[messages.length - 1]?.id ?? null)
-  }, [sessionId])
-
-  useEffect(() => {
-    const previous = selectedMessageIdRef.current
-    if (messages.length === 0) {
-      setSelectedMessageId(null)
-      return
-    }
-    if (!previous) {
-      setSelectedMessageId(messages[messages.length - 1]!.id)
-      return
-    }
-    if (messages.some(message => message.id === previous)) return
-    // Whatever we were pointing at (a real uuid that's gone, or the
-    // transient '__live__' sentinel whose text was just archived
-    // into a historical entry) — snap to the newest message. These
-    // two cases used to be split, but they both land here.
-    setSelectedMessageId(messages[messages.length - 1]!.id)
-  }, [messages])
+  // Selection state carries the message list and session it was computed
+  // against, so a list change can be reconciled DURING render (React's
+  // "adjusting state when a prop changes" pattern) instead of in an effect.
+  // WHY not an effect: an effect runs after a commit in which the old id is
+  // already missing, and `selectedIndex` below falls back to the newest
+  // message for that frame — every live -> committed handoff flashed the live
+  // end of the conversation before snapping back. A render-phase update is
+  // applied before anything paints.
+  //
+  // `scrollResetToken` changes only when the reader lands on a DIFFERENT
+  // message (see ReaderSelection.moved): user navigation, a session switch,
+  // following the agent onto a new page. A message growing, finishing, or being
+  // handed to its committed twin keeps the user's scroll position.
+  //
+  // `stickToBottom` is declared here, ahead of the selection, because it is
+  // also the "is the reader following the agent" input to the selection rule:
+  // it is set when the reader lands on a growing message, cleared when they
+  // scroll up or land on a finished one, and it survives the pinned message
+  // finishing. Only a following reader is carried onto new pages.
+  const [stickToBottom, setStickToBottom] = useState(true)
+  const [selection, setSelection] = useState<{
+    messages: readonly ReaderMessage[]
+    sessionId: SessionId
+    id: string | null
+    scrollResetToken: number
+  }>(() => ({
+    messages,
+    sessionId,
+    id: messages[messages.length - 1]?.id ?? null,
+    scrollResetToken: 0,
+  }))
+  const sessionChanged = selection.sessionId !== sessionId
+  // WHY the write is skipped only for an identical list, not for an unchanged
+  // selection: a render-phase update re-renders immediately, so writing on
+  // every new `messages` IDENTITY would never settle if a caller handed Reader
+  // an unstable-but-identical list (a test fixture whose getRuntime built a
+  // fresh runtime per call hit "Too many re-renders"). But the rule also needs
+  // `selection.messages` to be the list the reader last saw: the previous
+  // version skipped the write whenever the selection did not change, and a
+  // reader who paged back and then watched ten answers arrive was later placed
+  // by "distance from the end" in a list ten answers out of date. So every
+  // real change is recorded, and only a content-identical list is ignored.
+  if (sessionChanged || (selection.messages !== messages && !sameReaderList(selection.messages, messages))) {
+    const next = sessionChanged
+      // A different session's list has no relation to the old selection.
+      ? { id: messages[messages.length - 1]?.id ?? null, moved: true }
+      : nextReaderSelection(selection.messages, selection.id, messages, stickToBottom)
+    setSelection({
+      messages,
+      sessionId,
+      id: next.id,
+      scrollResetToken: next.moved ? selection.scrollResetToken + 1 : selection.scrollResetToken,
+    })
+  }
+  const selectedMessageId = selection.id
+  const scrollResetToken = selection.scrollResetToken
 
   const selectedIndex = useMemo(() => {
     if (messages.length === 0) return -1
@@ -243,8 +256,8 @@ function ReaderBody({
 
   // WHY selection is read through refs inside the keydown handler
   // instead of closing over `messages`/`selectedIndex` directly:
-  //   messages recomputes on every semantic text delta (a new
-  //   `__live__` entry is pushed per frame). Closing over
+  //   messages recomputes on every semantic text delta (the live
+  //   block's text grows per frame). Closing over
   //   `selectOlder`/`selectNewer` callbacks in the effect below
   //   would then re-register the document listener on every delta —
   //   not a crash, but a lot of `addEventListener`/`removeEventListener`
@@ -255,25 +268,38 @@ function ReaderBody({
   const selectedIndexRef = useRef(selectedIndex)
   selectedIndexRef.current = selectedIndex
 
+  // Explicit navigation is always a move to a different message, so it resets
+  // the scroll like any other landing. It also records the list the id was
+  // chosen from: the selection rule looks the selected id up in
+  // `selection.messages`, which may lag (see above) and might not contain it.
+  const selectMessage = useCallback((id: string) => {
+    setSelection(current => ({
+      ...current,
+      messages: messagesRef.current,
+      id,
+      scrollResetToken: current.scrollResetToken + 1,
+    }))
+  }, [])
   const selectOlder = useCallback(() => {
     const idx = selectedIndexRef.current
     if (idx <= 0) return
-    setSelectedMessageId(messagesRef.current[idx - 1]!.id)
-  }, [])
+    selectMessage(messagesRef.current[idx - 1]!.id)
+  }, [selectMessage])
   const selectNewer = useCallback(() => {
     const idx = selectedIndexRef.current
     const list = messagesRef.current
     if (idx < 0 || idx >= list.length - 1) return
-    setSelectedMessageId(list[idx + 1]!.id)
-  }, [])
+    selectMessage(list[idx + 1]!.id)
+  }, [selectMessage])
 
   // Auto-scroll to bottom while content grows during streaming. Only
   // pin to the bottom if the user hasn't manually scrolled away — same
   // sticky-bottom heuristic as the Feed component but simpler because
   // there's only one growing block, not a list of entries.
   const scrollerRef = useRef<HTMLDivElement>(null)
-  const [stickToBottom, setStickToBottom] = useState(true)
   const lastScrollTopRef = useRef(0)
+  const selectedMessageRef = useRef(selectedMessage)
+  selectedMessageRef.current = selectedMessage
   useEffect(() => {
     if (!stickToBottom || !selectedMessage?.live) return
     const el = scrollerRef.current
@@ -282,13 +308,20 @@ function ReaderBody({
     lastScrollTopRef.current = el.scrollTop
   }, [selectedMessage?.live, text, stickToBottom])
 
+  // Start a newly landed message from the top — and ONLY a newly landed one.
+  // WHY keyed on the token and not on `selectedMessageId` / `live` (what this
+  // effect used to key on): with ledger-sourced messages the id changes when a
+  // finished message is handed to its committed entry, and `live` flips when a
+  // block finishes streaming. Both happen under a reader who is mid-paragraph,
+  // and resetting there scrolled them back to the top twice for one message.
+  // `stickToBottom` restarts only for a message that is still growing.
   useEffect(() => {
     const el = scrollerRef.current
     if (!el) return
     el.scrollTop = 0
     lastScrollTopRef.current = 0
-    setStickToBottom(Boolean(selectedMessage?.live))
-  }, [selectedMessageId, sessionId, selectedMessage?.live])
+    setStickToBottom(Boolean(selectedMessageRef.current?.live))
+  }, [scrollResetToken])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -363,19 +396,21 @@ function ReaderBody({
               setReaderModeSession, and the quote must land in the session
               the user is actually reading. */}
           <article
-            data-quote-scope={sessionId}
+            data-quote-scope={selectedMessage?.notice ? undefined : sessionId}
             className="
               prose-theme
               mx-auto max-w-3xl px-8 py-10
               text-ink text-[15px] leading-[1.7]
             "
           >
-            <ReactMarkdown
+            {selectedMessage?.notice ? (
+              <UsageLimitNoticeView notice={selectedMessage.notice.notice} sessionRunId={selectedMessage.notice.sessionRunId} actions={usageLimitActions} />
+            ) : <ReactMarkdown
               remarkPlugins={REMARK_PLUGINS}
               components={MARKDOWN_COMPONENTS}
             >
               {text}
-            </ReactMarkdown>
+            </ReactMarkdown>}
           </article>
         </div>
       ) : (

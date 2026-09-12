@@ -1,3 +1,4 @@
+import { tldrCommands } from '@renderer/features/tldr/commands'
 import { layoutCommands } from '@renderer/features/workspace/commands/layoutCommands'
 import { globalEditorCommands } from '@renderer/features/global-editor/commands/globalEditorCommands'
 import { paneCommands } from '@renderer/features/workspace/commands/paneCommands'
@@ -11,6 +12,7 @@ import { readerCommands } from '@renderer/features/reader/commands/readerCommand
 import { copyAssistantCommands } from '@renderer/features/copy-assistant/commands/copyAssistantCommands'
 import { copyCodeBlockCommands } from '@renderer/features/copy-code-block/commands/copyCodeBlockCommands'
 import { promptTemplateCommands } from '@renderer/features/prompt-templates/commands/promptTemplateCommands'
+import { keyVaultCommands } from '@renderer/features/key-vault/commands/keyVaultCommands'
 import { replyToSelectionCommands } from '@renderer/features/reply-to-selection/commands/replyToSelectionCommands'
 import { agentStatusCommands } from '@renderer/features/agent-status/commands/agentStatusCommands'
 import { dispatchColorFlagCommands } from '@renderer/features/workspace/commands/dispatchColorFlagCommands'
@@ -72,14 +74,16 @@ export const builtInCommandCatalog: readonly CommandDef[] = Object.freeze([
   ...agentTitleCommands,
   ...dispatchColorFlagCommands,
   ...spotlightCommands,
+  ...tldrCommands,
   ...readerCommands,
   ...tileTabsCommands,
   ...settingsCommands,
   ...copyAssistantCommands,
   ...copyCodeBlockCommands,
   ...promptTemplateCommands,
-  // Grouped with the prompt-template commands because it is the other
-  // composer-insertion command — registry order is the palette's
+  ...keyVaultCommands,
+  // Grouped with the prompt-template and vault commands because those are
+  // the other insertion commands — registry order is the palette's
   // empty-query browse order, so like things stay adjacent.
   ...replyToSelectionCommands,
   ...agentStatusCommands,

@@ -11,7 +11,9 @@ import { registerSessionIpc } from '@main/ipc/session.js'
 import { registerProviderIpc } from '@main/ipc/provider.js'
 import { registerLspIpc } from '@main/ipc/lsp.js'
 import { registerFsIpc } from '@main/ipc/fs.js'
-import { registerSessionsIpc } from '@main/ipc/sessions.js'
+import { registerConversationsIpc } from '@main/ipc/conversations.js'
+import type { ConversationService } from '@main/conversations/service.js'
+import { registerAgentNamesIpc } from '@main/agentNames/ipc.js'
 import { registerWorkspaceIpc } from '@main/ipc/workspace.js'
 import { registerWindowIpc } from '@main/ipc/window.js'
 import type { WorkspaceFileStore } from '@main/storage/workspaceFileStore.js'
@@ -33,6 +35,8 @@ import { registerAgentManagementIpc } from '@main/ipc/agentManagement.js'
 import { registerAiWorkspaceIpc } from '@main/ipc/aiWorkspace.js'
 import { registerRenderedContentIpc } from '@main/ipc/renderedContent.js'
 import { registerCaffeinateIpc } from '@main/ipc/caffeinate.js'
+import { registerKeyVaultIpc } from '@main/ipc/keyVault.js'
+import type { VaultService } from '@main/keyVault/VaultService.js'
 import { registerRemoteIpc } from '@main/ipc/remote.js'
 import type { OrchestrationBridge } from '@main/orchestration/OrchestrationBridge.js'
 import type { AgentManagementBridge } from '@main/agentManagement/AgentManagementBridge.js'
@@ -49,6 +53,7 @@ import { registerWorkflowIpc } from '@main/ipc/workflows.js'
 import { registerAgentCodeConventionsIpc } from '@main/ipc/agentCodeConventions.js'
 import { registerAgentCodeCustomSkillsIpc } from '@main/ipc/agentCodeCustomSkills.js'
 import { registerAgentCodeInstalledSkillsIpc } from '@main/ipc/agentCodeInstalledSkills.js'
+import { registerAgentSkillsIpc } from '@main/ipc/agentSkills.js'
 import type { WorkflowBridge } from '@main/workflows/WorkflowBridge.js'
 
 // IPC registration aggregator.
@@ -75,12 +80,14 @@ export type IpcDeps = {
   agentManagementBridge: AgentManagementBridge
   aiWorkspaceRegistry: AiWorkspaceRegistry
   caffeinateController: CaffeinateController
+  vaultService: VaultService
   remoteController: RemoteController
   appRunJournal: AppRunJournal
   cliUpdateOrchestrator: CliUpdateOrchestrator
   workflowBridge: WorkflowBridge
   agentCodeConventionsService: AgentCodeConventionsService
   workspaceFileStore: WorkspaceFileStore
+  conversationService: ConversationService
 }
 
 export function registerAllIpc(deps: IpcDeps): void {
@@ -93,8 +100,9 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerProviderIpc(deps.manager)
   registerLspIpc(deps.lspManager, editorFsRoots, deps.aiWorkspaceRegistry)
   registerFsIpc()
-  registerSessionsIpc()
+  registerConversationsIpc(deps.conversationService, deps.appRunJournal)
   registerWorkspaceIpc(deps.manager, deps.workspaceFileStore)
+  registerAgentNamesIpc()
   registerWindowIpc(deps.workspaceFileStore)
   registerGhostIpc(deps.ghostJournals)
   registerGitIpc()
@@ -111,6 +119,7 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerAiWorkspaceIpc(deps.aiWorkspaceRegistry)
   registerRenderedContentIpc()
   registerCaffeinateIpc(deps.caffeinateController)
+  registerKeyVaultIpc({ vaultService: deps.vaultService })
   registerRemoteIpc(deps.remoteController)
   registerIncidentIpc(deps.appRunJournal)
   // Debug export needs the lifecycle limiter's monotonic completeness state.
@@ -128,4 +137,5 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerAgentCodeConventionsIpc(deps.agentCodeConventionsService)
   registerAgentCodeCustomSkillsIpc(deps.agentCodeConventionsService)
   registerAgentCodeInstalledSkillsIpc(deps.agentCodeConventionsService)
+  registerAgentSkillsIpc(deps.agentCodeConventionsService)
 }

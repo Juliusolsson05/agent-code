@@ -1,5 +1,7 @@
+import { TldrPane } from '@renderer/features/tldr/TldrOverlay'
 import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
-import { useCallback, useRef } from 'react'
+import { memo, useCallback, useRef } from 'react'
+import { useSessionRuntime } from '@renderer/workspace/useSessionRuntime'
 
 import { getRendererProvider } from '@providers/registry.renderer'
 import type { AgentViewMode } from '@renderer/app-state/settings/types'
@@ -27,18 +29,24 @@ type Props = {
   focusedSessionId: SessionId | null
   workspace: Workspace
   agentViewMode: AgentViewMode
-  showStatusMode?: boolean
-  showWorktreeBadges?: boolean
+  // WHY both display settings are required rather than defaulted to `true`
+  // (#856): Spotlight and Tiled Tabs never passed them. They silently got the
+  // defaults, so a user who turned Status Mode or worktree badges off still
+  // saw them there. A default here only ever means "some surface forgot to
+  // read the setting". Required props make tsc name every surface that has to
+  // thread the real value.
+  showStatusMode: boolean
+  showWorktreeBadges: boolean
 }
 
-export function TileTree({
+export const TileTree = memo(function TileTree({
   tabId,
   node,
   focusedSessionId,
   workspace,
   agentViewMode,
-  showStatusMode = true,
-  showWorktreeBadges = true,
+  showStatusMode,
+  showWorktreeBadges,
 }: Props) {
   if (node.type === 'leaf') {
     return renderWorkspaceLeaf(
@@ -89,20 +97,60 @@ export function TileTree({
       workspace={workspace}
     />
   )
-}
+})
 
+// No defaults for the tab, view mode or display settings, for the same reason
+// as TileTree's props (#856). Every caller is a surface that knows these
+// values, and a default would hide the one that doesn't pass them.
 export function renderWorkspaceLeaf(
   sessionId: SessionId,
   focusedSessionId: SessionId | null,
   workspace: Workspace,
-  tabId: TabId = workspace.state.activeTabId,
-  agentViewMode: AgentViewMode = 'agent',
-  showStatusMode = true,
-  showWorktreeBadges = true,
-  onFocusRequest: () => void = () => workspace.focusSessionInTab(tabId, sessionId),
+  tabId: TabId,
+  agentViewMode: AgentViewMode,
+  showStatusMode: boolean,
+  showWorktreeBadges: boolean,
+  onFocusRequest?: () => void,
   showRelatedAgentTabs = false,
   surfacePaneLabel?: string,
 ) {
+  return <WorkspaceLeaf
+    sessionId={sessionId}
+    focusedSessionId={focusedSessionId}
+    workspace={workspace}
+    tabId={tabId}
+    agentViewMode={agentViewMode}
+    showStatusMode={showStatusMode}
+    showWorktreeBadges={showWorktreeBadges}
+    onFocusRequest={onFocusRequest}
+    showRelatedAgentTabs={showRelatedAgentTabs}
+    surfacePaneLabel={surfacePaneLabel}
+  />
+}
+
+// The subscription belongs below the recursive layout and above provider/view
+// selection: a runtime can change Hybrid's surface, but another session's
+// output must not traverse this pane or recreate any terminal callbacks.
+const WorkspaceLeaf = memo(function WorkspaceLeaf({
+  sessionId, focusedSessionId, workspace, tabId, agentViewMode,
+  showStatusMode, showWorktreeBadges, onFocusRequest, showRelatedAgentTabs,
+  surfacePaneLabel,
+}: {
+  sessionId: SessionId
+  focusedSessionId: SessionId | null
+  workspace: Workspace
+  tabId: TabId
+  agentViewMode: AgentViewMode
+  showStatusMode: boolean
+  showWorktreeBadges: boolean
+  onFocusRequest?: () => void
+  showRelatedAgentTabs: boolean
+  surfacePaneLabel?: string
+}) {
+  const requestFocus = useCallback(() => {
+    if (onFocusRequest) onFocusRequest()
+    else workspace.focusSessionInTab(tabId, sessionId)
+  }, [onFocusRequest, workspace, tabId, sessionId])
   const relatedTabs = showRelatedAgentTabs
     ? buildGridRelatedAgentTabs(workspace.state, tabId, sessionId)
     : []
@@ -112,6 +160,7 @@ export function renderWorkspaceLeaf(
   const renderedSessionId = workspace.state.sessions[selectedSessionId] ? selectedSessionId : sessionId
   const meta = workspace.state.sessions[renderedSessionId]
   const kind = meta?.kind ?? DEFAULT_PROVIDER
+  const runtime = useSessionRuntime(workspace, renderedSessionId)
   // WHY a parent-owned label may override the tab-local coordinate: Dispatch
   // renders one globally ordered visible-row stream, so its D23 identity can
   // legitimately differ from this session's position inside its owning tab.
@@ -127,14 +176,14 @@ export function renderWorkspaceLeaf(
         sessionId={sessionId}
         paneLabel={paneLabel}
         focused={sessionId === focusedSessionId}
-        onFocusRequest={onFocusRequest}
+        onFocusRequest={requestFocus}
         workspace={workspace}
+        showStatusMode={showStatusMode}
       />
     )
   }
 
   const provider = getRendererProvider(kind)
-  const runtime = workspace.getRuntime(renderedSessionId)
   if (getEffectiveAgentSurfaceForSession({
     kind,
     providerRuntime: meta?.providerRuntime,
@@ -143,43 +192,61 @@ export function renderWorkspaceLeaf(
     runtime,
   }) === 'terminal') {
     return (
-      <MountedAgentTerminalOwner sessionId={renderedSessionId}>
-        <AgentTerminalLeaf
-          sessionId={renderedSessionId}
-          paneLabel={paneLabel}
-          agentTitle={meta?.title}
-          focused={sessionId === focusedSessionId}
-          onFocusRequest={onFocusRequest}
-          workspace={workspace}
-          runtime={runtime}
-          projectDir={runtime.projectDir ?? meta?.cwd ?? null}
-          provider={kind}
-        />
-      </MountedAgentTerminalOwner>
+      <TldrPane runtime={runtime} provider={kind} identity={meta?.tldrIdentity ?? renderedSessionId} enabled={Boolean(meta?.builtInMcpDomains?.includes('tldr'))}>
+        <MountedAgentTerminalOwner sessionId={renderedSessionId}>
+          <AgentTerminalLeaf
+            sessionId={renderedSessionId}
+            paneLabel={paneLabel}
+            agentTitle={meta?.title}
+            focused={sessionId === focusedSessionId}
+            onFocusRequest={requestFocus}
+            workspace={workspace}
+            runtime={runtime}
+            projectDir={runtime.projectDir ?? meta?.cwd ?? null}
+            provider={kind}
+            // The rendered branch below always received this. The terminal
+            // branch didn't, which is why terminal-view panes never lit their
+            // header while working (#851).
+            showStatusMode={showStatusMode}
+            // #858: same related-agent identity the rendered branch below
+            // passes to LeafComponent, so a persisted related selection that
+            // lands here (raw-terminal surface) is named in the status row
+            // instead of silently swapping which agent's TUI this pane shows.
+            ownerSessionId={sessionId}
+            relatedAgentTabs={relatedTabs}
+            onSelectRelatedSession={(nextSessionId: SessionId) => {
+              workspace.selectGridRelatedSession(sessionId, nextSessionId)
+              workspace.focusSessionInTab(tabId, sessionId)
+            }}
+          />
+        </MountedAgentTerminalOwner>
+      </TldrPane>
     )
   }
 
   const LeafComponent = provider.TileLeaf
   return (
-    <LeafComponent
-      sessionId={renderedSessionId}
-      runtime={runtime}
-      paneLabel={paneLabel}
-      focused={sessionId === focusedSessionId}
-      onFocusRequest={onFocusRequest}
-      workspace={workspace}
-      showStatusMode={showStatusMode}
-      showWorktreeBadges={showWorktreeBadges}
-      ownerSessionId={sessionId}
-      relatedAgentTabs={relatedTabs}
-      selectedRelatedSessionId={renderedSessionId}
-      onSelectRelatedSession={(nextSessionId: SessionId) => {
-        workspace.selectGridRelatedSession(sessionId, nextSessionId)
-        workspace.focusSessionInTab(tabId, sessionId)
-      }}
-    />
+    <TldrPane runtime={runtime} provider={kind} identity={meta?.tldrIdentity ?? renderedSessionId} enabled={Boolean(meta?.builtInMcpDomains?.includes('tldr'))}>
+      <LeafComponent
+        sessionId={renderedSessionId}
+        runtime={runtime}
+        paneLabel={paneLabel}
+        focused={sessionId === focusedSessionId}
+        onFocusRequest={requestFocus}
+        workspace={workspace}
+        showStatusMode={showStatusMode}
+        showWorktreeBadges={showWorktreeBadges}
+        ownerSessionId={sessionId}
+        relatedAgentTabs={relatedTabs}
+        selectedRelatedSessionId={renderedSessionId}
+        onSelectRelatedSession={(nextSessionId: SessionId) => {
+          workspace.selectGridRelatedSession(sessionId, nextSessionId)
+          workspace.focusSessionInTab(tabId, sessionId)
+        }}
+      />
+    </TldrPane>
   )
-}
+})
 
 function firstLeafId(n: TileNode): SessionId {
   let current = n

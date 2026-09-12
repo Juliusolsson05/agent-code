@@ -7,7 +7,7 @@ import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
 
-import { useSessionActions } from './session'
+import { killSessionBackendIfOwned, useSessionActions } from './session'
 
 const originalApiDescriptor = Object.getOwnPropertyDescriptor(window, 'api')
 
@@ -24,6 +24,16 @@ function ref<T>(current: T): MutableRefObject<T> {
 }
 
 describe('useSessionActions recovery retry', () => {
+  it('uses the captured spawn scope for cleanup before render refs catch up', async () => {
+    const killOwnedSession = vi.fn(async () => true)
+    Object.defineProperty(window, 'api', { configurable: true, value: { killOwnedSession } })
+    const refs = { stateRef: ref({ sessions: {} }) } as unknown as WorkspaceRefs
+    expect(await killSessionBackendIfOwned(refs, 'just-spawned')).toBe(false)
+    expect(killOwnedSession).not.toHaveBeenCalled()
+    expect(await killSessionBackendIfOwned(refs, 'just-spawned', { cwd: '/captured/project', kind: 'codex' })).toBe(true)
+    expect(killOwnedSession).toHaveBeenCalledExactlyOnceWith({ sessionId: 'just-spawned', cwd: '/captured/project', kind: 'codex', providerRuntime: undefined })
+  })
+
   it('seeds fresh sessions from Settings while an explicit empty list wins', async () => {
     let state = {
       tabs: [],
@@ -42,6 +52,7 @@ describe('useSessionActions recovery retry', () => {
       dangerousAgentsRef: ref(false),
       useProxyStreamingRef: ref(false),
       defaultBuiltInMcpDomainsRef: ref(['orchestration', 'workflows']),
+      seenUuidsRef: ref({}),
     } as unknown as WorkspaceRefs
     const setState = (next: WorkspaceState | ((prev: WorkspaceState) => WorkspaceState)) => {
       state = typeof next === 'function' ? next(state) : next
@@ -62,9 +73,15 @@ describe('useSessionActions recovery retry', () => {
         sessionId: 'opencode-terminal',
         providerSessionId: 'ses_precreated_at_runtime_start',
       })
+    const loadInitialHistory = vi.fn(async () => ({ entries: [], hasMore: false, totalEntries: 0 }))
     Object.defineProperty(window, 'api', {
       configurable: true,
-      value: { spawnSession, ghostRead: vi.fn(async () => []) },
+      value: {
+        spawnSession,
+        ghostRead: vi.fn(async () => []),
+        loadInitialHistory,
+        gitWorktrees: vi.fn(async () => ({ ok: true, worktrees: [] })),
+      },
     })
     const { result } = renderHook(() => useSessionActions(
       state,
@@ -106,13 +123,20 @@ describe('useSessionActions recovery retry', () => {
       providerSessionId: 'ses_precreated_at_runtime_start',
       providerSessionIdSource: 'runtime-start',
     })
-    // Native terminal sessions intentionally skip structured history loading;
-    // the provider's durable identity is for recovery and conversion, not an
-    // instruction to mount the immature rendered OpenCode surface.
-    expect(runtimes['opencode-terminal']).toMatchObject({
-      transcriptStatus: 'ready',
-      processStatus: 'started',
-      hasOlderHistory: false,
+    // The terminal runtime loads its durable history like any agent — the
+    // app's features and MCP reads need `entries` — while the pane stays on
+    // the TUI (agentDisplayMode pins it). The two sessions without a durable
+    // provider id have nothing to load.
+    await vi.waitFor(() => {
+      expect(loadInitialHistory).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        kind: 'opencode',
+        providerSessionId: 'ses_precreated_at_runtime_start',
+      }))
+      expect(runtimes['opencode-terminal']).toMatchObject({
+        transcriptStatus: 'ready',
+        processStatus: 'started',
+        hasOlderHistory: false,
+      })
     })
   })
 
@@ -205,8 +229,12 @@ describe('useSessionActions recovery retry', () => {
     expect(recoverSession).toHaveBeenCalledWith(expect.objectContaining({
       builtInMcpDomains: ['orchestration'],
     }))
+    // The wake asked for the pane's resolved capabilities and the backend
+    // answered with fewer; the meta records what the process actually has, not
+    // what was requested. The wake result no longer repeats that list — nothing
+    // consumed it once replacement started resolving from the pane's choices.
     expect(state.sessions[sessionId]?.builtInMcpDomains).toEqual([])
-    expect(wakeResult).toEqual({ sessionId, builtInMcpDomains: [] })
+    expect(wakeResult).toEqual({ sessionId })
     expect(runtimes[sessionId]).toMatchObject({
       sessionRunId: '55555555-5555-4555-8555-555555555555',
       processStatus: 'started',

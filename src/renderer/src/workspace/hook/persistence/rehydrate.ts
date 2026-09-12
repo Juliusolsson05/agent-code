@@ -1,3 +1,4 @@
+import { tldrIdentityForSession } from '@renderer/features/tldr/identity'
 import {
   DEFAULT_PROVIDER,
   isAgentProviderKind,
@@ -42,7 +43,7 @@ import type {
   WorkspaceSetTileTabs,
 } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
-import { resolveSessionBuiltInMcpDomains } from '@renderer/workspace/mcpDomains'
+import { resolveSessionBuiltInMcpDomains, sessionMcpOverrides } from '@renderer/workspace/mcpDomains'
 import * as perf from '@renderer/performance/client'
 import { reportLifecycle } from '@renderer/lifecycle/report'
 import { loadInitialHistoryForSession } from '@renderer/workspace/hook/actions/initialHistory'
@@ -439,25 +440,16 @@ export async function rehydrateWorkspace(
     const recoveredRunId = observedReplacementWhileRecovering
       ? observedRunId
       : backend?.sessionRunId ?? observedRunId
-    const usesProviderTerminalRuntime =
-      freshSessions[sessionId]?.providerRuntime === 'terminal'
     const seeded: SessionRuntime = {
       ...base,
       ...(backend ? { sessionRunId: recoveredRunId } : {}),
       ...(draft && !base.draftInput ? { draftInput: draft } : {}),
-      ...(usesProviderTerminalRuntime
-        ? {
-            // The OpenCode native TUI owns the pane's visual history. Marking
-            // this runtime as `loading` would mount the structured-history
-            // bootstrap path and leave a permanent spinner because rehydrate
-            // deliberately skips that loader below. Its provider id remains
-            // durable metadata for recovery and transcript transforms; it is
-            // not permission to mix the rendered engine into this surface.
-            hasOlderHistory: false,
-            transcriptStatus: 'ready' as const,
-            transcriptError: null,
-          }
-        : seedResumedRuntimeFields(existing, freshSessions[sessionId])),
+      // OpenCode Terminal seeds like every agent. It used to be pinned to
+      // `ready` with no history because this path skipped its loader; now
+      // the loader below runs for it too, so `loading` settles like
+      // anyone's, and the pane itself stays on the raw TUI (see
+      // loadInitialHistoryForSession).
+      ...seedResumedRuntimeFields(existing, freshSessions[sessionId]),
     }
 
     if (failure) {
@@ -706,11 +698,12 @@ export async function rehydrateWorkspace(
             return
           }
           const kind: SessionKind = meta.kind ?? DEFAULT_PROVIDER
+          const builtInMcpOverrides = sessionMcpOverrides(meta)
           const builtInMcpDomains =
             isAgentProviderKind(kind)
               ? resolveSessionBuiltInMcpDomains({
                   provider: kind,
-                  sessionDomains: meta.builtInMcpDomains,
+                  sessionOverrides: builtInMcpOverrides,
                   defaultDomains: refs.defaultBuiltInMcpDomainsRef.current,
                 })
               : undefined
@@ -731,6 +724,7 @@ export async function rehydrateWorkspace(
             refs.latestRuntimesRef.current[oldId]?.sessionRunId ?? null,
           )
           const recovery = await recoverSessionBeforeDeadline(recoveryApi, {
+            tldrIdentity: tldrIdentityForSession(oldId, meta),
             sessionId: oldId,
             kind,
             providerRuntime: meta.providerRuntime,
@@ -751,7 +745,7 @@ export async function rehydrateWorkspace(
               status: 'failed',
               meta: {
                 ...restoredMeta,
-                ...(builtInMcpDomains !== undefined ? { builtInMcpDomains } : {}),
+                ...(builtInMcpDomains !== undefined ? { builtInMcpDomains, builtInMcpOverrides } : {}),
               },
               message: recovery.message,
               code: recovery.code,
@@ -798,6 +792,8 @@ export async function rehydrateWorkspace(
               : undefined
           const recoveredMeta: SessionMeta = {
             ...restoredMeta,
+            builtInMcpOverrides,
+            ...(recovery.snapshot.tldrIdentity ? { tldrIdentity: recovery.snapshot.tldrIdentity } : {}),
             ...(recoveredBuiltInMcpDomains !== undefined
               ? { builtInMcpDomains: recoveredBuiltInMcpDomains }
               : {}),
@@ -812,7 +808,6 @@ export async function rehydrateWorkspace(
           commitRehydratedState(newId)
           if (
             kind !== 'terminal' &&
-            meta.providerRuntime !== 'terminal' &&
             resumeSessionId &&
             refs.stateRef.current.sessions[newId] &&
             refs.latestRuntimesRef.current[newId]

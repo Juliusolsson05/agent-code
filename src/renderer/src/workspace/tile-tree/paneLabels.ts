@@ -1,5 +1,5 @@
-import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
-import type { AgentProviderKind } from '@shared/types/providerKind'
+import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
+import type { SessionKind } from '@shared/types/providerKind'
 import { buildVisibleDispatchRows } from '@renderer/workspace/dispatch/dispatchSelectors'
 import type {
   SessionId,
@@ -9,6 +9,7 @@ import type {
   WorkspaceState,
 } from '@renderer/workspace/types'
 import { resolveTabSessions } from '@renderer/workspace/queries'
+import { sessionDisplayTitle } from '@renderer/workspace/sessionDisplayTitle'
 import { tabIndexLabel } from '@renderer/workspace/tile-tree/paneLabelFormat'
 
 export { tabIndexLabel } from '@renderer/workspace/tile-tree/paneLabelFormat'
@@ -45,7 +46,17 @@ export type AgentPaneLabelTarget = {
   tabTitle: string
   title: string
   cwd: string
-  kind: AgentProviderKind
+  kind: SessionKind
+}
+
+/** Stable identity entry point for bookmarks, automation and future UI links.
+ * Membership still comes from the canonical project query; a buried record is
+ * intentionally not a navigable live placement until explicitly restored. */
+export function resolveAgentSessionTarget(state: WorkspaceState, sessionId: SessionId): AgentPaneLabelTarget | null {
+  const owners = state.tabs.filter(tab => resolveTabSessions(state, tab.id).includes(sessionId))
+  if (owners.length !== 1) return null
+  const tab = owners[0]
+  return buildAgentPaneLabelTarget(state, paneLabelForSession(state, tab.id, sessionId), sessionId, tab.id)
 }
 
 /**
@@ -53,10 +64,10 @@ export type AgentPaneLabelTarget = {
  *
  * WHY this belongs beside paneLabelForSession instead of in the command
  * palette: `A2` is workspace identity, not search syntax. Dispatch, grid,
- * Tiled Tabs, and any future navigation surface must all agree that terminals
- * still occupy an index position while only provider agents are navigable for
- * issue #546. Rebuilding the ordering inside the palette would inevitably
- * drift the first time detached-session ordering changes.
+ * Tiled Tabs, and any future navigation surface must all agree on one
+ * ordering for every session kind, terminals included (#865). Rebuilding the
+ * ordering inside the palette would inevitably drift the first time
+ * detached-session ordering changes.
  */
 export function resolveAgentPaneLabel(
   state: WorkspaceState,
@@ -123,20 +134,15 @@ function buildAgentPaneLabelTarget(
   const meta = state.sessions[sessionId]
   if (!tab || !meta) return null
   const kind = meta.kind ?? DEFAULT_PROVIDER
-  // Terminals deliberately keep their visible coordinate (so an A2 agent does
-  // not become A1 merely because A1 is a terminal), but issue #546 is an
-  // agent-navigation affordance. A Dispatch row match must also stop here
-  // rather than fall through to a different pane-local agent with the same
-  // coordinate: the user pointed at the visible terminal, not that agent.
-  if (!isAgentProviderKind(kind)) return null
-
-  const cwdParts = meta.cwd.split('/').filter(Boolean)
+  // Any session kind is navigable by label (#865). #546 scoped this to agents
+  // "instead of becoming a hidden second terminal-navigation feature", but
+  // Dispatch ⌘N and ⌥↑/↓ already selected terminals, so the two paths disagreed.
   return {
     label,
     sessionId,
     tabId,
     tabTitle: tab.title,
-    title: meta.title?.trim() || cwdParts[cwdParts.length - 1] || meta.cwd,
+    title: sessionDisplayTitle(meta),
     cwd: meta.cwd,
     kind,
   }

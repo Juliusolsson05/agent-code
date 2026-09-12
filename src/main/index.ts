@@ -3,14 +3,32 @@
 // reads env flags at module load) is imported. See
 // `./loadEnv.ts` for the rationale.
 import '@main/loadEnv.js'
+import { TldrStore } from '@main/tldr/TldrStore.js'
+import { registerTldrIpc } from '@main/tldr/ipc.js'
+import { TldrEnforcement } from '@main/tldr/enforcement.js'
+import { sweepStaleTldrHookFiles } from '@providers/shared/runtime/tldrHooks.js'
+import { ExternalControlMcpHost } from './externalControlMcp/host'
+import { registerOperatorControlTools } from './externalControlMcp/tools'
+import { createExternalControlSettings } from './settings/externalControl'
+import { createExternalCodexIntegration } from './settings/externalCodexIntegration'
+import operatorSkillSource from '../../operator-skills/agent-code-computer-execution/SKILL.md?raw'
 
-import { app, crashReporter, dialog, Menu } from 'electron'
+import { app, clipboard, crashReporter, dialog, Menu, systemPreferences } from 'electron'
 import { existsSync } from 'fs'
 import { readFile } from 'fs/promises'
 import { join } from 'path'
 import { performance } from 'perf_hooks'
 
 import { SessionManager } from '@main/sessionManager.js'
+import { createControlHost } from '@main/control/createControlHost.js'
+import { sessionHistoryControlCapabilities } from '@main/sessions/control.js'
+import { nativeHistoryControlCapabilities } from '@main/sessions/nativeHistoryControl.js'
+import { workflowControlCapabilities } from '@main/workflows/control.js'
+import { usageControlCapabilities } from '@main/usage/control.js'
+import { applicationIdentityCapabilities } from '@main/window/identityControl.js'
+import { conditionBackendCapabilities } from '@main/sessions/conditionControl.js'
+import { terminalBackendCapabilities } from '@main/sessions/terminalControl.js'
+import { windowLifecycleControlCapabilities } from '@main/window/lifecycleControl.js'
 import { installSessionShutdownGate } from '@main/sessionShutdownGate.js'
 import { LspManager } from '@main/lspManager.js'
 import { compactAllGhostLogs, GhostJournalRegistry } from '@main/ghostJournal.js'
@@ -26,7 +44,7 @@ import { TmuxRegistry } from '@main/tmux/TmuxRegistry.js'
 import { reconcile } from '@main/tmux/tmuxRecovery.js'
 import type { PersistedTerminalRef } from '@main/tmux/tmuxRecovery.js'
 
-import { STATE_DIR, STATE_FILE } from '@main/storage/paths.js'
+import { STATE_DIR, STATE_FILE, TLDR_HOOK_RUNTIME_DIR } from '@main/storage/paths.js'
 import {
   scheduleDebugStoragePrune,
   setDebugRetentionJournal,
@@ -44,6 +62,9 @@ import {
   broadcastToWindows,
   createAppWindow,
   focusedWindowId,
+  getBrowserWindow,
+  listWindowIds,
+  windowIdFor,
   focusWindow,
   sendToFocusedWindow,
   sendToSessionWindow,
@@ -62,6 +83,12 @@ import { SessionRecorderManager } from '@main/recording/SessionRecorderManager.j
 import { setOutboundObserver } from '@main/window/windowRegistry.js'
 import { captureWindowGeometry, restorableBounds } from '@main/window/windowGeometry.js'
 import { WorkspaceFileStore } from '@main/storage/workspaceFileStore.js'
+import type { PersistedWindow } from '@main/storage/workspaceFile.js'
+import { ConversationLedger, readAgentNameAssignments } from '@main/conversations/ledger/ledger.js'
+import { createConversationService } from '@main/conversations/service.js'
+import { listWorktreesForCwd } from '@main/ipc/git.js'
+import { AGENT_NAMES_FILE } from '@main/agentNames/ipc.js'
+import { CONVERSATIONS_LEDGER_FILE } from '@main/storage/paths.js'
 import { isSessionRecordingEnabled, isSessionRecordingAutoStart } from '@main/ipc/devDebug.js'
 import { registerAllIpc } from '@main/ipc/index.js'
 import { AgentCodeManagedSkillsService } from '@main/agentCodeConventions/AgentCodeManagedSkillsService.js'
@@ -79,6 +106,9 @@ import { AgentManagementBridge } from '@main/agentManagement/AgentManagementBrid
 import { AiWorkspaceRegistry } from '@main/aiWorkspace/AiWorkspaceRegistry.js'
 import { RemoteController } from '@main/remote/RemoteController.js'
 import { CaffeinateController } from '@main/caffeinate/CaffeinateController.js'
+import { createFileVaultStore } from '@main/keyVault/vaultStore.js'
+import { createSafeStorageCodec } from '@main/keyVault/safeStorageCodec.js'
+import { VaultService } from '@main/keyVault/VaultService.js'
 import { buildAppMenu } from '@main/menu/appMenu.js'
 import { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import { installProcessCrashHooks } from '@main/incident/installCrashHooks.js'
@@ -177,6 +207,37 @@ const aiWorkspaceRegistry = new AiWorkspaceRegistry()
 // its curated editor open on the workspace that just changed.
 aiWorkspaceRegistry.on('changed', event => broadcastToWindows('ai-workspace:changed', event))
 const caffeinateController = new CaffeinateController()
+
+// API Key Vault (#831). promptTouchID presents Touch ID with the user's
+// login password as fallback, which is the "mac password" gate. Unsigned
+// dev builds may skip the biometric option but the password path still
+// works; if neither is available the service fails closed on unlock.
+// Constructed top-level (like caffeinate) because it owns no window and
+// no async boot step — only the per-run unlock boolean.
+const vaultService = new VaultService({
+  store: createFileVaultStore(join(STATE_DIR, 'key-vault'), createSafeStorageCodec()),
+  promptAuth: async reason => {
+    // WHY the platform check lives HERE and not in ensureUnlocked: the service
+    // deliberately attempts the prompt rather than pre-gating on
+    // canPromptAuth, because that flag once reported biometric capability only
+    // and pre-gating locked out every password-only Mac from the login-password
+    // path this feature promises. That reasoning is right for capability. It is
+    // NOT right for a platform that has no promptTouchID at all: there,
+    // "attempt it" meant calling undefined, and the user got a raw
+    // "systemPreferences.promptTouchID is not a function" TypeError instead of
+    // the honest platform message. Fails closed either way; only the wording
+    // was broken.
+    if (process.platform !== 'darwin' || typeof systemPreferences.promptTouchID !== 'function') {
+      throw new Error('The API key vault needs macOS Touch ID or login-password authentication, which this platform does not provide.')
+    }
+    await systemPreferences.promptTouchID(reason)
+  },
+  // canPromptTouchID checks biometrics, not user-presence/password auth.
+  // Electron 43's promptTouchID uses SecAccessControlUserPresence; attempt
+  // that supported macOS API and let rejection keep the vault locked.
+  canPromptAuth: () => process.platform === 'darwin' && typeof systemPreferences.promptTouchID === 'function',
+  copyToClipboard: text => clipboard.writeText(text),
+})
 
 // SessionManager is constructed inside whenReady so we can await
 // TmuxRegistry.detectAvailability() first — terminal sessions need
@@ -737,7 +798,10 @@ async function startApp(): Promise<void> {
     tmuxAvailable ? tmuxRegistry : null,
     builtInMcpHost,
     appRunJournal,
-    async () => { await agentCodeConventionsService.audit() },
+    async options => {
+      await agentCodeConventionsService.audit()
+      if (options.builtInMcpDomains?.includes('tldr')) await agentCodeConventionsService.ensureTldrSkill()
+    },
     (sessionId, sessionRunId, observation) => {
       sessionRecorders?.recordCodexTranscriptObservation(
         sessionId,
@@ -790,7 +854,36 @@ async function startApp(): Promise<void> {
     // workflow surface (MCP without IPC, or IPC without a durable owner).
     throw new Error('Workflow service was not initialized before app composition')
   }
+  // WHY the control host is composed here, before the built-in MCP host learns
+  // its dependencies: `setDependencies` is one-shot by design (it refuses to
+  // run once a provider session has registered), and Root Agent Code
+  // Management (#906) needs a per-session operator port from this host. It used
+  // to be built after IPC registration; nothing in between depended on that
+  // order, and the external server starting a moment earlier changes nothing.
+  let externalHost: ExternalControlMcpHost
+  const externalSettings = createExternalControlSettings(STATE_DIR, {
+    integration: createExternalCodexIntegration(process.env.CODEX_HOME || join(app.getPath('home'), '.codex'), operatorSkillSource),
+    start: (port, token) => externalHost.start(port, token),
+    stop: () => externalHost.stop(), copy: text => clipboard.writeText(text),
+  })
+  const controlManager = manager
+  const controlHost = createControlHost({ getBrowserWindow, windowIdFor, listWindowIds }, join(STATE_DIR, 'control-history'), ({ invokeTask }) => [
+    ...workflowControlCapabilities(activeWorkflowService, invokeTask), ...usageControlCapabilities(), ...applicationIdentityCapabilities(), ...sessionHistoryControlCapabilities(), ...nativeHistoryControlCapabilities(() => conversationService), ...conditionBackendCapabilities(controlManager), ...terminalBackendCapabilities(controlManager), ...windowLifecycleControlCapabilities(), ...externalSettings.capabilities,
+  ])
+  externalHost = new ExternalControlMcpHost(controlHost.forCaller({ kind: 'external', id: 'agent-code-control' }))
+  await externalSettings.initialize()
+  app.once('will-quit', () => { void externalSettings.dispose(); controlHost.dispose() })
+  const tldrStore = new TldrStore(join(STATE_DIR, 'tldr.json'))
+  const tldrEnforcement = new TldrEnforcement(tldrStore)
+  // Before any session can register: the sweep removes every entry, and each
+  // one left by an earlier run holds a bearer that run's host already revoked.
+  await sweepStaleTldrHookFiles(TLDR_HOOK_RUNTIME_DIR).catch(error => {
+    console.warn('[tldr] stale hook file sweep failed:', error)
+  })
+  registerTldrIpc(tldrStore, tldrEnforcement)
   builtInMcpHost.setDependencies({
+    tldrStore,
+    tldrEnforcement,
     orchestrationBridge,
     agentManagementBridge,
     aiWorkspaceRegistry,
@@ -811,6 +904,21 @@ async function startApp(): Promise<void> {
     appRunJournal,
     workflowService: activeWorkflowService,
     workflowBridge: activeWorkflowBridge,
+    // Root Agent Code Management (#906): the SAME operator catalog the external
+    // server projects, on the session's own built-in server, with the session
+    // as the journaled caller. Only composition may touch the external MCP
+    // adapter (import boundary), which is why this closure is built here.
+    rootControlTools: (server, sessionId) => registerOperatorControlTools(
+      server,
+      controlHost.forCaller({ kind: 'agent', id: sessionId }),
+      {
+        onSchemaFallback: (capabilityId, error) => appRunJournal?.record({
+          area: 'mcp.root_management',
+          name: 'tool_schema.fallback',
+          data: { sessionId, capabilityId, message: error instanceof Error ? error.message : String(error) },
+        }),
+      },
+    ),
   })
   performanceService.mark('app.main.sessionManager.created')
 
@@ -840,6 +948,24 @@ async function startApp(): Promise<void> {
   // renderer-driven `workspace:load` could not answer that — it required a
   // renderer, which requires a window.
   const workspaceFileStore = await WorkspaceFileStore.open()
+  // Conversation ledger (docs/decomposition/conversations.md, Stage 3): a
+  // projection of every window's sessions keyed by native id, so the picker
+  // can name and classify conversations after their panes are gone. Boots
+  // from the store's current document, then follows every commit.
+  const conversationLedger = await ConversationLedger.open(CONVERSATIONS_LEDGER_FILE).catch((error: unknown) => {
+    // eslint-disable-next-line no-console
+    console.warn('[conversations] ledger unavailable', error)
+    return null
+  })
+  if (conversationLedger) {
+    const projectConversations = (windows: readonly PersistedWindow[]) => {
+      void readAgentNameAssignments(AGENT_NAMES_FILE)
+        .then(names => conversationLedger.projectWindows(windows, names))
+        .catch(() => undefined)
+    }
+    workspaceFileStore.observe(projectConversations)
+    projectConversations(workspaceFileStore.windows())
+  }
   // Dragging a window to the other monitor changes nothing the renderer knows
   // about, so it triggers no autosave. Without this, the feature's central
   // promise — it comes back where you left it — would depend on the user
@@ -915,6 +1041,11 @@ async function startApp(): Promise<void> {
         console.warn('[window] geometry save failed:', err)
       })
   })
+  // The conversation service reads the provider stores on demand and joins
+  // the ledger, so it is constructed after the ledger. The control host above
+  // was built before the workspace store opened and holds a getter for it;
+  // its handlers only run on requests, long after this line.
+  const conversationService = createConversationService({ ledger: conversationLedger, listWorktrees: listWorktreesForCwd })
   registerAllIpc({
     manager,
     remoteController,
@@ -928,11 +1059,13 @@ async function startApp(): Promise<void> {
     agentManagementBridge,
     aiWorkspaceRegistry,
     caffeinateController,
+    vaultService,
     appRunJournal,
     cliUpdateOrchestrator,
     workflowBridge: activeWorkflowBridge,
     agentCodeConventionsService,
     workspaceFileStore,
+    conversationService,
   })
   // Boot probe runs after the IPC is wired so its first `state` push
   // has a live subscriber to receive it on the renderer side.

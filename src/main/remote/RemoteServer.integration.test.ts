@@ -1,125 +1,6 @@
-import { EventEmitter } from 'node:events'
-import { randomBytes } from 'node:crypto'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { describe, expect, it, vi } from 'vitest'
 import { WebSocket } from 'ws'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-
-import { DevicePairing } from './auth/DevicePairing.js'
-import { DeviceRegistry } from './auth/deviceRegistry.js'
-import { SessionFeedSource } from './SessionFeedSource.js'
-import { LanTransport } from './transport/LanTransport.js'
-import { RemoteServer } from './RemoteServer.js'
-import type { RemoteSessionControl } from './RemoteServer.js'
-
-// End-to-end over real sockets: pairing over HTTP, authenticated WS,
-// feed fan-out, and the scope gate applied to a live connection. The
-// manager is a bare EventEmitter + spies — RemoteServer must consume
-// nothing more (RemoteSessionControl is the structural proof).
-
-type FakeManager = RemoteSessionControl & EventEmitter
-
-function makeManager(): FakeManager {
-  const emitter = new EventEmitter() as FakeManager
-  emitter.list = vi.fn(() => [])
-  emitter.getScreenSnapshot = vi.fn(() => null)
-  emitter.getConditionsSnapshot = vi.fn(() => null)
-  emitter.getBackendSnapshot = vi.fn(() => null)
-  emitter.resolveTranscriptFile = vi.fn(async () => null)
-  emitter.getSpawnCwd = vi.fn(() => null)
-  emitter.getLastActivityAt = vi.fn(() => null)
-  emitter.write = vi.fn(() => true)
-  emitter.submitStagedPrompt = vi.fn(sessionId => emitter.write(sessionId, '\r'))
-  emitter.resolveCondition = vi.fn(async () => ({ ok: true as const }))
-  emitter.deliverPromptToAgent = vi.fn(async () => ({
-    ok: true as const,
-    acceptance: { kind: 'transport' as const, acceptedAt: 123 },
-  }))
-  emitter.getSessionKind = vi.fn(() => 'claude' as const)
-  return emitter
-}
-
-let dir: string
-let manager: FakeManager
-let registry: DeviceRegistry
-let pairing: DevicePairing
-let feedSource: SessionFeedSource
-let server: RemoteServer
-let baseUrl: string
-
-async function pairDevice(name = 'test phone'): Promise<string> {
-  const { code } = pairing.issuePairingCode()
-  const res = await fetch(`${baseUrl}/pair`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ code, deviceName: name }),
-  })
-  expect(res.status).toBe(200)
-  const body = (await res.json()) as { token: string }
-  return body.token
-}
-
-function connect(token: string): Promise<{ ws: WebSocket; frames: unknown[] }> {
-  const wsUrl = baseUrl.replace(/^http/, 'ws')
-  const ws = new WebSocket(`${wsUrl}/ws?token=${encodeURIComponent(token)}`)
-  const frames: unknown[] = []
-  ws.on('message', data => frames.push(JSON.parse(String(data))))
-  return new Promise((resolve, reject) => {
-    ws.once('open', () => resolve({ ws, frames }))
-    ws.once('error', reject)
-  })
-}
-
-/** Wait until the frame list satisfies a predicate — event-driven, no sleeps. */
-function waitFor(frames: unknown[], pred: (frames: unknown[]) => boolean): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const deadline = setTimeout(() => reject(new Error('waitFor timeout')), 3000)
-    const tick = (): void => {
-      if (pred(frames)) {
-        clearTimeout(deadline)
-        resolve()
-      } else {
-        setImmediate(tick)
-      }
-    }
-    tick()
-  })
-}
-
-function framesOfType(frames: unknown[], type: string): Array<Record<string, unknown>> {
-  return frames.filter(
-    (f): f is Record<string, unknown> =>
-      typeof f === 'object' && f !== null && (f as { type?: unknown }).type === type,
-  )
-}
-
-beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'remote-server-'))
-  manager = makeManager()
-  registry = new DeviceRegistry(join(dir, 'devices.json'))
-  await registry.load()
-  pairing = new DevicePairing({ secret: randomBytes(32), registry })
-  feedSource = new SessionFeedSource(manager as never)
-  server = new RemoteServer({
-    manager,
-    feedSource,
-    pairing,
-    registry,
-    transport: new LanTransport({ port: 0 }),
-  })
-  const { url } = await server.start()
-  // The LAN URL uses the machine's LAN IP; loopback is fine for tests.
-  baseUrl = url.replace(/\/\/[\d.]+:/, '//127.0.0.1:')
-})
-
-afterEach(async () => {
-  await server.stop()
-  feedSource.dispose()
-  // registry.touch() persists fire-and-forget; a write can race this rm and
-  // leave a fresh .tmp file mid-delete (ENOTEMPTY). Retrying absorbs it.
-  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 25 })
-})
+import { manager, registry, pairing, baseUrl, restartServer, pairDevice, connect, waitFor, framesOfType } from './RemoteServer.testSupport.js'
 
 describe('pairing endpoint', () => {
   it('redeems a live code and rejects a bogus one', async () => {
@@ -186,7 +67,6 @@ describe('event fan-out', () => {
     // permission prompt BEFORE the user enabled remote. The manager's
     // snapshot caches are the only source for that state; the server must
     // seed its late-joiner caches from them at start().
-    await server.stop()
     ;(manager.list as ReturnType<typeof vi.fn>).mockReturnValue(['pre'])
     ;(manager.getScreenSnapshot as ReturnType<typeof vi.fn>).mockReturnValue({
       plain: 'pre-enable output', markdown: '', recent: 'pre-enable output',
@@ -208,14 +88,7 @@ describe('event fan-out', () => {
       lifecycle: 'live',
       input: { ready: false, revision: 3, reason: 'replaying-history' },
     })
-    feedSource.dispose()
-    feedSource = new SessionFeedSource(manager as never)
-    server = new RemoteServer({
-      manager, feedSource, pairing, registry,
-      transport: new LanTransport({ port: 0 }),
-    })
-    const { url } = await server.start()
-    baseUrl = url.replace(/\/\/[\d.]+:/, '//127.0.0.1:')
+    await restartServer()
     const token = await pairDevice()
 
     const { ws, frames } = await connect(token)
@@ -279,6 +152,53 @@ describe('inbound scope enforcement on a live socket', () => {
     ws.close()
   })
 
+  it('refuses submit and interrupt for a terminal session (#866)', async () => {
+    ;(manager.getSessionKind as unknown as ReturnType<typeof vi.fn>)
+      .mockImplementation((sessionId: string) => (sessionId === 'shell' ? 'terminal' : 'claude'))
+    const { ws, frames, token } = await openAuthed()
+    ws.send(JSON.stringify({ token, id: 'a', message: { type: 'submit', sessionId: 'shell' } }))
+    ws.send(JSON.stringify({ token, id: 'b', message: { type: 'interrupt', sessionId: 'shell' } }))
+    await waitFor(frames, f => framesOfType(f, 'reply').length >= 2)
+    expect(manager.submitStagedPrompt).not.toHaveBeenCalled()
+    expect(manager.write).not.toHaveBeenCalled()
+    expect(framesOfType(frames, 'reply')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'a', ok: false, error: 'not an agent session' }),
+      expect.objectContaining({ id: 'b', ok: false, error: 'not an agent session' }),
+    ]))
+    ws.close()
+  })
+
+  it('refuses permission-reply for a terminal session (#866)', async () => {
+    // Sibling of the submit/interrupt terminal-refusal test above rather than
+    // an extension of it: permission-reply takes a THIRD manager method
+    // (resolveCondition) that submit/interrupt never touch, and asserting all
+    // three "not called" expectations in one test would blur which guard
+    // caught the message if a future refactor ever weakened one path but not
+    // the other two. isAgentSession (RemoteServer.ts ~:639) already gates
+    // this case (~:678-679); this test exists so that guard can never
+    // regress silently — a terminal id is never shown to the phone in the
+    // first place (SessionFeedSource's terminal filter), so a permission-reply
+    // naming one is either stale phone state or a crafted frame, and replying
+    // to it would let a remote client answer a prompt on a shell pane.
+    ;(manager.getSessionKind as unknown as ReturnType<typeof vi.fn>)
+      .mockImplementation((sessionId: string) => (sessionId === 'shell' ? 'terminal' : 'claude'))
+    const { ws, frames, token } = await openAuthed()
+    ws.send(JSON.stringify({
+      token, id: 'r1',
+      message: {
+        type: 'permission-reply', sessionId: 'shell',
+        action: { kind: 'pty', id: 'yes', label: 'Yes', data: '1\r' },
+      },
+    }))
+    await waitFor(frames, f => framesOfType(f, 'reply').length >= 1)
+    expect(framesOfType(frames, 'reply')[0]).toMatchObject({
+      id: 'r1', ok: false, error: 'not an agent session',
+    })
+    expect(manager.write).not.toHaveBeenCalled()
+    expect(manager.resolveCondition).not.toHaveBeenCalled()
+    ws.close()
+  })
+
   it('custom permission-reply routes through resolveCondition', async () => {
     const { ws, frames, token } = await openAuthed()
     const action = { kind: 'custom', id: 'q', label: 'Answer', name: 'claude.auq', payload: { a: 1 } }
@@ -338,99 +258,6 @@ describe('inbound scope enforcement on a live socket', () => {
     expect(framesOfType(frames, 'reply')[0]?.ok).toBe(false)
     expect(manager.write).not.toHaveBeenCalled()
     expect(manager.resolveCondition).not.toHaveBeenCalled()
-    ws.close()
-  })
-
-  it('get-history serves the newest chunk from the cached transcript file', async () => {
-    // Write a real jsonl transcript and point the manager's file cache at
-    // it — the exact shape RemoteServer reads for a live session.
-    const transcript = join(dir, 'session.jsonl')
-    const lines = Array.from({ length: 5 }, (_, i) =>
-      JSON.stringify({
-        type: 'user',
-        uuid: `u-${i}`,
-        message: { role: 'user', content: `prompt ${i}` },
-      }),
-    )
-    await writeFile(transcript, lines.join('\n') + '\n', 'utf8')
-    ;(manager.resolveTranscriptFile as ReturnType<typeof vi.fn>).mockResolvedValue(transcript)
-
-    const { ws, frames, token } = await openAuthed()
-    ws.send(JSON.stringify({
-      token, id: 'h1',
-      message: { type: 'get-history', sessionId: 's1', limit: 3 },
-    }))
-    await waitFor(frames, f => framesOfType(f, 'reply').length > 0)
-    const reply = framesOfType(frames, 'reply')[0] as {
-      ok: boolean
-      result: { entries: Array<{ uuid: string }>; hasMore: boolean; totalEntries: number }
-    }
-    expect(reply.ok).toBe(true)
-    // Newest `limit` records, in file order.
-    expect(reply.result.entries.map(e => e.uuid)).toEqual(['u-2', 'u-3', 'u-4'])
-    expect(reply.result.hasMore).toBe(true)
-    expect(reply.result.totalEntries).toBe(5)
-
-    // Older page anchored on the first entry of the previous chunk.
-    ws.send(JSON.stringify({
-      token, id: 'h2',
-      message: { type: 'get-history', sessionId: 's1', beforeMarker: 'u-2', limit: 3 },
-    }))
-    await waitFor(frames, f => framesOfType(f, 'reply').length >= 2)
-    const older = framesOfType(frames, 'reply')[1] as {
-      ok: boolean
-      result: { entries: Array<{ uuid: string }>; hasMore: boolean }
-    }
-    expect(older.ok).toBe(true)
-    expect(older.result.entries.map(e => e.uuid)).toEqual(['u-0', 'u-1'])
-    expect(older.result.hasMore).toBe(false)
-    ws.close()
-  })
-
-  it('get-history carries physical cursors through duplicate markers without skipping records', async () => {
-    const transcript = join(dir, 'duplicate-cursors.jsonl')
-    const lines = Array.from({ length: 5 }, (_, index) => JSON.stringify({
-      type: 'user', uuid: 'same', message: { role: 'user', content: `prompt ${index}` },
-    }))
-    await writeFile(transcript, lines.join('\n') + '\n', 'utf8')
-    ;(manager.resolveTranscriptFile as ReturnType<typeof vi.fn>).mockResolvedValue(transcript)
-    const { ws, frames, token } = await openAuthed()
-    let beforeOffset: number | undefined
-    const contents: string[] = []
-    // Bound the fixture loop so a cursor regression fails instead of hanging
-    // CI. Marker-only fallback would skip most of these identical UUIDs.
-    for (let page = 0; page < 3; page += 1) {
-      ws.send(JSON.stringify({ token, id: `cursor-${page}`, message: {
-        type: 'get-history', sessionId: 's1', limit: 2,
-        ...(beforeOffset === undefined ? {} : { beforeMarker: 'same', beforeOffset }),
-      } }))
-      await waitFor(frames, f => framesOfType(f, 'reply').length > page)
-      const reply = framesOfType(frames, 'reply')[page] as {
-        ok: boolean
-        result: { entries: Array<{ message: { content: string } }>; offsets: number[]; hasMore: boolean }
-      }
-      expect(reply.ok).toBe(true)
-      contents.unshift(...reply.result.entries.map(entry => entry.message.content))
-      expect(reply.result.offsets).toHaveLength(reply.result.entries.length)
-      const next = reply.result.offsets[0]!
-      if (beforeOffset !== undefined) expect(next).toBeLessThan(beforeOffset)
-      beforeOffset = next
-      expect(reply.result.hasMore).toBe(page < 2)
-    }
-    expect(contents).toEqual(['prompt 0', 'prompt 1', 'prompt 2', 'prompt 3', 'prompt 4'])
-    ws.close()
-  })
-
-  it('get-history fails cleanly before any transcript exists', async () => {
-    const { ws, frames, token } = await openAuthed()
-    ws.send(JSON.stringify({
-      token, id: 'h1',
-      message: { type: 'get-history', sessionId: 's1' },
-    }))
-    await waitFor(frames, f => framesOfType(f, 'reply').length > 0)
-    expect(framesOfType(frames, 'reply')[0]).toMatchObject({
-      ok: false, error: expect.stringContaining('no transcript'),
-    })
     ws.close()
   })
 

@@ -1,14 +1,13 @@
 // See docs/design/provider-switching.md for the renderer/main transaction,
 // progress, and non-cancellable compaction lock invariants.
-import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import type { SessionId } from '@renderer/workspace/types'
+import type { SessionRuntime } from '@renderer/session-runtime/state'
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 import type { AgentProviderKind, AgentProviderRuntime } from '@shared/types/providerKind'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import type { WorkspaceSetRuntimes } from '@renderer/workspace/hook/context'
 import type { SessionActions } from '@renderer/workspace/hook/actions/session'
 import { resumableProviderSessionId } from '@renderer/workspace/providerSessionIdentity'
-import { resolveSessionBuiltInMcpDomains } from '@renderer/workspace/mcpDomains'
 import {
   providerChoiceLabel,
   providerSwitchChoices,
@@ -36,9 +35,65 @@ import {
 // agent.
 
 export type SwitchAgentProviderResult =
-  | { status: 'switched'; newSessionId: SessionId; targetKind: AgentProviderKind }
+  | {
+      status: 'switched'
+      newSessionId: SessionId
+      targetKind: AgentProviderKind
+      /** How the conversation was made to fit the target, straight from the
+       *  transaction: `native` lost nothing, `raw` dropped only a carrier the
+       *  target could not have read, `shrunk` removed content the ladder had
+       *  to remove. The bulk caller counts these; the single-pane caller shows
+       *  the one it got. */
+      strategy: SwitchStrategy
+      /** One human-readable line describing what `shrunk` cost, else null. */
+      shrinkSummary: string | null
+    }
   | { status: 'skipped'; reason: string }
   | { status: 'failed'; message: string }
+
+export type SwitchStrategy = 'native' | 'raw' | 'shrunk'
+
+/**
+ * Is this pane parked on a provider usage limit rather than genuinely working?
+ *
+ * WHY the switch guard needs an exception at all: both providers keep their
+ * process alive while a usage window is exhausted — Claude paints "Usage limit
+ * reached · continuing automatically" and waits, Codex keeps the conversation
+ * open after its 429. `processActive` therefore stays true for the exact
+ * population this feature exists to rescue, and the pre-existing guard
+ * ("Wait for the current turn to finish") would refuse every one of them.
+ *
+ * WHY the comparison is against `turnStartedAt` and not a wall-clock age: a
+ * limit hit older than the current turn's start belongs to a previous episode
+ * the user already worked past, and switching then would kill a live turn.
+ * `turnStartedAt === null` (restored/detached panes that never ran the stream
+ * phase machine) means there is no turn to protect, so the limit signal stands
+ * on its own.
+ *
+ * CAVEAT, deliberately shipped: whether `processActive` in fact stays true
+ * under Claude's auto-wait banner is Unknown 1 in the decomposition and has NO
+ * recording yet (docs/decomposition/quota-independent-provider-switch.md,
+ * Stage 6). This predicate is therefore DEFENSIVE, not evidence-driven: if the
+ * banner turns out to clear `processActive`, the guard already lets the switch
+ * through on the ordinary idle path and this exception is simply never
+ * consulted. It can only widen the guard, never narrow it, so being wrong
+ * about the banner costs nothing.
+ */
+export function isLimitIdle(
+  runtime: Pick<SessionRuntime, 'limitHit' | 'turnStartedAt'>,
+): boolean {
+  // The two timestamps come from different clocks and can disagree: `limitHit.at`
+  // is provider-side (a Claude record's own `timestamp`, or a Codex event's `ts`)
+  // while `turnStartedAt` is this renderer's fold-time `Date.now()` fallback, so
+  // clock skew or a backpressured queue can make a genuine hit look older than
+  // the turn it stopped. That miscompare is bounded on the safe side — it makes
+  // the predicate false, and a false predicate only refuses a switch; it can
+  // never green-light one over a live turn.
+  return (
+    runtime.limitHit !== null &&
+    (runtime.turnStartedAt === null || runtime.limitHit.at >= runtime.turnStartedAt)
+  )
+}
 
 // WHY this is module-scoped rather than React state: the lock guards an
 // imperative cross-process transaction and should become visible to a second
@@ -53,10 +108,38 @@ export async function switchAgentProvider(params: {
   refs: WorkspaceRefs
   setRuntimes: WorkspaceSetRuntimes
   sessionActions: SessionActions
+  /**
+   * What this switch may spend to make the conversation portable. Both halves
+   * default to false in main (DEFAULT_SWITCH_CONTEXT_POLICY); the caller that
+   * owns the UI decides. `compactOnArrival` is acted on HERE rather than by the
+   * transaction, because the pane it applies to does not exist until
+   * `replaceSession` returns.
+   */
+  contextPolicy?: {
+    allowSourceTurns?: boolean
+    compactOnArrival?: boolean
+  }
+  /**
+   * The caller already confirmed that compacting the LIVE source is
+   * acceptable, so main skips its per-agent native dialog.
+   *
+   * WHY the confirmation travels beside the policy instead of being implied by
+   * `allowSourceTurns`: a batch of twenty agents must be confirmed ONCE, in the
+   * modal, and a per-agent modal dialog twenty deep is the behavior this
+   * feature removes (spec §Renderer, "One confirmation per batch"). Only
+   * meaningful with `allowSourceTurns: true`; main ignores it otherwise.
+   */
+  sourceCompactionConfirmed?: boolean
   onProgress?: (event: {
-    phase: 'compacting' | 'summarizing' | 'projecting'
+    phase: 'compacting' | 'summarizing' | 'shrinking' | 'projecting'
     message: string
   }) => void
+  /**
+   * Arrival compaction failed. Separate from the result because the switch
+   * itself already succeeded and this fires long after this function returned;
+   * the caller decides whether one agent's failed tidy-up is worth a toast.
+   */
+  onArrivalFailure?: (message: string) => void
 }): Promise<SwitchAgentProviderResult> {
   const {
     sessionId,
@@ -65,7 +148,10 @@ export async function switchAgentProvider(params: {
     refs,
     setRuntimes,
     sessionActions,
+    contextPolicy,
+    sourceCompactionConfirmed,
     onProgress,
+    onArrivalFailure,
   } = params
 
   const meta = refs.stateRef.current.sessions[sessionId]
@@ -90,20 +176,6 @@ export async function switchAgentProvider(params: {
     }
   }
 
-  const resolveTargetBuiltInMcpDomains = (
-    effectiveSourceDomains: unknown,
-    effectiveTargetKind: AgentProviderKind,
-  ) => resolveSessionBuiltInMcpDomains({
-    provider: effectiveTargetKind,
-    // WHY original undefined provenance bypasses the source-filtered value:
-    // this legacy pane has never captured a per-session choice, so the target
-    // provider must seed current Settings. Once a list exists, including [],
-    // it is authoritative and only its source-supported subset may cross.
-    sessionDomains:
-      meta.builtInMcpDomains === undefined ? undefined : effectiveSourceDomains,
-    defaultDomains: refs.defaultBuiltInMcpDomainsRef.current,
-  })
-
   const replaceTranscriptlessPane = async (): Promise<SwitchAgentProviderResult> => {
     // A freshly-spawned pane can be transcript-less either because its
     // provider has not announced a durable id yet (Claude/Codex) OR because it
@@ -111,22 +183,9 @@ export async function switchAgentProvider(params: {
     // Both states need the same pane replacement. Keeping that operation in
     // one closure prevents the two identity models from drifting on draft and
     // MCP-domain preservation.
-    const draftImages = refs.latestRuntimesRef.current[sessionId]?.draftImages ?? []
-    const effectiveSourceDomains =
-      meta.builtInMcpDomains === undefined
-        ? undefined
-        : resolveSessionBuiltInMcpDomains({
-            provider: sourceKind,
-            sessionDomains: meta.builtInMcpDomains,
-            defaultDomains: [],
-          })
     const newSessionId = await sessionActions.replaceSession(meta.cwd, {
       kind: targetKind,
       ...(targetProviderRuntime ? { providerRuntime: targetProviderRuntime } : {}),
-      builtInMcpDomains: resolveTargetBuiltInMcpDomains(
-        effectiveSourceDomains,
-        targetKind,
-      ),
       // Pin the replacement to THIS agent. Without it, bulk switching can
       // replace whichever pane became focused while an earlier conversion was
       // awaiting main-process work.
@@ -134,49 +193,84 @@ export async function switchAgentProvider(params: {
     })
     if (!newSessionId) return { status: 'failed', message: 'Replacement failed' }
 
-    setRuntimes(prev => {
-      const runtime = prev[newSessionId]
-      if (!runtime) return prev
-      return {
-        ...prev,
-        [newSessionId]: {
-          ...runtime,
-          // A target without image attachment support must not inherit hidden
-          // image state: the invisible array participates in the empty-submit
-          // guard and could make an apparently blank composer send a prompt.
-          draftImages: getRendererProviderCapabilities(targetKind).supportsImageAttachments
-            ? draftImages
-            : [],
-        },
-      }
-    })
-    return { status: 'switched', newSessionId, targetKind }
+    // The replacement owner transfers the latest supported draft atomically.
+    // A second snapshot here would overwrite edits made while spawn awaited.
+    //
+    // `native` is the honest strategy for an empty source: no transcript was
+    // translated, so nothing could be lost. Reporting null instead would make
+    // the batch tally under-count agents that switched perfectly well.
+    return { status: 'switched', newSessionId, targetKind, strategy: 'native', shrinkSummary: null }
   }
 
   const sourceRuntime = refs.latestRuntimesRef.current[sessionId]
-  if (sourceRuntime?.processActive || sourceRuntime?.semantic.currentTurn) {
-    return { status: 'failed', message: 'Wait for the current turn to finish before switching provider' }
+  // WHY a second in-flight guard beside `providerSwitchesInFlight`, which is
+  // right below: that Set is keyed on the pane the switch STARTS from and is
+  // released the moment this function returns — which is before arrival
+  // compaction has finished, and on a different pane id than the one arrival
+  // compaction runs on. So a user who switches A -> Claude with "compact on
+  // arrival", then immediately switches the resulting pane on to Codex, passes
+  // the Set check cleanly while `/compact` is still running on that pane. The
+  // switch would then replace the pane out from under a compaction whose wait
+  // loop is still polling the transcript it is about to orphan.
+  //
+  // `runtime.providerSwitch` is the honest signal because it is exactly "this
+  // pane is inside a provider-switch operation of some kind", set by this
+  // function for the transaction and by `startArrivalCompaction` for the
+  // follow-up, and cleared in both `finally` blocks. Checking it before the
+  // turn guard below keeps the message specific: arrival compaction makes the
+  // pane busy too, and "wait for the current turn to finish" would send the
+  // user looking for a turn they never started.
+  if (sourceRuntime?.providerSwitch) {
+    // 'skipped', not 'failed'. Nothing went wrong: this pane is busy with an
+    // operation that ends on its own, and the correct user response is to try
+    // again shortly. Reporting it as a failure made a bulk return during
+    // arrival compaction — which is the DEFAULT for large conversations and
+    // holds this flag for minutes per pane — announce "Returned 0 agents (20
+    // failed)" for a batch where nothing was wrong with any of them. Both
+    // shapes carry their string to the same place on the single-pane path.
+    return {
+      status: 'skipped',
+      reason: 'This pane is still finishing a provider switch — wait for it to complete',
+    }
+  }
+  // The usage-limit exception (see isLimitIdle): a pane whose provider is
+  // sitting on an exhausted window still reads as busy, and refusing it would
+  // lock out precisely the agents this feature exists to move. Replacement
+  // kills the process, which is what ends the provider's wait banner anyway.
+  if ((sourceRuntime?.processActive || sourceRuntime?.semantic.currentTurn) && !(sourceRuntime && isLimitIdle(sourceRuntime))) {
+    // Also 'skipped': BulkProviderSwitchModal's own footer promises "N of M
+    // are mid-turn and will be skipped until idle", and reporting them as
+    // failures made the summary contradict the warning the user just read.
+    return { status: 'skipped', reason: 'Wait for the current turn to finish before switching provider' }
   }
   if (providerSwitchesInFlight.has(sessionId)) {
     return { status: 'failed', message: 'Provider switch already in progress' }
   }
-  providerSwitchesInFlight.add(sessionId)
-  setRuntimes(prev => {
-    const runtime = prev[sessionId]
-    if (!runtime) return prev
-    return {
-      ...prev,
-      [sessionId]: {
-        ...runtime,
-        providerSwitch: {
-          phase: 'preparing',
-          message: `Preparing switch to ${targetKind}…`,
-        },
-      },
-    }
-  })
-
+  // WHY the claim and the first runtime write are INSIDE the try: the release
+  // lives in this function's `finally`, and both statements used to sit above
+  // it. A throw from that setRuntimes — a subscriber, a selector, anything in
+  // the store's update path — leaked the id permanently in a module-scoped
+  // Set, and that pane then answered "Provider switch already in progress"
+  // for the rest of the window's life with no way back short of a reload.
+  // Deleting an id that was never added is a no-op, so widening the try costs
+  // nothing.
   try {
+    providerSwitchesInFlight.add(sessionId)
+    setRuntimes(prev => {
+      const runtime = prev[sessionId]
+      if (!runtime) return prev
+      return {
+        ...prev,
+        [sessionId]: {
+          ...runtime,
+          providerSwitch: {
+            phase: 'preparing',
+            message: `Preparing switch to ${targetKind}…`,
+          },
+        },
+      }
+    })
+
     const sourceProviderSessionId = resumableProviderSessionId(meta)
     if (!sourceProviderSessionId) {
       // A freshly-spawned provider pane has no durable provider transcript yet.
@@ -189,12 +283,6 @@ export async function switchAgentProvider(params: {
       // state is "I opened the wrong provider before starting", so a no-resume
       // replacement is the faithful operation.
       //
-      // `replaceSession` already preserves draftInput because several
-      // replacement flows want typed-but-unsent text to survive. It does not
-      // preserve draftImages, and broadening that helper would change
-      // reload/rewind/resume semantics. Image drafts are still part of the
-      // user's unsent empty-pane state, so this branch snapshots and restores
-      // them explicitly — but only when the target provider can render them.
       return await replaceTranscriptlessPane()
     }
 
@@ -210,7 +298,29 @@ export async function switchAgentProvider(params: {
     // recovery is a real mid-transaction ownership change, not ordinary pane
     // hibernation. `ensureSessionLive` is idempotent for an already-live owner
     // and main's recovery claim serializes concurrent wake attempts.
-    const wakeResult = await sessionActions.ensureSessionLive(sessionId, 'provider-switch.wake-source')
+    // WHY the wake stays but its READINESS WAIT does not, when the caller has
+    // explicitly ruled out source turns:
+    //
+    // The wake itself is load-bearing and must not be removed — it is what
+    // resolves this pane's built-in MCP domains under the SOURCE provider (see
+    // the provenance comment below), and what makes a later kind/cwd mismatch
+    // mean a real ownership change rather than ordinary hibernation.
+    //
+    // The 30s input-readiness wait is a different thing, and with
+    // `allowSourceTurns: false` — the transaction default, and the entire
+    // point of the quota-independent path — main plans the conversion from
+    // files on disk and never asks the source to do anything. Waiting for a
+    // prompt we will never send costs up to 30s per pane, serialised across a
+    // bulk switch, before `replaceSession` kills the process anyway.
+    //
+    // Gated on an EXPLICIT false rather than on `!allowSourceTurns`: an absent
+    // contextPolicy means "main decides", and the renderer must not assume
+    // which way DEFAULT_SWITCH_CONTEXT_POLICY went.
+    const wakeResult = await sessionActions.ensureSessionLive(
+      sessionId,
+      'provider-switch.wake-source',
+      ...(contextPolicy?.allowSourceTurns === false ? [{ awaitInputReady: false }] : []),
+    )
 
     // The translated target transcript must be created BEFORE we replace the
     // live pane. If translation fails, the current provider process should stay
@@ -234,40 +344,47 @@ export async function switchAgentProvider(params: {
       })
       onProgress?.({ phase: event.phase, message: event.message })
     })
-    const result = await window.api.switchProvider({
-      sourceKind,
-      // Explicit target (#394 phase 5a). This helper always KNEW the
-      // target — its callers pass it — but historically dropped it
-      // before IPC and relied on main's two-provider negation. With
-      // the negation slated for removal, the renderer's choice is now
-      // authoritative end-to-end.
-      targetKind,
-      sourceProviderSessionId,
-      sourceSessionId: sessionId,
-      cwd: meta.cwd,
-    }).finally(unsubscribeProgress)
+    // WHY try/finally rather than `.finally(unsubscribeProgress)` on the
+    // promise: if `window.api.switchProvider` throws SYNCHRONOUSLY — a preload
+    // shape mismatch, a serialisation failure on the argument object — no
+    // promise is ever created, `.finally` is never attached, and this listener
+    // survives for the life of the renderer, writing into a session that has
+    // moved on. `startArrivalCompaction` already guards exactly this case;
+    // this path did not.
+    let result: Awaited<ReturnType<typeof window.api.switchProvider>>
+    try {
+      result = await window.api.switchProvider({
+        sourceKind,
+        // Explicit target (#394 phase 5a). This helper always KNEW the
+        // target — its callers pass it — but historically dropped it
+        // before IPC and relied on main's two-provider negation. With
+        // the negation slated for removal, the renderer's choice is now
+        // authoritative end-to-end.
+        targetKind,
+        sourceProviderSessionId,
+        sourceSessionId: sessionId,
+        cwd: meta.cwd,
+        // A policy the caller passed and this function silently dropped would be
+        // a trap for the caller that sets `allowSourceTurns` and wonders why the
+        // source was never asked to compact. Both keys are spread conditionally
+        // so an unset policy still reaches main as "absent", letting
+        // DEFAULT_SWITCH_CONTEXT_POLICY stay the single source of the defaults.
+        ...(contextPolicy ? { contextPolicy } : {}),
+        ...(sourceCompactionConfirmed ? { sourceCompactionConfirmed } : {}),
+      })
+    } finally {
+      unsubscribeProgress()
+    }
 
     if (result.kind === 'source-empty') {
       return await replaceTranscriptlessPane()
     }
 
-    // WHY target domains distinguish legacy `undefined` from an explicit list:
-    // waking initializes renderer metadata under the SOURCE provider. A legacy
-    // undefined Claude pane can therefore become `[]` merely because its
-    // configured default is Codex-only Workflow MCP; that must still seed the
-    // Codex target. Conversely, a stale explicit `['workflows']` is narrowed
-    // to `[]` during the Claude wake and must not be resurrected just because
-    // Codex supports it. Preserve original initialization provenance, but use
-    // the post-wake list for every session that already had an explicit policy.
-    const targetBuiltInMcpDomains = resolveTargetBuiltInMcpDomains(
-      wakeResult.builtInMcpDomains,
-      result.targetKind,
-    )
     const newSessionId = await sessionActions.replaceSession(meta.cwd, {
       kind: result.targetKind,
       ...(targetProviderRuntime ? { providerRuntime: targetProviderRuntime } : {}),
       resumeSessionId: result.targetProviderSessionId,
-      builtInMcpDomains: targetBuiltInMcpDomains,
+      preserveTldr: true,
       // See the empty-pane branch above: pin to this agent so the bulk loop
       // replaces the right pane (not the focused one) and the single-pane
       // caller is immune to focus changing during the translate await.
@@ -275,7 +392,39 @@ export async function switchAgentProvider(params: {
     })
     if (!newSessionId) return { status: 'failed', message: 'Replacement failed' }
 
-    return { status: 'switched', newSessionId, targetKind: result.targetKind }
+    if (contextPolicy?.compactOnArrival && result.targetKind === 'claude') {
+      // WHY this one call is wrapped when the whole body is already inside a
+      // try: this statement runs AFTER `replaceSession` succeeded, and the
+      // outer catch turns anything thrown into `{ status: 'failed' }` — which
+      // would report a committed switch as failed because a follow-up could not
+      // start. A synchronous throw here (a missing `window.api.compactAfterSwitch`
+      // on an older preload, a subscribe that rejects) would also leak the
+      // progress subscription. Contain it and tell the caller through the same
+      // channel every other arrival failure uses.
+      try {
+        startArrivalCompaction({
+          sessionId: newSessionId,
+          cwd: meta.cwd,
+          providerSessionId: result.targetProviderSessionId,
+          setRuntimes,
+          onArrivalFailure,
+        })
+      } catch (arrivalError) {
+        onArrivalFailure?.(
+          arrivalError instanceof Error && arrivalError.message.length > 0
+            ? arrivalError.message
+            : 'Arrival compaction could not be started',
+        )
+      }
+    }
+
+    return {
+      status: 'switched',
+      newSessionId,
+      targetKind: result.targetKind,
+      strategy: result.strategy,
+      shrinkSummary: result.shrinkSummary,
+    }
   } catch (err) {
     const message =
       err instanceof Error && err.message.length > 0 ? err.message : 'Provider switch failed'
@@ -291,4 +440,86 @@ export async function switchAgentProvider(params: {
       }
     })
   }
+}
+
+/**
+ * Ask the freshly replaced pane to compact its imported history with the
+ * TARGET's quota, and show its progress on that pane.
+ *
+ * WHY fire-and-forget rather than awaited: a batch of twenty agents must not
+ * serialize twenty Claude compactions, each of which can run for minutes. The
+ * switch is already committed and its result is already the caller's; this is
+ * an independent follow-up whose only user-visible outputs are the pane banner
+ * below and, on failure, one toast.
+ *
+ * WHY a second progress subscription instead of reusing the one in
+ * `switchAgentProvider`: that one filters on the SOURCE session id and is
+ * unsubscribed the moment the transaction resolves — which is before
+ * `replaceSession` has even created the id this progress is addressed to. The
+ * subscription is torn down when the arrival promise settles, which is the only
+ * honest terminator: the progress channel has no "done" event.
+ */
+function startArrivalCompaction(params: {
+  sessionId: SessionId
+  cwd: string
+  providerSessionId: string
+  setRuntimes: WorkspaceSetRuntimes
+  onArrivalFailure?: (message: string) => void
+}): void {
+  const { sessionId, cwd, providerSessionId, setRuntimes, onArrivalFailure } = params
+  const unsubscribeProgress = window.api.onProviderSwitchProgress(event => {
+    if (event.sourceSessionId !== sessionId) return
+    setRuntimes(prev => {
+      const runtime = prev[sessionId]
+      if (!runtime) return prev
+      return {
+        ...prev,
+        [sessionId]: {
+          ...runtime,
+          providerSwitch: { phase: event.phase, message: event.message },
+        },
+      }
+    })
+  })
+  // The subscription is live from here on, so a synchronous throw out of the
+  // IPC call (an older preload with no `compactAfterSwitch`) has to take it
+  // down before the caller's catch reports the failure — otherwise the pane
+  // keeps a listener that nothing will ever unsubscribe.
+  let pending: ReturnType<typeof window.api.compactAfterSwitch>
+  try {
+    pending = window.api.compactAfterSwitch({
+      sessionId,
+      targetKind: 'claude',
+      cwd,
+      providerSessionId,
+    })
+  } catch (error) {
+    unsubscribeProgress()
+    throw error
+  }
+  void pending
+    .then(outcome => {
+      if (!outcome.ok) onArrivalFailure?.(outcome.message)
+    })
+    // The handler reports failures in its result, so a rejection here means the
+    // IPC boundary itself broke. Catch it anyway: an unhandled rejection from a
+    // deliberately un-awaited promise is a console error with no owner.
+    .catch(error => {
+      onArrivalFailure?.(
+        error instanceof Error && error.message.length > 0
+          ? error.message
+          : 'Arrival compaction failed',
+      )
+    })
+    .finally(() => {
+      unsubscribeProgress()
+      setRuntimes(prev => {
+        const runtime = prev[sessionId]
+        if (!runtime || runtime.providerSwitch === null) return prev
+        return {
+          ...prev,
+          [sessionId]: { ...runtime, providerSwitch: null },
+        }
+      })
+    })
 }

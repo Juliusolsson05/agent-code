@@ -1,8 +1,6 @@
 import type { AgentProviderKind } from '@shared/types/providerKind'
 import { useRef, useState } from 'react'
 
-import { extractAssistantInProgress } from '@shared/parsers/extractAssistant'
-
 import type { SessionId } from '@renderer/workspace/types'
 import type { SessionRuntime, Workspace } from '@renderer/workspace/workspaceStore'
 import { isSessionExited } from '@renderer/workspace/providerSessionIdentity'
@@ -225,12 +223,13 @@ export function useComposerKeybinds({
         sessionId,
       },
     })
-    // Capture streaming baseline from the very freshest screen
-    // text so the streaming card can detect "this is the old
-    // response" reliably. latestScreenRef is mutated
-    // synchronously on every IPC screen event so this is always
-    // current.
-    const screen = workspace.latestScreenRef.current[sessionId] ?? ''
+    // No screen read here any more. This handler used to scrape the
+    // assistant block off the TUI screen as a "streaming baseline" for the
+    // old screen-driven streaming card; that card is gone (live text renders
+    // only from the semantic channel) and the scraped value ended up read by
+    // the debug panel alone, while costing a screen parse per Enter and
+    // keeping the renderer dependent on TUI heuristics (#855).
+    //
     // Composer panes only mount for agent kinds; an undefined kind is
     // the pre-kind-persistence back-compat case (historically Claude).
     const sessionKind = workspace.state.sessions[sessionId]?.kind
@@ -238,7 +237,6 @@ export function useComposerKeybinds({
       ? sessionKind
       : DEFAULT_PROVIDER
     const caps = getRendererProviderCapabilities(submitProvider)
-    const baseline = extractAssistantInProgress(screen, submitProvider)
     // Emitted BEFORE the optimistic streaming state is set, so a recorded
     // ladder shows the exact ordering that produces the stuck-`Sending` bug:
     // submit.begin → (optimistic streamPhase 'submitting') → submit.result
@@ -261,7 +259,7 @@ export function useComposerKeybinds({
       // id observed at Enter.
       ...(runtime.sessionRunId ? { sessionRunId: runtime.sessionRunId } : {}),
     })
-    workspace.setStreamingBaseline(sessionId, baseline)
+    workspace.beginOptimisticSubmit(sessionId)
     if (caps.usesOptimisticUserEcho) {
       // Codex does not reliably give us a structured user
       // message at submit time the way Claude does. Seed the
@@ -371,7 +369,7 @@ export function useComposerKeybinds({
       // nor Enter reached the provider — not on an inference about why delivery
       // failed. Nothing written means no turn can start, so the optimistic
       // `submitting` phase set before the attempt is provably stale and would
-      // otherwise count up forever (see unwindStreamingBaseline for the three
+      // otherwise count up forever (see unwindOptimisticSubmit for the three
       // reasons nothing else can clear it).
       //
       // The `uncertain` case — something WAS written — is intentionally left
@@ -398,7 +396,7 @@ export function useComposerKeybinds({
         )
       }
       if (nothingWasWritten) {
-        workspace.unwindStreamingBaseline(sessionId)
+        workspace.unwindOptimisticSubmit(sessionId)
         reportLifecycle('submit.unwound', sessionId, {
           provider: submitProvider,
           code: failed?.code ?? 'threw',

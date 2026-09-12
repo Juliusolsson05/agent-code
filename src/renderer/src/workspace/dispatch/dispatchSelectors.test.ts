@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  buildPinnedDispatchRows,
   dispatchSessionIdsForTab,
+  focusedLaneBoundProjectTabIds,
   resolveDispatchSpawnTarget,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
 import { resolveDispatchAttachTarget } from '@renderer/workspace/dispatch/dispatchTarget'
@@ -110,6 +112,43 @@ describe('resolveDispatchSpawnTarget with a detached focused lane', () => {
       cwdSessionId: 'b2',
       laneIndex: 1,
     })
+  })
+})
+
+// Grid Dispatch row bindings (#681). Two consumers must agree on "which
+// projects may this lane hold": the spawn resolver (where plain New Agent…
+// lands) and New Agent In…'s project list (#852). Both read the SAME selector,
+// pinned here. The resolver's bound-row RULES (binding over the active tab,
+// active tab preferred among several bound projects, first bound otherwise)
+// are covered on the real persisted fixture in rowScopedRows.test.ts, which
+// guarded the selector extraction — they are deliberately not restated here.
+describe('focusedLaneBoundProjectTabIds', () => {
+  it('returns the binding of the row that owns the focused lane', () => {
+    const state = makeState({
+      scope: 'global',
+      focusedSessionId: 'a1',
+      tiled: {
+        focusedLane: 1,
+        lanes: [{ selectedSessionId: 'a1' }, {}],
+        rows: [{ length: 1 }, { length: 1, projectTabIds: ['tabB'] }],
+      },
+    })
+    expect(focusedLaneBoundProjectTabIds(state)).toEqual(['tabB'])
+  })
+
+  it('returns nothing for an unbound row, classic Dispatch, or no Dispatch at all', () => {
+    const unbound = makeState({
+      scope: 'global',
+      focusedSessionId: 'a1',
+      tiled: {
+        focusedLane: 0,
+        lanes: [{ selectedSessionId: 'a1' }, {}],
+        rows: [{ length: 1 }, { length: 1, projectTabIds: ['tabB'] }],
+      },
+    })
+    expect(focusedLaneBoundProjectTabIds(unbound)).toEqual([])
+    expect(focusedLaneBoundProjectTabIds(makeState({ scope: 'global', focusedSessionId: 'a1' }))).toEqual([])
+    expect(focusedLaneBoundProjectTabIds(makeState(null))).toEqual([])
   })
 })
 
@@ -291,5 +330,18 @@ describe('nextTiledRowIndex', () => {
     const up = nextTiledRowIndex(-1, -1, 4)
     expect(up).toBe(0)
     expect(nextTiledRowIndex(up, -1, 4)).toBe(3)
+  })
+})
+
+describe('buildPinnedDispatchRows', () => {
+  it('pins a terminal like any other session (#865)', () => {
+    // Pins were agent-only since before terminals were Dispatch rows (#152
+    // deferred them "for v1"). Since #671 a shell is a full row, and a pinned
+    // dev-server shell is exactly the one-keystroke-away session pins exist for.
+    const state = makeState({ scope: 'global', focusedSessionId: 'a1' })
+    state.sessions.shell = { cwd: '/work/project-a', kind: 'terminal' }
+    state.tabs[0] = { ...state.tabs[0], root: { type: 'split', direction: 'vertical', ratio: 0.5, a: leaf('a1'), b: leaf('shell') } }
+    state.pinnedSessionIds = ['shell']
+    expect(buildPinnedDispatchRows(state).map(row => [row.sessionId, row.kind])).toEqual([['shell', 'terminal']])
   })
 })

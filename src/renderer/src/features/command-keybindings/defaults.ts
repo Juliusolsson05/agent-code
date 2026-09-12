@@ -297,6 +297,7 @@ export function buildDefaultKeybindings(): CommandBindingDefault[] {
     // already CLOSES it (useKeybinds' one-key dismiss), but nothing opened it
     // — an asymmetry that cost 156 palette round-trips for a toggle.
     { commandId: 'toggle-reader-mode', bindings: ['Alt+R'], context: 'global' },
+    { commandId: 'tldr-preview', bindings: ['Cmd+L'], context: 'global' },
     { commandId: 'toggle-spotlight', bindings: ['Alt+S'], context: 'global' },
     // ⌥F, leaving ⌥⇧F open for Auto-follow ALL Visible Agents — the same
     // soft/heavy pairing, and the command that OWNS the effective state when

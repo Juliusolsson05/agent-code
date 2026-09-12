@@ -8,8 +8,10 @@ import { useShallow } from 'zustand/react/shallow'
 
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { useAppStore } from '@renderer/app-state/hooks'
+import { useAgentName } from '@renderer/workspace/agentNames/useAgentName'
 import { WorktreeBadge } from '@renderer/workspace/tile-tree/TileLeaf/SessionBadges'
-import { extractLatestUserPrompt } from '@renderer/features/workspace/lib/latestUserPrompts'
+import { dispatchRowTitle } from './rowTitle'
+export { cachedLatestPromptTitle, dispatchRowTitle } from './rowTitle'
 import { buildDispatchGroups } from '@renderer/workspace/dispatch/dispatchSelectors'
 import type { DispatchAgentRow } from '@renderer/workspace/dispatch/dispatchSelectors'
 import { DispatchColorFlagStrip } from '@renderer/workspace/dispatch/DispatchColorFlagStrip'
@@ -31,11 +33,6 @@ import { isSessionExited } from '@renderer/workspace/providerSessionIdentity'
 
 export type DispatchAgentActivity = 'working' | 'running' | 'idle' | 'exited' | 'starting'
 
-const latestPromptTitleCache = new WeakMap<
-  Entry[],
-  { kind: DispatchAgentRow['kind']; title: string | null }
->()
-
 export const DispatchAgentList = memo(function DispatchAgentList({
   groups,
   pinnedRows,
@@ -49,6 +46,7 @@ export const DispatchAgentList = memo(function DispatchAgentList({
   onToggleExpandedParent,
   onToggleCapChildren,
   onPickRowProject,
+  targetLaneIndex,
 }: {
   groups: ReturnType<typeof buildDispatchGroups>
   pinnedRows: DispatchAgentRow[]
@@ -69,6 +67,10 @@ export const DispatchAgentList = memo(function DispatchAgentList({
   onToggleExpandedParent?: (parentSessionId: SessionId) => void
   onToggleCapChildren?: () => void
   onPickRowProject?: () => void
+  // The row owner supplies the exact destination, including its first-lane
+  // fallback when focus is in another row. Re-deriving global focus here would
+  // give misleading help for an unfocused row's index.
+  targetLaneIndex?: number
   // Sessions that must render as unselectable in this index. Used by Tiled
   // Dispatch's lane-0 index to grey out agents already shown in another lane
   // (the one-session-per-lane invariant — without this, clicking a claimed
@@ -233,6 +235,7 @@ export const DispatchAgentList = memo(function DispatchAgentList({
                 disabled={disabledSessionIds?.has(row.sessionId) ?? false}
                 showWorktreeBadges={showWorktreeBadges}
                 focusSessionInTab={focusSessionInTab}
+                targetLaneIndex={targetLaneIndex}
                 projectChip={`${tabIndexLabel(row.tabIndex)} · ${row.tabTitle}`}
               />
             ))}
@@ -257,6 +260,7 @@ export const DispatchAgentList = memo(function DispatchAgentList({
                   disabled={disabledSessionIds?.has(item.row.sessionId) ?? false}
                   showWorktreeBadges={showWorktreeBadges}
                   focusSessionInTab={focusSessionInTab}
+                  targetLaneIndex={targetLaneIndex}
                 />
               ) : (
                 <button
@@ -343,6 +347,7 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
   showWorktreeBadges,
   focusSessionInTab,
   projectChip,
+  targetLaneIndex,
 }: {
   row: DispatchAgentRow
   active: boolean
@@ -357,6 +362,7 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
   // rows already live under a group header that names the project,
   // so a chip would just duplicate that information.
   projectChip?: string
+  targetLaneIndex?: number
 }) {
   const runtime = useAppStore(useShallow(state => {
     const current = state.workspaceRuntimes[row.sessionId]
@@ -371,32 +377,50 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
       unreadKind: current?.unreadKind,
       conditions: current?.conditions,
       processError: current?.processError,
+      transcriptError: current?.transcriptError,
+      // Foreground monitor state (#865): terminalForeground.cwd lets a shell
+      // row's title follow `cd` the way an agent row follows its latest
+      // prompt; activityStatus is the running command shown in the subtitle
+      // ("shell running · npm").
+      terminalForeground: current?.terminalForeground,
+      // WHY gated on row.kind === 'terminal' (I3, D3 deviation): Codex's
+      // activityStatus string ticks every second ("working… 12s") while a
+      // command is running, and this selector runs useShallow — a shallow
+      // key/value diff, not a deep skip — so including the raw string for
+      // EVERY row made every live Codex/Claude row re-render on that tick
+      // even though the dispatch list never paints their activityStatus (it
+      // only reads it for the 'shell running · …' subtitle on terminal
+      // rows). Selecting undefined for non-terminal rows keeps the shallow
+      // comparison stable across those per-second updates while still
+      // giving terminal rows the live value they actually render.
+      activityStatus: row.kind === 'terminal' ? current?.activityStatus : undefined,
     }
   }))
   const onSelect = useCallback(() => {
     if (disabled) return
     focusSessionInTab(row.tabId, row.sessionId)
   }, [disabled, focusSessionInTab, row.sessionId, row.tabId])
-  const isTerminal = row.kind === 'terminal'
   const activity = dispatchActivity(runtime)
   const activityClasses = dispatchActivityClasses(activity, active)
   const subtitle = dispatchSubtitle(runtime, row.kind)
-  const title = dispatchRowTitle(row, runtime.entries)
-  const attentionLabel = dispatchAttentionLabel(runtime)
-  const unreadKind = isTerminal
-    ? null
-    : attentionLabel
-      ? 'attention'
-      : runtime.unreadKind === 'attention'
-        ? 'output'
-        : runtime.unreadKind
+  const title = dispatchRowTitle(row, runtime.entries, runtime.terminalForeground?.cwd)
+  const agentName = useAgentName(row.sessionId)
+  // The hover tooltip joins name and title exactly the way AgentTitleHeader
+  // does (' — ', name first, empty parts dropped). WHY it must match: the chip
+  // in this row is truncation-proof but the TITLE beside it is not, so the
+  // tooltip is what a user reaches for when a row is too narrow to read — and
+  // it was the one place the name was missing while the pane header showed it.
+  // Two different answers to "what is this agent called" is exactly the silent
+  // re-addressing #816 is about, even when it is only a tooltip.
+  const nameAndTitle = [agentName, title].filter(Boolean).join(' — ')
+  const unreadBadge = dispatchUnreadBadge(runtime, row.kind)
 
   return (
     <button
       type="button"
       onClick={onSelect}
       disabled={disabled}
-      title={disabled ? 'shown in another lane' : title}
+      title={disabled ? 'shown in another lane' : targetLaneIndex === undefined ? nameAndTitle : `${nameAndTitle} — Show in lane ${targetLaneIndex + 1}, replacing its view. Other views of this agent remain open.`}
       data-dispatch-active={active ? 'true' : undefined}
       // WHY this marker exists: clicking a Dispatch row lands DOM focus on this
       // <button>, which the bare-Enter composer router (composerEnterRegistry)
@@ -433,13 +457,26 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
       </span>
       <div className="min-w-0 flex-1 py-1 pl-2">
         <div className="flex items-center gap-2 min-w-0">
+          {agentName && (
+            // WHY the chip leads the row instead of being appended to the
+            // title: the index is scanned vertically, and a leading column of
+            // names lines up the way the label column already does. Appending
+            // would put it inside the truncating span, where the longest
+            // titles would eat exactly the token the user needs to speak.
+            <span
+              data-dispatch-agent-name="true"
+              className="flex-shrink-0 rounded-chip border border-border px-1 text-[9px] font-semibold leading-[13px] text-ink"
+            >
+              {agentName}
+            </span>
+          )}
           <span className="min-w-0 flex-1">
             <span className={`block min-w-0 truncate px-1 py-[1px] text-[11px] text-ink ${activityClasses.title}`}>
               {title}
             </span>
           </span>
-          {unreadKind && (
-            <DispatchUnreadBadge kind={unreadKind} label={attentionLabel} />
+          {unreadBadge && (
+            <DispatchUnreadBadge kind={unreadBadge.kind} text={unreadBadge.text} />
           )}
         </div>
         {/* Row 2 — secondary metadata. Worktree + model are split off the
@@ -477,49 +514,18 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
   )
 })
 
-// Exported for reuse by the Tiled Dispatch mini-list, which renders the
-// same prompt-derived title in a more compact row.
-export function cachedLatestPromptTitle(
-  entries: Entry[],
-  kind: DispatchAgentRow['kind'],
-): string | null {
-  const cached = latestPromptTitleCache.get(entries)
-  if (cached && cached.kind === kind) return cached.title
-
-  const title = extractLatestUserPrompt(entries, kind)?.text ?? null
-  latestPromptTitleCache.set(entries, { kind, title })
-  return title
-}
-
-/**
- * Resolve the one-line Dispatch label without erasing the distinction between
- * an explicit title and the existing latest-prompt fallback.
- *
- * WHY `row.title` alone is insufficient: selectors historically fold the cwd
- * basename into that field, and the component then replaces it with the latest
- * prompt. Once users can author a title, applying the same replacement makes
- * Save appear to work in the pane while the primary Dispatch index—the surface
- * built for scanning many agents—continues showing something else. Carrying
- * `agentTitle` separately lets explicit user intent win while preserving the
- * useful automatic prompt label for every untitled agent.
- */
-export function dispatchRowTitle(
-  row: Pick<DispatchAgentRow, 'agentTitle' | 'kind' | 'title'>,
-  entries?: Entry[],
-): string {
-  if (row.agentTitle) return row.agentTitle
-  if (row.kind !== 'terminal' && entries) {
-    return cachedLatestPromptTitle(entries, row.kind) ?? row.title
-  }
-  return row.title
-}
-
-function dispatchSubtitle(runtime: {
+// Exported so tests can read the row's second line from a real runtime the
+// way the user reads it (e.g. an OpenCode Terminal pane replayed end to end),
+// instead of asserting on runtime fields whose surface mapping they would
+// have to re-derive.
+export function dispatchSubtitle(runtime: {
   sessionStatus?: string
   streamPhase?: string
   exited?: number | null
   unreadSince?: number | null
   processStatus?: string
+  transcriptError?: string | null
+  activityStatus?: string | null
 }, kind?: SessionKind): string {
   // WHY terminals get their own label path:
   // Agent subtitles describe model turn state (`thinking`, `responding`,
@@ -530,9 +536,16 @@ function dispatchSubtitle(runtime: {
   if (kind === 'terminal') {
     if (runtime.sessionStatus === undefined) return 'shell starting'
     if (isSessionExited(runtime)) return 'shell exited'
-    if (runtime.sessionStatus === 'running') return 'shell running'
+    // The foreground command, e.g. `shell running · npm` (#865). Before the
+    // monitor this branch could never be reached: shells were never running.
+    if (runtime.sessionStatus === 'running') {
+      return runtime.activityStatus ? `shell running · ${runtime.activityStatus}` : 'shell running'
+    }
     return 'shell idle'
   }
+  // A TUI session mismatch must remain visible even while the bound
+  // session emits healthy activity. Agent Status shows the same diagnostic.
+  if (runtime.transcriptError) return runtime.transcriptError
   if (runtime.sessionStatus === undefined) return 'starting'
   if (runtime.streamPhase && runtime.streamPhase !== 'idle') return runtime.streamPhase
   if (runtime.sessionStatus === 'running') return 'running'
@@ -547,6 +560,47 @@ function dispatchAttentionLabel(runtime: {
   const conditionLabel = dispatchAttentionLabelFromConditions(runtime.conditions ?? null)
   if (conditionLabel) return conditionLabel
   if (runtime.processError) return 'ERROR'
+  return null
+}
+
+export type DispatchUnreadBadgeModel = {
+  kind: 'output' | 'attention'
+  /** The exact text the badge paints: NEW, ACTION, QUESTION, ERROR, … */
+  text: string
+}
+
+/**
+ * The unread badge a Dispatch row shows, or null for none.
+ *
+ * WHY the runtime's `unreadKind` is not the answer on its own: it records
+ * what happened while the user was away, and it deliberately keeps
+ * `attention` after the prompt that raised it is answered (attention outranks
+ * a later turn's NEW until the user opens the pane). The badge instead asks
+ * whether anything is blocking NOW. A live condition wins as ACTION/QUESTION;
+ * a resolved attention degrades to NEW, because what is left to look at is the
+ * output that followed. Deriving that here, from the same inputs the row
+ * reads, keeps a test of "the user sees NEW after answering" honest: it
+ * asserts this function, not the raw field.
+ *
+ * Shell terminals badge too, since #865: they used to be excluded because a
+ * shell had no "finished" signal to mark output unread, but the foreground
+ * monitor now provides one — and that same exclusion was also swallowing a
+ * failed wake's ERROR. `kind` is therefore no longer a gate here; it stays in
+ * the signature because the caller passes the row's kind and a future
+ * kind-specific rule belongs in this one place rather than at the call site.
+ * (An OpenCode Terminal pane was never `kind === 'terminal'` anyway: its kind
+ * is `opencode` and only its runtime is terminal.)
+ */
+export function dispatchUnreadBadge(runtime: {
+  unreadKind?: 'output' | 'attention' | null
+  conditions?: ProviderConditionSnapshot | null
+  processError?: string | null
+}, _kind?: SessionKind): DispatchUnreadBadgeModel | null {
+  const attentionLabel = dispatchAttentionLabel(runtime)
+  if (attentionLabel) return { kind: 'attention', text: attentionLabel }
+  if (runtime.unreadKind === 'attention' || runtime.unreadKind === 'output') {
+    return { kind: 'output', text: 'NEW' }
+  }
   return null
 }
 
@@ -572,13 +626,7 @@ function DispatchAgentBadge({ kind }: { kind: SessionKind | undefined }) {
   )
 }
 
-function DispatchUnreadBadge({
-  kind,
-  label,
-}: {
-  kind: 'output' | 'attention'
-  label: string | null
-}) {
+function DispatchUnreadBadge({ kind, text }: DispatchUnreadBadgeModel) {
   if (kind === 'attention') {
     return (
       <span
@@ -587,7 +635,7 @@ function DispatchUnreadBadge({
           px-1.5 py-[1px] text-[9px] font-semibold leading-none text-warning
         "
       >
-        {label ?? 'ACTION'}
+        {text}
       </span>
     )
   }
@@ -598,7 +646,7 @@ function DispatchUnreadBadge({
         px-1.5 py-[1px] text-[9px] font-semibold leading-none text-accent
       "
     >
-      NEW
+      {text}
     </span>
   )
 }

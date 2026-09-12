@@ -48,6 +48,8 @@ export type UiShellSlice = UiShellState & {
   closeTileTabsModal: () => void
   openReorderTabs: () => void
   closeReorderTabs: () => void
+  openMergeProjectTabs: () => void
+  closeMergeProjectTabs: () => void
   openPinAgents: () => void
   closePinAgents: () => void
   openSettingsPage: () => void
@@ -56,6 +58,8 @@ export type UiShellSlice = UiShellState & {
   closeAgentTitlePrompt: () => void
   openBuryPrompt: (sessionId: SessionId) => void
   closeBuryPrompt: () => void
+  openRootManagementPrompt: (sessionId: SessionId) => void
+  closeRootManagementPrompt: () => void
   openDebugBundleNotePrompt: (payload: {
     bundlePath: string
     sessionId: SessionId
@@ -71,12 +75,17 @@ export type UiShellSlice = UiShellState & {
   closeRecordingNotePrompt: () => void
   openViewPrompts: (sessionId: SessionId) => void
   closeViewPrompts: () => void
+  openTldrHistory: (sessionId: SessionId) => void
+  closeTldrHistory: () => void
   openNewAgentPlacement: () => void
   /** Open the placement overlay pre-targeted at a specific project. Used by
    *  the Dispatch header "+"; see `newAgentProjectIntent` for why the target
    *  is captured here rather than resolved at commit time. */
   openNewAgentForProject: (tabId: TabId, anchorSessionId: SessionId) => void
   closeNewAgentPlacement: () => void
+  /** Open/close the New Agent In… dialog (#852). See `newAgentInOpen`. */
+  openNewAgentIn: () => void
+  closeNewAgentIn: () => void
   openTiledDispatchPrompt: () => void
   openDispatchRowProjectPicker: (rowIndex: number) => void
   closeDispatchRowProjectPicker: () => void
@@ -106,8 +115,8 @@ export type UiShellSlice = UiShellState & {
   closeGlobalEditor: () => void
   toggleGlobalEditor: () => void
   setDispatchListRatio: (ratio: number) => void
-  openPromptSearch: () => void
-  closePromptSearch: () => void
+  openConversations: (opts: { focusSearch: boolean }) => void
+  closeConversations: () => void
   openAgentActivity: () => void
   closeAgentActivity: () => void
   openKeyboardShortcuts: () => void
@@ -120,6 +129,8 @@ export type UiShellSlice = UiShellState & {
   closeProviderSwitchPicker: () => void
   openUsageModal: () => void
   closeUsageModal: () => void
+  openKeyVault: () => void
+  closeKeyVault: () => void
   openRewindPrompt: (sessionId: SessionId) => void
   closeRewindPrompt: () => void
   openAgentViewModePicker: (sessionId: SessionId) => void
@@ -134,6 +145,16 @@ export type WorkspaceSlice = {
   workspaceSpotlight: SpotlightState | null
   workspaceReaderMode: ReaderModeState | null
   workspaceTileTabs: TileTabsState | null
+  /** Allocated spoken names keyed by SessionMeta.agentNameId.
+   *
+   *  WHY this is store state and not a ref or a React context: three unrelated
+   *  consumers read it — the pane header, the Dispatch index, and
+   *  workspace.observe, which is called synchronously from main and cannot
+   *  reach React state any other way. It is deliberately NOT persisted: the
+   *  main registry is the source of truth and re-resolving on launch is one
+   *  IPC round trip, whereas a stale localStorage copy could show a name that
+   *  the registry has since assigned differently. */
+  workspaceAgentNames: Record<string, string>
   setWorkspaceState: (
     next: WorkspaceState | ((prev: WorkspaceState) => WorkspaceState),
   ) => void
@@ -149,6 +170,10 @@ export type WorkspaceSlice = {
   ) => void
   setWorkspaceTileTabs: (
     next: TileTabsState | null | ((prev: TileTabsState | null) => TileTabsState | null),
+  ) => void
+  setWorkspaceAgentNames: (
+    next: Record<string, string>
+      | ((prev: Record<string, string>) => Record<string, string>),
   ) => void
 }
 

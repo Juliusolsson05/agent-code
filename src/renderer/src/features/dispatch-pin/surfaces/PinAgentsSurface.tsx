@@ -4,6 +4,7 @@ import type { PinAgentsModalRow } from '@renderer/features/dispatch-pin/PinAgent
 import { useAppStore } from '@renderer/app-state/hooks'
 import { useWorkspaceContext } from '@renderer/workspace/WorkspaceContext'
 import { resolveTabSessions } from '@renderer/workspace/queries'
+import { sessionDisplayTitle } from '@renderer/workspace/sessionDisplayTitle'
 import type { SessionId, TabId } from '@renderer/workspace/types'
 
 // Registry wrapper (#494). The candidate-row memo moved here from
@@ -24,16 +25,18 @@ export function PinAgentsSurface() {
   // workspace state via the workspace hook — the modal stays a dumb
   // props-driven component.
   //
-  // Ordering: currently-pinned agents first in pin order, then
+  // Ordering: currently-pinned sessions first in pin order, then
   // everyone else tab-by-tab in tab order. Pinned-first means the
   // user's existing pins surface at the top when they open the
   // modal — the most common operation is "tweak my pins," not
-  // "scroll through every agent in the workspace."
+  // "scroll through every session in the workspace."
   //
-  // Terminals are excluded: pin reducer / sanity effect / modal
-  // selection all agree pins are agents. Detached agents ARE
-  // included — they're the ones the user is most likely pinning
-  // (background work they want one keystroke away).
+  // Any session kind is eligible, terminals included (#865): pin
+  // reducer / sanity effect / modal selection all agree on that now
+  // — the old agents-only exclusion was a leftover of #152's v1
+  // scope, from before shells were full Dispatch rows (#671).
+  // Detached agents ARE included too — they're the ones the user is
+  // most likely pinning (background work they want one keystroke away).
   const rows = useMemo<PinAgentsModalRow[]>(() => {
     const result: PinAgentsModalRow[] = []
     const pinnedSet = new Set(state.pinnedSessionIds)
@@ -44,7 +47,7 @@ export function PinAgentsSurface() {
     const pushRow = (sessionId: SessionId, tabId: TabId): void => {
       if (seen.has(sessionId)) return
       const meta = state.sessions[sessionId]
-      if (!meta || meta.kind === 'terminal') return
+      if (!meta) return
       const tabIndex = tabIndexFor(tabId)
       const tab = state.tabs[tabIndex]
       if (!tab) return
@@ -53,10 +56,8 @@ export function PinAgentsSurface() {
         sessionId,
         tabIndex,
         tabTitle: tab.title,
-        // Same title fallback the dispatch selectors use — keep this
-        // in sync if the title source ever changes. Inlined rather
-        // than importing the selector helper because it's two lines.
-        title: meta.title?.trim() || meta.cwd?.split('/').filter(Boolean).pop() || 'agent',
+        // The shared title rule (#865), no longer an inlined copy of the selector's.
+        title: sessionDisplayTitle(meta),
       })
     }
 

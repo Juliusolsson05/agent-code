@@ -7,9 +7,13 @@ import type { Workspace } from '@renderer/workspace/workspaceStore'
 type Props = {
   workspace: Workspace
   agentViewMode: AgentViewMode
+  // Threaded from settings like every other workspace surface (#856). A
+  // spotlighted pane is the same pane, so it must honor the same toggles.
+  showStatusMode: boolean
+  showWorktreeBadges: boolean
 }
 
-export function SpotlightView({ workspace, agentViewMode }: Props) {
+export function SpotlightView({ workspace, agentViewMode, showStatusMode, showWorktreeBadges }: Props) {
   const spotlight = workspace.spotlight
   if (!spotlight) return null
   const tab = workspace.state.tabs.find(item => item.id === spotlight.tabId)
@@ -65,6 +69,8 @@ export function SpotlightView({ workspace, agentViewMode }: Props) {
           workspace,
           tab.id,
           agentViewMode,
+          showStatusMode,
+          showWorktreeBadges,
         )}
       </div>
     </div>

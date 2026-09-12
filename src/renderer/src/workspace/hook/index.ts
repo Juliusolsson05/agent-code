@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createElement, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
 import { useGlobalToast } from '@renderer/ui/GlobalToast'
@@ -25,19 +25,19 @@ import { useHistoryActions } from '@renderer/workspace/hook/actions/history'
 import { useUndoCloseAction } from '@renderer/workspace/hook/actions/undoClose'
 import { useDispatchActions } from '@renderer/workspace/hook/actions/dispatch'
 import { useAgentIndexNavigationActions } from '@renderer/workspace/hook/actions/agentIndexNavigation'
-import { useAutoSave } from '@renderer/workspace/hook/persistence/useAutoSave'
+import { useAgentNameReconciler } from '@renderer/workspace/agentNames/useAgentNameReconciler'
+import { createDraftChanges, WorkspaceRuntimeServices } from './persistence/WorkspaceRuntimeServices'
 import { useBootstrap } from '@renderer/workspace/hook/persistence/useBootstrap'
 import type { WorkspaceRestoreStatus } from '@renderer/workspace/hook/persistence/useBootstrap'
 import { useFeedDebugPersist } from '@renderer/workspace/hook/persistence/useFeedDebugPersist'
-import { useCodexTranscriptObservationOutbox } from '@renderer/lifecycle/codexTranscriptObservationOutbox'
 import {
-  usePickerSanity,
   usePinnedSessionIdsSanity,
   useReaderModeSanity,
   useSpotlightSanity,
   useTileTabsSanity,
 } from '@renderer/workspace/hook/invalidation/effects'
 import { useIpcSubscriptions } from '@renderer/workspace/hook/ipc/useIpcSubscriptions'
+import { useTerminalForeground } from '@renderer/workspace/hook/ipc/useTerminalForeground'
 import { useWorkspaceAdoption } from '@renderer/workspace/hook/ipc/useWorkspaceAdoption'
 import { useSessionFeed } from '@renderer/features/sessionFeed/SessionFeedContext'
 import type { OrchestrationAgentRecord } from '@mcp/shared/orchestrationTypes'
@@ -54,11 +54,10 @@ import {
   additionalCloseImpact,
   assertManagedTarget,
   listManagedAgentDescriptors,
-  managedTranscriptUnavailableReason,
   readManagedAgentOutput,
   readManagedAgentOutputs,
 } from '@renderer/workspace/agentManagementMcp'
-import { loadInitialHistoryForSession } from '@renderer/workspace/hook/actions/initialHistory'
+import { hydrateTranscriptWithoutWaking as hydrateManagedTranscript } from '@renderer/workspace/hook/actions/hydrateTranscript'
 import { setAgentTitleInWorkspace } from '@renderer/workspace/agentTitle'
 
 // -----------------------------------------------------------------------------
@@ -97,7 +96,10 @@ export function useWorkspace(
 
   const state = useAppStore(store => store.workspaceState)
   const setState = useAppStore(store => store.setWorkspaceState)
-  const runtimes = useAppStore(store => store.workspaceRuntimes)
+  // Runtime rendering is owned by session subscribers, not the composition
+  // root. The snapshot seeds refs only; an imperative subscription below keeps
+  // callbacks current even when no layout render is scheduled.
+  const runtimes = useAppStore.getState().workspaceRuntimes
   const setRuntimes = useAppStore(store => store.setWorkspaceRuntimes)
   const spotlight = useAppStore(store => store.workspaceSpotlight)
   const setSpotlight = useAppStore(store => store.setWorkspaceSpotlight)
@@ -120,14 +122,20 @@ export function useWorkspace(
   refs.stateRef.current = state
   refs.latestStateRef.current = state
   refs.latestRuntimesRef.current = runtimes
+  useLayoutEffect(() => {
+    refs.latestRuntimesRef.current = useAppStore.getState().workspaceRuntimes
+    return useAppStore.subscribe(store => store.workspaceRuntimes, next => {
+      refs.latestRuntimesRef.current = next
+    })
+  }, [refs])
   refs.latestTileTabsRef.current = tileTabs
   refs.dangerousAgentsRef.current = dangerousAgentsEnabled
   refs.useProxyStreamingRef.current = useProxyStreaming
   refs.defaultBuiltInMcpDomainsRef.current = defaultBuiltInMcpDomains
 
-  // ---- Draft version counter (React state because the save effect
-  //      reads it as a dep) ----
-  const [draftVersion, setDraftVersion] = useState(0)
+  // Draft changes invalidate the autosave service, not the whole controller.
+  // The service observes this stable signal even when App does not rerender.
+  const draftChanges = useMemo(createDraftChanges, [])
   const [bootstrapComplete, setBootstrapComplete] = useState(false)
   // Surfaces the bootstrap outcome to the UI so it can render a banner
   // when the workspace is in a partial-restore / persisted-fallback
@@ -223,8 +231,8 @@ export function useWorkspace(
   }, [refs.stateRef, setRuntimes, setState, showToast])
 
   const setAgentTitle = useCallback((sessionId: SessionId, title: string): boolean => {
-    const meta = refs.stateRef.current.sessions[sessionId]
-    if (!meta || !isAgentProviderKind(meta.kind ?? DEFAULT_PROVIDER)) return false
+    // Any existing session can carry a title (#865); only a vanished one is refused.
+    if (!refs.stateRef.current.sessions[sessionId]) return false
 
     // WHY the mutation is delegated to a pure workspace helper rather than
     // written inline here: `SessionMeta.title` is already consumed by several
@@ -247,7 +255,7 @@ export function useWorkspace(
     releaseAllRenderedViewLeases,
     scrollFocusedToLatest,
   } =
-    useWorkspaceHelpers(runtimes, setRuntimes, refs)
+    useWorkspaceHelpers(setRuntimes, refs)
 
   // ---- Pane toast (needs updateRuntime, so after helpers) ----
   const showPaneToast = usePaneToast(refs.paneToastTimers, updateRuntime)
@@ -260,11 +268,11 @@ export function useWorkspace(
   const { setDraftInput, setDraftImages, clearDraft, undoClearDraft } = useDraftActions(
     setRuntimes,
     updateRuntime,
-    setDraftVersion,
+    draftChanges.bump,
   )
   const {
-    setStreamingBaseline,
-    unwindStreamingBaseline,
+    beginOptimisticSubmit,
+    unwindOptimisticSubmit,
     clearPendingRewindUndo,
     addOptimisticCodexUserEntry,
     removeOptimisticCodexUserEntry,
@@ -272,12 +280,12 @@ export function useWorkspace(
     useStreamingActions(setRuntimes, isCodexSession)
   const { pickerEnter, pickerMove, pickerCancel, pickerConfirm, setCodeBlockPicker } =
     usePickerActions(setRuntimes, refs, showPaneToast)
-  const { toggleSpotlight, setSpotlightSession } = useSpotlightActions(
+  const { setSpotlightTarget, toggleSpotlight, setSpotlightSession } = useSpotlightActions(
     setSpotlight,
     setState,
     refs,
   )
-  const { toggleReaderMode, setReaderModeSession } = useReaderActions(
+  const { setReaderModeTarget, toggleReaderMode, setReaderModeSession } = useReaderActions(
     setReaderMode,
     setSpotlight,
     setState,
@@ -308,7 +316,7 @@ export function useWorkspace(
   const ensureSessionLiveRef = useRef(ensureSessionLive)
   ensureSessionLiveRef.current = ensureSessionLive
 
-  const { focusAgentByPaneLabel } = useAgentIndexNavigationActions(
+  const { focusAgentByPaneLabel, focusAgentBySessionId } = useAgentIndexNavigationActions(
     setState,
     setTileTabs,
     refs,
@@ -357,6 +365,7 @@ export function useWorkspace(
           const agent = await createOrchestrationAgentRef.current({
             parentId: request.parentSessionId,
             kind: request.kind,
+            ...(request.providerRuntime ? { providerRuntime: request.providerRuntime } : {}),
             cwd: request.cwd,
             title: request.title,
             role: request.role,
@@ -570,30 +579,20 @@ export function useWorkspace(
       })
     }
 
-    const hydrateTranscriptWithoutWaking = async (
+    // See hydrateTranscript.ts for why reads never wake the agent and why the
+    // zustand store (not refs) is what gets read back.
+    const hydrateTranscriptWithoutWaking = (
       sessionId: string,
-    ): Promise<'transcript_unavailable' | 'not_created' | null> => {
-      const before = useAppStore.getState()
-      const meta = before.workspaceState.sessions[sessionId]
-      const runtime = before.workspaceRuntimes[sessionId]
-      if (!meta || !runtime || runtime.transcriptStatus === 'ready') {
-        return managedTranscriptUnavailableReason(runtime, meta)
-      }
-      // WHY audit reads call the durable-history loader directly instead of
-      // ensureSessionLive: restored and buried agents remain valid project
-      // records even with no provider process. Transcript inspection must not
-      // wake them, mutate their backend lifetime, or consume a provider turn.
-      await loadInitialHistoryForSession({ sessionId, refs, setRuntimes, meta })
-      // Zustand updates synchronously, while the React render that refreshes
-      // latestRuntimesRef may happen after this promise continuation. Reading
-      // the store directly prevents a successful/error hydration from being
-      // mistaken for the stale pre-load runtime in the same MCP request.
-      const after = useAppStore.getState()
-      return managedTranscriptUnavailableReason(
-        after.workspaceRuntimes[sessionId],
-        after.workspaceState.sessions[sessionId],
-      )
-    }
+    ): Promise<'transcript_unavailable' | 'not_created' | null> =>
+      hydrateManagedTranscript({
+        sessionId,
+        refs,
+        setRuntimes,
+        read: () => {
+          const current = useAppStore.getState()
+          return { state: current.workspaceState, runtimes: current.workspaceRuntimes }
+        },
+      })
 
     const off = window.api.onAgentManagementRequest(async request => {
       try {
@@ -825,7 +824,7 @@ export function useWorkspace(
     return off
   }, [refs, setRuntimes])
 
-  const { switchSessionProvider, reloadFocusedAgent, rewindFocusedToPrompt, undoLastRewind } =
+  const { switchSessionProvider, reloadSessionAgent, rewindSessionToPrompt, undoSessionRewind, removeCodexCyberPolicyBlock, reloadFocusedAgent, rewindFocusedToPrompt, undoLastRewind, removeFocusedCyberPolicyBlock } =
     useProviderActions(refs, setRuntimes, showPaneToast, sessionActions)
 
   // Bulk provider switch (Switch Agents modal) + remembered-batch return. Uses
@@ -862,9 +861,8 @@ export function useWorkspace(
   // see the WHY on useIpcSubscriptions.
   const sessionFeed = useSessionFeed()
   useIpcSubscriptions(sessionFeed, refs, setState, setRuntimes, updateRuntime, appendFeedDebug)
-  useCodexTranscriptObservationOutbox(runtimes)
+  useTerminalForeground(restoreStatus, setRuntimes)
   useWorkspaceAdoption(refs, setState, setRuntimes, bootstrapComplete)
-  useAutoSave(state, draftVersion, refs, bootstrapComplete)
   useBootstrap(
     refs,
     setState,
@@ -876,12 +874,19 @@ export function useWorkspace(
     defaultWorkspaceMode,
     dispatchActions.enterDispatchMode,
   )
-  useFeedDebugPersist(runtimes, refs)
+  // The persist effect reads current refs on its own timer, so it needs no
+  // render-time snapshot — passing `runtimes` here would suggest a reactivity
+  // dependency that deliberately does not exist.
+  useFeedDebugPersist(refs)
   useSpotlightSanity(spotlight, state, setSpotlight)
   useReaderModeSanity(readerMode, state, setReaderMode)
-  usePickerSanity(runtimes, pickerCancel)
   useTileTabsSanity(tileTabs, state.tabs, setTileTabs)
   usePinnedSessionIdsSanity(state, setState)
+  // Beside the sanity hooks because it is the same kind of thing: a
+  // membership-driven correction that keeps an orthogonal slice consistent
+  // with the tile tree. It is last so it observes the state the sanity hooks
+  // have already settled.
+  useAgentNameReconciler(state, setState, restoreStatus)
 
   // ---- Derived values ----
   const activeTab = useMemo(
@@ -896,13 +901,19 @@ export function useWorkspace(
   // ---- Return the stable Workspace shape ----
   return {
     state,
-    runtimes,
+    // Imperative commands/debug capture read the latest committed store.
+    // Renderers must subscribe through useSessionRuntime/useWorkspaceContext.
+    get runtimes() { return refs.latestRuntimesRef.current },
+    runtimeServices: createElement(WorkspaceRuntimeServices, {
+      state, refs, bootstrapComplete, draftChanges, pickerCancel,
+    }),
     activeTab,
     spotlight,
     tileTabs,
     readerMode,
     dispatchMode: state.dispatchMode,
     restoreStatus,
+    setReaderModeTarget,
     toggleReaderMode,
     setReaderModeSession,
     latestScreenRef: refs.latestScreenRef,
@@ -924,10 +935,12 @@ export function useWorkspace(
     startNewAgentPlacement: paneActions.startNewAgentPlacement,
     commitNewAgentPlacement: paneActions.commitNewAgentPlacement,
     createDetachedDispatchAgent: paneActions.createDetachedDispatchAgent,
+    createDetachedSession: paneActions.createDetachedSession,
     createLinkedAgent: paneActions.createLinkedAgent,
     createOrchestrationAgent: paneActions.createOrchestrationAgent,
     attachDetachedToGrid: paneActions.attachDetachedToGrid,
     attachAllDetachedForTab: paneActions.attachAllDetachedForTab,
+    detachSessionToDispatch: paneActions.detachSessionToDispatch,
     detachFocusedToDispatch: paneActions.detachFocusedToDispatch,
     closeFocused: paneActions.closeFocused,
     closeSession: paneActions.closeSession,
@@ -938,6 +951,7 @@ export function useWorkspace(
     focusSession: paneActions.focusSession,
     focusSessionInTab: paneActions.focusSessionInTab,
     focusAgentByPaneLabel,
+    focusAgentBySessionId,
     setAgentTitle,
     setSessionAgentViewModeOverride,
     selectGridRelatedSession,
@@ -945,14 +959,15 @@ export function useWorkspace(
     activateTab: tabActions.activateTab,
     activateTabByIndex: tabActions.activateTabByIndex,
     reorderTabs: tabActions.reorderTabs,
+    mergeTabs: tabActions.mergeTabs,
     nextTab: tabActions.nextTab,
     prevTab: tabActions.prevTab,
     resizeFocused,
     resizeFocusedDirectional,
     setSplitRatio,
     setSplitRatioInTab,
-    setStreamingBaseline,
-    unwindStreamingBaseline,
+    beginOptimisticSubmit,
+    unwindOptimisticSubmit,
     clearPendingRewindUndo,
     acknowledgeSession,
     appendFeedDebug,
@@ -973,11 +988,17 @@ export function useWorkspace(
     reloadFocusedAgent,
     softReloadAgentView,
     switchSessionProvider,
+    reloadSessionAgent,
+    rewindSessionToPrompt,
+    removeCodexCyberPolicyBlock,
+    undoSessionRewind,
     switchAgentsToProvider,
     returnLastProviderSwitchBatch,
     rewindFocusedToPrompt,
+    removeFocusedCyberPolicyBlock,
     undoLastRewind,
     reloadAgentSessions,
+    setSpotlightTarget,
     toggleSpotlight,
     setSpotlightSession,
     openTileTabs,

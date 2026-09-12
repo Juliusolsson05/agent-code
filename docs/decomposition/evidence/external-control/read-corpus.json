@@ -1,0 +1,42 @@
+{
+  "purpose": "Narrow real-source corpus for the control read projection; synthetic faults and pagination probes are labeled separately. No new recorder or fabricated provider events.",
+  "fixtures": [
+    {
+      "path": "testing/fixtures/rendering-bundles/2026-05-20T19-11-51-193-d4a44a16.json",
+      "sha256": "49428b492aa4cf440dda154f4d863eed7dc6ca4a3fe9d481234b761b6af2101e",
+      "provider": "codex",
+      "source": "existing incident bundle and provider transcript",
+      "entryTypes": {
+        "assistant": 51,
+        "user": 29
+      },
+      "semanticHistoryCount": 20,
+      "hasCurrent": true
+    },
+    {
+      "path": "testing/fixtures/rendering-bundles/2026-07-06T16-54-13-861-87f0eeef.json",
+      "sha256": "9127ad482d00b329d7b8a8dc5833342f1f503f7f5053928a16db4a28b7c64e95",
+      "provider": "opencode",
+      "source": "existing incident bundle; no committed transcript reconstruction",
+      "entryTypes": {},
+      "semanticHistoryCount": 20,
+      "hasCurrent": true
+    },
+    {
+      "path": "testing/fixtures/rendering-bundles/2026-07-07T13-17-48-452-5b19529f.json",
+      "sha256": "223a9d040fbe5ad1ab970b237783f7d5f416b7cdc186ccda51c3d71a15b1a949",
+      "provider": "claude",
+      "source": "existing incident bundle and provider transcript",
+      "entryTypes": {
+        "pr-link": 7,
+        "assistant": 41,
+        "user": 21,
+        "attachment": 5,
+        "system": 2,
+        "queue-operation": 4
+      },
+      "semanticHistoryCount": 10,
+      "hasCurrent": true
+    }
+  ]
+}

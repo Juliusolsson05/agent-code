@@ -154,7 +154,7 @@ export function usePickerSanity(
 // thread "also strip pinnedSessionIds" through every one of those
 // invites the same drift problem the rest of this file solves.
 // Centralized invariant: "after any setState, pinnedSessionIds is a
-// subset of Object.keys(sessions) (minus terminals)."
+// subset of Object.keys(sessions)." Terminals are pinnable since #865.
 //
 // SetWorkspaceState typing: reproducing the narrow shape locally
 // instead of importing from context.ts to avoid a circular dep
@@ -172,11 +172,7 @@ export function usePinnedSessionIdsSanity(
     if (pinnedSessionIds.length === 0) return
     const valid = pinnedSessionIds.filter(id => {
       const meta = sessions[id]
-      // Terminals can never be pinned. If one somehow lands here
-      // (legacy workspace.json, manual reducer slip) treat it like a
-      // missing session and drop it — the invariant the modal +
-      // command paths depend on is "pinned ids point at agents."
-      return meta !== undefined && meta.kind !== 'terminal'
+      return meta !== undefined
     })
     if (valid.length === pinnedSessionIds.length) return
     setState(prev => {
@@ -186,7 +182,7 @@ export function usePinnedSessionIdsSanity(
       // in this file.
       const next = prev.pinnedSessionIds.filter(id => {
         const meta = prev.sessions[id]
-        return meta !== undefined && meta.kind !== 'terminal'
+        return meta !== undefined
       })
       if (next.length === prev.pinnedSessionIds.length) return prev
       return { ...prev, pinnedSessionIds: next }

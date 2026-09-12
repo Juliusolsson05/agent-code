@@ -50,7 +50,8 @@ function applyRemoteThemeSettings(settings: Record<string, unknown> | null | und
 //
 // Reconnect: the socket redials with capped backoff until dispose(). On
 // each (re)connect the server replays session-list + cached per-session
-// state, so listeners self-heal without a client-side resync protocol.
+// state. TranscriptStore resets its loaded window on disconnect and backfills
+// after the next authoritative list; cached state alone cannot repair a gap.
 
 const BRACKETED_PASTE = /^\x1b\[200~([\s\S]*)\x1b\[201~$/
 // WHY this exceeds the provider protocol: Claude may spend 2s proving paste
@@ -114,6 +115,7 @@ export class WebSocketSessionFeed implements SessionFeed {
   private socket: WebSocketLike | null = null
   private disposed = false
   private reconnectAttempt = 0
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private nextRequestId = 1
   private lastSessionList: RemoteSessionSummary[] = []
   /** Latest hello-declared STT capability. null = unknown (no hello yet, or
@@ -159,6 +161,8 @@ export class WebSocketSessionFeed implements SessionFeed {
 
   dispose(): void {
     this.disposed = true
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer)
+    this.reconnectTimer = null
     for (const [, p] of this.pending) {
       clearTimeout(p.timer)
       p.resolve({ ok: false, error: 'feed disposed' })
@@ -352,14 +356,24 @@ export class WebSocketSessionFeed implements SessionFeed {
     this.socket = socket
 
     socket.addEventListener('open', () => {
+      if (this.socket !== socket || this.disposed) return
       this.reconnectAttempt = 0
       this.emitConnection('open')
     })
     socket.addEventListener('message', event => {
-      this.onFrame(String(event.data))
+      if (this.socket === socket && !this.disposed) this.onFrame(String(event.data))
     })
     socket.addEventListener('close', () => {
-      if (this.socket === socket) this.socket = null
+      if (this.socket !== socket || this.disposed) return
+      this.socket = null
+      // The remote command may already have reached the provider. Reject
+      // pending requests promptly, but NEVER replay them on reconnect. The
+      // prompt API's conservative fallback preserves duplicate-send safety.
+      for (const pending of this.pending.values()) {
+        clearTimeout(pending.timer)
+        pending.resolve({ ok: false, error: 'Connection lost; request outcome is unknown.' })
+      }
+      this.pending.clear()
       this.emitConnection('closed')
       this.scheduleReconnect()
     })
@@ -369,13 +383,16 @@ export class WebSocketSessionFeed implements SessionFeed {
   }
 
   private scheduleReconnect(): void {
-    if (this.disposed) return
+    if (this.disposed || this.reconnectTimer) return
     const delay = Math.min(
       RECONNECT_BASE_MS * 2 ** this.reconnectAttempt,
       RECONNECT_CAP_MS,
     )
     this.reconnectAttempt += 1
-    setTimeout(() => this.dial(), delay)
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null
+      this.dial()
+    }, delay)
   }
 
   private onFrame(raw: string): void {

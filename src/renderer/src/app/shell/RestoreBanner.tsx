@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 
-import { useWorkspaceContext } from '@renderer/workspace/WorkspaceContext'
+import { useWorkspaceLayoutContext } from '@renderer/workspace/WorkspaceContext'
 
 // WHY render this above TabBar instead of as a toast:
 //
@@ -23,7 +23,7 @@ import { useWorkspaceContext } from '@renderer/workspace/WorkspaceContext'
 const COLLAPSE_AFTER_MS = 60_000
 
 export function RestoreBanner() {
-  const workspace = useWorkspaceContext()
+  const workspace = useWorkspaceLayoutContext()
   const message: string | null =
     workspace.restoreStatus === 'partial-restore'
       ? 'Workspace partially restored — autosave is disabled to protect your saved state. Restart Agent Code after fixing the underlying spawn or proxy issue.'

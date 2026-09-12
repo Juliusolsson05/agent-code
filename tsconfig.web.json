@@ -32,9 +32,13 @@
       "codex-headless/*": ["./packages/codex-headless/src/*"],
       "opencode-headless": ["./packages/opencode-headless/src/index.ts"],
       "opencode-headless/*": ["./packages/opencode-headless/src/*"],
+      "opencode-terminal-headless": ["./packages/opencode-terminal-headless/src/index.ts"],
+      "opencode-terminal-headless/*": ["./packages/opencode-terminal-headless/src/*"],
       "agent-transcript-parser": ["./packages/agent-transcript-parser/src/index.ts"],
       "agent-transcript-parser/*": ["./packages/agent-transcript-parser/src/*"],
       "workflow-mcp/state": ["./packages/workflow-mcp/src/state.ts"],
+      "@control-sdk": ["./src/control-sdk/index.ts"],
+      "@control-sdk/host": ["./src/control-sdk/host.ts"],
       "@main/*": ["./src/main/*"],
       "@preload/*": ["./src/preload/*"],
       "@renderer/*": ["./src/renderer/src/*"],
@@ -44,6 +48,8 @@
     }
   },
   "include": [
+    "testing/fixtures/provider-usage-limits/*.json",
+    "src/control-sdk/**/*",
     "src/renderer/**/*",
     // Renderer specs use the DOM matchers installed by the Vitest setup module. The setup lived
     // outside every web include glob, so runtime tests passed while the authoritative web checker
@@ -95,6 +101,12 @@
     "src/preload/index.d.ts",
     "src/shared/code/**/*",
     "src/shared/types/**/*",
+    // The exhaustion derivation is read by BOTH halves of the app (the bulk
+    // switch modal in the renderer, the usage IPC in main), so it has to be in
+    // both projects' file lists. Composite tsc refuses a transitive module that
+    // is not named in the project, so leaving it out would fail the web
+    // typecheck the moment a renderer file imports it (#821, Stage 4/6).
+    "src/shared/usage/**/*",
     "src/shared/performance/**/*",
     "src/shared/parsers/**/*",
     "src/shared/renderedContent/**/*",
