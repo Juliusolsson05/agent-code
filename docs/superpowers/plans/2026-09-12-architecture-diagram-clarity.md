@@ -1,6 +1,8 @@
 # Architecture diagram clarity
 
-Status: Research and audit complete; implementation in progress.
+Status: Implementation and validation complete; awaiting review.
+
+Tracking: [issue #937](https://github.com/Juliusolsson05/agent-code/issues/937).
 
 ## Outcome
 
@@ -36,8 +38,7 @@ changes explanation and presentation, not the architecture or application code.
    Keep diagram sources in Markdown and generated SVGs in the existing directory.
 4. Render and inspect at ordinary Markdown width, including grayscale. Check
    links, obsolete assets, source/preview agreement and rendering determinism.
-5. Open a new PR linked to the diagram-clarity issue and #100. Do not merge it
-   under the approval previously given only for #897.
+5. Open a follow-up PR linked to #937 and #100 for visual/content review.
 
 ## Diagram audit
 
@@ -88,6 +89,24 @@ changes explanation and presentation, not the architecture or application code.
 
 ## Validation
 
-Pending implementation and visual review. Application runtime tests are not
-required for this documentation-only change; the documentation renderer and its
-artifacts must be verified directly.
+The audit retains 26 diagrams and removes 16 redundant views. All implementation
+links and the existing technical tables remain. The startup diagram becomes an
+ordered explanation; ownership and rendering views use concrete examples.
+
+Verified on 2026-09-12 with the pinned Mermaid 11.4.1 / Puppeteer 24.2.1 tools:
+
+- All 26 sources parse and render; a second render matches committed previews
+  byte for byte through `--check`.
+- All previews decode as standalone SVG images, with no HTML or script elements.
+  Questions, captions and accessible SVG titles/descriptions agree for all 26.
+- Reviewed at 960-pixel reading width and in grayscale. Fixed crowded group
+  headings, a context view that reduced labels too far, and long participant
+  labels. Text-bound checks find no labels outside the exported figures.
+- Text palette contrast is at least 7.58:1; tested meaningful line/border pairs
+  are at least 4.33:1. External boundaries remain dashed without color.
+- Markdown validation covers 117 headings and 373 links, with no broken local
+  paths or anchors and no runtime Mermaid fences. The 26 preview files exactly
+  match the retained diagram inventory.
+- `node --check scripts/render-architecture-diagrams.mjs` and `git diff --check`
+  pass. Application runtime tests were not run: the changes are confined to the
+  reference, generated previews, documentation renderer and this plan.

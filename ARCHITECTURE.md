@@ -2,70 +2,48 @@
 
 <!-- architecture-diagram: application-overview -->
 
-[![Application overview](docs/architecture/diagrams/application-overview.svg)](docs/architecture/diagrams/application-overview.svg)
+[![How is Agent Code put together?](docs/architecture/diagrams/application-overview.svg)](docs/architecture/diagrams/application-overview.svg)
 
-[Open the full-size application map](docs/architecture/diagrams/application-overview.svg)
+Windows share one main process. Main coordinates native agents and tools while application state, provider history and project files remain separate.
+
+[Open the application map at full size](docs/architecture/diagrams/application-overview.svg).
 
 <details>
 <summary>Mermaid source</summary>
 
 ```text
-%%{init: {"flowchart": {"nodeSpacing": 24, "rankSpacing": 45, "padding": 12, "htmlLabels": false}, "themeVariables": {"fontSize": "18px"}}}%%
 flowchart TB
-    Desktop["AGENT CODE DESKTOP<br/>React + Electron windows<br/>Projects, tabs, grid / Dispatch<br/>Conversations · editor · terminals"]
-    Bridge["TYPED PRELOAD IPC<br/>Requests and observations"]
-    Desktop <--> Bridge
-
-    subgraph Main["ELECTRON MAIN"]
-        Sessions["SESSIONS + OBSERVATIONS<br/>SessionManager · provider adapters<br/>Lifecycle · prompt delivery<br/>History · live events · conditions"]
-        Workspace["WORKSPACE + FILES<br/>Windows · saved layouts<br/>Editor I/O · AI Workspace · LSP<br/>Git · worktrees · activity"]
-        Automation["CONTROL + WORKFLOWS<br/>Control SDK · scoped MCP<br/>Orchestration · agent management<br/>Workflow approval and scheduling"]
-        Support["SUPPORTING SERVICES<br/>Skills · dictation · key vault<br/>Toolchain setup · keep-awake<br/>Diagnostics · incident journals"]
+accTitle: How is Agent Code put together?
+accDescr: Windows share one main process. Main coordinates native agents and tools while application state, provider history and project files remain separate.
+%% scope: Application overview · responsibilities and selected dependencies
+%% external: Native,Helpers,NativeData,Files
+UI["Desktop windows · React<br/>Projects and panes<br/>Conversations, editor and terminals"]
+    subgraph Main["Electron main"]
+        Sessions["Agent sessions<br/>Start and recover agents<br/>Deliver prompts and collect progress"]
+        Workspace["Workspace and files<br/>Save layouts · edit files<br/>Git and language-server access"]
+        Services["Automation and support<br/>MCP and workflows · managed skills<br/>Dictation · secrets · diagnostics"]
     end
-    Bridge <--> Sessions
-    Bridge <--> Workspace
-    Bridge <--> Automation
-    Bridge <--> Support
-    Clients["OTHER CLIENTS<br/>Paired remote browser<br/>External local MCP operator"] <-->|remote / control hosts| Automation
-
-    subgraph Execution["NATIVE EXECUTION"]
-        Providers["INTERACTIVE AGENTS<br/>Claude + Codex: CLI PTYs<br/>OpenCode: HTTP/SSE service<br/>or native terminal runtime"]
-        Workers["WORKFLOW ATTEMPTS<br/>Electron utility-process worker<br/>Provider host · Codex SDK / CLI"]
-        Tools["SHELLS + HELPERS<br/>PTY / tmux · language servers<br/>Proxies · hotkey helper<br/>Optional cloudflared tunnel"]
-    end
-    Sessions --> Providers
-    Sessions --> Tools
-    Workspace --> Tools
-    Automation --> Workers
-
-    subgraph Data["LOCAL STORAGE"]
-        AppState["APPLICATION STATE<br/>Workspace · settings · skills<br/>Workflow / control journals<br/>Encrypted secrets · diagnostics"]
-        NativeState["PROVIDER STATE<br/>Conversations · authentication<br/>JSONL / rollouts / native interfaces"]
-        Project["USER PROJECT FILES<br/>Repositories · worktrees<br/>Shared by agents and editors"]
-    end
-    Workspace --> AppState
-    Automation --> AppState
-    Support --> AppState
-    Providers --> NativeState
-    Providers --> Project
-    Workers --> Project
-    Tools --> Project
-
-    Network["EXTERNAL SERVICES<br/>Provider APIs · Deepgram<br/>GitHub · optional Cloudflare"]
-    Providers --> Network
-    Workers --> Network
-    Support --> Network
-
-    classDef appView fill:#e7f0ff,stroke:#3266a8,color:#102c50
-    classDef service fill:#e6f4ec,stroke:#367754,color:#173e29
-    classDef runtime fill:#eee9fb,stroke:#7954a1,color:#392052
-    classDef data fill:#fff2d4,stroke:#a77c24,color:#513b12
-    classDef external fill:#fbe9e5,stroke:#ae6554,color:#582b20
-    class Desktop,Bridge,Clients appView
-    class Sessions,Workspace,Automation,Support service
-    class Providers,Workers,Tools runtime
-    class AppState,NativeState,Project data
-    class Network external
+    UI -->|agent requests via preload| Sessions
+    UI -->|file and layout requests via preload| Workspace
+    UI -->|feature requests via preload| Services
+    Native["Native agents<br/>Claude Code · Codex · OpenCode"]
+    Helpers["Native tools<br/>Shell / tmux · language servers"]
+    Workers["Workflow workers<br/>Approved scripts and Codex tasks"]
+    Sessions -->|starts and observes| Native
+    Workspace -->|starts and queries| Helpers
+    Services -->|schedules| Workers
+    AppData[("Application data<br/>Layouts · settings · operation journals")]
+    NativeData[("Provider data<br/>Conversation history · authentication")]
+    Files[("Project files<br/>Repositories and worktrees")]
+    Workspace -->|saves| AppData
+    Services -->|records operations in| AppData
+    Native -->|maintains| NativeData
+    Native -->|reads and edits| Files
+    Helpers -->|operates on| Files
+    Workers -->|runs tasks against| Files
+classDef external fill:#f1f4f6,stroke:#526477,color:#172b3a,stroke-dasharray:5 3
+classDef caution fill:#fff4d6,stroke:#886116,color:#432f10
+class Native,Helpers,NativeData,Files external
 ```
 
 </details>
@@ -78,7 +56,7 @@ The lower part of the map shows where work runs and where data lives. Agents, sh
 
 Remote clients connect to a limited set of app features. Automated workflows use a separate execution path: they run tasks through the Codex SDK and record progress so interrupted runs can be inspected and, when safe, resumed.
 
-*Map colors: blue = interfaces; green = shared app services; purple = running tools; gold = local data; coral = external services.*
+Blue identifies Agent Code components and state. Gray, dashed boxes identify external tools, clients or their data. Amber marks checks and cautions. Every view includes a key; the labels carry the meaning even without color.
 
 This reference describes the implementation at source revision `6a19e4ee`, inspected on 2026-09-11.
 
@@ -153,23 +131,29 @@ These are not interchangeable transports for the entire application API. For exa
 
 <!-- architecture-diagram: system-context -->
 
-[![System context](docs/architecture/diagrams/system-context.svg)](docs/architecture/diagrams/system-context.svg)
+[![What sits outside Agent Code?](docs/architecture/diagrams/system-context.svg)](docs/architecture/diagrams/system-context.svg)
+
+Agent Code coordinates local coding tools and uses external services for specific features. The model providers perform the model computation.
 
 <details>
 <summary>Mermaid source</summary>
 
 ```text
-flowchart LR
-    User["Developer<br/>Person"] -->|organizes and controls work| App["Agent Code<br/>Desktop software system"]
-    Phone["Paired remote browser<br/>External client"] <-->|restricted session protocol| App
-    Operator["External MCP operator<br/>External client"] -->|loopback capability calls| App
-    App <-->|launch, input and observations| Native["Native coding providers<br/>Claude / Codex / OpenCode"]
-    Native -->|model requests| Models["Model provider services<br/>External systems"]
-    Native -->|read and modify| Project["User repositories and worktrees<br/>Local files"]
-    App -->|authorized editing and Git inspection| Project
-    App -->|dictation audio| STT["Deepgram<br/>External transcription service"]
-    App -->|optional remote tunnel| Cloud["Cloudflare<br/>External transport service"]
-    App -->|skill acquisition and releases| GitHub["GitHub<br/>External source/artifact service"]
+flowchart TB
+accTitle: What sits outside Agent Code?
+accDescr: Agent Code coordinates local coding tools and uses external services for specific features. The model providers perform the model computation.
+%% scope: System context · external dependencies
+%% external: Person,Clients,Native,Models,Speech,GitHub,Tunnel
+Person["Developer"] -->|organizes work| App["Agent Code<br/>Desktop workspace"]
+    Clients["Paired browser / local MCP client"] -->|permitted app operations| App
+    App -->|runs and prompts| Native["Claude Code / Codex / OpenCode<br/>Local coding tools"]
+    Native -->|requests inference from| Models["Model provider services"]
+    App -->|transcribes audio with| Speech["Deepgram"]
+    App -->|downloads from| GitHub["GitHub"]
+    App -->|optional tunnel through| Tunnel["Cloudflare"]
+classDef external fill:#f1f4f6,stroke:#526477,color:#172b3a,stroke-dasharray:5 3
+classDef caution fill:#fff4d6,stroke:#886116,color:#432f10
+class Person,Clients,Native,Models,Speech,GitHub,Tunnel external
 ```
 
 </details>
@@ -197,38 +181,40 @@ These strategies recur in the component and runtime views. The decision catalog 
 
 ### 5.1 Containers and their responsibilities
 
-This C4 container view separates executable and data-store responsibilities within the Agent Code system. Native provider executables are independently installed integrations. The component sections below refine Electron main and the renderer; the package dependency graph describes source reuse rather than additional deployed services.
+This C4 container view shows the processes and their communication paths. Native provider executables are independently installed integrations. The following sections explain the components within main and the renderer; the repository and package tables explain source reuse. The deployment table in section 7 gives process owners and lifetimes.
 
 <!-- architecture-diagram: container-view -->
 
-[![Container view](docs/architecture/diagrams/container-view.svg)](docs/architecture/diagrams/container-view.svg)
+[![Which processes communicate with each other?](docs/architecture/diagrams/container-view.svg)](docs/architecture/diagrams/container-view.svg)
+
+Each window has its own renderer. Electron main is the shared endpoint for desktop calls, remote requests and managed native processes.
 
 <details>
 <summary>Mermaid source</summary>
 
 ```text
-flowchart LR
-    User["Desktop user<br/>Person"] --> Renderer
-    Phone["Paired browser<br/>Browser JavaScript client"] <-->|HTTP / WebSocket| Main
-    Operator["External MCP client"] -->|authenticated loopback HTTP| Main
-    subgraph App["Agent Code system"]
-        Renderer["Desktop renderer<br/>Electron + React + Zustand<br/>workspace, feed, editor and terminal UI"]
-        Main["Main process<br/>Electron + TypeScript / Node<br/>resource ownership and privileged services"]
-        Worker["Workflow worker<br/>Electron utility process<br/>approved workflow source"]
-        Host["Workflow provider host<br/>Node process + Codex SDK<br/>one tracked provider attempt"]
-        State["Application state store<br/>JSON / JSONL / encrypted blobs<br/>workspace, durable operations and diagnostics"]
-        BrowserState["Renderer preferences<br/>Chromium localStorage<br/>settings and editor path/geometry state"]
-        Renderer <-->|typed preload IPC| Main
-        Renderer --> BrowserState
-        Main <-->|worker protocol| Worker
-        Main -->|attempt lifecycle| Host
-        Main --> State
-    end
-    Main <-->|PTY or HTTP / SSE| Native["Native interactive runtimes<br/>Claude / Codex / OpenCode"]
-    Main <-->|stdio JSON-RPC| LSP["Language servers"]
-    Main <-->|PTY attachment| Shell["Shell / tmux"]
-    Native --> ProviderState["Native history and authentication<br/>Provider-owned storage"]
-    Host --> Codex["Selected native Codex executable"]
+flowchart TB
+accTitle: Which processes communicate with each other?
+accDescr: Each window has its own renderer. Electron main is the shared endpoint for desktop calls, remote requests and managed native processes.
+%% scope: C4 container view · communication interfaces, not every helper process
+%% external: Browser,Operator,Agents,Tools
+Windows["Window renderers<br/>React + preload · one per window"]
+    Browser["Remote browser"]
+    Operator["Local MCP client"]
+    Main["Electron main<br/>Shared Node services"]
+    Windows -->|calls through Electron IPC| Main
+    Browser -->|HTTP and WebSocket| Main
+    Operator -->|authenticated loopback HTTP| Main
+    Agents["Claude / Codex / OpenCode<br/>Native agent processes"]
+    Tools["Shells and language servers<br/>Native subprocesses"]
+    Workflow["Workflow execution<br/>Utility-process worker<br/>Provider host + Codex SDK / CLI"]
+    Main -->|PTY input or HTTP requests| Agents
+    Main -->|PTY or standard-stream JSON-RPC| Tools
+    Main -->|worker and provider-host messages| Workflow
+    Agents -->|history and live events| Main
+classDef external fill:#f1f4f6,stroke:#526477,color:#172b3a,stroke-dasharray:5 3
+classDef caution fill:#fff4d6,stroke:#886116,color:#432f10
+class Browser,Operator,Agents,Tools external
 ```
 
 </details>
@@ -265,36 +251,6 @@ The six application submodules at this revision are:
 | [workflow-mcp](https://github.com/Juliusolsson05/workflow-mcp/tree/b4b98f8d13f59bae0c999c927533f451b491496a) | `b4b98f8d` | Durable workflow service, store, scheduler, worker protocol and providers |
 
 Package capability is not the same as product capability. The speech package supports more than the application's configured Deepgram path. The workflow package also has standalone deployment facilities; Agent Code uses its embedded Electron integration, not a Docker service. OpenCode package support for a native operation does not imply a saved-session picker exists in the UI.
-
-<!-- architecture-diagram: source-dependencies -->
-
-[![Source dependencies](docs/architecture/diagrams/source-dependencies.svg)](docs/architecture/diagrams/source-dependencies.svg)
-
-<details>
-<summary>Mermaid source</summary>
-
-```text
-flowchart LR
-    Renderer[Renderer features and workspace] --> Shared[Shared types and pure logic]
-    Renderer --> PR[Provider renderer capabilities]
-    Preload[Preload domain APIs] --> Shared
-    Main[Main services] --> Shared
-    Main --> PM[Provider main registry and adapters]
-    PM --> CH[claude-code-headless]
-    PM --> CX[codex-headless]
-    PM --> OC[opencode-headless]
-    Main --> TP[agent-transcript-parser]
-    Main --> Voice[agent-voice-dictation]
-    Main --> Workflow[workflow-mcp]
-    Main --> Control[Control SDK host]
-    Renderer --> Contract[Control SDK contracts]
-    Remote[Remote browser] --> Shared
-    Remote --> Feed[Selected renderer feed modules]
-    Build[Build scripts] --> Artifacts[third_party manifests and runtime artifacts]
-    Reference[vendor source references]
-```
-
-</details>
 
 Build aliases resolve most local packages directly from source. Workflow integration has an explicit package build/type-resolution step. The presence of a convenient alias does not make Node-based headless code browser-safe. See [Electron Vite configuration](electron.vite.config.ts), [TypeScript configurations](tsconfig.json), [.gitmodules](.gitmodules), and [package scripts](package.json).
 
@@ -360,24 +316,29 @@ Workspace persistence uses main-process file IPC. Session runtime contains hot o
 
 <!-- architecture-diagram: renderer-state -->
 
-[![Renderer state](docs/architecture/diagrams/renderer-state.svg)](docs/architecture/diagrams/renderer-state.svg)
+[![Why does streaming output not save the whole workspace?](docs/architecture/diagrams/renderer-state.svg)](docs/architecture/diagrams/renderer-state.svg)
+
+Layout changes and agent output update different stores. Only workspace metadata goes through workspace persistence.
 
 <details>
 <summary>Mermaid source</summary>
 
 ```text
 flowchart TB
-    Entry[React entry and providers] --> App[App composition]
-    App --> Layout[Workspace hooks and layout selectors]
-    App --> Surfaces[Feature surfaces and overlays]
-    Settings[Persisted settings slice] --> Layout
-    Layout <--> Workspace[Workspace metadata]
-    Workspace --> Save[Preload workspace save]
-    Events[SessionFeed observations] --> Reducers[Session runtime ingestion and folds]
-    Reducers --> Runtime[Per-session runtime state]
-    Runtime --> Selectors[Per-session selectors]
-    Selectors --> Tiles[Agent and terminal leaves]
-    Tiles --> Ledger[Rendering ledger and feed]
+accTitle: Why does streaming output not save the whole workspace?
+accDescr: Layout changes and agent output update different stores. Only workspace metadata goes through workspace persistence.
+%% scope: Renderer data flow · persisted layout versus live session state
+subgraph Layout["Workspace changes"]
+        Action["Move a pane / change a tab"] -->|updates placement| Metadata["Workspace metadata"]
+        Metadata -->|persists via preload| Saved[("Saved workspace")]
+    end
+    subgraph Live["Live agent output"]
+        Event["SessionFeed event"] -->|folds into current state| Runtime["Per-session runtime"]
+        Runtime -->|updates that session's view| Feed["Conversation or terminal view"]
+    end
+    Metadata -->|selects which session to display| Feed
+classDef external fill:#f1f4f6,stroke:#526477,color:#172b3a,stroke-dasharray:5 3
+classDef caution fill:#fff4d6,stroke:#886116,color:#432f10
 ```
 
 </details>
@@ -404,31 +365,6 @@ The command catalog is context-free. The palette's registry resolves presentatio
 
 Hiding a command from the palette does not disable its native-menu or keyboard capability. Conversely, a keyboard shortcut does not bypass current availability merely because it skips the picker. The gateway rechecks surface, command conditions and rendered-view policy against fresh context, then applies single-flight protection by command ID.
 
-<!-- architecture-diagram: command-admission -->
-
-[![Command admission](docs/architecture/diagrams/command-admission.svg)](docs/architecture/diagrams/command-admission.svg)
-
-<details>
-<summary>Mermaid source</summary>
-
-```text
-flowchart TB
-    Palette[Palette selection] --> Dispatch[dispatchCommand]
-    Menu[Native menu] --> Dispatch
-    Key[Keybinding] --> Dispatch
-    Code[Programmatic invocation] --> Dispatch
-    Catalog[Full command catalog] --> Dispatch
-    State[Fresh command context] --> Admission[Availability and surface policy]
-    Dispatch --> Admission
-    Admission --> Guard[Command-ID single flight]
-    Guard --> Run[Command implementation]
-    Run --> Outcome[Explicit ran / unavailable / failed / in-flight outcome]
-    Outcome --> Recent[Record successful deliberate user use]
-    Visibility[Picker visibility preference] --> Palette
-```
-
-</details>
-
 Successful deliberate user invocations update recent-use ranking; background programmatic calls do not. Admission answers whether an operation makes sense now. It does not replace mutation-time checks when a target can disappear after admission. See [execution gateway](src/renderer/src/features/command-palette/executeCommand.ts), [catalog](src/renderer/src/features/command-palette/catalog.ts), [picker registry](src/renderer/src/features/command-palette/registry.ts), and [keybindings](src/renderer/src/features/command-keybindings).
 
 #### 5.5.2 Application capabilities
@@ -436,49 +372,6 @@ Successful deliberate user invocations update recent-use ranking; background pro
 The control SDK is a separate typed application capability layer. Capability descriptors specify schema, execution owner, effect, visibility and completion semantics. Main and renderer register implementations. A caller resolves a catalog and invokes a capability through a scoped host port rather than gaining arbitrary object access.
 
 Main capabilities have application-wide owners. Renderer capabilities have window/generation owners. Ownership observation can map session/project targets to windows; missing or conflicting ownership is an error, not permission to choose whichever window responds first.
-
-<!-- architecture-diagram: control-capabilities -->
-
-[![Control capabilities](docs/architecture/diagrams/control-capabilities.svg)](docs/architecture/diagrams/control-capabilities.svg)
-
-<details>
-<summary>Mermaid source</summary>
-
-```text
-classDiagram
-    class CapabilityDescriptor {
-        id
-        inputSchema
-        outputSchema
-        execution
-        effect
-        visibility
-    }
-    class CapabilityOwner {
-        kind
-        windowId
-        generation
-    }
-    class ControlHost {
-        registry
-        executor
-        forCaller()
-    }
-    class RendererBridge {
-        invoke()
-        retireGeneration()
-    }
-    class FileControlHistory {
-        received
-        result
-    }
-    ControlHost o-- CapabilityDescriptor
-    CapabilityDescriptor --> CapabilityOwner
-    ControlHost --> RendererBridge
-    ControlHost --> FileControlHistory
-```
-
-</details>
 
 Registration validates a complete set before replacing an existing generation. Navigation retires the renderer owner and settles pending operations with the appropriate uncertainty. Cleanup from an old React StrictMode registration cannot remove the newer registration. Main also checks sender/main-frame identity for renderer control messages.
 
@@ -490,33 +383,38 @@ An identical in-flight request joins its existing promise. A completed result ca
 
 <!-- architecture-diagram: control-invocation -->
 
-[![Control invocation](docs/architecture/diagrams/control-invocation.svg)](docs/architecture/diagrams/control-invocation.svg)
+[![Why can a timed-out command be unsafe to retry?](docs/architecture/diagrams/control-invocation.svg)](docs/architecture/diagrams/control-invocation.svg)
+
+The receipt is saved before dispatch. Once dispatch begins, a missing reply cannot prove the operation had no effect.
 
 <details>
 <summary>Mermaid source</summary>
 
 ```text
 sequenceDiagram
-    participant Caller
-    participant Executor
-    participant History
-    participant Owner as Main or renderer owner
-    Caller->>Executor: Invoke capability with optional requestKey
-    Executor->>Executor: Validate schema, visibility and owner
-    Executor->>History: Look up canonical request identity
-    alt Existing in-flight or completed request
-        Executor-->>Caller: Join or return recorded result
-    else New admitted request
-        Executor->>History: Persist received record
-        History-->>Executor: Receipt durable
-        Executor->>Owner: Execute against resolved owner generation
-        alt Owner returns conclusive result
-            Owner-->>Executor: Completed / pending / UI opened / blocked
-            Executor->>History: Persist result
-            Executor-->>Caller: Operation result
-        else Timeout, restart or owner retirement after dispatch
-            Executor->>History: Record uncertainty where possible
-            Executor-->>Caller: outcome_unknown, no blind replay
+accTitle: Why can a timed-out command be unsafe to retry?
+accDescr: The receipt is saved before dispatch. Once dispatch begins, a missing reply cannot prove the operation had no effect.
+%% scope: Control SDK · admission, execution and retry evidence
+%% external: Caller
+participant Caller as Caller
+    participant Exec as Control executor
+    participant Store as Operation history
+    participant Owner as Main / window owner
+    Caller->>Exec: Invoke with a request key
+    Exec->>Store: Find an existing request / result
+    alt Same request already exists
+        Exec-->>Caller: Join it or return its saved result
+    else New validated request
+        Exec->>Store: Save receipt
+        Store-->>Exec: Receipt is durable
+        Exec->>Owner: Execute against the current owner
+        alt Conclusive reply
+            Owner-->>Exec: Operation result
+            Exec->>Store: Save result
+            Exec-->>Caller: Return result
+        else Reply missing after dispatch
+            Exec-->>Caller: outcome_unknown
+            Note over Exec,Owner: The operation may already have happened<br/>Do not automatically repeat it
         end
     end
 ```
@@ -539,28 +437,34 @@ The HTTP host is application-lived, but it constructs a fresh protocol `McpServe
 
 <!-- architecture-diagram: builtin-mcp -->
 
-[![Builtin mcp](docs/architecture/diagrams/builtin-mcp.svg)](docs/architecture/diagrams/builtin-mcp.svg)
+[![How is an agent given access to app tools?](docs/architecture/diagrams/builtin-mcp.svg)](docs/architecture/diagrams/builtin-mcp.svg)
+
+A fresh token grants one managed session access to selected tools. Removing the registration revokes that token.
 
 <details>
 <summary>Mermaid source</summary>
 
 ```text
 sequenceDiagram
-    participant SM as SessionManager
-    participant Host as BuiltInMcpHttpHost
-    participant Native as Native provider
-    participant Server as Request-scoped McpServer
-    participant Service as App-owned service
-    SM->>Host: Register session and permitted domains
-    Host-->>SM: Endpoint and fresh bearer token
-    SM->>Native: Launch with private MCP configuration
-    Native->>Host: Authenticated MCP request
-    Host->>Host: Resolve current session scope
-    Host->>Server: Create server with only enabled tools
-    Server->>Service: Invoke with scoped caller identity
-    Service-->>Native: Structured result through request server
-    SM->>Host: Unregister on session teardown
-    Note over Native,Host: Old token no longer authorizes calls
+accTitle: How is an agent given access to app tools?
+accDescr: A fresh token grants one managed session access to selected tools. Removing the registration revokes that token.
+%% scope: Built-in MCP · grant, use and revoke session access
+%% external: Agent
+participant Manager as SessionManager
+    participant Host as Built-in MCP host
+    participant Agent as Native agent
+    participant Service as App service
+    Manager->>Host: Register session and allowed tool domains
+    Host-->>Manager: Endpoint and fresh token
+    Manager->>Agent: Launch with private MCP configuration
+    Agent->>Host: Call a tool with the token
+    Host->>Host: Check current registration and scope
+    Note over Host,Service: Create a protocol server for this request<br/>Reuse the existing app service
+    Host->>Service: Invoke within the caller's scope
+    Service-->>Host: Result
+    Host-->>Agent: Tool result
+    Manager->>Host: Remove registration during teardown
+    Note over Host,Agent: Later calls with the old token are rejected
 ```
 
 </details>
@@ -590,37 +494,26 @@ Closed child outputs can remain available through bounded tombstones: the curren
 
 <!-- architecture-diagram: orchestration-relationships -->
 
-[![Orchestration relationships](docs/architecture/diagrams/orchestration-relationships.svg)](docs/architecture/diagrams/orchestration-relationships.svg)
+[![How do root, parent and child agents relate?](docs/architecture/diagrams/orchestration-relationships.svg)](docs/architecture/diagrams/orchestration-relationships.svg)
+
+In this example, A is the run root and B is the direct parent of D. The bridge tracks both relationships while workspace actions place the agents.
 
 <details>
 <summary>Mermaid source</summary>
 
 ```text
-classDiagram
-    class OrchestrationRun {
-        rootSessionId
-        runId
-    }
-    class ManagedAgent {
-        sessionId
-        parentSessionId
-        role
-        bootstrapDeliveryState
-    }
-    class OrchestrationBridge {
-        queuedRendererRequests
-        relationshipIndex
-        closedOutputTombstones
-    }
-    class WorkspaceActions {
-        createChild()
-        placeSession()
-        closeChild()
-    }
-    OrchestrationRun "1" o-- "many" ManagedAgent
-    ManagedAgent --> ManagedAgent : parent relationship
-    OrchestrationBridge --> WorkspaceActions : serialized request
-    OrchestrationBridge --> ManagedAgent : tracks lineage
+flowchart TB
+accTitle: How do root, parent and child agents relate?
+accDescr: In this example, A is the run root and B is the direct parent of D. The bridge tracks both relationships while workspace actions place the agents.
+%% scope: Orchestration relationships · example, not a class schema
+subgraph Run["One orchestration run"]
+        direction TB
+        A["Agent A<br/>Run root"] -->|creates child| B["Agent B<br/>Parent of D"]
+        A -->|creates child| C["Agent C"]
+        B -->|creates child| D["Agent D<br/>Parent = B · root = A"]
+    end
+classDef external fill:#f1f4f6,stroke:#526477,color:#172b3a,stroke-dasharray:5 3
+classDef caution fill:#fff4d6,stroke:#886116,color:#432f10
 ```
 
 </details>
@@ -645,27 +538,26 @@ The application creates the service under Electron `userData/workflows`. It supp
 
 <!-- architecture-diagram: workflow-components -->
 
-[![Workflow components](docs/architecture/diagrams/workflow-components.svg)](docs/architecture/diagrams/workflow-components.svg)
+[![What runs a workflow and what runs an agent task?](docs/architecture/diagrams/workflow-components.svg)](docs/architecture/diagrams/workflow-components.svg)
+
+The workflow worker executes approved workflow code. Individual provider tasks run in tracked hosts; the service records their progress and results.
 
 <details>
 <summary>Mermaid source</summary>
 
 ```text
 flowchart TB
-    UI[Desktop workflow client] --> Bridge[WorkflowBridge]
-    MCP[Built-in workflow MCP] --> Service[WorkflowService]
-    Bridge --> Service
-    Service --> Approval[Exact-source approval store]
-    Service --> Store[FileWorkflowStore]
-    Service --> Scheduler[Shared work-conserving scheduler]
-    Service --> Worker[Workflow utility process]
-    Worker -->|agent requests| Service
-    Scheduler --> Provider[Codex workflow provider]
-    Provider --> Broker[Authentication broker]
-    Provider --> Host[Per-attempt provider host]
-    Host --> SDK[Codex SDK and selected CLI]
-    Store --> Files[Run manifests, journals, source and results]
-    Service --> Bridge
+accTitle: What runs a workflow and what runs an agent task?
+accDescr: The workflow worker executes approved workflow code. Individual provider tasks run in tracked hosts; the service records their progress and results.
+%% scope: Embedded workflow execution · script and provider-task boundaries
+Client["Desktop or enabled workflow MCP"] -->|starts approved run| Service["WorkflowService<br/>Approval · scheduling · run control"]
+    Service -->|launches approved script| Worker["Workflow worker<br/>Electron utility process"]
+    Worker -->|requests agent tasks| Service
+    Service -->|admits an attempt| Host["Provider host<br/>Codex SDK + selected CLI"]
+    Service -->|persists events and results| Store[("FileWorkflowStore<br/>Run journal and artifacts")]
+    Host -->|returns attempt evidence| Service
+classDef external fill:#f1f4f6,stroke:#526477,color:#172b3a,stroke-dasharray:5 3
+classDef caution fill:#fff4d6,stroke:#886116,color:#432f10
 ```
 
 </details>
@@ -700,33 +592,29 @@ Sources: [scheduler](https://github.com/Juliusolsson05/workflow-mcp/blob/b4b98f8
 
 <!-- architecture-diagram: workflow-lifecycle -->
 
-[![Workflow lifecycle](docs/architecture/diagrams/workflow-lifecycle.svg)](docs/architecture/diagrams/workflow-lifecycle.svg)
+[![When is a cancelled workflow actually stopped?](docs/architecture/diagrams/workflow-lifecycle.svg)](docs/architecture/diagrams/workflow-lifecycle.svg)
+
+Cancellation is a request until termination is established. If that cannot be proven, the run is interrupted rather than reported as cancelled.
 
 <details>
 <summary>Mermaid source</summary>
 
 ```text
 stateDiagram-v2
-    [*] --> queued
-    queued --> running: Admitted
-    queued --> cancellation_requested: Cancel
+accTitle: When is a cancelled workflow actually stopped?
+accDescr: Cancellation is a request until termination is established. If that cannot be proven, the run is interrupted rather than reported as cancelled.
+%% scope: Conceptual workflow states · cancellation path only
+[*] --> queued
+    queued --> running: Work admitted
+    queued --> cancellation_requested: Cancel before start
     running --> cancellation_requested: Cancel
-    running --> completed: All required work succeeds
-    running --> completed_with_errors: Policy accepts terminal task gaps
-    running --> failed: Run failure
-    running --> interrupted: Execution ownership interrupted
     cancellation_requested --> cancelled: Termination established
-    cancellation_requested --> interrupted: Cannot establish clean completion
-    completed --> [*]
-    completed_with_errors --> [*]
-    failed --> [*]
-    cancelled --> [*]
-    interrupted --> [*]
+    cancellation_requested --> interrupted: Termination cannot be established
 ```
 
 </details>
 
-This is the principal conceptual run-state view; exact transitions and attempt-level evidence belong to the package service. Recovery-required UI can reflect unresolved attempt evidence without being interchangeable with every run status. Best-effort policies can preserve explicit failed-task assignments rather than fabricate successful values.
+This view isolates cancellation. Normal execution can instead end in `completed`, `completed_with_errors` or `failed`; losing execution ownership can also leave a run `interrupted`. Exact transitions and attempt-level evidence belong to the package service. Recovery-required UI can reflect unresolved attempt evidence without being interchangeable with every run status. Best-effort policies can preserve explicit failed-task assignments rather than fabricate successful values.
 
 Resume is lineage-aware. Matching source and arguments can reuse completed siblings; edited workflows are constrained by the reusable prefix/evidence. Manual retry of terminal gaps creates traceable subsequent work. It does not erase failure events from the original run.
 
@@ -740,27 +628,32 @@ At this revision, bridge hints are coalesced on a 500 ms interval; a projected r
 
 <!-- architecture-diagram: workflow-synchronization -->
 
-[![Workflow synchronization](docs/architecture/diagrams/workflow-synchronization.svg)](docs/architecture/diagrams/workflow-synchronization.svg)
+[![How does a workflow view catch up after a missed update?](docs/architecture/diagrams/workflow-synchronization.svg)](docs/architecture/diagrams/workflow-synchronization.svg)
+
+An update notification says that more saved events exist. The client reads after its last applied cursor, so the saved journal can fill the gap.
 
 <details>
 <summary>Mermaid source</summary>
 
 ```text
 sequenceDiagram
-    participant Store as Durable workflow store
-    participant Service
-    participant Bridge
-    participant UI as Workflow client
-    Service->>Store: Append event and persist
-    Store-->>Service: Durable cursor
-    Service->>Bridge: Cursor advanced
-    Bridge-->>UI: Coalesced available-cursor hint
-    UI->>Bridge: Read after applied cursor
-    Bridge->>Store: Bounded read
-    Store-->>UI: Projected events and next cursor
-    UI->>UI: Apply events to run store
-    UI->>Bridge: Acknowledge cursor
-    Note over Bridge,UI: Missed hints recover by reading durable state
+accTitle: How does a workflow view catch up after a missed update?
+accDescr: An update notification says that more saved events exist. The client reads after its last applied cursor, so the saved journal can fill the gap.
+%% scope: Workflow synchronization · illustrative event cursors
+participant Service as Workflow service
+    participant Store as Saved run journal
+    participant Bridge as Workflow bridge
+    participant UI as Workflow view
+    Service->>Store: Append event
+    Store-->>Service: Saved cursor 42
+    Service->>Bridge: Cursor advanced to 42
+    Bridge-->>UI: More events available
+    Note over Bridge,UI: Notifications can be combined or missed
+    UI->>Bridge: Read after last applied cursor 39
+    Bridge->>Store: Read bounded page after 39
+    Store-->>Bridge: Events 40–42 and next cursor
+    Bridge-->>UI: Deliver page
+    UI->>UI: Apply events, then advance cursor
 ```
 
 </details>
@@ -772,28 +665,6 @@ Sources: [WorkflowBridge](src/main/workflows/WorkflowBridge.ts), [renderer workf
 External operator MCP is an independently enabled, application-wide connection. It is disabled by default, uses a configurable stable loopback port (default `47653`), and persists a private token in main-owned settings. Enabling it can reconcile a managed Codex configuration/skill integration so an external Codex client can discover the operator surface.
 
 It is not the built-in per-session MCP endpoint. Internal interactive agents and workflow provider configuration explicitly exclude the external operator server to avoid unintentionally granting general app control through inherited configuration.
-
-<!-- architecture-diagram: external-operator -->
-
-[![External operator](docs/architecture/diagrams/external-operator.svg)](docs/architecture/diagrams/external-operator.svg)
-
-<details>
-<summary>Mermaid source</summary>
-
-```text
-flowchart TB
-    Local[Local settings UI] --> Settings[External control settings]
-    Settings --> Host[Loopback MCP host]
-    Settings --> Integration[Managed external Codex integration]
-    Client[External operator client] -->|Bearer-authenticated POST /mcp| Host
-    Host --> Tools[Catalog / invoke / operation tools]
-    Tools --> Port[ControlHost.forCaller]
-    Port --> Main[Main capabilities]
-    Port --> Windows[Generation-owned renderer capabilities]
-    Port --> History[Durable control history]
-```
-
-</details>
 
 The HTTP host accepts only the intended loopback `Host` value and `/mcp` POST route, rejects requests carrying an `Origin`, compares bearer credentials in constant time, bounds request bodies to 2 MiB, and enforces header/request timeouts. Disabling it closes active connections. These defenses reduce browser-origin and local HTTP confusion; possession of the token still grants the externally exposed capability set.
 
@@ -815,25 +686,32 @@ Tunnel mode binds locally and runs bundled `cloudflared` against that loopback s
 
 <!-- architecture-diagram: remote-transports -->
 
-[![Remote transports](docs/architecture/diagrams/remote-transports.svg)](docs/architecture/diagrams/remote-transports.svg)
+[![What changes between LAN and tunnel access?](docs/architecture/diagrams/remote-transports.svg)](docs/architecture/diagrams/remote-transports.svg)
+
+Both routes reach the same restricted remote server. LAN uses plain HTTP/WebSocket; tunnel mode adds an external HTTPS endpoint and a local tunnel process.
 
 <details>
 <summary>Mermaid source</summary>
 
 ```text
 flowchart TB
-    subgraph LAN[LAN mode]
-        PhoneA[Paired browser] <-->|HTTP / WS| ListenerA[All-interface remote listener]
+accTitle: What changes between LAN and tunnel access?
+accDescr: Both routes reach the same restricted remote server. LAN uses plain HTTP/WebSocket; tunnel mode adds an external HTTPS endpoint and a local tunnel process.
+%% scope: Remote access · request routes; responses return along the same route
+%% external: DeviceA,DeviceB,Edge,Process
+subgraph LAN["LAN mode"]
+        DeviceA["Paired browser"] -->|HTTP / WebSocket over LAN| ListenerA["Listener on network interfaces"]
     end
-    subgraph Tunnel[Tunnel mode]
-        PhoneB[Paired browser] <-->|HTTPS / WSS| Edge[Cloudflare tunnel endpoint]
-        Edge <--> Cloudflared[Bundled cloudflared process]
-        Cloudflared <-->|Loopback HTTP| ListenerB[Local remote listener]
+    subgraph Tunnel["Tunnel mode"]
+        DeviceB["Paired browser"] -->|HTTPS / secure WebSocket| Edge["Cloudflare endpoint"]
+        Edge -->|tunnel connection| Process["Local cloudflared process"]
+        Process -->|loopback HTTP| ListenerB["Local-only listener"]
     end
-    ListenerA --> Server[RemoteServer]
-    ListenerB --> Server
-    Server --> Source[SessionFeedSource]
-    Source --> Manager[SessionManager]
+    ListenerA -->|serves restricted session API| Server["RemoteServer<br/>Pairing and device authorization"]
+    ListenerB -->|serves restricted session API| Server
+classDef external fill:#f1f4f6,stroke:#526477,color:#172b3a,stroke-dasharray:5 3
+classDef caution fill:#fff4d6,stroke:#886116,color:#432f10
+class DeviceA,DeviceB,Edge,Process external
 ```
 
 </details>
@@ -851,33 +729,6 @@ Sources: [remote authentication](src/main/remote/auth), [server](src/main/remote
 #### 5.9.3 Protocol scope and recovery
 
 The protocol supports ping, send-prompt, submit, interrupt, condition reply and history requests. It exposes agent sessions, not a general-purpose shell or every desktop IPC method. Current snapshots seed screen, conditions, readiness and process state; committed history is loaded on demand rather than retained as another full transcript cache in the server.
-
-<!-- architecture-diagram: remote-session-protocol -->
-
-[![Remote session protocol](docs/architecture/diagrams/remote-session-protocol.svg)](docs/architecture/diagrams/remote-session-protocol.svg)
-
-<details>
-<summary>Mermaid source</summary>
-
-```text
-sequenceDiagram
-    participant Device as Remote browser
-    participant Server as RemoteServer
-    participant Source as SessionFeedSource
-    participant Manager as SessionManager
-    Device->>Server: Pair with short-lived code
-    Server-->>Device: Device token
-    Device->>Server: Authenticated WebSocket upgrade
-    Server->>Source: Subscribe and obtain current snapshots
-    Source-->>Device: Session list and current state
-    Device->>Server: Request bounded history page
-    Server-->>Device: Native history projection and cursor
-    Device->>Server: Send prompt / offered condition action
-    Server->>Manager: Validate scope and use managed operation
-    Manager-->>Device: Result and subsequent observations
-```
-
-</details>
 
 Outbound backlog and frame limits prevent an unresponsive device from accumulating unlimited buffered data. The current backlog cap is 4 MiB. The server terminates an over-budget connection so the client can reconnect/backfill, rather than silently dropping structural events while pretending the stream is complete.
 
@@ -915,29 +766,35 @@ AI Workspace uses its own main-owned registry of attached file entries. A render
 
 <!-- architecture-diagram: editor-file-io -->
 
-[![Editor file io](docs/architecture/diagrams/editor-file-io.svg)](docs/architecture/diagrams/editor-file-io.svg)
+[![What happens if a file changes before you save?](docs/architecture/diagrams/editor-file-io.svg)](docs/architecture/diagrams/editor-file-io.svg)
+
+The editor sends the version it originally read. A mismatch rejects the save and leaves the dirty buffer available to the user.
 
 <details>
 <summary>Mermaid source</summary>
 
 ```text
 sequenceDiagram
-    participant Editor as Renderer editor
-    participant IPC as Editor filesystem IPC
-    participant Roots as Root or AI Workspace authority
-    participant IO as Bounded file I/O
-    participant Disk
-    Editor->>IPC: Read path within requested workspace
-    IPC->>Roots: Authorize renderer and canonical target
-    Roots-->>IPC: Authorized root/entry or refusal
-    IPC->>IO: Read regular file within byte limit
-    IO->>Disk: Open and verify file identity
-    Disk-->>Editor: Text and opaque version through IPC
-    Editor->>IPC: Save text with expected version
-    IPC->>Roots: Revalidate authority
-    IPC->>IO: Serialize same-path mutation
-    IO->>Disk: Write sibling temp, sync, recheck, publish
-    IO-->>Editor: New version or conflict
+accTitle: What happens if a file changes before you save?
+accDescr: The editor sends the version it originally read. A mismatch rejects the save and leaves the dirty buffer available to the user.
+%% scope: Editor save · version conflict detection, not an OS-wide atomic compare-and-swap
+%% external: Disk
+participant Editor as Editor buffer
+    participant Main as Authorized file I/O
+    participant Disk as Project file
+    Editor->>Main: Read an allowed file
+    Main->>Disk: Open and verify file
+    Disk-->>Main: Current bytes and file evidence
+    Main-->>Editor: Text and version V1
+    Note over Editor,Disk: The user edits locally<br/>Another program may also change the file
+    Editor->>Main: Save new text, expected version V1
+    Main->>Disk: Recheck current file evidence
+    alt File no longer matches V1
+        Main-->>Editor: Conflict, retain local edits
+    else Version still matches
+        Main->>Disk: Write synced temp, recheck, publish
+        Main-->>Editor: New version or conflict
+    end
 ```
 
 </details>
@@ -968,41 +825,6 @@ Deleting or clearing a collection changes its reference set. File-content mutati
 
 `LspManager` shares a language-server process for a workspace root/server specification and reference-counts document clients. It bridges JSON-RPC over stdio, synchronizes documents, and supplies completions, hover, diagnostics, symbols, definitions, references and semantic tokens. Diagnostics are file-scoped and may need to reach several views/windows.
 
-<!-- architecture-diagram: language-servers -->
-
-[![Language servers](docs/architecture/diagrams/language-servers.svg)](docs/architecture/diagrams/language-servers.svg)
-
-<details>
-<summary>Mermaid source</summary>
-
-```text
-classDiagram
-    class MonacoClient {
-        documentUri
-        clientId
-    }
-    class LspManager {
-        serversByWorkspaceAndSpec
-        documentReferences
-        requestTimeouts
-    }
-    class LspServerSpec {
-        id
-        languages
-        resolveCommand()
-    }
-    class LanguageServerProcess {
-        stdinJsonRpc
-        stdoutJsonRpc
-    }
-    MonacoClient --> LspManager : authorized document operations
-    LspManager --> LspServerSpec : resolve supported server
-    LspManager "1" o-- "many" LanguageServerProcess
-    LspManager --> MonacoClient : diagnostics and results
-```
-
-</details>
-
 JavaScript/TypeScript use the packaged npm `typescript-language-server`, launched through Electron with `ELECTRON_RUN_AS_NODE`. Python (`pyright-langserver`), Rust (`rust-analyzer`) and Go (`gopls`) are optional executable discoveries. Availability is resolved again when a server is created, allowing installation during an app run.
 
 Virtual document URIs under an application-specific workspace path support non-file editor content without claiming those URIs are ordinary saved project files. General requests and initialization have separate timeouts. Filesystem/LSP authorization shares the root authority; a renderer does not get unrestricted language-server access by inventing a root.
@@ -1024,27 +846,6 @@ Source: [Git IPC and queue](src/main/ipc/git.ts), [shared Git contracts](src/sha
 #### 5.11.2 Where an agent is working
 
 The launch `cwd` is a useful default but not a complete account of current work. A native agent may run commands or edit files in another worktree. Shared work-context extractors interpret transcript evidence, match paths to known worktrees, and track active/primary/touched context with confidence and provenance.
-
-<!-- architecture-diagram: worktree-attribution -->
-
-[![Worktree attribution](docs/architecture/diagrams/worktree-attribution.svg)](docs/architecture/diagrams/worktree-attribution.svg)
-
-<details>
-<summary>Mermaid source</summary>
-
-```text
-flowchart TB
-    Native[Provider transcript event] --> Extract[Work-context extractors]
-    Git[Known worktree identities] --> Match[Canonical path matching]
-    Extract --> Match
-    Match --> State[Active / primary / touched context]
-    State --> UI[Agent and worktree UI]
-    Files[Historical native transcripts] --> Index[WorktreeActivityIndex]
-    Index --> Summaries[Cached historical activity summaries]
-    Summaries --> UI
-```
-
-</details>
 
 This is evidence-based attribution, not an OS-wide file audit. Confidence and fallback behavior remain visible in the model. The live tracker bounds its timeline and deduplication keys. Historical discovery belongs to a main service so every UI surface does not independently walk all provider history.
 
@@ -1082,25 +883,34 @@ Targets come from provider policy: Claude's configured/default skill root, Codex
 
 <!-- architecture-diagram: skill-materialization -->
 
-[![Skill materialization](docs/architecture/diagrams/skill-materialization.svg)](docs/architecture/diagrams/skill-materialization.svg)
+[![What protects a skill edited outside Agent Code?](docs/architecture/diagrams/skill-materialization.svg)](docs/architecture/diagrams/skill-materialization.svg)
+
+An ownership record must match the file being changed. The service records pending work before publishing approved bytes, so recovery can check what happened.
 
 <details>
 <summary>Mermaid source</summary>
 
 ```text
 sequenceDiagram
-    participant UI as Skill settings
-    participant Service as Managed skills service
-    participant State as Desired state and ownership journal
-    participant Target as Provider skill files
-    UI->>Service: Preview/import/edit desired skill
-    Service->>Target: Inspect existing paths, versions and digests
-    Service-->>UI: Conflicts and proposed materialization
-    UI->>Service: Apply selected change
-    Service->>State: Record pending operation and ownership evidence
-    Service->>Target: Publish exact approved bytes safely
-    Service->>State: Commit materialization revision
-    Note over State,Target: Recovery reconciles pending operations against exact file evidence
+accTitle: What protects a skill edited outside Agent Code?
+accDescr: An ownership record must match the file being changed. The service records pending work before publishing approved bytes, so recovery can check what happened.
+%% scope: Managed skill update · simplified owned-file path
+%% external: File
+participant UI as Skill settings
+    participant Service as Managed skills
+    participant Journal as Ownership journal
+    participant File as Provider skill file
+    UI->>Service: Preview a skill update
+    Service->>File: Read current bytes and identity
+    alt File no longer matches managed ownership
+        Service-->>UI: Conflict, do not overwrite
+    else Ownership permits the update
+        Service-->>UI: Preview proposed changes
+        UI->>Service: Apply approved update
+        Service->>Journal: Record pending operation and hashes
+        Service->>File: Safely publish approved bytes
+        Service->>Journal: Commit new ownership revision
+    end
 ```
 
 </details>
@@ -1127,33 +937,6 @@ Sources: [GitHub source resolver](src/main/agentCodeConventions/githubSkillSourc
 
 The renderer captures microphone audio and manages the active composer interaction. Main owns the provider connection and credentials. Audio chunks cross IPC into a streaming session or a batch fallback; transcription events return to the appropriate UI path. The application integration uses Deepgram even though the reusable package has a broader API.
 
-<!-- architecture-diagram: dictation -->
-
-[![Dictation](docs/architecture/diagrams/dictation.svg)](docs/architecture/diagrams/dictation.svg)
-
-<details>
-<summary>Mermaid source</summary>
-
-```text
-sequenceDiagram
-    participant User
-    participant Renderer as Dictation/composer UI
-    participant Main as Dictation IPC/controller
-    participant Key as Runtime key resolver
-    participant STT as Deepgram
-    User->>Renderer: Start dictation gesture
-    Renderer->>Main: Start transcription session
-    Main->>Key: Resolve environment override or encrypted saved key
-    Renderer->>Main: Audio chunks
-    Main->>STT: Streaming or batch transcription
-    STT-->>Main: Partial/final text or provider error
-    Main-->>Renderer: Transcription result
-    Renderer->>Renderer: Integrate with owning composer draft
-    User->>Renderer: Review/submit through normal input path
-```
-
-</details>
-
 The composer path must retain the intended target across focus and mount changes. Global hotkeys route to focused/recently focused windows; renderer ownership coordinates the active recording/composer. Audio transcription is not automatically authorization to submit a prompt to a newly focused agent.
 
 Ordinary accelerators use Electron `globalShortcut`, which provides activation rather than a physical key-up edge; that path uses toggle behavior. Fn/bare-modifier bindings require the native macOS event-tap helper and its Accessibility permission, supporting real hold/release edges. Reconfiguration drains an active recording edge before replacing the binding.
@@ -1178,19 +961,24 @@ Encryption at rest and permission to reveal are separate. Reveal, copy and refer
 
 <!-- architecture-diagram: vault-lifecycle -->
 
-[![Vault lifecycle](docs/architecture/diagrams/vault-lifecycle.svg)](docs/architecture/diagrams/vault-lifecycle.svg)
+[![Can a late authentication result unlock a locked vault?](docs/architecture/diagrams/vault-lifecycle.svg)](docs/architecture/diagrams/vault-lifecycle.svg)
+
+Unlock succeeds only if no intervening lock has changed the generation. An older authentication prompt cannot restore access.
 
 <details>
 <summary>Mermaid source</summary>
 
 ```text
 stateDiagram-v2
-    [*] --> Locked
-    Locked --> UnlockPending: Reveal/copy/resolve requests authentication
-    UnlockPending --> Unlocked: Authentication succeeds in same generation
-    UnlockPending --> Locked: Cancel, failure or intervening lock
-    Unlocked --> Unlocked: Gated secret operation
-    Unlocked --> Locked: Explicit lock or new application run
+accTitle: Can a late authentication result unlock a locked vault?
+accDescr: Unlock succeeds only if no intervening lock has changed the generation. An older authentication prompt cannot restore access.
+%% scope: Vault access · conceptual states over the authentication generation
+[*] --> Locked
+    Locked --> Authenticating: User requests a secret
+    Authenticating --> Unlocked: Authentication succeeds<br/>and generation still matches
+    Authenticating --> Locked: Cancel, failure or intervening lock
+    Unlocked --> Locked: User locks or application restarts
+    Unlocked --> Unlocked: Reveal / copy / resolve a secret
 ```
 
 </details>
@@ -1211,40 +999,17 @@ Main is a composition root. Most services accept dependencies or small ports rat
 
 Startup ordering prevents several observable races: environment variables must exist before modules read them, lineage must be restored before a window asks about workflow history, MCP launch configuration must be available before provider spawn, and window ownership must exist before the first session event.
 
-<!-- architecture-diagram: startup -->
+Read startup in this dependency order:
 
-[![Startup](docs/architecture/diagrams/startup.svg)](docs/architecture/diagrams/startup.svg)
+1. Acquire the shared-state lock and start incident evidence.
+2. Resolve tool paths and runtime resources.
+3. Create the workflow service and restore its saved associations. Failure here stops startup.
+4. Reconcile managed tmux references and start the built-in MCP host.
+5. Construct SessionManager, inject its services, and connect event forwarding.
+6. Open the workspace store, register desktop APIs, and create the restored windows.
+7. Recover individual sessions through workspace actions after the windows exist.
 
-<details>
-<summary>Mermaid source</summary>
-
-```text
-sequenceDiagram
-    participant Boot as Main entry
-    participant State as State lock and diagnostics
-    participant Setup as Toolchain setup
-    participant WF as Workflow service and bridge
-    participant Tmux as tmux registry
-    participant MCP as Built-in MCP host
-    participant Sessions as SessionManager
-    participant Windows as Workspace store and windows
-    Boot->>State: Acquire state-process lock, begin run journal
-    Boot->>Setup: Initialize cached paths and runtime tools
-    Boot->>WF: Create service, restore bridge lineage
-    Note over Boot,WF: Failure here aborts startup
-    Boot->>Tmux: Detect bundled tmux and reconcile persisted references
-    Boot->>MCP: Listen on loopback ephemeral port
-    Boot->>Sessions: Construct manager with runtime dependencies
-    Boot->>MCP: Install service dependencies
-    Boot->>Sessions: Wire event forwarding and lifecycle services
-    Boot->>Windows: Open workspace envelope, register IPC/control
-    Boot->>Windows: Create restored windows
-    Windows->>Sessions: Recover individual sessions through renderer actions
-```
-
-</details>
-
-The exact implementation interleaves diagnostic marks and setup work; the diagram shows dependency order. It does not imply all diagnostic objects are created at the point they are first used. See [main startup](src/main/index.ts).
+Diagnostic setup is interleaved with these steps. The tmux format discrepancy at this source snapshot is described in section 6.6. See [main startup](src/main/index.ts).
 
 Toolchain setup stores resolved executable paths and checks them again when necessary. A captured original `PATH` prevents repeated setup from continually prepending duplicate directories. Provider startup uses a validated absolute CLI path; a missing CLI is an explicit launch error rather than an accidental shell lookup. CLI updates coordinate with active sessions and workflow admission, especially Codex, so new work is not admitted into a binary replacement window. See [setup services](src/main/setup).
 
@@ -1252,38 +1017,29 @@ Shutdown has vetoes. An unsaved editor can refuse a window close. Workflow shutd
 
 <!-- architecture-diagram: shutdown -->
 
-[![Shutdown](docs/architecture/diagrams/shutdown.svg)](docs/architecture/diagrams/shutdown.svg)
+[![What can stop the application from quitting?](docs/architecture/diagrams/shutdown.svg)](docs/architecture/diagrams/shutdown.svg)
+
+Quit proceeds through workflow, editor and process checks. A failed check keeps the application available instead of pretending shutdown completed.
 
 <details>
 <summary>Mermaid source</summary>
 
 ```text
-sequenceDiagram
-    participant User
-    participant App as Electron lifecycle
-    participant WF as WorkflowService
-    participant Window as Renderer/editor guard
-    participant SM as Session shutdown gate
-    participant Aux as Auxiliary services and journals
-    User->>App: Quit
-    App->>WF: Stop durable workflow execution
-    alt Workflow stop cannot finish safely
-        WF-->>App: Failure, retain application for retry
-    else Workflow stop completes
-        App->>Window: Close / beforeunload
-        alt Unsaved changes veto close
-            Window-->>App: Keep editing
-        else Close is allowed
-            App->>SM: will-quit: killAll and await teardown
-            alt Owned process teardown fails
-                SM-->>App: Block quit, report failure
-            else Teardown completes
-                App->>Aux: Flush queues, stop servers and helpers
-                App->>Aux: Mark clean run and release state lock
-                App-->>User: Application exits
-            end
-        end
-    end
+flowchart TB
+accTitle: What can stop the application from quitting?
+accDescr: Quit proceeds through workflow, editor and process checks. A failed check keeps the application available instead of pretending shutdown completed.
+%% scope: Application quit · required gates; auxiliary hooks may overlap
+Quit["User requests quit"] -->|attempt stop| Workflow{"Workflows<br/>safely stopped?"}
+    Workflow -->|yes| Editor{"Editor close<br/>allowed?"}
+    Editor -->|yes| Processes{"Processes<br/>torn down?"}
+    Workflow -->|no| Stay["Keep app open<br/>Report failure / preserve user work"]
+    Editor -->|no, unsaved work| Stay
+    Processes -->|no| Stay
+    Processes -->|yes| Cleanup["Finish lifecycle cleanup<br/>Mark clean run and release lock"]
+    Cleanup -->|complete| Exit["Application exits"]
+    class Workflow,Editor,Processes caution
+classDef external fill:#f1f4f6,stroke:#526477,color:#172b3a,stroke-dasharray:5 3
+classDef caution fill:#fff4d6,stroke:#886116,color:#432f10
 ```
 
 </details>
@@ -1306,63 +1062,45 @@ Closing a window while the app continues can transfer its sessions to a survivin
 
 <!-- architecture-diagram: workspace-model -->
 
-[![Workspace model](docs/architecture/diagrams/workspace-model.svg)](docs/architecture/diagrams/workspace-model.svg)
+[![How does the grid refer to its sessions?](docs/architecture/diagrams/workspace-model.svg)](docs/architecture/diagrams/workspace-model.svg)
+
+A split contains two tiles; a leaf refers to session metadata by ID. Rearranging tiles changes placement without making the layout own a provider process.
 
 <details>
 <summary>Mermaid source</summary>
 
 ```text
 classDiagram
-    class WorkspaceState {
-        tabs
-        activeTabId
-        sessions
-        gridRelatedSelections
-        dispatchMode
-        detachedSessions
-        pinnedSessionIds
-    }
-    class Tab {
-        id
-        title
-        focusedSessionId
+accTitle: How does the grid refer to its sessions?
+accDescr: A split contains two tiles; a leaf refers to session metadata by ID. Rearranging tiles changes placement without making the layout own a provider process.
+%% scope: Grid layout · selected type relationships, not runtime class inheritance
+direction LR
+    class Tab
+    class TileNode {
+        <<union>>
     }
     class TileLeaf {
         sessionId
-    }
-    class TileNode {
-        <<union>>
     }
     class TileSplit {
         direction
         ratio
     }
     class SessionMeta {
-        cwd
         kind
         providerRuntime
-        linkedParentId
-        orchestrationParentId
+        cwd
     }
-    class DispatchLayout {
-        lanes
-        rows
-        focus
-        scope
-    }
-    WorkspaceState "1" *-- "many" Tab
-    Tab --> TileNode : root
+    Tab *-- TileNode : root
     TileNode <|-- TileLeaf : leaf variant
     TileNode <|-- TileSplit : split variant
     TileSplit "1" *-- "2" TileNode : children
-    TileLeaf --> SessionMeta : sessionId
-    WorkspaceState *-- DispatchLayout
-    DispatchLayout --> SessionMeta : lane placement
+    TileLeaf ..> SessionMeta : references sessionId
 ```
 
 </details>
 
-`TileNode` is a TypeScript discriminated union, shown with variant relationships rather than runtime class inheritance. Each split has exactly two children, either of which can be a leaf or another split. A split ratio is normalized to the allowed range; a tab's focused session must be an actual leaf.
+`TileNode` is a TypeScript discriminated union: a leaf references a session, while a split contains child tiles. The class notation here summarizes that data structure. Each split has exactly two children, either of which can be a leaf or another split. A split ratio is normalized to the allowed range; a tab's focused session must be an actual leaf.
 
 Grid placement, Dispatch Mode lanes, pinning, detached sessions, and buried sessions describe visibility and organization. They do not by themselves terminate a backend. Dispatch lanes are a flat ordered sequence with explicit row structure; row weights and scope are normalized separately. Empty lanes remain meaningful and are not automatically populated from the session pool.
 
@@ -1374,23 +1112,28 @@ Restoration first publishes durable layout and session metadata using stable app
 
 <!-- architecture-diagram: workspace-recovery -->
 
-[![Workspace recovery](docs/architecture/diagrams/workspace-recovery.svg)](docs/architecture/diagrams/workspace-recovery.svg)
+[![Why does a failed recovery leave the pane visible?](docs/architecture/diagrams/workspace-recovery.svg)](docs/architecture/diagrams/workspace-recovery.svg)
+
+Saved placement can be restored before a backend exists. Failure remains visible so the user can inspect it and explicitly retry.
 
 <details>
 <summary>Mermaid source</summary>
 
 ```text
 stateDiagram-v2
-    [*] --> SavedMetadata
-    SavedMetadata --> VisibleShell: Publish restored layout
-    VisibleShell --> Hibernated: Backend not requested
-    VisibleShell --> Recovering: Request stable-ID recovery
-    Recovering --> Live: Backend adopted or started
-    Recovering --> FailedVisible: Recovery fails
-    FailedVisible --> Recovering: Explicit retry
+accTitle: Why does a failed recovery leave the pane visible?
+accDescr: Saved placement can be restored before a backend exists. Failure remains visible so the user can inspect it and explicitly retry.
+%% scope: Workspace recovery · conceptual states, not literal enum values
+[*] --> SavedLayout
+    SavedLayout --> VisiblePane: Restore placement
+    VisiblePane --> Hibernated: Backend not requested
+    VisiblePane --> Recovering: Request recovery
     Hibernated --> Recovering: Wake
+    Recovering --> Live: Adopt or start backend
+    Recovering --> FailedPane: Recovery fails
+    Live --> FailedPane: Backend fails
+    FailedPane --> Recovering: Explicit retry
     Live --> Hibernated: Hibernate
-    Live --> FailedVisible: Backend failure
 ```
 
 </details>
@@ -1400,49 +1143,6 @@ This is a conceptual restoration view; process, transcript and input readiness h
 ### 6.3 Session lifecycle
 
 `SessionManager` is the main authority for interactive sessions. It manages live registry entries, spawning generations, recovery operations, prompt reservations, readiness revisions, last observations, PTY attachment state, and Codex replacement coordination. It is not the transcript parser or the renderer's workspace store.
-
-<!-- architecture-diagram: session-adapters -->
-
-[![Session adapters](docs/architecture/diagrams/session-adapters.svg)](docs/architecture/diagrams/session-adapters.svg)
-
-<details>
-<summary>Mermaid source</summary>
-
-```text
-classDiagram
-    class SessionManager {
-        spawn()
-        recover()
-        deliverPromptToAgent()
-        killAll()
-    }
-    class AgentSession {
-        <<interface>>
-        start()
-        stop()
-        write()
-        resize()
-        resolveCondition()
-    }
-    class ClaudeSession
-    class CodexSession
-    class OpencodeSession
-    class OpencodeTerminalSession
-    class ProviderRegistry {
-        createSession
-        createTerminalSession
-        listSessions
-        resolveTranscriptPath
-    }
-    SessionManager --> ProviderRegistry : selects adapter
-    SessionManager o-- AgentSession : owns resource lifetime
-    AgentSession <|.. ClaudeSession
-    AgentSession <|.. CodexSession
-    AgentSession <|.. OpencodeSession
-    AgentSession <|.. OpencodeTerminalSession
-```
-
-</details>
 
 The interface has optional capabilities because a structured service session cannot honestly implement all PTY behaviors. The selected adapter, runtime kind, and feature policy determine what is available. A no-op `write` method on a structured OpenCode adapter is not a supported prompt path.
 
@@ -1454,28 +1154,30 @@ The manager checks the working directory before committing to process resources.
 
 <!-- architecture-diagram: session-spawn -->
 
-[![Session spawn](docs/architecture/diagrams/session-spawn.svg)](docs/architecture/diagrams/session-spawn.svg)
+[![Why assign a window before starting the agent?](docs/architecture/diagrams/session-spawn.svg)](docs/architecture/diagrams/session-spawn.svg)
+
+An agent can emit events immediately. Its application session ID must already belong to the requesting window before those events are forwarded.
 
 <details>
 <summary>Mermaid source</summary>
 
 ```text
 sequenceDiagram
-    participant UI as Workspace action
-    participant SM as SessionManager
-    participant Owner as Window registry
-    participant MCP as MCP host
-    participant Adapter as Provider adapter
-    UI->>SM: Spawn requested kind, runtime, cwd
-    SM-->>UI: Early allocated sessionId callback
-    UI->>Owner: Claim session for requesting window
-    SM->>SM: Validate cwd, reserve generation, resolve executable
-    SM->>MCP: Register session and enabled domains
-    SM->>Adapter: Construct and wire fenced listeners
-    SM->>Adapter: start()
-    Adapter-->>SM: Process, transcript, readiness and semantic observations
-    SM->>Owner: Route only current-entry observations
-    SM-->>UI: Spawn result or explicit failure
+accTitle: Why assign a window before starting the agent?
+accDescr: An agent can emit events immediately. Its application session ID must already belong to the requesting window before those events are forwarded.
+%% scope: Session creation · window ownership before first progress
+participant UI as Workspace action
+    participant Main as SessionManager
+    participant Windows as Window registry
+    participant Agent as Provider adapter
+    UI->>Main: Spawn agent in a working directory
+    Main-->>UI: Early sessionId callback
+    UI->>Windows: Claim session for this window
+    Main->>Main: Validate launch, register MCP, wire listeners
+    Main->>Agent: Start native runtime
+    Agent-->>Main: First progress event
+    Main->>Windows: Route current session generation's event
+    Main-->>UI: Spawn result or explicit failure
 ```
 
 </details>
@@ -1512,30 +1214,29 @@ The result reports success evidence or a failure stage, a retry-safety decision,
 
 <!-- architecture-diagram: prompt-delivery -->
 
-[![Prompt delivery](docs/architecture/diagrams/prompt-delivery.svg)](docs/architecture/diagrams/prompt-delivery.svg)
+[![When is it safe to retry a prompt?](docs/architecture/diagrams/prompt-delivery.svg)](docs/architecture/diagrams/prompt-delivery.svg)
+
+A failure before writing is different from a failure after input may have reached the agent. The result carries that distinction back to the caller.
 
 <details>
 <summary>Mermaid source</summary>
 
 ```text
-sequenceDiagram
-    participant Composer as Composer or authorized caller
-    participant Manager as SessionManager
-    participant Delivery as Provider delivery implementation
-    participant Native as Native runtime
-    Composer->>Manager: deliverPromptToAgent(text, options)
-    Manager->>Manager: Reserve current live session entry
-    alt Another delivery owns the session
-        Manager-->>Composer: Rejected, retry-safe before writes
-    else Reservation granted
-        Manager->>Delivery: Deliver with fenced write functions
-        Delivery->>Native: Establish provider-specific readiness
-        Delivery->>Native: Write or submit prompt
-        Native-->>Delivery: Acceptance evidence or uncertainty
-        Delivery-->>Manager: Result with disposition and write state
-        Manager->>Manager: Release reservation
-        Manager-->>Composer: Preserve evidence in result
-    end
+flowchart TB
+accTitle: When is it safe to retry a prompt?
+accDescr: A failure before writing is different from a failure after input may have reached the agent. The result carries that distinction back to the caller.
+%% scope: Prompt delivery · decision summary over provider-specific evidence
+Request["Submit prompt"] -->|reserve the current live session| Reserved{"Reservation<br/>granted?"}
+    Reserved -->|no| Safe["Rejected before writes<br/>Retry is safe"]
+    Reserved -->|yes| Submit["Check readiness and deliver<br/>with the provider-specific protocol"]
+    Submit -->|inspect result| Written{"Could input<br/>have arrived?"}
+    Written -->|definitely no| Safe
+    Written -->|yes or uncertain| Accepted{"Acceptance<br/>proven?"}
+    Accepted -->|durable or transport acceptance| Report["Return the acceptance kind<br/>The guarantees differ by provider"]
+    Accepted -->|no conclusive acceptance| Unknown["Outcome uncertain<br/>Do not blindly submit again"]
+    class Reserved,Written,Accepted,Unknown caution
+classDef external fill:#f1f4f6,stroke:#526477,color:#172b3a,stroke-dasharray:5 3
+classDef caution fill:#fff4d6,stroke:#886116,color:#432f10
 ```
 
 </details>
@@ -1591,29 +1292,6 @@ Sources: [history loader](src/main/sessions/historyLoader.ts), [transcript reade
 
 Provider switch, duplicate and rewind share a transcript engine. Each native provider has an adapter for reading and writing its format. The parser package decodes into a neutral `ConversationDocument`, applies operations and target projection, then writes a provider-native artifact.
 
-<!-- architecture-diagram: transcript-projection -->
-
-[![Transcript projection](docs/architecture/diagrams/transcript-projection.svg)](docs/architecture/diagrams/transcript-projection.svg)
-
-<details>
-<summary>Mermaid source</summary>
-
-```text
-flowchart TB
-    Claude[Claude native transcript] --> Decode[Provider decoder]
-    Codex[Codex rollout] --> Decode
-    OpenCode[OpenCode native export] --> Decode
-    Decode --> Document[ConversationDocument]
-    Document --> Operations[Switch / duplicate / rewind / context planning]
-    Operations --> Project[Target native projection]
-    Project --> COut[Claude native artifact]
-    Project --> XOut[Codex native artifact]
-    Project --> OOut[OpenCode native import]
-    Project --> Report[Loss, repair and validation report]
-```
-
-</details>
-
 This avoids a separate converter for every ordered provider pair. It does not eliminate provider differences. Archive preservation can retain opaque provenance that a native resume target cannot safely execute. A successful archival round trip is weaker evidence than verified native resume compatibility.
 
 Native projection is constrained by provider profiles and tested evidence. Unsupported or repaired content is reported. Codex encrypted compaction state cannot simply be transplanted as a portable summary. A Claude compaction boundary is not a summary until its durable summary carrier exists. Provider API failures are not rewritten as assistant speech to make a transcript appear complete.
@@ -1628,31 +1306,35 @@ Context estimation is not an exact tokenizer guarantee. The planner uses target 
 
 <!-- architecture-diagram: provider-switch -->
 
-[![Provider switch](docs/architecture/diagrams/provider-switch.svg)](docs/architecture/diagrams/provider-switch.svg)
+[![When does switching create the new conversation?](docs/architecture/diagrams/provider-switch.svg)](docs/architecture/diagrams/provider-switch.svg)
+
+The engine decodes the source into a neutral conversation model and writes a new native identity before the workspace replaces the pane.
 
 <details>
 <summary>Mermaid source</summary>
 
 ```text
 sequenceDiagram
-    participant UI as Switch action
+accTitle: When does switching create the new conversation?
+accDescr: The engine decodes the source into a neutral conversation model and writes a new native identity before the workspace replaces the pane.
+%% scope: Provider switch · source validation and target-before-pane ordering
+%% external: Source,Target
+participant UI as Switch action
     participant Engine as Transcript engine
-    participant Source as Source adapter
-    participant Planner as Context planner
-    participant Target as Target adapter
-    participant Workspace
-    UI->>Engine: Source identity, target provider and policy
+    participant Source as Source history
+    participant Target as Target history
+    UI->>Engine: Selected source, target and policy
     Engine->>Source: Read exact native conversation
-    Source-->>Engine: Decoded conversation and provenance
-    Engine->>Planner: Plan target history and report losses
-    alt Source action required but not authorized
-        Planner-->>UI: Explicit required action / refusal
-    else Projection admitted
-        Engine->>Target: Project and write new native identity
-        Target-->>Engine: Native resume locator
-        Engine-->>UI: Target artifact and report
-        UI->>Workspace: Replace pane through lifecycle transaction
-        Note over Target,Workspace: A later UI failure does not erase a valid target artifact
+    Source-->>Engine: History and source evidence
+    Engine->>Engine: Decode ConversationDocument<br/>Plan target history and report losses
+    alt Required source action is not authorized
+        Engine-->>UI: Refuse or request explicit action
+    else Target projection is allowed
+        Engine->>Target: Write a new native conversation
+        Target-->>Engine: New resume identity
+        Engine-->>UI: Target identity and conversion report
+        UI->>UI: Replace pane through lifecycle transaction
+        Note over UI,Engine: A later UI failure does not erase<br/>the valid target conversation
     end
 ```
 
@@ -1675,33 +1357,6 @@ Sources: [provider-switch module](src/main/providerSwitch), [parser operations](
 Ordinary shell terminals and agent-native terminal views share xterm-based rendering but have different backend ownership. An ordinary terminal is a workspace session backed by a direct PTY or tmux. An agent terminal view attaches to the already managed provider PTY; changing the view must not spawn a second agent.
 
 Raw byte dispatch is centralized so mounting another UI consumer does not create competing global IPC subscriptions. Agent PTY attachments have owner/size coordination and retained capped output for attachment continuity. The visible terminal owner controls size; a hidden duplicate view must not resize the native application to its own dimensions.
-
-<!-- architecture-diagram: terminal-attachment -->
-
-[![Terminal attachment](docs/architecture/diagrams/terminal-attachment.svg)](docs/architecture/diagrams/terminal-attachment.svg)
-
-<details>
-<summary>Mermaid source</summary>
-
-```text
-sequenceDiagram
-    participant View as Terminal leaf
-    participant Ownership as Terminal ownership/dispatcher
-    participant SM as SessionManager
-    participant PTY as Direct PTY or tmux attachment
-    View->>Ownership: Register visible terminal view
-    Ownership->>SM: Attach and establish controlling size
-    SM-->>View: Retained bytes and future output
-    View->>SM: Input / authorized resize
-    SM->>PTY: Forward bytes / resize
-    PTY-->>SM: Output
-    SM-->>Ownership: Session-scoped raw data
-    Ownership-->>View: Write to xterm
-    View->>Ownership: Unmount or lose ownership
-    Ownership->>SM: Release attachment lease
-```
-
-</details>
 
 #### 6.6.1 Persistence scope
 
@@ -1744,42 +1399,6 @@ The desktop uses one main process and one renderer per application window. Optio
 | Native dictation hotkey helper | Dictation hotkey service | Only while a binding requires it |
 | `caffeinate` | `CaffeinateController` | Enabled keep-awake lifetime on macOS |
 
-<!-- architecture-diagram: process-deployment -->
-
-[![Process deployment](docs/architecture/diagrams/process-deployment.svg)](docs/architecture/diagrams/process-deployment.svg)
-
-<details>
-<summary>Mermaid source</summary>
-
-```text
-flowchart LR
-    subgraph Host[User machine]
-        subgraph Electron[Agent Code application]
-            Main[Main process]
-            R1[Window A renderer and preload]
-            R2[Window B renderer and preload]
-            Worker[Workflow utility process]
-            Main <-->|Electron IPC| R1
-            Main <-->|Electron IPC| R2
-            Main <-->|worker protocol| Worker
-        end
-        Main --> PTYs[Native provider and shell PTYs]
-        Main --> OpenCode[OpenCode HTTP service]
-        Main --> LSP[Language server subprocesses]
-        Main --> ProviderHost[Workflow provider host]
-        ProviderHost --> Codex[Codex SDK CLI child]
-        Main --> NativeTools[tmux / mitmproxy / cloudflared / helper]
-        Main --> AppFiles[Application state and journals]
-        PTYs --> ProviderFiles[Provider-owned conversation files]
-    end
-    Browser[Remote device browser] <-->|LAN or tunnel| Main
-    PTYs --> Internet[Provider services]
-    OpenCode --> Internet
-    Codex --> Internet
-```
-
-</details>
-
 This is a macOS-first delivery system. Packaging produces separate arm64 and x64 application artifacts with a macOS 12 minimum. OS-specific behavior includes Keychain access, Touch ID/user-presence authentication, the native hotkey helper, and `caffeinate`. A portable TypeScript module or Linux compatibility test is not evidence of a shipped Windows or Linux application.
 
 Windows use `contextIsolation: true` and `nodeIntegration: false`, but explicitly set `sandbox: false`. The security boundary is therefore the selected preload API and main-process validation, not a claim that all Electron renderers run with Chromium sandboxing enabled. External navigation is intercepted and new-window requests are denied before approved destinations are opened externally. See [window construction](src/main/window/appWindow.ts) and [packaging](electron-builder.yml).
@@ -1792,28 +1411,28 @@ The current manifest uses Electron 43, React 18, Zustand 5, Monaco 0.52, Tailwin
 
 <!-- architecture-diagram: build-pipeline -->
 
-[![Build pipeline](docs/architecture/diagrams/build-pipeline.svg)](docs/architecture/diagrams/build-pipeline.svg)
+[![What has to come together before a package can ship?](docs/architecture/diagrams/build-pipeline.svg)](docs/architecture/diagrams/build-pipeline.svg)
+
+Source bundles and verified native artifacts meet at packaging. Verification must check the packaged resources as well as the application bundles.
 
 <details>
 <summary>Mermaid source</summary>
 
 ```text
 flowchart TB
-    Source[Application TypeScript and renderer assets] --> Check[Verify initialized submodules]
-    Packages[Pinned package source] --> Check
-    Check --> WFBuild[Build workflow package]
-    WFBuild --> Browser[Build remote browser client]
-    Browser --> Vite[Electron Vite build with xterm patch gate]
-    Vite --> Main[Main plus workflow worker/provider-host entries]
-    Vite --> Preload[Preload bundle]
-    Vite --> Renderer[Renderer bundle]
-    Main --> Resources[Copy runtime resources and build hotkey helper]
-    Preload --> Package[Electron Builder packaging]
-    Renderer --> Package
-    Resources --> Package
-    Native[Verified native artifacts for each architecture] --> Package
-    Package --> Verify[Structural verification and smoke checks]
-    Verify --> Release[Signed/notarized macOS DMG and ZIP]
+accTitle: What has to come together before a package can ship?
+accDescr: Source bundles and verified native artifacts meet at packaging. Verification must check the packaged resources as well as the application bundles.
+%% scope: macOS delivery · dependency overview, not exact hook execution order
+Source["Application + pinned package source"] -->|validate and build| Bundles["Workflow package + remote client<br/>Main / preload / renderer bundles"]
+    Bundles -->|supply application output| Package["Electron Builder<br/>Package each macOS architecture"]
+    Native["Verified native artifacts<br/>Manifests + checksums"] -->|supply executable resources| Package
+    Helpers["Native module rebuilds<br/>Hotkey helper + resource copies"] -->|supply platform-specific output| Package
+    Package -->|inspect actual output| Verify{"Package checks<br/>pass?"}
+    Verify -->|yes, release credentials available| Release["Signed and notarized<br/>arm64 / x64 DMG and ZIP"]
+    Verify -->|no| Stop["Stop release and repair inputs"]
+    class Verify,Stop caution
+classDef external fill:#f1f4f6,stroke:#526477,color:#172b3a,stroke-dasharray:5 3
+classDef caution fill:#fff4d6,stroke:#886116,color:#432f10
 ```
 
 </details>
@@ -1867,60 +1486,34 @@ Several strings called “session IDs” coexist. Treating them as one identifie
 
 <!-- architecture-diagram: identity-ownership -->
 
-[![Identity ownership](docs/architecture/diagrams/identity-ownership.svg)](docs/architecture/diagrams/identity-ownership.svg)
+[![What stays the same when a backend is replaced?](docs/architecture/diagrams/identity-ownership.svg)](docs/architecture/diagrams/identity-ownership.svg)
+
+The application session ID can remain stable while one execution ends and another begins. A provider conversation has its own identity and resume rules.
 
 <details>
 <summary>Mermaid source</summary>
 
 ```text
-classDiagram
-    class WorkspaceState {
-        tabs
-        sessions
-        detachedSessions
-        buried
-        pinnedSessionIds
-    }
-    class SessionMeta {
-        sessionId
-        kind
-        providerRuntime
-        agentNameId
-        nativeProviderIdentity
-    }
-    class SessionManager {
-        registry
-        spawningGenerations
-        recoveries
-        promptReservations
-    }
-    class AgentSession {
-        <<interface>>
-        start()
-        stop()
-        write()
-        resize()
-    }
-    class SessionBackendSnapshot {
-        sessionId
-        sessionRunId
-        lifecycle
-        inputReadiness
-    }
-    class WindowRegistry {
-        sessionOwnership
-        rendererWindows
-    }
-    WorkspaceState "1" *-- "many" SessionMeta : durable metadata
-    SessionManager "1" *-- "many" AgentSession : live resources
-    SessionManager --> SessionBackendSnapshot : projects
-    SessionMeta ..> SessionBackendSnapshot : joins by sessionId
-    WindowRegistry --> SessionMeta : routes session events
+flowchart TB
+accTitle: What stays the same when a backend is replaced?
+accDescr: The application session ID can remain stable while one execution ends and another begins. A provider conversation has its own identity and resume rules.
+%% scope: Identity example · S, R1, R2 and N are illustrative IDs
+%% external: Native
+Pane["Workspace pane<br/>References application session S"] -->|looks up| Session["Application session S<br/>Stable workspace association"]
+    Session -->|had previous execution| Old["Backend attempt R1<br/>Ended"]
+    Session -->|has replacement execution| New["Backend attempt R2<br/>Current"]
+    Old -.->|late events are rejected| Fence["Generation check<br/>Accept only current execution"]
+    New -->|current events pass| Fence
+    New -->|uses separately validated identity| Native["Provider conversation N<br/>Native history / resume identity"]
+    class Fence caution
+classDef external fill:#f1f4f6,stroke:#526477,color:#172b3a,stroke-dasharray:5 3
+classDef caution fill:#fff4d6,stroke:#886116,color:#432f10
+class Native external
 ```
 
 </details>
 
-Field names such as `nativeProviderIdentity` in this diagram summarize provider-specific metadata; they are not a replacement schema. [Workspace types](src/renderer/src/workspace/types.ts) and [session contracts](src/shared/types/session.ts) define the actual fields.
+The example separates the three identities; [Workspace types](src/renderer/src/workspace/types.ts) and [session contracts](src/shared/types/session.ts) define the actual fields.
 
 Ownership has several independent dimensions:
 
@@ -1962,34 +1555,31 @@ Structural events cannot be treated as replaceable values. Completion, start, er
 
 <!-- architecture-diagram: observation-ordering -->
 
-[![Observation ordering](docs/architecture/diagrams/observation-ordering.svg)](docs/architecture/diagrams/observation-ordering.svg)
+[![Which streamed updates may be combined?](docs/architecture/diagrams/observation-ordering.svg)](docs/architecture/diagrams/observation-ordering.svg)
+
+For the same content identity, a newer accumulated value replaces an older one. Saved records and lifecycle boundaries keep their order.
 
 <details>
 <summary>Mermaid source</summary>
 
 ```text
 sequenceDiagram
-    participant Provider
-    participant Manager
-    participant Forwarder
-    participant Queue as Coalescers
-    participant Renderer
-    Provider->>Manager: Semantic accumulator A
-    Manager->>Forwarder: semantic-event
-    Forwarder->>Queue: Retain latest value for identity
-    Provider->>Manager: Semantic accumulator B, same identity
-    Manager->>Forwarder: semantic-event
-    Forwarder->>Queue: Replace A with B
-    Provider->>Manager: Committed transcript entry
-    Manager->>Forwarder: jsonl-entry
-    Forwarder->>Queue: Flush preceding semantic values
-    Queue-->>Renderer: Accumulator B
-    Forwarder->>Queue: Enqueue ordered JSONL batch
-    Provider->>Manager: Structural boundary
-    Manager->>Forwarder: Boundary event
-    Forwarder->>Queue: Flush pending observations
-    Queue-->>Renderer: Ordered batch
-    Forwarder-->>Renderer: Boundary event
+accTitle: Which streamed updates may be combined?
+accDescr: For the same content identity, a newer accumulated value replaces an older one. Saved records and lifecycle boundaries keep their order.
+%% scope: Event ordering · illustrative accumulated text values
+%% external: Provider
+participant Provider as Provider events
+    participant Queue as Main event buffers
+    participant UI as Session renderer
+    Provider-->>Queue: Same block: textSoFar = He
+    Provider-->>Queue: Same block: textSoFar = Hello
+    Note over Queue: Keep Hello, which includes the earlier text
+    Provider-->>Queue: Saved transcript record
+    Queue-->>UI: Flush live value Hello first
+    Queue->>Queue: Queue the saved record
+    Provider-->>Queue: Structural event, such as turn completion
+    Queue-->>UI: Flush queued saved records
+    Queue-->>UI: Then deliver the structural event
 ```
 
 </details>
@@ -2002,40 +1592,7 @@ Sources: [semantic backpressure contract](src/shared/sessionFeed/semanticEventBa
 
 The shared `SessionFeed` contract supports subscriptions and a limited set of session interactions. Desktop implements it with IPC. The remote browser implements its corresponding behavior over WebSocket. This lets both clients reuse transcript folding and feed rendering without teaching the feed about Electron.
 
-<!-- architecture-diagram: session-feed -->
-
-[![Session feed](docs/architecture/diagrams/session-feed.svg)](docs/architecture/diagrams/session-feed.svg)
-
-<details>
-<summary>Mermaid source</summary>
-
-```text
-classDiagram
-    class SessionFeed {
-        <<interface>>
-        observeLifecycle()
-        observeTranscript()
-        observeSemantic()
-        observeConditions()
-        sendInput()
-        deliverPrompt()
-        resolveCondition()
-    }
-    class IpcSessionFeed
-    class RemoteFeed {
-        <<conceptual browser adapter>>
-    }
-    class FakeSessionFeed
-    class SessionFeedContext
-    SessionFeed <|.. IpcSessionFeed
-    SessionFeed <|.. RemoteFeed
-    SessionFeed <|.. FakeSessionFeed
-    SessionFeedContext --> SessionFeed
-```
-
-</details>
-
-The observation method names in the diagram summarize event families. The exact interface is in [SessionFeed](src/shared/sessionFeed/SessionFeed.ts). Spawn, workspace mutation, files, settings, and workflow history are not all routed through this interface. [IpcSessionFeed](src/renderer/src/features/sessionFeed/IpcSessionFeed.ts) and the [remote client](src/remote-client/src) implement their allowed subsets explicitly.
+The exact observation and input methods are defined in [SessionFeed](src/shared/sessionFeed/SessionFeed.ts). Spawn, workspace mutation, files, settings, and workflow history are not all routed through this interface. [IpcSessionFeed](src/renderer/src/features/sessionFeed/IpcSessionFeed.ts) and the [remote client](src/remote-client/src) implement their allowed subsets explicitly.
 
 ### 8.3 Conversation rendering and ownership
 
@@ -2047,27 +1604,28 @@ The renderer converts these observations into candidates, decides ownership, ord
 
 <!-- architecture-diagram: rendering-pipeline -->
 
-[![Rendering pipeline](docs/architecture/diagrams/rendering-pipeline.svg)](docs/architecture/diagrams/rendering-pipeline.svg)
+[![How do live and saved copies become one visible message?](docs/architecture/diagrams/rendering-pipeline.svg)](docs/architecture/diagrams/rendering-pipeline.svg)
+
+In this example, live and saved observations describe the same text unit M42. The saved copy supplies the visible text; the matching live copy is suppressed. An independent tool result keeps its own place.
 
 <details>
 <summary>Mermaid source</summary>
 
 ```text
 flowchart TB
-    Committed[Committed entries] --> Collect[collectLedgerInput]
-    Current[Current semantic turn] --> Collect
-    History[Semantic history] --> Collect
-    Ghosts[Semantic-derived ghosts] --> Collect
-    Local[Optimistic submissions and queues] --> Collect
-    Work[Work and condition state] --> Collect
-    Collect --> Candidates[Typed candidates with identities]
-    Candidates --> Ownership[Ownership ledger]
-    Ownership --> Decisions[Selected and suppressed decisions]
-    Decisions --> Order[Deterministic order]
-    Order --> Bridge[Ledger-to-feed view bridge]
-    Bridge --> Resolve[Provider operation decisions]
-    Resolve --> Feed[Feed rows]
-    Decisions --> Evidence[Debug and replay evidence]
+accTitle: How do live and saved copies become one visible message?
+accDescr: In this example, live and saved observations describe the same text unit M42. The saved copy supplies the visible text; the matching live copy is suppressed. An independent tool result keeps its own place.
+%% scope: Rendering ownership · illustrative content IDs, not text-based deduplication
+Live["Live candidate<br/>Text unit M42: Hello"]
+    Saved["Saved candidate<br/>Text unit M42: Hello"]
+    Tool["Tool-result candidate<br/>Result T7: tests passed"]
+    Live -->|same unit M42| Ledger["Ownership ledger<br/>Saved M42 owns the text<br/>T7 remains independent"]
+    Saved -->|same unit M42| Ledger
+    Tool -->|separate unit T7| Ledger
+    Ledger -->|selects and orders| Feed["Visible feed<br/>Hello · shown once<br/>Tests passed · retained"]
+    Ledger -->|records why| Evidence["Decision evidence<br/>Matching live M42 suppressed"]
+classDef external fill:#f1f4f6,stroke:#526477,color:#172b3a,stroke-dasharray:5 3
+classDef caution fill:#fff4d6,stroke:#886116,color:#432f10
 ```
 
 </details>
@@ -2078,54 +1636,7 @@ The model distinguishes content owner from observation plane. Owners include com
 
 Candidates carry native message/item/turn identities where available, tool-use/call/result identities, content unit type, source timestamps and stable sequence evidence. Producer timestamps are preferable to local receipt timestamps when trustworthy. Array index is not a durable identity across history prepend, trimming or replay.
 
-<!-- architecture-diagram: rendering-ownership-model -->
-
-[![Rendering ownership model](docs/architecture/diagrams/rendering-ownership-model.svg)](docs/architecture/diagrams/rendering-ownership-model.svg)
-
-<details>
-<summary>Mermaid source</summary>
-
-```text
-classDiagram
-    class LedgerInput {
-        committedCandidates
-        semanticCandidates
-        ghostCandidates
-        localCandidates
-    }
-    class Candidate {
-        owner
-        plane
-        contentType
-        nativeIdentities
-        timestampEvidence
-        sequence
-    }
-    class OwnershipDecision {
-        selected
-        reason
-        suppressingOwner
-        evidence
-    }
-    class Ledger {
-        rows
-        decisions
-        unknowns
-    }
-    class ProviderOperationDecision {
-        render
-        fallback
-        absorb
-    }
-    LedgerInput *-- Candidate
-    Candidate --> OwnershipDecision
-    Ledger *-- OwnershipDecision
-    Ledger --> ProviderOperationDecision : view bridge correlates tools
-```
-
-</details>
-
-These are selected conceptual fields over the concrete types in [rendering model types](src/renderer/src/rendering/model/types.ts).
+The concrete candidate and decision types are defined in [rendering model types](src/renderer/src/rendering/model/types.ts).
 
 #### 8.3.3 Committed/live reconciliation
 
@@ -2159,22 +1670,27 @@ Sources: [provider renderer implementations](src/providers), [shared render prot
 
 <!-- architecture-diagram: stream-phase -->
 
-[![Stream phase](docs/architecture/diagrams/stream-phase.svg)](docs/architecture/diagrams/stream-phase.svg)
+[![Why can an agent stay busy after text stops?](docs/architecture/diagrams/stream-phase.svg)](docs/architecture/diagrams/stream-phase.svg)
+
+Text completion is not enough to report idle while tools are pending. A tool result may start another model request in the same turn.
 
 <details>
 <summary>Mermaid source</summary>
 
 ```text
 stateDiagram-v2
-    [*] --> Idle
-    Idle --> Submitting: Local submission
-    Submitting --> Requesting: Provider request begins
+accTitle: Why can an agent stay busy after text stops?
+accDescr: Text completion is not enough to report idle while tools are pending. A tool result may start another model request in the same turn.
+%% scope: Busy indicator · conceptual stream phases, not process lifetime
+[*] --> Idle
+    Idle --> Submitting: User submits
+    Submitting --> Requesting: Model request begins
     Submitting --> Responding: Turn starts
-    Requesting --> Responding: Turn starts or semantic response
-    Responding --> AwaitingTools: Tool execution pending
-    AwaitingTools --> Requesting: Tool result permits next request
-    Responding --> Idle: Completion with no pending tools
-    AwaitingTools --> Idle: Completion and pending tools resolved
+    Requesting --> Responding: Response begins
+    Responding --> AwaitingTools: Tool work remains
+    AwaitingTools --> Requesting: Tool result starts next request
+    Responding --> Idle: Complete, no pending tools
+    AwaitingTools --> Idle: Complete, tools resolved
 ```
 
 </details>
@@ -2194,31 +1710,6 @@ Neither mechanism proves a hard total renderer heap limit. Provider caches, indi
 #### 8.4.1 There is more than one storage root
 
 `STATE_DIR` resolves to `~/.config/agent-code` in the implementation, including on macOS. It is not computed from `XDG_CONFIG_HOME`. Electron `userData` remains a separate root for workflows and historical journals, while Chromium storage holds selected UI preferences. Native providers retain their own conversation and authentication stores.
-
-<!-- architecture-diagram: storage-roots -->
-
-[![Storage roots](docs/architecture/diagrams/storage-roots.svg)](docs/architecture/diagrams/storage-roots.svg)
-
-<details>
-<summary>Mermaid source</summary>
-
-```text
-flowchart LR
-    Main[Main services] --> State[HOME/.config/agent-code]
-    State --> Workspace[workspace.json and main-owned settings]
-    State --> Managed[Managed skill state and snapshots]
-    State --> Secrets[Remote credentials and encrypted key blobs]
-    State --> Debug[Incidents, recordings and debug artifacts]
-    Main --> UserData[Electron userData]
-    UserData --> Workflows[Workflow store and isolated Codex home]
-    UserData --> Journals[Historical ghost/dictation/paste journals]
-    Renderer[Window renderer] --> Browser[Chromium localStorage]
-    Browser --> Preferences[Settings and editor path/geometry preferences]
-    Native[Native provider runtimes] --> NativeHistory[Provider history and authentication stores]
-    Editor[Editor and native tools] --> Projects[Actual project files]
-```
-
-</details>
 
 | Artifact | Location / owner | Meaning and recovery behavior |
 | --- | --- | --- |
@@ -2293,26 +1784,25 @@ The journal has bounded pending events and a per-run byte cap. Completeness meta
 
 <!-- architecture-diagram: diagnostics -->
 
-[![Diagnostics](docs/architecture/diagrams/diagnostics.svg)](docs/architecture/diagrams/diagnostics.svg)
+[![Which evidence helps investigate this failure?](docs/architecture/diagrams/diagnostics.svg)](docs/architecture/diagrams/diagnostics.svg)
+
+Choose evidence for the symptom: run journals explain lifecycle failures, performance traces explain resource use, and session recordings support feed replay.
 
 <details>
 <summary>Mermaid source</summary>
 
 ```text
 flowchart LR
-    Main[Main lifecycle and services] --> Incident[AppRunJournal]
-    Renderer[Renderer errors and heartbeat] --> Incident
-    Crash[Crash/fatal reports] --> Prior[Prior-run classification]
-    Prior --> Incident
-    Perf[Optional spans and samples] --> PerfFiles[Performance run JSONL]
-    Pipeline[Session observations and render shapes] --> Recording[Optional session recordings]
-    Heap[Heap pressure watchdog] --> Snapshot[Heap snapshot]
-    Snapshot --> Incident
-    Incident --> Bundle[Debug bundle and local investigation]
-    PerfFiles --> Bundle
-    Recording --> Replay[Deterministic rendering replay]
-    Retention[Retention scheduler] --> Incident
-    Retention --> Storage[Prune eligible debug artifacts]
+accTitle: Which evidence helps investigate this failure?
+accDescr: Choose evidence for the symptom: run journals explain lifecycle failures, performance traces explain resource use, and session recordings support feed replay.
+%% scope: Diagnostics · investigation guide; optional captures may not exist
+Crash["Crash or unexplained exit"] -->|inspect| Journal["Incident journal<br/>Crash reports and run classification"]
+    Slow["Slowdown or memory pressure"] -->|inspect available captures| Perf["Optional performance trace<br/>Available heap snapshot"]
+    Feed["Missing or duplicated feed content"] -->|replay a captured session| Replay["Optional session recording<br/>Rendering decisions and replay"]
+    Journal -->|collect relevant artifacts| Bundle["Local investigation / debug bundle"]
+    Perf -->|collect relevant artifacts| Bundle
+classDef external fill:#f1f4f6,stroke:#526477,color:#172b3a,stroke-dasharray:5 3
+classDef caution fill:#fff4d6,stroke:#886116,color:#432f10
 ```
 
 </details>
@@ -2537,6 +2027,14 @@ The document follows the [arc42 architecture documentation structure](https://ar
 UML class diagrams show selected code relationships; sequence diagrams show how an operation passes between components; state diagrams show how a session or operation changes over time. Diagrams marked *conceptual* combine implementation details to explain a behavior. Component and deployment diagrams use Mermaid flowcharts because Mermaid does not support those UML diagram types. Each diagram has a committed SVG preview and editable Mermaid source below it. The SVGs avoid GitHub's runtime rendering failures on this long document.
 
 Source links lead to the code responsible for each behavior. Application links are relative to this file; package links point to the inspected submodule commits.
+
+A diagram earns its place by answering a reader question. Use relationships, ordering or state transitions when those are easier to see than to read; prefer a table for an inventory of fields, files or capabilities. This follows the [C4 guidance on choosing useful views](https://c4model.com/diagrams) and its caution about [class-level detail in long-lived documentation](https://c4model.com/diagrams/code).
+
+Give each source an `accTitle` question, an `accDescr` takeaway, and a `%% scope:` comment. The renderer uses these to make an accessible, standalone figure. Label arrows with what happens in their direction, keep each view at a clear level of detail, and explain its notation. These conventions follow the [C4 diagram review checklist](https://c4model.com/diagrams/checklist).
+
+Keep the palette consistent: blue for Agent Code, gray with dashed borders for external tools/clients/data, and amber for checks or cautions. Group related elements with space and boundaries; shorten labels before shrinking type. The [NN/g visual-design principles](https://www.nngroup.com/articles/principles-visual-design/) explain how grouping, scale and contrast guide attention. Color must supplement labels and shapes, following [W3C use-of-color guidance](https://www.w3.org/WAI/WCAG22/Understanding/use-of-color.html). Check normal text against the [4.5:1 text-contrast target](https://www.w3.org/WAI/WCAG22/Understanding/contrast-minimum.html) and meaningful lines against the [3:1 graphical-contrast target](https://www.w3.org/WAI/WCAG22/Understanding/non-text-contrast.html).
+
+Review the exported figure at a 960-pixel reading width and in grayscale. Check that the question, boxes, arrows and key are readable, that labels do not collide, and that every visible relationship contributes to the stated question. A successful Mermaid parse is only a syntax check. When removing a diagram, remove its preview too; the renderer rejects obsolete SVGs.
 
 Update this file when a boundary, ownership rule, durable format, execution path or supported provider capability changes. Routine symbol moves can update source links; tuning a constant can update its cited table. A behavioral change should update the corresponding prose and diagram together.
 
