@@ -169,4 +169,27 @@ describe('collectLiveAgentsByWorktree recorded context', () => {
       .toEqual([SESSION_ID])
     expect(liveByWorktree.get(MAIN_CHECKOUT) ?? []).toEqual([])
   })
+
+  it('lists a shell working inside a worktree (#865)', () => {
+    // A shell has no transcript, so it has no workActivity; its cwd is the
+    // only evidence and is exact for where it was started.
+    const worktrees = [
+      status(MAIN_CHECKOUT, 'fixture/branch-1', 'main'),
+      status(LINKED_WORKTREE, 'fixture/worktree-branch', 'active-unmerged'),
+    ]
+    const state = {
+      tabs: [{ id: 'tab', title: 'Project', root: { type: 'leaf', sessionId: 'shell' }, focusedSessionId: 'shell' }],
+      activeTabId: 'tab', dispatchMode: null,
+      sessions: { shell: { cwd: LINKED_WORKTREE, kind: 'terminal' } },
+      detachedSessions: {}, buried: [], pinnedSessionIds: [],
+    } as WorkspaceState
+    const workspace = {
+      state,
+      runtimes: { shell: { sessionStatus: 'running', streamPhase: 'idle' } as unknown as SessionRuntime },
+    } as unknown as Workspace
+
+    expect(collectLiveAgentsByWorktree(workspace, worktrees).get(LINKED_WORKTREE)).toEqual([
+      expect.objectContaining({ sessionId: 'shell', kind: 'terminal', live: true }),
+    ])
+  })
 })

@@ -78,6 +78,7 @@ function makeHarness() {
     stateRef: ref(state),
     latestStateRef: ref(state),
     latestRuntimesRef: ref(runtimes),
+    seenUuidsRef: ref({}),
   } as unknown as WorkspaceRefs
 
   return {
@@ -106,6 +107,24 @@ function makeHarness() {
 }
 
 describe('rehydrateWorkspace backend reconciliation', () => {
+  it('adopts the live backend’s TLDR identity when persisted renderer metadata is stale', async () => {
+    const persisted = makePersisted()
+    persisted.sessions['stable-session']!.tldrIdentity = 'stale-renderer-summary'
+    persisted.sessions['stable-session']!.builtInMcpDomains = ['tldr']
+    const harness = makeHarness()
+    Object.defineProperty(window, 'api', { configurable: true, value: {
+      defaultCwd: vi.fn(),
+      recoverSession: vi.fn(async () => ({
+        ok: true, disposition: 'adopted', snapshot: {
+          sessionId: 'stable-session', kind: 'claude', cwd: '/tmp/project', lifecycle: 'live',
+          input: { ready: true, revision: 1 }, builtInMcpDomains: ['tldr'], tldrIdentity: 'main-summary',
+        },
+      })),
+    } })
+    await rehydrateWorkspace(persisted, harness.refs, harness.setState, harness.setRuntimes, harness.setTileTabs, vi.fn())
+    expect(harness.state().sessions['stable-session']?.tldrIdentity).toBe('main-summary')
+  })
+
   it('recovers OpenCode Terminal with its runtime selector and durable provider id intact', async () => {
     const persisted = makePersisted()
     persisted.sessions['stable-session'] = {
@@ -113,6 +132,7 @@ describe('rehydrateWorkspace backend reconciliation', () => {
       kind: 'opencode',
       providerRuntime: 'terminal',
       providerSessionId: 'ses_durable_terminal',
+      tldrIdentity: 'summary-stable',
       providerSessionIdSource: 'runtime-start',
       builtInMcpDomains: ['orchestration'],
     }
@@ -130,9 +150,30 @@ describe('rehydrateWorkspace backend reconciliation', () => {
         builtInMcpDomains: ['orchestration' as const],
       },
     }))
+    // One committed exchange in the `{ info, parts }` shape OpenCode's
+    // database serves through main's history loader.
+    const loadInitialHistory = vi.fn(async () => ({
+      entries: [
+        {
+          info: { id: 'msg_user', sessionID: 'ses_durable_terminal', role: 'user', time: { created: 1_000 } },
+          parts: [{ id: 'prt_1', type: 'text', text: 'what changed?' }],
+        },
+        {
+          info: { id: 'msg_answer', sessionID: 'ses_durable_terminal', role: 'assistant', parentID: 'msg_user', time: { created: 2_000, completed: 3_000 } },
+          parts: [{ id: 'prt_2', type: 'text', text: 'Nothing yet.' }],
+        },
+      ],
+      hasMore: false,
+      totalEntries: 2,
+    }))
     Object.defineProperty(window, 'api', {
       configurable: true,
-      value: { recoverSession, defaultCwd: vi.fn() },
+      value: {
+        recoverSession,
+        defaultCwd: vi.fn(),
+        loadInitialHistory,
+        gitWorktrees: vi.fn(async () => ({ ok: true, worktrees: [] })),
+      },
     })
 
     await rehydrateWorkspace(
@@ -149,25 +190,37 @@ describe('rehydrateWorkspace backend reconciliation', () => {
       kind: 'opencode',
       providerRuntime: 'terminal',
       resumeSessionId: 'ses_durable_terminal',
+      tldrIdentity: 'summary-stable',
     }))
     expect(harness.state().sessions['stable-session']).toMatchObject({
       kind: 'opencode',
       providerRuntime: 'terminal',
       providerSessionId: 'ses_durable_terminal',
+      tldrIdentity: 'summary-stable',
     })
-    // Structured-history bootstrap must remain off. The raw terminal owns the
-    // pixels even though the same provider id remains available to conversion,
-    // duplication, and future crash recovery.
-    expect(harness.runtimes()['stable-session']).toMatchObject({
-      processStatus: 'started',
-      transcriptStatus: 'ready',
-      hasOlderHistory: false,
+    // The conversation reloads into the runtime like any agent's: Copy Last
+    // Response, View Prompts, status rows and MCP reads all read `entries`.
+    // The raw TUI still owns the pane (agentDisplayMode pins it).
+    await vi.waitFor(() => {
+      expect(harness.runtimes()['stable-session']).toMatchObject({
+        processStatus: 'started',
+        transcriptStatus: 'ready',
+        hasOlderHistory: false,
+        totalEntries: 2,
+      })
     })
+    expect(loadInitialHistory).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      kind: 'opencode',
+      providerSessionId: 'ses_durable_terminal',
+    }))
+    expect(harness.runtimes()['stable-session']!.entries.map(entry => (entry as { uuid?: string }).uuid))
+      .toEqual(['msg_user', 'msg_answer'])
   })
 
-  it('does not reapply enabled defaults to a persisted explicit empty list', async () => {
+  it('does not reapply enabled defaults over a persisted explicit disable', async () => {
     const persisted = makePersisted()
     persisted.sessions['stable-session']!.builtInMcpDomains = []
+    persisted.sessions['stable-session']!.builtInMcpOverrides = { orchestration: false }
     const harness = makeHarness()
     harness.refs.defaultBuiltInMcpDomainsRef.current = ['orchestration']
     const recoverSession = vi.fn(async () => ({
@@ -199,6 +252,26 @@ describe('rehydrateWorkspace backend reconciliation', () => {
       builtInMcpDomains: [],
     }))
     expect(harness.state().sessions['stable-session']?.builtInMcpDomains).toEqual([])
+  })
+
+  it.each(['spawned', 'adopted'] as const)('migrates legacy off to inheritance while keeping a %s backend snapshot authoritative', async disposition => {
+    const persisted = makePersisted()
+    persisted.sessions['stable-session']!.builtInMcpDomains = []
+    const harness = makeHarness()
+    harness.refs.defaultBuiltInMcpDomainsRef.current = ['tldr']
+    const domains = disposition === 'spawned' ? ['tldr'] : []
+    const recoverSession = vi.fn(async () => ({
+      ok: true, disposition, snapshot: {
+        sessionId: 'stable-session', kind: 'claude', cwd: '/tmp/project', lifecycle: 'live',
+        input: { ready: true, revision: 1 }, builtInMcpDomains: domains,
+      },
+    }))
+    Object.defineProperty(window, 'api', { configurable: true, value: { recoverSession, defaultCwd: vi.fn() } })
+    await rehydrateWorkspace(persisted, harness.refs, harness.setState, harness.setRuntimes, harness.setTileTabs, vi.fn())
+    // Recovery may adopt an existing process. Settings describe the next
+    // launch; they cannot change the tools that process already started with.
+    expect(recoverSession).toHaveBeenCalledWith(expect.objectContaining({ builtInMcpDomains: ['tldr'] }))
+    expect(harness.state().sessions['stable-session']).toMatchObject({ builtInMcpDomains: domains, builtInMcpOverrides: {} })
   })
 
   it('adopts under the persisted local id without calling the fresh-spawn API', async () => {

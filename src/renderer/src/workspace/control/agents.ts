@@ -3,12 +3,13 @@ import { startControlTask } from './startTask'
 import { ControlError, defineCapability, pageInput, pageSchema, paginate } from '@control-sdk'
 import { useAppStore } from '@renderer/app-state/store'
 import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
-import { resolveTabSessions } from '@renderer/workspace/queries'
+import { findTabsHoldingDirectory, resolveTabSessions } from '@renderer/workspace/queries'
 import { observeWorkspace, workspaceObservationSchema } from '@renderer/workspace/control'
 import type { Workspace } from '@renderer/workspace/hook'
 import { AGENT_PROVIDER_RUNTIMES } from '@shared/types/providerKind'
 import { buildPlacementTargets } from '@renderer/features/workspace/lib/newAgentPlacement'
 import { setAgentTitleInWorkspace } from '@renderer/workspace/agentTitle'
+import { sessionHasTranscript } from '@renderer/workspace/transcriptAvailability'
 
 const sessionInput = z.object({ sessionId: z.string().min(1).describe('Stable agent sessionId from agents.search/list; not a provider-native transcript ID or numbered tile.') }).strict()
 const sessionReference = workspaceObservationSchema.shape.sessions.element
@@ -19,9 +20,13 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
   const setTitle = (sessionId: string, title: string) => useAppStore.getState().setWorkspaceState(
     state => setAgentTitleInWorkspace(state, sessionId, title),
   )
-  const requireSession = (sessionId: string, allowBuried = false, allowTerminal = false) => {
+  // WHY every session kind passes (#865): locate/show/close/restore/titleSet/
+  // pinSet act on metadata and placement, which a shell has exactly like an
+  // agent. The single capability that must refuse a shell, agents.prompt,
+  // checks provider itself because its refusal has to name the right route.
+  const requireSession = (sessionId: string, allowBuried = false) => {
     const current = observe().sessions.find(session => session.sessionId === sessionId)
-    if (!current || (!allowTerminal && current.provider === 'terminal')) throw new ControlError('unavailable', 'Agent does not exist in this window')
+    if (!current) throw new ControlError('unavailable', 'Agent does not exist in this window')
     if (!allowBuried && current.placements.some(placement => placement.kind === 'buried')) {
       throw new ControlError('unavailable', 'Agent is buried; restore it explicitly before acting')
     }
@@ -73,14 +78,14 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
       output: sessionReference,
       handler: async ({ sessionId, tabId, anchorSessionId, targetId, revision }) => {
         requireUi()
-        const session = requireSession(sessionId, false, true)
+        const session = requireSession(sessionId)
         if (!session.placements.some(placement => placement.kind === 'detached')) throw new ControlError('unavailable', 'Agent is already attached')
         const targets = placements(tabId, anchorSessionId)
         if (paginate(targets, { limit: 200 }, `placement:${tabId}:${anchorSessionId}`).revision !== revision) throw new ControlError('stale_cursor', 'Placement changed; list targets again')
         const target = targets.find(target => target.id === targetId)
         if (!target) throw new ControlError('unavailable', 'Placement target no longer exists')
         await getWorkspace().attachDetachedToGrid(sessionId, tabId, target)
-        const placed = requireSession(sessionId, false, true)
+        const placed = requireSession(sessionId)
         if (!placed.placements.some(placement => placement.kind === 'grid' && placement.tabId === tabId)) {
           throw new ControlError('failed', 'Attachment was not observed; inspect current placement', 'unknown')
         }
@@ -89,8 +94,8 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
     }),
     defineCapability({
       id: 'agents.list', title: 'Find agents', execution: 'window', effect: 'read',
-      description: 'Search all agents in this window by stable ID, visible label, spoken agent name, title, directory and provider, including detached and buried records. Reading never wakes an agent.',
-      input: z.object({ query: z.string().default('').describe('Case-insensitive substring of session ID, visible label, spoken agent name, title, working directory or provider. Empty lists all agents in this window.'), tabId: z.string().describe('Project tab ID from app.observe in the target window.').optional(), ...pageInput }).strict(),
+      description: 'Search all agents and terminals in this window by stable ID, visible label, spoken agent name, title, directory and provider, including detached and buried records. Reading never wakes an agent.',
+      input: z.object({ query: z.string().default('').describe('Case-insensitive substring of session ID, visible label, spoken agent name, title, working directory or provider. Empty lists every agent and terminal in this window.'), tabId: z.string().describe('Project tab ID from app.observe in the target window.').optional(), ...pageInput }).strict(),
       output: pageSchema(sessionReference),
       handler: input => {
         const query = input.query.trim().toLocaleLowerCase()
@@ -101,8 +106,12 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
         // recovers an agent globally must also recover it in-window. Omitting
         // agentName here made "search for apoll" answer differently depending on
         // which tool the client happened to reach for.
-        const rows = observe().sessions.filter(session => session.provider !== 'terminal'
-          && (!input.tabId || session.placements.some(placement => placement.tabId === input.tabId))
+        //
+        // WHY terminals are included (#865): a shell is a session an operator
+        // can locate, title, pin and navigate to exactly like an agent — only
+        // agents.prompt draws the provider-only line, and it does so itself.
+        const rows = observe().sessions.filter(session =>
+          (!input.tabId || session.placements.some(placement => placement.tabId === input.tabId))
           && [session.sessionId, session.title, session.displayedTitle, session.displayLabel ?? '', session.agentName ?? '', session.cwd, session.provider].some(value => value.toLocaleLowerCase().includes(query)))
         return paginate(rows, input, `agents:${query}:${input.tabId ?? ''}`)
       },
@@ -119,7 +128,38 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
       output: z.object({ session: sessionReference, mode: workspaceObservationSchema.shape.mode,
         bounds: z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() }) }),
       handler: async ({ sessionId, intent }) => {
-        requireUi(); requireSession(sessionId)
+        requireUi()
+        const session = requireSession(sessionId)
+        // Reader Mode is agent-only (Design D2): it renders a provider-
+        // registered transcript view a terminal has none of. requireSession no
+        // longer refuses terminals (#865 — they're locatable/showable/
+        // pinnable like any other session), so this capability is now the
+        // thing standing between an operator's "show" request and pointing
+        // Reader Mode at a session it can't render. Refuse BEFORE the focus
+        // call below, which would otherwise navigate the grid to the terminal
+        // while Reader still owns the screen. Spotlight has no such
+        // restriction — it shows terminals fine — so only Reader is gated
+        // here; reader.ts's own setReaderModeSession guard is the second,
+        // independent layer in case some other caller reaches it directly.
+        //
+        // WHY sessionHasTranscript instead of `session.provider === 'terminal'`
+        // (M5): a plain terminal is not the only kind Reader can't render.
+        // OpenCode Terminal (provider 'opencode', providerRuntime 'terminal')
+        // is agent-provider-kind but also never loads a transcript — see
+        // transcriptAvailability.ts. readerCommands.ts and reader.ts's own
+        // setReaderModeSession guard already use sessionHasTranscript; this
+        // refusal has to agree with them or an OpenCode Terminal could slip
+        // past this check and hit the exact same "can't render" failure one
+        // layer down. Read from raw workspace state (not the sessionReference
+        // `session` above) because sessionHasTranscript's shape is keyed on
+        // SessionMeta's `kind`/`providerRuntime` fields, not the observation
+        // schema's renamed `provider` field.
+        if (
+          !sessionHasTranscript(useAppStore.getState().workspaceState.sessions[sessionId]) &&
+          useAppStore.getState().workspaceReaderMode
+        ) {
+          throw new ControlError('unavailable', 'Reader Mode shows agent transcripts only; close it before showing this session')
+        }
         if (!await getWorkspace().focusAgentBySessionId(sessionId, intent)) throw new ControlError('unavailable', 'Agent could not be shown; inspect state before retrying', 'unknown')
         // Reader and Spotlight own legitimate alternate agent views. Move their
         // explicit selection too instead of reporting a hidden grid as visible.
@@ -128,15 +168,19 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
         if (store.workspaceSpotlight) getWorkspace().setSpotlightSession(sessionId)
         await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
         const state = observe()
-        const session = requireSession(sessionId)
-        if (state.focusedSessionId !== sessionId || !session.placements.some(placement => placement.visible)) throw new ControlError('failed', 'Navigation committed but the target is no longer visibly focused', 'unknown')
+        // Re-fetch after the async focus/animation-frame gap: placement can
+        // have changed underneath us, and the response must reflect what
+        // actually ended up visible, not the pre-navigation snapshot captured
+        // in `session` above (kept for the pre-focus Reader/terminal check).
+        const refreshed = requireSession(sessionId)
+        if (state.focusedSessionId !== sessionId || !refreshed.placements.some(placement => placement.visible)) throw new ControlError('failed', 'Navigation committed but the target is no longer visibly focused', 'unknown')
         const pane = [...document.querySelectorAll<HTMLElement>('[data-pane-id]')].find(element => {
           const rect = element.getBoundingClientRect()
           return element.dataset.paneId === sessionId && rect.width > 0 && rect.height > 0
         })
         if (!pane || hasAppInteractionOwner()) throw new ControlError('failed', 'The target view was not observed or another surface took input; inspect the UI', 'unknown')
         const { x, y, width, height } = pane.getBoundingClientRect()
-        return { session, mode: state.mode, bounds: { x, y, width, height } }
+        return { session: refreshed, mode: state.mode, bounds: { x, y, width, height } }
       },
     }),
     defineCapability({
@@ -152,9 +196,13 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
       },
     }),
     defineCapability({
-      id: 'agents.titleSet', target: { kind: 'session', field: 'sessionId' }, title: 'Set an agent title', execution: 'window', effect: 'mutation',
-      description: 'Set or clear the exact agent title using the same normalization and length policy as the UI. Does not send a prompt.',
-      input: sessionInput.extend({ title: z.string().describe('Agent display title; empty clears a custom title. Normal UI normalization applies.') }), output: z.object({ sessionId: z.string(), title: z.string().describe('Agent display title; empty clears a custom title. Normal UI normalization applies.') }),
+      id: 'agents.titleSet', target: { kind: 'session', field: 'sessionId' }, title: 'Set a session title', execution: 'window', effect: 'mutation',
+      description: 'Set or clear the exact agent or terminal title using the same normalization and length policy as the UI. Does not send a prompt.',
+      // WHY "Session" not "Agent" here (M8): this capability's own description
+      // already says "agent or terminal title" — a shell's title is set through
+      // this exact same field, so calling it an "Agent display title" in the
+      // schema .describe() text contradicted the capability's own behavior.
+      input: sessionInput.extend({ title: z.string().describe('Session display title; empty clears a custom title. Normal UI normalization applies.') }), output: z.object({ sessionId: z.string(), title: z.string().describe('Session display title; empty clears a custom title. Normal UI normalization applies.') }),
       handler: ({ sessionId, title }) => {
         requireReady(); requireSession(sessionId)
         setTitle(sessionId, title)
@@ -181,7 +229,9 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
       handler: async ({ cwd, provider: kind, createDuplicate }) => {
         requireUi()
         const state = useAppStore.getState().workspaceState
-        const matches = state.tabs.filter(tab => resolveTabSessions(state, tab.id).some(id => state.sessions[id]?.cwd === cwd))
+        // One rule with the path picker (#913): a tab holds a directory when one
+        // of its sessions runs there.
+        const matches = findTabsHoldingDirectory(state, cwd)
         if (!createDuplicate && matches.length > 1) throw new ControlError('ambiguous_owner', 'Several project tabs use this directory; select a tab ID')
         if (!createDuplicate && matches.length === 1) {
           const tab = matches[0]
@@ -218,6 +268,12 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
       handler: async ({ sessionId, prompt, imagePaths }) => {
         requireReady()
         const session = requireSession(sessionId)
+        // Terminals are sessions, not prompt targets (#865): provider delivery
+        // needs a readiness gate and an acceptance signal a shell cannot give.
+        // Point at the route that exists instead of a bare "unavailable".
+        if (session.provider === 'terminal') {
+          throw new ControlError('unavailable', 'This session is a terminal. Send text with terminals.input; agents.prompt only drives provider agents')
+        }
         // Codex's text-only delivery currently ignores imagePaths. Refuse
         // unsupported attachments BEFORE wake/write instead of silently sending
         // a different task from the one the operator supplied.

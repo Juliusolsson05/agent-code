@@ -34,8 +34,13 @@ export async function getClaudeSessionFilePath(
   cwd: string,
   providerSessionId: string,
 ): Promise<string> {
-  const projectDir = await getProjectDirForCwd(cwd)
-  return join(projectDir, `${providerSessionId}.jsonl`)
+  // Source reads must follow the same native relocation as live observation
+  // and history pagination. Only the projection writer below creates a new
+  // session at the target cwd; reusing that path math here strands rewind and
+  // provider switching after EnterWorktree even when the visible feed recovers.
+  const file = await getMainProvider('claude').resolveTranscriptPath(cwd, providerSessionId)
+  if (!file) throw new Error(`Claude transcript not found for session ${providerSessionId}`)
+  return file
 }
 
 export async function writeProjectedClaudeSessionFile(
@@ -114,9 +119,10 @@ export async function resolveProviderTranscriptPath(params: {
   // pagination, transcript-template resolution, duplicate/rewind flows, and
   // provider switching must agree on the exact same path semantics or the UI can
   // resume one durable file while older-history pagination reads another. The
-  // provider registry owns those semantics now: Claude resolves a cwd-scoped
-  // JSONL path, while Codex resolves a global rollout file by structured thread
-  // id. Delegating here lets history loading, transcript templates, and provider
+  // provider registry owns those semantics now: Claude follows native worktree
+  // relocation for an exact session UUID, while Codex resolves a global rollout
+  // file by structured thread id. Delegating here lets history loading,
+  // transcript templates, and provider
   // templates share one call site without moving provider-specific storage rules
   // back into each feature. Provider-switch/duplicate/rewind still use the
   // Codex-specific helper above when they need the source path directly, and

@@ -199,6 +199,17 @@ describe('target expansion', () => {
     expect(result.required).toBe(true)
     if (result.required) expect(result.summary).toContain('3 sessions')
   })
+
+  it('names an untitled session by its folder, never by its raw id (#865)', () => {
+    // The dialog used to read "8f3a…-… is still working." for any untitled
+    // session. Terminals reach it now that a busy shell counts as working.
+    const targets = expandSessionCloseTargets(
+      { sessions: { shell: { cwd: '/work/api', kind: 'terminal' } } },
+      { shell: { sessionStatus: 'running' } },
+      'shell',
+    )
+    expect(targets).toEqual([{ sessionId: 'shell', title: 'api', live: true }])
+  })
 })
 
 // ---------------------------------------------------------------------------

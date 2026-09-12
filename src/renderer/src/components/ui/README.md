@@ -71,7 +71,7 @@ not created merely because shadcn has one or because it might be useful later.
 - Application surfaces and store wiring stay in their existing `surfaces/`
   wrappers.
 - Business-specific components such as `CloseOldAgentsModal`,
-  `PromptSearchModal`, or `ComposerInput` do not move here. They should compose
+  `ConversationsPicker`, or `ComposerInput` do not move here. They should compose
   primitives from this directory.
 - Non-visual coordination that multiple input paths must query synchronously
   belongs in `lib/`, not inside a visual component. The app interaction

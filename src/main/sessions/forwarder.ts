@@ -104,17 +104,27 @@ export function wireSessionForwarder(
     enqueueJsonl(payload.sessionId, payload.entry, payload.file, payload.observation)
     subAgents.observeParentEntry(payload.sessionId, payload.entry, payload.file)
   })
-  manager.on('jsonl-error', ({ sessionId, error }) =>
+  manager.on('jsonl-error', ({ sessionId, error }) => {
+    // A failed drain can still commit earlier records. Preserve that order
+    // across the asynchronous batch boundary or those records clear the
+    // renderer's error after the durable channel has already stopped.
+    flushJsonl(sessionId)
     sendToSessionWindow(sessionId, 'session:jsonl-error', {
       sessionId,
       message: String(error.message ?? error),
-    }),
-  )
+    })
+  })
   manager.on('transcript-diagnostic', payload =>
     sendToSessionWindow(payload.sessionId, 'session:transcript-diagnostic', payload),
   )
   manager.on('terminal-data', payload =>
     sendToSessionWindow(payload.sessionId, 'session:terminal-data', payload),
+  )
+  // Shell activity (#865) crosses directly: the monitor already emits only on
+  // change (at most once per terminal per second), so there is no burst for a
+  // coalescer to absorb.
+  manager.on('terminal-foreground', payload =>
+    sendToSessionWindow(payload.sessionId, 'session:terminal-foreground', payload),
   )
   manager.on('agent-pty-data', payload =>
     sendToSessionWindow(payload.sessionId, 'session:agent-pty-data', payload),

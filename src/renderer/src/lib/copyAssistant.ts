@@ -1,21 +1,30 @@
 // extractLastAssistantText — provider-agnostic extraction of the most
-// recent assistant text from a transcript entry list.
+// recent assistant text from a pane's `runtime.entries` (Copy Last Response).
 //
-// Claude and Codex store assistant content in different shapes:
+// WHY one walk serves every provider: providers store assistant content in
+// different raw shapes, but nothing raw reaches `runtime.entries`. Each
+// provider's transcript mapper (the registry's createTranscriptEntryMapper)
+// folds its lines into the same Claude-shaped ConversationEntry first:
 //
-//   Claude: ConversationEntry { type: 'assistant', message: { role: 'assistant',
-//           content: string | ContentBlock[] } }
-//     Text lives in `TextBlock` elements ({ type: 'text', text: '...' }).
-//     We concatenate all text blocks (skipping thinking, tool_use, etc.)
-//     because a single assistant turn can contain multiple text blocks
-//     interleaved with tool calls.
+//   Claude:   the entry itself: { type: 'assistant', message: { role:
+//             'assistant', content: string | ContentBlock[] } }.
+//   Codex:    a rollout `response_item` message's `output_text` blocks
+//             become `{ type: 'text' }` blocks (codex/renderer/transcript/
+//             rollout.ts).
+//   OpenCode: a committed `{ info, parts }` message becomes one assistant
+//             entry whose text parts are `{ type: 'text' }` blocks
+//             (opencode/renderer/transcript/mapper.ts). That includes an
+//             OpenCode Terminal pane: its history and live entries come
+//             from OpenCode's database through the same mapper, so Copy
+//             Last Response works on the raw-TUI pane too.
 //
-//   Codex:  CodexRolloutLine { type: 'response_item', payload: { type: 'message',
-//           role: 'assistant', content: [{ type: 'output_text', text: '...' }] } }
-//     Text lives in `output_text` content blocks inside the payload.
-//
-// We walk the entries array backward so the first match is the most
-// recent assistant turn. Returns null if no assistant text is found.
+// Text lives in `TextBlock` elements. We concatenate all text blocks of the
+// newest assistant entry (skipping thinking, tool_use, etc.) because a single
+// assistant turn can interleave several text blocks with tool calls, walking
+// backward so the first match is the most recent turn. Returns null if no
+// assistant text is found. `kind` is unused for that reason; it stays in the
+// signature so a provider whose mapped shape ever diverges has a place to
+// branch without touching callers.
 
 import type { Entry } from '@shared/types/transcript'
 

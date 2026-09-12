@@ -1,8 +1,8 @@
 import { isAgentProviderKind } from '@shared/types/providerKind'
 import type { SessionKind } from '@shared/types/providerKind'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
-// Small display helpers shared by the workspace's search and
-// activity modals (PromptSearchModal, AgentActivityModal).
+// Small display helpers shared by the conversation rows (ConversationRow)
+// and the activity modal (AgentActivityModal).
 //
 // WHY this is scoped to those modal surfaces and not a generic
 // "providerLabel" module: tile-tree pane headers use slightly
@@ -24,20 +24,15 @@ export function pluralAgents(n: number): string {
   return `${n} agent${n === 1 ? '' : 's'}`
 }
 
-export function cwdBasename(cwd: string): string {
-  if (!cwd) return ''
-  // Trim trailing slashes so `/foo/bar/` doesn't return an empty
-  // basename. Then split on '/' and take the last non-empty segment.
-  const trimmed = cwd.replace(/\/+$/, '')
-  const parts = trimmed.split('/').filter(Boolean)
-  return parts[parts.length - 1] ?? trimmed
-}
+// Moved to the workspace layer with the shared title rule (#865); re-exported so
+// the activity, prompt-search and bulk-switch modals keep their import.
+export { cwdBasename } from '@renderer/workspace/sessionDisplayTitle'
 
 // WHY this accepts 'terminal' even though most callers only pass
 // claude/codex: AgentActivityModal renders terminal sessions in the
 // same list, so widening the signature means the modal doesn't have
 // to special-case its row renderer. Callers that only deal with
-// agent providers (PromptSearchModal) can still pass the narrower
+// agent providers (ConversationRow) can still pass the narrower
 // 'claude' | 'codex' subset — TypeScript will accept it.
 export function providerGlyph(kind: SessionKind): string {
   // Registry-derived for agent kinds (#394 phase 2c-2); terminal is

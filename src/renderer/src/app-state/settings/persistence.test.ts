@@ -2,6 +2,23 @@ import { describe, expect, it } from 'vitest'
 
 import { coerceSettings } from '@renderer/app-state/settings/persistence'
 
+describe('dictation audio input persistence', () => {
+  it('preserves saved device identity through serialized settings without needing connected hardware', () => {
+    const dictationAudioInput = { deviceId: 'saved-headset', label: 'USB Headset' }
+    const saved = JSON.parse(JSON.stringify(coerceSettings({ dictationAudioInput })))
+    expect(coerceSettings(saved).dictationAudioInput).toEqual(dictationAudioInput)
+    expect(coerceSettings({ dictationAudioInput: { deviceId: 'default' } }).dictationAudioInput)
+      .toEqual({ deviceId: 'default', label: '' })
+  })
+
+  it.each([undefined, null, 'headset', {}, { deviceId: 12 }, { deviceId: ' ' }])(
+    'keeps automatic selection for absent or invalid settings: %j',
+    dictationAudioInput => {
+      expect(coerceSettings({ dictationAudioInput }).dictationAudioInput).toBeNull()
+    },
+  )
+})
+
 describe('coerceSettings agentViewMode', () => {
   it('defaults missing agentViewMode to Agent mode', () => {
     expect(coerceSettings({}).agentViewMode).toBe('agent')

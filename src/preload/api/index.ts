@@ -1,7 +1,8 @@
+import { tldrApi } from '@preload/api/tldr.js'
 import { sessionApi } from '@preload/api/session.js'
 import { controlApi } from '@preload/api/control.js'
 import { providerApi } from '@preload/api/provider.js'
-import { sessionsApi } from '@preload/api/sessions.js'
+import { conversationsApi } from '@preload/api/conversations.js'
 import { lspApi } from '@preload/api/lsp.js'
 import { workspaceApi } from '@preload/api/workspace.js'
 import { agentNamesApi } from '@preload/api/agentNames.js'
@@ -34,6 +35,7 @@ import { workflowsApi } from '@preload/api/workflows.js'
 import { agentCodeConventionsApi } from '@preload/api/agentCodeConventions.js'
 import { agentCodeCustomSkillsApi } from '@preload/api/agentCodeCustomSkills.js'
 import { agentCodeInstalledSkillsApi } from '@preload/api/agentCodeInstalledSkills.js'
+import { agentSkillsApi } from '@preload/api/agentSkills.js'
 
 // Composed preload API surface.
 //
@@ -59,10 +61,11 @@ import { agentCodeInstalledSkillsApi } from '@preload/api/agentCodeInstalledSkil
 // handler to wherever it actually is — do not assume main/ipc/<domain>.
 
 export const api = {
+  ...tldrApi,
   ...controlApi,
   ...sessionApi,
   ...providerApi,
-  ...sessionsApi,
+  ...conversationsApi,
   ...lspApi,
   ...workspaceApi,
   ...agentNamesApi,
@@ -95,6 +98,7 @@ export const api = {
   ...agentCodeConventionsApi,
   ...agentCodeCustomSkillsApi,
   ...agentCodeInstalledSkillsApi,
+  ...agentSkillsApi,
 }
 
 export type Api = typeof api

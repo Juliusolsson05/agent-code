@@ -1,3 +1,5 @@
+import { UsageLimitNoticeView } from '@providers/shared/renderer/protocols/usage-limit/UsageLimitNoticeView'
+import { claudeUsageLimitNotice } from '@providers/claude/renderer/adapters/usageLimitNotice'
 import type { ProviderDurableEntryDecision, ProviderDurableEntryInput } from '@shared/types/providerConfig'
 import type { CompactSummaryEntry } from '@shared/types/transcript'
 import { CompactionView } from '@providers/shared/renderer/protocols/compaction/CompactionView'
@@ -10,6 +12,10 @@ import { QueuedUserPromptRow } from '@providers/claude/renderer/components/queue
 export function renderClaudeDurableEntry(
   input: ProviderDurableEntryInput,
 ): ProviderDurableEntryDecision | undefined {
+  const notice = claudeUsageLimitNotice(input.entry)
+  if (notice) {
+    return { action: 'render', node: <UsageLimitNoticeView notice={notice} />, receipt: { rendererId: 'shared.usage-limit', protocolId: 'provider.usage-limit' } }
+  }
   const kind = classifyClaudeDurableEntry(input.entry)
   if (kind === 'compact-boundary') {
     return {

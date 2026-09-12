@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto'
 import { performanceService } from '@main/performance/PerformanceService.js'
 import { makeStringPool, internEntryFields } from '@main/sessions/internEntry.js'
 import { resolveProviderTranscriptPath } from '@main/providerSwitch/shared.js'
+import { getMainProvider } from '@providers/registry.main.js'
 
 // Loader for the bootstrap tail and for older history chunks.
 //
@@ -97,8 +98,9 @@ export type HistoryChunk = {
 // single records to hundreds of KB or more; the line assembly below handles
 // those by carrying chunks across blocks, so a larger block would only buy
 // fewer syscalls on an already-rare path while every ordinary load would read
-// (and allocate) more than it needs. The same size the session picker's tail
-// window uses (sessionIndex.ts), for the same reason.
+// (and allocate) more than it needs. The same size the conversation prompt
+// folder's tail window uses (conversations/prompts/promptFolder.ts), for the
+// same reason.
 const TAIL_BLOCK_BYTES = 256 * 1024
 
 // WHY a bigger block for the newline count: that pass touches every byte
@@ -123,6 +125,27 @@ function extractCodexHistoryMarker(entry: Record<string, unknown>): string {
   return `${String(entry.timestamp ?? '')}:${String(payload?.id ?? payload?.call_id ?? payload?.type ?? entry.type)}`
 }
 
+/**
+ * Run a provider-owned history read with the same performance-journal span
+ * the file path records, so a slow or failing OpenCode page shows up in the
+ * same place a slow JSONL page does.
+ */
+async function loadProviderOwnedChunk(
+  spanName: string,
+  kind: AgentProviderKind,
+  read: () => Promise<HistoryChunk>,
+): Promise<HistoryChunk> {
+  const span = performanceService.span(spanName, { kind, providerOwned: true })
+  try {
+    const chunk = await read()
+    span.end({ result: chunk.entries.length > 0 ? 'loaded' : 'empty', returned: chunk.entries.length, hasMore: chunk.hasMore })
+    return chunk
+  } catch (err) {
+    span.fail(err)
+    throw err
+  }
+}
+
 async function resolveHistoryTranscriptPath(
   params: InitialHistoryChunkRequest,
 ): Promise<string | null> {
@@ -130,7 +153,14 @@ async function resolveHistoryTranscriptPath(
   // old history-loader-local walker returned the first lexical match; the shared
   // resolver picks newest by mtime, which is the correct tie-break when the same
   // Codex thread id appears in more than one rollout file.
-  return resolveProviderTranscriptPath(params)
+  const file = await resolveProviderTranscriptPath(params)
+  // Bulk locators must be able to report individual missing files, but a
+  // requested Claude history must not masquerade as a healthy empty replay.
+  // Keep this strict read policy at the caller, not in the shared locator.
+  if (!file && params.kind === 'claude') {
+    throw new Error(`Claude transcript not found for session ${params.providerSessionId}`)
+  }
+  return file
 }
 
 /**
@@ -630,6 +660,18 @@ function finishWindow(
 export async function loadOlderHistoryChunk(
   params: HistoryChunkRequest,
 ): Promise<HistoryChunk> {
+  // Providers without a transcript file (OpenCode: SQLite) own their pages.
+  const providerSource = getMainProvider(params.kind).loadHistoryChunk
+  if (providerSource) {
+    return await loadProviderOwnedChunk('historyLoader.loadOlderChunk', params.kind, () =>
+      providerSource({
+        cwd: params.cwd,
+        providerSessionId: params.providerSessionId,
+        limit: params.limit,
+        beforeMarker: params.beforeMarker,
+      }),
+    )
+  }
   // Thin resolver wrapper — the reading work, span bookkeeping, and
   // return shaping all live in the FromFile variant so the two entrypoints
   // cannot drift (review finding: the first extraction duplicated the span
@@ -714,6 +756,12 @@ function finishOlderChunk(
 export async function loadInitialHistoryChunk(
   params: InitialHistoryChunkRequest,
 ): Promise<HistoryChunk> {
+  const providerSource = getMainProvider(params.kind).loadHistoryChunk
+  if (providerSource) {
+    return await loadProviderOwnedChunk('historyLoader.loadInitialChunk', params.kind, () =>
+      providerSource({ cwd: params.cwd, providerSessionId: params.providerSessionId, limit: params.limit }),
+    )
+  }
   const span = performanceService.span('historyLoader.loadInitialChunk', {
     kind: params.kind,
     limit: params.limit,

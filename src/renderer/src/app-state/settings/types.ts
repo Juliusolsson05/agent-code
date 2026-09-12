@@ -217,6 +217,12 @@ export const CORNER_STYLES: CornerStyleMeta[] = [
 
 export type DictationProviderId = DictationProvider
 
+/** The label is display-only, so an unplugged microphone remains recognizable.
+ * Device IDs are opaque browser identities; never recover by matching labels,
+ * which can collide across two identical headsets. null keeps the historical
+ * built-in preference, while deviceId 'default' follows the operating system. */
+export type DictationAudioInput = { deviceId: string; label: string }
+
 // Font choice for the entire app. This is the single source of truth for
 // "what monospace face does Agent Code render in" — normal DOM inherits
 // `--theme-app-font`, old `font-code` Tailwind classes alias to that same
@@ -387,16 +393,10 @@ export type Settings = {
    *  writes agent-names.json. Turning it back off hides names and name lookup
    *  but keeps every assignment, so re-enabling restores the same addresses. */
   agentNamesEnabled: boolean
-  /** Built-in MCP capabilities used to seed a new agent session when its
-   *  caller does not provide an explicit per-session list. This is a default,
-   *  not a fleet policy: after initialization the resolved array lives in
-   *  SessionMeta and command-palette toggles may change it independently.
-   *
-   *  `ping` is deliberately excluded from the type because it is a
-   *  development bridge probe, not a product capability. Provider-specific
-   *  restrictions (notably Workflow MCP being Codex-only) are applied at the
-   *  session and main-host boundaries rather than encoded as parallel
-   *  per-provider preference lists. */
+  /** Global built-in MCP preferences resolved whenever a provider starts,
+   * including reloads. Per-domain session overrides win; a running process's
+   * captured capability list is an observation, never its preference source.
+   * `ping` stays diagnostic-only. Provider filters run after resolution. */
   defaultBuiltInMcpDomains: ConfigurableBuiltInMcpDomain[]
   /** When true, agent sessions are spawned through a per-session proxy
    *  that Agent Code owns. Claude gets a mitmproxy that decrypts Anthropic
@@ -450,6 +450,7 @@ export type Settings = {
    *  toggle recording. */
   dictationEnabled: boolean
   dictationProvider: DictationProviderId
+  dictationAudioInput: DictationAudioInput | null
   /** Arbitrary keyboard binding captured by the settings UI. The standalone
    *  dictation app historically offered fixed choices, but Agent Code needs the
    *  same "press the key you want" model because composer bindings compete
@@ -649,6 +650,7 @@ export const DEFAULT_SETTINGS: Settings = {
   useProxyStreaming: true,
   dictationEnabled: false,
   dictationProvider: 'deepgram',
+  dictationAudioInput: null,
   // WHY the default binding is Cmd+Shift+D and not Fn (packaged-mode fix):
   // the Fn key can only be captured on macOS via a CGEventTap, which
   // requires the app to hold the Accessibility permission — an OS-level

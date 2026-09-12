@@ -1,3 +1,5 @@
+import { collectProviderNotices } from '@renderer/rendering/observations/providerNotices'
+import type { SemanticErrorEntry } from '@renderer/session-runtime/state'
 import type { GhostEntry } from 'agent-transcript-parser/ghost'
 import type { AgentProviderKind } from '@shared/types/providerKind'
 import type { SemanticLiveTurn } from '@renderer/session-runtime/state'
@@ -74,6 +76,7 @@ export type RuntimeSemanticTurn = {
 }
 
 export type RuntimeLedgerSlices = {
+  semanticErrors?: readonly SemanticErrorEntry[]
   provider: AgentProviderKind
   sessionId: string
   /** runtime.entries — committed JSONL rows PLUS embedded optimistic rows
@@ -211,6 +214,7 @@ export function createLedgerInputAdapter(): (slices: RuntimeLedgerSlices) => Led
     optimistic: readonly RenderCandidate[]
     merged: readonly RenderCandidate[]
   } | null = null
+  let noticeCache: { errors: readonly SemanticErrorEntry[] | undefined; provider: AgentProviderKind; sessionId: string; candidates: readonly RenderCandidate[] } | null = null
   let lastBundle: { input: LedgerInput; bundle: LedgerInputBundle } | null = null
 
   // Unknown-behavior plumbing (Stage 2 diagnostic): sightings recorded at
@@ -229,6 +233,10 @@ export function createLedgerInputAdapter(): (slices: RuntimeLedgerSlices) => Led
 
   return slices => {
     const { provider, sessionId } = slices
+    if (!noticeCache || noticeCache.errors !== slices.semanticErrors || noticeCache.provider !== provider || noticeCache.sessionId !== sessionId) {
+      noticeCache = { errors: slices.semanticErrors, provider, sessionId,
+        candidates: collectProviderNotices(slices.semanticErrors ?? [], provider, sessionId) }
+    }
 
     if (
       !committedCache ||
@@ -409,6 +417,7 @@ export function createLedgerInputAdapter(): (slices: RuntimeLedgerSlices) => Led
       lastBundle.input.provider === provider &&
       lastBundle.input.committed === committedCache.committed &&
       lastBundle.input.live === live &&
+      lastBundle.input.notices === noticeCache.candidates &&
       lastBundle.input.statics === staticsCache.candidates &&
       lastBundle.input.emptyCandidate === emptyCache.candidate &&
       lastBundle.input.committedTailMs === slices.lastJsonlEntryAtMs &&
@@ -423,6 +432,7 @@ export function createLedgerInputAdapter(): (slices: RuntimeLedgerSlices) => Led
     const input: LedgerInput = {
       provider,
       committed: committedCache.committed,
+      notices: noticeCache.candidates,
       live,
       statics: staticsCache.candidates,
       // Empty is minted here but only PAINTED by the ledger if no content

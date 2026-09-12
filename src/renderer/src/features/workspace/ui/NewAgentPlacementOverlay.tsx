@@ -109,19 +109,24 @@ export function NewAgentPlacementOverlay({
     : activeTab
   const anchorSessionId = placementTab?.focusedSessionId ?? null
   const dispatchMode = workspace.dispatchMode !== null
-  // Both dispatch mode and linked mode are "kind only": pick any registered
-  // agent provider — no placement step, no terminal option. The filter below
-  // pulls the option set from `AGENT_PROVIDER_KINDS` (not a hand-written
-  // literal) so a newly registered provider becomes selectable here without
-  // touching this file. See CLAUDE.md and issue #394 phase 4.
-  const kindOnly = dispatchMode || linkedMode
+  // Both dispatch mode and linked mode are "kind only": pick a kind and spawn
+  // immediately off the picker, no placement step — see the `dispatchMode` /
+  // `linkedMode` branches inside commitKind below, which is where that
+  // behavior actually lives (there is no single merged flag left to read it
+  // off of; see the option-filter comment just below for why one kind-only
+  // mode now differs from the other).
+  //
+  // Linked mode offers agent providers only: createLinkedAgent's signature
+  // refuses 'terminal' (a shell cannot be an orchestration/linked child).
+  // Dispatch offers Terminal too (#865): Dispatch terminals have been full
+  // detached rows since #671, and the old "no terminal option" note predated it.
   const kindOptions = useMemo(
-    () => kindOnly
+    () => linkedMode
       ? KIND_OPTIONS.filter((option): option is AgentProviderChoice =>
           isAgentProviderKind(option.kind),
         )
       : KIND_OPTIONS,
-    [kindOnly],
+    [linkedMode],
   )
 
   // Commit a chosen kind. In kind-only modes this spawns immediately;
@@ -134,11 +139,13 @@ export function NewAgentPlacementOverlay({
     if (linkedMode && linkedAgentParentId) {
       // WHY the runtime narrow: `SessionKind` includes 'terminal', which
       // createLinkedAgent's signature refuses. The kind picker filters options
-      // in kind-only modes to `AgentProviderKind` (see kindOptions above), so
-      // in practice this branch only fires with an agent provider — but the
-      // event handler is typed against the broader union. Route through the
-      // registry predicate instead of a hand-written pair so adding a
-      // provider does not silently drop it here again (#394 phase 4).
+      // to `AgentProviderKind` whenever `linkedMode` is true (see kindOptions
+      // above — Dispatch stopped filtering this way when it gained a Terminal
+      // option, #865, but linked mode still does), so in practice this branch
+      // only fires with an agent provider — but the event handler is typed
+      // against the broader union. Route through the registry predicate
+      // instead of a hand-written pair so adding a provider does not silently
+      // drop it here again (#394 phase 4).
       if (!isAgentProviderKind(kind)) return
       if (committingRef.current) return
       committingRef.current = true
@@ -151,52 +158,11 @@ export function NewAgentPlacementOverlay({
     if (dispatchMode) {
       if (committingRef.current) return
       committingRef.current = true
-      if (kind === 'terminal') {
-        // DEAD BRANCH, kept as a guard rather than removed.
-        //
-        // `kindOnly` is true whenever `dispatchMode` is set, and that filters
-        // KIND_OPTIONS down to agent providers only — both commitKind call
-        // sites read the filtered list, so Terminal is never offered here in
-        // Dispatch and this cannot fire. (See the "no placement step, no
-        // terminal option" note above, which says the same thing.)
-        //
-        // It stays because the handler is typed against the full SessionKind
-        // union: if a future change reintroduces Terminal to the Dispatch kind
-        // picker, falling through would hand 'terminal' to
-        // createDetachedDispatchAgent, whose signature excludes it. Routing to
-        // splitFocused is the correct behaviour if this ever becomes live —
-        // its Dispatch branch is kind-agnostic and files a terminal as a
-        // detached row (#671).
-        //
-        // NOT equivalent to the agent path in one respect: that path forwards
-        // `projectIntent`, the project-header "+" override that exists because
-        // lane focus does not identify the clicked project. splitFocused has no
-        // such override, so a revived Terminal option would resolve its project
-        // from focus alone.
-        void workspace.splitFocused('vertical', 'terminal')
-        return
-      }
-      // WHY registry-driven runtime narrow (not `kind !== 'claude' && kind !==
-      // 'codex'`): the two-provider literal here silently dropped OpenCode
-      // clicks with no toast, no spawn, no log — the classic silent-fail path
-      // #394 §4 warned about. Using the shared predicate keeps this branch
-      // aligned with the kind picker's option filter (kindOptions above) and
-      // with every downstream API that takes `AgentProviderKind`
-      // (createDetachedDispatchAgent, createLinkedAgent, buildProviderResume-
-      // Command, duplicateSession).
-      if (!isAgentProviderKind(kind)) return
-      // Dispatch Mode creates a detached provider agent on the focused
-      // Dispatch project; there is intentionally no placement step.
-      // createDetachedDispatchAgent owns its own overlay close.
-      //
-      // When the project header's "+" opened this, the target is explicit and
-      // must override focus-based resolution — the whole reason that intent
-      // exists is that focus does NOT identify the clicked project in Tiled
-      // Dispatch.
-      void workspace.createDetachedDispatchAgent(
-        { kind, providerRuntime },
-        projectIntent ?? undefined,
-      )
+      // Every kind goes through the detached-Dispatch creator, terminals
+      // included (#865): it accepts SessionSpawnSelection (control's
+      // terminals.create already uses it for shells) and, unlike splitFocused,
+      // honors projectIntent, so "+" on a project header files the shell there.
+      void workspace.createDetachedDispatchAgent({ kind, providerRuntime }, projectIntent ?? undefined)
       return
     }
     setSelectedKind(kind)

@@ -60,9 +60,9 @@ describe('built-in MCP default settings', () => {
     })
   })
 
-  it('documents Workflow MCP as Codex-only because Claude is native', () => {
+  it('documents Workflow MCP for Codex and OpenCode because Claude is native', () => {
     const setting = defaultMcpToggle('default-workflow-mcp')
-    expect(setting.description).toContain('Codex only')
+    expect(setting.description).toContain('Codex and OpenCode')
     expect(setting.description).toContain('Claude uses its native workflow feature')
   })
 

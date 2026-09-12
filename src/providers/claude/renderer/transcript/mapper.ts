@@ -69,3 +69,18 @@ export function extractClaudeProviderSessionId(
     ? raw.sessionId
     : null
 }
+
+/**
+ * Is this text-bearing, non-meta Claude user row a prompt the user typed?
+ *
+ * Claude writes its own scaffolding as NON-meta user rows: `<command-name>`
+ * and `<local-command-stdout>` markers, "Unknown skill: …" error replies,
+ * tool-result-only rows. The positive signal is `permissionMode`: Claude
+ * stamps it on the rows the user submitted, not on isMeta rows, error replies
+ * or local-command markers. The `<` guard is belt and braces for the marker
+ * family: a `<command-…>`/`<local-command-…>` row is excluded even if it ever
+ * carries the stamp (latestUserPrompts.test.ts pins that case).
+ */
+export function isClaudeTypedUserPrompt(entry: Entry, text: string): boolean {
+  return (entry as { permissionMode?: string }).permissionMode !== undefined && !text.startsWith('<')
+}

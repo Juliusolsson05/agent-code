@@ -1,4 +1,5 @@
 import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
+import { AGENT_PROVIDER_CHOICES } from '@renderer/workspace/providerChoices'
 import {
   expandSessionCloseTargets,
   expandTabCloseTargets,
@@ -7,6 +8,7 @@ import {
 } from '@renderer/workspace/closeConfirmation'
 import type { CloseExpansionRuntimes, CloseTargetSnapshot } from '@renderer/workspace/closeConfirmation'
 import { requestCloseConfirmation } from '@renderer/workspace/closeConfirmationBroker'
+import { sessionDisplayTitle } from '@renderer/workspace/sessionDisplayTitle'
 import { useCallback, useRef } from 'react'
 
 import type {
@@ -50,7 +52,7 @@ import {
 } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import { commandTargetSessionIdForState } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import type { PlacementTarget } from '@renderer/features/workspace/lib/newAgentPlacement'
-import type { BuiltInMcpDomain } from '@mcp/shared/types'
+import type { BuiltInMcpDomain, BuiltInMcpOverrides } from '@mcp/shared/types'
 import type {
   OrchestrationAgentKind,
   OrchestrationAgentRecord,
@@ -347,7 +349,10 @@ type SplitFocusedContinuation = {
   // class of bug where a related child's transcript is resumed with its physical parent's token.
   resumeSessionId: string
   cwd: string
-  builtInMcpDomains?: BuiltInMcpDomain[]
+  /** Per-domain MCP choices the clone should adopt. The source pane's effective
+   * capability list is deliberately not carried: a clone is a new provider
+   * process and resolves these against current Settings. */
+  builtInMcpOverrides?: BuiltInMcpOverrides
   /** Preserve an alternate provider transport when cloning a conversation. */
   providerRuntime?: AgentProviderRuntime
 }
@@ -380,8 +385,21 @@ export function usePaneActions(
   startNewAgentPlacement: () => void
   commitNewAgentPlacement: (selection: SessionSpawnSelection, target: PlacementTarget) => Promise<void>
   createDetachedSession: (selection: SessionSpawnSelection, projectOverride?: { tabId: TabId; anchorSessionId: SessionId }, continuation?: SplitFocusedContinuation, placement?: { selectCreated: boolean }) => Promise<SessionId | null>
+  // WHY `kind` is the full SessionKind here (unlike createLinkedAgent right
+  // below, which stays narrowed to agent providers): Dispatch's "New Agent…"
+  // picker now offers Terminal (#865), and files it through this exact
+  // creator so the project-header "+" override (`projectOverride`, honored
+  // here and NOT by splitFocused) applies to shells too. This was a type-only
+  // restriction, not a runtime one — proof is two lines below the useCallback:
+  // `createDetachedSession: createDetachedDispatchAgent` exposes the SAME
+  // function under a second name, and that name's declared type (just above,
+  // unchanged) already accepted every SessionKind — `control/terminals.ts`'s
+  // `terminals.create` capability has been passing `{ kind: 'terminal' }`
+  // through it since terminals existed. Narrowing only THIS name's type was
+  // an artifact of when this alias was agent-only; it never matched what the
+  // underlying implementation actually does.
   createDetachedDispatchAgent: (
-    selection: SessionSpawnSelection & { kind: Exclude<SessionKind, 'terminal'> },
+    selection: SessionSpawnSelection,
     projectOverride?: { tabId: TabId; anchorSessionId: SessionId },
     continuation?: SplitFocusedContinuation,
     placement?: { selectCreated: boolean },
@@ -431,7 +449,7 @@ export function usePaneActions(
       continuation?: SplitFocusedContinuation,
     ) => {
       const resumeSessionId = continuation?.resumeSessionId
-      const builtInMcpDomains = continuation?.builtInMcpDomains
+      const builtInMcpOverrides = continuation?.builtInMcpOverrides
       const providerRuntime = continuation?.providerRuntime
       const dispatchSnapshot = refs.stateRef.current
       // ONE Dispatch creation flow for every session kind.
@@ -501,8 +519,9 @@ export function usePaneActions(
           // passed through unguarded, but they are NOT symmetric and it is
           // worth being precise about which is which:
           //
-          //  - `builtInMcpDomains` really is dropped for a terminal —
-          //    `sessionActions.spawn` gates it behind `isAgentProviderKind`.
+          //  - `builtInMcpOverrides` really is dropped for a terminal —
+          //    `sessionActions.spawn` gates the resolved capability list it
+          //    produces behind `isAgentProviderKind`.
           //  - `resumeSessionId` is NOT dropped. It is forwarded to
           //    `window.api.spawnSession` for every kind; only the value written
           //    back into the durable `SessionMeta` is kind-gated. It is inert
@@ -522,7 +541,7 @@ export function usePaneActions(
             kind,
             ...(providerRuntime ? { providerRuntime } : {}),
             resumeSessionId,
-            builtInMcpDomains,
+            builtInMcpOverrides,
           })
         } catch (err) {
           showToast(
@@ -615,7 +634,7 @@ export function usePaneActions(
           kind,
           ...(providerRuntime ? { providerRuntime } : {}),
           resumeSessionId,
-          builtInMcpDomains,
+          builtInMcpOverrides,
         })
       } catch (err) {
         showToast(
@@ -707,7 +726,7 @@ export function usePaneActions(
 
       let sessionId: SessionId
       try {
-        sessionId = await sessionActions.spawn(cwd, { kind, providerRuntime, resumeSessionId: continuation?.resumeSessionId, builtInMcpDomains: continuation?.builtInMcpDomains })
+        sessionId = await sessionActions.spawn(cwd, { kind, providerRuntime, resumeSessionId: continuation?.resumeSessionId, builtInMcpOverrides: continuation?.builtInMcpOverrides })
       } catch (err) {
         showToast(
           err instanceof Error && err.message.length > 0
@@ -867,6 +886,7 @@ export function usePaneActions(
     async (params: {
       parentId: SessionId
       kind: OrchestrationAgentKind
+      providerRuntime?: AgentProviderRuntime
       cwd?: string
       title?: string
       role?: string
@@ -874,6 +894,13 @@ export function usePaneActions(
       builtInMcpDomains?: BuiltInMcpDomain[]
       inheritParentContext?: boolean
     }): Promise<OrchestrationAgentRecord> => {
+      // WHY also check the renderer launch choices: this action can be called
+      // without the MCP bridge. Reuse the picker's supported combinations so
+      // direct calls cannot silently launch a structured child after the user
+      // requested a TUI. Main separately validates the actual factory.
+      if (!AGENT_PROVIDER_CHOICES.some(choice => choice.kind === params.kind && choice.providerRuntime === params.providerRuntime)) {
+        throw new Error(`${params.kind} does not support the requested ${params.providerRuntime ?? 'structured'} runtime`)
+      }
       const snapshot = refs.stateRef.current
       const parentMeta = snapshot.sessions[params.parentId]
       if (!parentMeta) {
@@ -934,6 +961,7 @@ export function usePaneActions(
 
       const sessionId = await sessionActions.spawn(cwd, {
         kind: params.kind,
+        ...(params.providerRuntime ? { providerRuntime: params.providerRuntime } : {}),
         resumeSessionId,
         builtInMcpDomains: params.builtInMcpDomains,
       })
@@ -2155,13 +2183,16 @@ export function usePaneActions(
       const buriedConfirmed = await requestCloseConfirmation({
         required: true,
         // Its OWN reason. Borrowing 'running' made the dialog title an idle
-        // buried session "Close a working agent?", contradicting both its body
-        // and the actual state — on the one close with no undo, where the
+        // buried session "Close a working session?", contradicting both its
+        // body and the actual state — on the one close with no undo, where the
         // dialog's credibility is the entire mechanism.
         reason: 'irreversible',
         targets: [{
           sessionId: entry.sessionId,
-          title: snapshot.sessions[entry.sessionId]?.title ?? entry.sessionId,
+          // A buried entry always carries its own sessionMeta, even after the
+          // session has left `sessions` entirely — so read from there rather
+          // than the (possibly absent) live sessions record (#865).
+          title: sessionDisplayTitle(entry.sessionMeta),
           live: isSessionLiveForClose(refs.latestRuntimesRef.current, entry.sessionId),
         }],
         summary: 'Killing a buried session is permanent — Undo Close cannot restore it.',

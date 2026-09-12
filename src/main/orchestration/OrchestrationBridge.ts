@@ -12,6 +12,8 @@ import type {
 } from '@mcp/shared/orchestrationTypes.js'
 import type { BuiltInMcpDomain } from '@mcp/shared/types.js'
 import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
+import { getMainProvider } from '@providers/registry.main.js'
+import type { AgentProviderRuntime } from '@shared/types/providerKind.js'
 
 type PendingRequest = {
   resolve: (response: OrchestrationRendererResponse) => void
@@ -86,6 +88,7 @@ export class OrchestrationBridge {
   async createAgent(params: {
     parentSessionId: string
     kind: OrchestrationAgentKind
+    providerRuntime?: AgentProviderRuntime
     cwd?: string
     title?: string
     role?: string
@@ -93,6 +96,14 @@ export class OrchestrationBridge {
     builtInMcpDomains?: BuiltInMcpDomain[]
     inheritParentContext?: boolean
   }): Promise<OrchestrationAgentRecord> {
+    // WHY validate before sending a renderer request: an unsupported launch
+    // must fail before a child or ownership record can exist. The factory is
+    // the same capability SessionManager uses; a provider-name allowlist would
+    // drift when another provider gains a native TUI. Omission stays untouched
+    // so a terminal parent does not silently change its children's default.
+    if (params.providerRuntime === 'terminal' && !getMainProvider(params.kind).createTerminalSession) {
+      throw new Error(`${getMainProvider(params.kind).name} does not support a terminal runtime`)
+    }
     const response = await this.request({
       requestId: randomUUID(),
       type: 'create-agent',

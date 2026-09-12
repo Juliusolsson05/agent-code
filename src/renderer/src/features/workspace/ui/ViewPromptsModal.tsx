@@ -1,5 +1,6 @@
-import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
-import { useEffect, useMemo, useRef } from 'react'
+import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
+import type { ConversationPrompt } from '@shared/conversations/types'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { Button } from '@renderer/components/ui/button'
 import {
@@ -10,29 +11,27 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
+import { PromptList } from '@renderer/features/conversations/ui/PromptList'
 import { extractLatestUserPrompts } from '@renderer/features/workspace/lib/latestUserPrompts'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { SessionId } from '@renderer/workspace/types'
+import { resumableProviderSessionId } from '@renderer/workspace/providerSessionIdentity'
+
+// ViewPromptsModal — every user prompt of the focused session, newest first.
+//
+// WHY the transcript on disk rather than runtime.entries: the feed bootstraps
+// a tail window, and the old modal paged older history until it had fifteen
+// prompts, then said "Showing the latest 15". The whole conversation is what
+// the user asked to see (2026-09-11: "capping the view prompts command is
+// just pure stupid"), and the catalog reads it through the same incremental
+// folder the picker's search uses, unwrapped the same way. A pane that has no
+// durable transcript yet still shows what the feed holds, uncapped.
 
 type Props = {
   open: boolean
   sessionId: SessionId | null
   workspace: Workspace
   onClose: () => void
-}
-
-const PROMPT_LIMIT = 15
-
-function formatPromptTimestamp(timestamp: string | null): string {
-  if (!timestamp) return 'Unknown time'
-  const parsed = new Date(timestamp)
-  if (Number.isNaN(parsed.getTime())) return 'Unknown time'
-  return parsed.toLocaleString([], {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
 }
 
 export function ViewPromptsModal({
@@ -44,30 +43,51 @@ export function ViewPromptsModal({
   const scrollerRef = useRef<HTMLDivElement>(null)
   const meta = sessionId ? workspace.state.sessions[sessionId] ?? null : null
   const runtime = sessionId ? workspace.getRuntime(sessionId) : null
+  const provider = meta?.kind
+  const providerSessionId = meta ? resumableProviderSessionId(meta) : undefined
+  const cwd = meta?.cwd ?? null
+  const [fromDisk, setFromDisk] = useState<ConversationPrompt[] | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [loadError, setLoadError] = useState<string | null>(null)
 
-  const prompts = useMemo(() => {
+  useEffect(() => {
+    if (!open) return
+    if (!cwd || !providerSessionId || !isAgentProviderKind(provider)) {
+      setFromDisk(null)
+      setLoadError(null)
+      return
+    }
+    let cancelled = false
+    setLoading(true)
+    setLoadError(null)
+    window.api.listConversationPrompts({ provider, nativeId: providerSessionId, cwd })
+      .then(next => {
+        if (!cancelled) setFromDisk(next)
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return
+        setFromDisk(null)
+        setLoadError(error instanceof Error && error.message.length > 0 ? error.message : 'Could not read prompts.')
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [open, cwd, provider, providerSessionId])
+
+  const fromFeed = useMemo(() => {
     if (!meta || !runtime) return []
-    return extractLatestUserPrompts(runtime.entries, meta.kind, PROMPT_LIMIT)
+    return extractLatestUserPrompts(runtime.entries, meta.kind).map(p => ({
+      text: p.text,
+      timestamp: p.timestamp ? Date.parse(p.timestamp) : null,
+    }))
   }, [meta, runtime])
 
-  // The feed only bootstraps the recent tail of a resumed session.
-  // If the user opens "View Prompts" on a long conversation, the
-  // in-memory runtime may initially contain only the last couple of
-  // prompts even though many older prompts exist on disk. While the
-  // modal is open, keep paging older history until we've collected a
-  // reasonable prompt set or the provider says there's nothing left.
-  useEffect(() => {
-    if (!open || !sessionId || !runtime) return
-    if (prompts.length >= PROMPT_LIMIT) return
-    if (!runtime.hasOlderHistory || runtime.loadingOlderHistory) return
-    void workspace.loadOlderHistory(sessionId)
-  }, [
-    open,
-    prompts.length,
-    runtime,
-    sessionId,
-    workspace,
-  ])
+  // Both come newest first: the catalog's folder returns prompts in that
+  // order and extractLatestUserPrompts reverses its chronological walk.
+  const prompts = fromDisk ?? fromFeed
 
   if (!meta || !runtime) return null
 
@@ -91,7 +111,7 @@ export function ViewPromptsModal({
         }}
       >
         <DialogHeader>
-          <DialogTitle>Latest User Prompts</DialogTitle>
+          <DialogTitle>User Prompts</DialogTitle>
           <DialogDescription asChild>
             <div>
               <div>{meta.kind ?? DEFAULT_PROVIDER} · {cwdBase}</div>
@@ -105,32 +125,20 @@ export function ViewPromptsModal({
           tabIndex={-1}
           className="min-h-0 flex-1 overflow-y-auto px-4 py-3 outline-none"
         >
-          {prompts.length === 0 ? (
-            <div className="py-8 text-center text-[12px] text-muted">
-              No visible user prompts found for this session.
-            </div>
-          ) : (
-            <div className="flex flex-col gap-3">
-              {prompts.map((prompt, index) => (
-                <div key={`${prompt.timestamp ?? 'unknown'}:${index}`} className="rounded-slab border border-border bg-canvas/70 px-3 py-3">
-                  <div className="flex items-center justify-between gap-3 text-[10px] uppercase tracking-[0.12em] text-muted">
-                    <span>#{index + 1}</span>
-                    <span>{formatPromptTimestamp(prompt.timestamp)}</span>
-                  </div>
-                  <div className="mt-2 whitespace-pre-wrap break-words text-[12px] leading-5 text-ink">
-                    {prompt.text}
-                  </div>
-                </div>
-              ))}
+          {loadError && (
+            <div role="alert" className="mb-3 rounded-slab border border-danger/40 bg-danger/10 px-3 py-2 text-[12px] text-danger">
+              {loadError}
             </div>
           )}
+          <PromptList
+            prompts={prompts}
+            emptyMessage={loading ? 'Reading prompts…' : 'No visible user prompts found for this session.'}
+          />
         </div>
 
         <DialogFooter className="justify-between">
           <div className="text-[11px] text-muted">
-            {runtime.loadingOlderHistory && prompts.length < PROMPT_LIMIT
-              ? 'Loading older prompts…'
-              : `Showing the latest ${Math.min(PROMPT_LIMIT, prompts.length)} prompts`}
+            {loading ? 'Loading prompts…' : `${prompts.length} ${prompts.length === 1 ? 'prompt' : 'prompts'}`}
           </div>
           <Button
             type="button"

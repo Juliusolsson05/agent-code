@@ -1,3 +1,4 @@
+import { useUsageLimitActions } from '@renderer/features/usage-limit/useUsageLimitActions'
 import { conditionStateByKind } from '@shared/types/providerConditions'
 import type { ClaudeAskUserQuestionState } from '@shared/types/providerConditions'
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
@@ -441,6 +442,7 @@ export function TileLeaf({
   // (The Stage-2 shadow that diffed this against the legacy renderer is gone:
   // its job — proving parity before cutover — is done, and the legacy renderer
   // it diffed against has been deleted.)
+  const usageLimitActions = useUsageLimitActions(workspace, sessionId, runtime.sessionRunId)
   const ledgerFeedPlan = useLedgerFeedItems(runtime, provider, sessionId, {
     toolUseIndex: runtime.toolUseIndex,
     toolResultIndex: runtime.toolResultIndex,
@@ -827,6 +829,7 @@ export function TileLeaf({
           />
         ) : (
           <Feed
+            usageLimitActions={usageLimitActions}
             renderItemsOverride={ledgerFeedPlan.items}
             committedOperationDecisionOverride={ledgerFeedPlan.resolveOperation}
             sessionId={sessionId}

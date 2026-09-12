@@ -61,6 +61,19 @@ Provider modules declare discovery capabilities only. This single-consumer
 shape is intentional: duplicating even one deletion or collision rule in a
 consumer would create a second source of ownership truth.
 
+Agent Status uses the service's read-only `getInstalledSkillLocations` projection
+to attribute known deployments. It neither initializes nor audits the service,
+and it derives file paths from the resolved target registry and the canonical
+document — never from a status's user-facing `displayPath`. A status whose id no
+longer names a current target (retired, unsupported, initialization error)
+cannot produce an Agent Code label. The separate `src/main/agentSkills/`
+collector reads metadata from native skill roots declared by provider discovery
+adapters, walks each root in the layout its provider actually uses, and labels
+matching files as Agent Code-managed. Missing files are omitted, never repaired
+by inspection; unmanaged files remain outside this service's ownership. The
+inventory reports installation evidence, not the running provider's activation
+or loaded context.
+
 `githubSkillSource.ts` and `installedSkillPackageStore.ts` are focused helpers,
 not additional authorities. Acquisition returns inert, bounded package bytes;
 the service alone decides whether those bytes may enter canonical state or a
@@ -96,13 +109,29 @@ than 64 characters. Descriptions are structured single-line values no longer
 than 1,024 characters, and instructions have the same bounded, normalized
 Markdown treatment as Conventions. Agent Code serializes `name` and
 `description` frontmatter itself; the editor never accepts raw YAML. Custom
-names cannot claim the reserved `agent-code-conventions` destination.
+names cannot claim the reserved `agent-code-conventions` or `agent-code-tldr` destinations.
 
 Custom management deliberately excludes personal skills installed by other
 tools, repository-local skills, plugins, and skills with scripts, references,
 or assets. The service inspects only an exact destination it is about to
 publish. A pre-existing unmanaged destination is a collision and cannot be
 adopted or replaced from the Custom Skills UI.
+
+## Product-owned reporting skill
+
+TLDR uses the same single writer and ownership journal for the reserved
+`builtin:agent-code-tldr` instruction record. Its canonical content lives in
+`src/shared/types/tldr.ts`, and its snapshot is marked as product-managed so
+Custom Skills cannot edit, disable, or delete it. Enabling TLDR for a session
+reconciles this skill before starting the provider; a collision fails that
+launch rather than silently dropping the reporting instructions. Personal
+Conventions remain independently enabled and unchanged.
+
+Once deployed, the skill stays installed because other agents can still need
+it. Its instructions are inactive unless the current session exposes the TLDR
+MCP tool. Disabling a single session revokes that capability; it does not remove
+shared provider files. MCP initialization also supplies the same reporting
+instructions because native skill discovery alone cannot guarantee activation.
 
 ## GitHub-installed packages
 

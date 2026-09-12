@@ -1,3 +1,5 @@
+import { UsageLimitNoticeView } from '@providers/shared/renderer/protocols/usage-limit/UsageLimitNoticeView'
+import { useUsageLimitActions } from '@renderer/features/usage-limit/useUsageLimitActions'
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import ReactMarkdown from 'react-markdown'
@@ -139,6 +141,7 @@ function ReaderBody({
   sessionIds: SessionId[]
 }) {
   const runtime = useSessionRuntime(workspace, sessionId)
+  const usageLimitActions = useUsageLimitActions(workspace, sessionId, runtime.sessionRunId)
   const meta = workspace.state.sessions[sessionId]
   // The pane's real provider, never a `=== 'codex' ? 'codex' : 'claude'`
   // negation (that collapsed opencode to Claude). It selects the provider
@@ -393,19 +396,21 @@ function ReaderBody({
               setReaderModeSession, and the quote must land in the session
               the user is actually reading. */}
           <article
-            data-quote-scope={sessionId}
+            data-quote-scope={selectedMessage?.notice ? undefined : sessionId}
             className="
               prose-theme
               mx-auto max-w-3xl px-8 py-10
               text-ink text-[15px] leading-[1.7]
             "
           >
-            <ReactMarkdown
+            {selectedMessage?.notice ? (
+              <UsageLimitNoticeView notice={selectedMessage.notice.notice} sessionRunId={selectedMessage.notice.sessionRunId} actions={usageLimitActions} />
+            ) : <ReactMarkdown
               remarkPlugins={REMARK_PLUGINS}
               components={MARKDOWN_COMPONENTS}
             >
               {text}
-            </ReactMarkdown>
+            </ReactMarkdown>}
           </article>
         </div>
       ) : (

@@ -23,7 +23,8 @@ import { attachXtermWebglRenderer } from '@renderer/workspace/terminal/xtermWebg
 import { createTerminalInputForwarder } from '@renderer/workspace/tile-tree/terminalInputForwarder'
 import { encodeTerminalPaste, registerTerminalPasteTarget } from '@renderer/workspace/terminal/textPasteTarget'
 import { AgentTerminalActions } from '@renderer/workspace/tile-tree/AgentTerminalActions'
-import { useAgentTerminalFollow } from '@renderer/workspace/tile-tree/agentTerminalFollow'
+import { useTerminalFollow } from '@renderer/workspace/tile-tree/terminalFollow'
+import type { GridRelatedAgentTab } from '@renderer/workspace/gridRelatedAgents'
 
 type Props = {
   sessionId: SessionId
@@ -40,6 +41,19 @@ type Props = {
    *  defaulted: an omitted prop is exactly how the terminal branch went unlit
    *  in #851, and a default would let the next call site repeat that. */
   showStatusMode: boolean
+  /** The pane's OWN session — as opposed to `sessionId`, which is whichever
+   *  session is actually mounted here (the parent, or a persisted related
+   *  selection). Optional because WorkspaceLeaf is the only caller that has a
+   *  distinct owner to report; when omitted or equal to `sessionId` this pane
+   *  is simply showing its own agent, and #858's identity chrome stays off. */
+  ownerSessionId?: SessionId
+  /** The owner's related-agent set, so this pane can look up which relation
+   *  and label describe whatever `sessionId` currently is. Same shape
+   *  WorkspaceLeaf already builds for the rendered `LeafComponent` branch. */
+  relatedAgentTabs?: GridRelatedAgentTab[]
+  /** Same callback the rendered branch's `parent`/related chips call. Wired
+   *  here to the `parent` button described in the #858 comment below. */
+  onSelectRelatedSession?: (sessionId: SessionId) => void
 }
 
 // AgentTerminalLeaf — full-pane raw provider terminal for PTY-backed agents.
@@ -66,6 +80,9 @@ export function AgentTerminalLeaf({
   projectDir,
   provider,
   showStatusMode,
+  ownerSessionId,
+  relatedAgentTabs,
+  onSelectRelatedSession,
 }: Props) {
   const dictationEnabled = useAppStore(state => state.settings.dictationEnabled)
   const dictationProvider = useAppStore(state => state.settings.dictationProvider)
@@ -103,7 +120,7 @@ export function AgentTerminalLeaf({
   // effects read termRef.current at effect time and React runs passive effects
   // in declaration order — when tail is already on at mount, the terminal does
   // not exist yet, which is exactly the "nothing to restore" case.
-  const follow = useAgentTerminalFollow({
+  const follow = useTerminalFollow({
     sessionId,
     scrollToLatestRequest: runtime.scrollToLatestRequest,
     tailActive,
@@ -267,7 +284,12 @@ export function AgentTerminalLeaf({
       fit = new FitAddon()
       term.loadAddon(fit)
       term.open(container)
-      webglRenderer = attachXtermWebglRenderer(term)
+      // A renderer change (DOM -> WebGL upgrade, or WebGL -> DOM after a
+      // context loss) changes cell metrics without resizing the container, so
+      // the ResizeObserver below would never refit it. Route it through the
+      // same coalesced, ownership-gated scheduler: a non-owner pane stays
+      // inert exactly as it does for container resizes.
+      webglRenderer = attachXtermWebglRenderer(term, { onRendererChange: scheduleFitAndResizeBackend })
       termRef.current = term
       // Follow re-pin wiring lives in the hook; the mount effect only owns
       // the terminal instance lifetime, so this attaches/detaches with it.
@@ -552,13 +574,27 @@ export function AgentTerminalLeaf({
   // `awaitingAssistant`, is set only by the composer. That means this header
   // lights on the first spinner frame or semantic turn, not on Enter.
   //
-  // Known gap: the OpenCode Terminal runtime emits no activity at all (only
-  // `process-state {active:false}`), so its header stays unlit (#857). That
-  // is a missing provider signal, not something this surface can derive.
+  // OpenCode Terminal lights it the same way, from a different source: it has
+  // no spinner detector, so `process-state` and the semantic turn come from
+  // the TUI's own server (busy/idle over `/event`) through
+  // opencode-terminal-headless (#864). Before that package it emitted only
+  // `process-state {active:false}` and this header never lit (#857). If it
+  // stops lighting again, look for a lost live channel (`live-state`
+  // diagnostics) before suspecting this surface: nothing here is runtime
+  // specific. opencodeTerminalRuntime.renderer.test.tsx replays a recorded
+  // TUI turn through this exact `paneHeaderStatusLit` rule.
   const isSessionLive = runtime.sessionStatus === 'running'
   // Uses PaneHeader's own rule instead of an inline `&&`, so the slot colors
   // below can never disagree with the fill they sit on.
   const statusLit = paneHeaderStatusLit(showStatusMode, isSessionLive)
+
+  // #858: WorkspaceLeaf mounts a persisted related selection here, so this pane
+  // can be showing a CHILD's TUI under the PARENT's pane label. Say which one,
+  // in the status row that already exists, and offer the way back. No chip row:
+  // every header row is taken out of the PTY, and a row appearing when a child
+  // spawns would resize the live TUI.
+  const showingRelated = ownerSessionId !== undefined && ownerSessionId !== sessionId
+  const relatedTab = showingRelated ? relatedAgentTabs?.find(tab => tab.sessionId === sessionId) : undefined
 
   return (
     <div
@@ -586,14 +622,10 @@ export function AgentTerminalLeaf({
           #851 happened: that copy never got the Status Mode fill or the color
           flag. Only the terminal-specific chrome is supplied from this file.
 
-          Related-agent chips are not passed, which keeps pre-#851 behavior,
-          but that behavior has a known hole (#858). A persisted related
-          selection still mounts here (WorkspaceLeaf passes the selected
-          `renderedSessionId`), so the pane can show a child's TUI under the
-          parent's label with nothing marking it. The chips aren't simply
-          added because every header row is taken out of the PTY: a chip row
-          appearing when a child spawns would resize the live TUI. #858 tracks
-          that decision.
+          Related agents (#858): the chip row is still not rendered here,
+          because a row appearing when a child spawns would resize the live TUI.
+          Instead the status row's badge names the displayed related agent and
+          a `parent` button returns to the owner.
 
           The same cost applies to Status Mode. `statusMode` switches the row
           between `py-0` and `py-1`, so toggling the setting changes this
@@ -613,10 +645,25 @@ export function AgentTerminalLeaf({
         badge={
           <span className={`flex-shrink-0 ${statusLit ? '' : 'text-ink'}`}>
             raw {provider}
+            {relatedTab ? ` · ${relatedTab.relation} ${relatedTab.label}` : null}
           </span>
         }
         trailing={
           <>
+            {showingRelated && onSelectRelatedSession ? (
+              <button
+                type="button"
+                // Keep xterm focused: a mousedown here must not steal it.
+                onMouseDown={event => event.preventDefault()}
+                onClick={event => {
+                  event.stopPropagation()
+                  onSelectRelatedSession(ownerSessionId!)
+                }}
+                className="rounded-control border border-current/30 px-1 leading-[14px] text-[9px] uppercase tracking-wider"
+              >
+                parent
+              </button>
+            ) : null}
             {/* TAIL pill styling copied from ScrollIndicator so both surfaces
                 read identically — without it the raw view silently follows
                 output while showing no state the palette can be checked
@@ -653,6 +700,42 @@ export function AgentTerminalLeaf({
           </>
         }
       />
+
+      {/* WHY the raw pane carries its own transcript diagnostic:
+          every other surface that shows one (Agent Status, the Dispatch row)
+          can be closed, and this pane is the one the user is actually looking
+          at. The case that forced it is a TUI session switch: the user runs
+          /new or picks another session inside the TUI, this pane goes on
+          following the session it launched with, and with Dispatch and Agent
+          Status closed nothing on screen said so. A pane that quietly names
+          the wrong conversation is the failure the whole signal exists to
+          prevent, so it must be visible HERE.
+
+          It takes layout space rather than overlaying: the terminal is the
+          content, and covering a line of it to report a problem would be its
+          own small lie. xterm's fit addon reflows on the resulting resize.
+          Nothing here is focusable, so the terminal keeps keyboard focus.
+
+          WHY `transcriptChannelError` and not `transcriptError`: the latter
+          also carries transient diagnostics — a `sink_failed` delivery hiccup,
+          a history read that the next read fixes — which the user can do
+          nothing about and which clear themselves. Standing a warning over
+          someone's terminal for those trains them to ignore the banner, which
+          costs exactly the one case it exists for. This field is the lifetime
+          marker: a channel that stopped for good, or a TUI that moved to
+          another session. Both stay true until something real changes. */}
+      {runtime.transcriptChannelError ? (
+        <div
+          data-terminal-transcript-error="true"
+          role="status"
+          className="
+            mx-2 mt-1 flex-shrink-0 rounded-control border border-warning-border
+            bg-warning-soft px-2 py-1 text-[10px] leading-snug text-warning
+          "
+        >
+          {runtime.transcriptChannelError}
+        </div>
+      ) : null}
 
       <div className="flex-1 min-h-0 min-w-0 overflow-hidden p-2">
         <div

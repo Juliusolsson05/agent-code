@@ -297,6 +297,7 @@ export function slicesFromState(state: ReplayFoldState): RuntimeLedgerSlices {
     entries: state.entries,
     semanticCurrent: state.semantic.currentTurn,
     semanticHistory: state.semantic.history,
+    semanticErrors: state.semantic.errors,
     ghosts: state.ghosts,
     streamPhase: state.phase.streamPhase,
     lastJsonlEntryAtMs: state.lastJsonlEntryAt,

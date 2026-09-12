@@ -2,14 +2,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { render } from '@testing-library/react'
 import { act } from 'react'
 import { useRef } from 'react'
-import type { MutableRefObject } from 'react'
 import recordedQueueHandoffBundle from '../../../../../../testing/fixtures/rendering-bundles/2026-06-14T14-25-07-012-a8ad1ebb.json'
 import recordedTaskNotificationBundle from '../../../../../../testing/fixtures/rendering-bundles/2026-06-21T20-14-23-131-62432945.json'
 import recordedCodexWorktreeWindow from '../../../../../../testing/fixtures/worktree-live-attribution/codex-0151-worktree-window.json'
 import recordedGitWorktrees from '../../../../../../testing/fixtures/worktree-live-attribution/git-worktree-identities.json'
 
 import { createFakeSessionFeed } from '@renderer/features/sessionFeed/FakeSessionFeed'
-import { UndoCloseStack } from '@renderer/lib/undoClose'
 import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
 import {
@@ -24,6 +22,7 @@ import { isOptimisticCodexUserEntry } from '@providers/codex/renderer/transcript
 import { entryTextContent } from '@renderer/session-runtime/entries'
 
 import { useIpcSubscriptions } from './useIpcSubscriptions'
+import { makeWorkspaceRefsForTest as makeRefs } from './testing/workspaceRefsForTest'
 
 const originalWindowApi = window.api
 
@@ -57,30 +56,8 @@ afterEach(() => {
 // fire on paths this test does not drive (ghost changes, session-started
 // worktree refresh).
 
-function makeRefs(state: WorkspaceState): WorkspaceRefs {
-  // Plain object refs are fine outside React's render cycle — the hook only
-  // ever reads/writes `.current`.
-  const ref = <T,>(v: T): MutableRefObject<T> => ({ current: v })
-  return {
-    stateRef: ref(state),
-    latestStateRef: ref(state),
-    latestRuntimesRef: ref({}),
-    latestTileTabsRef: ref(null),
-    dangerousAgentsRef: ref(false),
-    useProxyStreamingRef: ref(false),
-    defaultBuiltInMcpDomainsRef: ref([]),
-    seenUuidsRef: ref({}),
-    latestScreenRef: ref({}),
-    undoStackRef: ref(new UndoCloseStack()),
-    bootstrapTimersRef: ref(new Map()),
-    persistedFeedDebugIdRef: ref({}),
-    inFlightFeedDebugIdRef: ref({}),
-    paneToastTimers: ref({}),
-    pendingAdoptionWindowIdsRef: ref<string[]>([]),
-    saveTimerRef: ref(null),
-    bootRef: ref(false),
-  }
-}
+// The harness refs now live in ./testing/workspaceRefsForTest so every
+// subscription test builds the same minimal workspace (imported as makeRefs).
 
 describe('useIpcSubscriptions with an injected SessionFeed', () => {
   it('persists fresh Codex identity while handing a queued prompt to its rollout row', () => {
@@ -1011,6 +988,69 @@ describe('useIpcSubscriptions with an injected SessionFeed', () => {
       })
     })
     expect(runtimes.s1?.sessionRunId).toBe('77777777-7777-4777-8777-777777777777')
+  })
+
+  it('clears terminalForeground on exit so a dead shell cannot keep a stale badge (M3)', () => {
+    // terminalForeground itself is written by a SEPARATE hook
+    // (useTerminalForeground.ts, driven by window.api.onTerminalForeground),
+    // not by anything in useIpcSubscriptions — so this test seeds it
+    // directly on the runtime map rather than through the fake feed, the
+    // same way it would already be sitting in state by the time a real
+    // exit event arrives.
+    const fake = createFakeSessionFeed()
+    const state = { sessions: {} } as WorkspaceState
+    let runtimes: Record<SessionId, SessionRuntime> = {}
+
+    function Harness(): React.JSX.Element {
+      const refs = useRef<WorkspaceRefs | null>(null)
+      if (refs.current === null) refs.current = makeRefs(state)
+      useIpcSubscriptions(
+        fake,
+        refs.current,
+        () => {},
+        updater => {
+          runtimes = typeof updater === 'function' ? updater(runtimes) : updater
+        },
+        (sessionId, patch) => {
+          const current = runtimes[sessionId] ?? emptyRuntime()
+          runtimes = { ...runtimes, [sessionId]: { ...current, ...patch } }
+          refs.current!.latestRuntimesRef.current = runtimes
+        },
+        () => {},
+      )
+      return <div />
+    }
+
+    render(<Harness />)
+
+    act(() => {
+      fake.emitStarted({ sessionId: 's1', kind: 'terminal' })
+    })
+    // Simulate the foreground monitor having already reported "npm is
+    // running in this shell" before the process exits.
+    runtimes = {
+      ...runtimes,
+      s1: {
+        ...(runtimes.s1 ?? emptyRuntime()),
+        terminalForeground: { busy: true, command: 'npm', cwd: '/work', changedAt: 1 },
+      },
+    }
+
+    act(() => {
+      fake.emitExit({ sessionId: 's1', exitCode: 0 })
+    })
+
+    // Main DOES untrack the session on exit (cleanupSessionState calls
+    // terminalForeground.untrack(sessionId) in sessionManager.ts), but that
+    // clears TerminalForegroundMonitor's OWN `last`-emitted map — a separate
+    // structure this handler cannot reach — not this renderer-side runtime
+    // field. Left uncleared, a same-id respawn's very first (idle) sample
+    // would diff against this stale `busy: true` in applyTerminalForeground:
+    // busy genuinely differs, so that is a real busy→idle transition, not a
+    // suppressed no-op, and it fires a SPURIOUS "new work" mark for a pane
+    // where nothing happened. It would also show a live "npm" badge on a
+    // pane with nothing running in it.
+    expect(runtimes.s1?.terminalForeground).toBeNull()
   })
 
   // Live entries window (#375 part B) — the burst handler applying a trim

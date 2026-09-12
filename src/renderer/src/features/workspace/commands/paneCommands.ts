@@ -17,6 +17,7 @@ import { resolveDispatchAttachTarget } from '@renderer/workspace/dispatch/dispat
 import { dispatchFocusedSessionId } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 import { submitActiveComposer } from '@renderer/workspace/tile-tree/TileLeaf/composerEnterRegistry'
+import { sessionHasTranscript } from '@renderer/workspace/transcriptAvailability'
 
 /**
  * Buried panes visible from the CURRENT tab.
@@ -214,9 +215,9 @@ export const paneCommands: CommandDef[] = [
     // guard — pins are a Dispatch-list concept and the registry gate
     // now hides this in the grid.
     surface: 'dispatch',
-    title: 'Pin Agents…',
-    description: '**What it does:** Opens the multi-select Pin modal to choose which **Dispatch** agents stay pinned at the top of the agent list.\n\n**Use when:** You want a few favorite agents to always be one keystroke away regardless of project or scope.\n\n**Notes:** Space toggles, Enter commits, Esc cancels. The order you Space through the rows is the order pins render in. Pins survive project↔global scope toggles.',
-    keywords: ['pin', 'pins', 'pinned', 'favorite', 'star', 'top', 'dispatch'],
+    title: 'Pin Sessions…',
+    description: '**What it does:** Opens the multi-select Pin modal to choose which **Dispatch** agents and terminals stay pinned at the top of the agent list.\n\n**Use when:** You want a few favorite agents or terminals to always be one keystroke away regardless of project or scope.\n\n**Notes:** Space toggles, Enter commits, Esc cancels. The order you Space through the rows is the order pins render in. Pins survive project↔global scope toggles.',
+    keywords: ['pin', 'pins', 'pinned', 'favorite', 'star', 'top', 'dispatch', 'terminal'],
     getState: ({ flags }) => panel(flags.pinAgentsOpen),
     run: ({ ui, flags }) => {
       if (flags.pinAgentsOpen) {
@@ -229,14 +230,14 @@ export const paneCommands: CommandDef[] = [
   {
     // Quick-remove counterpart to pin-agents. Targets the currently
     // dispatch-focused row so the keyboard-driven flow is "navigate
-    // to a pinned row, run Unpin Agent." We use the same
+    // to a pinned row, run Unpin Session." We use the same
     // commandTargetSessionId resolver the rest of this file uses
     // for dispatch-aware target picking, so the highlighted row in
     // the dispatch list IS the unpin target.
     //
     // The `when` guard is intentionally strict: only show the
     // command if the focused row is currently pinned. Showing it
-    // unconditionally would lead users to "Unpin Agent" on a
+    // unconditionally would lead users to "Unpin Session" on a
     // non-pinned row, which silently no-ops in the reducer — bad
     // affordance.
     id: 'unpin-agent',
@@ -244,7 +245,7 @@ export const paneCommands: CommandDef[] = [
     // `dispatch` surface carries the mode gate; `when` keeps only the
     // data condition (the focused row is currently pinned).
     surface: 'dispatch',
-    title: 'Unpin Agent',
+    title: 'Unpin Session',
     description: '**What it does:** Removes the currently-focused **Dispatch** row from the Pinned section.\n\n**Use when:** You want to quickly drop a single pin without opening the Pin modal.\n\n**Notes:** Only appears when the focused dispatch row is currently pinned.',
     keywords: ['unpin', 'remove', 'pin', 'pinned', 'star'],
     when: ({ workspace }) => {
@@ -514,9 +515,9 @@ export const paneCommands: CommandDef[] = [
     description: '**What it does:** Toggles **auto-follow** for the focused target.\n\n**Use when:** You want output to stay pinned to the bottom.\n\n**Notes:** Applies to the visible command target, including **Dispatch** selection. Works in both the rendered feed and raw agent terminal views — in a terminal view the TUI output stays pinned to the bottom.',
     // NO `renderedViewPolicy` — deliberately: this command owns follow
     // behavior on BOTH agent surfaces now (Feed's tailMode on the rendered
-    // surface, useAgentTerminalFollow on the raw terminal). The old
-    // 'requires-rendered-feed' gate hid it on terminal surfaces, where
-    // following is exactly as meaningful.
+    // surface, useTerminalFollow on the raw terminal — and, since #865, on
+    // plain shell terminals too). The old 'requires-rendered-feed' gate hid
+    // it on terminal surfaces, where following is exactly as meaningful.
     getState: ({ workspace, flags }) => {
       const sessionId = commandTargetSessionId(workspace)
       const tailMode = sessionId
@@ -545,13 +546,9 @@ export const paneCommands: CommandDef[] = [
     },
     when: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
-      if (!sessionId) return false
-      // WHY tail is agent-only even though plain shells are Dispatch rows:
-      // agent sessions consume tailMode on both of their surfaces since the
-      // terminal-follow work (useAgentTerminalFollow). Plain shell terminals
-      // (kind === 'terminal') delegate entirely to xterm scrollback and have
-      // no tail state.
-      return workspace.state.sessions[sessionId]?.kind !== 'terminal'
+      // Every session follows (#865): agents through the feed or the raw
+      // terminal view, plain shells through the same xterm follow hook.
+      return sessionId !== null && Boolean(workspace.state.sessions[sessionId])
     },
     run: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
@@ -570,7 +567,7 @@ export const paneCommands: CommandDef[] = [
     surface: 'app',
     title: 'Auto-follow All Visible Agents',
     description:
-      '**What it does:** Toggles **auto-follow for every visible agent** at once.\n\n**Use when:** You are watching several agents work and want them all pinned to the bottom.\n\n**Notes:** Scopes to what is on screen — in **single dispatch** that is the one agent, in **tiled** every lane, in the **grid** the current tab\'s panes only. Panes you open afterward tail too, until you toggle it off. Plain shell terminals are never affected; raw agent terminal views follow too.\n\n**Caution:** A tailing pane cannot be scrolled up. Turning this off leaves individually enabled followers on; other panes restore their earlier reading position where that content is still retained. Raw terminal follow controls xterm scrollback, not a TUI\'s internal history.',
+      '**What it does:** Toggles **auto-follow for every visible agent** at once.\n\n**Use when:** You are watching several agents work and want them all pinned to the bottom.\n\n**Notes:** Scopes to what is on screen — in **single dispatch** that is the one agent, in **tiled** every lane, in the **grid** the current tab\'s panes only. Panes you open afterward tail too, until you toggle it off. Plain terminals and raw agent terminal views follow too.\n\n**Caution:** A tailing pane cannot be scrolled up. Turning this off leaves individually enabled followers on; other panes restore their earlier reading position where that content is still retained. Raw terminal follow controls xterm scrollback, not a TUI\'s internal history.',
     keywords: ['tail', 'all', 'follow', 'auto-scroll', 'bulk', 'every', 'watch', 'tail all', 'tail'],
     // WHY no `renderedViewPolicy` — Tail All is a stance over whatever is
     // mounted, on either agent surface (rendered feed or raw terminal view,
@@ -589,15 +586,15 @@ export const paneCommands: CommandDef[] = [
     category: 'navigate',
     surface: 'session',
     title: 'Jump to Latest Message',
-    description: '**What it does:** Scrolls to the **latest agent message**.\n\n**Use when:** You are far up in the feed and want to return to the bottom.\n\n**Notes:** Agent panes only. In a raw terminal view this scrolls the xterm viewport, which works for providers that render inline (Claude, Codex). A TUI that owns its own transcript on the alternate screen (OpenCode Terminal) keeps its history outside the viewport, so there is nothing here to scroll — use that TUI\'s own scroll keys.',
+    description: '**What it does:** Scrolls to the **latest agent message**.\n\n**Use when:** You are far up in the feed and want to return to the bottom.\n\n**Notes:** Works in agent feeds, raw agent terminal views and plain terminals. In a raw terminal view this scrolls the xterm viewport, which works for providers that render inline (Claude, Codex). A TUI that owns its own transcript on the alternate screen (OpenCode Terminal) keeps its history outside the viewport, so there is nothing here to scroll — use that TUI\'s own scroll keys.',
     // NO `renderedViewPolicy` — the xterm viewport answers jump requests too
-    // (useAgentTerminalFollow); gating on a rendered feed would hide this on
+    // (useTerminalFollow); gating on a rendered feed would hide this on
     // the surface where returning to the bottom is most often needed.
     when: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
-      if (!sessionId) return false
-      const kind = workspace.state.sessions[sessionId]?.kind ?? DEFAULT_PROVIDER
-      return kind !== 'terminal'
+      // Every session follows (#865): agents through the feed or the raw
+      // terminal view, plain shells through the same xterm follow hook.
+      return sessionId !== null && Boolean(workspace.state.sessions[sessionId])
     },
     run: ({ workspace }) => {
       workspace.scrollFocusedToLatest()
@@ -616,7 +613,9 @@ export const paneCommands: CommandDef[] = [
       // transcript, and extractLastAssistantText intentionally reads provider
       // entries. Showing the command on a shell row would imply there is an
       // assistant response to copy when there is only PTY scrollback.
-      return workspace.state.sessions[sessionId]?.kind !== 'terminal'
+      // sessionHasTranscript also excludes OpenCode Terminal, which never has
+      // entries to copy.
+      return sessionHasTranscript(workspace.state.sessions[sessionId])
     },
     run: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
@@ -681,10 +680,14 @@ export const paneCommands: CommandDef[] = [
     description:
       '**What it does:** Restores the draft removed by the last **Clear Composer** in this agent.\n\n**Use when:** You cleared the composer by mistake.\n\n**Notes:** Text only — attached images are not restored. Survives further typing, so it is still available after you start over.',
     keywords: ['undo', 'restore', 'composer', 'draft', 'clear', 'recover'],
-    // NO `when` guard, matching `undo-close`: the stash lives in module state
-    // that the command registry does not re-derive on, so a guard reading it
-    // would go stale. `undoClearDraft` returns false when there is nothing to
-    // restore and the command stays quiet.
+    // Plain terminals have no composer at all; the rendered-view policy cannot
+    // hide this for them because it answers "allowed" for non-agent kinds.
+    // This guard reads only the session kind, never the module-level stash,
+    // so the staleness concern that kept this command guard-free does not apply.
+    when: ({ workspace }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      return sessionId !== null && workspace.state.sessions[sessionId]?.kind !== 'terminal'
+    },
     run: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return

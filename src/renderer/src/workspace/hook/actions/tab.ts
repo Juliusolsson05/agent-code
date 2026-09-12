@@ -10,6 +10,9 @@ import { requestCloseConfirmation } from '@renderer/workspace/closeConfirmationB
 import { clearLiveEntryWindowSession } from '@renderer/session-runtime/liveEntryWindow'
 import { clearTiledLaneSessions } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import { sanitizeTileTabsState, titleFromCwd } from '@renderer/workspace/layout/helpers'
+import { mergeProjectTabs, retargetTileTabsAfterMerge } from '@renderer/workspace/mergeProjectTabs'
+import type { MergeProjectTabsResult } from '@renderer/workspace/mergeProjectTabs'
+import { tabIndexLabel } from '@renderer/workspace/tile-tree/paneLabelFormat'
 
 import type {
   WorkspaceSetReaderMode,
@@ -45,6 +48,8 @@ export function useTabActions(
   activateTab: (tabId: TabId) => void
   activateTabByIndex: (index: number) => void
   reorderTabs: (tabIds: TabId[]) => void
+  /** Fold `sourceTabIds` into `targetTabId` without touching any process (#913). */
+  mergeTabs: (targetTabId: TabId, sourceTabIds: TabId[]) => MergeProjectTabsResult
   nextTab: () => void
   prevTab: () => void
 } {
@@ -294,6 +299,59 @@ export function useTabActions(
     [refs.stateRef, setSpotlight, setState, setTileTabs],
   )
 
+  const mergeTabs = useCallback(
+    (targetTabId: TabId, sourceTabIds: TabId[]): MergeProjectTabsResult => {
+      // The plan is made INSIDE the updater against `prev`, never against
+      // `refs.stateRef`, which is refreshed on render and can lag a workspace
+      // mutation that landed between the modal's last paint and this click.
+      // Reading the result back out of the updater is only sound because
+      // `setState` is the zustand store setter, which applies the updater
+      // synchronously (pane.ts relies on the same property). Every side
+      // effect below is gated on that result: a refused merge must leave
+      // tiled tabs, Spotlight, Reader and the toast exactly as they were,
+      // otherwise the user is told "merged" while the tabs are still there.
+      // No kill, no spawn, no runtime change: every session keeps its
+      // process and its runtime; only tab affinity moves.
+      const now = Date.now()
+      // A holder object rather than a `let`: TypeScript keeps a `let`
+      // narrowed to its initial value across the updater call (it cannot see
+      // the closure assign), which would type the merged branch as `never`.
+      const applied: { result: MergeProjectTabsResult | null } = { result: null }
+      setState(prev => {
+        const planned = mergeProjectTabs(prev, { targetTabId, sourceTabIds, now })
+        applied.result = planned
+        return planned.ok ? planned.state : prev
+      })
+      const result = applied.result ?? { ok: false as const, reason: 'nothing_to_merge' as const }
+      if (!result.ok) {
+        showToast(
+          result.reason === 'target_is_source'
+            ? 'Merge cancelled — the target tab cannot be one of the merged tabs.'
+            : result.reason === 'unknown_tab'
+              ? 'Merge cancelled — a tab changed while the dialog was open. Try again.'
+              : 'Nothing to merge.',
+        )
+        return result
+      }
+      setTileTabs(prev => retargetTileTabsAfterMerge(prev, sourceTabIds, targetTabId))
+      // Spotlight and Reader zoom a GRID pane of a tab; the pane they named
+      // is now a Dispatch agent of another tab, so the takeover has nothing
+      // to frame.
+      const removed = new Set(sourceTabIds)
+      setSpotlight(prev => (prev && removed.has(prev.tabId) ? null : prev))
+      setReaderMode(prev => (prev && removed.has(prev.tabId) ? null : prev))
+      const { summary } = result
+      const moved = summary.detachedFromGrid.length + summary.repointedDetached.length
+      showToast(
+        `Merged ${summary.removedTabIds.length} tab${summary.removedTabIds.length === 1 ? '' : 's'} into `
+        + `${tabIndexLabel(summary.targetIndex)} · ${summary.targetTitle} — `
+        + `${moved} agent${moved === 1 ? '' : 's'} now in its Dispatch list`,
+      )
+      return result
+    },
+    [setReaderMode, setSpotlight, setState, setTileTabs, showToast],
+  )
+
   const reorderTabs = useCallback(
     (tabIds: TabId[]) => {
       setState(prev => {
@@ -363,6 +421,7 @@ export function useTabActions(
     activateTab,
     activateTabByIndex,
     reorderTabs,
+    mergeTabs,
     nextTab,
     prevTab,
   }
