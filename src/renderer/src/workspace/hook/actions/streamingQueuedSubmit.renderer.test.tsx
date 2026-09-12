@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { SemanticLiveTurn, SessionRuntime } from '@renderer/session-runtime/state'
 import { reduceStreamPhase } from '@renderer/session-runtime/semantic/streamPhaseMachine'
+import { hasPendingSemanticTools } from '@renderer/session-runtime/semantic/helpers'
 import type { SessionId } from '@renderer/workspace/types'
 
 import { useStreamingActions } from './streaming'
@@ -152,6 +153,69 @@ describe('beginOptimisticSubmit', () => {
     expect(runtime.streamPhase).toBe('idle')
     expect(runtime.submittedAt).toBeNull()
     expect(runtime.turnStartedAt).toBeNull()
+  })
+
+  it('does not stamp Sending while a tool is still running under an ended turn', () => {
+    // #893 review F2, the half that must NOT change. For a whole Claude Bash or
+    // Task run (and a Codex function_call), the adapter has already closed the
+    // proxy turn at the response boundary and published `awaiting-tool`. The fold
+    // keeps that ended turn mounted because its tool is pending.
+    // `isSemanticTurnRunning` is false here, which is exactly why "awaiting-tool
+    // with no running turn" alone cannot mean idle: Claude queues this submit.
+    const toolRun: SemanticLiveTurn = {
+      ...liveTurn(),
+      stopReason: 'tool_use',
+      endedAt: 950_000,
+      blocks: {
+        0: { kind: 'tool_use', toolUseId: 'toolu_bash', toolName: 'Bash', resultAt: null } as never,
+      },
+    }
+    expect(hasPendingSemanticTools(toolRun)).toBe(true)
+    const h = harness({
+      [S1]: idlePane({
+        streamPhase: 'awaiting-tool',
+        streamPhasePendingToolName: 'Bash',
+        streamPhasePendingToolUseId: 'toolu_bash',
+        turnStartedAt: 900_000,
+        phaseChangedAt: 950_000,
+        semantic: { ...emptyRuntime().semantic, currentTurn: toolRun },
+      }),
+    })
+
+    let stamp: number | null = -1
+    act(() => { stamp = h.view.result.current.beginOptimisticSubmit(S1) })
+
+    const runtime = h.get(S1)
+    expect(stamp).toBeNull()
+    expect(runtime.streamPhase).toBe('awaiting-tool')
+    expect(runtime.turnStartedAt).toBe(900_000)
+  })
+
+  it('stamps Sending on an awaiting-tool phase that outlived its tool', () => {
+    // #893 review F2, the documented Codex shape. A tool resolved through
+    // `tool_completed` archives the ended turn, but the phase machine leaves
+    // `awaiting-tool` only on a matching `tool_result`, so the phase is left over
+    // with no running turn and nothing pending. A submit here can START a turn,
+    // so the pre-#889 stamp is truthful and must still happen.
+    const h = harness({
+      [S1]: idlePane({
+        streamPhase: 'awaiting-tool',
+        streamPhasePendingToolName: 'mcp__docs__search',
+        streamPhasePendingToolUseId: 'call_docs',
+        turnStartedAt: 900_000,
+        phaseChangedAt: 950_000,
+      }),
+    })
+
+    let stamp: number | null = null
+    act(() => { stamp = h.view.result.current.beginOptimisticSubmit(S1) })
+
+    const runtime = h.get(S1)
+    expect(stamp).not.toBeNull()
+    expect(runtime.streamPhase).toBe('submitting')
+    expect(runtime.submittedAt).toBe(stamp)
+    expect(runtime.turnStartedAt).toBe(stamp)
+    expect(runtime.awaitingAssistant).toBe(true)
   })
 })
 

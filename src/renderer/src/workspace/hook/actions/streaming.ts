@@ -12,7 +12,10 @@ import {
   entryTextContent,
 } from '@renderer/session-runtime/entries'
 import { isOptimisticCodexUserEntry } from '@providers/codex/renderer/transcript/entries'
-import { isSemanticTurnRunning } from '@renderer/session-runtime/semantic/helpers'
+import {
+  hasPendingSemanticTools,
+  isSemanticTurnRunning,
+} from '@renderer/session-runtime/semantic/helpers'
 import {
   buildCommittedAssistantText,
   semanticTurnHasRenderableContent,
@@ -27,7 +30,10 @@ import type { WorkspaceSetRuntimes } from '@renderer/workspace/hook/context'
 // Optimistic submit state + optimistic-codex-user entry.
 //
 // beginOptimisticSubmit is called by TileLeaf on submit. It sets a
-// synthetic `submitting` phase and a `submittedAt` timestamp. (It was
+// synthetic `submitting` phase and a `submittedAt` timestamp, but only when
+// the submit lands on an idle pane. Over work the provider is still doing it
+// skips the stamp and returns null instead of the stamp token the queue settle
+// matches on (#889; see submitJoinsLiveWork for what counts as live). (It was
 // `setStreamingBaseline` while it also stored an assistant block scraped
 // off the TUI screen for the old screen-driven streaming card; that card
 // and its baseline are gone, see #855.) This covers the gap between the user
@@ -86,10 +92,12 @@ export function optimisticCodexQueueReason(
 ): OptimisticQueueReason | null {
   // WHY this deliberately ignores `streamPhase`:
   // TileLeaf calls beginOptimisticSubmit() and addOptimisticCodexUserEntry()
-  // in the same submit handler. beginOptimisticSubmit moves streamPhase to
-  // "submitting" before this function runs, so treating any non-idle
-  // streamPhase as "previous turn is live" queues the *first* prompt of an
-  // idle Codex session and makes the optimistic feed row path unreachable.
+  // in the same submit handler. On an idle pane beginOptimisticSubmit moves
+  // streamPhase to "submitting" before this function runs, so treating any
+  // non-idle streamPhase as "previous turn is live" queues the *first* prompt
+  // of an idle Codex session and makes the optimistic feed row path
+  // unreachable. (Over live work the stamp is skipped since #889, so the phase
+  // here is whatever the running turn left. It is still no ownership signal.)
   //
   // The ordering bug we are preventing is narrower: a follow-up prompt
   // while an existing semantic assistant/tool turn is still visibly live.
@@ -121,6 +129,62 @@ export function optimisticCodexQueueReason(
     ),
   )
   return unownedHistory ? 'unowned-history' : null
+}
+
+/**
+ * Whether a composer submit lands on work the provider is still doing. If so,
+ * `beginOptimisticSubmit` must not paint `submitting` over it (#889).
+ *
+ * WHY skipping the stamp is right for every provider, not only Claude (#893
+ * review F2):
+ *   - Claude holds a prompt submitted mid-turn in its queue (main reports
+ *     `queue`) and drains it into the running turn. No turn starts for it, so
+ *     `Sending` overwrote the running turn's real phase and clock with a claim
+ *     nothing downstream corrects.
+ *   - Codex's composer writes raw PTY bytes and returns no acceptance. While
+ *     its task runs, the running turn keeps emitting its own stream_phase
+ *     events, and those are the truth the stamp would have hidden.
+ *   - OpenCode reports `transport` for every successful HTTP handoff, so the
+ *     renderer cannot tell a held prompt from a started turn. Over a live turn
+ *     the live phase is accurate either way, and a turn the prompt does start
+ *     later paints itself through its own phase events.
+ *   The skipped stamp also drops its `awaitingAssistant: true`, which the
+ *   running turn's next semantic event would have cleared almost at once.
+ *   Orchestration and agent management read `streamPhase !== 'idle'`, which the
+ *   live phase already satisfies.
+ *
+ * WHY `awaiting-tool` is split on pending tools instead of on "is the turn
+ * running" (#893 review F2): both adapters close the proxy turn at the response
+ * boundary and only THEN publish `awaiting-tool` while the client runs the
+ * tool (ClaudeProxyAdapter at message_delta, CodexResponsesAdapter at
+ * response.completed). The fold keeps that ended turn mounted while its tool
+ * is pending, so `isSemanticTurnRunning` is false for the whole of a Claude
+ * Bash or Task run. Counting "awaiting-tool with no running turn" as idle
+ * would repaint `Sending` over every Claude tool run, and the queue settle
+ * would then blank the indicator for the rest of the run. The shape that can
+ * precede a NEW turn is narrower: the phase still says `awaiting-tool`, but the
+ * semantic turn holds no pending tool. A Codex tool resolved through
+ * `tool_completed` leaves exactly that. The fold archives the turn, while the
+ * phase machine only leaves `awaiting-tool` on a matching `tool_result`
+ * (streamPhaseMachine.ts). Nothing is running under that phase, so the pre-#889
+ * stamp is truthful there and is kept. OpenCode never publishes `awaiting-tool`.
+ *
+ * Accepted cost, recorded in plan §2 D1: any OTHER non-idle phase that nothing
+ * returned to idle (e.g. `requesting` after an interrupted tool loop) still
+ * counts as live. A turn that submit starts then relabels the indicator with
+ * its first changed phase, but keeps that stale phase's elapsed clock, because
+ * the machine stamps `turnStartedAt` only while it is null.
+ */
+export function submitJoinsLiveWork(
+  current: Pick<SessionRuntime, 'semantic' | 'streamPhase'>,
+): boolean {
+  const turn = current.semantic.currentTurn
+  if (isSemanticTurnRunning(turn)) return true
+  if (current.streamPhase === 'idle') return false
+  if (current.streamPhase === 'awaiting-tool') {
+    return turn !== null && hasPendingSemanticTools(turn)
+  }
+  return true
 }
 
 export function codexPromptOwnershipKey(text: string | null | undefined): string {
@@ -379,24 +443,20 @@ export function useStreamingActions(
       let stamp: OptimisticSubmitStamp | null = null
       setRuntimes(prev => {
         const current = prev[sessionId] ?? emptyRuntime()
-        // WHY the phase stamp is skipped over a live turn (#889): a submit into
-        // a pane whose turn is still running is not going to START a turn —
+        // WHY the phase stamp is skipped over live work (#889): a submit into a
+        // pane whose provider is still working is not going to START a turn —
         // Claude queues it and drains it into the running turn later. Painting
         // `submitting` here overwrote the turn's real phase and its real
         // clock (`turnStartedAt`) with `Sending · 0s`, and because nothing
         // downstream ever corrects that (see settleQueuedSubmit), the pane lied
-        // for as long as the turn stayed quiet. Both live signals are checked:
-        // the phase machine can lag the semantic turn (first deltas arrive
-        // before the first stream_phase), and the semantic turn can be closed
-        // while the phase still reports a pending tool.
+        // for as long as the turn stayed quiet. submitJoinsLiveWork owns the
+        // precise predicate and its per-provider reasoning, including the
+        // stale `awaiting-tool` that must still stamp.
         //
         // Everything that is not a phase claim still happens on this branch —
         // continuing from a rewound branch retires Undo Rewind whether or not
         // the prompt is queued.
-        const turnIsLive =
-          current.streamPhase !== 'idle' ||
-          isSemanticTurnRunning(current.semantic.currentTurn)
-        if (turnIsLive) {
+        if (submitJoinsLiveWork(current)) {
           stamp = null
           return {
             ...prev,
