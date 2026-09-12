@@ -105,6 +105,7 @@ export type UiShellSlice = UiShellState & {
    *  app-state/uiShell/types.ts for why this is an OR-mask rather than a bulk
    *  write over every session's `tailMode`. */
   toggleTailAllMode: () => void
+  toggleTailWorkingMode: () => void
   toggleDevDebugPanel: () => void
   openAgentStatusPanel: () => void
   closeAgentStatusPanel: () => void

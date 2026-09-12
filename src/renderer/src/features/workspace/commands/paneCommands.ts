@@ -18,6 +18,7 @@ import { dispatchFocusedSessionId } from '@renderer/workspace/dispatch/tiledDisp
 import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 import { submitActiveComposer } from '@renderer/workspace/tile-tree/TileLeaf/composerEnterRegistry'
 import { sessionHasTranscript } from '@renderer/workspace/transcriptAvailability'
+import { isWorkingAgent } from '@renderer/workspace/agentFollow'
 
 /**
  * Buried panes visible from the CURRENT tab.
@@ -524,7 +525,7 @@ export const paneCommands: CommandDef[] = [
         ? workspace.getRuntime(sessionId).tailMode
         : false
       // WHY this consults Tail All: the pane's actual behavior is
-      // `runtime.tailMode || tailAllMode` (see TileLeaf). Reporting the raw
+      // the individual flag OR the active bulk policy (see agentFollow). Reporting the raw
       // per-session flag would print "Off" next to a pane that is visibly
       // pinned to the bottom, which reads as a broken command. The distinct
       // 'On (all)' label says the state is real but not this session's to own —
@@ -541,6 +542,12 @@ export const paneCommands: CommandDef[] = [
         // while and was never read by any surface, so the sentence was always
         // doing the whole job.
         return toggle(true, { detail: 'On via Auto-follow All Visible Agents' })
+      }
+      if (
+        !tailMode && flags.tailWorkingMode && sessionId
+        && isWorkingAgent(workspace.state.sessions[sessionId]?.kind, workspace.getRuntime(sessionId))
+      ) {
+        return toggle(true, { detail: 'On via Auto-follow All Working Agents' })
       }
       return toggle(Boolean(tailMode))
     },
@@ -567,7 +574,7 @@ export const paneCommands: CommandDef[] = [
     surface: 'app',
     title: 'Auto-follow All Visible Agents',
     description:
-      '**What it does:** Toggles **auto-follow for every visible agent** at once.\n\n**Use when:** You are watching several agents work and want them all pinned to the bottom.\n\n**Notes:** Scopes to what is on screen — in **single dispatch** that is the one agent, in **tiled** every lane, in the **grid** the current tab\'s panes only. Panes you open afterward tail too, until you toggle it off. Plain terminals and raw agent terminal views follow too.\n\n**Caution:** A tailing pane cannot be scrolled up. Turning this off leaves individually enabled followers on; other panes restore their earlier reading position where that content is still retained. Raw terminal follow controls xterm scrollback, not a TUI\'s internal history.',
+      '**What it does:** Toggles **auto-follow for every visible agent** at once.\n\n**Use when:** You are watching several agents work and want them all pinned to the bottom.\n\n**Notes:** Scopes to what is on screen — in **single dispatch** that is the one agent, in **tiled** every lane, in the **grid** the current tab\'s panes only. Panes you open afterward tail too, until you toggle it off. Enabling this switches off Auto-follow All Working Agents. Plain terminals and raw agent terminal views follow too.\n\n**Caution:** A tailing pane cannot be scrolled up. Turning this off leaves individually enabled followers on; other panes restore their earlier reading position where that content is still retained. Raw terminal follow controls xterm scrollback, not a TUI\'s internal history.',
     keywords: ['tail', 'all', 'follow', 'auto-scroll', 'bulk', 'every', 'watch', 'tail all', 'tail'],
     // WHY no `renderedViewPolicy` — Tail All is a stance over whatever is
     // mounted, on either agent surface (rendered feed or raw terminal view,
@@ -580,6 +587,20 @@ export const paneCommands: CommandDef[] = [
     // disappears from the palette for reasons the user cannot see.
     getState: ({ flags }) => toggle(flags.tailAllMode),
     run: ({ ui }) => ui.toggleTailAllMode(),
+  },
+  {
+    id: 'toggle-tail-working',
+    category: 'layout-dispatch',
+    pickerVisibility: 'advanced',
+    surface: 'app',
+    title: 'Auto-follow All Working Agents',
+    description: '**What it does:** Keeps working agents pinned to their latest output.\n\n**Use when:** You want to watch active work while reading idle conversations freely.\n\n**Notes:** Applies automatically as agents start and stop working, in rendered feeds and raw agent terminal views. Hidden panes suspend scrolling. Plain shell terminals are excluded. Enabling this switches off Auto-follow All Visible Agents. Individually enabled followers stay on.\n\n**Caution:** A following pane cannot be scrolled up. When work ends or this mode is switched off, other panes restore their earlier reading position where retained. Raw terminal follow controls xterm scrollback, not a TUI’s internal history.',
+    keywords: ['tail', 'all', 'working', 'busy', 'running', 'follow', 'auto-scroll', 'watch'],
+    // This is a policy for future work too, so it stays available with no busy
+    // target and on either view surface. The leaf observes activity changes;
+    // the command never wakes agents or snapshots the current working set.
+    getState: ({ flags }) => toggle(flags.tailWorkingMode),
+    run: ({ ui }) => ui.toggleTailWorkingMode(),
   },
   {
     id: 'jump-latest-message',

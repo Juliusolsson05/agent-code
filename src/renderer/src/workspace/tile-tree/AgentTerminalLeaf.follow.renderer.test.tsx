@@ -54,6 +54,7 @@ const appStore = vi.hoisted(() => ({
     dispatchColorFlags: {},
   },
   tailAllMode: false,
+  tailWorkingMode: false,
 }))
 
 vi.mock('@renderer/workspace/terminal/xtermWebglRenderer', () => ({
@@ -226,6 +227,7 @@ describe('AgentTerminalLeaf follow (jump-to-latest + tail)', () => {
 
   beforeEach(() => {
     appStore.tailAllMode = false
+    appStore.tailWorkingMode = false
     attach = deferred<string | null>()
     nextFrameId = 0
     frames = new Map()
@@ -391,6 +393,53 @@ describe('AgentTerminalLeaf follow (jump-to-latest + tail)', () => {
     expect(screen.getByText('TAIL')).toBeTruthy()
     term().buffer.active.length = 500
     act(() => { channelListener?.({ sessionId: 'session-1', data: 'stream' }) })
+    expect(term().buffer.active.viewportY).toBe(460)
+  })
+
+  it('follows only while working and restores the idle reading position', async () => {
+    appStore.tailWorkingMode = true
+    const view = render(leaf())
+    await attachResolved()
+    term().buffer.active.length = 500
+    term().buffer.active.viewportY = 100
+    expect(screen.queryByText('TAIL')).toBeNull()
+    act(() => { channelListener?.({ sessionId: 'session-1', data: 'idle repaint' }) })
+    expect(term().scrollToBottom).not.toHaveBeenCalled()
+
+    act(() => { view.rerender(leaf(runtimeWith({ sessionStatus: 'running' }))) })
+    expect(screen.getByText('TAIL')).toBeTruthy()
+    expect(term().buffer.active.viewportY).toBe(460)
+    term().buffer.active.length = 600
+    act(() => { channelListener?.({ sessionId: 'session-1', data: 'working output' }) })
+    expect(term().buffer.active.viewportY).toBe(560)
+
+    act(() => { view.rerender(leaf()) })
+    expect(screen.queryByText('TAIL')).toBeNull()
+    expect(term().buffer.active.viewportY).toBe(100)
+    term().scrollToBottom.mockClear()
+    act(() => { channelListener?.({ sessionId: 'session-1', data: 'idle repaint' }) })
+    expect(term().scrollToBottom).not.toHaveBeenCalled()
+
+    act(() => { view.rerender(leaf(runtimeWith({ tailMode: true }))) })
+    expect(screen.getByText('TAIL')).toBeTruthy()
+  })
+
+  it('suspends working follow while hidden and pins again when revealed', async () => {
+    appStore.tailWorkingMode = true
+    const renderVisible = (visible: boolean) => (
+      <AgentTerminalOwnerVisibilityProvider visible={visible}>
+        {leaf(runtimeWith({ sessionStatus: 'running' }))}
+      </AgentTerminalOwnerVisibilityProvider>
+    )
+    const view = render(renderVisible(false))
+    await attachResolved()
+    term().buffer.active.length = 500
+    term().buffer.active.viewportY = 100
+    act(() => { channelListener?.({ sessionId: 'session-1', data: 'background work' }) })
+    expect(term().scrollToBottom).not.toHaveBeenCalled()
+    expect(screen.queryByText('TAIL')).toBeNull()
+    act(() => { view.rerender(renderVisible(true)) })
+    expect(screen.getByText('TAIL')).toBeTruthy()
     expect(term().buffer.active.viewportY).toBe(460)
   })
 

@@ -16,7 +16,8 @@ import type { CommandDef } from '@renderer/features/command-palette/types'
 // Remove Cybersecurity Block (#848), 117 with New Agent In… (#852),
 // 119 with TLDR preview and TLDR MCP (#888), 120 with Root Agent Code
 // Management (#906), 121 with Use Global MCP Settings (#904), 122 with
-// Merge Project Tabs (#913), and 123 with View TLDR History (#917).
+// Merge Project Tabs (#913), 123 with View TLDR History (#917), and 124 with
+// Auto-follow All Working Agents (#938).
 // Keeping ONE snapshot that moved — rather
 // than a "baseline" file and an "after" file — is what makes the plan's
 // headline count an assertion anyone can check against running code instead of
@@ -74,6 +75,7 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
   'kill-buried-pane',
   'toggle-tail',
   'toggle-tail-all',
+  'toggle-tail-working',
   'jump-latest-message',
   'copy-last-assistant',
   'clear-composer',
@@ -209,7 +211,7 @@ describe('built-in command catalog — baseline characterization', () => {
     expect(ids()).toEqual([...BASELINE_COMMAND_IDS])
   })
 
-  it('has exactly 123 commands', () => {
+  it('has exactly 124 commands', () => {
     // Stated separately from the order assertion because this number is the
     // thing that moves, and a bare count failure is a clearer signal than a
     // 99-line array diff.
@@ -223,11 +225,11 @@ describe('built-in command catalog — baseline characterization', () => {
     // New Agent In… (#852) → 119 with TLDR preview and TLDR MCP (#888) → 120
     // with Root Agent Code Management (#906) → 121 with Use Global MCP
     // Settings (#904) → 122 with Merge Project Tabs (#913) → 123 with View
-    // TLDR History (#917).
+    // TLDR History (#917) → 124 with Auto-follow All Working Agents (#938).
     // Each step of that arithmetic was a deliberate edit to this line, which is the entire point of pinning it. (The two test
     // titles above had drifted to "115" while this line said 116; they now
     // track it again.)
-    expect(builtInCommandCatalog).toHaveLength(123)
+    expect(builtInCommandCatalog).toHaveLength(124)
   })
 
   it('reports no structural defects', () => {
@@ -261,12 +263,12 @@ describe('generated per-provider split commands', () => {
   })
 
   it('accounts for the difference between literal and total command count', () => {
-    // 123 total - 4 generated = 119 literal `id:` fields across the command
+    // 124 total - 4 generated = 120 literal `id:` fields across the command
     // modules. At the original baseline this read 102 - 4 = 98; it moved down by
     // the five retirements, then back up by the nine additions, Grid Dispatch's
     // six row commands, New Window, and the later single additions recorded in
-    // the count test above (through View TLDR History, #917).
-    expect(builtInCommandCatalog.length - nonDefaultProviders.length * 2).toBe(119)
+    // the count test above (through Auto-follow All Working Agents, #938).
+    expect(builtInCommandCatalog.length - nonDefaultProviders.length * 2).toBe(120)
   })
 
   it('emits both directions for every non-default provider', () => {
@@ -365,7 +367,7 @@ describe('governance targets', () => {
   })
 
   it('lands on the arithmetic the plan predicted', () => {
-    // 102 baseline - 5 retirements + 25 additions = 122, checked against the
+    // 102 baseline - 5 retirements + 27 additions = 124, checked against the
     // real catalog rather than trusted as prose.
     //
     // The subtracted term is the count of APPROVED ADDITIONS and the expected
@@ -388,9 +390,9 @@ describe('governance targets', () => {
     // `tldr-preview` and `enable-tldr-mcp` (#888),
     // `enable-root-agent-code-management` (#906), and
     // `use-global-mcp-settings` (#904), `merge-project-tabs` (#913), and
-    // `view-tldr-history` (#917).
-    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 26).toBe(102)
-    expect(builtInCommandCatalog).toHaveLength(123)
+    // `view-tldr-history` (#917), and `toggle-tail-working` (#938).
+    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 27).toBe(102)
+    expect(builtInCommandCatalog).toHaveLength(124)
   })
 })
 
