@@ -1,4 +1,4 @@
-import { Incidents } from './Incidents'
+import { Timeline } from './Timeline'
 import { useEffect, useMemo, useState } from 'react'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@renderer/components/ui/dialog'
 import { Button } from '@renderer/components/ui/button'
@@ -9,7 +9,7 @@ import { useMonitor } from './useMonitor'
 
 const bytes = (value: number | null | undefined) => value == null ? '—' : value >= 1024 ** 3 ? `${(value / 1024 ** 3).toFixed(2)} GiB` : `${(value / 1024 ** 2).toFixed(1)} MiB`
 const number = (value: number | null | undefined, suffix = '') => value == null ? '—' : `${value.toFixed(1)}${suffix}`
-type View = 'overview' | 'processes' | 'operations' | 'incidents'
+type View = 'overview' | 'timeline' | 'processes' | 'operations' | 'recordings'
 
 export function PerformanceMonitor({ onClose }: { onClose: () => void }) {
   const { snapshot, error } = useMonitor()
@@ -28,17 +28,48 @@ export function PerformanceMonitor({ onClose }: { onClose: () => void }) {
         </div>
       </DialogHeader>
       <nav aria-label="Performance views" className="flex gap-2 border-b border-border px-4 py-2">
-        {(['overview', 'processes', 'operations', 'incidents'] as const).map(tab => <Button key={tab} size="sm" variant={view === tab ? 'default' : 'ghost'} aria-pressed={view === tab} onClick={() => setView(tab)}>
+        {(['overview', 'timeline', 'processes', 'operations', 'recordings'] as const).map(tab => <Button key={tab} size="sm" variant={view === tab ? 'default' : 'ghost'} aria-pressed={view === tab} onClick={() => setView(tab)}>
           {tab[0].toUpperCase() + tab.slice(1)}
         </Button>)}
       </nav>
       <div className="overflow-auto p-4 text-[12px] min-h-[min(400px,50vh)]">
         {!snapshot ? <p className="text-muted" role="status">{error ? 'Performance readings are unavailable. Collection will reconnect automatically.' : 'Waiting for the first sample…'}</p>
           : view === 'overview' ? <Overview snapshot={snapshot} />
-            : view === 'processes' ? <Processes /> : view === 'incidents' ? <Incidents incidents={snapshot.incidents ?? []} /> : <Operations snapshot={snapshot} />}
+            : view === 'timeline' ? <Timeline incidents={snapshot.incidents ?? []} />
+              : view === 'processes' ? <Processes /> : view === 'recordings' ? <Recordings snapshot={snapshot} /> : <Operations snapshot={snapshot} />}
       </div>
     </DialogContent>
   </Dialog>
+}
+
+function Recordings({ snapshot }: { snapshot: MonitorSnapshot }) {
+  const [range, setRange] = useState(15 * 60_000)
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState<string | null>(null)
+  const save = async () => {
+    setBusy(true); setMessage(null)
+    try {
+      const result = await window.api.saveMonitorReport(Math.max(0, Date.now() - range), Date.now())
+      setMessage(result.ok ? `Saved ${(result.bytes / 1024).toFixed(1)} KiB with ${result.points.toLocaleString()} metric points and ${result.incidents} incidents.`
+        : result.code === 'cancelled' ? 'Save cancelled.' : `Report was not saved (${result.code}).`)
+    } catch { setMessage('Report was not saved.') }
+    finally { setBusy(false) }
+  }
+  const clear = async () => {
+    setBusy(true); setMessage(null)
+    try { const status = await window.api.clearMonitorHistory(); if (status) setMessage(`Local history now uses ${(status.bytes / 1024 / 1024).toFixed(1)} MiB.`) }
+    catch { setMessage('History could not be cleared.') }
+    finally { setBusy(false) }
+  }
+  return <div className="space-y-5">
+    <section className="rounded-slab border border-border bg-canvas p-4 space-y-3"><h2 className="font-medium">Local performance report</h2><p className="text-[11px] leading-5 text-muted">Includes bounded metric rollups, operation histograms, incidents, coverage and build metadata. It contains no prompts, transcript text, paths, DOM, audio, environment variables or stacks. Nothing is uploaded.</p>
+      <label className="text-muted">Range <select className="ml-2 rounded-control border border-border bg-canvas p-1 text-ink" value={range} onChange={event => setRange(Number(event.target.value))}><option value={15 * 60_000}>15 minutes</option><option value={24 * 60 * 60_000}>24 hours</option><option value={7 * 24 * 60 * 60_000}>7 days</option></select></label>
+      <div className="flex flex-wrap gap-2"><Button size="sm" disabled={busy} onClick={() => void save()}>Save Performance Report</Button><Button size="sm" variant="destructive-outline" disabled={busy || snapshot.history?.exporting} onClick={() => void clear()}>Clear Local History</Button></div>
+      <p className="text-[11px] text-muted">{snapshot.history ? `${(snapshot.history.bytes / 1024 / 1024).toFixed(1)} MiB stored · ${snapshot.history.state}${snapshot.history.shortened ? ' · shortened' : ''}` : 'History is warming up.'}</p>
+      {message && <p role="status" className="text-[11px]">{message}</p>}
+    </section>
+    <section className="rounded-slab border border-border p-4"><h2 className="font-medium">Advanced recordings</h2><p className="mt-2 text-[11px] leading-5 text-muted">A performance trace is explicit, app-wide and limited to 30 seconds by default. Heap snapshots remain a separate manual action because they pause the main JavaScript isolate and may contain sensitive application memory.</p></section>
+  </div>
 }
 
 function Stat({ label, value, detail }: { label: string; value: string; detail: string }) {

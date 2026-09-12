@@ -1,4 +1,5 @@
-import type { MonitorIncident, MonitorIncidentSummary } from './monitorIncidents.js'
+import type { MonitorIncidentSummary } from './monitorIncidents.js'
+import type { MonitorHistoryStatus, MonitorWorkerQuery, MonitorWorkerQueryResult } from './monitorHistory.js'
 import type { MonitorElectronProcess, MonitorProcessTarget, MonitorProcessChunk, MonitorProcessSummary } from './processSnapshot.js'
 import type { MonitorHeartbeat, MonitorOperation } from './monitorContracts.js'
 import type { LatencyHistogramSnapshot } from './latencyHistogram.js'
@@ -25,7 +26,7 @@ export type MonitorEnvelope =
 export type MonitorWorkerSnapshot = {
   schemaVersion: 1; sampledAt: number; main: MonitorMainSample | null
   windows: MonitorWindowSample[]; operations: MonitorOperationSummary[]
-  recent: MonitorMainSample[]; workerRss: number; incidents?: MonitorIncidentSummary[]
+  recent: MonitorMainSample[]; workerRss: number; incidents?: MonitorIncidentSummary[]; history?: MonitorHistoryStatus
 }
 export type MonitorSnapshot = MonitorWorkerSnapshot & {
   runId: string; enabled: true
@@ -34,5 +35,5 @@ export type MonitorSnapshot = MonitorWorkerSnapshot & {
   processes?: MonitorProcessSummary
 }
 
-export type MonitorWorkerRequest = { sequence: number; records: MonitorEnvelope[]; liveWindowIds?: number[]; visibleWindowIds?: number[]; droppedRecords?: number; query?: { kind: 'incident'; id: number } }
-export type MonitorWorkerResponse = { sequence: number; snapshot?: MonitorWorkerSnapshot; processChunk?: MonitorProcessChunk; incident?: MonitorIncident | null }
+export type MonitorWorkerRequest = { sequence: number; runId: string; restarts: number; records: MonitorEnvelope[]; liveWindowIds?: number[]; visibleWindowIds?: number[]; droppedRecords?: number; query?: MonitorWorkerQuery }
+export type MonitorWorkerResponse = { sequence: number; snapshot?: MonitorWorkerSnapshot; processChunk?: MonitorProcessChunk; queryResult?: MonitorWorkerQueryResult }

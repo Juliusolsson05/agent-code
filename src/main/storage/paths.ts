@@ -74,6 +74,12 @@ export const PROXY_EVENTS_DIR = join(STATE_DIR, 'proxy')
 // written only when AGENT_CODE_PERF=1.
 export const PERFORMANCE_RUNS_DIR = join(STATE_DIR, 'performance', 'runs')
 
+// Product monitoring is always on, so it cannot share the environment-gated
+// trace root above. A distinct root also lets its hard 128 MiB retention rule
+// prune only the bounded metric history it owns.
+export const MONITOR_HISTORY_DIR = join(STATE_DIR, 'performance-monitor')
+export const MONITOR_TRACE_DIR = join(MONITOR_HISTORY_DIR, 'traces')
+
 // Always-on app-run incident journals. Unlike performance traces, this root is
 // not gated by AGENT_CODE_PERF: it holds the small manifest/heartbeat/event
 // spine that explains crashes and restarts in normal user runs. Large forensic

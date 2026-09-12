@@ -1,5 +1,6 @@
-import { parseMonitorIncident } from '@shared/performance/parseMonitorIncident.js'
 import type { MonitorIncident } from '@shared/performance/monitorIncidents.js'
+import { parseMonitorWorkerQueryResult } from '@shared/performance/parseMonitorHistory.js'
+import type { MonitorHistoryPage, MonitorHistoryStatus, MonitorReportPreview, MonitorReportResult, MonitorWorkerQuery, MonitorWorkerQueryResult } from '@shared/performance/monitorHistory.js'
 import { mainOperations, setMainOperationSink } from './operations.js'
 import { parseProcessChunk } from '@shared/performance/parseProcessChunk.js'
 import { parseMonitorSnapshot } from '@shared/performance/parseMonitorSnapshot.js'
@@ -26,7 +27,7 @@ export class MonitorCoordinator {
   private queue = new BoundedQueue<MonitorEnvelope>(1600, 1600 * MONITOR_RECORD_BYTES)
   private processQueue = new BoundedQueue<MonitorEnvelope>(2306, 2306 * MONITOR_RECORD_BYTES)
   private sequence = 0
-  private pending: { sequence: number; at: number; count: number; query?: { resolve: (value: MonitorIncident | null) => void } } | null = null
+  private pending: { sequence: number; at: number; count: number; timeoutMs: number; query?: QueryWaiter } | null = null
   private lost = 0
   private launches = 0
   private retryAt = 0
@@ -38,14 +39,33 @@ export class MonitorCoordinator {
   private moreProcesses = false
   private processReceivedAt = 0
   private visibleWindows = new Set<number>()
-  private query: { id: number; resolve: (value: MonitorIncident | null) => void } | null = null
+  private query: QueryWaiter | null = null
   setWindowVisible(id: number, visible: boolean): void {
     if (visible && this.visibleWindows.size < 64) this.visibleWindows.add(id)
     else this.visibleWindows.delete(id)
   }
   readIncident(id: number): Promise<MonitorIncident | null> {
-    if (!Number.isSafeInteger(id) || id < 1 || this.query || this.pending?.query || this.stopped || !this.child) return Promise.resolve(null)
-    return new Promise(resolve => { this.query = { id, resolve } })
+    if (!Number.isSafeInteger(id) || id < 1) return Promise.resolve(null)
+    return this.request({ kind: 'incident', id }).then(result => result?.kind === 'incident' ? result.value : null)
+  }
+  readHistory(from: number, to: number, cursor?: string, limit = 500): Promise<MonitorHistoryPage | null> {
+    if (!validRange(from, to) || (cursor !== undefined && !/^\d{1,7}$/.test(cursor))) return Promise.resolve(null)
+    return this.request({ kind: 'history', from, to, ...(cursor ? { cursor } : {}), limit: Math.max(1, Math.min(1000, Math.floor(limit))) })
+      .then(result => result?.kind === 'history' ? result.value : null)
+  }
+  readHistoryStatus(): Promise<MonitorHistoryStatus | null> {
+    return this.request({ kind: 'history-status' }).then(result => result?.kind === 'history-status' ? result.value : null)
+  }
+  previewReport(from: number, to: number): Promise<MonitorReportPreview | null> {
+    if (!validRange(from, to)) return Promise.resolve(null)
+    return this.request({ kind: 'report-preview', from, to }).then(result => result?.kind === 'report-preview' ? result.value : null)
+  }
+  exportReport(from: number, to: number, destination: string, build: Record<string, string | boolean>): Promise<MonitorReportResult> {
+    if (!validRange(from, to) || !destination || destination.length > 4096) return Promise.resolve({ ok: false, code: 'invalid-range' })
+    return this.request({ kind: 'report-export', from, to, destination, build }).then(result => result?.kind === 'report-export' ? result.value : { ok: false, code: 'unavailable' })
+  }
+  clearHistory(): Promise<MonitorHistoryStatus | null> {
+    return this.request({ kind: 'history-clear' }).then(result => result?.kind === 'history-clear' ? result.value : null)
   }
   private liveWindows = new Set<number>()
   private cache: MonitorSnapshot = {
@@ -189,9 +209,9 @@ export class MonitorCoordinator {
             }
           }
           if (this.pending.query) {
-            const detail = message.incident === null ? null : parseMonitorIncident(message.incident)
-            if (message.incident !== null && !detail) { this.fail(child); return }
-            this.pending.query.resolve(detail)
+            const result = parseMonitorWorkerQueryResult(message.queryResult)
+            if (!result || result.kind !== this.pending.query.request.kind) { this.fail(child); return }
+            this.pending.query.resolve(result)
           }
           this.pending = null
           this.lastReplyAt = this.monotonicNow()
@@ -220,10 +240,15 @@ export class MonitorCoordinator {
     this.cache = { ...this.cache, collector: 'degraded' }
   }
 
+  private request(request: MonitorWorkerQuery): Promise<MonitorWorkerQueryResult | null> {
+    if (this.query || this.pending?.query || this.stopped || !this.child) return Promise.resolve(null)
+    return new Promise(resolve => { this.query = { request, resolve } })
+  }
+
   private pump(): void {
     mainOperations.sweep()
     try {
-      if (this.pending && this.monotonicNow() - this.pending.at > 5000) this.fail(this.child)
+      if (this.pending && this.monotonicNow() - this.pending.at > this.pending.timeoutMs) this.fail(this.child)
       if (!this.child && this.monotonicNow() >= this.retryAt) this.launch()
       if (!this.child || this.pending) return
       // Reserve 100 of 120 slots for a complete process generation. At the
@@ -239,10 +264,18 @@ export class MonitorCoordinator {
       // Electron message-port queue. Timeout discards the in-flight evidence,
       // counts the loss, and caps process restarts for the entire app run.
       const query = this.query; this.query = null
-      this.pending = { sequence, at: this.monotonicNow(), count: records.length, ...(query ? { query } : {}) }
-      this.child.postMessage({ sequence, records, liveWindowIds: [...this.liveWindows], visibleWindowIds: [...this.visibleWindows], droppedRecords: this.queue.stats.dropped + this.processQueue.stats.dropped + this.lost, ...(query ? { query: { kind: 'incident', id: query.id } } : {}) })
+      const timeoutMs = query?.request.kind === 'report-export' ? 60_000 : query ? 10_000 : 5000
+      this.pending = { sequence, at: this.monotonicNow(), count: records.length, timeoutMs, ...(query ? { query } : {}) }
+      this.child.postMessage({ sequence, runId: this.cache.runId, restarts: Math.max(0, this.launches - 1), records,
+        liveWindowIds: [...this.liveWindows], visibleWindowIds: [...this.visibleWindows],
+        droppedRecords: this.queue.stats.dropped + this.processQueue.stats.dropped + this.lost,
+        ...(query ? { query: query.request } : {}) })
     } catch { this.fail(this.child) }
   }
 }
+
+type QueryWaiter = { request: MonitorWorkerQuery; resolve: (value: MonitorWorkerQueryResult | null) => void }
+const validRange = (from: number, to: number): boolean => Number.isFinite(from) && Number.isFinite(to)
+  && from >= 0 && to >= from && to <= Number.MAX_SAFE_INTEGER && to - from <= MONITOR_POLICY.historyMs
 
 export const monitorCoordinator = new MonitorCoordinator()

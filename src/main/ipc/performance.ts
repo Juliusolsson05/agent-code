@@ -1,5 +1,6 @@
-import { BrowserWindow, ipcMain, shell } from 'electron'
+import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { monitorCoordinator } from '@main/performance/MonitorCoordinator.js'
+import { getBuildInfo } from '@main/buildInfo.js'
 import { parseMonitorRendererBatch } from '@shared/performance/monitorContracts.js'
 import { writeHeapSnapshot } from 'node:v8'
 import { mainProbe } from '@main/performance/MainProbe.js'
@@ -21,6 +22,44 @@ export function registerPerformanceIpc(manager: SessionManager): void {
   ipcMain.handle('performance:monitor-incident', (event, id: number) => {
     if (!BrowserWindow.fromWebContents(event.sender)) return null
     return monitorCoordinator.readIncident(id)
+  })
+  ipcMain.handle('performance:monitor-history', (event, from: number, to: number, cursor?: string, limit?: number) => {
+    if (!BrowserWindow.fromWebContents(event.sender)) return null
+    return monitorCoordinator.readHistory(from, to, cursor, limit)
+  })
+  ipcMain.handle('performance:monitor-report-preview', (event, from: number, to: number) => {
+    if (!BrowserWindow.fromWebContents(event.sender)) return null
+    return monitorCoordinator.previewReport(from, to)
+  })
+  ipcMain.handle('performance:monitor-save-report', async (event, from: number, to: number) => {
+    const window = BrowserWindow.fromWebContents(event.sender)
+    if (!window) return { ok: false, code: 'unavailable' as const }
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+    const selection = await dialog.showSaveDialog(window, {
+      title: 'Save Performance Report',
+      defaultPath: `agent-code-performance-${stamp}.json`,
+      filters: [{ name: 'JSON report', extensions: ['json'] }],
+    })
+    if (selection.canceled || !selection.filePath) return { ok: false, code: 'cancelled' as const }
+    // The renderer never supplies a filesystem path. Main receives the native
+    // picker result and the worker receives only that explicit destination,
+    // preventing this narrow report API from becoming arbitrary file write.
+    const result = await monitorCoordinator.exportReport(from, to, selection.filePath, {
+      ...getBuildInfo(), platform: process.platform, architecture: process.arch,
+      electron: process.versions.electron ?? 'unknown', node: process.versions.node,
+    })
+    return result.ok ? { ...result, path: selection.filePath } : result
+  })
+  ipcMain.handle('performance:monitor-clear-history', async event => {
+    const window = BrowserWindow.fromWebContents(event.sender)
+    if (!window) return null
+    const answer = await dialog.showMessageBox(window, {
+      type: 'warning', title: 'Clear performance history?',
+      message: 'Delete locally stored performance history and incident evidence?',
+      detail: 'Live monitoring continues immediately. Saved reports and performance traces are not deleted.',
+      buttons: ['Cancel', 'Clear History'], defaultId: 0, cancelId: 0, noLink: true,
+    })
+    return answer.response === 1 ? monitorCoordinator.clearHistory() : monitorCoordinator.readHistoryStatus()
   })
   ipcMain.handle('performance:monitor-processes', (event, offset?: number, sort?: unknown) => {
     if (!BrowserWindow.fromWebContents(event.sender)) return null

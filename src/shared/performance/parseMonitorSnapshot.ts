@@ -1,4 +1,5 @@
 import { parseIncidentSummary } from './parseMonitorIncident.js'
+import { parseMonitorHistoryStatus } from './parseMonitorHistory.js'
 import { parseMonitorRendererRecord } from './monitorContracts.js'
 import { isLatencyHistogram } from './latencyHistogram.js'
 import type { MonitorMainSample, MonitorWorkerSnapshot } from './monitorSnapshot.js'
@@ -18,13 +19,16 @@ function mainSample(value: unknown): MonitorMainSample | null {
  * degrade diagnostics rather than throwing through main's fatal error hook.
  * Validate/copy every retained field before acknowledging or replacing state. */
 export function parseMonitorSnapshot(value: unknown): MonitorWorkerSnapshot | null {
-  if (!object(value) || (Object.keys(value).length !== 7 && Object.keys(value).length !== 8) || value.schemaVersion !== 1
+  const allowedKeys = new Set(['schemaVersion', 'sampledAt', 'main', 'windows', 'operations', 'recent', 'workerRss', 'incidents', 'history'])
+  if (!object(value) || Object.keys(value).length < 7 || Object.keys(value).length > allowedKeys.size
+    || Object.keys(value).some(key => !allowedKeys.has(key)) || value.schemaVersion !== 1
     || !finite(value.sampledAt) || !finite(value.workerRss)
     || !Array.isArray(value.windows) || value.windows.length > 64
     || !Array.isArray(value.recent) || value.recent.length > 120
     || !Array.isArray(value.operations) || value.operations.length > 100) return null
   const incidents = value.incidents === undefined ? [] : Array.isArray(value.incidents) && value.incidents.length <= 50 ? value.incidents.map(parseIncidentSummary) : null
-  if (!incidents || incidents.some(row => !row)) return null
+  const history = value.history === undefined ? undefined : parseMonitorHistoryStatus(value.history)
+  if (!incidents || incidents.some(row => !row) || (value.history !== undefined && !history)) return null
   const main = value.main === null ? null : mainSample(value.main)
   if (value.main !== null && !main) return null
   const recent: MonitorWorkerSnapshot['recent'] = []
@@ -48,5 +52,7 @@ export function parseMonitorSnapshot(value: unknown): MonitorWorkerSnapshot | nu
       count: row.histogram.count, counts: [...row.histogram.counts], sumMs: row.histogram.sumMs, maxMs: row.histogram.maxMs,
     } })
   }
-  return { schemaVersion: 1, sampledAt: value.sampledAt, main, windows, operations, recent, workerRss: value.workerRss, ...(value.incidents === undefined ? {} : { incidents: incidents as NonNullable<MonitorWorkerSnapshot['incidents']> }) }
+  return { schemaVersion: 1, sampledAt: value.sampledAt, main, windows, operations, recent, workerRss: value.workerRss,
+    ...(value.incidents === undefined ? {} : { incidents: incidents as NonNullable<MonitorWorkerSnapshot['incidents']> }),
+    ...(history ? { history } : {}) }
 }

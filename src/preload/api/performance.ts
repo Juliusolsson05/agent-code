@@ -1,4 +1,5 @@
 import type { MonitorIncident } from '@shared/performance/monitorIncidents.js'
+import type { MonitorHistoryPage, MonitorHistoryStatus, MonitorReportPreview, MonitorReportResult, MonitorTraceStatus } from '@shared/performance/monitorHistory.js'
 import { completeMonitorResponse } from '../monitorOperations.js'
 import type { MonitorProcessPage } from '@shared/performance/processSnapshot.js'
 import type { MonitorSnapshot } from '@shared/performance/monitorSnapshot.js'
@@ -25,6 +26,14 @@ export const performanceApi = {
     incidentRead = ipcRenderer.invoke('performance:monitor-incident', id).finally(() => { incidentRead = null })
     return incidentRead!
   },
+  getMonitorHistory: (from: number, to: number, cursor?: string, limit = 500): Promise<MonitorHistoryPage | null> =>
+    ipcRenderer.invoke('performance:monitor-history', from, to, cursor, limit),
+  previewMonitorReport: (from: number, to: number): Promise<MonitorReportPreview | null> =>
+    ipcRenderer.invoke('performance:monitor-report-preview', from, to),
+  saveMonitorReport: (from: number, to: number): Promise<MonitorReportResult> =>
+    ipcRenderer.invoke('performance:monitor-save-report', from, to),
+  clearMonitorHistory: (): Promise<MonitorHistoryStatus | null> =>
+    ipcRenderer.invoke('performance:monitor-clear-history'),
   getMonitorProcesses: async (offset = 0, sort: 'cpu' | 'memory' = 'cpu'): Promise<MonitorProcessPage | null> => {
     if (processReadInFlight) return null
     processReadInFlight = true
