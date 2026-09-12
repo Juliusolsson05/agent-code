@@ -14,7 +14,8 @@ export function parseProcessChunk(input: unknown): MonitorProcessChunk | null {
     || input.offset > 2048 || typeof input.complete !== 'boolean' || !Array.isArray(input.rows) || input.rows.length > 120
     || !object(input.summary)) return null
   const summary = input.summary
-  if (Object.keys(summary).length !== 8 || !finite(summary.sampledAt) || !integer(summary.count) || summary.count > 2048
+  if ((Object.keys(summary).length !== 8 && Object.keys(summary).length !== 9) || !finite(summary.sampledAt) || !integer(summary.count) || summary.count > 2048
+    || (summary.contextGeneration !== undefined && !integer(summary.contextGeneration))
     || !nullable(summary.cpuPercent) || !nullable(summary.memoryBytes) || !integer(summary.sessionCount) || summary.sessionCount > 2048
     || !integer(summary.missingRoots) || typeof summary.truncated !== 'boolean'
     || typeof summary.quality !== 'string' || !qualities.has(summary.quality)) return null
@@ -37,7 +38,7 @@ export function parseProcessChunk(input: unknown): MonitorProcessChunk | null {
       cpuPercent: row.cpuPercent, memoryBytes: row.memoryBytes, quality: row.quality as MonitorProcessRow['quality'] })
   }
   return { generation: input.generation, offset: input.offset, complete: input.complete, rows,
-    summary: { sampledAt: summary.sampledAt, count: summary.count, cpuPercent: summary.cpuPercent, memoryBytes: summary.memoryBytes,
+    summary: { ...(summary.contextGeneration === undefined ? {} : { contextGeneration: summary.contextGeneration as number }), sampledAt: summary.sampledAt, count: summary.count, cpuPercent: summary.cpuPercent, memoryBytes: summary.memoryBytes,
       quality: summary.quality as MonitorProcessSummary['quality'], sessionCount: summary.sessionCount,
       missingRoots: summary.missingRoots, truncated: summary.truncated } }
 }

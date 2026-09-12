@@ -20,7 +20,8 @@ export class MonitorCoordinator {
   private child: UtilityProcess | null = null
   private timer: ReturnType<typeof setInterval> | null = null
   private unsubscribe: (() => void) | null = null
-  private queue = new BoundedQueue<MonitorEnvelope>(4000, MONITOR_POLICY.coordinatorQueueBytes)
+  private queue = new BoundedQueue<MonitorEnvelope>(1600, 1600 * MONITOR_RECORD_BYTES)
+  private processQueue = new BoundedQueue<MonitorEnvelope>(2306, 2306 * MONITOR_RECORD_BYTES)
   private sequence = 0
   private pending: { sequence: number; at: number; count: number } | null = null
   private lost = 0
@@ -57,13 +58,13 @@ export class MonitorCoordinator {
       this.enqueue({ kind: 'main', sample: main })
     })
     this.launch()
-    this.timer = setInterval(() => this.pump(), 250)
+    this.timer = setInterval(() => this.pump(), 200)
     this.timer.unref()
   }
 
   startProcesses(targets: () => MonitorProcessTarget[]): void {
     if (this.processSource) return
-    this.processSource = new ElectronProcessSource(targets, record => this.enqueue(record))
+    this.processSource = new ElectronProcessSource(targets, record => this.processQueue.push(record, MONITOR_RECORD_BYTES), () => this.processQueue.stats.records === 0)
     this.processSource.start()
   }
 
@@ -82,8 +83,8 @@ export class MonitorCoordinator {
 
   read(): MonitorSnapshot {
     return {
-      ...this.cache, processes: this.processSummary(), queuedBytes: this.queue.stats.bytes,
-      droppedRecords: this.queue.stats.dropped + this.lost,
+      ...this.cache, processes: this.processSummary(), queuedBytes: this.queue.stats.bytes + this.processQueue.stats.bytes,
+      droppedRecords: this.queue.stats.dropped + this.processQueue.stats.dropped + this.lost,
       restarts: Math.max(0, this.launches - 1),
       collector: this.stopped ? 'stopped'
         : this.lastReplyAt && this.monotonicNow() - this.lastReplyAt > 5000 ? 'degraded' : this.cache.collector,
@@ -130,6 +131,7 @@ export class MonitorCoordinator {
     this.child?.kill()
     this.child = null
     this.queue.clear()
+    this.processQueue.clear()
   }
 
   private enqueue(record: MonitorEnvelope): void {
@@ -162,8 +164,9 @@ export class MonitorCoordinator {
               || transfer.rows.length + chunk.rows.length > MONITOR_POLICY.processLimit) { this.fail(child); return }
             transfer.rows.push(...chunk.rows)
             this.moreProcesses = !chunk.complete
-            if (chunk.complete) {
+            if (chunk.complete && chunk.summary.sampledAt > 0) {
               this.processPage = { summary: chunk.summary, rows: transfer.rows, total: transfer.rows.length }
+              this.processSource?.captureBirths(transfer.rows, chunk.summary.contextGeneration)
               this.processReceivedAt = this.monotonicNow()
               this.processTransfer = null
             }
@@ -198,7 +201,13 @@ export class MonitorCoordinator {
       if (this.pending && this.monotonicNow() - this.pending.at > 5000) this.fail(this.child)
       if (!this.child && this.monotonicNow() >= this.retryAt) this.launch()
       if (!this.child || this.pending) return
-      const records = this.queue.drain(MONITOR_POLICY.rendererBatchRecords, MONITOR_POLICY.batchBytes - 1024)
+      // Reserve 100 of 120 slots for a complete process generation. At the
+      // declared 2,048-target + 256-Electron ceiling this drains in 4.8s,
+      // independent of an operation storm. A slow worker finishes its current
+      // generation before the source admits a new one; it never restarts the
+      // same half-transfer every five seconds. Both queues total <2 MiB.
+      const processes = this.processQueue.drain(100, 100 * MONITOR_RECORD_BYTES)
+      const records = [...processes, ...this.queue.drain(120 - processes.length, (120 - processes.length) * MONITOR_RECORD_BYTES)]
       if (!records.length && !this.moreProcesses) return
       const sequence = ++this.sequence
       // One credit means a suspended worker cannot accumulate an invisible

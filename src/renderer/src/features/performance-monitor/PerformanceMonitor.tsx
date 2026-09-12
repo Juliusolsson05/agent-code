@@ -111,7 +111,10 @@ function Processes() {
     let disposed = false
     let timer: ReturnType<typeof setTimeout> | undefined
     const read = async () => {
-      try { const result = await window.api.getMonitorProcesses(offset, sort); if (!disposed) { setPage(result); setError(result === null) } }
+      try { const result = await window.api.getMonitorProcesses(offset, sort); if (!disposed) {
+        if (result && offset >= result.total && offset > 0) setOffset(Math.max(0, Math.floor((result.total - 1) / 50) * 50))
+        setPage(result); setError(result === null)
+      } }
       catch { if (!disposed) setError(true) }
       finally { if (!disposed) timer = setTimeout(read, 2000) }
     }
