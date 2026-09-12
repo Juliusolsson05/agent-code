@@ -4,7 +4,7 @@
 // workspace can still recover its known terminals without authorizing deletion
 // of terminals whose references may have been discarded by decoding (#898).
 
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 
 import { parseWorkspaceFile } from '@main/storage/workspaceFile.js'
 import type { ParsedWorkspaceFile } from '@main/storage/workspaceFile.js'
@@ -40,6 +40,9 @@ type TerminalInventory = {
 export type RecoveryReport = {
   inventory: TerminalInventory['kind']
   inventoryIssues: InventoryIssues
+  /** Identifies the exact bytes inspected, including unreadable bytes. Null
+   *  means the read failed; it must not look like the digest of an empty file. */
+  inventoryDigest: string | null
   /** Known live references, including ones retained by a partial decoder. */
   recoverable: PersistedTerminalRef[]
   /** Known references absent from the registry's live-session listing. */
@@ -127,12 +130,21 @@ export async function reconcileWorkspace(
     const issue = isRecord(error) && error.code === 'ENOENT' ? 'workspace_missing' : 'workspace_read_failed'
     return reconcile(registry, { kind: 'unknown', references: [], issues: { [issue]: 1 } })
   }
-  return reconcile(registry, terminalInventory(parseWorkspaceFile(text, randomUUID)))
+  // The journal needs to identify which file snapshot authorized cleanup even
+  // after a renderer autosave replaces that file. Counts alone cannot tell two
+  // different inventories apart. A digest carries that evidence without
+  // copying workspace paths, prompts, or terminal content into diagnostics.
+  const digest = createHash('sha256').update(text, 'utf8').digest('hex')
+  return reconcile(registry, terminalInventory(parseWorkspaceFile(text, randomUUID)), digest)
 }
 
-async function reconcile(registry: RecoveryRegistry, inventory: TerminalInventory): Promise<RecoveryReport> {
+async function reconcile(
+  registry: RecoveryRegistry,
+  inventory: TerminalInventory,
+  inventoryDigest: string | null = null,
+): Promise<RecoveryReport> {
   const persisted = inventory.references
-  const evidence = { inventory: inventory.kind, inventoryIssues: inventory.issues }
+  const evidence = { inventory: inventory.kind, inventoryIssues: inventory.issues, inventoryDigest }
   if (!registry.isAvailable()) {
     return { ...evidence, recoverable: [], lost: persisted.map(p => p.sessionId), orphans: [], preserved: [] }
   }

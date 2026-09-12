@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 
 import { reconcileWorkspace } from '@main/tmux/tmuxRecovery.js'
@@ -118,14 +119,16 @@ describe('startup workspace inventory and tmux cleanup', () => {
 
   it('recovers known references while reporting discarded windows and invalid rows as bounded counts', async () => {
     const registry = registryWith('agentcode-saved', 'agentcode-hidden')
-    const report = await reconcileWorkspace(registry, readJson({
+    const source = {
       version: 2, windows: [
         windowWith('good', { saved: terminal('agentcode-saved'), dead: terminal('agentcode-dead'), invalid: null }),
         null, { windowId: 'bad' }, windowWith('good', { hidden: terminal('agentcode-hidden') }),
       ],
-    }))
+    }
+    const report = await reconcileWorkspace(registry, readJson(source))
     expect(report).toEqual({
       inventory: 'incomplete', inventoryIssues: { discarded_windows: 3, invalid_session_metadata: 1 },
+      inventoryDigest: createHash('sha256').update(JSON.stringify(source)).digest('hex'),
       recoverable: [{ sessionId: 'saved', tmuxName: 'agentcode-saved' }],
       lost: ['dead'], orphans: [], preserved: ['agentcode-hidden'],
     })
@@ -176,5 +179,27 @@ describe('startup workspace inventory and tmux cleanup', () => {
     if (operation === 'list') registry.listManagedSessions.mockRejectedValue(error)
     else registry.killSession.mockRejectedValue(error)
     await expect(reconcileWorkspace(registry, readJson({ version: 2, windows: [] }))).rejects.toBe(error)
+  })
+
+  it('identifies the captured file bytes after the source changes, even when both inventories are empty', async () => {
+    const registry = registryWith()
+    let source = '{"version":2,"windows":[]}'
+    const first = await reconcileWorkspace(registry, async () => source)
+    source = '{"workspace":{"sessions":{}}}'
+    const second = await reconcileWorkspace(registry, async () => source)
+    expect(first.inventoryDigest).toBe(createHash('sha256').update('{"version":2,"windows":[]}').digest('hex'))
+    expect(second.inventoryDigest).not.toBe(first.inventoryDigest)
+    expect(first.inventory).toBe('complete')
+    expect(second.inventory).toBe('complete')
+  })
+
+  it('distinguishes an unreadable byte snapshot from a failed read without retaining its contents', async () => {
+    const registry = registryWith()
+    const text = '{"private":"unfinished'
+    const decoded = await reconcileWorkspace(registry, async () => text)
+    const unread = await reconcileWorkspace(registry, async () => { throw new Error('unavailable') })
+    expect(decoded.inventoryDigest).toBe(createHash('sha256').update(text).digest('hex'))
+    expect(unread.inventoryDigest).toBeNull()
+    expect(JSON.stringify(decoded)).not.toContain('unfinished')
   })
 })

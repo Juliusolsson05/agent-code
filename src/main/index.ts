@@ -737,6 +737,7 @@ async function startApp(): Promise<void> {
       const recoverySummary = {
         inventory: recoveryReport.inventory,
         inventoryIssues: recoveryReport.inventoryIssues,
+        inventoryDigest: recoveryReport.inventoryDigest,
         recoverable: recoveryReport.recoverable.length,
         lost: recoveryReport.lost.length,
         orphans: recoveryReport.orphans.length,
