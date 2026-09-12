@@ -115,7 +115,6 @@ export type SessionActions = {
 
 export type SessionWakeResult = {
   sessionId: SessionId
-  builtInMcpDomains: BuiltInMcpDomain[] | undefined
 }
 
 export type SessionWakeOptions = {
@@ -371,7 +370,6 @@ export function useSessionActions(
         isAgentProviderKind(kind)
           ? resolveSessionBuiltInMcpDomains({
               provider: kind,
-              sessionDomains: opts?.builtInMcpDomains,
               sessionOverrides: builtInMcpOverrides,
               defaultDomains: refs.defaultBuiltInMcpDomainsRef.current,
             })
@@ -656,7 +654,6 @@ export function useSessionActions(
           isAgentProviderKind(kind)
             ? resolveSessionBuiltInMcpDomains({
                 provider: kind,
-                sessionDomains: meta.builtInMcpDomains,
                 sessionOverrides: builtInMcpOverrides,
                 defaultDomains: refs.defaultBuiltInMcpDomainsRef.current,
               })
@@ -1071,16 +1068,16 @@ export function useSessionActions(
           })
         }
 
-        // WHY the authoritative scope travels in the return value instead of
-        // requiring callers to re-read stateRef: Zustand updates the store
-        // synchronously, but React may not refresh render-owned refs before an
-        // awaiting command continues. Provider switching is one such command;
-        // returning the recovery fact closes that batching window without
-        // making imperative callers depend on a render having happened.
-        return {
-          sessionId,
-          builtInMcpDomains: recoveredBuiltInMcpDomains,
-        }
+        // This used to also return the recovered capability list, because
+        // provider switching resolved MCP itself and could not safely re-read
+        // `stateRef` straight after an await: Zustand updates the store
+        // synchronously, but React may not have refreshed a render-owned ref
+        // yet. That batching window no longer matters for MCP. Replacement
+        // resolves from the pane's CHOICES, and a wake never changes those — it
+        // only refreshes the observed list — so reading the pre- or post-wake
+        // meta produces the same decision. If a future caller needs a fact this
+        // wake established, return it here rather than re-reading the ref.
+        return { sessionId }
       })()
 
       wakeInFlightRef.current.set(sessionId, wake)
@@ -1495,7 +1492,6 @@ export function useSessionActions(
             isAgentProviderKind(kind)
               ? resolveSessionBuiltInMcpDomains({
                   provider: kind,
-                  sessionDomains: meta.builtInMcpDomains,
                   sessionOverrides: builtInMcpOverrides,
                   defaultDomains: refs.defaultBuiltInMcpDomainsRef.current,
                 })

@@ -1,4 +1,4 @@
-import { sessionMcpOverrides } from '@renderer/workspace/mcpDomains'
+import { clonedMcpOverrides } from '@renderer/workspace/mcpDomains'
 import { z } from 'zod'
 import { ControlError, defineCapability, paginate } from '@control-sdk'
 import { useAppStore } from '@renderer/app-state/store'
@@ -93,7 +93,7 @@ export function lifecycleControlCapabilities(getWorkspace: () => Workspace) {
             throw new ControlError('failed', `Native copy ${clone.newProviderSessionId} exists but the source/placement changed: ${String(error)}`, 'unknown')
           }
           const newSessionId = await getWorkspace().createDetachedSession({ kind: value.provider, providerRuntime: meta.providerRuntime },
-            { tabId: input.tabId, anchorSessionId: input.anchorSessionId }, { cwd: value.cwd, resumeSessionId: clone.newProviderSessionId, builtInMcpOverrides: sessionMcpOverrides(meta) }, { selectCreated: input.selectCreated })
+            { tabId: input.tabId, anchorSessionId: input.anchorSessionId }, { cwd: value.cwd, resumeSessionId: clone.newProviderSessionId, builtInMcpOverrides: clonedMcpOverrides(meta) }, { selectCreated: input.selectCreated })
           if (!newSessionId) throw new ControlError('failed', `Native copy ${clone.newProviderSessionId} exists but no placement was committed`, 'unknown')
           return { sourceSessionId: input.sessionId, newSessionId, nativeSessionId: clone.newProviderSessionId }
         })

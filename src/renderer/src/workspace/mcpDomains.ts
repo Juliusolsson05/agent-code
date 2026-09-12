@@ -1,5 +1,6 @@
 import {
   BUILT_IN_MCP_DOMAINS,
+  CONFIRMATION_GATED_BUILT_IN_MCP_DOMAINS,
   filterBuiltInMcpDomainsForProvider,
   normalizeBuiltInMcpDomains,
 } from '@mcp/shared/types'
@@ -74,6 +75,27 @@ export function sessionMcpOverrides(meta: { builtInMcpDomains?: BuiltInMcpDomain
   // so later autosaves never mistake inherited enablement for an override.
   return normalizeBuiltInMcpOverrides(meta.builtInMcpOverrides)
     ?? Object.fromEntries(normalizeBuiltInMcpDomains(meta.builtInMcpDomains).map(domain => [domain, true]))
+}
+
+/**
+ * The choices a clone of `meta` may start with.
+ *
+ * Inheriting the source's capability choices is deliberate: a duplicate that
+ * silently lost its tools would not be a duplicate. The exception is every
+ * confirmation-gated capability — see CONFIRMATION_GATED_BUILT_IN_MCP_DOMAINS
+ * for why a copy is not covered by the original confirmation.
+ *
+ * Restoring the SAME pane (undo-close, rewind, undo-rewind) deliberately does
+ * NOT use this: those return the user to a conversation they already had, so a
+ * grant they already confirmed for that agent should come back with it.
+ */
+export function clonedMcpOverrides(meta: {
+  builtInMcpDomains?: BuiltInMcpDomain[]
+  builtInMcpOverrides?: BuiltInMcpOverrides
+}): BuiltInMcpOverrides {
+  const inherited = sessionMcpOverrides(meta)
+  for (const domain of CONFIRMATION_GATED_BUILT_IN_MCP_DOMAINS) delete inherited[domain]
+  return inherited
 }
 
 export function spawnMcpOverrides(options?: { builtInMcpDomains?: BuiltInMcpDomain[]; builtInMcpOverrides?: BuiltInMcpOverrides }): BuiltInMcpOverrides {

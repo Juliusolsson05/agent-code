@@ -215,8 +215,12 @@ describe('useSessionActions recovery retry', () => {
     expect(recoverSession).toHaveBeenCalledWith(expect.objectContaining({
       builtInMcpDomains: ['orchestration'],
     }))
+    // The wake asked for the pane's resolved capabilities and the backend
+    // answered with fewer; the meta records what the process actually has, not
+    // what was requested. The wake result no longer repeats that list — nothing
+    // consumed it once replacement started resolving from the pane's choices.
     expect(state.sessions[sessionId]?.builtInMcpDomains).toEqual([])
-    expect(wakeResult).toEqual({ sessionId, builtInMcpDomains: [] })
+    expect(wakeResult).toEqual({ sessionId })
     expect(runtimes[sessionId]).toMatchObject({
       sessionRunId: '55555555-5555-4555-8555-555555555555',
       processStatus: 'started',

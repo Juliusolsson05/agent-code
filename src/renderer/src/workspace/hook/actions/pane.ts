@@ -518,8 +518,9 @@ export function usePaneActions(
           // passed through unguarded, but they are NOT symmetric and it is
           // worth being precise about which is which:
           //
-          //  - `builtInMcpDomains` really is dropped for a terminal —
-          //    `sessionActions.spawn` gates it behind `isAgentProviderKind`.
+          //  - `builtInMcpOverrides` really is dropped for a terminal —
+          //    `sessionActions.spawn` gates the resolved capability list it
+          //    produces behind `isAgentProviderKind`.
           //  - `resumeSessionId` is NOT dropped. It is forwarded to
           //    `window.api.spawnSession` for every kind; only the value written
           //    back into the durable `SessionMeta` is kind-gated. It is inert

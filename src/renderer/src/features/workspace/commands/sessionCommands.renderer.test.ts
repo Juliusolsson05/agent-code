@@ -76,6 +76,46 @@ describe('Duplicate Agent command', () => {
     expect(closePalette).toHaveBeenCalledOnce()
   })
 
+  it('never hands a clone the root-management grant', async () => {
+    const duplicateSession = vi.fn().mockResolvedValue({ newProviderSessionId: 'provider-clone' })
+    Object.defineProperty(window, 'api', { configurable: true, value: { duplicateSession } })
+    const splitFocused = vi.fn().mockResolvedValue(undefined)
+    const workspace = {
+      state: {
+        activeTabId: 'tab-klay',
+        dispatchMode: null,
+        sessions: {
+          source: {
+            cwd: '/projects/klay',
+            kind: 'codex',
+            providerSessionId: 'provider-source',
+            builtInMcpDomains: ['tldr', 'root_management'],
+            builtInMcpOverrides: { tldr: true, root_management: true },
+          },
+        },
+        tabs: [{ id: 'tab-klay', focusedSessionId: 'source', root: { type: 'leaf', sessionId: 'source' } }],
+      },
+      splitFocused,
+      showPaneToast: vi.fn(),
+    } as unknown as Workspace
+    const context = {
+      workspace,
+      ui: { closePalette: vi.fn() },
+      flags: {},
+    } as unknown as CommandContext
+    const command = sessionCommands.find(candidate => candidate.id === 'duplicate-agent')
+    if (!command) throw new Error('Duplicate Agent command is missing')
+
+    await command.run(context)
+
+    // The confirmation dialog names one agent, so a clone was never confirmed
+    // by anyone — and the granting agent's own catalog can call this command,
+    // so inheriting the grant would let one confirmation replicate itself.
+    expect(splitFocused).toHaveBeenCalledWith('vertical', 'codex', expect.objectContaining({
+      builtInMcpOverrides: { tldr: true },
+    }))
+  })
+
   it('keeps an OpenCode Terminal clone on the native terminal runtime', async () => {
     const duplicateSession = vi.fn().mockResolvedValue({
       newProviderSessionId: 'ses_clone',
@@ -342,6 +382,10 @@ describe('built-in MCP provider command policy', () => {
       kind: 'codex',
       resumeSessionId: 'provider-session',
       builtInMcpOverrides: { workflows: true },
+      // Every capability reload now pins its target: Dispatch focus can move
+      // while the replacement is in flight, and an unpinned reload would apply
+      // the change to whichever pane became focused.
+      targetSessionId: 'agent',
     })
   })
 
@@ -367,6 +411,10 @@ describe('built-in MCP provider command policy', () => {
       kind: 'claude',
       resumeSessionId: 'provider-session',
       builtInMcpOverrides: { agent_management: true },
+      // Every capability reload now pins its target: Dispatch focus can move
+      // while the replacement is in flight, and an unpinned reload would apply
+      // the change to whichever pane became focused.
+      targetSessionId: 'agent',
     })
   })
 })

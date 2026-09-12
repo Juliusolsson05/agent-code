@@ -37,6 +37,8 @@ describe('reloadSessionWithBuiltInMcpChoice', () => {
     expect(replaceSession).toHaveBeenCalledWith('/projects/app', {
       kind: 'codex',
       targetSessionId: 'target',
+      // A legacy id with no recorded source stays durable: workspaces saved
+      // before the field existed only persisted captured/resumed ids.
       resumeSessionId: 'thread-1',
       builtInMcpOverrides: { tldr: true, root_management: true },
     })
@@ -52,6 +54,50 @@ describe('reloadSessionWithBuiltInMcpChoice', () => {
     // supplied the capability, so it is recorded as false, not as absence.
     expect(replaceSession).toHaveBeenCalledWith('/projects/app', expect.objectContaining({
       builtInMcpOverrides: { tldr: true, root_management: false },
+    }))
+  })
+
+  it('refuses to resume a provisional provider session id', async () => {
+    const replaceSession = vi.fn().mockResolvedValue('target-2')
+    const showPaneToast = vi.fn()
+    const workspace = {
+      state: {
+        sessions: {
+          // A proxy-observed id can belong to a sidecar or sub-agent request
+          // rather than this pane's conversation, so resuming it would either
+          // fail to start or rehome the pane onto a stranger's transcript —
+          // and a matching resume id reads as "same conversation" downstream,
+          // so the pane's TLDR would be carried onto it too.
+          target: {
+            cwd: '/projects/app', kind: 'codex',
+            providerSessionId: 'observed-on-the-wire', providerSessionIdSource: 'proxy-header',
+          },
+        },
+      },
+      replaceSession,
+      showPaneToast,
+    } as unknown as Workspace
+
+    await expect(reloadSessionWithBuiltInMcpChoice(workspace, 'target', 'tldr', true, labels))
+      .resolves.toBeUndefined()
+    expect(replaceSession).not.toHaveBeenCalled()
+    expect(showPaneToast).toHaveBeenCalledWith('target', 'Provider session id is not ready yet')
+  })
+
+  it('still reloads a brand-new pane that has no provider session id at all', async () => {
+    const replaceSession = vi.fn().mockResolvedValue('target-2')
+    const workspace = {
+      state: { sessions: { target: { cwd: '/projects/app', kind: 'codex' } } },
+      replaceSession,
+      showPaneToast: vi.fn(),
+    } as unknown as Workspace
+
+    // No id means no transcript to lose, so the capability change is allowed to
+    // start the pane fresh rather than being blocked by the guard above.
+    await reloadSessionWithBuiltInMcpChoice(workspace, 'target', 'tldr', true, labels)
+    expect(replaceSession).toHaveBeenCalledWith('/projects/app', expect.objectContaining({
+      resumeSessionId: undefined,
+      builtInMcpOverrides: { tldr: true },
     }))
   })
 

@@ -712,7 +712,6 @@ export async function rehydrateWorkspace(
             isAgentProviderKind(kind)
               ? resolveSessionBuiltInMcpDomains({
                   provider: kind,
-                  sessionDomains: meta.builtInMcpDomains,
                   sessionOverrides: builtInMcpOverrides,
                   defaultDomains: refs.defaultBuiltInMcpDomainsRef.current,
                 })

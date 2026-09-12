@@ -65,3 +65,27 @@ settings describe desired next-launch behavior; live capability snapshots remain
 authoritative for current UI. Keep WHY decisions inline and preserve summary
 identity only for the same conversation. Do not merge without authorization for
 this follow-up PR.
+
+## Review outcome
+
+One Claude orchestration reviewer traced every launch path. Two findings were
+fixed here because both of their call sites are rewritten by this branch:
+
+- A clone inherited `root_management`. The grant is confirmation-gated per agent,
+  and the granting agent's own catalog includes `agents.duplicate`, so one
+  confirmed grant could replicate itself. Named the rule once
+  (CONFIRMATION_GATED_BUILT_IN_MCP_DOMAINS + clonedMcpOverrides) and applied it
+  at both clone entry points. Restoring the same pane still restores the grant.
+- The capability reload commands resumed `meta.providerSessionId` raw, including
+  a provisional `proxy-header` id that the rest of the codebase refuses to trust.
+  All eight now share one owner that declines such an id, the way
+  reloadSessionAgent already did, and that owner also pins its target.
+
+Smaller items: the resolver's `sessionDomains` argument was inert wherever
+choices are passed and is gone from those call sites; `SessionWakeResult` no
+longer carries a capability list nothing consumed.
+
+Not fixed here: `tldrActivity` and agentManagementMcp's `runtimeActivityAt`
+derive "last active" with different rules and can disagree when the newest
+transcript entry is a tool record. Unifying them changes `agent_management` tool
+output, which is outside this issue; filed separately.
