@@ -291,4 +291,45 @@ describe('composer submit accepted into the provider queue', () => {
     expect(current.getRuntime(SESSION).streamPhase).toBe('responding')
     expect(current.getRuntime(SESSION).turnStartedAt).toBe(stampA)
   })
+
+  it('a second submit that fails before any write never unwinds the Sending an earlier submit still owns', async () => {
+    // #893 review round 2 (R2-1): the unwind twin of the race above, driven
+    // through the composer's real catch path. A resolves `user`; B lands before
+    // A's first provider event, skips its stamp, and main rejects it with
+    // nothing written. That failure proves nothing about A, so A's claim stays.
+    seed({})
+    const feed = feedAccepting('user')
+    mount(feed)
+    act(() => current.setDraftInput(SESSION, 'prompt A starts a turn'))
+    await act(async () => { await submit('textarea-enter') })
+    const stampA = current.getRuntime(SESSION).submittedAt
+    expect(stampA).not.toBeNull()
+
+    // `retry-same-session` keeps deliverWithWake out of it: only a
+    // `session-unusable` not-ready triggers its wake-and-retry.
+    feed.nextDeliverPromptResult = {
+      ok: false,
+      stage: 'before-write',
+      code: 'not-ready',
+      message: 'Agent is not ready for input',
+      retrySafe: true,
+      disposition: 'retry-same-session',
+      promptWritten: false,
+      enterWritten: false,
+    }
+    act(() => current.setDraftInput(SESSION, 'prompt B fails before any write'))
+    await act(async () => { await submit('textarea-enter') })
+
+    // Proves the catch took the nothing-written unwind branch rather than
+    // skipping it.
+    expect(lifecycleReports.some(report => report.name === 'submit.unwound')).toBe(true)
+    const afterB = current.getRuntime(SESSION)
+    expect(afterB.streamPhase).toBe('submitting')
+    expect(afterB.submittedAt).toBe(stampA)
+    expect(afterB.turnStartedAt).toBe(stampA)
+    expect(afterB.awaitingAssistant).toBe(true)
+    // The failed prompt's draft is preserved, as for every before-write failure.
+    expect(afterB.draftInput).toBe('prompt B fails before any write')
+    expect(screen.getByText('Sending')).toBeTruthy()
+  })
 })

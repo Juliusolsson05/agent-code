@@ -61,8 +61,16 @@ export type OptimisticQueueReason = 'live-current-turn' | 'unowned-history'
 /**
  * Proof that ONE submit wrote the optimistic `submitting` claim: the exact
  * `submittedAt` value that submit stamped. `beginOptimisticSubmit` returns it
- * (null when it skipped the stamp) and `settleQueuedSubmit` reverts only a
- * runtime that still carries this exact value.
+ * (null when it skipped the stamp). Both paths that retract the claim revert
+ * only a runtime still carrying this exact value: `settleQueuedSubmit` (the
+ * provider queued the prompt) and `unwindOptimisticSubmit` (nothing was
+ * written).
+ *
+ * The two retractions share one ownership rule because they retract the same
+ * claim. Scoping only one of them leaves the other able to erase an earlier
+ * submit's claim through the same race (#893 review round 2, R2-1): a skipped
+ * submit B that fails before any write would unwind A's `submitting` and also
+ * clear A's `awaitingAssistant`.
  *
  * WHY a token instead of "is the phase still `submitting`?" (#893 review,
  * Codex major / Claude F1): the phase says SOME submit stamped it, not which
@@ -233,7 +241,7 @@ export function useStreamingActions(
   isCodexSession: (sessionId: SessionId) => boolean,
 ): {
   beginOptimisticSubmit: (sessionId: SessionId) => OptimisticSubmitStamp | null
-  unwindOptimisticSubmit: (sessionId: SessionId) => void
+  unwindOptimisticSubmit: (sessionId: SessionId, stamp: OptimisticSubmitStamp | null) => void
   settleQueuedSubmit: (sessionId: SessionId, stamp: OptimisticSubmitStamp | null) => void
   clearPendingRewindUndo: (sessionId: SessionId) => void
   addOptimisticCodexUserEntry: (
@@ -315,16 +323,30 @@ export function useStreamingActions(
    * The unwind belongs at the site that OWNS the optimistic set.
    */
   const unwindOptimisticSubmit = useCallback(
-    (sessionId: SessionId) => {
+    (sessionId: SessionId, stamp: OptimisticSubmitStamp | null) => {
       setRuntimes(prev => {
         const current = prev[sessionId]
         if (!current) return prev
-        // Only unwind what this submit actually set. A provider event that
-        // arrived between the optimistic write and the failure is real, and
-        // stomping it would trade a stuck spinner for a lost turn — the exact
-        // suppress-before-replace shape the rendering pipeline is built to
-        // avoid.
-        if (current.streamPhase !== 'submitting') return prev
+        // Only unwind what THIS submit set. This is the same ownership rule as
+        // settleQueuedSubmit, because both retract the one optimistic claim:
+        //   - The phase is still `submitting`. A provider event that arrived
+        //     between the optimistic write and the failure is real, and
+        //     stomping it would trade a stuck spinner for a lost turn — the
+        //     exact suppress-before-replace shape the rendering pipeline is
+        //     built to avoid.
+        //   - `submittedAt` is this submit's stamp. A null stamp means this
+        //     submit painted nothing, because it landed on live work (see
+        //     submitJoinsLiveWork). A different value is another submit's
+        //     claim, typically an earlier prompt whose turn is genuinely
+        //     starting. Unwinding that would blank its indicator, lose its
+        //     clock and clear its `awaitingAssistant`, and `turn_started`
+        //     could not repair it, because its bridge never leaves `idle`
+        //     (#893 review round 2, R2-1).
+        if (
+          stamp === null ||
+          current.streamPhase !== 'submitting' ||
+          current.submittedAt !== stamp
+        ) return prev
         return {
           ...prev,
           [sessionId]: withDerivedSessionStatus(
@@ -371,7 +393,9 @@ export function useStreamingActions(
    * RUNNING turn happens to emit its next `stream_phase` event — 21 s and 46 s
    * in the 2026-09-11 recordings, over a turn that was visibly thinking.
    *
-   * Only ever reverts THIS submit's `submitting`. Two things must both hold:
+   * Only ever reverts THIS submit's `submitting`. The rule is shared with
+   * unwindOptimisticSubmit, since both retract the same optimistic claim. Two
+   * things must both hold:
    *   - The phase is still `submitting`. If a real event moved it between the
    *     stamp and the acceptance, that phase is the truth (the same rule as
    *     unwind).

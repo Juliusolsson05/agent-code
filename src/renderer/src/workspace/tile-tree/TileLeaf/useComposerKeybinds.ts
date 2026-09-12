@@ -259,7 +259,8 @@ export function useComposerKeybinds({
       // id observed at Enter.
       ...(runtime.sessionRunId ? { sessionRunId: runtime.sessionRunId } : {}),
     })
-    // Kept for the queue settle below: the settle may revert only the
+    // Kept for the two paths below that retract the optimistic claim: the
+    // queue settle and the nothing-written unwind. Each may revert only the
     // `submitting` claim THIS submit wrote, and this token (null when the stamp
     // was skipped) is the only proof of which claim that is. See
     // OptimisticSubmitStamp in hook/actions/streaming.ts for the two-submit race.
@@ -392,6 +393,12 @@ export function useComposerKeybinds({
       // otherwise count up forever (see unwindOptimisticSubmit for the three
       // reasons nothing else can clear it).
       //
+      // Scoped by the stamp token exactly like the queue settle. A submit that
+      // skipped its stamp because an EARLIER submit's `submitting` was still
+      // waiting for its first provider event has nothing of its own to unwind.
+      // Its failure proves nothing about that earlier prompt (#893 review
+      // round 2, R2-1).
+      //
       // The `uncertain` case — something WAS written — is intentionally left
       // alone: a turn may genuinely be running and unwinding could hide it.
       // Two independent proofs that nothing reached the provider, one per
@@ -416,7 +423,7 @@ export function useComposerKeybinds({
         )
       }
       if (nothingWasWritten) {
-        workspace.unwindOptimisticSubmit(sessionId)
+        workspace.unwindOptimisticSubmit(sessionId, optimisticStamp)
         reportLifecycle('submit.unwound', sessionId, {
           provider: submitProvider,
           code: failed?.code ?? 'threw',
