@@ -11,11 +11,12 @@
 //
 // So the refusal narrows rather than disappears. Main learns exactly one new
 // thing — which window an opaque blob belongs to — and `workspace` below stays
-// `unknown`, stored and returned verbatim. Nothing in main interprets tabs,
-// panes, ownership, or any other renderer concept. If you find yourself adding
-// a field access into that blob, stop: the pruning/ownership logic in
-// `sessionOwnership.ts` is the renderer's, and duplicating a second opinion
-// about it in main is how the two get to disagree.
+// `unknown`, stored and returned verbatim. Main must not reimplement tab/pane
+// ownership or pruning from `sessionOwnership.ts`. Narrow resource inventories
+// (such as tmux startup recovery) may read saved references from these decoded
+// slices, but must respect incomplete decoding and must not decide whether a
+// reference is valid from renderer layout. A hidden terminal still owns its
+// process. Duplicating the renderer's ownership rules is how the two disagree.
 //
 // WHY one file instead of `workspace.<windowId>.json` per window:
 //
@@ -55,8 +56,22 @@ export type WorkspaceFile = {
 
 export const WORKSPACE_FILE_VERSION = 2
 
+/**
+ * Restoring usable windows and proving a complete resource inventory are
+ * different promises. Dropping a damaged/duplicate window is useful for the
+ * former but can hide the only reference to a surviving terminal. Keep that
+ * evidence beside the decoded result so cleanup cannot mistake a repaired
+ * subset for an authoritative empty workspace. Geometry repairs and minted
+ * window ids preserve payloads, so they do not weaken this envelope evidence.
+ * This says nothing about the opaque payload's schema; its consumers validate
+ * the narrow reference fields they actually understand.
+ */
+export type WorkspaceDecodeCompleteness =
+  | { kind: 'complete' }
+  | { kind: 'partial'; invalidWindowsContainer: boolean; discardedWindows: number }
+
 export type ParsedWorkspaceFile =
-  | { kind: 'ok'; file: WorkspaceFile; migratedFromV1: boolean }
+  | { kind: 'ok'; file: WorkspaceFile; migratedFromV1: boolean; completeness: WorkspaceDecodeCompleteness }
   /**
    * The file exists but this build cannot represent it — a NEWER version
    * written by a future build.
@@ -146,6 +161,7 @@ export function parseWorkspaceFile(
     return {
       kind: 'ok',
       migratedFromV1: true,
+      completeness: { kind: 'complete' },
       file: {
         version: WORKSPACE_FILE_VERSION,
         windows: [{
@@ -169,18 +185,33 @@ export function parseWorkspaceFile(
   const rawWindows = Array.isArray(parsed.windows) ? parsed.windows : []
   const windows: PersistedWindow[] = []
   const seen = new Set<string>()
+  let discardedWindows = 0
   for (const raw of rawWindows) {
     const window = coerceWindow(raw, mintWindowId)
-    if (!window) continue
+    if (!window) {
+      discardedWindows += 1
+      continue
+    }
     // Duplicate ids would make `withWindowSlice` ambiguous and could let one
     // window's save land in another's slot. Hand-edited files are an explicit
     // threat model throughout this codebase; keep the first, drop the rest.
-    if (seen.has(window.windowId)) continue
+    if (seen.has(window.windowId)) {
+      discardedWindows += 1
+      continue
+    }
     seen.add(window.windowId)
     windows.push(window)
   }
 
-  return { kind: 'ok', migratedFromV1: false, file: { version: WORKSPACE_FILE_VERSION, windows } }
+  const invalidWindowsContainer = !Array.isArray(parsed.windows)
+  return {
+    kind: 'ok',
+    migratedFromV1: false,
+    file: { version: WORKSPACE_FILE_VERSION, windows },
+    completeness: invalidWindowsContainer || discardedWindows > 0
+      ? { kind: 'partial', invalidWindowsContainer, discardedWindows }
+      : { kind: 'complete' },
+  }
 }
 
 export function serializeWorkspaceFile(file: WorkspaceFile): string {
