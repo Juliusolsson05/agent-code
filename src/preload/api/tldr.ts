@@ -11,6 +11,13 @@ export const tldrApi = {
   },
   readTldrs: (identities: string[]): Promise<Record<string, TldrRecord>> => ipcRenderer.invoke('tldr:read', identities),
   readTldrHistory: (identity: string): Promise<TldrHistoryEntry[]> => ipcRenderer.invoke('tldr:history', identity),
+  readGoals: (identities: string[]): Promise<Record<string, TldrRecord>> => ipcRenderer.invoke('goal:read', identities),
+  readGoalHistory: (identity: string): Promise<TldrHistoryEntry[]> => ipcRenderer.invoke('goal:history', identity),
+  onGoalChanged: (listener: (update: TldrUpdate) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, update: TldrUpdate) => listener(update)
+    ipcRenderer.on('goal:changed', handler)
+    return () => { ipcRenderer.removeListener('goal:changed', handler) }
+  },
   readTldrEnforcement: (identities: string[]): Promise<Record<string, TldrEnforcementStatus>> => ipcRenderer.invoke('tldr:enforcement', identities),
   onTldrChanged: (listener: (update: TldrUpdate) => void): (() => void) => {
     const handler = (_event: Electron.IpcRendererEvent, update: TldrUpdate) => listener(update)
