@@ -60,6 +60,8 @@ type ActiveDictationSession = {
 const activeSessions = new Map<string, ActiveDictationSession>()
 let shutdownAdmitted = false
 const pendingOperations = new Set<Promise<unknown>>()
+const pendingTranscriptions = new Set<AbortController>()
+const stoppingPreviews = new Set<string>()
 
 function trackPending<T>(promise: Promise<T>): Promise<T> {
   pendingOperations.add(promise)
@@ -149,7 +151,9 @@ export function registerDictationIpc(deps: {
     event: string,
     data?: Record<string, unknown>,
   ): void => {
-    if (!debugSessionId) return
+    // Preview cancellation may abandon an unresolved package stop promise.
+    // Late optional observations must not append behind the final debug flush.
+    if (shutdownAdmitted || !debugSessionId) return
     deps.dictationDebugJournals
       .get(debugSessionId)
       .append({ layer, event, ...(data !== undefined ? { data } : {}) })
@@ -484,7 +488,13 @@ export function registerDictationIpc(deps: {
             return null
           })
         : Promise.resolve(null)
-      trackPending(streamingStop)
+      if (streamingId) {
+        stoppingPreviews.add(streamingId)
+        const forgetPreview = (): void => { stoppingPreviews.delete(streamingId) }
+        void streamingStop.then(forgetPreview, forgetPreview)
+      }
+      const batchAbort = new AbortController()
+      pendingTranscriptions.add(batchAbort)
 
       if (DICTATION_DUMP_ENABLED) {
         // eslint-disable-next-line no-console
@@ -517,6 +527,7 @@ export function registerDictationIpc(deps: {
         })
         const startedAt = Date.now()
         const outcome = await transcribeBatch({
+          signal: batchAbort.signal,
           provider: session.provider,
           apiKey: session.apiKey,
           audio,
@@ -657,6 +668,8 @@ export function registerDictationIpc(deps: {
           kind: 'error',
           message: err instanceof Error ? err.message : 'Dictation failed.',
         }
+      } finally {
+        pendingTranscriptions.delete(batchAbort)
       }
     }),
   )
@@ -679,6 +692,17 @@ export function registerDictationIpc(deps: {
 export async function cleanupDictationIpcResources(): Promise<void> {
   shutdownAdmitted = true
   unregisterDictationHotkey()
+  // Quit has committed and the originating composer is gone. Cancel owned
+  // batch HTTP and join the handler, rather than letting an unbounded provider
+  // response hold application exit. A response that already completed can
+  // still enqueue history before the handler settles and its tail is drained.
+  for (const operation of pendingTranscriptions) operation.abort()
+  // The pinned preview cancel() drops the session before finalizeSession can
+  // resolve an earlier stop() promise. It is explicitly an abandonment API,
+  // not a joinable completion receipt. Cancel both active and stopping previews
+  // and fence their late debug observations instead of awaiting that promise.
+  for (const id of stoppingPreviews) deepgramStreaming().cancel(id)
+  stoppingPreviews.clear()
   for (const session of activeSessions.values()) {
     if (session.streamingId) deepgramStreaming().cancel(session.streamingId)
   }

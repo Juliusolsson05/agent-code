@@ -33,6 +33,8 @@ export type DictationBatchInput = {
    *  expose multilingual dictation later without a controller refactor. */
   language?: string
   onTrace?: (event: SpeechTraceEvent) => void
+  /** The owning operation cancels HTTP when its consumer is permanently gone. */
+  signal?: AbortSignal
 }
 
 // Discriminated union, same shape as the cleanup we landed on the
@@ -74,6 +76,7 @@ function runProvider(input: DictationBatchInput): Promise<SpeechTranscript> {
     audio,
     ...(input.language ? { language: input.language } : {}),
     ...(input.onTrace ? { onTrace: input.onTrace } : {}),
+    ...(input.signal ? { signal: input.signal } : {}),
   }
   return transcribeDeepgram({}, opts)
 }

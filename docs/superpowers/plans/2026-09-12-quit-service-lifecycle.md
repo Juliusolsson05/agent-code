@@ -43,7 +43,7 @@ Partial startup required more than moving listeners. The workflow factory publis
 
 The composition audit exposed two concrete owner gaps that this same slice repairs:
 
-- Dictation's active map excludes stop handlers awaiting batch HTTP. Committed cleanup now fences new operations, cancels active previews, joins admitted start/stop/hotkey work and the independent preview-stop promise, then captures the history write tail. A key lookup or hotkey configuration finishing late cannot revive a resource behind cleanup.
+- Dictation's active map excludes stop handlers awaiting batch HTTP. Committed cleanup now fences new operations, aborts owned batch HTTP, joins admitted start/stop/hotkey work, cancels active/stopping previews and fences their late observations, then captures the history write tail. A key lookup or hotkey configuration finishing late cannot revive a resource behind cleanup.
 - Remote disposal previously bypassed the enable/disable FIFO and erased its server pointer before a stop resolved. Disposal now closes enable admission, joins that FIFO, prevents a pending enable from publishing a live URL, and keeps the exact server on rejection for an explicit retry.
 
 The shutdown section of `ARCHITECTURE.md` and its generated preview now describe the implemented boundary. All 42 diagram sources rendered and verified with the pinned documentation tools; only the changed shutdown preview is retained. Five unrelated previews differed when regenerated in this local Chrome environment; those generated changes were discarded. The shutdown SVG was visually inspected independently.
@@ -64,3 +64,12 @@ This PR uses **Refs #919**, not an issue-closing keyword. B02 remains open for t
 The bounded result is preservation of services on veto and one explicit composition of existing committed-stop/drain contracts, including the two owner gaps above. It is not completion of every quit durability or editor approval invariant in the program.
 
 The next control frontier audit starts at `src/main/control/createControlHost.ts`, `src/control-sdk/core/executor.ts` and `src/main/control/history/FileControlHistory.ts`. The executor's `active` map is populated only after its admitted intent write, so draining that map alone would miss a request still queued in `exclusive`. Nested waits/batches also call the executor directly. Main's private `operations.start`/`operations.finish` port must keep completion receipts writable while new effectful work is closed; a blanket rejection of all invocation would lose the evidence shutdown needs. Keep these facts in the next focused B02 plan.
+
+
+## Final provider-boundary review
+
+The first app build and entrypoint verification passed. Review of the actual pinned voice package then exposed why merely awaiting dictation promises was insufficient: batch HTTP has no default application deadline, and preview `cancel()` removes the session before `finalizeSession` can resolve an earlier `stop()` promise. The final implementation propagates an AbortSignal through the real main controller to the pinned HTTP provider, aborts owned batch work on committed quit, and joins its handler. It cancels previews through the existing API and suppresses late optional debug writes instead of awaiting an abandoned preview-stop promise. Already-completed batch results may still enqueue history before their handler settles; the subsequent tail includes those writes.
+
+A fourth dictation regression exercises IPC → real controller → pinned provider → abortable HTTP boundary. The coordinator/dictation review lane passed 13 cases, including cancellation and an intentionally unresolved optional preview promise. This adds one unique unit case to the previous totals (58 unit, nine remote system, one renderer). Repeat final-source checks/build after this substantive correction; do not cite the earlier app build as verification of the cancellation change.
+
+New problem records from the composition audit: #941 remote disposal (implemented), #942 pending dictation cleanup (implemented), #943 control admission/result drain (follow-up, not implemented). The first two are independently closeable by this PR; #919/#943/#918 remain open. The conventions require these separate issue records even though the implementation shares the quit-safety PR.

@@ -31,6 +31,7 @@ beforeEach(() => {
   vi.resetModules()
   vi.resetAllMocks()
   mocks.handlers.clear()
+  vi.unstubAllGlobals()
   mocks.key.mockResolvedValue('test-only-key')
   mocks.preview.start.mockReturnValue({ id: 'preview' })
   mocks.preview.stop.mockResolvedValue(null)
@@ -60,7 +61,7 @@ describe('dictation IPC shutdown ownership', () => {
     await expect(invoke('stream-start', { provider: 'deepgram' })).rejects.toThrow('shutting down')
   })
 
-  it('cancels active previews and keeps pending batch/history producers inside the drain', async () => {
+  it('cancels previews without joining abandoned stop promises and drains admitted batch/history producers', async () => {
     const module = await setup()
     const batch = deferred<{ kind: 'ok'; raw: string }>()
     const preview = deferred<null>()
@@ -76,13 +77,15 @@ describe('dictation IPC shutdown ownership', () => {
     const settled = vi.fn()
     const shutdown = module.cleanupDictationIpcResources().then(settled)
     expect(mocks.preview.cancel).toHaveBeenCalledWith('preview')
+    expect(mocks.batch.mock.calls[0]![0].signal.aborted).toBe(true)
     batch.resolve({ kind: 'ok', raw: 'recoverable dictation' })
     await stop
     expect(mocks.append).toHaveBeenCalledWith(expect.objectContaining({ text: 'recoverable dictation' }))
-    expect(settled).not.toHaveBeenCalled()
-    preview.resolve(null)
     await shutdown
     expect(settled).toHaveBeenCalledOnce()
+    // The native preview cancel contract may never settle preview.promise.
+    // That optional promise cannot hold committed application exit.
+    preview.resolve(null)
   })
 
   it('removes a hotkey installed by a configuration request that finishes after shutdown', async () => {
@@ -96,4 +99,27 @@ describe('dictation IPC shutdown ownership', () => {
     await shutdown
     expect(mocks.unregister).toHaveBeenCalledTimes(2)
   })
+  it('propagates committed cancellation through the real controller and pinned provider HTTP path', async () => {
+    const { transcribeBatch } = await import('../dictation/controller')
+    mocks.batch.mockImplementation(transcribeBatch)
+    let signal: AbortSignal | undefined
+    vi.stubGlobal('fetch', vi.fn((_url: unknown, init: RequestInit) => {
+      signal = init.signal as AbortSignal
+      return new Promise((_resolve, reject) => {
+        signal!.addEventListener('abort', () => reject(new DOMException('Quit cancelled HTTP', 'AbortError')), { once: true })
+      })
+    }))
+    try {
+      const module = await setup()
+      const { id } = await invoke('stream-start', { provider: 'deepgram' })
+      await invoke('stream-chunk', { id, chunk: new ArrayBuffer(4) })
+      const stop = invoke('stream-stop', { id, audioDurationMs: 1000 })
+      expect(signal?.aborted).toBe(false)
+      await module.cleanupDictationIpcResources()
+      expect(signal?.aborted).toBe(true)
+      expect(await stop).toMatchObject({ kind: 'error' })
+      expect(mocks.append).not.toHaveBeenCalled()
+    } finally { vi.unstubAllGlobals() }
+  })
+
 })
