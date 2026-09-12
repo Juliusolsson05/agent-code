@@ -13,6 +13,10 @@ export type TldrHookOutput =
 
 export const TLDR_GOAL_CONTEXT = 'Agent Code TLDR: this agent has no TLDR yet. Once you understand the goal of this request, call tldr_update with that goal before starting the work.'
 export const TLDR_NEVER_WRITTEN_REASON = 'Agent Code TLDR: this agent has no TLDR yet. Call tldr_update now with the current goal and status in one or two sentences, then finish.'
+// With Goal on, the goal has its own record. Asking for it in the TLDR too would
+// contradict the TLDR skill ("keep the TLDR to status when goal_set is
+// available") and put the goal where the next status update overwrites it.
+export const TLDR_STATUS_NEVER_WRITTEN_REASON = 'Agent Code TLDR: this agent has no TLDR yet. Call tldr_update now with the current status in one or two sentences, then finish.'
 export const GOAL_SET_CONTEXT = 'Agent Code Goal: this agent has no goal yet. Once you understand what this request is trying to achieve, call goal_set with that goal in one plain sentence before starting the work.'
 export const GOAL_NEVER_SET_REASON = 'Agent Code Goal: this agent has no goal yet. Call goal_set now with what this work is trying to achieve, in one plain sentence.'
 
@@ -101,6 +105,7 @@ export class TldrEnforcement {
       //
       // With Goal on, the goal has its own home (#936). Asking for it in the
       // TLDR as well would get it overwritten by the next status update.
+      // A missing TLDR is still caught at Stop, with a status-only request.
       if (features.goal && this.goalStore) {
         return await this.goalStore.lastWrittenAt(identity) ? {} : {
           hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: GOAL_SET_CONTEXT },
@@ -137,7 +142,7 @@ export class TldrEnforcement {
     }
     if (features.tldr) {
       const lastWrittenAt = await this.store.lastWrittenAt(identity)
-      if (!lastWrittenAt) reasons.push(TLDR_NEVER_WRITTEN_REASON)
+      if (!lastWrittenAt) reasons.push(features.goal && this.goalStore ? TLDR_STATUS_NEVER_WRITTEN_REASON : TLDR_NEVER_WRITTEN_REASON)
       // A pure-chat turn never reaches this: without a tool call there is no
       // evidence the task moved, and a clarifying question must stay free.
       // The goal has no staleness rule — it changes with direction, not work.

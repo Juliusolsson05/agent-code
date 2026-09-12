@@ -25,7 +25,7 @@ type HistoryRow = TldrHistoryEntry & { kind: 'tldr' | 'goal' }
 
 type Loaded =
   | { state: 'loading' }
-  | { state: 'ready'; entries: HistoryRow[] }
+  | { state: 'ready'; entries: HistoryRow[]; unavailable: Array<'tldr' | 'goal'> }
   | { state: 'error' }
 
 // Goals (#936) are interleaved with statuses rather than shown in a second
@@ -67,9 +67,27 @@ export function TldrHistoryModal({ open, sessionId, workspace, onClose }: Props)
     if (!open || !identity) return
     let current = true
     const load = () => {
-      Promise.all([window.api.readTldrHistory(identity), window.api.readGoalHistory(identity)])
-        .then(([tldr, goal]) => { if (current) setLoaded({ state: 'ready', entries: mergeHistory(tldr, goal) }) })
-        .catch(() => { if (current) setLoaded({ state: 'error' }) })
+      // Settled, not all-or-nothing: the two histories are separate files, and
+      // one unreadable file must not hide the other. A store deliberately
+      // rejects an unreadable history instead of returning [], and repairs it
+      // only on that store's own next write — for a goal, which changes
+      // rarely, that write may never come.
+      void Promise.allSettled([window.api.readTldrHistory(identity), window.api.readGoalHistory(identity)])
+        .then(([tldr, goal]) => {
+          if (!current) return
+          if (tldr.status === 'rejected' && goal.status === 'rejected') {
+            setLoaded({ state: 'error' })
+            return
+          }
+          setLoaded({
+            state: 'ready',
+            entries: mergeHistory(tldr.status === 'fulfilled' ? tldr.value : [], goal.status === 'fulfilled' ? goal.value : []),
+            unavailable: [
+              ...(tldr.status === 'rejected' ? ['tldr' as const] : []),
+              ...(goal.status === 'rejected' ? ['goal' as const] : []),
+            ],
+          })
+        })
     }
     setLoaded({ state: 'loading' })
     // Subscribe before the first read so an update that lands while the read
@@ -89,9 +107,9 @@ export function TldrHistoryModal({ open, sessionId, workspace, onClose }: Props)
     : loaded.state === 'loading'
       ? <p className="text-sm text-muted">Loading…</p>
       : loaded.state === 'error'
-        ? <p className="text-sm text-muted">TLDR history is unavailable.</p>
+        ? <p className="text-sm text-muted">History is unavailable.</p>
         : loaded.entries.length === 0
-          ? <p className="text-sm text-muted">No TLDR history yet.</p>
+          ? (loaded.unavailable.length > 0 ? null : <p className="text-sm text-muted">No TLDR or goal history yet.</p>)
           : <ol className="flex flex-col gap-3" aria-label="TLDR history">
               {loaded.entries.map((entry, index) => {
                 const time = tldrTime(Date.parse(entry.writtenAt), now)
@@ -118,7 +136,12 @@ export function TldrHistoryModal({ open, sessionId, workspace, onClose }: Props)
           <DialogTitle>TLDR History</DialogTitle>
           <DialogDescription>Each saved TLDR and goal for this agent, newest first. The latest 100 of each are kept.</DialogDescription>
         </DialogHeader>
-        <div className="max-h-[60vh] overflow-y-auto pr-1">{body}</div>
+        <div className="max-h-[60vh] overflow-y-auto pr-1">
+          {identity && loaded.state === 'ready' && loaded.unavailable.map(kind => (
+            <p key={kind} role="status" className="mb-3 text-sm text-muted">{kind === 'goal' ? 'Goal' : 'TLDR'} history is unavailable.</p>
+          ))}
+          {body}
+        </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Close</Button>
         </DialogFooter>

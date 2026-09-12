@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { ReportingFeatures } from './enforcement'
 import {
-  GOAL_NEVER_SET_REASON, GOAL_SET_CONTEXT, TLDR_GOAL_CONTEXT, TLDR_NEVER_WRITTEN_REASON, TLDR_STALE_REASON, TldrEnforcement,
+  GOAL_NEVER_SET_REASON, GOAL_SET_CONTEXT, TLDR_GOAL_CONTEXT, TLDR_NEVER_WRITTEN_REASON, TLDR_STALE_REASON,
+  TLDR_STATUS_NEVER_WRITTEN_REASON, TldrEnforcement,
 } from './enforcement'
 
 function setup(features: ReportingFeatures = { tldr: true, goal: false }) {
@@ -179,8 +180,19 @@ describe('Goal turn enforcement', () => {
     const t = setup({ tldr: true, goal: true })
     await t.hook('user-prompt-submit')
     await t.hook('post-tool-use')
-    expect(await t.hook('stop')).toEqual(block(`${GOAL_NEVER_SET_REASON}\n\n${TLDR_NEVER_WRITTEN_REASON}`))
+    expect(await t.hook('stop')).toEqual(block(`${GOAL_NEVER_SET_REASON}\n\n${TLDR_STATUS_NEVER_WRITTEN_REASON}`))
     expect(await t.hook('stop')).toEqual({})
+  })
+
+  it('asks a goal-holding agent for status only when its TLDR is missing', async () => {
+    const t = setup({ tldr: true, goal: true })
+    t.setGoal('agent-a')
+    t.tick()
+    // The prompt stays quiet once a goal exists; the missing TLDR is caught at
+    // the end of the turn, and it must not ask for the goal a second time.
+    expect(await t.hook('user-prompt-submit')).toEqual({})
+    await t.hook('post-tool-use')
+    expect(await t.hook('stop')).toEqual(block(TLDR_STATUS_NEVER_WRITTEN_REASON))
   })
 
   it('never treats a goal as stale: it changes with direction, not with work', async () => {

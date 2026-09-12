@@ -5,7 +5,7 @@ import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { CommandContext } from '@renderer/features/command-palette/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { tldrCommands } from './commands'
-import { TldrHistoryModal } from './TldrHistoryModal'
+import { mergeHistory, TldrHistoryModal } from './TldrHistoryModal'
 import { TldrPane } from './TldrOverlay'
 import { dismissTldr, toggleTldr } from './viewState'
 
@@ -54,6 +54,7 @@ describe('TLDR history', () => {
   })
 
   it('interleaves goal changes with status by time and marks the current one of each kind', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
     const api = historyApi(
       [at('Tests pass; opening the PR.', 2, 1), at('Reading the store.', 1, 10)],
       [at('Let users see what each agent is for.', 2, 5), at('Add a history view.', 1, 20)],
@@ -74,8 +75,11 @@ describe('TLDR history', () => {
     expect(rows[3]!.meta).toMatch(/^Goal · /)
     expect(rows[3]!.meta).not.toContain('Current')
 
-    // Revisions repeat across the two stores; both rows with revision 2 render.
-    expect(list.querySelectorAll('li')).toHaveLength(4)
+    // Revisions repeat across the two stores (both have a revision 2). React
+    // still renders duplicate keys on first mount and only warns, so the
+    // warning is the observable failure.
+    expect(consoleError.mock.calls.flat().join(' ')).not.toContain('same key')
+    consoleError.mockRestore()
     act(() => api.emitGoal('someone-else'))
     expect(api.readGoalHistory).toHaveBeenCalledTimes(1)
     act(() => api.emitGoal('summary-1'))
@@ -88,6 +92,32 @@ describe('TLDR history', () => {
     expect(screen.getByText('TLDR and Goal have never been enabled for this agent.')).toBeTruthy()
     expect(api.readTldrHistory).not.toHaveBeenCalled()
     expect(api.readGoalHistory).not.toHaveBeenCalled()
+  })
+
+  it('keeps a readable history visible when the other capability’s history cannot be read', async () => {
+    const api = historyApi([at('Reviewing the PR.', 1, 1)])
+    api.readGoalHistory.mockRejectedValue(new Error('TLDR history is invalid.'))
+    render(<TldrHistoryModal open sessionId="pane" onClose={vi.fn()} workspace={workspaceWith({
+      pane: { cwd: '/project', kind: 'claude', tldrIdentity: 'summary-1', builtInMcpDomains: ['tldr', 'goal'] },
+    })} />)
+    const list = await screen.findByRole('list', { name: 'TLDR history' })
+    expect(list.textContent).toContain('Reviewing the PR.')
+    expect(screen.getByRole('status').textContent).toBe('Goal history is unavailable.')
+    expect(screen.queryByText('History is unavailable.')).toBeNull()
+  })
+
+  it('reports history unavailable only when neither read succeeds, and names both kinds when empty', async () => {
+    const failing = historyApi([])
+    failing.readTldrHistory.mockRejectedValue(new Error('TLDR history is invalid.'))
+    failing.readGoalHistory.mockRejectedValue(new Error('TLDR history is invalid.'))
+    const goalOnly = { pane: { cwd: '/project', kind: 'claude', tldrIdentity: 'summary-1', builtInMcpDomains: ['goal'] } }
+    const view = render(<TldrHistoryModal open sessionId="pane" onClose={vi.fn()} workspace={workspaceWith(goalOnly)} />)
+    expect(await screen.findByText('History is unavailable.')).toBeTruthy()
+    view.unmount()
+
+    historyApi([], [])
+    render(<TldrHistoryModal open sessionId="pane" onClose={vi.fn()} workspace={workspaceWith(goalOnly)} />)
+    expect(await screen.findByText('No TLDR or goal history yet.')).toBeTruthy()
   })
 
   it('opens from the focused agent and is not offered for a shell', () => {
@@ -161,5 +191,19 @@ describe('TLDR enforcement status in the peek', () => {
     await screen.findByText('No TLDR yet')
     expect(opencode).not.toHaveBeenCalled()
     expect(screen.queryByText('Reporting check inactive')).toBeNull()
+  })
+})
+
+describe('mergeHistory', () => {
+  const row = (text: string, revision: number, writtenAt: string): TldrHistoryEntry => ({ text, revision, writtenAt })
+
+  it('keeps each store’s own order when the clock stepped backwards, and puts TLDR first on a tie', () => {
+    // Revision 2 was written after revision 1 although the wall clock went back.
+    // A global sort by time would put revision 1 first.
+    const tldr = [row('Second status', 2, '2026-09-12T10:00:00.000Z'), row('First status', 1, '2026-09-12T10:05:00.000Z')]
+    const goal = [row('The goal', 1, '2026-09-12T10:00:00.000Z')]
+    expect(mergeHistory(tldr, goal).map(entry => `${entry.kind}:${entry.text}`)).toEqual([
+      'tldr:Second status', 'tldr:First status', 'goal:The goal',
+    ])
   })
 })

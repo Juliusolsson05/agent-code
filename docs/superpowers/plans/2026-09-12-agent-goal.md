@@ -98,3 +98,28 @@ without authorization.
 - **Peek switching.** `toggleTldr('goal')` while TLDR is latched switches to
   goals rather than closing, and both peeks share one hold controller, native
   release watcher, and Escape path.
+
+## Review round (PR #946: one Codex, one Claude reviewer)
+
+All findings were verified against source and adopted:
+
+- **Stop asked for the goal inside the TLDR when Goal was on** (Codex). A
+  missing TLDR now gets `TLDR_STATUS_NEVER_WRITTEN_REASON` when the agent has
+  Goal; TLDR-only agents keep the goal-and-status wording. Once a goal exists,
+  the prompt hook stays quiet and a missing TLDR is caught at Stop — intended,
+  because the prompt nudge exists to get the goal written before the work.
+- **One unreadable history hid both** (Claude, medium). The modal reads with
+  `Promise.allSettled`, shows a per-kind "… history is unavailable" note, and
+  shows the full error only when both reads fail. A store repairs a corrupt
+  history only on its own next write, which for a goal may never come.
+- **A new default could silently take a chord a user had already bound**
+  (Claude). Persisted overrides are never reconciled against new defaults and
+  the router takes the first match, so `buildBindingIndex` now indexes
+  customized bindings ahead of shipped defaults. This applies to every future
+  default, not only Cmd+G.
+- History and command wording, README, and `controlReference` now describe Goal.
+- Test gaps closed: merge order under a backwards clock and ties, the React
+  duplicate-key warning, Goal in Spotlight with the native release token, Goal
+  rebinding and the modal gate, an observable Goal subscription,
+  `enable-goal-mcp` behavior, settings rows derived from the configurable
+  domain list, and Goal-only rows in the reload/rewind identity table.

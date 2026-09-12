@@ -18,8 +18,8 @@ export const tldrCommands: CommandDef[] = [{
   run: ({ ui }) => { ui.closePalette(); toggleTldr('goal') },
 }, {
   id: 'view-tldr-history', title: 'View TLDR History', category: 'session', surface: 'session',
-  description: '**What it does:** Shows every saved TLDR for the focused **agent**, newest first.\n\n**Use when:** You want to see how an agent’s status evolved — its goal, milestones and outcome — rather than only where it is now.\n\n**Notes:** Keeps the latest 100 updates per agent. History follows the conversation across reloads and provider switches; a duplicate or rewind starts fresh.',
-  keywords: ['tldr', 'history', 'summary', 'status', 'timeline', 'progress'],
+  description: '**What it does:** Shows every saved TLDR and goal change for the focused **agent**, newest first.\n\n**Use when:** You want to see how an agent’s status and direction evolved — milestones, outcome and any change of goal — rather than only where it is now.\n\n**Notes:** Keeps the latest 100 TLDR updates and 100 goal changes per agent. History follows the conversation across reloads and provider switches; a duplicate or rewind starts fresh.',
+  keywords: ['tldr', 'goal', 'history', 'summary', 'status', 'timeline', 'progress'],
   // Offered for every agent pane, not only TLDR-enabled ones: history outlives
   // turning reporting off, and the modal explains when there is none.
   when: ({ workspace }) => {

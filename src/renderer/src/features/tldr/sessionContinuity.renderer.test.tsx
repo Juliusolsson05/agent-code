@@ -74,12 +74,17 @@ describe('TLDR identity through real session actions', () => {
     { operation: 'provider translation', kind: 'codex', resumeSessionId: 'native-translated', preserveTldr: true, carry: true },
     { operation: 'rewind', kind: 'claude', resumeSessionId: 'native-rewound', carry: false },
     { operation: 'unrelated resume', kind: 'codex', resumeSessionId: 'native-other', carry: false },
+    { operation: 'Goal-only reload', kind: 'claude', resumeSessionId: 'native-source', carry: true, domains: ['goal'] },
+    { operation: 'Goal-only rewind', kind: 'claude', resumeSessionId: 'native-rewound', carry: false, domains: ['goal'] },
   ] as const)('persists the correct summary identity after $operation', async scenario => {
     vi.useFakeTimers()
+    // Goal shares the conversation identity, so a Goal-only agent must carry,
+    // mint and refuse to donate it exactly like a TLDR agent.
+    const domains = 'domains' in scenario && scenario.domains ? [...scenario.domains] : ['tldr' as const]
     const state = {
       tabs: [{ id: 'project', title: 'Project', root: { type: 'leaf', sessionId: 'source' }, focusedSessionId: 'source' }],
       activeTabId: 'project', sessions: {
-        source: { cwd: '/project', kind: 'claude', providerSessionId: 'native-source', tldrIdentity: 'summary-source', builtInMcpDomains: ['tldr'] },
+        source: { cwd: '/project', kind: 'claude', providerSessionId: 'native-source', tldrIdentity: 'summary-source', builtInMcpDomains: domains },
       }, detachedSessions: {}, buried: [], pinnedSessionIds: [], dispatchMode: null,
     } as WorkspaceState
     const refs = makeRefs(state)
@@ -108,24 +113,12 @@ describe('TLDR identity through real session actions', () => {
     // metadata nor the last replacement may donate its completion statement.
     spawnSession.mockResolvedValueOnce({ sessionId: 'duplicate' })
     await act(async () => {
-      await hook.result.current.spawn('/project', { kind: scenario.kind, resumeSessionId: 'native-clone', builtInMcpDomains: ['tldr'] })
+      await hook.result.current.spawn('/project', { kind: scenario.kind, resumeSessionId: 'native-clone', builtInMcpDomains: domains })
       await vi.runAllTimersAsync()
     })
     const duplicateIdentity = writer.getState().sessions.duplicate?.tldrIdentity
     expect(duplicateIdentity).toEqual(expect.any(String))
     expect(duplicateIdentity).not.toBe(spawnedIdentity)
     expect(duplicateIdentity).not.toBe('summary-source')
-
-    // Goal shares the conversation identity, so an agent with only Goal needs
-    // one minted too — otherwise its goals would follow the routing id and be
-    // lost at the first reload.
-    spawnSession.mockResolvedValueOnce({ sessionId: 'goal-agent' })
-    await act(async () => {
-      await hook.result.current.spawn('/project', { kind: scenario.kind, builtInMcpDomains: ['goal'] })
-      await vi.runAllTimersAsync()
-    })
-    const goalIdentity = spawnSession.mock.calls.at(-1)![0].tldrIdentity
-    expect(goalIdentity).toEqual(expect.any(String))
-    expect(writer.getState().sessions['goal-agent']?.tldrIdentity).toBe(goalIdentity)
   })
 })

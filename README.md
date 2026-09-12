@@ -99,7 +99,7 @@ a running session can move mid-task among Claude Code, Codex, and OpenCode.
   next reload, including the managed reporting skill. Explicit per-agent choices
   take priority; **Use Global MCP Settings** clears those choices and reloads the
   agent. Claude and Codex agents with TLDR are asked to set their goal on the
-  first prompt, and at turn end to update after work that used tools without a
+  first prompt (through Goal instead when Goal MCP is also on), and at turn end to update after work that used tools without a
   report; the footer notes when that check is not running. **View TLDR History**
   shows how an agent's status evolved. The editor keeps Cmd+L Select Line.
 - **Goal peek** — enable **Goal MCP** for an agent, then hold **Cmd+G** to see

@@ -298,7 +298,14 @@ function buildBindingIndex(
   overrides: Record<string, string[]>,
 ): Map<string, { commandId: string; context: BindingContext }[]> {
   const index = new Map<string, { commandId: string; context: BindingContext }[]>()
-  for (const entry of resolveEffectiveKeybindings(overrides, buildDefaultKeybindings())) {
+  // Customized bindings are indexed ahead of shipped defaults, because the
+  // router takes the first match. A user binding and a default can share a
+  // chord when the default shipped AFTER the user claimed it (Cmd+G for Goal,
+  // #936): persisted overrides are never reconciled against new defaults, so
+  // in default-first order a release would silently take the chord from them.
+  // An explicit user choice is the stronger statement of intent.
+  const effective = resolveEffectiveKeybindings(overrides, buildDefaultKeybindings())
+  for (const entry of [...effective.filter(item => item.customized), ...effective.filter(item => !item.customized)]) {
     for (const binding of entry.bindings) {
       const list = index.get(binding) ?? []
       list.push({ commandId: entry.commandId, context: entry.context })
