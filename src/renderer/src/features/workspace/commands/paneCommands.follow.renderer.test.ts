@@ -85,6 +85,11 @@ describe('working-agent follow command', () => {
     const workingState = command.getState!(context)
     if (!workingState) throw new Error('Working follow must expose a command state')
     expect(describeCommandState(workingState).detail).toBe('On via Auto-follow All Working Agents')
+    runtime.conditions = { provider: 'claude', ts: 1, conditions: {
+      'claude.permission-prompt': { kind: 'claude.permission-prompt', state: { visible: true }, actions: [] },
+    } }
+    expect(command.getState?.(context)).toEqual({ kind: 'toggle', value: 'off' })
+    runtime.conditions = null
     context.workspace.state.sessions.agent.kind = 'terminal'
     expect(command.getState?.(context)).toEqual({ kind: 'toggle', value: 'off' })
     runtime.tailMode = true

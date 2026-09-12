@@ -43,6 +43,13 @@ it('reports working follow dynamically and invalidates stale preference revision
   expect(busy).toMatchObject({ ok: true, value: { autoFollow: false, tailAll: false, tailWorking: true, followEnabled: true } })
   if (!busy.ok) throw new Error('No preferences')
   const revision = (busy.value as { revision: string }).revision
+  useAppStore.setState({ workspaceRuntimes: { first: { ...emptyRuntime(), sessionStatus: 'running', streamPhase: 'awaiting-tool',
+    conditions: { provider: 'claude', ts: 1, conditions: {
+      'claude.permission-prompt': { kind: 'claude.permission-prompt', state: { visible: true }, actions: [] },
+    } },
+  } } })
+  expect(await invoke('views.preferencesRead', { sessionId: 'first' })).toMatchObject({ ok: true, value: { tailWorking: true, followEnabled: false } })
+  expect(await invoke('views.followSet', { sessionId: 'first', revision, enabled: false })).toMatchObject({ ok: false, error: { code: 'stale_cursor' } })
   useAppStore.setState({ workspaceRuntimes: { first: emptyRuntime() } })
   expect(await invoke('views.preferencesRead', { sessionId: 'first' })).toMatchObject({ ok: true, value: { tailWorking: true, followEnabled: false } })
   expect(await invoke('views.followSet', { sessionId: 'first', revision, enabled: false })).toMatchObject({ ok: false, error: { code: 'stale_cursor' } })

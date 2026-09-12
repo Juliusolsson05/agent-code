@@ -32,4 +32,27 @@ describe('working-agent follow policy', () => {
     expect(agentFollowEnabled('claude', emptyRuntime(), workingMode)).toBe(false)
     expect(agentFollowEnabled('claude', { ...emptyRuntime(), tailMode: true }, workingMode)).toBe(true)
   })
+
+  it.each([
+    ['claude', 'claude.permission-prompt', { visible: true }, false],
+    ['claude', 'claude.ask-user-question', { active: true }, false],
+    ['claude', 'claude.trust-dialog', { visible: true }, false],
+    ['claude', 'claude.resume-prompt', { visible: true }, false],
+    ['codex', 'codex.approval', {}, false],
+    ['codex', 'codex.trust-dialog', { visible: true }, false],
+    ['opencode', 'opencode.permission', {}, false],
+    ['opencode', 'opencode.question', {}, false],
+    ['claude', 'claude.permission-prompt', { visible: false }, true],
+    ['claude', 'claude.compaction', { visible: true, phase: 'running' }, true],
+  ] as const)('leaves human input scrollable: %s %s %j', (provider, kind, state, expected) => {
+    // These conditions arrive while a tool is still pending, before any idle
+    // event. The provider policies must distinguish human input from tool work
+    // and compaction; dropping all awaiting-tool phases would break long tools.
+    const runtime: SessionRuntime = { ...emptyRuntime(), sessionStatus: 'running', streamPhase: 'awaiting-tool',
+      conditions: { provider, ts: 1, conditions: { [kind]: { kind, state, actions: [] } } },
+    }
+    expect(agentFollowEnabled(provider, runtime, workingMode)).toBe(expected)
+    expect(agentFollowEnabled(provider, { ...runtime, tailMode: true }, workingMode)).toBe(true)
+    expect(agentFollowEnabled(provider, runtime, { tailAllMode: true, tailWorkingMode: false })).toBe(true)
+  })
 })

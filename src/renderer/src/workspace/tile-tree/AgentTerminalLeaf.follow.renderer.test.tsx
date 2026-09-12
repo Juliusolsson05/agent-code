@@ -424,6 +424,30 @@ describe('AgentTerminalLeaf follow (jump-to-latest + tail)', () => {
     expect(screen.getByText('TAIL')).toBeTruthy()
   })
 
+  it('unlocks a busy terminal while approval is pending and follows again after approval', async () => {
+    appStore.tailWorkingMode = true
+    const busy = runtimeWith({ sessionStatus: 'running', streamPhase: 'awaiting-tool' })
+    const view = render(leaf())
+    await attachResolved()
+    term().buffer.active.length = 500
+    term().buffer.active.viewportY = 100
+    act(() => { view.rerender(leaf(busy)) })
+    expect(term().buffer.active.viewportY).toBe(460)
+
+    act(() => { view.rerender(leaf({ ...busy, conditions: { provider: 'claude', ts: 1,
+      conditions: { 'claude.permission-prompt': { kind: 'claude.permission-prompt', state: { visible: true }, actions: [] } },
+    } })) })
+    expect(screen.queryByText('TAIL')).toBeNull()
+    expect(term().buffer.active.viewportY).toBe(100)
+    term().scrollToBottom.mockClear()
+    act(() => { channelListener?.({ sessionId: 'session-1', data: 'approval repaint' }) })
+    expect(term().scrollToBottom).not.toHaveBeenCalled()
+
+    act(() => { view.rerender(leaf(busy)) })
+    expect(screen.getByText('TAIL')).toBeTruthy()
+    expect(term().buffer.active.viewportY).toBe(460)
+  })
+
   it('suspends working follow while hidden and pins again when revealed', async () => {
     appStore.tailWorkingMode = true
     const renderVisible = (visible: boolean) => (

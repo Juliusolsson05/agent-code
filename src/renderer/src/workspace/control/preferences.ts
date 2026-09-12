@@ -15,6 +15,9 @@ export function preferenceControlCapabilities(getWorkspace: () => Workspace) {
     const meta = state.workspaceState.sessions[sessionId]
     if (!meta || !isAgentKind(meta.kind ?? 'claude') || state.workspaceState.buried.some(row => row.sessionId === sessionId)) throw new ControlError('unavailable', 'Choose an existing non-buried agent')
     const runtime = state.workspaceRuntimes[sessionId] ?? emptyRuntime()
+    // Revisions cover the observation, including effective surface/follow, not
+    // only stored preferences. Working activity can invalidate a read without
+    // a settings edit; callers must re-read instead of acting on a stale On state.
     const value = { sessionId, override: meta.agentViewModeOverride ?? null, globalMode: state.settings.agentViewMode,
       effectiveSurface: getEffectiveAgentSurfaceForSession({ kind: meta.kind ?? 'claude', providerRuntime: meta.providerRuntime, globalMode: state.settings.agentViewMode, override: meta.agentViewModeOverride, runtime }),
       autoFollow: runtime.tailMode, tailAll: state.tailAllMode, tailWorking: state.tailWorkingMode, followEnabled: agentFollowEnabled(meta.kind, runtime, state) }
