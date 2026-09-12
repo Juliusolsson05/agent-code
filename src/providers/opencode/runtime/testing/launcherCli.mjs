@@ -16,6 +16,10 @@
 // - escaped: starts its own session, like a plugin helper that daemonizes, so
 //   a process-group kill cannot reach it and only releasing stderr lets the
 //   launcher's `close` arrive.
+// - escaped-exit: as escaped, but the launcher then exits 0 at once, like a CLI
+//   whose root finished while a daemonized helper still holds stderr. The
+//   parent reaps the launcher long before `close`, and the launcher's group id
+//   is released while the command is still pending.
 import { spawn } from 'node:child_process'
 import { ftruncateSync, renameSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -36,8 +40,11 @@ if (process.env.OPENCODE_LAUNCHER_ROLE === 'descendant') {
   spawn(process.execPath, [fileURLToPath(import.meta.url)], {
     env: { ...process.env, NODE_OPTIONS: '', OPENCODE_LAUNCHER_ROLE: 'descendant', OPENCODE_LAUNCHER_PID: String(process.pid) },
     stdio: 'inherit',
-    detached: behaviour === 'escaped',
+    detached: behaviour === 'escaped' || behaviour === 'escaped-exit',
   })
+  // spawn() has already forked and exec'd, so the helper keeps its inherited
+  // descriptors after this exit.
+  if (behaviour === 'escaped-exit') process.exit(0)
 }
 // Neither role exits on SIGTERM, so only a SIGKILL path can end them.
 process.on('SIGTERM', () => {})

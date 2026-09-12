@@ -284,17 +284,37 @@ async function runOpencode(
       //     own kill(), which destroyed stdout/stderr before signalling. Only
       //     diagnostics written after the outcome was decided are lost.
       //     stdout is a plain descriptor, not a stream: nothing to destroy.
-      // (b) SIGKILL the whole group via the negative pid. A group outlives its
-      //     leader while any member lives, so this still reaches the native
-      //     descendant after the launcher has died, and POSIX does not reuse a
-      //     pid while a group with that id exists. The `pid > 0` check is
-      //     load-bearing: process.kill(-0) would signal Agent Code's OWN group.
-      //     If the group is already gone (ESRCH) or cannot be signalled, fall
-      //     back to the direct child, which is all Node's kill paths ever did.
-      // Timers and the abort listener are cleared at `close`, so this never
-      // runs against a pid that has already been released.
+      // (b) SIGKILL the whole group via the negative pid, at most once, and
+      //     only while the direct child is still unreaped.
+      //     A numeric group id is only an identity while something still holds
+      //     it. Node reaps the child and sets exitCode/signalCode before it
+      //     emits `exit`, but `close` can come much later because it also
+      //     waits for stderr EOF. Timers and the abort listener stay armed
+      //     until `close`. So once the leader has been reaped and every
+      //     remaining stderr holder has left the group, the id is free for any
+      //     new session or job to reuse, and a late deadline, overflow or
+      //     stop() would SIGKILL an unrelated group. While exitCode and
+      //     signalCode are both null the leader (running or a zombie) still
+      //     reserves the id. libuv reaps and runs Node's exit callback in the
+      //     same loop turn, so the check below is re-evaluated immediately
+      //     before the signal with no event of this command in between.
+      //     Trade-off: a same-group member that outlives an exited leader is
+      //     no longer killed. It can only append to the unlinked capture, and
+      //     readCapture is bounded by the fstat size taken after `close`. The
+      //     npm launcher that motivated the group is unaffected: it waits for
+      //     its native child, so the leader is alive whenever the tree is.
+      //     At most once: a timeout or overflow followed by stop() before
+      //     `close` must not signal the number again, because the first
+      //     SIGKILL may already have released it. `signalled` is set before
+      //     signalling, so re-entry from a listener cannot signal twice.
+      //     The `pid > 0` check is load-bearing: process.kill(-0) would signal
+      //     Agent Code's OWN group. If the group cannot be signalled, fall back
+      //     to the direct child's handle, which Node never aims at a reaped pid.
+      let signalled = false
       const terminate = () => {
         child.stderr?.destroy()
+        if (signalled || child.exitCode !== null || child.signalCode !== null) return
+        signalled = true
         if (process.platform !== 'win32' && typeof child.pid === 'number' && child.pid > 0) {
           try {
             process.kill(-child.pid, 'SIGKILL')

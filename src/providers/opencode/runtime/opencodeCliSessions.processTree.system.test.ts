@@ -69,7 +69,7 @@ async function expectClean() { expect(await readdir(root)).toEqual(['project']) 
  * cleanup owns the launcher even when readiness never arrives. If the budget
  * runs out, spawn returns anyway and ready() fails with its own message.
  */
-function startTree(descendant: 'hang' | 'overflow' | 'escaped', timeoutMs?: number): Run {
+function startTree(descendant: 'hang' | 'overflow' | 'escaped' | 'escaped-exit', timeoutMs?: number): Run {
   const statusFile = join(cwd, 'descendant.json')
   const launcher: Run['launcher'] = {}
   vi.mocked(spawn).mockImplementationOnce(((...args: Parameters<typeof realSpawn>) => {
@@ -155,6 +155,60 @@ describe('OpenCode CLI process-tree termination', () => {
       expect(run.launcher.child!.signalCode).toBe('SIGKILL')
       await expectClean()
     } finally {
+      await release(run, tree)
+    }
+  }, TEST_TIMEOUT_MS)
+
+  it('never signals the process group once its leader has been reaped', async () => {
+    // The launcher exits 0 at once while an escaped helper keeps stderr open,
+    // so the deadline fires after Node reaped the leader but before `close`.
+    // Nothing reserves that group id any more: a negative-pid SIGKILL would be
+    // aimed at whatever group reused the number. The spy records requested
+    // targets; with the fix no group signal is ever requested, so no real
+    // process is at risk in this test either way.
+    const kills = vi.spyOn(process, 'kill')
+    const run = startTree('escaped-exit', 1000)
+    let tree: Tree | undefined
+    try {
+      tree = await ready(run)
+      const launcher = run.launcher.child!
+      await waitUntil(() => launcher.exitCode !== null, 2000, 'launcher reaped')
+      expect(launcher.exitCode).toBe(0)
+      expect(performance.now() - run.launcher.spawnedAt!, 'leader reaped before the deadline fires').toBeLessThan(1000)
+      const failure = await within(run.outcome, run.launcher.spawnedAt! + 1000 + SETTLE_MARGIN_MS - performance.now())
+      expect(failure, 'timeout still settles by releasing stderr').toBeInstanceOf(Error)
+      expect((failure as Error).message).toContain('timed out after 1000 ms')
+      expect(kills.mock.calls.filter(([pid]) => pid < 0)).toEqual([])
+      await expectClean()
+    } finally {
+      kills.mockRestore()
+      await release(run, tree)
+    }
+  }, TEST_TIMEOUT_MS)
+
+  it('signals the process group only once when stop() follows a timeout before close', async () => {
+    // Stop is requested in the microtask right after the deadline's group
+    // signal: later than the timeout, earlier than any I/O callback, so always
+    // before `close` (which needs the reap). A second group signal there would
+    // reuse a number that the first SIGKILL may already have released.
+    const run = startTree('hang', 1000)
+    const realKill = process.kill.bind(process)
+    const kills = vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
+      if (pid < 0 && !run.controller.signal.aborted) queueMicrotask(() => run.controller.abort())
+      return realKill(pid, signal)
+    })
+    let tree: Tree | undefined
+    try {
+      tree = await ready(run)
+      const failure = await within(run.outcome, run.launcher.spawnedAt! + 1000 + SETTLE_MARGIN_MS - performance.now())
+      expect(failure, 'timeout then stop settles within its bound').toBeInstanceOf(Error)
+      // Cancellation still takes precedence over the timeout it raced.
+      expect((failure as Error).message).toContain('OpenCode command cancelled')
+      expect(kills.mock.calls.filter(([pid]) => pid < 0)).toEqual([[-tree.launcherPid, 'SIGKILL']])
+      await waitUntil(() => !alive(tree!.pid), 2000, 'descendant exit')
+      await expectClean()
+    } finally {
+      kills.mockRestore()
       await release(run, tree)
     }
   }, TEST_TIMEOUT_MS)
