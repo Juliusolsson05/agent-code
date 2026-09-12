@@ -194,9 +194,8 @@ async function runOpencode(
       // (#845) replaced execFile with spawn so stdout can be a regular file.
       //
       // WHY the deadline and the abort are owned here instead of passed as
-      // spawn's own `timeout` / `signal` / `killSignal` options (Node 24's
-      // spawn does accept all three, an earlier version of this comment said
-      // otherwise and was wrong):
+      // spawn's own `timeout` / `signal` / `killSignal` options, which Node
+      // 24's spawn does accept:
       // - The deadline records a distinct `timed out after N ms` failure. With
       //   spawn's timeout, `close` would only report signal SIGKILL, which is
       //   indistinguishable from an external kill or the OOM killer.
@@ -219,7 +218,8 @@ async function runOpencode(
         stdio: ['ignore', fd, 'pipe'],
         // WHY a private process group (detached, deliberately WITHOUT unref)
         // on POSIX: the `opencode` on PATH or in the cached tool path can be
-        // OpenCode's npm launcher (packages/opencode/bin/opencode, v1.18.30).
+        // OpenCode's npm launcher (anomalyco/opencode v1.18.30,
+        // packages/opencode/bin/opencode).
         // It is a Node script that spawns the native binary as ITS child with
         // `stdio: "inherit"` and only forwards SIGINT/SIGTERM/SIGHUP. SIGKILL
         // cannot be forwarded, so killing only the direct child left the
@@ -257,11 +257,12 @@ async function runOpencode(
       // the timers and abort listener were never cleared, and the next-tick
       // `error` had no listener. An unhandled ChildProcess `error` is an
       // uncaught exception, and installCrashHooks exits the app on those.
-      // Nothing below this point may be allowed to run before these exist.
+      // Nothing that can throw may run before these exist.
       //
       // Node also emits error when a kill fails, not just on failed spawn.
-      // Retain capture ownership until close (which follows spawn errors too),
-      // otherwise cleanup could unlink output while its producer is alive.
+      // Record it and still settle only at close (which follows spawn errors
+      // too), otherwise the import payload could be deleted, or a capture
+      // returned, while its producer is alive.
       child.on('error', error => { failure ??= error })
       child.once('close', (code, signal) => {
         // Referencing the timers declared below is safe: `close` is always
