@@ -9,8 +9,11 @@ const snapshot: MonitorSnapshot = {
   schemaVersion: 1, runId: 'test', enabled: true, sampledAt: 1000, main, windows: [], operations: [],
   recent: [main, { ...main, at: 2000 }], workerRss: 1024, collector: 'healthy', droppedRecords: 0, queuedBytes: 0, restarts: 0,
 }
-function api(read: () => Promise<MonitorSnapshot | null>) {
-  Object.defineProperty(window, 'api', { value: { getMonitorSnapshot: read }, configurable: true })
+function api(
+  read: () => Promise<MonitorSnapshot | null>,
+  getMonitorProcesses = vi.fn(async () => null),
+) {
+  Object.defineProperty(window, 'api', { value: { getMonitorSnapshot: read, getMonitorProcesses }, configurable: true })
 }
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
 
@@ -36,5 +39,33 @@ describe('monitor display lifecycle', () => {
     expect(await screen.findByText('Peak 0.0 %')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Processes' })).toBeInTheDocument()
     expect(screen.getByText('Always on · no automatic uploads')).toBeInTheDocument()
+  })
+
+  it('returns pagination to the last valid page when a process fleet shrinks', async () => {
+    vi.useFakeTimers()
+    const rows = Array.from({ length: 50 }, (_, index) => ({
+      identity: `${index + 1}:1`, pid: index + 1, parentPid: 1, creationTime: 1,
+      type: 'agent' as const, provider: 'claude' as const, sessionIds: [`s-${index}`],
+      sharedSessionCount: 1, cpuPercent: 1, memoryBytes: 1024, quality: 'ok' as const,
+    }))
+    let total = 100
+    const readProcesses = vi.fn(async (offset: number) => ({
+      summary: { sampledAt: 1, count: total, cpuPercent: 1, memoryBytes: 1024,
+        quality: 'ok' as const, sessionCount: total, missingRoots: 0, truncated: false },
+      rows: offset < total ? rows.slice(0, Math.min(50, total - offset)) : [], total,
+    }))
+    api(vi.fn(async () => snapshot), readProcesses)
+    render(<PerformanceMonitor onClose={vi.fn()} />)
+    await act(async () => { await Promise.resolve() })
+    screen.getByRole('button', { name: 'Processes' }).click()
+    await act(async () => { await Promise.resolve() })
+    screen.getByRole('button', { name: 'Next' }).click()
+    await act(async () => { await Promise.resolve() })
+    expect(readProcesses).toHaveBeenLastCalledWith(50, 'cpu')
+
+    total = 10
+    await act(async () => { vi.advanceTimersByTime(2000); await Promise.resolve() })
+    await act(async () => { await Promise.resolve() })
+    expect(readProcesses).toHaveBeenLastCalledWith(0, 'cpu')
   })
 })

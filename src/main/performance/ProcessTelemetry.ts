@@ -11,10 +11,10 @@ export class ProcessTelemetry {
       // Shared helpers stay in the application total and are excluded from
       // per-session totals. Charging them to each owner would double-count RSS
       // and CPU as soon as two panes share a provider process.
-      const rows = page.rows.filter(row => row.sharedSessionCount === 1 && row.sessionIds.includes(target.sessionId))
+      const rows = target.exited || !target.pid ? [] : page.rows.filter(row => row.sharedSessionCount === 1 && row.sessionIds.includes(target.sessionId))
       return {
         sessionId: target.sessionId, kind: target.kind, rootPid: target.pid,
-        status: target.exited ? 'exited' : 'unknown',
+        status: target.exited ? 'exited' : activityStatus(target.lastActivityAt, Date.now()),
         cpuPercent: rows.length && rows.every(row => row.cpuPercent !== null) ? rows.reduce((sum, row) => sum + row.cpuPercent!, 0) : null,
         memoryBytes: rows.length && rows.every(row => row.memoryBytes !== null) ? rows.reduce((sum, row) => sum + row.memoryBytes!, 0) : null,
         childCount: Math.max(0, rows.length - 1), lastActivityAt: target.lastActivityAt,
@@ -23,4 +23,12 @@ export class ProcessTelemetry {
     })
     return { enabled: true, sampledAt: page.summary.sampledAt, panes }
   }
+}
+
+function activityStatus(
+  lastActivityAt: number | null,
+  sampledAt: number,
+): PanePerformanceStats['status'] {
+  if (!lastActivityAt) return 'unknown'
+  return sampledAt - lastActivityAt > 30_000 ? 'idle' : 'running'
 }

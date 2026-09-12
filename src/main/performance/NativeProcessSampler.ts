@@ -7,9 +7,15 @@ import { parseNativeProcessTable } from './nativeProcessTable.js'
 import type { NativeProcessStat } from './nativeProcessTable.js'
 
 type Execute = (args: string[]) => Promise<string>
-const execute: Execute = async args => (await promisify(execFile)('/bin/ps', args, {
-  env: { ...process.env, LC_ALL: 'C' }, timeout: 3000, maxBuffer: 1024 * 1024,
-})).stdout
+const execute: Execute = async args => {
+  const task = promisify(execFile)('/bin/ps', args, {
+    env: { ...process.env, LC_ALL: 'C' }, timeout: 3000, maxBuffer: 1024 * 1024,
+  })
+  const result = await task
+  // ps enumerates itself. Its PID is already gone when the usage pass runs;
+  // retaining that row would mark every healthy sample partial forever.
+  return result.stdout.split('\n').filter(line => Number(/^\s*(\d+)/.exec(line)?.[1]) !== task.child.pid).join('\n')
+}
 
 export const EMPTY_PROCESS_SUMMARY: MonitorProcessSummary = {
   sampledAt: 0, count: 0, cpuPercent: null, memoryBytes: null, quality: 'warming-up',
@@ -21,6 +27,7 @@ export class NativeProcessSampler {
   private inFlight = false
   private topologyAt = -Infinity
   private topology = new Map<number, NativeProcessStat>()
+  private rootIdentities = new Map<string, { pid: number; birth: number; generation?: string }>()
   private previous = new Map<string, { cpuMs: number; at: number }>()
   private cached: MonitorProcessPage = { summary: EMPTY_PROCESS_SUMMARY, rows: [], total: 0 }
 
@@ -36,6 +43,7 @@ export class NativeProcessSampler {
       let truncated = context.truncated === true
       let missingRoots = 0
       const native = new Map<number, NativeProcessStat>()
+      let nativeQuerySucceeded = false
       const owners = new Map<number, { ids: string[]; count: number }>()
       const selected = new Set<number>()
       const representedOwners = new Set<string>()
@@ -81,10 +89,25 @@ export class NativeProcessSampler {
           // no longer descend from Electron's main PID. A shared descendant is
           // selected once; its owners are recorded without summing it twice.
           visit(context.rootPid)
-          for (const target of context.targets) if (target.pid && !target.exited) visit(target.pid, target.sessionId)
+          const activeRoots = new Set<string>()
+          for (const target of context.targets) if (target.pid && !target.exited) {
+            activeRoots.add(target.sessionId)
+            const birth = this.topology.get(target.pid)?.creationTime
+            const prior = this.rootIdentities.get(target.sessionId)
+            const sameLifetime = prior?.pid === target.pid && prior.generation === target.generation
+            const expected = target.creationTime ?? (sameLifetime ? prior.birth : undefined)
+            // The manager's backend run ID permits an intentional same-pane
+            // restart. A changed OS birth within that same run is PID reuse,
+            // not a new child of the old agent; preserve unavailable coverage.
+            if (birth === undefined || (expected !== undefined && expected !== birth)) { missingRoots++; continue }
+            this.rootIdentities.set(target.sessionId, { pid: target.pid, birth, generation: target.generation })
+            visit(target.pid, target.sessionId)
+          }
+          for (const id of this.rootIdentities.keys()) if (!activeRoots.has(id)) this.rootIdentities.delete(id)
           const nativePids = [...selected].filter(pid => !electron.has(pid))
           if (nativePids.length) {
             const text = await this.run(['-o', 'pid=,ppid=,lstart=,time=,rss=', '-p', nativePids.join(',')])
+            nativeQuerySucceeded = true
             for (const row of parseNativeProcessTable(text, MONITOR_POLICY.processLimit)) {
               // Topology can go stale between 15s scans. A PID recycled during
               // that interval must not be attributed through its old parent.
@@ -111,6 +134,7 @@ export class NativeProcessSampler {
       for (const pid of selected) {
         if (electron.has(pid) || rows.length >= MONITOR_POLICY.processLimit) continue
         const stat = native.get(pid)
+        if (!stat && nativeQuerySucceeded) continue
         const identity = `${pid}:${stat?.creationTime ?? this.topology.get(pid)?.creationTime ?? 0}`
         const previous = this.previous.get(identity)
         const elapsed = previous ? now - previous.at : 0
@@ -129,14 +153,20 @@ export class NativeProcessSampler {
       // Ownership IDs in each row are capped at four for transport. Keep a
       // separate bounded membership set so a fifth shared owner does not
       // become a fictitious unavailable process in the table.
-      const represented = representedOwners
+      const represented = new Set<string>()
+      for (const target of context.targets) {
+        if (representedOwners.has(target.sessionId) && rows.some(row => row.pid === target.pid)) represented.add(target.sessionId)
+      }
       for (const target of context.targets) {
         if (target.exited || represented.has(target.sessionId)) continue
         if (rows.length >= MONITOR_POLICY.processLimit) { truncated = true; break }
         rows.push({ identity: `session:${target.sessionId}`, pid: null, parentPid: null, creationTime: 0,
           type: target.kind === 'terminal' ? 'terminal' : 'agent', provider: target.kind,
           sessionIds: [target.sessionId], sharedSessionCount: 1, cpuPercent: null, memoryBytes: null, quality: 'unsupported' })
-        if (!target.pid) missingRoots++
+        // A root that existed in the topology but vanished before the usage
+        // query is just as unavailable as a missing PID. Count both so the UI
+        // does not show full coverage beside an unsupported placeholder.
+        missingRoots++
       }
       // Replace the entire interval map: exited identities cannot accumulate
       // forever or leak a previous CPU baseline into a later PID reuse.
@@ -147,7 +177,7 @@ export class NativeProcessSampler {
       this.cached = {
         rows, total: rows.length,
         summary: {
-          sampledAt: Date.now(), count: rows.filter(row => row.pid !== null).length, sessionCount: context.targets.filter(target => !target.exited).length,
+          contextGeneration: context.generation, sampledAt: Date.now(), count: rows.filter(row => row.pid !== null).length, sessionCount: context.targets.filter(target => !target.exited).length,
           cpuPercent: cpu.length ? cpu.reduce((a, b) => a + b, 0) : null,
           memoryBytes: memory.length ? memory.reduce((a, b) => a + b, 0) : null,
           missingRoots, truncated,

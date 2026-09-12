@@ -1,4 +1,4 @@
-import { readElectronProcesses } from '@main/performance/ElectronProcessSource.js'
+import { readElectronDiagnostics } from '@main/performance/ElectronProcessSource.js'
 import { app, ipcMain } from 'electron'
 import type { BrowserWindow, WebContents } from 'electron'
 import { execFile } from 'node:child_process'
@@ -451,7 +451,8 @@ function logFreezeSnapshot(input: {
         eventLoop: mainMemory.eventLoopDelay,
       },
       outboundIpc: getOutboundIpcDiagnostics(),
-      electronProcesses: readElectronProcesses(),
+      electronProcesses: readElectronDiagnostics().processes,
+      electronProcessesSampledAt: readElectronDiagnostics().sampledAt,
     })
   } catch (error) {
     terminalFreezeLog('renderer freeze snapshot failed', diagnosticFailureMetadata(error))

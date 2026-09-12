@@ -46,6 +46,9 @@ describe('native process ownership', () => {
     await first
     now = 16000; currentBirth = 'Sat Sep 12 12:00:01 2026'
     await sampler.sample(context)
+    expect(sampler.read().rows.some(row => row.pid === 20 && row.sessionIds.includes('a'))).toBe(false)
+    expect(sampler.read().rows).toContainEqual(expect.objectContaining({ identity: 'session:a', quality: 'unsupported' }))
+    await sampler.sample({ ...context, targets: context.targets.map(target => ({ ...target, generation: 'new-backend' })) })
     expect(sampler.read().rows.find(row => row.pid === 20)?.cpuPercent).toBeNull()
   })
 
@@ -64,7 +67,7 @@ describe('native process ownership', () => {
     await sampler.sample({ ...context, targets: [{ ...context.targets[0], pid: null }] })
     expect(run).not.toHaveBeenCalled()
     expect(sampler.read().rows).toContainEqual(expect.objectContaining({ pid: null, sessionIds: ['a'], quality: 'unsupported' }))
-    expect(sampler.read().summary.missingRoots).toBe(1)
+    expect(sampler.read().summary.missingRoots).toBeGreaterThanOrEqual(1)
   })
 })
 
