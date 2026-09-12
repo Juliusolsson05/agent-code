@@ -72,6 +72,10 @@ export type UiShellState = {
    * autosave from recording half-finished reorder attempts that the
    * user later cancels with Escape. */
   reorderTabsOpen: boolean
+  /** When true, the Merge Project Tabs modal is open (#913). Same rationale
+   *  as reorderTabsOpen: the target/source draft is modal-local; the merge
+   *  lands on WorkspaceState only when the user confirms. */
+  mergeProjectTabsOpen: boolean
   /** When true, the Pin Agents multi-select modal is open.
    *
    * Same rationale for living on uiShell as reorderTabsOpen above:

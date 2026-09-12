@@ -18,6 +18,7 @@ import { ReorderTabsSurface } from '@renderer/features/workspace/surfaces/Reorde
 import { PinAgentsSurface } from '@renderer/features/dispatch-pin/surfaces/PinAgentsSurface'
 import { BuryPanePromptSurface } from '@renderer/features/workspace/surfaces/BuryPanePromptSurface'
 import { RootManagementConfirmSurface } from '@renderer/features/workspace/surfaces/RootManagementConfirmSurface'
+import { MergeProjectTabsSurface } from '@renderer/features/workspace/surfaces/MergeProjectTabsSurface'
 import { CloseConfirmationSurface } from '@renderer/features/workspace/surfaces/CloseConfirmationSurface'
 import { ViewPromptsSurface } from '@renderer/features/workspace/surfaces/ViewPromptsSurface'
 import { ConversationsSurface } from '@renderer/features/conversations/surfaces/ConversationsSurface'
@@ -100,6 +101,9 @@ export const modalSurfaces: SurfaceEntry[] = [
   // closes the palette first; it must paint over every established modal so
   // the warning is never hidden behind the surface it is warning about.
   { id: 'root-management-confirm', Component: RootManagementConfirmSurface },
+  // Appended per the contract above; opened only from a command that closes
+  // the palette first (#913).
+  { id: 'merge-project-tabs', Component: MergeProjectTabsSurface },
   // Appended per the contract above. Opened only from a session command that
   // closes the palette first, so it stacks over established modals by order.
   { id: 'tldr-history', Component: TldrHistorySurface },

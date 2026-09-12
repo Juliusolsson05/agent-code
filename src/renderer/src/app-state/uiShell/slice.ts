@@ -18,6 +18,7 @@ export const createUiShellSlice: StateCreator<
   tileTabsModalOpen: false,
   tileTabsInitialSelectedIds: [],
   reorderTabsOpen: false,
+  mergeProjectTabsOpen: false,
   pinAgentsOpen: false,
   settingsPageOpen: false,
   agentTitlePromptSessionId: null,
@@ -121,6 +122,10 @@ export const createUiShellSlice: StateCreator<
     set({ reorderTabsOpen: true }, false, 'uiShell/openReorderTabs'),
   closeReorderTabs: () =>
     set({ reorderTabsOpen: false }, false, 'uiShell/closeReorderTabs'),
+  openMergeProjectTabs: () =>
+    set({ mergeProjectTabsOpen: true }, false, 'uiShell/openMergeProjectTabs'),
+  closeMergeProjectTabs: () =>
+    set({ mergeProjectTabsOpen: false }, false, 'uiShell/closeMergeProjectTabs'),
 
   openPinAgents: () =>
     set({ pinAgentsOpen: true }, false, 'uiShell/openPinAgents'),

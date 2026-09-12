@@ -189,6 +189,8 @@ export type CommandContext = {
     openNewTabPicker: () => void
     openTileTabs: () => void
     openReorderTabs: () => void
+    /** Open the Merge Project Tabs modal (#913); the modal performs the merge. */
+    openMergeProjectTabs: () => void
     openSettings: () => void
     /** Open the command palette. Exists so ⌘⇧P has a command to name instead
      *  of a hard-coded callback that nothing could rebind or collision-check. */
@@ -286,6 +288,7 @@ export type CommandContext = {
     closeBulkProviderSwitch: () => void
     closeConversations: () => void
     closeReorderTabs: () => void
+    closeMergeProjectTabs: () => void
     closePinAgents: () => void
     closePathPicker: () => void
     closePalette: () => void
@@ -338,6 +341,8 @@ export type CommandContext = {
     remotePanelOpen: boolean
     /** The Reorder Tabs modal is on screen. */
     reorderTabsOpen: boolean
+    /** The Merge Project Tabs modal is on screen. */
+    mergeProjectTabsOpen: boolean
     /** The Pin Agents modal is on screen. */
     pinAgentsOpen: boolean
     /** The path picker (New Tab / Resume) is on screen. */

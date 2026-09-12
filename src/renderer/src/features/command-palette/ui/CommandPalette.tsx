@@ -266,6 +266,7 @@ function OpenCommandPalette({
     )
   }, [openTileTabsModal, workspace.activeTab, workspace.tileTabs])
   const onReorderTabsRequest = useAppStore(state => state.openReorderTabs)
+  const openMergeProjectTabs = useAppStore(state => state.openMergeProjectTabs)
   const onSettingsRequest = useAppStore(state => state.openSettingsPage)
   const openPaletteAction = useAppStore(state => state.openCommandPalette)
   const openViewPrompts = useAppStore(state => state.openViewPrompts)
@@ -288,6 +289,7 @@ function OpenCommandPalette({
   const closeBulkProviderSwitch = useAppStore(state => state.closeBulkProviderSwitch)
   const closeConversations = useAppStore(state => state.closeConversations)
   const closeReorderTabs = useAppStore(state => state.closeReorderTabs)
+  const closeMergeProjectTabs = useAppStore(state => state.closeMergeProjectTabs)
   const closePinAgents = useAppStore(state => state.closePinAgents)
   const closePathPicker = useAppStore(state => state.closePathPicker)
   const openUsageModal = useAppStore(state => state.openUsageModal)
@@ -357,6 +359,7 @@ function OpenCommandPalette({
   const conversationsOpen = useAppStore(state => state.conversationsOpen)
   const remotePanelOpen = useAppStore(state => state.remotePanelOpen)
   const reorderTabsOpen = useAppStore(state => state.reorderTabsOpen)
+  const mergeProjectTabsOpen = useAppStore(state => state.mergeProjectTabsOpen)
   const pinAgentsOpen = useAppStore(state => state.pinAgentsOpen)
   const pathPickerOpen = useAppStore(state => state.pathPickerOpen)
   const gitBarOpen = useAppStore(state => state.gitBarOpen)
@@ -569,6 +572,7 @@ function OpenCommandPalette({
         openNewTabPicker: onNewTabRequest,
         openTileTabs: onTileTabsRequest,
         openReorderTabs: onReorderTabsRequest,
+        openMergeProjectTabs,
         openSettings: onSettingsRequest,
         // Reachable through the gateway (keybinding, native menu, programmatic)
         // but never rendered as a palette row — see
@@ -595,6 +599,7 @@ function OpenCommandPalette({
         closeBulkProviderSwitch,
         closeConversations,
         closeReorderTabs,
+        closeMergeProjectTabs,
         closePinAgents,
         closePathPicker,
         openUsageModal,
@@ -652,6 +657,7 @@ function OpenCommandPalette({
         conversationsOpen,
         remotePanelOpen,
         reorderTabsOpen,
+        mergeProjectTabsOpen,
         pinAgentsOpen,
         pathPickerOpen,
         gitBarOpen,
@@ -687,6 +693,7 @@ function OpenCommandPalette({
       onNewTabRequest,
       onTileTabsRequest,
       onReorderTabsRequest,
+      openMergeProjectTabs,
       onSettingsRequest,
       openViewPrompts,
       openTldrHistory,
@@ -706,6 +713,7 @@ function OpenCommandPalette({
       closeBulkProviderSwitch,
       closeConversations,
       closeReorderTabs,
+      closeMergeProjectTabs,
       closePinAgents,
       closePathPicker,
       openUsageModal,
@@ -761,6 +769,7 @@ function OpenCommandPalette({
       conversationsOpen,
       remotePanelOpen,
       reorderTabsOpen,
+      mergeProjectTabsOpen,
       pinAgentsOpen,
       pathPickerOpen,
       gitBarOpen,
