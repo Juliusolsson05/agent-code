@@ -37,3 +37,55 @@ printing or retaining its contents. The 256 MiB final-size check is a memory
 bound; polling detects disk overflow during execution but is not a hard quota.
 Versioned upstream evidence: anomalyco/opencode v1.18.30,
 packages/opencode/src/cli/cmd/export.ts and packages/opencode/src/index.ts.
+
+## Merge with main (e9ac8bdf)
+
+Main's e9ac8bdf (Refs #864) had meanwhile bounded every CLI call with
+execFile's `timeout` plus an owned abort listener, both SIGKILL, with a 30 s
+default, so a hung empty-session import cannot hold OpenCode Terminal startup
+or survive stop(). The merge (36bf9581) rebuilt both bounds by hand on
+`spawn` and kept main's invariants: settle only from `close`, cancellation
+wins over timeout or overflow, and an already-stopped caller creates nothing.
+Timeout errors now read `timed out after N ms` instead of execFile's
+`Command failed: ...`.
+
+## Review round (2026-09-12)
+
+Two independent reviews of the merged head (Codex: request changes; Claude:
+approve with comments) led to these changes:
+
+- A spawn that fails before stdio exists (EMFILE/ENFILE) has no stderr stream.
+  The `child.stderr!` dereference ran before the lifecycle listeners, so the
+  next-tick child `error` became an uncaught exception, which the crash hooks
+  turn into an app exit. The listeners now come first and stderr is optional.
+- Every kill path SIGKILLed only the direct child. OpenCode's npm launcher
+  spawns the native binary with inherited stdio and cannot forward SIGKILL, so
+  the native process kept the capture and stderr pipe open, and timeout, stop
+  and overflow never settled. The merge had also dropped execFile's stdio
+  destruction. Commands now run in a private process group on POSIX, and one
+  terminate() destroys stderr and then SIGKILLs the group. Resolving the native
+  binary was rejected: it would couple Agent Code to OpenCode's install layout
+  and still miss helpers a native CLI starts itself.
+- The capture was removed only by an async finally, which an app quit does not
+  await. It is now unlinked, with its directory, before spawn and read through
+  the retained descriptor with positional reads, because the child moved the
+  shared offset. The import payload is still read by path and is out of scope.
+- Transform export and import inherited the 30 s startup default. They now
+  pass 5 minutes, while the startup import and profile probes keep 30 s. The
+  14.6 MB export's duration was never measured and was not measured in this
+  round, because no live run against real sessions was authorized. Transforms
+  carry no AbortSignal, so the deadline is their only bound.
+- Declined: an app-wide shutdown drain for finite CLI operations. With the
+  unlink, nothing persists across a quit. An orphaned child on quit predates
+  this branch (execFile had the same exposure). An app-owned operation drain
+  belongs to the quit lifecycle and operation ownership work in #919 and #918.
+- The comments no longer claim that `spawn` lacks `timeout`/`killSignal`.
+  Spawn failure must now report ENOENT, and the late-stop replay is covered.
+
+Regression evidence: real two-process launcher trees for timeout, stop,
+overflow, and a descendant that left the group; a spawn-failure double without
+stderr that errors on the next tick; a zero link count observed inside the
+running child; and no named capture while an import child runs. With its fix
+reverted, each regression failed for the expected reason: an uncaught EMFILE,
+a call still pending past its bound, a surviving descendant, a link count of 1,
+or a named capture directory.
