@@ -79,6 +79,9 @@ describe('mergeProjectTabs', () => {
       sessionId: 'b-audit', surface: 'dispatch', projectTabId: 'tab-e', projectTabTitle: 'agent-code', projectTabIndex: 1, detachedAt: 1000,
     })
     expect(state.detachedSessions['b-verify']).toMatchObject({ projectTabId: 'tab-e', projectTabIndex: 1, detachedAt: 10 })
+    // The target's OWN records moved from letter C to B when tab B left, and
+    // must not keep the old letter next to the ones they were just joined by.
+    expect(state.detachedSessions['e-tldr']).toMatchObject({ projectTabId: 'tab-e', projectTabIndex: 1, detachedAt: 20 })
     expect(state.buried[0]).toMatchObject({ sourceTabId: 'tab-e', sourceTabTitle: 'agent-code', sourceTabIndex: 1 })
     expect(state.pinnedSessionIds).toEqual(['e-grok'])
     // Row filters that named a removed tab name the target once; the legacy
@@ -92,6 +95,28 @@ describe('mergeProjectTabs', () => {
       detachedFromGrid: ['b-audit', 'g-review'], repointedDetached: ['b-verify'], repointedBuried: ['g-buried'],
     })
     expect(resolveTabSessions(state, 'tab-startup')).toEqual(['pitch'])
+  })
+
+  it('skips a source pane with no metadata and counts a pane that already had a detached record once', () => {
+    const before = fixture()
+    // `phantom` is a leaf the ownership rules already treat as absent;
+    // `g-review` is both a grid pane of G and, by a broken earlier save, a
+    // detached record of G.
+    before.tabs[3]!.root = {
+      type: 'split', direction: 'horizontal', ratio: 0.5,
+      a: { type: 'leaf', sessionId: 'g-review' },
+      b: { type: 'leaf', sessionId: 'phantom' },
+    }
+    before.detachedSessions['g-review'] = {
+      sessionId: 'g-review', surface: 'dispatch', projectTabId: 'tab-g', projectTabTitle: 'agent-code', projectTabIndex: 3, detachedAt: 40,
+    }
+    const result = mergeProjectTabs(before, { targetTabId: 'tab-e', sourceTabIds: ['tab-g'], now: 1000 })
+    if (!result.ok) throw new Error(result.reason)
+    expect(collectOwnedSessionIds(result.state)).toEqual(collectOwnedSessionIds(before))
+    expect(result.state.detachedSessions['phantom']).toBeUndefined()
+    expect(result.state.detachedSessions['g-review']).toMatchObject({ projectTabId: 'tab-e', projectTabIndex: 2, detachedAt: 40 })
+    expect(result.summary.detachedFromGrid).toEqual([])
+    expect(result.summary.repointedDetached).toEqual(['g-review'])
   })
 
   it('refuses a target among the sources, an unknown tab, and an empty selection', () => {
@@ -110,6 +135,13 @@ describe('retargetTileTabsAfterMerge', () => {
     expect(retargetTileTabsAfterMerge(tiled, ['tab-g'], 'tab-e')).toMatchObject({ tabIds: ['tab-b', 'tab-e'], focusedTabId: 'tab-e' })
     const ratios = retargetTileTabsAfterMerge(tiled, ['tab-g'], 'tab-e')!.ratios
     expect(ratios[0]! / ratios[1]!).toBeCloseTo(0.4)
+  })
+
+  it('gives a tiled source\'s slot to a target that was not tiled, so the kept tab stays on screen', () => {
+    const twoTiled: TileTabsState = { tabIds: ['tab-b', 'tab-g'], focusedTabId: 'tab-g', direction: 'vertical', ratios: [0.3, 0.7] }
+    expect(retargetTileTabsAfterMerge(twoTiled, ['tab-g'], 'tab-e')).toMatchObject({ tabIds: ['tab-b', 'tab-e'], focusedTabId: 'tab-e', ratios: [0.3, 0.7] })
+    // Two tiled sources into an untiled target: one slot, the other leaves.
+    expect(retargetTileTabsAfterMerge(tiled, ['tab-b', 'tab-g'], 'tab-startup')).toMatchObject({ tabIds: ['tab-startup', 'tab-e'], focusedTabId: 'tab-startup' })
   })
 
   it('exits tiled tabs when fewer than two remain, and leaves an absent layout absent', () => {

@@ -301,27 +301,38 @@ export function useTabActions(
 
   const mergeTabs = useCallback(
     (targetTabId: TabId, sourceTabIds: TabId[]): MergeProjectTabsResult => {
-      // Plan against the live snapshot for validation and the toast, then
-      // apply the SAME plan through functional updates so a workspace
-      // mutation racing the modal cannot be overwritten by a stale value.
+      // The plan is made INSIDE the updater against `prev`, never against
+      // `refs.stateRef`, which is refreshed on render and can lag a workspace
+      // mutation that landed between the modal's last paint and this click.
+      // Reading the result back out of the updater is only sound because
+      // `setState` is the zustand store setter, which applies the updater
+      // synchronously (pane.ts relies on the same property). Every side
+      // effect below is gated on that result: a refused merge must leave
+      // tiled tabs, Spotlight, Reader and the toast exactly as they were,
+      // otherwise the user is told "merged" while the tabs are still there.
       // No kill, no spawn, no runtime change: every session keeps its
       // process and its runtime; only tab affinity moves.
       const now = Date.now()
-      const planned = mergeProjectTabs(refs.stateRef.current, { targetTabId, sourceTabIds, now })
-      if (!planned.ok) {
+      // A holder object rather than a `let`: TypeScript keeps a `let`
+      // narrowed to its initial value across the updater call (it cannot see
+      // the closure assign), which would type the merged branch as `never`.
+      const applied: { result: MergeProjectTabsResult | null } = { result: null }
+      setState(prev => {
+        const planned = mergeProjectTabs(prev, { targetTabId, sourceTabIds, now })
+        applied.result = planned
+        return planned.ok ? planned.state : prev
+      })
+      const result = applied.result ?? { ok: false as const, reason: 'nothing_to_merge' as const }
+      if (!result.ok) {
         showToast(
-          planned.reason === 'target_is_source'
+          result.reason === 'target_is_source'
             ? 'Merge cancelled — the target tab cannot be one of the merged tabs.'
-            : planned.reason === 'unknown_tab'
+            : result.reason === 'unknown_tab'
               ? 'Merge cancelled — a tab changed while the dialog was open. Try again.'
               : 'Nothing to merge.',
         )
-        return planned
+        return result
       }
-      setState(prev => {
-        const applied = mergeProjectTabs(prev, { targetTabId, sourceTabIds, now })
-        return applied.ok ? applied.state : prev
-      })
       setTileTabs(prev => retargetTileTabsAfterMerge(prev, sourceTabIds, targetTabId))
       // Spotlight and Reader zoom a GRID pane of a tab; the pane they named
       // is now a Dispatch agent of another tab, so the takeover has nothing
@@ -329,16 +340,16 @@ export function useTabActions(
       const removed = new Set(sourceTabIds)
       setSpotlight(prev => (prev && removed.has(prev.tabId) ? null : prev))
       setReaderMode(prev => (prev && removed.has(prev.tabId) ? null : prev))
-      const { summary } = planned
+      const { summary } = result
       const moved = summary.detachedFromGrid.length + summary.repointedDetached.length
       showToast(
         `Merged ${summary.removedTabIds.length} tab${summary.removedTabIds.length === 1 ? '' : 's'} into `
         + `${tabIndexLabel(summary.targetIndex)} · ${summary.targetTitle} — `
         + `${moved} agent${moved === 1 ? '' : 's'} now in its Dispatch list`,
       )
-      return planned
+      return result
     },
-    [refs.stateRef, setReaderMode, setSpotlight, setState, setTileTabs, showToast],
+    [setReaderMode, setSpotlight, setState, setTileTabs, showToast],
   )
 
   const reorderTabs = useCallback(

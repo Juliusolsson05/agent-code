@@ -49,13 +49,32 @@ type Props = {
     provider: AgentProvider,
   ) => void | Promise<void>
   /**
-   * Tabs that already hold a session in `expandedPath` (#913). When any
-   * exist, Enter and the primary button go to the first one instead of
-   * creating a duplicate tab; "new tab anyway" keeps the deliberate case.
-   * Absent means the caller has no workspace to consult (tests, embedding).
+   * Tabs that already hold a session in `expandedPath` (#913), in tab order,
+   * with `current` marking the active tab. When any exist, Enter and the
+   * primary button go to one of them instead of creating a duplicate tab;
+   * "new tab anyway" and Shift+Enter keep the deliberate case. Absent means
+   * the caller has no workspace to consult (tests, embedding).
    */
-  openTabsForPath?: (expandedPath: string) => Array<{ tabId: string; label: string }>
+  openTabsForPath?: (expandedPath: string) => OpenTabHolder[]
   onActivateTab?: (tabId: string) => void
+}
+
+export type OpenTabHolder = { tabId: string; label: string; current: boolean }
+
+/**
+ * Which holder Enter goes to when several tabs hold the folder.
+ *
+ * WHY the current tab wins: ⌘T pre-fills the active tab's folder, so with
+ * tabs B, E and G all on the same repository and G active, "first in tab
+ * order" would jump the user from G to B for pressing Enter on the default.
+ * Staying put is the only answer that never surprises. Otherwise the first
+ * holder in tab order is taken, which is a guess the operator capability
+ * `projects.open` deliberately refuses to make (`ambiguous_owner`): an
+ * operator has no "current tab" and no hint on screen, while the user here
+ * sees every holder named and can still pick "new tab anyway".
+ */
+function preferredHolder(holders: OpenTabHolder[]): OpenTabHolder | null {
+  return holders.find(holder => holder.current) ?? holders[0] ?? null
 }
 
 export function PathPickerModal({
@@ -192,8 +211,10 @@ export function PathPickerModal({
   // Decided at submit time from the freshly expanded path, never from the
   // debounced `resolvedPath` the hint below renders: the user can press Enter
   // before the debounce settles, and the choice must follow the path that is
-  // actually about to be opened.
-  const holdersOf = (expandedPath: string) =>
+  // actually about to be opened. The buttons are the one exception — see the
+  // footer: a button does what its label says, and the label is what the
+  // debounced hint knew.
+  const holdersOf = (expandedPath: string): OpenTabHolder[] =>
     (onActivateTab && openTabsForPath ? openTabsForPath(expandedPath) : [])
 
   const submit = async (options: { forceNewTab?: boolean } = {}) => {
@@ -208,11 +229,14 @@ export function PathPickerModal({
       // user input.
       const result = await window.api.expandCwd(value)
       if (result.ok) {
-        const holders = holdersOf(result.path)
-        if (holders.length > 0 && !options.forceNewTab) {
+        const holder = options.forceNewTab ? null : preferredHolder(holdersOf(result.path))
+        if (holder) {
           // The folder is already on screen: go there instead of minting the
-          // duplicate tab that ⌘T used to create every time (#913).
-          onActivateTab!(holders[0]!.tabId)
+          // duplicate tab that ⌘T used to create every time (#913). When the
+          // holder is the current tab this is a stay-put that only closes
+          // the picker; the primary button says so ("stay here"). The
+          // provider toggle is irrelevant on this path — nothing is spawned.
+          onActivateTab!(holder.tabId)
           return
         }
         await onAccept(result.path, provider)
@@ -267,6 +291,8 @@ export function PathPickerModal({
 
   // Display only; `submit` re-derives from the path it is about to open.
   const alreadyOpenAs = resolvedPath && !pendingCreatePath ? holdersOf(resolvedPath) : []
+  const preferred = preferredHolder(alreadyOpenAs)
+  const otherHolders = alreadyOpenAs.filter(holder => holder !== preferred)
 
   return (
     <Dialog
@@ -319,7 +345,7 @@ export function PathPickerModal({
               setValue(next)
               if (error) setError(null)
             }}
-            onSubmit={() => void submit()}
+            onSubmit={({ shift }) => void submit({ forceNewTab: shift })}
             onCancel={onCancel}
             placeholder="/path/to/project or ~/…"
             directoriesOnly
@@ -354,7 +380,9 @@ export function PathPickerModal({
             </span>
           ) : (
             <span className="text-muted">
-              tab completes · ↑↓ to browse · enter to open · esc to cancel
+              {preferred
+                ? 'tab completes · ↑↓ to browse · enter to go there · ⇧enter for a new tab anyway · esc to cancel'
+                : 'tab completes · ↑↓ to browse · enter to open · esc to cancel'}
             </span>
           )}
         </div>
@@ -375,9 +403,12 @@ export function PathPickerModal({
           </div>
         )}
 
-        {alreadyOpenAs.length > 0 && (
+        {preferred && (
           <div role="status" className="mt-2 flex-shrink-0 text-[11px] text-muted">
-            Already open as {alreadyOpenAs.map(tab => tab.label).join(', ')}.
+            {preferred.current
+              ? `Already open in this tab (${preferred.label})`
+              : `Already open as ${preferred.label}`}
+            {otherHolders.length > 0 ? `, and as ${otherHolders.map(tab => tab.label).join(', ')}` : ''}.
           </div>
         )}
 
@@ -390,7 +421,14 @@ export function PathPickerModal({
           >
             cancel
           </Button>
-          {alreadyOpenAs.length > 0 ? (
+          {/* WHY every button forces the action its label names: the labels
+              follow the debounced hint, and a click can land before the hint
+              has caught up with the typed path. Letting `submit` re-decide
+              would then switch tabs under a button that said "new session".
+              Enter is the only submit that decides at submit time, because
+              Enter carries no label to honour and reuse is the safer default
+              for a keypress that outran the hint. */}
+          {preferred ? (
             <>
               <Button
                 type="button"
@@ -402,16 +440,16 @@ export function PathPickerModal({
               </Button>
               <Button
                 type="button"
-                onClick={() => void submit()}
+                onClick={() => { onActivateTab?.(preferred.tabId) }}
                 disabled={busy}
               >
-                go to tab
+                {preferred.current ? 'stay here' : 'go to tab'}
               </Button>
             </>
           ) : (
             <Button
               type="button"
-              onClick={() => void submit()}
+              onClick={() => void submit({ forceNewTab: true })}
               disabled={busy || value.trim() === ''}
             >
               {pendingCreatePath ? 'create & open' : 'new session'}

@@ -1,6 +1,6 @@
 # Reuse an open project tab on New Tab, and Merge Project Tabs
 
-Status: implemented, tests green, PR open for review.
+Status: implemented, tests green, PR #914 open; first orchestrated review (REQUEST CHANGES, B1 modal seeding race) addressed, re-review pending.
 PR: [agent-code#914](https://github.com/Juliusolsson05/agent-code/pull/914). Merge requires explicit approval.
 
 Feature Issue: [agent-code#913](https://github.com/Juliusolsson05/agent-code/issues/913).

@@ -86,12 +86,14 @@ export function PathPickerSurface() {
   // The same rule the operator's projects.open applies (#913): a tab holds a
   // directory when one of its sessions runs there. Labelled the way Dispatch
   // names tabs so "Already open as E · agent-code" points at something the
-  // user can find in the tab bar.
+  // user can find in the tab bar. `current` lets the picker prefer the tab
+  // the user is standing in, which ⌘T pre-fills for and Enter must not leave.
   const openTabsForPath = useCallback(
     (expandedPath: string) =>
       findTabsHoldingDirectory(workspace.state, expandedPath).map(tab => ({
         tabId: tab.id,
         label: `${tabIndexLabel(workspace.state.tabs.indexOf(tab))} · ${tab.title}`,
+        current: tab.id === workspace.state.activeTabId,
       })),
     [workspace.state],
   )
