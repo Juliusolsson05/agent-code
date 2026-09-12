@@ -31,6 +31,7 @@ import { controlReference as reference28 } from '@renderer/features/usage/contro
 import { controlReference as reference29 } from '@renderer/features/voice-dictation/controlReference'
 import { controlReference as reference30 } from '@renderer/features/workflows/controlReference'
 import { controlReference as reference31 } from '@renderer/features/worktrees/controlReference'
+import { controlReference as reference33 } from '@renderer/features/conversations/controlReference'
 import { controlReference as tldrReference } from '@renderer/features/tldr/controlReference'
 
 export const featureReferences = [
@@ -67,6 +68,7 @@ export const featureReferences = [
   ...reference30,
   ...reference31,
   ...reference32,
+  ...reference33,
   ...tldrReference,
 ]
 
@@ -82,6 +84,7 @@ export const referenceOwnership = {
   "voice-dictation": "dictation",
   "tile-tabs": "tiled-tabs",
   "path-picker": "path-picker",
+  "conversations": "conversations",
   "global-editor": "global-editor",
   "workspace": "workspace",
   "setup": "setup",

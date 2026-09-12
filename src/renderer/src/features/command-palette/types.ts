@@ -194,7 +194,7 @@ export type CommandContext = {
      *  of a hard-coded callback that nothing could rebind or collision-check. */
     openCommandPalette: () => void
     openViewPrompts: (sessionId: string) => void
-    openPromptSearch: () => void
+    openConversations: (opts: { focusSearch: boolean }) => void
     openAgentActivity: () => void
     /** Open the read-only Keyboard Shortcuts reference. */
     openKeyboardShortcuts: () => void
@@ -207,6 +207,10 @@ export type CommandContext = {
     openColorFlagPicker: (sessionId: string) => void
     /** Open the title editor for the captured command-target agent. */
     openAgentTitlePrompt: (sessionId: string) => void
+    /** Open the Root Agent Code Management confirmation for the captured
+     *  command-target agent (#906). The dialog, not the command, performs the
+     *  reload, so a declined warning leaves the session untouched. */
+    openRootManagementPrompt: (sessionId: string) => void
     openUsageModal: () => void
     openKeyVault: () => void
     toggleGitBar: () => void
@@ -259,7 +263,6 @@ export type CommandContext = {
      *  modal itself, not the store. */
     openPinAgents: () => void
     setAggressiveDebugPersistence: (enabled: boolean) => void
-    enterResumeMode: () => void
     enterBuriedMode: () => void
     enterKillBuriedMode: () => void
     enterPromptTemplateMode: () => void
@@ -280,7 +283,7 @@ export type CommandContext = {
     closeAgentActivity: () => void
     closeCloseOldAgents: () => void
     closeBulkProviderSwitch: () => void
-    closePromptSearch: () => void
+    closeConversations: () => void
     closeReorderTabs: () => void
     closePinAgents: () => void
     closePathPicker: () => void
@@ -328,8 +331,8 @@ export type CommandContext = {
     closeOldAgentsOpen: boolean
     /** The Switch Agents modal is on screen. */
     bulkProviderSwitchOpen: boolean
-    /** The Prompt Search modal is on screen. */
-    promptSearchOpen: boolean
+    /** The Conversations picker is on screen. */
+    conversationsOpen: boolean
     /** The Remote Control panel is on screen. */
     remotePanelOpen: boolean
     /** The Reorder Tabs modal is on screen. */

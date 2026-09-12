@@ -253,7 +253,7 @@ describe('closing a detached Dispatch session is undoable (#671)', () => {
       kind: 'terminal',
       resumeSessionId: undefined,
       recoverTmuxName: 'agent-code-aTerm',
-      builtInMcpDomains: undefined,
+      builtInMcpOverrides: {},
     })
     expect(undo.getState().detachedSessions['aTerm2' as SessionId]).toMatchObject({
       sessionId: 'aTerm2',
