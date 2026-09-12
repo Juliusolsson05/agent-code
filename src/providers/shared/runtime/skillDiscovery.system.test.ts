@@ -1,6 +1,6 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { discoverClaudeSkillRoots } from '@providers/claude/runtime/skillDiscovery.js'
 import { compareCodexPluginVersions, discoverCodexSkillRoots } from '@providers/codex/runtime/skillDiscovery.js'
@@ -27,6 +27,7 @@ const context = (homeDirectory: string, cwd: string, environment: Record<string,
 const paths = (discovery: AgentSkillDiscovery, predicate: (root: AgentSkillRoot) => boolean) =>
   discovery.roots.filter(predicate).map(root => root.path)
 const skill = (name: string) => `---\nname: ${name}\ndescription: ${name} description\n---\n`
+const AGENT_PLUGIN_SCHEMA = 'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json'
 afterEach(async () => {
   await Promise.all(temporary.splice(0).map(path => rm(path, { recursive: true, force: true })))
 })
@@ -51,12 +52,15 @@ describe('Claude skill roots', () => {
     ])
   })
 
-  it('falls back to the main checkout commands from a linked worktree, but never for skills', async () => {
+  it('falls back to the main checkout commands only from a validated linked worktree, and never for skills', async () => {
     const base = await home()
     const main = join(base, 'code', 'app')
-    await write(join(main, '.git', 'worktrees', 'feat', 'commondir'), '../..\n')
+    const worktreeGitDirectory = join(main, '.git', 'worktrees', 'feat')
     const worktree = join(main, '.worktrees', 'feat')
+    await write(join(worktreeGitDirectory, 'commondir'), '../..\n')
     await write(join(worktree, '.git'), 'gitdir: ../../.git/worktrees/feat\n')
+    // `git worktree add` writes the realpath back-link; Claude requires it.
+    await write(join(worktreeGitDirectory, 'gitdir'), `${join(await realpath(worktree), '.git')}\n`)
     const discovery = await discoverClaudeSkillRoots(context(base, worktree))
     expect(paths(discovery, root => root.source === 'project' && root.layout === 'children')).toEqual([
       join(worktree, '.claude', 'skills'),
@@ -69,6 +73,16 @@ describe('Claude skill roots', () => {
     const own = await discoverClaudeSkillRoots(context(base, worktree))
     expect(paths(own, root => root.source === 'project' && root.layout === 'commands')).toEqual([
       join(worktree, '.claude', 'commands'),
+    ])
+
+    // Round-two regression: a cloned repository's forged `.git` file and
+    // `commondir` must not pull another repository's commands in.
+    const rogue = join(base, 'rogue')
+    await write(join(rogue, '.git'), 'gitdir: ./fake\n')
+    await write(join(rogue, 'fake', 'commondir'), `${join(main, '.git')}\n`)
+    const forged = await discoverClaudeSkillRoots(context(base, rogue))
+    expect(paths(forged, root => root.source === 'project' && root.layout === 'commands')).toEqual([
+      join(rogue, '.claude', 'commands'),
     ])
   })
 
@@ -153,10 +167,22 @@ describe('Codex skill roots', () => {
     await write(join(codexHome, 'config.toml'), 'project_root_markers = []\n')
     const cwdOnly = await discoverCodexSkillRoots(context(base, cwd, { CODEX_HOME: codexHome }))
     expect(paths(cwdOnly, root => root.source === 'project')).toEqual([join(cwd, '.agents', 'skills')])
-    expect(paths(cwdOnly, root => root.source === 'system')).toContain(join(codexHome, 'skills', '.system'))
+    expect(cwdOnly.roots).toContainEqual(expect.objectContaining({
+      path: join(codexHome, 'skills', '.system'), source: 'system', followDirectorySymlinks: false,
+    }))
   })
 
-  it('resolves plugins like Codex: enabled by default, highest cached version, alternate manifests, explicit paths', async () => {
+  // Round-two regression: repo roots listed before user roots labelled
+  // ~/.agents/skills as Project for an agent launched in home without a repo.
+  it('keeps user labels for a home-level agent without a repository', async () => {
+    const base = await home()
+    await write(join(base, '.agents', 'skills', 'mine', 'SKILL.md'), skill('mine'))
+    const discovery = await discoverCodexSkillRoots(context(base, base))
+    const inventory = await collectInstalledAgentSkills(discovery, { paths: [], notices: [] })
+    expect(inventory.skills.map(({ name, source }) => ({ name, source }))).toEqual([{ name: 'mine', source: 'personal' }])
+  })
+
+  it('resolves plugins like Codex: default enablement, highest version, manifest formats, and path rules', async () => {
     const base = await home()
     const cwd = join(base, 'work')
     await mkdir(cwd, { recursive: true })
@@ -167,6 +193,8 @@ describe('Codex skill roots', () => {
       '[plugins."beta@market"]', 'enabled = false',
       '[plugins."gamma@market"]', 'enabled = true',
       '[plugins."delta@market"]',
+      '[plugins."epsilon@market"]',
+      '[plugins."zeta@market"]',
     ].join('\n'))
     // alpha: no `enabled` key, two versions where lexical order picks the wrong
     // one, and a `.claude-plugin` manifest whose explicit path replaces skills/.
@@ -175,26 +203,36 @@ describe('Codex skill roots', () => {
     await json(join(alpha, '.claude-plugin', 'plugin.json'), { name: 'alpha', skills: './selected' })
     await mkdir(join(alpha, 'skills'), { recursive: true })
     await json(join(cache, 'beta', '1.0.0', '.codex-plugin', 'plugin.json'), { name: 'beta' })
-    // gamma: `local` beats a higher version; invalid declared paths fall back to
-    // the default folder; migrated legacy command skills are a root too.
+    // gamma: `local` beats a higher version; every declared path is one Codex
+    // rejects, so the default folder applies; migrated command skills add a root.
     const gamma = join(cache, 'gamma', 'local')
-    await json(join(gamma, '.codex-plugin', 'plugin.json'), { name: 'gamma', skills: ['../escape', 'no-dot-slash'] })
+    await json(join(gamma, '.codex-plugin', 'plugin.json'), { name: 'gamma', skills: ['../escape', 'no-dot-slash', './', './a/../b'] })
     await mkdir(join(gamma, 'skills'), { recursive: true })
     await mkdir(join(gamma, '.codex-plugin', 'migrated-command-skills'), { recursive: true })
     await json(join(cache, 'gamma', '9.9.9', '.codex-plugin', 'plugin.json'), { name: 'gamma' })
-    // delta: agent-plugin format — direct children only.
+    // delta: Agent Plugins format — the manifest cannot redirect skills, and
+    // only direct children of `./skills` count.
     const delta = join(cache, 'delta', '1.0.0')
-    await json(join(delta, 'plugin.json'), { $schema: 'https://agent-plugins.org/schemas/plugin.json', name: 'delta' })
-    await mkdir(join(delta, 'skills'), { recursive: true })
+    await json(join(delta, 'plugin.json'), { $schema: AGENT_PLUGIN_SCHEMA, name: 'delta', skills: './elsewhere' })
+    // epsilon: claims the Agent Plugins format with an unsupported schema.
+    await json(join(cache, 'epsilon', '1.0.0', 'plugin.json'), { $schema: 'https://agent-plugins.org/schemas/2.0.0/plugin.schema.json', name: 'epsilon' })
+    // zeta: a symlinked legacy manifest makes Codex reject the plugin.
+    await json(join(base, 'elsewhere.json'), { name: 'zeta' })
+    await mkdir(join(cache, 'zeta', '1.0.0', '.codex-plugin'), { recursive: true })
+    await symlink(join(base, 'elsewhere.json'), join(cache, 'zeta', '1.0.0', '.codex-plugin', 'plugin.json'))
 
     const discovery = await discoverCodexSkillRoots(context(base, cwd))
     expect(discovery.roots.filter(root => root.source === 'plugin')).toEqual([
-      { path: join(alpha, 'selected'), source: 'plugin', sourceLabel: 'alpha', layout: 'recursive', maxDepth: 6 },
-      { path: join(gamma, 'skills'), source: 'plugin', sourceLabel: 'gamma', layout: 'recursive', maxDepth: 6 },
-      { path: join(gamma, '.codex-plugin', 'migrated-command-skills'), source: 'plugin', sourceLabel: 'gamma', layout: 'recursive', maxDepth: 6 },
-      { path: join(delta, 'skills'), source: 'plugin', sourceLabel: 'delta', layout: 'children' },
+      { path: join(alpha, 'selected'), source: 'plugin', sourceLabel: 'alpha', layout: 'recursive', maxDepth: 6, namespace: 'alpha' },
+      { path: join(gamma, 'skills'), source: 'plugin', sourceLabel: 'gamma', layout: 'recursive', maxDepth: 6, namespace: 'gamma' },
+      { path: join(gamma, '.codex-plugin', 'migrated-command-skills'), source: 'plugin', sourceLabel: 'gamma', layout: 'recursive', maxDepth: 6, namespace: 'gamma' },
+      { path: join(delta, 'skills'), source: 'plugin', sourceLabel: 'delta', layout: 'children', namespace: 'delta' },
     ])
-    expect(discovery.notices).toContainEqual(expect.stringContaining('Ignored 2 skill path(s) in the gamma'))
+    expect(discovery.notices).toEqual(expect.arrayContaining([
+      expect.stringContaining('Ignored 4 skill path(s) in the gamma'),
+      expect.stringContaining('epsilon plugin because it declares an unsupported Agent Plugins schema'),
+      expect.stringContaining('zeta plugin because its .codex-plugin/plugin.json is not a regular file'),
+    ]))
   })
 
   it('orders versions by SemVer, including prereleases, before falling back to string order', () => {
@@ -202,13 +240,19 @@ describe('Codex skill roots', () => {
       .toEqual(['1.9.0', '1.10.0-beta.2', '1.10.0-beta.10', '1.10.0', 'local-build'])
   })
 
-  it('applies user skills.config rules and always disables the Agent Code operator skill', async () => {
+  it('applies skills.config selectors like Codex and always disables the Agent Code operator skill', async () => {
     const base = await home()
     const codexHome = join(base, '.codex')
-    await write(join(codexHome, 'config.toml'), '[[skills.config]]\nname = "review"\nenabled = false\n')
+    await write(join(codexHome, 'config.toml'), [
+      '[[skills.config]]', 'name = "  review  "', 'enabled = false',
+      '[[skills.config]]', 'name = "   "', 'enabled = false',
+      '[[skills.config]]', 'name = "both"', 'path = "skills/both/SKILL.md"', 'enabled = false',
+      '[[skills.config]]', 'path = "skills/draft/SKILL.md"', 'enabled = true',
+    ].join('\n'))
     const discovery = await discoverCodexSkillRoots(context(base, base))
     expect(discovery.enablementRules).toEqual([
       { name: 'review', enabled: false },
+      { path: resolve(codexHome, 'skills/draft/SKILL.md'), enabled: true },
       { path: expect.stringMatching(/agent-code-computer-execution[\\/]SKILL\.md$/), enabled: false },
     ])
   })
@@ -220,7 +264,7 @@ describe('OpenCode skill roots', () => {
     const cwd = join(base, 'work')
     await mkdir(cwd, { recursive: true })
     const claudeOff = await discoverOpencodeSkillRoots(context(base, cwd, { OPENCODE_DISABLE_CLAUDE_CODE_SKILLS: 'TRUE' }))
-    expect(claudeOff.roots.some(root => root.path.includes(`${join('', '.claude')}`))).toBe(false)
+    expect(claudeOff.roots.some(root => root.path.includes('.claude'))).toBe(false)
     expect(paths(claudeOff, root => root.source === 'personal')).toContain(join(base, '.agents', 'skills'))
 
     const customConfig = join(base, 'custom-opencode')

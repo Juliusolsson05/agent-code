@@ -170,8 +170,12 @@ describe('installed skill inventory', () => {
       ...[0, 1, 2].map(index => `Could not read skill metadata: ${join(base, `plugin-${index}`, 'SKILL.md')}`),
       'Could not read metadata for 9 more skill files.',
     ])
+    // Each malformed plugin root costs two units — the `<root>/SKILL.md` probe
+    // and the metadata read — so a budget of 4 reaches exactly two reads before
+    // the remaining ten roots are refused. A count of 4 would mean probes had
+    // stopped being charged again.
     const budgeted = await collectInstalledAgentSkills({ roots, notices: [] }, unmanaged, { entries: 4 })
-    expect(budgeted.notices.filter(notice => notice.startsWith('Could not read skill metadata'))).toHaveLength(4)
+    expect(budgeted.notices.filter(notice => notice.startsWith('Could not read skill metadata'))).toHaveLength(2)
     expect(budgeted.notices).toContain('Skill discovery reached its scan limit; the list may be incomplete.')
   })
 
@@ -204,5 +208,83 @@ describe('installed skill inventory', () => {
       { name: 'draft', disabled: false },
       { name: 'review', disabled: true },
     ])
+  })
+
+  // Round-two regression: a global visited-folder set read a folder named by
+  // two roots only under the first layout, silently dropping plugin commands.
+  it('reads one folder under every layout that names it', async () => {
+    const base = await temp()
+    await write(join(base, 'shared', 'a', 'SKILL.md'), skill('a'))
+    await write(join(base, 'shared', 'command.md'), 'A plugin command')
+    const result = await collectInstalledAgentSkills({
+      roots: [
+        root(join(base, 'shared'), 'children', { source: 'plugin' }),
+        root(join(base, 'shared'), 'commands', { source: 'plugin', optionalFrontmatter: true, stopAtSkillDirectory: true }),
+      ],
+      notices: [],
+    }, unmanaged)
+    expect(names(result)).toEqual(['a', 'command'])
+  })
+
+  // Round-two regression: missing command roots were `stat`ed without charge,
+  // so a manifest listing thousands of absent paths escaped the budget.
+  it('charges root probes to the budget so absent roots cannot starve or bypass the limit', async () => {
+    const base = await temp()
+    await write(join(base, 'late', 'valid', 'SKILL.md'), skill('late'))
+    const missing = Array.from({ length: 20 }, (_, index) => [
+      root(join(base, `absent-command-${index}`), 'commands', { optionalFrontmatter: true }),
+      root(join(base, `absent-skill-${index}`), 'children', { rootMayBeSkill: true }),
+    ]).flat()
+    const roots = [...missing, root(join(base, 'late'), 'children')]
+    const budgeted = await collectInstalledAgentSkills({ roots, notices: [] }, unmanaged, { entries: 10 })
+    expect(names(budgeted)).toEqual([])
+    expect(budgeted.notices).toContain('Skill discovery reached its scan limit; the list may be incomplete.')
+    const unbudgeted = await collectInstalledAgentSkills({ roots, notices: [] }, unmanaged)
+    expect(names(unbudgeted)).toEqual(['late'])
+    expect(unbudgeted.notices).toEqual([])
+  })
+
+  it('skips hidden skill folders and linked folders when the provider does', async () => {
+    const base = await temp()
+    await write(join(base, 'root', '.hidden', 'SKILL.md'), skill('hidden'))
+    await write(join(base, 'root', 'visible', 'SKILL.md'), skill('visible'))
+    await write(join(base, 'elsewhere', 'SKILL.md'), skill('linked'))
+    await symlink(join(base, 'elsewhere'), join(base, 'root', 'linked'), 'dir')
+    const strict = await collectInstalledAgentSkills({
+      roots: [root(join(base, 'root'), 'children', { followDirectorySymlinks: false })],
+      notices: [],
+    }, unmanaged)
+    expect(names(strict)).toEqual(['visible'])
+    const permissive = await collectInstalledAgentSkills({
+      roots: [root(join(base, 'root'), 'children', { includeHidden: true })],
+      notices: [],
+    }, unmanaged)
+    expect(names(permissive)).toEqual(['hidden', 'linked', 'visible'])
+  })
+
+  // Round-two regression: Codex qualifies plugin skill names before applying
+  // name rules, so `sample:review` must disable only the plugin copy.
+  it('qualifies namespaced plugin skills for display and name-rule matching', async () => {
+    const base = await temp()
+    await write(join(base, 'plugin', 'review', 'SKILL.md'), skill('review'))
+    await write(join(base, 'personal', 'review', 'SKILL.md'), skill('review'))
+    const result = await collectInstalledAgentSkills({
+      roots: [
+        root(join(base, 'personal'), 'children'),
+        root(join(base, 'plugin'), 'children', { source: 'plugin', namespace: 'sample' }),
+      ],
+      notices: [],
+      enablementRules: [{ name: 'sample:review', enabled: false }],
+    }, unmanaged)
+    expect(result.skills.map(({ name, disabled }) => ({ name, disabled: disabled === true }))).toEqual([
+      { name: 'review', disabled: false },
+      { name: 'sample:review', disabled: true },
+    ])
+    const unqualified = await collectInstalledAgentSkills({
+      roots: [root(join(base, 'plugin'), 'children', { source: 'plugin', namespace: 'sample' })],
+      notices: [],
+      enablementRules: [{ name: 'review', enabled: false }],
+    }, unmanaged)
+    expect(unqualified.skills.map(({ disabled }) => disabled === true)).toEqual([false])
   })
 })

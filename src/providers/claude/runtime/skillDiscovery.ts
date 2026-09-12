@@ -1,4 +1,4 @@
-import { stat } from 'node:fs/promises'
+import { realpath, stat } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'
 import { asRecord } from '@shared/lib/asRecord.js'
 import type { AgentSkillDiscovery, AgentSkillDiscoveryContext, AgentSkillRoot } from '@shared/types/agentSkills.js'
@@ -12,8 +12,8 @@ import {
 // Source of truth for every rule below is the vendored CLI, not the docs:
 // `vendor/claude-code-src/full/skills/loadSkillsDir.ts` (getSkillDirCommands),
 // `utils/markdownConfigLoader.ts` (getProjectDirsUpToHome,
-// loadMarkdownFilesForSubdir), `utils/plugins/pluginLoader.ts` and
-// `utils/plugins/loadPluginCommands.ts`.
+// loadMarkdownFilesForSubdir), `utils/git.ts` (resolveCanonicalRoot),
+// `utils/plugins/pluginLoader.ts` and `utils/plugins/loadPluginCommands.ts`.
 
 // utils/envUtils.ts isEnvTruthy.
 function envTruthy(value: string | undefined): boolean {
@@ -56,23 +56,31 @@ function projectDirectories(cwd: string, home: string, gitRoot: string | null): 
 }
 
 /**
- * The main checkout behind a linked worktree (findCanonicalGitRoot). A worktree
- * `.git` file points at `<main>/.git/worktrees/<name>`, whose `commondir` leads
- * back to `<main>/.git`. Submodules and ordinary checkouts have no such chain
- * and resolve to themselves.
+ * utils/git.ts resolveCanonicalRoot: the main checkout behind a linked worktree.
+ *
+ * `.git` and `commondir` are repository-controlled, so Claude only follows the
+ * chain when it has the exact shape `git worktree add` creates: the worktree's
+ * git dir is a direct child of `<common>/worktrees/`, and its `gitdir` back-link
+ * realpaths to this checkout's own `.git`. The round-two review showed that
+ * skipping those checks let a cloned repo's forged `commondir` pull another
+ * repository's `.claude/commands` into the panel. Bare-repo worktrees resolve
+ * to the common dir itself; submodules and ordinary checkouts to themselves.
  */
 async function canonicalGitRoot(gitRoot: string): Promise<string> {
   try {
-    const pointer = await readSkillFile(join(gitRoot, '.git'), 4096)
-    const gitDirectory = pointer?.match(/^gitdir:\s*(.+)$/m)?.[1]?.trim()
-    if (!gitDirectory) return gitRoot
-    const absoluteGitDirectory = resolve(gitRoot, gitDirectory)
-    const common = (await readSkillFile(join(absoluteGitDirectory, 'commondir'), 4096))?.trim()
+    const pointer = (await readSkillFile(join(gitRoot, '.git'), 4096))?.trim()
+    if (!pointer?.startsWith('gitdir:')) return gitRoot
+    const worktreeGitDirectory = resolve(gitRoot, pointer.slice('gitdir:'.length).trim())
+    const common = (await readSkillFile(join(worktreeGitDirectory, 'commondir'), 4096))?.trim()
     if (!common) return gitRoot
-    const commonDirectory = resolve(absoluteGitDirectory, common)
-    return basename(commonDirectory) === '.git' ? dirname(commonDirectory) : gitRoot
+    const commonDirectory = resolve(worktreeGitDirectory, common)
+    if (dirname(worktreeGitDirectory) !== join(commonDirectory, 'worktrees')) return gitRoot
+    const backlink = (await readSkillFile(join(worktreeGitDirectory, 'gitdir'), 4096))?.trim()
+    if (!backlink || await realpath(backlink) !== join(await realpath(gitRoot), '.git')) return gitRoot
+    return basename(commonDirectory) === '.git' ? dirname(commonDirectory) : commonDirectory
   } catch {
-    // `.git` is a directory (ordinary checkout) or unreadable: no worktree hop.
+    // `.git` is a directory (ordinary checkout), a link file is missing, or
+    // something is unreadable: Claude falls back to the checkout itself.
     return gitRoot
   }
 }
@@ -92,10 +100,11 @@ function manifestPaths(value: unknown): string[] {
  * walked with `stopAtSkillDir: true`, and a skill path may itself be a skill
  * folder (loadSkillsFromDirectory checks `<path>/SKILL.md` first). Command-only
  * plugins previously produced nothing; Claude loads them, so they are listed.
+ * Claude reads both with plain `readdir`, so dot-folders are included.
  */
 async function pluginRoots(installPath: string, pluginName: string, notices: string[]): Promise<AgentSkillRoot[]> {
   const manifest = await readSkillJson(join(installPath, '.claude-plugin', 'plugin.json'), notices)
-  const base = { source: 'plugin' as const, sourceLabel: pluginName, optionalFrontmatter: true }
+  const base = { source: 'plugin' as const, sourceLabel: pluginName, optionalFrontmatter: true, includeHidden: true }
   const roots: AgentSkillRoot[] = []
   const escaped = () => notices.push(`Ignored a path in the ${pluginName} plugin manifest that points outside the plugin folder.`)
 
@@ -121,11 +130,8 @@ async function pluginRoots(installPath: string, pluginName: string, notices: str
   }
   for (const path of commandPaths) {
     const inside = pathInsidePlugin(installPath, path)
-    if (inside) {
-      roots.push({ ...base, path: inside, layout: 'commands', includeHidden: true, stopAtSkillDirectory: true })
-    } else {
-      escaped()
-    }
+    if (inside) roots.push({ ...base, path: inside, layout: 'commands', stopAtSkillDirectory: true })
+    else escaped()
   }
   return roots
 }
@@ -137,8 +143,9 @@ export async function discoverClaudeSkillRoots(context: AgentSkillDiscoveryConte
   const policyHome = managedHome()
   const notices = ['Claude bundled skills are supplied by the CLI and are not exposed as installed SKILL.md files.']
   // Claude skill files may omit frontmatter entirely; the folder names the skill.
+  // loadSkillsFromSkillsDir uses a plain readdir, so dot-folders count.
   const skillsFolder = (path: string, source: AgentSkillRoot['source']): AgentSkillRoot =>
-    ({ path, source, layout: 'children', optionalFrontmatter: true })
+    ({ path, source, layout: 'children', includeHidden: true, optionalFrontmatter: true })
   // Legacy commands are found with `rg --files --hidden --follow --glob *.md`.
   const commandsFolder = (path: string, source: AgentSkillRoot['source']): AgentSkillRoot =>
     ({ path, source, layout: 'commands', includeHidden: true, optionalFrontmatter: true })

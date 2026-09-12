@@ -92,6 +92,42 @@ describe('Agent Code custom skill management', () => {
     expect(await readFile(stateFilePath, 'utf8')).toBe(originalState)
   })
 
+  // Round-two test gap: attribution must come from the resolved target registry.
+  // Conventions resolve to each current target's skill file, and a status for a
+  // retired (moved) provider root must never grant the Agent Code label even
+  // though its historical copy still exists on disk.
+  it('attributes Conventions per current target and never labels a retired root', async () => {
+    const { targets, service } = await harness()
+    expect(await service.save({ expectedRevision: 0, enabled: true, markdown: '# Rules' })).toMatchObject({ ok: true })
+    expect((await service.getInstalledSkillLocations('codex')).paths).toEqual(
+      expect.arrayContaining(targets.map(targetValue => targetValue.skillFile)),
+    )
+
+    const root = await temporaryDirectory()
+    const stateFilePath = join(root, 'state', 'conventions.json')
+    const oldTarget = target('agents-standard', join(root, 'old', 'skills'))
+    const newTarget = target('agents-standard', join(root, 'new', 'skills'))
+    const original = new AgentCodeConventionsService({
+      stateFilePath,
+      homeDirectory: root,
+      resolveTargets: async () => ({ targets: [oldTarget], unsupportedProviders: [] }),
+    })
+    await original.initialize()
+    await original.createCustomSkill({
+      expectedRevision: 0, name: 'moving-skill', description: 'Follows the root', markdown: '# Moving', enabled: true,
+    })
+    const restarted = new AgentCodeConventionsService({
+      stateFilePath,
+      homeDirectory: root,
+      resolveTargets: async () => ({ targets: [newTarget], unsupportedProviders: [] }),
+    })
+    await restarted.initialize()
+    const locations = await restarted.getInstalledSkillLocations('codex')
+    expect(locations.paths).toContain(customPath(newTarget, 'moving-skill'))
+    expect(locations.paths).not.toContain(customPath(oldTarget, 'moving-skill'))
+    expect(await readFile(customPath(oldTarget, 'moving-skill'), 'utf8')).toContain('# Moving')
+  })
+
   it('keeps drafts app-owned and independently materializes multiple enabled skills', async () => {
     const { targets, service } = await harness()
     const drafted = await service.createCustomSkill({

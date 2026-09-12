@@ -1,6 +1,6 @@
 # Agent Status installed skills
 
-Status: implemented; review round 1 findings fixed and re-review pending. Issue: #900. PR: #903.
+Status: implemented; review rounds 1 and 2 findings fixed; round-3 re-review pending. Issue: #900. PR: #903.
 
 ## Outcome
 
@@ -15,19 +15,21 @@ This is an installed inventory, not a claim that the running model loaded a body
    the renderer supplies the selected provider/project context over typed IPC.
 2. Keep provider-specific discovery rules behind the provider registry. Each
    adapter declares WHERE skills live and HOW each root is laid out (`children`,
-   `recursive`, `commands`), derived from the vendored provider source rather
-   than documentation. Each adapter also owns its project ancestry, because the
-   three providers stop at different boundaries. Never infer enabled plugins
-   from caches alone.
+   `recursive`, `commands`, plus hidden-folder, folder-symlink and namespace
+   policy), derived from the vendored provider source rather than
+   documentation. Each adapter owns its project ancestry and root order, because
+   the providers stop at different boundaries and deduplicate first-wins. Never
+   infer enabled plugins from caches alone.
 3. Reuse a public, metadata-only managed-skill service projection to attribute
    Agent Code deployments. Paths come from the resolved target registry and the
    canonical document, never from UI `displayPath` strings. Do not import
    persistence/ownership internals or introduce another writer. Skill bodies
    remain in main and do not enter diagnostics, IPC, or the status UI.
-4. Bound all filesystem work with one budget (listings, entries, and metadata
-   reads), deduplicate physical files, cap failure notices, and surface
-   incomplete discovery. Opening the panel performs no installations,
-   configuration mutations, native prompts, or provider process launches.
+4. Bound all filesystem work with one budget (root probes, listings, entries,
+   and metadata reads), fence symlink cycles per root walk, deduplicate physical
+   files across roots, cap failure notices, and surface incomplete discovery.
+   Opening the panel performs no installations, configuration mutations, native
+   prompts, or provider process launches.
 5. Add an Installed Skills section following existing dense semantic styling.
    Fetch on target/context changes, explicit refresh, and managed-skill updates;
    fence stale responses and show loading, empty, partial/error, and shell states.
@@ -37,9 +39,9 @@ This is an installed inventory, not a claim that the running model loaded a body
 ## Validation
 
 - Deterministic filesystem tests use isolated temporary roots, covering managed
-  attribution, per-provider layouts and boundaries, plugin resolution,
-  duplicates, symlinks, malformed or oversized metadata, the shared budget, and
-  source failures without executing skills.
+  attribution, per-provider layouts, boundaries and root order, plugin
+  resolution, duplicates, symlinks, malformed or oversized metadata, the shared
+  budget, and source failures without executing skills.
 - Renderer tests cover the displayed inventory, disabled marking,
   empty/error/terminal states, refreshing, and switching targets while
   discovery is pending.
@@ -55,29 +57,35 @@ comments explain each provider rule and asynchronous ownership boundary.
 
 ## Implemented scope
 
-- Claude (`loadSkillsDir.ts`, `markdownConfigLoader.ts`, `pluginLoader.ts`):
-  policy, user, and project `skills/` folders as direct children only; project
-  ancestry from cwd up to the nearest `.git` (file or directory), never home.
-  Legacy `commands/` Markdown is scanned recursively, with SKILL.md owning its
-  folder, and a linked worktree without its own commands falls back to the main
-  checkout's. Plugin enablement comes from user, launch-directory project/local,
-  and policy settings; project installs must match the launch directory exactly.
-  Manifest `skills`/`commands` paths replace the defaults and must stay inside
-  the plugin. Command-only plugins are listed. Bundled skills compiled into the
-  CLI are disclosed as unlisted.
-- Codex (`host_roots.rs`, `loader/`, `core-plugins`): project roots from the
-  `project_root_markers` root (default `.git`) to cwd — `.agents/skills`, plus
-  `.codex/skills` where a project `.codex` exists. User roots are
-  `$CODEX_HOME/skills` and `~/.agents/skills`; defaults are
-  `$CODEX_HOME/skills/.system` unless `skills.bundled.enabled = false`; admin is
-  `/etc/codex/skills`. All are recursive to six segments with hidden folders
-  skipped. Plugins are enabled unless `enabled = false`, and the loaded version
-  is `local` or the highest SemVer. Manifest lookup covers agent-plugin root
-  `plugin.json` (direct children) and `.codex-plugin`/`.claude-plugin`/`.cursor-plugin`
-  manifests (recursive plus migrated command skills). Explicit `./` paths
-  replace `skills/`. `[[skills.config]]` rules and Agent Code's session-level
-  disable of its external-operator skill mark skills Disabled. Remote-catalog
-  plugins and project-config plugin/skill settings are disclosed.
+- Claude (`loadSkillsDir.ts`, `markdownConfigLoader.ts`, `git.ts`,
+  `pluginLoader.ts`): policy, user, and project `skills/` folders as direct
+  children only (dot-folders included); project ancestry from cwd up to the
+  nearest `.git` (file or directory), never home. Legacy `commands/` Markdown is
+  scanned recursively, with SKILL.md owning its folder. A validated linked
+  worktree without its own commands falls back to the main checkout's; the
+  `worktrees/` parent and gitdir back-link checks apply, and bare-repo worktrees
+  resolve to the common dir. Plugin enablement comes from user, launch-directory
+  project/local, and policy settings; project installs must match the launch
+  directory exactly. Manifest `skills`/`commands` paths replace the defaults and
+  must stay inside the plugin. Command-only plugins are listed. Bundled skills
+  compiled into the CLI are disclosed as unlisted.
+- Codex (`host_roots.rs`, `loader/`, `core-plugins`, `utils/plugins`): root order
+  is project `.codex/skills` layers, then `$CODEX_HOME/skills`,
+  `~/.agents/skills`, `.system` defaults (unless `skills.bundled.enabled =
+  false`; folder symlinks ignored), `/etc/codex/skills`, plugins, and finally
+  repo `.agents/skills` from the `project_root_markers` root (default `.git`) to
+  cwd. Host roots are recursive to six segments with hidden folders skipped.
+  Plugins are enabled unless `enabled = false`, and the loaded version is `local`
+  or the highest SemVer. Agent Plugins (root `plugin.json` with the exact v1.0.0
+  schema and a valid name) always use `./skills` direct children; other
+  agent-plugins.org schemas reject the plugin. Legacy
+  `.codex-plugin`/`.claude-plugin`/`.cursor-plugin` manifests reject the plugin
+  when their folder or file is not real, and use `./`-relative, `..`-free
+  declared paths that replace `skills/`, plus migrated command skills. Plugin
+  skills are named `<plugin>:<name>`. `[[skills.config]]` rules (one selector,
+  trimmed names) and Agent Code's session-level operator exclusion mark skills
+  Disabled. Remote-catalog plugins and project-config plugin/skill settings are
+  disclosed.
 - OpenCode (`skill/index.ts`, `config/paths.ts`): `.claude`/`.agents` `skills/**`
   (hidden included) at home and from cwd up to the worktree, and
   `{skill,skills}/**` in the XDG config dir, `~/.opencode`, project `.opencode`,
@@ -86,36 +94,58 @@ comments explain each provider rule and asynchronous ownership boundary.
 
 ## Review round 1 (Claude + Codex orchestration agents, both CHANGES REQUIRED)
 
-Confirmed against vendored provider source and fixed, each with a regression test:
+Confirmed against vendored provider source and fixed in `951d7a0e`, each with a
+regression test:
 
 - Claude project walk crossed the git root, and ancestor settings/installs
-  controlled plugins. Both agents found this, and the vendored
-  `getProjectDirsUpToHome` stop logic confirmed it.
-- A single generic walk matched no provider: it fabricated Claude skills from a
-  stray `skills/SKILL.md`, listed nested archives, and missed Codex nested skills.
-  Fixed with per-root layouts.
-- Metadata reads under skill-path roots bypassed the scan budget, causing
-  unbounded parsing and notices in main. Now one budget plus capped notices.
-- Plugin resolution: explicit manifest paths replace the default folder; Codex
-  alternate manifests and agent-plugin format; Codex default-enabled plugins and
-  highest-version selection; Claude command-only plugins; manifest paths escaping
-  the plugin root.
-- Missing roots: Codex project `.codex/skills`; OpenCode singular `skill/`,
-  `~/.opencode`, Claude-compatibility disable flags, case-insensitive flags.
-- Codex disabled skills, including Agent Code's own external-operator exclusion,
-  were presented as usable.
-- Managed attribution parsed the UI `displayPath` (breaks on `~\` paths).
+  controlled plugins.
+- A single generic walk matched no provider; replaced by per-root layouts.
+- Metadata reads under skill-path roots bypassed the scan budget.
+- Plugin resolution gaps for both providers, and escaping manifest paths.
+- Missing Codex `.codex/skills` and OpenCode roots/flags.
+- Disabled Codex skills presented as usable.
+- Managed attribution parsed the UI `displayPath`.
 
-Not adopted, with reason:
+## Review round 2 (both CHANGES REQUIRED; all round-1 fixes confirmed)
 
-- No main-process guard against overlapping scans. The renderer already discards
-  stale responses, and each scan is bounded by the shared budget; cancellation
-  plumbing through IPC would add machinery without changing what is displayed.
+Confirmed and fixed, each with a regression test:
+
+- (Codex) Missing command roots and root probes were not charged to the budget.
+- (Codex) Agent Plugins manifests were read with legacy rules (declared
+  `skills` honored, unsupported schemas accepted).
+- (Codex) Plugin disable-by-name rules matched bare instead of
+  `<plugin>:<name>` names.
+- (Codex) A global visited-folder set suppressed a second layout over the same
+  folder.
+- (Claude) Branch conflicted with main in `registry.main.ts`; merged and
+  resolved.
+- (Claude) Worktree canonical-root resolution skipped Claude's validation,
+  letting a forged `commondir` add another repository's commands.
+- (Claude) Codex root order labelled `~/.agents/skills` as Project for a
+  home-level agent.
+- (Claude) No test covered registry-based managed attribution.
+- (Claude nits) Codex manifest `./` and `..` paths, symlinked legacy manifests,
+  hidden children for Codex agent plugins, System-scope folder symlinks, and
+  `skills.config` selector rules.
+
+## Not adopted, with reasons
+
+- No main-process guard against overlapping scans: the renderer discards stale
+  responses and each scan is bounded by the shared budget.
 - OpenCode `skills.paths`/`skills.urls`, Codex remote-catalog plugins, and
   project-config plugin settings are not reproduced. Doing so needs each
-  provider's full layered config loader (or a network pull), which would be a
-  second, drifting implementation; the panel discloses these instead.
+  provider's full layered config loader or a network pull, which would be a
+  second, drifting implementation; the panel discloses them instead.
+- One shared budget across roots instead of Codex's per-root limits: exhaustion
+  is reported in the panel, and per-root budgets would multiply worst-case
+  main-process work by the number of roots.
 
-Verification after fixes: both TypeScript projects type-check with no errors;
-focused system tests (inventory, provider discovery, managed projection) and
-renderer tests pass.
+## Verification after round-2 fixes
+
+- The branch includes current `main` (merge `78ee198f`); both TypeScript projects
+  type-check with no errors on the merged tree.
+- Focused system suites pass (inventory, provider discovery, and the Custom,
+  Conventions, and Installed managed-skill services): 65 tests. Agent Status
+  renderer tests pass: 6.
+- A read-only scan of real provider folders on a development machine completed
+  without errors or scan-limit hits for Claude, Codex, and OpenCode.

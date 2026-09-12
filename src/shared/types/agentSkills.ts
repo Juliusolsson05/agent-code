@@ -38,9 +38,10 @@ export type AgentSkillsSnapshot = {
  * `skills/archive/old/SKILL.md` it never loads; Codex skills nested inside
  * other skills were missed. Each adapter now states its provider's real rule.
  *
- * - `children`: Claude `skills/` folders — only `<root>/<name>/SKILL.md`
- *   (`vendor/claude-code-src/full/skills/loadSkillsDir.ts` loadSkillsFromSkillsDir;
- *   plugin skill paths additionally accept `<root>/SKILL.md` via `rootMayBeSkill`).
+ * - `children`: Claude `skills/` folders and Codex agent plugins — only
+ *   `<root>/<name>/SKILL.md` (`vendor/claude-code-src/full/skills/loadSkillsDir.ts`
+ *   loadSkillsFromSkillsDir; Codex `SkillDiscoveryMode::DirectChildren`). Claude
+ *   plugin skill paths additionally accept `<root>/SKILL.md` via `rootMayBeSkill`.
  * - `recursive`: Codex and OpenCode — every `SKILL.md` below the root up to
  *   `maxDepth`, including skills nested inside another skill's folder.
  * - `commands`: Claude legacy/plugin commands — every `*.md`, recursively; a
@@ -62,18 +63,33 @@ export type AgentSkillRoot = {
    * omitted the collector's own safety ceiling applies and hitting it is reported.
    */
   maxDepth?: number
-  /** `recursive`/`commands`: descend into dot-directories below the root. */
+  /** Descend into (or, for `children`, accept) dot-directories below the root. */
   includeHidden?: boolean
+  /**
+   * Treat linked folders below the root as folders (default true). Codex
+   * ignores directory symlinks under its System scope
+   * (`ext/skills/src/loader/host.rs` DirectorySymlinkPolicy::Ignore).
+   */
+  followDirectorySymlinks?: boolean
   /** `commands` only: a directory holding `SKILL.md` is a leaf; do not descend. */
   stopAtSkillDirectory?: boolean
   /** Claude permits omitted name/description/frontmatter; other providers do not. */
   optionalFrontmatter?: boolean
+  /**
+   * Codex exposes a plugin's skills as `<plugin>:<name>` and applies
+   * `[[skills.config]]` name rules to that qualified name
+   * (`ext/skills/src/loader/namespace.rs` qualify). When set, both the listed
+   * name and name-rule matching use the qualified form; matching the bare
+   * frontmatter name missed `sample:review` rules and let an unqualified rule
+   * wrongly disable plugin skills.
+   */
+  namespace?: string
 }
 
 /**
  * One ordered enablement rule. Later rules override earlier ones for the skills
  * they match, exactly like Codex `SkillConfigRules::resolve_disabled_paths`.
- * Path rules name the skill's `SKILL.md`; name rules match frontmatter names.
+ * Path rules name the skill's `SKILL.md`; name rules match (qualified) names.
  */
 export type AgentSkillEnablementRule =
   | { path: string; enabled: boolean }
