@@ -259,7 +259,12 @@ export function useComposerKeybinds({
       // id observed at Enter.
       ...(runtime.sessionRunId ? { sessionRunId: runtime.sessionRunId } : {}),
     })
-    workspace.beginOptimisticSubmit(sessionId)
+    // Kept for the two paths below that retract the optimistic claim: the
+    // queue settle and the nothing-written unwind. Each may revert only the
+    // `submitting` claim THIS submit wrote, and this token (null when the stamp
+    // was skipped) is the only proof of which claim that is. See
+    // OptimisticSubmitStamp in hook/actions/streaming.ts for the two-submit race.
+    const optimisticStamp = workspace.beginOptimisticSubmit(sessionId)
     if (caps.usesOptimisticUserEcho) {
       // Codex does not reliably give us a structured user
       // message at submit time the way Claude does. Seed the
@@ -282,7 +287,7 @@ export function useComposerKeybinds({
       // paste-commit wait / plain fast path) live in
       // providers/<kind>/renderer/composerSubmit.ts with their race
       // rationale. This site keeps only the kind-agnostic machinery.
-      await caps.composerSubmit({
+      const acceptance = await caps.composerSubmit({
         sessionId,
         input,
         draftImages: caps.supportsImageAttachments ? draftImages : [],
@@ -329,6 +334,18 @@ export function useComposerKeybinds({
         setInputText(acceptedDraft)
       }
       workspace.updateRuntime(sessionId, { promptDelivery: { kind: 'idle' } })
+      // A `queue` acceptance means the provider held the prompt behind a
+      // running turn: no turn will start for it, so the optimistic
+      // `submitting` phase stamped above would otherwise stand until the
+      // RUNNING turn's next stream_phase event (#889). Settle it here — this
+      // is the only place that both owns the stamp and sees the acceptance.
+      // beginOptimisticSubmit already skips the stamp when the renderer can
+      // see the live turn; this covers the pane the renderer believed idle.
+      // The stamp token scopes the settle to this submit's own claim: when this
+      // submit skipped its stamp because an EARLIER submit's `submitting` was
+      // still waiting for its first provider event, that claim is not ours to
+      // revert.
+      if (acceptance?.kind === 'queue') workspace.settleQueuedSubmit(sessionId, optimisticStamp)
       if (caps.supportsImageAttachments && draftImages.length > 0) {
         workspace.setDraftImages(
           sessionId,
@@ -349,6 +366,10 @@ export function useComposerKeybinds({
       reportLifecycle('submit.result', sessionId, {
         provider: submitProvider,
         ok: true,
+        // The acceptance kind is what separates "a turn started" from "Claude
+        // queued it" in the journal. Without it the 2026-09-11 incident needed
+        // the paste-debug journal to explain a pane that looked stuck.
+        acceptance: acceptance?.kind ?? null,
         durationMs: Date.now() - submitStartedAt,
       }, {
         submissionId: pasteId,
@@ -371,6 +392,12 @@ export function useComposerKeybinds({
       // `submitting` phase set before the attempt is provably stale and would
       // otherwise count up forever (see unwindOptimisticSubmit for the three
       // reasons nothing else can clear it).
+      //
+      // Scoped by the stamp token exactly like the queue settle. A submit that
+      // skipped its stamp because an EARLIER submit's `submitting` was still
+      // waiting for its first provider event has nothing of its own to unwind.
+      // Its failure proves nothing about that earlier prompt (#893 review
+      // round 2, R2-1).
       //
       // The `uncertain` case — something WAS written — is intentionally left
       // alone: a turn may genuinely be running and unwinding could hide it.
@@ -396,7 +423,7 @@ export function useComposerKeybinds({
         )
       }
       if (nothingWasWritten) {
-        workspace.unwindOptimisticSubmit(sessionId)
+        workspace.unwindOptimisticSubmit(sessionId, optimisticStamp)
         reportLifecycle('submit.unwound', sessionId, {
           provider: submitProvider,
           code: failed?.code ?? 'threw',
