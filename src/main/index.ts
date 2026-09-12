@@ -6,7 +6,7 @@ import '@main/loadEnv.js'
 import { monitorCoordinator } from '@main/performance/MonitorCoordinator.js'
 import { mainProbe } from '@main/performance/MainProbe.js'
 import { TldrStore } from '@main/tldr/TldrStore.js'
-import { registerTldrIpc } from '@main/tldr/ipc.js'
+import { registerGoalIpc, registerTldrIpc } from '@main/tldr/ipc.js'
 import { TldrEnforcement } from '@main/tldr/enforcement.js'
 import { sweepStaleTldrHookFiles } from '@providers/shared/runtime/tldrHooks.js'
 import { ExternalControlMcpHost } from './externalControlMcp/host'
@@ -806,6 +806,7 @@ async function startApp(): Promise<void> {
     async options => {
       await agentCodeConventionsService.audit()
       if (options.builtInMcpDomains?.includes('tldr')) await agentCodeConventionsService.ensureTldrSkill()
+      if (options.builtInMcpDomains?.includes('goal')) await agentCodeConventionsService.ensureGoalSkill()
     },
     (sessionId, sessionRunId, observation) => {
       sessionRecorders?.recordCodexTranscriptObservation(
@@ -879,15 +880,18 @@ async function startApp(): Promise<void> {
   await externalSettings.initialize()
   app.once('will-quit', () => { void externalSettings.dispose(); controlHost.dispose() })
   const tldrStore = new TldrStore(join(STATE_DIR, 'tldr.json'))
-  const tldrEnforcement = new TldrEnforcement(tldrStore)
+  const goalStore = new TldrStore(join(STATE_DIR, 'goal.json'), undefined, { historyDirectoryName: 'goal-history', label: 'Goal' })
+  const tldrEnforcement = new TldrEnforcement(tldrStore, undefined, goalStore)
   // Before any session can register: the sweep removes every entry, and each
   // one left by an earlier run holds a bearer that run's host already revoked.
   await sweepStaleTldrHookFiles(TLDR_HOOK_RUNTIME_DIR).catch(error => {
     console.warn('[tldr] stale hook file sweep failed:', error)
   })
   registerTldrIpc(tldrStore, tldrEnforcement)
+  registerGoalIpc(goalStore)
   builtInMcpHost.setDependencies({
     tldrStore,
+    goalStore,
     tldrEnforcement,
     orchestrationBridge,
     agentManagementBridge,

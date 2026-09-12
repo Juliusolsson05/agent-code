@@ -6,7 +6,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { BuiltInMcpHttpHost } from '@mcp/runtime/BuiltInMcpHttpHost.js'
 import type { BuiltInMcpDomain } from '@mcp/shared/types.js'
-import { TLDR_GOAL_CONTEXT, TLDR_NEVER_WRITTEN_REASON, TLDR_STALE_REASON, TldrEnforcement } from './enforcement.js'
+import { GOAL_NEVER_SET_REASON, GOAL_SET_CONTEXT, TLDR_GOAL_CONTEXT, TLDR_NEVER_WRITTEN_REASON, TLDR_STALE_REASON, TldrEnforcement } from './enforcement.js'
 import { TldrStore } from './TldrStore.js'
 
 vi.mock('@main/performance/PerformanceService.js', () => ({ performanceService: { record: vi.fn() } }))
@@ -23,9 +23,12 @@ async function setup() {
   const directory = await mkdtemp(join(tmpdir(), 'agent-code-tldr-hooks-'))
   cleanups.push(() => rm(directory, { recursive: true, force: true }))
   const store = new TldrStore(join(directory, 'tldr.json'))
+  // Every scenario runs with Goal available in the host, so a TLDR-only agent
+  // proves the host tells the policy which capabilities it actually enabled.
+  const goalStore = new TldrStore(join(directory, 'goal.json'), undefined, { historyDirectoryName: 'goal-history', label: 'Goal' })
   const host = new BuiltInMcpHttpHost()
-  const enforcement = new TldrEnforcement(store)
-  host.setDependencies({ tldrStore: store, tldrEnforcement: enforcement })
+  const enforcement = new TldrEnforcement(store, undefined, goalStore)
+  host.setDependencies({ tldrStore: store, goalStore, tldrEnforcement: enforcement })
   await host.start()
   cleanups.push(() => host.stop())
   const register = (sessionId: string, domains: BuiltInMcpDomain[] = ['tldr'], tldrIdentity = `summary-${sessionId}`) =>
@@ -39,16 +42,17 @@ async function setup() {
     })
     return { status: response.status, body: await response.json() }
   }
-  const report = async (config: { url: string; bearerToken?: string }, text: string) => {
+  const call = async (config: { url: string; bearerToken?: string }, tool: 'tldr_update' | 'goal_set', text: string) => {
     const client = new Client({ name: 'tldr-hook-test', version: '1' })
     await client.connect(new StreamableHTTPClientTransport(new URL(config.url), {
       requestInit: { headers: { Authorization: `Bearer ${config.bearerToken}` } },
     }))
     cleanups.push(() => client.close())
-    await client.callTool({ name: 'tldr_update', arguments: { text } })
+    await client.callTool({ name: tool, arguments: { text } })
     await settle()
   }
-  return { host, store, enforcement, register, hook, report }
+  const report = (config: { url: string; bearerToken?: string }, text: string) => call(config, 'tldr_update', text)
+  return { host, store, goalStore, enforcement, register, hook, report, call }
 }
 
 describe('TLDR turn hooks through the real MCP host', () => {
@@ -72,6 +76,27 @@ describe('TLDR turn hooks through the real MCP host', () => {
     expect((await hook(agent, token, 'stop')).body).toEqual({ decision: 'block', reason: TLDR_STALE_REASON })
     await report(agent, 'History is implemented and tests pass. Opening the PR next.')
     expect((await hook(agent, token, 'stop', { stop_hook_active: true })).body).toEqual({})
+  })
+
+  it('gives a Goal-only agent its own identity and hooks, and clears the block with goal_set', async () => {
+    const { host, store, goalStore, hook, call } = await setup()
+    // No explicit identity: a main-created agent can register before renderer
+    // metadata exists, and a Goal-only agent must not be left identity-less.
+    const [agent] = host.registerSession({ sessionId: 'goal-only', cwd: '/project', providerKind: 'claude', domains: ['goal'] })
+    expect(agent!.tldrHooks?.baseUrl).toMatch(/\/hooks\/tldr$/)
+    const token = agent!.bearerToken
+
+    expect((await hook(agent!, token, 'user-prompt-submit')).body).toEqual({
+      hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: GOAL_SET_CONTEXT },
+    })
+    expect((await hook(agent!, token, 'stop')).body).toEqual({ decision: 'block', reason: GOAL_NEVER_SET_REASON })
+
+    await call(agent!, 'goal_set', 'Let users see what each agent is for.')
+    expect((await goalStore.read(['goal-only']))['goal-only']).toMatchObject({ text: 'Let users see what each agent is for.' })
+    expect(await store.read(['goal-only'])).toEqual({})
+    await hook(agent!, token, 'user-prompt-submit')
+    await hook(agent!, token, 'post-tool-use', { tool_name: 'Edit' })
+    expect((await hook(agent!, token, 'stop')).body).toEqual({})
   })
 
   it('refuses missing and foreign credentials and stops a revoked process at once', async () => {
