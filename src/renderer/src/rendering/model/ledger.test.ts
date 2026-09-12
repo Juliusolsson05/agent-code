@@ -89,6 +89,79 @@ describe('ledger: ordering law (D4)', () => {
     expect(rowIds(l)).toEqual(['ts', 'no-ts'])
   })
 
+  // #868: Claude Code writes one JSONL line per content block AS THE BLOCK
+  // COMPLETES, in block order, all carrying the message's id (measured:
+  // thinking +0.0s, text +0.84s, tool_use +2.27s, tool_use +4.01s). Live
+  // blocks of the current turn are stamped with the turn's start, so a
+  // committed line of that same message — always earlier content than any
+  // still-live block of it — used to sort BELOW them.
+  it('#868: a committed block of the live turn orders inside that turn, above its still-streaming blocks', () => {
+    const l = run({
+      provider: 'claude',
+      committed: [
+        cand({ id: 'prompt', owner: 'committed', provider: 'claude', contentKind: 'user-text', timestampMs: T0 }),
+        // The text block's line landed while the tool_use input still streams.
+        cand({ id: 'text', owner: 'committed', provider: 'claude', contentKind: 'assistant-text', messageId: 'msg_1', turnId: 'msg_1', timestampMs: T0 + 150 }),
+      ],
+      live: [
+        cand({ id: 'tool', owner: 'semantic-current', provider: 'claude', contentKind: 'tool-use', turnId: 'msg_1', blockIndex: 1, toolUseId: 'tu_1', timestampMs: T0 + 100 }),
+      ],
+      statics: [cand({ id: 'work', owner: 'work', contentKind: 'work' })],
+    })
+    expect(rowIds(l)).toEqual(['prompt', 'text', 'tool', 'work'])
+  })
+
+  it('#868: the anchor is the live turn\'s own slot, so a skewed producer clock cannot pull the row above the previous turn', () => {
+    // Producer time (JSONL) and local receipt time (semantic turn start) are
+    // different clocks. Anchoring to min(own, turn) would let a producer time
+    // that reads earlier than the previous turn's local end jump above it.
+    const l = run({
+      provider: 'claude',
+      committed: [
+        cand({ id: 'text', owner: 'committed', provider: 'claude', contentKind: 'assistant-text', messageId: 'msg_2', turnId: 'msg_2', timestampMs: T0 + 110 }),
+      ],
+      live: [
+        cand({ id: 'prev', owner: 'semantic-history', provider: 'claude', contentKind: 'assistant-text', turnId: 'msg_1', timestampMs: T0 + 120 }),
+        cand({ id: 'tool', owner: 'semantic-current', provider: 'claude', contentKind: 'tool-use', turnId: 'msg_2', blockIndex: 1, toolUseId: 'tu_2', timestampMs: T0 + 130 }),
+      ],
+    })
+    expect(rowIds(l)).toEqual(['prev', 'text', 'tool'])
+  })
+
+  it('#868: a tool result of the live turn stays with its tool call (streaming tool execution)', () => {
+    // Shape of real bundle 2026-06-22 …7733b0fc: Claude Code EXECUTES a tool as
+    // soon as its tool_use block completes, while the message still streams —
+    // tool_use line at 42.238s, its tool_result 9ms later, the next tool_use
+    // at 44.141s, block 2 still live. The result is a user row with no
+    // message.id; only its tool_use_id ties it to the live turn.
+    const l = run({
+      provider: 'claude',
+      committed: [
+        cand({ id: 'use0', owner: 'committed', provider: 'claude', contentKind: 'tool-use', messageId: 'msg_1', turnId: 'msg_1', ownedToolUseIds: ['tu_0'], timestampMs: T0 + 200 }),
+        cand({ id: 'result0', owner: 'committed', provider: 'claude', contentKind: 'tool-result', ownedToolResultIds: ['tu_0'], timestampMs: T0 + 209 }),
+        cand({ id: 'use1', owner: 'committed', provider: 'claude', contentKind: 'tool-use', messageId: 'msg_1', turnId: 'msg_1', ownedToolUseIds: ['tu_1'], timestampMs: T0 + 400 }),
+        cand({ id: 'result1', owner: 'committed', provider: 'claude', contentKind: 'tool-result', ownedToolResultIds: ['tu_1'], timestampMs: T0 + 407 }),
+      ],
+      live: [
+        cand({ id: 'block2', owner: 'semantic-current', provider: 'claude', contentKind: 'tool-use', turnId: 'msg_1', blockIndex: 2, toolUseId: 'tu_2', timestampMs: T0 + 100 }),
+      ],
+    })
+    expect(rowIds(l)).toEqual(['use0', 'result0', 'use1', 'result1', 'block2'])
+  })
+
+  it('#868: a committed row of another message keeps its own time', () => {
+    const l = run({
+      provider: 'claude',
+      committed: [
+        cand({ id: 'other', owner: 'committed', provider: 'claude', contentKind: 'assistant-text', messageId: 'msg_0', turnId: 'msg_0', timestampMs: T0 + 150 }),
+      ],
+      live: [
+        cand({ id: 'tool', owner: 'semantic-current', provider: 'claude', contentKind: 'tool-use', turnId: 'msg_1', blockIndex: 1, toolUseId: 'tu_1', timestampMs: T0 + 100 }),
+      ],
+    })
+    expect(rowIds(l)).toEqual(['tool', 'other'])
+  })
+
   it('empty + work is a legal output (work is lifecycle, not text)', () => {
     const l = run({
       statics: [

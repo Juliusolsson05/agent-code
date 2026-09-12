@@ -1,9 +1,10 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import type { Entry } from '@shared/types/transcript'
 import type { FeedRenderItem } from '@renderer/features/feed/model/renderModel'
 import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { SemanticLiveTurn, SessionRuntime } from '@renderer/session-runtime/state'
+import { foldSemanticEvent } from '@renderer/session-runtime/semantic/foldEvent'
 import { createLedgerInputAdapter } from '@renderer/rendering/adapter/collectLedgerInput'
 import type { RuntimeLedgerSlices } from '@renderer/rendering/adapter/collectLedgerInput'
 import { createSessionLedger } from '@renderer/rendering/model/ledger'
@@ -314,5 +315,50 @@ describe('view bridge: ledger rows drive block-level FeedRenderItems', () => {
     expect(items.filter(item => item.type === 'entry')).toEqual([])
     expect(items.filter(item => item.type === 'absorbed-entry')).toHaveLength(100)
     expect(items.some(item => item.type === 'empty')).toBe(true)
+  })
+})
+
+describe('view bridge: committed blocks of a live turn (#868)', () => {
+  // Built with the production reducer and the event order ClaudeProxyAdapter
+  // publishes, then the committed line Claude Code writes when the text block
+  // completes. Measured on real transcripts: one JSONL line per content block,
+  // written as each block completes, all with the message's id — so the text's
+  // line lands while the next tool call's input is still streaming (for large
+  // tool inputs that window was 10–30s).
+  it('keeps the text of a "text, then tool call" message above its streaming tool call once the text is committed', () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(T + 1_000)
+    let semantic = emptyRuntime().semantic
+    try {
+      for (const event of [
+        { type: 'turn_started', turnId: 'msg_live', role: 'assistant', source: 'proxy' },
+        { type: 'block_started', turnId: 'msg_live', blockIndex: 0, kind: 'text', source: 'proxy' },
+        { type: 'text_delta', turnId: 'msg_live', blockIndex: 0, textSoFar: 'Let me edit the config.', source: 'proxy' },
+        { type: 'block_completed', turnId: 'msg_live', blockIndex: 0, kind: 'text', text: 'Let me edit the config.', source: 'proxy' },
+        { type: 'block_started', turnId: 'msg_live', blockIndex: 1, kind: 'tool_use', toolName: 'Edit', toolUseId: 'toolu_edit', source: 'proxy' },
+        { type: 'tool_input_delta', turnId: 'msg_live', blockIndex: 1, toolName: 'Edit', toolUseId: 'toolu_edit', partialJson: '{"file_path":"/p/c', inputJsonSoFar: '{"file_path":"/p/c', source: 'proxy' },
+      ]) semantic = foldSemanticEvent(semantic, event, 'claude')
+    } finally {
+      clock.mockRestore()
+    }
+
+    const rt = emptyRuntime()
+    rt.semantic = semantic
+    rt.streamPhase = 'responding'
+    rt.entries = [
+      userEntry('u1', T, 'fix the config'),
+      // The text block's JSONL line: same message id as the live turn, stamped
+      // when the block completed (after the turn started).
+      assistantEntry('a_text', 'msg_live', T + 1_840, 'Let me edit the config.'),
+    ]
+    rt.lastJsonlEntryAt = T + 1_840
+
+    const { items, dropped } = bridgeItems(rt)
+    expect(dropped).toEqual([])
+    expect(items.map(shape)).toEqual([
+      'entry:u1',
+      'entry:a_text',
+      'semantic-block:msg_live#1',
+      'work',
+    ])
   })
 })
