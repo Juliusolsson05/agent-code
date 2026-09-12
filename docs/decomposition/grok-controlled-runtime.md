@@ -1,12 +1,13 @@
 # Grok Controlled Runtime and App Adoption
 
-**Status: PROPOSED — awaiting explicit user approval.**
+**Status: APPROVED for staged execution. Stage 1 is next.**
 
-This is the approval boundary for the remaining runtime/app work in #832 / #844.
-The user reasserted staged decomposition before further implementation. Earlier
-approval of the general integration and socket guard does not approve this new
-decomposition. Only this document and its navigation link are being changed in
-this step. Do not begin the recorder or production runtime until approval.
+The user approved this written decomposition after reasserting the
+recorded-evidence-first methodology. Execution in #832 / #844 now begins with
+Stage 1 recording. Approval does not skip independent stage exit gates: do not
+implement the combined runtime before the corpus and catalog are verified.
+Unresolved or contradictory ownership semantics return to the user rather than
+being silently invented in code or test expectations.
 
 ## Plain-language sequence
 
@@ -54,7 +55,7 @@ Conversations discovery, setup, capabilities and built-in MCP include Grok.
 Unsupported behavior is explicit. No uncertain prompt is automatically replayed,
 and no unobserved native session change inherits app authority.
 
-## Proposed ownership rules — included in the approval request
+## Approved ownership rules — reopen if evidence exposes ambiguity
 
 - **Conversation identity:** assigned by the owning runtime, not inferred from
   the newest file, matching text, or a terminal heading. If the native terminal
