@@ -323,6 +323,27 @@ export type PersonalAgentSkillLocation = {
   }) => string
 }
 
+/** One page of provider-owned durable history, newest window or older page. */
+export type ProviderHistoryRequest = {
+  cwd: string
+  providerSessionId: string
+  limit: number
+  /** The renderer's pagination cursor (the provider mapper's history marker). */
+  beforeMarker?: string
+}
+
+export type ProviderHistoryChunk = {
+  entries: Record<string, unknown>[]
+  hasMore: boolean
+  totalEntries?: number
+  /**
+   * Cursor for the next older provider page, when hasMore is true. Main-only
+   * consumers cannot import the renderer mapper to extract this from a record;
+   * the source supplies the marker using its own storage identity contract.
+   */
+  oldestMarker?: string
+}
+
 export type MainProviderConfig = {
   /** Provider identity — see RendererProviderConfig.id. */
   id: AgentProviderKind
@@ -385,6 +406,53 @@ export type MainProviderConfig = {
    * `getProjectDir`.
    */
   resolveTranscriptPath: (cwd: string, providerSessionId: string) => Promise<string | null>
+  /**
+   * Provider-owned prompt delivery protocol (#394 phase 2c).
+   *
+   * WHY this is a capability and not inline branches: prompt delivery
+   * disciplines are OPPOSITE between the two shipped providers —
+   * Codex gates on TUI readiness BEFORE pasting and sends paste+Enter
+   * as one atomic PTY write (its headless accounts the prompt as
+   * submitted on the paste bytes); Claude pastes WITHOUT Enter, waits
+   * for the `[Pasted text #N]` placeholder to prove the paste
+   * committed, then sends Enter separately. The old inline
+   * `if codex … if claude …` in MCP's submitPrompt meant a THIRD
+   * provider fell through to a protocol-free paste+Enter with no
+   * readiness gate and no confirmation (#394 §4.2) — it "worked"
+   * exactly until it didn't, silently.
+   *
+   * The io bag deliberately passes the AgentSession plus a bound
+   * write-with-liveness function rather than the SessionManager:
+   * providers must not depend on the manager (dependency arrow), and
+   * the typed optionals they need (awaitReadyForPrompt /
+   * awaitPastePlaceholder) live on AgentSession since phase 2a.
+   */
+  /**
+   * Optional provider-owned history source, for providers whose durable
+   * transcript is not a JSONL file the shared loader can walk.
+   *
+   * WHY a capability instead of a branch in historyLoader: OpenCode keeps its
+   * transcript in SQLite, which the backwards JSONL reader cannot use. A
+   * `kind === 'opencode'` branch in shared history code is exactly the
+   * third-provider special-casing #394 removed; the registry already owns
+   * "where is this provider's transcript", so it also owns "read a page of it"
+   * when the answer is not a file. When absent, the shared loader keeps
+   * resolving `resolveTranscriptPath` and reading the JSONL file.
+   *
+   * Entries must be the raw records the provider's renderer mapper folds, and
+   * `beforeMarker` is that mapper's history marker, so paging works unchanged.
+   */
+  loadHistoryChunk?: (request: ProviderHistoryRequest) => Promise<ProviderHistoryChunk>
+  /**
+   * Non-file transcript identity. Minting and parsing stay with the provider:
+   * remote backfill has the locator even before a resumed process emits an
+   * entry, and must recover its native id without knowing a provider's URI
+   * grammar. A provider-owned source should supply both halves together.
+   */
+  transcriptLocator?: (providerSessionId: string) => string
+  parseTranscriptLocator?: (locator: string) => string | null
+  /** Database-backed modification evidence for inventory, in place of stat(). */
+  transcriptLastModifiedAt?: (providerSessionId: string) => Promise<number | null>
   /**
    * Provider-owned prompt delivery protocol (#394 phase 2c).
    *

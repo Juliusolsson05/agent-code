@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createFakeSessionFeed } from '@renderer/features/sessionFeed/FakeSessionFeed'
 import { SessionFeedProvider } from '@renderer/features/sessionFeed/SessionFeedContext'
 import { useComposerDictation } from './useComposerDictation'
+import { useAppStore } from '@renderer/app-state/store'
 import type { ComposerDictationController } from './useComposerDictation'
 
 // Regression net for the cold-start audio-loss bug.
@@ -100,15 +101,18 @@ let captured: CapturedChunk[] = []
 let controller: ComposerDictationController | null = null
 /** When set, the first `pushDictationChunk` blocks on this until resolved. */
 let holdFirstPush: Promise<void> | null = null
+const onMessage = vi.fn()
 
-function Harness(): React.JSX.Element {
+function Harness({ terminal = false }: { terminal?: boolean }): React.JSX.Element {
   controller = useComposerDictation({
     enabled: true,
     focused: true,
     provider: 'deepgram',
     shortcut: '',
-    sink: { kind: 'composer', sessionId: 'session-1', input: '', setInputText: () => {} },
-    onMessage: () => {},
+    sink: terminal
+      ? { kind: 'terminal', sessionId: 'session-1' }
+      : { kind: 'composer', sessionId: 'session-1', input: '', setInputText: () => {} },
+    onMessage,
   })
   return <div />
 }
@@ -116,6 +120,8 @@ function Harness(): React.JSX.Element {
 const wait = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
 
 beforeEach(() => {
+  useAppStore.getState().setSettings({ dictationAudioInput: null })
+  onMessage.mockClear()
   captured = []
   controller = null
   holdFirstPush = null
@@ -163,7 +169,7 @@ beforeEach(() => {
   Object.defineProperty(globalThis.navigator, 'mediaDevices', {
     configurable: true,
     value: {
-      getUserMedia: async () => stream,
+      getUserMedia: vi.fn(async () => stream),
       enumerateDevices: async () => [
         { kind: 'audioinput', label: 'MacBook Air Microphone (Built-in)', deviceId: 'builtin' },
       ],
@@ -194,7 +200,49 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  useAppStore.getState().setSettings({ dictationAudioInput: null })
   vi.unstubAllGlobals()
+})
+
+describe('configured dictation microphone', () => {
+  it.each([false, true])('uses the latest selection at capture start (terminal: %s)', async terminal => {
+    const mount = () => render(
+      <SessionFeedProvider value={createFakeSessionFeed()}><Harness terminal={terminal} /></SessionFeedProvider>,
+    )
+    const view = mount()
+    // Set after mount: a callback that captured the initial preference would
+    // pass a fresh-mount test but fail when Settings changes on a live pane.
+    await act(async () => {
+      useAppStore.getState().setSettings({ dictationAudioInput: { deviceId: 'headset', label: 'USB Headset' } })
+      controller?.toggle()
+    })
+    expect(navigator.mediaDevices.getUserMedia).toHaveBeenLastCalledWith({ audio: { deviceId: { exact: 'headset' } } })
+    const calls = vi.mocked(navigator.mediaDevices.getUserMedia).mock.calls.length
+    await act(async () => {
+      useAppStore.getState().setSettings({ dictationAudioInput: { deviceId: 'default', label: 'System default' } })
+    })
+    expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledTimes(calls)
+    expect(FakeMediaRecorder.instances[0]?.state).toBe('recording')
+    view.unmount()
+    const next = mount()
+    await act(async () => { controller?.toggle() })
+    expect(navigator.mediaDevices.getUserMedia).toHaveBeenLastCalledWith({ audio: true })
+    next.unmount()
+  })
+
+  it('reports a disconnected selected microphone without recording from a fallback', async () => {
+    render(<SessionFeedProvider value={createFakeSessionFeed()}><Harness /></SessionFeedProvider>)
+    // Let any one-time prewarm finish before rejecting the real capture.
+    await act(async () => {})
+    useAppStore.getState().setSettings({ dictationAudioInput: { deviceId: 'gone', label: 'USB Headset' } })
+    vi.mocked(navigator.mediaDevices.getUserMedia).mockClear()
+    vi.mocked(navigator.mediaDevices.getUserMedia).mockRejectedValueOnce(new DOMException('', 'OverconstrainedError'))
+    await act(async () => { controller?.toggle() })
+    expect(onMessage).toHaveBeenCalledWith(expect.stringContaining('USB Headset'))
+    expect(onMessage).toHaveBeenCalledWith(expect.stringContaining('Settings → Dictation'))
+    expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledOnce()
+    expect(FakeMediaRecorder.instances).toHaveLength(0)
+  })
 })
 
 describe('composer dictation chunk delivery', () => {

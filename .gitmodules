@@ -22,3 +22,6 @@
 [submodule "packages/grok-code-headless"]
 	path = packages/grok-code-headless
 	url = https://github.com/Juliusolsson05/grok-code-headless.git
+[submodule "packages/opencode-terminal-headless"]
+	path = packages/opencode-terminal-headless
+	url = https://github.com/Juliusolsson05/opencode-terminal-headless.git

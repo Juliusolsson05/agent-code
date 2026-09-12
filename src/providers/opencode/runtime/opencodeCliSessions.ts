@@ -3,15 +3,16 @@ import { randomUUID } from 'node:crypto'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { promisify } from 'node:util'
 
-const execFileAsync = promisify(execFile)
 const MAX_EXPORT_BYTES = 256 * 1024 * 1024
 
 export type OpencodeCliSessionOptions = {
   binary: string
   cwd: string
   env?: NodeJS.ProcessEnv
+  signal?: AbortSignal
+  /** A stuck CLI must not hold startup or a transcript transform indefinitely. */
+  timeoutMs?: number
 }
 
 /**
@@ -135,11 +136,30 @@ async function runOpencode(
   args: string[],
 ): Promise<{ stdout: string; stderr: string }> {
   try {
-    const result = await execFileAsync(options.binary, args, {
-      cwd: options.cwd,
-      env: options.env ?? process.env,
-      encoding: 'utf8',
-      maxBuffer: MAX_EXPORT_BYTES,
+    options.signal?.throwIfAborted()
+    const result = await new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
+      const child = execFile(options.binary, args, {
+        cwd: options.cwd,
+        env: options.env ?? process.env,
+        encoding: 'utf8',
+        maxBuffer: MAX_EXPORT_BYTES,
+        timeout: Math.max(1, options.timeoutMs ?? 30_000),
+        killSignal: 'SIGKILL',
+      }, (error, stdout, stderr) => {
+        options.signal?.removeEventListener('abort', abort)
+        // execFile's callback waits for process/stdio teardown. Rejecting from
+        // the abort event itself would remove the payload and settle startup
+        // while the child can still be alive and reading that file.
+        if (options.signal?.aborted) reject(new Error('OpenCode command cancelled'))
+        else if (error) reject(Object.assign(error, { stderr }))
+        else resolve({ stdout, stderr })
+      })
+      // Node's execFile signal path uses spawn's default SIGTERM independently
+      // of execFile's timeout killSignal. Own this abort listener so a CLI that
+      // ignores SIGTERM cannot outlive stop(); its payload is disposable.
+      const abort = () => { child.kill('SIGKILL') }
+      options.signal?.addEventListener('abort', abort, { once: true })
+      if (options.signal?.aborted) abort()
     })
     return { stdout: result.stdout, stderr: result.stderr }
   } catch (error) {

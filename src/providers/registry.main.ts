@@ -3,6 +3,8 @@
 // sessionManager and IPC handlers import from HERE.
 
 import { join } from 'path'
+import { opencodeTranscriptFile, parseOpencodeTranscriptFile } from 'opencode-terminal-headless'
+import { readOpencodeSessionInfo } from '@providers/opencode/runtime/opencodeDatabase'
 
 import type { MainProviderConfig } from '@shared/types/providerConfig'
 import { AGENT_PROVIDER_KINDS, isAgentProviderKind } from '@shared/types/providerKind'
@@ -14,6 +16,7 @@ import { CodexSession } from '@providers/codex/runtime/codexSession'
 import { deliverCodexPrompt } from '@providers/codex/runtime/promptDelivery'
 import { OpencodeSession } from '@providers/opencode/runtime/opencodeSession'
 import { OpencodeTerminalSession } from '@providers/opencode/runtime/opencodeTerminalSession'
+import { loadOpencodeHistoryChunk } from '@providers/opencode/runtime/opencodeHistory'
 import { deliverOpencodePrompt } from '@providers/opencode/runtime/promptDelivery'
 import {
   findCodexRolloutPathByThreadId,
@@ -102,19 +105,29 @@ const opencodeMain: MainProviderConfig = {
   },
   createSession: (opts) => new OpencodeSession(opts),
   createTerminalSession: (opts) => new OpencodeTerminalSession(opts),
-  // OpenCode stores sessions behind its own SQLite/API boundary and does not
-  // expose a cwd-filtered CLI list with the metadata our resume picker needs.
-  // Known `ses_` identities are fully resumable/transformable through the CLI;
-  // returning an empty list keeps only discovery unavailable.
   // Opencode has no per-cwd project dir concept; the storage root is
   // server-owned. Returning cwd keeps consumers (which only display
   // it) harmless.
   getProjectDir: async (cwd) => cwd,
-  // No durable transcript FILE exists: structured history arrives via the
-  // HTTP runtime replay, while offline transforms use `opencode export` in the
-  // transcript adapter. Returning null prevents generic file consumers from
-  // reaching into OpenCode's private database.
+  // No durable transcript FILE exists, so generic file consumers get null.
+  // History reads go through `loadHistoryChunk` instead: OpenCode's database,
+  // opened read-only by opencode-terminal-headless, serves both runtimes'
+  // parked panes, reloads and MCP reads. Writes and transforms (switch,
+  // duplicate, rewind) stay on `opencode import`/`export` in the transcript
+  // adapter.
   resolveTranscriptPath: async () => null,
+  loadHistoryChunk: loadOpencodeHistoryChunk,
+  // OpenCode names a session by `opencode://session/<id>`, a locator the
+  // package mints and parses; it names a database row, not a file.
+  transcriptLocator: opencodeTranscriptFile,
+  parseTranscriptLocator: parseOpencodeTranscriptFile,
+  // The session row's time_updated stands in for a JSONL file's mtime.
+  // OpenCode rewrites that row when a prompt is submitted and again as each
+  // step's summary lands, so it tracks the conversation, not just renames:
+  // in every recorded session under opencode-terminal-headless's
+  // testing/fixtures/durable it sits within seconds of the newest part write.
+  // Null (session gone, database unreadable) means "do not publish".
+  transcriptLastModifiedAt: async id => (await readOpencodeSessionInfo(id))?.timeUpdated ?? null,
   deliverPrompt: deliverOpencodePrompt,
 }
 

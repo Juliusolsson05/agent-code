@@ -34,6 +34,8 @@
       "grok-code-headless/*": ["./packages/grok-code-headless/src/*"],
       "opencode-headless": ["./packages/opencode-headless/src/index.ts"],
       "opencode-headless/*": ["./packages/opencode-headless/src/*"],
+      "opencode-terminal-headless": ["./packages/opencode-terminal-headless/src/index.ts"],
+      "opencode-terminal-headless/*": ["./packages/opencode-terminal-headless/src/*"],
       "agent-transcript-parser": ["./packages/agent-transcript-parser/src/index.ts"],
       "agent-transcript-parser/*": ["./packages/agent-transcript-parser/src/*"],
       "workflow-mcp/state": ["./packages/workflow-mcp/src/state.ts"],
