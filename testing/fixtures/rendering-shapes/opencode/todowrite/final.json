@@ -1,0 +1,22 @@
+{
+  "evidence": "Curated from the 2026-07-19 OpenCode committed todowrite soak; values are synthetic while the checklist invocation grammar is preserved.",
+  "toolUse": {
+    "type": "tool_use",
+    "id": "opencode-todo-fixture-1",
+    "name": "todowrite",
+    "input": {
+      "todos": [
+        {
+          "content": "Catalog the first OpenCode shapes",
+          "status": "completed",
+          "priority": "high"
+        },
+        {
+          "content": "Add curated fixtures",
+          "status": "in_progress",
+          "priority": "high"
+        }
+      ]
+    }
+  }
+}

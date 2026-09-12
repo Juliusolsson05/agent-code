@@ -1,0 +1,38 @@
+{
+  "evidence": "Synthetic from the 2026-07-19 OpenCode SSE/reducer shape. The structural keys are copied from fp2-9003dc12; one case proves the owned code-edit path and one proves the generic decline for malformed bodies.",
+  "cases": [
+    {
+      "expectedRoute": "specialized",
+      "expectedReceipt": {
+        "rendererId": "opencode.rows.dispatch"
+      },
+      "semanticBlock": {
+        "blockIndex": 0,
+        "kind": "tool_use",
+        "toolName": "apply_patch",
+        "toolUseId": "patch-live-owned",
+        "inputJson": "{\"patchText\":\"*** Begin Patch\\n*** Update File: src/example.ts\\n@@\\n-old\\n+new\\n*** End Patch\"}",
+        "inputJsonValid": true,
+        "parsedInput": {
+          "patchText": "*** Begin Patch\n*** Update File: src/example.ts\n@@\n-old\n+new\n*** End Patch"
+        },
+        "finalized": true
+      }
+    },
+    {
+      "expectedRoute": "generic",
+      "semanticBlock": {
+        "blockIndex": 1,
+        "kind": "tool_use",
+        "toolName": "apply_patch",
+        "toolUseId": "patch-live-generic",
+        "inputJson": "{\"patchText\":\"*** Begin Patch\\nnot enough structure yet\"}",
+        "inputJsonValid": true,
+        "parsedInput": {
+          "patchText": "*** Begin Patch\nnot enough structure yet"
+        },
+        "finalized": true
+      }
+    }
+  ]
+}

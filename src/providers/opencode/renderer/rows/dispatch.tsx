@@ -1,6 +1,8 @@
 import type { ReactNode } from 'react'
 
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
+import { fromOpencodeApplyPatch, rawOpencodeApplyPatchText } from '@providers/opencode/renderer/adapters/codeEdit'
+import { OpencodeApplyPatchRow } from '@providers/opencode/renderer/components/apply-patch'
 import { renderOpencodeReadResult } from '@providers/opencode/renderer/components/read-result'
 import { fromOpencodeTodoUse } from '@providers/opencode/renderer/adapters/todo'
 import { OpencodeTodoRow } from '@providers/opencode/renderer/components/todo'
@@ -64,6 +66,10 @@ export function renderOpencodeOperation(
 // Specialized rows (diff-style edit rendering etc.) should be added here one
 // evidence-backed tool at a time, not speculatively.
 function renderOpencodeToolUse(block: ToolUseBlock): ReactNode | undefined {
+  const applyPatch = fromOpencodeApplyPatch(block)
+  if (applyPatch) {
+    return <OpencodeApplyPatchRow model={applyPatch} rawPatch={rawOpencodeApplyPatchText(block)} />
+  }
   const todo = fromOpencodeTodoUse(block)
   return todo ? <OpencodeTodoRow model={todo} /> : undefined
 }

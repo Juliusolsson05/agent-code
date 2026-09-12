@@ -1,0 +1,63 @@
+{
+  "evidence": "Curated from the 2026-07-19 OpenCode committed result soak. The same base tool_result envelope can remain generic or graduate to a provider-owned row depending on the paired invocation.",
+  "sourceShapeEvidence": {
+    "capturedAt": "2026-07-19T11:39:04.242Z",
+    "provider": "opencode",
+    "sessionId": "295304f9-82ca-4945-bbc5-30dafe959281",
+    "result": {
+      "fingerprint": "fp2-f31bc9d2",
+      "shapePaths": [
+        "<root>:object",
+        "content:string",
+        "is_error:boolean",
+        "tool_use_id:string",
+        "type:string"
+      ],
+      "discriminatorValues": {
+        "type": "tool_result"
+      }
+    }
+  },
+  "cases": [
+    {
+      "expectedRoute": "generic",
+      "toolUse": {
+        "type": "tool_use",
+        "id": "opencode-result-generic-use",
+        "name": "glob",
+        "input": {
+          "path": "/workspace/project",
+          "pattern": "src/**/*.ts"
+        }
+      },
+      "toolResult": {
+        "type": "tool_result",
+        "tool_use_id": "opencode-result-generic-use",
+        "content": "No files found",
+        "is_error": false
+      }
+    },
+    {
+      "expectedRoute": "specialized",
+      "expectedReceipt": {
+        "rendererId": "opencode.rows.dispatch"
+      },
+      "toolUse": {
+        "type": "tool_use",
+        "id": "opencode-result-read-use",
+        "name": "read",
+        "input": {
+          "filePath": "/workspace/project/src/example.ts",
+          "offset": 1,
+          "limit": 3
+        }
+      },
+      "toolResult": {
+        "type": "tool_result",
+        "tool_use_id": "opencode-result-read-use",
+        "content": "<path>/workspace/project/src/example.ts</path>\n<type>file</type>\n<content>\n1: export const answer = 42\n2: export type Answer = number\n3: export function getAnswer(): Answer {\n</content>",
+        "is_error": false
+      }
+    }
+  ]
+}

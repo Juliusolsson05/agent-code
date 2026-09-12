@@ -1,0 +1,12 @@
+{
+  "evidence": "Curated from the 2026-07-19 OpenCode committed tool-use soak; values are synthetic while the admitted invocation structure is preserved.",
+  "toolUse": {
+    "type": "tool_use",
+    "id": "opencode-glob-fixture-1",
+    "name": "glob",
+    "input": {
+      "path": "/workspace/project",
+      "pattern": "src/**/*.ts"
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "evidence": "Curated from the 2026-07-19 OpenCode committed tool-use soak; values are synthetic while the admitted invocation structure is preserved.",
+  "toolUse": {
+    "type": "tool_use",
+    "id": "opencode-grep-fixture-1",
+    "name": "grep",
+    "input": {
+      "pattern": "renderSemanticBlock",
+      "path": "/workspace/project/src",
+      "include": "*.ts"
+    }
+  }
+}

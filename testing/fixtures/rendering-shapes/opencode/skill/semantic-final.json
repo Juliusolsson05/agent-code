@@ -1,0 +1,15 @@
+{
+  "evidence": "Synthetic from the 2026-07-19 OpenCode SSE/reducer shape; values are reduced while preserving fp2-66bcff9c.",
+  "semanticBlock": {
+    "blockIndex": 0,
+    "kind": "tool_use",
+    "toolName": "skill",
+    "toolUseId": "skill-live",
+    "inputJson": "{\"name\":\"writing-plans\"}",
+    "inputJsonValid": true,
+    "parsedInput": {
+      "name": "writing-plans"
+    },
+    "finalized": true
+  }
+}

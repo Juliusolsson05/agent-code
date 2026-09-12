@@ -1,0 +1,17 @@
+{
+  "evidence": "Synthetic from the 2026-07-19 OpenCode SSE/reducer shape; values are reduced while preserving fp2-6507bf37.",
+  "semanticBlock": {
+    "blockIndex": 0,
+    "kind": "tool_use",
+    "toolName": "grep",
+    "toolUseId": "grep-live",
+    "inputJson": "{\"pattern\":\"renderSemanticBlock\",\"path\":\"/workspace/project/src\",\"include\":\"*.ts\"}",
+    "inputJsonValid": true,
+    "parsedInput": {
+      "pattern": "renderSemanticBlock",
+      "path": "/workspace/project/src",
+      "include": "*.ts"
+    },
+    "finalized": true
+  }
+}
