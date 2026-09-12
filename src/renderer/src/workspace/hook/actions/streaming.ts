@@ -1,4 +1,4 @@
-import { useCallback } from 'react'
+import { useCallback, useRef } from 'react'
 
 import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { QueuedMessage, SessionRuntime } from '@renderer/session-runtime/state'
@@ -51,6 +51,32 @@ import type { WorkspaceSetRuntimes } from '@renderer/workspace/hook/context'
  *  bundles required manual rollout forensics to distinguish "live turn"
  *  from "unowned history because the committed tail is dead"). */
 export type OptimisticQueueReason = 'live-current-turn' | 'unowned-history'
+
+/**
+ * Proof that ONE submit wrote the optimistic `submitting` claim: the exact
+ * `submittedAt` value that submit stamped. `beginOptimisticSubmit` returns it
+ * (null when it skipped the stamp) and `settleQueuedSubmit` reverts only a
+ * runtime that still carries this exact value.
+ *
+ * WHY a token instead of "is the phase still `submitting`?" (#893 review,
+ * Codex major / Claude F1): the phase says SOME submit stamped it, not which
+ * one. Submit A on an idle pane stamps and gets a `user` acceptance, so the
+ * composer releases its in-flight guard while the stamp waits for A's first
+ * provider event (100-500 ms on a cold proxy). Submit B in that gap skips its
+ * own stamp (the pane is not idle), Claude queues B, and a phase-only settle
+ * then reverted A's legitimate claim, blanking the WorkIndicator and losing
+ * A's submit-to-first-event clock. `turn_started` cannot repair that, because
+ * its bridge only advances `submitting`/`requesting`, never `idle`.
+ *
+ * WHY `submittedAt` and not a new SessionRuntime field: a new field would ride
+ * into every debug bundle and runtime spread, which is the cost plan D1 already
+ * refused, and `submittedAt` is written by exactly one site (the stamp below)
+ * and cleared by the paths that retire the claim. What makes it a sound token
+ * is that issued values are unique. `beginOptimisticSubmit` clamps them to be
+ * strictly increasing, so two stamps within one millisecond can never compare
+ * equal.
+ */
+export type OptimisticSubmitStamp = number
 
 export function optimisticCodexQueueReason(
   current: Pick<
@@ -142,9 +168,9 @@ export function useStreamingActions(
   setRuntimes: WorkspaceSetRuntimes,
   isCodexSession: (sessionId: SessionId) => boolean,
 ): {
-  beginOptimisticSubmit: (sessionId: SessionId) => void
+  beginOptimisticSubmit: (sessionId: SessionId) => OptimisticSubmitStamp | null
   unwindOptimisticSubmit: (sessionId: SessionId) => void
-  settleQueuedSubmit: (sessionId: SessionId) => void
+  settleQueuedSubmit: (sessionId: SessionId, stamp: OptimisticSubmitStamp | null) => void
   clearPendingRewindUndo: (sessionId: SessionId) => void
   addOptimisticCodexUserEntry: (
     sessionId: SessionId,
@@ -281,16 +307,26 @@ export function useStreamingActions(
    * RUNNING turn happens to emit its next `stream_phase` event — 21 s and 46 s
    * in the 2026-09-11 recordings, over a turn that was visibly thinking.
    *
-   * Only ever reverts `submitting`. If a real event moved the phase between
-   * the stamp and the acceptance, that phase is the truth (same rule as
-   * unwind).
+   * Only ever reverts THIS submit's `submitting`. Two things must both hold:
+   *   - The phase is still `submitting`. If a real event moved it between the
+   *     stamp and the acceptance, that phase is the truth (the same rule as
+   *     unwind).
+   *   - `submittedAt` is the stamp this submit wrote. A null stamp means this
+   *     submit painted nothing, so there is nothing of its own to settle. A
+   *     different value means the claim belongs to another submit, which may
+   *     be a turn that is genuinely starting (see OptimisticSubmitStamp for
+   *     the recorded two-submit sequence).
    */
   const settleQueuedSubmit = useCallback(
-    (sessionId: SessionId) => {
+    (sessionId: SessionId, stamp: OptimisticSubmitStamp | null) => {
       setRuntimes(prev => {
         const current = prev[sessionId]
         if (!current) return prev
-        if (current.streamPhase !== 'submitting') return prev
+        if (
+          stamp === null ||
+          current.streamPhase !== 'submitting' ||
+          current.submittedAt !== stamp
+        ) return prev
         return {
           ...prev,
           [sessionId]: withDerivedSessionStatus(
@@ -317,9 +353,30 @@ export function useStreamingActions(
     [setRuntimes],
   )
 
+  // The last stamp this controller issued, across every session. It exists
+  // only to keep issued stamps strictly increasing; see OptimisticSubmitStamp.
+  const lastIssuedStampRef = useRef(0)
+
   const beginOptimisticSubmit = useCallback(
-    (sessionId: SessionId) => {
-      const now = Date.now()
+    (sessionId: SessionId): OptimisticSubmitStamp | null => {
+      // Clamped to be strictly increasing rather than raw `Date.now()`: the stamp
+      // doubles as the settle's ownership token, and two stamps written in the
+      // same millisecond would be indistinguishable. The clamp moves such a stamp
+      // by at most a few milliseconds, which the whole-second elapsed counter
+      // cannot show. A value burned by a skipped stamp costs nothing.
+      const now = Math.max(Date.now(), lastIssuedStampRef.current + 1)
+      lastIssuedStampRef.current = now
+      // WHY the token is decided INSIDE the updater and read after it: whether
+      // this submit stamps can only be judged against the `prev` the write is
+      // applied to. Reading the store before or after `setRuntimes` would race
+      // any IPC fold that lands in between. `setWorkspaceRuntimes` is a zustand
+      // `set` whose updater runs synchronously, exactly once, before it returns
+      // (app-state/workspace/slice.ts), so `stamp` holds the committed decision
+      // by the time we return it. Each branch assigns it explicitly, so even a
+      // re-run reports its last decision. If the updater somehow never ran, the
+      // null default fails safe: the settle then does nothing rather than erase
+      // a phase it cannot prove it owns.
+      let stamp: OptimisticSubmitStamp | null = null
       setRuntimes(prev => {
         const current = prev[sessionId] ?? emptyRuntime()
         // WHY the phase stamp is skipped over a live turn (#889): a submit into
@@ -340,6 +397,7 @@ export function useStreamingActions(
           current.streamPhase !== 'idle' ||
           isSemanticTurnRunning(current.semantic.currentTurn)
         if (turnIsLive) {
+          stamp = null
           return {
             ...prev,
             [sessionId]: withDerivedSessionStatus(
@@ -354,6 +412,7 @@ export function useStreamingActions(
             ),
           }
         }
+        stamp = now
         const next = withDerivedSessionStatus(
           appendFeedDebugLog(
             {
@@ -383,6 +442,7 @@ export function useStreamingActions(
           [sessionId]: next,
         }
       })
+      return stamp
     },
     [setRuntimes],
   )

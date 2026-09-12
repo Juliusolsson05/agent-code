@@ -259,7 +259,11 @@ export function useComposerKeybinds({
       // id observed at Enter.
       ...(runtime.sessionRunId ? { sessionRunId: runtime.sessionRunId } : {}),
     })
-    workspace.beginOptimisticSubmit(sessionId)
+    // Kept for the queue settle below: the settle may revert only the
+    // `submitting` claim THIS submit wrote, and this token (null when the stamp
+    // was skipped) is the only proof of which claim that is. See
+    // OptimisticSubmitStamp in hook/actions/streaming.ts for the two-submit race.
+    const optimisticStamp = workspace.beginOptimisticSubmit(sessionId)
     if (caps.usesOptimisticUserEcho) {
       // Codex does not reliably give us a structured user
       // message at submit time the way Claude does. Seed the
@@ -336,7 +340,11 @@ export function useComposerKeybinds({
       // is the only place that both owns the stamp and sees the acceptance.
       // beginOptimisticSubmit already skips the stamp when the renderer can
       // see the live turn; this covers the pane the renderer believed idle.
-      if (acceptance?.kind === 'queue') workspace.settleQueuedSubmit(sessionId)
+      // The stamp token scopes the settle to this submit's own claim: when this
+      // submit skipped its stamp because an EARLIER submit's `submitting` was
+      // still waiting for its first provider event, that claim is not ours to
+      // revert.
+      if (acceptance?.kind === 'queue') workspace.settleQueuedSubmit(sessionId, optimisticStamp)
       if (caps.supportsImageAttachments && draftImages.length > 0) {
         workspace.setDraftImages(
           sessionId,

@@ -1,8 +1,9 @@
 import { act, renderHook } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { SemanticLiveTurn, SessionRuntime } from '@renderer/session-runtime/state'
+import { reduceStreamPhase } from '@renderer/session-runtime/semantic/streamPhaseMachine'
 import type { SessionId } from '@renderer/workspace/types'
 
 import { useStreamingActions } from './streaming'
@@ -33,6 +34,11 @@ function harness(initial: Record<SessionId, SessionRuntime>) {
 }
 
 const S1 = 's1' as SessionId
+const S2 = 's2' as SessionId
+
+afterEach(() => {
+  vi.restoreAllMocks()
+})
 
 function liveTurn(): SemanticLiveTurn {
   return {
@@ -69,14 +75,37 @@ describe('beginOptimisticSubmit', () => {
   it('stamps the optimistic phase on an idle pane (the pre-existing contract)', () => {
     const h = harness({ [S1]: idlePane({ pendingRewindUndo: { kind: 'x' } as never }) })
 
-    act(() => h.view.result.current.beginOptimisticSubmit(S1))
+    let stamp: number | null = null
+    act(() => { stamp = h.view.result.current.beginOptimisticSubmit(S1) })
 
     const runtime = h.get(S1)
     expect(runtime.streamPhase).toBe('submitting')
     expect(runtime.submittedAt).not.toBeNull()
+    // The returned token IS the stamp written, the only thing the queue settle
+    // may later match against.
+    expect(stamp).toBe(runtime.submittedAt)
     expect(runtime.turnStartedAt).toBe(runtime.submittedAt)
     expect(runtime.awaitingAssistant).toBe(true)
     expect(runtime.pendingRewindUndo).toBeNull()
+  })
+
+  it('issues distinct stamps even within one millisecond', () => {
+    // The stamp is an ownership token. Two stamps that compare equal would let a
+    // settle revert a claim it did not write, so uniqueness is the invariant,
+    // not a clock nicety.
+    vi.spyOn(Date, 'now').mockReturnValue(5_000)
+    const h = harness({ [S1]: idlePane(), [S2]: idlePane() })
+
+    let first: number | null = null
+    let second: number | null = null
+    act(() => {
+      first = h.view.result.current.beginOptimisticSubmit(S1)
+      second = h.view.result.current.beginOptimisticSubmit(S2)
+    })
+
+    expect(first).not.toBeNull()
+    expect(second).not.toBeNull()
+    expect(second).not.toBe(first)
   })
 
   it('does not stamp Sending over a live turn signalled by the stream phase', () => {
@@ -92,9 +121,12 @@ describe('beginOptimisticSubmit', () => {
       }),
     })
 
-    act(() => h.view.result.current.beginOptimisticSubmit(S1))
+    let stamp: number | null = -1
+    act(() => { stamp = h.view.result.current.beginOptimisticSubmit(S1) })
 
     const runtime = h.get(S1)
+    // No stamp written, so no token: this submit owns no phase claim to settle.
+    expect(stamp).toBeNull()
     expect(runtime.streamPhase).toBe('thinking')
     expect(runtime.turnStartedAt).toBe(1_000_000)
     expect(runtime.phaseChangedAt).toBe(1_000_500)
@@ -138,7 +170,7 @@ describe('settleQueuedSubmit', () => {
   it('reverts a stamped Sending to idle when the acceptance was a queue', () => {
     const h = harness({ [S1]: stamped() })
 
-    act(() => h.view.result.current.settleQueuedSubmit(S1))
+    act(() => h.view.result.current.settleQueuedSubmit(S1, 1_000_000))
 
     const runtime = h.get(S1)
     expect(runtime.streamPhase).toBe('idle')
@@ -155,20 +187,62 @@ describe('settleQueuedSubmit', () => {
     const queued = [{ content: 'queued prompt', timestamp: 't' }]
     const h = harness({ [S1]: stamped({ queuedMessages: queued }) })
 
-    act(() => h.view.result.current.settleQueuedSubmit(S1))
+    act(() => h.view.result.current.settleQueuedSubmit(S1, 1_000_000))
 
     const runtime = h.get(S1)
     expect(runtime.awaitingAssistant).toBe(true)
     expect(runtime.queuedMessages).toBe(queued)
   })
 
-  it('refuses to touch a phase this submit did not stamp', () => {
+  it('refuses to touch a phase a real event already moved', () => {
     // If a real event moved the phase between the stamp and the acceptance,
     // that phase is the truth. Same rule as unwindOptimisticSubmit.
     const h = harness({ [S1]: stamped({ streamPhase: 'responding' }) })
     const before = h.get(S1)
 
-    act(() => h.view.result.current.settleQueuedSubmit(S1))
+    act(() => h.view.result.current.settleQueuedSubmit(S1, 1_000_000))
+
+    expect(h.get(S1)).toBe(before)
+  })
+
+  it('never settles the Sending an earlier submit still owns', () => {
+    // Codex review (major) / Claude F1, the recorded sequence:
+    //   A on an idle pane stamps `submitting` and main answers `user`, so the
+    //   composer releases its in-flight guard before A's first provider event.
+    //   B arrives in that gap, skips its stamp (the pane is not idle), and
+    //   Claude queues it.
+    // B's queue settle carries B's null token. A's claim, and A's clock, must
+    // survive until A's own provider evidence supersedes them.
+    const h = harness({ [S1]: idlePane() })
+    let stampA: number | null = null
+    let stampB: number | null = -1
+    act(() => { stampA = h.view.result.current.beginOptimisticSubmit(S1) })
+    act(() => { stampB = h.view.result.current.beginOptimisticSubmit(S1) })
+    expect(stampA).not.toBeNull()
+    expect(stampB).toBeNull()
+
+    act(() => h.view.result.current.settleQueuedSubmit(S1, stampB))
+
+    const afterB = h.get(S1)
+    expect(afterB.streamPhase).toBe('submitting')
+    expect(afterB.submittedAt).toBe(stampA)
+    expect(afterB.turnStartedAt).toBe(stampA)
+
+    // A's first real event still finds A's claim to advance. Had the settle
+    // idled it, this bridge would be a no-op: it only leaves
+    // `submitting`/`requesting`.
+    const advanced = reduceStreamPhase(afterB, { type: 'turn_started', turnId: 'msg_a' }, null)
+    expect(advanced.streamPhase).toBe('responding')
+    expect(advanced.turnStartedAt).toBe(stampA)
+  })
+
+  it('never settles a stamp a later submit wrote over its own', () => {
+    // The token must match exactly, not merely be non-null: a stale token from a
+    // retired claim must not revert the claim that replaced it.
+    const h = harness({ [S1]: stamped({ submittedAt: 2_000_000, turnStartedAt: 2_000_000 }) })
+    const before = h.get(S1)
+
+    act(() => h.view.result.current.settleQueuedSubmit(S1, 1_000_000))
 
     expect(h.get(S1)).toBe(before)
   })
@@ -176,7 +250,7 @@ describe('settleQueuedSubmit', () => {
   it('is a no-op for a session that no longer exists', () => {
     const h = harness({})
 
-    act(() => h.view.result.current.settleQueuedSubmit('gone' as SessionId))
+    act(() => h.view.result.current.settleQueuedSubmit('gone' as SessionId, 1_000_000))
 
     expect(h.all()).toEqual({})
   })

@@ -7,6 +7,7 @@ import { createFakeSessionFeed } from '@renderer/features/sessionFeed/FakeSessio
 import type { FakeSessionFeed } from '@renderer/features/sessionFeed/FakeSessionFeed'
 import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
+import { reduceStreamPhase } from '@renderer/session-runtime/semantic/streamPhaseMachine'
 import type { TileNode, WorkspaceState } from '@renderer/workspace/types'
 import type { SessionId } from '@renderer/workspace/types'
 import { useWorkspace } from '@renderer/workspace/hook'
@@ -208,5 +209,42 @@ describe('composer submit accepted into the provider queue', () => {
     await act(async () => { await submit('textarea-enter') })
 
     expect(current.getRuntime(SESSION).streamPhase).toBe('submitting')
+  })
+
+  it('a queued second submit never settles the Sending an earlier submit still owns', async () => {
+    // Codex review (major) / Claude F1. A resolves `user` and the composer
+    // releases its in-flight guard before A's first provider event. B lands in
+    // that gap, skips its own stamp, and Claude queues it. Neither main's
+    // reservation nor the renderer guard prevents this: the two deliveries are
+    // sequential and each one completed.
+    seed({})
+    const feed = feedAccepting('user')
+    mount(feed)
+    act(() => current.setDraftInput(SESSION, 'prompt A starts a turn'))
+    await act(async () => { await submit('textarea-enter') })
+    const stampA = current.getRuntime(SESSION).submittedAt
+    expect(current.getRuntime(SESSION).streamPhase).toBe('submitting')
+    expect(stampA).not.toBeNull()
+
+    feed.nextDeliverPromptResult = { ok: true, acceptance: { kind: 'queue', acceptedAt: Date.now() } }
+    act(() => current.setDraftInput(SESSION, 'prompt B queued behind A'))
+    await act(async () => { await submit('textarea-enter') })
+
+    expect(feed.calls.filter(c => c.method === 'deliverPrompt')).toHaveLength(2)
+    const afterB = current.getRuntime(SESSION)
+    expect(afterB.streamPhase).toBe('submitting')
+    expect(afterB.submittedAt).toBe(stampA)
+    expect(afterB.turnStartedAt).toBe(stampA)
+
+    // A's first real event must still advance A's claim. The IPC fold is mocked
+    // in this suite, so apply the same pure reducer it runs.
+    act(() => {
+      current.updateRuntime(
+        SESSION,
+        reduceStreamPhase(current.getRuntime(SESSION), { type: 'turn_started', turnId: 'msg_a' }, null),
+      )
+    })
+    expect(current.getRuntime(SESSION).streamPhase).toBe('responding')
+    expect(current.getRuntime(SESSION).turnStartedAt).toBe(stampA)
   })
 })
