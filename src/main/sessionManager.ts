@@ -476,6 +476,9 @@ export class SessionManager extends EventEmitter {
   // the subscriber existed would be invisible forever. Cost is one Map.set
   // per event (a reference store, no clone); entries die with the session
   // in cleanupSessionState.
+  // Same generation-owned lifetime as the screen/conditions caches. Process
+  // activity is an independent observation; input-ready does not mean idle.
+  private readonly lastProcessState = new Map<string, AgentProcessState>()
   private readonly lastScreenSnapshot = new Map<string, AgentScreenSnapshot>()
   // See screenFrameGate.ts — drops spinner-only repaints before they fan out.
   private readonly screenFrameGate = new ScreenFrameGate()
@@ -883,6 +886,7 @@ export class SessionManager extends EventEmitter {
     // session's screen/conditions to a late subscriber would present it as
     // live (the exact stale-state bug the remote late-joiner replay had).
     this.lastScreenSnapshot.delete(sessionId)
+    this.lastProcessState.delete(sessionId)
     this.screenFrameGate.forget(sessionId)
     this.lastConditionsSnapshot.delete(sessionId)
     this.lastTranscriptFile.delete(sessionId)
@@ -1147,11 +1151,13 @@ export class SessionManager extends EventEmitter {
   private reclaimPendingCodexReplacement(
     options: SessionRecoverOptions,
     reservation: CodexReplacementReservationRecord,
+    onAdmitted?: () => void,
   ): Promise<SessionRecoverResult> {
     if (!this.replacementOwnershipMatches(reservation.predecessorOwnership, options)) {
       return Promise.resolve(this.recoveryConflict(options.sessionId, null))
     }
     if (reservation.reclaimPromise) {
+      onAdmitted?.()
       const activeReclaim = this.codexReplacements.getReclaim(
         reservation.predecessorSessionId,
       )
@@ -1172,6 +1178,7 @@ export class SessionManager extends EventEmitter {
       return Promise.resolve(this.replacementReclaimConflict(options.sessionId))
     }
 
+    onAdmitted?.()
     reservation.reclaimRequested = true
     const reclaim = this.beginCodexReplacementReclaim(
       options,
@@ -1242,11 +1249,13 @@ export class SessionManager extends EventEmitter {
   private reclaimPersistedCodexRedirect(
     options: SessionRecoverOptions,
     redirect: CodexReplacementRedirect,
+    onAdmitted?: () => void,
   ): Promise<SessionRecoverResult> {
     if (!this.replacementOwnershipMatches(redirect.predecessorOwnership, options)) {
       return Promise.resolve(this.recoveryConflict(options.sessionId, null))
     }
     if (redirect.reclaimPromise) {
+      onAdmitted?.()
       const activeReclaim = this.codexReplacements.getReclaim(
         redirect.predecessorSessionId,
       )
@@ -1265,6 +1274,7 @@ export class SessionManager extends EventEmitter {
       return Promise.resolve(this.replacementReclaimConflict(options.sessionId))
     }
 
+    onAdmitted?.()
     const siblingRedirects = this.codexReplacements
       .findRedirects(redirect.successorSessionId)
       .filter(candidate => candidate !== redirect)
@@ -1448,7 +1458,16 @@ export class SessionManager extends EventEmitter {
    * persisted local SessionId is the only ownership key. Provider history ids
    * are consumed only by the cold-spawn path and never used to adopt a process.
    */
-  recover(options: SessionRecoverOptions): Promise<SessionRecoverResult> {
+  recover(
+    options: SessionRecoverOptions,
+    // The IPC adapter may establish display ownership only after the same
+    // admission that authorizes this recovery. Claiming before these checks
+    // leaks live observations on a rejected kind/cwd request; claiming after
+    // start settles hides trust/permission conditions needed to finish start.
+    // This synchronous, non-reentrant hook may throw to reject the display
+    // claim BEFORE tokens, provider work, or replacement effects are admitted.
+    onAdmitted?: () => void,
+  ): Promise<SessionRecoverResult> {
     const requestedKind: unknown = options.kind
     if (requestedKind !== undefined && !isSessionKind(requestedKind)) {
       // WHY validate again in main even though renderer has a type guard: IPC
@@ -1499,7 +1518,7 @@ export class SessionManager extends EventEmitter {
         addressesPredecessor &&
         options.reclaimPendingReplacement
       ) {
-        return this.reclaimPendingCodexReplacement(options, replacement)
+        return this.reclaimPendingCodexReplacement(options, replacement, onAdmitted)
       }
       const owningReclaim = addressesPredecessor
         ? this.codexReplacements.getReclaim(options.sessionId)
@@ -1569,7 +1588,7 @@ export class SessionManager extends EventEmitter {
           return Promise.resolve(this.replacementRecoveryCancelled(options.sessionId))
         }
         if (options.reclaimPendingReplacement) {
-          return this.reclaimPersistedCodexRedirect(options, predecessorRedirect)
+          return this.reclaimPersistedCodexRedirect(options, predecessorRedirect, onAdmitted)
         }
         return Promise.resolve({
           ok: false,
@@ -1618,6 +1637,7 @@ export class SessionManager extends EventEmitter {
         (existingClaim.providerRuntime ?? null) === (providerRuntime ?? null) &&
         existingClaim.cwd === cwd
       ) {
+        onAdmitted?.()
         if (options.recoveryToken) {
           // Compatible callers share one physical provider start. A new
           // renderer therefore joins that generation's cancellation authority
@@ -1660,6 +1680,7 @@ export class SessionManager extends EventEmitter {
         (snapshot.providerRuntime ?? null) === (providerRuntime ?? null) &&
         path.resolve(snapshot.cwd) === cwd
       ) {
+        onAdmitted?.()
         // Adoption carries the ADOPTED BACKEND'S readiness, not just the
         // disposition. #596 turned on exactly this distinction: a caller that
         // adopts a live-but-not-ready agent behaves completely differently from
@@ -1702,6 +1723,7 @@ export class SessionManager extends EventEmitter {
       return Promise.resolve(this.recoveryConflict(options.sessionId, null))
     }
 
+    onAdmitted?.()
     // WHY the microtask: assigning the promise by calling an async helper first
     // would execute that helper synchronously until its first await. Provider
     // construction (and MCP registration) occurs before spawn's first
@@ -2843,6 +2865,7 @@ export class SessionManager extends EventEmitter {
       session.on('process-state', (state: AgentProcessState) => {
         if (!ownsEntry()) return
         this.markActivity(sessionId)
+        this.lastProcessState.set(sessionId, state)
         this.emit('process-state', { sessionId, ...state })
       })
       session.on('trust-dialog', (state: AgentTrustDialogState) => {
@@ -4607,6 +4630,16 @@ export class SessionManager extends EventEmitter {
    *  late-attaching consumers (remote companion) to seed their state. */
   getScreenSnapshot(sessionId: string): AgentScreenSnapshot | null {
     return this.lastScreenSnapshot.get(sessionId) ?? null
+  }
+
+  getProcessStateSnapshot(sessionId: string): AgentProcessState | null {
+    return this.lastProcessState.get(sessionId) ?? null
+  }
+
+  /** The provider's current native selection, never a guessed transcript path. */
+  getNativeConversationId(sessionId: string): string | null {
+    const entry = this.sessions.get(sessionId)
+    return entry && entry.kind !== 'terminal' ? entry.session.getProviderSessionId?.() ?? null : null
   }
 
   /** Latest provider-conditions snapshot for a live session, or null if no

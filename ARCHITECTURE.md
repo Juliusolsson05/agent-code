@@ -1952,7 +1952,9 @@ The manager emits several independent observation families:
 | Native subagents | Derived child activity | Provider-specific producer, shared UI contract |
 | Raw terminal bytes | Terminal display/input surface | Separate ordinary-terminal and agent-PTY channels |
 
-[SessionForwarder](src/main/sessions/forwarder.ts) subscribes once in main and routes session events to the owning window. The current fallback for a session without recorded ownership is broadcast; correct early ownership assignment therefore matters. The fallback is not evidence that cross-window session routing is intrinsically isolated in every failure case.
+[SessionForwarder](src/main/sessions/forwarder.ts) subscribes once in main and routes session events to the owning window. [SessionWindowRouter](src/main/window/sessionWindowRouter.ts) requires an explicit revisioned display claim in the current renderer generation. Unknown-owner traffic retains bounded incident/gap metadata only. Recognized closing-window/handoff traffic is queued under per-session and application byte/item/age budgets, then revalidated on delivery; overflow and stale generations produce an explicit gap. Application-wide broadcasts remain a separate API.
+
+Recovery establishes the display claim at SessionManager's accepted target boundary, before provider startup can require visible conditions. Natural backend exit does not end pane ownership; explicit pane disposal releases only its captured claim. [Routing repair IPC](src/main/ipc/sessionRouting.ts) flushes coalesced observations before seeding available current snapshots and admits scoped saved-history reads without starting a process or writing input. The shared pane header retains a visible transient-output gap after refresh. These routing revisions fence this queue and repair path; the program's broader native binding/source-generation audit is still separate.
 
 #### 8.2.2 Coalesce values, preserve boundaries
 
@@ -2378,7 +2380,7 @@ The application runs native tools with the user's filesystem and provider privil
 | Boundary | Mechanism in the application | Residual authority/limitation |
 | --- | --- | --- |
 | Renderer to main | Context-isolated typed preload, per-handler validation and ownership checks | Renderer has only exposed APIs, but Electron window sandbox is explicitly disabled |
-| Window to another window's sessions | Main session ownership and renderer control generations | Unknown-ownership session forwarding currently has a broadcast fallback |
+| Window to another window's sessions | Main session ownership and renderer control generations | Revisioned display claims, bounded transition queues, metadata-only unknown-owner gaps and scoped read-only repair |
 | Agent to built-in MCP | Fresh session bearer, selected domains, scoped service calls | Enabled tools can cause real app mutations within their contract |
 | External client to app control | Separate enablement/token, strict loopback HTTP admission, capability visibility | Token holders can invoke the exposed control catalog |
 | Remote device to sessions | Pairing, signed device token, revocation, restricted protocol | LAN traffic is unencrypted; prompts can cause native agent tool execution |

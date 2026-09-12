@@ -21,10 +21,14 @@ import type {
 import { aliasScreenSnapshotForWire } from '@shared/types/session.js'
 import {
   claimSessionForWindow,
+  captureSessionWindowLease,
+  isSessionWindowLeaseCurrent,
   releaseSession,
+  sendToSessionWindow,
   sessionsOwnedBy,
   windowIdFor,
 } from '@main/window/windowRegistry.js'
+import type { SessionWindowLease } from '@main/window/sessionWindowRouter.js'
 
 // One secret per app process is enough for correlation inside that run's
 // incident journal, and unlike a bare SHA-256 it prevents an exported bundle
@@ -71,18 +75,28 @@ export function registerSessionIpc(
       // resolved result: the provider emits `started` and its first screen and
       // semantic events while `spawn()` is still awaiting, and those must
       // already route to this window.
-      return await manager.spawn(options, sessionId =>
-        claimSessionForWindow(sessionId, owner),
-      )
+      let lease: SessionWindowLease | null = null
+      try {
+        return await manager.spawn(options, sessionId => {
+          lease = claimSessionForWindow(sessionId, owner)
+          if (!lease) throw new Error('The requesting window can no longer own this session')
+        })
+      } catch (error) {
+        // A failed spawn never returns its minted id to the renderer, so no
+        // pane-disposal request can clean this claim later. Release only this
+        // admission; a successor recovery may already have claimed the id.
+        releaseSession(lease)
+        throw error
+      }
     },
   )
 
   ipcMain.handle('session:recover', async (evt, options: SessionRecoverOptions) => {
-    // Recovery already knows its id — the renderer supplies the durable local
-    // id it is restoring — so the claim can happen before the call rather than
-    // through a mint hook.
-    claimSessionForWindow(options.sessionId, windowIdFor(evt.sender))
-    const result = await manager.recover(options)
+    let lease: SessionWindowLease | null = null
+    const result = await manager.recover(options, () => {
+      lease = claimSessionForWindow(options.sessionId, windowIdFor(evt.sender))
+      if (!lease) throw new Error('This session is owned by another window or the requesting window is unavailable')
+    })
     // A fresh/reloaded renderer has no previous screen even when this backend
     // is already live. The spinner gate may now suppress every subsequent
     // repaint, and an idle backend may emit none. Seed this requesting renderer
@@ -90,9 +104,9 @@ export function registerSessionIpc(
     // global gate or broadcast to unrelated windows just to satisfy one joiner.
     // Read after await so a frame received during recovery cannot be replayed
     // behind a newer cached value. Failed/conflicting recoveries reveal nothing.
-    if (result.ok && !evt.sender.isDestroyed()) {
+    if (result.ok && !evt.sender.isDestroyed() && isSessionWindowLeaseCurrent(lease)) {
       const screen = manager.getScreenSnapshot(options.sessionId)
-      if (screen) evt.sender.send('session:screen', aliasScreenSnapshotForWire({ sessionId: options.sessionId, ...screen }))
+      if (screen) sendToSessionWindow(options.sessionId, 'session:screen', aliasScreenSnapshotForWire({ sessionId: options.sessionId, ...screen }))
     }
     return result
   })
@@ -108,15 +122,22 @@ export function registerSessionIpc(
     return manager.getBackendSnapshot(sessionId)
   })
 
-  ipcMain.handle('session:kill', async (_evt, sessionId: string) => {
+  ipcMain.handle('session:kill', async (evt, sessionId: string) => {
+    const lease = captureSessionWindowLease(sessionId)
+    if (lease && (lease.windowId !== windowIdFor(evt.sender) || !isSessionWindowLeaseCurrent(lease))) return false
     const killed = await manager.kill(sessionId)
-    releaseSession(sessionId)
+    releaseSession(lease)
     return killed
   })
 
-  ipcMain.handle('session:kill-owned', async (_evt, options: SessionOwnershipOptions) => {
+  ipcMain.handle('session:kill-owned', async (evt, options: SessionOwnershipOptions) => {
+    const lease = captureSessionWindowLease(options.sessionId)
+    // A stale window must not dispose another window's current view, even if
+    // its saved provider/cwd still happen to match. Main-internal shutdown and
+    // custody cleanup retain their direct manager authority.
+    if (lease && (lease.windowId !== windowIdFor(evt.sender) || !isSessionWindowLeaseCurrent(lease))) return false
     const killed = await manager.killOwned(options)
-    releaseSession(options.sessionId)
+    releaseSession(lease)
     return killed
   })
 

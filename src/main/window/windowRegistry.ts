@@ -4,6 +4,8 @@ import type { WebContents } from 'electron'
 
 import { buildAppWindow, zoomBrowserWindow } from '@main/window/appWindow.js'
 import type { WindowBounds } from '@main/storage/workspaceFile.js'
+import { SessionWindowRouter } from '@main/window/sessionWindowRouter.js'
+import type { SessionRoutingResult, SessionWindowLease } from '@main/window/sessionWindowRouter.js'
 
 // The window registry: who exists, who is focused, who owns which session, and
 // therefore who should hear a given outbound message.
@@ -41,6 +43,8 @@ type RegisteredWindow = {
    * delivered to a live workspace.
    */
   closing: boolean
+  rendererGeneration: number
+  rendererReady: boolean
 }
 
 const windows = new Map<WindowId, RegisteredWindow>()
@@ -67,7 +71,36 @@ const focusOrder: WindowId[] = []
  * through `event.sender`, which makes ownership exact and immediate instead of
  * eventually-consistent.
  */
-const sessionOwners = new Map<string, WindowId>()
+const sessionRouter = new SessionWindowRouter({
+  window: id => {
+    const entry = windows.get(id)
+    if (!entry || entry.window.isDestroyed()) return null
+    return {
+      generation: entry.rendererGeneration,
+      accepting: entry.rendererReady && !entry.closing,
+    }
+  },
+  deliver: (lease, channel, args) => deliverSessionLease(lease, channel, args),
+  gap: (lease, gap) => deliverSessionLease(lease, 'session:routing-gap', [gap]) === 'sent',
+  incident: (reason, metadata) => recordIpcDiagnosticBreadcrumb(`window.route.${reason}`, metadata),
+})
+
+function deliverSessionLease(lease: SessionWindowLease, channel: string, args: unknown[]) {
+  const entry = windows.get(lease.windowId)
+  if (
+    !entry || entry.closing || !entry.rendererReady || entry.window.isDestroyed() ||
+    entry.rendererGeneration !== lease.rendererGeneration || sessionRouter.owner(lease.sessionId) !== lease
+  ) return 'unavailable' as const
+  try {
+    deliver([entry], channel, args)
+    return 'sent' as const
+  } catch {
+    // webContents.send throwing is not proof Chromium accepted zero bytes.
+    // The router records a gap rather than replaying potentially accepted PTY
+    // data or silently expanding the destination set.
+    return 'uncertain' as const
+  }
+}
 
 /**
  * webContents id → window id for windows that have already been destroyed.
@@ -362,7 +395,20 @@ export function createAppWindow(options?: {
       onCloseVetoed: () => {
         const entry = windows.get(id)
         if (entry) entry.closing = false
+        sessionRouter.windowAvailable(id)
         windowCloseVetoedObserver?.(id)
+      },
+      onRendererUnavailable: () => {
+        const entry = windows.get(id)
+        if (!entry) return
+        entry.rendererGeneration += 1
+        entry.rendererReady = false
+        sessionRouter.rendererChanged(id)
+      },
+      onRendererReady: () => {
+        const entry = windows.get(id)
+        if (entry) entry.rendererReady = true
+        sessionRouter.windowAvailable(id)
       },
       onClosed: () => {
         const closing = windows.get(id)
@@ -384,12 +430,13 @@ export function createAppWindow(options?: {
         // Session ownership is NOT cleared here. A closed window's sessions
         // stay alive in SessionManager, and the close path transfers them to a
         // survivor. Clearing on teardown would strand every one of them as
-        // "unowned" between the two events, which downgrades their routing to a
-        // broadcast for no reason.
+        // unowned between the two events and discard their publication proof.
+        // A recognized claim can retain bounded observations until handoff;
+        // a genuinely unknown owner can retain only repair metadata.
       },
     },
   })
-  windows.set(id, { id, window, closing: false })
+  windows.set(id, { id, window, closing: false, rendererGeneration: 0, rendererReady: true })
   noteFocused(id)
   return id
 }
@@ -480,34 +527,60 @@ export function zoomFocusedWindow(direction: 'in' | 'out' | 'reset'): void {
 // Session ownership
 // ---------------------------------------------------------------------------
 
-export function claimSessionForWindow(sessionId: string, id: WindowId | null): void {
-  if (!id) return
-  sessionOwners.set(sessionId, id)
+export function claimSessionForWindow(sessionId: string, id: WindowId | null): SessionWindowLease | null {
+  return id ? sessionRouter.claim(sessionId, id) : null
 }
 
-export function releaseSession(sessionId: string): void {
-  sessionOwners.delete(sessionId)
+export function captureSessionWindowLease(sessionId: string): SessionWindowLease | null {
+  return sessionRouter.owner(sessionId)
+}
+
+export function windowRendererGeneration(windowId: WindowId): number | null {
+  return windows.get(windowId)?.rendererGeneration ?? null
+}
+
+export function isSessionWindowLeaseCurrent(lease: SessionWindowLease | null): boolean {
+  if (!lease || sessionRouter.owner(lease.sessionId) !== lease) return false
+  const entry = windows.get(lease.windowId)
+  return Boolean(entry && !entry.window.isDestroyed() && entry.rendererGeneration === lease.rendererGeneration)
+}
+
+export function isSessionWindowLeaseAvailable(lease: SessionWindowLease | null): boolean {
+  if (!isSessionWindowLeaseCurrent(lease)) return false
+  const entry = windows.get(lease!.windowId)
+  return Boolean(entry?.rendererReady && !entry.closing)
+}
+
+export function releaseSession(lease: SessionWindowLease | null): boolean {
+  return sessionRouter.release(lease)
+}
+
+export function acknowledgeSessionRoutingGap(lease: SessionWindowLease, gapRevision: number): boolean {
+  return sessionRouter.acknowledgeGap(lease, gapRevision)
+}
+
+export function sessionRoutingGapsForWindow(windowId: WindowId) {
+  return sessionRouter.gapsForWindow(windowId)
+}
+
+export function getSessionRoutingDiagnostics() {
+  return sessionRouter.diagnostics()
 }
 
 export function windowForSession(sessionId: string): WindowId | null {
-  const id = sessionOwners.get(sessionId)
-  if (!id) return null
-  return windows.has(id) ? id : null
+  const lease = sessionRouter.owner(sessionId)
+  return isSessionWindowLeaseCurrent(lease) ? lease!.windowId : null
 }
 
 /** Move every listed session to a new owner. Used when a closing window hands
  *  its live agents to a survivor: ownership must move BEFORE the survivor is
  *  told about them, or events emitted mid-handoff route to a dying window. */
 export function transferSessions(sessionIds: Iterable<string>, to: WindowId): void {
-  for (const sessionId of sessionIds) sessionOwners.set(sessionId, to)
+  for (const sessionId of sessionIds) sessionRouter.transfer(sessionId, to)
 }
 
 export function sessionsOwnedBy(id: WindowId): string[] {
-  const owned: string[] = []
-  for (const [sessionId, owner] of sessionOwners) {
-    if (owner === id) owned.push(sessionId)
-  }
-  return owned
+  return sessionRouter.sessionsOwnedBy(id)
 }
 
 // ---------------------------------------------------------------------------
@@ -558,58 +631,26 @@ export function sendToFocusedWindow(channel: string, ...args: unknown[]): void {
 }
 
 /**
- * Session traffic. Routes to the owning window.
- *
- * WHY an unknown owner broadcasts instead of dropping: a dropped session event
- * silently freezes a pane, which is the single worst failure shape this
- * codebase knows (the rendering design principles' P6 — bias toward surviving,
- * because a row that survives is diagnosable while one that vanishes is not).
- * Ownership is claimed at id-mint time and released only on an explicit kill,
- * so "unowned" should mean "no window is displaying this" and the fallback
- * should effectively never fire. It is still a broadcast rather than a drop
- * because that reasoning is an argument, and an argument is not a guarantee.
- *
- * WHY there is no matching renderer-side "ignore sessions I don't own" guard,
- * even though it looks like the obvious belt to this suspenders:
- *
- * The renderer CANNOT distinguish "not mine" from "mine, but I have not
- * registered it yet". A pane's first events legitimately precede the
- * `session:spawn` IPC response — that is the whole reason ownership is claimed
- * from inside `spawn()` — so the renderer accumulates them under a sessionId it
- * has not seen before (`prev[sessionId] ?? emptyRuntime()`, eleven call sites).
- * A guard strict enough to reject a foreign session would also reject the first
- * frames of every new pane in its own window. So the fallback is instead made
- * rare by construction and made *visible* through the breadcrumb below, rather
- * than made harmless by a guard that cannot exist.
+ * Session observations use only explicit ownership. Unknown ids retain bounded
+ * repair metadata; closing/handoff claims may retain a bounded ordered queue.
+ * The renderer cannot guard these events by current tile membership because
+ * legitimate first events precede the spawn/recover response. Main therefore
+ * owns recipient admission, queued publication, and the explicit gap/repair
+ * boundary instead of broadcasting content when that admission fails.
  */
 export function sendToSessionWindow(
   sessionId: string,
   channel: string,
   ...args: unknown[]
-): void {
-  const owner = windowForSession(sessionId)
-  if (owner) {
-    sendToWindow(owner, channel, ...args)
-    return
-  }
-  // WHY the channel goes in the breadcrumb's CHANNEL field rather than its
-  // metadata: `sanitizeDiagnosticMetadata` replaces every metadata string with
-  // its length, so `channel: 'session:screen'` would be recorded as
-  // `channelLength: 14` — defeating the only reason this breadcrumb exists.
-  // Channel names are a fixed compile-time allowlist, not provider data, so the
-  // redaction rule that sanitizer enforces does not apply to them.
-  recordIpcDiagnosticBreadcrumb(`window.route.unowned-session:${channel}`, {
-    sessionIdLength: sessionId.length,
-    windowCount: windows.size,
-  })
-  broadcastToWindows(channel, ...args)
+): SessionRoutingResult {
+  return sessionRouter.send(sessionId, channel, args)
 }
 
 /** Test-only reset. Vitest module state persists across files in a worker. */
 export function resetWindowRegistryForTests(): void {
   windows.clear()
   focusOrder.length = 0
-  sessionOwners.clear()
+  sessionRouter.dispose()
   for (const timer of geometryDebounces.values()) clearTimeout(timer)
   geometryDebounces.clear()
   retiredWebContentsIds.clear()

@@ -176,13 +176,21 @@ export async function loadInitialHistoryForSession({
   setRuntimes,
   limit = 120,
   meta: metaOverride,
+  readHistory,
+  preserveStatusUntilLoaded = false,
 }: {
   sessionId: SessionId
   refs: WorkspaceRefs
   setRuntimes: WorkspaceSetRuntimes
   limit?: number
   meta?: SessionMeta
-}): Promise<void> {
+  // A scoped recovery can supply an owner/source-validated read while retaining
+  // the existing mapper, UUID ledger, tool pairing and optimistic reconciliation.
+  readHistory?: typeof window.api.loadInitialHistory
+  // Routing repair owns its own warning. A denied/stale repair read is not
+  // evidence that the provider's committed transcript channel has failed.
+  preserveStatusUntilLoaded?: boolean
+}): Promise<boolean> {
   const meta = metaOverride ?? refs.stateRef.current.sessions[sessionId]
   const kind = meta?.kind ?? DEFAULT_PROVIDER
   // WHY provider-native terminal runtimes (OpenCode Terminal) load history
@@ -200,7 +208,7 @@ export async function loadInitialHistoryForSession({
   // cannot leak onto the terminal: `getEffectiveAgentSurface` pins the
   // runtime to the terminal surface and `commandAllowedByRenderedViewPolicy`
   // hides every feed-only command for it, whatever `entries` holds.
-  if (!meta || !isAgentProviderKind(kind)) return
+  if (!meta || !isAgentProviderKind(kind)) return false
 
   if (!hasDurableProviderSession(meta)) {
     setRuntimes(prev => {
@@ -221,7 +229,7 @@ export async function loadInitialHistoryForSession({
         },
       }
     })
-    return
+    return false
   }
 
   const span = perf.span('workspace.history.loadInitial', {
@@ -256,7 +264,7 @@ export async function loadInitialHistoryForSession({
   // synchronous contract is asserted by the test below rather than assumed.
   let loadOutcome = 'no-terminal-write'
   let loadedEntryCount = 0
-  setRuntimes(prev => {
+  if (!preserveStatusUntilLoaded) setRuntimes(prev => {
     const current = prev[sessionId]
     if (!current) return prev
     return {
@@ -281,7 +289,7 @@ export async function loadInitialHistoryForSession({
     // `gitWorktrees`.
     const historyRead = (async () => {
       try {
-        return await window.api.loadInitialHistory({
+        return await (readHistory ?? window.api.loadInitialHistory)({
           kind,
           cwd: meta.cwd,
           providerSessionId: meta.providerSessionId,
@@ -469,11 +477,12 @@ export async function loadInitialHistoryForSession({
       fetched: chunk.entries.length,
       hasMore: chunk.hasMore,
     })
+    return loadOutcome === 'ready'
   } catch (err) {
     span.fail(err)
     const message = err instanceof Error ? err.message : String(err)
     console.warn('[history] load initial failed', err)
-    setRuntimes(prev => {
+    if (!preserveStatusUntilLoaded) setRuntimes(prev => {
       const current = prev[sessionId]
       if (!current) {
         loadOutcome = 'dropped-error'
@@ -490,6 +499,7 @@ export async function loadInitialHistoryForSession({
         },
       }
     })
+    return false
   } finally {
     // Always clear in-flight, even on the dropped-write paths above. If the
     // terminal write was discarded the runtime is left at 'loading' but the

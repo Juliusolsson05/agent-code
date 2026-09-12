@@ -58,18 +58,15 @@ describe('window registry routing', () => {
     expect(built[1]?.sent).toEqual([])
   })
 
-  it('broadcasts an unowned session rather than dropping it', () => {
+  it('quarantines unknown session metadata without sending content to either window', () => {
     registry.createAppWindow()
     registry.createAppWindow()
 
     registry.sendToSessionWindow('nobody', 'session:screen', { sessionId: 'nobody' })
 
-    // A dropped session event silently freezes a pane, which is the worst
-    // failure shape this codebase knows. Ownership should make this
-    // unreachable; the broadcast exists because that is an argument, not a
-    // guarantee.
-    expect(built[0]?.sent).toHaveLength(1)
-    expect(built[1]?.sent).toHaveLength(1)
+    expect(built[0]?.sent).toEqual([])
+    expect(built[1]?.sent).toEqual([])
+    expect(registry.getSessionRoutingDiagnostics()).toMatchObject({ pendingEvents: 0, gapRecords: 1 })
   })
 
   it('moves routing when sessions are transferred to a survivor', () => {
@@ -94,7 +91,7 @@ describe('window registry routing', () => {
     registry.sendToSessionWindow('agent-1', 'session:exit', { sessionId: 'agent-1' })
     expect(registry.windowForSession('agent-1')).toBe(window)
 
-    registry.releaseSession('agent-1')
+    registry.releaseSession(registry.captureSessionWindowLease('agent-1'))
     expect(registry.windowForSession('agent-1')).toBeNull()
   })
 
@@ -162,7 +159,9 @@ describe('window registry routing', () => {
 
     built[0]?.hooks.onCloseVetoed()
     registry.sendToSessionWindow('agent-1', 'session:screen', { sessionId: 'agent-1' })
-    expect(built[0]?.sent).toHaveLength(1)
+    // The pre-veto observation was held under this same claim; both it and
+    // the new observation reach the surviving renderer in order.
+    expect(built[0]?.sent).toHaveLength(2)
   })
 
   it('tells its observer when a close is vetoed', () => {

@@ -1,3 +1,4 @@
+import type { SessionRoutingGap, SessionRoutingScope, SessionRoutingResyncResult, SessionRoutingHistoryResult } from '@shared/types/sessionRouting.js'
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
 import { ipcRenderer } from 'electron'
 import type { PromptDeliveryResult } from '@shared/types/providerConfig.js'
@@ -45,6 +46,13 @@ type SessionScreenWireEvent = Omit<SessionScreenEvent, 'recent' | 'recentMarkdow
 // callback — this avoids N×N listener storms as tabs and splits grow.
 
 export const sessionApi = {
+  onSessionRoutingGap: (cb: (gap: SessionRoutingGap) => void): Unsub => subscribe('session:routing-gap', cb),
+  getSessionRoutingGaps: (): Promise<SessionRoutingGap[]> => ipcRenderer.invoke('session:routing-gaps'),
+  resyncSessionRouting: (scope: SessionRoutingScope): Promise<SessionRoutingResyncResult> =>
+    ipcRenderer.invoke('session:resync-routing', scope),
+  loadSessionRoutingHistory: (scope: SessionRoutingScope, sourceKey: string): Promise<SessionRoutingHistoryResult> =>
+    ipcRenderer.invoke('session:load-routing-history', scope, sourceKey),
+
   // --- Session lifecycle ---
   spawnSession: (options: SessionSpawnOptions): Promise<SessionSpawnResult> =>
     ipcRenderer.invoke('session:spawn', options),

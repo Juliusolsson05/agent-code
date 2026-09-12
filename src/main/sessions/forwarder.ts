@@ -5,7 +5,6 @@ import type { LspManager } from '@main/lspManager.js'
 
 import {
   broadcastToWindows,
-  releaseSession,
   sendToSessionWindow,
 } from '@main/window/windowRegistry.js'
 import {
@@ -42,6 +41,7 @@ import { SubAgentWatcherManager } from '@main/subagents/index.js'
 
 export type SessionForwarderControl = {
   flush(): void
+  flushSession(sessionId: string): void
 }
 
 export function wireSessionForwarder(
@@ -158,16 +158,12 @@ export function wireSessionForwarder(
     processStates.flush(payload.sessionId)
     flushAndDropJsonl(payload.sessionId)
     subAgents.stop(payload.sessionId)
-    // WHY window ownership is released HERE but only on the next tick:
-    //
-    // `removed` is the designated final-cleanup point, but it fires BEFORE the
-    // renderer-facing `exit` (see the ordering note above), so releasing
-    // synchronously would leave that last event unowned and broadcast it to
-    // every window. Deferring by one turn lets `exit` route to the owner and
-    // still drops the entry, which otherwise grows for the life of the process
-    // — and, worse, would hand a closing window's survivor ids for backends
-    // that no longer exist.
-    setImmediate(() => releaseSession(payload.sessionId))
+    // The pane still owns its display after a natural exit or hibernation.
+    // Ending that claim here (even next tick) would discard final observations
+    // held while an editor close sheet is open, or revoke a successor recovery
+    // that reused the same id. Explicit pane disposal releases its captured
+    // claim in session IPC; failed spawn admission releases the id the caller
+    // never received. This ownership map describes views, not live processes.
   })
   manager.on('exit', payload => {
     sendToSessionWindow(payload.sessionId, 'session:exit', payload)
@@ -177,6 +173,14 @@ export function wireSessionForwarder(
   lspManager.on('diagnostics', payload => broadcastToWindows('lsp:diagnostics', payload))
 
   return {
+    flushSession(sessionId: string): void {
+      // Reseeding a late view is an ordering barrier. An older coalesced
+      // snapshot must not flush AFTER the current cached snapshot we seed.
+      semanticEvents.flush(sessionId)
+      screens.flush(sessionId)
+      processStates.flush(sessionId)
+      flushJsonl(sessionId)
+    },
     flush(): void {
       semanticEvents.flush()
       screens.flush()

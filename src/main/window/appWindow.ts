@@ -29,6 +29,10 @@ const MAX_ZOOM_LEVEL = 2
 const ZOOM_STEP = 1
 
 export type AppWindowHooks = {
+  /** A new document/crashed renderer cannot inherit the old renderer's queued
+   *  publication authority even though its BrowserWindow id stays the same. */
+  onRendererUnavailable: () => void
+  onRendererReady: () => void
   /** Called when this window takes focus, so the registry can keep its
    *  most-recently-focused order for `sendToFocusedWindow`. */
   onFocused: () => void
@@ -253,7 +257,14 @@ export function buildAppWindow(options: {
   // did-finish-load fires on every navigation/reload, and the renderer
   // subscribes in a mount effect that runs before this event's IPC
   // round-trip can complete, so the push always lands on a listener.
-  window.webContents.on('did-finish-load', () => pushTrafficLightInset(window))
+  window.webContents.on('did-start-navigation', details => {
+    if (details.isMainFrame && !details.isSameDocument) hooks.onRendererUnavailable()
+  })
+  window.webContents.on('render-process-gone', () => hooks.onRendererUnavailable())
+  window.webContents.on('did-finish-load', () => {
+    hooks.onRendererReady()
+    pushTrafficLightInset(window)
+  })
 
   window.webContents.on('before-input-event', (event, input) =>
     handleZoomInput(window, event, input),
