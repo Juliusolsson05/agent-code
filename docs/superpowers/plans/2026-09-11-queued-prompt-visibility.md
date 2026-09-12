@@ -166,6 +166,13 @@ when it skipped:
 `submittedAt` serves as the token instead of a new field for the same reason
 as D1.
 
+*Unwind shares the rule (review round 2, R2-1).* `unwindOptimisticSubmit(
+sessionId, stamp)` retracts the same claim when nothing was written, so it
+takes the same token and the same guard. A submit that skipped its stamp and
+then fails before any write has nothing of its own to unwind. Without the
+token it would idle an earlier submit's claim and clear that submit's
+`awaitingAssistant`.
+
 *Why not reuse `unwindOptimisticSubmit`:* unwind means "nothing reached the
 provider" and clears `awaitingAssistant`. A queued prompt did reach the
 provider; only the phase claim is false.
@@ -203,6 +210,12 @@ So the boundary is membership. The collapse resets when no item of the
 previous rendered queue survives into the next one. An empty queue shares
 nothing, so the plain drain falls under the same rule. Growth (`[A] → [A, B]`)
 and a partial drain (`[A, B] → [B]`) keep the collapse.
+
+The comparison is between consecutive renders, not against the set that was
+visible when the user collapsed (review round 2, R2-2). A chain of overlapping
+renders is one episode: `[A] → [A, B] → [B]` stays collapsed, so an item that
+joined while collapsed stays hidden behind the visible count until the
+episode ends.
 
 Identity is `(timestamp, content)`. That is the key the Claude reconciler's
 enqueue idempotence guard and the strip's dialog selection already use, so no
@@ -356,3 +369,24 @@ follows changes no code.
 - **`vitest related --run`** on `streaming.ts`, `useComposerKeybinds.ts`,
   `QueueStrip.tsx` and `events.ts`: 70 files / 599 tests passed.
 - The full suite was not re-run this round.
+
+### Review round 2 (2026-09-12)
+
+Re-reviews of `78665e6a`:
+
+- **Codex: APPROVE, 0 findings.** It re-ran the two-submit ownership replay,
+  the single-burst queue replay and the Codex `tool_completed` gate replay
+  against the real reducers.
+- **Claude: APPROVE WITH COMMENTS, R2-1 to R2-3.** It verified every round-1
+  disposition, including the two declined literal fixes.
+
+| Finding | Disposition |
+|---|---|
+| Codex round 2 | Approve, no findings. |
+| Claude R2-1 (minor): `unwindOptimisticSubmit` still guarded on the phase alone. A skipped submit B that failed with nothing written unwound A's claim and cleared A's `awaitingAssistant`. | Fixed in `ef648452`: unwind takes the same stamp token and guard as the settle, one ownership rule for both retractions (D2). |
+| Claude R2-2 (nit): the QueueStrip WHY said "none of the items the user hid remain", but the code compares consecutive renders. | Fixed in `fd3340ba`: the comment states the implemented rule. A chain of overlapping renders is one episode, so an item that joined while collapsed stays hidden (D4). |
+| Claude R2-3 (nit): the PR body's CI line for `78665e6a` was stale. | Fixed in the PR body, which records the final head's CI result. A commit cannot record CI on itself, so this plan does not. |
+
+Mutation check for R2-1: with the unwind guard back to phase-only, 3 tests fail: in the hook suite, another submit's claim and a replaced claim; in the controller suite, a second submit failing before any write. The source was restored byte-for-byte.
+
+Verification of round 2 (Node 24.14.1): on `fd3340ba`, raw `tsc -p tsconfig.node.json` then `tsc -p tsconfig.web.json` were clean (exit 0, no diagnostics). The focused renderer tests passed: 4 files / 34 tests (`streamingUnwind`, `streamingQueuedSubmit`, `useComposerKeybinds.queueAcceptance`, `QueueStrip`). The plan commit that follows changes no code. CI on `78665e6a` passed (`quality-gate`, `minimum-node-fixture-gate`).
