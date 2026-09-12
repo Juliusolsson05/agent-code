@@ -125,7 +125,7 @@ const FEATURES_BY_KIND: Record<AgentProviderKind, ProviderFeatureCapabilities> =
   // rewind, duplicate, and pairwise switching; its sessions are listed from
   // its database by the conversation catalog.
   opencode: {
-      transcriptRewind: true,
+    transcriptRewind: true,
     transcriptDuplicate: true,
     promptHistoryExtraction: true,
     // TRUE, and the one place OpenCode is not behind. `opencodeSession`

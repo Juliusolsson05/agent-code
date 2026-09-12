@@ -240,19 +240,6 @@ export type SessionAgentPtyDataEvent = { sessionId: string; data: string }
 // provider runtimes; those are owned by the conditions-framework /
 // provider-boundary clusters and are intentionally untouched here.
 
-// --- Session prompt index ---------------------------------------------------
-//
-// Shape returned by the Search Conversation Prompts modal's IPC
-// endpoints. Mirrors src/main/sessionIndex.ts's public exports one-to-
-// one; re-declared here because preload/main/renderer are built under
-// different tsconfig contexts and we don't share runtime types across
-// them by import.
-//
-// A single entry carries enough metadata for the modal to render a
-// row (provider icon, summary, relative time) and show the most
-// recent user prompts for visual recognition. `matchCount` is only
-// meaningful on search results — zero on the default listing.
-
 export type SessionHistoryChunk = {
   entries: JsonlEntry[]
   hasMore: boolean

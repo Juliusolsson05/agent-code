@@ -38,11 +38,8 @@ import {
 // SessionManager / ClaudeSession / CodexSession / TerminalSession
 // machinery; this file is a thin IPC adapter.
 //
-// Listing handlers live here too (list-for-cwd, list-all) because
-// they're "session lifecycle from the user's POV" — the resume
-// picker asks "what sessions could I spawn?" before calling spawn.
-// The prompt-indexing handlers (sessions:*) live in ./sessions.ts
-// because they're a separate concern with their own cache layer.
+// Listing past conversations is not here: every picker reads the
+// conversation catalog through ./conversations.ts.
 //
 // WHY spawn/recover/kill also talk to the window registry:
 //
