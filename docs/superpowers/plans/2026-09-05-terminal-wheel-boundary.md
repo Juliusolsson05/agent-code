@@ -24,3 +24,29 @@ reported scrolling problem or change providers' alternate-screen behavior.
   patched keeps it at 0px. Normal scrollback, output anchoring, alternate-screen
   arrows, and SGR mouse reporting pass in both modes.
 - Probe retained as scripts/smoke-terminal-wheel.mjs, including --control.
+
+## Re-validation on main after #873 (xterm 6.1.0-beta.304)
+
+Main moved to exact-pinned xterm betas with WebGL re-enabled and a locally
+patched resize(). Before keeping this PR, the boundary assumptions were
+re-derived from the installed beta, checked against its shipped bundle
+(lib/xterm.mjs), not only its sources:
+
+- Still leaks. The viewport's scrollable element consumes a wheel only if it
+  scrolled, or if `alwaysConsumeMouseWheel` / `consumeMouseWheelIfScrollbarIsNeeded`
+  are set. Both default to false and `Viewport.ts` sets neither. MouseService's
+  passive wheel handler returns without `preventDefault` while the buffer has
+  scrollback. Same shape as 6.0.0.
+- Mechanism still correct. All xterm wheel listeners sit at or below `.xterm`,
+  which `open()` appends to the host, so the host's bubbling listener runs
+  last. Alternate-screen arrows (`!hasScrollback`) and mouse-protocol reports
+  both `preventDefault` first, so the helper's `defaultPrevented` bail keeps
+  them intact.
+- Merge resolutions: the boundary attaches right after `open()`; main's
+  `onRendererChange` WebGL attach stays where main put it.
+- The real-browser probe spawns Electron, so it was not re-run in this pass.
+  Its fixture still type-matches `attachXtermWebglRenderer(term).ready`.
+- On the merge (Node 24, against the patched beta install): raw
+  `tsc -p tsconfig.node.json` and `tsc -p tsconfig.web.json` are clean. The
+  boundary helper tests plus every AgentTerminalLeaf / TerminalLeaf renderer
+  test file pass: 9 files, 62 tests.
