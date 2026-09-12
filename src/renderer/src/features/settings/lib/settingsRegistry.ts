@@ -39,7 +39,7 @@ export type SettingMetadata = {
   /** Whose behaviour this changes. */
   scope: 'app' | 'project' | 'session-default' | 'fresh-install'
   /** When the change takes effect. */
-  apply: 'immediate' | 'new-session' | 'reload-live-sessions' | 'restart-required'
+  apply: 'immediate' | 'next-recording' | 'new-session' | 'reload-live-sessions' | 'restart-required'
   /** Where the value actually lives. Not always renderer Settings — some rows
    *  front main-owned setup state, the keychain, or files on disk, which is
    *  what makes "Reset Settings" ambiguous today. */
@@ -88,6 +88,9 @@ type ChoiceOption<T extends string> = {
 }
 
 export type SettingDefinition =
+  // A live device inventory needs permission, hotplug and unavailable states,
+  // so it cannot be represented by the static generic select's options.
+  | { id: string; category: SettingCategoryId; title: string; description: string; keywords: string[]; metadata?: SettingMetadata; control: { type: 'dictation-audio-input' } }
   | { id: string; category: SettingCategoryId; title: string; description: string; keywords: string[]; metadata?: SettingMetadata; control: { type: 'external-control' } }
   | {
       id: string
@@ -852,6 +855,15 @@ export function getSettingsRegistry(): SettingDefinition[] {
         onSelect: (ctx, value) =>
           ctx.onChange({ dictationProvider: value as Settings['dictationProvider'] }),
       },
+    },
+    {
+      id: 'dictation-audio-input',
+      category: 'dictation',
+      title: 'Audio Input Device',
+      description: 'Choose the microphone used for voice dictation in composers and terminals.',
+      keywords: ['voice', 'dictation', 'audio', 'input', 'device', 'microphone', 'headphones', 'headset', 'airpods', 'usb'],
+      metadata: { scope: 'app', apply: 'next-recording', storage: 'settings' },
+      control: { type: 'dictation-audio-input' },
     },
     {
       // Marker row rendered by <DictationApiKeyRow /> — see the registry
