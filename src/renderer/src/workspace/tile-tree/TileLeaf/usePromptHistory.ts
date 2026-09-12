@@ -59,11 +59,14 @@ import type { SessionKind } from '@renderer/workspace/types'
 //      all, just the results for the previous assistant turn's
 //      tool_use blocks.
 //
-// Positive signal for "this was a real prompt the user typed":
-// the entry has a `permissionMode` field set. Empirically every
-// real user prompt in the current transcript carries it; every
-// synthetic entry (isMeta, error responses, local-command
-// markers) lacks it. The filter applied here lives in
+// That list is Claude's noise. The positive signal is per provider,
+// because each marks its non-typed rows differently: Claude stamps
+// `permissionMode` on typed prompts and on none of the noise above;
+// Codex has no stamp but prefixes its injected context with `<`;
+// OpenCode drops its own `synthetic` parts in the feed mapper, so
+// every text-bearing OpenCode user row is typed. Each rule is the
+// provider's `isTypedUserPrompt` capability
+// (registry.renderer.capabilities.ts), reached through
 // `extractLatestUserPrompts`; this hook just consumes its output.
 //
 // Dedup: adjacent identical prompts (the "oops, meant to add

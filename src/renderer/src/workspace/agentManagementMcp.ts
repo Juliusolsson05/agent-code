@@ -194,11 +194,11 @@ function descriptorForSession(params: {
       backendState: backendState(runtime),
       activityState: activityState(runtime),
       ...(summary ? { statusSummary: summary } : {}),
+      // A placeholder: main replaces it with the resolved locator (a JSONL
+      // path, or opencode://session/<id>) before anything reaches the MCP.
       transcript: {
         path: null,
-        availability: meta.providerSessionId
-          ? (kind === 'opencode' ? 'provider_managed' : 'unavailable')
-          : 'not_created',
+        availability: meta.providerSessionId ? 'unavailable' : 'not_created',
       },
       processActive: runtime?.processActive === true,
       // A hibernated runtime does not persist the transient awaitingAssistant

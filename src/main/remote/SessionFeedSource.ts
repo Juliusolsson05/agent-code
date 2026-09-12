@@ -122,14 +122,17 @@ export class SessionFeedSource {
     sub('input-readiness', (payload: { sessionId: string }) =>
       this.emit('input-readiness', payload),
     )
-    sub('jsonl-error', (payload: { sessionId: string; error: Error }) =>
+    sub('jsonl-error', (payload: { sessionId: string; error: Error }) => {
+      // The reader emits understood records before refusing a later row. The
+      // phone must receive that same order even while a burst is buffered.
+      this.flushJsonl(payload.sessionId)
       this.emit('jsonl-error', {
         sessionId: payload.sessionId,
         // Match the forwarder's serialization: Errors don't survive
         // structured clone/JSON, the message string does.
         message: String(payload.error?.message ?? payload.error),
-      }),
-    )
+      })
+    })
     sub('semantic-event', (payload: { sessionId: string }) =>
       this.emit('semantic-event', payload),
     )

@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto'
 import { performanceService } from '@main/performance/PerformanceService.js'
 import { makeStringPool, internEntryFields } from '@main/sessions/internEntry.js'
 import { resolveProviderTranscriptPath } from '@main/providerSwitch/shared.js'
+import { getMainProvider } from '@providers/registry.main.js'
 
 // Loader for the bootstrap tail and for older history chunks.
 //
@@ -122,6 +123,27 @@ function extractClaudeHistoryMarker(entry: Record<string, unknown>): string | nu
 function extractCodexHistoryMarker(entry: Record<string, unknown>): string {
   const payload = entry.payload as Record<string, unknown> | undefined
   return `${String(entry.timestamp ?? '')}:${String(payload?.id ?? payload?.call_id ?? payload?.type ?? entry.type)}`
+}
+
+/**
+ * Run a provider-owned history read with the same performance-journal span
+ * the file path records, so a slow or failing OpenCode page shows up in the
+ * same place a slow JSONL page does.
+ */
+async function loadProviderOwnedChunk(
+  spanName: string,
+  kind: AgentProviderKind,
+  read: () => Promise<HistoryChunk>,
+): Promise<HistoryChunk> {
+  const span = performanceService.span(spanName, { kind, providerOwned: true })
+  try {
+    const chunk = await read()
+    span.end({ result: chunk.entries.length > 0 ? 'loaded' : 'empty', returned: chunk.entries.length, hasMore: chunk.hasMore })
+    return chunk
+  } catch (err) {
+    span.fail(err)
+    throw err
+  }
 }
 
 async function resolveHistoryTranscriptPath(
@@ -638,6 +660,18 @@ function finishWindow(
 export async function loadOlderHistoryChunk(
   params: HistoryChunkRequest,
 ): Promise<HistoryChunk> {
+  // Providers without a transcript file (OpenCode: SQLite) own their pages.
+  const providerSource = getMainProvider(params.kind).loadHistoryChunk
+  if (providerSource) {
+    return await loadProviderOwnedChunk('historyLoader.loadOlderChunk', params.kind, () =>
+      providerSource({
+        cwd: params.cwd,
+        providerSessionId: params.providerSessionId,
+        limit: params.limit,
+        beforeMarker: params.beforeMarker,
+      }),
+    )
+  }
   // Thin resolver wrapper — the reading work, span bookkeeping, and
   // return shaping all live in the FromFile variant so the two entrypoints
   // cannot drift (review finding: the first extraction duplicated the span
@@ -722,6 +756,12 @@ function finishOlderChunk(
 export async function loadInitialHistoryChunk(
   params: InitialHistoryChunkRequest,
 ): Promise<HistoryChunk> {
+  const providerSource = getMainProvider(params.kind).loadHistoryChunk
+  if (providerSource) {
+    return await loadProviderOwnedChunk('historyLoader.loadInitialChunk', params.kind, () =>
+      providerSource({ cwd: params.cwd, providerSessionId: params.providerSessionId, limit: params.limit }),
+    )
+  }
   const span = performanceService.span('historyLoader.loadInitialChunk', {
     kind: params.kind,
     limit: params.limit,

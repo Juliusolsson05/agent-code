@@ -598,6 +598,14 @@ export type SessionRuntime = {
    *  usable even if an optional tail-read failed. */
   transcriptStatus: TranscriptStatus
   transcriptError: string | null
+  /**
+   * A stopped observation channel (or a TUI following a different session)
+   * stays unhealthy even when a snapshot read succeeds. History and live
+   * entries may still be useful, but neither can repair that channel. Keep
+   * its diagnostic until the backend is replaced and gets a fresh runtime;
+   * optional for older runtime snapshots that predate this field.
+   */
+  transcriptChannelError?: string | null
   /** Backend process lifecycle for send gating. `sessionStatus` is
    *  "is the agent doing work right now"; `processStatus` is "does a
    *  writable backend exist for this pane". Keeping them separate

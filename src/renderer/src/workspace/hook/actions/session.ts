@@ -71,9 +71,10 @@ import type { WakeCaller } from '@shared/lifecycle/events'
 // replaceSession     — kill current focused session + spawn a new one in
 //                      the same tile-tree slot. Used by resume picker and
 //                      provider switch.
-// reloadAgentSessions — recreate every Claude/Codex session with fresh
-//                       dangerous-mode settings. Remaps panes + buried
-//                       records onto the new ids.
+// reloadAgentSessions — recreate every live agent session (any provider,
+//                       either runtime) with fresh dangerous-mode settings.
+//                       Remaps panes + buried records onto the new ids and
+//                       reloads each durable session's history.
 // -----------------------------------------------------------------------------
 
 export type SessionActions = {
@@ -279,9 +280,12 @@ function softReloadRuntime(current: SessionRuntime, hasProviderSession: boolean)
     phaseChangedAt: current.phaseChangedAt,
     submittedAt: current.submittedAt,
     hasOlderHistory: true,
-    transcriptStatus: 'loading',
+    // A soft reload keeps the same backend. Rebuilding the view cannot
+    // restart a stopped channel or undo navigation inside the provider TUI.
+    transcriptChannelError: current.transcriptChannelError,
+    transcriptStatus: current.transcriptChannelError ? 'error' : 'loading',
     transcriptStatusChangedAt: Date.now(),
-    transcriptError: null,
+    transcriptError: current.transcriptChannelError ?? null,
   }
 }
 
@@ -495,7 +499,11 @@ export function useSessionActions(
             ...prev,
             [sessionId]: {
               ...base,
-              ...(kind !== 'terminal' && opts?.providerRuntime !== 'terminal'
+              // Provider-native terminal runtimes seed like any agent: their
+              // durable history loads into `entries` below (see
+              // loadInitialHistoryForSession for why). Only plain shells
+              // have no transcript to load.
+              ...(kind !== 'terminal'
                 ? seedResumedRuntimeFields(current, meta)
                 : {
                     hasOlderHistory: false,
@@ -510,7 +518,7 @@ export function useSessionActions(
             },
           }
         })
-        if (kind !== 'terminal' && meta.providerRuntime !== 'terminal' && meta.providerSessionId) {
+        if (kind !== 'terminal' && meta.providerSessionId) {
           void loadInitialHistoryForSession({
             sessionId,
             meta,
@@ -1051,7 +1059,6 @@ export function useSessionActions(
 
         if (
           kind !== 'terminal' &&
-          recoveredMeta.providerRuntime !== 'terminal' &&
           resumeSessionId &&
           refs.stateRef.current.sessions[sessionId] &&
           refs.latestRuntimesRef.current[sessionId]
@@ -1546,19 +1553,10 @@ export function useSessionActions(
           const existing = prev[newId]
           const restored: SessionRuntime = { ...(existing ?? emptyRuntime()) }
           restored.draftInput = oldRuntimes[oldId]?.draftInput ?? existing?.draftInput ?? ''
-          if (freshSessions[newId]?.providerRuntime === 'terminal') {
-            // A global dangerous-mode/MCP restart must not convert native
-            // OpenCode TUI state into a rendered-history bootstrap. The raw
-            // PTY is the only visual authority for this runtime; its durable
-            // provider id is still retained in freshSessions for resume.
-            Object.assign(restored, {
-              hasOlderHistory: false,
-              transcriptStatus: 'ready' as const,
-              transcriptError: null,
-            })
-          } else {
-            Object.assign(restored, seedResumedRuntimeFields(existing, freshSessions[newId]))
-          }
+          // Terminal-runtime agents included: their history reloads into
+          // `entries` with everyone else's below, and the pane stays on the
+          // raw TUI regardless (see loadInitialHistoryForSession).
+          Object.assign(restored, seedResumedRuntimeFields(existing, freshSessions[newId]))
           next[newId] = restored
         }
         return next

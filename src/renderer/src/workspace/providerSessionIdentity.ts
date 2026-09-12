@@ -21,6 +21,7 @@ export function seedResumedRuntimeFields(
   | 'hasOlderHistory'
   | 'transcriptStatus'
   | 'transcriptError'
+  | 'transcriptChannelError'
   | 'processStatus'
   | 'processError'
   | 'inputReady'
@@ -44,6 +45,10 @@ export function seedResumedRuntimeFields(
       ? existing.transcriptStatus
       : meta?.providerSessionId ? 'loading' : 'ready',
     transcriptError: existing?.transcriptError ?? null,
+    // Startup may publish a channel failure before spawn/rehydrate returns.
+    // Preserve its lifetime marker as well as its current display text, or
+    // the next successful history read would erase it again.
+    transcriptChannelError: existing?.transcriptChannelError ?? null,
     processStatus: preserveProcess ? existing.processStatus : 'started',
     processError: existing?.processError ?? null,
     // Process start is deliberately not composer readiness. A provider may

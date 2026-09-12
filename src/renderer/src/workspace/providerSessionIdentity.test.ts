@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
-import { decideJsonlProviderBurst } from '@renderer/workspace/providerSessionIdentity'
+import { emptyRuntime } from '@renderer/session-runtime/state'
+import { decideJsonlProviderBurst, seedResumedRuntimeFields } from '@renderer/workspace/providerSessionIdentity'
 
 describe('decideJsonlProviderBurst', () => {
   it('accepts an observed provider id that matches the durable pane identity', () => {
@@ -89,5 +90,13 @@ describe('decideJsonlProviderBurst', () => {
       lastObservedProviderSessionId: 'first-provider',
       blockedAfterConflict: false,
     })
+  })
+})
+
+
+it('retains a channel failure published before resume bookkeeping finishes', () => {
+  const existing = { ...emptyRuntime(), transcriptStatus: 'error' as const, transcriptError: 'reader stopped', transcriptChannelError: 'reader stopped' }
+  expect(seedResumedRuntimeFields(existing, { providerSessionId: 'ses_saved' })).toMatchObject({
+    transcriptStatus: 'error', transcriptError: 'reader stopped', transcriptChannelError: 'reader stopped',
   })
 })

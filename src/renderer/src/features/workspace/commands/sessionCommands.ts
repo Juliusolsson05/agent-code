@@ -161,6 +161,16 @@ export const sessionCommands: CommandDef[] = [
       // introduced when OpenCode had no adapter; retaining it matters because
       // the next provider must not inherit destructive transcript powers just
       // by joining the broad agent-kind union.
+      //
+      // WHY a native terminal runtime (OpenCode Terminal, the only one today)
+      // stays excluded although OpenCode supports rewind: rewind hands the
+      // anchored prompt back as the pane's COMPOSER draft
+      // (rewindSessionToPrompt → draftInput), and a native TUI pane renders
+      // no composer; the TUI owns its own input box. The rewound prompt would
+      // land in a runtime field nothing shows. Supporting it means delivering
+      // that draft into the TUI's input, and respawning the TUI on the
+      // rewritten session through replaceSession, which still drops
+      // orchestration metadata (#879). A follow-up feature, not a gate to lift.
       return (
         getProviderFeatures(kind).transcriptRewind &&
         meta?.providerRuntime !== 'terminal' &&
@@ -216,8 +226,12 @@ export const sessionCommands: CommandDef[] = [
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return
       const meta = workspace.state.sessions[sessionId]
-      // Match `when` exactly so a keybinding cannot strip a Claude pane,
-      // a Codex terminal runtime, or a provider that lost transcriptRewind.
+      // Match `when` exactly so a keybinding cannot strip a Claude pane, a
+      // provider that lost transcriptRewind, or a native terminal runtime.
+      // Codex has no terminal runtime today (only OpenCode does, and the kind
+      // check already excludes it); the runtime check is there so this
+      // opens-rendered-feed command cannot reach a Codex native TUI if one is
+      // ever added, since that pane would not render the rewritten feed.
       if (
         meta?.kind !== 'codex' ||
         !getProviderFeatures(meta.kind).transcriptRewind ||

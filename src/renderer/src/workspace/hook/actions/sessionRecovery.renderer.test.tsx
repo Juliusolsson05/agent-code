@@ -52,6 +52,7 @@ describe('useSessionActions recovery retry', () => {
       dangerousAgentsRef: ref(false),
       useProxyStreamingRef: ref(false),
       defaultBuiltInMcpDomainsRef: ref(['orchestration', 'workflows']),
+      seenUuidsRef: ref({}),
     } as unknown as WorkspaceRefs
     const setState = (next: WorkspaceState | ((prev: WorkspaceState) => WorkspaceState)) => {
       state = typeof next === 'function' ? next(state) : next
@@ -72,9 +73,15 @@ describe('useSessionActions recovery retry', () => {
         sessionId: 'opencode-terminal',
         providerSessionId: 'ses_precreated_at_runtime_start',
       })
+    const loadInitialHistory = vi.fn(async () => ({ entries: [], hasMore: false, totalEntries: 0 }))
     Object.defineProperty(window, 'api', {
       configurable: true,
-      value: { spawnSession, ghostRead: vi.fn(async () => []) },
+      value: {
+        spawnSession,
+        ghostRead: vi.fn(async () => []),
+        loadInitialHistory,
+        gitWorktrees: vi.fn(async () => ({ ok: true, worktrees: [] })),
+      },
     })
     const { result } = renderHook(() => useSessionActions(
       state,
@@ -116,13 +123,20 @@ describe('useSessionActions recovery retry', () => {
       providerSessionId: 'ses_precreated_at_runtime_start',
       providerSessionIdSource: 'runtime-start',
     })
-    // Native terminal sessions intentionally skip structured history loading;
-    // the provider's durable identity is for recovery and conversion, not an
-    // instruction to mount the immature rendered OpenCode surface.
-    expect(runtimes['opencode-terminal']).toMatchObject({
-      transcriptStatus: 'ready',
-      processStatus: 'started',
-      hasOlderHistory: false,
+    // The terminal runtime loads its durable history like any agent — the
+    // app's features and MCP reads need `entries` — while the pane stays on
+    // the TUI (agentDisplayMode pins it). The two sessions without a durable
+    // provider id have nothing to load.
+    await vi.waitFor(() => {
+      expect(loadInitialHistory).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        kind: 'opencode',
+        providerSessionId: 'ses_precreated_at_runtime_start',
+      }))
+      expect(runtimes['opencode-terminal']).toMatchObject({
+        transcriptStatus: 'ready',
+        processStatus: 'started',
+        hasOlderHistory: false,
+      })
     })
   })
 

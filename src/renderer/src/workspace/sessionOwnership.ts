@@ -96,7 +96,7 @@ export type PrunedSessionOwnership = {
  * key holding `undefined` has to read as "no metadata" on this side too or the
  * two halves disagree about what a pane is.
  */
-function hasSessionMeta(
+export function hasSessionMeta(
   sessions: Record<SessionId, SessionMeta>,
   id: SessionId,
 ): boolean {
