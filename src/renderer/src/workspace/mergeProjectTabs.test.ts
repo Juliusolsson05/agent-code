@@ -44,6 +44,7 @@ function fixture(): WorkspaceState {
       'e-tldr': meta('/dev/agent-code'),
       'g-review': meta('/dev/agent-code'),
       'g-buried': meta('/dev/agent-code'),
+      'e-buried': meta('/dev/agent-code'),
     },
     detachedSessions: {
       'b-verify': { sessionId: 'b-verify', surface: 'dispatch', projectTabId: 'tab-b', projectTabTitle: 'agent-code', projectTabIndex: 0, detachedAt: 10 },
@@ -52,6 +53,9 @@ function fixture(): WorkspaceState {
     buried: [{
       id: 'g-buried', sessionId: 'g-buried', sessionMeta: meta('/dev/agent-code'), buriedAt: 30,
       sourceTabId: 'tab-g', sourceTabTitle: 'agent-code', sourceTabIndex: 3,
+    }, {
+      id: 'e-buried', sessionId: 'e-buried', sessionMeta: meta('/dev/agent-code'), buriedAt: 35,
+      sourceTabId: 'tab-e', sourceTabTitle: 'agent-code', sourceTabIndex: 2,
     }],
     pinnedSessionIds: ['e-grok'],
   }
@@ -83,6 +87,8 @@ describe('mergeProjectTabs', () => {
     // must not keep the old letter next to the ones they were just joined by.
     expect(state.detachedSessions['e-tldr']).toMatchObject({ projectTabId: 'tab-e', projectTabIndex: 1, detachedAt: 20 })
     expect(state.buried[0]).toMatchObject({ sourceTabId: 'tab-e', sourceTabTitle: 'agent-code', sourceTabIndex: 1 })
+    // A buried record of the surviving target moves letter with it too.
+    expect(state.buried[1]).toMatchObject({ id: 'e-buried', sourceTabId: 'tab-e', sourceTabIndex: 1, buriedAt: 35 })
     expect(state.pinnedSessionIds).toEqual(['e-grok'])
     // Row filters that named a removed tab name the target once; the legacy
     // single binding is folded into the array; lanes are untouched.

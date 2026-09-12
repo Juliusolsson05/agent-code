@@ -98,9 +98,12 @@ export function PathPickerSurface() {
     [workspace.state],
   )
 
+  // "stay here" must be exactly that: `activateTab` also clears Spotlight,
+  // so activating the tab the user is already in would drop them out of a
+  // Spotlight they opened ⌘T from. Only a different tab is activated.
   const onActivateTab = useCallback(
     (tabId: string) => {
-      workspace.activateTab(tabId)
+      if (tabId !== workspace.state.activeTabId) workspace.activateTab(tabId)
       closePathPicker()
     },
     [closePathPicker, workspace],

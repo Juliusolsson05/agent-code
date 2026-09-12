@@ -116,7 +116,7 @@ next autosave.
 - `PathPickerModal.renderer.test.tsx`: with a holder, the primary action
   activates and does not accept; "new tab anyway" accepts; without a holder
   the primary action accepts as before.
-- Command catalog baseline: 121 commands, 24 approved additions.
+- Command catalog baseline: 122 commands, 25 approved additions.
 - `tsc -b` on both projects, `npm run test:contract`, touched suites green.
 
 ## Out of scope
