@@ -11,5 +11,6 @@ const parent = (process as unknown as { parentPort: {
 const aggregator = new MonitorAggregator()
 parent.on('message', ({ data }) => {
   aggregator.accept(data.records)
+  if (data.liveWindowIds) aggregator.reconcileWindows(data.liveWindowIds)
   parent.postMessage({ sequence: data.sequence, snapshot: aggregator.snapshot(Date.now(), process.memoryUsage.rss()) })
 })

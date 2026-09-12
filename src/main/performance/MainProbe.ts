@@ -20,7 +20,9 @@ export class MainProbe {
   private histogram: ReturnType<typeof monitorEventLoopDelay> | null = null
   private lastCpu = process.cpuUsage()
   private lastMono = performance.now()
-  private lastWall = Date.now()
+  private suspended = false
+  private resumed = false
+  private loopWindows: Array<{ at: number; from: number; count: number; meanMs: number; maxMs: number; p99Ms: number }> = []
   private lastMemoryAt = -Infinity
   private listeners = new Set<(sample: MainProbeSample) => void>()
   private sample: MainProbeSample = {
@@ -36,7 +38,6 @@ export class MainProbe {
     this.histogram.enable()
     this.lastCpu = process.cpuUsage()
     this.lastMono = performance.now()
-    this.lastWall = Date.now()
     this.tick()
     this.timer = setInterval(() => this.tick(), 1000)
     this.timer.unref()
@@ -50,6 +51,26 @@ export class MainProbe {
   }
 
   read(): MainProbeSample { return this.sample }
+
+  noteSuspend(): void { this.suspended = true }
+  noteResume(): void { this.suspended = false; this.resumed = true }
+
+  readJournalWindow(): { meanMs: number; maxMs: number; p99UpperBoundMs: number; windowMs: number } | null {
+    const now = performance.now()
+    const windows = this.loopWindows.filter(window => window.at > now - 5000)
+    const count = windows.reduce((sum, window) => sum + window.count, 0)
+    if (!count) return null
+    // Native ELD histograms cannot be merged with RecordableHistogram.add on
+    // the supported Node runtime. Do not average per-window p99s and pretend
+    // that is a distribution. Preserve the exact peak and weighted mean, and
+    // label the worst-window p99 explicitly as a conservative upper bound.
+    return {
+      meanMs: windows.reduce((sum, window) => sum + window.meanMs * window.count, 0) / count,
+      maxMs: Math.max(...windows.map(window => window.maxMs)),
+      p99UpperBoundMs: Math.max(...windows.map(window => window.p99Ms)),
+      windowMs: now - windows[0].from,
+    }
+  }
 
   subscribe(listener: (sample: MainProbeSample) => void): () => void {
     this.listeners.add(listener)
@@ -65,8 +86,10 @@ export class MainProbe {
       const mono = performance.now()
       const elapsed = mono - this.lastMono
       const cpu = process.cpuUsage()
-      const wallElapsed = now - this.lastWall
-      const sleepGap = elapsed > 5000 || wallElapsed > 5000 || wallElapsed < 0
+      // A long callback gap is also exactly what an awake main-thread stall
+      // looks like. Only Electron suspend/resume evidence may suppress it.
+      const sleepGap = this.suspended || this.resumed
+      this.resumed = false
       const histogram = this.histogram
       const eventLoopDelay = histogram && Number.isFinite(histogram.mean) && !sleepGap
         ? { meanMs: histogram.mean / 1e6, maxMs: histogram.max / 1e6, p99Ms: histogram.percentile(99) / 1e6 }
@@ -76,9 +99,13 @@ export class MainProbe {
         cpuPercent: elapsed >= 100 && !sleepGap
           ? Math.max(0, (cpu.user - this.lastCpu.user + cpu.system - this.lastCpu.system) / (elapsed * 10)) : null,
       }
+      if (eventLoopDelay && histogram) {
+        this.loopWindows.push({ at: mono, from: this.lastMono, count: histogram.count, ...eventLoopDelay })
+        if (this.loopWindows.length > 6) this.loopWindows.shift()
+      }
+      if (sleepGap) this.loopWindows = []
       this.lastCpu = cpu
       this.lastMono = mono
-      this.lastWall = now
       histogram?.reset()
       if (mono - this.lastMemoryAt >= 5000) {
         const memory = process.memoryUsage()

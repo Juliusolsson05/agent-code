@@ -30,3 +30,15 @@ fixed helper overhead and incremental retained evidence rather than claiming
 this target already passes. Live snapshot queries carry the last 120 main
 points; the worker retains the full 15-minute ring for later history queries.
 Full build and independent review remain in progress.
+
+Review corrections: only explicit Electron suspend/resume suppresses gap evidence;
+terminal monitoring teardown moved into the admitted shutdown callback; native
+ELD windows retain a bounded five-second journal rollup (weighted mean, exact
+peak, explicitly labelled worst-window p99 upper bound because supported Node
+cannot merge ELD histograms); coordinator deadlines/freshness use monotonic time;
+main's live sample stays authoritative; window membership is reconciled in every
+transport frame independently of lossy data; the helper receives a minimal
+environment. Twenty-one focused tests now pass, including the shutdown gate.
+The redundant local build/final typecheck were stopped after memory contention
+on this shared machine; prior full typecheck and Electron entry smoke passed,
+and PR CI will validate the final complete application build.

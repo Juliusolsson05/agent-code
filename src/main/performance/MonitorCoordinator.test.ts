@@ -19,7 +19,7 @@ describe('monitor worker isolation', () => {
     vi.useFakeTimers()
     const child = new FakeChild()
     harness.launch.mockReturnValue(child)
-    const coordinator = new MonitorCoordinator()
+    const coordinator = new MonitorCoordinator(() => Date.now())
     coordinator.start()
     for (let i = 0; i < 10000; i++) coordinator.operation(operation)
     vi.advanceTimersByTime(5000)
@@ -37,7 +37,7 @@ describe('monitor worker isolation', () => {
   it('ignores stale acknowledgements and limits restarts for the entire app run', () => {
     vi.useFakeTimers()
     harness.launch.mockImplementation(() => new FakeChild())
-    const coordinator = new MonitorCoordinator()
+    const coordinator = new MonitorCoordinator(() => Date.now())
     coordinator.start()
     for (let attempt = 0; attempt < 4; attempt++) {
       coordinator.operation(operation)
@@ -53,4 +53,45 @@ describe('monitor worker isolation', () => {
     vi.advanceTimersByTime(300000)
     expect(harness.launch).toHaveBeenCalledTimes(4)
   })
+  it('does not let a wall-clock rollback postpone its deadline or inherit credentials', () => {
+    vi.useFakeTimers()
+    vi.stubEnv('PERFORMANCE_TEST_SECRET', 'synthetic-sentinel')
+    let mono = 1
+    const child = new FakeChild()
+    harness.launch.mockReturnValue(child)
+    const coordinator = new MonitorCoordinator(() => mono)
+    coordinator.start()
+    expect(JSON.stringify(harness.launch.mock.calls[0])).not.toContain('synthetic-sentinel')
+    coordinator.operation(operation)
+    vi.advanceTimersByTime(1000)
+    vi.setSystemTime(Date.now() - 3600000)
+    mono += 6000
+    vi.advanceTimersByTime(1000)
+    expect(child.kill).toHaveBeenCalledOnce()
+    coordinator.stop()
+    vi.unstubAllEnvs()
+  })
+
+  it('reconciles window closure under overload and keeps the authoritative live main sample', () => {
+    vi.useFakeTimers()
+    const child = new FakeChild()
+    harness.launch.mockReturnValue(child)
+    const coordinator = new MonitorCoordinator(() => Date.now())
+    coordinator.start()
+    coordinator.heartbeat(1, { sentAt: 100, monotonicMs: 50, eventLoopLagMs: 0,
+      visibilityState: 'visible', longTasks: { count: 0, totalMs: 0, maxMs: 0 } })
+    coordinator.closeWindow(1)
+    for (let i = 0; i < 5000; i++) coordinator.operation(operation)
+    vi.advanceTimersByTime(1000)
+    const sent = child.postMessage.mock.calls[0][0]
+    expect(sent.liveWindowIds).toEqual([])
+    child.emit('message', { sequence: sent.sequence, snapshot: {
+      schemaVersion: 1, sampledAt: Date.now(), main: { at: -1 }, windows: [{ windowId: 1 }],
+      recent: [], operations: [], workerRss: 0,
+    } })
+    expect(coordinator.read().main).toBeNull()
+    expect(coordinator.read().windows).toEqual([])
+    coordinator.stop()
+  })
+
 })
