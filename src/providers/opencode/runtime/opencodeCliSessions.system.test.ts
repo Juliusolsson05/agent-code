@@ -208,9 +208,10 @@ it.each(['stop', 'timeout'] as const)('bounds a hung import on %s and removes it
     expect(await outcome).toBe(mode === 'stop' ? 'resolved' : 'rejected')
     expect(existsSync(dirname(status!.file))).toBe(false)
     // Since #845 the import also mints a private stdout capture directory
-    // next to the payload. spawn has no built-in timeout or SIGKILL abort, so
-    // those kill paths are hand-written in runOpencode. A leftover
-    // agent-code-opencode-* directory here means a kill path skipped cleanup.
+    // next to the payload, and the timeout and stop kill paths are owned by
+    // runOpencode rather than delegated to spawn's built-in options. A
+    // leftover agent-code-opencode-* directory here means a kill path skipped
+    // cleanup.
     expect((await readdir(root)).filter(name => name.startsWith('agent-code-opencode-'))).toEqual([])
     expect(spawnPty).not.toHaveBeenCalled()
     expect(prepareLaunch).not.toHaveBeenCalled()
@@ -221,6 +222,81 @@ it.each(['stop', 'timeout'] as const)('bounds a hung import on %s and removes it
     await rm(dir, { recursive: true, force: true })
   }
 })
+
+// OpenCode's npm launcher is a Node process whose native child inherits stdout
+// and stderr (see testing/launcherCli.mjs). A single-process fake cannot show
+// that a kill path reaches a descendant, or that settlement stops waiting on
+// one, so these cases run a real two-process tree. Each bound is far below the
+// 30 s default deadline: a broken kill path fails here, it is not rescued.
+describe('OpenCode CLI process-tree termination', () => {
+  type Tree = { pid: number; launcherPid: number }
+  function launcher(descendant: 'hang' | 'overflow' | 'escaped', extra: { signal?: AbortSignal; timeoutMs?: number }) {
+    const statusFile = join(cwd, 'descendant.json')
+    const env = { ...process.env, NODE_OPTIONS: `--import=${new URL('./testing/launcherCli.mjs', import.meta.url).href}`, OPENCODE_LAUNCHER_DESCENDANT: descendant, OPENCODE_LAUNCHER_STATUS: statusFile }
+    return { statusFile, options: { binary: process.execPath, cwd, env, ...extra } }
+  }
+  async function killTree(tree: Tree | undefined) {
+    for (const pid of [tree?.pid, tree?.launcherPid]) if (pid && alive(pid)) process.kill(pid, 'SIGKILL')
+  }
+
+  it.each([
+    { trigger: 'timeout', descendant: 'hang', message: 'timed out after 2000 ms' },
+    { trigger: 'stop', descendant: 'hang', message: 'OpenCode command cancelled' },
+    { trigger: 'output overflow', descendant: 'overflow', message: 'output exceeds' },
+  ] as const)('settles on $trigger and kills a descendant holding stdout and stderr', async ({ trigger, descendant, message }) => {
+    const controller = new AbortController()
+    const run = launcher(descendant, { signal: controller.signal, ...(trigger === 'timeout' ? { timeoutMs: 2000 } : {}) })
+    const startedAt = performance.now()
+    const outcome = exportOpencodeSession(run.options, 'ses_fixture').then(() => new Error('resolved'), (error: Error) => error)
+    let tree: Tree | undefined
+    try {
+      await waitUntil(() => existsSync(run.statusFile), 5000, 'descendant status')
+      tree = JSON.parse(readFileSync(run.statusFile, 'utf8')) as Tree
+      if (trigger === 'stop') controller.abort()
+      const settleBy = (trigger === 'timeout' ? startedAt + 2000 : performance.now()) + 2000
+      const failure = await within(outcome, settleBy - performance.now())
+      expect(failure, `${trigger} settles within its bound`).toBeInstanceOf(Error)
+      expect((failure as Error).message).toContain(message)
+      await waitUntil(() => !alive(tree!.pid), 2000, 'descendant exit')
+      await expectClean()
+    } finally {
+      await killTree(tree)
+      await outcome
+    }
+  })
+
+  it('settles a timeout when a descendant left the process group but kept stderr', async () => {
+    // A group kill cannot reach a descendant in its own session. Settlement is
+    // still bounded because terminate() releases stderr, the pipe `close` would
+    // otherwise wait on. The survivor is out of reach by design, so it is
+    // killed in finally rather than asserted dead.
+    const run = launcher('escaped', { timeoutMs: 2000 })
+    const startedAt = performance.now()
+    const outcome = exportOpencodeSession(run.options, 'ses_fixture').then(() => new Error('resolved'), (error: Error) => error)
+    let tree: Tree | undefined
+    try {
+      await waitUntil(() => existsSync(run.statusFile), 5000, 'descendant status')
+      tree = JSON.parse(readFileSync(run.statusFile, 'utf8')) as Tree
+      const failure = await within(outcome, startedAt + 4000 - performance.now())
+      expect(failure, 'timeout settles within its bound').toBeInstanceOf(Error)
+      expect((failure as Error).message).toContain('timed out after 2000 ms')
+      await waitUntil(() => !alive(tree!.launcherPid), 2000, 'launcher exit')
+      await expectClean()
+    } finally {
+      await killTree(tree)
+      await outcome
+    }
+  })
+})
+
+async function within<T>(promise: Promise<T>, ms: number): Promise<T | 'pending'> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([promise, new Promise<'pending'>(resolve => { timer = setTimeout(() => resolve('pending'), Math.max(0, ms)) })])
+  } finally {
+    clearTimeout(timer)
+  }
+}
 
 async function waitUntil(predicate: () => boolean, timeoutMs: number, label: string): Promise<void> {
   const deadline = performance.now() + timeoutMs

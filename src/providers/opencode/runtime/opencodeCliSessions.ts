@@ -165,18 +165,59 @@ async function runOpencode(
       // owned abort listener, both SIGKILL, so a hung empty-session import
       // cannot hold OpenCode Terminal startup or survive stop(). This branch
       // (#845) replaced execFile with spawn so stdout can be a regular file.
-      // spawn has no `timeout`/`killSignal`, and its own `signal` option sends
-      // SIGTERM, which a wedged CLI can ignore (the system test's fake CLI
-      // does exactly that). So both bounds are rebuilt by hand on SIGKILL.
+      //
+      // WHY the deadline and the abort are owned here instead of passed as
+      // spawn's own `timeout` / `signal` / `killSignal` options (Node 24's
+      // spawn does accept all three, an earlier version of this comment said
+      // otherwise and was wrong):
+      // - The deadline records a distinct `timed out after N ms` failure. With
+      //   spawn's timeout, `close` would only report signal SIGKILL, which is
+      //   indistinguishable from an external kill or the OOM killer.
+      // - spawn's `signal` path emits an AbortError `error` and, for an
+      //   already-aborted signal, kills on nextTick. Owning the listener keeps
+      //   ONE cancellation outcome, `OpenCode command cancelled`, which
+      //   OpencodeTerminalSession relies on to treat stop() as expected.
+      // - None of spawn's built-in kill paths destroy stdio or reach
+      //   descendants (execFile's kill did destroy stdio, which the merge
+      //   first lost), so none of them would bound settlement when a
+      //   descendant holds stderr. terminate() below does both.
       //
       // The invariant from main still holds: this promise settles ONLY from
       // `close`, never from the abort or timeout event. Rejecting earlier
       // would let the finally blocks here and in importOpencodeSession delete
       // the capture and the import payload while the child is still alive and
-      // writing or reading them.
+      // writing or reading them. terminate() is what keeps that wait bounded.
       const child = spawn(options.binary, args, {
         cwd: options.cwd, env: options.env ?? process.env,
         stdio: ['ignore', fd, 'pipe'],
+        // WHY a private process group (detached, deliberately WITHOUT unref)
+        // on POSIX: the `opencode` on PATH or in the cached tool path can be
+        // OpenCode's npm launcher (packages/opencode/bin/opencode, v1.18.30).
+        // It is a Node script that spawns the native binary as ITS child with
+        // `stdio: "inherit"` and only forwards SIGINT/SIGTERM/SIGHUP. SIGKILL
+        // cannot be forwarded, so killing only the direct child left the
+        // native process alive, still holding the stdout capture and the
+        // stderr pipe: `close` never arrived and the timeout, stop and
+        // overflow bounds all hung while the native CLI kept exporting or
+        // mutating provider state. In its own group, terminate() reaches the
+        // whole tree with one signal. Skipping unref() keeps the parent
+        // tracking the child exactly as before; on POSIX `detached` only
+        // means setsid().
+        //
+        // Why not resolve and exec the native binary instead: the launcher
+        // picks it from OPENCODE_BIN_PATH, a cached copy, or one of several
+        // platform/arch/AVX2-baseline/musl optional packages. Re-deriving that
+        // couples Agent Code to OpenCode's private install layout (npm, brew,
+        // curl installer all differ) and still would not cover a native CLI
+        // or plugin that starts helpers of its own. A group does not care how
+        // the tree was formed.
+        //
+        // Consequences: the child has no controlling terminal (these commands
+        // are non-interactive and stdin is ignored), and a Ctrl+C in a dev
+        // terminal no longer reaches it directly; it runs to its own end or to
+        // the deadline. On Windows `detached` would open a console window and
+        // there is no process-group kill, so it keeps the direct-child kill.
+        detached: process.platform !== 'win32',
       })
       let failure: Error | undefined
       // WHY the lifecycle listeners come first, before timers and stdio: on
@@ -206,26 +247,59 @@ async function runOpencode(
         else if (code !== 0) reject(new Error(stderrText().trim() || `exited with ${signal ?? code}`))
         else resolve()
       })
+      // ONE termination path for the deadline, stop() and the size guard, so
+      // the three bounds cannot drift apart again.
+      // (a) Destroy stderr first. Settlement waits for `close`, and `close`
+      //     waits for stderr EOF. A descendant that inherited fd 2 and left
+      //     the process group (so (b) cannot reach it) would otherwise hold
+      //     the promise open for as long as it lives. This mirrors execFile's
+      //     own kill(), which destroyed stdout/stderr before signalling. Only
+      //     diagnostics written after the outcome was decided are lost.
+      //     stdout is a plain descriptor, not a stream: nothing to destroy.
+      // (b) SIGKILL the whole group via the negative pid. A group outlives its
+      //     leader while any member lives, so this still reaches the native
+      //     descendant after the launcher has died, and POSIX does not reuse a
+      //     pid while a group with that id exists. The `pid > 0` check is
+      //     load-bearing: process.kill(-0) would signal Agent Code's OWN group.
+      //     If the group is already gone (ESRCH) or cannot be signalled, fall
+      //     back to the direct child, which is all Node's kill paths ever did.
+      // Timers and the abort listener are cleared at `close`, so this never
+      // runs against a pid that has already been released.
+      const terminate = () => {
+        child.stderr?.destroy()
+        if (process.platform !== 'win32' && typeof child.pid === 'number' && child.pid > 0) {
+          try {
+            process.kill(-child.pid, 'SIGKILL')
+            return
+          } catch {
+            // Group already gone or not signalable: fall through.
+          }
+        }
+        child.kill('SIGKILL')
+      }
       const deadline = setTimeout(() => {
         failure ??= new Error(`timed out after ${timeoutMs} ms`)
-        child.kill('SIGKILL')
+        terminate()
       }, timeoutMs)
       // No `failure` is recorded for abort: close checks `signal.aborted`
       // first, so cancellation wins over any overflow or timeout that raced it.
       // That matches the execFile version, which callers such as
       // OpencodeTerminalSession treat as an expected stop, not a failure.
-      const abort = () => { child.kill('SIGKILL') }
+      const abort = () => { terminate() }
       options.signal?.addEventListener('abort', abort, { once: true })
       // Detect overflow while the producer runs, then check its final size
       // before allocating a string. Polling is a soft disk bound, not a hard
       // quota. Overflow fails the command; never parse a truncated prefix.
+      // Killing the whole tree is what makes the disk bound real: before the
+      // group kill, a surviving native writer kept growing the file after
+      // `failure` had already switched this guard off.
       const sizeGuard = setInterval(() => {
         if (failure) return
         try {
           if (fstatSync(fd).size > MAX_EXPORT_BYTES) throw new Error('output exceeds the 256 MiB capture limit')
         } catch (error) {
           failure = error instanceof Error ? error : new Error('Cannot inspect CLI output')
-          child.kill('SIGKILL')
+          terminate()
         }
       }, 100)
       sizeGuard.unref()
