@@ -82,7 +82,9 @@ describe('working-agent follow command', () => {
     context.workspace.getRuntime = () => runtime
     expect(command.getState?.(context)).toEqual({ kind: 'toggle', value: 'off' })
     runtime.sessionStatus = 'running'
-    expect(describeCommandState(command.getState!(context)).detail).toBe('On via Auto-follow All Working Agents')
+    const workingState = command.getState!(context)
+    if (!workingState) throw new Error('Working follow must expose a command state')
+    expect(describeCommandState(workingState).detail).toBe('On via Auto-follow All Working Agents')
     context.workspace.state.sessions.agent.kind = 'terminal'
     expect(command.getState?.(context)).toEqual({ kind: 'toggle', value: 'off' })
     runtime.tailMode = true

@@ -1,6 +1,6 @@
 # Auto-follow working agents
 
-Status: Implemented; 79 focused tests, test contract, and keybinding checks pass. Full type checking and production build verification are running. Refs #938.
+Status: Implemented. Refs #938; implementation and verification results are tracked in PR #939. The 79 focused tests, test contract, and keybinding checks pass.
 
 Add `Auto-follow All Working Agents` beside the existing follow commands. This is a transient window-wide policy: eligibility changes with each agent's activity, without rewriting individual follow preferences. Starting work follows immediately; returning to idle releases the forced follow. Use the existing running-session or non-idle-stream signals, with exited/failed sessions excluded. Plain shells do not participate.
 
