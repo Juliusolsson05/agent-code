@@ -1,6 +1,7 @@
 # Project scope by tab in Switch Agents and Close Old Agents
 
-Status: planned; implementation follows on this branch.
+Status: implemented, tests green, PR open for review.
+PR: [agent-code#909](https://github.com/Juliusolsson05/agent-code/pull/909). Merge requires explicit approval.
 
 Bug: [agent-code#908](https://github.com/Juliusolsson05/agent-code/issues/908).
 Branch: `fix/project-scope-by-tab`. Worktree: `.worktrees/project-scope-by-tab`.
