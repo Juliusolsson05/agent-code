@@ -3,6 +3,8 @@
 // reads env flags at module load) is imported. See
 // `./loadEnv.ts` for the rationale.
 import '@main/loadEnv.js'
+import { monitorCoordinator } from '@main/performance/MonitorCoordinator.js'
+import { mainProbe } from '@main/performance/MainProbe.js'
 import { TldrStore } from '@main/tldr/TldrStore.js'
 import { registerGoalIpc, registerTldrIpc } from '@main/tldr/ipc.js'
 import { TldrEnforcement } from '@main/tldr/enforcement.js'
@@ -13,7 +15,7 @@ import { createExternalControlSettings } from './settings/externalControl'
 import { createExternalCodexIntegration } from './settings/externalCodexIntegration'
 import operatorSkillSource from '../../operator-skills/agent-code-computer-execution/SKILL.md?raw'
 
-import { app, clipboard, crashReporter, dialog, Menu, systemPreferences } from 'electron'
+import { app, clipboard, crashReporter, dialog, Menu, powerMonitor, systemPreferences } from 'electron'
 import { existsSync } from 'fs'
 import { readFile } from 'fs/promises'
 import { join } from 'path'
@@ -600,6 +602,9 @@ async function startApp(): Promise<void> {
     appRunJournal.recordError('prior_run.classify.error', err)
   }
 
+  powerMonitor.on('suspend', () => mainProbe.noteSuspend())
+  powerMonitor.on('resume', () => mainProbe.noteResume())
+  monitorCoordinator.start()
   void performanceService.start().catch(err => {
     console.warn('[performance] failed to start:', err)
     appRunJournal?.recordError('performance.start.error', err)
@@ -614,8 +619,8 @@ async function startApp(): Promise<void> {
   startMainHeapWatchdog({
     onHeapPressure: (info) => {
       // Near-OOM is exactly the kind of incident users need to diagnose later.
-      // The watchdog already writes the heap snapshot; this records the durable
-      // incident that points at it.
+      // Automatic pressure capture is metadata-only: a synchronous heap dump
+      // can double memory and freeze main precisely when it is near OOM.
       appRunJournal?.recordIncident({
         kind: 'heap.pressure',
         severity: 'error',
@@ -1204,7 +1209,6 @@ app.on('before-quit', (event) => {
   void lspManager.dispose()
   caffeinateController.dispose()
   cleanupDictationIpcResources()
-  stopMainHeapWatchdog()
   // Flush pending ghost writes. Fire-and-forget is fine — Electron's
   // quit path gives us a tick before teardown. 100 ms queue depth is
   // worst-case; in practice drains are empty at quit time because
@@ -1226,7 +1230,6 @@ app.on('before-quit', (event) => {
   // is simply lost, with no error anywhere. See historyStore.ts.
   void flushHistoryWrites()
   void pasteDebugJournals.flushAll()
-  performanceService.stop()
 })
 
 const sessionShutdownGate = installSessionShutdownGate({
@@ -1274,6 +1277,11 @@ const sessionShutdownGate = installSessionShutdownGate({
     caffeinateController.dispose()
   },
   onQuitAllowed: () => {
+    // before-quit is still vetoable by an unsaved editor. These observers must
+    // remain live until the existing shutdown gate actually admits exit.
+    monitorCoordinator.stop()
+    stopMainHeapWatchdog()
+    performanceService.stop()
     appRunJournal?.record({ area: 'app.lifecycle', name: 'app.will_quit' })
     appRunJournal?.markCleanShutdown('will-quit')
     appRunJournal?.stop()

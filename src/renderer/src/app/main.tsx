@@ -73,7 +73,8 @@ void initializePerformance().then(() => {
 
 // This starts before React mounts so a freeze in initial rendering has the same terminal evidence
 // as a later feed/workflow freeze. It is independent of optional performance recording.
-startRendererFreezeHeartbeat()
+const stopRendererProbe = startRendererFreezeHeartbeat()
+if (import.meta.hot) import.meta.hot.dispose(stopRendererProbe)
 
 createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
