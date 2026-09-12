@@ -48,6 +48,14 @@ type Props = {
     sessionId: string,
     provider: AgentProvider,
   ) => void | Promise<void>
+  /**
+   * Tabs that already hold a session in `expandedPath` (#913). When any
+   * exist, Enter and the primary button go to the first one instead of
+   * creating a duplicate tab; "new tab anyway" keeps the deliberate case.
+   * Absent means the caller has no workspace to consult (tests, embedding).
+   */
+  openTabsForPath?: (expandedPath: string) => Array<{ tabId: string; label: string }>
+  onActivateTab?: (tabId: string) => void
 }
 
 export function PathPickerModal({
@@ -56,6 +64,8 @@ export function PathPickerModal({
   onCancel,
   onAccept,
   onResume,
+  openTabsForPath,
+  onActivateTab,
 }: Props) {
   const [value, setValue] = useState(defaultValue)
   const [error, setError] = useState<string | null>(null)
@@ -179,7 +189,14 @@ export function PathPickerModal({
     return () => clearTimeout(t)
   }, [value, open, provider])
 
-  const submit = async () => {
+  // Decided at submit time from the freshly expanded path, never from the
+  // debounced `resolvedPath` the hint below renders: the user can press Enter
+  // before the debounce settles, and the choice must follow the path that is
+  // actually about to be opened.
+  const holdersOf = (expandedPath: string) =>
+    (onActivateTab && openTabsForPath ? openTabsForPath(expandedPath) : [])
+
+  const submit = async (options: { forceNewTab?: boolean } = {}) => {
     if (busy) return
     setBusy(true)
     setError(null)
@@ -191,6 +208,13 @@ export function PathPickerModal({
       // user input.
       const result = await window.api.expandCwd(value)
       if (result.ok) {
+        const holders = holdersOf(result.path)
+        if (holders.length > 0 && !options.forceNewTab) {
+          // The folder is already on screen: go there instead of minting the
+          // duplicate tab that ⌘T used to create every time (#913).
+          onActivateTab!(holders[0]!.tabId)
+          return
+        }
         await onAccept(result.path, provider)
         return
       }
@@ -240,6 +264,9 @@ export function PathPickerModal({
       setBusy(false)
     }
   }
+
+  // Display only; `submit` re-derives from the path it is about to open.
+  const alreadyOpenAs = resolvedPath && !pendingCreatePath ? holdersOf(resolvedPath) : []
 
   return (
     <Dialog
@@ -348,6 +375,12 @@ export function PathPickerModal({
           </div>
         )}
 
+        {alreadyOpenAs.length > 0 && (
+          <div role="status" className="mt-2 flex-shrink-0 text-[11px] text-muted">
+            Already open as {alreadyOpenAs.map(tab => tab.label).join(', ')}.
+          </div>
+        )}
+
         <div className="flex justify-end gap-2 mt-4 flex-shrink-0">
           <Button
             type="button"
@@ -357,13 +390,33 @@ export function PathPickerModal({
           >
             cancel
           </Button>
-          <Button
-            type="button"
-            onClick={() => void submit()}
-            disabled={busy || value.trim() === ''}
-          >
-            {pendingCreatePath ? 'create & open' : 'new session'}
-          </Button>
+          {alreadyOpenAs.length > 0 ? (
+            <>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => void submit({ forceNewTab: true })}
+                disabled={busy}
+              >
+                new tab anyway
+              </Button>
+              <Button
+                type="button"
+                onClick={() => void submit()}
+                disabled={busy}
+              >
+                go to tab
+              </Button>
+            </>
+          ) : (
+            <Button
+              type="button"
+              onClick={() => void submit()}
+              disabled={busy || value.trim() === ''}
+            >
+              {pendingCreatePath ? 'create & open' : 'new session'}
+            </Button>
+          )}
         </div>
       </DialogContent>
     </Dialog>

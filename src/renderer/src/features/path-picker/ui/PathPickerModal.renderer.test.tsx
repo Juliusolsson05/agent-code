@@ -108,3 +108,57 @@ describe('PathPickerModal resume target coherence', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 })
+
+describe('PathPickerModal reuse of an open tab (#913)', () => {
+  it('goes to the tab that already holds the folder, and only creates on an explicit new-tab choice', async () => {
+    installApi(vi.fn(async () => response([])))
+    const onAccept = vi.fn()
+    const onActivateTab = vi.fn()
+    render(
+      <PathPickerModal
+        open
+        defaultValue="/repo"
+        onCancel={vi.fn()}
+        onAccept={onAccept}
+        onResume={vi.fn()}
+        openTabsForPath={path => (path === '/repo' ? [{ tabId: 'tab-e', label: 'E · repo' }] : [])}
+        onActivateTab={onActivateTab}
+      />,
+    )
+
+    // The hint follows the debounced resolution of the typed path.
+    await screen.findByText('Already open as E · repo.')
+    expect(screen.queryByRole('button', { name: 'new session' })).not.toBeInTheDocument()
+
+    // Enter (the input's submit) and the primary button both go to the tab:
+    // this is the default that stops ⌘T from minting duplicate tabs.
+    fireEvent.click(screen.getByRole('button', { name: 'go to tab' }))
+    await waitFor(() => expect(onActivateTab).toHaveBeenCalledWith('tab-e'))
+    expect(onAccept).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'new tab anyway' }))
+    await waitFor(() => expect(onAccept).toHaveBeenCalledWith('/repo', 'claude'))
+  })
+
+  it('creates as before when no tab holds the folder', async () => {
+    installApi(vi.fn(async () => response([])))
+    const onAccept = vi.fn()
+    const onActivateTab = vi.fn()
+    render(
+      <PathPickerModal
+        open
+        defaultValue="/repo"
+        onCancel={vi.fn()}
+        onAccept={onAccept}
+        onResume={vi.fn()}
+        openTabsForPath={() => []}
+        onActivateTab={onActivateTab}
+      />,
+    )
+
+    fireEvent.click(await screen.findByRole('button', { name: 'new session' }))
+    await waitFor(() => expect(onAccept).toHaveBeenCalledWith('/repo', 'claude'))
+    expect(onActivateTab).not.toHaveBeenCalled()
+    expect(screen.queryByText(/Already open as/)).not.toBeInTheDocument()
+  })
+})

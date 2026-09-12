@@ -3,7 +3,8 @@ import type { AgentProviderKind } from '@shared/types/providerKind'
 import { PathPickerModal } from '@renderer/features/path-picker/ui/PathPickerModal'
 import { useAppStore } from '@renderer/app-state/hooks'
 import { useWorkspaceContext } from '@renderer/workspace/WorkspaceContext'
-import { resolveTabSessions } from '@renderer/workspace/queries'
+import { findTabsHoldingDirectory, resolveTabSessions } from '@renderer/workspace/queries'
+import { tabIndexLabel } from '@renderer/workspace/tile-tree/paneLabelFormat'
 
 // Registry wrapper (#494): owns the store + workspace wiring App.tsx
 // used to inline for the new-tab / resume path picker. Always mounted
@@ -82,6 +83,27 @@ export function PathPickerSurface() {
     [closePathPicker, workspace],
   )
 
+  // The same rule the operator's projects.open applies (#913): a tab holds a
+  // directory when one of its sessions runs there. Labelled the way Dispatch
+  // names tabs so "Already open as E · agent-code" points at something the
+  // user can find in the tab bar.
+  const openTabsForPath = useCallback(
+    (expandedPath: string) =>
+      findTabsHoldingDirectory(workspace.state, expandedPath).map(tab => ({
+        tabId: tab.id,
+        label: `${tabIndexLabel(workspace.state.tabs.indexOf(tab))} · ${tab.title}`,
+      })),
+    [workspace.state],
+  )
+
+  const onActivateTab = useCallback(
+    (tabId: string) => {
+      workspace.activateTab(tabId)
+      closePathPicker()
+    },
+    [closePathPicker, workspace],
+  )
+
   return (
     <PathPickerModal
       open={open}
@@ -89,6 +111,8 @@ export function PathPickerSurface() {
       onCancel={closePathPicker}
       onAccept={onAccept}
       onResume={onResume}
+      openTabsForPath={openTabsForPath}
+      onActivateTab={onActivateTab}
     />
   )
 }
