@@ -1,6 +1,7 @@
 import { utilityProcess } from 'electron'
 import type { UtilityProcess } from 'electron'
 import { fileURLToPath } from 'node:url'
+import { performance } from 'node:perf_hooks'
 import { BoundedQueue } from '@shared/performance/boundedQueue.js'
 import { MONITOR_POLICY } from '@shared/performance/monitorPolicy.js'
 import { parseMonitorRendererRecord, MONITOR_RECORD_BYTES } from '@shared/performance/monitorContracts.js'
@@ -21,11 +22,15 @@ export class MonitorCoordinator {
   private launches = 0
   private retryAt = 0
   private stopped = false
+  private lastReplyAt = 0
+  private liveWindows = new Set<number>()
   private cache: MonitorSnapshot = {
     schemaVersion: 1, runId: getAppRunId(), enabled: true, sampledAt: 0,
     collector: 'starting', droppedRecords: 0, queuedBytes: 0, restarts: 0,
     main: null, windows: [], operations: [], recent: [], workerRss: 0,
   }
+
+  constructor(private readonly monotonicNow: () => number = () => performance.now()) {}
 
   start(): void {
     if (this.timer || this.stopped) return
@@ -52,7 +57,7 @@ export class MonitorCoordinator {
       droppedRecords: this.queue.stats.dropped + this.lost,
       restarts: Math.max(0, this.launches - 1),
       collector: this.stopped ? 'stopped'
-        : this.cache.sampledAt && Date.now() - this.cache.sampledAt > 5000 ? 'degraded' : this.cache.collector,
+        : this.lastReplyAt && this.monotonicNow() - this.lastReplyAt > 5000 ? 'degraded' : this.cache.collector,
     }
   }
 
@@ -70,11 +75,16 @@ export class MonitorCoordinator {
       inputCount: heartbeat.input?.count ?? 0, inputMaxMs: heartbeat.input?.maxMs ?? 0,
     })
     if (sample?.kind === 'heartbeat') {
+      if (!this.liveWindows.has(windowId) && this.liveWindows.size >= MONITOR_POLICY.windowLimit) { this.lost++; return }
+      this.liveWindows.add(windowId)
       this.enqueue({ kind: 'window', sample: { ...sample, windowId, receivedAt: Date.now(), longTasksSupported: heartbeat.longTasksSupported === true, inputSupported: heartbeat.inputSupported === true } })
     }
   }
 
-  closeWindow(windowId: number): void { this.enqueue({ kind: 'window-closed', windowId }) }
+  closeWindow(windowId: number): void {
+    this.liveWindows.delete(windowId)
+    this.cache = { ...this.cache, windows: this.cache.windows.filter(window => window.windowId !== windowId) }
+  }
 
   operation(sample: MonitorOperation, windowId: number | null = null): void {
     const parsed = parseMonitorRendererRecord(sample)
@@ -102,6 +112,9 @@ export class MonitorCoordinator {
     try {
       const child = utilityProcess.fork(fileURLToPath(new URL('./performanceWorker.js', import.meta.url)), [], {
         serviceName: 'Agent Code Performance Monitor', stdio: 'ignore',
+        // This helper never needs provider credentials, NODE_OPTIONS, or app
+        // configuration from the launch environment. Pass only OS necessities.
+        env: { PATH: '/usr/bin:/bin', ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}) },
       })
       this.child = child
       child.on('message', (message: MonitorWorkerResponse) => {
@@ -113,7 +126,12 @@ export class MonitorCoordinator {
           return
         }
         this.pending = null
-        this.cache = { ...this.cache, ...message.snapshot, collector: 'healthy' }
+        this.lastReplyAt = this.monotonicNow()
+        this.cache = {
+          ...this.cache, ...message.snapshot, main: this.cache.main,
+          windows: message.snapshot.windows.filter(window => this.liveWindows.has(window.windowId)),
+          collector: 'healthy',
+        }
       })
       child.on('exit', () => this.fail(child))
       child.on('error', () => this.fail(child))
@@ -126,14 +144,14 @@ export class MonitorCoordinator {
     child?.kill()
     this.lost += this.pending?.count ?? 0
     this.pending = null
-    this.retryAt = Date.now() + 5000 * this.launches
+    this.retryAt = this.monotonicNow() + 5000 * this.launches
     this.cache = { ...this.cache, collector: 'degraded' }
   }
 
   private pump(): void {
     try {
-      if (this.pending && Date.now() - this.pending.at > 5000) this.fail(this.child)
-      if (!this.child && Date.now() >= this.retryAt) this.launch()
+      if (this.pending && this.monotonicNow() - this.pending.at > 5000) this.fail(this.child)
+      if (!this.child && this.monotonicNow() >= this.retryAt) this.launch()
       if (!this.child || this.pending) return
       const records = this.queue.drain(MONITOR_POLICY.rendererBatchRecords, MONITOR_POLICY.batchBytes - 1024)
       if (!records.length) return
@@ -141,8 +159,8 @@ export class MonitorCoordinator {
       // One credit means a suspended worker cannot accumulate an invisible
       // Electron message-port queue. Timeout discards the in-flight evidence,
       // counts the loss, and caps process restarts for the entire app run.
-      this.pending = { sequence, at: Date.now(), count: records.length }
-      this.child.postMessage({ sequence, records })
+      this.pending = { sequence, at: this.monotonicNow(), count: records.length }
+      this.child.postMessage({ sequence, records, liveWindowIds: [...this.liveWindows] })
     } catch { this.fail(this.child) }
   }
 }

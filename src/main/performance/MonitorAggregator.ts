@@ -41,6 +41,11 @@ export class MonitorAggregator {
     }
   }
 
+  reconcileWindows(liveWindowIds: number[]): void {
+    const live = new Set(liveWindowIds.slice(0, MONITOR_POLICY.windowLimit))
+    for (const id of this.windows.keys()) if (!live.has(id)) this.windows.delete(id)
+  }
+
   snapshot(now: number, workerRss: number): MonitorWorkerSnapshot {
     // Drain/reinsert preserves ring order without exposing mutable storage.
     // This path runs only once per acknowledged batch in the isolated worker.

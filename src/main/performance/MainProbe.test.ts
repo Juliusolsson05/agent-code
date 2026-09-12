@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-const probe = vi.hoisted(() => ({ enable: vi.fn(), disable: vi.fn(), reset: vi.fn(), percentile: () => 30e6, mean: 22e6, max: 40e6 }))
+const probe = vi.hoisted(() => ({ enable: vi.fn(), disable: vi.fn(), reset: vi.fn(), percentile: () => 30e6, mean: 22e6, max: 40e6, count: 50 }))
 vi.mock('node:perf_hooks', () => ({ monitorEventLoopDelay: () => probe, performance: { now: () => Date.now() } }))
 import { MainProbe } from './MainProbe.js'
 
-afterEach(() => { vi.useRealTimers(); vi.clearAllMocks() })
+afterEach(() => { vi.useRealTimers(); vi.clearAllMocks(); probe.max = 40e6 })
 describe('shared main sample ownership', () => {
   it('keeps reads passive and starts only one sampler, with independent sink failures', () => {
     vi.useFakeTimers()
@@ -33,9 +33,29 @@ describe('shared main sample ownership', () => {
     vi.useFakeTimers()
     const sampler = new MainProbe()
     sampler.start()
+    sampler.noteSuspend()
     vi.setSystemTime(Date.now() + 60000)
+    sampler.noteResume()
     vi.advanceTimersByTime(1000)
     expect(sampler.read()).toMatchObject({ sleepGap: true, cpuPercent: null, eventLoopDelay: null })
     sampler.stop()
   })
+  it('preserves awake stalls and keeps earlier peaks in the journal window', () => {
+    vi.useFakeTimers()
+    const sampler = new MainProbe()
+    sampler.start()
+    probe.max = 500e6
+    vi.setSystemTime(Date.now() + 6000)
+    vi.advanceTimersByTime(1000)
+    expect(sampler.read().sleepGap).toBe(false)
+    expect(sampler.read().cpuPercent).not.toBeNull()
+    expect(sampler.read().eventLoopDelay?.maxMs).toBe(500)
+    probe.max = 20e6
+    vi.advanceTimersByTime(3000)
+    expect(sampler.read().eventLoopDelay?.maxMs).toBe(20)
+    expect(sampler.readJournalWindow()?.maxMs).toBe(500)
+    expect(sampler.readJournalWindow()?.windowMs).toBeGreaterThanOrEqual(5000)
+    sampler.stop()
+  })
+
 })

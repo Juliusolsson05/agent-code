@@ -27,5 +27,5 @@ export type MonitorSnapshot = MonitorWorkerSnapshot & {
   droppedRecords: number; queuedBytes: number; restarts: number
 }
 
-export type MonitorWorkerRequest = { sequence: number; records: MonitorEnvelope[] }
+export type MonitorWorkerRequest = { sequence: number; records: MonitorEnvelope[]; liveWindowIds?: number[] }
 export type MonitorWorkerResponse = { sequence: number; snapshot: MonitorWorkerSnapshot }

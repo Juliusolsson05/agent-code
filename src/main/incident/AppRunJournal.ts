@@ -531,6 +531,7 @@ export class AppRunJournal {
 
   private createHeartbeat(): AppRunHeartbeat {
     const memory = mainProbe.read()
+    const loop = mainProbe.readJournalWindow()
     const windows = BrowserWindow.getAllWindows()
     const focused = BrowserWindow.getFocusedWindow() !== null
     const heartbeat: AppRunHeartbeat = {
@@ -550,9 +551,12 @@ export class AppRunJournal {
         arrayBuffers: memory.arrayBuffers,
       },
       mainEventLoop: {
-        delayMeanMs: memory.eventLoopDelay?.meanMs ?? 0,
-        delayMaxMs: memory.eventLoopDelay?.maxMs ?? 0,
-        delayP99Ms: memory.eventLoopDelay?.p99Ms ?? 0,
+        delayMeanMs: loop?.meanMs ?? 0,
+        delayMaxMs: loop?.maxMs ?? 0,
+        delayP99Ms: loop?.p99UpperBoundMs ?? 0,
+        p99Aggregation: 'worst-window-upper-bound',
+        windowMs: loop?.windowMs ?? 0,
+        available: loop !== null,
       },
       window: {
         count: windows.length,
