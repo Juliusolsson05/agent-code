@@ -110,6 +110,7 @@ export function makeTestCommandContext(
       htmlDebugPanelOpen: false,
       renderingDebugMode: false,
       tailAllMode: false,
+      tailWorkingMode: false,
       devDebugEnabled: false,
       sessionRecordingEnabled: false,
       devDebugPanelOpen: false,

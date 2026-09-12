@@ -1,5 +1,9 @@
 export type RendererFreezeHeartbeat = {
   sentAt: number
+  longTasksSupported?: boolean
+  inputSupported?: boolean
+  timeOriginMs?: number
+  input?: { count: number; maxMs: number }
   monotonicMs: number
   eventLoopLagMs: number
   visibilityState: 'visible' | 'hidden' | 'prerender'

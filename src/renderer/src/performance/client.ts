@@ -1,3 +1,4 @@
+import { subscribeRendererProbe } from './freezeHeartbeat.js'
 import { SpanStatusCode, trace } from '@opentelemetry/api'
 import type { Attributes } from '@opentelemetry/api'
 import { BasicTracerProvider, BatchSpanProcessor } from '@opentelemetry/sdk-trace-base'
@@ -255,46 +256,27 @@ export async function flushPerformance(): Promise<void> {
 }
 
 export async function shutdownPerformance(): Promise<void> {
+  stopRendererProbeSubscription?.()
+  stopRendererProbeSubscription = null
   if (flushTimer) clearInterval(flushTimer)
   flushTimer = null
   await flushPerformance()
   await tracerProvider?.shutdown()
 }
 
+let stopRendererProbeSubscription: (() => void) | null = null
 function setupRendererPerformanceProbes(): void {
-  try {
-    const observer = new PerformanceObserver(list => {
-      for (const entry of list.getEntries()) {
-        mark('renderer.longtask', {
-          durationMs: entry.duration,
-          startTime: entry.startTime,
-          entryType: entry.entryType,
-          name: entry.name,
-        })
-      }
-    })
-    observer.observe({ entryTypes: ['longtask'] })
-  } catch {
-    // Long Task API is Chromium-only and may not be exposed in every context.
-  }
-
-  setInterval(() => {
-    const memory = performanceMemory()
-    if (!memory) return
-    gauge('renderer.memory.usedJSHeapSize', memory.usedJSHeapSize, {
-      totalJSHeapSize: memory.totalJSHeapSize,
-      jsHeapSizeLimit: memory.jsHeapSizeLimit,
-    })
-  }, 5000)
-}
-
-function performanceMemory():
-  | { usedJSHeapSize: number; totalJSHeapSize: number; jsHeapSizeLimit: number }
-  | null {
-  const maybePerformance = performance as Performance & {
-    memory?: { usedJSHeapSize: number; totalJSHeapSize: number; jsHeapSizeLimit: number }
-  }
-  return maybePerformance.memory ?? null
+  stopRendererProbeSubscription?.()
+  let lastMemoryAt = 0
+  stopRendererProbeSubscription = subscribeRendererProbe(sample => {
+    if (sample.longTasks.count > 0) mark('renderer.longtask', sample.longTasks)
+    if (sample.heap && sample.sentAt - lastMemoryAt >= 5000) {
+      lastMemoryAt = sample.sentAt
+      gauge('renderer.memory.usedJSHeapSize', sample.heap.usedBytes, {
+        totalJSHeapSize: sample.heap.totalBytes, jsHeapSizeLimit: sample.heap.limitBytes,
+      })
+    }
+  })
 }
 
 const serializeError = serializePerformanceError

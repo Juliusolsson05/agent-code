@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { tldrIdentityForReplacement } from './identity'
+import { tldrIdentityForReplacement, tldrIdentityForSession } from './identity'
 
 describe('TLDR conversation continuity', () => {
   const source = { cwd: '/project', kind: 'claude' as const, providerSessionId: 'native-1', tldrIdentity: 'logical-1' }
@@ -11,5 +11,12 @@ describe('TLDR conversation continuity', () => {
     expect(tldrIdentityForReplacement('old', source, { kind: 'claude', resumeSessionId: 'rewound-clone' })).toBeUndefined()
     expect(tldrIdentityForReplacement('old', source, { kind: 'claude' })).toBeUndefined()
     expect(tldrIdentityForReplacement('old', source, { kind: 'terminal', preserveTldr: true })).toBeUndefined()
+  })
+})
+
+describe('reporting identity', () => {
+  it('gives a Goal-only agent an identity and none to an agent without reporting', () => {
+    expect(tldrIdentityForSession('pane', { cwd: '/project', kind: 'claude', builtInMcpDomains: ['goal'] })).toBe('pane')
+    expect(tldrIdentityForSession('pane', { cwd: '/project', kind: 'claude', builtInMcpDomains: ['orchestration'] })).toBeUndefined()
   })
 })

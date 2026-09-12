@@ -1,3 +1,6 @@
+import type { MonitorSnapshot } from '@shared/performance/monitorSnapshot.js'
+import { parseMonitorRendererBatch } from '@shared/performance/monitorContracts.js'
+import type { MonitorRendererRecord } from '@shared/performance/monitorContracts.js'
 import { ipcRenderer } from 'electron'
 
 import type {
@@ -8,7 +11,19 @@ import type {
   SystemPerformanceStats,
 } from '@shared/performance/types.js'
 
+let monitorBatchInFlight = false
 export const performanceApi = {
+  getMonitorSnapshot: (): Promise<MonitorSnapshot | null> => ipcRenderer.invoke('performance:monitor-snapshot'),
+  appendMonitorRecords: async (records: MonitorRendererRecord[]): Promise<boolean> => {
+    if (monitorBatchInFlight) return false
+    const parsed = parseMonitorRendererBatch(records)
+    if (!parsed) return false
+    monitorBatchInFlight = true
+    try {
+      await ipcRenderer.invoke('performance:monitor-batch', parsed)
+      return true
+    } finally { monitorBatchInFlight = false }
+  },
   getPerformanceConfig: (): Promise<PerformanceConfig> =>
     ipcRenderer.invoke('performance:get-config'),
 
