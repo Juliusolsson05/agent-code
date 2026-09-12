@@ -969,6 +969,7 @@ export function useWorkspace(
     activateTab: tabActions.activateTab,
     activateTabByIndex: tabActions.activateTabByIndex,
     reorderTabs: tabActions.reorderTabs,
+    mergeTabs: tabActions.mergeTabs,
     nextTab: tabActions.nextTab,
     prevTab: tabActions.prevTab,
     resizeFocused,
