@@ -43,6 +43,9 @@ const value = command === 'debug'
     messages: [{ info: { id: 'msg_fixture', sessionID, role: 'assistant', time: { created: 1, completed: 2 } }, parts: [{ type: 'text', text }] }],
     fixtureEnv: process.env.OPENCODE_FIXTURE_VALUE,
     outputMode: fstatSync(1).isFile() ? fstatSync(1).mode & 0o777 : null,
+    // Link count of the capture as the running child sees it. Zero means the
+    // parent unlinked it before spawn, so no name exists to leave behind.
+    outputLinks: fstatSync(1).isFile() ? fstatSync(1).nlink : null,
   }
 process.stdout.write(JSON.stringify(value))
 process.stdout.write('\n')

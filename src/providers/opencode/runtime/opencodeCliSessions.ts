@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { fstatSync } from 'node:fs'
-import { mkdtemp, open, readFile, rm, writeFile, type FileHandle } from 'node:fs/promises'
+import { mkdtemp, open, rm, rmdir, unlink, writeFile, type FileHandle } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -152,7 +152,34 @@ async function runOpencode(
     // cannot recover bytes the producer never delivered: a real 14.6 MB export
     // stopped at 64 KiB. A regular-file stdout descriptor avoids that async-pipe
     // exit race. Keep this at the CLI boundary: resolved config can be large too.
-    output = await open(outputPath, 'wx', 0o600)
+    // The same rule applies to any new OpenCode command: output that always
+    // fits one pipe buffer (`db path` in opencode-terminal-headless,
+    // `--version` in setup/cliVersion) is safe on a pipe, because a write
+    // smaller than the buffer completes before exit; anything that can exceed
+    // ~64 KiB must go through this capture.
+    //
+    // WHY the capture is unlinked, and its private directory removed, BEFORE
+    // the child starts: the child inherits the descriptor, not the path, and
+    // this handle is all the parent needs to poll and read it. A file with no
+    // name is freed by the kernel when its last descriptor closes, so an app
+    // quit, a main-process crash or an orphaned child can no longer leave a
+    // plaintext copy of a transcript in the temp directory. Before this, only
+    // the async finally below deleted it, and an ordinary quit does not wait
+    // for that: finite CLI commands are not part of any shutdown drain. The
+    // remaining window is mkdtemp -> open -> unlink, a few syscalls before any
+    // byte is written, inside a 0700 directory with a 0600 file.
+    // `wx+` rather than `wx`: the parent reads the result back through this
+    // same handle (see readCapture).
+    //
+    // Out of scope: the payload importOpencodeSession writes is handed to
+    // `opencode import <path>` BY PATH, so it must keep a name while the child
+    // runs and is still removed only by that function's finally.
+    output = await open(outputPath, 'wx+', 0o600)
+    await unlink(outputPath)
+    await rmdir(directory)
+    // Cleared only once nothing is left on disk. While it is still set, the
+    // finally below removes whatever a failed setup step left behind.
+    directory = undefined
     const fd = output.fd
     const stderrChunks: Buffer[] = []
     let stderrBytes = 0
@@ -184,9 +211,9 @@ async function runOpencode(
       //
       // The invariant from main still holds: this promise settles ONLY from
       // `close`, never from the abort or timeout event. Rejecting earlier
-      // would let the finally blocks here and in importOpencodeSession delete
-      // the capture and the import payload while the child is still alive and
-      // writing or reading them. terminate() is what keeps that wait bounded.
+      // would let importOpencodeSession's finally delete the import payload
+      // while the child is still reading it, and would return a capture the
+      // child is still writing. terminate() is what keeps that wait bounded.
       const child = spawn(options.binary, args, {
         cwd: options.cwd, env: options.env ?? process.env,
         stdio: ['ignore', fd, 'pipe'],
@@ -313,19 +340,44 @@ async function runOpencode(
       // the listener existed; `once` listeners are not replayed for past aborts.
       if (options.signal?.aborted) abort()
     })
-    if ((await output.stat()).size > MAX_EXPORT_BYTES) throw new Error('output exceeds the 256 MiB capture limit')
-    return { stdout: await readFile(outputPath, 'utf8'), stderr: stderrText() }
+    // fstat through the retained handle: the capture has no path to stat.
+    const { size } = await output.stat()
+    if (size > MAX_EXPORT_BYTES) throw new Error('output exceeds the 256 MiB capture limit')
+    return { stdout: await readCapture(output, size), stderr: stderrText() }
   } catch (error) {
     throw new Error(
       `OpenCode ${args[0] ?? 'command'} failed: ${errorMessage(error)}`,
     )
   } finally {
-    // Wait for process/stdio completion before closing and deleting the private
-    // capture. Match import cleanup policy without ever touching native history.
-    // `directory` is unset only when the pre-abort check or mkdtemp threw.
+    // Reached only after `close`, or before anything was spawned. Closing the
+    // last descriptor Agent Code owns frees the unnamed capture. `directory`
+    // is still set only when setup failed between mkdtemp and rmdir; removal
+    // failure stays non-fatal, matching the import payload policy, and native
+    // history is never touched.
     try { await output?.close() }
     finally { if (directory) await rm(directory, { recursive: true, force: true }).catch(() => undefined) }
   }
+}
+
+/**
+ * Read the whole unnamed capture through its retained handle.
+ *
+ * WHY positional reads rather than `handle.readFile()`: the child's stdout is a
+ * dup of this very descriptor, so both share one file offset, and the child's
+ * writes left it at end-of-file. FileHandle.readFile reads from the current
+ * offset and would return an empty string for a complete export. Positional
+ * reads ignore the shared offset. `size` is the fstat that enforced the limit,
+ * so the allocation stays bounded even if a stray writer appended afterwards.
+ */
+async function readCapture(handle: FileHandle, size: number): Promise<string> {
+  const buffer = Buffer.allocUnsafe(size)
+  let offset = 0
+  while (offset < size) {
+    const { bytesRead } = await handle.read(buffer, offset, size - offset, offset)
+    if (bytesRead === 0) break
+    offset += bytesRead
+  }
+  return buffer.toString('utf8', 0, offset)
 }
 
 function errorMessage(error: unknown): string {

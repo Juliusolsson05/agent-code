@@ -59,6 +59,10 @@ describe('OpenCode CLI output integrity', () => {
     expect((value.messages as { parts: { text: string }[] }[])[0].parts[0].text).toHaveLength('fixture text '.length * 160000)
     expect(value.fixtureEnv).toBe('environment forwarded')
     expect(value.outputMode).toBe(0o600)
+    // Observed from inside the running child: its stdout already has no name,
+    // so a quit or crash mid-export has no plaintext file to leave behind. A
+    // cleanup check after settlement cannot see that difference.
+    expect(value.outputLinks).toBe(0)
     await expectClean()
   })
 
@@ -201,6 +205,10 @@ it.each(['stop', 'timeout'] as const)('bounds a hung import on %s and removes it
     await waitUntil(() => existsSync(statusFile), 2000, 'import child status')
     status = JSON.parse(readFileSync(statusFile, 'utf8'))
     expect(existsSync(status!.file)).toBe(true)
+    // While the child runs, its import payload still needs a path (`opencode
+    // import <path>` reads it by name), but the stdout capture must already be
+    // unnamed: nothing an app quit at this moment could leave on disk.
+    expect((await readdir(root)).filter(name => name.startsWith('agent-code-opencode-output-'))).toEqual([])
     const stoppedAt = performance.now()
     if (mode === 'stop') await session.stop()
     await waitUntil(() => !alive(status!.pid), 2000, 'import child exit')
