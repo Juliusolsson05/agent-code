@@ -6,13 +6,13 @@ import { isPreviewVisible, toggleTldr, useTldrView } from './viewState'
 
 export const tldrCommands: CommandDef[] = [{
   id: 'tldr-preview', title: 'TLDR', category: 'navigate', surface: 'app',
-  description: '**What it does:** Shows each visible agent’s saved TLDR centered over its darkened pane.\n\n**Use when:** You want to scan progress and pending decisions across agents.\n\n**Notes:** Hold the shortcut to peek; release to dismiss. From the palette, press Escape to dismiss. Enable TLDR MCP for agents that should report summaries. Reading makes no model calls.',
+  description: '**What it does:** Shows each visible agent’s saved TLDR centered over its pane.\n\n**Use when:** You want to scan progress and pending decisions across agents.\n\n**Notes:** Hold the shortcut to peek; release to dismiss. From the palette, press Escape to dismiss. Enable TLDR MCP for agents that should report summaries. Reading makes no model calls.',
   keywords: ['summary', 'summaries', 'status', 'peek', 'hold', 'decision'],
   getState: () => toggle(isPreviewVisible(useTldrView.getState(), 'tldr')),
   run: ({ ui }) => { ui.closePalette(); toggleTldr('tldr') },
 }, {
   id: 'goal-preview', title: 'Goal', category: 'navigate', surface: 'app',
-  description: '**What it does:** Shows each visible agent’s goal — what its work is for — centered over its darkened pane.\n\n**Use when:** You have many agents open and need to know what each one is trying to achieve, not just its latest status.\n\n**Notes:** Hold the shortcut to peek; release to dismiss. From the palette, press Escape to dismiss. Enable Goal MCP for agents that should record goals. Reading makes no model calls.',
+  description: '**What it does:** Shows each visible agent’s goal — what its work is for — centered over its pane.\n\n**Use when:** You have many agents open and need to know what each one is trying to achieve, not just its latest status.\n\n**Notes:** Hold the shortcut to peek; release to dismiss. From the palette, press Escape to dismiss. Enable Goal MCP for agents that should record goals. Reading makes no model calls.',
   keywords: ['goal', 'purpose', 'objective', 'intent', 'why', 'peek', 'hold'],
   getState: () => toggle(isPreviewVisible(useTldrView.getState(), 'goal')),
   run: ({ ui }) => { ui.closePalette(); toggleTldr('goal') },
