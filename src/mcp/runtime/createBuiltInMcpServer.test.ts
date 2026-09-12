@@ -1,4 +1,5 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { describe, expect, it, vi } from 'vitest'
 import type { WorkflowService } from 'workflow-mcp'
@@ -252,5 +253,54 @@ describe('orchestration create-agent delivery disposition', () => {
       agentClosed: true,
     })
     expect(closeAgent).toHaveBeenCalledOnce()
+  })
+})
+
+describe('createBuiltInMcpServer root management domain (#906)', () => {
+  async function surface(domains: BuiltInMcpDomain[], dependencies: Parameters<typeof createBuiltInMcpServer>[1]) {
+    const server = createBuiltInMcpServer({ sessionId: 'session-9', cwd: '/tmp/project', domains }, dependencies)
+    const client = new Client({ name: 'root-management-test', version: '0.0.0' })
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+    try {
+      await server.connect(serverTransport)
+      await client.connect(clientTransport)
+      return { names: (await client.listTools()).tools.map(tool => tool.name), instructions: client.getInstructions() ?? '' }
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  }
+
+  it('hands the session server to the injected operator projection and teaches the root rules', async () => {
+    const rootControlTools = vi.fn((server: McpServer, sessionId: string) => {
+      server.registerTool(`ac_probe_${sessionId.replaceAll('-', '_')}`, { description: 'probe', inputSchema: {} }, async () => ({ content: [] }))
+    })
+    const result = await surface(['root_management', 'agent_management'], { rootControlTools })
+    expect(rootControlTools).toHaveBeenCalledWith(expect.anything(), 'session-9')
+    expect(result.names).toContain('ac_probe_session_9')
+    expect(result.names).toContain('agent_management_list_agents')
+    // The rules a root-managed agent must not lose: it knows its own session,
+    // it treats "tidy the workspace" as placement-only authorization, and a
+    // declined confirmation is final.
+    expect(result.instructions).toContain('session ID is session-9')
+    expect(result.instructions).toContain('placement, focus, pin and title changes only')
+    expect(result.instructions).toContain('declined dialog is a refusal')
+  })
+
+  it('registers nothing and stays silent about root tools without the domain or without a registrar', async () => {
+    const rootControlTools = vi.fn()
+    const withoutDomain = await surface(['agent_management'], { rootControlTools })
+    expect(rootControlTools).not.toHaveBeenCalled()
+    expect(withoutDomain.names.some(name => name.startsWith('ac_'))).toBe(false)
+    expect(withoutDomain.instructions).not.toContain('Root Agent Code Management')
+
+    // Paired with another domain because the SDK answers tools/list with
+    // "Method not found" for a server that registered no tool at all; the
+    // contract under test is that root contributes nothing when unwired.
+    const record = vi.fn()
+    const unwired = await surface(['root_management', 'agent_management'], { appRunJournal: { record } as never })
+    expect(unwired.names.some(name => name.startsWith('ac_'))).toBe(false)
+    expect(unwired.instructions).not.toContain('Root Agent Code Management')
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ area: 'mcp.root_management', name: 'registrar.missing' }))
   })
 })
