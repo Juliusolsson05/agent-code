@@ -40,12 +40,39 @@ export class LatencyHistogram {
 export function isLatencyHistogram(input: unknown): input is LatencyHistogramSnapshot {
   if (!input || typeof input !== 'object') return false
   const value = input as LatencyHistogramSnapshot
-  return Array.isArray(value.counts) && value.counts.length === LATENCY_BUCKETS_MS.length + 1
-    && value.counts.every(count => Number.isSafeInteger(count) && count >= 0)
-    && Number.isSafeInteger(value.count) && value.count >= 0
-    && value.counts.reduce((sum, count) => sum + count, 0) === value.count
-    && Number.isFinite(value.sumMs) && value.sumMs >= 0
-    && Number.isFinite(value.maxMs) && value.maxMs >= 0
+  if (!Array.isArray(value.counts) || value.counts.length !== LATENCY_BUCKETS_MS.length + 1
+    || !Number.isSafeInteger(value.count) || value.count < 0
+    || !Number.isFinite(value.sumMs) || value.sumMs < 0
+    || !Number.isFinite(value.maxMs) || value.maxMs < 0) return false
+  // Structured clone preserves sparse arrays. Array.every/reduce skip holes,
+  // which would admit missing buckets and permanently poison a merge with NaN.
+  // Validate every index before allowing any mutation of accumulated evidence.
+  let total = 0
+  let lastOccupied = -1
+  let minimumSum = 0
+  let maximumSum = 0
+  for (let i = 0; i < value.counts.length; i++) {
+    const count = value.counts[i]
+    if (!Number.isSafeInteger(count) || count < 0) return false
+    total += count
+    if (!Number.isSafeInteger(total)) return false
+    if (count > 0) lastOccupied = i
+    minimumSum += count * (i === 0 ? 0 : LATENCY_BUCKETS_MS[i - 1])
+    maximumSum += count * Math.min(value.maxMs, LATENCY_BUCKETS_MS[i] ?? value.maxMs)
+  }
+  if (total !== value.count) return false
+  if (total === 0) return value.sumMs === 0 && value.maxMs === 0
+  const maxBucket = LATENCY_BUCKETS_MS.findIndex(bound => value.maxMs <= bound)
+  // An empty window cannot contribute latency, and a nonempty window's maximum
+  // must belong to its last occupied bucket. Allow roundoff in the sum of many
+  // floating-point observations without accepting impossible aggregate totals.
+  const tolerance = Number.EPSILON * Math.max(1, value.sumMs) * value.count
+  // At least one sample actually attained maxMs. Bucket populations also
+  // constrain the sum: 100 samples in (30s, 60s] cannot have a 600ms mean.
+  minimumSum += value.maxMs - (lastOccupied === 0 ? 0 : LATENCY_BUCKETS_MS[lastOccupied - 1])
+  return lastOccupied === (maxBucket < 0 ? LATENCY_BUCKETS_MS.length : maxBucket)
+    && value.sumMs + tolerance >= minimumSum
+    && value.sumMs <= maximumSum + tolerance
 }
 
 export function latencyQuantile(snapshot: LatencyHistogramSnapshot, quantile: number): {
