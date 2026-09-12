@@ -192,7 +192,7 @@ const WorkspaceLeaf = memo(function WorkspaceLeaf({
     runtime,
   }) === 'terminal') {
     return (
-      <TldrPane runtime={runtime} identity={meta?.tldrIdentity ?? renderedSessionId} enabled={Boolean(meta?.builtInMcpDomains?.includes('tldr'))}>
+      <TldrPane runtime={runtime} provider={kind} identity={meta?.tldrIdentity ?? renderedSessionId} enabled={Boolean(meta?.builtInMcpDomains?.includes('tldr'))}>
         <MountedAgentTerminalOwner sessionId={renderedSessionId}>
           <AgentTerminalLeaf
             sessionId={renderedSessionId}
@@ -226,7 +226,7 @@ const WorkspaceLeaf = memo(function WorkspaceLeaf({
 
   const LeafComponent = provider.TileLeaf
   return (
-    <TldrPane runtime={runtime} identity={meta?.tldrIdentity ?? renderedSessionId} enabled={Boolean(meta?.builtInMcpDomains?.includes('tldr'))}>
+    <TldrPane runtime={runtime} provider={kind} identity={meta?.tldrIdentity ?? renderedSessionId} enabled={Boolean(meta?.builtInMcpDomains?.includes('tldr'))}>
       <LeafComponent
         sessionId={renderedSessionId}
         runtime={runtime}

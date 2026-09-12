@@ -58,8 +58,9 @@ contact. The TLDR store supplies when the identity was last written.
 - `user-prompt-submit`: record the prompt time and reset the per-turn flags. If
   the identity has never been written, return `additionalContext` asking for the
   session goal first.
-- `post-tool-use`: mark tool use for this turn. Codex runs it async so tool calls
-  never wait on it.
+- `post-tool-use`: mark tool use for this turn. Synchronous for both CLIs:
+  Codex 0.154.0 silently discards async hooks, found by checking the builder's
+  real output against the binary's `hooks/list`.
 - `stop`: allow when `stop_hook_active` is set or this turn already blocked.
   Block when never written. Block when tools ran and the last write predates the
   prompt. Otherwise allow.
@@ -102,3 +103,20 @@ markdown automatically.
 Never launch the Agent Code app for verification. Never edit user or project hook
 files. Never trust the user's hooks on their behalf. Do not merge without
 authorization.
+
+## Validation evidence
+
+- The hook builder's actual output was loaded by the installed Codex 0.154.0
+  through `app-server` `hooks/list` with an isolated `CODEX_HOME`: all three hooks
+  report `trustStatus: trusted`, no warnings, and no bearer in argv. The first
+  run found Codex silently discarding the then-async PostToolUse hook, which would
+  have disabled the stale-report check; it is now synchronous.
+- The pinned hash vector in tldrHooks.test.ts is Codex's own `currentHash`.
+- Eleven deliberate regressions each fail their tests: blocking a pure-chat turn,
+  a block that can loop, asking for the goal on every prompt, turn state shared
+  across processes, subagents inheriting hooks, an async Codex PostToolUse, an
+  unsorted trust hash, Claude's token variable not allowlisted, a Claude settings
+  fragment overwriting the operator deny, history keeping exact repeats, and the
+  inactive note appearing before any turn.
+- Enforcement is exercised through the real MCP HTTP host with real bearer
+  registrations, the real TLDR store, and real MCP tool writes.

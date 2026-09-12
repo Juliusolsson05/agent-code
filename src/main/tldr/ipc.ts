@@ -3,11 +3,12 @@ import { z } from 'zod'
 import { validTldrIdentity } from '@shared/types/tldr.js'
 import type { TldrUpdate } from '@shared/types/tldr.js'
 import type { TldrStore } from './TldrStore.js'
+import type { TldrEnforcement } from './enforcement.js'
 import { broadcastToWindows, getBrowserWindow, windowIdFor } from '@main/window/windowRegistry.js'
 import { ensureMacHotkeyHelperBinary } from '@main/dictation/macHotkeyHelper.js'
 import { watchMacTldrRelease } from './holdRelease.js'
 
-export function registerTldrIpc(store: TldrStore): void {
+export function registerTldrIpc(store: TldrStore, enforcement: Pick<TldrEnforcement, 'status'>): void {
   // Warm the development build without delaying the first peek. This only
   // resolves/builds our bundled executable; it starts no keyboard observer.
   const helper = process.platform === 'darwin' ? ensureMacHotkeyHelperBinary() : null
@@ -46,12 +47,27 @@ export function registerTldrIpc(store: TldrStore): void {
     if (hold && hold.token === token) hold.cancel()
   })
   const identities = z.array(z.string().refine(validTldrIdentity)).max(10_000)
-  ipcMain.handle('tldr:read', (event, raw: unknown) => {
+  const identity = z.string().refine(validTldrIdentity)
+  const assertApplicationWindow = (event: Electron.IpcMainInvokeEvent) => {
     const windowId = windowIdFor(event.sender)
     if (!windowId || !getBrowserWindow(windowId) || event.senderFrame !== event.sender.mainFrame) {
       throw new Error('TLDR requires a registered application window.')
     }
+  }
+  ipcMain.handle('tldr:read', (event, raw: unknown) => {
+    assertApplicationWindow(event)
     return store.read(identities.parse(raw))
+  })
+  ipcMain.handle('tldr:history', (event, raw: unknown) => {
+    assertApplicationWindow(event)
+    return store.history(identity.parse(raw))
+  })
+  // Read-only, like every renderer TLDR API: whether this identity's provider
+  // hooks have reached main. The renderer uses it to say when enforcement is not
+  // running; it can never mark a hook as having fired.
+  ipcMain.handle('tldr:enforcement', (event, raw: unknown) => {
+    assertApplicationWindow(event)
+    return enforcement.status(identities.parse(raw))
   })
   // Renderer APIs are read-only. Only the authenticated MCP scope can write;
   // neither a model-supplied target ID nor a UI convenience method bypasses it.

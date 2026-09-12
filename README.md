@@ -98,7 +98,10 @@ a running session can move mid-task among Claude Code, Codex, and OpenCode.
   is off by default. MCP settings apply to new agents and existing agents on their
   next reload, including the managed reporting skill. Explicit per-agent choices
   take priority; **Use Global MCP Settings** clears those choices and reloads the
-  agent. The editor keeps Cmd+L Select Line.
+  agent. Claude and Codex agents with TLDR are asked to set their goal on the
+  first prompt, and at turn end to update after work that used tools without a
+  report; the footer notes when that check is not running. **View TLDR History**
+  shows how an agent's status evolved. The editor keeps Cmd+L Select Line.
 - **Prompt and transcript tools** — search, rewind, duplicate, resume-command
   copy, prompt templates. Reader Mode gives a paginated, distraction-free view
   of long sessions for reviewing what an agent actually did.

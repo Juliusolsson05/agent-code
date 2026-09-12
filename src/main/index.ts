@@ -5,6 +5,7 @@
 import '@main/loadEnv.js'
 import { TldrStore } from '@main/tldr/TldrStore.js'
 import { registerTldrIpc } from '@main/tldr/ipc.js'
+import { TldrEnforcement } from '@main/tldr/enforcement.js'
 import { ExternalControlMcpHost } from './externalControlMcp/host'
 import { registerOperatorControlTools } from './externalControlMcp/tools'
 import { createExternalControlSettings } from './settings/externalControl'
@@ -872,9 +873,11 @@ async function startApp(): Promise<void> {
   await externalSettings.initialize()
   app.once('will-quit', () => { void externalSettings.dispose(); controlHost.dispose() })
   const tldrStore = new TldrStore(join(STATE_DIR, 'tldr.json'))
-  registerTldrIpc(tldrStore)
+  const tldrEnforcement = new TldrEnforcement(tldrStore)
+  registerTldrIpc(tldrStore, tldrEnforcement)
   builtInMcpHost.setDependencies({
     tldrStore,
+    tldrEnforcement,
     orchestrationBridge,
     agentManagementBridge,
     aiWorkspaceRegistry,

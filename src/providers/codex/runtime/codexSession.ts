@@ -1,4 +1,6 @@
 import { excludeExternalControlFromCodex } from '@providers/shared/runtime/externalControlExclusion.js'
+import { createCodexTldrHooks } from '@providers/shared/runtime/tldrHooks.js'
+import type { PrivateCodexTldrHooks } from '@providers/shared/runtime/tldrHooks.js'
 import { EventEmitter } from 'events'
 import { mkdir } from 'fs/promises'
 import { join } from 'path'
@@ -209,12 +211,16 @@ type CodexStartAttempt = {
   resumeRolloutPreparation: CodexResumeRolloutPreparation | null
   pty: ReturnType<typeof ptySpawn> | null
   headless: CodexHeadless | null
+  /** Private TLDR hook header file (#917). Generation-owned like the proxy: a
+   * cancelled start must delete the file holding its bearer. */
+  tldrHooks: PrivateCodexTldrHooks | null
   rollbackPromise: Promise<void> | null
 }
 
 export class CodexSession extends EventEmitter {
   private headless: CodexHeadless | null = null
   private pty: ReturnType<typeof ptySpawn> | null = null
+  private tldrHooks: PrivateCodexTldrHooks | null = null
   private exited = false
   private composerReady = false
 
@@ -285,6 +291,7 @@ export class CodexSession extends EventEmitter {
       resumeRolloutPreparation: null,
       pty: null,
       headless: null,
+      tldrHooks: null,
       rollbackPromise: null,
     }
     // WHY generation identity, rather than a permanent `stopped` boolean, is
@@ -386,6 +393,22 @@ export class CodexSession extends EventEmitter {
     // stop() on it. Wrap everything in a try/catch that rolls back.
     let promptInputProfile: CodexPromptInputProfile | null = null
     try {
+      // TLDR turn hooks must be global config arguments, so they precede the
+      // prompt-input profile (which must stay last) and the resume subcommand.
+      // Created inside the rollback region because the header file holds the
+      // session bearer.
+      const tldrHooks = await createCodexTldrHooks(this.builtInMcpServers)
+      if (!this.isStartAttemptActive(attempt)) {
+        // Stop may already have drained this attempt before the file existed;
+        // this continuation is then its only owner.
+        try { await tldrHooks?.dispose() } catch { /* best-effort */ }
+        return
+      }
+      if (tldrHooks) {
+        attempt.tldrHooks = tldrHooks
+        this.tldrHooks = tldrHooks
+        args.push(...tldrHooks.args)
+      }
       if (this.resumeSessionId) {
         // WHY app-level replacement waits until this exact boundary: proxy
         // allocation, launch-argument assembly, and manager-owned MCP setup do
@@ -677,6 +700,7 @@ export class CodexSession extends EventEmitter {
       resumeRolloutPreparation: this.resumeRolloutPreparation,
       pty: this.pty,
       headless: this.headless,
+      tldrHooks: this.tldrHooks,
       rollbackPromise: null,
     }
     owned.cancelled = true
@@ -692,6 +716,8 @@ export class CodexSession extends EventEmitter {
     const preparationTask = owned.resumeRolloutPreparationTask
     const preparation = owned.resumeRolloutPreparation
     const pty = owned.pty
+    const tldrHooks = owned.tldrHooks
+    owned.tldrHooks = null
     owned.proxyAdapter = null
     owned.proxyServer = null
     owned.headless = null
@@ -711,6 +737,7 @@ export class CodexSession extends EventEmitter {
       this.resumeRolloutPreparation = null
     }
     if (pty && this.pty === pty) this.pty = null
+    if (tldrHooks && this.tldrHooks === tldrHooks) this.tldrHooks = null
 
     owned.rollbackPromise = (async () => {
       try { proxyAdapter?.detach() } catch { /* best-effort */ }
@@ -744,6 +771,9 @@ export class CodexSession extends EventEmitter {
       try { await headless?.stop() } catch { /* best-effort */ }
       await preparationDisposal
       try { pty?.kill() } catch { /* best-effort */ }
+      // After the PTY is gone, so a final in-flight hook is not denied its
+      // credential while the provider can still act on the answer.
+      try { await tldrHooks?.dispose() } catch { /* best-effort */ }
     })()
     await owned.rollbackPromise
     // WHY keep a cancelled generation discoverable while cleanup is pending.

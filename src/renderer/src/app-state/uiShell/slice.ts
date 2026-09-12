@@ -26,6 +26,7 @@ export const createUiShellSlice: StateCreator<
   debugBundleNotePrompt: null,
   recordingNotePrompt: null,
   viewPromptsSessionId: null,
+  tldrHistorySessionId: null,
   newAgentPlacementOpen: false,
   newAgentProjectIntent: null,
   newAgentInOpen: false,
@@ -166,6 +167,11 @@ export const createUiShellSlice: StateCreator<
     set({ viewPromptsSessionId: sessionId }, false, 'uiShell/openViewPrompts'),
   closeViewPrompts: () =>
     set({ viewPromptsSessionId: null }, false, 'uiShell/closeViewPrompts'),
+
+  openTldrHistory: sessionId =>
+    set({ tldrHistorySessionId: sessionId }, false, 'uiShell/openTldrHistory'),
+  closeTldrHistory: () =>
+    set({ tldrHistorySessionId: null }, false, 'uiShell/closeTldrHistory'),
 
   openNewAgentPlacement: () =>
     set({ newAgentPlacementOpen: true }, false, 'uiShell/openNewAgentPlacement'),

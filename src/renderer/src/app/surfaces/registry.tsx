@@ -32,6 +32,7 @@ import { AgentTitlePromptSurface } from '@renderer/features/workspace/surfaces/A
 import { ProviderSwitchPickerSurface } from '@renderer/features/workspace/surfaces/ProviderSwitchPickerSurface'
 import { KeyVaultModalSurface } from '@renderer/features/key-vault/surfaces/KeyVaultModalSurface'
 import { NewAgentInSurface } from '@renderer/features/workspace/surfaces/NewAgentInSurface'
+import { TldrHistorySurface } from '@renderer/features/tldr/surfaces/TldrHistorySurface'
 
 // The surface registry (issue #494). Adding a surface = write a wrapper
 // in the owning feature's surfaces/ folder + add ONE import + ONE array
@@ -99,6 +100,9 @@ export const modalSurfaces: SurfaceEntry[] = [
   // closes the palette first; it must paint over every established modal so
   // the warning is never hidden behind the surface it is warning about.
   { id: 'root-management-confirm', Component: RootManagementConfirmSurface },
+  // Appended per the contract above. Opened only from a session command that
+  // closes the palette first, so it stacks over established modals by order.
+  { id: 'tldr-history', Component: TldrHistorySurface },
 ]
 
 /**
