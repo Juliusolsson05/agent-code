@@ -1,12 +1,13 @@
 # Root Agent Code Management
 
-Status: planned. Implementation follows on this branch.
+Status: implemented, tests green, PR open for review.
+PR: [agent-code#907](https://github.com/Juliusolsson05/agent-code/pull/907). Merge requires explicit approval.
 
 Feature Issue: [agent-code#906](https://github.com/Juliusolsson05/agent-code/issues/906).
 Branch: `feat/root-agent-code-management`. Worktree: `.worktrees/root-agent-code-management`.
 Base: `origin/main` at `4c32a9cf8ca22c41d05bbbc0504f59270f8395b8` (2026-09-11).
-This plan is the first commit on the branch; the implementation lands in
-follow-up commits on the same outcome-named branch.
+This plan is the first commit on the branch; the implementation landed in
+four follow-up commits on the same outcome-named branch.
 
 ## Outcome
 
