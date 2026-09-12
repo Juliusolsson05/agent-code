@@ -205,18 +205,33 @@ export class TranscriptStore {
       // growth (review finding).
       feed.onSessionList(sessions => {
         const live = new Set(sessions.map(s => s.sessionId))
+        // WHY a list never touches listener sets, and evicts only UNVIEWED
+        // state (#847): the handshake list is computed on the server at
+        // connection time and can predate a session the client is already
+        // viewing. Whether that list is parsed before or after the view
+        // subscribed depends on TCP chunking of the upgrade response, so an
+        // "authoritative" list was a race. Deleting the listener set severed
+        // the mounted view from the store for good: the later `started`
+        // patch found no state to backfill, and live entries were dropped as
+        // unviewed. The retention guarantee from #805 only ever needed
+        // unviewed sessions to hold nothing; a mounted view keeps what it
+        // shows, and its own unsubscribe resets the transcript when it leaves.
         for (const sessionId of [...this.sessions.keys()]) {
-          if (!live.has(sessionId)) {
+          if (!live.has(sessionId) && !this.isViewed(sessionId)) {
             this.sessions.delete(sessionId)
-            this.listeners.delete(sessionId)
           }
         }
         // Reconnect/retry hook: a backfill that failed while the socket was
         // down stays failed forever without this — SessionView only calls
         // loadInitialHistory once per mount (review finding). The list
-        // frame doubles as the "connection is live again" signal.
-        for (const [sessionId, state] of this.sessions) {
-          if (!state.historyLoaded && !state.historyLoading && (this.listeners.get(sessionId)?.size ?? 0) > 0) {
+        // frame doubles as the "connection is live again" signal. Iterate
+        // the VIEWS, not existing states: a session subscribed before it
+        // appeared in any list has no state yet and must still backfill the
+        // moment the list names it.
+        for (const [sessionId, set] of this.listeners) {
+          if (set.size === 0 || !live.has(sessionId)) continue
+          const state = this.state(sessionId)
+          if (!state.historyLoaded && !state.historyLoading) {
             void this.loadInitialHistory(sessionId)
           }
         }
@@ -250,6 +265,15 @@ export class TranscriptStore {
       set.delete(cb)
       if (set.size > 0 || this.listeners.get(sessionId) !== set) return
       this.listeners.delete(sessionId)
+      // A session the manager forgot while it was on screen kept its state
+      // only because a view held it (session-list frames evict unviewed state
+      // alone, #847). The last view leaving is the moment that state has no
+      // owner left, so drop it outright rather than parking an empty shell
+      // until the next list frame happens to arrive.
+      if (!this.feed.getSessionList().some(s => s.sessionId === sessionId)) {
+        this.sessions.delete(sessionId)
+        return
+      }
       // Selecting another session/list screen is an ownership boundary, not
       // merely a render pause. Keeping the last snapshot would retain the
       // entire transcript through indexes, semantic folds and mapper state.
