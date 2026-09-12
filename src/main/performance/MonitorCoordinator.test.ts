@@ -2,8 +2,16 @@ import type { MainProbeSample } from './MainProbe.js'
 import { EventEmitter } from 'node:events'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-const harness = vi.hoisted(() => ({ launch: vi.fn(), subscribe: vi.fn((_listener: (sample: MainProbeSample) => void) => vi.fn()), start: vi.fn() }))
-vi.mock('electron', () => ({ utilityProcess: { fork: harness.launch } }))
+const harness = vi.hoisted(() => ({
+  launch: vi.fn(),
+  metrics: vi.fn(() => []),
+  subscribe: vi.fn((_listener: (sample: MainProbeSample) => void) => vi.fn()),
+  start: vi.fn(),
+}))
+vi.mock('electron', () => ({
+  app: { getAppMetrics: harness.metrics },
+  utilityProcess: { fork: harness.launch },
+}))
 vi.mock('./MainProbe.js', () => ({ mainProbe: harness }))
 vi.mock('@main/incident/appRunIds.js', () => ({ getAppRunId: () => 'run-test' }))
 import { MonitorCoordinator } from './MonitorCoordinator.js'
@@ -27,11 +35,11 @@ describe('monitor worker isolation', () => {
     expect(child.postMessage).toHaveBeenCalledTimes(1)
     expect(child.postMessage.mock.calls[0][0].records).toHaveLength(120)
     expect(coordinator.read().queuedBytes).toBeLessThanOrEqual(2 * 1024 ** 2)
-    expect(coordinator.read().droppedRecords).toBe(6000)
+    expect(coordinator.read().droppedRecords).toBe(8400)
     vi.advanceTimersByTime(2000)
     expect(child.kill).toHaveBeenCalledOnce()
     expect(coordinator.read().collector).toBe('degraded')
-    expect(coordinator.read().droppedRecords).toBe(6120)
+    expect(coordinator.read().droppedRecords).toBe(8520)
     coordinator.stop()
   })
 
@@ -115,6 +123,88 @@ describe('monitor worker isolation', () => {
     expect(() => child.emit('message', { sequence, snapshot: { schemaVersion: 1, sampledAt: Date.now() } })).not.toThrow()
     expect(coordinator.read().collector).toBe('degraded')
     expect(coordinator.read().droppedRecords).toBe(1)
+    coordinator.stop()
+  })
+
+  it('publishes process generations atomically and rejects missing chunks', () => {
+    vi.useFakeTimers()
+    const child = new FakeChild()
+    harness.launch.mockReturnValue(child)
+    const coordinator = new MonitorCoordinator(() => Date.now())
+    coordinator.start()
+    coordinator.operation(operation)
+    const row = { identity: '1:100', pid: 1, parentPid: 0, creationTime: 100, type: 'main',
+      sessionIds: [], sharedSessionCount: 0, cpuPercent: 1, memoryBytes: 1024, quality: 'ok' }
+    const summary = { sampledAt: 100, count: 2, cpuPercent: 2, memoryBytes: 2048, quality: 'ok', sessionCount: 0, missingRoots: 0, truncated: false }
+    vi.advanceTimersByTime(250)
+    child.emit('message', { sequence: 1, processChunk: { generation: 1, offset: 0, complete: false, rows: [row], summary } })
+    expect(coordinator.readProcesses().rows).toEqual([])
+    vi.advanceTimersByTime(250)
+    child.emit('message', { sequence: 2, processChunk: { generation: 1, offset: 1, complete: true, rows: [{ ...row, identity: '2:100', pid: 2 }], summary } })
+    expect(coordinator.readProcesses().rows).toHaveLength(2)
+    coordinator.operation(operation)
+    vi.advanceTimersByTime(250)
+    child.emit('message', { sequence: 3, processChunk: { generation: 2, offset: 1, complete: true, rows: [row], summary } })
+    expect(coordinator.read().collector).toBe('degraded')
+    expect(coordinator.readProcesses().rows).toHaveLength(2)
+    coordinator.stop()
+  })
+
+  it('reserves transport capacity for the declared maximum process fleet', () => {
+    vi.useFakeTimers()
+    const child = new FakeChild()
+    harness.launch.mockReturnValue(child)
+    const coordinator = new MonitorCoordinator(() => Date.now())
+    coordinator.start()
+    coordinator.startProcesses(() => Array.from({ length: 2048 }, (_, index) => ({
+      sessionId: `session-${index}`,
+      kind: 'claude' as const,
+      pid: 10_000 + index,
+      exited: false,
+      lastActivityAt: null,
+    })))
+
+    const records: Array<{ kind: string }> = []
+    for (let index = 0; index < 21; index++) {
+      vi.advanceTimersByTime(200)
+      const request = child.postMessage.mock.calls.at(-1)?.[0]
+      expect(request).toBeDefined()
+      records.push(...request.records)
+      child.emit('message', { sequence: request.sequence })
+    }
+
+    expect(records).toHaveLength(2050)
+    expect(records[0]?.kind).toBe('process-context-start')
+    expect(records.at(-1)?.kind).toBe('process-context-end')
+    expect(coordinator.read().droppedRecords).toBe(0)
+    coordinator.stop()
+  })
+
+  it('keeps the last valid process page when a restarted worker sends its empty sentinel', () => {
+    vi.useFakeTimers()
+    const first = new FakeChild()
+    const second = new FakeChild()
+    harness.launch.mockReturnValueOnce(first).mockReturnValueOnce(second)
+    const coordinator = new MonitorCoordinator(() => Date.now())
+    coordinator.start()
+    coordinator.operation(operation)
+    vi.advanceTimersByTime(200)
+    const row = { identity: '1:100', pid: 1, parentPid: 0, creationTime: 100, type: 'main',
+      sessionIds: [], sharedSessionCount: 0, cpuPercent: 1, memoryBytes: 1024, quality: 'ok' }
+    const summary = { contextGeneration: 1, sampledAt: 100, count: 1, cpuPercent: 1,
+      memoryBytes: 1024, quality: 'ok', sessionCount: 0, missingRoots: 0, truncated: false }
+    first.emit('message', { sequence: 1, processChunk: { generation: 1, offset: 0, complete: true, rows: [row], summary } })
+    first.emit('exit', 1)
+    vi.advanceTimersByTime(5000)
+    coordinator.operation(operation)
+    vi.advanceTimersByTime(200)
+    const sequence = second.postMessage.mock.calls.at(-1)?.[0].sequence
+    second.emit('message', { sequence, processChunk: {
+      generation: 1, offset: 0, complete: true, rows: [],
+      summary: { sampledAt: 0, count: 0, cpuPercent: null, memoryBytes: null,
+        quality: 'warming-up', sessionCount: 0, missingRoots: 0, truncated: false },
+    } })
+    expect(coordinator.readProcesses().rows).toEqual([row])
     coordinator.stop()
   })
 

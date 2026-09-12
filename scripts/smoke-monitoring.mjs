@@ -23,18 +23,31 @@ try {
       const child = utilityProcess.fork(${JSON.stringify(worker)}, [], {
         serviceName: 'Agent Code Performance Smoke', stdio: 'ignore'
       });
+      let sequence = 0;
+      let workerRss = 0;
+      let operationSeen = false;
+      let processSeen = false;
       const deadline = setTimeout(() => { child.kill(); app.exit(2); }, 15000);
+      const send = records => child.postMessage({ sequence: ++sequence, records });
       child.on('message', response => {
-        if (response.sequence !== 1 || response.snapshot?.operations?.[0]?.histogram?.count !== 1) {
-          child.kill(); app.exit(3); return;
+        if (response.sequence !== sequence) { child.kill(); app.exit(3); return; }
+        if (response.snapshot) {
+          workerRss = response.snapshot.workerRss;
+          operationSeen ||= response.snapshot.operations?.[0]?.histogram?.count === 1;
         }
-        console.log(JSON.stringify({ ok: true, workerRss: response.snapshot.workerRss, schemaVersion: response.snapshot.schemaVersion }));
-        clearTimeout(deadline); child.kill(); app.exit(0);
+        processSeen ||= response.processChunk?.rows?.some(row => row.pid === child.pid);
+        if (operationSeen && processSeen) {
+          console.log(JSON.stringify({ ok: true, workerRss, schemaVersion: 1, nativeHelperDiscovered: true }));
+          clearTimeout(deadline); child.kill(); app.exit(0); return;
+        }
+        setTimeout(() => send([]), 250);
       });
-      child.on('spawn', () => child.postMessage({ sequence: 1, records: [{
-        kind: 'operation', at: Date.now(), windowId: null,
-        sample: { kind: 'operation', name: 'ipc.handler', durationMs: 5, outcome: 'success' }
-      }] }));
+      child.on('spawn', () => send([
+        { kind: 'operation', at: Date.now(), windowId: null,
+          sample: { kind: 'operation', name: 'ipc.handler', durationMs: 5, outcome: 'success' } },
+        { kind: 'process-context-start', generation: 1, rootPid: process.pid, sampledAt: Date.now(), expected: 0 },
+        { kind: 'process-context-end', generation: 1 }
+      ]));
     }).catch(() => app.exit(4));
   `)
   const env = { ...process.env }
