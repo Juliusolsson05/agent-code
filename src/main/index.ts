@@ -6,6 +6,7 @@ import '@main/loadEnv.js'
 import { TldrStore } from '@main/tldr/TldrStore.js'
 import { registerTldrIpc } from '@main/tldr/ipc.js'
 import { TldrEnforcement } from '@main/tldr/enforcement.js'
+import { sweepStaleTldrHookFiles } from '@providers/shared/runtime/tldrHooks.js'
 import { ExternalControlMcpHost } from './externalControlMcp/host'
 import { registerOperatorControlTools } from './externalControlMcp/tools'
 import { createExternalControlSettings } from './settings/externalControl'
@@ -43,7 +44,7 @@ import { TmuxRegistry } from '@main/tmux/TmuxRegistry.js'
 import { reconcile } from '@main/tmux/tmuxRecovery.js'
 import type { PersistedTerminalRef } from '@main/tmux/tmuxRecovery.js'
 
-import { STATE_DIR, STATE_FILE } from '@main/storage/paths.js'
+import { STATE_DIR, STATE_FILE, TLDR_HOOK_RUNTIME_DIR } from '@main/storage/paths.js'
 import {
   scheduleDebugStoragePrune,
   setDebugRetentionJournal,
@@ -874,6 +875,11 @@ async function startApp(): Promise<void> {
   app.once('will-quit', () => { void externalSettings.dispose(); controlHost.dispose() })
   const tldrStore = new TldrStore(join(STATE_DIR, 'tldr.json'))
   const tldrEnforcement = new TldrEnforcement(tldrStore)
+  // Before any session can register: the sweep removes every entry, and each
+  // one left by an earlier run holds a bearer that run's host already revoked.
+  await sweepStaleTldrHookFiles(TLDR_HOOK_RUNTIME_DIR).catch(error => {
+    console.warn('[tldr] stale hook file sweep failed:', error)
+  })
   registerTldrIpc(tldrStore, tldrEnforcement)
   builtInMcpHost.setDependencies({
     tldrStore,

@@ -76,18 +76,35 @@ describe('TLDR enforcement status in the peek', () => {
     }
     return readTldrEnforcement
   }
-  const submitted = { ...emptyRuntime(), submittedAt: Date.now() }
+  const completed = { ...emptyRuntime(), phaseChangedAt: Date.now(), streamPhase: 'idle' as const }
 
   it('says reporting enforcement is inactive after a turn produced no hook contact', async () => {
     peekApi(null)
-    render(<TldrPane identity="agent" enabled provider="codex" runtime={submitted}><div /></TldrPane>)
+    render(<TldrPane identity="agent" enabled provider="codex" runtime={completed}><div /></TldrPane>)
     act(toggleTldr)
     expect(await screen.findByText('Reporting check inactive')).toBeTruthy()
   })
 
+  it('re-reads status as a turn progresses instead of keeping a warning read too early', async () => {
+    let contact: string | null = null
+    const readTldrEnforcement = vi.fn(async (ids: string[]) => Object.fromEntries(ids.map(id => [id, { hookContactAt: contact }])))
+    window.api = { ...originalApi, readTldrs: vi.fn(async () => ({})), onTldrChanged: () => () => {}, readTldrEnforcement }
+    // The peek is latched open while a turn starts, before its first hook lands.
+    const running = { ...emptyRuntime(), phaseChangedAt: 1_000, streamPhase: 'responding' as const }
+    const view = render(<TldrPane identity="agent" enabled provider="codex" runtime={running}><div /></TldrPane>)
+    act(toggleTldr)
+    await waitFor(() => expect(readTldrEnforcement).toHaveBeenCalledTimes(1))
+    expect(screen.queryByText('Reporting check inactive')).toBeNull()
+    // The hook arrives and the turn ends while the peek stays open.
+    contact = new Date().toISOString()
+    view.rerender(<TldrPane identity="agent" enabled provider="codex" runtime={{ ...running, phaseChangedAt: 2_000, streamPhase: 'idle' }}><div /></TldrPane>)
+    await waitFor(() => expect(readTldrEnforcement).toHaveBeenCalledTimes(2))
+    expect(screen.queryByText('Reporting check inactive')).toBeNull()
+  })
+
   it('stays quiet when hooks made contact, before any turn, and for providers without hooks', async () => {
     peekApi(new Date().toISOString())
-    const view = render(<TldrPane identity="agent" enabled provider="claude" runtime={submitted}><div /></TldrPane>)
+    const view = render(<TldrPane identity="agent" enabled provider="claude" runtime={completed}><div /></TldrPane>)
     act(toggleTldr)
     await screen.findByText('No TLDR yet')
     await waitFor(() => expect(window.api.readTldrEnforcement).toHaveBeenCalled())
@@ -100,7 +117,7 @@ describe('TLDR enforcement status in the peek', () => {
     expect(screen.queryByText('Reporting check inactive')).toBeNull()
 
     const opencode = peekApi(null)
-    view.rerender(<TldrPane identity="oc" enabled provider="opencode" runtime={submitted}><div /></TldrPane>)
+    view.rerender(<TldrPane identity="oc" enabled provider="opencode" runtime={completed}><div /></TldrPane>)
     await screen.findByText('No TLDR yet')
     expect(opencode).not.toHaveBeenCalled()
     expect(screen.queryByText('Reporting check inactive')).toBeNull()

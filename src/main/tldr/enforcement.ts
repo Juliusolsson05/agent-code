@@ -16,11 +16,18 @@ export const TLDR_NEVER_WRITTEN_REASON = 'Agent Code TLDR: this agent has no TLD
 export const TLDR_STALE_REASON = 'Agent Code TLDR: you used tools this turn without updating your TLDR. If this turn changed the task status — an outcome, the next step, or a decision the user must make — call tldr_update now. If nothing changed, finish without updating.'
 
 type TurnState = {
+  /** Codex's turn id, when the provider sends one. Claude does not. */
+  turnId: string | null
   /** When this turn began: its prompt, or its first tool call when the prompt
    * hook was missed (a reload mid-turn, or an app restart). */
   startedAt: number
   toolUsed: boolean
   blocked: boolean
+}
+
+function nonEmptyString(input: unknown, key: string): string | undefined {
+  const value = input && typeof input === 'object' ? (input as Record<string, unknown>)[key] : undefined
+  return typeof value === 'string' && value.length > 0 ? value : undefined
 }
 
 /**
@@ -43,7 +50,8 @@ type TurnState = {
  */
 export class TldrEnforcement {
   private readonly turns = new Map<string, TurnState>()
-  private readonly contact = new Map<string, string>()
+  /** Keyed by identity, but remembers which process made contact: see forget(). */
+  private readonly contact = new Map<string, { at: string; token: string }>()
 
   constructor(
     private readonly store: Pick<TldrStore, 'lastWrittenAt'>,
@@ -52,10 +60,27 @@ export class TldrEnforcement {
 
   async handle(token: string, identity: string, event: TldrHookEvent, input: unknown): Promise<TldrHookOutput> {
     const at = this.now()
-    this.contact.set(identity, new Date(at).toISOString())
+    this.contact.set(identity, { at: new Date(at).toISOString(), token })
+
+    // WHY subagent hooks change nothing: both CLIs run a subagent inside the
+    // parent process with the parent's hook config, so its hooks arrive with
+    // the parent's bearer, marked only by `agent_id` (Claude's background Task,
+    // Codex's spawn_agent). Letting them in would let a child reset the parent's
+    // turn, receive the goal nudge and write its own sub-task into the parent's
+    // TLDR, or have a background child's tool calls block a later pure-chat turn.
+    // Ignoring them loses nothing: spawning the child was itself a tool call by
+    // the parent, and that already marked the parent's turn as having done work.
+    // Contact is still recorded above — a child's hook proves the hooks load.
+    if (nonEmptyString(input, 'agent_id')) return {}
+    const turnId = nonEmptyString(input, 'turn_id') ?? null
 
     if (event === 'user-prompt-submit') {
-      this.turns.set(token, { startedAt: at, toolUsed: false, blocked: false })
+      // Codex runs this hook again for input steered into a RUNNING turn, with
+      // that turn's id. It is the same turn: resetting would erase tool work the
+      // agent has not reported, so a "stop and summarize" steer would let an
+      // unreported turn end unchallenged.
+      if (turnId && this.turns.get(token)?.turnId === turnId) return {}
+      this.turns.set(token, { turnId, startedAt: at, toolUsed: false, blocked: false })
       // Asking at the prompt rather than only at Stop is what gets the goal
       // written BEFORE the work: an agent blocked at the end reports what it
       // did, which is not what a user scanning many panes needed during it.
@@ -67,7 +92,7 @@ export class TldrEnforcement {
     if (event === 'post-tool-use') {
       const turn = this.turns.get(token)
       if (turn) turn.toolUsed = true
-      else this.turns.set(token, { startedAt: at, toolUsed: true, blocked: false })
+      else this.turns.set(token, { turnId, startedAt: at, toolUsed: true, blocked: false })
       return {}
     }
 
@@ -92,17 +117,25 @@ export class TldrEnforcement {
   }
 
   private block(token: string, turn: TurnState | undefined, at: number, reason: string): TldrHookOutput {
-    this.turns.set(token, { startedAt: turn?.startedAt ?? at, toolUsed: turn?.toolUsed ?? false, blocked: true })
+    this.turns.set(token, {
+      turnId: turn?.turnId ?? null, startedAt: turn?.startedAt ?? at, toolUsed: turn?.toolUsed ?? false, blocked: true,
+    })
     return { decision: 'block', reason }
   }
 
-  /** A revoked registration's process is gone; its unfinished turn must not
-   * leak into the process that replaces it under a new token. */
+  /** A revoked registration's process is gone. Its unfinished turn must not
+   * leak into the process that replaces it, and neither may its hook contact:
+   * a reload keeps the TLDR identity, so contact left behind by the old process
+   * would vouch for a replacement whose hooks never ran — exactly the silent
+   * failure the peek's inactive note exists to reveal. */
   forget(token: string): void {
     this.turns.delete(token)
+    for (const [identity, contact] of this.contact) {
+      if (contact.token === token) this.contact.delete(identity)
+    }
   }
 
   status(identities: readonly string[]): Record<string, TldrEnforcementStatus> {
-    return Object.fromEntries(identities.map(identity => [identity, { hookContactAt: this.contact.get(identity) ?? null }]))
+    return Object.fromEntries(identities.map(identity => [identity, { hookContactAt: this.contact.get(identity)?.at ?? null }]))
   }
 }

@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { chmod, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import type { BuiltInMcpServerConfig } from '@mcp/shared/types.js'
@@ -130,10 +129,16 @@ export type PrivateCodexTldrHooks = {
  */
 export async function createCodexTldrHooks(
   servers: readonly BuiltInMcpServerConfig[],
+  root: string,
 ): Promise<PrivateCodexTldrHooks | null> {
   const server = tldrHookServer(servers)
   if (!server) return null
-  const directory = await mkdtemp(join(tmpdir(), 'agent-code-tldr-hooks-'))
+  // `root` is app-owned rather than os.tmpdir(): this file must outlive days of
+  // idleness, and macOS clears its temp directory after three. See
+  // TLDR_HOOK_RUNTIME_DIR. 0700 because every entry holds a live bearer.
+  await mkdir(root, { recursive: true, mode: 0o700 })
+  await chmod(root, 0o700)
+  const directory = await mkdtemp(join(root, 'codex-'))
   const headerPath = join(directory, 'authorization')
   try {
     await writeFile(headerPath, `Authorization: Bearer ${server.bearerToken}\n`, { encoding: 'utf8', mode: 0o600 })
@@ -161,4 +166,23 @@ export async function createCodexTldrHooks(
     args,
     dispose: () => rm(directory, { recursive: true, force: true }),
   }
+}
+
+/**
+ * Delete hook credential files left by an earlier app run.
+ *
+ * Every bearer they hold was revoked when that run's MCP host stopped, so they
+ * are dead weight rather than live credentials. A process that exits naturally
+ * never calls stop() on its session, so without this sweep those files would
+ * accumulate. Call only before any session registers: it removes every entry.
+ */
+export async function sweepStaleTldrHookFiles(root: string): Promise<void> {
+  let entries: string[]
+  try {
+    entries = await readdir(root)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+    throw error
+  }
+  await Promise.all(entries.map(entry => rm(join(root, entry), { recursive: true, force: true })))
 }

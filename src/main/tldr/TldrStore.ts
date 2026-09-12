@@ -129,14 +129,17 @@ export class TldrStore extends EventEmitter {
   }
 
   private async appendHistory(identity: string, record: TldrRecord): Promise<void> {
-    const previous = await this.readHistory(identity).catch(() => [])
+    const path = this.historyFile(identity)
+    // Whether this adds a file is a question about the directory, not about
+    // whether the old contents parsed. Repairing a corrupt file must not count
+    // as a new one, or the eviction below would delete real histories.
+    const existed = await stat(path).then(() => true, () => false)
+    const previous = existed ? await this.readHistory(identity).catch(() => []) : []
     // An agent re-posting an unchanged status is not a new moment in the task;
     // keeping it would bury real transitions under identical rows.
     if (previous[0]?.text === record.text) return
     const entries = [{ text: record.text, writtenAt: record.updatedAt, revision: record.revision }, ...previous]
       .slice(0, TLDR_HISTORY_LIMIT)
-    const path = this.historyFile(identity)
-    const isNew = previous.length === 0
     await mkdir(this.historyDirectory, { recursive: true })
     const temporary = `${path}.${randomUUID()}.tmp`
     try {
@@ -145,7 +148,7 @@ export class TldrStore extends EventEmitter {
     } finally {
       await unlink(temporary).catch(() => {})
     }
-    if (isNew) await this.evictOldHistory()
+    if (!existed) await this.evictOldHistory()
   }
 
   private async evictOldHistory(): Promise<void> {
@@ -161,8 +164,12 @@ export class TldrStore extends EventEmitter {
       return { path, mtime: (await stat(path).catch(() => null))?.mtimeMs ?? 0 }
     }))
     aged.sort((a, b) => a.mtime - b.mtime)
-    for (const { path } of aged.slice(0, aged.length - this.maxHistoryFiles)) await unlink(path).catch(() => {})
-    this.historyFileCount = Math.min(aged.length, this.maxHistoryFiles)
+    // The cached count only decides whether to look. The directory listing is
+    // the truth, and the excess is clamped: a negative end index to slice()
+    // would select every file except the newest few and delete them.
+    const excess = Math.max(0, aged.length - this.maxHistoryFiles)
+    for (const { path } of aged.slice(0, excess)) await unlink(path).catch(() => {})
+    this.historyFileCount = aged.length - excess
   }
 
   update(identity: string, value: string, authorized: () => boolean): Promise<TldrRecord> {

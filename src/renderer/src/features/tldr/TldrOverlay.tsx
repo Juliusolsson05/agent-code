@@ -18,17 +18,24 @@ export function TldrOverlay({ identity, enabled, runtime, provider }: { identity
   const [snapshot, setSnapshot] = useState<{ identity: string; record: TldrRecord | null; error: boolean }>({ identity, record: null, error: false })
   const [hookContact, setHookContact] = useState<{ identity: string; seen: boolean } | null>(null)
   const enforced = enabled && ENFORCED_PROVIDERS.has(provider ?? '')
+  // A turn that ran and ENDED in this renderer run. The prompt hook fires when
+  // a turn starts, so by the time one has ended a working provider has made
+  // contact; a turn that is merely submitted may still be ahead of its hook.
+  const turnEnded = Boolean(runtime && runtime.phaseChangedAt !== null && runtime.streamPhase === 'idle')
+  const turnMarker = runtime?.phaseChangedAt ?? null
   useEffect(() => {
     if (!visible || !enforced) return
     let current = true
     // Advisory only: if the status cannot be read, say nothing rather than
-    // claim enforcement is broken.
+    // claim enforcement is broken. Re-read on every phase change: a latched
+    // peek can stay open across a whole turn, and a status read before that
+    // turn's first hook would otherwise leave a false warning on screen.
     void Promise.resolve()
       .then(() => window.api.readTldrEnforcement([identity]))
       .then(status => { if (current) setHookContact({ identity, seen: Boolean(status[identity]?.hookContactAt) }) })
       .catch(() => {})
     return () => { current = false }
-  }, [identity, enforced, visible])
+  }, [identity, enforced, visible, turnMarker])
   useEffect(() => {
     if (!visible || !enabled) return
     let current = true
@@ -67,12 +74,12 @@ export function TldrOverlay({ identity, enabled, runtime, provider }: { identity
     <TldrFreshness
       runtime={runtime}
       writtenAt={enabled ? record?.updatedAt : undefined}
-      // WHY this needs evidence of a submitted turn: a freshly (re)loaded agent
-      // has had no turn for its hooks to fire on, so "never contacted" is not
-      // yet a failure. A turn that started and still produced no hook contact
-      // means the provider never ran them — the silent failure worth showing.
-      enforcementInactive={enforced && hookContact?.identity === identity && !hookContact.seen
-        && Boolean(runtime && (runtime.phaseChangedAt !== null || runtime.submittedAt !== null))}
+      // WHY this needs a completed turn: a freshly (re)loaded agent has had no
+      // turn for its hooks to fire on, and a just-submitted one may still be
+      // ahead of its first hook, so "never contacted" is not yet a failure. A
+      // turn that ran to the end with no hook contact means the provider never
+      // ran them — the silent failure worth showing.
+      enforcementInactive={enforced && turnEnded && hookContact?.identity === identity && !hookContact.seen}
     />
   </div>
 }

@@ -52,6 +52,22 @@ describe('TLDR history', () => {
     expect((await store.history('agent-a')).map(entry => entry.text)).toEqual(['Second report.'])
   })
 
+  it('repairs corrupt histories without evicting other agents below the cap', async () => {
+    const { directory, store } = await setup({ maxHistoryFiles: 3 })
+    await store.update('agent-a', 'A reports.', allow)
+    await store.update('agent-b', 'B reports.', allow)
+    const historyFile = (identity: string) => join(directory, 'tldr-history', `${createHash('sha256').update(identity).digest('hex')}.json`)
+    await writeFile(historyFile('agent-a'), '{ not json')
+    await writeFile(historyFile('agent-b'), '{ not json')
+    // Two files exist and the cap is three. Repairing them adds no file, so
+    // nothing may be evicted — before the fix each repair counted as new and
+    // the second one deleted agent A's history.
+    await store.update('agent-a', 'A again.', allow)
+    await store.update('agent-b', 'B again.', allow)
+    expect((await store.history('agent-a')).map(entry => entry.text)).toEqual(['A again.'])
+    expect((await store.history('agent-b')).map(entry => entry.text)).toEqual(['B again.'])
+  })
+
   it('evicts the least recently written histories beyond the file cap', async () => {
     const { store } = await setup({ maxHistoryFiles: 2 })
     for (const identity of ['agent-a', 'agent-b', 'agent-c']) {

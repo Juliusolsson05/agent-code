@@ -7,7 +7,7 @@ import { join } from 'path'
 import { spawn as ptySpawn } from 'node-pty'
 
 import type { SlashPickerState } from '@preload/index.js'
-import { PROXY_EVENTS_DIR } from '@main/storage/paths.js'
+import { PROXY_EVENTS_DIR, TLDR_HOOK_RUNTIME_DIR } from '@main/storage/paths.js'
 import { scheduleDebugStoragePrune } from '@main/storage/debugRetention.js'
 import {
   CodexHeadless,
@@ -397,7 +397,7 @@ export class CodexSession extends EventEmitter {
       // prompt-input profile (which must stay last) and the resume subcommand.
       // Created inside the rollback region because the header file holds the
       // session bearer.
-      const tldrHooks = await createCodexTldrHooks(this.builtInMcpServers)
+      const tldrHooks = await createCodexTldrHooks(this.builtInMcpServers, TLDR_HOOK_RUNTIME_DIR)
       if (!this.isStartAttemptActive(attempt)) {
         // Stop may already have drained this attempt before the file existed;
         // this continuation is then its only owner.

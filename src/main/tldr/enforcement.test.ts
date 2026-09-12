@@ -97,10 +97,55 @@ describe('TLDR turn-end enforcement', () => {
     expect(await t.hook('stop', {}, 'process-a', 'agent-a')).toEqual({})
   })
 
-  it('reports hook contact per identity so a silent provider can be shown', async () => {
+  it('reports hook contact per identity and forgets it with the process that made it', async () => {
     const t = setup()
     expect(t.enforcement.status(['agent-a'])).toEqual({ 'agent-a': { hookContactAt: null } })
     await t.hook('post-tool-use')
     expect(t.enforcement.status(['agent-a'])['agent-a']!.hookContactAt).toBe(new Date(1_000_000).toISOString())
+    // A reload keeps the identity. The old process's contact must not vouch for
+    // a replacement whose hooks never run.
+    t.enforcement.forget('process-a')
+    expect(t.enforcement.status(['agent-a'])).toEqual({ 'agent-a': { hookContactAt: null } })
+  })
+
+  it('ignores subagent hooks so a child can neither reset, nudge, nor contaminate the parent turn', async () => {
+    const never = setup()
+    // A child spawned before the parent ever reported must not be asked for a
+    // goal: it would write its own sub-task into the parent's TLDR.
+    expect(await never.hook('user-prompt-submit', { agent_id: 'child', turn_id: 'c1' })).toEqual({})
+
+    const t = setup()
+    t.report('agent-a')
+    t.tick()
+    await t.hook('user-prompt-submit', { turn_id: 't1' })
+    await t.hook('post-tool-use', { turn_id: 't1' })
+    await t.hook('user-prompt-submit', { agent_id: 'child', agent_type: 'default', turn_id: 'c1' })
+    await t.hook('post-tool-use', { agent_id: 'child', turn_id: 'c1' })
+    expect(await t.hook('stop', { turn_id: 't1' })).toEqual(block(TLDR_STALE_REASON))
+
+    const background = setup()
+    background.report('agent-a')
+    background.tick()
+    await background.hook('user-prompt-submit')
+    // A background Task from an earlier turn keeps calling tools; the parent's
+    // current turn is still a pure question.
+    await background.hook('post-tool-use', { agent_id: 'background-task' })
+    expect(await background.hook('stop')).toEqual({})
+  })
+
+  it('keeps a steer into the same Codex turn from erasing unreported tool work', async () => {
+    const t = setup()
+    t.report('agent-a')
+    t.tick()
+    await t.hook('user-prompt-submit', { turn_id: 't1' })
+    await t.hook('post-tool-use', { turn_id: 't1' })
+    t.tick()
+    expect(await t.hook('user-prompt-submit', { turn_id: 't1', prompt: 'stop and summarize' })).toEqual({})
+    expect(await t.hook('stop', { turn_id: 't1' })).toEqual(block(TLDR_STALE_REASON))
+    // A genuinely new turn still starts clean.
+    t.report('agent-a')
+    t.tick()
+    await t.hook('user-prompt-submit', { turn_id: 't2' })
+    expect(await t.hook('stop', { turn_id: 't2' })).toEqual({})
   })
 })

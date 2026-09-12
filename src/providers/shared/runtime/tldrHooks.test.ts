@@ -1,6 +1,7 @@
-import { readFile, stat } from 'node:fs/promises'
-import { dirname } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
+import { afterEach, describe, expect, it } from 'vitest'
 import type { BuiltInMcpServerConfig } from '@mcp/shared/types.js'
 import {
   CLAUDE_TLDR_HOOK_TOKEN_ENV,
@@ -8,8 +9,18 @@ import {
   claudeTldrHookSettings,
   codexHookTrustHash,
   createCodexTldrHooks,
+  sweepStaleTldrHookFiles,
   tldrHookServer,
 } from './tldrHooks'
+
+const roots: string[] = []
+afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))) })
+async function appRoot() {
+  const base = await mkdtemp(join(tmpdir(), 'agent-code-tldr-hook-root-'))
+  roots.push(base)
+  // A not-yet-existing child: the launcher must create the app-owned root itself.
+  return join(base, 'tldr-hooks')
+}
 
 const baseUrl = 'http://127.0.0.1:4321/hooks/tldr'
 const server = (overrides: Partial<BuiltInMcpServerConfig> = {}): BuiltInMcpServerConfig => ({
@@ -49,7 +60,8 @@ describe('provider launch hooks', () => {
   })
 
   it('pre-trusts exactly the Codex hooks it injects and keeps the bearer out of argv', async () => {
-    const hooks = await createCodexTldrHooks([server()])
+    const root = await appRoot()
+    const hooks = await createCodexTldrHooks([server()], root)
     expect(hooks).not.toBeNull()
     try {
       expect(hooks!.args.join(' ')).not.toContain('session-secret-token')
@@ -77,6 +89,10 @@ describe('provider launch hooks', () => {
       const headerPath = /-H @'([^']+)'/.exec(byEvent['hooks.Stop']!.command)![1]!
       expect(await readFile(headerPath, 'utf8')).toBe('Authorization: Bearer session-secret-token\n')
       expect((await stat(headerPath)).mode & 0o777).toBe(0o600)
+      // The file lives under the app-owned root, never the OS temp directory
+      // that macOS clears after three days, and that root admits only the user.
+      expect(headerPath.startsWith(`${root}/`)).toBe(true)
+      expect((await stat(root)).mode & 0o777).toBe(0o700)
       await hooks!.dispose()
       await expect(stat(dirname(headerPath))).rejects.toMatchObject({ code: 'ENOENT' })
     } finally {
@@ -85,7 +101,25 @@ describe('provider launch hooks', () => {
   })
 
   it('injects nothing for sessions without TLDR hooks or a bearer', async () => {
-    expect(await createCodexTldrHooks([server({ tldrHooks: undefined })])).toBeNull()
+    expect(await createCodexTldrHooks([server({ tldrHooks: undefined })], await appRoot())).toBeNull()
     expect(tldrHookServer([server({ bearerToken: undefined })])).toBeUndefined()
+  })
+})
+
+describe('stale Codex hook credentials', () => {
+  it('removes every entry an earlier run left while keeping the root usable', async () => {
+    const root = await appRoot()
+    // A naturally exited process never ran stop(), so its file outlived it.
+    await mkdir(join(root, 'codex-earlier-run'), { recursive: true })
+    await writeFile(join(root, 'codex-earlier-run', 'authorization'), 'Authorization: Bearer revoked\n')
+    await sweepStaleTldrHookFiles(root)
+    expect(await readdir(root)).toEqual([])
+    const hooks = await createCodexTldrHooks([server()], root)
+    expect(await readdir(root)).toHaveLength(1)
+    await hooks!.dispose()
+  })
+
+  it('treats a root that was never created as nothing to sweep', async () => {
+    await expect(sweepStaleTldrHookFiles(await appRoot())).resolves.toBeUndefined()
   })
 })

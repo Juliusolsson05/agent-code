@@ -120,3 +120,38 @@ authorization.
   inactive note appearing before any turn.
 - Enforcement is exercised through the real MCP HTTP host with real bearer
   registrations, the real TLDR store, and real MCP tool writes.
+
+## Review outcome
+
+Two orchestrated reviewers ran: a Claude reviewer on security and launch
+lifecycles, and a Codex reviewer on rules, history, and renderer. Their
+deduplicated findings were all fixed on this branch, each with a regression test
+that fails without the fix:
+
+- Subagent hooks share the parent's config and bearer (Claude background Task,
+  Codex `spawn_agent`), marked only by `agent_id`. They could reset the parent's
+  turn, receive the goal nudge and write into the parent's TLDR, or block a later
+  pure-chat turn. Such payloads now change nothing; the parent's own spawn call
+  already marks its turn as having done work. The Claude reviewer suggested
+  counting a child's tool calls toward the parent. That was not adopted, because
+  it recreates the Codex reviewer's false block from a background Task.
+- Codex runs UserPromptSubmit again for input steered into a running turn, using
+  the same `turn_id`. Turn state is now kept when the id matches, so a "stop and
+  summarize" steer cannot erase unreported tool work.
+- Hook contact outlived its process, so a reload whose hooks never ran still
+  looked active. Contact now records its token and is forgotten on revocation.
+- Repairing a corrupt history file counted as a new file. With a negative slice
+  end, eviction then deleted real histories below the cap. "New" now means the
+  file did not exist, and eviction is clamped.
+- The peek read hook status once, and a warning read before a turn's first hook
+  stayed on screen. It now requires a completed turn and re-reads on every phase
+  change.
+- The Codex header file lived in os.tmpdir(), which macOS clears after three
+  days, so a long-idle pane would lose enforcement silently. It now lives under
+  `~/.config/agent-code/tldr-hooks` (0700), swept at startup.
+
+Declined: rewriting user or managed Claude `allowedHttpHookUrls` /
+`httpHookAllowedEnvVars`. Those arrays merge across settings sources, and an
+unset list means "unrestricted", so adding Agent Code's entries would restrict
+the user's other HTTP hooks. It stays a documented limitation, and the inactive
+note surfaces it.

@@ -24,11 +24,12 @@ async function setup() {
   cleanups.push(() => rm(directory, { recursive: true, force: true }))
   const store = new TldrStore(join(directory, 'tldr.json'))
   const host = new BuiltInMcpHttpHost()
-  host.setDependencies({ tldrStore: store, tldrEnforcement: new TldrEnforcement(store) })
+  const enforcement = new TldrEnforcement(store)
+  host.setDependencies({ tldrStore: store, tldrEnforcement: enforcement })
   await host.start()
   cleanups.push(() => host.stop())
-  const register = (sessionId: string, domains: BuiltInMcpDomain[] = ['tldr']) =>
-    host.registerSession({ sessionId, tldrIdentity: `summary-${sessionId}`, cwd: '/project', providerKind: 'codex', domains })[0]!
+  const register = (sessionId: string, domains: BuiltInMcpDomain[] = ['tldr'], tldrIdentity = `summary-${sessionId}`) =>
+    host.registerSession({ sessionId, tldrIdentity, cwd: '/project', providerKind: 'codex', domains })[0]!
   const hook = async (config: { tldrHooks?: { baseUrl: string }; url: string }, token: string | undefined, event: string, body: unknown = {}) => {
     const base = config.tldrHooks?.baseUrl ?? new URL('/hooks/tldr', config.url).toString()
     const response = await fetch(`${base}/${event}`, {
@@ -47,7 +48,7 @@ async function setup() {
     await client.callTool({ name: 'tldr_update', arguments: { text } })
     await settle()
   }
-  return { host, store, register, hook, report }
+  return { host, store, enforcement, register, hook, report }
 }
 
 describe('TLDR turn hooks through the real MCP host', () => {
@@ -90,6 +91,20 @@ describe('TLDR turn hooks through the real MCP host', () => {
 
     host.revokeSession('a')
     expect((await hook(a, a.bearerToken, 'stop')).status).toBe(401)
+  })
+
+  it('drops a revoked process’s hook contact so a silent replacement shows as inactive', async () => {
+    const { host, enforcement, register, hook } = await setup()
+    const original = register('process-a', ['tldr'], 'summary-kept')
+    await hook(original, original.bearerToken, 'post-tool-use')
+    expect(enforcement.status(['summary-kept'])['summary-kept']!.hookContactAt).toEqual(expect.any(String))
+    // A reload revokes the old process and registers a replacement that keeps
+    // the conversation's TLDR identity.
+    host.revokeSession('process-a')
+    const replacement = register('process-b', ['tldr'], 'summary-kept')
+    expect(enforcement.status(['summary-kept'])).toEqual({ 'summary-kept': { hookContactAt: null } })
+    await hook(replacement, replacement.bearerToken, 'user-prompt-submit')
+    expect(enforcement.status(['summary-kept'])['summary-kept']!.hookContactAt).toEqual(expect.any(String))
   })
 
   it('gives hooks only to a TLDR registration’s own launch, never to inherited configs', async () => {
