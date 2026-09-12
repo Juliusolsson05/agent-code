@@ -1,3 +1,4 @@
+import { monitorCoordinator } from '@main/performance/MonitorCoordinator.js'
 // Side-effect import — MUST be first so `.env` is loaded into
 // `process.env` before PerformanceService (and anything else that
 // reads env flags at module load) is imported. See
@@ -600,6 +601,7 @@ async function startApp(): Promise<void> {
     appRunJournal.recordError('prior_run.classify.error', err)
   }
 
+  monitorCoordinator.start()
   void performanceService.start().catch(err => {
     console.warn('[performance] failed to start:', err)
     appRunJournal?.recordError('performance.start.error', err)
@@ -614,8 +616,8 @@ async function startApp(): Promise<void> {
   startMainHeapWatchdog({
     onHeapPressure: (info) => {
       // Near-OOM is exactly the kind of incident users need to diagnose later.
-      // The watchdog already writes the heap snapshot; this records the durable
-      // incident that points at it.
+      // Automatic pressure capture is metadata-only: a synchronous heap dump
+      // can double memory and freeze main precisely when it is near OOM.
       appRunJournal?.recordIncident({
         kind: 'heap.pressure',
         severity: 'error',
@@ -1222,6 +1224,7 @@ app.on('before-quit', (event) => {
   // is simply lost, with no error anywhere. See historyStore.ts.
   void flushHistoryWrites()
   void pasteDebugJournals.flushAll()
+  monitorCoordinator.stop()
   performanceService.stop()
 })
 

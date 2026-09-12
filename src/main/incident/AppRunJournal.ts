@@ -2,9 +2,9 @@ import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs'
 import { mkdir, rename, writeFile } from 'node:fs/promises'
 import { arch, platform } from 'node:os'
 import { join } from 'node:path'
-import { monitorEventLoopDelay, performance } from 'node:perf_hooks'
+import { performance } from 'node:perf_hooks'
+import { mainProbe } from '@main/performance/MainProbe.js'
 import { pid, versions } from 'node:process'
-import { getHeapStatistics } from 'node:v8'
 import { BrowserWindow } from 'electron'
 
 import { INCIDENT_RUNS_DIR, STATE_DIR } from '@main/storage/paths.js'
@@ -64,7 +64,6 @@ export class AppRunJournal {
   private readonly incidentsPath: string
   private readonly heartbeatPath: string
   private readonly cleanShutdownPath: string
-  private readonly eventLoopDelay = monitorEventLoopDelay({ resolution: 20 })
   private pending: AppRunJournalEvent[] = []
   private droppedPendingEvents = 0
   // Monotonic source-loss counter for debug-bundle provenance. The per-flush
@@ -172,7 +171,7 @@ export class AppRunJournal {
     } catch (err) {
       console.warn('[incident-journal] could not enable process.report:', err)
     }
-    this.eventLoopDelay.enable()
+    mainProbe.start()
     this.flushTimer = setInterval(() => {
       void this.flush()
     }, FLUSH_INTERVAL_MS)
@@ -421,7 +420,7 @@ export class AppRunJournal {
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer)
     this.flushTimer = null
     this.heartbeatTimer = null
-    this.eventLoopDelay.disable()
+    mainProbe.stop()
     // Synchronous: the async flush() never lands during quit teardown (see flushSync).
     this.flushSync()
     // Latch closed. Without this, record() kept accepting events after stop()
@@ -531,11 +530,9 @@ export class AppRunJournal {
   }
 
   private createHeartbeat(): AppRunHeartbeat {
-    const memory = process.memoryUsage()
-    const heap = getHeapStatistics()
+    const memory = mainProbe.read()
     const windows = BrowserWindow.getAllWindows()
     const focused = BrowserWindow.getFocusedWindow() !== null
-    const delayMean = Number.isFinite(this.eventLoopDelay.mean) ? this.eventLoopDelay.mean : 0
     const heartbeat: AppRunHeartbeat = {
       schemaVersion: 1,
       appRunId: this.appRunId,
@@ -548,14 +545,14 @@ export class AppRunJournal {
         rss: memory.rss,
         heapUsed: memory.heapUsed,
         heapTotal: memory.heapTotal,
-        heapLimit: heap.heap_size_limit,
+        heapLimit: memory.heapLimit,
         external: memory.external,
         arrayBuffers: memory.arrayBuffers,
       },
       mainEventLoop: {
-        delayMeanMs: nsToMs(delayMean),
-        delayMaxMs: nsToMs(this.eventLoopDelay.max),
-        delayP99Ms: nsToMs(this.eventLoopDelay.percentile(99)),
+        delayMeanMs: memory.eventLoopDelay?.meanMs ?? 0,
+        delayMaxMs: memory.eventLoopDelay?.maxMs ?? 0,
+        delayP99Ms: memory.eventLoopDelay?.p99Ms ?? 0,
       },
       window: {
         count: windows.length,
@@ -563,7 +560,6 @@ export class AppRunJournal {
       },
       lastEventSeq: this.nextEventSeq - 1,
     }
-    this.eventLoopDelay.reset()
     return heartbeat
   }
 }
@@ -595,9 +591,4 @@ function normalizeError(
     return { name: error.name, message: error.message, stack: error.stack }
   }
   return { message: String(error) }
-}
-
-function nsToMs(value: number): number {
-  if (!Number.isFinite(value) || value <= 0) return 0
-  return Math.round((value / 1_000_000) * 100) / 100
 }

@@ -48,6 +48,7 @@
     "extract:conversations": "tsx --tsconfig tsconfig.node.json scripts/extract-conversation-corpus.mts",
     "check:conversation-fixtures": "tsx --tsconfig tsconfig.node.json scripts/extract-conversation-corpus.mts --verify-checked-in",
     "lifecycle:summarize": "tsx --tsconfig tsconfig.node.json scripts/summarize-lifecycle.mts",
+    "smoke:monitoring": "node scripts/smoke-monitoring.mjs",
     "benchmark:monitoring": "tsx scripts/benchmark-monitoring.mts",
     "check:keybindings": "tsx --tsconfig tsconfig.web.json scripts/check-command-keybindings.mts",
     "check": "npm run test:contract && npm run check:worktree-live-fixtures && npm run check:conversation-fixtures && npm run check:keybindings && npm run typecheck && npm run check:live-resume-probe && npm test && npm run test:package",

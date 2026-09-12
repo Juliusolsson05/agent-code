@@ -19,3 +19,14 @@ Verification: unit and system tests for lifecycle, backpressure, worker failure,
 sender validation and clock windows; existing incident/heap regression suites;
 typecheck/build plus isolated Electron helper smoke and resource measurements.
 Hardware-specific and long-duration evidence will be reported separately.
+
+Implementation status: shared main probe, bounded utility-process coordinator and
+aggregator, renderer singleton/disposal and acknowledged heartbeat transport,
+cached IPC, and metadata-only heap pressure are implemented. Thirteen focused
+unit/renderer tests pass, full main+renderer TypeScript checking passes, and the
+isolated real Electron helper smoke passes. Initial helper RSS was 69,746,688
+bytes (~66.5 MiB), above the provisional 64 MiB budget; stage 6 must qualify
+fixed helper overhead and incremental retained evidence rather than claiming
+this target already passes. Live snapshot queries carry the last 120 main
+points; the worker retains the full 15-minute ring for later history queries.
+Full build and independent review remain in progress.
