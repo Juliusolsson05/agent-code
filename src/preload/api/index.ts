@@ -35,6 +35,7 @@ import { workflowsApi } from '@preload/api/workflows.js'
 import { agentCodeConventionsApi } from '@preload/api/agentCodeConventions.js'
 import { agentCodeCustomSkillsApi } from '@preload/api/agentCodeCustomSkills.js'
 import { agentCodeInstalledSkillsApi } from '@preload/api/agentCodeInstalledSkills.js'
+import { agentSkillsApi } from '@preload/api/agentSkills.js'
 
 // Composed preload API surface.
 //
@@ -97,6 +98,7 @@ export const api = {
   ...agentCodeConventionsApi,
   ...agentCodeCustomSkillsApi,
   ...agentCodeInstalledSkillsApi,
+  ...agentSkillsApi,
 }
 
 export type Api = typeof api

@@ -3,6 +3,9 @@
 // sessionManager and IPC handlers import from HERE.
 
 import { join } from 'path'
+import { discoverClaudeSkillRoots } from '@providers/claude/runtime/skillDiscovery'
+import { discoverCodexSkillRoots } from '@providers/codex/runtime/skillDiscovery'
+import { discoverOpencodeSkillRoots } from '@providers/opencode/runtime/skillDiscovery'
 import { opencodeTranscriptFile, parseOpencodeTranscriptFile } from 'opencode-terminal-headless'
 import { readOpencodeSessionInfo } from '@providers/opencode/runtime/opencodeDatabase'
 
@@ -26,6 +29,7 @@ import {
 const claudeMain: MainProviderConfig = {
   id: 'claude',
   name: 'Claude Code',
+  discoverSkillRoots: discoverClaudeSkillRoots,
   personalAgentSkills: {
     supported: true,
     locations: [
@@ -54,6 +58,7 @@ const claudeMain: MainProviderConfig = {
 const codexMain: MainProviderConfig = {
   id: 'codex',
   name: 'Codex',
+  discoverSkillRoots: discoverCodexSkillRoots,
   personalAgentSkills: {
     supported: true,
     locations: [
@@ -86,6 +91,7 @@ const codexMain: MainProviderConfig = {
 const opencodeMain: MainProviderConfig = {
   id: 'opencode',
   name: 'OpenCode',
+  discoverSkillRoots: discoverOpencodeSkillRoots,
   personalAgentSkills: {
     supported: true,
     locations: [

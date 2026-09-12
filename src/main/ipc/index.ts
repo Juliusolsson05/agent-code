@@ -53,6 +53,7 @@ import { registerWorkflowIpc } from '@main/ipc/workflows.js'
 import { registerAgentCodeConventionsIpc } from '@main/ipc/agentCodeConventions.js'
 import { registerAgentCodeCustomSkillsIpc } from '@main/ipc/agentCodeCustomSkills.js'
 import { registerAgentCodeInstalledSkillsIpc } from '@main/ipc/agentCodeInstalledSkills.js'
+import { registerAgentSkillsIpc } from '@main/ipc/agentSkills.js'
 import type { WorkflowBridge } from '@main/workflows/WorkflowBridge.js'
 
 // IPC registration aggregator.
@@ -136,4 +137,5 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerAgentCodeConventionsIpc(deps.agentCodeConventionsService)
   registerAgentCodeCustomSkillsIpc(deps.agentCodeConventionsService)
   registerAgentCodeInstalledSkillsIpc(deps.agentCodeConventionsService)
+  registerAgentSkillsIpc(deps.agentCodeConventionsService)
 }

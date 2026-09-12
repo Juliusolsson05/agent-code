@@ -1,5 +1,7 @@
 import { TLDR_INSTRUCTIONS, TLDR_SKILL_NAME, TLDR_SKILL_DESCRIPTION } from '@shared/types/tldr.js'
 import { randomUUID } from 'crypto'
+import type { AgentProviderKind } from '@shared/types/providerKind.js'
+import type { ManagedAgentSkillLocations } from '@shared/types/agentSkills.js'
 import { homedir } from 'os'
 import { isAbsolute, relative, resolve, sep } from 'path'
 
@@ -255,6 +257,57 @@ export class AgentCodeManagedSkillsService {
       // status list during an awaited provider write.
       await this.ensureInitializedLocked()
       return this.snapshot()
+    })
+  }
+
+  getInstalledSkillLocations(provider: AgentProviderKind): Promise<ManagedAgentSkillLocations> {
+    return this.serialize(async () => {
+      // Status is strictly observational. Unlike Settings' audit, it must not
+      // initialize/reconcile or repair provider files. Main initializes this
+      // service before registering IPC; callers arriving earlier get an honest
+      // unavailable result. The mutation queue still gives us coherent state.
+      if (!this.initialized || this.recovery) {
+        return { paths: [], notices: ['Agent Code skill deployment status is unavailable.'] }
+      }
+      // WHY paths come from the resolved target registry and the document, not
+      // from a status's `displayPath`: displayPath is a UI string. It is
+      // `~`-abbreviated with the platform separator (`~\…` on win32, which a
+      // `'~/'` parse silently resolved against the process cwd), and it is not
+      // the value materialization writes to. `this.targets` is. A status whose
+      // id no longer names a current target (retired, unsupported, the
+      // initialization-error placeholder) resolves to nothing, so it can never
+      // grant an Agent Code label.
+      const targetsById = new Map(this.targets.targets.map(target => [target.id, target]))
+      const paths: string[] = []
+      let needsAttention = false
+      const collect = (
+        statuses: readonly AgentCodeConventionsTargetStatus[],
+        skillFile: (target: AgentCodeConventionsTarget) => string,
+      ) => {
+        for (const status of statuses) {
+          const target = targetsById.get(status.id)
+          if (!target?.providers.includes(provider)) continue
+          if (status.state === 'installed') paths.push(skillFile(target))
+          else if (status.state === 'missing' || status.state === 'conflict' || status.state === 'error') {
+            needsAttention = true
+          }
+        }
+      }
+      collect(this.targetStatuses, target => target.skillFile)
+      for (const [skillId, statuses] of this.customTargetStatuses) {
+        const skill = this.document.customSkills[skillId]
+        if (skill) collect(statuses, target => resolve(target.skillsDirectory, skill.name, 'SKILL.md'))
+      }
+      for (const [skillId, statuses] of this.installedTargetStatuses) {
+        const skill = this.document.installedSkills[skillId]
+        if (skill) collect(statuses, target => resolve(target.skillsDirectory, skill.name, 'SKILL.md'))
+      }
+      return {
+        paths: [...new Set(paths)],
+        notices: needsAttention
+          ? ['Some Agent Code skills need attention in Settings; only files found on disk are listed here.']
+          : [],
+      }
     })
   }
 
