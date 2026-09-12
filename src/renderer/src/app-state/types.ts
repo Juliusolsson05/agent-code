@@ -75,6 +75,8 @@ export type UiShellSlice = UiShellState & {
   closeRecordingNotePrompt: () => void
   openViewPrompts: (sessionId: SessionId) => void
   closeViewPrompts: () => void
+  openTldrHistory: (sessionId: SessionId) => void
+  closeTldrHistory: () => void
   openNewAgentPlacement: () => void
   /** Open the placement overlay pre-targeted at a specific project. Used by
    *  the Dispatch header "+"; see `newAgentProjectIntent` for why the target

@@ -196,6 +196,7 @@ export type CommandContext = {
      *  of a hard-coded callback that nothing could rebind or collision-check. */
     openCommandPalette: () => void
     openViewPrompts: (sessionId: string) => void
+    openTldrHistory: (sessionId: string) => void
     openConversations: (opts: { focusSearch: boolean }) => void
     openAgentActivity: () => void
     /** Open the read-only Keyboard Shortcuts reference. */

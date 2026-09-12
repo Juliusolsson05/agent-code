@@ -123,6 +123,15 @@ export type BuiltInMcpServerConfig = {
    */
   bearerToken?: string
   headers: Record<string, string>
+  /**
+   * Present only on a TLDR-enabled registration's own launch config. Provider launchers inject
+   * turn hooks that post to `${baseUrl}/<event>` with this same bearer, so a hook can only ever
+   * read or change its own session's reporting state and is revoked with it.
+   *
+   * WHY it is absent from `sessionServers()`: workflow subagents reuse the parent's token, and
+   * enforcing the parent's TLDR on each subagent's turns would block work that owns no summary.
+   */
+  tldrHooks?: { baseUrl: string }
 }
 
 export type McpSessionScope = {

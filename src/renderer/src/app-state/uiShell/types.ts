@@ -118,6 +118,7 @@ export type UiShellState = {
     title: string
   } | null
   viewPromptsSessionId: SessionId | null
+  tldrHistorySessionId: SessionId | null
   newAgentPlacementOpen: boolean
   /**
    * Non-null when the placement overlay is open in "attach detached

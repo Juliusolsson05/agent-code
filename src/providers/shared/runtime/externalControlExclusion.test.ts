@@ -47,3 +47,14 @@ it('reserves the canonical skill path before installation through a symlinked Co
     expect(disabledExternalOperatorSkill(linked)).toEqual(before)
   } finally { await rm(directory, { recursive: true, force: true }) }
 })
+
+it('merges other Claude launch settings into the single settings source without weakening the deny', () => {
+  const args: string[] = []
+  // A caller fragment that tried to clear the denylist must not win: a second
+  // --settings flag, or a later spread, would hand the operator MCP back.
+  excludeExternalControlFromClaude(args, { hooks: { Stop: [] }, deniedMcpServers: [] })
+  expect(args.filter(arg => arg === '--settings')).toHaveLength(1)
+  const settings = JSON.parse(args[1]!)
+  expect(settings.hooks).toEqual({ Stop: [] })
+  expect(settings.deniedMcpServers).toEqual([{ serverName: 'agent-code-control' }])
+})

@@ -35,6 +35,14 @@ export const AGENT_CODE_INSTALLED_SKILL_SNAPSHOTS_DIR = join(
   'managed-skill-snapshots',
 )
 
+// Private per-process header files for Codex TLDR turn hooks (#917), each
+// holding one live session bearer. WHY app-owned rather than os.tmpdir(): the
+// file is read on every hook for the whole life of the process, and macOS
+// clears files in its per-user temp directory after three days, which would
+// silently switch enforcement off for a long-idle pane. Every entry belongs to
+// a process of this app run, so startup deletes whatever an earlier run left.
+export const TLDR_HOOK_RUNTIME_DIR = join(STATE_DIR, 'tldr-hooks')
+
 // Per-session feed-debug append-only logs, one JSONL file per session.
 // See storage/feedDebugLog.ts for the write-queue discipline.
 export const FEED_DEBUG_DIR = join(STATE_DIR, 'feed-debug')
