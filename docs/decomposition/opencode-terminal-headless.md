@@ -32,6 +32,13 @@ own isolated layer and the cases get enumerated from recorded data first.
   delivery with the `opencode-terminal-not-ready` refusal code, generation
   fencing, idempotent stop). Its lifecycle behavior is trusted and kept; its
   *observability* is the gap.
+
+  **Corrected after review:** the paste delivery described here was NOT kept.
+  It looked trustworthy and was not: the refusal code only fires when the PTY
+  is absent, so a prompt pasted into a TUI that had painted but was not yet
+  listening was reported as delivered and then dropped (#877). Delivery moved
+  to the TUI's HTTP server. This entry is left standing because "trusted
+  because it has not visibly failed" is the assumption worth remembering.
 - `src/providers/opencode/runtime/opencodeCliSessions.ts`: `opencode import` /
   `export` hosting. Session creation (`createEmptyOpencodeSession`) and every
   write/transform (switch, duplicate, rewind) stay on this boundary.
@@ -152,11 +159,16 @@ live is disconnected it falls back to a 1 Hz primary-key lookup of
 
 ### Stage 1 — Durable reader (`src/transcript/`)
 
-- **Produces:**
-  - `OpencodeDatabase`: shared, ref-counted, read-only `node:sqlite` handle per
-    db path, with the schema gate.
+- **Produces** (names as SHIPPED; this plan's originals are noted because the
+  difference is the point — the split between "hold the handle" and "tail the
+  log" did not survive contact with the schema gate, which has to own both):
+  - `OpencodeStore` (planned as `OpencodeDatabase` + `EventLogTail`): the
+    shared, generation-keyed, read-only `node:sqlite` handle per db path, the
+    schema gate, and every statement that reads OpenCode's tables — history
+    pages, the event tail, session rows, and the root-session listing the
+    Resume picker uses. One owner, because the gate must equal the columns the
+    statements actually read, and two owners could not keep that true.
   - `readHistory()`: projection snapshot → `{ info, parts }` records plus cursor.
-  - `EventLogTail`: type-filtered `seq > cursor` reads.
   - `CommittedAssembler`: pure; decides *when* a message is committed.
   - `DurableReader`: doorbell/poll orchestration.
 - **Verified by:** replaying every Stage 0 durable fixture yields exactly the
@@ -234,7 +246,14 @@ live is disconnected it falls back to a 1 Hz primary-key lookup of
   job `claudeSession.ts` does): headless activity → `process-state`, semantic →
   `semantic-event`, committed → `jsonl-entry(record,
   'opencode://session/<id>')`, conditions → `conditions`, plus
-  `resolveCondition`. Readiness and paste delivery are unchanged.
+  `resolveCondition`.
+
+  **Corrected after review:** paste delivery is NOT unchanged. It was replaced
+  by `headless.submitPrompt`, an HTTP `prompt_async` submission, because a
+  booting TUI silently swallows a paste and Agent Code was reporting success
+  for prompts nobody received (#877). The 250 ms readiness grace survives, but
+  only as a UI hint: it no longer gates delivery, because first paint proves
+  neither that the composer mounted nor that it consumed anything.
 - **Verified by:** adapter tests with a fake headless: the event mapping,
   identity entry, heartbeat while active, and `stop()`/exit ordering.
 - **Why separate:** the package must remain usable (and testable) without Agent

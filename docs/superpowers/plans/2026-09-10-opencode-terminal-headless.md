@@ -178,6 +178,9 @@ git commit -m "build(opencode): wire the opencode-terminal-headless submodule in
     - `conditions: [ProviderConditionSnapshot]`
     - `'live-state': [{ connected: boolean; reason?: string }]`
   - Headless methods: `resolveConditionAction(action: ConditionCustomAction): Promise<{ ok: true } | { ok: false; reason: string; failedAtStep?: string }>`, `start(): Promise<void>`, `stop(): Promise<void>`, `write(data)`, `resize(cols, rows)`, `pasteAndSubmit(text)`.
+  - **AS SHIPPED:** plus `submitPrompt(text, { timeoutMs? })`, which is what
+    programmatic delivery actually uses. `pasteAndSubmit` survives only for the
+    host's own composer interactions — see the Task 2 correction.
 - Produces: the unchanged `AgentSession` surface, plus `resolveCondition` (new for this runtime).
 
 - [x] **Step 1: Write the failing adapter tests.** Inject a fake headless factory and a fake PTY spawner (both constructor options that default to the real ones). Assert:
@@ -194,6 +197,14 @@ git commit -m "build(opencode): wire the opencode-terminal-headless submodule in
 
 - [x] **Step 3: Rewrite the adapter.**
   - Keep: env assembly, `addOpencodeBuiltInMcpLaunchConfig`, `excludeExternalControlFromOpencode`, `createEmptyOpencodeSession` for fresh sessions, the generation fence, readiness (first byte + 250 ms), `deliverPromptText` (now calls `headless.pasteAndSubmit`), and its `OpencodeTerminalNotReadyError`.
+  - **CORRECTED AFTER REVIEW:** `deliverPromptText` calls
+    `headless.submitPrompt`, NOT `pasteAndSubmit`. Pasting into a TUI that has
+    painted but is not yet listening is silently dropped, and we reported
+    success for it (#877). Readiness is still computed, but it no longer gates
+    delivery — it is a UI hint. `OpencodeTerminalNotReadyError` is kept and now
+    means something narrower: the request was never dispatched. A dispatched
+    request whose outcome is unknown must NOT use it, or callers are told it is
+    safe to submit the user's work a second time.
   - Replace the bare `ptySpawn(binary, args)` with the sequence below, and forward the headless events per Step 1.
   - `stop()`: `headless.stop()`, then `pty.kill()`. Both are idempotent.
 
@@ -229,6 +240,15 @@ await headless.start()
 - [x] **Step 3: Implement.**
   - Stores are memoized per db path and released on app quit.
   - Store errors become an empty chunk plus a `performanceService` span failure. The loader never throws into the renderer, matching the missing-file behavior.
+  - **BOTH CORRECTED AFTER REVIEW.** There is no app-quit release: the facade
+    is held for the process lifetime, and a `opencode.db` replaced at the same
+    path is still read from the old handle by the host (the package grew a
+    generation for this; the host does not yet use it — filed as a follow-up).
+  - Store errors are NOT empty chunks. They throw typed `OpencodeStoreError`s.
+    An empty chunk says "this session has no history", which is a different and
+    more damaging claim than "history could not be read" — it made a database
+    failure look like an empty conversation. Matching the missing-file behavior
+    was the wrong goal.
 - [x] **Step 4: Run it** and confirm it passes.
 - [x] **Step 5: Commit** `feat(opencode): load OpenCode history from the durable store` (`Refs #864`).
 
