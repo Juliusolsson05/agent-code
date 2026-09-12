@@ -207,6 +207,10 @@ export type CommandContext = {
     openColorFlagPicker: (sessionId: string) => void
     /** Open the title editor for the captured command-target agent. */
     openAgentTitlePrompt: (sessionId: string) => void
+    /** Open the Root Agent Code Management confirmation for the captured
+     *  command-target agent (#906). The dialog, not the command, performs the
+     *  reload, so a declined warning leaves the session untouched. */
+    openRootManagementPrompt: (sessionId: string) => void
     openUsageModal: () => void
     openKeyVault: () => void
     toggleGitBar: () => void
