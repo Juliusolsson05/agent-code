@@ -53,6 +53,15 @@ const originalApi = window.api
 let current!: ReturnType<typeof useWorkspace>
 let submit!: (source: 'textarea-enter' | 'global-enter' | 'button') => Promise<void>
 let renderedInput = ''
+type LifecycleReport = { name: string; data?: Record<string, unknown> }
+let lifecycleReports: LifecycleReport[] = []
+
+// The journaled `submit.result` of the most recent submit, as it crossed the
+// preload bridge: after report.ts's allowlist filtering, which is the filter
+// that silently drops a renamed or unlisted key.
+function lastSubmitResult(): Record<string, unknown> | undefined {
+  return lifecycleReports.filter(r => r.name === 'submit.result').at(-1)?.data
+}
 
 function Composer({ workspace }: { workspace: ReturnType<typeof useWorkspace> }) {
   // Mirrors TileLeaf exactly: `input` IS runtime.draftInput and setInputText
@@ -122,9 +131,14 @@ function feedAccepting(kind: 'user' | 'queue') {
 }
 
 beforeEach(() => {
+  lifecycleReports = []
   const api = new Proxy({} as Record<string, unknown>, {
     get: (_t, key) => {
       if (key === 'saveClaudeImage') return async () => ({ path: '/tmp/img.png' })
+      // Captured, not swallowed: the `acceptance` field on submit.result is the
+      // journal evidence #889 needed, and only the bridge payload shows whether
+      // it survived the allowlist (#893 review F4).
+      if (key === 'reportSessionLifecycle') return (report: LifecycleReport) => { lifecycleReports.push(report) }
       // Every `on*` subscription must hand back an unsubscribe or effect
       // cleanup throws and the whole tree comes down mid-test.
       if (typeof key === 'string' && key.startsWith('on')) return () => () => undefined
@@ -158,6 +172,8 @@ describe('composer submit accepted into the provider queue', () => {
     expect(runtime.draftImages).toEqual([])
     expect(runtime.promptDelivery.kind).toBe('idle')
     expect(renderedInput).toBe('')
+    // The journal records which acceptance this was.
+    expect(lastSubmitResult()).toMatchObject({ provider: 'claude', ok: true, acceptance: kind })
   })
 
   it('over a live turn, never paints Sending: the turn keeps its phase and its clock', async () => {

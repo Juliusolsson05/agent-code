@@ -781,6 +781,12 @@ export function pickCodexTranscriptObservationData(
       provider()
       boolean('ok')
       string('acceptance', ['user', 'queue', 'transport'])
+      // WHY an explicit null survives here although `string()` drops it: null
+      // is the Codex composer's real answer today (raw PTY writes carry no
+      // delivery result), and dropping it made every Codex `submit.result`
+      // indistinguishable from a row written before the field existed. Only
+      // null is added; the string vocabulary above stays closed.
+      if (input.acceptance === null) out.acceptance = null
       deliveryCode()
       deliveryStage()
       boolean('bodyWritten')
