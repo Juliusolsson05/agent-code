@@ -165,7 +165,7 @@ export type AppRunHeartbeat = {
     delayP99Ms: number
     /** Existing numeric field retained for old readers; new readers must use
      * this qualifier instead of treating the rollup as an exact quantile. */
-    p99Aggregation?: 'worst-window-upper-bound'
+    p99Aggregation?: 'worst-window-p99'
     windowMs?: number
     available?: boolean
   }

@@ -553,8 +553,8 @@ export class AppRunJournal {
       mainEventLoop: {
         delayMeanMs: loop?.meanMs ?? 0,
         delayMaxMs: loop?.maxMs ?? 0,
-        delayP99Ms: loop?.p99UpperBoundMs ?? 0,
-        p99Aggregation: 'worst-window-upper-bound',
+        delayP99Ms: loop?.p99WorstWindowMs ?? 0,
+        p99Aggregation: 'worst-window-p99',
         windowMs: loop?.windowMs ?? 0,
         available: loop !== null,
       },

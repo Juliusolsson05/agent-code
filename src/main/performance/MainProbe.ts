@@ -55,7 +55,7 @@ export class MainProbe {
   noteSuspend(): void { this.suspended = true }
   noteResume(): void { this.suspended = false; this.resumed = true }
 
-  readJournalWindow(): { meanMs: number; maxMs: number; p99UpperBoundMs: number; windowMs: number } | null {
+  readJournalWindow(): { meanMs: number; maxMs: number; p99WorstWindowMs: number; windowMs: number } | null {
     const now = performance.now()
     const windows = this.loopWindows.filter(window => window.at > now - 5000)
     const count = windows.reduce((sum, window) => sum + window.count, 0)
@@ -63,11 +63,11 @@ export class MainProbe {
     // Native ELD histograms cannot be merged with RecordableHistogram.add on
     // the supported Node runtime. Do not average per-window p99s and pretend
     // that is a distribution. Preserve the exact peak and weighted mean, and
-    // label the worst-window p99 explicitly as a conservative upper bound.
+    // label the worst-window p99 explicitly as a worst-window statistic, not a merged percentile.
     return {
       meanMs: windows.reduce((sum, window) => sum + window.meanMs * window.count, 0) / count,
       maxMs: Math.max(...windows.map(window => window.maxMs)),
-      p99UpperBoundMs: Math.max(...windows.map(window => window.p99Ms)),
+      p99WorstWindowMs: Math.max(...windows.map(window => window.p99Ms)),
       windowMs: now - windows[0].from,
     }
   }
