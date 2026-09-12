@@ -1,6 +1,6 @@
 import { lstat, opendir, stat } from 'node:fs/promises'
 import type { Stats } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { basename, join, resolve } from 'node:path'
 import { parse } from '@iarna/toml'
 import { asRecord } from '@shared/lib/asRecord.js'
 import type {
@@ -195,7 +195,8 @@ async function pluginSkillRoots(pluginRoot: string, pluginName: string, notices:
     // schema or invalid name is a load error, and the manifest cannot choose
     // skill folders — unknown fields (including `skills`) are dropped and the
     // skills path is always `./skills`. The Codex extension/overlay replaces
-    // only apps, hooks and interface. Agent plugins scan direct children only.
+    // only apps, hooks and interface. Agent plugins scan direct children only,
+    // and loader/host.rs drops any child whose real path leaves the plugin.
     const manifest = await readJsonQuietly(lookup.path) ?? {}
     if (manifest.$schema !== AGENT_PLUGIN_SCHEMA_URI) {
       notices.push(`Codex rejects the ${pluginName} plugin because it declares an unsupported Agent Plugins schema; its skills are not listed.`)
@@ -205,14 +206,17 @@ async function pluginSkillRoots(pluginRoot: string, pluginName: string, notices:
       notices.push(`Codex rejects the ${pluginName} plugin because its Agent Plugins name is invalid; its skills are not listed.`)
       return []
     }
-    return [{ ...base, path: join(pluginRoot, 'skills'), layout: 'children', namespace: manifest.name }]
+    return [{ ...base, path: join(pluginRoot, 'skills'), layout: 'children', namespace: manifest.name, containWithin: pluginRoot }]
   }
 
   // Legacy manifests: valid declared `skills` paths REPLACE the default
   // `skills/` folder (loader.rs plugin_skill_roots); only when none resolve does
   // the default apply. Migrated legacy command skills are an extra root.
   const manifest = await readSkillJson(lookup.path, notices)
-  const namespace = typeof manifest.name === 'string' && manifest.name.trim() ? manifest.name.trim() : pluginName
+  // manifest.rs resolve_raw_plugin_manifest: an empty or whitespace `name`
+  // falls back to the plugin root's folder name — the VERSION folder for an
+  // installed plugin — and a non-empty name is kept untrimmed.
+  const namespace = typeof manifest.name === 'string' && manifest.name.trim() ? manifest.name : basename(pluginRoot)
   const declared = typeof manifest.skills === 'string' ? [manifest.skills]
     : Array.isArray(manifest.skills) ? manifest.skills : []
   const paths: string[] = []
@@ -259,9 +263,17 @@ export async function discoverCodexSkillRoots(context: AgentSkillDiscoveryContex
 
   // Host roots are walked recursively with hidden folders skipped below the
   // root (loader/host.rs HiddenDirectoryPolicy::Skip), which is why the
-  // `.system` defaults need a root of their own.
-  const tree = (path: string, source: AgentSkillRoot['source'], sourceLabel?: string): AgentSkillRoot =>
-    ({ path, source, layout: 'recursive', maxDepth: MAX_SCAN_DEPTH, ...(sourceLabel ? { sourceLabel } : {}) })
+  // `.system` defaults need a root of their own. Host roots have no provided
+  // plugin namespace, so Codex discovers one per skill
+  // (SkillNamespaceResolver::discover) — `resolvePluginNamespaces`.
+  const tree = (path: string, source: AgentSkillRoot['source'], sourceLabel?: string): AgentSkillRoot => ({
+    path,
+    source,
+    layout: 'recursive',
+    maxDepth: MAX_SCAN_DEPTH,
+    resolvePluginNamespaces: true,
+    ...(sourceLabel ? { sourceLabel } : {}),
+  })
   // Root ORDER mirrors resolve_skill_roots_with_home_dir, whose path dedupe
   // keeps the first entry: config-layer roots high to low (project `.codex`,
   // then user, then system/admin), then plugin roots, then repo `.agents/skills`

@@ -168,7 +168,7 @@ describe('installed skill inventory', () => {
     const capped = await collectInstalledAgentSkills({ roots, notices: [] }, unmanaged, { failureNotices: 3 })
     expect(capped.notices).toEqual([
       ...[0, 1, 2].map(index => `Could not read skill metadata: ${join(base, `plugin-${index}`, 'SKILL.md')}`),
-      'Could not read metadata for 9 more skill files.',
+      'Could not list 9 more skill files.',
     ])
     // Each malformed plugin root costs two units — the `<root>/SKILL.md` probe
     // and the metadata read — so a budget of 4 reaches exactly two reads before
@@ -286,5 +286,65 @@ describe('installed skill inventory', () => {
       enablementRules: [{ name: 'review', enabled: false }],
     }, unmanaged)
     expect(unqualified.skills.map(({ disabled }) => disabled === true)).toEqual([false])
+  })
+
+  // Round-three regression: Codex drops an Agent Plugin skill whose real path
+  // leaves the plugin (loader/host.rs "resolves outside plugin root"), while a
+  // link that stays inside the plugin is still a skill.
+  it('rejects plugin skills whose real path leaves the containing plugin', async () => {
+    const base = await temp()
+    const plugin = join(base, 'plugin')
+    await write(join(plugin, 'skills', 'inside', 'SKILL.md'), skill('inside'))
+    await write(join(plugin, 'shared', 'SKILL.md'), skill('shared'))
+    await symlink(join(plugin, 'shared'), join(plugin, 'skills', 'linked-inside'), 'dir')
+    await write(join(base, 'outside', 'SKILL.md'), skill('outside'))
+    await symlink(join(base, 'outside'), join(plugin, 'skills', 'smuggled'), 'dir')
+    const result = await collectInstalledAgentSkills({
+      roots: [root(join(plugin, 'skills'), 'children', { source: 'plugin', namespace: 'delta', containWithin: plugin })],
+      notices: [],
+    }, unmanaged)
+    expect(names(result)).toEqual(['delta:inside', 'delta:shared'])
+    expect(result.notices).toEqual([
+      `Skipped a plugin skill that resolves outside its plugin folder: ${join(plugin, 'skills', 'smuggled', 'SKILL.md')}`,
+    ])
+  })
+
+  // Round-three regression: host roots have no provided namespace, so Codex
+  // derives one per skill (namespace.rs SkillNamespaceResolver). A personal
+  // link into an installed plugin showed a bare name and escaped name rules.
+  it('derives Codex namespaces for host-root skills from linked targets, plugin folders, and ancestors', async () => {
+    const base = await temp()
+    const installed = join(base, 'cache', 'sample', '1.0.0')
+    await write(join(installed, '.codex-plugin', 'plugin.json'), JSON.stringify({ name: 'sample' }))
+    await write(join(installed, 'skills', 'review', 'SKILL.md'), skill('review'))
+    const personal = join(base, 'personal')
+    await mkdir(personal, { recursive: true })
+    await symlink(join(installed, 'skills', 'review'), join(personal, 'review'), 'dir')
+    // A plugin folder copied into the root whose manifest has no name uses the
+    // folder name; an unparseable nested manifest is ignored.
+    await write(join(personal, 'superpowers', '.claude-plugin', 'plugin.json'), '{}')
+    await write(join(personal, 'superpowers', 'skills', 'brainstorming', 'SKILL.md'), skill('brainstorming'))
+    await write(join(personal, 'broken', '.codex-plugin', 'plugin.json'), '{ not json')
+    await write(join(personal, 'broken', 'skills', 'draft', 'SKILL.md'), skill('draft'))
+    await write(join(personal, 'plain', 'SKILL.md'), skill('plain'))
+    const host = { maxDepth: 6, resolvePluginNamespaces: true }
+    const result = await collectInstalledAgentSkills({
+      roots: [root(personal, 'recursive', host)],
+      notices: [],
+      enablementRules: [{ name: 'sample:review', enabled: false }],
+    }, unmanaged)
+    expect(result.skills.map(({ name, disabled }) => ({ name, disabled: disabled === true }))).toEqual([
+      { name: 'draft', disabled: false },
+      { name: 'plain', disabled: false },
+      { name: 'sample:review', disabled: true },
+      { name: 'superpowers:brainstorming', disabled: false },
+    ])
+    expect(result.notices).toEqual([])
+    // A root that itself sits inside a plugin inherits that plugin's name.
+    const inherited = await collectInstalledAgentSkills({
+      roots: [root(join(installed, 'skills'), 'recursive', host)],
+      notices: [],
+    }, unmanaged)
+    expect(names(inherited)).toEqual(['sample:review'])
   })
 })

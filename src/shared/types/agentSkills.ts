@@ -84,6 +84,25 @@ export type AgentSkillRoot = {
    * wrongly disable plugin skills.
    */
   namespace?: string
+  /**
+   * `recursive` Codex host roots only (never installed-plugin roots, which get
+   * `namespace`): derive each skill's namespace the way
+   * `SkillNamespaceResolver::discover` does — from a plugin-shaped folder
+   * (`.codex-plugin`/`.claude-plugin`/`.cursor-plugin`) above the skill inside
+   * the root, from the nearest manifest above a symlinked skill's real
+   * location, or from the nearest manifest at or above the root. Without it a
+   * personal link into an installed plugin, or a plugin folder copied into
+   * `~/.agents/skills`, showed a bare name and missed name rules (round-three
+   * review).
+   */
+  resolvePluginNamespaces?: boolean
+  /**
+   * Codex agent-plugin roots: a skill whose real path resolves outside this
+   * folder is rejected, as `loader/host.rs` does for DirectChildren roots
+   * ("resolves outside plugin root"). A link inside `skills/` must not smuggle
+   * an unrelated SKILL.md into the plugin's listing.
+   */
+  containWithin?: string
 }
 
 /**

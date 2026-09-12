@@ -1,5 +1,5 @@
 import { opendir, realpath, stat } from 'node:fs/promises'
-import { basename, dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, relative, resolve, sep } from 'node:path'
 import { parseDocument } from 'yaml'
 import { asRecord } from '@shared/lib/asRecord.js'
 import type {
@@ -37,6 +37,17 @@ export const SKILL_INVENTORY_LIMITS: SkillInventoryLimits = {
 }
 
 const SKILL_FILE = 'SKILL.md'
+/**
+ * Codex plugin manifest folders (exec-server-protocol
+ * DISCOVERABLE_PLUGIN_MANIFEST_PATHS), in Codex's lookup order. Only roots with
+ * `resolvePluginNamespaces` consult them.
+ */
+const PLUGIN_MANIFEST_DIRECTORIES = ['.codex-plugin', '.claude-plugin', '.cursor-plugin']
+
+/** Component-wise containment like Codex `PathUri::starts_with`: `/a/bc` is not inside `/a/b`. */
+function within(path: string, base: string): boolean {
+  return path === base || path.startsWith(base.endsWith(sep) ? base : `${base}${sep}`)
+}
 
 function metadata(text: string, path: string, optional: boolean): { name: string; description: string } {
   const normalized = text.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n')
@@ -117,6 +128,14 @@ export async function collectInstalledAgentSkills(
       const text = await readSkillFile(path, undefined, true)
       if (text === null) return
       const physical = await realpath(path)
+      // Round-three review: Codex resolves each Agent Plugin skill and drops one
+      // whose real path leaves the canonical plugin root (loader/host.rs,
+      // "resolves outside plugin root"). Without this a `skills/x` link to an
+      // unrelated folder was listed as the plugin's own skill under its namespace.
+      if (root.containWithin && !within(physical, await canonical(root.containWithin))) {
+        failures.push(`Skipped a plugin skill that resolves outside its plugin folder: ${path}`)
+        return
+      }
       if (seenFiles.has(physical)) return
       const value = metadata(text, path, root.optionalFrontmatter === true)
       seenFiles.add(physical)
@@ -183,14 +202,22 @@ export async function collectInstalledAgentSkills(
     }
   }
 
-  async function recursive(root: AgentSkillRoot): Promise<void> {
+  async function recursive(root: AgentSkillRoot, pluginFolders: Set<string>): Promise<void> {
     const providerBounded = root.maxDepth !== undefined
     const maxDepth = Math.min(root.maxDepth ?? limits.depth, limits.depth)
     const visited = new Set<string>()
     // `depth` is the folder's distance below the root; its SKILL.md sits at
     // depth + 1 path segments, matching Codex's walk `max_depth` accounting.
     const visit = async (directory: string, depth: number): Promise<void> => {
-      for (const entry of await list(directory, root, visited) ?? []) {
+      const entries = await list(directory, root, visited) ?? []
+      // Codex records a plugin root for every walked `.codex-plugin`-style
+      // FOLDER entry (loader/discovery.rs) before pruning hidden folders, which
+      // is why this inspects the listing rather than the folders it descends into.
+      if (root.resolvePluginNamespaces
+        && entries.some(entry => entry.kind === 'directory' && PLUGIN_MANIFEST_DIRECTORIES.includes(entry.name))) {
+        pluginFolders.add(directory)
+      }
+      for (const entry of entries) {
         if (exhausted()) return
         if (entry.kind === 'file') {
           if (entry.name === SKILL_FILE) await add(entry.path, root)
@@ -243,14 +270,132 @@ export async function collectInstalledAgentSkills(
     await visit(root.path, 0)
   }
 
+  // Manifest lookups are cached per directory for the whole inventory, as Codex
+  // caches them per root scan, so sibling skills and overlapping roots share
+  // ancestor probes. `null` means "no valid manifest here".
+  const manifestNamespaces = new Map<string, string | null>()
+
+  /** utils/plugins/src/plugin_namespace.rs plugin_namespace_for_root_uri. */
+  async function manifestNamespace(directory: string): Promise<string | null> {
+    const cached = manifestNamespaces.get(directory)
+    if (cached !== undefined) return cached
+    let manifest: string | null = null
+    for (const folder of PLUGIN_MANIFEST_DIRECTORIES) {
+      // Budget exhaustion is reported as an incomplete scan and never cached as
+      // "no plugin here".
+      if (!spend()) return null
+      const candidate = join(directory, folder, 'plugin.json')
+      if ((await stat(candidate).catch(() => null))?.isFile()) {
+        manifest = candidate
+        break
+      }
+    }
+    let namespace: string | null = null
+    if (manifest !== null) {
+      if (!spend()) return null
+      try {
+        // Codex deserializes `{ name: String }` with `name` defaulting to "" and
+        // stops at the FIRST manifest file: unparseable JSON or a non-string
+        // name means no namespace at all, a blank name falls back to the folder
+        // name, and a real name is kept exactly as written (untrimmed).
+        const value = asRecord(JSON.parse(await readSkillFile(manifest, 1024 * 1024) ?? ''))
+        const name = value?.name === undefined ? '' : value.name
+        if (value && typeof name === 'string') namespace = name.trim() ? name : basename(directory)
+      } catch {
+        namespace = null
+      }
+    }
+    manifestNamespaces.set(directory, namespace)
+    return namespace
+  }
+
+  /** namespace.rs discover: the nearest valid manifest from a folder up to the filesystem root. */
+  async function nearestManifestNamespace(directory: string): Promise<string | null> {
+    for (let current = directory; !exhausted(); current = dirname(current)) {
+      const namespace = await manifestNamespace(current)
+      if (namespace !== null || dirname(current) === current) return namespace
+    }
+    return null
+  }
+
+  type NestedNamespace = { path: string; namespace: string | null }
+
+  /**
+   * Codex host roots (`$CODEX_HOME/skills`, `~/.agents/skills`, repo roots…)
+   * have no owning plugin, so Codex derives each skill's namespace
+   * (ext/skills/src/loader/namespace.rs SkillNamespaceResolver::discover and
+   * for_skill, fed by loader/host.rs). Mirrored step by step:
+   *
+   * 1. Codex scans the CANONICAL root, so a skill's discovered path is the
+   *    canonical root plus the walked components. A skill whose real path
+   *    differs was reached through a link, and its real folder becomes a
+   *    "namespace root".
+   * 2. Folders holding a `.codex-plugin`-style folder become "plugin roots" —
+   *    only above a loaded skill, and never the scan root or a namespace root.
+   * 3. Namespace roots and the scan root resolve through their ancestors (a
+   *    namespace root with no manifest above it is explicitly plain); plugin
+   *    roots resolve only from their own manifest, and invalid ones are dropped.
+   * 4. Per skill, the deepest nested root containing its real path wins, except
+   *    that a link target at or above the scan root cannot rename a skill that
+   *    still lives inside the root; otherwise the scan root's inherited name.
+   *
+   * WHY the panel needs this: `[[skills.config]]` name rules match the
+   * qualified name. The round-three review showed a personal link into an
+   * installed plugin listed as bare `review` while Codex loads, and a rule
+   * disables, `sample:review`.
+   */
+  async function resolvePluginNamespaces(root: AgentSkillRoot, skills: FoundSkill[], pluginFolders: Set<string>): Promise<void> {
+    if (skills.length === 0) return
+    const scanRoot = await canonical(root.path)
+    const discovered = (path: string) => join(scanRoot, relative(root.path, path))
+    const namespaceRoots = new Set<string>()
+    for (const skill of skills) {
+      if (skill.physical !== discovered(skill.path)) namespaceRoots.add(dirname(skill.physical))
+    }
+    namespaceRoots.delete(scanRoot)
+    // Every ancestor of an earlier skill is already present, so a walk can stop
+    // at the first folder it has seen.
+    const skillAncestors = new Set<string>()
+    for (const skill of skills) {
+      for (let current = dirname(skill.physical); !skillAncestors.has(current); current = dirname(current)) {
+        skillAncestors.add(current)
+        if (dirname(current) === current) break
+      }
+    }
+    const nested: NestedNamespace[] = []
+    for (const path of namespaceRoots) nested.push({ path, namespace: await nearestManifestNamespace(path) })
+    for (const folder of pluginFolders) {
+      const path = discovered(folder)
+      if (!skillAncestors.has(path) || path === scanRoot || namespaceRoots.has(path)) continue
+      const namespace = await manifestNamespace(path)
+      if (namespace !== null) nested.push({ path, namespace })
+    }
+    const inherited = await nearestManifestNamespace(scanRoot)
+    const depth = (path: string) => path.split(sep).length
+    for (const skill of skills) {
+      const insideRoot = within(skill.physical, scanRoot)
+      const nearest = nested
+        .filter(candidate => within(skill.physical, candidate.path) && (!insideRoot || !within(scanRoot, candidate.path)))
+        .reduce<NestedNamespace | null>((best, candidate) => (!best || depth(candidate.path) > depth(best.path) ? candidate : best), null)
+      const namespace = nearest ? nearest.namespace : inherited
+      if (namespace !== null) skill.name = `${namespace}:${skill.name}`
+    }
+  }
+
   for (const root of discovery.roots) {
     if (exhausted()) {
       limited = true
       break
     }
     if (root.layout === 'children') await children(root)
-    else if (root.layout === 'recursive') await recursive(root)
-    else await commands(root)
+    else if (root.layout === 'commands') await commands(root)
+    else {
+      const firstSkill = found.length
+      const pluginFolders = new Set<string>()
+      await recursive(root, pluginFolders)
+      // Names must be final before the enablement rules below match them.
+      if (root.resolvePluginNamespaces) await resolvePluginNamespaces(root, found.slice(firstSkill), pluginFolders)
+    }
   }
 
   if (discovery.enablementRules?.length) {
@@ -274,7 +419,9 @@ export async function collectInstalledAgentSkills(
 
   const notices = [...discovery.notices, ...managed.notices, ...failures.slice(0, limits.failureNotices)]
   if (failures.length > limits.failureNotices) {
-    notices.push(`Could not read metadata for ${failures.length - limits.failureNotices} more skill files.`)
+    // "list", not "read metadata": failures also cover unscannable folders and
+    // plugin skills rejected for resolving outside their plugin.
+    notices.push(`Could not list ${failures.length - limits.failureNotices} more skill files.`)
   }
   if (limited) notices.push('Skill discovery reached its scan limit; the list may be incomplete.')
   const skills = found

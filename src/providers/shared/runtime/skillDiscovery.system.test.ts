@@ -163,6 +163,8 @@ describe('Codex skill roots', () => {
       '/etc/codex/skills',
     ])
     expect(discovery.roots.every(root => root.layout === 'recursive' && root.maxDepth === 6)).toBe(true)
+    // Host roots have no provided plugin namespace, so Codex discovers one per skill.
+    expect(discovery.roots.every(root => root.resolvePluginNamespaces === true)).toBe(true)
 
     await write(join(codexHome, 'config.toml'), 'project_root_markers = []\n')
     const cwdOnly = await discoverCodexSkillRoots(context(base, cwd, { CODEX_HOME: codexHome }))
@@ -195,6 +197,7 @@ describe('Codex skill roots', () => {
       '[plugins."delta@market"]',
       '[plugins."epsilon@market"]',
       '[plugins."zeta@market"]',
+      '[plugins."eta@market"]',
     ].join('\n'))
     // alpha: no `enabled` key, two versions where lexical order picks the wrong
     // one, and a `.claude-plugin` manifest whose explicit path replaces skills/.
@@ -220,13 +223,20 @@ describe('Codex skill roots', () => {
     await json(join(base, 'elsewhere.json'), { name: 'zeta' })
     await mkdir(join(cache, 'zeta', '1.0.0', '.codex-plugin'), { recursive: true })
     await symlink(join(base, 'elsewhere.json'), join(cache, 'zeta', '1.0.0', '.codex-plugin', 'plugin.json'))
+    // eta: a blank manifest name falls back to the plugin root's folder name,
+    // which for an installed plugin is its VERSION folder (manifest.rs
+    // resolve_raw_plugin_manifest) — not the configured plugin name.
+    const eta = join(cache, 'eta', '2.0.0')
+    await json(join(eta, '.codex-plugin', 'plugin.json'), { name: '   ' })
+    await mkdir(join(eta, 'skills'), { recursive: true })
 
     const discovery = await discoverCodexSkillRoots(context(base, cwd))
     expect(discovery.roots.filter(root => root.source === 'plugin')).toEqual([
       { path: join(alpha, 'selected'), source: 'plugin', sourceLabel: 'alpha', layout: 'recursive', maxDepth: 6, namespace: 'alpha' },
       { path: join(gamma, 'skills'), source: 'plugin', sourceLabel: 'gamma', layout: 'recursive', maxDepth: 6, namespace: 'gamma' },
       { path: join(gamma, '.codex-plugin', 'migrated-command-skills'), source: 'plugin', sourceLabel: 'gamma', layout: 'recursive', maxDepth: 6, namespace: 'gamma' },
-      { path: join(delta, 'skills'), source: 'plugin', sourceLabel: 'delta', layout: 'children', namespace: 'delta' },
+      { path: join(delta, 'skills'), source: 'plugin', sourceLabel: 'delta', layout: 'children', namespace: 'delta', containWithin: delta },
+      { path: join(eta, 'skills'), source: 'plugin', sourceLabel: 'eta', layout: 'recursive', maxDepth: 6, namespace: '2.0.0' },
     ])
     expect(discovery.notices).toEqual(expect.arrayContaining([
       expect.stringContaining('Ignored 4 skill path(s) in the gamma'),

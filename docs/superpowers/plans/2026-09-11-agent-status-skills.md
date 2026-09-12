@@ -1,6 +1,6 @@
 # Agent Status installed skills
 
-Status: implemented; review rounds 1 and 2 findings fixed; round-3 re-review pending. Issue: #900. PR: #903.
+Status: implemented; review rounds 1–3 findings fixed; no round-4 review, at the user's direction. Issue: #900. PR: #903.
 
 ## Outcome
 
@@ -47,6 +47,8 @@ This is an installed inventory, not a claim that the running model loaded a body
   discovery is pending.
 - Run focused tests, both TypeScript projects, and CI `quality-gate`.
 - Review with independent Claude and Codex agents; merge only when both are clean.
+  After round 3 the user chose to merge once its findings were fixed, without a
+  further review round.
 
 ## Constraints
 
@@ -81,8 +83,12 @@ comments explain each provider rule and asynchronous ownership boundary.
   agent-plugins.org schemas reject the plugin. Legacy
   `.codex-plugin`/`.claude-plugin`/`.cursor-plugin` manifests reject the plugin
   when their folder or file is not real, and use `./`-relative, `..`-free
-  declared paths that replace `skills/`, plus migrated command skills. Plugin
-  skills are named `<plugin>:<name>`. `[[skills.config]]` rules (one selector,
+  declared paths that replace `skills/`, plus migrated command skills; a blank
+  legacy name falls back to the plugin folder name. Agent Plugin skills whose
+  real path leaves the plugin are rejected. Plugin skills are named
+  `<plugin>:<name>`, and host-root skills get Codex's discovered namespace (a
+  linked skill's real-location manifest, a plugin-shaped folder inside the root,
+  or a manifest above the root). `[[skills.config]]` rules (one selector,
   trimmed names) and Agent Code's session-level operator exclusion mark skills
   Disabled. Remote-catalog plugins and project-config plugin/skill settings are
   disclosed.
@@ -128,6 +134,26 @@ Confirmed and fixed, each with a regression test:
   hidden children for Codex agent plugins, System-scope folder symlinks, and
   `skills.config` selector rules.
 
+## Review round 3 (Claude CLEAN; Codex CHANGES REQUIRED)
+
+Both reviewers confirmed every round-2 fix. The user directed that the round-3
+findings be fixed and the PR merged without a fourth review round. Fixed, each
+with a regression test:
+
+- (Codex) Agent Plugin skills whose real path resolves outside the plugin were
+  listed as the plugin's own; they are now rejected with a capped notice
+  (`loader/host.rs`).
+- (Codex) Host-root skills never received Codex's discovered namespace, so a
+  personal link into an installed plugin listed as `review` instead of
+  `sample:review`, and name rules plus the Disabled chip missed it. The
+  collector now mirrors `SkillNamespaceResolver` (link targets, plugin-shaped
+  folders inside the root, the manifest inherited from above the root).
+- (Claude, minor) Plugin-shaped folders inside host roots stayed unqualified;
+  covered by the same resolver.
+- (Claude nit) A blank legacy manifest name now falls back to the plugin root's
+  folder name (the version folder for installed plugins), and real names are
+  kept untrimmed (`manifest.rs` resolve_raw_plugin_manifest).
+
 ## Not adopted, with reasons
 
 - No main-process guard against overlapping scans: the renderer discards stale
@@ -140,12 +166,15 @@ Confirmed and fixed, each with a regression test:
   is reported in the panel, and per-root budgets would multiply worst-case
   main-process work by the number of roots.
 
-## Verification after round-2 fixes
+## Verification after round-3 fixes
 
 - The branch includes current `main` (merge `78ee198f`); both TypeScript projects
-  type-check with no errors on the merged tree.
-- Focused system suites pass (inventory, provider discovery, and the Custom,
-  Conventions, and Installed managed-skill services): 65 tests. Agent Status
-  renderer tests pass: 6.
-- A read-only scan of real provider folders on a development machine completed
-  without errors or scan-limit hits for Claude, Codex, and OpenCode.
+  (`tsconfig.control-sdk.json` and `tsc -b`) exit 0 on the merged tree.
+- Focused system suites pass (inventory, provider discovery, and the
+  managed-skill services under `src/main/agentCodeConventions/`): 82 tests in 8
+  files. Agent Status renderer tests pass: 6.
+- After the round-2 fixes, a read-only scan of real provider folders on a
+  development machine completed without errors or scan-limit hits for Claude,
+  Codex, and OpenCode. It was not re-run after the round-3 fixes (the ad-hoc
+  script no longer resolved path aliases under `tsx`); the regression tests
+  above cover the changed behavior.
