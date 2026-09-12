@@ -22,7 +22,7 @@ export const BUILT_IN_MCP_DOMAINS = [
 ] as const satisfies readonly BuiltInMcpDomain[]
 
 /**
- * Product capabilities a user may enable by default for new agent sessions.
+ * Product capabilities a user may enable globally for new/reloaded agents.
  *
  * WHY `ping` is not merely hidden by the Settings UI: persisted Settings are
  * untrusted, long-lived input and can survive downgrades, hand edits, and
@@ -50,6 +50,30 @@ export const CONFIGURABLE_BUILT_IN_MCP_DOMAINS = [
 
 export type ConfigurableBuiltInMcpDomain =
   (typeof CONFIGURABLE_BUILT_IN_MCP_DOMAINS)[number]
+
+/** Absence inherits Settings. A false value is an intentional per-agent off,
+ * not an old effective snapshot captured before a global setting changed. */
+export type BuiltInMcpOverrides = Partial<Record<BuiltInMcpDomain, boolean>>
+
+/**
+ * Capabilities a NEW agent may never inherit from an existing one, however that
+ * new agent is created.
+ *
+ * WHY this list exists separately from the configurable-defaults list: keeping
+ * `root_management` out of Settings stops it being switched on for a whole
+ * fleet, but says nothing about copying it from one agent to another. Duplicate
+ * Agent and the control surface's native copy both carry the source pane's
+ * capability choices to the clone on purpose — that is what makes a duplicate a
+ * duplicate — and application-wide control is the one capability where that is
+ * wrong: the grant is gated behind a confirmation dialog naming the agent it
+ * applies to, so a second agent holding it was never confirmed by anyone. It
+ * also closes an escalation: the granting agent's own catalog includes
+ * `agents.duplicate`, so without this rule one confirmed grant could be
+ * replicated by the agent itself, repeatedly.
+ */
+export const CONFIRMATION_GATED_BUILT_IN_MCP_DOMAINS = [
+  'root_management',
+] as const satisfies readonly BuiltInMcpDomain[]
 
 /**
  * The provider launchers, not the generic "agent provider" type, determine

@@ -12,6 +12,7 @@ import { settingMetadata } from '@renderer/features/settings/lib/settingsRegistr
 import { CliUpdateBehaviorRow } from '@renderer/features/cli-updates/CliUpdateBehaviorRow'
 import { DictationApiKeyRow } from '@renderer/features/voice-dictation/DictationApiKeyRow'
 import { DictationHistoryRow } from '@renderer/features/voice-dictation/DictationHistoryRow'
+import { DictationAudioInputRow } from '@renderer/features/voice-dictation/DictationAudioInputRow'
 import { ThemePickerRow } from '@renderer/features/settings/ui/ThemePickerRow'
 import { AgentCodeConventionsRow } from '@renderer/features/settings/ui/AgentCodeConventionsRow'
 import { AgentCodeCustomSkillsRow } from '@renderer/features/settings/ui/AgentCodeCustomSkillsRow'
@@ -225,6 +226,13 @@ function SettingRow({
               round-trip. See features/voice-dictation/DictationApiKeyRow.tsx. */}
           {control.type === 'dictation-api-key' ? <DictationApiKeyRow /> : null}
 
+          {control.type === 'dictation-audio-input' ? (
+            <DictationAudioInputRow
+              value={settings.dictationAudioInput}
+              onChange={dictationAudioInput => actionContext.onChange({ dictationAudioInput })}
+            />
+          ) : null}
+
           {/* Same marker-row rationale: the transcripts and lifetime totals
               live in a main-owned JSON store, not in Settings. */}
           {control.type === 'dictation-history' ? <DictationHistoryRow /> : null}
@@ -294,6 +302,7 @@ const SCOPE_LABELS = {
 
 const APPLY_LABELS = {
   immediate: 'Immediate',
+  'next-recording': 'Next recording',
   'new-session': 'Next session',
   'reload-live-sessions': 'Reloads live agents',
   'restart-required': 'Restart required',

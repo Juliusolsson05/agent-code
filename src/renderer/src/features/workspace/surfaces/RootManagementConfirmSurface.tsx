@@ -7,8 +7,7 @@ import {
 } from '@renderer/features/workspace/lib/rootManagement'
 import { RootManagementConfirmDialog } from '@renderer/features/workspace/ui/RootManagementConfirmDialog'
 import {
-  reloadSessionWithBuiltInMcpDomains,
-  withBuiltInMcpDomain,
+  reloadSessionWithBuiltInMcpChoice,
 } from '@renderer/workspace/builtInMcpReload'
 import { useWorkspaceContext } from '@renderer/workspace/WorkspaceContext'
 
@@ -34,10 +33,11 @@ export function RootManagementConfirmSurface() {
       onConfirm={() => {
         if (!sessionId || !meta) return
         close()
-        void reloadSessionWithBuiltInMcpDomains(
+        void reloadSessionWithBuiltInMcpChoice(
           workspace,
           sessionId,
-          withBuiltInMcpDomain(meta.builtInMcpDomains, ROOT_MANAGEMENT_DOMAIN, true),
+          ROOT_MANAGEMENT_DOMAIN,
+          true,
           rootManagementReloadLabels(true),
         )
       }}

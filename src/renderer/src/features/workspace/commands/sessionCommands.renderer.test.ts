@@ -69,11 +69,51 @@ describe('Duplicate Agent command', () => {
       'codex',
       {
         resumeSessionId: 'provider-clone',
-        builtInMcpDomains: ['workflows'],
+        builtInMcpOverrides: { workflows: true },
         cwd: '/projects/klay',
       },
     )
     expect(closePalette).toHaveBeenCalledOnce()
+  })
+
+  it('never hands a clone the root-management grant', async () => {
+    const duplicateSession = vi.fn().mockResolvedValue({ newProviderSessionId: 'provider-clone' })
+    Object.defineProperty(window, 'api', { configurable: true, value: { duplicateSession } })
+    const splitFocused = vi.fn().mockResolvedValue(undefined)
+    const workspace = {
+      state: {
+        activeTabId: 'tab-klay',
+        dispatchMode: null,
+        sessions: {
+          source: {
+            cwd: '/projects/klay',
+            kind: 'codex',
+            providerSessionId: 'provider-source',
+            builtInMcpDomains: ['tldr', 'root_management'],
+            builtInMcpOverrides: { tldr: true, root_management: true },
+          },
+        },
+        tabs: [{ id: 'tab-klay', focusedSessionId: 'source', root: { type: 'leaf', sessionId: 'source' } }],
+      },
+      splitFocused,
+      showPaneToast: vi.fn(),
+    } as unknown as Workspace
+    const context = {
+      workspace,
+      ui: { closePalette: vi.fn() },
+      flags: {},
+    } as unknown as CommandContext
+    const command = sessionCommands.find(candidate => candidate.id === 'duplicate-agent')
+    if (!command) throw new Error('Duplicate Agent command is missing')
+
+    await command.run(context)
+
+    // The confirmation dialog names one agent, so a clone was never confirmed
+    // by anyone — and the granting agent's own catalog can call this command,
+    // so inheriting the grant would let one confirmation replicate itself.
+    expect(splitFocused).toHaveBeenCalledWith('vertical', 'codex', expect.objectContaining({
+      builtInMcpOverrides: { tldr: true },
+    }))
   })
 
   it('keeps an OpenCode Terminal clone on the native terminal runtime', async () => {
@@ -118,7 +158,7 @@ describe('Duplicate Agent command', () => {
 
     expect(splitFocused).toHaveBeenCalledWith('vertical', 'opencode', {
       resumeSessionId: 'ses_clone',
-      builtInMcpDomains: ['orchestration'],
+      builtInMcpOverrides: { orchestration: true },
       providerRuntime: 'terminal',
       cwd: '/projects/opencode',
     })
@@ -341,7 +381,11 @@ describe('built-in MCP provider command policy', () => {
     expect(replaceSession).toHaveBeenCalledWith('/projects/mcp', {
       kind: 'codex',
       resumeSessionId: 'provider-session',
-      builtInMcpDomains: ['workflows'],
+      builtInMcpOverrides: { workflows: true },
+      // Every capability reload now pins its target: Dispatch focus can move
+      // while the replacement is in flight, and an unpinned reload would apply
+      // the change to whichever pane became focused.
+      targetSessionId: 'agent',
     })
   })
 
@@ -366,7 +410,11 @@ describe('built-in MCP provider command policy', () => {
     expect(replaceSession).toHaveBeenCalledWith('/projects/mcp', {
       kind: 'claude',
       resumeSessionId: 'provider-session',
-      builtInMcpDomains: ['agent_management'],
+      builtInMcpOverrides: { agent_management: true },
+      // Every capability reload now pins its target: Dispatch focus can move
+      // while the replacement is in flight, and an unpinned reload would apply
+      // the change to whichever pane became focused.
+      targetSessionId: 'agent',
     })
   })
 })
@@ -555,7 +603,10 @@ describe('Root Agent Code Management command (#906)', () => {
       kind: 'claude',
       targetSessionId: 'agent',
       resumeSessionId: 'provider-agent',
-      builtInMcpDomains: ['tldr'],
+      // An explicit off, not a return to inheritance: revoking root control
+      // must survive the next reload, and the pane's unrelated TLDR capability
+      // keeps its own choice instead of being rewritten by this one edit.
+      builtInMcpOverrides: { tldr: true, root_management: false },
     })
   })
 })

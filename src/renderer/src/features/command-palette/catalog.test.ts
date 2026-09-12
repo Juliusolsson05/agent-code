@@ -15,7 +15,8 @@ import type { CommandDef } from '@renderer/features/command-palette/types'
 // Agent Composer (#683), 115 with API Key Vault (#831), 116 with
 // Remove Cybersecurity Block (#848), 117 with New Agent In… (#852),
 // 119 with TLDR preview and TLDR MCP (#888), 120 with Root Agent Code
-// Management (#906), and 121 with Merge Project Tabs (#913).
+// Management (#906), 121 with Use Global MCP Settings (#904), and 122 with
+// Merge Project Tabs (#913).
 // Keeping ONE snapshot that moved — rather
 // than a "baseline" file and an "after" file — is what makes the plan's
 // headline count an assertion anyone can check against running code instead of
@@ -107,7 +108,8 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
   'create-ai-workspace',
   'clear-ai-workspace',
   'toggle-file-tree',
-  // sessionCommands (30)
+  // sessionCommands (31)
+  'use-global-mcp-settings',
   'view-prompts',
   'rewind-to-prompt',
   'remove-cybersecurity-block',
@@ -201,12 +203,12 @@ const NAVIGATION_COMMAND_GROUP: readonly string[] = [
 const ids = (): string[] => builtInCommandCatalog.map(c => c.id)
 
 describe('built-in command catalog — baseline characterization', () => {
-  it('contains exactly the 121 governed commands in registration order', () => {
+  it('contains exactly the 122 governed commands in registration order', () => {
     // Order matters: this is the palette's empty-query browse order.
     expect(ids()).toEqual([...BASELINE_COMMAND_IDS])
   })
 
-  it('has exactly 121 commands', () => {
+  it('has exactly 122 commands', () => {
     // Stated separately from the order assertion because this number is the
     // thing that moves, and a bare count failure is a clearer signal than a
     // 99-line array diff.
@@ -218,12 +220,12 @@ describe('built-in command catalog — baseline characterization', () => {
     // Window → 114 with Clear Agent Composer (#683) → 115 with API Key
     // Vault (#831) → 116 with Remove Cybersecurity Block (#848) → 117 with
     // New Agent In… (#852) → 119 with TLDR preview and TLDR MCP (#888) → 120
-    // with Root Agent Code Management (#906) → 121 with Merge Project Tabs
-    // (#913).
+    // with Root Agent Code Management (#906) → 121 with Use Global MCP
+    // Settings (#904) → 122 with Merge Project Tabs (#913).
     // Each step of that arithmetic was a deliberate edit to this line, which is the entire point of pinning it. (The two test
     // titles above had drifted to "115" while this line said 116; they now
     // track it again.)
-    expect(builtInCommandCatalog).toHaveLength(121)
+    expect(builtInCommandCatalog).toHaveLength(122)
   })
 
   it('reports no structural defects', () => {
@@ -257,12 +259,12 @@ describe('generated per-provider split commands', () => {
   })
 
   it('accounts for the difference between literal and total command count', () => {
-    // 121 total - 4 generated = 117 literal `id:` fields across the command
+    // 122 total - 4 generated = 118 literal `id:` fields across the command
     // modules. At the original baseline this read 102 - 4 = 98; it moved down by
     // the five retirements, then back up by the nine additions, Grid Dispatch's
     // six row commands, New Window, and the later single additions recorded in
     // the count test above (through Merge Project Tabs, #913).
-    expect(builtInCommandCatalog.length - nonDefaultProviders.length * 2).toBe(117)
+    expect(builtInCommandCatalog.length - nonDefaultProviders.length * 2).toBe(118)
   })
 
   it('emits both directions for every non-default provider', () => {
@@ -361,7 +363,7 @@ describe('governance targets', () => {
   })
 
   it('lands on the arithmetic the plan predicted', () => {
-    // 102 baseline - 5 retirements + 24 additions = 121, checked against the
+    // 102 baseline - 5 retirements + 25 additions = 122, checked against the
     // real catalog rather than trusted as prose.
     //
     // The subtracted term is the count of APPROVED ADDITIONS and the expected
@@ -383,9 +385,9 @@ describe('governance targets', () => {
     // `remove-cybersecurity-block` (#848), `new-agent-in` (#852),
     // `tldr-preview` and `enable-tldr-mcp` (#888),
     // `enable-root-agent-code-management` (#906), and
-    // `merge-project-tabs` (#913).
-    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 24).toBe(102)
-    expect(builtInCommandCatalog).toHaveLength(121)
+    // `use-global-mcp-settings` (#904), `merge-project-tabs` (#913).
+    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 25).toBe(102)
+    expect(builtInCommandCatalog).toHaveLength(122)
   })
 })
 

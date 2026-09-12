@@ -60,7 +60,7 @@ beforeEach(() => {
     closeDispatchAttach: vi.fn(), closeLinkedAgent: vi.fn(), closeReorderTabs: vi.fn(), closePinAgents: vi.fn(),
   }
 })
-afterEach(() => { cleanup(); dismissTldr() })
+afterEach(() => { cleanup(); dismissTldr(); vi.useRealTimers() })
 
 describe('TLDR hold input', () => {
   it.each(['Cmd+L', 'Cmd+B'])('peeks in Spotlight through the real keyboard router with %s', async binding => {
@@ -166,6 +166,35 @@ describe('TLDR pane overlay', () => {
     expect(mounted).toHaveBeenCalledTimes(1)
     expect(unmounted).not.toHaveBeenCalled()
     expect(listeners.size).toBe(0)
+  })
+
+  it('keeps activity and note ages independent, ticks only while visible, and exposes exact times', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-09-11T02:00:00.000Z'))
+    const runtime = { ...emptyRuntime(), lastJsonlEntryAt: Date.parse('2026-09-11T01:57:00.000Z') }
+    const view = render(<TldrPane identity="agent-a" enabled runtime={runtime}><div /></TldrPane>)
+    expect(vi.getTimerCount()).toBe(0)
+    await act(async () => { toggleTldr() })
+    expect(screen.getByLabelText(/^Last active 3 minutes ago/).getAttribute('datetime')).toBe('2026-09-11T01:57:00.000Z')
+    const written = screen.getByLabelText(/^Note written 2 hours ago/)
+    expect(written.getAttribute('datetime')).toBe('2026-09-11T00:00:00.000Z')
+    expect(written.getAttribute('title')).toBeTruthy()
+    await act(async () => { vi.advanceTimersByTime(60_000) })
+    expect(screen.getByLabelText(/^Last active 4 minutes ago/)).toBeTruthy()
+    view.rerender(<TldrPane identity="agent-a" enabled runtime={{ ...runtime, sessionStatus: 'running' }}><div /></TldrPane>)
+    expect(screen.getByText('now').parentElement?.textContent).toBe('Last active now')
+    expect(screen.getByLabelText(/^Note written 2 hours ago/)).toBe(written)
+    act(dismissTldr)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('reports unknown timestamps without inventing activity or a note', async () => {
+    api.readTldrs.mockResolvedValueOnce({})
+    await act(async () => { toggleTldr() })
+    render(<TldrPane identity="missing" enabled runtime={emptyRuntime()}><div /></TldrPane>)
+    expect(screen.getByLabelText('Last active Unknown').hasAttribute('datetime')).toBe(false)
+    expect(screen.getByLabelText('Note written Unknown').hasAttribute('datetime')).toBe(false)
+    await screen.findByText('No TLDR yet')
   })
 
   it('keeps a newer update when an older snapshot arrives later', async () => {
