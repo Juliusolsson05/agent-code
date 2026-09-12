@@ -165,9 +165,11 @@ live is disconnected it falls back to a 1 Hz primary-key lookup of
   - `OpencodeStore` (planned as `OpencodeDatabase` + `EventLogTail`): the
     shared, generation-keyed, read-only `node:sqlite` handle per db path, the
     schema gate, and every statement that reads OpenCode's tables — history
-    pages, the event tail, session rows, and the root-session listing the
-    Resume picker uses. One owner, because the gate must equal the columns the
-    statements actually read, and two owners could not keep that true.
+    pages, the event tail, session rows, and a root-session listing. One owner,
+    because the gate must equal the columns the statements actually read, and
+    two owners could not keep that true. (The listing was built for the Resume
+    picker; #899 landed a conversation catalog that reads the database itself
+    first, so nothing calls it today — see agent-code#910.)
   - `readHistory()`: projection snapshot → `{ info, parts }` records plus cursor.
   - `CommittedAssembler`: pure; decides *when* a message is committed.
   - `DurableReader`: doorbell/poll orchestration.
