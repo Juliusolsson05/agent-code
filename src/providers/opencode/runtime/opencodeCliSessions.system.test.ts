@@ -97,7 +97,10 @@ describe('OpenCode CLI output integrity', () => {
   })
 
   it('cleans up when the CLI cannot be spawned', async () => {
-    await expect(exportOpencodeSession({ ...options(), binary: join(root, 'missing') }, 'ses_fixture')).rejects.toThrow('failed')
+    // `ENOENT`, not just `failed`: every runOpencode rejection carries the
+    // `OpenCode export failed:` prefix, so a timeout, overflow or parse error
+    // would satisfy a weaker assertion without exercising spawn failure.
+    await expect(exportOpencodeSession({ ...options(), binary: join(root, 'missing') }, 'ses_fixture')).rejects.toThrow('ENOENT')
     await expectClean()
   })
 
@@ -227,6 +230,36 @@ it.each(['stop', 'timeout'] as const)('bounds a hung import on %s and removes it
     if (status && alive(status.pid)) process.kill(status.pid, 'SIGKILL')
     await session.stop()
     await starting?.catch(() => {})
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+it('kills a CLI whose stop arrived while its capture was still being prepared', async () => {
+  // runOpencode runs synchronously until mkdtemp suspends, so an abort issued
+  // right after the call lands after the pre-abort check but before the abort
+  // listener exists. `once` listeners are not replayed for past aborts, so only
+  // the post-spawn `signal.aborted` replay can stop this child. Without it the
+  // SIGTERM-ignoring fixture would live until the 30 s deadline, and stop()
+  // during capture setup would silently do nothing.
+  const { dir, binary, statusFile } = await fixture()
+  const controller = new AbortController()
+  const outcome = exportOpencodeSession({ binary, cwd: dir, env: { IMPORT_STATUS_FILE: statusFile }, signal: controller.signal }, 'ses_fixture')
+    .then(() => new Error('resolved'), (error: Error) => error)
+  controller.abort()
+  const spawnedPid = () => vi.mocked(spawn).mock.results[0]?.value?.pid as number | undefined
+  try {
+    const failure = await within(outcome, 2000)
+    expect(failure, 'late stop settles promptly').toBeInstanceOf(Error)
+    expect((failure as Error).message).toContain('OpenCode command cancelled')
+    // A real child was spawned: this is the replay path, not the "already
+    // stopped, create nothing" path the pre-abort check handles.
+    expect(spawnedPid()).toBeGreaterThan(0)
+    await waitUntil(() => !alive(spawnedPid()!), 2000, 'cancelled child exit')
+    expect((await readdir(root)).filter(name => name.startsWith('agent-code-opencode-'))).toEqual([])
+  } finally {
+    const pid = spawnedPid()
+    if (pid && alive(pid)) process.kill(pid, 'SIGKILL')
+    await outcome
     await rm(dir, { recursive: true, force: true })
   }
 })
