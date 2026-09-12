@@ -31,6 +31,11 @@ tools and permission UI remain Grok-owned.
   key. TUI resolution retires the other control client's stale request token.
   Normal cleanup awaits TUI/leader exit and verifies process absence by private
   socket path. Headless verification: 180 tests, typecheck/build/packed exports.
+- The headless candidate now includes the framed TUI guard at 4814a17, with
+  198 deterministic tests and installed-native failed-attachment, idle-crash
+  and mid-turn-crash proofs. Each fault test independently verifies OS no-fork
+  containment, holds the TUI alive for one second without another downstream
+  connection, then acknowledges owned TUI exit before releasing the guard.
 
 ## D: Intended End State
 
@@ -89,16 +94,15 @@ Next blocking gate: [grok-code-headless#3](https://github.com/Juliusolsson05/gro
 Independent public-source audits found that the native TUI uses unbounded
 connect_or_spawn, can create a replacement immediately after leader loss, and
 can fall back to an embedded agent after initial connection timeout. There is
-no supported connect-only TUI flag in that source. A deliberate installed-binary
-crash/respawn experiment has not been run; source and binary evidence remain
-distinct. Normal-path coexistence does not establish crash containment.
+no supported connect-only TUI flag in that source. The new guard now has scoped
+installed-binary fault evidence in headless testing/fixtures/native-tui-guard-proof.json;
+it does not claim behavior for a dead or indefinitely stalled host.
 
 The headless owner stops an attached TUI before terminating its leader and
 retains the owned leader if dependent cleanup fails. Full app integration needs
-an agreed, verified TUI lifetime boundary for unexpected loss plus safe handling
-of native session-changing commands. A stable app-owned TUI socket boundary is
-a candidate design to evaluate, not an implemented guarantee. MCP model-driven
-discovery and native reload/reconnect reseeding also remain verification gates.
+runtime/pane adoption of that guard plus safe handling of native session-changing
+commands and startup deadline policy. MCP model-driven discovery, native
+reload/reconnect reseeding, and prompt acceptance versus completion remain gates.
 
 Until the protocol stage is approved and verified, keep the app and headless
 input work draft. Do not claim general clipboard-independent automated prompt

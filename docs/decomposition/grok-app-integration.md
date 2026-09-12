@@ -9,7 +9,9 @@ and reviews of runtime, switching, rendering, streaming and test boundaries.
 
 A: reviewed Grok headless runtime/history/permission/relay contracts and Grok
 parser decoder/archive/native-resume projectors exist in separate repositories.
-The app branch contains package/build wiring only and is behind current main.
+The app branch now contains host publication and main 364e5a16. It pins the
+reviewed parser and the owned native ACP/guard candidate; full provider runtime
+and rendering registration remain the next integration stage.
 
 D: an installed Grok CLI can be created/resumed and used as an Agent Code
 provider, with correct session identity, transcript rendering, safe controls,
@@ -103,3 +105,18 @@ renderer consumption are NOT implemented by this publication stage.
   requests before enabling semantic rendering; matching output text is invalid.
 - The initial registration must respect existing directory guards, agent-name
   identity carry, text delivery and session retirement from current main.
+
+## Current-main continuation
+
+Main 364e5a16 is integrated. Its new native Codex clone operation now passes one
+complete TranscriptPublication to identity extraction and storage, with a
+regression against the recorded native clone fixture. Full app typechecking and
+84 provider-switch tests passed, followed by green app CI at 06719c38.
+
+The app now pins headless 4814a17 (owned ACP plus framed TUI guard). The approved
+automated-input route is ACP, superseding the older composer-paste gate above.
+Native guard fault evidence is separate from full app/pane adoption; see
+grok-native-control.md. Resume discovery must extend the new Conversations
+catalog, and built-in MCP must preserve main's choice/reload and root-management
+non-inheritance policy. The older package-wiring branch is already included;
+continue implementation here rather than creating a competing integration.
