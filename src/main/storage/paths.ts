@@ -90,3 +90,10 @@ export const HEAP_SNAPSHOT_DIR = join(STATE_DIR, 'heap-snapshots')
 // every other debug root here it must register with debugRetention as a
 // budgeted bucket (a continuous recorder re-opens the #388 OOM/disk vector).
 export const SESSION_RECORDING_DIR = join(STATE_DIR, 'session-recordings')
+
+// Durable per-conversation identity (title, spoken name, orchestration role)
+// keyed by provider-native session id, projected from workspace saves. Lives
+// beside workspace.json because it is derived from it, and stays a separate
+// file because it must outlive any pane the workspace forgets.
+export const CONVERSATIONS_DIR = join(STATE_DIR, 'conversations')
+export const CONVERSATIONS_LEDGER_FILE = join(CONVERSATIONS_DIR, 'ledger.jsonl')

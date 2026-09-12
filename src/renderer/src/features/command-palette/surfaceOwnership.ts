@@ -86,7 +86,8 @@ export const SURFACE_OWNER_FLAGS = {
   'open-agent-activity': 'agentActivityOpen',
   'close-old-agents': 'closeOldAgentsOpen',
   'switch-agents-provider': 'bulkProviderSwitchOpen',
-  'search-conversation-prompts': 'promptSearchOpen',
+  'search-conversation-prompts': 'conversationsOpen',
+  'resume-session': 'conversationsOpen',
   'toggle-remote-panel': 'remotePanelOpen',
   'reorder-tabs': 'reorderTabsOpen',
   'pin-agents': 'pinAgentsOpen',
@@ -112,7 +113,6 @@ export type SurfaceOwningCommandId = keyof typeof SURFACE_OWNER_FLAGS
  * decides whether it gets the chance.
  */
 export const PALETTE_MODE_COMMANDS = {
-  'resume-session': 'resume',
   'revive-pane': 'buried',
   'kill-buried-pane': 'kill-buried',
   'prompt-template': 'prompt-template',

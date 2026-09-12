@@ -1,6 +1,6 @@
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 import type { RewindPrompt } from '@shared/types/transcriptRewind'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { Button } from '@renderer/components/ui/button'
 import {
@@ -11,6 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
+import { PromptList } from '@renderer/features/conversations/ui/PromptList'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { SessionId } from '@renderer/workspace/types'
 import { resumableProviderSessionId } from '@renderer/workspace/providerSessionIdentity'
@@ -23,8 +24,8 @@ import { resumableProviderSessionId } from '@renderer/workspace/providerSessionI
 // composer with the anchored prompt in an UNSENT state. The source
 // session is never touched.
 //
-// Parallel to `ViewPromptsModal` (same data source, same paging
-// behavior) but rows are clickable — each invokes
+// Parallel to `ViewPromptsModal` (same row component, every prompt, newest
+// first) but rows are clickable — each invokes
 // `workspace.rewindFocusedToPrompt(anchor)` and the modal closes.
 // Keyboard navigation mirrors the other command palette family
 // (Up/Down to move, Enter to confirm, Esc to close).
@@ -49,20 +50,6 @@ type Props = {
   sessionId: SessionId | null
   workspace: Workspace
   onClose: () => void
-}
-
-const PROMPT_LIMIT = 30
-
-function formatPromptTimestamp(timestamp: string | null): string {
-  if (!timestamp) return 'Unknown time'
-  const parsed = new Date(timestamp)
-  if (Number.isNaN(parsed.getTime())) return 'Unknown time'
-  return parsed.toLocaleString([], {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
 }
 
 export function RewindToPromptModal({
@@ -92,11 +79,12 @@ export function RewindToPromptModal({
     setLoading(true)
     setLoadError(null)
     setPrompts([])
+    // No limit: main returns every prompt newest first. A cap of thirty hid
+    // the prompt the user wanted to rewind to on any long session.
     void window.api.listRewindPrompts({
       provider,
       sourceProviderSessionId: providerSessionId,
       cwd,
-      limit: PROMPT_LIMIT,
     }).then(next => {
       if (!cancelled) setPrompts(next)
     }).catch(error => {
@@ -126,15 +114,25 @@ export function RewindToPromptModal({
     }
   }, [prompts.length, selectedIndex])
 
+  // The list renders text and time; the address stays in `prompts` at the
+  // same index, which is what confirm() reads.
+  const rows = useMemo(
+    () => prompts.map(prompt => ({ text: prompt.text, timestamp: prompt.timestamp ? Date.parse(prompt.timestamp) : null })),
+    [prompts],
+  )
+
   if (!meta) return null
 
   const cwdBase = meta.cwd.split('/').filter(Boolean).pop() ?? meta.cwd
   const selected = prompts[selectedIndex] ?? null
 
-  const confirm = async () => {
-    if (!selected) return
+  // Takes the index explicitly so a click confirms the clicked row even when
+  // the highlight state has not caught up with it in this render.
+  const confirm = async (index = selectedIndex) => {
+    const target = prompts[index] ?? null
+    if (!target) return
     onClose()
-    await workspace.rewindFocusedToPrompt(selected.address)
+    await workspace.rewindFocusedToPrompt(target.address)
   }
 
   return (
@@ -182,44 +180,16 @@ export function RewindToPromptModal({
           }}
           className="min-h-0 flex-1 overflow-y-auto px-4 py-3 outline-none"
         >
-          {prompts.length === 0 ? (
-            <div className="py-8 text-center text-[12px] text-muted">
-              {loading
-                ? 'Reading transcript prompts…'
-                : loadError ?? 'No rewindable prompts found for this session.'}
-            </div>
-          ) : (
-            <div className="flex flex-col gap-2">
-              {prompts.map((prompt, index) => {
-                const isSelected = index === selectedIndex
-                return (
-                  <button
-                    type="button"
-                    key={`${prompt.timestamp ?? 'unknown'}:${index}`}
-                    onMouseEnter={() => setSelectedIndex(index)}
-                    onClick={() => {
-                      setSelectedIndex(index)
-                      void confirm()
-                    }}
-                    className={
-                      'rounded-control text-left border px-3 py-3 cursor-pointer transition-colors ' +
-                      (isSelected
-                        ? 'border-accent bg-canvas'
-                        : 'border-border bg-canvas/70 hover:border-border-hi')
-                    }
-                  >
-                    <div className="flex items-center justify-between gap-3 text-[10px] uppercase tracking-[0.12em] text-muted">
-                      <span>#{index + 1}</span>
-                      <span>{formatPromptTimestamp(prompt.timestamp)}</span>
-                    </div>
-                    <div className="mt-2 whitespace-pre-wrap break-words text-[12px] leading-5 text-ink">
-                      {prompt.text}
-                    </div>
-                  </button>
-                )
-              })}
-            </div>
-          )}
+          <PromptList
+            prompts={rows}
+            selectedIndex={selectedIndex}
+            onHover={setSelectedIndex}
+            onSelect={index => {
+              setSelectedIndex(index)
+              void confirm(index)
+            }}
+            emptyMessage={loading ? 'Reading transcript prompts…' : loadError ?? 'No rewindable prompts found for this session.'}
+          />
         </div>
 
         <DialogFooter className="justify-between text-[11px] text-muted">
@@ -227,7 +197,7 @@ export function RewindToPromptModal({
             <span>
               {loading
                 ? 'Reading transcript prompts…'
-                : `Showing the latest ${Math.min(PROMPT_LIMIT, prompts.length)} prompt${prompts.length === 1 ? '' : 's'}`}
+                : `${prompts.length} prompt${prompts.length === 1 ? '' : 's'}`}
             </span>
             <span className="text-[10px] text-muted/70">
               Selecting a prompt rewinds THIS pane to that point. The original transcript is not touched.

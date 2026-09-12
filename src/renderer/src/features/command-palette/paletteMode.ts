@@ -24,7 +24,6 @@
 
 export type PaletteMode =
   | 'commands'
-  | 'resume'
   | 'buried'
   | 'kill-buried'
   | 'prompt-template'

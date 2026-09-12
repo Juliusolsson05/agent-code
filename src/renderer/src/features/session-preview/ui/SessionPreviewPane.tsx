@@ -74,7 +74,11 @@ type PaneState =
   | { status: 'empty' } // session exists but has no renderable content
   | { status: 'error'; message: string }
 
-export function SessionPreviewPane({ target }: { target: PreviewTarget | null }) {
+// `turnCount` is the catalog's prompt count for the whole conversation. The
+// pane itself loads a tail window, so its own count is a floor: a long
+// planning session read "1 turn" in the old picker because only the last
+// records were in the window. When the caller knows the real count it wins.
+export function SessionPreviewPane({ target, turnCount = null }: { target: PreviewTarget | null; turnCount?: number | null }) {
   const [state, setState] = useState<PaneState>({ status: 'idle' })
 
   // Monotonic request id. Every target change bumps it (see the effect
@@ -161,7 +165,7 @@ export function SessionPreviewPane({ target }: { target: PreviewTarget | null })
 
   return (
     <div className="flex flex-col min-h-0 h-full w-full bg-canvas/40">
-      <PaneHeader state={state} kind={target?.kind ?? null} />
+      <PaneHeader state={state} kind={target?.kind ?? null} turnCount={turnCount} />
       <div
         ref={scrollRef}
         className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden"
@@ -175,12 +179,14 @@ export function SessionPreviewPane({ target }: { target: PreviewTarget | null })
 function PaneHeader({
   state,
   kind,
+  turnCount,
 }: {
   state: PaneState
   kind: AgentProviderKind | null
+  turnCount: number | null
 }) {
   const turns =
-    state.status === 'ready' ? countUserTurns(state.model.entries) : null
+    turnCount ?? (state.status === 'ready' ? countUserTurns(state.model.entries) : null)
   return (
     <div className="flex-shrink-0 flex items-center gap-2 border-b border-border px-4 py-2">
       <span className="text-[10px] uppercase tracking-[0.15em] text-muted font-medium">

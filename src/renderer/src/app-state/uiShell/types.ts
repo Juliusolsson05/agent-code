@@ -277,11 +277,14 @@ export type UiShellState = {
    *  surface is active without replacing it. Tracking it as a toggle
    *  flag keeps the mode-state machine untouched. */
   globalEditorOpen: boolean
-  /** When true, the Search Conversation Prompts modal is open. Lives
-   *  on the uiShell slice (not the workspace slice) because it's
-   *  a cross-session concern: the modal reads prompts from ALL
-   *  sessions on disk, not just those currently mounted. */
-  promptSearchOpen: boolean
+  /** When true, the Conversations picker is open (Resume Session… and
+   *  Search Conversations… both open it). Lives on uiShell because it
+   *  reads every conversation on disk, not only mounted panes. */
+  conversationsOpen: boolean
+  /** Whether the picker should start with the search field focused. Set
+   *  by the command that opened it; reset on close so a chord never
+   *  inherits the previous invocation's intent. */
+  conversationsFocusSearch: boolean
   /** When true, the Agent Activity modal is open. Lists every
    *  visible agent/terminal session grouped by tab with last-
    *  activity timestamps so the user can triage and close unused

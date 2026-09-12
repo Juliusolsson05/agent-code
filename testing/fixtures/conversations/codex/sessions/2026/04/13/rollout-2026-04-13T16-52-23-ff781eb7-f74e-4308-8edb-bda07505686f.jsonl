@@ -1,0 +1,5 @@
+{"timestamp":"2026-04-09T06:09:22.478Z","type":"session_meta","payload":{"id":"ff781eb7-f74e-4308-8edb-bda07505686f","timestamp":"2026-04-09T06:09:22.478Z","cwd":"/fixture/other-16","originator":"agent-transcript-parser","cli_version":"p:6ad9613a:5","source":"cli","model_provider":"openai","git":{"branch":"main"}}}
+{"timestamp":"2026-04-13T16:31:23.054Z","type":"atp_passthrough","payload":{"source_type":"p:7a129f2b:15"}}
+{"timestamp":"2026-04-09T06:09:22.478Z","type":"atp_passthrough","payload":{"source_type":"p:602a5e69:10"}}
+{"timestamp":"2026-04-09T06:09:22.478Z","type":"atp_passthrough","payload":{"source_type":"p:602a5e69:10"}}
+{"timestamp":"2026-04-13T16:31:23.055Z","type":"atp_passthrough","payload":{"source_type":"p:cdd122d0:21"}}

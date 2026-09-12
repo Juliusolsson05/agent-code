@@ -1,4 +1,3 @@
-import { DEFAULT_PROVIDER } from '@shared/types/providerKind.js'
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
 import { ipcRenderer } from 'electron'
 import type { PromptDeliveryResult } from '@shared/types/providerConfig.js'
@@ -10,7 +9,6 @@ import type { TerminalForegroundEvent, TerminalForegroundState } from '@shared/t
 import type {
   SessionExitEvent,
   SessionHistoryChunk,
-  SessionInfo,
   SessionKind,
   SessionJsonlEntriesEvent,
   SessionJsonlErrorEvent,
@@ -157,22 +155,6 @@ export const sessionApi = {
     | { kind: 'no-session' }
   > =>
     ipcRenderer.invoke('claude:await-paste-placeholder', sessionId, opts),
-
-  // --- Resume picker: list previous sessions recorded in a cwd ---
-  listSessionsForCwd: (
-    cwd: string,
-    limit?: number,
-    provider: AgentProviderKind = DEFAULT_PROVIDER,
-  ): Promise<SessionInfo[]> =>
-    ipcRenderer.invoke('session:list-for-cwd', cwd, limit, provider),
-
-  /** Global session listing for the rendering-debug harness. Returns
-   *  every known Claude + Codex session tagged with provider, sorted
-   *  by lastModified desc. */
-  listAllSessions: (
-    limit?: number,
-  ): Promise<Array<SessionInfo & { provider: AgentProviderKind }>> =>
-    ipcRenderer.invoke('session:list-all', limit),
 
   loadOlderHistory: (params: {
     kind: AgentProviderKind
