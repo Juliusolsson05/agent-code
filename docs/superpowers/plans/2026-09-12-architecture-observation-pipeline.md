@@ -112,6 +112,7 @@ Survey results may add or merge diagrams, such as Codex rollout attribution or t
 
 ## Decisions log
 
+- Combined with #940 into one PR targeting `main` at the maintainer's request (2026-09-12): both changes rewrite the same document and diagram set, so reviewing them separately only duplicated review. #940's commits are included unchanged.
 - Stack on #940 rather than `main`. #940 rewrites every diagram and adds renderer metadata requirements; branching from `main` would conflict on the same sections and produce previews the new renderer rejects.
 - Keep arc42 numbering. Put the core chapter in 8.3 (crosscutting, because it spans packages, main, renderer and the remote client), and link to it prominently from the opening, sections 3, 4, 5.3 and 6.4/6.5.
 - Source research: six read-only surveys (one per headless package, main-process transport, renderer reconciliation), plus direct reading of every `rendering/` model, collector, adapter, evidence and replay module. Survey claims used as facts were re-verified by grep (for example the Codex 0.149.1 profile, the phone's zero committed tail, the recorded channel allowlist, accepted upstream versions).
