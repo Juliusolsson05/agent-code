@@ -1,7 +1,8 @@
-import { act, cleanup, render } from '@testing-library/react'
+import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { useAppStore } from '@renderer/app-state/hooks'
+import { WorkIndicator } from '@renderer/features/feed/WorkIndicator'
 import { SessionFeedProvider } from '@renderer/features/sessionFeed/SessionFeedContext'
 import { createFakeSessionFeed } from '@renderer/features/sessionFeed/FakeSessionFeed'
 import type { FakeSessionFeed } from '@renderer/features/sessionFeed/FakeSessionFeed'
@@ -89,7 +90,25 @@ function Composer({ workspace }: { workspace: ReturnType<typeof useWorkspace> })
     endHistoryCycle: () => {},
   })
   submit = keys.submitCurrentDraft
-  return <textarea data-testid="composer" value={input} readOnly />
+  return (
+    <>
+      <textarea data-testid="composer" value={input} readOnly />
+      {/*
+        The real in-feed indicator, fed the same runtime fields Feed passes it.
+        #889 was literally the text `Sending · 46s` on screen, so the contract is
+        asserted on the rendered label (#893 review F3). Asserting only
+        `streamPhase` would stay green if the phase→label mapping or the clock
+        source changed.
+      */}
+      <WorkIndicator
+        phase={runtime.streamPhase}
+        turnStartedAt={runtime.turnStartedAt}
+        toolName={runtime.streamPhasePendingToolName}
+        toolHint={null}
+        reducedMotion
+      />
+    </>
+  )
 }
 
 function Controller() {
@@ -195,6 +214,9 @@ describe('composer submit accepted into the provider queue', () => {
     expect(runtime.turnStartedAt).toBe(1_000_000)
     expect(runtime.phaseChangedAt).toBe(1_000_500)
     expect(runtime.draftInput).toBe('')
+    // What the user sees: the running turn's own label, never `Sending`.
+    expect(screen.getByText('Thinking')).toBeTruthy()
+    expect(screen.queryByText('Sending')).toBeNull()
   })
 
   it('on a pane the renderer believed idle, a queue acceptance settles the stamped Sending back to idle', async () => {
@@ -212,6 +234,7 @@ describe('composer submit accepted into the provider queue', () => {
     expect(runtime.streamPhase).toBe('idle')
     expect(runtime.turnStartedAt).toBeNull()
     expect(runtime.submittedAt).toBeNull()
+    expect(screen.queryByText('Sending')).toBeNull()
   })
 
   it('on an idle pane, a user acceptance keeps the optimistic Sending until the turn events arrive', async () => {
@@ -225,6 +248,9 @@ describe('composer submit accepted into the provider queue', () => {
     await act(async () => { await submit('textarea-enter') })
 
     expect(current.getRuntime(SESSION).streamPhase).toBe('submitting')
+    // The positive control for the label assertions above: the same render
+    // path DOES paint `Sending` when the claim is legitimate.
+    expect(screen.getByText('Sending')).toBeTruthy()
   })
 
   it('a queued second submit never settles the Sending an earlier submit still owns', async () => {
@@ -251,6 +277,8 @@ describe('composer submit accepted into the provider queue', () => {
     expect(afterB.streamPhase).toBe('submitting')
     expect(afterB.submittedAt).toBe(stampA)
     expect(afterB.turnStartedAt).toBe(stampA)
+    // A is genuinely starting, so its indicator stays on screen.
+    expect(screen.getByText('Sending')).toBeTruthy()
 
     // A's first real event must still advance A's claim. The IPC fold is mocked
     // in this suite, so apply the same pure reducer it runs.
