@@ -14,8 +14,8 @@ import type { CommandDef } from '@renderer/features/command-palette/types'
 // row commands (#681), 113 with New Window (#688), 114 with Clear
 // Agent Composer (#683), 115 with API Key Vault (#831), 116 with
 // Remove Cybersecurity Block (#848), 117 with New Agent In… (#852),
-// 119 with TLDR preview and TLDR MCP (#888), and 120 with Root Agent Code
-// Management (#906).
+// 119 with TLDR preview and TLDR MCP (#888), 120 with Root Agent Code
+// Management (#906), and 121 with Use Global MCP Settings (#904).
 // Keeping ONE snapshot that moved — rather
 // than a "baseline" file and an "after" file — is what makes the plan's
 // headline count an assertion anyone can check against running code instead of
@@ -106,7 +106,8 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
   'create-ai-workspace',
   'clear-ai-workspace',
   'toggle-file-tree',
-  // sessionCommands (30)
+  // sessionCommands (31)
+  'use-global-mcp-settings',
   'view-prompts',
   'rewind-to-prompt',
   'remove-cybersecurity-block',
@@ -200,12 +201,12 @@ const NAVIGATION_COMMAND_GROUP: readonly string[] = [
 const ids = (): string[] => builtInCommandCatalog.map(c => c.id)
 
 describe('built-in command catalog — baseline characterization', () => {
-  it('contains exactly the 120 governed commands in registration order', () => {
+  it('contains exactly the 121 governed commands in registration order', () => {
     // Order matters: this is the palette's empty-query browse order.
     expect(ids()).toEqual([...BASELINE_COMMAND_IDS])
   })
 
-  it('has exactly 120 commands', () => {
+  it('has exactly 121 commands', () => {
     // Stated separately from the order assertion because this number is the
     // thing that moves, and a bare count failure is a clearer signal than a
     // 99-line array diff.
@@ -217,11 +218,12 @@ describe('built-in command catalog — baseline characterization', () => {
     // Window → 114 with Clear Agent Composer (#683) → 115 with API Key
     // Vault (#831) → 116 with Remove Cybersecurity Block (#848) → 117 with
     // New Agent In… (#852) → 119 with TLDR preview and TLDR MCP (#888) → 120
-    // with Root Agent Code Management (#906).
+    // with Root Agent Code Management (#906) → 121 with Use Global MCP
+    // Settings (#904).
     // Each step of that arithmetic was a deliberate edit to this line, which is the entire point of pinning it. (The two test
     // titles above had drifted to "115" while this line said 116; they now
     // track it again.)
-    expect(builtInCommandCatalog).toHaveLength(120)
+    expect(builtInCommandCatalog).toHaveLength(121)
   })
 
   it('reports no structural defects', () => {
@@ -255,12 +257,12 @@ describe('generated per-provider split commands', () => {
   })
 
   it('accounts for the difference between literal and total command count', () => {
-    // 120 total - 4 generated = 116 literal `id:` fields across the command
+    // 121 total - 4 generated = 117 literal `id:` fields across the command
     // modules. At the original baseline this read 102 - 4 = 98; it moved down by
     // the five retirements, then back up by the nine additions, Grid Dispatch's
     // six row commands, New Window, and the later single additions recorded in
     // the count test above (through Root Agent Code Management, #906).
-    expect(builtInCommandCatalog.length - nonDefaultProviders.length * 2).toBe(116)
+    expect(builtInCommandCatalog.length - nonDefaultProviders.length * 2).toBe(117)
   })
 
   it('emits both directions for every non-default provider', () => {
@@ -379,10 +381,11 @@ describe('governance targets', () => {
     // `dispatch-focus-row-down`, `new-window` (#688), and
     // `clear-agent-composer` (#683), `api-key-vault` (#831),
     // `remove-cybersecurity-block` (#848), `new-agent-in` (#852),
-    // `tldr-preview` and `enable-tldr-mcp` (#888), and
-    // `enable-root-agent-code-management` (#906).
-    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 23).toBe(102)
-    expect(builtInCommandCatalog).toHaveLength(120)
+    // `tldr-preview` and `enable-tldr-mcp` (#888),
+    // `enable-root-agent-code-management` (#906), and
+    // `use-global-mcp-settings` (#904).
+    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 24).toBe(102)
+    expect(builtInCommandCatalog).toHaveLength(121)
   })
 })
 

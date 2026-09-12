@@ -52,7 +52,7 @@ import {
 } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import { commandTargetSessionIdForState } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import type { PlacementTarget } from '@renderer/features/workspace/lib/newAgentPlacement'
-import type { BuiltInMcpDomain } from '@mcp/shared/types'
+import type { BuiltInMcpDomain, BuiltInMcpOverrides } from '@mcp/shared/types'
 import type {
   OrchestrationAgentKind,
   OrchestrationAgentRecord,
@@ -349,7 +349,10 @@ type SplitFocusedContinuation = {
   // class of bug where a related child's transcript is resumed with its physical parent's token.
   resumeSessionId: string
   cwd: string
-  builtInMcpDomains?: BuiltInMcpDomain[]
+  /** Per-domain MCP choices the clone should adopt. The source pane's effective
+   * capability list is deliberately not carried: a clone is a new provider
+   * process and resolves these against current Settings. */
+  builtInMcpOverrides?: BuiltInMcpOverrides
   /** Preserve an alternate provider transport when cloning a conversation. */
   providerRuntime?: AgentProviderRuntime
 }
@@ -446,7 +449,7 @@ export function usePaneActions(
       continuation?: SplitFocusedContinuation,
     ) => {
       const resumeSessionId = continuation?.resumeSessionId
-      const builtInMcpDomains = continuation?.builtInMcpDomains
+      const builtInMcpOverrides = continuation?.builtInMcpOverrides
       const providerRuntime = continuation?.providerRuntime
       const dispatchSnapshot = refs.stateRef.current
       // ONE Dispatch creation flow for every session kind.
@@ -516,8 +519,9 @@ export function usePaneActions(
           // passed through unguarded, but they are NOT symmetric and it is
           // worth being precise about which is which:
           //
-          //  - `builtInMcpDomains` really is dropped for a terminal —
-          //    `sessionActions.spawn` gates it behind `isAgentProviderKind`.
+          //  - `builtInMcpOverrides` really is dropped for a terminal —
+          //    `sessionActions.spawn` gates the resolved capability list it
+          //    produces behind `isAgentProviderKind`.
           //  - `resumeSessionId` is NOT dropped. It is forwarded to
           //    `window.api.spawnSession` for every kind; only the value written
           //    back into the durable `SessionMeta` is kind-gated. It is inert
@@ -537,7 +541,7 @@ export function usePaneActions(
             kind,
             ...(providerRuntime ? { providerRuntime } : {}),
             resumeSessionId,
-            builtInMcpDomains,
+            builtInMcpOverrides,
           })
         } catch (err) {
           showToast(
@@ -630,7 +634,7 @@ export function usePaneActions(
           kind,
           ...(providerRuntime ? { providerRuntime } : {}),
           resumeSessionId,
-          builtInMcpDomains,
+          builtInMcpOverrides,
         })
       } catch (err) {
         showToast(
@@ -722,7 +726,7 @@ export function usePaneActions(
 
       let sessionId: SessionId
       try {
-        sessionId = await sessionActions.spawn(cwd, { kind, providerRuntime, resumeSessionId: continuation?.resumeSessionId, builtInMcpDomains: continuation?.builtInMcpDomains })
+        sessionId = await sessionActions.spawn(cwd, { kind, providerRuntime, resumeSessionId: continuation?.resumeSessionId, builtInMcpOverrides: continuation?.builtInMcpOverrides })
       } catch (err) {
         showToast(
           err instanceof Error && err.message.length > 0

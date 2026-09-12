@@ -34,7 +34,7 @@ import type { ProviderConditionSnapshot } from '@shared/types/providerConditions
 import type { SessionRecoverFailureCode,
   SessionInputReadiness,
 } from '@shared/types/session'
-import type { BuiltInMcpDomain } from '@mcp/shared/types'
+import type { BuiltInMcpOverrides } from '@mcp/shared/types'
 import type { SubAgentState } from '@preload/api/types'
 import type {
   CodexTranscriptObservationEventName,
@@ -126,7 +126,11 @@ export type PendingRewindUndo = {
   rewoundPromptTimestamp: string | null
   previousDraftInput: string
   previousDraftImages: ClaudeDraftImage[]
-  builtInMcpDomains?: BuiltInMcpDomain[]
+  /** The original conversation's per-domain MCP choices. The effective list is
+   * deliberately NOT stored: undo re-resolves against current Settings like
+   * every other replacement, so returning to a transcript cannot resurrect a
+   * capability the user has since turned off globally. */
+  builtInMcpOverrides?: BuiltInMcpOverrides
 }
 
 export type SemanticLiveBlock = {

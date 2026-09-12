@@ -217,9 +217,10 @@ describe('rehydrateWorkspace backend reconciliation', () => {
       .toEqual(['msg_user', 'msg_answer'])
   })
 
-  it('does not reapply enabled defaults to a persisted explicit empty list', async () => {
+  it('does not reapply enabled defaults over a persisted explicit disable', async () => {
     const persisted = makePersisted()
     persisted.sessions['stable-session']!.builtInMcpDomains = []
+    persisted.sessions['stable-session']!.builtInMcpOverrides = { orchestration: false }
     const harness = makeHarness()
     harness.refs.defaultBuiltInMcpDomainsRef.current = ['orchestration']
     const recoverSession = vi.fn(async () => ({
@@ -251,6 +252,26 @@ describe('rehydrateWorkspace backend reconciliation', () => {
       builtInMcpDomains: [],
     }))
     expect(harness.state().sessions['stable-session']?.builtInMcpDomains).toEqual([])
+  })
+
+  it.each(['spawned', 'adopted'] as const)('migrates legacy off to inheritance while keeping a %s backend snapshot authoritative', async disposition => {
+    const persisted = makePersisted()
+    persisted.sessions['stable-session']!.builtInMcpDomains = []
+    const harness = makeHarness()
+    harness.refs.defaultBuiltInMcpDomainsRef.current = ['tldr']
+    const domains = disposition === 'spawned' ? ['tldr'] : []
+    const recoverSession = vi.fn(async () => ({
+      ok: true, disposition, snapshot: {
+        sessionId: 'stable-session', kind: 'claude', cwd: '/tmp/project', lifecycle: 'live',
+        input: { ready: true, revision: 1 }, builtInMcpDomains: domains,
+      },
+    }))
+    Object.defineProperty(window, 'api', { configurable: true, value: { recoverSession, defaultCwd: vi.fn() } })
+    await rehydrateWorkspace(persisted, harness.refs, harness.setState, harness.setRuntimes, harness.setTileTabs, vi.fn())
+    // Recovery may adopt an existing process. Settings describe the next
+    // launch; they cannot change the tools that process already started with.
+    expect(recoverSession).toHaveBeenCalledWith(expect.objectContaining({ builtInMcpDomains: ['tldr'] }))
+    expect(harness.state().sessions['stable-session']).toMatchObject({ builtInMcpDomains: domains, builtInMcpOverrides: {} })
   })
 
   it('adopts under the persisted local id without calling the fresh-spawn API', async () => {
