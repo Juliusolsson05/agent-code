@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { projectScopeLabel } from '@renderer/features/workspace/lib/projectScope'
 import { emptyRuntime } from '@renderer/session-runtime/state'
 import { makeRefs, mountPaneActions } from '@renderer/workspace/hook/actions/testing/paneActionsHarness'
 import type { WorkspaceState } from '@renderer/workspace/types'
@@ -133,7 +134,19 @@ describe('Close Old Agents destructive scope (#886)', () => {
     mountCleanup()
     fireEvent.click(screen.getByRole('button', { name: 'Selected projects' }))
     expect(screen.getByRole('button', { name: 'Close 0 Agents' })).toBeDisabled()
-    fireEvent.click(screen.getByRole('checkbox', { name: /project \/project/ }))
+    // WHY the name comes from projectScopeLabel instead of a literal: main's
+    // #908 re-keyed this picker from working directory to project TAB, and the
+    // row is now labelled the way the Dispatch index names projects
+    // (`A · Project`) with the directories as a secondary line. The old
+    // `/project \/project/` matcher encoded the retired cwd label, so it broke
+    // on the merge even though the scope behavior under test (nothing closes
+    // until a project is ticked, and ticking it admits exactly its agents) is
+    // unchanged. Deriving the label from the shared helper keeps this test on
+    // the picker's source of truth if the vocabulary moves again. `includes`
+    // rather than equality because the checkbox's accessible name also carries
+    // the directory line and the matching/total count.
+    const projectLabel = projectScopeLabel(0, 'Project')
+    fireEvent.click(screen.getByRole('checkbox', { name: name => name.includes(projectLabel) }))
     expect(screen.getByRole('button', { name: 'Close 2 Agents' })).toBeEnabled()
     fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '0' } })
     expect(screen.getByRole('button', { name: 'Close 0 Agents' })).toBeDisabled()
