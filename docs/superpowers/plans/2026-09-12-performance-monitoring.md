@@ -19,10 +19,9 @@ profiling is an explicit, time-limited action. Monitoring never changes agent
 state, kills processes, or submits prompts as a side effect of an incident.
 
 Working assumptions for this plan: local collection, explicit report export,
-and equal priority for live visibility and explanations. The user was asked
-whether centralized reporting and implementation in this same pass are wanted;
-no response was available when this plan was written. Automatic uploads and a
-remote ingestion service are not prerequisites for the local implementation.
+and equal priority for live visibility and explanations. Centralized reporting
+remains an open product decision. Automatic uploads and a remote ingestion
+service are not prerequisites for the local implementation.
 This pass produces the architecture and rollout plan, not the production rollout.
 
 ### The experience to build
@@ -125,6 +124,17 @@ or after abrupt power loss. Preserve the last durable sample and report the gap.
 or subscriptions never initiate OS process scans or reset sample windows. Cache
 query results by run/range/filter/resolution with explicit size and lifetime
 bounds. Closed or hidden monitor surfaces have no chart animation or history work.
+
+**Configuration migration** separates `baselineEnabled`, supported capabilities,
+collector health, and the current capture session. The existing
+`PerformanceConfig.enabled` currently gates expensive legacy paths as well as
+the product widgets. Do not set that boolean to true globally to enable the new
+UI. Keep its legacy detailed-tracing meaning until every consumer is classified;
+migrate product reads to baseline capabilities explicitly. `AGENT_CODE_PERF`
+continues to request legacy/developer detail, never to determine whether ordinary
+users can open the monitor. Adapt only reviewed, allowlisted operation names into
+baseline aggregates. Switching capture modes must install/dispose observers once,
+without restarting the baseline or duplicating instrumentation.
 
 ## Collection policy and measurement semantics
 
