@@ -269,20 +269,42 @@ export class AgentCodeManagedSkillsService {
       if (!this.initialized || this.recovery) {
         return { paths: [], notices: ['Agent Code skill deployment status is unavailable.'] }
       }
-      const targets = [
-        ...this.targetStatuses,
-        ...[...this.customTargetStatuses.values()].flat(),
-        ...[...this.installedTargetStatuses.values()].flat(),
-      ].filter(target => target.providers.includes(provider))
-      const paths = targets.filter(target => target.state === 'installed').map(target => {
-        const directory = target.displayPath.startsWith('~/')
-          ? resolve(this.homeDirectory, target.displayPath.slice(2))
-          : target.displayPath
-        return resolve(directory, 'SKILL.md')
-      })
+      // WHY paths come from the resolved target registry and the document, not
+      // from a status's `displayPath`: displayPath is a UI string. It is
+      // `~`-abbreviated with the platform separator (`~\…` on win32, which a
+      // `'~/'` parse silently resolved against the process cwd), and it is not
+      // the value materialization writes to. `this.targets` is. A status whose
+      // id no longer names a current target (retired, unsupported, the
+      // initialization-error placeholder) resolves to nothing, so it can never
+      // grant an Agent Code label.
+      const targetsById = new Map(this.targets.targets.map(target => [target.id, target]))
+      const paths: string[] = []
+      let needsAttention = false
+      const collect = (
+        statuses: readonly AgentCodeConventionsTargetStatus[],
+        skillFile: (target: AgentCodeConventionsTarget) => string,
+      ) => {
+        for (const status of statuses) {
+          const target = targetsById.get(status.id)
+          if (!target?.providers.includes(provider)) continue
+          if (status.state === 'installed') paths.push(skillFile(target))
+          else if (status.state === 'missing' || status.state === 'conflict' || status.state === 'error') {
+            needsAttention = true
+          }
+        }
+      }
+      collect(this.targetStatuses, target => target.skillFile)
+      for (const [skillId, statuses] of this.customTargetStatuses) {
+        const skill = this.document.customSkills[skillId]
+        if (skill) collect(statuses, target => resolve(target.skillsDirectory, skill.name, 'SKILL.md'))
+      }
+      for (const [skillId, statuses] of this.installedTargetStatuses) {
+        const skill = this.document.installedSkills[skillId]
+        if (skill) collect(statuses, target => resolve(target.skillsDirectory, skill.name, 'SKILL.md'))
+      }
       return {
         paths: [...new Set(paths)],
-        notices: targets.some(target => ['missing', 'conflict', 'error'].includes(target.state))
+        notices: needsAttention
           ? ['Some Agent Code skills need attention in Settings; only files found on disk are listed here.']
           : [],
       }

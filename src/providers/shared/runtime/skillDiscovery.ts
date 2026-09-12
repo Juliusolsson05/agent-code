@@ -1,10 +1,15 @@
 import { constants } from 'node:fs'
 import { open, stat } from 'node:fs/promises'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { asRecord } from '@shared/lib/asRecord.js'
-import type { AgentSkillRoot } from '@shared/types/agentSkills.js'
 
 export const SKILL_METADATA_BYTES = 64 * 1024
+
+// WHY every ancestor walk is capped: the cwd comes from renderer state. A
+// pathological or symlink-heavy path must not turn one status panel into an
+// unbounded sequence of stat calls in Electron main. 128 levels is far deeper
+// than any real checkout.
+const MAX_ANCESTORS = 128
 
 export function missingSkillPath(error: unknown): boolean {
   const code = (error as NodeJS.ErrnoException)?.code
@@ -47,38 +52,59 @@ export async function readSkillJson(path: string, notices: string[]): Promise<Re
   }
 }
 
-export async function skillProjectDirectories(cwd: string): Promise<string[]> {
-  const directories: string[] = []
+/**
+ * Nearest ancestor of `cwd` (inclusive) that contains one of `markers`.
+ *
+ * A marker only needs to exist: a linked worktree's `.git` is a FILE, and
+ * treating only directories as repository roots is how a walk escapes into the
+ * parent checkout. Probe errors other than "missing" are treated as absent —
+ * every provider we mirror logs and continues past an unreadable marker rather
+ * than failing skill discovery for the whole session.
+ */
+export async function findAncestorWithMarker(cwd: string, markers: readonly string[]): Promise<string | null> {
   let current = resolve(cwd)
-  // A worktree's .git is a FILE. Checking only directories would walk outside
-  // the project and attribute another project's skills to this agent.
-  for (let depth = 0; depth < 128; depth += 1) {
-    directories.push(current)
-    try { await stat(join(current, '.git')); return directories } catch (error) {
-      if (!missingSkillPath(error)) throw error
+  for (let depth = 0; depth < MAX_ANCESTORS; depth += 1) {
+    for (const marker of markers) {
+      if (await stat(join(current, marker)).then(() => true, () => false)) return current
     }
     const parent = dirname(current)
-    if (parent === current) return [resolve(cwd)]
+    if (parent === current) return null
     current = parent
   }
-  throw new Error('Project ancestry exceeds discovery limit')
+  return null
 }
 
-export async function pluginSkillRoots(
-  installPath: string,
-  pluginName: string,
-  manifestDirectory: string,
-  notices: string[],
-): Promise<AgentSkillRoot[]> {
-  const manifest = await readSkillJson(join(installPath, manifestDirectory, 'plugin.json'), notices)
-  const paths = [join(installPath, 'skills')]
-  const configured = typeof manifest.skills === 'string' ? [manifest.skills]
-    : Array.isArray(manifest.skills) ? manifest.skills : []
-  for (const value of configured) {
-    if (typeof value === 'string') paths.push(resolve(installPath, value))
+/** `cwd` and its ancestors, nearest first, through `stop` (inclusive), or up to
+ *  the filesystem root when `stop` is null. */
+export function ancestorsThrough(cwd: string, stop: string | null): string[] {
+  const directories: string[] = []
+  const end = stop === null ? null : resolve(stop)
+  let current = resolve(cwd)
+  for (let depth = 0; depth < MAX_ANCESTORS; depth += 1) {
+    directories.push(current)
+    if (current === end) break
+    const parent = dirname(current)
+    if (parent === current) break
+    current = parent
   }
-  return [...new Set(paths)].map(path => ({
-    path, source: 'plugin', sourceLabel: pluginName,
-    optionalFrontmatter: manifestDirectory === '.claude-plugin',
-  }))
+  return directories
+}
+
+/**
+ * Resolve a manifest-declared path under a plugin root, or null when it escapes.
+ *
+ * WHY containment is enforced for every provider: a plugin manifest is
+ * repository-controlled input. Without this check `"skills": "../../.."` made
+ * main scan (bounded, but still) arbitrary directories and surface foreign
+ * SKILL.md names in the panel. Codex rejects escaping paths itself
+ * (core-plugins/src/manifest.rs resolve_manifest_path); Claude joins without a
+ * check, so for a malicious Claude manifest this inventory lists slightly less
+ * than Claude would load — the safe direction for a read-only status view.
+ */
+export function pathInsidePlugin(pluginRoot: string, manifestPath: string): string | null {
+  const root = resolve(pluginRoot)
+  const resolved = resolve(root, manifestPath)
+  const rel = relative(root, resolved)
+  if (rel === '') return resolved
+  return rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel) ? null : resolved
 }

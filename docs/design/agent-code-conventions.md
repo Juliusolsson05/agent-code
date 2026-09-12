@@ -62,12 +62,17 @@ shape is intentional: duplicating even one deletion or collision rule in a
 consumer would create a second source of ownership truth.
 
 Agent Status uses the service's read-only `getInstalledSkillLocations` projection
-to attribute known deployments. It neither initializes nor audits the service.
-The separate `src/main/agentSkills/` collector reads metadata from native skill
-directories declared by provider discovery adapters and labels matching files
-as Agent Code-managed. Missing files are omitted, never repaired by inspection;
-unmanaged files remain outside this service's ownership. The inventory reports
-installation evidence, not the running provider's activation or loaded context.
+to attribute known deployments. It neither initializes nor audits the service,
+and it derives file paths from the resolved target registry and the canonical
+document — never from a status's user-facing `displayPath`. A status whose id no
+longer names a current target (retired, unsupported, initialization error)
+cannot produce an Agent Code label. The separate `src/main/agentSkills/`
+collector reads metadata from native skill roots declared by provider discovery
+adapters, walks each root in the layout its provider actually uses, and labels
+matching files as Agent Code-managed. Missing files are omitted, never repaired
+by inspection; unmanaged files remain outside this service's ownership. The
+inventory reports installation evidence, not the running provider's activation
+or loaded context.
 
 `githubSkillSource.ts` and `installedSkillPackageStore.ts` are focused helpers,
 not additional authorities. Acquisition returns inert, bounded package bytes;

@@ -30,7 +30,11 @@ function deferred() {
 describe('Agent Status installed skills', () => {
   it('shows managed and provider-default metadata, count, and expandable locations', async () => {
     const api = installApi(vi.fn().mockResolvedValue({
-      skills: [...snapshot().skills, ...snapshot('agent-code-conventions', 'agent-code').skills],
+      skills: [
+        ...snapshot().skills,
+        ...snapshot('agent-code-conventions', 'agent-code').skills,
+        { ...snapshot('agent-code-computer-execution', 'personal').skills[0]!, disabled: true },
+      ],
       notices: [],
     }))
     render(<AgentSkillsSection sessionId="agent-1" kind="codex" cwd="/project" />)
@@ -38,7 +42,11 @@ describe('Agent Status installed skills', () => {
     expect(screen.getByText('agent-code-conventions')).toBeTruthy()
     expect(screen.getByText('System')).toBeTruthy()
     expect(screen.getByText('Agent Code')).toBeTruthy()
-    expect(screen.getByText('Installed Skills · 2')).toBeTruthy()
+    // A provider-disabled skill stays visible, marked, and counted.
+    const operator = screen.getByText('agent-code-computer-execution').closest('li')!
+    expect(within(operator).getByText('Disabled')).toBeTruthy()
+    expect(within(screen.getByText('skill-creator').closest('li')!).queryByText('Disabled')).toBeNull()
+    expect(screen.getByText('Installed Skills · 3')).toBeTruthy()
     expect(api).toHaveBeenCalledWith({ provider: 'codex', cwd: '/project' })
     const item = screen.getByText('skill-creator').closest('li')!
     fireEvent.click(within(item).getByText('Location'))

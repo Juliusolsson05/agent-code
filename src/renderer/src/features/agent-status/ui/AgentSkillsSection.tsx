@@ -82,7 +82,12 @@ function SkillInventory({ kind, cwd }: { kind: SessionKind; cwd: string }) {
                     <li key={skill.path} className="min-w-0 px-2 py-2">
                       <div className="flex items-start justify-between gap-2">
                         <span className="min-w-0 break-words font-code text-ink">{skill.name}</span>
-                        <span className="shrink-0 text-[10px] text-muted">{sourceLabels[skill.source]}</span>
+                        <span className="flex shrink-0 items-center gap-1 text-[10px]">
+                          {/* Disabled skills stay listed: hiding them would make
+                              "why doesn't the agent use my skill?" unanswerable here. */}
+                          {skill.disabled ? <span className="text-warning">Disabled</span> : null}
+                          <span className="text-muted">{sourceLabels[skill.source]}</span>
+                        </span>
                       </div>
                       {skill.sourceLabel ? <div className="break-words text-ink-dim">{skill.sourceLabel}</div> : null}
                       {skill.description ? <p className="mt-1 break-words text-ink-dim">{skill.description}</p> : null}

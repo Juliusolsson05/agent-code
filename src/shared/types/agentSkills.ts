@@ -12,6 +12,14 @@ export type InstalledAgentSkill = {
   path: string
   source: AgentSkillSource
   sourceLabel?: string
+  /**
+   * Present on disk but switched off by provider configuration that applies to
+   * Agent Code's sessions (Codex `[[skills.config]]`, plus the external-operator
+   * skill Agent Code disables for every Codex session it launches). Listing it
+   * as disabled rather than hiding it keeps "why isn't my skill used?" answerable
+   * from the panel.
+   */
+  disabled?: boolean
 }
 
 export type AgentSkillsRequest = { provider: AgentProviderKind; cwd: string }
@@ -20,25 +28,71 @@ export type AgentSkillsSnapshot = {
   notices: string[]
 }
 
+/**
+ * How skill files are arranged below a root.
+ *
+ * WHY this is per-root data instead of one generic walk: the first version of
+ * PR #903 used a single depth-12 "stop at the first SKILL.md" walk for every
+ * provider, and both review agents showed it matched none of them. Claude
+ * fabricated a skill from a stray `skills/SKILL.md` and listed nested
+ * `skills/archive/old/SKILL.md` it never loads; Codex skills nested inside
+ * other skills were missed. Each adapter now states its provider's real rule.
+ *
+ * - `children`: Claude `skills/` folders — only `<root>/<name>/SKILL.md`
+ *   (`vendor/claude-code-src/full/skills/loadSkillsDir.ts` loadSkillsFromSkillsDir;
+ *   plugin skill paths additionally accept `<root>/SKILL.md` via `rootMayBeSkill`).
+ * - `recursive`: Codex and OpenCode — every `SKILL.md` below the root up to
+ *   `maxDepth`, including skills nested inside another skill's folder.
+ * - `commands`: Claude legacy/plugin commands — every `*.md`, recursively; a
+ *   directory that holds `SKILL.md` contributes only that file.
+ */
+export type AgentSkillLayout = 'children' | 'recursive' | 'commands'
+
 export type AgentSkillRoot = {
+  /** A directory, or (for `commands`) a single Markdown command file. */
   path: string
   source: Exclude<AgentSkillSource, 'agent-code'>
   sourceLabel?: string
-  /** Claude still accepts standalone Markdown commands as skills. */
-  legacyCommands?: boolean
+  layout: AgentSkillLayout
+  /** `children` only: the root itself may be a skill folder. */
+  rootMayBeSkill?: boolean
+  /**
+   * `recursive` only: deepest allowed `SKILL.md`, counted in path segments below
+   * the root (`<root>/SKILL.md` is 1). Mirrors Codex's walk `max_depth`. When
+   * omitted the collector's own safety ceiling applies and hitting it is reported.
+   */
+  maxDepth?: number
+  /** `recursive`/`commands`: descend into dot-directories below the root. */
+  includeHidden?: boolean
+  /** `commands` only: a directory holding `SKILL.md` is a leaf; do not descend. */
+  stopAtSkillDirectory?: boolean
   /** Claude permits omitted name/description/frontmatter; other providers do not. */
   optionalFrontmatter?: boolean
 }
 
+/**
+ * One ordered enablement rule. Later rules override earlier ones for the skills
+ * they match, exactly like Codex `SkillConfigRules::resolve_disabled_paths`.
+ * Path rules name the skill's `SKILL.md`; name rules match frontmatter names.
+ */
+export type AgentSkillEnablementRule =
+  | { path: string; enabled: boolean }
+  | { name: string; enabled: boolean }
+
 export type AgentSkillDiscoveryContext = {
+  /** The agent's launch directory. Each adapter derives its own ancestry from
+   *  it — Claude, Codex and OpenCode stop at different boundaries, and a shared
+   *  precomputed list is what let Claude discovery cross the repository root. */
   cwd: string
   homeDirectory: string
   environment: Readonly<Record<string, string | undefined>>
-  /** Nearest directory first, ending at the Git worktree root. */
-  projectDirectories: string[]
 }
 
-export type AgentSkillDiscovery = { roots: AgentSkillRoot[]; notices: string[] }
+export type AgentSkillDiscovery = {
+  roots: AgentSkillRoot[]
+  notices: string[]
+  enablementRules?: AgentSkillEnablementRule[]
+}
 
 // Only the managed-skills service can attribute a deployment to Agent Code.
 // Names and public marker comments are not ownership proof, and consumers must
