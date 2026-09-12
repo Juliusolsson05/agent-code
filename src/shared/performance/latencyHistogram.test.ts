@@ -45,6 +45,9 @@ describe('latency distribution', () => {
     expect(histogram.merge({ counts: new Array(16), count: 0, sumMs: 0, maxMs: 0 })).toBe(false)
     expect(histogram.merge({ counts: Array(16).fill(0), count: 0, sumMs: 60000, maxMs: 60000 })).toBe(false)
     expect(histogram.merge({ ...before, maxMs: 60000 })).toBe(false)
+    const impossible = Array(16).fill(0)
+    impossible[14] = 100
+    expect(histogram.merge({ counts: impossible, count: 100, sumMs: 60000, maxMs: 60000 })).toBe(false)
     expect(histogram.snapshot()).toEqual(before)
     histogram.observe(5)
     expect(latencyQuantile(histogram.snapshot(), 0.95)).toEqual({ upperBoundMs: 50, overflow: false })
