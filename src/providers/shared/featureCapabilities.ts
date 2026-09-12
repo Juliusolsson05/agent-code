@@ -21,11 +21,6 @@ import type { AgentProviderKind } from '@shared/types/providerKind'
  */
 export type ProviderFeatureCapabilities = {
   /**
-   * Main can enumerate this provider's saved sessions for a cwd, so the Resume
-   * picker has something to list. Without it Resume opens an empty modal.
-   */
-  savedSessionListing: boolean
-  /**
    * The transcript adapter can rewind this provider's transcript to an earlier
    * prompt. Rewind rewrites session history; offering it without an adapter
    * means the command either no-ops or corrupts.
@@ -81,7 +76,6 @@ export type ProviderFeatureCapabilities = {
  * `false`s and drifting when a sixth capability is added.
  */
 export const NO_PROVIDER_FEATURES: ProviderFeatureCapabilities = {
-  savedSessionListing: false,
   transcriptRewind: false,
   transcriptDuplicate: false,
   promptHistoryExtraction: false,
@@ -106,11 +100,11 @@ export const NO_PROVIDER_FEATURES: ProviderFeatureCapabilities = {
  * existing — it has to declare them.
  */
 const FEATURES_BY_KIND: Record<AgentProviderKind, ProviderFeatureCapabilities> = {
-  // Saved-session index, a transcript adapter used by both rewind and
-  // duplicate, a verified `claude --resume` form, and translation edges to
-  // both other native-resume adapters.
+  // A transcript adapter used by both rewind and duplicate, a verified
+  // `claude --resume` form, and translation edges to both other native-resume
+  // adapters. Saved-session listing is no longer a per-provider capability:
+  // the conversation catalog lists every provider from its native index.
   claude: {
-    savedSessionListing: true,
     transcriptRewind: true,
     transcriptDuplicate: true,
     promptHistoryExtraction: true,
@@ -120,7 +114,6 @@ const FEATURES_BY_KIND: Record<AgentProviderKind, ProviderFeatureCapabilities> =
   },
   // Mirrors Claude, with explicit edges to both other adapters.
   codex: {
-    savedSessionListing: true,
     transcriptRewind: true,
     transcriptDuplicate: true,
     promptHistoryExtraction: true,
@@ -128,10 +121,10 @@ const FEATURES_BY_KIND: Record<AgentProviderKind, ProviderFeatureCapabilities> =
     switchTargets: ['claude', 'opencode'],
     verifiedExternalResumeCommand: true,
   },
-  // The read-only store now lists root sessions by directory for Resume;
-  // the CLI export/import boundary still owns transcript transformations.
+  // OpenCode's supported CLI export/import boundary backs prompt extraction,
+  // rewind, duplicate, and pairwise switching; its sessions are listed from
+  // its database by the conversation catalog.
   opencode: {
-    savedSessionListing: true,
     transcriptRewind: true,
     transcriptDuplicate: true,
     promptHistoryExtraction: true,

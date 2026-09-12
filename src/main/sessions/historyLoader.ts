@@ -98,8 +98,9 @@ export type HistoryChunk = {
 // single records to hundreds of KB or more; the line assembly below handles
 // those by carrying chunks across blocks, so a larger block would only buy
 // fewer syscalls on an already-rare path while every ordinary load would read
-// (and allocate) more than it needs. The same size the session picker's tail
-// window uses (sessionIndex.ts), for the same reason.
+// (and allocate) more than it needs. The same size the conversation prompt
+// folder's tail window uses (conversations/prompts/promptFolder.ts), for the
+// same reason.
 const TAIL_BLOCK_BYTES = 256 * 1024
 
 // WHY a bigger block for the newline count: that pass touches every byte

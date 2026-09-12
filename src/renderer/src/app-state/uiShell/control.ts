@@ -15,7 +15,7 @@ const routes = {
   git: { field: 'gitBarOpen', toggle: () => useAppStore.getState().toggleGitBar() },
   agentStatus: { field: 'agentStatusPanelOpen', toggle: (open: boolean) => { const s = useAppStore.getState(); open ? s.openAgentStatusPanel() : s.closeAgentStatusPanel() } },
   activity: { field: 'agentActivityOpen', toggle: (open: boolean) => { const s = useAppStore.getState(); open ? s.openAgentActivity() : s.closeAgentActivity() } },
-  promptSearch: { field: 'promptSearchOpen', toggle: (open: boolean) => { const s = useAppStore.getState(); open ? s.openPromptSearch() : s.closePromptSearch() } },
+  conversations: { field: 'conversationsOpen', toggle: (open: boolean) => { const s = useAppStore.getState(); open ? s.openConversations({ focusSearch: false }) : s.closeConversations() } },
   editor: { field: 'globalEditorOpen', toggle: (open: boolean) => { const s = useAppStore.getState(); open ? s.openGlobalEditor() : s.closeGlobalEditor() } },
   performance: { field: 'performancePanelOpen', toggle: () => useAppStore.getState().togglePerformancePanel() },
   remote: { field: 'remotePanelOpen', toggle: () => useAppStore.getState().toggleRemotePanel() },

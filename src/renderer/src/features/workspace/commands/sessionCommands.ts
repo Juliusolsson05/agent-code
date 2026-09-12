@@ -15,6 +15,14 @@ import { providerSupportsBuiltInMcpDomain } from '@mcp/shared/types'
 import type { BuiltInMcpDomain } from '@mcp/shared/types'
 import { clearAgentComposer } from '@renderer/workspace/tile-tree/TileLeaf/clearAgentComposer'
 import { sessionHasTranscript } from '@renderer/workspace/transcriptAvailability'
+import {
+  reloadSessionWithBuiltInMcpDomains,
+  withBuiltInMcpDomain,
+} from '@renderer/workspace/builtInMcpReload'
+import {
+  ROOT_MANAGEMENT_DOMAIN,
+  rootManagementReloadLabels,
+} from '@renderer/features/workspace/lib/rootManagement'
 
 function targetSupportsBuiltInMcpDomain(
   workspace: CommandContext['workspace'],
@@ -398,8 +406,8 @@ export const sessionCommands: CommandDef[] = [
     category: 'workspace-tools',
     pickerVisibility: 'advanced',
     surface: 'app',
-    title: 'Search Conversation Prompts',
-    description: '**What it does:** Searches saved conversations by **prompt text**.\n\n**Use when:** You remember what you asked, but not where it was.\n\n**Notes:** Searches sessions on disk, not only visible panes.',
+    title: 'Search Conversations…',
+    description: '**What it does:** Finds a past conversation by **title, name or prompt text** across every worktree of this repository and all providers.\n\n**Use when:** You remember what you asked or what it was called, but not where it was.\n\n**Notes:** Same picker as Resume Session…, opened with the search field focused.',
     keywords: [
       'search',
       'prompt',
@@ -410,14 +418,15 @@ export const sessionCommands: CommandDef[] = [
       'sessions',
       'recent',
       'history',
+      'resume',
     ],
-    getState: ({ flags }) => panel(flags.promptSearchOpen),
+    getState: ({ flags }) => panel(flags.conversationsOpen),
     run: ({ ui, flags }) => {
-      if (flags.promptSearchOpen) {
-        ui.closePromptSearch()
+      if (flags.conversationsOpen) {
+        ui.closeConversations()
         return
       }
-      ui.openPromptSearch()
+      ui.openConversations({ focusSearch: true })
       ui.closePalette()
     },
   },
@@ -676,6 +685,54 @@ export const sessionCommands: CommandDef[] = [
             : 'Agent Management MCP reload failed'
         workspace.showPaneToast(sessionId, message)
       }
+    },
+  },
+  {
+    id: 'enable-root-agent-code-management',
+    category: 'session',
+    pickerVisibility: 'advanced',
+    surface: 'session',
+    risk: 'destructive',
+    title: 'Root Agent Code Management',
+    description: '**What it does:** Gives the focused **agent** application-wide control of Agent Code: every window, project, agent, terminal and layout, through the same tools an external operator uses.\n\n**Use when:** You are supervising one specific, rare job, such as reorganizing the workspace right after this agent audited every other agent.\n\n**Notes:** Off by default and never a Settings default. Turning it on asks you to confirm first and then reloads the agent; turning it off reloads without the tools and asks nothing.',
+    keywords: ['root', 'agent code management', 'operator', 'control', 'mcp', 'workspace', 'layout', 'reorganize', 'all projects', 'enable', 'disable', 'reload', 'claude', 'codex', 'opencode'],
+    when: ({ workspace }) => {
+      return targetSupportsBuiltInMcpDomain(workspace, ROOT_MANAGEMENT_DOMAIN)
+    },
+    getState: ctx => builtInMcpDomainState(ctx, ROOT_MANAGEMENT_DOMAIN),
+    run: async ({ workspace, ui }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return
+      const meta = workspace.state.sessions[sessionId]
+      const kind = meta?.kind ?? DEFAULT_PROVIDER
+      // Command visibility is advisory—the command can still be invoked by a
+      // keybinding or programmatic caller—so provider policy is repeated at the
+      // mutation boundary before we replace a live process.
+      if (
+        !isAgentProviderKind(kind) ||
+        !providerSupportsBuiltInMcpDomain(kind, ROOT_MANAGEMENT_DOMAIN) ||
+        !meta
+      ) return
+
+      ui.closePalette()
+      const enabled = Boolean(meta.builtInMcpDomains?.includes(ROOT_MANAGEMENT_DOMAIN))
+      if (enabled) {
+        // Revoking needs no ceremony: the reload simply drops the domain.
+        await reloadSessionWithBuiltInMcpDomains(
+          workspace,
+          sessionId,
+          withBuiltInMcpDomain(meta.builtInMcpDomains, ROOT_MANAGEMENT_DOMAIN, false),
+          rootManagementReloadLabels(false),
+        )
+        return
+      }
+      // WHY the command does NOT reload here: granting application-wide
+      // control is the one MCP toggle whose blast radius reaches beyond the
+      // agent's own project. The confirmation dialog owns the enable path
+      // (RootManagementConfirmSurface), so a declined warning leaves the
+      // session exactly as it was, and the target is captured now rather than
+      // re-read after the user finishes reading.
+      ui.openRootManagementPrompt(sessionId)
     },
   },
   {

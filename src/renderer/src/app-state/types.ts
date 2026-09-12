@@ -56,6 +56,8 @@ export type UiShellSlice = UiShellState & {
   closeAgentTitlePrompt: () => void
   openBuryPrompt: (sessionId: SessionId) => void
   closeBuryPrompt: () => void
+  openRootManagementPrompt: (sessionId: SessionId) => void
+  closeRootManagementPrompt: () => void
   openDebugBundleNotePrompt: (payload: {
     bundlePath: string
     sessionId: SessionId
@@ -109,8 +111,8 @@ export type UiShellSlice = UiShellState & {
   closeGlobalEditor: () => void
   toggleGlobalEditor: () => void
   setDispatchListRatio: (ratio: number) => void
-  openPromptSearch: () => void
-  closePromptSearch: () => void
+  openConversations: (opts: { focusSearch: boolean }) => void
+  closeConversations: () => void
   openAgentActivity: () => void
   closeAgentActivity: () => void
   openKeyboardShortcuts: () => void

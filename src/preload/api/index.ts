@@ -2,7 +2,7 @@ import { tldrApi } from '@preload/api/tldr.js'
 import { sessionApi } from '@preload/api/session.js'
 import { controlApi } from '@preload/api/control.js'
 import { providerApi } from '@preload/api/provider.js'
-import { sessionsApi } from '@preload/api/sessions.js'
+import { conversationsApi } from '@preload/api/conversations.js'
 import { lspApi } from '@preload/api/lsp.js'
 import { workspaceApi } from '@preload/api/workspace.js'
 import { agentNamesApi } from '@preload/api/agentNames.js'
@@ -64,7 +64,7 @@ export const api = {
   ...controlApi,
   ...sessionApi,
   ...providerApi,
-  ...sessionsApi,
+  ...conversationsApi,
   ...lspApi,
   ...workspaceApi,
   ...agentNamesApi,

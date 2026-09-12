@@ -14,7 +14,7 @@
 // RendererProviderConfig, and nothing re-joins them.
 
 import type { ComponentType, ReactNode } from 'react'
-import type { SessionOptions, SessionInfo, AgentSession } from '@shared/types/session.js'
+import type { SessionOptions, AgentSession } from '@shared/types/session.js'
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
 import type { Entry, ToolResultBlock, ToolUseBlock } from '@shared/types/transcript.js'
 
@@ -389,31 +389,10 @@ export type MainProviderConfig = {
    * runtime when the selected provider does not implement it.
    */
   createTerminalSession?: (opts: SessionOptions) => AgentSession
-  /**
-   * List resumable sessions for a cwd.
-   *
-   * WHY this is required rather than optional: a provider that answered an
-   * empty array instead of enumerating would tell the Resume picker and the
-   * nativeHistory catalog that the user HAS no sessions, which is a different
-   * and more damaging claim than "this provider cannot look". OpenCode was the
-   * last registry row without discovery (#773); it now reads root sessions out
-   * of its own SQLite database, so every provider can answer honestly and the
-   * former `sessionDiscoveryUnavailableReason` escape hatch is gone.
-   */
-  listSessions: (cwd: string, limit: number) => Promise<SessionInfo[]>
-  /**
-   * List resumable sessions without cwd scoping when a caller genuinely needs a
-   * global debug/resume inventory.
-   *
-   * WHY this is optional and provider-owned: the normal app flow should prefer
-   * `listSessions(cwd, limit)` so resume choices match the cwd Agent Code will
-   * spawn in. The rendering-debug harness is different: it has no focused cwd
-   * and needs a cross-provider inventory. Routing that exceptional path through
-   * the main provider registry prevents IPC adapters from importing provider
-   * storage walkers directly while still allowing Claude to keep its app-local
-   * global walker until the package grows an equivalent API.
-   */
-  listAllSessions?: (limit: number) => Promise<SessionInfo[]>
+  // Session listing is not a provider-registry concern any more: the
+  // conversation catalog (src/main/conversations) reads each provider's
+  // native index directly and serves every picker and the external
+  // nativeHistory capabilities from one place.
   /** Resolve the on-disk project dir for a cwd. */
   getProjectDir: (cwd: string) => Promise<string>
   /**
@@ -427,6 +406,27 @@ export type MainProviderConfig = {
    * `getProjectDir`.
    */
   resolveTranscriptPath: (cwd: string, providerSessionId: string) => Promise<string | null>
+  /**
+   * Provider-owned prompt delivery protocol (#394 phase 2c).
+   *
+   * WHY this is a capability and not inline branches: prompt delivery
+   * disciplines are OPPOSITE between the two shipped providers —
+   * Codex gates on TUI readiness BEFORE pasting and sends paste+Enter
+   * as one atomic PTY write (its headless accounts the prompt as
+   * submitted on the paste bytes); Claude pastes WITHOUT Enter, waits
+   * for the `[Pasted text #N]` placeholder to prove the paste
+   * committed, then sends Enter separately. The old inline
+   * `if codex … if claude …` in MCP's submitPrompt meant a THIRD
+   * provider fell through to a protocol-free paste+Enter with no
+   * readiness gate and no confirmation (#394 §4.2) — it "worked"
+   * exactly until it didn't, silently.
+   *
+   * The io bag deliberately passes the AgentSession plus a bound
+   * write-with-liveness function rather than the SessionManager:
+   * providers must not depend on the manager (dependency arrow), and
+   * the typed optionals they need (awaitReadyForPrompt /
+   * awaitPastePlaceholder) live on AgentSession since phase 2a.
+   */
   /**
    * Optional provider-owned history source, for providers whose durable
    * transcript is not a JSONL file the shared loader can walk.

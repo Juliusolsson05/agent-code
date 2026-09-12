@@ -46,6 +46,20 @@ export type BuiltInMcpDependencies = {
   appRunJournal?: AppRunJournal
   workflowService?: WorkflowService
   workflowBridge?: WorkflowBridge
+  /**
+   * Installs the operator control catalog (`ac_*` tools) on a session's server
+   * when its scope carries `root_management` (#906).
+   *
+   * WHY a registrar is injected instead of the MCP runtime importing the
+   * projection: the projection lives in `src/main/externalControlMcp`, which
+   * the control import boundary reserves for app composition (`main/index.ts`)
+   * so the external adapter can only ever invoke the SDK, never application
+   * internals. Composition builds the per-session operator port from the
+   * control host with an `agent` caller identity and hands this closure in;
+   * the runtime only knows it has something to call with the server and the
+   * authenticated session ID.
+   */
+  rootControlTools?: (server: McpServer, sessionId: string) => void
 }
 
 const MCP_REQUEST_SLOW_MS = 1000

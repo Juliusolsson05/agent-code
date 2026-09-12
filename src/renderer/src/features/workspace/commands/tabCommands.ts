@@ -61,18 +61,18 @@ export const tabCommands: CommandDef[] = [
     id: 'resume-session',
     category: 'session',
     surface: 'app',
-    title: 'Resume Session',
-    description: '**What it does:** Opens the **resume session** flow.\n\n**Use when:** You want to continue an old Claude, Codex, or OpenCode session.\n\n**Notes:** Uses the focused project folder as the default.',
-    keepPaletteOpen: true,
+    title: 'Resume Session…',
+    description: '**What it does:** Opens the Conversations picker for this repository.\n\n**Use when:** You want to continue a past Claude, Codex or OpenCode conversation.\n\n**Notes:** Lists every worktree of the focused project across all providers; orchestration children are hidden behind a toggle.',
+    getState: ({ flags }) => panel(flags.conversationsOpen),
     run: ({ ui, flags }) => {
-      // Already showing this mode? Dismiss. A mode-entering command whose
-      // second press re-enters the mode it is already in reads as a dead key,
-      // which is the same complaint that started this whole change.
-      if (flags.paletteMode === 'resume') {
-        ui.closePalette()
+      // A second press dismisses. The old palette resume mode re-entered
+      // itself on a second press, which read as a dead key.
+      if (flags.conversationsOpen) {
+        ui.closeConversations()
         return
       }
-      ui.enterResumeMode()
+      ui.openConversations({ focusSearch: false })
+      ui.closePalette()
     },
   },
 ]
