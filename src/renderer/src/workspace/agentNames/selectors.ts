@@ -1,5 +1,3 @@
-import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
-
 import type { AppStore } from '@renderer/app-state/types'
 import type { SessionId, SessionMeta } from '@renderer/workspace/types'
 
@@ -23,7 +21,6 @@ export function resolveAgentName(input: {
   names: Record<string, string>
 }): string | null {
   if (!input.enabled || !input.meta) return null
-  if (!isAgentProviderKind(input.meta.kind ?? DEFAULT_PROVIDER)) return null
 
   const identity = input.meta.agentNameId
   if (!identity) return null
@@ -89,10 +86,12 @@ export function agentNameForSession(state: AppStore, sessionId: SessionId): stri
  *
  * Reserving the row from first paint removes the layout change entirely, so
  * there is no second resize to race. It is deliberately keyed on
- * `agentNamesEnabled` + provider kind rather than on the identity or the
+ * `agentNamesEnabled` + session existence rather than on the identity or the
  * name, because those are the only two facts already known at mount: the
  * identity itself is claimed by a later effect, so keying on it would
- * reintroduce the same flip one step earlier.
+ * reintroduce the same flip one step earlier. Provider kind no longer enters
+ * this decision at all (#865): every session kind reserves the row now, the
+ * same way every session kind is claimed and named.
  *
  * Same defensive optional reads as `agentNameForSession` above, for the same
  * phone-bundle reason: a keyless store must degrade, never throw.
@@ -100,6 +99,7 @@ export function agentNameForSession(state: AppStore, sessionId: SessionId): stri
 export function agentNameRowIsReserved(state: AppStore, sessionId: SessionId): boolean {
   if (state.settings?.agentNamesEnabled !== true) return false
   const meta = state.workspaceState?.sessions?.[sessionId]
-  if (!meta) return false
-  return isAgentProviderKind(meta.kind ?? DEFAULT_PROVIDER)
+  // Any existing session reserves the row while names are on (#865): a shell
+  // now receives a name, so the same late-arrival resize hazard applies to it.
+  return meta !== undefined
 }

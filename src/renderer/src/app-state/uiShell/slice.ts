@@ -22,6 +22,7 @@ export const createUiShellSlice: StateCreator<
   settingsPageOpen: false,
   agentTitlePromptSessionId: null,
   buryPromptSessionId: null,
+  rootManagementPromptSessionId: null,
   debugBundleNotePrompt: null,
   recordingNotePrompt: null,
   viewPromptsSessionId: null,
@@ -139,6 +140,11 @@ export const createUiShellSlice: StateCreator<
     set({ buryPromptSessionId: sessionId }, false, 'uiShell/openBuryPrompt'),
   closeBuryPrompt: () =>
     set({ buryPromptSessionId: null }, false, 'uiShell/closeBuryPrompt'),
+
+  openRootManagementPrompt: sessionId =>
+    set({ rootManagementPromptSessionId: sessionId }, false, 'uiShell/openRootManagementPrompt'),
+  closeRootManagementPrompt: () =>
+    set({ rootManagementPromptSessionId: null }, false, 'uiShell/closeRootManagementPrompt'),
 
   openDebugBundleNotePrompt: payload =>
     set({ debugBundleNotePrompt: payload }, false, 'uiShell/openDebugBundleNotePrompt'),

@@ -5,6 +5,7 @@ import type { PromptDeliveryResult } from '@shared/types/providerConfig.js'
 import { subscribe } from '@preload/api/ipc.js'
 import { expandScreenSnapshotFromWire } from '@shared/types/session.js'
 import type { AgentScreenSnapshotWire } from '@shared/types/session.js'
+import type { TerminalForegroundEvent, TerminalForegroundState } from '@shared/types/terminalForeground.js'
 import type {
   SessionExitEvent,
   SessionHistoryChunk,
@@ -218,6 +219,14 @@ export const sessionApi = {
   /** Raw PTY bytes for attached provider terminals. */
   onSessionAgentPtyData: (cb: (e: SessionAgentPtyDataEvent) => void): Unsub =>
     subscribe('session:agent-pty-data', cb),
+
+  /** Foreground-process changes for plain terminals (#865). Desktop-only:
+   *  deliberately not on SessionFeed, because the phone never shows terminals. */
+  onTerminalForeground: (cb: (e: TerminalForegroundEvent) => void): Unsub =>
+    subscribe('session:terminal-foreground', cb),
+
+  getTerminalForegrounds: (): Promise<Record<string, TerminalForegroundState>> =>
+    ipcRenderer.invoke('session:terminal-foregrounds'),
 
   onSessionProcessState: (
     cb: (e: { sessionId: string; active: boolean; status?: string }) => void,

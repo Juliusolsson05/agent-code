@@ -50,7 +50,7 @@ export async function startMacDictationHotkeyHelper(
   }
 
   try {
-    const binary = await ensureHelperBinary()
+    const binary = await ensureMacHotkeyHelperBinary()
     const helper = spawn(binary, [binding], {
       stdio: ['ignore', 'pipe', 'pipe'],
     })
@@ -233,7 +233,18 @@ export function stopMacDictationHotkeyHelper(): void {
   current.kill()
 }
 
-async function ensureHelperBinary(): Promise<string> {
+let helperBinary: Promise<string> | null = null
+
+// TLDR warms the same artifact that dictation can request at startup. Share the
+// build promise so two callers never compile over the same executable path.
+export function ensureMacHotkeyHelperBinary(): Promise<string> {
+  return helperBinary ??= resolveMacHotkeyHelperBinary().catch(error => {
+    helperBinary = null
+    throw error
+  })
+}
+
+async function resolveMacHotkeyHelperBinary(): Promise<string> {
   if (app.isPackaged) {
     // Packaged builds use the binary compiled at BUILD time by
     // scripts/build-hotkey-helper.mjs (#495 A4) — end-user Macs must not

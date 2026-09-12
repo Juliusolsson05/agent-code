@@ -13,6 +13,7 @@ import { getRendererProviderCapabilities } from '@providers/registry.renderer.ca
 import type { TranscriptEntryMapper } from '@shared/types/providerConfig'
 import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { QueuedMessage, SessionRuntime } from '@renderer/session-runtime/state'
+import { withUnread } from '@renderer/session-runtime/unread'
 import { appendFeedDebugLog } from '@renderer/session-runtime/feedDebug'
 import type { FeedDebugInput } from '@renderer/session-runtime/feedDebug'
 import type { SessionId } from '@renderer/workspace/types'
@@ -647,33 +648,6 @@ export function useIpcSubscriptions(
       void worktreeReconciler.refresh(cwd)
     }
 
-    const withUnread = (
-      runtime: SessionRuntime,
-      kind: 'output' | 'attention',
-    ): SessionRuntime => {
-      // Unread is an acknowledgement marker, not a focus marker.
-      // Dispatch navigation, tab restore, and automatic focus sync can all
-      // make a session "focused" without the user reading or acting on it.
-      // Writers therefore mark only meaningful milestones unread: ordinary
-      // output waits until the agent turn finishes, while attention prompts
-      // still surface immediately. Explicit engagement handlers (composer
-      // edit/click/paste, feed scroll/click, terminal click/input, action
-      // sends) clear it via acknowledgeSession().
-      // Attention outranks ordinary output: once a permission/trust
-      // prompt appears, the list should keep showing ACTION until
-      // the user opens that agent or the prompt resolves. A later
-      // transcript append must not downgrade the marker to NEW.
-      const unreadKind =
-        runtime.unreadKind === 'attention' || kind === 'attention'
-          ? 'attention'
-          : 'output'
-      return {
-        ...runtime,
-        unreadSince: runtime.unreadSince ?? Date.now(),
-        unreadKind,
-      }
-    }
-
     const quarantinesSessionFeed = (sessionId: string): boolean =>
       refs.latestRuntimesRef.current[sessionId]?.recoveryFailureCode ===
       'ownership-conflict'
@@ -936,6 +910,26 @@ export function useIpcSubscriptions(
               processActive: false,
               processStatus: 'exited',
               processError: null,
+              // WHY terminalForeground is also cleared on exit (M3): main DOES
+              // untrack the session on exit — the terminal exit handler
+              // (main/sessionManager.ts ~3110) calls cleanupSessionState,
+              // which calls this.terminalForeground.untrack(sessionId) (~903)
+              // — but that clears a SEPARATE structure: TerminalForegroundMonitor's
+              // own `last`-emitted map, which only decides when main should
+              // emit at all. It says nothing about this renderer-side runtime
+              // field, a second independent copy that applyTerminalForeground
+              // (session-runtime/terminalForeground.ts ~42) diffs every new
+              // sample against. Left uncleared, a same-id respawn's first
+              // (idle) sample would be compared against the dead
+              // predecessor's stale `busy: true` sitting here — busy
+              // genuinely differs, so that is NOT a suppressed no-op, it is a
+              // real busy→idle transition, and applyTerminalForeground fires
+              // withUnread on it: a SPURIOUS "new work" mark on a pane where
+              // nothing actually happened, the shell just started. Clearing
+              // it here also stops a dead shell's last command (e.g. `npm`)
+              // from lingering as a badge with no live process left to
+              // correct it.
+              terminalForeground: null,
               inputReady: false,
               // Restamped on exit for the same reason as every other readiness
               // write: without it the pane would report how long ago the DEAD
@@ -1164,7 +1158,7 @@ export function useIpcSubscriptions(
           return { ...prev, [sessionId]: updated }
         }
 
-        const nextSemantic = foldSemanticEvent(current.semantic, semanticEvent, sessionKind)
+        const nextSemantic = foldSemanticEvent(current.semantic, semanticEvent, sessionKind, current.sessionRunId)
         const eventType = typeof semanticEvent.type === 'string' ? semanticEvent.type : ''
         const clearOptimisticAwaiting =
           isSemanticTurnRunning(nextSemantic.currentTurn) ||

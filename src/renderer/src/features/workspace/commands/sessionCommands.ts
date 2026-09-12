@@ -14,6 +14,15 @@ import { buildProviderResumeCommand } from '@renderer/workspace/providerResumeCo
 import { providerSupportsBuiltInMcpDomain } from '@mcp/shared/types'
 import type { BuiltInMcpDomain } from '@mcp/shared/types'
 import { clearAgentComposer } from '@renderer/workspace/tile-tree/TileLeaf/clearAgentComposer'
+import { sessionHasTranscript } from '@renderer/workspace/transcriptAvailability'
+import {
+  reloadSessionWithBuiltInMcpDomains,
+  withBuiltInMcpDomain,
+} from '@renderer/workspace/builtInMcpReload'
+import {
+  ROOT_MANAGEMENT_DOMAIN,
+  rootManagementReloadLabels,
+} from '@renderer/features/workspace/lib/rootManagement'
 
 function targetSupportsBuiltInMcpDomain(
   workspace: CommandContext['workspace'],
@@ -86,7 +95,12 @@ export const sessionCommands: CommandDef[] = [
       // nothing looked wrong; it would have started reporting the wrong answer
       // the moment a switch edge was added for a provider whose prompts we
       // cannot parse, or an adapter for one with no switch edge.
-      return getProviderFeatures(kind).promptHistoryExtraction
+      //
+      // sessionHasTranscript additionally excludes OpenCode Terminal (kind
+      // 'opencode', providerRuntime 'terminal'): its history loaders never
+      // populate `runtime.entries`, so prompt extraction had nothing to read
+      // even though promptHistoryExtraction is true for plain OpenCode.
+      return getProviderFeatures(kind).promptHistoryExtraction && sessionHasTranscript(meta)
     },
     run: ({ workspace, ui }) => {
       const sessionId = commandTargetSessionId(workspace)
@@ -285,7 +299,9 @@ export const sessionCommands: CommandDef[] = [
     },
   },
   {
-    // Close Old Agents — batch cleanup for stale provider panes.
+    // Close Old Agents — batch cleanup for stale agent AND terminal panes
+    // (#865 gave Close Old Agents parity: terminals are inactive-sortable
+    // and closeable through this same batch flow, not just agents).
     //
     // WHY this is an app-surface command instead of a session command:
     // the user is cleaning the workspace, not acting on the focused pane.
@@ -298,7 +314,7 @@ export const sessionCommands: CommandDef[] = [
     pickerVisibility: 'advanced',
     surface: 'app',
     title: 'Close Old Agents…',
-    description: '**What it does:** Opens a batch cleanup modal for **agents** inactive longer than a chosen time.\n\n**Use when:** You want to close stale agents across all projects or selected projects.\n\n**Notes:** Defaults to 4 hours and excludes currently-running agents unless you opt in.',
+    description: '**What it does:** Opens a batch cleanup modal for **agents and terminals** inactive longer than a chosen time.\n\n**Use when:** You want to close stale agents and terminals across all projects or selected projects.\n\n**Notes:** Defaults to 4 hours and excludes currently-running sessions unless you opt in.',
     keywords: [
       'close',
       'old',
@@ -653,6 +669,105 @@ export const sessionCommands: CommandDef[] = [
           err instanceof Error && err.message.length > 0
             ? err.message
             : 'Agent Management MCP reload failed'
+        workspace.showPaneToast(sessionId, message)
+      }
+    },
+  },
+  {
+    id: 'enable-root-agent-code-management',
+    category: 'session',
+    pickerVisibility: 'advanced',
+    surface: 'session',
+    risk: 'destructive',
+    title: 'Root Agent Code Management',
+    description: '**What it does:** Gives the focused **agent** application-wide control of Agent Code: every window, project, agent, terminal and layout, through the same tools an external operator uses.\n\n**Use when:** You are supervising one specific, rare job, such as reorganizing the workspace right after this agent audited every other agent.\n\n**Notes:** Off by default and never a Settings default. Turning it on asks you to confirm first and then reloads the agent; turning it off reloads without the tools and asks nothing.',
+    keywords: ['root', 'agent code management', 'operator', 'control', 'mcp', 'workspace', 'layout', 'reorganize', 'all projects', 'enable', 'disable', 'reload', 'claude', 'codex', 'opencode'],
+    when: ({ workspace }) => {
+      return targetSupportsBuiltInMcpDomain(workspace, ROOT_MANAGEMENT_DOMAIN)
+    },
+    getState: ctx => builtInMcpDomainState(ctx, ROOT_MANAGEMENT_DOMAIN),
+    run: async ({ workspace, ui }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return
+      const meta = workspace.state.sessions[sessionId]
+      const kind = meta?.kind ?? DEFAULT_PROVIDER
+      // Command visibility is advisory—the command can still be invoked by a
+      // keybinding or programmatic caller—so provider policy is repeated at the
+      // mutation boundary before we replace a live process.
+      if (
+        !isAgentProviderKind(kind) ||
+        !providerSupportsBuiltInMcpDomain(kind, ROOT_MANAGEMENT_DOMAIN) ||
+        !meta
+      ) return
+
+      ui.closePalette()
+      const enabled = Boolean(meta.builtInMcpDomains?.includes(ROOT_MANAGEMENT_DOMAIN))
+      if (enabled) {
+        // Revoking needs no ceremony: the reload simply drops the domain.
+        await reloadSessionWithBuiltInMcpDomains(
+          workspace,
+          sessionId,
+          withBuiltInMcpDomain(meta.builtInMcpDomains, ROOT_MANAGEMENT_DOMAIN, false),
+          rootManagementReloadLabels(false),
+        )
+        return
+      }
+      // WHY the command does NOT reload here: granting application-wide
+      // control is the one MCP toggle whose blast radius reaches beyond the
+      // agent's own project. The confirmation dialog owns the enable path
+      // (RootManagementConfirmSurface), so a declined warning leaves the
+      // session exactly as it was, and the target is captured now rather than
+      // re-read after the user finishes reading.
+      ui.openRootManagementPrompt(sessionId)
+    },
+  },
+  {
+    id: 'enable-tldr-mcp',
+    category: 'session',
+    surface: 'session',
+    title: 'TLDR MCP',
+    description: '**What it does:** Reloads the focused agent with TLDR reporting on or off.\n\n**Use when:** You want this agent to keep one concise summary of progress, next steps and pending decisions.\n\n**Notes:** Deploys the managed reporting skill. Hold the TLDR shortcut to read summaries across visible agents.',
+    keywords: ['tldr', 'summary', 'status', 'mcp', 'decision', 'report'],
+    when: ({ workspace }) => {
+      return targetSupportsBuiltInMcpDomain(workspace, 'tldr')
+    },
+    getState: ctx => builtInMcpDomainState(ctx, 'tldr'),
+    run: async ({ workspace, ui }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return
+      const meta = workspace.state.sessions[sessionId]
+      const kind = meta?.kind ?? DEFAULT_PROVIDER
+      // Command visibility is advisory—the command can still be invoked by a
+      // keybinding or programmatic caller—so provider policy is repeated at the
+      // mutation boundary before we replace a live process.
+      if (
+        !isAgentProviderKind(kind) ||
+        !providerSupportsBuiltInMcpDomain(kind, 'tldr') ||
+        !meta
+      ) return
+
+      ui.closePalette()
+      try {
+        const nextDomains = toggleBuiltInMcpDomain(meta.builtInMcpDomains, 'tldr')
+        const newSessionId = await workspace.replaceSession(meta.cwd, {
+          kind,
+          targetSessionId: sessionId,
+          resumeSessionId: meta.providerSessionId,
+          builtInMcpDomains: nextDomains,
+        })
+        if (newSessionId) {
+          workspace.showPaneToast(
+            newSessionId,
+            nextDomains.includes('tldr')
+              ? 'Reloaded with TLDR MCP'
+              : 'Reloaded without TLDR MCP',
+          )
+        }
+      } catch (err) {
+        const message =
+          err instanceof Error && err.message.length > 0
+            ? err.message
+            : 'TLDR MCP reload failed'
         workspace.showPaneToast(sessionId, message)
       }
     },

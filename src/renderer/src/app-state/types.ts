@@ -56,6 +56,8 @@ export type UiShellSlice = UiShellState & {
   closeAgentTitlePrompt: () => void
   openBuryPrompt: (sessionId: SessionId) => void
   closeBuryPrompt: () => void
+  openRootManagementPrompt: (sessionId: SessionId) => void
+  closeRootManagementPrompt: () => void
   openDebugBundleNotePrompt: (payload: {
     bundlePath: string
     sessionId: SessionId

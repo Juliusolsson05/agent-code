@@ -19,7 +19,7 @@ const service = {
   prompts: vi.fn(async () => [{ text: 'Recorded conversation', timestamp: 1 }]),
   children: vi.fn(async () => []),
 }
-const capabilities = () => nativeHistoryControlCapabilities(service as never)
+const capabilities = () => nativeHistoryControlCapabilities(() => service as never)
 it('pages exact rewind references from the recorded Claude transcript through the real native engine', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'ac-native-catalog-')); directories.push(dir)
   source.path = join(dir, 'source.jsonl')

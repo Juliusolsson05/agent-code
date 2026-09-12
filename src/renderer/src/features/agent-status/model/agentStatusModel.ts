@@ -1,5 +1,4 @@
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
-import type { AgentProviderKind } from '@shared/types/providerKind'
 import { normalizeSessionBuiltInMcpDomains } from '@renderer/workspace/mcpDomains'
 import {
   buildVisibleDispatchRows,
@@ -7,6 +6,7 @@ import {
 } from '@renderer/workspace/dispatch/dispatchSelectors'
 import { commandTargetSessionIdForState } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
+import { sessionDisplayTitle } from '@renderer/workspace/sessionDisplayTitle'
 import type {
   SessionId,
   SessionKind,
@@ -18,7 +18,7 @@ import { getRendererProviderCapabilities } from '@providers/registry.renderer.ca
 import { conditionStateByKind } from '@shared/types/providerConditions'
 import type { ClaudeCompactionState } from '@shared/types/providerConditions'
 
-export type AgentStatusKind = AgentProviderKind
+export type AgentStatusKind = SessionKind
 
 export type AgentStatusModel = {
   sessionId: SessionId
@@ -69,12 +69,15 @@ export function buildAgentStatusModel(
   const meta = state.sessions[sessionId]
   if (!meta) return null
   const kind = meta.kind ?? DEFAULT_PROVIDER
-  if (!isAgentKind(kind)) return null
 
   const placement = derivePlacement(state, sessionId)
   const providerSessionId = normalizeOptionalString(meta.providerSessionId)
   const domains = normalizeSessionBuiltInMcpDomains(meta.builtInMcpDomains) ?? []
-  const normalizeConditions = getRendererProviderCapabilities(kind).normalizeConditions
+  // Provider capability lookups throw for 'terminal' (it is not a registry
+  // kind); a shell has no provider conditions to normalize anyway.
+  const normalizeConditions = isAgentProviderKind(kind)
+    ? getRendererProviderCapabilities(kind).normalizeConditions
+    : undefined
   const conditions = normalizeConditions
     ? normalizeConditions({
         snapshot: runtime.conditions,
@@ -90,7 +93,7 @@ export function buildAgentStatusModel(
   return {
     sessionId,
     kind,
-    title: meta.title?.trim() || basename(meta.cwd),
+    title: sessionDisplayTitle(meta),
     cwd: meta.cwd,
     providerSessionId,
     providerSessionState: providerSessionId ? 'present' : 'none',
@@ -222,16 +225,7 @@ function findGridOwner(
   return null
 }
 
-function isAgentKind(kind: SessionKind): kind is AgentStatusKind {
-  return isAgentProviderKind(kind)
-}
-
 function normalizeOptionalString(value: string | null | undefined): string | null {
   const trimmed = value?.trim()
   return trimmed ? trimmed : null
-}
-
-function basename(path: string): string {
-  const parts = path.split('/').filter(Boolean)
-  return parts[parts.length - 1] ?? path
 }

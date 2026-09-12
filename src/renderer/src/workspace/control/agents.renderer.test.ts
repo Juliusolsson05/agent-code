@@ -17,11 +17,15 @@ function setup(wake: () => Promise<unknown> = async () => undefined) {
   }, workspaceRuntimes: { agent: { ...emptyRuntime(), draftInput: 'unfinished human draft' } } })
   const deliverPrompt = vi.fn().mockResolvedValue({ ok: true, acceptance: { kind: 'queue', acceptedAt: 1 } })
   window.api = { ...originalApi, deliverPrompt }
+  // focusAgentBySessionId is a spy (not just a stub) so the Reader-Mode/
+  // terminal refusal test below can prove agents.show never reaches the
+  // actual navigation call when it refuses early.
+  const focusAgentBySessionId = vi.fn().mockResolvedValue(true)
   // Only provider I/O is a contract double. The capability uses the actual
   // store, admission, title normalization and provider delivery result shape.
-  const capabilities = agentControlCapabilities(() => ({ restoreStatus: 'fresh', ensureSessionLive: wake }) as unknown as Workspace)
+  const capabilities = agentControlCapabilities(() => ({ restoreStatus: 'fresh', ensureSessionLive: wake, focusAgentBySessionId }) as unknown as Workspace)
   const invoke = (id: string, input: unknown) => capabilities.find(capability => capability.descriptor.id === id)!.execute(input, context)
-  return { deliverPrompt, invoke }
+  return { deliverPrompt, invoke, focusAgentBySessionId }
 }
 
 it('keeps the named prompt target and composer draft, and reports queue acceptance honestly', async () => {
@@ -98,4 +102,49 @@ it('finds an agent by its spoken name from the window-local index too, not only 
   // reports — the observation is the single gate for both.
   useAppStore.setState({ settings: { ...useAppStore.getState().settings, agentNamesEnabled: false } })
   expect(await invoke('agents.list', { query: 'apoll' })).toMatchObject({ ok: true, value: { total: 0 } })
+})
+
+it('treats a terminal as a session for metadata and navigation, but never as a prompt target (#865)', async () => {
+  const { invoke, deliverPrompt } = setup()
+  useAppStore.getState().setWorkspaceState(state => ({
+    ...state,
+    sessions: { ...state.sessions, shell: { cwd: '/trial', kind: 'terminal' } },
+    tabs: [{ ...state.tabs[0], root: { type: 'split', direction: 'vertical', ratio: 0.5,
+      a: { type: 'leaf', sessionId: 'agent' }, b: { type: 'leaf', sessionId: 'shell' } } }],
+  }))
+
+  expect(await invoke('agents.titleSet', { sessionId: 'shell', title: 'dev server' }))
+    .toMatchObject({ ok: true, value: { title: 'dev server' } })
+  expect(await invoke('agents.locate', { sessionId: 'shell' }))
+    .toMatchObject({ ok: true, value: { provider: 'terminal', title: 'dev server' } })
+  expect(await invoke('agents.list', { query: 'dev server' }))
+    .toMatchObject({ ok: true, value: { items: [expect.objectContaining({ sessionId: 'shell' })] } })
+
+  // The refusal carries the route an operator should take instead, and it
+  // happens before any wake or provider write.
+  const refused = await invoke('agents.prompt', { sessionId: 'shell', prompt: 'ls' })
+  expect(refused).toMatchObject({ ok: false, error: { code: 'unavailable' } })
+  expect(JSON.stringify(refused)).toContain('terminals.input')
+  expect(deliverPrompt).not.toHaveBeenCalled()
+})
+
+// Reader Mode is agent-only (Design D2): it renders a provider-registered
+// transcript view, which a terminal has none of. requireSession stopped
+// refusing terminals in the #865 work above, which made this capability the
+// thing actually standing between an operator's "show" request and pointing
+// Reader Mode at a session it can't render — so the refusal, and the fact
+// that it happens before any navigation call, are both load-bearing here.
+it('refuses to show a terminal while Reader Mode owns the screen, before any navigation (#865)', async () => {
+  const { invoke, focusAgentBySessionId } = setup()
+  useAppStore.getState().setWorkspaceState(state => ({
+    ...state,
+    sessions: { ...state.sessions, shell: { cwd: '/trial', kind: 'terminal' } },
+    tabs: [{ ...state.tabs[0], root: { type: 'split', direction: 'vertical', ratio: 0.5,
+      a: { type: 'leaf', sessionId: 'agent' }, b: { type: 'leaf', sessionId: 'shell' } } }],
+  }))
+  useAppStore.setState({ workspaceReaderMode: { tabId: 'project', focusedSessionId: 'agent' } })
+
+  const result = await invoke('agents.show', { sessionId: 'shell' })
+  expect(result).toMatchObject({ ok: false, error: { code: 'unavailable' } })
+  expect(focusAgentBySessionId).not.toHaveBeenCalled()
 })

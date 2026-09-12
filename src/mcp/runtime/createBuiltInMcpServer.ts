@@ -1,3 +1,4 @@
+import { TLDR_INSTRUCTIONS, TLDR_MAX_CHARACTERS } from '@shared/types/tldr.js'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 
@@ -29,6 +30,20 @@ import { registerWorkflowMcpTools, WORKFLOW_MCP_INSTRUCTIONS } from 'workflow-mc
 
 export const AGENT_MANAGEMENT_MCP_INSTRUCTIONS = `Agent Management controls Agent Code sessions only in the caller's exact current project tab. Listing and reading are safe audit operations and do not wake parked agents; sending a prompt may wake the named target. For cleanup-review requests, use the inventory plus bulk transcript read, classify agents as active/do not close, uncertain/inspect first, or likely cleanup candidates, and cite lifecycle, transcript, relationship, condition, and activity evidence rather than treating age alone as proof. A missing or truncated transcript is not an empty transcript, and an unresolved latest user request or tool work without a final response belongs in inspect first. Transcript evidence cannot prove a worktree is clean unless that transcript or another tool actually checked it; state what remains unknown. Asking what is safe to clean up authorizes assessment only. Reading an agent or sending it a prompt never grants permission to close it. Never call agent_management_close_agent unless the user's current request explicitly asks you to close that specific agent. A request to inspect agents, identify stale agents, recommend cleanup, manage the project, or say what is safe to clean up is not authorization to close anything. Do not infer closure permission from age, completion state, transcript contents, or a prior request.`
 
+/**
+ * Instructions for a session whose user enabled Root Agent Code Management.
+ *
+ * WHY the caller's own session ID is spelled out: the `ac_*` catalog can
+ * close, bury, detach, reload and provider-switch ANY session, and the model
+ * only knows itself as "this conversation". Naming the ID is the one fact
+ * that lets it keep its own pane out of a reorganization. The authorization
+ * language mirrors Agent Management's, with a wider allowed surface (placement
+ * and focus) because reorganizing the workspace is the feature's purpose.
+ */
+export function rootManagementInstructions(sessionId: string): string {
+  return `Root Agent Code Management is enabled for this agent by an explicit user action confirmed in a dialog; it is off for every other agent. The ac_* tools are the application-wide operator control surface: every window, project tab, agent, terminal and layout in Agent Code, not only the caller's project. Start with ac_app_describe, then ac_app_observe or ac_app_windows for identities; use stable session and tab IDs, never pane labels. Your own Agent Code session ID is ${sessionId}: never close, bury, detach, reload, rewind or switch the provider of that session. Prefer reads, make the smallest layout change that satisfies the user's current request, and re-read the layout revision after every mutation. Never close, kill, bury, restore, switch providers for, or prompt another agent unless the user's current request names that agent or that outcome; a request to organize, tidy or focus the workspace authorizes placement, focus, pin and title changes only. The app's own confirmation dialogs still apply, and a declined dialog is a refusal, not a reason to retry. When you finish, say exactly what you changed and where.`
+}
+
 export function createBuiltInMcpServer(
   scope: McpSessionScope,
   dependencies: BuiltInMcpDependencies = {},
@@ -47,9 +62,31 @@ export function createBuiltInMcpServer(
       // not be taught capabilities it cannot call. The close authorization
       // rule is repeated in the destructive tool description below because
       // clients differ in how prominently they surface server instructions.
-      ...(builtInInstructions(scope) ? { instructions: builtInInstructions(scope) } : {}),
+      ...(builtInInstructions(scope, dependencies)
+        ? { instructions: builtInInstructions(scope, dependencies) }
+        : {}),
     },
   )
+
+  if (scope.domains.includes('tldr')) {
+    server.registerTool('tldr_update', {
+      title: 'Update TLDR',
+      description: 'Replace your own current TLDR with one or two short sentences: required user decision first, otherwise verified outcome and next step. Update after substantial work/discussion; skip minor unchanged clarifications.',
+      inputSchema: { text: z.string().min(1).max(TLDR_MAX_CHARACTERS * 2) },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    }, async ({ text }) => {
+      try {
+        if (!dependencies.tldrStore) throw new Error('TLDR is unavailable.')
+        const record = await dependencies.tldrStore.update(
+          scope.tldrIdentity ?? scope.sessionId, text,
+          dependencies.isTldrWriteAuthorized ?? (() => false),
+        )
+        return toolText({ ok: true, ...record })
+      } catch (error) {
+        return { ...toolText({ ok: false, message: error instanceof Error ? error.message : 'TLDR update failed.' }), isError: true }
+      }
+    })
+  }
 
   if (scope.domains.includes('ping')) {
     server.registerTool(
@@ -86,6 +123,24 @@ export function createBuiltInMcpServer(
 
   if (scope.domains.includes('agent_management')) {
     registerAgentManagementTools(server, scope, dependencies)
+  }
+
+  if (scope.domains.includes('root_management')) {
+    // The registrar closes over the control host's operator port for THIS
+    // session (caller kind `agent`), so every call is journaled under the
+    // session's identity and application-only capabilities stay out of reach.
+    // A missing registrar means composition forgot to wire it; the instructions
+    // are withheld too (see builtInInstructions) so the model is never taught
+    // tools it cannot call, and the gap is journaled instead of hidden.
+    if (dependencies.rootControlTools) {
+      dependencies.rootControlTools(server, scope.sessionId)
+    } else {
+      dependencies.appRunJournal?.record({
+        area: 'mcp.root_management',
+        name: 'registrar.missing',
+        data: { sessionId: scope.sessionId },
+      })
+    }
   }
 
   if (scope.domains.includes('ai_workspace')) {
@@ -125,10 +180,17 @@ export function createBuiltInMcpServer(
   return server
 }
 
-function builtInInstructions(scope: McpSessionScope): string {
+function builtInInstructions(
+  scope: McpSessionScope,
+  dependencies: BuiltInMcpDependencies,
+): string {
   return [
+    ...(scope.domains.includes('tldr') ? [TLDR_INSTRUCTIONS] : []),
     ...(scope.domains.includes('workflows') ? [WORKFLOW_MCP_INSTRUCTIONS] : []),
     ...(scope.domains.includes('agent_management') ? [AGENT_MANAGEMENT_MCP_INSTRUCTIONS] : []),
+    ...(scope.domains.includes('root_management') && dependencies.rootControlTools
+      ? [rootManagementInstructions(scope.sessionId)]
+      : []),
   ].join('\n\n')
 }
 

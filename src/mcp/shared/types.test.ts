@@ -46,3 +46,15 @@ describe('built-in MCP provider policy', () => {
     ])).toEqual(['orchestration', 'workflows'])
   })
 })
+
+describe('root management domain policy (#906)', () => {
+  it('is a real domain a session can carry but never a configurable default', () => {
+    // The whole point of the command's confirmation gate is that nothing else
+    // can grant application-wide control. If this normalizer ever admitted the
+    // domain, a persisted Settings list could hand it to every new agent.
+    expect(normalizeConfigurableBuiltInMcpDomains(['root_management', 'tldr'])).toEqual(['tldr'])
+    expect(filterBuiltInMcpDomainsForProvider('claude', ['root_management'])).toEqual(['root_management'])
+    expect(filterBuiltInMcpDomainsForProvider('codex', ['root_management'])).toEqual(['root_management'])
+    expect(filterBuiltInMcpDomainsForProvider('opencode', ['root_management'])).toEqual(['root_management'])
+  })
+})

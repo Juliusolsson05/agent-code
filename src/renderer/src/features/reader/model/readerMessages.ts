@@ -22,10 +22,12 @@ import { blockContentKind } from '@renderer/rendering/observations/semantic'
 // The ledger already decides all of that for Feed — ownership between live and
 // committed text, sidechain exclusion, compaction refusal, block
 // classification. Reusing its output makes the contract one sentence: Reader
-// pages through exactly the assistant prose Feed paints, and nothing else.
+// pages through the assistant prose and provider-limit notices Feed paints.
 // ---------------------------------------------------------------------------
 
 export type ReaderMessage = {
+  notice?: Extract<FeedRenderItem, { type: 'provider-notice' }>
+
   /** The feed item's key. Stable while the ledger attributes the text to the
    *  same painted unit (a live block keeps its id as it grows); it changes
    *  when the ledger hands finished text to its committed entry
@@ -90,6 +92,11 @@ export function readerMessagesFromFeedItems(
   const messages: ReaderMessage[] = []
   for (const item of items) {
     switch (item.type) {
+      case 'provider-notice':
+        // Reader must explain why generation stopped without making the error
+        // assistant prose. Retain its model and identity for the shared card.
+        messages.push({ id: item.key, text: item.notice.originalMessage, live: false, sourceId: null, committed: item.sourcePlane === 'committed', notice: item })
+        break
       case 'entry': {
         // User prompts, system rows and tool-only assistant carriers return
         // null here. Reader is a reading view of what the agent SAID.

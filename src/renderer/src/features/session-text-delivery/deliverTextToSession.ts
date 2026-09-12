@@ -40,7 +40,8 @@ import type { Workspace } from '@renderer/workspace/workspaceStore'
 //   4. Submitting puts it in the provider transcript, plaintext.
 //   5. With proxy streaming on, the mitm addon base64-encodes outbound
 //      request bodies into the proxy events journal under
-//      ~/.config/agent-code/proxy, which nothing prunes or rotates.
+//      ~/.config/agent-code/proxy, kept until debug-storage retention prunes
+//      it (main/storage/debugRetention.ts).
 //
 // The VAULT's encryption contract covers storage, not the prompt
 // pipeline, and this helper is the boundary where that stops applying.
@@ -62,6 +63,28 @@ export type DeliverTextResult =
    */
   | { delivered: false; reason: 'refused'; message: string }
 
+/**
+ * Which surface would receive text for this session right now: the Agent Code
+ * composer draft, or the PTY via a bracketed paste. Exported so the template
+ * UI can describe the outcome truthfully (#865). Insert modes exist only
+ * for a draft; on a PTY the text is pasted at the cursor.
+ */
+export function textDeliverySurface(workspace: Workspace, sessionId: SessionId): 'composer' | 'pty' | null {
+  const session = workspace.state.sessions[sessionId]
+  if (!session) return null
+  // WHY normalize kind (review finding): legacy persisted sessions may lack
+  // `kind`; an undefined kind must not silently mean "rendered".
+  const kind = session.kind ?? DEFAULT_PROVIDER
+  if (kind === 'terminal') return 'pty'
+  return getEffectiveAgentSurfaceForSession({
+    kind,
+    providerRuntime: session.providerRuntime,
+    globalMode: useAppStore.getState().settings.agentViewMode,
+    override: session.agentViewModeOverride,
+    runtime: workspace.getRuntime(sessionId),
+  }) === 'rendered' ? 'composer' : 'pty'
+}
+
 export async function deliverTextToSession(
   workspace: Workspace,
   sessionId: SessionId,
@@ -69,32 +92,15 @@ export async function deliverTextToSession(
   opts?: { insertMode?: 'replace' | 'append'; isCurrent?: () => boolean },
 ): Promise<DeliverTextResult> {
   if (opts?.isCurrent && !opts.isCurrent()) return { delivered: false, reason: 'cancelled' }
-  const session = workspace.state.sessions[sessionId]
-  if (!session) return { delivered: false, reason: 'no-session' }
-
-  // WHY normalize kind (review finding): legacy persisted sessions may
-  // lack `kind`. TileTree normalizes missing kinds to the default agent
-  // provider before asking the surface policy; doing the same here keeps
-  // this helper's dispatch identical to what the pane actually renders —
-  // an undefined kind must not silently mean "rendered".
-  const kind = session.kind ?? DEFAULT_PROVIDER
-
-  if (kind !== 'terminal') {
-    const surface = getEffectiveAgentSurfaceForSession({
-      kind,
-      providerRuntime: session.providerRuntime,
-      globalMode: useAppStore.getState().settings.agentViewMode,
-      override: session.agentViewModeOverride,
-      runtime: workspace.getRuntime(sessionId),
-    })
-    if (surface === 'rendered') {
-      const currentDraft = workspace.getRuntime(sessionId).draftInput
-      workspace.setDraftInput(
-        sessionId,
-        opts?.insertMode ? applyPromptTemplateInsertMode(currentDraft, text, opts.insertMode) : currentDraft + text,
-      )
-      return { delivered: true, surface: 'composer' }
-    }
+  const surface = textDeliverySurface(workspace, sessionId)
+  if (surface === null) return { delivered: false, reason: 'no-session' }
+  if (surface === 'composer') {
+    const currentDraft = workspace.getRuntime(sessionId).draftInput
+    workspace.setDraftInput(
+      sessionId,
+      opts?.insertMode ? applyPromptTemplateInsertMode(currentDraft, text, opts.insertMode) : currentDraft + text,
+    )
+    return { delivered: true, surface: 'composer' }
   }
   return deliverPtyText(workspace, sessionId, text, opts?.isCurrent)
 }

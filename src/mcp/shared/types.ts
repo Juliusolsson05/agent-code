@@ -1,19 +1,23 @@
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
 
 export type BuiltInMcpDomain =
+  | 'tldr'
   | 'ping'
   | 'orchestration'
   | 'ai_workspace'
   | 'agent_transcripts'
   | 'agent_management'
+  | 'root_management'
   | 'workflows'
 
 export const BUILT_IN_MCP_DOMAINS = [
+  'tldr',
   'ping',
   'orchestration',
   'ai_workspace',
   'agent_transcripts',
   'agent_management',
+  'root_management',
   'workflows',
 ] as const satisfies readonly BuiltInMcpDomain[]
 
@@ -25,8 +29,18 @@ export const BUILT_IN_MCP_DOMAINS = [
  * experimental builds. Giving configurable defaults their own closed list
  * prevents a stale `ping` value from turning a diagnostic bridge probe into a
  * normal model-visible capability on every new session.
+ *
+ * WHY `root_management` is also absent (#906): it hands one agent the external
+ * operator's application-wide control catalog, every window, project, agent,
+ * terminal and layout. That is only ever right for one supervised agent in one
+ * rare moment, which is why the session command gates it behind a confirmation
+ * dialog. A defaults row would let a single click, or a stale persisted list,
+ * grant it to every new agent silently. Keeping it out of this closed list is
+ * what makes "never on by default" a property of the code rather than of the
+ * Settings UI's current shape.
  */
 export const CONFIGURABLE_BUILT_IN_MCP_DOMAINS = [
+  'tldr',
   'orchestration',
   'ai_workspace',
   'agent_transcripts',
@@ -50,14 +64,21 @@ export type ConfigurableBuiltInMcpDomain =
  * available there. OpenCode accepts the same HTTP endpoints through its
  * process-local inline configuration; both its structured server runtime and
  * native terminal runtime inject that configuration at launch.
+ *
+ * `root_management` is provider-agnostic: it projects the control catalog that
+ * the external operator server already serves, and every launcher that can
+ * carry a built-in MCP config can carry it. The per-agent confirmation gate,
+ * not the provider, is what keeps it rare.
  */
 const BUILT_IN_MCP_DOMAINS_BY_PROVIDER = {
   claude: [
+    'tldr',
     'ping',
     'orchestration',
     'ai_workspace',
     'agent_transcripts',
     'agent_management',
+    'root_management',
   ],
   codex: [...BUILT_IN_MCP_DOMAINS],
   opencode: [...BUILT_IN_MCP_DOMAINS],
@@ -81,6 +102,7 @@ export type BuiltInMcpServerConfig = {
 }
 
 export type McpSessionScope = {
+  tldrIdentity?: string
   sessionId: string
   cwd: string
   domains: BuiltInMcpDomain[]

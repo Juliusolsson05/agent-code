@@ -85,6 +85,7 @@ export type ProviderDurableEntryInput = { entry: Entry }
  * `system.subtype` while another provider may use a different carrier.
  */
 export type ProviderDurableEntryKind =
+  | 'provider-notice'
   | 'compact-boundary'
   | 'compact-summary'
   | 'queued-user-prompt'

@@ -46,6 +46,7 @@
     }
   },
   "include": [
+    "testing/fixtures/provider-usage-limits/*.json",
     "src/control-sdk/**/*",
     "src/renderer/**/*",
     // Renderer specs use the DOM matchers installed by the Vitest setup module. The setup lived

@@ -82,6 +82,8 @@ export type SessionBackendSnapshot = {
    *  observed backend fact, not the renderer's requested policy. It is absent
    *  for terminal sessions, which never receive built-in MCP configuration. */
   builtInMcpDomains?: BuiltInMcpDomain[]
+  /** Main-owned logical summary identity when this backend exposes TLDR. */
+  tldrIdentity?: string
 }
 
 export type SessionRecoverOptions = {
@@ -95,6 +97,7 @@ export type SessionRecoverOptions = {
   dangerousMode?: boolean
   useProxy?: boolean
   recoverTmuxName?: string
+  tldrIdentity?: string
   builtInMcpDomains?: BuiltInMcpDomain[]
   /**
    * Opaque renderer-generated generation for this recovery admission.

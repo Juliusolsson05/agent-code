@@ -3,7 +3,10 @@
 // reads env flags at module load) is imported. See
 // `./loadEnv.ts` for the rationale.
 import '@main/loadEnv.js'
+import { TldrStore } from '@main/tldr/TldrStore.js'
+import { registerTldrIpc } from '@main/tldr/ipc.js'
 import { ExternalControlMcpHost } from './externalControlMcp/host'
+import { registerOperatorControlTools } from './externalControlMcp/tools'
 import { createExternalControlSettings } from './settings/externalControl'
 import { createExternalCodexIntegration } from './settings/externalCodexIntegration'
 import operatorSkillSource from '../../operator-skills/agent-code-computer-execution/SKILL.md?raw'
@@ -793,7 +796,10 @@ async function startApp(): Promise<void> {
     tmuxAvailable ? tmuxRegistry : null,
     builtInMcpHost,
     appRunJournal,
-    async () => { await agentCodeConventionsService.audit() },
+    async options => {
+      await agentCodeConventionsService.audit()
+      if (options.builtInMcpDomains?.includes('tldr')) await agentCodeConventionsService.ensureTldrSkill()
+    },
     (sessionId, sessionRunId, observation) => {
       sessionRecorders?.recordCodexTranscriptObservation(
         sessionId,
@@ -846,7 +852,29 @@ async function startApp(): Promise<void> {
     // workflow surface (MCP without IPC, or IPC without a durable owner).
     throw new Error('Workflow service was not initialized before app composition')
   }
+  // WHY the control host is composed here, before the built-in MCP host learns
+  // its dependencies: `setDependencies` is one-shot by design (it refuses to
+  // run once a provider session has registered), and Root Agent Code
+  // Management (#906) needs a per-session operator port from this host. It used
+  // to be built after IPC registration; nothing in between depended on that
+  // order, and the external server starting a moment earlier changes nothing.
+  let externalHost: ExternalControlMcpHost
+  const externalSettings = createExternalControlSettings(STATE_DIR, {
+    integration: createExternalCodexIntegration(process.env.CODEX_HOME || join(app.getPath('home'), '.codex'), operatorSkillSource),
+    start: (port, token) => externalHost.start(port, token),
+    stop: () => externalHost.stop(), copy: text => clipboard.writeText(text),
+  })
+  const controlManager = manager
+  const controlHost = createControlHost({ getBrowserWindow, windowIdFor, listWindowIds }, join(STATE_DIR, 'control-history'), ({ invokeTask }) => [
+    ...workflowControlCapabilities(activeWorkflowService, invokeTask), ...usageControlCapabilities(), ...applicationIdentityCapabilities(), ...sessionHistoryControlCapabilities(), ...nativeHistoryControlCapabilities(() => conversationService), ...conditionBackendCapabilities(controlManager), ...terminalBackendCapabilities(controlManager), ...windowLifecycleControlCapabilities(), ...externalSettings.capabilities,
+  ])
+  externalHost = new ExternalControlMcpHost(controlHost.forCaller({ kind: 'external', id: 'agent-code-control' }))
+  await externalSettings.initialize()
+  app.once('will-quit', () => { void externalSettings.dispose(); controlHost.dispose() })
+  const tldrStore = new TldrStore(join(STATE_DIR, 'tldr.json'))
+  registerTldrIpc(tldrStore)
   builtInMcpHost.setDependencies({
+    tldrStore,
     orchestrationBridge,
     agentManagementBridge,
     aiWorkspaceRegistry,
@@ -867,6 +895,21 @@ async function startApp(): Promise<void> {
     appRunJournal,
     workflowService: activeWorkflowService,
     workflowBridge: activeWorkflowBridge,
+    // Root Agent Code Management (#906): the SAME operator catalog the external
+    // server projects, on the session's own built-in server, with the session
+    // as the journaled caller. Only composition may touch the external MCP
+    // adapter (import boundary), which is why this closure is built here.
+    rootControlTools: (server, sessionId) => registerOperatorControlTools(
+      server,
+      controlHost.forCaller({ kind: 'agent', id: sessionId }),
+      {
+        onSchemaFallback: (capabilityId, error) => appRunJournal?.record({
+          area: 'mcp.root_management',
+          name: 'tool_schema.fallback',
+          data: { sessionId, capabilityId, message: error instanceof Error ? error.message : String(error) },
+        }),
+      },
+    ),
   })
   performanceService.mark('app.main.sessionManager.created')
 
@@ -990,8 +1033,9 @@ async function startApp(): Promise<void> {
       })
   })
   // The conversation service reads the provider stores on demand and joins
-  // the ledger; it is constructed here, after the ledger, so the IPC surface
-  // and the external nativeHistory catalog share one set of caches.
+  // the ledger, so it is constructed after the ledger. The control host above
+  // was built before the workspace store opened and holds a getter for it;
+  // its handlers only run on requests, long after this line.
   const conversationService = createConversationService({ ledger: conversationLedger, listWorktrees: listWorktreesForCwd })
   registerAllIpc({
     manager,
@@ -1014,19 +1058,6 @@ async function startApp(): Promise<void> {
     workspaceFileStore,
     conversationService,
   })
-  let externalHost: ExternalControlMcpHost
-  const externalSettings = createExternalControlSettings(STATE_DIR, {
-    integration: createExternalCodexIntegration(process.env.CODEX_HOME || join(app.getPath('home'), '.codex'), operatorSkillSource),
-    start: (port, token) => externalHost.start(port, token),
-    stop: () => externalHost.stop(), copy: text => clipboard.writeText(text),
-  })
-  const controlManager = manager
-  const controlHost = createControlHost({ getBrowserWindow, windowIdFor, listWindowIds }, join(STATE_DIR, 'control-history'), ({ invokeTask }) => [
-    ...workflowControlCapabilities(activeWorkflowService, invokeTask), ...usageControlCapabilities(), ...applicationIdentityCapabilities(), ...sessionHistoryControlCapabilities(), ...nativeHistoryControlCapabilities(conversationService), ...conditionBackendCapabilities(controlManager), ...terminalBackendCapabilities(controlManager), ...windowLifecycleControlCapabilities(), ...externalSettings.capabilities,
-  ])
-  externalHost = new ExternalControlMcpHost(controlHost.forCaller({ kind: 'external', id: 'agent-code-control' }))
-  await externalSettings.initialize()
-  app.once('will-quit', () => { void externalSettings.dispose(); controlHost.dispose() })
   // Boot probe runs after the IPC is wired so its first `state` push
   // has a live subscriber to receive it on the renderer side.
   cliUpdateOrchestrator.scheduleBootProbe()

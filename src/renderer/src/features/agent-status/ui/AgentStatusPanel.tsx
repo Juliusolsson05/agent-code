@@ -43,7 +43,7 @@ export function AgentStatusPanel({ sessionId, workspace, onClose }: Props) {
             Agent Status
           </div>
           <div className="truncate text-ink font-medium">
-            {model ? model.title : 'No focused agent'}
+            {model ? model.title : 'No focused session'}
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -98,7 +98,7 @@ function AgentStatusContent({ model }: { model: AgentStatusModel }) {
 function EmptyState() {
   return (
     <div className="rounded-slab border border-border bg-canvas px-3 py-3 text-muted">
-      Focus a Claude or Codex agent to inspect its status.
+      Focus an agent or terminal to inspect its status.
     </div>
   )
 }

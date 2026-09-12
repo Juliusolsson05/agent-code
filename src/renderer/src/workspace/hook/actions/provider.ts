@@ -1,4 +1,5 @@
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
+import { tldrIdentityForSession } from '@renderer/features/tldr/identity'
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 import type { AgentProviderKind, AgentProviderRuntime } from '@shared/types/providerKind'
 import type { RewindPromptAddress } from '@shared/types/transcriptRewind'
@@ -269,6 +270,7 @@ export function useProviderActions(
                 provider: kind,
                 cwd: meta.cwd,
                 previousProviderSessionId,
+                previousTldrIdentity: tldrIdentityForSession(sourceSessionId, meta),
                 rewoundProviderSessionId: result.newProviderSessionId,
                 rewoundPromptText: result.promptText,
                 rewoundPromptTimestamp: result.promptTimestamp,
@@ -327,6 +329,7 @@ export function useProviderActions(
       const newSessionId = await sessionActions.replaceSession(pending.cwd, {
         kind: pending.provider,
         resumeSessionId: pending.previousProviderSessionId,
+        restoreTldrIdentity: pending.previousTldrIdentity,
         builtInMcpDomains: pending.builtInMcpDomains,
         targetSessionId: sourceSessionId,
       })
@@ -435,6 +438,7 @@ export function useProviderActions(
                 provider: 'codex',
                 cwd: meta.cwd,
                 previousProviderSessionId,
+                previousTldrIdentity: tldrIdentityForSession(sourceSessionId, meta),
                 rewoundProviderSessionId: result.newProviderSessionId,
                 // Not a prompt rewind. Undo restores previousProviderSessionId
                 // and previousDraftInput; this field exists because the

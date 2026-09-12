@@ -4,12 +4,9 @@ import {
 } from '@renderer/workspace/agentNames/useAgentName'
 import type { SessionId } from '@renderer/workspace/types'
 
-// One visual contract for explicit agent titles and spoken agent names across
-// the structured Agent surface and the raw agent-terminal surface. Plain shell
-// terminals intentionally do not use this component: titles belong to provider
-// agents and the command refuses terminal targets at the mutation boundary too.
-// The name selector refuses them a second time, so a terminal that somehow
-// mounts this still renders nothing.
+// One visual contract for explicit titles and spoken names across every pane
+// surface: the structured Agent view, the raw agent terminal, and (since #865)
+// plain shell terminals, which render PaneHeader and therefore this row too.
 //
 // WHY the component subscribes rather than taking `agentName` as a prop: both
 // call sites sit on the hot pane-render path and already thread a dozen props;

@@ -1,3 +1,6 @@
+import type { UsageLimitNotice } from '@shared/types/usageLimitNotice'
+import { claudeUsageLimitNotice } from '@providers/claude/renderer/adapters/usageLimitNotice'
+import { codexUsageLimitNotice } from '@providers/codex/renderer/adapters/usageLimitNotice'
 import type { ConditionView } from '@shared/conditions-core/view'
 import type { Entry, ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 import type { ProviderConditionSnapshot } from '@shared/types/providerConditions'
@@ -90,6 +93,10 @@ export type RendererProviderCapabilities = {
     entries: readonly Entry[]
   }) => ProviderConditionSnapshot | null
   renderOperation: (input: ProviderOperationInput) => ProviderOperationDecision
+  /** Provider status admission is data-only so the ledger and shared card use
+   * the same interpretation; a quoted error in ordinary prose is never enough. */
+  usageLimitNoticeFromEntry?: (entry: unknown) => UsageLimitNotice | null
+  usageLimitNoticeFromError?: (error: unknown) => UsageLimitNotice | null
   renderDurableEntry?: (
     input: ProviderDurableEntryInput,
   ) => ProviderDurableEntryDecision | undefined
@@ -258,6 +265,7 @@ const claudeCapabilities: RendererProviderCapabilities = {
   renderOperation: renderClaudeOperation,
   renderDurableEntry: renderClaudeDurableEntry,
   classifyDurableEntry: classifyClaudeDurableEntry,
+  usageLimitNoticeFromEntry: claudeUsageLimitNotice,
   collectTaskNotifications: collectClaudeTaskNotifications,
   classifyTaskNotificationEntry: taskNotificationFromEntry,
   renderSemanticBlock: renderClaudeSemanticBlock,
@@ -282,6 +290,7 @@ const codexCapabilities: RendererProviderCapabilities = {
   renderOperation: renderCodexOperation,
   renderDurableEntry: renderCodexDurableEntry,
   classifyDurableEntry: classifyCodexDurableEntry,
+  usageLimitNoticeFromError: codexUsageLimitNotice,
   renderSemanticBlock: renderCodexSemanticBlock,
   isSpawnTool: block => Boolean(
     fromCodexNativeSpawnUse(block) ||

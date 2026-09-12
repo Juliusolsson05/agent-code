@@ -43,13 +43,13 @@ describe('follow command availability', () => {
     expect(jump!.renderedViewPolicy).toBeUndefined()
   })
 
-  it('keeps both commands hidden for plain shell terminals and visible for agent kinds', () => {
+  it('offers both follow commands for plain shell terminals as well as every agent kind (#865)', () => {
+    // Plain terminals follow through the same xterm hook as agent terminal
+    // views now; there is no kind left for which these commands are inert.
     for (const command of [tail!, jump!]) {
-      expect(command.when?.(contextWithKind('terminal'))).toBe(false)
-      expect(command.when?.(contextWithKind('claude'))).toBe(true)
-      // OpenCode covers both process runtimes: the structured HTTP session
-      // and OpenCode Terminal (same kind, providerRuntime 'terminal').
-      expect(command.when?.(contextWithKind('opencode'))).toBe(true)
+      for (const kind of ['terminal', 'claude', 'codex', 'opencode']) {
+        expect(command.when?.(contextWithKind(kind))).toBe(true)
+      }
     }
   })
 })

@@ -96,13 +96,29 @@ than 64 characters. Descriptions are structured single-line values no longer
 than 1,024 characters, and instructions have the same bounded, normalized
 Markdown treatment as Conventions. Agent Code serializes `name` and
 `description` frontmatter itself; the editor never accepts raw YAML. Custom
-names cannot claim the reserved `agent-code-conventions` destination.
+names cannot claim the reserved `agent-code-conventions` or `agent-code-tldr` destinations.
 
 Custom management deliberately excludes personal skills installed by other
 tools, repository-local skills, plugins, and skills with scripts, references,
 or assets. The service inspects only an exact destination it is about to
 publish. A pre-existing unmanaged destination is a collision and cannot be
 adopted or replaced from the Custom Skills UI.
+
+## Product-owned reporting skill
+
+TLDR uses the same single writer and ownership journal for the reserved
+`builtin:agent-code-tldr` instruction record. Its canonical content lives in
+`src/shared/types/tldr.ts`, and its snapshot is marked as product-managed so
+Custom Skills cannot edit, disable, or delete it. Enabling TLDR for a session
+reconciles this skill before starting the provider; a collision fails that
+launch rather than silently dropping the reporting instructions. Personal
+Conventions remain independently enabled and unchanged.
+
+Once deployed, the skill stays installed because other agents can still need
+it. Its instructions are inactive unless the current session exposes the TLDR
+MCP tool. Disabling a single session revokes that capability; it does not remove
+shared provider files. MCP initialization also supplies the same reporting
+instructions because native skill discovery alone cannot guarantee activation.
 
 ## GitHub-installed packages
 

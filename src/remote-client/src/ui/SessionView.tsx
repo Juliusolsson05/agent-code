@@ -150,7 +150,7 @@ export function SessionView({
   // ghosts is the frozen empty map (no optimistic plane on the phone) and
   // lastJsonlEntryAt is irrelevant with no ghosts to invalidate.
   //
-  // Memo deps stay the scalar mirrors (semanticTurn/semanticHistory), NOT
+  // Memo deps stay the turn mirrors plus bounded errors, NOT
   // transcript.semantic: the fold object also changes reference on
   // flows/log-only updates, and re-firing on those would recompute the
   // pipeline more often than the desktop does for the same stream.
@@ -169,6 +169,7 @@ export function SessionView({
       transcript.entries,
       transcript.semanticTurn,
       transcript.semanticHistory,
+      transcript.semantic.errors,
       transcript.phase.streamPhase,
       transcript.phase.streamPhasePendingToolName,
       transcript.phase.streamPhasePendingToolUseId,
@@ -343,6 +344,7 @@ export function SessionView({
             trust dialog a blank page (review finding). */}
         {transcript.entries.length === 0 &&
         !transcript.semanticTurn &&
+        !ledgerFeedPlan.items.some(item => item.type === 'provider-notice') &&
         transcript.screenText ? (
           <div className="screen">
             {transcript.historyError && (

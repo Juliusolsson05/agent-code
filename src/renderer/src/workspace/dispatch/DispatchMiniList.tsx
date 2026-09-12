@@ -111,6 +111,9 @@ const DispatchMiniChip = memo(function DispatchMiniChip({
       streamPhase: current?.streamPhase,
       exited: current?.exited,
       entries: current?.entries,
+      // Live tmux cwd (#865), so a shell's chip tooltip follows `cd` the same
+      // way the full index's row title does — see DispatchAgentList.
+      terminalForeground: current?.terminalForeground,
     }
   }))
   const onClick = useCallback(() => onSelect(row), [onSelect, row])
@@ -123,7 +126,7 @@ const DispatchMiniChip = memo(function DispatchMiniChip({
   // tooltip label here: the mini selector is the scanning control for Tiled
   // Dispatch. If it keeps the historical latest-prompt-first rule, hover text
   // contradicts the explicit title shown in the adjacent index and pane.
-  const title = dispatchRowTitle(row, runtime.entries)
+  const title = dispatchRowTitle(row, runtime.entries, runtime.terminalForeground?.cwd)
 
   return (
     <button

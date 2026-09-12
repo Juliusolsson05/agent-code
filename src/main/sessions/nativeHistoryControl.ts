@@ -21,7 +21,12 @@ type CatalogRow = Awaited<ReturnType<ConversationService['list']>>['rows'][numbe
 // coverage block now reports the truth (scope-bounded and exhaustive within
 // the scope) instead of the old 400-candidate budget, and `fileSize` is a
 // constant zero because the catalog does not stat transcripts to list them.
-export function nativeHistoryControlCapabilities(service: ConversationService) {
+// WHY a getter rather than the service: the control host is built before the
+// workspace store opens (Root Agent Code Management needs the per-session
+// operator port before any provider registers), and the catalog joins the
+// ledger that store feeds. Handlers run only on later requests, so resolving
+// the service then keeps boot order untouched.
+export function nativeHistoryControlCapabilities(getService: () => ConversationService) {
   const rowToSession = (row: CatalogRow) => ({
     nativeSessionId: row.nativeId, summary: row.label.slice(0, 4000), lastModified: row.lastUserActivityAt, fileSize: 0,
     cwd: row.cwd || null, customTitle: row.agentCodeTitle, firstPrompt: row.firstPrompt?.slice(0, 4000) ?? null, gitBranch: row.gitBranch,
@@ -32,7 +37,7 @@ export function nativeHistoryControlCapabilities(service: ConversationService) {
       input: z.object({ query: z.string().trim().min(1).max(2000), cwd: z.string().min(1).optional(), resultLimit: z.number().int().min(1).max(800).default(100), ...pageInput }).strict(),
       output: pageSchema(z.object({ provider, nativeSessionId: z.string(), cwd: z.string().nullable(), lastModified: z.number(), summary: z.string(), matchCount: z.number(), prompts: z.array(z.object({ text: z.string(), totalChars: z.number(), timestamp: z.number().nullable() })) })).extend({ coverage: z.object({ providers: z.array(z.string()), candidatesPerProvider: z.number(), exhaustive: z.boolean(), possiblyMoreResults: z.boolean() }) }),
       handler: async input => {
-        const response = await service.list({ cwd: input.cwd ?? '', scope: input.cwd ? 'repository' : 'everywhere', query: input.query, includeChildren: true, limit: input.resultLimit })
+        const response = await getService().list({ cwd: input.cwd ?? '', scope: input.cwd ? 'repository' : 'everywhere', query: input.query, includeChildren: true, limit: input.resultLimit })
         // Hash full evidence before shortening text, so changing a prompt after
         // its preview boundary cannot silently reuse an old page revision.
         const page = paginate(response.rows, input, `native-search:${input.query}:${input.cwd ?? ''}:${input.resultLimit}`)
@@ -46,7 +51,7 @@ export function nativeHistoryControlCapabilities(service: ConversationService) {
       input: z.object({ provider, cwd: z.string().min(1).optional(), scanLimit: z.number().int().min(1).max(2000).default(500).describe('Number of recent native records to load before paging; keep fixed for continuation.'), ...pageInput }).strict(),
       output: pageSchema(session).extend({ provider, possiblyTruncated: z.boolean() }),
       handler: async input => {
-        const response = await service.list({ cwd: input.cwd ?? '', scope: input.cwd ? 'repository' : 'everywhere', providers: [input.provider], includeChildren: true, limit: input.scanLimit })
+        const response = await getService().list({ cwd: input.cwd ?? '', scope: input.cwd ? 'repository' : 'everywhere', providers: [input.provider], includeChildren: true, limit: input.scanLimit })
         return { ...paginate(response.rows.map(rowToSession), input, `native:${input.provider}:${input.cwd ?? ''}:${input.scanLimit}`), provider: input.provider, possiblyTruncated: response.nextCursor !== null }
       },
     }),

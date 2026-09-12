@@ -10,7 +10,7 @@ import type { SessionId } from '@renderer/workspace/types'
 
 import { usePinAgentsKeybinds } from './usePinAgentsKeybinds'
 
-// Modal for the `Pin Agents…` command. Multi-select: Space toggles
+// Modal for the `Pin Sessions…` command. Multi-select: Space toggles
 // the focused row, Enter commits, Escape cancels. Mouse click also
 // toggles; hover moves focus so a mouse user gets the same
 // selection-cursor feedback as a keyboard user.
@@ -77,7 +77,7 @@ export function PinAgentsModal({
         onKeyDown={onKeyDown}
         className="flex max-h-[80vh] w-[520px] max-w-[calc(100vw-64px)] flex-col p-5"
       >
-        <DialogTitle className="mb-1 flex-shrink-0 font-semibold">Pin Agents</DialogTitle>
+        <DialogTitle className="mb-1 flex-shrink-0 font-semibold">Pin Sessions</DialogTitle>
         <DialogDescription className="sr-only">
           Choose the agents pinned in Dispatch. Space toggles and Enter commits.
         </DialogDescription>

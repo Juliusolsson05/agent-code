@@ -1,23 +1,31 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
 
 const mocks = vi.hoisted(() => ({
-  read: vi.fn(),
-  project: vi.fn(),
+  locate: vi.fn(),
   write: vi.fn(),
   sessionId: vi.fn(),
+  readFile: vi.fn(),
 }))
 
 vi.mock('node:crypto', () => ({
-  randomUUID: () => '00000000-0000-4000-8000-000000000848',
+  randomUUID: () => '00000000-0000-4000-8000-000000000869',
 }))
+
+vi.mock('node:fs/promises', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>()
+  return {
+    ...actual,
+    readFile: mocks.readFile,
+  }
+})
 
 vi.mock('@main/providerSwitch/transcriptEngine.js', () => ({
   getHostTranscriptAdapter(provider: string) {
     if (provider !== 'codex') throw new Error('No transcript engine adapter is registered')
     return {
       provider,
-      read: mocks.read,
-      projectNativeResume: mocks.project,
+      locate: mocks.locate,
       write: mocks.write,
       sessionId: mocks.sessionId,
     }
@@ -26,110 +34,40 @@ vi.mock('@main/providerSwitch/transcriptEngine.js', () => ({
 
 import { stripCodexCyberPolicy } from './stripCodexCyberPolicy.js'
 
-const sourceConversation = {
-  schemaVersion: 1 as const,
-  sourceProvider: 'codex' as const,
-  sourceSessionIds: ['source-session'],
-  entries: [
-    {
-      kind: 'message' as const,
-      role: 'user' as const,
-      content: [{ kind: 'text' as const, text: 'build it' }],
-      timestamp: '2026-09-10T00:00:01.000Z',
-      source: { provider: 'codex', line: 1, raw: {}, evidence: [] },
-    },
-    {
-      kind: 'message' as const,
-      role: 'assistant' as const,
-      content: [{ kind: 'text' as const, text: 'working' }],
-      timestamp: '2026-09-10T00:00:02.000Z',
-      source: { provider: 'codex', line: 2, raw: {}, evidence: [] },
-    },
-    {
-      kind: 'tool-call' as const,
-      callId: 'call-kept',
-      name: 'exec',
-      input: { cmd: 'ls' },
-      nativeKind: 'custom_tool_call',
-      timestamp: '2026-09-10T00:00:03.000Z',
-      source: { provider: 'codex', line: 3, raw: {}, evidence: [] },
-    },
-    {
-      kind: 'tool-result' as const,
-      callId: 'call-kept',
-      output: 'ok',
-      isError: null,
-      nativeKind: 'custom_tool_call_output',
-      timestamp: '2026-09-10T00:00:04.000Z',
-      source: { provider: 'codex', line: 4, raw: {}, evidence: [] },
-    },
-    {
-      kind: 'tool-call' as const,
-      callId: 'call-last',
-      name: 'exec',
-      input: { cmd: 'rg' },
-      nativeKind: 'custom_tool_call',
-      timestamp: '2026-09-10T00:00:05.000Z',
-      source: { provider: 'codex', line: 5, raw: {}, evidence: [] },
-    },
-    {
-      kind: 'tool-result' as const,
-      callId: 'call-last',
-      output: 'flagged-input',
-      isError: null,
-      nativeKind: 'custom_tool_call_output',
-      timestamp: '2026-09-10T00:00:06.000Z',
-      source: { provider: 'codex', line: 6, raw: {}, evidence: [] },
-    },
-    {
-      kind: 'opaque' as const,
-      nativeType: 'event_msg',
-      timestamp: '2026-09-10T00:00:07.000Z',
-      source: {
-        provider: 'codex',
-        line: 7,
-        raw: {
-          type: 'event_msg',
-          payload: {
-            type: 'task_complete',
-            error: { codex_error_info: 'cyber_policy', message: 'flagged' },
-          },
-        },
-        evidence: [],
-      },
-    },
-  ],
-}
+const fixture = readFileSync(
+  new URL('../../../testing/fixtures/codex-cyber-policy-native-clone/source.jsonl', import.meta.url),
+  'utf8',
+)
 
 describe('stripCodexCyberPolicy', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    mocks.read.mockResolvedValue(sourceConversation)
-    mocks.project.mockResolvedValue({ values: [{ type: 'session_meta' }] })
-    mocks.sessionId.mockReturnValue('new-session')
+    mocks.locate.mockResolvedValue('/tmp/source.jsonl')
+    mocks.readFile.mockResolvedValue(fixture)
+    mocks.sessionId.mockImplementation((values: Array<{ payload?: { id?: string } }>) => (
+      values[0]?.payload?.id ?? 'missing'
+    ))
     mocks.write.mockResolvedValue('/target/rollout.jsonl')
   })
 
-  it('projects the conversation with the last model step removed and writes only then', async () => {
+  it('writes a native clone of the source rollout, not a native-resume reconstruction', async () => {
     const result = await stripCodexCyberPolicy({
       provider: 'codex',
       sourceProviderSessionId: 'source-session',
       cwd: '/project',
     })
 
-    expect(mocks.project).toHaveBeenCalledWith(
-      expect.objectContaining({
-        entries: sourceConversation.entries.slice(0, 4),
-      }),
-      expect.objectContaining({
-        cwd: '/project',
-        targetSessionId: '00000000-0000-4000-8000-000000000848',
-      }),
-    )
+    expect(mocks.readFile).toHaveBeenCalledWith('/tmp/source.jsonl', 'utf8')
     expect(mocks.write).toHaveBeenCalledOnce()
+    const written = mocks.write.mock.calls[0]?.[1] as Array<Record<string, unknown>>
+    const serialized = JSON.stringify(written)
+    expect(serialized).toContain('"type":"agent_message"')
+    expect(serialized).toContain('inter_agent_communication_metadata')
+    expect(serialized).not.toContain('cyber_policy')
+    expect(serialized).not.toContain('call-last')
     expect(result).toEqual({
       provider: 'codex',
-      newProviderSessionId: 'new-session',
+      newProviderSessionId: '00000000-0000-4000-8000-000000000869',
       newFilePath: '/target/rollout.jsonl',
     })
   })
@@ -140,30 +78,19 @@ describe('stripCodexCyberPolicy', () => {
       sourceProviderSessionId: 'source-session',
       cwd: '/project',
     })).rejects.toThrow(/Codex/)
-    expect(mocks.read).not.toHaveBeenCalled()
+    expect(mocks.locate).not.toHaveBeenCalled()
     expect(mocks.write).not.toHaveBeenCalled()
   })
 
   it('does not write when the session has no cyber policy block', async () => {
-    mocks.read.mockResolvedValueOnce({
-      ...sourceConversation,
-      entries: sourceConversation.entries.slice(0, 2),
-    })
+    mocks.readFile.mockResolvedValueOnce(
+      '{"timestamp":"2026-09-10T00:00:00.000Z","type":"session_meta","payload":{"id":"source-session","timestamp":"2026-09-10T00:00:00.000Z","cwd":"/project"}}\n{"timestamp":"2026-09-10T00:00:01.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}}\n',
+    )
     await expect(stripCodexCyberPolicy({
       provider: 'codex',
       sourceProviderSessionId: 'source-session',
       cwd: '/project',
     })).rejects.toThrow(/No cybersecurity block/)
-    expect(mocks.write).not.toHaveBeenCalled()
-  })
-
-  it('does not write when native projection fails', async () => {
-    mocks.project.mockRejectedValueOnce(new Error('profile rejected'))
-    await expect(stripCodexCyberPolicy({
-      provider: 'codex',
-      sourceProviderSessionId: 'source-session',
-      cwd: '/project',
-    })).rejects.toThrow('profile rejected')
     expect(mocks.write).not.toHaveBeenCalled()
   })
 })
