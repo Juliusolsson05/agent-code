@@ -36,6 +36,20 @@ export async function deliverOpencodePrompt(
     await io.session.deliverPromptText(io.prompt)
     return { ok: true, acceptance: { kind: 'transport', acceptedAt: Date.now() } }
   } catch (err) {
+    if (isTerminalRejectedError(err)) {
+      return {
+        ok: false,
+        // A refusal is the one failure that proves nothing was written: the
+        // server declined the request rather than forking a turn.
+        stage: 'before-write',
+        code: 'transport-failed',
+        message: `opencode prompt delivery refused for session ${io.sessionId}: ${err.message}`,
+        retrySafe: false,
+        disposition: 'do-not-retry',
+        promptWritten: false,
+        enterWritten: false,
+      }
+    }
     if (isTerminalNotReadyError(err)) {
       return {
         ok: false,
@@ -50,8 +64,10 @@ export async function deliverOpencodePrompt(
     }
     return {
       ok: false,
-      // Both runtimes can throw after crossing a non-transactional
-      // boundary, so retrying could duplicate an already accepted prompt.
+      // Everything else, including the package's `unknown`: the request was
+      // dispatched and its outcome was never learned. OpenCode forks the
+      // prompt work before it acknowledges, so retrying could duplicate a turn
+      // that is already running. Report the write as possibly-performed.
       stage: 'after-enter',
       code: 'transport-failed',
       message: `opencode prompt delivery failed for session ${io.sessionId}: ${
@@ -63,6 +79,12 @@ export async function deliverOpencodePrompt(
       enterWritten: false,
     }
   }
+}
+
+function isTerminalRejectedError(
+  error: unknown,
+): error is Error & { code: 'opencode-terminal-rejected' } {
+  return error instanceof Error && (error as { code?: unknown }).code === 'opencode-terminal-rejected'
 }
 
 function isTerminalNotReadyError(

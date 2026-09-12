@@ -701,6 +701,33 @@ export function AgentTerminalLeaf({
         }
       />
 
+      {/* WHY the raw pane carries its own transcript diagnostic:
+          every other surface that shows one (Agent Status, the Dispatch row)
+          can be closed, and this pane is the one the user is actually looking
+          at. The case that forced it is a TUI session switch: the user runs
+          /new or picks another session inside the TUI, this pane goes on
+          following the session it launched with, and with Dispatch and Agent
+          Status closed nothing on screen said so. A pane that quietly names
+          the wrong conversation is the failure the whole signal exists to
+          prevent, so it must be visible HERE.
+
+          It takes layout space rather than overlaying: the terminal is the
+          content, and covering a line of it to report a problem would be its
+          own small lie. xterm's fit addon reflows on the resulting resize.
+          Nothing here is focusable, so the terminal keeps keyboard focus. */}
+      {runtime.transcriptError ? (
+        <div
+          data-terminal-transcript-error="true"
+          role="status"
+          className="
+            mx-2 mt-1 flex-shrink-0 rounded-control border border-warning-border
+            bg-warning-soft px-2 py-1 text-[10px] leading-snug text-warning
+          "
+        >
+          {runtime.transcriptError}
+        </div>
+      ) : null}
+
       <div className="flex-1 min-h-0 min-w-0 overflow-hidden p-2">
         <div
           ref={containerRef}

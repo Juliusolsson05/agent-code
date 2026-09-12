@@ -24,6 +24,20 @@ class OpencodeTerminalNotReadyError extends Error {
 }
 
 /**
+ * The server answered, and its answer was no.
+ *
+ * WHY this is distinct from the generic failure below it: a refusal is the one
+ * failure that proves NOTHING was written — the server rejected the request
+ * instead of forking a turn — so reporting `promptWritten: true` for it would
+ * overstate what happened and could make a caller discard a draft it still
+ * needs. It is still not retry-safe: resending a prompt the server just
+ * refused only produces the same refusal.
+ */
+class OpencodeTerminalRejectedError extends Error {
+  readonly code = 'opencode-terminal-rejected'
+}
+
+/**
  * Injection seams. Production uses the defaults; tests replace the PTY spawn
  * (no real TUI) and the launch step (point the reader at a recorded replay).
  * The headless itself is always the real package, so adapter tests exercise
@@ -307,14 +321,25 @@ export class OpencodeTerminalSession extends EventEmitter implements AgentSessio
     const result = await headless.submitPrompt(text)
     if (result.ok) return
     if (result.reason === 'no-live-channel' || result.reason === 'unreachable') {
-      // These failures prove that submission never reached an accepting
-      // server. Preserve the existing pre-write marker so orchestration can
-      // retain the draft and retry this same pane once its server is ready.
+      // These two, and ONLY these two, prove the request was never dispatched:
+      // the instance was not running, or the deadline expired while we were
+      // still waiting to connect. Preserve the pre-write marker so
+      // orchestration can retain the draft and retry this same pane.
+      //
+      // `unknown` deliberately does NOT come here. It used to, because the
+      // package reported one `unreachable` for both, and that told callers a
+      // prompt the server may already be running was safe to send again.
       throw new OpencodeTerminalNotReadyError(result.detail ?? `OpenCode server is not ready (${result.reason})`)
     }
-    // A server refusal is not a startup delay. Leave it on the conservative
-    // non-retry path rather than repeatedly sending an invalid prompt.
-    throw new Error(result.detail ?? 'OpenCode server rejected the prompt')
+    if (result.reason === 'rejected') {
+      throw new OpencodeTerminalRejectedError(result.detail ?? 'OpenCode server rejected the prompt')
+    }
+    // `unknown`: the POST was dispatched and its fate is unknown. OpenCode's
+    // route forks the prompt work before answering, so the turn may already be
+    // running. Fall through to the generic failure, which reports the write as
+    // possibly-performed and refuses to retry — the only honest answer when we
+    // cannot tell whether the user's work was submitted.
+    throw new Error(result.detail ?? 'OpenCode prompt delivery outcome is unknown')
   }
 
   /**

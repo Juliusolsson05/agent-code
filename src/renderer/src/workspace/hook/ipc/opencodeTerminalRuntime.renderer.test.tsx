@@ -150,8 +150,11 @@ describe('an OpenCode Terminal pane driven by a recorded TUI session, end to end
         const once = pane.runtime().conditions!.conditions['opencode.permission']!.actions
           .find(action => action.label === 'Allow once') as ConditionCustomAction
         // The resolver external condition control calls (SessionManager →
-        // adapter → the TUI's own server), not a pane button: the terminal
-        // surface renders no answer buttons (a pending owner decision).
+        // adapter → the TUI's own server), not a pane button. The terminal
+        // surface renders no answer buttons by decision, not by omission:
+        // permissions and questions are answered in the TUI itself, on the
+        // phone, or through MCP. Duplicating them in the pane would put two
+        // live answer paths on one prompt.
         await expect(pane.manager.resolveCondition(SESSION_ID, once)).resolves.toEqual({ ok: true })
         expect(pane.server.calls).toContainEqual(expect.objectContaining({
           method: 'POST',

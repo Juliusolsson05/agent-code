@@ -103,11 +103,51 @@ describe('OpenCode terminal server-acknowledged prompt delivery', () => {
     expect(pty.writes).toEqual([])
   })
 
-  it('reports server rejection as non-retry-safe and submits only once', async () => {
+  it('refuses to call a POST the server already received retry-safe, even when its acknowledgement never arrives', async () => {
+    // The defect this protects against: the package used to report one
+    // `unreachable` both for "never dispatched" and for "dispatched, fate
+    // unknown", and the adapter turned every `unreachable` into a retry-safe
+    // not-ready failure. OpenCode's prompt_async route FORKS the prompt work
+    // before it answers, so the turn can already be running — a caller
+    // following that advice submits the user's work a second time.
+    //
+    // The server here receives the whole body and simply never answers, which
+    // is indistinguishable from a lost acknowledgement.
+    const { server, pty, deliver } = await start()
+    const held = server.holdNext(PROMPT_PATH)
+    const pending = deliver('ambiguous acknowledgement')
+    try {
+      await held.arrived
+      expect(server.calls.filter(call => call.path === PROMPT_PATH)).toHaveLength(1)
+      await expect(pending).resolves.toMatchObject({
+        ok: false,
+        retrySafe: false,
+        disposition: 'do-not-retry',
+        // Possibly performed, not "never happened": the honest report when the
+        // server may be mid-turn on this prompt.
+        promptWritten: true,
+      })
+      // agents.prompt derives its outcome from retrySafe, so a false here is
+      // what makes the control surface say `unknown` instead of `not_started`.
+      expect(server.calls.filter(call => call.path === PROMPT_PATH)).toHaveLength(1)
+      expect(pty.writes).toEqual([])
+    } finally {
+      held.release()
+      await pending.catch(() => {})
+    }
+  })
+
+  it('reports server rejection as non-retry-safe, and as nothing written', async () => {
     const { server, pty, deliver } = await start()
     server.setFailing(PROMPT_PATH, true)
     await expect(deliver('rejected prompt')).resolves.toMatchObject({
       ok: false, retrySafe: false, disposition: 'do-not-retry', message: expect.stringContaining('500'),
+      // `stage`/`promptWritten` are what separate a refusal from an ambiguous
+      // acknowledgement. Both refuse to retry, but a server that answered "no"
+      // provably created nothing, while a dispatched POST with no answer may
+      // already be running. Asserting only retrySafe/disposition would let the
+      // two collapse back into one branch without any test noticing.
+      stage: 'before-write', promptWritten: false,
     })
     expect(server.calls.filter(call => call.method === 'POST')).toHaveLength(1)
     expect(pty.writes).toEqual([])

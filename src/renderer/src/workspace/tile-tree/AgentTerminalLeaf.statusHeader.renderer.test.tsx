@@ -152,6 +152,30 @@ describe('AgentTerminalLeaf status header', () => {
     expect(statusRow(container).getAttribute('data-status-lit')).toBe('false')
   })
 
+  it('shows a transcript diagnostic inside the pane, and clears it when it resolves', () => {
+    // #894 / feature E. The TUI can switch session under us — /new, /sessions,
+    // a fork — and this pane goes on following the session it launched with.
+    // Agent Status and the Dispatch row report that, but BOTH can be closed,
+    // and this pane is the one the user is looking at. Testing the formatting
+    // helper alone is exactly how this shipped invisible, so this mounts the
+    // real leaf and reads the rendered text.
+    const switched = {
+      ...withStatus('idle'),
+      transcriptError: 'OpenCode switched to session ses_new inside the TUI. This pane still follows ses_old.',
+    }
+    const { container, rerender } = render(leaf(switched, true))
+    const banner = container.querySelector('[data-terminal-transcript-error="true"]')
+    expect(banner?.textContent).toContain('ses_new')
+    expect(banner?.textContent).toContain('still follows ses_old')
+    // It must not swallow keyboard focus from the terminal.
+    expect(banner?.querySelector('button, input, a, [tabindex]')).toBeNull()
+
+    // The negative half: a banner that never clears would be its own lie, and
+    // a leaf that only read the error at mount would pass the assertion above.
+    rerender(leaf(withStatus('idle'), true))
+    expect(container.querySelector('[data-terminal-transcript-error="true"]')).toBeNull()
+  })
+
   it('leaves the header unlit while running when Status Mode is off', () => {
     // Status Mode is a user setting. Terminal view must honor it the same
     // way rendered panes do, rather than lighting unconditionally.
