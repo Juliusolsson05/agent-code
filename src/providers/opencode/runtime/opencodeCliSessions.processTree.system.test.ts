@@ -1,0 +1,182 @@
+import { existsSync, readFileSync } from 'node:fs'
+import { mkdtemp, mkdir, readdir, realpath, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { performance } from 'node:perf_hooks'
+import { spawn, type ChildProcess } from 'node:child_process'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+// OpenCode's npm launcher is a Node process whose native child inherits stdout
+// and stderr (see testing/launcherCli.mjs). A single-process fake cannot show
+// that a kill path reaches a descendant, or that settlement stops waiting on
+// one, so these cases run a real two-process tree against runOpencode. They
+// live apart from opencodeCliSessions.system.test.ts because they own a spawn
+// seam (startTree) and a fixture that the output-integrity cases do not need.
+vi.mock('node:child_process', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:child_process')>()
+  return { ...actual, spawn: vi.fn(actual.spawn) }
+})
+import { exportOpencodeSession } from './opencodeCliSessions.js'
+
+const { spawn: realSpawn } = await vi.importActual<typeof import('node:child_process')>('node:child_process')
+
+// Readiness gets a generous budget. The termination bounds stay tight because
+// they only start once the tree is ready (see startTree), and the per-test
+// timeout covers the readiness budget plus the bounds and cleanup.
+const READY_BUDGET_MS = 10_000
+const SETTLE_MARGIN_MS = 2_000
+const TEST_TIMEOUT_MS = 30_000
+
+type Tree = { pid: number; launcherPid: number }
+type Run = {
+  statusFile: string
+  controller: AbortController
+  outcome: Promise<Error>
+  launcher: { child?: ChildProcess; spawnedAt?: number }
+}
+
+let root: string
+let cwd: string
+beforeEach(async () => {
+  root = await realpath(await mkdtemp(join(tmpdir(), 'opencode-tree-test-')))
+  cwd = join(root, 'project')
+  await mkdir(cwd)
+  vi.stubEnv('TMPDIR', root)
+  vi.stubEnv('TMP', root)
+  vi.stubEnv('TEMP', root)
+})
+afterEach(async () => {
+  vi.clearAllMocks()
+  vi.unstubAllEnvs()
+  await rm(root, { recursive: true, force: true })
+})
+async function expectClean() { expect(await readdir(root)).toEqual(['project']) }
+
+/**
+ * Start one export against a real launcher tree that is ready before any bound arms.
+ *
+ * WHY runOpencode's spawn() call is held until the descendant reports: the
+ * deadline and the size guard are armed only after spawn returns. Handing the
+ * launcher back at once let a slow Node start on a loaded runner race a correct
+ * short deadline. The tree could be killed before the descendant existed, and
+ * the test then failed on readiness without ever exercising termination of an
+ * established tree. Blocking the synchronous spawn call makes readiness a
+ * precondition of every bound instead of a competitor, so the bounds can stay
+ * tight. Atomics.wait is the only synchronous sleep available; both fixture
+ * processes keep running while this worker waits.
+ *
+ * The seam also hands the test the launcher's ChildProcess at spawn time, so
+ * cleanup owns the launcher even when readiness never arrives. If the budget
+ * runs out, spawn returns anyway and ready() fails with its own message.
+ */
+function startTree(descendant: 'hang' | 'overflow' | 'escaped', timeoutMs?: number): Run {
+  const statusFile = join(cwd, 'descendant.json')
+  const launcher: Run['launcher'] = {}
+  vi.mocked(spawn).mockImplementationOnce(((...args: Parameters<typeof realSpawn>) => {
+    const child = realSpawn(...args)
+    launcher.child = child
+    const readyBy = performance.now() + READY_BUDGET_MS
+    const pause = new Int32Array(new SharedArrayBuffer(4))
+    while (!existsSync(statusFile) && performance.now() < readyBy) Atomics.wait(pause, 0, 0, 10)
+    launcher.spawnedAt = performance.now()
+    return child
+  }) as typeof spawn)
+  const controller = new AbortController()
+  const env = { ...process.env, NODE_OPTIONS: `--import=${new URL('./testing/launcherCli.mjs', import.meta.url).href}`, OPENCODE_LAUNCHER_DESCENDANT: descendant, OPENCODE_LAUNCHER_STATUS: statusFile }
+  const outcome = exportOpencodeSession({ binary: process.execPath, cwd, env, signal: controller.signal, ...(timeoutMs === undefined ? {} : { timeoutMs }) }, 'ses_fixture')
+    .then(() => new Error('resolved'), (error: Error) => error)
+  return { statusFile, controller, outcome, launcher }
+}
+
+async function ready(run: Run): Promise<Tree> {
+  await waitUntil(() => run.launcher.spawnedAt !== undefined, READY_BUDGET_MS + 5_000, 'launcher spawn')
+  expect(existsSync(run.statusFile), 'fixture tree ready before runOpencode armed its bounds').toBe(true)
+  const tree = JSON.parse(readFileSync(run.statusFile, 'utf8')) as Tree
+  // The launcher reports its own pid. A descendant's ppid is not evidence: an
+  // escaped child whose launcher already exited has been reparented.
+  expect(tree.launcherPid).toBe(run.launcher.child?.pid)
+  return tree
+}
+
+/**
+ * Release everything a tree test started, on success and on failure.
+ *
+ * Abort comes first. When a test fails before it observed the tree (no status,
+ * or a failed assertion before its trigger), runOpencode's own terminate() is
+ * the only code that can end the group, and without the abort `outcome` would
+ * wait for the 30 s default deadline while the tree outlived the test. The
+ * launcher is killed through its ChildProcess, which Node makes a no-op once
+ * reaped, never through a raw pid that could since have been reused.
+ */
+async function release(run: Run, tree: Tree | undefined) {
+  run.controller.abort()
+  run.launcher.child?.kill('SIGKILL')
+  if (tree && alive(tree.pid)) process.kill(tree.pid, 'SIGKILL')
+  await run.outcome
+}
+
+describe('OpenCode CLI process-tree termination', () => {
+  it.each([
+    { trigger: 'timeout', descendant: 'hang', message: 'timed out after 1000 ms' },
+    { trigger: 'stop', descendant: 'hang', message: 'OpenCode command cancelled' },
+    { trigger: 'output overflow', descendant: 'overflow', message: 'output exceeds' },
+  ] as const)('settles on $trigger and kills a descendant holding stdout and stderr', async ({ trigger, descendant, message }) => {
+    const run = startTree(descendant, trigger === 'timeout' ? 1000 : undefined)
+    let tree: Tree | undefined
+    try {
+      tree = await ready(run)
+      if (trigger === 'stop') run.controller.abort()
+      // Every bound counts from spawn's return, which is also readiness, and
+      // sits far below the 30 s default: a broken kill path fails here instead
+      // of being rescued by the default deadline.
+      const settleBy = run.launcher.spawnedAt! + (trigger === 'timeout' ? 1000 : 0) + SETTLE_MARGIN_MS
+      const failure = await within(run.outcome, settleBy - performance.now())
+      expect(failure, `${trigger} settles within its bound`).toBeInstanceOf(Error)
+      expect((failure as Error).message).toContain(message)
+      await waitUntil(() => !alive(tree!.pid), 2000, 'descendant exit')
+      await expectClean()
+    } finally {
+      await release(run, tree)
+    }
+  }, TEST_TIMEOUT_MS)
+
+  it('settles a timeout when a descendant left the process group but kept stderr', async () => {
+    // A group kill cannot reach a descendant in its own session. Settlement is
+    // still bounded because terminate() releases stderr, the pipe `close` would
+    // otherwise wait on. The survivor is out of reach by design, so release()
+    // kills it rather than the test asserting it dead.
+    const run = startTree('escaped', 1000)
+    let tree: Tree | undefined
+    try {
+      tree = await ready(run)
+      const failure = await within(run.outcome, run.launcher.spawnedAt! + 1000 + SETTLE_MARGIN_MS - performance.now())
+      expect(failure, 'timeout settles within its bound').toBeInstanceOf(Error)
+      expect((failure as Error).message).toContain('timed out after 1000 ms')
+      expect(run.launcher.child!.signalCode).toBe('SIGKILL')
+      await expectClean()
+    } finally {
+      await release(run, tree)
+    }
+  }, TEST_TIMEOUT_MS)
+})
+
+function alive(pid: number) {
+  try { process.kill(pid, 0); return true } catch { return false }
+}
+
+async function within<T>(promise: Promise<T>, ms: number): Promise<T | 'pending'> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([promise, new Promise<'pending'>(resolve => { timer = setTimeout(() => resolve('pending'), Math.max(0, ms)) })])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+async function waitUntil(predicate: () => boolean, timeoutMs: number, label: string): Promise<void> {
+  const deadline = performance.now() + timeoutMs
+  while (!predicate()) {
+    if (performance.now() >= deadline) throw new Error(`timed out waiting for ${label}`)
+    await new Promise(resolve => setImmediate(resolve))
+  }
+}

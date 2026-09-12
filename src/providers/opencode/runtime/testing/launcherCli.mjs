@@ -23,15 +23,18 @@ import { fileURLToPath } from 'node:url'
 const behaviour = process.env.OPENCODE_LAUNCHER_DESCENDANT
 const statusFile = process.env.OPENCODE_LAUNCHER_STATUS
 if (process.env.OPENCODE_LAUNCHER_ROLE === 'descendant') {
-  // Status before overflow: the size guard kills the tree within one 100 ms
-  // poll of the overflow, and the test needs both pids before that happens.
-  writeFileSync(`${statusFile}.tmp`, JSON.stringify({ pid: process.pid, launcherPid: process.ppid }))
+  // The status file is the tree's readiness signal. It carries the launcher
+  // pid the launcher itself passed down: process.ppid is not reliable, because
+  // an escaped descendant whose launcher already exited has been reparented.
+  // Status comes before overflow so the test learns both pids before the size
+  // guard kills the tree.
+  writeFileSync(`${statusFile}.tmp`, JSON.stringify({ pid: process.pid, launcherPid: Number(process.env.OPENCODE_LAUNCHER_PID) }))
   renameSync(`${statusFile}.tmp`, statusFile)
   // Sparse, as in abruptCli.mjs: over the limit without writing 256 MiB.
   if (behaviour === 'overflow') ftruncateSync(1, 256 * 1024 * 1024 + 1)
 } else {
   spawn(process.execPath, [fileURLToPath(import.meta.url)], {
-    env: { ...process.env, NODE_OPTIONS: '', OPENCODE_LAUNCHER_ROLE: 'descendant' },
+    env: { ...process.env, NODE_OPTIONS: '', OPENCODE_LAUNCHER_ROLE: 'descendant', OPENCODE_LAUNCHER_PID: String(process.pid) },
     stdio: 'inherit',
     detached: behaviour === 'escaped',
   })
