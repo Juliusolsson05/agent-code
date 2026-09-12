@@ -58,6 +58,23 @@ export const tabCommands: CommandDef[] = [
     },
   },
   {
+    id: 'merge-project-tabs',
+    category: 'layout-dispatch',
+    surface: 'app',
+    title: 'Merge Project Tabs',
+    description: '**What it does:** Folds other tabs into one tab. Their agents move to the target\'s Dispatch list; nothing restarts.\n\n**Use when:** The same folder ended up open in several tabs, or worktree tabs belong together.\n\n**Notes:** Buried panes and Dispatch row filters follow the target. No agent is closed, so anything can be re-arranged afterwards; the dialog lists what moves before you confirm. Moved grid panes become Dispatch agents, so after the next launch they wake on first use like any other Dispatch agent instead of being live from the start.',
+    keywords: ['merge tabs', 'combine tabs', 'duplicate tab', 'same project', 'fold tabs', 'dispatch', 'worktree'],
+    when: ({ workspace }) => workspace.state.tabs.length > 1,
+    getState: ({ flags }) => panel(flags.mergeProjectTabsOpen),
+    run: ({ ui, flags }) => {
+      if (flags.mergeProjectTabsOpen) {
+        ui.closeMergeProjectTabs()
+        return
+      }
+      ui.openMergeProjectTabs()
+    },
+  },
+  {
     id: 'resume-session',
     category: 'session',
     surface: 'app',
