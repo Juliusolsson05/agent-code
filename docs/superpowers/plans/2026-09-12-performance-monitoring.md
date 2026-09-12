@@ -2,7 +2,7 @@
 
 Issue: [#944](https://github.com/Juliusolsson05/agent-code/issues/944)
 
-Status: design complete for implementation planning; no runtime changes or measured overhead claims.
+Status: implementation authorized; stage 1 contracts and synthetic producer benchmark implemented (issue #948), awaiting review/CI. Stages 2–6 remain active work.
 Audited base: `115e26fc9c67316a3b0b1b4318f47f7a2bea3606` (2026-09-12).
 Branch: `feat/performance-monitoring`.
 
@@ -22,7 +22,8 @@ Working assumptions for this plan: local collection, explicit report export,
 and equal priority for live visibility and explanations. Centralized reporting
 remains an open product decision. Automatic uploads and a remote ingestion
 service are not prerequisites for the local implementation.
-This pass produces the architecture and rollout plan, not the production rollout.
+The user authorized building the full plan on 2026-09-12. Local collection and
+explicit export remain the implementation defaults.
 
 ### The experience to build
 
@@ -465,7 +466,11 @@ advanced profiling is bounded, existing crash evidence remains intact, and the
 overhead/soak/review evidence meets the agreed gates. A CPU chart alone does not
 complete #944.
 
-Plan validation performed: repository/source and issue audit, current primary
-API documentation checks, scope/dependency review, and local file-link/diff
-validation. Runtime tests and performance benchmarks have not been run because
-this commit contains planning only.
+Stage 1 validation: 20 focused tests passed for privacy/schema rejection, byte
+and record queue limits, overload, and weighted histogram rollups; the shared
+production modules pass a strict standalone TypeScript check. A synthetic
+100,000-operation producer benchmark on arm64/Node 25.5.0 measured p99 2.042 µs
+for validation + queue admission + histogram update (61.605 ms process CPU).
+This is a microbenchmark, not a packaged-app overhead measurement. Worker,
+on/off app, UI, and soak qualification remain later-stage checks. The harness is
+`npm run benchmark:monitoring`; no user recordings or credentials are read.
