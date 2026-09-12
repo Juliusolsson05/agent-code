@@ -43,6 +43,7 @@ export const createUiShellSlice: StateCreator<
   htmlDebugPanelOpen: false,
   renderingDebugMode: false,
   tailAllMode: false,
+  tailWorkingMode: false,
   devDebugPanelOpen: false,
   agentStatusPanelOpen: false,
   performancePanelOpen: false,
@@ -254,9 +255,17 @@ export const createUiShellSlice: StateCreator<
     ),
   toggleTailAllMode: () =>
     set(
-      state => ({ tailAllMode: !state.tailAllMode }),
+      // Atomic policy switch: no intermediate render may follow idle panes
+      // while the palette already claims the narrower Working mode is active.
+      state => ({ tailAllMode: !state.tailAllMode, tailWorkingMode: false }),
       false,
       'uiShell/toggleTailAllMode',
+    ),
+  toggleTailWorkingMode: () =>
+    set(
+      state => ({ tailWorkingMode: !state.tailWorkingMode, tailAllMode: false }),
+      false,
+      'uiShell/toggleTailWorkingMode',
     ),
   toggleDevDebugPanel: () =>
     set(

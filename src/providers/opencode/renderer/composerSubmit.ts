@@ -16,9 +16,9 @@
 // site also rolls back the optimistic user bubble on this throw.
 
 import type { ComposerSubmitIo } from '@providers/registry.renderer.capabilities'
-import type { PromptDeliveryResult } from '@shared/types/providerConfig'
+import type { PromptAcceptance, PromptDeliveryResult } from '@shared/types/providerConfig'
 
-export async function opencodeComposerSubmit(io: ComposerSubmitIo): Promise<void> {
+export async function opencodeComposerSubmit(io: ComposerSubmitIo): Promise<PromptAcceptance> {
   const result = await io.deliverPrompt(io.input)
   if (!result.ok) {
     // The shared composer catch owns draft/optimistic-row recovery, but it can
@@ -31,4 +31,8 @@ export async function opencodeComposerSubmit(io: ComposerSubmitIo): Promise<void
     error.promptDeliveryResult = result
     throw error
   }
+  // OpenCode reports `transport` acceptance today; returning it keeps the
+  // capability contract uniform so the composer's queue settle (#889) needs
+  // no provider branch when OpenCode grows a queue of its own.
+  return result.acceptance
 }

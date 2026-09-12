@@ -225,6 +225,7 @@ export type CommandContext = {
     toggleRenderingDebugMode: () => void
     /** Flip workspace-wide feed auto-follow (every visible agent pane). */
     toggleTailAllMode: () => void
+    toggleTailWorkingMode: () => void
     toggleDevDebugPanel: () => void
     toggleAgentStatusPanel: () => void
     togglePerformancePanel: () => void
@@ -358,6 +359,8 @@ export type CommandContext = {
      *  (its own on/off label) and per-session `Tail`, which must not report
      *  "Off" while the pane it targets is visibly tailing because of this. */
     tailAllMode: boolean
+    /** Window-wide follow applies only while the target agent is working. */
+    tailWorkingMode: boolean
     devDebugEnabled: boolean
     /** The recording CAPABILITY is available (dev-debug on). Gates the
      *  Start/Stop Session Recording and Attach-Recording-Note commands (plan

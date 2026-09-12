@@ -45,6 +45,26 @@ function queuedPromptPreview(content: string): string {
   return `${compact.slice(0, PREVIEW_CHARACTERS - 1).trimEnd()}…`
 }
 
+// A queued item's identity: (timestamp, content). This is not a new identity
+// invented for the strip. It is the one the queue pipeline already uses: the
+// Claude reconciler's enqueue idempotence guard
+// (session-runtime/claudeQueue/reconcile.ts) and this component's dialog
+// selection both match on it. Claude's `timestamp` is the producer clock copied
+// from the JSONL record, so redelivery and the reducer rebuilding arrays on
+// every fold (or marking an item stale) keep it equal. The Codex/OpenCode
+// placeholders mint theirs once when queued and keep the object. Two identical
+// prompts with the same producer timestamp are one item to the reconciler too.
+function isSameQueuedMessage(a: QueuedMessage, b: QueuedMessage): boolean {
+  return a.timestamp === b.timestamp && a.content === b.content
+}
+
+function sharesQueuedMessage(
+  previous: readonly QueuedMessage[],
+  next: readonly QueuedMessage[],
+): boolean {
+  return next.some(item => previous.some(prior => isSameQueuedMessage(prior, item)))
+}
+
 function QueuedPromptDialog({
   message,
   position,
@@ -102,6 +122,47 @@ export function QueueStrip({
 }) {
   const listId = useId()
   const [collapsed, setCollapsed] = useState(false)
+  // WHY collapse is scoped to a queue EPISODE (#890): TileLeaf keeps this
+  // component mounted while the queue is empty (it renders null), so a single
+  // "hide" survived into every later queue episode. The 2026-09-11 screenshot
+  // shows exactly that — a freshly queued prompt behind a strip the user had
+  // collapsed minutes earlier, while the pane also painted `Sending` (#889).
+  // During the queued window the strip is the ONLY place the prompt exists in
+  // Agent Code (the durable feed row paints at the drain, #665), so a new
+  // episode must always start expanded. Collapsing stays a per-episode gesture.
+  //
+  // WHY the episode boundary is "no queued item survives" and not "the queue
+  // rendered empty" (#893 review, Codex minor / Claude F8): the first fix reset
+  // on an observed empty render, but main coalesces JSONL tail reads and the
+  // Claude branch folds a whole burst in ONE runtime update
+  // (useIpcSubscriptions, queue-operation branch). A drain and a new enqueue in
+  // the same burst therefore go [A] → [B] with the intermediate [] never
+  // published, so the strip never saw the boundary and B started hidden. What
+  // the component CAN observe is membership between consecutive renders.
+  //
+  // The rule (#893 review round 2, R2-2): the collapse resets when no item of
+  // the PREVIOUS render survives into the next one, whether the reducer passed
+  // through [] or not. It is deliberately NOT "none of the items visible when
+  // the user collapsed remain". A chain of overlapping renders is one episode:
+  // [A] → [A, B] → [B] keeps the collapse even though A, the only item on
+  // screen at the gesture, has gone. So an item that joined while collapsed
+  // stays hidden behind the visible count until the episode ends. Changing
+  // that would make collapse last only until the next drain, rather than being
+  // a per-episode choice. An empty queue shares nothing, so the plain drain is
+  // the same rule.
+  //
+  // WHY state-during-render (React's "storing information from previous
+  // renders" pattern) instead of an effect: an effect would commit one frame of
+  // the collapsed header over the new episode before expanding it. Keying on
+  // the prop's array identity keeps this loop-free: the adjustment re-renders
+  // once with `observedQueue === queuedMessages`. The membership scan is
+  // O(n·m) over a handful of rows, and it only runs when a new array arrives
+  // while collapsed.
+  const [observedQueue, setObservedQueue] = useState(queuedMessages)
+  if (observedQueue !== queuedMessages) {
+    setObservedQueue(queuedMessages)
+    if (collapsed && !sharesQueuedMessage(observedQueue, queuedMessages)) setCollapsed(false)
+  }
   const [selectedPrompt, setSelectedPrompt] = useState<QueuedMessage | null>(null)
   const displayItems = useMemo(() => queuedMessages.map(message => {
     // WHY content sniffing is Claude-only: task notifications are a Claude
@@ -124,10 +185,7 @@ export function QueueStrip({
 
   const selectedIndex = selectedPrompt === null
     ? -1
-    : queuedMessages.findIndex(message =>
-        message.timestamp === selectedPrompt.timestamp &&
-        message.content === selectedPrompt.content,
-      )
+    : queuedMessages.findIndex(message => isSameQueuedMessage(message, selectedPrompt))
   const selectedMessage = selectedIndex >= 0 ? queuedMessages[selectedIndex] ?? null : null
 
   useEffect(() => {

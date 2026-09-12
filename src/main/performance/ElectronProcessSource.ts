@@ -20,13 +20,23 @@ export class ElectronProcessSource {
   private generation = 0
   private previous = new Set<string>()
   private roots = new Map<string, { pid: number | null; generation?: string; birth?: number }>()
+  private emittedRoots = new Map<number, Map<string, { pid: number | null; generation?: string }>>()
   captureBirths(rows: MonitorProcessRow[], generation?: number): void {
-    if (generation !== this.generation) return
+    if (generation === undefined) return
+    const sampledRoots = this.emittedRoots.get(generation)
+    if (!sampledRoots) return
     const byPid = new Map(rows.filter(row => row.pid !== null && row.quality !== 'partial').map(row => [row.pid, row]))
-    for (const root of this.roots.values()) {
+    for (const [sessionId, root] of this.roots) {
+      const sampled = sampledRoots.get(sessionId)
+      // A native sample can finish after the source has emitted a newer
+      // context. Its OS birth remains valid when the current session still
+      // names the same PID and backend run; requiring the latest transport
+      // generation here loses that evidence across helper restarts.
+      if (!sampled || sampled.pid !== root.pid || sampled.generation !== root.generation) continue
       const row = byPid.get(root.pid)
       if (root.birth === undefined && row && row.creationTime > 0) root.birth = row.creationTime
     }
+    for (const prior of this.emittedRoots.keys()) if (prior <= generation) this.emittedRoots.delete(prior)
   }
 
   constructor(private readonly targets: () => MonitorProcessTarget[], private readonly emit: (record: MonitorEnvelope) => void, private readonly canEmit: () => boolean = () => true) {}
@@ -77,6 +87,12 @@ export class ElectronProcessSource {
       for (const id of this.roots.keys()) if (!live.has(id)) this.roots.delete(id)
       if (!this.canEmit()) return
       const generation = ++this.generation
+      this.emittedRoots.set(generation, new Map(targets.map(target => [target.sessionId, { pid: target.pid, generation: target.generation }])))
+      // At most one native command is in flight and the process queue admits
+      // one complete generation at a time. Four contexts cover the worst-case
+      // command timeout plus transfer overlap without retaining session IDs
+      // for the lifetime of the app.
+      while (this.emittedRoots.size > 4) this.emittedRoots.delete(this.emittedRoots.keys().next().value!)
       // Context travels as ordinary bounded records. The helper only commits
       // a complete generation, so losing one record under pressure yields stale
       // coverage rather than silently attributing a partial fleet as complete.

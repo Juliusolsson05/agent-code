@@ -226,4 +226,38 @@ describe('Codex transcript lifecycle contract', () => {
       durationMs: 12.5,
     })).toEqual({ durationMs: 12.5 })
   })
+
+  it('journals the submit acceptance kind, including the Codex composer null', () => {
+    // #889: `acceptance` is what separates "a turn started" from "Claude queued
+    // it" in the journal. The key allowlist drops unknown keys without a sound,
+    // so this is the test that fails if the key is renamed or removed.
+    for (const acceptance of ['user', 'queue', 'transport', null]) {
+      expect(pickLifecycleData({ provider: 'claude', ok: true, acceptance })).toEqual({
+        provider: 'claude',
+        ok: true,
+        acceptance,
+      })
+    }
+
+    // The strict Codex projection, which report.ts applies to every Codex
+    // submit.result before the bridge.
+    expect(pickCodexTranscriptObservationData('submit.result', {
+      provider: 'codex',
+      ok: true,
+      acceptance: 'transport',
+      durationMs: 20,
+    })).toEqual({ provider: 'codex', ok: true, acceptance: 'transport', durationMs: 20 })
+    expect(pickCodexTranscriptObservationData('submit.result', {
+      provider: 'codex',
+      ok: true,
+      acceptance: null,
+      durationMs: 20,
+    })).toEqual({ provider: 'codex', ok: true, acceptance: null, durationMs: 20 })
+    // Preserving null does not open the string vocabulary.
+    expect(pickCodexTranscriptObservationData('submit.result', {
+      provider: 'codex',
+      ok: true,
+      acceptance: 'queued behind the running turn',
+    })).toEqual({ provider: 'codex', ok: true })
+  })
 })

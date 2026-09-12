@@ -255,6 +255,11 @@ export type UiShellState = {
    *  Deliberately NOT persisted, matching per-session `tailMode`: waking up to
    *  every feed pinned to the bottom with no visible cause is confusing. */
   tailAllMode: boolean
+  /** Auto-follow agents while they are busy, using the same transient lifetime
+   *  and visibility ownership as tailAllMode. Enabling either bulk mode clears
+   *  the other: selecting Working must narrow an already-enabled All Visible
+   *  policy immediately. Neither mode writes individual tail preferences. */
+  tailWorkingMode: boolean
   /** When true, the .env-gated Dev Debug Panel is mounted. Unlike the
    *  stable debug panels above, this is a temporary module host for
    *  one-off investigations. Its modules are intentionally freeform:
