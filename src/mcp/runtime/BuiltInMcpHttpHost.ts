@@ -1,3 +1,4 @@
+import type { TldrStore } from '@main/tldr/TldrStore.js'
 import { randomBytes } from 'node:crypto'
 import { createServer } from 'node:http'
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
@@ -35,6 +36,8 @@ type BuiltInMcpServerFactory = (
 ) => McpServer
 
 export type BuiltInMcpDependencies = {
+  tldrStore?: Pick<TldrStore, 'update'>
+  isTldrWriteAuthorized?: () => boolean
   orchestrationBridge?: OrchestrationBridge
   agentManagementBridge?: AgentManagementBridge
   aiWorkspaceRegistry?: AiWorkspaceRegistry
@@ -43,6 +46,20 @@ export type BuiltInMcpDependencies = {
   appRunJournal?: AppRunJournal
   workflowService?: WorkflowService
   workflowBridge?: WorkflowBridge
+  /**
+   * Installs the operator control catalog (`ac_*` tools) on a session's server
+   * when its scope carries `root_management` (#906).
+   *
+   * WHY a registrar is injected instead of the MCP runtime importing the
+   * projection: the projection lives in `src/main/externalControlMcp`, which
+   * the control import boundary reserves for app composition (`main/index.ts`)
+   * so the external adapter can only ever invoke the SDK, never application
+   * internals. Composition builds the per-session operator port from the
+   * control host with an `agent` caller identity and hands this closure in;
+   * the runtime only knows it has something to call with the server and the
+   * authenticated session ID.
+   */
+  rootControlTools?: (server: McpServer, sessionId: string) => void
 }
 
 const MCP_REQUEST_SLOW_MS = 1000
@@ -158,6 +175,7 @@ export class BuiltInMcpHttpHost {
   }
 
   registerSession(scope: {
+    tldrIdentity?: string
     sessionId: string
     cwd: string
     providerKind: AgentProviderKind
@@ -198,6 +216,7 @@ export class BuiltInMcpHttpHost {
     this.revokeSession(scope.sessionId)
     const token = randomBytes(32).toString('base64url')
     const mcpScope = {
+      tldrIdentity: scope.tldrIdentity ?? (domains.includes('tldr') ? scope.sessionId : undefined),
       sessionId: scope.sessionId,
       cwd: scope.cwd,
       domains,
@@ -227,6 +246,11 @@ export class BuiltInMcpHttpHost {
     // assembly cannot mutate the host's authorization state.
     const config = this.serverConfig(token)
     return [{ ...config, headers: { ...config.headers } }]
+  }
+
+  sessionTldrIdentity(sessionId: string): string | undefined {
+    const token = this.tokensBySession.get(sessionId)
+    return token ? this.registrations.get(token)?.scope.tldrIdentity : undefined
   }
 
   sessionDomains(sessionId: string): BuiltInMcpDomain[] {
@@ -335,7 +359,10 @@ export class BuiltInMcpHttpHost {
     // request is cheap relative to a dead bridge. (Verified end-to-end against
     // the MCP SDK client: cached+queue => listTools times out; per-request =>
     // listTools returns.)
-    const server = this.createServerForScope(registration.scope, this.dependencies)
+    const server = this.createServerForScope(registration.scope, {
+      ...this.dependencies,
+      isTldrWriteAuthorized: () => !registration.revoked,
+    })
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
     })

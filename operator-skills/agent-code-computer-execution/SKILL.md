@@ -177,6 +177,10 @@ Use `ac_terminals_create` for a detached terminal in an observed project. Read
 Send exact bytes with `ac_terminals_input` and the observed `sessionRunId`; it does
 not append Enter. These tools never wake a missing process.
 
+Terminals are sessions: `ac_agents_search`, locate, show, close, restore, title and
+pin work on them (provider `terminal`). `ac_agents_prompt` refuses a terminal —
+send text to it with `ac_terminals_input`, which appends no Enter.
+
 `ac_agents_close` uses the normal close flow and child-cascade confirmation.
 Finish its dialog with computer use and call `ac_operations_read` with the returned
 callId to learn whether it closed or was cancelled. Do not interpret acceptance as

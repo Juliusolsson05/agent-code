@@ -1,3 +1,4 @@
+import { tldrIdentityForSession } from '@renderer/features/tldr/identity'
 import {
   DEFAULT_PROVIDER,
   isAgentProviderKind,
@@ -42,7 +43,7 @@ import type {
   WorkspaceSetTileTabs,
 } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
-import { resolveSessionBuiltInMcpDomains } from '@renderer/workspace/mcpDomains'
+import { resolveSessionBuiltInMcpDomains, sessionMcpOverrides } from '@renderer/workspace/mcpDomains'
 import * as perf from '@renderer/performance/client'
 import { reportLifecycle } from '@renderer/lifecycle/report'
 import { loadInitialHistoryForSession } from '@renderer/workspace/hook/actions/initialHistory'
@@ -706,11 +707,12 @@ export async function rehydrateWorkspace(
             return
           }
           const kind: SessionKind = meta.kind ?? DEFAULT_PROVIDER
+          const builtInMcpOverrides = sessionMcpOverrides(meta)
           const builtInMcpDomains =
             isAgentProviderKind(kind)
               ? resolveSessionBuiltInMcpDomains({
                   provider: kind,
-                  sessionDomains: meta.builtInMcpDomains,
+                  sessionOverrides: builtInMcpOverrides,
                   defaultDomains: refs.defaultBuiltInMcpDomainsRef.current,
                 })
               : undefined
@@ -731,6 +733,7 @@ export async function rehydrateWorkspace(
             refs.latestRuntimesRef.current[oldId]?.sessionRunId ?? null,
           )
           const recovery = await recoverSessionBeforeDeadline(recoveryApi, {
+            tldrIdentity: tldrIdentityForSession(oldId, meta),
             sessionId: oldId,
             kind,
             providerRuntime: meta.providerRuntime,
@@ -751,7 +754,7 @@ export async function rehydrateWorkspace(
               status: 'failed',
               meta: {
                 ...restoredMeta,
-                ...(builtInMcpDomains !== undefined ? { builtInMcpDomains } : {}),
+                ...(builtInMcpDomains !== undefined ? { builtInMcpDomains, builtInMcpOverrides } : {}),
               },
               message: recovery.message,
               code: recovery.code,
@@ -798,6 +801,8 @@ export async function rehydrateWorkspace(
               : undefined
           const recoveredMeta: SessionMeta = {
             ...restoredMeta,
+            builtInMcpOverrides,
+            ...(recovery.snapshot.tldrIdentity ? { tldrIdentity: recovery.snapshot.tldrIdentity } : {}),
             ...(recoveredBuiltInMcpDomains !== undefined
               ? { builtInMcpDomains: recoveredBuiltInMcpDomains }
               : {}),

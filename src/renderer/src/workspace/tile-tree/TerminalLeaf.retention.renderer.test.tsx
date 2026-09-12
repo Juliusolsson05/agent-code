@@ -16,12 +16,21 @@ vi.mock('@xterm/xterm', () => ({
     cols = xtermHarness.cols
     rows = xtermHarness.rows
     options: Record<string, unknown> = {}
+    // Minimal shape the shared useTerminalFollow hook needs to attach without
+    // throwing (#865: TerminalLeaf now always wires it, not just on tail).
+    // This file never engages tail, so onScroll is only ever registered —
+    // never fired — but attach() itself calls it unconditionally on mount.
+    buffer = { active: { type: 'normal', viewportY: 0, baseY: 0, cursorY: 0 } }
     loadAddon() {}
     open() {}
     onData(listener: (data: string) => void) {
       xtermHarness.onData = listener
       return { dispose() {} }
     }
+    onScroll() { return { dispose() {} } }
+    scrollToBottom() {}
+    scrollToLine() {}
+    registerMarker() { return null }
     // Real xterm reports each write parsed via the callback; the input
     // forwarder (#745) holds its replay latch until then, so a mock that
     // never calls back would model a pane that is deaf forever.
@@ -29,6 +38,15 @@ vi.mock('@xterm/xterm', () => ({
     focus() {}
     dispose() {}
   },
+}))
+
+// Keep this suite about the leaf: without this, every mount would run the real
+// attachXtermWebglRenderer and evaluate the real @xterm/addon-webgl bundle in
+// happy-dom now that WebGL is on (#871) — hidden coverage this suite never
+// asserts on, with failures swallowed by the wrapper's DOM fallback. The
+// AgentTerminalLeaf suites mock it the same way.
+vi.mock('@renderer/workspace/terminal/xtermWebglRenderer', () => ({
+  attachXtermWebglRenderer: () => ({ ready: Promise.resolve(false), dispose() {} }),
 }))
 
 vi.mock('@xterm/addon-fit', () => ({
@@ -44,6 +62,11 @@ vi.mock('@renderer/app-state/hooks', () => ({
         dictationEnabled: false,
         dictationProvider: 'local',
         dictationShortcut: 'off',
+        // TerminalLeaf renders the shared PaneHeader since #865, and its
+        // color-flag chunk reads this key unconditionally (unlike the other
+        // header selectors, which optional-chain). A keyless mock would throw
+        // on `undefined[sessionId]` before this file's own assertions run.
+        dispatchColorFlags: {},
       },
     }),
 }))
@@ -132,7 +155,7 @@ describe('TerminalLeaf retention', () => {
   it('sends exactly one resize when revealed after a takeover, none while hidden', async () => {
     const tree = (hidden: boolean) => (
       <RetainedWorkspaceSurface hidden={hidden}>
-        <TerminalLeaf sessionId="shell-1" focused onFocusRequest={() => {}} workspace={workspace} />
+        <TerminalLeaf sessionId="shell-1" focused onFocusRequest={() => {}} workspace={workspace} showStatusMode={false} />
       </RetainedWorkspaceSurface>
     )
     const view = render(tree(false))

@@ -40,13 +40,13 @@ export async function listRewindPrompts(
     request.cwd,
     request.sourceProviderSessionId,
   )
-  // The transcript analyzer returns document order. The picker wants newest
-  // first, and the cap belongs here so thousands of raw sessions never cross
-  // the Electron bridge merely to be discarded by the renderer.
-  const requestedLimit = request.limit ?? 30
-  const limit = Number.isFinite(requestedLimit)
-    ? Math.max(1, Math.min(200, Math.floor(requestedLimit)))
-    : 30
+  // The transcript analyzer returns document order; the picker wants newest
+  // first. No cap unless the caller asks for one: the rewind picker lists
+  // every prompt (a cap of thirty hid the one the user wanted on any long
+  // session), while an external operator can still bound its page. A finite
+  // limit is honoured as before.
+  if (request.limit === undefined) return prompts.slice().reverse()
+  const limit = Number.isFinite(request.limit) ? Math.max(1, Math.floor(request.limit)) : prompts.length
   return prompts.slice(-limit).reverse()
 }
 

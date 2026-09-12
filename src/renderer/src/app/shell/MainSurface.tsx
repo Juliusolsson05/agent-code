@@ -103,12 +103,22 @@ export function MainSurface({ onNewTabRequest }: { onNewTabRequest: () => void }
       ) : takeover === 'reader' ? (
         <ReaderView workspace={workspace} />
       ) : takeover === 'spotlight' ? (
-        <SpotlightView workspace={workspace} agentViewMode={settings.agentViewMode} />
+        <SpotlightView
+          workspace={workspace}
+          agentViewMode={settings.agentViewMode}
+          showStatusMode={settings.showStatusMode}
+          showWorktreeBadges={settings.showWorktreeBadges}
+        />
       ) : null}
       <RetainedWorkspaceSurface hidden={takeover !== null}>
         <GlobalEditorShell workspace={workspace}>
           {workspace.tileTabs ? (
-            <TileTabsView workspace={workspace} agentViewMode={settings.agentViewMode} />
+            <TileTabsView
+              workspace={workspace}
+              agentViewMode={settings.agentViewMode}
+              showStatusMode={settings.showStatusMode}
+              showWorktreeBadges={settings.showWorktreeBadges}
+            />
           ) : activeTab && workspace.dispatchMode ? (
             <div className="relative h-full min-h-0 min-w-0">
               <DispatchLayout

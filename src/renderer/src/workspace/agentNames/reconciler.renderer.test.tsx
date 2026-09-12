@@ -95,7 +95,7 @@ function mount(options: {
 }
 
 describe('agent name reconciliation', () => {
-  it('claims identities for agents only, resolves them once, and stores the names', async () => {
+  it('claims identities for every session, resolves them once, and stores the names', async () => {
     const resolveAgentNames = vi.fn(async (identities: string[]) =>
       Object.fromEntries(identities.map(identity => [identity, identity === 'agent-one' ? 'Apollo' : 'Jasper'])))
     const mounted = mount({ enabled: true, resolveAgentNames })
@@ -103,9 +103,8 @@ describe('agent name reconciliation', () => {
     await waitFor(() => expect(resolveAgentNames).toHaveBeenCalled())
 
     expect(mounted.seen.current.sessions['agent-one'].agentNameId).toBe('agent-one')
-    // A shell has no conversation to address; naming it would advertise an
-    // unroutable target to a voice operator.
-    expect(mounted.seen.current.sessions['shell-one'].agentNameId).toBeUndefined()
+    // Shells are named too (#865): the claim covers every session kind.
+    expect(mounted.seen.current.sessions['shell-one'].agentNameId).toBe('shell-one')
     // Buried agents keep their own metadata copy and must still resolve, or a
     // buried Apollo would come back unnamed and get a second address.
     //
@@ -116,10 +115,10 @@ describe('agent name reconciliation', () => {
     // Deriving from `state` would split this into two requests — and the
     // re-run triggered by the claim would then discard the first reply.
     // Asserting on call[0] rather than on the union is what pins that.
-    expect([...resolveAgentNames.mock.calls[0][0]].sort()).toEqual(['agent-one', 'identity-buried'])
+    expect([...resolveAgentNames.mock.calls[0][0]].sort()).toEqual(['agent-one', 'identity-buried', 'shell-one'])
     expect(resolveAgentNames).toHaveBeenCalledTimes(1)
     await waitFor(() => expect(useAppStore.getState().workspaceAgentNames)
-      .toEqual({ 'agent-one': 'Apollo', 'identity-buried': 'Jasper' }))
+      .toEqual({ 'agent-one': 'Apollo', 'identity-buried': 'Jasper', 'shell-one': 'Jasper' }))
 
     // Stable membership must not re-ask: allocation is the expensive, durable
     // side effect and a re-render is not a membership change.
@@ -161,13 +160,14 @@ describe('agent name reconciliation', () => {
 
     await waitFor(() => expect(resolveAgentNames).toHaveBeenCalled())
     await waitFor(() => expect(useAppStore.getState().workspaceAgentNames)
-      .toEqual({ 'agent-one': 'Apollo', 'identity-buried': 'Jasper' }))
+      .toEqual({ 'agent-one': 'Apollo', 'identity-buried': 'Jasper', 'shell-one': 'Jasper' }))
 
     // One claim and one request, not one per agent and not one per re-render:
-    // enabling is a single membership event, and allocation is durable.
+    // enabling is a single membership event, and allocation is durable. Shells
+    // are claimed on this same pass too (#865), same as every other kind.
     expect(mounted.seen.current.sessions['agent-one'].agentNameId).toBe('agent-one')
-    expect(mounted.seen.current.sessions['shell-one'].agentNameId).toBeUndefined()
-    expect([...resolveAgentNames.mock.calls[0][0]].sort()).toEqual(['agent-one', 'identity-buried'])
+    expect(mounted.seen.current.sessions['shell-one'].agentNameId).toBe('shell-one')
+    expect([...resolveAgentNames.mock.calls[0][0]].sort()).toEqual(['agent-one', 'identity-buried', 'shell-one'])
     expect(resolveAgentNames).toHaveBeenCalledTimes(1)
   })
 
@@ -187,7 +187,10 @@ describe('agent name reconciliation', () => {
     await act(async () => { await Promise.resolve() })
 
     expect(mounted.seen.current.sessions['agent-one'].agentNameId).toBe('agent-one')
-    expect(resolveAgentNames.mock.calls[0][0]).toEqual(['agent-one'])
+    // The fixture's shell also has no identity yet, so the same reclaim pass
+    // picks it up alongside the malformed agent (#865): the claim no longer
+    // distinguishes provider kind, only "already identified or not".
+    expect(resolveAgentNames.mock.calls[0][0]).toEqual(['agent-one', 'shell-one'])
     expect(resolveAgentName({
       enabled: true,
       meta: mounted.seen.current.sessions['agent-one'],

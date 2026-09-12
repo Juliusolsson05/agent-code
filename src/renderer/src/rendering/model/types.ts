@@ -1,3 +1,4 @@
+import type { UsageLimitNotice } from '@shared/types/usageLimitNotice'
 import type { AgentProviderKind } from '@shared/types/providerKind'
 
 // ---------------------------------------------------------------------------
@@ -24,6 +25,7 @@ import type { AgentProviderKind } from '@shared/types/providerKind'
  * convenience. (Plan §1 table for what each owner is allowed to paint.)
  */
 export type RenderOwner =
+  | 'provider-notice'
   | 'committed'
   | 'semantic-current'
   | 'semantic-history'
@@ -53,6 +55,7 @@ export type RenderSourcePlane =
   | 'process'
 
 export type RenderContentKind =
+  | 'provider-notice'
   | 'user-text'
   | 'assistant-text'
   | 'tool-use'
@@ -81,6 +84,10 @@ export type RenderContentKind =
  * React-subtree-reuse "phantom duplicate" class).
  */
 export type RenderCandidate = {
+  /** Validated status model only. Carrying the selected model prevents the
+   * view from reclassifying raw errors or fabricating a turn to locate one. */
+  usageLimitNotice?: UsageLimitNotice
+  sessionRunId?: string
   id: string
   owner: RenderOwner
   provider: AgentProviderKind | 'unknown'
@@ -105,7 +112,10 @@ export type RenderCandidate = {
   /**
    * Per the D4 trust hierarchy: committed entry.timestamp (producer clock)
    * beats semantic startedAt/endedAt (local receipt) beats nothing. Channel
-   * receipt `ts` values are diagnostics and MUST NOT land here. Null means
+   * receipt `ts` values are diagnostics and MUST NOT date assistant content.
+   * Provider status is the explicit exception: a failed request has no turn
+   * start, and its validated producer observation time dates the notice itself.
+   * Null means
    * "no trustworthy time" and sorts AFTER timestamped content — a missing
    * timestamp is lossy evidence, not proof the row happened last.
    */

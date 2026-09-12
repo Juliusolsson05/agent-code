@@ -17,7 +17,6 @@ import type {
 import type { AgentTranscriptEntry } from '@shared/types/session.js'
 export type { ProviderConditionSnapshot } from '@shared/types/providerConditions.js'
 export type { BuiltInMcpDomain } from '@mcp/shared/types.js'
-export type { SessionInfo } from '@shared/types/session.js'
 export type {
   WorkflowCancelRequest,
   WorkflowCancelResult,
@@ -203,6 +202,8 @@ export type SessionSpawnOptions = {
   useProxy?: boolean
   /** Terminal + tmux only: attach to an existing managed tmux session if alive. */
   recoverTmuxName?: string
+  /** Stable summary key carried only when continuing a logical conversation. */
+  tldrIdentity?: string
   /** Agent sessions only: built-in Agent Code MCP domains exposed to the child. */
   builtInMcpDomains?: BuiltInMcpDomain[]
 }
@@ -238,34 +239,6 @@ export type SessionAgentPtyDataEvent = { sessionId: string; data: string }
 // shapes still exist INTERNALLY on the SessionManager event map and the
 // provider runtimes; those are owned by the conditions-framework /
 // provider-boundary clusters and are intentionally untouched here.
-
-// --- Session prompt index ---------------------------------------------------
-//
-// Shape returned by the Search Conversation Prompts modal's IPC
-// endpoints. Mirrors src/main/sessionIndex.ts's public exports one-to-
-// one; re-declared here because preload/main/renderer are built under
-// different tsconfig contexts and we don't share runtime types across
-// them by import.
-//
-// A single entry carries enough metadata for the modal to render a
-// row (provider icon, summary, relative time) and show the most
-// recent user prompts for visual recognition. `matchCount` is only
-// meaningful on search results — zero on the default listing.
-
-export type SessionIndexPrompt = {
-  text: string
-  ts: number | null
-}
-
-export type SessionIndexEntry = {
-  providerSessionId: string
-  kind: AgentProviderKind
-  cwd: string
-  lastModified: number
-  summary: string
-  recentUserPrompts: SessionIndexPrompt[]
-  matchCount: number
-}
 
 export type SessionHistoryChunk = {
   entries: JsonlEntry[]

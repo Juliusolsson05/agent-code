@@ -6,7 +6,7 @@ import type { SessionId } from '@renderer/workspace/types'
 
 import { useStreamingActions } from './streaming'
 
-// Covers `unwindStreamingBaseline` — the actual repair for the reported bug:
+// Covers `unwindOptimisticSubmit` — the actual repair for the reported bug:
 //
 //   "Cannot deliver prompt: <id> is not a live agent session", then the pane
 //   shows `Sending · 17s` counting up forever until the agent is reloaded.
@@ -35,19 +35,18 @@ function submitting(overrides: Partial<SessionRuntime> = {}): SessionRuntime {
     turnStartedAt: 1_000_000,
     phaseChangedAt: 1_000_000,
     awaitingAssistant: true,
-    streamingBaseline: 'previous assistant text',
     ...overrides,
   }
 }
 
-describe('unwindStreamingBaseline', () => {
+describe('unwindOptimisticSubmit', () => {
   it('clears every field the optimistic submit set, so the spinner stops', () => {
     // WorkIndicator renders 'submitting' as `Sending` and times it from
     // submittedAt. Leaving either behind reproduces the bug.
     const h = harness({ s1: submitting() })
 
     act(() => {
-      h.view.result.current.unwindStreamingBaseline('s1' as SessionId)
+      h.view.result.current.unwindOptimisticSubmit('s1' as SessionId)
     })
 
     const runtime = h.get('s1' as SessionId)
@@ -56,14 +55,13 @@ describe('unwindStreamingBaseline', () => {
     expect(runtime.turnStartedAt).toBeNull()
     expect(runtime.phaseChangedAt).toBeNull()
     expect(runtime.awaitingAssistant).toBe(false)
-    expect(runtime.streamingBaseline).toBeNull()
   })
 
   it('preserves the draft, because a failed submit must not eat the prompt', () => {
     const h = harness({ s1: submitting({ draftInput: 'the prompt I just typed' }) })
 
     act(() => {
-      h.view.result.current.unwindStreamingBaseline('s1' as SessionId)
+      h.view.result.current.unwindOptimisticSubmit('s1' as SessionId)
     })
 
     expect(h.get('s1' as SessionId).draftInput).toBe('the prompt I just typed')
@@ -77,7 +75,7 @@ describe('unwindStreamingBaseline', () => {
     const h = harness({ s1: running })
 
     act(() => {
-      h.view.result.current.unwindStreamingBaseline('s1' as SessionId)
+      h.view.result.current.unwindOptimisticSubmit('s1' as SessionId)
     })
 
     const runtime = h.get('s1' as SessionId)
@@ -90,7 +88,7 @@ describe('unwindStreamingBaseline', () => {
     const h = harness({})
 
     act(() => {
-      h.view.result.current.unwindStreamingBaseline('gone' as SessionId)
+      h.view.result.current.unwindOptimisticSubmit('gone' as SessionId)
     })
 
     expect(h.all()).toEqual({})
@@ -100,7 +98,7 @@ describe('unwindStreamingBaseline', () => {
     const h = harness({ s1: submitting(), s2: submitting() })
 
     act(() => {
-      h.view.result.current.unwindStreamingBaseline('s1' as SessionId)
+      h.view.result.current.unwindOptimisticSubmit('s1' as SessionId)
     })
 
     expect(h.get('s1' as SessionId).streamPhase).toBe('idle')

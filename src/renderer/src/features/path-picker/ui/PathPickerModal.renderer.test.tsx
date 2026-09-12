@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import type { SessionInfo } from '@shared/types/session'
+import type { Conversation, ConversationListRequest, ConversationListResponse } from '@shared/conversations/types'
 
 import { PathPickerModal } from './PathPickerModal'
 
@@ -18,16 +18,24 @@ function deferred<T>() {
   return { promise, resolve }
 }
 
-function session(sessionId: string, summary: string): SessionInfo {
-  return { sessionId, summary, lastModified: Date.now(), fileSize: 1 }
+// A catalog row as main emits it; only the fields the picker shows vary.
+function row(nativeId: string, label: string, provider: Conversation['provider']): Conversation {
+  return {
+    provider, nativeId, cwd: '/repo', repoRoot: '/repo', worktree: null, gitBranch: 'main', kind: 'user', parentNativeId: null,
+    label, labelSource: 'first-prompt', firstPrompt: label, agentName: null, agentCodeTitle: null, createdAt: 1,
+    lastUserActivityAt: Date.now(), activitySource: 'index', promptCount: 2, available: true, origin: 'index', match: null,
+  }
+}
+function response(rows: Conversation[]): ConversationListResponse {
+  return { rows, total: rows.length, hiddenChildren: 0, nextCursor: null, family: { repoRoot: '/repo', roots: ['/repo'] }, timing: { ms: 1 } }
 }
 
-function installApi(listSessionsForCwd: Window['api']['listSessionsForCwd']): void {
+function installApi(listConversations: (request: ConversationListRequest) => Promise<ConversationListResponse>): void {
   Object.defineProperty(window, 'api', {
     configurable: true,
     value: {
       expandCwd: vi.fn(async () => ({ ok: true as const, path: '/repo' })),
-      listSessionsForCwd,
+      listConversations,
       listDirectory: vi.fn(async () => ({ ok: true as const, entries: [] })),
       createDirectory: vi.fn(async () => ({ ok: true as const, path: '/repo' })),
     },
@@ -36,13 +44,13 @@ function installApi(listSessionsForCwd: Window['api']['listSessionsForCwd']): vo
 
 describe('PathPickerModal resume target coherence', () => {
   it('removes an accepted Claude row before a pending Codex refresh can resolve', async () => {
-    const codex = deferred<SessionInfo[]>()
-    const list = vi.fn((_cwd: string, _limit: number, provider: string) =>
-      provider === 'claude'
-        ? Promise.resolve([session('claude-history', 'Claude saved row')])
+    const codex = deferred<ConversationListResponse>()
+    const list = vi.fn((request: ConversationListRequest) =>
+      request.providers?.[0] === 'claude'
+        ? Promise.resolve(response([row('claude-history', 'Claude saved row', 'claude')]))
         : codex.promise,
     )
-    installApi(list as Window['api']['listSessionsForCwd'])
+    installApi(list)
     const onResume = vi.fn()
     render(
       <PathPickerModal
@@ -55,6 +63,7 @@ describe('PathPickerModal resume target coherence', () => {
     )
 
     await screen.findByText('Claude saved row')
+    expect(list).toHaveBeenCalledWith({ cwd: '/repo', scope: 'cwd', providers: ['claude'], includeChildren: false, limit: 50 })
     fireEvent.click(screen.getByRole('button', { name: /^codex$/i }))
 
     // WHY assert during the unresolved replacement request: checking only
@@ -63,22 +72,26 @@ describe('PathPickerModal resume target coherence', () => {
     expect(screen.queryByText('Claude saved row')).not.toBeInTheDocument()
     expect(onResume).not.toHaveBeenCalled()
 
-    codex.resolve([session('codex-history', 'Codex saved row')])
+    codex.resolve(response([row('codex-history', 'Codex saved row', 'codex'), { ...row('gone-history', 'Gone Codex row', 'codex'), available: false }]))
+    // A row whose transcript file is gone is listed for the record only.
+    fireEvent.click(await screen.findByText('Gone Codex row'))
+    expect(onResume).not.toHaveBeenCalled()
     fireEvent.click(await screen.findByText('Codex saved row'))
     await waitFor(() => expect(onResume).toHaveBeenCalledWith(
       '/repo',
       'codex-history',
       'codex',
     ))
+    expect(list).toHaveBeenLastCalledWith({ cwd: '/repo', scope: 'cwd', providers: ['codex'], includeChildren: false, limit: 50 })
   })
 
   it('clears a failed listing message after a later successful target refresh', async () => {
-    const list = vi.fn((_cwd: string, _limit: number, provider: string) =>
-      provider === 'claude'
+    const list = vi.fn((request: ConversationListRequest) =>
+      request.providers?.[0] === 'claude'
         ? Promise.reject(new Error('fixture listing failure'))
-        : Promise.resolve([session('codex-history', 'Recovered Codex row')]),
+        : Promise.resolve(response([row('codex-history', 'Recovered Codex row', 'codex')])),
     )
-    installApi(list as Window['api']['listSessionsForCwd'])
+    installApi(list)
     render(
       <PathPickerModal
         open

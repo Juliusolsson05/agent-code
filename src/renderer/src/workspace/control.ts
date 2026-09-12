@@ -8,6 +8,7 @@ import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
 import { commandTargetSessionIdForState } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import { buildVisibleDispatchRows } from '@renderer/workspace/dispatch/dispatchSelectors'
 import { dispatchRowTitle } from '@renderer/workspace/dispatch/rowTitle'
+import { sessionDisplayTitle } from '@renderer/workspace/sessionDisplayTitle'
 import { paneLabelForSession, resolveAgentPaneLabel } from '@renderer/workspace/tile-tree/paneLabels'
 import { resolveAgentName } from '@renderer/workspace/agentNames/selectors'
 import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
@@ -73,8 +74,10 @@ export function observeWorkspace(getWorkspace: () => Pick<Workspace, 'restoreSta
     // Dispatch labels can shadow project-local labels. Only advertise a
     // fallback that the app's label resolver maps back to this same session.
     const displayLabel = row?.label ?? (localLabel && resolveAgentPaneLabel(state, localLabel, tileTabs)?.sessionId === sessionId ? localLabel : null)
-    const displayedTitle = row ? dispatchRowTitle(row, store.workspaceRuntimes[sessionId]?.entries)
-      : meta.title?.trim() || meta.cwd.split('/').filter(Boolean).pop() || meta.cwd
+    const runtime = store.workspaceRuntimes[sessionId]
+    const displayedTitle = row
+      ? dispatchRowTitle(row, runtime?.entries, runtime?.terminalForeground?.cwd)
+      : sessionDisplayTitle(meta, runtime?.terminalForeground?.cwd)
     const agentName = resolveAgentName({
       // Read from the SAME store snapshot the rest of this observation uses.
       // Re-reading getState() here could interleave with a reconciliation and

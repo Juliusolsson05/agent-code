@@ -1,4 +1,3 @@
-import { DEFAULT_PROVIDER } from '@shared/types/providerKind.js'
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
 import { ipcRenderer } from 'electron'
 import type { PromptDeliveryResult } from '@shared/types/providerConfig.js'
@@ -6,10 +5,10 @@ import type { PromptDeliveryResult } from '@shared/types/providerConfig.js'
 import { subscribe } from '@preload/api/ipc.js'
 import { expandScreenSnapshotFromWire } from '@shared/types/session.js'
 import type { AgentScreenSnapshotWire } from '@shared/types/session.js'
+import type { TerminalForegroundEvent, TerminalForegroundState } from '@shared/types/terminalForeground.js'
 import type {
   SessionExitEvent,
   SessionHistoryChunk,
-  SessionInfo,
   SessionKind,
   SessionJsonlEntriesEvent,
   SessionJsonlErrorEvent,
@@ -157,22 +156,6 @@ export const sessionApi = {
   > =>
     ipcRenderer.invoke('claude:await-paste-placeholder', sessionId, opts),
 
-  // --- Resume picker: list previous sessions recorded in a cwd ---
-  listSessionsForCwd: (
-    cwd: string,
-    limit?: number,
-    provider: AgentProviderKind = DEFAULT_PROVIDER,
-  ): Promise<SessionInfo[]> =>
-    ipcRenderer.invoke('session:list-for-cwd', cwd, limit, provider),
-
-  /** Global session listing for the rendering-debug harness. Returns
-   *  every known Claude + Codex session tagged with provider, sorted
-   *  by lastModified desc. */
-  listAllSessions: (
-    limit?: number,
-  ): Promise<Array<SessionInfo & { provider: AgentProviderKind }>> =>
-    ipcRenderer.invoke('session:list-all', limit),
-
   loadOlderHistory: (params: {
     kind: AgentProviderKind
     cwd: string
@@ -236,6 +219,14 @@ export const sessionApi = {
   /** Raw PTY bytes for attached provider terminals. */
   onSessionAgentPtyData: (cb: (e: SessionAgentPtyDataEvent) => void): Unsub =>
     subscribe('session:agent-pty-data', cb),
+
+  /** Foreground-process changes for plain terminals (#865). Desktop-only:
+   *  deliberately not on SessionFeed, because the phone never shows terminals. */
+  onTerminalForeground: (cb: (e: TerminalForegroundEvent) => void): Unsub =>
+    subscribe('session:terminal-foreground', cb),
+
+  getTerminalForegrounds: (): Promise<Record<string, TerminalForegroundState>> =>
+    ipcRenderer.invoke('session:terminal-foregrounds'),
 
   onSessionProcessState: (
     cb: (e: { sessionId: string; active: boolean; status?: string }) => void,

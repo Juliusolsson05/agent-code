@@ -56,6 +56,8 @@ export type UiShellSlice = UiShellState & {
   closeAgentTitlePrompt: () => void
   openBuryPrompt: (sessionId: SessionId) => void
   closeBuryPrompt: () => void
+  openRootManagementPrompt: (sessionId: SessionId) => void
+  closeRootManagementPrompt: () => void
   openDebugBundleNotePrompt: (payload: {
     bundlePath: string
     sessionId: SessionId
@@ -77,6 +79,9 @@ export type UiShellSlice = UiShellState & {
    *  is captured here rather than resolved at commit time. */
   openNewAgentForProject: (tabId: TabId, anchorSessionId: SessionId) => void
   closeNewAgentPlacement: () => void
+  /** Open/close the New Agent In… dialog (#852). See `newAgentInOpen`. */
+  openNewAgentIn: () => void
+  closeNewAgentIn: () => void
   openTiledDispatchPrompt: () => void
   openDispatchRowProjectPicker: (rowIndex: number) => void
   closeDispatchRowProjectPicker: () => void
@@ -106,8 +111,8 @@ export type UiShellSlice = UiShellState & {
   closeGlobalEditor: () => void
   toggleGlobalEditor: () => void
   setDispatchListRatio: (ratio: number) => void
-  openPromptSearch: () => void
-  closePromptSearch: () => void
+  openConversations: (opts: { focusSearch: boolean }) => void
+  closeConversations: () => void
   openAgentActivity: () => void
   closeAgentActivity: () => void
   openKeyboardShortcuts: () => void

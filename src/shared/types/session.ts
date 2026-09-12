@@ -82,6 +82,8 @@ export type SessionBackendSnapshot = {
    *  observed backend fact, not the renderer's requested policy. It is absent
    *  for terminal sessions, which never receive built-in MCP configuration. */
   builtInMcpDomains?: BuiltInMcpDomain[]
+  /** Main-owned logical summary identity when this backend exposes TLDR. */
+  tldrIdentity?: string
 }
 
 export type SessionRecoverOptions = {
@@ -95,6 +97,7 @@ export type SessionRecoverOptions = {
   dangerousMode?: boolean
   useProxy?: boolean
   recoverTmuxName?: string
+  tldrIdentity?: string
   builtInMcpDomains?: BuiltInMcpDomain[]
   /**
    * Opaque renderer-generated generation for this recovery admission.
@@ -640,25 +643,4 @@ export type SessionOptions = {
    * ownership boundary ignore it.
    */
   beforeResumeOwnershipAcquire?: () => Promise<void>
-}
-
-export type SessionInfo = {
-  /**
-   * WHY this shared type is the source of truth:
-   * preload, renderer resume UI, provider listers, and main registries all pass
-   * these records across process/module boundaries. Local copies drift silently
-   * because most fields are optional and UI call sites usually touch only one or
-   * two of them. Keep new metadata here first, then let provider-specific
-   * listers populate the same contract instead of redefining compatible-looking
-   * shadows.
-   */
-  sessionId: string
-  summary: string
-  lastModified: number
-  fileSize: number
-  customTitle?: string
-  firstPrompt?: string
-  gitBranch?: string
-  cwd?: string
-  createdAt?: number
 }

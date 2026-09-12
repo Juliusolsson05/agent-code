@@ -37,6 +37,7 @@ import {
   useTileTabsSanity,
 } from '@renderer/workspace/hook/invalidation/effects'
 import { useIpcSubscriptions } from '@renderer/workspace/hook/ipc/useIpcSubscriptions'
+import { useTerminalForeground } from '@renderer/workspace/hook/ipc/useTerminalForeground'
 import { useWorkspaceAdoption } from '@renderer/workspace/hook/ipc/useWorkspaceAdoption'
 import { useSessionFeed } from '@renderer/features/sessionFeed/SessionFeedContext'
 import type { OrchestrationAgentRecord } from '@mcp/shared/orchestrationTypes'
@@ -231,8 +232,8 @@ export function useWorkspace(
   }, [refs.stateRef, setRuntimes, setState, showToast])
 
   const setAgentTitle = useCallback((sessionId: SessionId, title: string): boolean => {
-    const meta = refs.stateRef.current.sessions[sessionId]
-    if (!meta || !isAgentProviderKind(meta.kind ?? DEFAULT_PROVIDER)) return false
+    // Any existing session can carry a title (#865); only a vanished one is refused.
+    if (!refs.stateRef.current.sessions[sessionId]) return false
 
     // WHY the mutation is delegated to a pure workspace helper rather than
     // written inline here: `SessionMeta.title` is already consumed by several
@@ -271,8 +272,8 @@ export function useWorkspace(
     draftChanges.bump,
   )
   const {
-    setStreamingBaseline,
-    unwindStreamingBaseline,
+    beginOptimisticSubmit,
+    unwindOptimisticSubmit,
     clearPendingRewindUndo,
     addOptimisticCodexUserEntry,
     removeOptimisticCodexUserEntry,
@@ -833,7 +834,7 @@ export function useWorkspace(
     return off
   }, [refs, setRuntimes])
 
-  const { switchSessionProvider, reloadSessionAgent, rewindSessionToPrompt, undoSessionRewind, reloadFocusedAgent, rewindFocusedToPrompt, undoLastRewind } =
+  const { switchSessionProvider, reloadSessionAgent, rewindSessionToPrompt, undoSessionRewind, removeCodexCyberPolicyBlock, reloadFocusedAgent, rewindFocusedToPrompt, undoLastRewind, removeFocusedCyberPolicyBlock } =
     useProviderActions(refs, setRuntimes, showPaneToast, sessionActions)
 
   // Bulk provider switch (Switch Agents modal) + remembered-batch return. Uses
@@ -870,6 +871,7 @@ export function useWorkspace(
   // see the WHY on useIpcSubscriptions.
   const sessionFeed = useSessionFeed()
   useIpcSubscriptions(sessionFeed, refs, setState, setRuntimes, updateRuntime, appendFeedDebug)
+  useTerminalForeground(restoreStatus, setRuntimes)
   useWorkspaceAdoption(refs, setState, setRuntimes, bootstrapComplete)
   useBootstrap(
     refs,
@@ -973,8 +975,8 @@ export function useWorkspace(
     resizeFocusedDirectional,
     setSplitRatio,
     setSplitRatioInTab,
-    setStreamingBaseline,
-    unwindStreamingBaseline,
+    beginOptimisticSubmit,
+    unwindOptimisticSubmit,
     clearPendingRewindUndo,
     acknowledgeSession,
     appendFeedDebug,
@@ -997,10 +999,12 @@ export function useWorkspace(
     switchSessionProvider,
     reloadSessionAgent,
     rewindSessionToPrompt,
+    removeCodexCyberPolicyBlock,
     undoSessionRewind,
     switchAgentsToProvider,
     returnLastProviderSwitchBatch,
     rewindFocusedToPrompt,
+    removeFocusedCyberPolicyBlock,
     undoLastRewind,
     reloadAgentSessions,
     setSpotlightTarget,

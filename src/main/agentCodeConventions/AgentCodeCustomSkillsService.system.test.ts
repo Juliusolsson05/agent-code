@@ -430,3 +430,39 @@ describe('Agent Code custom skill management', () => {
     })
   })
 })
+
+
+describe('product-owned TLDR skill', () => {
+  it('deploys through managed ownership and keeps personal conventions untouched', async () => {
+    const { service, targets, stateFilePath, root } = await harness()
+    const before = await service.audit()
+    await service.ensureTldrSkill()
+    const snapshot = await service.getCustomSkillsSnapshot()
+    expect(snapshot.skills).toHaveLength(1)
+    expect(snapshot.skills[0]).toMatchObject({ name: 'agent-code-tldr', managedBy: 'tldr', health: 'active' })
+    for (const target of targets) {
+      const text = await readFile(customPath(target, 'agent-code-tldr'), 'utf8')
+      expect(text).toContain('name: agent-code-tldr')
+      expect(text).toContain('tldr_update')
+      expect(text).toContain('this skill is inactive')
+    }
+    const restarted = new AgentCodeConventionsService({ stateFilePath, homeDirectory: root, resolveTargets: async () => ({ targets, unsupportedProviders: [] }) })
+    await restarted.initialize()
+    await restarted.ensureTldrSkill()
+    expect((await restarted.getCustomSkillsSnapshot()).skills[0]).toMatchObject({ name: 'agent-code-tldr', managedBy: 'tldr', health: 'active' })
+    const firstRevision = snapshot.revision
+    await service.ensureTldrSkill()
+    expect((await service.getCustomSkillsSnapshot()).revision).toBe(firstRevision)
+    const after = await service.audit()
+    expect({ enabled: after.enabled, markdown: after.markdown }).toEqual({ enabled: before.enabled, markdown: before.markdown })
+    expect(await service.deleteCustomSkill({ expectedRevision: firstRevision, skillId: snapshot.skills[0]!.id })).toMatchObject({ ok: false, code: 'validation' })
+  })
+
+  it('refuses to overwrite an unmanaged skill with the TLDR name', async () => {
+    const { service, targets } = await harness()
+    const file = customPath(targets[0]!, 'agent-code-tldr')
+    await writeFileWithParents(file, 'User owned instructions')
+    await expect(service.ensureTldrSkill()).rejects.toThrow('deployment failed')
+    expect(await readFile(file, 'utf8')).toBe('User owned instructions')
+  })
+})

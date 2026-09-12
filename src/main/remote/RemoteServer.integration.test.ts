@@ -280,6 +280,53 @@ describe('inbound scope enforcement on a live socket', () => {
     ws.close()
   })
 
+  it('refuses submit and interrupt for a terminal session (#866)', async () => {
+    ;(manager.getSessionKind as unknown as ReturnType<typeof vi.fn>)
+      .mockImplementation((sessionId: string) => (sessionId === 'shell' ? 'terminal' : 'claude'))
+    const { ws, frames, token } = await openAuthed()
+    ws.send(JSON.stringify({ token, id: 'a', message: { type: 'submit', sessionId: 'shell' } }))
+    ws.send(JSON.stringify({ token, id: 'b', message: { type: 'interrupt', sessionId: 'shell' } }))
+    await waitFor(frames, f => framesOfType(f, 'reply').length >= 2)
+    expect(manager.submitStagedPrompt).not.toHaveBeenCalled()
+    expect(manager.write).not.toHaveBeenCalled()
+    expect(framesOfType(frames, 'reply')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'a', ok: false, error: 'not an agent session' }),
+      expect.objectContaining({ id: 'b', ok: false, error: 'not an agent session' }),
+    ]))
+    ws.close()
+  })
+
+  it('refuses permission-reply for a terminal session (#866)', async () => {
+    // Sibling of the submit/interrupt terminal-refusal test above rather than
+    // an extension of it: permission-reply takes a THIRD manager method
+    // (resolveCondition) that submit/interrupt never touch, and asserting all
+    // three "not called" expectations in one test would blur which guard
+    // caught the message if a future refactor ever weakened one path but not
+    // the other two. isAgentSession (RemoteServer.ts ~:639) already gates
+    // this case (~:678-679); this test exists so that guard can never
+    // regress silently — a terminal id is never shown to the phone in the
+    // first place (SessionFeedSource's terminal filter), so a permission-reply
+    // naming one is either stale phone state or a crafted frame, and replying
+    // to it would let a remote client answer a prompt on a shell pane.
+    ;(manager.getSessionKind as unknown as ReturnType<typeof vi.fn>)
+      .mockImplementation((sessionId: string) => (sessionId === 'shell' ? 'terminal' : 'claude'))
+    const { ws, frames, token } = await openAuthed()
+    ws.send(JSON.stringify({
+      token, id: 'r1',
+      message: {
+        type: 'permission-reply', sessionId: 'shell',
+        action: { kind: 'pty', id: 'yes', label: 'Yes', data: '1\r' },
+      },
+    }))
+    await waitFor(frames, f => framesOfType(f, 'reply').length >= 1)
+    expect(framesOfType(frames, 'reply')[0]).toMatchObject({
+      id: 'r1', ok: false, error: 'not an agent session',
+    })
+    expect(manager.write).not.toHaveBeenCalled()
+    expect(manager.resolveCondition).not.toHaveBeenCalled()
+    ws.close()
+  })
+
   it('custom permission-reply routes through resolveCondition', async () => {
     const { ws, frames, token } = await openAuthed()
     const action = { kind: 'custom', id: 'q', label: 'Answer', name: 'claude.auq', payload: { a: 1 } }

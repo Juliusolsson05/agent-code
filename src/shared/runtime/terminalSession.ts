@@ -244,6 +244,23 @@ export class TerminalSession extends EventEmitter {
     return this.pty?.pid ?? null
   }
 
+  /**
+   * Name of the PTY's foreground process, for DIRECT PTYs only (#865).
+   *
+   * WHY null in tmux mode: there the PTY's child is the `tmux attach` client,
+   * so node-pty would name `tmux` forever. The tmux server reports the real
+   * foreground through TmuxRegistry.listPaneForeground instead.
+   */
+  getForegroundProcessName(): string | null {
+    if (this.runtime !== 'direct' || !this.pty) return null
+    try {
+      return this.pty.process || null
+    } catch {
+      // The getter reads the tty's process group; a PTY mid-exit can throw.
+      return null
+    }
+  }
+
   /** True if the PTY has exited. */
   isExited(): boolean {
     return this.exited

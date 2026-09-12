@@ -1,0 +1,2 @@
+{"type":"bridge-session","sessionId":"e3d5cfc8-f255-4e94-9204-52ed316ab69e","bridgeSessionId":"p:a6299679:28","lastSequenceNum":0,"ownerAccountUuid":"p:20902daa:36","ownerOrganizationUuid":"p:3f41e7d6:36"}
+{"type":"cost-state","sessionId":"e3d5cfc8-f255-4e94-9204-52ed316ab69e","totalCostUSD":0,"totalAPIDuration":0,"totalAPIDurationWithoutRetries":0,"totalToolDuration":0,"totalLinesAdded":0,"totalLinesRemoved":0,"totalDuration":5621,"startTime":1788594499846,"modelUsage":{},"hasUnknownModelCost":false}

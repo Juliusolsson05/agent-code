@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { BuiltInMcpHttpHost } from '@mcp/runtime/BuiltInMcpHttpHost.js'
 
 const { createSession, createTerminalSession } = vi.hoisted(() => ({
   createSession: vi.fn(),
@@ -197,6 +198,18 @@ describe('SessionManager restart wake recovery', () => {
     await expect(manager.spawn({ kind: 'codex', cwd: '/tmp/project' }))
       .resolves.toMatchObject({ sessionId: expect.any(String) })
     expect(createSession).toHaveBeenCalledTimes(1)
+  })
+
+  it('fails a TLDR-enabled launch and revokes its token if the reporting skill cannot deploy', async () => {
+    const { SessionManager } = await import('./sessionManager')
+    const host = { registerSession: vi.fn((_scope: { sessionId: string }) => []), revokeSession: vi.fn() }
+    const reconcile = vi.fn(async () => { throw new Error('TLDR skill destination is user-owned') })
+    const manager = new SessionManager(null, host as unknown as BuiltInMcpHttpHost, null, reconcile)
+    const options = { kind: 'codex' as const, cwd: '/tmp/project', builtInMcpDomains: ['tldr' as const], tldrIdentity: 'summary-agent' }
+    await expect(manager.spawn(options)).rejects.toThrow('TLDR skill destination is user-owned')
+    expect(reconcile).toHaveBeenCalledWith(options)
+    expect(createSession).not.toHaveBeenCalled()
+    expect(host.revokeSession).toHaveBeenCalledWith(host.registerSession.mock.calls[0]![0].sessionId)
   })
 
   it('joins a second wake while the first backend recovery is still starting', async () => {

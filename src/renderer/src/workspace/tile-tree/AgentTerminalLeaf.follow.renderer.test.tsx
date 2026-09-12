@@ -51,6 +51,7 @@ const appStore = vi.hoisted(() => ({
     dictationProvider: 'local',
     dictationShortcut: 'off',
     mouseModeEnabled: false,
+    dispatchColorFlags: {},
   },
   tailAllMode: false,
 }))
@@ -198,6 +199,7 @@ describe('AgentTerminalLeaf follow (jump-to-latest + tail)', () => {
             runtime={runtime}
             projectDir="/tmp/project"
             provider="codex"
+            showStatusMode={false}
           />
         </MountedAgentTerminalOwner>
       </AgentTerminalOwnershipProvider>

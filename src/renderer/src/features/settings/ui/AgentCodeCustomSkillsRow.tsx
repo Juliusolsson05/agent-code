@@ -454,11 +454,12 @@ function AgentCodeCustomSkillsModal({
                             <div className="mt-1 text-[10px] text-muted">{HEALTH_LABELS[skill.health]}</div>
                           </div>
                           <div className="flex flex-wrap justify-end gap-2">
-                            <Button aria-label={`Edit ${skill.name}`} variant="outline" size="sm" disabled={busy} onClick={() => edit(draftFromSkill(skill))}>Edit</Button>
-                            <Button aria-label={`${skill.enabled ? 'Disable' : 'Enable'} ${skill.name}`} variant="outline" size="sm" disabled={busy || skill.health === 'recovery-required' || skill.health === 'unsupported'} onClick={() => void toggle(skill)}>
+                            {skill.managedBy && <span className="text-[10px] text-muted">Managed by TLDR MCP</span>}
+                            <Button aria-label={`Edit ${skill.name}`} variant="outline" size="sm" disabled={busy || Boolean(skill.managedBy)} onClick={() => edit(draftFromSkill(skill))}>Edit</Button>
+                            <Button aria-label={`${skill.enabled ? 'Disable' : 'Enable'} ${skill.name}`} variant="outline" size="sm" disabled={busy || Boolean(skill.managedBy) || skill.health === 'recovery-required' || skill.health === 'unsupported'} onClick={() => void toggle(skill)}>
                               {skill.enabled ? 'Disable' : 'Enable'}
                             </Button>
-                            <button type="button" aria-label={`Delete ${skill.name}`} disabled={busy} className="rounded-control border border-danger px-2 py-1 text-[10px] text-danger disabled:opacity-50" onClick={() => void remove(skill)}>Delete</button>
+                            <button type="button" aria-label={`Delete ${skill.name}`} disabled={busy || Boolean(skill.managedBy)} className="rounded-control border border-danger px-2 py-1 text-[10px] text-danger disabled:opacity-50" onClick={() => void remove(skill)}>Delete</button>
                           </div>
                         </div>
                         {skill.targets.length ? (

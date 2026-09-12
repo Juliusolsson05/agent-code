@@ -97,8 +97,9 @@ export type HistoryChunk = {
 // single records to hundreds of KB or more; the line assembly below handles
 // those by carrying chunks across blocks, so a larger block would only buy
 // fewer syscalls on an already-rare path while every ordinary load would read
-// (and allocate) more than it needs. The same size the session picker's tail
-// window uses (sessionIndex.ts), for the same reason.
+// (and allocate) more than it needs. The same size the conversation prompt
+// folder's tail window uses (conversations/prompts/promptFolder.ts), for the
+// same reason.
 const TAIL_BLOCK_BYTES = 256 * 1024
 
 // WHY a bigger block for the newline count: that pass touches every byte
@@ -130,7 +131,14 @@ async function resolveHistoryTranscriptPath(
   // old history-loader-local walker returned the first lexical match; the shared
   // resolver picks newest by mtime, which is the correct tie-break when the same
   // Codex thread id appears in more than one rollout file.
-  return resolveProviderTranscriptPath(params)
+  const file = await resolveProviderTranscriptPath(params)
+  // Bulk locators must be able to report individual missing files, but a
+  // requested Claude history must not masquerade as a healthy empty replay.
+  // Keep this strict read policy at the caller, not in the shared locator.
+  if (!file && params.kind === 'claude') {
+    throw new Error(`Claude transcript not found for session ${params.providerSessionId}`)
+  }
+  return file
 }
 
 /**

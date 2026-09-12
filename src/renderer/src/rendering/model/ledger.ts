@@ -45,6 +45,7 @@ export type GhostLedgerCandidate = {
 
 export type LedgerInput = {
   provider: AgentProviderKind
+  notices?: readonly RenderCandidate[]
   committed: readonly RenderCandidate[]
   live: readonly RenderCandidate[]
   /** Pure phase statics (the 'work' chip). NOT 'empty' anymore — see
@@ -125,6 +126,12 @@ function computeLedger(input: LedgerInput): RenderLedger {
     decisions.push(d)
     if (d.selected) selected.push(c)
   }
+  // A request refusal can precede a model turn. These already-admitted status
+  // records own no conversation text and cannot participate in turn suppression.
+  for (const c of input.notices ?? []) {
+    decisions.push({ candidateId: c.id, selected: true, reason: 'selected', evidence: ['provider request status'] })
+    selected.push(c)
+  }
   for (const c of input.statics) {
     decisions.push({ candidateId: c.id, selected: true, reason: 'selected', evidence: [] })
     selected.push(c)
@@ -188,6 +195,7 @@ export function createSessionLedger(): (input: LedgerInput) => RenderLedger {
       last.input.provider === input.provider &&
       last.input.committed === input.committed &&
       last.input.live === input.live &&
+      last.input.notices === input.notices &&
       last.input.statics === input.statics &&
       // Both cached by (provider, sessionId) upstream, so reference equality
       // holds tick-to-tick; committedTailMs is a scalar the gate reads, so a

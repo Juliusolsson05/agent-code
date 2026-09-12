@@ -16,6 +16,8 @@ import {
   rewindSession,
 } from '@main/providerSwitch/rewindSession.js'
 import type { RewindSessionRequest } from '@main/providerSwitch/rewindSession.js'
+import { stripCodexCyberPolicy } from '@main/providerSwitch/stripCodexCyberPolicy.js'
+import type { StripCodexCyberPolicyRequest } from '@main/providerSwitch/stripCodexCyberPolicy.js'
 import type { ListRewindPromptsRequest } from '@shared/types/transcriptRewind.js'
 
 // Provider-level session transforms.
@@ -185,6 +187,17 @@ export function registerProviderIpc(manager: SessionManager): void {
     'session:rewind-to-prompt',
     async (_evt, params: RewindSessionRequest) => {
       return await rewindSession(params)
+    },
+  )
+
+  // Fork the focused Codex rollout with the last model step after a
+  // cyber_policy task_complete removed. Same write-new-file contract as
+  // rewind: the source is never touched, and the renderer re-homes the
+  // pane with replaceSession.
+  ipcMain.handle(
+    'session:strip-codex-cyber-policy',
+    async (_evt, params: StripCodexCyberPolicyRequest) => {
+      return await stripCodexCyberPolicy(params)
     },
   )
 }

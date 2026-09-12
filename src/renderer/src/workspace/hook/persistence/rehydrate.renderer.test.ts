@@ -106,6 +106,24 @@ function makeHarness() {
 }
 
 describe('rehydrateWorkspace backend reconciliation', () => {
+  it('adopts the live backend’s TLDR identity when persisted renderer metadata is stale', async () => {
+    const persisted = makePersisted()
+    persisted.sessions['stable-session']!.tldrIdentity = 'stale-renderer-summary'
+    persisted.sessions['stable-session']!.builtInMcpDomains = ['tldr']
+    const harness = makeHarness()
+    Object.defineProperty(window, 'api', { configurable: true, value: {
+      defaultCwd: vi.fn(),
+      recoverSession: vi.fn(async () => ({
+        ok: true, disposition: 'adopted', snapshot: {
+          sessionId: 'stable-session', kind: 'claude', cwd: '/tmp/project', lifecycle: 'live',
+          input: { ready: true, revision: 1 }, builtInMcpDomains: ['tldr'], tldrIdentity: 'main-summary',
+        },
+      })),
+    } })
+    await rehydrateWorkspace(persisted, harness.refs, harness.setState, harness.setRuntimes, harness.setTileTabs, vi.fn())
+    expect(harness.state().sessions['stable-session']?.tldrIdentity).toBe('main-summary')
+  })
+
   it('recovers OpenCode Terminal with its runtime selector and durable provider id intact', async () => {
     const persisted = makePersisted()
     persisted.sessions['stable-session'] = {
@@ -113,6 +131,7 @@ describe('rehydrateWorkspace backend reconciliation', () => {
       kind: 'opencode',
       providerRuntime: 'terminal',
       providerSessionId: 'ses_durable_terminal',
+      tldrIdentity: 'summary-stable',
       providerSessionIdSource: 'runtime-start',
       builtInMcpDomains: ['orchestration'],
     }
@@ -149,11 +168,13 @@ describe('rehydrateWorkspace backend reconciliation', () => {
       kind: 'opencode',
       providerRuntime: 'terminal',
       resumeSessionId: 'ses_durable_terminal',
+      tldrIdentity: 'summary-stable',
     }))
     expect(harness.state().sessions['stable-session']).toMatchObject({
       kind: 'opencode',
       providerRuntime: 'terminal',
       providerSessionId: 'ses_durable_terminal',
+      tldrIdentity: 'summary-stable',
     })
     // Structured-history bootstrap must remain off. The raw terminal owns the
     // pixels even though the same provider id remains available to conversion,
@@ -165,9 +186,10 @@ describe('rehydrateWorkspace backend reconciliation', () => {
     })
   })
 
-  it('does not reapply enabled defaults to a persisted explicit empty list', async () => {
+  it('does not reapply enabled defaults over a persisted explicit disable', async () => {
     const persisted = makePersisted()
     persisted.sessions['stable-session']!.builtInMcpDomains = []
+    persisted.sessions['stable-session']!.builtInMcpOverrides = { orchestration: false }
     const harness = makeHarness()
     harness.refs.defaultBuiltInMcpDomainsRef.current = ['orchestration']
     const recoverSession = vi.fn(async () => ({
@@ -199,6 +221,26 @@ describe('rehydrateWorkspace backend reconciliation', () => {
       builtInMcpDomains: [],
     }))
     expect(harness.state().sessions['stable-session']?.builtInMcpDomains).toEqual([])
+  })
+
+  it.each(['spawned', 'adopted'] as const)('migrates legacy off to inheritance while keeping a %s backend snapshot authoritative', async disposition => {
+    const persisted = makePersisted()
+    persisted.sessions['stable-session']!.builtInMcpDomains = []
+    const harness = makeHarness()
+    harness.refs.defaultBuiltInMcpDomainsRef.current = ['tldr']
+    const domains = disposition === 'spawned' ? ['tldr'] : []
+    const recoverSession = vi.fn(async () => ({
+      ok: true, disposition, snapshot: {
+        sessionId: 'stable-session', kind: 'claude', cwd: '/tmp/project', lifecycle: 'live',
+        input: { ready: true, revision: 1 }, builtInMcpDomains: domains,
+      },
+    }))
+    Object.defineProperty(window, 'api', { configurable: true, value: { recoverSession, defaultCwd: vi.fn() } })
+    await rehydrateWorkspace(persisted, harness.refs, harness.setState, harness.setRuntimes, harness.setTileTabs, vi.fn())
+    // Recovery may adopt an existing process. Settings describe the next
+    // launch; they cannot change the tools that process already started with.
+    expect(recoverSession).toHaveBeenCalledWith(expect.objectContaining({ builtInMcpDomains: ['tldr'] }))
+    expect(harness.state().sessions['stable-session']).toMatchObject({ builtInMcpDomains: domains, builtInMcpOverrides: {} })
   })
 
   it('adopts under the persisted local id without calling the fresh-spawn API', async () => {

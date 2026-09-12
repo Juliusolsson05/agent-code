@@ -97,7 +97,22 @@ describe('rewindSession neutral integration', () => {
     })
   })
 
-  it('returns analyzed prompts newest-first and caps the IPC payload', async () => {
+  it('returns every analyzed prompt newest-first when no limit is asked for', async () => {
+    mocks.listPrompts.mockResolvedValue([
+      { address: { provider: 'codex', line: 2, sessionId: 'source-session' }, text: 'first', timestamp: null },
+      { address: { provider: 'codex', line: 7, sessionId: 'source-session' }, text: 'second', timestamp: null },
+    ])
+    await expect(listRewindPrompts({
+      provider: 'codex',
+      sourceProviderSessionId: 'source-session',
+      cwd: '/project',
+    })).resolves.toEqual([
+      { address: { provider: 'codex', line: 7, sessionId: 'source-session' }, text: 'second', timestamp: null },
+      { address: { provider: 'codex', line: 2, sessionId: 'source-session' }, text: 'first', timestamp: null },
+    ])
+  })
+
+  it('honours a finite limit from a caller that wants a bounded page', async () => {
     mocks.listPrompts.mockResolvedValue([
       { address: { provider: 'codex', line: 2, sessionId: 'source-session' }, text: 'first', timestamp: null },
       { address: { provider: 'codex', line: 7, sessionId: 'source-session' }, text: 'second', timestamp: null },

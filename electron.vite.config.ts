@@ -1,12 +1,32 @@
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
-import { execSync } from 'node:child_process'
+import { execFileSync, execSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { copyFile, mkdir } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { resolve } from 'path'
 import type { Plugin } from 'vite'
+
+// ---------------------------------------------------------------------------
+// @xterm/xterm core patch gate (#871) — see scripts/patch-xterm.mjs for the
+// bug. The pinned 6.1.0 beta's resize() replays/drops queued writes; the
+// script removes that flush from both installed bundles.
+//
+// WHY run it HERE as well as from `postinstall` (PR #873 round-2 review):
+// postinstall is skipped by `npm ci --ignore-scripts` (a legitimate way to
+// avoid the native rebuild) and by an interrupted install, and nothing else
+// in dev/build would notice — the build succeeds and bundles the unpatched
+// core. This config is evaluated once per `electron-vite dev|build|preview`,
+// including direct invocations that bypass the npm scripts, so it is the one
+// choke point every renderer bundle passes through. The script is idempotent
+// ("already patched" in the normal case) and exits non-zero on any version or
+// bundle-shape mismatch; execFileSync then throws and the command aborts —
+// deliberately, because shipping the unpatched core is the failure we are
+// preventing. A child process (like the git provenance calls below) rather
+// than an import keeps this TypeScript config free of an untyped .mjs.
+// ---------------------------------------------------------------------------
+execFileSync(process.execPath, [resolve(__dirname, 'scripts/patch-xterm.mjs')], { stdio: 'inherit' })
 
 // Resolve headless packages from the submodule sources directly.
 // Only main + preload use these (they import Node APIs like
@@ -247,7 +267,19 @@ export default defineConfig(({ mode }) => ({
     },
     plugins: [react(), tailwindcss()],
     optimizeDeps: {
-      include: ['monaco-editor']
+      include: ['monaco-editor'],
+      // Never pre-bundle the patched xterm core (#871, PR #873 round-2 review).
+      // Vite's dev optimizer caches a pre-bundled copy keyed on the lockfile
+      // and config — NOT on the dependency's file contents — so a copy
+      // pre-bundled before scripts/patch-xterm.mjs ran (e.g. dev started on an
+      // unpatched revision or after `--ignore-scripts`) would keep being served
+      // after the patch succeeded, with the guard test (which reads
+      // node_modules) still green. Reproduced with this repo's Vite 7.3.6.
+      // Excluded, Vite serves node_modules/@xterm/xterm/lib/xterm.mjs itself,
+      // so dev always runs the patched file. Safe: that bundle is plain ESM
+      // with no imports of its own, and the add-ons do not import the core.
+      // Dev-only — production builds bundle straight from node_modules.
+      exclude: ['@xterm/xterm'],
     }
   }
 }))

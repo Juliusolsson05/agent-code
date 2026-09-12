@@ -14,6 +14,7 @@ import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import type { ResolveConditionResult } from '@shared/sessionFeed/types.js'
 import type { ConditionCustomAction } from '@shared/conditions-core/contract.js'
 import type { SessionKind } from '@shared/types/providerKind.js'
+import { isAgentProviderKind } from '@shared/types/providerKind.js'
 import type { PromptDeliveryResult } from '@shared/types/providerConfig.js'
 import type { SessionBackendSnapshot } from '@shared/types/session.js'
 
@@ -632,6 +633,13 @@ export class RemoteServer extends EventEmitter {
     this.send(ws, { type: 'reply', id: frame.id, ...result })
   }
 
+  /** Inbound writes are for agent sessions only (#866). A terminal is never
+   *  listed to a phone, so an inbound write to one is either stale or crafted,
+   *  and pressing Enter in a shell would run whatever sits on its line. */
+  private isAgentSession(sessionId: string): boolean {
+    return isAgentProviderKind(this.deps.manager.getSessionKind(sessionId))
+  }
+
   private async apply(frame: InboundFrame): Promise<RemoteReply> {
     const msg = frame.message
     switch (msg.type) {
@@ -656,16 +664,19 @@ export class RemoteServer extends EventEmitter {
       }
 
       case 'submit': {
+        if (!this.isAgentSession(msg.sessionId)) return { ok: false, error: 'not an agent session' }
         const wrote = this.deps.manager.submitStagedPrompt(msg.sessionId)
         return wrote ? { ok: true } : { ok: false, error: 'session not writable' }
       }
 
       case 'interrupt': {
+        if (!this.isAgentSession(msg.sessionId)) return { ok: false, error: 'not an agent session' }
         const wrote = this.deps.manager.write(msg.sessionId, INTERRUPT_BYTES, 'remote')
         return wrote ? { ok: true } : { ok: false, error: 'session not writable' }
       }
 
       case 'permission-reply':
+        if (!this.isAgentSession(msg.sessionId)) return { ok: false, error: 'not an agent session' }
         return this.applyPermissionReply(msg.sessionId, msg.action)
 
       case 'get-history': {
