@@ -387,16 +387,10 @@ export type Settings = {
    *  writes agent-names.json. Turning it back off hides names and name lookup
    *  but keeps every assignment, so re-enabling restores the same addresses. */
   agentNamesEnabled: boolean
-  /** Built-in MCP capabilities used to seed a new agent session when its
-   *  caller does not provide an explicit per-session list. This is a default,
-   *  not a fleet policy: after initialization the resolved array lives in
-   *  SessionMeta and command-palette toggles may change it independently.
-   *
-   *  `ping` is deliberately excluded from the type because it is a
-   *  development bridge probe, not a product capability. Provider-specific
-   *  restrictions (notably Workflow MCP being Codex-only) are applied at the
-   *  session and main-host boundaries rather than encoded as parallel
-   *  per-provider preference lists. */
+  /** Global built-in MCP preferences resolved whenever a provider starts,
+   * including reloads. Per-domain session overrides win; a running process's
+   * captured capability list is an observation, never its preference source.
+   * `ping` stays diagnostic-only. Provider filters run after resolution. */
   defaultBuiltInMcpDomains: ConfigurableBuiltInMcpDomain[]
   /** When true, agent sessions are spawned through a per-session proxy
    *  that Agent Code owns. Claude gets a mitmproxy that decrypts Anthropic

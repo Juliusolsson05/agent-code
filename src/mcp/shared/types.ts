@@ -20,7 +20,7 @@ export const BUILT_IN_MCP_DOMAINS = [
 ] as const satisfies readonly BuiltInMcpDomain[]
 
 /**
- * Product capabilities a user may enable by default for new agent sessions.
+ * Product capabilities a user may enable globally for new/reloaded agents.
  *
  * WHY `ping` is not merely hidden by the Settings UI: persisted Settings are
  * untrusted, long-lived input and can survive downgrades, hand edits, and
@@ -39,6 +39,10 @@ export const CONFIGURABLE_BUILT_IN_MCP_DOMAINS = [
 
 export type ConfigurableBuiltInMcpDomain =
   (typeof CONFIGURABLE_BUILT_IN_MCP_DOMAINS)[number]
+
+/** Absence inherits Settings. A false value is an intentional per-agent off,
+ * not an old effective snapshot captured before a global setting changed. */
+export type BuiltInMcpOverrides = Partial<Record<BuiltInMcpDomain, boolean>>
 
 /**
  * The provider launchers, not the generic "agent provider" type, determine

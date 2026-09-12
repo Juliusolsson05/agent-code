@@ -1,3 +1,4 @@
+import { sessionMcpOverrides } from '@renderer/workspace/mcpDomains'
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { getProviderFeatures } from '@providers/shared/featureCapabilities'
@@ -12,7 +13,7 @@ import { runAttachRecordingNoteCommand, runToggleSessionRecordingCommand } from 
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import { buildProviderResumeCommand } from '@renderer/workspace/providerResumeCommand'
 import { providerSupportsBuiltInMcpDomain } from '@mcp/shared/types'
-import type { BuiltInMcpDomain } from '@mcp/shared/types'
+import type { BuiltInMcpDomain, BuiltInMcpOverrides } from '@mcp/shared/types'
 import { clearAgentComposer } from '@renderer/workspace/tile-tree/TileLeaf/clearAgentComposer'
 import { sessionHasTranscript } from '@renderer/workspace/transcriptAvailability'
 
@@ -40,19 +41,21 @@ function builtInMcpDomainState(
   return toggle(enabled)
 }
 
-function toggleBuiltInMcpDomain(
-  domains: readonly BuiltInMcpDomain[] | undefined,
+/** WHY these commands are true toggles even though they reload the agent: the
+ * palette badge says On/Off, so the command must honor that contract. Adding a
+ * domain requires a provider restart because the MCP server list is fixed at
+ * spawn time; disabling one is the same operation in reverse.
+ *
+ * WHY the toggle flips the EFFECTIVE state and records a CHOICE: the badge
+ * reports what the running process actually has, so that is what the user is
+ * answering. Writing the decision as a per-domain override — rather than a new
+ * effective list — is what stops a later global Settings change from quietly
+ * reversing a decision made for this one agent (#904). */
+function toggledMcpOverrides(
+  meta: { builtInMcpDomains?: BuiltInMcpDomain[]; builtInMcpOverrides?: BuiltInMcpOverrides },
   domain: BuiltInMcpDomain,
-): BuiltInMcpDomain[] {
-  // WHY these commands are true toggles even though they reload the agent:
-  // the palette badge says On/Off, so the command must honor that contract.
-  // Adding a domain requires a provider restart because the MCP server list
-  // is fixed at spawn time; disabling one is the same operation in reverse:
-  // restart the same provider session with the domain removed.
-  const current = domains ?? []
-  return current.includes(domain)
-    ? current.filter(existing => existing !== domain)
-    : Array.from(new Set([...current, domain]))
+): BuiltInMcpOverrides {
+  return { ...sessionMcpOverrides(meta), [domain]: !meta.builtInMcpDomains?.includes(domain) }
 }
 
 function agentViewOverrideLabel(
@@ -69,6 +72,32 @@ function agentViewOverrideLabel(
 }
 
 export const sessionCommands: CommandDef[] = [
+  {
+    id: 'use-global-mcp-settings',
+    category: 'session', surface: 'session', title: 'Use Global MCP Settings',
+    description: '**What it does:** Clears this agent’s MCP overrides and reloads it with the current global settings.\n\n**Use when:** You want this agent to follow Settings again, including on future reloads.\n\n**Notes:** Resumes the same conversation when its provider session is available.',
+    keywords: ['mcp', 'global', 'default', 'inherit', 'reset', 'reload'],
+    when: ({ workspace }) => {
+      const id = commandTargetSessionId(workspace)
+      const meta = id ? workspace.state.sessions[id] : null
+      return Boolean(meta && isAgentProviderKind(meta.kind ?? DEFAULT_PROVIDER))
+    },
+    run: async ({ workspace, ui }) => {
+      const id = commandTargetSessionId(workspace)
+      const meta = id ? workspace.state.sessions[id] : null
+      if (!id || !meta || !isAgentProviderKind(meta.kind ?? DEFAULT_PROVIDER)) return
+      ui.closePalette()
+      try {
+        const next = await workspace.replaceSession(meta.cwd, {
+          targetSessionId: id, kind: meta.kind ?? DEFAULT_PROVIDER,
+          resumeSessionId: meta.providerSessionId, builtInMcpOverrides: {},
+        })
+        if (next) workspace.showPaneToast(next, 'Reloaded with global MCP settings')
+      } catch (error) {
+        workspace.showPaneToast(id, error instanceof Error ? error.message : 'MCP reload failed')
+      }
+    },
+  },
   {
     id: 'view-prompts',
     category: 'session',
@@ -440,16 +469,16 @@ export const sessionCommands: CommandDef[] = [
 
       ui.closePalette()
       try {
-        const nextDomains = toggleBuiltInMcpDomain(meta.builtInMcpDomains, 'ping')
+        const enable = !meta.builtInMcpDomains?.includes('ping')
         const newSessionId = await workspace.replaceSession(meta.cwd, {
           kind,
           resumeSessionId: meta.providerSessionId,
-          builtInMcpDomains: nextDomains,
+          builtInMcpOverrides: toggledMcpOverrides(meta, 'ping'),
         })
         if (newSessionId) {
           workspace.showPaneToast(
             newSessionId,
-            nextDomains.includes('ping')
+            enable
               ? 'Reloaded with built-in MCP ping'
               : 'Reloaded without built-in MCP ping',
           )
@@ -490,16 +519,16 @@ export const sessionCommands: CommandDef[] = [
 
       ui.closePalette()
       try {
-        const nextDomains = toggleBuiltInMcpDomain(meta.builtInMcpDomains, 'ai_workspace')
+        const enable = !meta.builtInMcpDomains?.includes('ai_workspace')
         const newSessionId = await workspace.replaceSession(meta.cwd, {
           kind,
           resumeSessionId: meta.providerSessionId,
-          builtInMcpDomains: nextDomains,
+          builtInMcpOverrides: toggledMcpOverrides(meta, 'ai_workspace'),
         })
         if (newSessionId) {
           workspace.showPaneToast(
             newSessionId,
-            nextDomains.includes('ai_workspace')
+            enable
               ? 'Reloaded with AI Workspace MCP'
               : 'Reloaded without AI Workspace MCP',
           )
@@ -540,16 +569,16 @@ export const sessionCommands: CommandDef[] = [
 
       ui.closePalette()
       try {
-        const nextDomains = toggleBuiltInMcpDomain(meta.builtInMcpDomains, 'orchestration')
+        const enable = !meta.builtInMcpDomains?.includes('orchestration')
         const newSessionId = await workspace.replaceSession(meta.cwd, {
           kind,
           resumeSessionId: meta.providerSessionId,
-          builtInMcpDomains: nextDomains,
+          builtInMcpOverrides: toggledMcpOverrides(meta, 'orchestration'),
         })
         if (newSessionId) {
           workspace.showPaneToast(
             newSessionId,
-            nextDomains.includes('orchestration')
+            enable
               ? 'Reloaded with orchestration MCP'
               : 'Reloaded without orchestration MCP',
           )
@@ -590,16 +619,16 @@ export const sessionCommands: CommandDef[] = [
 
       ui.closePalette()
       try {
-        const nextDomains = toggleBuiltInMcpDomain(meta.builtInMcpDomains, 'agent_transcripts')
+        const enable = !meta.builtInMcpDomains?.includes('agent_transcripts')
         const newSessionId = await workspace.replaceSession(meta.cwd, {
           kind,
           resumeSessionId: meta.providerSessionId,
-          builtInMcpDomains: nextDomains,
+          builtInMcpOverrides: toggledMcpOverrides(meta, 'agent_transcripts'),
         })
         if (newSessionId) {
           workspace.showPaneToast(
             newSessionId,
-            nextDomains.includes('agent_transcripts')
+            enable
               ? 'Reloaded with Agent Transcripts MCP'
               : 'Reloaded without Agent Transcripts MCP',
           )
@@ -641,16 +670,16 @@ export const sessionCommands: CommandDef[] = [
 
       ui.closePalette()
       try {
-        const nextDomains = toggleBuiltInMcpDomain(meta.builtInMcpDomains, 'agent_management')
+        const enable = !meta.builtInMcpDomains?.includes('agent_management')
         const newSessionId = await workspace.replaceSession(meta.cwd, {
           kind,
           resumeSessionId: meta.providerSessionId,
-          builtInMcpDomains: nextDomains,
+          builtInMcpOverrides: toggledMcpOverrides(meta, 'agent_management'),
         })
         if (newSessionId) {
           workspace.showPaneToast(
             newSessionId,
-            nextDomains.includes('agent_management')
+            enable
               ? 'Reloaded with Agent Management MCP'
               : 'Reloaded without Agent Management MCP',
           )
@@ -691,17 +720,17 @@ export const sessionCommands: CommandDef[] = [
 
       ui.closePalette()
       try {
-        const nextDomains = toggleBuiltInMcpDomain(meta.builtInMcpDomains, 'tldr')
+        const enable = !meta.builtInMcpDomains?.includes('tldr')
         const newSessionId = await workspace.replaceSession(meta.cwd, {
           kind,
           targetSessionId: sessionId,
           resumeSessionId: meta.providerSessionId,
-          builtInMcpDomains: nextDomains,
+          builtInMcpOverrides: toggledMcpOverrides(meta, 'tldr'),
         })
         if (newSessionId) {
           workspace.showPaneToast(
             newSessionId,
-            nextDomains.includes('tldr')
+            enable
               ? 'Reloaded with TLDR MCP'
               : 'Reloaded without TLDR MCP',
           )
@@ -740,7 +769,7 @@ export const sessionCommands: CommandDef[] = [
 
       ui.closePalette()
       try {
-        const nextDomains = toggleBuiltInMcpDomain(meta.builtInMcpDomains, 'workflows')
+        const enable = !meta.builtInMcpDomains?.includes('workflows')
         // WHY replace the agent instead of mutating the running registration:
         // Codex and OpenCode receive MCP configuration at process launch. Updating
         // renderer metadata alone would display an enabled toggle while the
@@ -749,12 +778,12 @@ export const sessionCommands: CommandDef[] = [
         const newSessionId = await workspace.replaceSession(meta.cwd, {
           kind,
           resumeSessionId: meta.providerSessionId,
-          builtInMcpDomains: nextDomains,
+          builtInMcpOverrides: toggledMcpOverrides(meta, 'workflows'),
         })
         if (newSessionId) {
           workspace.showPaneToast(
             newSessionId,
-            nextDomains.includes('workflows')
+            enable
               ? 'Reloaded with Workflow MCP'
               : 'Reloaded without Workflow MCP',
           )
@@ -978,17 +1007,18 @@ export const sessionCommands: CommandDef[] = [
         // what "duplicate" should do. Using `splitFocused` places
         // both side-by-side so the user can see and interact with
         // them at once.
-        // WHY the capability domains travel with the transcript clone: built-in MCP credentials
+        // WHY the capability choices travel with the transcript clone: built-in MCP credentials
         // are deliberately ephemeral, but the user's decision to enable a domain is durable pane
         // metadata. Passing only the new provider transcript id created a clone that worked until
         // restart, then rehydrate had no domain names from which to mint a fresh project-scoped
-        // token. The clone must inherit domain NAMES, never the source session's bearer token.
+        // token. The clone inherits CHOICES, never the source session's bearer token, and resolves
+        // them against current Settings the way every other new provider process does.
         await workspace.splitFocused(
           'vertical',
           kind,
           {
             resumeSessionId: newProviderSessionId,
-            builtInMcpDomains: meta.builtInMcpDomains,
+            builtInMcpOverrides: sessionMcpOverrides(meta),
             // OpenCode Terminal and rendered OpenCode share a provider kind.
             // The transcript clone should branch the current experience, not
             // silently reinterpret a terminal clone as a rendered session.

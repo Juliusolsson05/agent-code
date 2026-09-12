@@ -105,7 +105,8 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
   'create-ai-workspace',
   'clear-ai-workspace',
   'toggle-file-tree',
-  // sessionCommands (30)
+  // sessionCommands (31)
+  'use-global-mcp-settings',
   'view-prompts',
   'rewind-to-prompt',
   'remove-cybersecurity-block',
@@ -198,12 +199,12 @@ const NAVIGATION_COMMAND_GROUP: readonly string[] = [
 const ids = (): string[] => builtInCommandCatalog.map(c => c.id)
 
 describe('built-in command catalog — baseline characterization', () => {
-  it('contains exactly the 119 governed commands in registration order', () => {
+  it('contains exactly the 120 governed commands in registration order', () => {
     // Order matters: this is the palette's empty-query browse order.
     expect(ids()).toEqual([...BASELINE_COMMAND_IDS])
   })
 
-  it('has exactly 119 commands', () => {
+  it('has exactly 120 commands', () => {
     // Stated separately from the order assertion because this number is the
     // thing that moves, and a bare count failure is a clearer signal than a
     // 99-line array diff.
@@ -218,7 +219,7 @@ describe('built-in command catalog — baseline characterization', () => {
     // Each step of that arithmetic was a deliberate edit to this line, which is the entire point of pinning it. (The two test
     // titles above had drifted to "115" while this line said 116; they now
     // track it again.)
-    expect(builtInCommandCatalog).toHaveLength(119)
+    expect(builtInCommandCatalog).toHaveLength(120)
   })
 
   it('reports no structural defects', () => {
@@ -252,12 +253,12 @@ describe('generated per-provider split commands', () => {
   })
 
   it('accounts for the difference between literal and total command count', () => {
-    // 119 total - 4 generated = 115 literal `id:` fields across the command
+    // 120 total - 4 generated = 116 literal `id:` fields across the command
     // modules. At the original baseline this read 102 - 4 = 98; it moved down by
     // the five retirements, then back up by the nine additions, Grid Dispatch's
     // six row commands, New Window, and the later single additions recorded in
     // the count test above (through TLDR, #888).
-    expect(builtInCommandCatalog.length - nonDefaultProviders.length * 2).toBe(115)
+    expect(builtInCommandCatalog.length - nonDefaultProviders.length * 2).toBe(116)
   })
 
   it('emits both directions for every non-default provider', () => {
@@ -356,7 +357,7 @@ describe('governance targets', () => {
   })
 
   it('lands on the arithmetic the plan predicted', () => {
-    // 102 baseline - 5 retirements + 22 additions = 119, checked against the
+    // 102 baseline - 5 retirements + 23 additions = 120, checked against the
     // real catalog rather than trusted as prose.
     //
     // The subtracted term is the count of APPROVED ADDITIONS and the expected
@@ -376,9 +377,10 @@ describe('governance targets', () => {
     // `dispatch-focus-row-down`, `new-window` (#688), and
     // `clear-agent-composer` (#683), `api-key-vault` (#831),
     // `remove-cybersecurity-block` (#848), `new-agent-in` (#852),
-    // `tldr-preview` and `enable-tldr-mcp` (#888).
-    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 22).toBe(102)
-    expect(builtInCommandCatalog).toHaveLength(119)
+    // `tldr-preview` and `enable-tldr-mcp` (#888),
+    // `use-global-mcp-settings` (#904).
+    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 23).toBe(102)
+    expect(builtInCommandCatalog).toHaveLength(120)
   })
 })
 

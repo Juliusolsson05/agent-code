@@ -69,7 +69,7 @@ describe('Duplicate Agent command', () => {
       'codex',
       {
         resumeSessionId: 'provider-clone',
-        builtInMcpDomains: ['workflows'],
+        builtInMcpOverrides: { workflows: true },
         cwd: '/projects/klay',
       },
     )
@@ -118,7 +118,7 @@ describe('Duplicate Agent command', () => {
 
     expect(splitFocused).toHaveBeenCalledWith('vertical', 'opencode', {
       resumeSessionId: 'ses_clone',
-      builtInMcpDomains: ['orchestration'],
+      builtInMcpOverrides: { orchestration: true },
       providerRuntime: 'terminal',
       cwd: '/projects/opencode',
     })
@@ -341,7 +341,7 @@ describe('built-in MCP provider command policy', () => {
     expect(replaceSession).toHaveBeenCalledWith('/projects/mcp', {
       kind: 'codex',
       resumeSessionId: 'provider-session',
-      builtInMcpDomains: ['workflows'],
+      builtInMcpOverrides: { workflows: true },
     })
   })
 
@@ -366,7 +366,7 @@ describe('built-in MCP provider command policy', () => {
     expect(replaceSession).toHaveBeenCalledWith('/projects/mcp', {
       kind: 'claude',
       resumeSessionId: 'provider-session',
-      builtInMcpDomains: ['agent_management'],
+      builtInMcpOverrides: { agent_management: true },
     })
   })
 })

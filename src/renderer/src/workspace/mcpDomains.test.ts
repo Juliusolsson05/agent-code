@@ -12,9 +12,11 @@ describe('session built-in MCP domain resolution', () => {
     expect(withNormalizedBuiltInMcpDomains({
       cwd: '/tmp/project',
       builtInMcpDomains: [],
+      builtInMcpOverrides: {},
     })).toEqual({
       cwd: '/tmp/project',
       builtInMcpDomains: [],
+      builtInMcpOverrides: {},
     })
   })
 

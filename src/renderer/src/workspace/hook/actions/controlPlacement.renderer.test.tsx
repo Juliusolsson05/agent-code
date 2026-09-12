@@ -42,10 +42,10 @@ it('keeps native continuation cwd and target project separate from focus', async
   const harness = mountPaneActions(initial, { spawnSessionId: 'resumed-agent' })
   await act(async () => {
     expect(await harness.actions.createDetachedSession({ kind: 'opencode', providerRuntime: 'terminal' },
-      { tabId: 'project', anchorSessionId: 'anchor' }, { cwd: '/native-worktree', resumeSessionId: 'ses_native', builtInMcpDomains: ['orchestration'] }))
+      { tabId: 'project', anchorSessionId: 'anchor' }, { cwd: '/native-worktree', resumeSessionId: 'ses_native', builtInMcpOverrides: { orchestration: true } }))
       .toBe('resumed-agent')
   })
-  expect(harness.spawn).toHaveBeenCalledExactlyOnceWith('/native-worktree', expect.objectContaining({ kind: 'opencode', providerRuntime: 'terminal', resumeSessionId: 'ses_native', builtInMcpDomains: ['orchestration'] }))
+  expect(harness.spawn).toHaveBeenCalledExactlyOnceWith('/native-worktree', expect.objectContaining({ kind: 'opencode', providerRuntime: 'terminal', resumeSessionId: 'ses_native', builtInMcpOverrides: { orchestration: true } }))
   expect(harness.getState().detachedSessions['resumed-agent'].projectTabId).toBe('project')
   expect(harness.getState().tabs[0].root).toEqual(initial.tabs[0].root)
   harness.mounted.unmount()

@@ -65,7 +65,7 @@ export const controlReference = [
     ],
     "outcome": "The chosen provider or history state is visible and ready for the next step.",
     "cautions": "Use agents.lifecycleRead for supported choices/revisions and nativeHistory.list/prompts for native identities/rewind addresses; nativeHistory.search offers bounded Claude/Codex user-prompt search, not an exhaustive archive. views.preferencesRead/modeSet/followSet expose exact-agent display/follow preferences. Resume, duplicate, switch, reload, rewind and undoRewind report final IDs through operations.read or observations.wait. A live process does not establish input readiness. Provider switch can change the provider conversation identity. Rewind is not a harmless view change.",
-    "commandIds": []
+    "commandIds": ["use-global-mcp-settings"]
   },
   {
     "id": "terminal",

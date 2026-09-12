@@ -13,8 +13,8 @@ import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
 import { clearLiveEntryWindowSession } from '@renderer/session-runtime/liveEntryWindow'
 import type { SessionId, SessionKind, SessionMeta, TileNode, WorkspaceState } from '@renderer/workspace/types'
-import type { BuiltInMcpDomain } from '@mcp/shared/types'
-import { resolveSessionBuiltInMcpDomains } from '@renderer/workspace/mcpDomains'
+import type { BuiltInMcpDomain, BuiltInMcpOverrides } from '@mcp/shared/types'
+import { resolveSessionBuiltInMcpDomains, sessionMcpOverrides, spawnMcpOverrides } from '@renderer/workspace/mcpDomains'
 import {
   clearTiledLaneSessions,
   remapTiledLanes,
@@ -86,6 +86,7 @@ export type SessionActions = {
       dangerousMode?: boolean
       recoverTmuxName?: string
       tldrIdentity?: string
+      builtInMcpOverrides?: BuiltInMcpOverrides
       builtInMcpDomains?: BuiltInMcpDomain[]
     },
   ) => Promise<SessionId>
@@ -101,7 +102,8 @@ export type SessionActions = {
       resumeSessionId?: string
       kind?: SessionKind
       providerRuntime?: AgentProviderRuntime
-      builtInMcpDomains?: BuiltInMcpDomain[]
+      /** Per-domain MCP choices to ADOPT; omit to continue the pane's own. */
+      builtInMcpOverrides?: BuiltInMcpOverrides
       preserveTldr?: boolean
       restoreTldrIdentity?: string
       targetSessionId?: SessionId
@@ -172,9 +174,8 @@ export async function killSessionBackendIfOwned(
  * scope for a comparison function, but this is where someone will next look
  * for it.)
  *
- * Shallow is sufficient for the VALUES, with one exception that
- * `metaValuesEqual` handles: `builtInMcpDomains` is an array and is rebuilt on
- * every wake. Everything else on SessionMeta is a primitive.
+ * Values are primitives except for the domain array and flat override map;
+ * `metaValuesEqual` compares their leaves because wake rebuilds both.
  */
 function metaValuesEqual(a: unknown, b: unknown): boolean {
   if (Object.is(a, b)) return true
@@ -188,12 +189,17 @@ function metaValuesEqual(a: unknown, b: unknown): boolean {
   // comparison exists to protect, and would have left the bug fixed only for
   // plain terminals.
   //
-  // Elements are a string union, so a shallow pass is exact. Nothing else on
-  // SessionMeta is an object or array; if that ever changes, this function is
-  // where the new shape has to be answered rather than silently compared by
-  // reference.
+  // Elements are a string union, so a shallow pass is exact. The flat MCP
+  // override map receives its own leaf comparison below.
   if (Array.isArray(a) && Array.isArray(b)) {
     return a.length === b.length && a.every((value, index) => Object.is(value, b[index]))
+  }
+  if (a && b && typeof a === 'object' && typeof b === 'object' && !Array.isArray(a) && !Array.isArray(b)) {
+    // The only object-valued metadata is the flat MCP override map. Compare
+    // its boolean leaves so an idempotent wake cannot rerender every pane.
+    const left = a as Record<string, unknown>, right = b as Record<string, unknown>
+    return Object.keys(left).length === Object.keys(right).length
+      && Object.keys(left).every(key => Object.prototype.hasOwnProperty.call(right, key) && Object.is(left[key], right[key]))
   }
   return false
 }
@@ -347,6 +353,7 @@ export function useSessionActions(
         dangerousMode?: boolean
         recoverTmuxName?: string
         tldrIdentity?: string
+        builtInMcpOverrides?: BuiltInMcpOverrides
         builtInMcpDomains?: BuiltInMcpDomain[]
       },
     ): Promise<SessionId> => {
@@ -359,11 +366,13 @@ export function useSessionActions(
       // proxy via `openai_base_url`.
       const useProxy =
         kind !== 'terminal' ? refs.useProxyStreamingRef.current : undefined
+      const builtInMcpOverrides = spawnMcpOverrides(opts)
       const builtInMcpDomains =
         isAgentProviderKind(kind)
           ? resolveSessionBuiltInMcpDomains({
               provider: kind,
               sessionDomains: opts?.builtInMcpDomains,
+              sessionOverrides: builtInMcpOverrides,
               defaultDomains: refs.defaultBuiltInMcpDomainsRef.current,
             })
           : undefined
@@ -468,7 +477,7 @@ export function useSessionActions(
               }
             : {}),
           ...(isAgentProviderKind(kind) && builtInMcpDomains !== undefined
-            ? { builtInMcpDomains }
+            ? { builtInMcpDomains, builtInMcpOverrides }
             : {}),
         }
         setState(prev => ({
@@ -642,11 +651,13 @@ export function useSessionActions(
         }
         const kind: SessionKind = meta.kind ?? DEFAULT_PROVIDER
 
+        const builtInMcpOverrides = sessionMcpOverrides(meta)
         const builtInMcpDomains =
           isAgentProviderKind(kind)
             ? resolveSessionBuiltInMcpDomains({
                 provider: kind,
                 sessionDomains: meta.builtInMcpDomains,
+                sessionOverrides: builtInMcpOverrides,
                 defaultDomains: refs.defaultBuiltInMcpDomainsRef.current,
               })
             : undefined
@@ -981,6 +992,7 @@ export function useSessionActions(
             : undefined
         const recoveredMeta: SessionMeta = {
           ...restoredMeta,
+          builtInMcpOverrides,
           ...(recoverySnapshot?.tldrIdentity ? { tldrIdentity: recoverySnapshot.tldrIdentity } : {}),
           providerRuntime: recoverySnapshot?.providerRuntime ?? meta.providerRuntime,
           ...(recoveredBuiltInMcpDomains !== undefined
@@ -1148,7 +1160,10 @@ export function useSessionActions(
         resumeSessionId?: string
         kind?: SessionKind
         providerRuntime?: AgentProviderRuntime
-        builtInMcpDomains?: BuiltInMcpDomain[]
+        /** Per-domain choices this replacement should ADOPT. Omit to continue
+         * the pane's existing choices; replacement never takes the previous
+         * process's effective capability list as intent. */
+        builtInMcpOverrides?: BuiltInMcpOverrides
         preserveTldr?: boolean
         restoreTldrIdentity?: string
         targetSessionId?: SessionId
@@ -1186,19 +1201,28 @@ export function useSessionActions(
           ? oldMeta.providerRuntime
           : undefined
       )
-      // WHY replaceSession inherits MCP domains by default:
+      // WHY replacement resolves MCP here instead of trusting a caller-supplied
+      // list: every path through here (reload, resume, provider switch, rewind,
+      // undo, a capability toggle) CONTINUES one pane, so the pane's own
+      // per-domain choices are the intent, and the effective capability list of
+      // the process being replaced is merely an observation of how it happened
+      // to launch. Treating that observation as intent is exactly what froze
+      // agents at their creation-time defaults (#904) — a Settings change could
+      // reach new agents and never existing ones. Callers that genuinely change
+      // the intent (the capability toggles, Use Global MCP Settings, Undo
+      // Rewind restoring a captured choice) pass `builtInMcpOverrides`; nobody
+      // needs to restate the domains, so there is one source of truth.
       //
-      // Reload, provider switch, resume, and rewind all funnel through this
-      // path. Most callers think in terms of "keep this pane, replace the
-      // provider process" and therefore do not know they must restate every
-      // enabled MCP domain. Treating the old session metadata as the default
-      // keeps MCP enablement a durable property of the agent pane instead of a
-      // transient spawn flag that disappears on the next routine reload.
+      // Resolving against nextKind rather than the source provider matters on a
+      // switch: Claude cannot advertise Workflow MCP, so a Claude-filtered
+      // snapshot would otherwise record "refused" and permanently strip the
+      // capability from the Codex pane the user switched to.
+      const builtInMcpOverrides = spawnOpts.builtInMcpOverrides ?? sessionMcpOverrides(oldMeta)
       const builtInMcpDomains =
         isAgentProviderKind(nextKind)
           ? resolveSessionBuiltInMcpDomains({
               provider: nextKind,
-              sessionDomains: spawnOpts.builtInMcpDomains ?? oldMeta?.builtInMcpDomains,
+              sessionOverrides: builtInMcpOverrides,
               defaultDomains: refs.defaultBuiltInMcpDomainsRef.current,
             })
           : undefined
@@ -1229,7 +1253,7 @@ export function useSessionActions(
         // same-rollout handoff; Claude, OpenCode, fresh Codex, and different-
         // transcript swaps retain the rollback-friendly ordering here.
         predecessorSessionId: oldId,
-        ...(builtInMcpDomains !== undefined ? { builtInMcpDomains } : {}),
+        ...(builtInMcpDomains !== undefined ? { builtInMcpDomains, builtInMcpOverrides } : {}),
       })
       // WHY a finally, and why it wraps EVERY exit path including the bail-outs:
       // a stranded reservation would leave that pane permanently unnamed, which is
@@ -1299,7 +1323,7 @@ export function useSessionActions(
                   providerSessionIdSource: 'resume-request' as const,
                 }
               : {}),
-            ...(builtInMcpDomains !== undefined ? { builtInMcpDomains } : {}),
+            ...(builtInMcpDomains !== undefined ? { builtInMcpDomains, builtInMcpOverrides } : {}),
             ...(replacementTitle !== undefined ? { title: replacementTitle } : {}),
             // Last on purpose. `...(sessions[newId] ?? …)` earlier in this
             // literal is the successor's OWN freshly-spawned metadata, so any
@@ -1466,11 +1490,13 @@ export function useSessionActions(
 
         try {
           const kind: SessionKind = meta.kind ?? DEFAULT_PROVIDER
+          const builtInMcpOverrides = sessionMcpOverrides(meta)
           const builtInMcpDomains =
             isAgentProviderKind(kind)
               ? resolveSessionBuiltInMcpDomains({
                   provider: kind,
                   sessionDomains: meta.builtInMcpDomains,
+                  sessionOverrides: builtInMcpOverrides,
                   defaultDomains: refs.defaultBuiltInMcpDomainsRef.current,
                 })
               : undefined
@@ -1498,7 +1524,7 @@ export function useSessionActions(
             // the only thing this spread relies on.
             ...restoredMeta,
             tldrIdentity: tldrIdentityForSession(oldId, meta),
-            ...(builtInMcpDomains !== undefined ? { builtInMcpDomains } : {}),
+            ...(builtInMcpDomains !== undefined ? { builtInMcpDomains, builtInMcpOverrides } : {}),
           }
         } catch {
           failedIds.add(oldId)
