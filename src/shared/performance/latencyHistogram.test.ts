@@ -34,4 +34,19 @@ describe('latency distribution', () => {
     expect(histogram.snapshot().counts[0]).toBe(0)
     expect(latencyQuantile(histogram.snapshot(), 0)).toBeNull()
   })
+
+  it('rejects sparse and fabricated empty windows without losing genuine samples', () => {
+    const histogram = new LatencyHistogram()
+    histogram.observe(50)
+    const before = histogram.snapshot()
+    const sparse = new Array(before.counts.length)
+    sparse[0] = 1
+    expect(histogram.merge(structuredClone({ counts: sparse, count: 1, sumMs: 1, maxMs: 1 }))).toBe(false)
+    expect(histogram.merge({ counts: new Array(16), count: 0, sumMs: 0, maxMs: 0 })).toBe(false)
+    expect(histogram.merge({ counts: Array(16).fill(0), count: 0, sumMs: 60000, maxMs: 60000 })).toBe(false)
+    expect(histogram.merge({ ...before, maxMs: 60000 })).toBe(false)
+    expect(histogram.snapshot()).toEqual(before)
+    histogram.observe(5)
+    expect(latencyQuantile(histogram.snapshot(), 0.95)).toEqual({ upperBoundMs: 50, overflow: false })
+  })
 })
