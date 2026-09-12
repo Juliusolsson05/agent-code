@@ -99,6 +99,30 @@ describe('ConversationsPicker', () => {
     expect(await screen.findByText(/no conversations recorded/i)).toBeInTheDocument()
   })
 
+  it('refuses to resume a row whose transcript file is gone and says why', async () => {
+    install(vi.fn(async () => response({ rows: [row({ label: 'Gone thread', available: false })], total: 1, hiddenChildren: 0 })))
+    const ws = workspace()
+    render(<ConversationsPicker open focusSearch={false} workspace={ws} onClose={vi.fn()} />)
+    const gone = await screen.findByText('Gone thread')
+    expect(gone.closest('[role="option"]')).toHaveAttribute('aria-disabled', 'true')
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Enter' })
+    fireEvent.click(gone)
+    expect(await screen.findByRole('alert')).toHaveTextContent(/transcript file is missing/i)
+    expect(ws.replaceSession).not.toHaveBeenCalled()
+    expect(ws.newTab).not.toHaveBeenCalled()
+  })
+
+  it('asks for a pane when none is commanded, and lists everywhere without one', async () => {
+    const list = install()
+    const ws = workspace({ state: { tabs: [{ id: 't', focusedSessionId: 's' }], activeTabId: 't', dispatchMode: false, sessions: {} } })
+    render(<ConversationsPicker open focusSearch={false} workspace={ws} onClose={vi.fn()} />)
+    expect(await screen.findByText(/focus a pane to list its repository/i)).toBeInTheDocument()
+    expect(list).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: /^everywhere$/i }))
+    await waitFor(() => expect(list).toHaveBeenCalledWith(expect.objectContaining({ cwd: '', scope: 'everywhere' })))
+    expect(await screen.findByText('Project context bootstrapping')).toBeInTheDocument()
+  })
+
   it('opens a new tab when no pane can be replaced', async () => {
     install()
     const ws = workspace({ activeTab: null, state: { tabs: [{ id: 't', focusedSessionId: 's' }], activeTabId: 't', dispatchMode: false, sessions: { s: { cwd: '/fixture/repo', kind: 'claude' } } } })

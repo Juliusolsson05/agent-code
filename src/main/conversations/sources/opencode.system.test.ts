@@ -37,6 +37,19 @@ describe('OpenCode conversation source', () => {
     for (let i = 1; i < prompts.length; i++) expect(prompts[i]!.timestamp ?? 0).toBeLessThanOrEqual(prompts[i - 1]!.timestamp ?? Number.POSITIVE_INFINITY)
   })
 
+  it('lists the same rows for a family whose roots keep their case', async () => {
+    const corpus = await installConversationCorpus()
+    cleanups.push(corpus.cleanup)
+    const porcelain = await corpusWorktreesPorcelain()
+    const worktrees = porcelain.split('\n').filter(l => l.startsWith('worktree ')).map(l => ({ path: l.slice('worktree '.length) }))
+    const source = new OpencodeConversationSource({ dataDir: corpus.opencodeDataDir })
+    const family = await resolveFamily('/fixture/repo', 'repository', { listWorktrees: async () => worktrees })
+    const lower = await source.discover({ scope: 'repository', family })
+    const upper = await source.discover({ scope: 'repository', family: { ...family, cwd: family.cwd.toUpperCase(), roots: family.roots.map(r => r.toUpperCase()) } })
+    expect(upper.map(r => r.nativeId).sort()).toEqual(lower.map(r => r.nativeId).sort())
+    expect(lower.length).toBeGreaterThan(0)
+  })
+
   it('is empty, not broken, when the database is absent', async () => {
     const source = new OpencodeConversationSource({ dataDir: '/nonexistent/opencode' })
     const family = await resolveFamily('/fixture/repo', 'everywhere', { listWorktrees: async () => [] })

@@ -23,6 +23,9 @@ export function useConversationList(params: ConversationListParams): {
   response: ConversationListResponse | null
   loading: boolean
   error: string | null
+  /** No commanded pane and a scope that needs one: nothing was asked, so
+   *  the surface must say so instead of "no conversations". */
+  needsPane: boolean
   loadMore: () => void
 } {
   const version = useRef(0)
@@ -32,14 +35,17 @@ export function useConversationList(params: ConversationListParams): {
   const { open, cwd, scope, includeChildren, query } = params
   const providersKey = params.providers.join(',')
 
+  // The everywhere scope needs no seed directory; main resolves it from ''.
+  const effectiveCwd = cwd ?? (scope === 'everywhere' ? '' : null)
+  const needsPane = open && effectiveCwd === null
   const run = useCallback(async (cursor: string | null) => {
-    if (!open || !cwd) return
+    if (!open || effectiveCwd === null) return
     const request = ++version.current
     setLoading(true)
     setError(null)
     try {
       const next = await window.api.listConversations({
-        cwd, scope, providers: providersKey ? (providersKey.split(',') as AgentProviderKind[]) : undefined,
+        cwd: effectiveCwd, scope, providers: providersKey ? (providersKey.split(',') as AgentProviderKind[]) : undefined,
         includeChildren, query: query.trim() || undefined, cursor, limit: PAGE,
       })
       if (request !== version.current) return
@@ -54,7 +60,7 @@ export function useConversationList(params: ConversationListParams): {
     } finally {
       if (request === version.current) setLoading(false)
     }
-  }, [open, cwd, scope, providersKey, includeChildren, query])
+  }, [open, effectiveCwd, scope, providersKey, includeChildren, query])
 
   const hasResponse = useRef(false)
   hasResponse.current = response !== null
@@ -75,5 +81,5 @@ export function useConversationList(params: ConversationListParams): {
     if (response?.nextCursor && !loading) void run(response.nextCursor)
   }, [response, loading, run])
 
-  return { response, loading, error, loadMore }
+  return { response, loading, error, needsPane, loadMore }
 }

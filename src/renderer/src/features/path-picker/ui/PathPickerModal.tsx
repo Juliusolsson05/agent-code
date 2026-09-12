@@ -227,7 +227,9 @@ export function PathPickerModal({
     // makes a stale closure or synthetic click fail closed instead of pairing
     // a historical session id with today's provider toggle.
     const row = sessions.find(session => session.nativeId === sessionId)
-    if (!listingTarget || !row) return
+    // An unavailable row (index remembers it, transcript file gone) is shown
+    // for the record and is never a resume target.
+    if (!listingTarget || !row || !row.available) return
     setBusy(true)
     setError(null)
     try {
@@ -411,7 +413,7 @@ function ResumeSection({
               index={i}
               selected={false}
               onHover={() => {}}
-              onSelect={() => void onResume(row.nativeId)}
+              onSelect={() => { if (row.available) void onResume(row.nativeId) }}
             />
           ))}
         </div>

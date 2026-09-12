@@ -8,7 +8,7 @@ import { conversationKey } from '@shared/conversations/types.js'
 import { getCodexHome } from '@providers/codex/runtime/projectDir.js'
 import { getClaudeConfigHomeDir, getProjectsDir } from '@shared/runtime/projectDir.js'
 import { performanceService } from '@main/performance/PerformanceService.js'
-import { buildListing } from './catalog/listing.js'
+import { buildListing, HIDDEN_KINDS } from './catalog/listing.js'
 import { normalizeConversation } from './catalog/normalize.js'
 import { unwrapUserText } from './catalog/unwrap.js'
 import { resolveFamily, type RepositoryFamily } from './family.js'
@@ -152,7 +152,15 @@ export class ConversationService {
     }
     // Search needs prompt texts: normalise once to know the rows, gather
     // texts for the newest ones, then build the listing with them attached.
-    const rows = discovery.sources.map(s => normalizeConversation(s, ledger.get(conversationKey(s.provider, s.nativeId)) ?? null, discovery.family))
+    // WHY the candidates are the rows the request can show: the budget is
+    // SEARCH_PROMPT_ROWS newest rows, and hidden children or an excluded
+    // provider would otherwise spend it on rows the listing filters out,
+    // pushing a visible row inside the intended depth out of prompt search.
+    const providers = request.providers && request.providers.length > 0 ? new Set(request.providers) : null
+    const rows = discovery.sources
+      .filter(s => !providers || providers.has(s.provider))
+      .map(s => normalizeConversation(s, ledger.get(conversationKey(s.provider, s.nativeId)) ?? null, discovery.family))
+      .filter(r => request.includeChildren || !HIDDEN_KINDS.has(r.kind))
     const texts = await this.promptTextsFor(rows)
     return buildListing({
       sources: discovery.sources, ledger, family: discovery.family, request, startedAt,

@@ -26,6 +26,9 @@ export function classifyConversation(
   // thread opened with `/compact`, or one whose index title is the AGENTS.md
   // message) is still a real session with later prompts the head cannot see;
   // it stays a user conversation and its label falls to the cwd rung.
-  if (source.userTexts.length === 0 && !source.aiTitle && !source.customTitle && !ledger?.title) return 'empty'
+  // A head read that hit its byte bound saw no prompt because the prompt is
+  // further in, not because there is none; such a row is a user conversation
+  // labelled by its cwd rather than a hidden `empty` one.
+  if (source.userTexts.length === 0 && !source.aiTitle && !source.customTitle && !ledger?.title && !source.headTruncated) return 'empty'
   return 'user'
 }

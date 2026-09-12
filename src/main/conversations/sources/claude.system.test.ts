@@ -1,4 +1,4 @@
-import { readdir } from 'node:fs/promises'
+import { mkdir, readdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
@@ -67,6 +67,33 @@ describe('Claude conversation source', () => {
     const dir = join(corpus.claudeConfigDir, 'projects', '-fixture-repo')
     const files = (await readdir(dir)).filter(n => n.endsWith('.jsonl'))
     expect(rows).toHaveLength(files.length)
+  })
+
+  it('lists a natively moved session under the worktree it moved to, and never its redirect stub', async () => {
+    // Main's transcript relocation (#883) appends {type:'relocated', relocatedCwd}
+    // to a live session that EnterWorktree moved, renames the file into the
+    // worktree's project dir, and can leave a redirect stub behind. The head
+    // records still carry the launch cwd, so without the record the picker
+    // would resume the session in the main checkout.
+    const { corpus, source, listWorktrees } = shared
+    const id = '11111111-2222-4333-8444-555555555555'
+    const worktree = '/fixture/repo/.worktrees/extension-platform'
+    const user = (text: string, ts: string) => JSON.stringify({ type: 'user', uuid: `${text}-uuid`, sessionId: id, cwd: '/fixture/repo', timestamp: ts, message: { role: 'user', content: text } })
+    const relocated = JSON.stringify({ type: 'relocated', sessionId: id, relocatedCwd: worktree })
+    const projects = join(corpus.claudeConfigDir, 'projects')
+    await mkdir(join(projects, '-fixture-repo--worktrees-extension-platform'), { recursive: true })
+    await writeFile(join(projects, '-fixture-repo--worktrees-extension-platform', `${id}.jsonl`), [user('first prompt', '2026-09-11T10:00:00.000Z'), user('second prompt', '2026-09-11T11:00:00.000Z'), relocated].join('\n') + '\n')
+    await writeFile(join(projects, '-fixture-repo', `${id}.jsonl`), relocated + '\n')
+    const repository = await source.discover({ scope: 'repository', family: await resolveFamily('/fixture/repo', 'repository', { listWorktrees }) })
+    const rows = repository.filter(r => r.nativeId === id)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ cwd: worktree, userTexts: ['first prompt', 'second prompt'] })
+    expect(rows[0]!.file).toContain('-fixture-repo--worktrees-extension-platform')
+    // cwd scope: the session belongs to the worktree now, not to where it started.
+    const atRoot = await source.discover({ scope: 'cwd', family: await resolveFamily('/fixture/repo', 'cwd', { listWorktrees }) })
+    expect(atRoot.some(r => r.nativeId === id)).toBe(false)
+    const atWorktree = await source.discover({ scope: 'cwd', family: await resolveFamily(worktree, 'cwd', { listWorktrees }) })
+    expect(atWorktree.some(r => r.nativeId === id)).toBe(true)
   })
 
   it('lists prompts newest first for one conversation', async () => {

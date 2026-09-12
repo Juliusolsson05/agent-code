@@ -120,6 +120,9 @@ export class CodexConversationSource implements ConversationSource {
   private downgradeReason: string | null = null
   private walk: { at: number; files: Map<string, { mtime: number | null; id: string }> } | null = null
   private readonly heads = new Map<string, { mtime: number; head: RolloutHead }>()
+  // Rollout paths learnt at discovery, so a search that reads prompts for a
+  // hundred and fifty rows does not open the index once per row.
+  private readonly rolloutPaths = new Map<string, string>()
 
   constructor(private readonly deps: { codexHome: string; walkTtlMs?: number }) {}
 
@@ -229,11 +232,15 @@ export class CodexConversationSource implements ConversationSource {
       // answer. lower() keeps darwin's case-insensitive cwds equal.
       const predicates: string[] = []
       const args: string[] = []
+      // WHY the bound values are lowercased here too: the family lowercases
+      // only on case-insensitive platforms, and `lower(cwd) = ?` against a
+      // mixed-case root would never match on linux while the LIKE clause
+      // still would, silently dropping every row recorded at the repo root.
       if (scope.scope === 'cwd') {
         predicates.push('lower(cwd) = ?')
-        args.push(scope.family.cwd)
+        args.push(scope.family.cwd.toLowerCase())
       } else if (scope.scope === 'repository') {
-        for (const root of scope.family.roots) {
+        for (const root of scope.family.roots.map(r => r.toLowerCase())) {
           predicates.push('lower(cwd) = ?', "lower(cwd) like ? escape '\\'")
           args.push(root, root.replace(/[\\%_]/g, '\\$&') + '/%')
         }
@@ -241,6 +248,7 @@ export class CodexConversationSource implements ConversationSource {
       const where = predicates.length > 0 ? `where archived = 0 and (${predicates.join(' or ')})` : 'where archived = 0'
       const columns = CODEX_INDEX_COLUMNS.threads.map(c => `"${c}"`).join(', ')
       for (const row of opened.db.prepare(`select ${columns} from threads ${where}`).all(...args) as unknown as IndexRow[]) {
+        this.rolloutPaths.set(row.id, row.rollout_path)
         const title = (row.title ?? '').trim() || (row.first_user_message ?? '').trim() || (row.preview ?? '').trim()
         const name = (row.name ?? '').trim()
         rows.push({
@@ -295,8 +303,9 @@ export class CodexConversationSource implements ConversationSource {
   }
 
   async prompts(nativeId: string, _cwd: string, options: PromptReadOptions = {}): Promise<ConversationPrompt[]> {
-    let file: string | null = null
-    const dbPath = newestCodexStateDb(this.deps.codexHome)
+    const known = this.rolloutPaths.get(nativeId)
+    let file: string | null = known && existsSync(known) ? known : null
+    const dbPath = file ? null : newestCodexStateDb(this.deps.codexHome)
     const opened = dbPath ? openReadOnlySqlite(dbPath, { threads: ['id', 'rollout_path'] }) : null
     if (opened?.ok) {
       try {

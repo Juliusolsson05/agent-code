@@ -72,7 +72,10 @@ describe('PathPickerModal resume target coherence', () => {
     expect(screen.queryByText('Claude saved row')).not.toBeInTheDocument()
     expect(onResume).not.toHaveBeenCalled()
 
-    codex.resolve(response([row('codex-history', 'Codex saved row', 'codex')]))
+    codex.resolve(response([row('codex-history', 'Codex saved row', 'codex'), { ...row('gone-history', 'Gone Codex row', 'codex'), available: false }]))
+    // A row whose transcript file is gone is listed for the record only.
+    fireEvent.click(await screen.findByText('Gone Codex row'))
+    expect(onResume).not.toHaveBeenCalled()
     fireEvent.click(await screen.findByText('Codex saved row'))
     await waitFor(() => expect(onResume).toHaveBeenCalledWith(
       '/repo',

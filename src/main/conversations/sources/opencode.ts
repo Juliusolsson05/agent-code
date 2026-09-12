@@ -68,11 +68,13 @@ export class OpencodeConversationSource implements ConversationSource {
     try {
       const predicates: string[] = []
       const args: string[] = []
+      // Lowercased on both sides: see the Codex adapter for why the family's
+      // platform-dependent folding is not enough for `lower(directory) = ?`.
       if (scope.scope === 'cwd') {
         predicates.push('lower(directory) = ?')
-        args.push(scope.family.cwd)
+        args.push(scope.family.cwd.toLowerCase())
       } else if (scope.scope === 'repository') {
-        for (const root of scope.family.roots) {
+        for (const root of scope.family.roots.map(r => r.toLowerCase())) {
           predicates.push('lower(directory) = ?', "lower(directory) like ? escape '\\'")
           args.push(root, root.replace(/[\\%_]/g, '\\$&') + '/%')
         }

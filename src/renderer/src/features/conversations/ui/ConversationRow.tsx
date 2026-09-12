@@ -18,6 +18,7 @@ export function ConversationRow({ row, selected, index, onHover, onSelect }: {
     <div
       role="option"
       aria-selected={selected}
+      aria-disabled={!row.available}
       data-conversation-index={index}
       onMouseEnter={onHover}
       onClick={onSelect}

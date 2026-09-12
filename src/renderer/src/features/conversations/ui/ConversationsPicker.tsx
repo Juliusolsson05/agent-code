@@ -54,7 +54,7 @@ export function ConversationsPicker({ open, focusSearch, workspace, onClose }: P
   // pane underneath the command center.
   const commandSessionId = commandTargetSessionId(workspace)
   const cwd = commandSessionId ? workspace.state.sessions[commandSessionId]?.cwd ?? null : null
-  const { response, loading, error, loadMore } = useConversationList({ open, cwd, scope, providers, includeChildren, query })
+  const { response, loading, error, needsPane, loadMore } = useConversationList({ open, cwd, scope, providers, includeChildren, query })
   const rows = response?.rows ?? []
 
   useEffect(() => {
@@ -77,6 +77,13 @@ export function ConversationsPicker({ open, focusSearch, workspace, onClose }: P
   }, [selected])
 
   const resume = useCallback(async (row: Conversation) => {
+    if (!row.available) {
+      // The index remembers the thread but its transcript file is gone; the
+      // row is listed for the record, and resuming it would only open a pane
+      // that fails on a missing file.
+      setResumeError(`Can't resume ${row.label}: its transcript file is missing. The row is listed for the record.`)
+      return
+    }
     if (!row.cwd) {
       // A transcript that never recorded a cwd (a bridge-session stub) has
       // nowhere to resume in; the row is listed so it can be seen, not used.
@@ -152,7 +159,16 @@ export function ConversationsPicker({ open, focusSearch, workspace, onClose }: P
               {includeChildren ? `showing ${response.hiddenChildren} children` : `${response.hiddenChildren} hidden`}
             </button>
           )}
-          <span className="font-code opacity-80">{loading ? 'loading…' : response ? `${response.total} conversations` : ''} · ↑↓ ↵ resume</span>
+          <span className="font-code opacity-80">
+            {loading
+              ? 'loading…'
+              : response
+                ? query.trim()
+                  ? `${response.rows.length}${response.nextCursor ? '+' : ''} matches of ${response.total}`
+                  : `${response.total} conversations`
+                : ''}
+            {' · ↑↓ ↵ resume'}
+          </span>
         </div>
         {banner && <div role="alert" className="border-b border-danger/40 bg-danger/10 px-4 py-2 text-[12px] text-danger">{banner}</div>}
         <div className="flex min-h-0 flex-1">
@@ -165,7 +181,9 @@ export function ConversationsPicker({ open, focusSearch, workspace, onClose }: P
             style={{ width: listWidth, flexShrink: 0 }}
             onScroll={e => { const el = e.currentTarget; if (el.scrollTop + el.clientHeight >= el.scrollHeight - 200) loadMore() }}
           >
-            {rows.length === 0 && !loading && !error ? (
+            {needsPane ? (
+              <div className="py-12 text-center text-[12px] text-muted">Focus a pane to list its repository, or switch the scope to everywhere.</div>
+            ) : rows.length === 0 && !loading && !error ? (
               <div className="py-12 text-center text-[12px] text-muted">{query.trim() ? `No conversations match "${query.trim()}".` : 'No conversations recorded for this scope.'}</div>
             ) : rows.map((row, i) => (
               <ConversationRow key={`${row.provider}:${row.nativeId}`} row={row} index={i} selected={i === selected} onHover={() => setSelected(i)} onSelect={() => void resume(row)} />

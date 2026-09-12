@@ -16,7 +16,7 @@ export const DEFAULT_PAGE = 50
 // on the author's machine holds 1,400 rows. Rows are small; the cap exists
 // to bound a runaway request, not to force paging on honest callers.
 export const MAX_PAGE = 5000
-const HIDDEN_KINDS = new Set(['orchestration-child', 'native-subagent', 'exec', 'empty'])
+export const HIDDEN_KINDS: ReadonlySet<string> = new Set(['orchestration-child', 'native-subagent', 'exec', 'empty'])
 
 export type BuildListingInput = {
   sources: readonly SourceConversation[]

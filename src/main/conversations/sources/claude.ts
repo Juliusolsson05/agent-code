@@ -1,5 +1,5 @@
 import { open, readdir, stat } from 'node:fs/promises'
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 
 import type { ConversationPrompt } from '@shared/conversations/types.js'
 import { asRecord, parseJsonRecord } from '@shared/lib/asRecord.js'
@@ -62,6 +62,15 @@ type ClaudeSummary = {
   customTitle: string | null
   tailUserAt: number | null
   empty: boolean
+  /** The cwd a `relocated` record moved the session to (main's #883 appends
+   *  one when EnterWorktree moves a live session and renames the file into
+   *  the worktree's project dir). It outranks the launch cwd the head
+   *  records still carry, or the picker would resume the session where it
+   *  started rather than where it lives. */
+  relocatedCwd: string | null
+  /** The head read hit its byte bound before any user text: the transcript
+   *  is not empty, its first prompt just sits beyond what discovery reads. */
+  headTruncated: boolean
 }
 
 type SummaryCacheEntry = { mtimeMs: number; size: number; summary: ClaudeSummary }
@@ -92,9 +101,14 @@ function timestampOf(record: Record<string, unknown>): number | null {
   return Number.isFinite(ts) ? ts : null
 }
 
-type HeadSummary = Pick<ClaudeSummary, 'cwd' | 'gitBranch' | 'createdAt' | 'userTexts'>
+type HeadSummary = Pick<ClaudeSummary, 'cwd' | 'gitBranch' | 'createdAt' | 'userTexts' | 'relocatedCwd' | 'headTruncated'>
 
 function foldHeadRecord(out: HeadSummary, record: Record<string, unknown>): void {
+  if (record.type === 'relocated' && typeof record.relocatedCwd === 'string' && isAbsolute(record.relocatedCwd)) {
+    // Newest wins: a session can move more than once.
+    out.relocatedCwd = record.relocatedCwd
+    return
+  }
   if (out.cwd === null && typeof record.cwd === 'string' && record.cwd) out.cwd = record.cwd
   if (out.gitBranch === null && typeof record.gitBranch === 'string' && record.gitBranch) out.gitBranch = record.gitBranch
   if (out.createdAt === null) out.createdAt = timestampOf(record)
@@ -117,7 +131,7 @@ async function mapWithConcurrency<T, R>(items: readonly T[], limit: number, fn: 
 }
 
 async function readHead(file: string, size: number): Promise<HeadSummary> {
-  const out: HeadSummary = { cwd: null, gitBranch: null, createdAt: null, userTexts: [] }
+  const out: HeadSummary = { cwd: null, gitBranch: null, createdAt: null, userTexts: [], relocatedCwd: null, headTruncated: false }
   const handle = await open(file, 'r')
   try {
     // Complete lines only: a record cut by the block boundary is folded on the
@@ -135,7 +149,7 @@ async function readHead(file: string, size: number): Promise<HeadSummary> {
       const coveredWholeFile = offset >= size
       const lastNewline = buf.lastIndexOf(0x0a, offset - 1)
       const text = (coveredWholeFile ? buf.subarray(0, offset) : buf.subarray(0, Math.max(0, lastNewline + 1))).toString('utf8')
-      const pass: HeadSummary = { cwd: null, gitBranch: null, createdAt: null, userTexts: [] }
+      const pass: HeadSummary = { cwd: null, gitBranch: null, createdAt: null, userTexts: [], relocatedCwd: null, headTruncated: false }
       let records = 0
       let done = false
       for (const line of text.split('\n')) {
@@ -150,7 +164,11 @@ async function readHead(file: string, size: number): Promise<HeadSummary> {
         }
       }
       Object.assign(out, pass)
-      if (done || coveredWholeFile || blockBytes === HEAD_MAX_BYTES) return out
+      if (done || coveredWholeFile) return out
+      if (blockBytes === HEAD_MAX_BYTES) {
+        out.headTruncated = out.userTexts.length === 0
+        return out
+      }
     }
     return out
   } finally {
@@ -158,8 +176,8 @@ async function readHead(file: string, size: number): Promise<HeadSummary> {
   }
 }
 
-async function readTail(file: string, size: number): Promise<Pick<ClaudeSummary, 'aiTitle' | 'customTitle' | 'tailUserAt' | 'gitBranch'>> {
-  const out = { aiTitle: null as string | null, customTitle: null as string | null, tailUserAt: null as number | null, gitBranch: null as string | null }
+async function readTail(file: string, size: number): Promise<Pick<ClaudeSummary, 'aiTitle' | 'customTitle' | 'tailUserAt' | 'gitBranch' | 'relocatedCwd'>> {
+  const out = { aiTitle: null as string | null, customTitle: null as string | null, tailUserAt: null as number | null, gitBranch: null as string | null, relocatedCwd: null as string | null }
   if (size === 0) return out
   const handle = await open(file, 'r')
   try {
@@ -180,6 +198,7 @@ async function readTail(file: string, size: number): Promise<Pick<ClaudeSummary,
       if (!line.trim()) continue
       const record = parseJsonRecord(line)
       if (!record) continue
+      if (record.type === 'relocated' && typeof record.relocatedCwd === 'string' && isAbsolute(record.relocatedCwd)) out.relocatedCwd = record.relocatedCwd
       if (typeof record.aiTitle === 'string' && record.aiTitle.trim()) out.aiTitle = record.aiTitle.trim()
       if (typeof record.customTitle === 'string' && record.customTitle.trim()) out.customTitle = record.customTitle.trim()
       if (typeof record.gitBranch === 'string' && record.gitBranch) out.gitBranch = record.gitBranch
@@ -208,14 +227,18 @@ export class ClaudeConversationSource implements ConversationSource {
       return []
     }
     if (scope.scope === 'everywhere') return names.map(dir => ({ dir, exact: false }))
-    const sanitizedRoots = scope.family.rawRoots.map(sanitizePath)
+    // Folded like the family folds cwds: darwin and win32 name a directory
+    // for a lowercased cwd that the canonical cwd would not match otherwise.
+    const fold = (name: string) => (process.platform === 'darwin' || process.platform === 'win32' ? name.toLowerCase() : name)
+    const sanitizedRoots = scope.family.rawRoots.map(r => fold(sanitizePath(r)))
     const out: Array<{ dir: string; exact: boolean }> = []
-    for (const dir of names) {
+    for (const name of names) {
+      const dir = fold(name)
       const exact = sanitizedRoots.includes(dir)
       // The `-` continuation catches `.worktrees/<name>` (`--worktrees-<name>`),
       // `packages/<x>` and pruned worktrees; a transcript's recorded cwd then
       // decides membership, so `<repo>-other` cannot slip in on the prefix.
-      if (exact || (scope.scope === 'repository' && sanitizedRoots.some(r => dir.startsWith(r + '-')))) out.push({ dir, exact })
+      if (exact || (scope.scope === 'repository' && sanitizedRoots.some(r => dir.startsWith(r + '-')))) out.push({ dir: name, exact })
     }
     return out
   }
@@ -225,8 +248,14 @@ export class ClaudeConversationSource implements ConversationSource {
     if (cached && cached.mtimeMs === mtimeMs && cached.size === size) return cached.summary
     const head = await readHead(file, size)
     const tail = await readTail(file, size)
+    // A live-moved session appends the record and is renamed (tail); a
+    // destination written fresh starts with it (head). Either outranks the
+    // launch cwd, and membership below is decided on the resolved cwd.
+    const relocatedCwd = tail.relocatedCwd ?? head.relocatedCwd
     const summary: ClaudeSummary = {
-      cwd: head.cwd,
+      cwd: relocatedCwd ?? head.cwd,
+      relocatedCwd,
+      headTruncated: head.headTruncated,
       gitBranch: tail.gitBranch ?? head.gitBranch,
       createdAt: head.createdAt,
       userTexts: head.userTexts,
@@ -245,9 +274,10 @@ export class ClaudeConversationSource implements ConversationSource {
     const dirs = await this.candidateDirs(scope)
     const rows: SourceConversation[] = []
     const seen = new Set<string>()
-    // Every candidate file first, deduplicated by id in directory order so a
-    // transcript copied into two project dirs is claimed by the first, then
-    // summarised through a small pool.
+    // Every candidate file first, then summarised through a small pool. A
+    // session id can appear in two project dirs: a relocated transcript and
+    // the redirect stub left where it started, or a plain copy. The largest
+    // file is the conversation; a stub is a few hundred bytes.
     const candidates: Array<{ file: string; nativeId: string; exact: boolean }> = []
     for (const { dir, exact } of dirs) {
       let names: string[]
@@ -259,21 +289,22 @@ export class ClaudeConversationSource implements ConversationSource {
       for (const name of names) {
         if (!name.endsWith('.jsonl')) continue
         const nativeId = name.slice(0, -6)
-        if (!UUID_RE.test(nativeId) || seen.has(nativeId)) continue
-        seen.add(nativeId)
+        if (!UUID_RE.test(nativeId)) continue
         candidates.push({ file: join(this.deps.projectsDir, dir, name), nativeId, exact })
       }
     }
     const summarized = await mapWithConcurrency(candidates, SUMMARY_CONCURRENCY, async candidate => {
       try {
         const s = await stat(candidate.file)
-        return { ...candidate, mtimeMs: s.mtimeMs, summary: await this.summarize(candidate.file, s.mtimeMs, s.size) }
+        return { ...candidate, mtimeMs: s.mtimeMs, size: s.size, summary: await this.summarize(candidate.file, s.mtimeMs, s.size) }
       } catch {
         return null
       }
     })
-    for (const item of summarized) {
-      if (!item) continue
+    const largestFirst = summarized.filter((item): item is NonNullable<typeof item> => item !== null).sort((a, b) => b.size - a.size)
+    for (const item of largestFirst) {
+      if (seen.has(item.nativeId)) continue
+      seen.add(item.nativeId)
       const { file, nativeId, exact, summary, mtimeMs } = item
       // Membership: the recorded cwd wins; a transcript that never recorded
       // one (the 0-byte session) belongs only to an exactly-matching dir.
@@ -290,6 +321,7 @@ export class ClaudeConversationSource implements ConversationSource {
         customTitle: summary.customTitle,
         aiTitle: summary.aiTitle,
         userTexts: summary.userTexts,
+        headTruncated: summary.headTruncated,
         createdAt: summary.createdAt,
         lastUserActivityAt: historyLast ?? summary.tailUserAt,
         activitySource: historyLast !== null ? 'history' : summary.tailUserAt !== null ? 'tail' : null,

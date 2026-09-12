@@ -18,6 +18,9 @@ export type SourceConversation = {
   aiTitle: string | null
   /** The first few user texts in document order, raw, wrappers included. */
   userTexts: string[]
+  /** The adapter stopped reading the head at its byte bound before any user
+   *  text; the conversation is not empty, only unlabelled by prompt. */
+  headTruncated?: boolean
   createdAt: number | null
   lastUserActivityAt: number | null
   activitySource: 'history' | 'index' | 'tail' | null
@@ -49,6 +52,5 @@ export interface ConversationSource {
   readonly provider: AgentProviderKind
   discover(scope: SourceScope): Promise<SourceConversation[]>
   /** Every user prompt of one conversation, newest first. */
-  /** Newest first. */
   prompts(nativeId: string, cwd: string, options?: PromptReadOptions): Promise<ConversationPrompt[]>
 }

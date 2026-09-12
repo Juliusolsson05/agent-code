@@ -40,6 +40,22 @@ describe('Codex conversation source', () => {
     expect(everywhere.filter(r => r.origin === 'index')).toHaveLength(counts.codex.inFamily + counts.codex.control)
   })
 
+  it('lists the same rows for a family whose roots keep their case', async () => {
+    // On linux the family does not lowercase; `lower(cwd) = ?` must still be
+    // bound to a lowercased root, or every row recorded at the repo root
+    // vanishes while the LIKE clause keeps the worktree rows.
+    const { source, listWorktrees } = await setup()
+    const family = await resolveFamily('/fixture/repo', 'repository', { listWorktrees })
+    const mixed = { ...family, cwd: family.cwd.toUpperCase(), roots: family.roots.map(r => r.toUpperCase()) }
+    const lower = await source.discover({ scope: 'repository', family })
+    const upper = await source.discover({ scope: 'repository', family: mixed })
+    expect(upper.map(r => r.nativeId).sort()).toEqual(lower.map(r => r.nativeId).sort())
+    const cwdLower = await source.discover({ scope: 'cwd', family: await resolveFamily('/fixture/repo', 'cwd', { listWorktrees }) })
+    const cwdUpper = await source.discover({ scope: 'cwd', family: { ...family, scope: 'cwd', cwd: '/FIXTURE/REPO' } })
+    expect(cwdUpper).toHaveLength(cwdLower.length)
+    expect(cwdLower.length).toBeGreaterThan(0)
+  })
+
   it('treats a Codex name that merely prefixes the title as no name', async () => {
     const { corpus, source, listWorktrees } = await setup()
     const db = new DatabaseSync(join(corpus.codexHome, 'state_5.sqlite'))

@@ -39,6 +39,8 @@ describe('classifyConversation', () => {
     // claude a8220281: a 0-byte transcript with nothing to show.
     expect(classifyConversation(source({ available: false, aiTitle: null }), null, null)).toBe('empty')
     expect(classifyConversation(source({ aiTitle: 'p:aa:5' }), null, null)).toBe('user')
+    // A head read that hit its byte bound before the first prompt is not empty.
+    expect(classifyConversation(source({ headTruncated: true }), null, null)).toBe('user')
   })
 })
 
