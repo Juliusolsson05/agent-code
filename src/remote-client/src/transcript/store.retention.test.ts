@@ -100,13 +100,20 @@ describe('view-owned remote transcript retention', () => {
       await pending
       expect(f.store.getSnapshot('a').entries).toHaveLength(0)
       f.getHistory.mockResolvedValueOnce({ ok: true, chunk: { ...page(range(200, 210), true), file: '/synthetic/rolled-while-unviewed.jsonl' } })
-      await f.view()
+      const reselected = await f.view()
       expect(f.store.getSnapshot('a').entries.map(e => e.uuid)).toEqual(range(200, 210).map(e => e.uuid))
       f.semantic({ type: 'block_started', turnId: 'old', blockId: 'suffix', blockType: 'text' })
       expect(f.store.getSnapshot('a').semanticTurn).toBeNull()
       f.semantic({ type: 'turn_started', turnId: 'new' })
       expect(f.store.getSnapshot('a').semanticTurn?.turnId).toBe('new')
+      // A list that no longer names the session evicts only what nobody is
+      // looking at (#847): the mounted view keeps its snapshot, and the state
+      // goes the moment that last view leaves.
+      f.list.length = 0
       f.emit('onSessionList', [])
+      expect((Reflect.get(f.store, 'sessions') as Map<string, unknown>).size).toBe(1)
+      expect(f.store.getSnapshot('a').entries).toHaveLength(10)
+      reselected()
       expect((Reflect.get(f.store, 'sessions') as Map<string, unknown>).size).toBe(0)
     } finally { f.store.dispose() }
   })
