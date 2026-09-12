@@ -16,10 +16,13 @@ export type ManagedAgentActivityState =
   | 'failed'
   | 'unknown'
 
+// No provider is special-cased here: an OpenCode session is `available` with
+// an `opencode://session/<id>` path, which the agent transcript tools read
+// like any JSONL path. (A former `provider_managed` value marked OpenCode as
+// unreadable before those tools could read its database.)
 export type ManagedAgentTranscriptAvailability =
   | 'available'
   | 'not_created'
-  | 'provider_managed'
   | 'unavailable'
 
 export type ManagedAgentProject = {

@@ -22,6 +22,7 @@ import type { BuiltInMcpDomain, McpSessionScope } from '@mcp/shared/types.js'
 import type { SessionKind } from '@main/sessionManager.js'
 import {
   AGENT_PROVIDER_KINDS,
+  AGENT_PROVIDER_RUNTIMES,
   DEFAULT_PROVIDER,
   isAgentProviderKind,
 } from '@shared/types/providerKind.js'
@@ -394,12 +395,15 @@ function registerAgentTranscriptTools(server: McpServer): void {
     rawToolOutputs: z.boolean().optional(),
   }).optional()
 
-  // WHY these tools take an explicit filesystem path instead of trying to
+  // WHY these tools take an explicit transcript locator instead of trying to
   // discover "the right" transcript:
   //
   // The product use case is controlled consumption of another agent's work
   // product, not a global transcript browser. The UI, orchestration metadata,
-  // or a handoff prompt already knows which Claude/Codex JSONL file matters.
+  // or a handoff prompt already knows which transcript matters: a Claude or
+  // Codex JSONL path, or an `opencode://session/<id>` locator for OpenCode,
+  // whose sessions live in one database with no file per session (Agent
+  // Management publishes whichever the agent has).
   // Discovery would force this MCP boundary to decide ownership, scoping, and
   // ranking semantics that are unrelated to projection. A path-in API keeps v1
   // auditable and predictable: the caller names the transcript, then chooses a
@@ -412,7 +416,7 @@ function registerAgentTranscriptTools(server: McpServer): void {
     {
       title: 'Read Agent Transcript File',
       description:
-        'Reads one Claude or Codex transcript JSONL file by path and returns a normalized, filtered, bounded projection of user-visible agent context.',
+        'Reads one agent transcript and returns a normalized, filtered, bounded projection of user-visible agent context. `path` is a Claude or Codex transcript JSONL path, or `opencode://session/<id>` for an OpenCode session (the locator Agent Management lists for OpenCode agents).',
       inputSchema: {
         path: z.string(),
         provider: providerSchema.optional(),
@@ -446,7 +450,7 @@ function registerAgentTranscriptTools(server: McpServer): void {
     {
       title: 'Search Agent Transcript File',
       description:
-        'Searches one Claude or Codex transcript JSONL file by path and returns bounded normalized matches with optional surrounding context.',
+        'Searches one agent transcript and returns bounded normalized matches with optional surrounding context. `path` is a Claude or Codex transcript JSONL path, or `opencode://session/<id>` for an OpenCode session.',
       inputSchema: {
         path: z.string(),
         provider: providerSchema.optional(),
@@ -478,7 +482,7 @@ function registerAgentTranscriptTools(server: McpServer): void {
     {
       title: 'Inspect Agent Transcript File',
       description:
-        'Inspects one Claude or Codex transcript JSONL file by path and returns provider, timestamp, and item-count metadata without dumping content.',
+        'Inspects one agent transcript and returns provider, timestamp, and item-count metadata without dumping content. `path` is a Claude or Codex transcript JSONL path, or `opencode://session/<id>` for an OpenCode session.',
       inputSchema: {
         path: z.string(),
         provider: providerSchema.optional(),
@@ -711,9 +715,11 @@ function registerOrchestrationTools(
           'Creates a distinct Agent Code orchestration child agent in Dispatch, optionally bootstrapped with an initial prompt.',
           'Use this only when the user explicitly asks for delegated, parallel, or orchestrated agent work.',
           'The child currently starts from a clean provider conversation; include any necessary parent context directly in the prompt.',
+          'Choose providerRuntime: "terminal" when the owner or user wants the provider\'s native TUI in the pane; the provider must support that runtime. Omit providerRuntime for the default structured runtime.',
         ].join(' '),
       inputSchema: {
         kind: z.enum(AGENT_PROVIDER_KINDS).default(DEFAULT_PROVIDER),
+        providerRuntime: z.enum(AGENT_PROVIDER_RUNTIMES).optional(),
         prompt: z.string().optional(),
         cwd: z.string().optional(),
         title: z.string().optional(),
@@ -746,6 +752,7 @@ function registerOrchestrationTools(
       const agent = await bridge.createAgent({
         parentSessionId: scope.sessionId,
         kind: args.kind as OrchestrationAgentKind,
+        ...(args.providerRuntime ? { providerRuntime: args.providerRuntime } : {}),
         cwd: args.cwd,
         title: args.title,
         role: args.role,

@@ -440,25 +440,16 @@ export async function rehydrateWorkspace(
     const recoveredRunId = observedReplacementWhileRecovering
       ? observedRunId
       : backend?.sessionRunId ?? observedRunId
-    const usesProviderTerminalRuntime =
-      freshSessions[sessionId]?.providerRuntime === 'terminal'
     const seeded: SessionRuntime = {
       ...base,
       ...(backend ? { sessionRunId: recoveredRunId } : {}),
       ...(draft && !base.draftInput ? { draftInput: draft } : {}),
-      ...(usesProviderTerminalRuntime
-        ? {
-            // The OpenCode native TUI owns the pane's visual history. Marking
-            // this runtime as `loading` would mount the structured-history
-            // bootstrap path and leave a permanent spinner because rehydrate
-            // deliberately skips that loader below. Its provider id remains
-            // durable metadata for recovery and transcript transforms; it is
-            // not permission to mix the rendered engine into this surface.
-            hasOlderHistory: false,
-            transcriptStatus: 'ready' as const,
-            transcriptError: null,
-          }
-        : seedResumedRuntimeFields(existing, freshSessions[sessionId])),
+      // OpenCode Terminal seeds like every agent. It used to be pinned to
+      // `ready` with no history because this path skipped its loader; now
+      // the loader below runs for it too, so `loading` settles like
+      // anyone's, and the pane itself stays on the raw TUI (see
+      // loadInitialHistoryForSession).
+      ...seedResumedRuntimeFields(existing, freshSessions[sessionId]),
     }
 
     if (failure) {
@@ -817,7 +808,6 @@ export async function rehydrateWorkspace(
           commitRehydratedState(newId)
           if (
             kind !== 'terminal' &&
-            meta.providerRuntime !== 'terminal' &&
             resumeSessionId &&
             refs.stateRef.current.sessions[newId] &&
             refs.latestRuntimesRef.current[newId]
