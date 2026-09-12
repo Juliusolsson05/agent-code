@@ -1,5 +1,10 @@
 # Grok App Integration
 
+> Remaining-runtime planning gate: see [Grok Controlled Runtime and App Adoption](grok-controlled-runtime.md).
+> That replacement decomposition is proposed and awaiting explicit approval.
+> Pause the broad runtime/registration stages below until it is approved;
+> evidence capture and an observed-case catalog must precede the combined runtime.
+
 Continues the approved Grok provider design and agent-code#832. The user has
 authorized component commits, pushes and linked PRs, but no merges. Parent
 implements inline; orchestration agents perform independent read-only audits
