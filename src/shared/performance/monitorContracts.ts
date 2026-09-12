@@ -97,4 +97,3 @@ export function parseMonitorRendererBatch(input: unknown): MonitorRendererRecord
 // and at most one 96-byte ASCII ID. The tests prove its serialized upper bound;
 // expanding the schema requires revisiting this charge and the batch limit.
 export const MONITOR_RECORD_BYTES = 512
-

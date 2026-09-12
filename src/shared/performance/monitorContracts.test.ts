@@ -53,4 +53,3 @@ describe('content-minimized renderer ingress', () => {
       .toBeLessThanOrEqual(MONITOR_POLICY.batchBytes)
   })
 })
-

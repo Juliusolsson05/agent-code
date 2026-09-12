@@ -41,4 +41,3 @@ describe('monitoring backpressure', () => {
     expect(() => queue.drain(-1)).toThrow()
   })
 })
-

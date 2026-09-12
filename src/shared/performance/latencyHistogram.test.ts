@@ -35,4 +35,3 @@ describe('latency distribution', () => {
     expect(latencyQuantile(histogram.snapshot(), 0)).toBeNull()
   })
 })
-
