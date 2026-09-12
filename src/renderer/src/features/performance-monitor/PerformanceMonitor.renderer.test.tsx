@@ -1,6 +1,7 @@
 import { act, render, renderHook, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { MonitorSnapshot } from '@shared/performance/monitorSnapshot.js'
+import type { MonitorProcessPage } from '@shared/performance/processSnapshot.js'
 import { PerformanceMonitor } from './PerformanceMonitor'
 import { useMonitor } from './useMonitor'
 
@@ -11,7 +12,7 @@ const snapshot: MonitorSnapshot = {
 }
 function api(
   read: () => Promise<MonitorSnapshot | null>,
-  getMonitorProcesses = vi.fn(async () => null),
+  getMonitorProcesses: (offset: number, sort: 'cpu' | 'memory') => Promise<MonitorProcessPage | null> = vi.fn(async () => null),
 ) {
   Object.defineProperty(window, 'api', { value: { getMonitorSnapshot: read, getMonitorProcesses }, configurable: true })
 }

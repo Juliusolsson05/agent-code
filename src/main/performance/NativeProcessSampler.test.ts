@@ -67,7 +67,7 @@ describe('native process ownership', () => {
     await sampler.sample({ ...context, targets: [{ ...context.targets[0], pid: null }] })
     expect(run).not.toHaveBeenCalled()
     expect(sampler.read().rows).toContainEqual(expect.objectContaining({ pid: null, sessionIds: ['a'], quality: 'unsupported' }))
-    expect(sampler.read().summary.missingRoots).toBeGreaterThanOrEqual(1)
+    expect(sampler.read().summary.missingRoots).toBe(1)
   })
 })
 

@@ -65,7 +65,7 @@ export class NativeProcessSampler {
             children.set(row.parentPid, entries)
           }
           const visit = (root: number, sessionId?: string): void => {
-            if (!this.topology.has(root) && !electron.has(root)) { missingRoots++; return }
+            if (!this.topology.has(root) && !electron.has(root)) return
             const queue = [root]
             const seen = new Set<number>()
             for (let i = 0; i < queue.length && seen.size < MONITOR_POLICY.processLimit; i++) {
@@ -99,7 +99,7 @@ export class NativeProcessSampler {
             // The manager's backend run ID permits an intentional same-pane
             // restart. A changed OS birth within that same run is PID reuse,
             // not a new child of the old agent; preserve unavailable coverage.
-            if (birth === undefined || (expected !== undefined && expected !== birth)) { missingRoots++; continue }
+            if (birth === undefined || (expected !== undefined && expected !== birth)) continue
             this.rootIdentities.set(target.sessionId, { pid: target.pid, birth, generation: target.generation })
             visit(target.pid, target.sessionId)
           }
@@ -163,9 +163,9 @@ export class NativeProcessSampler {
         rows.push({ identity: `session:${target.sessionId}`, pid: null, parentPid: null, creationTime: 0,
           type: target.kind === 'terminal' ? 'terminal' : 'agent', provider: target.kind,
           sessionIds: [target.sessionId], sharedSessionCount: 1, cpuPercent: null, memoryBytes: null, quality: 'unsupported' })
-        // A root that existed in the topology but vanished before the usage
-        // query is just as unavailable as a missing PID. Count both so the UI
-        // does not show full coverage beside an unsupported placeholder.
+        // The placeholder is the canonical unavailable-root evidence. Count
+        // it here exactly once whether discovery failed during topology,
+        // lifetime validation, or the later resource query.
         missingRoots++
       }
       // Replace the entire interval map: exited identities cannot accumulate
