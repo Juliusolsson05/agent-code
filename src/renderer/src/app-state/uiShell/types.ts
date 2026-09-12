@@ -92,6 +92,13 @@ export type UiShellState = {
    */
   agentTitlePromptSessionId: SessionId | null
   buryPromptSessionId: SessionId | null
+  /**
+   * Session awaiting the Root Agent Code Management confirmation (#906), or
+   * null. Stored like the bury and title prompts: the grant must land on the
+   * agent the command was invoked for, not whichever Dispatch lane is focused
+   * by the time the user finishes reading the warning.
+   */
+  rootManagementPromptSessionId: SessionId | null
   debugBundleNotePrompt: {
     bundlePath: string
     sessionId: SessionId

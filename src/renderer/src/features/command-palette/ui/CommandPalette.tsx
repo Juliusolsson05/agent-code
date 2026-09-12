@@ -289,6 +289,7 @@ function OpenCommandPalette({
   const openAgentViewModePicker = useAppStore(state => state.openAgentViewModePicker)
   const openColorFlagPicker = useAppStore(state => state.openColorFlagPicker)
   const openAgentTitlePrompt = useAppStore(state => state.openAgentTitlePrompt)
+  const openRootManagementPrompt = useAppStore(state => state.openRootManagementPrompt)
   const closeUsageModal = useAppStore(state => state.closeUsageModal)
   const closeKeyboardShortcuts = useAppStore(state => state.closeKeyboardShortcuts)
   const closeAgentActivity = useAppStore(state => state.closeAgentActivity)
@@ -636,6 +637,7 @@ function OpenCommandPalette({
         openAgentViewModePicker,
         openColorFlagPicker,
         openAgentTitlePrompt,
+        openRootManagementPrompt,
         closeUsageModal,
         closeKeyboardShortcuts,
         closeAgentActivity,
@@ -746,6 +748,7 @@ function OpenCommandPalette({
       openRewindPrompt,
       openAgentViewModePicker,
       openAgentTitlePrompt,
+      openRootManagementPrompt,
       closeUsageModal,
       closeKeyboardShortcuts,
       closeAgentActivity,

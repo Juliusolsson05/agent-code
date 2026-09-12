@@ -17,6 +17,7 @@ import { TileTabsModalSurface } from '@renderer/features/workspace/surfaces/Tile
 import { ReorderTabsSurface } from '@renderer/features/workspace/surfaces/ReorderTabsSurface'
 import { PinAgentsSurface } from '@renderer/features/dispatch-pin/surfaces/PinAgentsSurface'
 import { BuryPanePromptSurface } from '@renderer/features/workspace/surfaces/BuryPanePromptSurface'
+import { RootManagementConfirmSurface } from '@renderer/features/workspace/surfaces/RootManagementConfirmSurface'
 import { CloseConfirmationSurface } from '@renderer/features/workspace/surfaces/CloseConfirmationSurface'
 import { ViewPromptsSurface } from '@renderer/features/workspace/surfaces/ViewPromptsSurface'
 import { PromptSearchSurface } from '@renderer/features/workspace/surfaces/PromptSearchSurface'
@@ -94,6 +95,10 @@ export const modalSurfaces: SurfaceEntry[] = [
   // closes the palette first, so it has no stacking relationship to reason
   // about beyond "a new modal paints over the established ones".
   { id: 'new-agent-in', Component: NewAgentInSurface },
+  // Appended per the contract above. Opened only from a session command that
+  // closes the palette first; it must paint over every established modal so
+  // the warning is never hidden behind the surface it is warning about.
+  { id: 'root-management-confirm', Component: RootManagementConfirmSurface },
 ]
 
 /**
