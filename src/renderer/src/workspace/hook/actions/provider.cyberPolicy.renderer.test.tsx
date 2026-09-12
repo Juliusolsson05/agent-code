@@ -91,7 +91,9 @@ it('re-homes the focused pane onto the stripped Codex session and records undo',
   expect(replaceSession).toHaveBeenCalledExactlyOnceWith('/source', {
     kind: 'codex',
     resumeSessionId: 'stripped-native',
-    builtInMcpDomains: ['orchestration'],
+    // No MCP arguments: replacement continues this pane's own capability
+    // choices and re-resolves them, so a caller cannot freeze the agent at the
+    // capability list its previous process happened to launch with.
     targetSessionId: 'source',
   })
   expect(splitFocused).not.toHaveBeenCalled()

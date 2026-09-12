@@ -83,6 +83,19 @@ export function coerceSettings(value: unknown): Settings {
     // streaming off on purpose.
     useProxyStreaming: parsed.useProxyStreaming !== false,
     dictationEnabled: parsed.dictationEnabled === true,
+    // Keep disconnected devices: hydration cannot inventory hardware, and
+    // forgetting the choice here would silently switch a docked user's mic.
+    dictationAudioInput:
+      parsed.dictationAudioInput
+      && typeof parsed.dictationAudioInput.deviceId === 'string'
+      && parsed.dictationAudioInput.deviceId.trim().length > 0
+        ? {
+            deviceId: parsed.dictationAudioInput.deviceId,
+            label: typeof parsed.dictationAudioInput.label === 'string'
+              ? parsed.dictationAudioInput.label
+              : '',
+          }
+        : null,
     dictationProvider: parsed.dictationProvider === 'deepgram'
       ? parsed.dictationProvider
       : DEFAULT_SETTINGS.dictationProvider,

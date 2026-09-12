@@ -45,7 +45,7 @@ function readMetaFlag(value: unknown): boolean {
   // provenance. A JSON serializer that writes the optional flag explicitly as
   // null is expressing absence, and every other reader of this field in the
   // repository treats a non-`true` value as non-meta — committed.ts,
-  // sessionIndex.ts, latestUserPrompts.ts, and the transcript parser all test
+  // promptFolder.ts, latestUserPrompts.ts, and the transcript parser all test
   // `isMeta === true`. Resolving null to meta here would make this the only
   // dissenting reader and, if a Claude build ever emitted it that way, would
   // suppress EVERY durable queued prompt bubble: a silent regression to the

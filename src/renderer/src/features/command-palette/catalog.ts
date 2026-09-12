@@ -1,3 +1,4 @@
+import { tldrCommands } from '@renderer/features/tldr/commands'
 import { layoutCommands } from '@renderer/features/workspace/commands/layoutCommands'
 import { globalEditorCommands } from '@renderer/features/global-editor/commands/globalEditorCommands'
 import { paneCommands } from '@renderer/features/workspace/commands/paneCommands'
@@ -73,6 +74,7 @@ export const builtInCommandCatalog: readonly CommandDef[] = Object.freeze([
   ...agentTitleCommands,
   ...dispatchColorFlagCommands,
   ...spotlightCommands,
+  ...tldrCommands,
   ...readerCommands,
   ...tileTabsCommands,
   ...settingsCommands,

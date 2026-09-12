@@ -126,7 +126,7 @@ describe('renderer session replacement handoff', () => {
       await result.current.replaceSession('/recorded/worktree', {
         kind: destination,
         resumeSessionId: 'recorded-provider-session',
-        builtInMcpDomains: ['workflows'],
+        builtInMcpOverrides: { workflows: true },
       })
       await vi.runAllTimersAsync()
     })

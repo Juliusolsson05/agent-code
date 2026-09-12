@@ -23,6 +23,7 @@ import { excludeExternalControlFromOpencode } from '@providers/shared/runtime/ex
 import { EventEmitter } from 'events'
 
 import { OpencodeHeadless } from 'opencode-headless'
+import { opencodeTranscriptFile } from 'opencode-terminal-headless'
 import type {
   CommittedEntryEvent,
   ScreenActivityEvent,
@@ -60,15 +61,14 @@ const QUESTION_REJECT = 'opencode.question.reject'
 const PERMISSION_REPLIES = ['once', 'always', 'reject'] as const
 type PermissionReplyValue = (typeof PERMISSION_REPLIES)[number]
 
-// Synthetic "source" string for jsonl-entry's second argument. The
-// PTY providers pass a real transcript file path here (Claude's
-// <id>.jsonl, Codex's rollout path); opencode has no durable file at
-// this seam (#406 blocker 2 — history arrives via the committed replay,
-// not a file loader), so we mint a stable URI instead. Consumers that
-// only display or key off this string stay happy; the mapper (step 4)
-// keys off the entry body, not this argument.
+// jsonl-entry's second argument. The PTY providers pass a real transcript
+// file path here (Claude's <id>.jsonl, Codex's rollout path); OpenCode has
+// no file per session, so both OpenCode runtimes publish the
+// `opencode://session/<id>` locator, whose format opencode-terminal-headless
+// owns. Main's transcript readers (agent transcript MCP tools, Agent
+// Management, remote history) route that locator to OpenCode's database.
 function transcriptSource(sessionID: string): string {
-  return `opencode://session/${sessionID}`
+  return opencodeTranscriptFile(sessionID)
 }
 
 function isPermissionReply(value: unknown): value is PermissionReplyValue {

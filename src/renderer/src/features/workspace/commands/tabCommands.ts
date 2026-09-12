@@ -58,21 +58,38 @@ export const tabCommands: CommandDef[] = [
     },
   },
   {
+    id: 'merge-project-tabs',
+    category: 'layout-dispatch',
+    surface: 'app',
+    title: 'Merge Project Tabs',
+    description: '**What it does:** Folds other tabs into one tab. Their agents move to the target\'s Dispatch list; nothing restarts.\n\n**Use when:** The same folder ended up open in several tabs, or worktree tabs belong together.\n\n**Notes:** Buried panes and Dispatch row filters follow the target. No agent is closed, so anything can be re-arranged afterwards; the dialog lists what moves before you confirm. Moved grid panes become Dispatch agents, so after the next launch they wake on first use like any other Dispatch agent instead of being live from the start.',
+    keywords: ['merge tabs', 'combine tabs', 'duplicate tab', 'same project', 'fold tabs', 'dispatch', 'worktree'],
+    when: ({ workspace }) => workspace.state.tabs.length > 1,
+    getState: ({ flags }) => panel(flags.mergeProjectTabsOpen),
+    run: ({ ui, flags }) => {
+      if (flags.mergeProjectTabsOpen) {
+        ui.closeMergeProjectTabs()
+        return
+      }
+      ui.openMergeProjectTabs()
+    },
+  },
+  {
     id: 'resume-session',
     category: 'session',
     surface: 'app',
-    title: 'Resume Session',
-    description: '**What it does:** Opens the **resume session** flow.\n\n**Use when:** You want to continue an old Claude or Codex session.\n\n**Notes:** Uses the focused project folder as the default.',
-    keepPaletteOpen: true,
+    title: 'Resume Session…',
+    description: '**What it does:** Opens the Conversations picker for this repository.\n\n**Use when:** You want to continue a past Claude, Codex or OpenCode conversation.\n\n**Notes:** Lists every worktree of the focused project across all providers; orchestration children are hidden behind a toggle.',
+    getState: ({ flags }) => panel(flags.conversationsOpen),
     run: ({ ui, flags }) => {
-      // Already showing this mode? Dismiss. A mode-entering command whose
-      // second press re-enters the mode it is already in reads as a dead key,
-      // which is the same complaint that started this whole change.
-      if (flags.paletteMode === 'resume') {
-        ui.closePalette()
+      // A second press dismisses. The old palette resume mode re-entered
+      // itself on a second press, which read as a dead key.
+      if (flags.conversationsOpen) {
+        ui.closeConversations()
         return
       }
-      ui.enterResumeMode()
+      ui.openConversations({ focusSearch: false })
+      ui.closePalette()
     },
   },
 ]

@@ -16,7 +16,7 @@ import { getProviderFeatures } from '@providers/shared/featureCapabilities'
 // The follow-up review found the first cut had the right idea and the wrong
 // wiring: two guards were transposed (View Prompts read the switch edge list,
 // Reload Agent read the shell-command flag), two commands still asked
-// agent-hood, and `savedSessionListing` had no reader at all. So the matrix
+// agent-hood, and one capability had no reader at all. So the matrix
 // alone is not the invariant — a capability with no consumer, or a consumer
 // reading someone else's capability, passes every test in this file. The
 // consumers are pinned in the command-catalog tests.
@@ -29,7 +29,6 @@ describe('provider feature matrix', () => {
     )
     expect(matrix).toEqual({
       claude: {
-        savedSessionListing: true,
         transcriptRewind: true,
         transcriptDuplicate: true,
         promptHistoryExtraction: true,
@@ -38,7 +37,6 @@ describe('provider feature matrix', () => {
         verifiedExternalResumeCommand: true,
       },
       codex: {
-        savedSessionListing: true,
         transcriptRewind: true,
         transcriptDuplicate: true,
         promptHistoryExtraction: true,
@@ -47,7 +45,6 @@ describe('provider feature matrix', () => {
         verifiedExternalResumeCommand: true,
       },
       opencode: {
-        savedSessionListing: false,
         transcriptRewind: true,
         transcriptDuplicate: true,
         promptHistoryExtraction: true,
@@ -65,7 +62,6 @@ describe('provider feature matrix', () => {
   it('grants a terminal nothing', () => {
     // The distinction isAgentProviderKind was actually making, kept explicit.
     expect(getProviderFeatures('terminal')).toEqual({
-      savedSessionListing: false,
       transcriptRewind: false,
       transcriptDuplicate: false,
       promptHistoryExtraction: false,
@@ -80,9 +76,8 @@ describe('provider feature matrix', () => {
     expect(getProviderFeatures('not-a-provider').switchTargets).toEqual([])
   })
 
-  it('grants OpenCode transcript operations without pretending it has a session index', () => {
+  it('grants OpenCode every transcript operation', () => {
     const opencode = getProviderFeatures('opencode')
-    expect(opencode.savedSessionListing).toBe(false)
     expect(opencode.transcriptRewind).toBe(true)
     expect(opencode.transcriptDuplicate).toBe(true)
     expect(opencode.promptHistoryExtraction).toBe(true)
@@ -102,7 +97,6 @@ describe('provider feature matrix', () => {
     // Adding a provider must fail here until it answers each question, rather
     // than silently inheriting broad agent powers.
     const required = [
-      'savedSessionListing',
       'transcriptRewind',
       'transcriptDuplicate',
       'promptHistoryExtraction',

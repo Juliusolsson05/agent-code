@@ -85,6 +85,9 @@ export function nextReaderSelection(
   //   - older history loaded above the list has unseen ids too;
   //   - a next block and its predecessor's commit can arrive in one update and
   //     share a turn id, so "same source as a departed page" hid the new block.
+  // A new transient provider notice is a complete status page too: a reader
+  // following a stalled generation should see why it stopped. Durable notices
+  // remain committed so paginating old caps never pulls the reader backwards.
   // Committed rows are never followed; the twin search below still carries a
   // reader across a live page's handoff to its committed row.
   const newPages = next.filter(message => !message.committed && !previousIds.has(message.id))
@@ -131,14 +134,18 @@ function findTwin(
   next: readonly ReaderMessage[],
   distanceFromEnd: number,
 ): ReaderMessage | null {
+  // Status notices do not hand off to prose that quotes the same error. Their
+  // stable ledger identity is the only proof of sameness.
+  if (selected.notice) return null
+  const proseNext = next.filter(message => !message.notice)
   const key = normalizeTextKey(selected.text)
-  const sameSourceCandidates = next.filter(message => sameSource(selected, message))
+  const sameSourceCandidates = proseNext.filter(message => sameSource(selected, message))
   const containing = sameSourceCandidates.filter(message => normalizeTextKey(message.text).includes(key))
   const pool = containing.length > 0
     ? containing
     : sameSourceCandidates.length > 0
       ? sameSourceCandidates
-      : next.filter(message => normalizeTextKey(message.text) === key)
+      : proseNext.filter(message => normalizeTextKey(message.text) === key)
   let best: ReaderMessage | null = null
   let bestGap = Number.POSITIVE_INFINITY
   for (const message of pool) {
@@ -160,7 +167,7 @@ export function sameReaderList(a: readonly ReaderMessage[], b: readonly ReaderMe
   for (let index = 0; index < a.length; index += 1) {
     const left = a[index]!
     const right = b[index]!
-    if (left.id !== right.id || left.text !== right.text || left.live !== right.live) return false
+    if (left.id !== right.id || left.text !== right.text || left.live !== right.live || left.notice?.notice !== right.notice?.notice) return false
   }
   return true
 }

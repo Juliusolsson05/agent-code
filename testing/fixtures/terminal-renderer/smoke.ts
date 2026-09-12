@@ -7,8 +7,10 @@ const write = (terminal: Terminal, data: string) => new Promise<void>(resolve =>
 
 // Pixel reads happen after paint, so preserve the test canvases' drawing buffer.
 // The application still uses the default false; no product options are changed.
-// Intercept only the public canvas factory, leaving the production loader and
-// its version-specific invalidation path intact (a mock addon would miss it).
+// Intercept only the public canvas factory, leaving the production loader intact
+// so the wrapper path under test is the one the app ships (a mock addon would
+// miss real GPU behaviour). The 0.19.0-specific invalidation bridge this used to
+// protect is gone since #871 moved to the addon line that fixes the atlas itself.
 const getContext = HTMLCanvasElement.prototype.getContext
 HTMLCanvasElement.prototype.getContext = function (type: string, options?: object) {
   return getContext.call(this, type as '2d', type === 'webgl2' ? { ...options, preserveDrawingBuffer: true } : options)

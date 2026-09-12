@@ -583,7 +583,7 @@ export class SessionManager extends EventEmitter {
     // Always-on incident journal. Optional so tests / non-journaled callers
     // still construct cleanly; null-guarded at every use.
     private readonly journal: AppRunJournal | null = null,
-    private readonly beforeAgentSessionStart: (() => Promise<void>) | null = null,
+    private readonly beforeAgentSessionStart: ((options: SessionSpawnOptions) => Promise<void>) | null = null,
     // Optional opt-in recording projection. Kept as a structural callback so
     // the process/session registry does not depend on the dev-debug recorder.
     private readonly recordCodexObservation: (
@@ -2169,6 +2169,7 @@ export class SessionManager extends EventEmitter {
         dangerousMode: predecessorInfo.dangerousMode,
         useProxy: predecessorInfo.useProxy,
         builtInMcpDomains: effectiveDomains,
+        tldrIdentity: this.builtInMcpHost?.sessionTldrIdentity?.(predecessorSessionId),
       }
       reservation.restoreOptions = restoreOptions
       // Path proof can be the awaited boundary where explicit close wins. The
@@ -2568,6 +2569,7 @@ export class SessionManager extends EventEmitter {
           cwd: options.cwd,
           providerKind: kind,
           domains: options.builtInMcpDomains,
+          tldrIdentity: options.tldrIdentity,
         })
         mcpRegistered = true
       }
@@ -2575,12 +2577,15 @@ export class SessionManager extends EventEmitter {
       if (this.beforeAgentSessionStart) {
         try {
           // Conventions reconciliation is a best-effort compatibility boundary,
-          // never a reason to strand a requested agent launch. The service
-          // records degraded/conflict health for Settings; the manager preserves
-          // its older availability contract even if external storage is broken.
-          await this.beforeAgentSessionStart()
+          // with degraded/conflict health in Settings. TLDR opts into a stricter
+          // launch contract below because its requested reporting skill is part
+          // of the capability, not an optional personal convention.
+          await this.beforeAgentSessionStart(options)
         } catch (error) {
           this.journal?.recordError('conventions.pre_spawn_reconcile.error', error)
+          // TLDR explicitly promises a managed reporting skill. Do not launch
+          // an enabled session while silently omitting that requested contract.
+          if (options.builtInMcpDomains?.includes('tldr')) throw error
         }
         this.throwIfSpawnCancelled(recoveryClaim, codexReplacementHandoff)
       }
@@ -4650,6 +4655,7 @@ export class SessionManager extends EventEmitter {
         ? {
             builtInMcpDomains:
               this.builtInMcpHost?.sessionDomains?.(sessionId) ?? [],
+            tldrIdentity: this.builtInMcpHost?.sessionTldrIdentity?.(sessionId),
           }
         : {}),
     }
@@ -4676,6 +4682,13 @@ export class SessionManager extends EventEmitter {
     const kind = this.getSessionKind(sessionId)
     if (!info?.resumeSessionId || !kind || kind === 'terminal') return null
     try {
+      // Resume metadata is available before any new committed entry. Providers
+      // with their own history mint the durable locator from that identity;
+      // a file-only resolver would strand database history until the TUI emits.
+      const provider = getMainProvider(kind)
+      if (provider.loadHistoryChunk && provider.transcriptLocator) {
+        return provider.transcriptLocator(info.resumeSessionId)
+      }
       return await resolveProviderTranscriptPath({
         kind,
         cwd: info.cwd,

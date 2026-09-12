@@ -88,7 +88,11 @@ export function createControlExecutor(ports: {
             await write('step', { step: 'resolve-owner', kind, id, owners, state: 'completed' })
             return owners
           } : undefined)
-          if (resolved.descriptor.visibility === 'application' && caller.kind === 'external') throw new ControlError('unavailable', 'This capability is reserved for local application actions')
+          // Allow-list the one caller kind that may use application-only
+          // capabilities instead of denying the one that may not: a caller
+          // kind added later (the `agent` kind arrived this way) must start
+          // out excluded rather than silently inherit settings actions.
+          if (resolved.descriptor.visibility === 'application' && caller.kind !== 'application') throw new ControlError('unavailable', 'This capability is reserved for local application actions')
           owner = resolved.owner
           completionKind = resolved.descriptor.completion
           effect = resolved.descriptor.effect

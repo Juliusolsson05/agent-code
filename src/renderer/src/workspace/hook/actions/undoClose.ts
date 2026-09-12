@@ -1,3 +1,4 @@
+import { sessionMcpOverrides } from '@renderer/workspace/mcpDomains'
 import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
 import { useCallback, useState } from 'react'
 
@@ -145,9 +146,12 @@ export function useUndoCloseAction(
           resumeSessionId: resumableProviderSessionId(meta),
           recoverTmuxName: meta.kind === 'terminal' ? meta.tmuxName : undefined,
           // WHY capability intent is restored but credentials are not: closing a pane revokes its
-          // session token. Undo must ask main to mint a fresh token from these durable domain names;
-          // dropping them makes an undo-restored transcript silently lose tools after restart.
-          builtInMcpDomains: meta.builtInMcpDomains,
+          // session token. Undo must ask main to mint a fresh token from the pane's durable
+          // choices; dropping them makes an undo-restored transcript silently lose tools. The
+          // effective list is deliberately not restored — the restored pane is a NEW provider
+          // process, so it resolves those choices against current Settings like any other launch.
+          tldrIdentity: meta.tldrIdentity,
+          builtInMcpOverrides: sessionMcpOverrides(meta),
         })
       } catch {
         return 'retryable-failure'
@@ -245,7 +249,8 @@ export function useUndoCloseAction(
             ...(meta.providerRuntime ? { providerRuntime: meta.providerRuntime } : {}),
             resumeSessionId: kind !== 'terminal' ? resumableProviderSessionId(meta) : undefined,
             recoverTmuxName: kind === 'terminal' ? meta.tmuxName : undefined,
-            builtInMcpDomains: meta.builtInMcpDomains,
+            tldrIdentity: meta.tldrIdentity,
+            builtInMcpOverrides: sessionMcpOverrides(meta),
           })
           idMap.set(oldId, newId)
           carried.set(newId, meta)
@@ -312,7 +317,8 @@ export function useUndoCloseAction(
               ? resumableProviderSessionId(detached.meta)
               : undefined,
             recoverTmuxName: kind === 'terminal' ? detached.meta.tmuxName : undefined,
-            builtInMcpDomains: detached.meta.builtInMcpDomains,
+            tldrIdentity: detached.meta.tldrIdentity,
+            builtInMcpOverrides: sessionMcpOverrides(detached.meta),
           })
           // A detached child restored with its tab is the same population
           // restoreDetachedEntry covers on its own, so it gets the same
@@ -398,7 +404,8 @@ export function useUndoCloseAction(
             ? resumableProviderSessionId(meta)
             : undefined,
           recoverTmuxName: kind === 'terminal' ? meta.tmuxName : undefined,
-          builtInMcpDomains: meta.builtInMcpDomains,
+          tldrIdentity: meta.tldrIdentity,
+          builtInMcpOverrides: sessionMcpOverrides(meta),
         })
       } catch {
         return 'retryable-failure'

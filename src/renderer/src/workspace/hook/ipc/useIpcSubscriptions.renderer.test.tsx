@@ -2,14 +2,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { render } from '@testing-library/react'
 import { act } from 'react'
 import { useRef } from 'react'
-import type { MutableRefObject } from 'react'
 import recordedQueueHandoffBundle from '../../../../../../testing/fixtures/rendering-bundles/2026-06-14T14-25-07-012-a8ad1ebb.json'
 import recordedTaskNotificationBundle from '../../../../../../testing/fixtures/rendering-bundles/2026-06-21T20-14-23-131-62432945.json'
 import recordedCodexWorktreeWindow from '../../../../../../testing/fixtures/worktree-live-attribution/codex-0151-worktree-window.json'
 import recordedGitWorktrees from '../../../../../../testing/fixtures/worktree-live-attribution/git-worktree-identities.json'
 
 import { createFakeSessionFeed } from '@renderer/features/sessionFeed/FakeSessionFeed'
-import { UndoCloseStack } from '@renderer/lib/undoClose'
 import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
 import {
@@ -24,6 +22,7 @@ import { isOptimisticCodexUserEntry } from '@providers/codex/renderer/transcript
 import { entryTextContent } from '@renderer/session-runtime/entries'
 
 import { useIpcSubscriptions } from './useIpcSubscriptions'
+import { makeWorkspaceRefsForTest as makeRefs } from './testing/workspaceRefsForTest'
 
 const originalWindowApi = window.api
 
@@ -57,30 +56,8 @@ afterEach(() => {
 // fire on paths this test does not drive (ghost changes, session-started
 // worktree refresh).
 
-function makeRefs(state: WorkspaceState): WorkspaceRefs {
-  // Plain object refs are fine outside React's render cycle — the hook only
-  // ever reads/writes `.current`.
-  const ref = <T,>(v: T): MutableRefObject<T> => ({ current: v })
-  return {
-    stateRef: ref(state),
-    latestStateRef: ref(state),
-    latestRuntimesRef: ref({}),
-    latestTileTabsRef: ref(null),
-    dangerousAgentsRef: ref(false),
-    useProxyStreamingRef: ref(false),
-    defaultBuiltInMcpDomainsRef: ref([]),
-    seenUuidsRef: ref({}),
-    latestScreenRef: ref({}),
-    undoStackRef: ref(new UndoCloseStack()),
-    bootstrapTimersRef: ref(new Map()),
-    persistedFeedDebugIdRef: ref({}),
-    inFlightFeedDebugIdRef: ref({}),
-    paneToastTimers: ref({}),
-    pendingAdoptionWindowIdsRef: ref<string[]>([]),
-    saveTimerRef: ref(null),
-    bootRef: ref(false),
-  }
-}
+// The harness refs now live in ./testing/workspaceRefsForTest so every
+// subscription test builds the same minimal workspace (imported as makeRefs).
 
 describe('useIpcSubscriptions with an injected SessionFeed', () => {
   it('persists fresh Codex identity while handing a queued prompt to its rollout row', () => {

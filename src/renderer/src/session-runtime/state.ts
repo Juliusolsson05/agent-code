@@ -34,7 +34,7 @@ import type { ProviderConditionSnapshot } from '@shared/types/providerConditions
 import type { SessionRecoverFailureCode,
   SessionInputReadiness,
 } from '@shared/types/session'
-import type { BuiltInMcpDomain } from '@mcp/shared/types'
+import type { BuiltInMcpOverrides } from '@mcp/shared/types'
 import type { SubAgentState } from '@preload/api/types'
 import type {
   CodexTranscriptObservationEventName,
@@ -118,12 +118,19 @@ export type PendingRewindUndo = {
   provider: AgentProviderKind
   cwd: string
   previousProviderSessionId: string
+  // Undo returns to the original transcript, whose summary must be restored;
+  // the truncated branch deliberately has a different, initially empty TLDR.
+  previousTldrIdentity?: string
   rewoundProviderSessionId: string
   rewoundPromptText: string
   rewoundPromptTimestamp: string | null
   previousDraftInput: string
   previousDraftImages: ClaudeDraftImage[]
-  builtInMcpDomains?: BuiltInMcpDomain[]
+  /** The original conversation's per-domain MCP choices. The effective list is
+   * deliberately NOT stored: undo re-resolves against current Settings like
+   * every other replacement, so returning to a transcript cannot resurrect a
+   * capability the user has since turned off globally. */
+  builtInMcpOverrides?: BuiltInMcpOverrides
 }
 
 export type SemanticLiveBlock = {
@@ -304,7 +311,9 @@ export type SemanticLogEntry = {
   raw?: Record<string, unknown>
 }
 
-export type SemanticErrorEntry = {
+export type SemanticErrorEntry = import('@shared/types/usageLimitNotice').ProviderErrorMetadata & {
+  observedAtMs?: number
+  sessionRunId?: string
   ts: number
   kind: 'api_error' | 'stream_error'
   message: string
@@ -589,6 +598,14 @@ export type SessionRuntime = {
    *  usable even if an optional tail-read failed. */
   transcriptStatus: TranscriptStatus
   transcriptError: string | null
+  /**
+   * A stopped observation channel (or a TUI following a different session)
+   * stays unhealthy even when a snapshot read succeeds. History and live
+   * entries may still be useful, but neither can repair that channel. Keep
+   * its diagnostic until the backend is replaced and gets a fresh runtime;
+   * optional for older runtime snapshots that predate this field.
+   */
+  transcriptChannelError?: string | null
   /** Backend process lifecycle for send gating. `sessionStatus` is
    *  "is the agent doing work right now"; `processStatus` is "does a
    *  writable backend exist for this pane". Keeping them separate

@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ManagedAgentRendererDescriptor } from '@mcp/shared/agentManagementTypes.js'
 
+vi.mock('@providers/registry.main.js', () => ({ getMainProvider: () => ({}), listMainProviders: () => [] }))
+
 const sentRendererRequests: unknown[] = []
 const resolveProviderTranscriptPath = vi.fn(async () => '/tmp/provider-agent.jsonl')
 
@@ -36,7 +38,7 @@ function managerFixture() {
       ? { lifecycle: 'live' }
       : null),
     getLastActivityAt: vi.fn(() => 8_000),
-    resolveTranscriptFile: vi.fn(async () => null),
+    resolveTranscriptFile: vi.fn(async (_sessionId: string): Promise<string | null> => null),
     getTranscriptFile: vi.fn(() => null),
   }
 }

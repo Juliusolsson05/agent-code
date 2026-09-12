@@ -1,4 +1,5 @@
-import { useEffect, useMemo } from 'react'
+import { createTldrHoldController, dismissTldr, observeTldrHoldRelease, useTldrView } from '@renderer/features/tldr/viewState'
+import { useEffect, useMemo, useRef } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
 import { buildDefaultKeybindings } from '@renderer/features/command-keybindings/defaults'
@@ -355,6 +356,12 @@ export function useKeybinds(
     [commandKeybindingOverrides],
   )
 
+  const tldrHoldRef = useRef<ReturnType<typeof createTldrHoldController> | null>(null)
+  if (!tldrHoldRef.current) tldrHoldRef.current = createTldrHoldController(undefined, observeTldrHoldRelease)
+  // Workspace membership/focus can change during a hold. Keep the gesture
+  // alive across handler re-registration; only actual key release, blur or
+  // hook unmount ends it.
+  useEffect(() => () => { tldrHoldRef.current?.release(); dismissTldr() }, [])
   useEffect(() => {
     let pendingTiledResizeIndex: number | null = null
     let pendingDispatchDigit: number | null = null
@@ -379,7 +386,21 @@ export function useKeybinds(
       }, 650)
     }
 
+    const tldrHold = tldrHoldRef.current!
     const handler = (e: KeyboardEvent) => {
+      if (useTldrView.getState().held || useTldrView.getState().latched) {
+        // The dimmed composer must never receive typing, including repeated
+        // Option-letter chords after a user rebinds this command. Release is
+        // handled by the independent keyup listener, even while this gate owns
+        // all keydown input.
+        e.preventDefault()
+        e.stopPropagation()
+        if (e.key === 'Escape') {
+          tldrHold.release()
+          dismissTldr()
+        }
+        return
+      }
       const cmd = e.metaKey
       const alt = e.altKey
       const shift = e.shiftKey
@@ -630,6 +651,19 @@ export function useKeybinds(
         return
       }
 
+      const handleTldrHold = (commandId: string | null): boolean => {
+        if (commandId !== 'tldr-preview') return false
+        // The editor owns Select Line, including after a rebind. Both ordinary
+        // panes and Spotlight must start synchronously: queueing the palette
+        // toggle could reopen the preview after keyup, leaving it latched.
+        if (!editorOwnsTarget && !fullscreenEditorOwnsWorkspace) {
+          e.preventDefault()
+          e.stopPropagation()
+          tldrHold.start(e)
+        }
+        return true
+      }
+
       // Reader and Spotlight are inline full-screen takeovers rather than
       // Radix dialogs, so they deliberately do not stamp the DOM interaction-
       // owner marker handled at the top of this router. Their workspace state
@@ -667,6 +701,10 @@ export function useKeybinds(
           bindingIndex,
           focusModeContexts,
         )
+        // Spotlight owns a mounted agent pane and its TLDR overlay. Reader
+        // does not, so it keeps its existing narrow shortcut admission. This
+        // special path shares the hold controller, not the async toggle list.
+        if (workspace.spotlight && !workspace.readerMode && handleTldrHold(focusModeCommandId)) return
         if (focusModeCommandId && focusModeCommandIds.has(focusModeCommandId)) {
           e.preventDefault()
           requestCommandInvocation(focusModeCommandId, 'keybinding')
@@ -707,6 +745,7 @@ export function useKeybinds(
         ),
       })
       const routedCommandId = routedCommandForEvent(e, bindingIndex, activeContexts)
+      if (handleTldrHold(routedCommandId)) return
       if (routedCommandId) {
         e.preventDefault()
         requestCommandInvocation(routedCommandId, 'keybinding')
@@ -919,6 +958,7 @@ export function useKeybinds(
     }
 
     const onKeyUp = (e: KeyboardEvent) => {
+      tldrHold.keyUp(e)
       if (e.key === 'Meta') {
         pendingTiledResizeIndex = null
         clearPendingDispatchDigit()
@@ -926,6 +966,8 @@ export function useKeybinds(
     }
 
     const onBlur = () => {
+      tldrHold.release()
+      dismissTldr()
       pendingTiledResizeIndex = null
       clearPendingDispatchDigit()
     }
@@ -936,11 +978,14 @@ export function useKeybinds(
     document.addEventListener('keydown', handler, { capture: true })
     document.addEventListener('keyup', onKeyUp, { capture: true })
     window.addEventListener('blur', onBlur)
+    const onVisibility = () => { if (document.hidden) onBlur() }
+    document.addEventListener('visibilitychange', onVisibility)
     return () => {
       clearPendingDispatchDigit()
       document.removeEventListener('keydown', handler, { capture: true })
       document.removeEventListener('keyup', onKeyUp, { capture: true })
       window.removeEventListener('blur', onBlur)
+      document.removeEventListener('visibilitychange', onVisibility)
     }
   }, [
     agentViewMode,

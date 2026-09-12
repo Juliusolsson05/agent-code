@@ -102,6 +102,23 @@ const TARGETS = [
     ),
     sync: true,
   },
+  {
+    name: 'opencode-terminal-headless',
+    // The native-TUI OpenCode package evaluates its permission and question
+    // conditions with the same engine, so its snapshots dedupe and order
+    // exactly like Claude's and Codex's. The structured opencode-headless
+    // runtime builds its snapshot in the Agent Code wrapper instead and is
+    // deliberately not a target.
+    dest: path.join(
+      REPO_ROOT,
+      'packages',
+      'opencode-terminal-headless',
+      'src',
+      'conditions',
+      'core',
+    ),
+    sync: true,
+  },
 ]
 
 // Compute the exact bytes a vendored copy of `file` should contain.

@@ -2,21 +2,22 @@ import { createHash, randomUUID } from 'node:crypto'
 import { stat } from 'node:fs/promises'
 import { ControlError, defineCapability, transcriptPageInput, transcriptPageOutput } from '@control-sdk'
 import { resolveProviderTranscriptPath } from '@main/providerSwitch/shared'
-import { getToolPath } from '@main/setup/toolchain'
-import { exportOpencodeSession } from '@providers/opencode/runtime/opencodeCliSessions'
+import { getMainProvider } from '@providers/registry.main'
 import { HistoryCursorChangedError, loadInitialHistoryChunkFromFile, loadOlderHistoryChunkFromFile } from './historyLoader'
 import type { z } from 'zod'
 
 type Request = z.infer<typeof transcriptPageInput>
 type Cursor = { identity: string; expires: number } & (
   | { source: 'provider-file'; path: string; fileIdentity: string; size: number; offset: number; hash: string }
-  | { source: 'provider-export'; entries: Record<string, unknown>[]; end: number; exportId: string }
+  | { source: 'provider-history'; marker: string; sourceIdentity: string }
 )
 
 // This feature adapts the existing provider storage operations to the SDK.
 // Neither the SDK nor the external MCP adapter learns transcript directories,
-// database schemas, or provider CLI syntax. Exports are immutable read snapshots;
-// file cursors require the same inode and exact record at their byte boundary.
+// database schemas, or provider CLI syntax. File cursors require the same inode
+// and exact record at their byte boundary. Provider cursors retain only a native
+// marker, not a whole-session export: each older request reads a bounded window
+// from the current projection, including the provider's revert behavior.
 export function sessionHistoryControlCapabilities() {
   const cursors = new Map<string, Cursor>()
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -36,7 +37,7 @@ export function sessionHistoryControlCapabilities() {
   const identity = (request: Request) => JSON.stringify([request.provider, request.cwd, request.providerSessionId])
   return [defineCapability({
     id: 'transcripts.page', visibility: 'application', title: 'Read provider history window', execution: 'main', effect: 'read',
-    description: 'SDK backing operation for agent reads. Reads exact provider file windows or a supported OpenCode export without waking an agent. Opaque cursors expire and reject changed transcript boundaries.',
+    description: 'SDK backing operation for agent reads. Reads exact provider file windows or provider-owned history pages without waking an agent. Opaque cursors expire and remain bound to the requested transcript.',
     input: transcriptPageInput, output: transcriptPageOutput,
     handler: async request => {
       const key = identity(request)
@@ -45,22 +46,32 @@ export function sessionHistoryControlCapabilities() {
         throw new ControlError('stale_cursor', 'History cursor expired or belongs to another transcript')
       }
       const expires = Date.now() + 5 * 60_000
-      if (request.provider === 'opencode') {
-        if (previous && previous.source !== 'provider-export') throw new ControlError('invalid_cursor', 'Wrong history source')
-        let entries: Record<string, unknown>[]
-        let exportId: string
-        if (previous) { entries = previous.entries; exportId = previous.exportId }
-        else {
-          const exported = await exportOpencodeSession({ binary: getToolPath('opencode', 'opencode'), cwd: request.cwd }, request.providerSessionId)
-          const info = exported.info as Record<string, unknown> | undefined
-          if (info?.id !== request.providerSessionId || !Array.isArray(exported.messages)) throw new ControlError('unavailable', 'OpenCode export did not match the requested session')
-          entries = exported.messages as Record<string, unknown>[]
-          exportId = randomUUID()
+      const provider = getMainProvider(request.provider)
+      if (provider.loadHistoryChunk) {
+        if (previous && previous.source !== 'provider-history') throw new ControlError('stale_cursor', 'History source changed')
+        // Identity describes the native session, not an export snapshot. A
+        // revert may remove the marker row; the provider owns continuing from
+        // the next older record. The cache retains only this opaque boundary,
+        // so 128 callers asking for one row cannot pin 128 full transcripts.
+        const sourceIdentity = provider.transcriptLocator?.(request.providerSessionId) ?? key
+        if (previous && previous.sourceIdentity !== sourceIdentity) throw new ControlError('stale_cursor', 'History source changed')
+        let chunk
+        try {
+          chunk = await provider.loadHistoryChunk({
+            cwd: request.cwd, providerSessionId: request.providerSessionId, limit: request.maxRecords,
+            ...(previous ? { beforeMarker: previous.marker } : {}),
+          })
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          const code = error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' ? error.code : null
+          throw new ControlError('unavailable', code && !message.includes(code) ? `${code}: ${message}` : message)
         }
-        const end = previous?.end ?? entries.length
-        const start = Math.max(0, end - request.maxRecords)
-        return { entries: transcriptPageOutput.shape.entries.parse(entries.slice(start, end)), source: 'provider-export' as const, sourceIdentity: exportId,
-          olderCursor: start > 0 ? save({ source: 'provider-export', identity: key, expires, entries, end: start, exportId }) : null }
+        const marker = chunk.oldestMarker
+        if (chunk.hasMore && (!marker || marker === previous?.marker || !chunk.entries.length)) {
+          throw new ControlError('unavailable', 'Provider history did not supply an advancing page marker')
+        }
+        return { entries: transcriptPageOutput.shape.entries.parse(chunk.entries), source: 'provider-history' as const, sourceIdentity,
+          olderCursor: chunk.hasMore ? save({ source: 'provider-history', identity: key, expires, marker: marker!, sourceIdentity }) : null }
       }
       if (previous && previous.source !== 'provider-file') throw new ControlError('invalid_cursor', 'Wrong history source')
       const path = previous?.path ?? await resolveProviderTranscriptPath({ kind: request.provider, cwd: request.cwd, providerSessionId: request.providerSessionId })

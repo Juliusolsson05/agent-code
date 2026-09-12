@@ -1,3 +1,4 @@
+import { claudeUsageLimitNotice } from '@providers/claude/renderer/adapters/usageLimitNotice'
 import type { ProviderDurableEntryKind } from '@shared/types/providerConfig'
 import type { Entry } from '@shared/types/transcript'
 import {
@@ -15,6 +16,9 @@ import { decodeClaudeQueuedUserPrompt } from '@providers/claude/renderer/entries
  * invariant enforceable.
  */
 export function classifyClaudeDurableEntry(entry: Entry): ProviderDurableEntryKind | null {
+  // An API refusal can also carry a compact-summary flag (#820). Its error
+  // semantics must win or the feed presents failure as a usable handoff.
+  if (claudeUsageLimitNotice(entry)) return 'provider-notice'
   if (isCompactBoundaryEntry(entry)) return 'compact-boundary'
   if (isCompactSummaryEntry(entry)) return 'compact-summary'
   if (decodeClaudeQueuedUserPrompt(entry)) return 'queued-user-prompt'

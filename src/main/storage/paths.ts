@@ -35,6 +35,14 @@ export const AGENT_CODE_INSTALLED_SKILL_SNAPSHOTS_DIR = join(
   'managed-skill-snapshots',
 )
 
+// Private per-process header files for Codex TLDR turn hooks (#917), each
+// holding one live session bearer. WHY app-owned rather than os.tmpdir(): the
+// file is read on every hook for the whole life of the process, and macOS
+// clears files in its per-user temp directory after three days, which would
+// silently switch enforcement off for a long-idle pane. Every entry belongs to
+// a process of this app run, so startup deletes whatever an earlier run left.
+export const TLDR_HOOK_RUNTIME_DIR = join(STATE_DIR, 'tldr-hooks')
+
 // Per-session feed-debug append-only logs, one JSONL file per session.
 // See storage/feedDebugLog.ts for the write-queue discipline.
 export const FEED_DEBUG_DIR = join(STATE_DIR, 'feed-debug')
@@ -90,3 +98,10 @@ export const HEAP_SNAPSHOT_DIR = join(STATE_DIR, 'heap-snapshots')
 // every other debug root here it must register with debugRetention as a
 // budgeted bucket (a continuous recorder re-opens the #388 OOM/disk vector).
 export const SESSION_RECORDING_DIR = join(STATE_DIR, 'session-recordings')
+
+// Durable per-conversation identity (title, spoken name, orchestration role)
+// keyed by provider-native session id, projected from workspace saves. Lives
+// beside workspace.json because it is derived from it, and stays a separate
+// file because it must outlive any pane the workspace forgets.
+export const CONVERSATIONS_DIR = join(STATE_DIR, 'conversations')
+export const CONVERSATIONS_LEDGER_FILE = join(CONVERSATIONS_DIR, 'ledger.jsonl')

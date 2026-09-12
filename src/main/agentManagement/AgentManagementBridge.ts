@@ -1,6 +1,9 @@
 import { randomUUID } from 'node:crypto'
-import { stat } from 'node:fs/promises'
 
+import {
+  providerSessionLocator,
+  transcriptLastModifiedAt as readTranscriptLastModifiedAt,
+} from '@main/agentTranscripts/transcriptLocator.js'
 import { sendToWindow, windowForSession } from '@main/window/windowRegistry.js'
 import {
   findCodexRolloutPathsBySessionIds,
@@ -491,11 +494,16 @@ export class AgentManagementBridge {
       const key = this.transcriptCacheKey(descriptor, descriptor.providerSessionId)
       let resolving = transcriptCache.get(key)
       if (!resolving) {
-        resolving = resolveProviderTranscriptPath({
-          kind: agent.kind,
-          cwd: agent.cwd,
-          providerSessionId: descriptor.providerSessionId,
-        }).catch(() => null)
+        // A provider without transcript files (OpenCode) is located by its
+        // session id alone; file-backed providers resolve a path on disk.
+        const locator = providerSessionLocator(agent.kind, descriptor.providerSessionId)
+        resolving = locator !== null
+          ? Promise.resolve(locator)
+          : resolveProviderTranscriptPath({
+              kind: agent.kind,
+              cwd: agent.cwd,
+              providerSessionId: descriptor.providerSessionId,
+            }).catch(() => null)
         transcriptCache.set(key, resolving)
       }
       transcriptPath = await resolving
@@ -503,14 +511,13 @@ export class AgentManagementBridge {
 
     let transcriptLastModifiedAt: number | undefined
     if (transcriptPath) {
-      try {
-        transcriptLastModifiedAt = (await stat(transcriptPath)).mtimeMs
-      } catch {
-        // A provider may rotate/delete a transcript between path resolution and
-        // stat. Report it unavailable instead of publishing a stale path as an
-        // audit authority that subsequent reads cannot open.
-        transcriptPath = null
-      }
+      // A provider may rotate/delete a transcript between path resolution and
+      // this read, and an OpenCode session may be gone from its database.
+      // Report it unavailable instead of publishing a stale locator as an
+      // audit authority that subsequent reads cannot open.
+      const modifiedAt = await readTranscriptLastModifiedAt(transcriptPath)
+      if (modifiedAt === null) transcriptPath = null
+      else transcriptLastModifiedAt = modifiedAt
     }
     const activityCandidates = [
       { value: transcriptLastModifiedAt ?? descriptor.transcriptActivityAt, source: 'transcript' as const },
@@ -545,9 +552,7 @@ export class AgentManagementBridge {
           }
         : {
             path: null,
-            availability: descriptor.providerSessionId
-              ? (agent.kind === 'opencode' ? 'provider_managed' : 'unavailable')
-              : 'not_created',
+            availability: descriptor.providerSessionId ? 'unavailable' : 'not_created',
           },
       ...(latest
         ? {
