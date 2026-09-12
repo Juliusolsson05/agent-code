@@ -1,6 +1,7 @@
 # Reuse an open project tab on New Tab, and Merge Project Tabs
 
-Status: planned; implementation follows on this branch.
+Status: implemented, tests green, PR open for review.
+PR: [agent-code#914](https://github.com/Juliusolsson05/agent-code/pull/914). Merge requires explicit approval.
 
 Feature Issue: [agent-code#913](https://github.com/Juliusolsson05/agent-code/issues/913).
 Branch: `feat/merge-project-tabs`. Worktree: `.worktrees/merge-project-tabs`.
