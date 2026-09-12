@@ -10,6 +10,13 @@ import {
 } from '@renderer/components/ui/dialog'
 import { relativeTime } from '@renderer/lib/relativeTime'
 import { cwdBasename, pluralAgents, providerGlyph } from '@renderer/features/workspace/lib/sessionDisplay'
+import {
+  buildProjectScopeRows,
+  filterProjectScopeRows,
+  rowsInSelectedProjects,
+} from '@renderer/features/workspace/lib/projectScope'
+import type { ProjectScopeRow } from '@renderer/features/workspace/lib/projectScope'
+import { tabIndexLabel } from '@renderer/workspace/tile-tree/paneLabelFormat'
 import { resolveTabSessions } from '@renderer/workspace/queries'
 import type { SessionId, Tab } from '@renderer/workspace/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
@@ -55,12 +62,6 @@ type AgentRow = {
   cwd: string
   cwdBase: string
   isLive: boolean
-}
-
-type ProjectRow = {
-  cwd: string
-  cwdBase: string
-  total: number
 }
 
 type SwitchDirection = {
@@ -324,40 +325,31 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
       }
     })
 
+    // Project (tab) first so the preview reads like the Dispatch index, then
+    // the directory inside it so a tab's worktrees sit together.
     rows.sort((a, b) => {
-      if (a.cwdBase !== b.cwdBase) return a.cwdBase.localeCompare(b.cwdBase)
-      return a.tabIndex - b.tabIndex
+      if (a.tabIndex !== b.tabIndex) return a.tabIndex - b.tabIndex
+      return a.cwdBase.localeCompare(b.cwdBase)
     })
     return rows
   }, [open, workspace.runtimes, workspace.state, source, nowTick])
 
   const matchingRows = useMemo(() => {
     if (scopeMode === 'all') return agentRows
-    return agentRows.filter(row => selectedProjects.has(row.cwd))
+    return rowsInSelectedProjects(agentRows, selectedProjects)
   }, [agentRows, scopeMode, selectedProjects])
 
-  const projects = useMemo<ProjectRow[]>(() => {
-    const byProject = new Map<string, ProjectRow>()
-    for (const row of agentRows) {
-      const existing = byProject.get(row.cwd)
-      if (existing) existing.total += 1
-      else byProject.set(row.cwd, { cwd: row.cwd, cwdBase: row.cwdBase, total: 1 })
-    }
-    return Array.from(byProject.values()).sort((a, b) => {
-      if (a.total !== b.total) return b.total - a.total
-      return a.cwdBase.localeCompare(b.cwdBase)
-    })
-  }, [agentRows])
+  // Projects are TABS here, keyed by tab id (#908). Every row is eligible for a
+  // switch, so `matching` equals `total` and only `total` is shown.
+  const projects = useMemo<ProjectScopeRow[]>(
+    () => buildProjectScopeRows(agentRows, agentRows),
+    [agentRows],
+  )
 
-  const filteredProjects = useMemo(() => {
-    const query = projectFilter.trim().toLowerCase()
-    if (!query) return projects
-    return projects.filter(
-      project =>
-        project.cwd.toLowerCase().includes(query) ||
-        project.cwdBase.toLowerCase().includes(query),
-    )
-  }, [projectFilter, projects])
+  const filteredProjects = useMemo(
+    () => filterProjectScopeRows(projects, projectFilter),
+    [projectFilter, projects],
+  )
 
   const midTurnCount = matchingRows.filter(row => row.isLive).length
   const selectedCount = selectedProjects.size
@@ -451,7 +443,7 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
   const selectAllProjects = useCallback(() => {
     setSourceConfirmArmed(false)
     setConfirmedSessionIds(null)
-    setSelectedProjects(new Set(projects.map(project => project.cwd)))
+    setSelectedProjects(new Set(projects.map(project => project.tabId)))
   }, [projects])
 
   const clearProjects = useCallback(() => {
@@ -865,11 +857,11 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
                 </div>
               ) : (
                 filteredProjects.map(project => {
-                  const selected = selectedProjects.has(project.cwd)
+                  const selected = selectedProjects.has(project.tabId)
                   const disabled = scopeMode === 'all'
                   return (
                     <label
-                      key={project.cwd}
+                      key={project.tabId}
                       className={`
                         flex items-start gap-2 px-3 py-2 border-b border-border last:border-b-0
                         ${disabled ? 'text-ink-dim' : 'cursor-pointer hover:bg-surface-hi'}
@@ -879,14 +871,19 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
                         type="checkbox"
                         disabled={disabled}
                         checked={scopeMode === 'all' || selected}
-                        onChange={() => toggleProject(project.cwd)}
+                        onChange={() => toggleProject(project.tabId)}
                         className="mt-0.5 accent-current disabled:opacity-50"
                       />
                       <span className="min-w-0 flex-1">
+                        {/* The Dispatch vocabulary (A · title), so this picker
+                            names projects the way the index does. Worktrees
+                            appear below as directories inside the project. */}
                         <span className="block text-[11px] text-ink truncate">
-                          {project.cwdBase}
+                          {project.label}
                         </span>
-                        <span className="block text-[10px] text-muted truncate">{project.cwd}</span>
+                        <span className="block text-[10px] text-muted truncate">
+                          {project.directories.join(' · ')}
+                        </span>
                       </span>
                       <span className="flex-shrink-0 text-[10px] text-muted tabular-nums">
                         {project.total}
@@ -937,7 +934,7 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
                     <div className="min-w-0 flex-1">
                       <div className="text-[12px] text-ink truncate">{row.cwdBase}</div>
                       <div className="mt-0.5 text-[10px] text-muted truncate">
-                        tab {row.tabIndex + 1} · {row.tabTitle} · {row.cwd}
+                        {tabIndexLabel(row.tabIndex)} · {row.tabTitle} · {row.cwd}
                       </div>
                     </div>
                     <div className="flex-shrink-0 w-[110px] text-right">

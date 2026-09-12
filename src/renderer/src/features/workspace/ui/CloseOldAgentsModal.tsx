@@ -20,6 +20,13 @@ import {
 } from '@renderer/components/ui/dialog'
 import { relativeTime } from '@renderer/lib/relativeTime'
 import { cwdBasename, providerGlyph } from '@renderer/features/workspace/lib/sessionDisplay'
+import {
+  buildProjectScopeRows,
+  filterProjectScopeRows,
+  rowsInSelectedProjects,
+} from '@renderer/features/workspace/lib/projectScope'
+import type { ProjectScopeRow } from '@renderer/features/workspace/lib/projectScope'
+import { tabIndexLabel } from '@renderer/workspace/tile-tree/paneLabelFormat'
 import { resolveTabSessions } from '@renderer/workspace/queries'
 import type { SessionId, Tab } from '@renderer/workspace/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
@@ -45,13 +52,6 @@ type AgentRow = {
   isLive: boolean
   lastActiveAt: number | null
   ageMs: number | null
-}
-
-type ProjectRow = {
-  cwd: string
-  cwdBase: string
-  total: number
-  matching: number
 }
 
 /**
@@ -116,8 +116,10 @@ export function buildAgentRows(
     const at = a.ageMs ?? -1
     const bt = b.ageMs ?? -1
     if (at !== bt) return bt - at
-    if (a.cwdBase !== b.cwdBase) return a.cwdBase.localeCompare(b.cwdBase)
-    return a.tabIndex - b.tabIndex
+    // Age first (the modal's purpose), then project tab, then the directory
+    // inside it, so equal-age worktree agents of one project sit together.
+    if (a.tabIndex !== b.tabIndex) return a.tabIndex - b.tabIndex
+    return a.cwdBase.localeCompare(b.cwdBase)
   })
   return rows
 }
@@ -140,7 +142,8 @@ function filterMatchingRows(
   criteria: { scopeMode: ScopeMode; selectedProjects: ReadonlySet<string> },
 ): AgentRow[] {
   if (criteria.scopeMode === 'all') return [...rows]
-  return rows.filter(row => criteria.selectedProjects.has(row.cwd))
+  // Projects are tabs (#908): a worktree agent belongs to its tab's project.
+  return rowsInSelectedProjects(rows, criteria.selectedProjects)
 }
 
 const DEFAULT_THRESHOLD_VALUE = 4
@@ -253,61 +256,34 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
     [eligibleRows, scopeMode, selectedProjectSet],
   )
 
-  const projects = useMemo<ProjectRow[]>(() => {
-    const matchingByProject = new Map<string, number>()
-    for (const row of eligibleRows) {
-      matchingByProject.set(row.cwd, (matchingByProject.get(row.cwd) ?? 0) + 1)
-    }
+  // Projects are TABS, keyed by tab id and labelled like the Dispatch index
+  // (#908). `matching` is how many of the tab's agents pass the age threshold,
+  // so the "2/7" count still tells the user what a tick would actually close.
+  const projects = useMemo<ProjectScopeRow[]>(
+    () => buildProjectScopeRows(agentRows, eligibleRows),
+    [agentRows, eligibleRows],
+  )
 
-    const byProject = new Map<string, ProjectRow>()
-    for (const row of agentRows) {
-      const existing = byProject.get(row.cwd)
-      if (existing) {
-        existing.total += 1
-      } else {
-        byProject.set(row.cwd, {
-          cwd: row.cwd,
-          cwdBase: row.cwdBase,
-          total: 1,
-          matching: 0,
-        })
-      }
-    }
-
-    for (const project of byProject.values()) {
-      project.matching = matchingByProject.get(project.cwd) ?? 0
-    }
-
-    return Array.from(byProject.values()).sort((a, b) => {
-      if (a.matching !== b.matching) return b.matching - a.matching
-      return a.cwdBase.localeCompare(b.cwdBase)
-    })
-  }, [agentRows, eligibleRows])
-
-  const filteredProjects = useMemo(() => {
-    const query = projectFilter.trim().toLowerCase()
-    if (!query) return projects
-    return projects.filter(project =>
-      project.cwd.toLowerCase().includes(query) ||
-      project.cwdBase.toLowerCase().includes(query),
-    )
-  }, [projectFilter, projects])
+  const filteredProjects = useMemo(
+    () => filterProjectScopeRows(projects, projectFilter),
+    [projectFilter, projects],
+  )
 
   const liveMatchCount = matchingRows.filter(row => row.isLive).length
   const selectedCount = selectedProjects.size
   const thresholdValid = thresholdMs != null
 
-  const toggleProject = useCallback((cwd: string) => {
+  const toggleProject = useCallback((tabId: string) => {
     setSelectedProjects(prev => {
       const next = new Set(prev)
-      if (next.has(cwd)) next.delete(cwd)
-      else next.add(cwd)
+      if (next.has(tabId)) next.delete(tabId)
+      else next.add(tabId)
       return next
     })
   }, [])
 
   const selectAllProjects = useCallback(() => {
-    setSelectedProjects(new Set(projects.map(project => project.cwd)))
+    setSelectedProjects(new Set(projects.map(project => project.tabId)))
   }, [projects])
 
   const clearProjects = useCallback(() => {
@@ -547,11 +523,11 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
                 </div>
               ) : (
                 filteredProjects.map(project => {
-                  const selected = selectedProjects.has(project.cwd)
+                  const selected = selectedProjects.has(project.tabId)
                   const disabled = scopeMode === 'all'
                   return (
                     <label
-                      key={project.cwd}
+                      key={project.tabId}
                       className={`
                         flex items-start gap-2 px-3 py-2 border-b border-border last:border-b-0
                         ${disabled ? 'text-ink-dim' : 'cursor-pointer hover:bg-surface-hi'}
@@ -561,15 +537,18 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
                         type="checkbox"
                         disabled={disabled}
                         checked={scopeMode === 'all' || selected}
-                        onChange={() => toggleProject(project.cwd)}
+                        onChange={() => toggleProject(project.tabId)}
                         className="mt-0.5 accent-current disabled:opacity-50"
                       />
                       <span className="min-w-0 flex-1">
+                        {/* The Dispatch vocabulary (A · title), so this picker
+                            names projects the way the index does. Worktrees
+                            appear below as directories inside the project. */}
                         <span className="block text-[11px] text-ink truncate">
-                          {project.cwdBase}
+                          {project.label}
                         </span>
                         <span className="block text-[10px] text-muted truncate">
-                          {project.cwd}
+                          {project.directories.join(' · ')}
                         </span>
                       </span>
                       <span className="flex-shrink-0 text-[10px] text-muted tabular-nums">
@@ -625,7 +604,7 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
                         {row.cwdBase}
                       </div>
                       <div className="mt-0.5 text-[10px] text-muted truncate">
-                        tab {row.tabIndex + 1} · {row.tabTitle} · {row.cwd}
+                        {tabIndexLabel(row.tabIndex)} · {row.tabTitle} · {row.cwd}
                       </div>
                     </div>
                     <div className="flex-shrink-0 w-[150px] text-right">
