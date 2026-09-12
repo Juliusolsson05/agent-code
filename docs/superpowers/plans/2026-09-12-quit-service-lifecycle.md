@@ -1,6 +1,6 @@
 # Preserve application services when quitting is cancelled
 
-Status: source revalidation and implementation plan for #919, B02 of #918 / program plan PR #931. This branch begins with this plan; no implementation precedes it.
+Status: first B02 disposal repair implemented locally; final verification and PR preparation in progress. Tracking #919 and #918 / program plan PR #931. The branch began with this plan in commit `841d094913a7e61bce35cfafea1786050bd3b4f2`; no implementation preceded it.
 
 Baseline: `115e26fc9c67316a3b0b1b4318f47f7a2bea3606`, current `origin/main` on 2026-09-12. It includes the skills and TLDR changes from #903/#932. It does not include unmerged tmux PR #933 or session-routing PR #935. The quit handlers are unchanged by those merged features. Do not assume either independent recovery slice has merged.
 
@@ -31,3 +31,36 @@ The complete B02 program ALSO requires a quit-attempt generation, renderer/buffe
 A unit test that calls only `SessionShutdownGate` cannot expose a rogue main `before-quit` disposer. The composed regression must include the caller that owns those service references. A mock stop result proves coordinator sequencing, not native process termination. Native ownership remains governed by each existing service contract and its separate program tests.
 
 Keep the window-routing repair and tmux changes independent. Do not modify native transcripts, stop live user sessions, or use a live application Quit as a routine test. Local tests must own their processes/state. If a live smoke is later useful, make its isolation and resource ownership concrete first.
+
+
+## Implementation checkpoint
+
+The application disposal inventory now lives in `applicationShutdown.ts`, installed by the real main entry point. `before-quit` only records reversible preparation and flushes observations; it skips that preparation on re-entry after commitment so it cannot enqueue new work behind the final drains. `SessionShutdownGate` retains its existing terminal-admission facade, but takes the complete application drain rather than inferring an empty inventory from a missing manager. It publishes the exact join before calling potentially reentrant/synchronously throwing shutdown code. Non-macOS last-window closure requests this same quit path; macOS still leaves the app running.
+
+Execution stops begin together. Stage receipts retain completed work across retry and preserve failed owners. Main keeps workflow/control inspection infrastructure until session and workflow stop contracts resolve. A failed drain holds the exit gate and process lock, with a later Quit retrying unresolved stages. Support disposal, admitted write-tail settlement and optional diagnostic flushing are separate stages.
+
+Partial startup required more than moving listeners. The workflow factory publishes its owner before `initialize`, whose existing stop contract already closes recovery admission and joins initialization. Main checks committed shutdown after asynchronous resource acquisition and the coordinator joins startup before closing its resource inventory. Failed startup retains the lock through cleanup and does not receive a clean-run marker. A typed workflow-closing outcome caused by committed quit is treated as interrupted startup. The common window factory fences restoration, menu, IPC and external-control creation after commitment.
+
+The composition audit exposed two concrete owner gaps that this same slice repairs:
+
+- Dictation's active map excludes stop handlers awaiting batch HTTP. Committed cleanup now fences new operations, cancels active previews, joins admitted start/stop/hotkey work and the independent preview-stop promise, then captures the history write tail. A key lookup or hotkey configuration finishing late cannot revive a resource behind cleanup.
+- Remote disposal previously bypassed the enable/disable FIFO and erased its server pointer before a stop resolved. Disposal now closes enable admission, joins that FIFO, prevents a pending enable from publishing a live URL, and keeps the exact server on rejection for an explicit retry.
+
+The shutdown section of `ARCHITECTURE.md` and its generated preview now describe the implemented boundary. All 42 diagram sources rendered and verified with the pinned documentation tools; only the changed shutdown preview is retained. Five unrelated previews differed when regenerated in this local Chrome environment; those generated changes were discarded. The shutdown SVG was visually inspected independently.
+
+## Evidence and limits of this slice
+
+The expanded unit lane passed 57 cases across seven files; the final coordinator/gate/dictation subset passed 19 cases after the drain-order review. The real remote stack suite passed nine system cases, including delayed start and failed transport release. The real renderer editor guard composed with the application listener installer passed its veto/clean-close test. External boundaries in those tests are Electron dispatch, provider HTTP, transport or filesystem operations as appropriate; no live user application was quit.
+
+Full typecheck, the test-contract checker and all seven pinned-checkout checks passed. Final-source incremental typecheck, application build/entrypoint verification, final targeted checks and PR CI are recorded below as they finish. The first renderer fixture assertion used the wrong buffer field (`text` instead of `currentText`); it was corrected and the renderer test passed. No product behavior was changed to satisfy that assertion.
+
+This PR uses **Refs #919**, not an issue-closing keyword. B02 remains open for the full revision-bound prepare/commit protocol. In particular:
+
+- Native per-window decisions are not yet votes bound to a quit generation, renderer generation and buffer revision. Cross-window edits, navigation and changing participants still need final revalidation and a short stable admission frontier.
+- `WorkspaceFileStore.drainAdmittedWrites` and `flushHistoryWrites` join their existing admission tails. Each original write still owns its failure receipt. These APIs do not recover an unacknowledged final renderer save, retry a rejected write, or establish fsync durability.
+- The remaining frontier must explicitly cover already-admitted control operations and their durable result writes. `createControlHost.dispose()` currently retires bridge registrations synchronously; it is not an awaitable guarantee that every executor operation and `FileControlHistory` append has settled. This slice does not add that missing contract or claim that the clean-run marker proves it.
+- Support disposal establishes the current service API's promise. LSP's current dispose requests process termination without independent exit evidence; its process/document ownership audit remains in B04. Optional diagnostics report write errors separately. Native provider custody is not redefined by this coordinator.
+
+The bounded result is preservation of services on veto and one explicit composition of existing committed-stop/drain contracts, including the two owner gaps above. It is not completion of every quit durability or editor approval invariant in the program.
+
+The next control frontier audit starts at `src/main/control/createControlHost.ts`, `src/control-sdk/core/executor.ts` and `src/main/control/history/FileControlHistory.ts`. The executor's `active` map is populated only after its admitted intent write, so draining that map alone would miss a request still queued in `exclusive`. Nested waits/batches also call the executor directly. Main's private `operations.start`/`operations.finish` port must keep completion receipts writable while new effectful work is closed; a blanket rejection of all invocation would lose the evidence shutdown needs. Keep these facts in the next focused B02 plan.
