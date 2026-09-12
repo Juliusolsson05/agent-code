@@ -21,7 +21,7 @@ export type ThemeMode =
   | 'light-soft'
 
 // What `Settings.mode` may actually hold: a built-in id, or a `theme:<uuid>`
-// saved-theme id. Kept as a distinct alias so the many call sites that only
+// saved-theme id or `extension-theme:<contribution-id>`. Kept as a distinct alias so the many call sites that only
 // ever deal with built-ins can keep using the narrower ThemeMode.
 export type ThemeModeValue = ThemeMode | string
 
@@ -155,7 +155,7 @@ export const AGENT_VIEW_MODES: AgentViewModeMeta[] = [
  * approximation is not.
  *
  * WHY this is a top-level setting and not part of customAppearance: that
- * contract is CUSTOM_APPEARANCE_COLOR_KEYS — 80 keys, all colours, validated
+ * contract is CUSTOM_APPEARANCE_COLOR_KEYS — 81 keys, all colours, validated
  * as colours and surfaced in the theme editor as colour fields. Threading
  * three lengths through a colour pipeline means either weakening that
  * validation or special-casing three keys in every consumer, to buy an axis
@@ -327,7 +327,7 @@ export const USAGE_HEADER_LEVELS = ['minimal', 'providers', 'all', 'detailed'] a
 export type UsageHeaderLevel = (typeof USAGE_HEADER_LEVELS)[number]
 
 export type Settings = {
-  /** Built-in theme id, or the id of an entry in `savedThemes`. One field
+  /** Built-in theme id, saved theme id, or namespaced extension theme id. One field
    *  answers "what am I looking at" for applyTheme, useThemeSync, and the
    *  paired phone client alike — see savedThemes.ts for why this is not a
    *  separate `activeSavedThemeId`. */

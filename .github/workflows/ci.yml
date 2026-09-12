@@ -54,7 +54,11 @@ jobs:
       - name: Install dependencies
         # --include=dev guards the NODE_ENV=production trap: a production
         # install strips electron-vite/vitest and every gate below with it.
-        run: npm ci --include=dev
+        run: |
+          npm ci --include=dev
+          # Electron 43 downloads lazily on first import. Keep that network
+          # activity in dependency setup, before the offline system tests.
+          node node_modules/electron/install.js
 
       - name: Validate testing contract
         run: npm run test:contract

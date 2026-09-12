@@ -1,6 +1,7 @@
 import { DEFAULT_PALETTE_MODE } from '@renderer/features/command-palette/paletteMode'
 import type { PaletteMode } from '@renderer/features/command-palette/paletteMode'
 import type { StateCreator } from 'zustand'
+import { applyTheme } from '@renderer/app-state/settings/theme'
 
 import type { AppStore, UiShellSlice } from '@renderer/app-state/types'
 import type { PendingCommandInvocation } from '@renderer/app-state/uiShell/types'
@@ -10,7 +11,7 @@ export const createUiShellSlice: StateCreator<
   [['zustand/devtools', never], ['zustand/subscribeWithSelector', never]],
   [],
   UiShellSlice
-> = set => ({
+> = (set, get) => ({
   commandPaletteOpen: false,
   paletteMode: DEFAULT_PALETTE_MODE,
   pathPickerOpen: false,
@@ -60,6 +61,14 @@ export const createUiShellSlice: StateCreator<
   providerSwitchPickerSessionId: null,
   rewindPromptSessionId: null,
   agentViewModePickerSessionId: null,
+  openAppId: null,
+  installedExtensions: [],
+  // False until the first SUCCESSFUL extensionsList(). Distinguishes "no extensions"
+  // from "not asked yet", which the pane leaf needs to avoid claiming an installed
+  // extension is missing during the async gap on every reload.
+  installedExtensionsLoaded: false,
+  installedExtensionsError: null,
+  extensionFailures: [],
   colorFlagPickerSessionId: null,
   // Default keeps the dispatch list at 25% (matching the
   // previous-hardcoded `basis-1/4`) so the migration is visually a
@@ -370,6 +379,24 @@ export const createUiShellSlice: StateCreator<
     set({ rewindPromptSessionId: sessionId }, false, 'uiShell/openRewindPrompt'),
   closeRewindPrompt: () =>
     set({ rewindPromptSessionId: null }, false, 'uiShell/closeRewindPrompt'),
+
+  openApp: appId => set({ openAppId: appId }, false, 'uiShell/openApp'),
+  closeApp: () => set({ openAppId: null }, false, 'uiShell/closeApp'),
+
+  setInstalledExtensions: entries => {
+    set(
+      { installedExtensions: entries, installedExtensionsLoaded: true, installedExtensionsError: null },
+      false,
+      'uiShell/setInstalledExtensions',
+    )
+    // Reconcile immediately on install/update/remove. A selected extension
+    // palette must never linger until the user changes an unrelated setting.
+    applyTheme(get().settings, entries)
+  },
+  setInstalledExtensionsError: error =>
+    set({ installedExtensionsError: error }, false, 'uiShell/setInstalledExtensionsError'),
+  setExtensionFailures: failures =>
+    set({ extensionFailures: failures }, false, 'uiShell/setExtensionFailures'),
 
   openAgentViewModePicker: sessionId =>
     set(

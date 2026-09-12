@@ -55,6 +55,7 @@ import { registerAgentCodeCustomSkillsIpc } from '@main/ipc/agentCodeCustomSkill
 import { registerAgentCodeInstalledSkillsIpc } from '@main/ipc/agentCodeInstalledSkills.js'
 import { registerAgentSkillsIpc } from '@main/ipc/agentSkills.js'
 import type { WorkflowBridge } from '@main/workflows/WorkflowBridge.js'
+import { registerExtensionsIpc } from '@main/ipc/extensions.js'
 
 // IPC registration aggregator.
 //
@@ -134,6 +135,10 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerUsageIpc()
   registerCliUpdatesIpc(deps.cliUpdateOrchestrator)
   registerWorkflowIpc(deps.workflowBridge)
+  // Takes no deps on purpose: extension storage is a pure filesystem namespace
+  // under STATE_DIR with no app service behind it. The moment this needs a dep,
+  // it has stopped being storage and the Stage-2 sender-identity question applies.
+  registerExtensionsIpc()
   registerAgentCodeConventionsIpc(deps.agentCodeConventionsService)
   registerAgentCodeCustomSkillsIpc(deps.agentCodeConventionsService)
   registerAgentCodeInstalledSkillsIpc(deps.agentCodeConventionsService)

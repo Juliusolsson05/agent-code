@@ -46,6 +46,15 @@ import { TmuxRegistry } from '@main/tmux/TmuxRegistry.js'
 import { reconcile } from '@main/tmux/tmuxRecovery.js'
 import type { PersistedTerminalRef } from '@main/tmux/tmuxRecovery.js'
 
+import {
+  handleExtensionScheme,
+  registerExtensionScheme,
+} from '@main/extensions/scheme.js'
+import { ExtensionRuntimeService } from '@main/extensions/runtimeService.js'
+import { ExtensionCapabilityService } from '@main/extensions/capabilityService.js'
+import { registerExtensionRuntimeIpc } from '@main/extensions/runtimeIpc.js'
+import { registerExtensionInputIpc } from '@main/extensions/nativeInput.js'
+import { sweepAbandonedInstallDirectories } from '@main/extensions/install.js'
 import { STATE_DIR, STATE_FILE, TLDR_HOOK_RUNTIME_DIR } from '@main/storage/paths.js'
 import {
   scheduleDebugStoragePrune,
@@ -257,6 +266,12 @@ let workflowBridge: WorkflowBridge | null = null
 let codexCliUpdateReserved = false
 let workflowShutdownPromise: Promise<void> | null = null
 let workflowShutdownComplete = false
+let extensionRuntime: ExtensionRuntimeService | null = null
+let extensionCapabilities: ExtensionCapabilityService | null = null
+let unregisterExtensionRuntime: (() => void) | null = null
+let unregisterExtensionInput: (() => void) | null = null
+let extensionQuitReady = false
+let extensionQuitPending: Promise<void> | null = null
 let sessionForwarder: SessionForwarderControl | null = null
 
 // A packaged release needs one executable-level smoke test that stops before
@@ -305,6 +320,14 @@ async function runPackagingSmoke(): Promise<void> {
 // shared. If that lock ever feels too strict, the storage model must be changed
 // first; deleting the guard alone would make last-writer-wins corruption
 // possible again.
+// MUST run at module scope, before any app.whenReady() handler. Electron silently
+// treats a scheme registered after ready as opaque — no origin semantics, no secure
+// context, no CORS — and the failure then surfaces in the renderer as a CSP or CORS
+// error, which sends you looking at index.html instead of at call ordering. There is
+// no runtime warning for getting this wrong. Verified working from a file:// document
+// (the production origin) by the B1 spike: dynamic import, relative specifiers, and
+// path-traversal rejection all behave.
+registerExtensionScheme()
 // WHY quit has to be distinguishable from an ordinary window close: closing one
 // window hands its workspace to a survivor, but quitting closes every window
 // and must NOT collapse them all into whichever one dies last.
@@ -602,6 +625,42 @@ async function startApp(): Promise<void> {
     appRunJournal.recordError('prior_run.classify.error', err)
   }
 
+  // Install the agent-code-ext:// handler before any window exists. The renderer
+  // imports extension modules over this scheme during startup, so a window that
+  // opened first could race a request against an unregistered handler and see a
+  // spurious load failure that never reproduces on a warm run.
+  handleExtensionScheme()
+  // The resolver closes over the late-created SessionManager rather than a
+  // focused renderer. Startup extensions may run with zero views, but every file
+  // target still has to name a live main-owned session and therefore a real cwd.
+  extensionCapabilities = new ExtensionCapabilityService({
+    resolveSessionRoot: sessionId => manager?.getSpawnCwd(sessionId) ?? null,
+  })
+  extensionRuntime = new ExtensionRuntimeService({
+    preload: join(__dirname, '../preload/extensionRuntime.js'),
+    capabilities: extensionCapabilities,
+  })
+  unregisterExtensionRuntime = registerExtensionRuntimeIpc(extensionRuntime, extensionCapabilities, contents => {
+    const id = windowIdFor(contents)
+    return !!id && getBrowserWindow(id)?.webContents === contents
+  })
+  unregisterExtensionInput = registerExtensionInputIpc(contents => {
+    const id = windowIdFor(contents)
+    return !!id && getBrowserWindow(id)?.webContents === contents
+  })
+
+  // Finish extension housekeeping before a window can install or load code.
+  // This is serialized with publication too; fire-and-forget previously let a
+  // slow startup sweep delete staging created by the first install dialog.
+  // Failures preserve data and are reported; they need not block the whole app.
+  await sweepAbandonedInstallDirectories().catch(err => {
+    console.warn('[extensions] staging sweep failed:', err)
+  })
+
+  // Performance monitoring and extension startup are independent main-process
+  // owners. Keep both before window creation: monitoring otherwise misses the
+  // startup interval, while extension frames can race an unregistered scheme or
+  // an unfinished install sweep if a window is allowed to open first.
   powerMonitor.on('suspend', () => mainProbe.noteSuspend())
   powerMonitor.on('resume', () => mainProbe.noteResume())
   monitorCoordinator.start()
@@ -985,7 +1044,11 @@ async function startApp(): Promise<void> {
   // renderer/workspace/adoptWorkspace.ts for why the SURVIVOR performs the
   // merge rather than main.
   // The only party that knows a ⌘Q was cancelled is the unsaved-changes sheet.
-  setWindowCloseVetoedObserver(() => { quitting = false })
+  setWindowCloseVetoedObserver(() => {
+    quitting = false
+    extensionQuitReady = false
+    void extensionRuntime?.resume().catch(error => console.error('[extensions] resume after cancelled quit failed:', error))
+  })
   setWindowClosedObserver(closedWindowId => {
     // WHY quitting is excluded: on quit every window closes, and collapsing all
     // of them into whichever one happens to die last would destroy the
@@ -1134,6 +1197,7 @@ async function startApp(): Promise<void> {
   // items dispatch command ids to THIS window's renderer (issue #148).
   Menu.setApplicationMenu(buildAppMenu())
   performanceService.mark('app.main.window.created')
+  void extensionRuntime?.activateStartupExtensions().catch(error => console.error('[extensions] startup catalog failed:', error))
 
   app.on('activate', () => {
     if (sessionShutdownGate.isTerminalShutdownAdmitted()) {
@@ -1197,6 +1261,17 @@ app.on('before-quit', (event) => {
     }
     return
   }
+  if (extensionRuntime && !extensionQuitReady) {
+    event.preventDefault()
+    if (!extensionQuitPending) {
+      extensionQuitPending = extensionRuntime.pause().then(() => {
+        extensionQuitReady = true
+        extensionQuitPending = null
+        app.quit()
+      })
+    }
+    return
+  }
   appRunJournal?.record({ area: 'app.lifecycle', name: 'app.before_quit' })
   performanceService.mark('app.main.beforeQuit')
   // WHY coalescers drain on the initial quit attempt: their buffers are cheap
@@ -1239,7 +1314,14 @@ const sessionShutdownGate = installSessionShutdownGate({
     if (!current) return null
     return {
       killAll: async () => {
-        await current.killAll()
+        await Promise.all([current.killAll(), extensionRuntime?.dispose()])
+        unregisterExtensionRuntime?.()
+        unregisterExtensionRuntime = null
+        unregisterExtensionInput?.()
+        unregisterExtensionInput = null
+        extensionRuntime = null
+        extensionCapabilities?.dispose()
+        extensionCapabilities = null
         // WHY a second sweep after killAll: killAll stops the sessions it
         // knows about, and each ClaudeSession.stop() already terminates its
         // own mitmdump under a deadline. This catches what that snapshot

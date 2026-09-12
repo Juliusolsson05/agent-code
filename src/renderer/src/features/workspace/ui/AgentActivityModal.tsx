@@ -1,4 +1,4 @@
-import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
+import { DEFAULT_PROVIDER, isAgentSessionKind } from '@shared/types/providerKind'
 import type { SessionKind } from '@shared/types/providerKind'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
@@ -136,6 +136,14 @@ export function AgentActivityModal({ open, workspace, onClose }: Props) {
       for (const sessionId of leaves) {
         const meta = workspace.state.sessions[sessionId]
         if (!meta) continue
+        // Extension-view panes are tile leaves with no process and no
+        // transcript, so they have no activity to report and every column here
+        // ("last active", "live", status tone, bury) is meaningless for them.
+        // Skipping is right rather than rendering an empty row: this modal is a
+        // triage list, and a permanently-blank entry per open extension pane is
+        // pure noise in the one view meant to answer "what is my fleet doing".
+        // Terminals stay because a PTY genuinely has running/exited state.
+        if (meta.kind === 'extension-view') continue
         const kind = (meta.kind ?? DEFAULT_PROVIDER) as SessionKind
         const runtime = workspace.runtimes[sessionId]
 

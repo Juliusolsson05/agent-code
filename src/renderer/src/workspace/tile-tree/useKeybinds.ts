@@ -2,8 +2,9 @@ import { createTldrHoldController, dismissTldr, observeTldrHoldRelease, useTldrV
 import { useEffect, useMemo, useRef } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
+import { deriveExtensionKeybindings } from '@renderer/apps/host/derive'
 import { buildDefaultKeybindings } from '@renderer/features/command-keybindings/defaults'
-import type { BindingContext } from '@renderer/features/command-keybindings/defaults'
+import type { BindingContext, CommandBindingDefault } from '@renderer/features/command-keybindings/defaults'
 import { keybindingFromEvent } from '@renderer/features/command-keybindings/normalize'
 import { commandOwnsOpenSurface } from '@renderer/features/command-palette/surfaceOwnership'
 import { resolveEffectiveKeybindings } from '@renderer/features/command-keybindings/resolve'
@@ -296,15 +297,22 @@ const SPOTLIGHT_FOCUS_MODE_COMMAND_IDS: ReadonlySet<string> = new Set([
 /** Chord -> candidate commands, built once per override change. */
 function buildBindingIndex(
   overrides: Record<string, string[]>,
+  // Extension-contributed defaults, concatenated onto the shipped table. A user
+  // override still wins (resolveEffectiveKeybindings applies overrides on top of
+  // whatever defaults it is handed), so this is the ONE site that actually makes
+  // an extension's declared chord fire — the editor/sheet/palette only display it.
+  extensionDefaults: CommandBindingDefault[],
 ): Map<string, { commandId: string; context: BindingContext }[]> {
   const index = new Map<string, { commandId: string; context: BindingContext }[]>()
-  // Customized bindings are indexed ahead of shipped defaults, because the
-  // router takes the first match. A user binding and a default can share a
-  // chord when the default shipped AFTER the user claimed it (Cmd+G for Goal,
-  // #936): persisted overrides are never reconciled against new defaults, so
-  // in default-first order a release would silently take the chord from them.
-  // An explicit user choice is the stronger statement of intent.
-  const effective = resolveEffectiveKeybindings(overrides, buildDefaultKeybindings())
+  // Extension declarations join the shipped defaults before resolution, so a
+  // user's persisted override can replace either source through one contract.
+  // Customized entries then lead the candidate list: a later Agent Code release
+  // may ship a default on a chord the user already assigned (#936), and install
+  // order must not silently take that explicit choice away.
+  const effective = resolveEffectiveKeybindings(overrides, [
+    ...buildDefaultKeybindings(),
+    ...extensionDefaults,
+  ])
   for (const entry of [...effective.filter(item => item.customized), ...effective.filter(item => !item.customized)]) {
     for (const binding of entry.bindings) {
       const list = index.get(binding) ?? []
@@ -323,6 +331,7 @@ export function useKeybinds(
   const commandKeybindingOverrides = useAppStore(
     state => state.settings.commandKeybindingOverrides,
   )
+  const installedExtensions = useAppStore(state => state.installedExtensions)
   const agentViewMode = useAppStore(state => state.settings.agentViewMode)
   const closeSettingsPage = useAppStore(state => state.closeSettingsPage)
   const buryPromptSessionId = useAppStore(state => state.buryPromptSessionId)
@@ -355,13 +364,52 @@ export function useKeybinds(
   const pinAgentsOpen = useAppStore(state => state.pinAgentsOpen)
   const closePinAgents = useAppStore(state => state.closePinAgents)
 
+  // Extension keybinding defaults, derived from installed manifests (no bundle
+  // import). Recomputed only when the installed set changes, so an install/remove
+  // makes a contributed chord start/stop firing without a reload.
+  //
+  // ── THE `?? []` IS NOT DEFENSIVE NOISE ──
+  // This hook owns the global keydown router: if it throws during render, the
+  // application has no keyboard at all, and it throws before anything can catch
+  // it usefully. That is the same shape as the persist-version bug that
+  // black-screened launch twice (#249) — a store slice that was expected to exist
+  // and did not. Extension state is the newest slice and the one most likely to be
+  // absent from a partially-restored or partially-mocked store, so the core
+  // keyboard path degrades to "no contributed chords" instead of taking the app
+  // down with it. Nothing else in this hook has an opinion about extensions.
+  const extensionKeybindings = useMemo(
+    () => deriveExtensionKeybindings(installedExtensions ?? []),
+    [installedExtensions],
+  )
+
   // Built once per override change, not per keystroke. Resolving inside the
   // handler meant rebuilding the default table and re-normalizing ~30 strings
   // on every keydown, including ordinary typing.
   const bindingIndex = useMemo(
-    () => buildBindingIndex(commandKeybindingOverrides),
-    [commandKeybindingOverrides],
+    () => buildBindingIndex(commandKeybindingOverrides, extensionKeybindings),
+    [commandKeybindingOverrides, extensionKeybindings],
   )
+
+  useEffect(() => {
+    if (!installedExtensions?.length) return
+    // Main must suppress Chromium/menu defaults synchronously for owned chords
+    // inside extension documents. Mirror the existing resolver's grammar, while
+    // command/context admission still runs through this hook after forwarding.
+    // Feed/editor-only bindings are not meaningful in an extension document.
+    const bindings = [...bindingIndex].filter(([, entries]) => entries.some(entry =>
+      !SURFACE_OWNED_COMMAND_IDS.has(entry.commandId) && ['global', 'grid', 'dispatch'].includes(entry.context),
+    )).map(([binding]) => binding)
+    // These are the fixed workspace interactions below, not palette commands.
+    // Their number-row continuation includes zero and directional tab resizing.
+    for (let digit = 0; digit <= 9; digit++) bindings.push(`Cmd+${digit}`, `Cmd+Alt+${digit}`)
+    bindings.push('Cmd+Left', 'Cmd+Right', 'Alt+Home', 'Alt+End', 'Alt+PageUp', 'Alt+PageDown', 'Alt+=', 'Alt+-')
+    const modal = [...bindingIndex].filter(([, entries]) => entries.some(entry => ['open-command-palette', 'close-pane'].includes(entry.commandId))).map(([binding]) => binding)
+    // Suppress native window-close defaults even when the user unbinds pane
+    // close. The existing modal gate decides whether there is an app action.
+    modal.push('Cmd+W', 'Cmd+Shift+W')
+    void window.api.extensionsSetInputBindings({ pane: [...new Set(bindings)], modal: [...new Set(modal)] }).catch(error => console.warn('[extensions] native input configuration failed:', error))
+    return () => { void window.api.extensionsSetInputBindings({ pane: [], modal: [] }).catch(() => {}) }
+  }, [bindingIndex, installedExtensions?.length])
 
   const tldrHoldRef = useRef<ReturnType<typeof createTldrHoldController> | null>(null)
   if (!tldrHoldRef.current) tldrHoldRef.current = createTldrHoldController(undefined, observeTldrHoldRelease)
@@ -438,6 +486,19 @@ export function useKeybinds(
         // it; only an app-wide chord can mean "dismiss the thing in front of
         // me".
         const dismissCommandId = routedCommandForEvent(e, bindingIndex, GLOBAL_CONTEXT_ONLY)
+        const extensionModal = e.target instanceof HTMLIFrameElement && e.target.dataset.extensionShell === 'modal'
+        if (extensionModal && dismissCommandId === 'close-pane') {
+          e.preventDefault()
+          // This is a host DOM event on the owned iframe element. It closes the
+          // modal surface, never the workspace pane hidden underneath it.
+          e.target.dispatchEvent(new Event('agent-code-extension-close'))
+          return
+        }
+        if (extensionModal && dismissCommandId === 'open-command-palette') {
+          e.preventDefault()
+          requestCommandInvocation(dismissCommandId, 'keybinding')
+          return
+        }
         if (dismissCommandId && commandOwnsOpenSurface(dismissCommandId, useAppStore.getState())) {
           e.preventDefault()
           requestCommandInvocation(dismissCommandId, 'keybinding')
