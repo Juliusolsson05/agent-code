@@ -8,9 +8,8 @@ import type { MainProviderConfig } from '@shared/types/providerConfig'
 import { AGENT_PROVIDER_KINDS, isAgentProviderKind } from '@shared/types/providerKind'
 import type { AgentProviderKind } from '@shared/types/providerKind'
 import { ClaudeSession } from '@providers/claude/runtime/claudeSession'
-import { listAllClaudeSessions } from '@providers/claude/runtime/sessionList'
 import { deliverClaudePrompt } from '@providers/claude/runtime/promptDelivery'
-import { listSessionsForCwd, getProjectDirForCwd, resolveClaudeTranscriptPath } from 'claude-code-headless'
+import { getProjectDirForCwd, resolveClaudeTranscriptPath } from 'claude-code-headless'
 import { CodexSession } from '@providers/codex/runtime/codexSession'
 import { deliverCodexPrompt } from '@providers/codex/runtime/promptDelivery'
 import { OpencodeSession } from '@providers/opencode/runtime/opencodeSession'
@@ -19,7 +18,6 @@ import { deliverOpencodePrompt } from '@providers/opencode/runtime/promptDeliver
 import {
   findCodexRolloutPathByThreadId,
   getCodexSessionsDir,
-  listCodexSessions,
 } from 'codex-headless'
 
 const claudeMain: MainProviderConfig = {
@@ -36,11 +34,6 @@ const claudeMain: MainProviderConfig = {
     ],
   },
   createSession: (opts) => new ClaudeSession(opts),
-  listSessions: (cwd, limit) => listSessionsForCwd(cwd, { limit }),
-  // Claude's package API is cwd-scoped today. Keep the app's global walker
-  // behind the same provider registry slot so debug IPC does not know which
-  // providers still need app-local compatibility shims.
-  listAllSessions: (limit) => listAllClaudeSessions({ limit }),
   getProjectDir: getProjectDirForCwd,
   resolveTranscriptPath: (cwd, providerSessionId) => {
     // Native EnterWorktree moves the durable file without changing its UUID.
@@ -77,8 +70,6 @@ const codexMain: MainProviderConfig = {
   // Agent Code has no detector for — the modal then eats the user's
   // first bracketed-paste submission. See the matching change in
   // packages/codex-headless/src/transcript/SessionList.ts.
-  listSessions: (cwd, limit) => listCodexSessions({ cwd, limit }),
-  listAllSessions: (limit) => listCodexSessions({ limit }),
   getProjectDir: async () => getCodexSessionsDir(),
   // WHY Agent Code delegates exact identity to codex-headless: live resume and
   // offline history must validate requested ID, filename UUID, session_meta.id,
@@ -115,8 +106,6 @@ const opencodeMain: MainProviderConfig = {
   // expose a cwd-filtered CLI list with the metadata our resume picker needs.
   // Known `ses_` identities are fully resumable/transformable through the CLI;
   // returning an empty list keeps only discovery unavailable.
-  listSessions: async () => [],
-  sessionDiscoveryUnavailableReason: 'OpenCode native session discovery is not implemented (#773). Known ses_ identities remain resumable.',
   // Opencode has no per-cwd project dir concept; the storage root is
   // server-owned. Returning cwd keeps consumers (which only display
   // it) harmless.

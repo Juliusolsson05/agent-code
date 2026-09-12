@@ -68,6 +68,19 @@ export class WorkspaceFileStore {
    */
   private readonly retiredWindowIds = new Set<string>()
 
+  // Observers of committed documents. WHY notified from inside the save
+  // tail: a listener must see the document exactly as it reached disk, in
+  // commit order, and never a composed-but-failed write. Listener errors are
+  // swallowed because the conversation ledger is a projection and must never
+  // turn a workspace save into a failure (same invariant as
+  // SessionLifecycleJournal: a sink, never a decider).
+  private readonly observers = new Set<(windows: readonly PersistedWindow[]) => void>()
+
+  observe(listener: (windows: readonly PersistedWindow[]) => void): () => void {
+    this.observers.add(listener)
+    return () => { this.observers.delete(listener) }
+  }
+
   static async open(): Promise<WorkspaceFileStore> {
     const store = new WorkspaceFileStore()
     await store.load()
@@ -265,6 +278,14 @@ export class WorkspaceFileStore {
       // state that actually reached disk, or a retry would silently commit a
       // window slice that was never persisted alongside it.
       this.file = next
+      for (const observer of this.observers) {
+        try {
+          observer(next.windows)
+        } catch (error) {
+          // eslint-disable-next-line no-console
+          console.warn('[workspace] observer failed', error)
+        }
+      }
     })
     this.saveTail = save.catch(() => undefined)
     return save
