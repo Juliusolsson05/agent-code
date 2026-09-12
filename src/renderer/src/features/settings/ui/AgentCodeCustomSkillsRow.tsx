@@ -454,7 +454,7 @@ function AgentCodeCustomSkillsModal({
                             <div className="mt-1 text-[10px] text-muted">{HEALTH_LABELS[skill.health]}</div>
                           </div>
                           <div className="flex flex-wrap justify-end gap-2">
-                            {skill.managedBy && <span className="text-[10px] text-muted">Managed by TLDR MCP</span>}
+                            {skill.managedBy && <span className="text-[10px] text-muted">Managed by {skill.managedBy === 'goal' ? 'Goal' : 'TLDR'} MCP</span>}
                             <Button aria-label={`Edit ${skill.name}`} variant="outline" size="sm" disabled={busy || Boolean(skill.managedBy)} onClick={() => edit(draftFromSkill(skill))}>Edit</Button>
                             <Button aria-label={`${skill.enabled ? 'Disable' : 'Enable'} ${skill.name}`} variant="outline" size="sm" disabled={busy || Boolean(skill.managedBy) || skill.health === 'recovery-required' || skill.health === 'unsupported'} onClick={() => void toggle(skill)}>
                               {skill.enabled ? 'Disable' : 'Enable'}

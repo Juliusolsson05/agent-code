@@ -25,6 +25,8 @@ const api = {
   onTldrHoldReleased: vi.fn((listener: (token: string) => void) => { releaseListeners.add(listener); return () => { releaseListeners.delete(listener) } }),
   readTldrs: vi.fn(async (ids: string[]) => Object.fromEntries(ids.map(id => [id, report(`Summary for ${id}.`)]))),
   onTldrChanged: vi.fn((listener: (update: TldrUpdate) => void) => { listeners.add(listener); return () => { listeners.delete(listener) } }),
+  readGoals: vi.fn(async (ids: string[]) => Object.fromEntries(ids.map(id => [id, report(`Goal for ${id}.`)]))),
+  onGoalChanged: vi.fn((_listener: (update: TldrUpdate) => void) => () => {}),
 }
 
 function workspace(): Workspace {
@@ -145,6 +147,43 @@ describe('TLDR hold input', () => {
     expect(fireEvent.keyDown(screen.getByLabelText('Composer'), { key: 'x', code: 'KeyX' })).toBe(false)
     fireEvent.keyDown(document, { key: 'Escape', code: 'Escape' })
     expect(useTldrView.getState()).toMatchObject({ held: false, latched: false })
+  })
+})
+
+describe('Goal peek', () => {
+  const goalKey = (target: Document | Element = document) => keyDown(target, { key: 'g', code: 'KeyG' })
+
+  it('holds Cmd+G through the real router to show goals instead of TLDRs and releases on G', async () => {
+    render(<><Harness /><TldrPane identity="agent" enabled goalEnabled><div>Feed</div></TldrPane></>)
+    goalKey()
+    expect(await screen.findByText('Goal for agent.')).toBeTruthy()
+    const note = screen.getByRole('note', { name: 'Agent goal' })
+    expect(note.textContent).toContain('Goal set')
+    expect(note.textContent).not.toContain('Note written')
+    expect(screen.queryByRole('note', { name: 'Agent TLDR' })).toBeNull()
+    expect(api.readTldrs).not.toHaveBeenCalled()
+    // The native release watcher is asked about G, not the TLDR key.
+    expect(api.startTldrHold).toHaveBeenLastCalledWith('KeyG', expect.any(String))
+    expect(harness.appState.requestCommandInvocation).not.toHaveBeenCalled()
+    fireEvent.keyUp(document, { code: 'KeyG', key: 'g', metaKey: true })
+    expect(screen.queryByRole('note')).toBeNull()
+    expect(screen.getByText('Feed')).toBeTruthy()
+  })
+
+  it('switches a latched TLDR to goals instead of closing it and leaves Cmd+G to the editor', async () => {
+    render(<><Harness /><TldrPane identity="agent" enabled goalEnabled={false}><div /></TldrPane><div data-global-editor-input-owner=""><textarea aria-label="Editor" /></div></>)
+    act(() => toggleTldr('tldr'))
+    await screen.findByText('Summary for agent.')
+    act(() => toggleTldr('goal'))
+    // An agent without Goal says so rather than showing its TLDR under the Goal label.
+    expect(await screen.findByText('Goal is off')).toBeTruthy()
+    expect(screen.queryByText('Summary for agent.')).toBeNull()
+    expect(useTldrView.getState()).toMatchObject({ latched: true, preview: 'goal' })
+    act(() => toggleTldr('goal'))
+    expect(useTldrView.getState().latched).toBe(false)
+
+    expect(goalKey(screen.getByLabelText('Editor'))).toBe(true)
+    expect(useTldrView.getState().held).toBe(false)
   })
 })
 

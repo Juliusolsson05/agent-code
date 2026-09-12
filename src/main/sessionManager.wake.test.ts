@@ -212,6 +212,16 @@ describe('SessionManager restart wake recovery', () => {
     expect(host.revokeSession).toHaveBeenCalledWith(host.registerSession.mock.calls[0]![0].sessionId)
   })
 
+  it('fails a Goal-only launch the same way when the goal skill cannot deploy', async () => {
+    const { SessionManager } = await import('./sessionManager')
+    const host = { registerSession: vi.fn((_scope: { sessionId: string }) => []), revokeSession: vi.fn() }
+    const reconcile = vi.fn(async () => { throw new Error('Goal skill destination is user-owned') })
+    const manager = new SessionManager(null, host as unknown as BuiltInMcpHttpHost, null, reconcile)
+    await expect(manager.spawn({ kind: 'claude', cwd: '/tmp/project', builtInMcpDomains: ['goal'] })).rejects.toThrow('Goal skill destination is user-owned')
+    expect(createSession).not.toHaveBeenCalled()
+    expect(host.revokeSession).toHaveBeenCalledWith(host.registerSession.mock.calls[0]![0].sessionId)
+  })
+
   it('joins a second wake while the first backend recovery is still starting', async () => {
     const { SessionManager } = await import('./sessionManager')
     let releaseStart!: () => void

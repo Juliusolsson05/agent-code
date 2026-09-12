@@ -652,14 +652,18 @@ export function useKeybinds(
       }
 
       const handleTldrHold = (commandId: string | null): boolean => {
-        if (commandId !== 'tldr-preview') return false
+        // Goal (#936) shares TLDR's synchronous hold path, including the
+        // Spotlight admission below and the editor yield: Monaco owns Cmd+G as
+        // Find Next exactly as it owns Cmd+L as Select Line.
+        const preview = commandId === 'tldr-preview' ? 'tldr' : commandId === 'goal-preview' ? 'goal' : null
+        if (!preview) return false
         // The editor owns Select Line, including after a rebind. Both ordinary
         // panes and Spotlight must start synchronously: queueing the palette
         // toggle could reopen the preview after keyup, leaving it latched.
         if (!editorOwnsTarget && !fullscreenEditorOwnsWorkspace) {
           e.preventDefault()
           e.stopPropagation()
-          tldrHold.start(e)
+          tldrHold.start(e, preview)
         }
         return true
       }

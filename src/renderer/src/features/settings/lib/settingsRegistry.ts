@@ -635,6 +635,20 @@ export function getSettingsRegistry(): SettingDefinition[] {
       },
     },
     {
+      id: 'default-goal-mcp',
+      category: 'agents',
+      title: 'Goal MCP',
+      description:
+        'Let agents record their goal — what their work is for — with the managed goal skill, and hold Cmd+G to see it. Off by default. Applies to new agents and existing agents on their next reload. Per-agent overrides take precedence; Use Global MCP Settings clears them.',
+      keywords: ['mcp', 'goal', 'purpose', 'objective', 'default', 'reload', 'existing agents', 'claude', 'codex'],
+      metadata: { scope: 'app', apply: 'new-session', storage: 'settings' },
+      control: {
+        type: 'toggle',
+        getValue: settings => settings.defaultBuiltInMcpDomains.includes('goal'),
+        onToggle: (ctx, value) => updateDefaultBuiltInMcpDomain(ctx, 'goal', value),
+      },
+    },
+    {
       id: 'default-orchestration-mcp',
       category: 'agents',
       title: 'Orchestration MCP',

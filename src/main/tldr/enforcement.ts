@@ -13,6 +13,13 @@ export type TldrHookOutput =
 
 export const TLDR_GOAL_CONTEXT = 'Agent Code TLDR: this agent has no TLDR yet. Once you understand the goal of this request, call tldr_update with that goal before starting the work.'
 export const TLDR_NEVER_WRITTEN_REASON = 'Agent Code TLDR: this agent has no TLDR yet. Call tldr_update now with the current goal and status in one or two sentences, then finish.'
+export const GOAL_SET_CONTEXT = 'Agent Code Goal: this agent has no goal yet. Once you understand what this request is trying to achieve, call goal_set with that goal in one plain sentence before starting the work.'
+export const GOAL_NEVER_SET_REASON = 'Agent Code Goal: this agent has no goal yet. Call goal_set now with what this work is trying to achieve, in one plain sentence.'
+
+/** Which reporting capabilities one registration has. The hooks are shared, so
+ * the host tells the policy what each session actually enabled. */
+export type ReportingFeatures = { tldr: boolean; goal: boolean }
+
 export const TLDR_STALE_REASON = 'Agent Code TLDR: you used tools this turn without updating your TLDR. If this turn changed the task status — an outcome, the next step, or a decision the user must make — call tldr_update now. If nothing changed, finish without updating.'
 
 type TurnState = {
@@ -56,9 +63,16 @@ export class TldrEnforcement {
   constructor(
     private readonly store: Pick<TldrStore, 'lastWrittenAt'>,
     private readonly now: () => number = Date.now,
+    private readonly goalStore?: Pick<TldrStore, 'lastWrittenAt'>,
   ) {}
 
-  async handle(token: string, identity: string, event: TldrHookEvent, input: unknown): Promise<TldrHookOutput> {
+  async handle(
+    token: string,
+    identity: string,
+    event: TldrHookEvent,
+    input: unknown,
+    features: ReportingFeatures = { tldr: true, goal: false },
+  ): Promise<TldrHookOutput> {
     const at = this.now()
     this.contact.set(identity, { at: new Date(at).toISOString(), token })
 
@@ -84,6 +98,15 @@ export class TldrEnforcement {
       // Asking at the prompt rather than only at Stop is what gets the goal
       // written BEFORE the work: an agent blocked at the end reports what it
       // did, which is not what a user scanning many panes needed during it.
+      //
+      // With Goal on, the goal has its own home (#936). Asking for it in the
+      // TLDR as well would get it overwritten by the next status update.
+      if (features.goal && this.goalStore) {
+        return await this.goalStore.lastWrittenAt(identity) ? {} : {
+          hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: GOAL_SET_CONTEXT },
+        }
+      }
+      if (!features.tldr) return {}
       return await this.store.lastWrittenAt(identity) ? {} : {
         hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: TLDR_GOAL_CONTEXT },
       }
@@ -105,13 +128,22 @@ export class TldrEnforcement {
       this.turns.delete(token)
       return {}
     }
-    const lastWrittenAt = await this.store.lastWrittenAt(identity)
-    if (!lastWrittenAt) return this.block(token, turn, at, TLDR_NEVER_WRITTEN_REASON)
-    // A pure-chat turn never reaches this block: without a tool call there is
-    // no evidence the task moved, and a clarifying question must stay free.
-    if (turn?.toolUsed && Date.parse(lastWrittenAt) < turn.startedAt) {
-      return this.block(token, turn, at, TLDR_STALE_REASON)
+    // Every missing report is gathered into ONE block. Two capabilities must
+    // not mean two blocks: the one-block-per-turn guarantee is what keeps a
+    // disagreement with the agent from becoming a loop.
+    const reasons: string[] = []
+    if (features.goal && this.goalStore && !(await this.goalStore.lastWrittenAt(identity))) {
+      reasons.push(GOAL_NEVER_SET_REASON)
     }
+    if (features.tldr) {
+      const lastWrittenAt = await this.store.lastWrittenAt(identity)
+      if (!lastWrittenAt) reasons.push(TLDR_NEVER_WRITTEN_REASON)
+      // A pure-chat turn never reaches this: without a tool call there is no
+      // evidence the task moved, and a clarifying question must stay free.
+      // The goal has no staleness rule — it changes with direction, not work.
+      else if (turn?.toolUsed && Date.parse(lastWrittenAt) < turn.startedAt) reasons.push(TLDR_STALE_REASON)
+    }
+    if (reasons.length > 0) return this.block(token, turn, at, reasons.join('\n\n'))
     this.turns.delete(token)
     return {}
   }

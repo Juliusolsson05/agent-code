@@ -21,10 +21,34 @@ type Props = {
   onClose: () => void
 }
 
+type HistoryRow = TldrHistoryEntry & { kind: 'tldr' | 'goal' }
+
 type Loaded =
   | { state: 'loading' }
-  | { state: 'ready'; entries: TldrHistoryEntry[] }
+  | { state: 'ready'; entries: HistoryRow[] }
   | { state: 'error' }
+
+// Goals (#936) are interleaved with statuses rather than shown in a second
+// list: the question this modal answers is "what happened with this agent",
+// and a direction change reads correctly only next to the status around it.
+//
+// WHY a merge and not a sort: each store already returns its history newest
+// first in revision order, which is the truth about that store. Revisions are
+// per-store, so only wall-clock time can order ACROSS the two lists — but a
+// clock stepping backwards must never reorder an agent's own statuses, which a
+// global sort by time would do. Merging keeps each list's order intact and
+// uses time only to decide which list's head comes next.
+export function mergeHistory(tldr: TldrHistoryEntry[], goal: TldrHistoryEntry[]): HistoryRow[] {
+  const rows: HistoryRow[] = []
+  let t = 0
+  let g = 0
+  while (t < tldr.length || g < goal.length) {
+    const takeGoal = t >= tldr.length
+      || (g < goal.length && Date.parse(goal[g]!.writtenAt) > Date.parse(tldr[t]!.writtenAt))
+    rows.push(takeGoal ? { ...goal[g++]!, kind: 'goal' } : { ...tldr[t++]!, kind: 'tldr' })
+  }
+  return rows
+}
 
 // TldrHistoryModal — how one agent's reported status evolved, newest first.
 //
@@ -43,23 +67,25 @@ export function TldrHistoryModal({ open, sessionId, workspace, onClose }: Props)
     if (!open || !identity) return
     let current = true
     const load = () => {
-      window.api.readTldrHistory(identity)
-        .then(entries => { if (current) setLoaded({ state: 'ready', entries }) })
+      Promise.all([window.api.readTldrHistory(identity), window.api.readGoalHistory(identity)])
+        .then(([tldr, goal]) => { if (current) setLoaded({ state: 'ready', entries: mergeHistory(tldr, goal) }) })
         .catch(() => { if (current) setLoaded({ state: 'error' }) })
     }
     setLoaded({ state: 'loading' })
     // Subscribe before the first read so an update that lands while the read
     // is in flight still triggers a refresh instead of being lost between them.
-    const unsubscribe = window.api.onTldrChanged(update => { if (update.identity === identity) load() })
+    const refresh = (update: { identity: string }) => { if (update.identity === identity) load() }
+    const unsubscribeTldr = window.api.onTldrChanged(refresh)
+    const unsubscribeGoal = window.api.onGoalChanged(refresh)
     load()
     // Relative ages only drift by minutes; a coarse tick keeps them honest
     // without re-rendering the list continuously while it is open.
     const timer = window.setInterval(() => setNow(Date.now()), 30_000)
-    return () => { current = false; unsubscribe(); window.clearInterval(timer) }
+    return () => { current = false; unsubscribeTldr(); unsubscribeGoal(); window.clearInterval(timer) }
   }, [open, identity])
 
   const body = !identity
-    ? <p className="text-sm text-muted">TLDR has never been enabled for this agent.</p>
+    ? <p className="text-sm text-muted">TLDR and Goal have never been enabled for this agent.</p>
     : loaded.state === 'loading'
       ? <p className="text-sm text-muted">Loading…</p>
       : loaded.state === 'error'
@@ -69,11 +95,15 @@ export function TldrHistoryModal({ open, sessionId, workspace, onClose }: Props)
           : <ol className="flex flex-col gap-3" aria-label="TLDR history">
               {loaded.entries.map((entry, index) => {
                 const time = tldrTime(Date.parse(entry.writtenAt), now)
+                // "Current" is per kind: the newest goal is still the current
+                // goal even when several status updates were written after it.
+                const current = loaded.entries.findIndex(other => other.kind === entry.kind) === index
                 return (
-                  <li key={entry.revision} className="flex flex-col gap-1 border-b border-border pb-3 last:border-b-0">
+                  <li key={`${entry.kind}:${entry.revision}`} className="flex flex-col gap-1 border-b border-border pb-3 last:border-b-0">
                     <p className="whitespace-pre-wrap break-words text-sm leading-relaxed [overflow-wrap:anywhere]">{entry.text}</p>
                     <span className="text-[11px] text-muted">
-                      {index === 0 ? 'Current · ' : ''}
+                      {entry.kind === 'goal' ? 'Goal · ' : ''}
+                      {current ? 'Current · ' : ''}
                       <time dateTime={time.iso} title={time.exact}>{time.text}</time>
                     </span>
                   </li>
@@ -86,7 +116,7 @@ export function TldrHistoryModal({ open, sessionId, workspace, onClose }: Props)
       <DialogContent className="max-w-xl">
         <DialogHeader>
           <DialogTitle>TLDR History</DialogTitle>
-          <DialogDescription>Each saved TLDR for this agent, newest first. The latest 100 updates are kept.</DialogDescription>
+          <DialogDescription>Each saved TLDR and goal for this agent, newest first. The latest 100 of each are kept.</DialogDescription>
         </DialogHeader>
         <div className="max-h-[60vh] overflow-y-auto pr-1">{body}</div>
         <DialogFooter>

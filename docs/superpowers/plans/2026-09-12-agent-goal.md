@@ -73,3 +73,28 @@ checks; full `npm run check` and CI.
 
 Never launch the Agent Code app. Keep WHY comments inline. Do not merge
 without authorization.
+
+## Decisions made during implementation
+
+- **History merges, it does not sort.** Each store returns its own history
+  newest first in revision order. Revisions are per-store, so only wall-clock
+  time can order across TLDR and Goal, but a clock stepping backwards must never
+  reorder one agent's own statuses. `mergeHistory` keeps each list's order and
+  uses time only to pick which head comes next. "Current" is marked per kind.
+- **One product-skill table.** `ensureTldrSkill` and `ensureGoalSkill` share
+  `ensureProductSkill` and a `PRODUCT_SKILLS` table that also drives reserved
+  names, refusals, and `managedBy`, so a guarantee fixed for one capability
+  cannot be forgotten for the other.
+- **`hasReportingDomain`** (in `@shared/types/tldr`) is the single predicate
+  for "mint the conversation identity / inject turn hooks / require the managed
+  skill at launch". A Goal-only agent gets an identity and hooks exactly like a
+  TLDR agent.
+- **Enforcement gathers reasons into one block.** With both capabilities on, a
+  missing goal and a missing or stale TLDR produce a single Stop block, which
+  keeps the one-block-per-turn loop guarantee. Goals have no staleness rule.
+- **Goal-on prompts ask for the goal only** (`GOAL_SET_CONTEXT`), never for a
+  goal in the TLDR; the TLDR skill wording now defers the goal to `goal_set`
+  when that tool is available.
+- **Peek switching.** `toggleTldr('goal')` while TLDR is latched switches to
+  goals rather than closing, and both peeks share one hold controller, native
+  release watcher, and Escape path.

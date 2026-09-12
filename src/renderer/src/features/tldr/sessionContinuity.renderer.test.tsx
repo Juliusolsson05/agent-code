@@ -115,5 +115,17 @@ describe('TLDR identity through real session actions', () => {
     expect(duplicateIdentity).toEqual(expect.any(String))
     expect(duplicateIdentity).not.toBe(spawnedIdentity)
     expect(duplicateIdentity).not.toBe('summary-source')
+
+    // Goal shares the conversation identity, so an agent with only Goal needs
+    // one minted too — otherwise its goals would follow the routing id and be
+    // lost at the first reload.
+    spawnSession.mockResolvedValueOnce({ sessionId: 'goal-agent' })
+    await act(async () => {
+      await hook.result.current.spawn('/project', { kind: scenario.kind, builtInMcpDomains: ['goal'] })
+      await vi.runAllTimersAsync()
+    })
+    const goalIdentity = spawnSession.mock.calls.at(-1)![0].tldrIdentity
+    expect(goalIdentity).toEqual(expect.any(String))
+    expect(writer.getState().sessions['goal-agent']?.tldrIdentity).toBe(goalIdentity)
   })
 })

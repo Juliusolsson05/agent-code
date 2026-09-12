@@ -1,4 +1,4 @@
-import { TLDR_INSTRUCTIONS, TLDR_MAX_CHARACTERS } from '@shared/types/tldr.js'
+import { GOAL_INSTRUCTIONS, TLDR_INSTRUCTIONS, TLDR_MAX_CHARACTERS } from '@shared/types/tldr.js'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 
@@ -85,6 +85,30 @@ export function createBuiltInMcpServer(
         return toolText({ ok: true, ...record })
       } catch (error) {
         return { ...toolText({ ok: false, message: error instanceof Error ? error.message : 'TLDR update failed.' }), isError: true }
+      }
+    })
+  }
+
+  if (scope.domains.includes('goal')) {
+    // Same authority model as tldr_update: the target is the authenticated
+    // scope's identity, never a model-supplied id, and a revoked process's
+    // queued write fails after the store's I/O instead of overwriting its
+    // successor's goal.
+    server.registerTool('goal_set', {
+      title: 'Set goal',
+      description: 'Record what your work is trying to achieve, in one plain sentence. Set it once you understand a new task; update it only when the user changes direction, never to report progress.',
+      inputSchema: { text: z.string().min(1).max(TLDR_MAX_CHARACTERS * 2) },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    }, async ({ text }) => {
+      try {
+        if (!dependencies.goalStore) throw new Error('Goal is unavailable.')
+        const record = await dependencies.goalStore.update(
+          scope.tldrIdentity ?? scope.sessionId, text,
+          dependencies.isTldrWriteAuthorized ?? (() => false),
+        )
+        return toolText({ ok: true, ...record })
+      } catch (error) {
+        return { ...toolText({ ok: false, message: error instanceof Error ? error.message : 'Goal update failed.' }), isError: true }
       }
     })
   }
@@ -186,6 +210,7 @@ function builtInInstructions(
   dependencies: BuiltInMcpDependencies,
 ): string {
   return [
+    ...(scope.domains.includes('goal') ? [GOAL_INSTRUCTIONS] : []),
     ...(scope.domains.includes('tldr') ? [TLDR_INSTRUCTIONS] : []),
     ...(scope.domains.includes('workflows') ? [WORKFLOW_MCP_INSTRUCTIONS] : []),
     ...(scope.domains.includes('agent_management') ? [AGENT_MANAGEMENT_MCP_INSTRUCTIONS] : []),

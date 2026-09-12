@@ -1,4 +1,5 @@
 import { tldrIdentityForReplacement, tldrIdentityForSession } from '@renderer/features/tldr/identity'
+import { hasReportingDomain } from '@shared/types/tldr'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import {
   DEFAULT_PROVIDER,
@@ -379,7 +380,7 @@ export function useSessionActions(
             })
           : undefined
       const tldrIdentity = kind === 'terminal' ? undefined : opts?.tldrIdentity
-        ?? (builtInMcpDomains?.includes('tldr') ? crypto.randomUUID() : undefined)
+        ?? (hasReportingDomain(builtInMcpDomains) ? crypto.randomUUID() : undefined)
       let sessionId: SessionId
       let tmuxName: string | undefined
       let startedProviderSessionId: string | undefined

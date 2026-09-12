@@ -15,11 +15,21 @@ afterEach(() => { cleanup(); dismissTldr(); window.api = originalApi })
 const entry = (text: string, revision: number): TldrHistoryEntry => ({ text, revision, writtenAt: new Date(Date.now() - revision * 60_000).toISOString() })
 const workspaceWith = (sessions: Record<string, unknown>) => ({ state: { sessions } }) as unknown as Workspace
 
-function historyApi(entries: TldrHistoryEntry[]) {
-  const listeners = new Set<(update: TldrUpdate) => void>()
+const at = (text: string, revision: number, minutesAgo: number): TldrHistoryEntry => ({ text, revision, writtenAt: new Date(Date.now() - minutesAgo * 60_000).toISOString() })
+
+function historyApi(entries: TldrHistoryEntry[], goals: TldrHistoryEntry[] = []) {
+  const tldrListeners = new Set<(update: TldrUpdate) => void>()
+  const goalListeners = new Set<(update: TldrUpdate) => void>()
+  const subscribe = (listeners: Set<(update: TldrUpdate) => void>) => (listener: (update: TldrUpdate) => void) => { listeners.add(listener); return () => { listeners.delete(listener) } }
+  const fire = (listeners: Set<(update: TldrUpdate) => void>, identity: string) => { for (const listener of listeners) listener({ identity, record: { text: 'x', revision: 9, updatedAt: new Date().toISOString() } }) }
   const readTldrHistory = vi.fn(async () => entries)
-  window.api = { ...originalApi, readTldrHistory, onTldrChanged: (listener: (update: TldrUpdate) => void) => { listeners.add(listener); return () => { listeners.delete(listener) } } }
-  return { readTldrHistory, emit: (identity: string) => { for (const listener of listeners) listener({ identity, record: { text: 'x', revision: 9, updatedAt: new Date().toISOString() } }) } }
+  const readGoalHistory = vi.fn(async () => goals)
+  window.api = { ...originalApi, readTldrHistory, readGoalHistory, onTldrChanged: subscribe(tldrListeners), onGoalChanged: subscribe(goalListeners) }
+  return {
+    readTldrHistory, readGoalHistory,
+    emit: (identity: string) => fire(tldrListeners, identity),
+    emitGoal: (identity: string) => fire(goalListeners, identity),
+  }
 }
 
 describe('TLDR history', () => {
@@ -43,11 +53,41 @@ describe('TLDR history', () => {
     await waitFor(() => expect(api.readTldrHistory).toHaveBeenCalledTimes(2))
   })
 
-  it('explains an agent that never had TLDR instead of reading someone else’s history', () => {
+  it('interleaves goal changes with status by time and marks the current one of each kind', async () => {
+    const api = historyApi(
+      [at('Tests pass; opening the PR.', 2, 1), at('Reading the store.', 1, 10)],
+      [at('Let users see what each agent is for.', 2, 5), at('Add a history view.', 1, 20)],
+    )
+    render(<TldrHistoryModal open sessionId="pane" onClose={vi.fn()} workspace={workspaceWith({
+      pane: { cwd: '/project', kind: 'claude', tldrIdentity: 'summary-1', builtInMcpDomains: ['tldr', 'goal'] },
+    })} />)
+    const list = await screen.findByRole('list', { name: 'TLDR history' })
+    expect(api.readGoalHistory).toHaveBeenCalledWith('summary-1')
+    const rows = [...list.querySelectorAll('li')].map(item => ({ text: item.querySelector('p')!.textContent, meta: item.querySelector('span')!.textContent! }))
+    expect(rows.map(row => row.text)).toEqual([
+      'Tests pass; opening the PR.', 'Let users see what each agent is for.', 'Reading the store.', 'Add a history view.',
+    ])
+    expect(rows[0]!.meta).toMatch(/^Current · /)
+    // The newest goal is still the current goal although a status came after it.
+    expect(rows[1]!.meta).toMatch(/^Goal · Current · /)
+    expect(rows[2]!.meta).not.toContain('Current')
+    expect(rows[3]!.meta).toMatch(/^Goal · /)
+    expect(rows[3]!.meta).not.toContain('Current')
+
+    // Revisions repeat across the two stores; both rows with revision 2 render.
+    expect(list.querySelectorAll('li')).toHaveLength(4)
+    act(() => api.emitGoal('someone-else'))
+    expect(api.readGoalHistory).toHaveBeenCalledTimes(1)
+    act(() => api.emitGoal('summary-1'))
+    await waitFor(() => expect(api.readGoalHistory).toHaveBeenCalledTimes(2))
+  })
+
+  it('explains an agent that never had TLDR or Goal instead of reading someone else’s history', () => {
     const api = historyApi([])
     render(<TldrHistoryModal open sessionId="pane" onClose={vi.fn()} workspace={workspaceWith({ pane: { cwd: '/project', kind: 'claude' } })} />)
-    expect(screen.getByText('TLDR has never been enabled for this agent.')).toBeTruthy()
+    expect(screen.getByText('TLDR and Goal have never been enabled for this agent.')).toBeTruthy()
     expect(api.readTldrHistory).not.toHaveBeenCalled()
+    expect(api.readGoalHistory).not.toHaveBeenCalled()
   })
 
   it('opens from the focused agent and is not offered for a shell', () => {
