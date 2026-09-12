@@ -1,6 +1,7 @@
 # Remote transcript store: a stale session list must not sever a live view
 
-Status: planned; implementation follows on this branch.
+Status: implemented, tests green, PR open for review.
+PR: [agent-code#911](https://github.com/Juliusolsson05/agent-code/pull/911). Merge requires explicit approval.
 
 Bug: [agent-code#847](https://github.com/Juliusolsson05/agent-code/issues/847).
 Branch: `fix/remote-feed-list-eviction`. Worktree: `.worktrees/remote-feed-list-eviction`.
