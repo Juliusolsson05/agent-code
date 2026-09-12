@@ -352,7 +352,10 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
   )
 
   const midTurnCount = matchingRows.filter(row => row.isLive).length
-  const selectedCount = selectedProjects.size
+  // Count only tabs that still exist: a selected tab closed while the modal is
+  // open keeps its id in the set (membership is unaffected, its rows are gone)
+  // and would otherwise inflate "N selected".
+  const selectedCount = projects.filter(project => selectedProjects.has(project.tabId)).length
 
   // Biggest conversation in the batch, not the sum: arrival compaction runs
   // per agent, so the question is whether ANY single pane will land oversized.
@@ -429,13 +432,13 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
   // changing the set disarms it — otherwise a user who confirms three agents
   // and then ticks a fourth project spends quota on agents they never saw named
   // in the confirmation.
-  const toggleProject = useCallback((cwd: string) => {
+  const toggleProject = useCallback((tabId: string) => {
     setSourceConfirmArmed(false)
     setConfirmedSessionIds(null)
     setSelectedProjects(prev => {
       const next = new Set(prev)
-      if (next.has(cwd)) next.delete(cwd)
-      else next.add(cwd)
+      if (next.has(tabId)) next.delete(tabId)
+      else next.add(tabId)
       return next
     })
   }, [])

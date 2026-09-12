@@ -270,7 +270,10 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
   )
 
   const liveMatchCount = matchingRows.filter(row => row.isLive).length
-  const selectedCount = selectedProjects.size
+  // Count only tabs that still exist: a selected tab closed while the modal is
+  // open keeps its id in the set (membership is unaffected, its rows are gone)
+  // and would otherwise inflate "N selected".
+  const selectedCount = projects.filter(project => selectedProjects.has(project.tabId)).length
   const thresholdValid = thresholdMs != null
 
   const toggleProject = useCallback((tabId: string) => {

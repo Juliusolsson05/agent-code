@@ -33,8 +33,16 @@ describe('project scope rows', () => {
   })
 
   it('orders by tab, not by count', () => {
-    const projects = buildProjectScopeRows([...rows].reverse(), [])
-    expect(projects.map(project => project.tabIndex)).toEqual([0, 1, 2])
+    // Tab C holds the most agents here, so the old count-first sort would put
+    // it before A; the Dispatch order must win regardless of population.
+    const crowdedLaterTab = [
+      ...rows,
+      { sessionId: 'c-two', tabId: 'tab-c', tabIndex: 2, tabTitle: 'agent-code', cwd: '/dev/agent-code' },
+      { sessionId: 'c-three', tabId: 'tab-c', tabIndex: 2, tabTitle: 'agent-code', cwd: '/dev/agent-code' },
+      { sessionId: 'c-four', tabId: 'tab-c', tabIndex: 2, tabTitle: 'agent-code', cwd: '/dev/agent-code' },
+    ]
+    const projects = buildProjectScopeRows([...crowdedLaterTab].reverse(), [])
+    expect(projects.map(project => [project.tabIndex, project.total])).toEqual([[0, 3], [1, 1], [2, 4]])
     expect(projects.every(project => project.matching === 0)).toBe(true)
   })
 

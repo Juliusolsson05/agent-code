@@ -1,5 +1,7 @@
 import { tabIndexLabel } from '@renderer/workspace/tile-tree/paneLabelFormat'
-import { cwdBasename } from '@renderer/features/workspace/lib/sessionDisplay'
+// Imported from its owner rather than through sessionDisplay.ts, which pulls in
+// the renderer provider registry; this module is pure data shaping.
+import { cwdBasename } from '@renderer/workspace/sessionDisplayTitle'
 
 /**
  * A project as the Dispatch index names it: the project TAB, labelled by its
@@ -84,8 +86,9 @@ export function buildProjectScopeRows<T extends ProjectScopeAgent>(
   return Array.from(byTab.values()).sort((a, b) => a.tabIndex - b.tabIndex)
 }
 
-/** Case-insensitive match on the label, the title and the directory names, so
- *  typing a worktree name still finds the project that contains it. */
+/** Case-insensitive match on the label (which embeds the title) and the
+ *  directory names, so typing a worktree name still finds the project that
+ *  contains it. */
 export function filterProjectScopeRows(
   rows: readonly ProjectScopeRow[],
   query: string,
@@ -94,7 +97,6 @@ export function filterProjectScopeRows(
   if (!needle) return [...rows]
   return rows.filter(project =>
     project.label.toLowerCase().includes(needle) ||
-    project.title.toLowerCase().includes(needle) ||
     project.directories.some(directory => directory.toLowerCase().includes(needle)),
   )
 }
