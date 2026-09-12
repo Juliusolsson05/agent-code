@@ -494,3 +494,71 @@ describe('capability gates', () => {
     expect(duplicateSession).not.toHaveBeenCalled()
   })
 })
+
+describe('Root Agent Code Management command (#906)', () => {
+  function contextFor(builtInMcpDomains: string[] | undefined) {
+    const replaceSession = vi.fn().mockResolvedValue('agent-2')
+    const openRootManagementPrompt = vi.fn()
+    const closePalette = vi.fn()
+    const workspace = {
+      state: {
+        activeTabId: 'tab-app',
+        dispatchMode: null,
+        sessions: {
+          agent: {
+            cwd: '/projects/app',
+            kind: 'claude',
+            providerSessionId: 'provider-agent',
+            ...(builtInMcpDomains ? { builtInMcpDomains } : {}),
+          },
+        },
+        tabs: [{
+          id: 'tab-app',
+          focusedSessionId: 'agent',
+          root: { type: 'leaf', sessionId: 'agent' },
+        }],
+      },
+      replaceSession,
+      showPaneToast: vi.fn(),
+    } as unknown as Workspace
+    const context = {
+      workspace,
+      ui: { closePalette, openRootManagementPrompt },
+      flags: {},
+    } as unknown as CommandContext
+    const command = sessionCommands.find(candidate => candidate.id === 'enable-root-agent-code-management')
+    if (!command) throw new Error('Root Agent Code Management command is missing')
+    return { command, context, replaceSession, openRootManagementPrompt, closePalette }
+  }
+
+  it('asks for confirmation instead of reloading when turning the capability on', async () => {
+    const { command, context, replaceSession, openRootManagementPrompt, closePalette } = contextFor(['tldr'])
+
+    expect(command.getState?.(context)).toEqual({ kind: 'toggle', value: 'off' })
+    await command.run(context)
+
+    // The regression this pins: any future "simplification" that reloads
+    // straight from the command would skip the warning the feature exists for.
+    expect(openRootManagementPrompt).toHaveBeenCalledWith('agent')
+    expect(replaceSession).not.toHaveBeenCalled()
+    expect(closePalette).toHaveBeenCalledOnce()
+  })
+
+  it('reloads without the domain, and without a prompt, when turning it off', async () => {
+    const { command, context, replaceSession, openRootManagementPrompt } = contextFor(['tldr', 'root_management'])
+
+    expect(command.getState?.(context)).toEqual({ kind: 'toggle', value: 'on' })
+    await command.run(context)
+
+    expect(openRootManagementPrompt).not.toHaveBeenCalled()
+    expect(replaceSession).toHaveBeenCalledWith('/projects/app', {
+      kind: 'claude',
+      targetSessionId: 'agent',
+      resumeSessionId: 'provider-agent',
+      // An explicit off, not a return to inheritance: revoking root control
+      // must survive the next reload, and the pane's unrelated TLDR capability
+      // keeps its own choice instead of being rewritten by this one edit.
+      builtInMcpOverrides: { tldr: true, root_management: false },
+    })
+  })
+})
