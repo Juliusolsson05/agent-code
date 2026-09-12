@@ -168,4 +168,47 @@ describe('QueueStrip collapse is a per-episode gesture (#890)', () => {
     expect(screen.getByRole('button', { name: '1 queued' })).toHaveAttribute('aria-expanded', 'true')
     expect(screen.getByRole('list', { name: 'queued prompt list' })).toHaveTextContent('second episode prompt')
   })
+
+  it('treats a drain and a new enqueue folded into one burst as a new episode', () => {
+    // #893 review (Codex minor / Claude F8). One JSONL tail read carries
+    // `remove(A)` then `enqueue(B)`, and the Claude branch folds the whole burst
+    // in one runtime update. The reducer passes through [], but the component
+    // only ever receives [A] → [B]: there is deliberately NO empty render here.
+    const view = render(
+      <QueueStrip
+        provider="claude"
+        queuedMessages={[{ content: 'prompt A drained mid-turn', timestamp: '2026-09-11T10:06:09.724Z' }]}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: '1 queued' }))
+    expect(screen.getByRole('button', { name: '1 queued' })).toHaveAttribute('aria-expanded', 'false')
+
+    view.rerender(
+      <QueueStrip
+        provider="claude"
+        queuedMessages={[{ content: 'prompt B queued in the same burst', timestamp: '2026-09-11T10:06:09.801Z' }]}
+      />,
+    )
+
+    expect(screen.getByRole('button', { name: '1 queued' })).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByRole('list', { name: 'queued prompt list' })).toHaveTextContent('prompt B queued in the same burst')
+  })
+
+  it('keeps the collapse while the same episode grows or partly drains', () => {
+    // The other side of the boundary: collapsing is a choice about THIS
+    // episode, so it must survive items joining or leaving while any hidden
+    // item remains. Fresh object copies stand in for the reducer rebuilding the
+    // array on every fold; identity is (timestamp, content), never the object.
+    const a = { content: 'prompt A', timestamp: '2026-09-11T10:02:39.115Z' }
+    const b = { content: 'prompt B', timestamp: '2026-09-11T10:02:41.020Z' }
+    const view = render(<QueueStrip provider="claude" queuedMessages={[a]} />)
+    fireEvent.click(screen.getByRole('button', { name: '1 queued' }))
+
+    view.rerender(<QueueStrip provider="claude" queuedMessages={[{ ...a }, b]} />)
+    expect(screen.getByRole('button', { name: '2 queued' })).toHaveAttribute('aria-expanded', 'false')
+
+    view.rerender(<QueueStrip provider="claude" queuedMessages={[{ ...b }]} />)
+    expect(screen.getByRole('button', { name: '1 queued' })).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByRole('list', { name: 'queued prompt list' })).toBeNull()
+  })
 })
