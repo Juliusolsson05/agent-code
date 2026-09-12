@@ -65,7 +65,7 @@ import {
   windowIdFor,
   focusWindow,
   sendToFocusedWindow,
-  sendToSessionWindow,
+  windowForSession,
   sendToWindow,
   sessionsOwnedBy,
   setGeometryObserver,
@@ -89,6 +89,7 @@ import { AGENT_NAMES_FILE } from '@main/agentNames/ipc.js'
 import { CONVERSATIONS_LEDGER_FILE } from '@main/storage/paths.js'
 import { isSessionRecordingEnabled, isSessionRecordingAutoStart } from '@main/ipc/devDebug.js'
 import { registerAllIpc } from '@main/ipc/index.js'
+import { registerSessionRoutingIpc } from '@main/ipc/sessionRouting.js'
 import { AgentCodeManagedSkillsService } from '@main/agentCodeConventions/AgentCodeManagedSkillsService.js'
 import { cleanupDictationIpcResources } from '@main/ipc/dictation.js'
 import { flushHistoryWrites } from '@main/dictation/historyStore.js'
@@ -171,14 +172,17 @@ const sessionRecorders = isSessionRecordingEnabled()
         // provably loses the auto-record race: the recorder starts on a
         // session's FIRST event, which for an idle restored pane is whenever
         // the user first prompts it — unboundedly after Feed mount.
-        sendToSessionWindow(sessionId, 'record-session:started', { sessionId, generation }),
+        sendToWindow(windowForSession(sessionId), 'record-session:started', { sessionId, generation }),
       (sessionId, generation) =>
         // Natural exit keeps the recorder writable until the renderer has
         // flushed its coalesced shape evidence (or the manager's grace timer
         // expires). The opaque generation is load-bearing: sessionId is reusable,
         // so an acknowledgement without it cannot prove which recorder should
-        // close. This channel is deliberately outside recorded session data.
-        sendToSessionWindow(sessionId, 'record-session:stopping', { sessionId, generation }),
+        // close. These are recorder control edges, deliberately outside both
+        // recorded data and the lossy observation queue. Replaying a delayed
+        // start/stop command after its grace period would arm an obsolete
+        // generation. Direct owner-targeted delivery retains that protocol.
+        sendToWindow(windowForSession(sessionId), 'record-session:stopping', { sessionId, generation }),
     )
   : null
 if (sessionRecorders) setOutboundObserver(sessionRecorders.observe)
@@ -914,6 +918,7 @@ async function startApp(): Promise<void> {
   performanceService.mark('app.main.sessionManager.created')
 
   sessionForwarder = wireSessionForwarder(manager, lspManager)
+  registerSessionRoutingIpc(manager, sessionForwarder)
   // CLI auto-updater — constructed AFTER SessionManager because it uses
   // the manager to decide whether an active session of the target kind
   // is currently running (updating a binary while a session holds a
@@ -982,10 +987,9 @@ async function startApp(): Promise<void> {
 
     // Ownership moves FIRST, synchronously, before anything is awaited. The
     // closed window's sessions are still producing events, and every tick they
-    // spend owned by a window that no longer exists is a tick their events fall
-    // back to a broadcast — which grows a ghost runtime in whichever window
-    // receives one. The survivor is about to adopt them anyway, so pointing
-    // them there immediately is both correct and the shortest possible gap.
+    // spend owned by the absent window consumes the bounded handoff queue.
+    // The explicit transfer authorizes the survivor to receive that queue;
+    // ownership failure never grants a broadcast fallback.
     //
     // It is an OPTIMISTIC move, so it is recorded as a pending offer: if the
     // survivor refuses the merge, or the offer cannot be composed at all, the

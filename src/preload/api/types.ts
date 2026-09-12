@@ -240,19 +240,7 @@ export type SessionAgentPtyDataEvent = { sessionId: string; data: string }
 // provider runtimes; those are owned by the conditions-framework /
 // provider-boundary clusters and are intentionally untouched here.
 
-export type SessionHistoryChunk = {
-  entries: JsonlEntry[]
-  hasMore: boolean
-  // Only set on initial-load chunks. See `HistoryChunk.totalEntries`
-  // in src/main/sessions/historyLoader.ts for the full WHY. Renderers
-  // should treat absence as "unknown / not provided" and avoid using
-  // it as a denominator unless it's a positive number.
-  totalEntries?: number
-  // Byte offset of each entry's transcript line, parallel to `entries`.
-  // The renderer echoes the one for its pagination cursor line back as
-  // `beforeOffset`. See `HistoryChunk.offsets` in historyLoader.ts.
-  offsets?: number[]
-}
+export type { SessionHistoryChunk } from '@shared/types/session.js'
 
 export type TranscriptPathRequest = {
   sessionId: string

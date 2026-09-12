@@ -1,3 +1,4 @@
+import { requestSessionRoutingRefresh } from '@renderer/session-runtime/routingGap'
 import type { ReactNode } from 'react'
 import { shortenCwd } from '@renderer/workspace/tile-tree/TileLeaf/labels'
 import { useAppStore } from '@renderer/app-state/hooks'
@@ -77,6 +78,9 @@ export function PaneHeader({
 }) {
   // Drives the fill and the `data-status-lit` hook together, so tests and
   // debug tooling read exactly what the user sees.
+  // sessionId is the displayed target, not the physical leaf's grouping id.
+  // Subscribe only to this rare gap object, never every feed/PTY update.
+  const routingGap = useAppStore(state => state.workspaceRuntimes?.[sessionId]?.routingGap)
   const statusLit = paneHeaderStatusLit(statusMode, isSessionLive)
   // Related agents can change without rerendering this session. Only the two
   // painted status values are dependencies; subscribing to their entire
@@ -247,6 +251,20 @@ export function PaneHeader({
               </button>
             )
           })}
+        </div>
+      )}
+      {routingGap && (
+        <div role="status" className="flex items-center gap-2 border-t border-border px-3 py-1 text-[11px] text-warning">
+          <span className="min-w-0 flex-1">
+            {routingGap.phase === 'refreshing' ? 'Refreshing available observations…' :
+              routingGap.phase === 'refreshed' ? 'View refreshed. Some earlier live output may be missing.' :
+                'Some live output may be missing. Refresh is unavailable right now.'}
+          </span>
+          <button type="button" disabled={routingGap.phase === 'refreshing'}
+            className="flex-shrink-0 underline disabled:opacity-50"
+            onClick={event => { event.stopPropagation(); requestSessionRoutingRefresh(sessionId) }}>
+            Refresh view
+          </button>
         </div>
       )}
     </div>

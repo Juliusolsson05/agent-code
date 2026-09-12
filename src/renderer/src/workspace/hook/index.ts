@@ -38,6 +38,7 @@ import {
 } from '@renderer/workspace/hook/invalidation/effects'
 import { useIpcSubscriptions } from '@renderer/workspace/hook/ipc/useIpcSubscriptions'
 import { useTerminalForeground } from '@renderer/workspace/hook/ipc/useTerminalForeground'
+import { useSessionRoutingRecovery } from '@renderer/workspace/hook/ipc/useSessionRoutingRecovery'
 import { useWorkspaceAdoption } from '@renderer/workspace/hook/ipc/useWorkspaceAdoption'
 import { useSessionFeed } from '@renderer/features/sessionFeed/SessionFeedContext'
 import type { OrchestrationAgentRecord } from '@mcp/shared/orchestrationTypes'
@@ -862,6 +863,7 @@ export function useWorkspace(
   const sessionFeed = useSessionFeed()
   useIpcSubscriptions(sessionFeed, refs, setState, setRuntimes, updateRuntime, appendFeedDebug)
   useTerminalForeground(restoreStatus, setRuntimes)
+  useSessionRoutingRecovery(refs, setRuntimes, state.sessions)
   useWorkspaceAdoption(refs, setState, setRuntimes, bootstrapComplete)
   useBootstrap(
     refs,

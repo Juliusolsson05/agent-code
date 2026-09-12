@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const harness = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
+  routed: vi.fn(),
 }))
 
 vi.mock('electron', () => ({
@@ -13,8 +14,11 @@ vi.mock('electron', () => ({
 }))
 
 vi.mock('@main/window/windowRegistry.js', () => ({
-  claimSessionForWindow: vi.fn(),
+  claimSessionForWindow: vi.fn((sessionId: string, windowId: string) => ({ sessionId, windowId, rendererGeneration: 0, revision: 1 })),
+  captureSessionWindowLease: vi.fn(),
+  isSessionWindowLeaseCurrent: () => true,
   releaseSession: vi.fn(),
+  sendToSessionWindow: harness.routed,
   windowIdFor: () => 'requesting-window',
 }))
 
@@ -27,17 +31,19 @@ describe('recovered renderer screen seed', () => {
     { ok: true, destroyed: true, available: true, sends: 0 },
     { ok: true, destroyed: false, available: false, sends: 0 },
   ])('seeds only successful live requesters ($ok/$destroyed/$available)', async ({ ok, destroyed, available, sends }) => {
+    harness.routed.mockClear()
     const screen = { plain: 'latest raw tick', markdown: 'latest raw tick', recent: 'latest raw tick', recentMarkdown: 'latest raw tick' }
-    const recover = vi.fn(async () => ({ ok }))
+    const recover = vi.fn(async (_options, admitted) => { if (ok) admitted(); return { ok } })
     const getScreenSnapshot = vi.fn(() => available ? screen : null)
     registerSessionIpc({ recover, getScreenSnapshot } as never, {} as never)
     const sender = { isDestroyed: () => destroyed, send: vi.fn() }
     await expect(harness.handlers.get('session:recover')!({ sender }, { sessionId: 's1' })).resolves.toEqual({ ok })
-    expect(sender.send).toHaveBeenCalledTimes(sends)
+    expect(harness.routed).toHaveBeenCalledTimes(sends)
+    expect(sender.send).not.toHaveBeenCalled()
     if (sends) {
       expect(getScreenSnapshot).toHaveBeenCalledWith('s1')
       expect(recover.mock.invocationCallOrder[0]).toBeLessThan(getScreenSnapshot.mock.invocationCallOrder[0]!)
-      expect(sender.send).toHaveBeenCalledWith('session:screen', {
+      expect(harness.routed).toHaveBeenCalledWith('s1', 'session:screen', {
         sessionId: 's1', plain: screen.plain, markdown: screen.markdown,
       })
     }

@@ -107,6 +107,22 @@ describe('SessionManager recover', () => {
     terminalControl.stop.mockClear()
   })
 
+  it('admits a display synchronously before provider construction and rejects it without publishing backend work', async () => {
+    const { SessionManager } = await import('./sessionManager')
+    const manager = new SessionManager()
+    const options = { sessionId: 'routing-admission', kind: 'claude' as const, cwd: '/tmp/project' }
+    expect(() => manager.recover(options, () => { throw new Error('window unavailable') })).toThrow('window unavailable')
+    expect(manager.getBackendSnapshot(options.sessionId)).toBeNull()
+    expect(createSession).not.toHaveBeenCalled()
+    const order: string[] = []
+    createSession.mockImplementation(() => { order.push('construct'); return new FakeAgentSession() })
+    const starting = manager.recover(options, () => { order.push('display-admitted') })
+    expect(order).toEqual(['display-admitted'])
+    await expect(starting).resolves.toMatchObject({ ok: true, disposition: 'spawned' })
+    expect(order).toEqual(['display-admitted', 'construct'])
+    await manager.kill(options.sessionId)
+  })
+
   it('reports the missing folder instead of a generic start failure', async () => {
     // The 2026-09-08 regression report: six panes came up as ERROR after their
     // git worktrees were deleted, and the only text the user ever saw was

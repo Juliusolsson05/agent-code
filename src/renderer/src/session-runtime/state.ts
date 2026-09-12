@@ -1,3 +1,4 @@
+import type { SessionRoutingGap } from '@shared/types/sessionRouting'
 // -----------------------------------------------------------------------------
 // session-runtime/state.ts — the INGEST layer's clean object (#493).
 //
@@ -384,6 +385,10 @@ export type CodexTranscriptObservationOutboxEntry = {
 }
 
 export type SessionRuntime = {
+  // A repaired snapshot cannot reconstruct transient semantics or raw PTY
+  // bytes. Keep this independent of process/readiness/transcript error state.
+  routingGap?: SessionRoutingGap & { phase: 'refreshing' | 'refreshed' | 'unavailable' }
+
   screen: string
   screenMarkdown: string
   recentScreen: string
