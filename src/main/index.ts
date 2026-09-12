@@ -39,8 +39,7 @@ import {
   pruneOldPasteDebugLogs,
 } from '@main/pasteDebugJournal.js'
 import { TmuxRegistry } from '@main/tmux/TmuxRegistry.js'
-import { reconcile } from '@main/tmux/tmuxRecovery.js'
-import type { PersistedTerminalRef } from '@main/tmux/tmuxRecovery.js'
+import { reconcileWorkspace } from '@main/tmux/tmuxRecovery.js'
 
 import { STATE_DIR, STATE_FILE } from '@main/storage/paths.js'
 import {
@@ -731,49 +730,34 @@ async function startApp(): Promise<void> {
   if (tmuxAvailable) {
     try {
       appRunJournal.record({ area: 'app.tmux', name: 'tmux.recovery.start' })
-      const raw = await readFile(STATE_FILE, 'utf8')
-      // workspace.json is wrapped: { workspace: { sessions: {...} } }.
-      // The renderer's saveWorkspace() writes { workspace: workspaceState }
-      // — so persisted sessions live one level deep, not at the root.
-      // Reading parsed.sessions directly (as the original code did)
-      // always returned undefined, which is why recovery silently
-      // reported "0 recoverable" even when tmuxName WAS persisted.
-      const parsed = JSON.parse(raw) as {
-        workspace?: {
-          sessions?: Record<string, { kind?: string; tmuxName?: string }>
-        }
-      }
-      const persisted: PersistedTerminalRef[] = Object.entries(
-        parsed.workspace?.sessions ?? {},
-      )
-        .filter(([, meta]) => meta?.kind === 'terminal' && typeof meta?.tmuxName === 'string')
-        .map(([sessionId, meta]) => ({ sessionId, tmuxName: meta!.tmuxName! }))
-      const recoveryReport = await reconcile(tmuxRegistry, persisted)
-      performanceService.mark('app.tmux.recovery.complete', {
+      // Use restoration's canonical envelope decoder, including its evidence
+      // of discarded windows. A successful partial restore cannot authorize
+      // deleting a terminal whose only reference was in the discarded region.
+      const recoveryReport = await reconcileWorkspace(tmuxRegistry, () => readFile(STATE_FILE, 'utf8'))
+      const recoverySummary = {
+        inventory: recoveryReport.inventory,
+        inventoryIssues: recoveryReport.inventoryIssues,
         recoverable: recoveryReport.recoverable.length,
         lost: recoveryReport.lost.length,
         orphans: recoveryReport.orphans.length,
-      })
+        preserved: recoveryReport.preserved.length,
+      }
+      performanceService.mark('app.tmux.recovery.complete', recoverySummary)
       appRunJournal.record({
         area: 'app.tmux',
         name: 'tmux.recovery.end',
-        data: {
-          recoverable: recoveryReport.recoverable.length,
-          lost: recoveryReport.lost.length,
-          orphans: recoveryReport.orphans.length,
-        },
+        data: recoverySummary,
       })
       console.log(
-        `[tmux] recovery: ${recoveryReport.recoverable.length} recoverable, ${recoveryReport.lost.length} lost, ${recoveryReport.orphans.length} orphans cleaned`,
+        `[tmux] recovery (${recoveryReport.inventory} inventory): ${recoveryReport.recoverable.length} recoverable, ${recoveryReport.lost.length} lost, ${recoveryReport.orphans.length} orphans cleaned, ${recoveryReport.preserved.length} unmatched preserved`,
       )
     } catch (err) {
-      // Missing/corrupt workspace.json is fine — fresh launch falls
-      // through with empty buckets. Log so a real failure is visible.
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-        console.warn('[tmux] recovery failed (treating all sessions as fresh):', err)
-        performanceService.error('app.tmux.recovery.error', err)
-        appRunJournal?.recordError('tmux.recovery.error', err)
-      }
+      // Read/decode uncertainty is reported above with cleanup withheld.
+      // Registry or cleanup failures remain failures; do not claim every
+      // session was fresh or that all requested termination succeeded.
+      console.warn('[tmux] recovery failed:', err)
+      performanceService.error('app.tmux.recovery.error', err)
+      appRunJournal?.recordError('tmux.recovery.error', err)
     }
   }
 
