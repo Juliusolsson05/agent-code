@@ -1,4 +1,4 @@
-import { app, ipcMain } from 'electron'
+import { app, ipcMain, type IpcMainInvokeEvent } from 'electron'
 import { createHash, randomUUID } from 'node:crypto'
 import { appendFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -58,6 +58,28 @@ type ActiveDictationSession = {
 }
 
 const activeSessions = new Map<string, ActiveDictationSession>()
+let shutdownAdmitted = false
+const pendingOperations = new Set<Promise<unknown>>()
+const pendingTranscriptions = new Set<AbortController>()
+const stoppingPreviews = new Set<string>()
+
+function trackPending<T>(promise: Promise<T>): Promise<T> {
+  pendingOperations.add(promise)
+  void promise.then(
+    () => { pendingOperations.delete(promise) },
+    () => { pendingOperations.delete(promise) },
+  )
+  return promise
+}
+
+function admittedDictation<Args extends unknown[], Result>(
+  handler: (...args: Args) => Promise<Result>,
+): (...args: Args) => Promise<Result> {
+  return (...args) => {
+    if (shutdownAdmitted) return Promise.reject(new Error('Agent Code is shutting down'))
+    return trackPending(handler(...args))
+  }
+}
 
 // First-8-hex-chars of SHA-256 over a chunk. Used purely as a fingerprint
 // for cross-process correlation: if the same `sha8` appears in the
@@ -129,7 +151,9 @@ export function registerDictationIpc(deps: {
     event: string,
     data?: Record<string, unknown>,
   ): void => {
-    if (!debugSessionId) return
+    // Preview cancellation may abandon an unresolved package stop promise.
+    // Late optional observations must not append behind the final debug flush.
+    if (shutdownAdmitted || !debugSessionId) return
     deps.dictationDebugJournals
       .get(debugSessionId)
       .append({ layer, event, ...(data !== undefined ? { data } : {}) })
@@ -175,9 +199,14 @@ export function registerDictationIpc(deps: {
   ipcMain.handle('dictation:history-clear', async () => clearEntries())
   ipcMain.handle('dictation:history-reset-totals', async () => resetTotals())
 
-  ipcMain.handle('dictation:hotkey-configure', async (_evt, params: { binding?: string }) => {
+  ipcMain.handle('dictation:hotkey-configure', admittedDictation(async (_evt: IpcMainInvokeEvent, params: { binding?: string }) => {
     try {
+      if (shutdownAdmitted) throw new Error('Agent Code is shutting down')
       const result = await configureDictationHotkey(params.binding ?? '')
+      if (shutdownAdmitted) {
+        unregisterDictationHotkey()
+        throw new Error('Agent Code is shutting down')
+      }
       if (!result.ok && result.message) {
         // Durable breadcrumb for the graceful degrade (#495 A4). The
         // renderer also receives `result.message`, but its console.warn is
@@ -201,7 +230,7 @@ export function registerDictationIpc(deps: {
         message: err instanceof Error ? err.message : 'Could not configure dictation hotkey.',
       }
     }
-  })
+  }))
 
   // Fire-and-forget journal write from the renderer. We use `ipcMain.on`
   // (not `handle`) because the renderer side is fire-and-forget; we don't
@@ -222,8 +251,8 @@ export function registerDictationIpc(deps: {
 
   ipcMain.handle(
     'dictation:stream-start',
-    async (
-      evt,
+    admittedDictation(async (
+      evt: IpcMainInvokeEvent,
       params: { provider: DictationProvider; mimeType?: string; debugSessionId?: string },
     ) => {
       const debugSessionId = params.debugSessionId ?? null
@@ -243,6 +272,9 @@ export function registerDictationIpc(deps: {
       }
 
       const apiKey = await readDeepgramApiKeyForRuntime()
+      // The key lookup may finish after cleanup closed admission and cleared
+      // the active map. Never publish a late socket/session behind that drain.
+      if (shutdownAdmitted) return { kind: 'error', message: 'Agent Code is shutting down.' }
       if (!apiKey) {
         emit(debugSessionId, 'ERROR', 'stream-start:rejected', {
           reason: 'missing-api-key',
@@ -345,7 +377,7 @@ export function registerDictationIpc(deps: {
       }
 
       return { kind: 'started', id }
-    },
+    }),
   )
 
   ipcMain.handle(
@@ -422,7 +454,7 @@ export function registerDictationIpc(deps: {
 
   ipcMain.handle(
     'dictation:stream-stop',
-    async (_evt, params: { id: string; audioDurationMs?: number }) => {
+    admittedDictation(async (_evt: IpcMainInvokeEvent, params: { id: string; audioDurationMs?: number }) => {
       const session = activeSessions.get(params.id)
       if (!session) {
         return { kind: 'error', message: 'Dictation session is no longer active.' }
@@ -456,6 +488,13 @@ export function registerDictationIpc(deps: {
             return null
           })
         : Promise.resolve(null)
+      if (streamingId) {
+        stoppingPreviews.add(streamingId)
+        const forgetPreview = (): void => { stoppingPreviews.delete(streamingId) }
+        void streamingStop.then(forgetPreview, forgetPreview)
+      }
+      const batchAbort = new AbortController()
+      pendingTranscriptions.add(batchAbort)
 
       if (DICTATION_DUMP_ENABLED) {
         // eslint-disable-next-line no-console
@@ -488,6 +527,7 @@ export function registerDictationIpc(deps: {
         })
         const startedAt = Date.now()
         const outcome = await transcribeBatch({
+          signal: batchAbort.signal,
           provider: session.provider,
           apiKey: session.apiKey,
           audio,
@@ -525,7 +565,8 @@ export function registerDictationIpc(deps: {
         // putting a disk write between the provider answering and the composer
         // filling would make dictation feel slower than it is, in exchange for
         // bookkeeping they cannot see. The store serialises its own writes, and
-        // `flushHistoryWrites()` on before-quit covers the dictate-then-⌘Q race.
+        // Committed shutdown joins this handler before draining history writes;
+        // a renderer veto leaves both the handler and the service intact.
         //
         // Raw text, never the <stt>-wrapped form: the wrapper is a delivery
         // concern for the LIVE prompt, and baking today's tag format into every
@@ -627,8 +668,10 @@ export function registerDictationIpc(deps: {
           kind: 'error',
           message: err instanceof Error ? err.message : 'Dictation failed.',
         }
+      } finally {
+        pendingTranscriptions.delete(batchAbort)
       }
-    },
+    }),
   )
 
   ipcMain.handle('dictation:stream-cancel', async (_evt, params: { id: string }) => {
@@ -646,9 +689,29 @@ export function registerDictationIpc(deps: {
   })
 }
 
-export function cleanupDictationIpcResources(): void {
+export async function cleanupDictationIpcResources(): Promise<void> {
+  shutdownAdmitted = true
   unregisterDictationHotkey()
+  // Quit has committed and the originating composer is gone. Cancel owned
+  // batch HTTP and join the handler, rather than letting an unbounded provider
+  // response hold application exit. A response that already completed can
+  // still enqueue history before the handler settles and its tail is drained.
+  for (const operation of pendingTranscriptions) operation.abort()
+  // The pinned preview cancel() drops the session before finalizeSession can
+  // resolve an earlier stop() promise. It is explicitly an abandonment API,
+  // not a joinable completion receipt. Cancel both active and stopping previews
+  // and fence their late debug observations instead of awaiting that promise.
+  for (const id of stoppingPreviews) deepgramStreaming().cancel(id)
+  stoppingPreviews.clear()
+  for (const session of activeSessions.values()) {
+    if (session.streamingId) deepgramStreaming().cancel(session.streamingId)
+  }
   activeSessions.clear()
+  // A stop handler removes its active entry BEFORE batch HTTP finishes. The
+  // map alone cannot enumerate pending transcripts/history producers. Join
+  // those already-admitted handlers before the separate history-store drain;
+  // its eventual enqueue must precede our final persistence snapshot.
+  while (pendingOperations.size) await Promise.allSettled([...pendingOperations])
 }
 
 // WHY the old readDeepgramApiKey() env-only helper is gone:

@@ -122,6 +122,16 @@ export class WorkspaceFileStore {
     }
   }
 
+  /**
+   * Join saves admitted before this call. Their individual IPC receipts still
+   * carry publication failures; this tail is settlement, not a new save or an
+   * fsync guarantee. Revision-bound final renderer saves need the B02 prepare
+   * protocol and must not be inferred merely from reaching will-quit.
+   */
+  async drainAdmittedWrites(): Promise<void> {
+    await this.saveTail
+  }
+
   /** The windows to restore at startup, in file order. */
   windows(): readonly PersistedWindow[] {
     return this.file.windows

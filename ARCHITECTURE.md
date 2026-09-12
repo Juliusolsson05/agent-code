@@ -1260,35 +1260,38 @@ Shutdown has vetoes. An unsaved editor can refuse a window close. Workflow shutd
 ```text
 sequenceDiagram
     participant User
-    participant App as Electron lifecycle
-    participant WF as WorkflowService
+    participant App as Application shutdown gate
     participant Window as Renderer/editor guard
-    participant SM as Session shutdown gate
-    participant Aux as Auxiliary services and journals
-    User->>App: Quit
-    App->>WF: Stop durable workflow execution
-    alt Workflow stop cannot finish safely
-        WF-->>App: Failure, retain application for retry
-    else Workflow stop completes
-        App->>Window: Close / beforeunload
-        alt Unsaved changes veto close
-            Window-->>App: Keep editing
-        else Close is allowed
-            App->>SM: will-quit: killAll and await teardown
-            alt Owned process teardown fails
-                SM-->>App: Block quit, report failure
-            else Teardown completes
-                App->>Aux: Flush queues, stop servers and helpers
-                App->>Aux: Mark clean run and release state lock
-                App-->>User: Application exits
-            end
+    participant Exec as Sessions and workflows
+    participant Aux as Services and persistence
+    User->>App: Quit and reversible observation flush
+    App->>Window: Close / beforeunload
+    alt Unsaved changes veto close
+        Window-->>App: Keep Editing, all services remain live
+    else Close is allowed
+        App->>App: will-quit, publish committed admission
+        App->>Exec: Begin both execution stops
+        App->>App: Join admitted startup and dictation work
+        App->>Exec: Await ownership release
+        alt Required stop rejects
+            Exec-->>App: Retain failed owner for explicit retry
+            App->>App: Keep inspection services and process lock
+        else Required stops complete
+            App->>Aux: Await support disposal and admitted write tails
+            App->>Aux: Await diagnostic flushes, report optional failures
+            App->>App: Mark clean unless startup failed, release state lock
+            App-->>User: Application exits
         end
     end
 ```
 
 </details>
 
-Some auxiliary shutdown hooks run earlier or concurrently with these gates. Diagnostic flushes are not all awaited with the same durability guarantee as workflow state and owned-process shutdown. “Clean exit” is a lifecycle result, not proof that every optional debug record reached disk.
+[Application shutdown composition](src/main/applicationShutdown.ts) keeps irreversible disposal out of `before-quit`. The existing [terminal gate](src/main/sessionShutdownGate.ts) holds `will-quit` until the complete application drain resolves. Repeated quit requests join one attempt; retries retain completed-stage receipts and invoke only failed stages. Startup publishes workflow ownership before initialization and checks committed admission after asynchronous acquisition. All window creation routes share a committed-shutdown guard.
+
+Required execution stops retain their native ownership contracts. Workspace and dictation history tails establish settlement of admitted writes; they do not retry failed saves or establish fsync durability. Dictation aborts owned batch HTTP and joins admitted handlers/hotkey work before capturing its history tail. It cancels active/stopping previews and fences late optional observations; the pinned preview cancellation API can abandon a pending stop promise, which shutdown must not await. Diagnostic queues are awaited, with failures reported separately. A failed boot retains its process lock through cleanup and does not receive a clean-run marker.
+
+This is the application disposal repair in B02/#919. It does not yet introduce revision-bound editor approvals, a cross-window preparation generation, or a final persistence acknowledgement frontier. The native per-window close decision UX remains in use. “Clean exit” remains a lifecycle result rather than proof that every optional record reached disk.
 
 ### 6.2 Windows, workspace, and restoration
 

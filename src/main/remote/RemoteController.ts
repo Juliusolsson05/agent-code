@@ -131,6 +131,8 @@ export class RemoteController extends EventEmitter {
    *  the whole class: later calls observe the state their predecessors left
    *  and no-op when it already matches. */
   private chain: Promise<unknown> = Promise.resolve()
+  private disposalAdmitted = false
+  private disposalPromise: Promise<void> | null = null
 
   constructor(private readonly deps: RemoteControllerDeps) {
     super()
@@ -153,13 +155,15 @@ export class RemoteController extends EventEmitter {
   }
 
   async enable(mode: RemoteTransportMode = 'lan'): Promise<RemoteStatus> {
+    if (this.disposalAdmitted) throw new Error('Remote access is shutting down')
     return this.runExclusive(async () => {
+      if (this.disposalAdmitted) throw new Error('Remote access is shutting down')
       // Same mode already live: idempotent no-op. Different mode: clean
       // switch — every socket drops (URL and reachability change anyway;
       // phones reconnect via their feed's backoff, and paired tokens
       // survive because pairing is durable state).
-      if (this.server && this.url) {
-        if (this.transport === mode) return this.getStatus()
+      if (this.server) {
+        if (this.url && this.transport === mode) return this.getStatus()
         await this.teardownLive()
         this.emit('status-changed', this.getStatus())
       }
@@ -225,6 +229,7 @@ export class RemoteController extends EventEmitter {
       this.transport = mode
       this.server.on('clients-changed', () => this.emitStatus())
       const { url } = await this.server.start()
+      if (this.disposalAdmitted) throw new Error('Remote access is shutting down')
       this.url = url
     } catch (err) {
       // Whatever partially came up, tear it ALL down so a retry starts
@@ -295,9 +300,22 @@ export class RemoteController extends EventEmitter {
     return revoked
   }
 
-  async dispose(): Promise<void> {
-    await this.teardownLive()
-    this.removeAllListeners()
+  dispose(): Promise<void> {
+    this.disposalAdmitted = true
+    if (this.disposalPromise) return this.disposalPromise
+    // Disposal must join the SAME FIFO as enable/disable. Stopping outside it
+    // could observe no server while a slow enable was still preparing its
+    // secret/transport, then return before that initializer published a server.
+    const disposal = this.runExclusive(async () => {
+      await this.teardownLive()
+      this.removeAllListeners()
+    })
+    this.disposalPromise = disposal
+    void disposal.catch(() => {
+      // Keep failed resource owners below, but allow an explicit shutdown retry.
+      if (this.disposalPromise === disposal) this.disposalPromise = null
+    })
+    return disposal
   }
 
   /** Build the transport for a mode. LAN needs nothing; tunnel resolves the
@@ -321,11 +339,13 @@ export class RemoteController extends EventEmitter {
 
   private async teardownLive(): Promise<void> {
     const server = this.server
-    this.server = null
     this.url = null
+    if (server) await server.stop()
+    // A rejection is not release evidence. Keep this exact server reachable so
+    // a retry cannot mistake a cleared registry field for successful teardown.
+    this.server = null
     this.transport = null
     this.pairing = null
-    if (server) await server.stop()
     this.feedSource?.dispose()
     this.feedSource = null
   }

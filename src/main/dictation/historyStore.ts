@@ -274,13 +274,11 @@ function enqueue<T>(operation: () => Promise<T>): Promise<T> {
  * a stop-handler that is still awaiting `transcribeBatch` — that row was never
  * enqueued.
  *
- * At shutdown it is **best-effort, exactly like the debug journals**, NOT a
- * guarantee. `before-quit` does not gate on the returned promise (doing so
- * would mean preventDefault-ing the quit and re-entering it, which is a real
- * risk of a hung quit in exchange for at most one bookkeeping row). So a
- * dictation finished microseconds before ⌘Q can still be lost. Do not write a
- * comment anywhere claiming otherwise — an earlier version of this file did,
- * and the guarantee was fictional.
+ * Committed application shutdown joins already-admitted dictation handlers
+ * before awaiting this tail, so a batch response cannot enqueue behind that
+ * snapshot. This remains a settlement receipt: enqueue reports each write's
+ * rejection to its original caller and keeps this private queue alive. It is
+ * not proof that a failed write was retried or that the filesystem was fsynced.
  *
  * It IS load-bearing for the IPC handlers, which await it to serialise against
  * in-flight appends.

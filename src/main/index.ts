@@ -29,7 +29,7 @@ import { applicationIdentityCapabilities } from '@main/window/identityControl.js
 import { conditionBackendCapabilities } from '@main/sessions/conditionControl.js'
 import { terminalBackendCapabilities } from '@main/sessions/terminalControl.js'
 import { windowLifecycleControlCapabilities } from '@main/window/lifecycleControl.js'
-import { installSessionShutdownGate } from '@main/sessionShutdownGate.js'
+import { installApplicationShutdown } from '@main/applicationShutdown.js'
 import { LspManager } from '@main/lspManager.js'
 import { compactAllGhostLogs, GhostJournalRegistry } from '@main/ghostJournal.js'
 import {
@@ -71,6 +71,7 @@ import {
   sendToWindow,
   sessionsOwnedBy,
   setGeometryObserver,
+  setWindowCreationAdmission,
   setWindowCloseVetoedObserver,
   setWindowClosedObserver,
   transferSessions,
@@ -120,7 +121,7 @@ import {
 import { getBuildInfo } from '@main/buildInfo.js'
 import { createWorkflowService } from '@main/workflows/createWorkflowService.js'
 import { WorkflowBridge } from '@main/workflows/WorkflowBridge.js'
-import type { WorkflowService } from 'workflow-mcp'
+import { WorkflowServiceError, type WorkflowService } from 'workflow-mcp'
 
 // Main process — thin Electron host.
 //
@@ -185,13 +186,13 @@ const sessionRecorders = isSessionRecordingEnabled()
   : null
 if (sessionRecorders) setOutboundObserver(sessionRecorders.observe)
 // Per-dictation-session debug-dump registry. Mirrors `ghostJournals`:
-// constructed before IPC handlers register, flushed on before-quit. See
+// constructed before IPC handlers register, flushed after committed shutdown. See
 // `src/main/dictationJournal.ts` for the on-disk shape and the
 // rationale for cloning the ghost-journal pattern instead of refactoring
 // them into a single shared writer.
 const dictationDebugJournals = new DictationDebugJournalRegistry()
 // Per-paste debug-dump registry. Same lifecycle as dictationDebugJournals:
-// constructed before IPC handlers register, flushed on before-quit,
+// constructed before IPC handlers register, flushed after committed shutdown,
 // pruned on startup. Diagnostic for the "first Enter does nothing"
 // paste-submit bug; see docs/superpowers/plans/2026-05-11-paste-submit-
 // harness-findings-and-fix.md for context.
@@ -253,8 +254,20 @@ let appRunJournal: AppRunJournal | null = null
 let workflowService: WorkflowService | null = null
 let workflowBridge: WorkflowBridge | null = null
 let codexCliUpdateReserved = false
-let workflowShutdownPromise: Promise<void> | null = null
-let workflowShutdownComplete = false
+// Keep partially initialized owners visible until committed shutdown joins
+// startup. A missing SessionManager does not mean no service acquired resources.
+let startupTask: Promise<void> | null = null
+let startupFailed = false
+let disposeExternalControl: (() => Promise<void>) | null = null
+let disposeControlHost: (() => void) | null = null
+let shutdownWorkspaceStore: WorkspaceFileStore | null = null
+
+class StartupInterruptedByQuit extends Error {}
+function assertStartupOpen(): void {
+  if (sessionShutdownGate.isTerminalShutdownAdmitted()) {
+    throw new StartupInterruptedByQuit('Startup interrupted by committed quit')
+  }
+}
 let sessionForwarder: SessionForwarderControl | null = null
 
 // A packaged release needs one executable-level smoke test that stops before
@@ -316,9 +329,9 @@ async function runPackagingSmoke(): Promise<void> {
 // is a window-modal sheet, so a vetoed quit never fires focus at all and the
 // flag stays latched forever, silently disabling the handoff.
 //
-// The flag is instead cleared by the two paths that actually KNOW the quit
-// failed: the sheet's "Keep Editing" branch (via the close-vetoed observer,
-// wired in startApp) and the workflow-drain rejection below.
+// The flag is instead cleared by the path that actually KNOWS the quit
+// was vetoed: the sheet's "Keep Editing" branch (via the close-vetoed observer,
+// wired in startApp). A committed drain failure must not resume window handoff.
 let quitting = false
 app.on('before-quit', () => { quitting = true })
 
@@ -338,38 +351,27 @@ if (packagingSmoke) {
     focusWindow(null)
   })
 
-  void app.whenReady().then(startApp).catch((err) => {
-    // A throw out of startApp (toolchain or MCP-host init failure, or a disk
-    // error while the journal itself starts) would otherwise become an
-    // unhandledRejection: the process keeps running with no window and never
-    // quits, so `will-quit` never fires and the state-process lock is leaked
-    // while THIS pid stays alive. That makes the NEXT launch refuse to start —
-    // acquireStateProcessLock sees a live owner and shows "Agent Code is already
-    // running" until the zombie is force-killed. Convert a fatal startup error
-    // into a clean exit: journal it, flush + release the lock, and quit so a
-    // relaunch can proceed. We intentionally do NOT write the clean-shutdown
-    // marker — this run WAS unclean, and a future prior-run classifier should
-    // see it that way.
-    console.error('[app] fatal startup error — releasing lock and quitting:', err)
-    // Record as an INCIDENT (synchronous flush) so the failed boot lands in
-    // incidents.jsonl and the NEXT launch's classifier can attribute it — a plain
-    // event would only hit the async events.jsonl that never flushes before quit.
-    appRunJournal?.recordIncident({
-      kind: 'app.startup_failed',
-      severity: 'fatal',
-      process: 'main',
-      error: err,
+  void app.whenReady().then(() => {
+    // A quit before readiness must not acquire a fresh resource after the exit
+    // drain captured an empty inventory. There is no startup task to join yet.
+    if (sessionShutdownGate.isTerminalShutdownAdmitted()) return
+    startupTask = startApp().catch(err => {
+      if (err instanceof StartupInterruptedByQuit) {
+        appRunJournal?.record({ area: 'app.lifecycle', name: 'app.startup_interrupted_by_quit' })
+        return
+      }
+      startupFailed = true
+      console.error('[app] fatal startup error — draining owned resources before quitting:', err)
+      appRunJournal?.recordIncident({
+        kind: 'app.startup_failed', severity: 'fatal', process: 'main', error: err,
+      })
+      // Keep the journal and process lock until partial-startup resources drain.
+      // Releasing the lock here would permit a second main to start while this
+      // failed initializer still owned providers or asynchronous state writes.
+      // The final callback deliberately leaves failed boot without a clean mark.
+      app.quit()
     })
-    appRunJournal?.stop()
-    // Null the handle BEFORE app.quit(): quit fires the will-quit handler, whose
-    // markCleanShutdown() would otherwise write the clean-shutdown marker and make
-    // this CRASHED boot look CLEAN on the next launch. (The crash-hook path uses
-    // process.exit, which bypasses will-quit; this path uses app.quit, which does
-    // NOT — hence the explicit null here, mirroring stateProcessLock below.)
-    appRunJournal = null
-    stateProcessLock?.releaseSync()
-    stateProcessLock = null
-    app.quit()
+    return startupTask
   })
 }
 
@@ -435,6 +437,7 @@ async function startApp(): Promise<void> {
     return
   }
   stateProcessLock = lock
+  assertStartupOpen()
   appRunJournal = new AppRunJournal({
     appVersion: app.getVersion(),
     // Build provenance (#374): git SHA / branch / dirty / timestamp / mode /
@@ -473,6 +476,7 @@ async function startApp(): Promise<void> {
   // folder as prunable, which is correct because none can be live.
   if (sessionRecorders) setLiveRecordingDirsProvider(() => sessionRecorders.liveRecordingDirs())
   await appRunJournal.start()
+  assertStartupOpen()
   appRunJournal.record({
     area: 'state.lock',
     name: 'state_lock.acquired',
@@ -647,6 +651,7 @@ async function startApp(): Promise<void> {
   appRunJournal.record({ area: 'setup.toolchain', name: 'toolchain.start' })
   try {
     await initializeToolchain()
+    assertStartupOpen()
     appRunJournal.record({ area: 'setup.toolchain', name: 'toolchain.end' })
   } catch (err) {
     appRunJournal.recordError('toolchain.error', err)
@@ -656,14 +661,25 @@ async function startApp(): Promise<void> {
   try {
     workflowService = await createWorkflowService({
       isCodexCliUpdateReserved: () => codexCliUpdateReserved,
+      onCreated: service => { workflowService = service },
     })
+    assertStartupOpen()
     workflowBridge = new WorkflowBridge(workflowService)
     // Recovery successors may be created during service.initialize(), before the bridge exists.
     // Await rehydration so the first renderer query sees the durable lineage owner instead of a
     // stale parent with a misleading Resume action.
     await workflowBridge.start()
+    assertStartupOpen()
     appRunJournal.record({ area: 'workflows.service', name: 'workflow_service.ready' })
   } catch (err) {
+    // WorkflowService.stop closes recovery admission inside initialize. That
+    // typed closing outcome is our own committed quit, not a failed boot. Keep
+    // real initialization/storage failures on the incident path below.
+    if (sessionShutdownGate.isTerminalShutdownAdmitted()
+      && err instanceof WorkflowServiceError
+      && (err.code === 'service-stopping' || err.code === 'service-stopped')) {
+      throw new StartupInterruptedByQuit('Workflow initialization interrupted by committed quit')
+    }
     // Workflow persistence is part of the execution contract, not a cosmetic
     // renderer enhancement. Starting the MCP host without its durable service
     // would advertise a toggle that either loses runs or fails every tool call;
@@ -676,6 +692,7 @@ async function startApp(): Promise<void> {
     performanceService.error('app.main.imageCache.cleanup.error', err)
     appRunJournal?.recordError('image_cache.cleanup.error', err)
   })
+  assertStartupOpen()
   // Tmux availability is checked once at startup. The cost is a
   // child-process roundtrip on `tmux -V` — cheap enough to await
   // before any IPC is wired. Result is cached on the registry; call
@@ -695,6 +712,7 @@ async function startApp(): Promise<void> {
   //   same as a machine without tmux installed. No silent
   //   system-tmux usage, no PATH lookup, no sentinel-string trickery.
   const bundledTmux = await resolveBundledTool('tmux')
+  assertStartupOpen()
   tmuxRegistry = new TmuxRegistry({ tmuxBinary: bundledTmux ?? undefined })
   const tmuxDetectStarted = performance.now()
   appRunJournal.record({
@@ -703,6 +721,7 @@ async function startApp(): Promise<void> {
     data: { bundled: bundledTmux !== null },
   })
   const tmuxAvailable = await tmuxRegistry.detectAvailability()
+  assertStartupOpen()
   appRunJournal.record({
     area: 'app.tmux',
     name: 'tmux.detect.end',
@@ -734,6 +753,7 @@ async function startApp(): Promise<void> {
     try {
       appRunJournal.record({ area: 'app.tmux', name: 'tmux.recovery.start' })
       const raw = await readFile(STATE_FILE, 'utf8')
+      assertStartupOpen()
       // workspace.json is wrapped: { workspace: { sessions: {...} } }.
       // The renderer's saveWorkspace() writes { workspace: workspaceState }
       // — so persisted sessions live one level deep, not at the root.
@@ -779,6 +799,7 @@ async function startApp(): Promise<void> {
     }
   }
 
+  assertStartupOpen()
   // Give the host its journal BEFORE start() so a bind failure can record its
   // mcp.host_start_failed incident — setDependencies() (which also carries the
   // journal) only runs AFTER start(), because it needs `manager`, so without this
@@ -787,6 +808,7 @@ async function startApp(): Promise<void> {
   appRunJournal.record({ area: 'mcp.host', name: 'mcp_host.start' })
   try {
     await builtInMcpHost.start()
+    assertStartupOpen()
     appRunJournal.record({ area: 'mcp.host', name: 'mcp_host.end' })
   } catch (err) {
     appRunJournal.recordError('mcp_host.error', err)
@@ -794,6 +816,7 @@ async function startApp(): Promise<void> {
   }
   const agentCodeConventionsService = new AgentCodeManagedSkillsService()
   await agentCodeConventionsService.initialize()
+  assertStartupOpen()
   manager = new SessionManager(
     tmuxAvailable ? tmuxRegistry : null,
     builtInMcpHost,
@@ -871,8 +894,10 @@ async function startApp(): Promise<void> {
     ...workflowControlCapabilities(activeWorkflowService, invokeTask), ...usageControlCapabilities(), ...applicationIdentityCapabilities(), ...sessionHistoryControlCapabilities(), ...nativeHistoryControlCapabilities(() => conversationService), ...conditionBackendCapabilities(controlManager), ...terminalBackendCapabilities(controlManager), ...windowLifecycleControlCapabilities(), ...externalSettings.capabilities,
   ])
   externalHost = new ExternalControlMcpHost(controlHost.forCaller({ kind: 'external', id: 'agent-code-control' }))
+  disposeExternalControl = () => externalSettings.dispose()
+  disposeControlHost = () => controlHost.dispose()
   await externalSettings.initialize()
-  app.once('will-quit', () => { void externalSettings.dispose(); controlHost.dispose() })
+  assertStartupOpen()
   const tldrStore = new TldrStore(join(STATE_DIR, 'tldr.json'))
   const tldrEnforcement = new TldrEnforcement(tldrStore)
   // Before any session can register: the sweep removes every entry, and each
@@ -880,6 +905,7 @@ async function startApp(): Promise<void> {
   await sweepStaleTldrHookFiles(TLDR_HOOK_RUNTIME_DIR).catch(error => {
     console.warn('[tldr] stale hook file sweep failed:', error)
   })
+  assertStartupOpen()
   registerTldrIpc(tldrStore, tldrEnforcement)
   builtInMcpHost.setDependencies({
     tldrStore,
@@ -943,11 +969,14 @@ async function startApp(): Promise<void> {
     },
   })
   await cliUpdateOrchestrator.loadInitialBehavior()
+  assertStartupOpen()
   // WHY the workspace file is read here, before any window exists: it now holds
   // the window list, so it is what decides how many windows to create. The old
   // renderer-driven `workspace:load` could not answer that — it required a
   // renderer, which requires a window.
   const workspaceFileStore = await WorkspaceFileStore.open()
+  shutdownWorkspaceStore = workspaceFileStore
+  assertStartupOpen()
   // Conversation ledger (docs/decomposition/conversations.md, Stage 3): a
   // projection of every window's sessions keyed by native id, so the picker
   // can name and classify conversations after their panes are gone. Boots
@@ -957,6 +986,7 @@ async function startApp(): Promise<void> {
     console.warn('[conversations] ledger unavailable', error)
     return null
   })
+  assertStartupOpen()
   if (conversationLedger) {
     const projectConversations = (windows: readonly PersistedWindow[]) => {
       void readAgentNameAssignments(AGENT_NAMES_FILE)
@@ -1144,144 +1174,74 @@ async function startApp(): Promise<void> {
   })
 }
 
-app.on('before-quit', (event) => {
-  // WHY Electron quit is gated on WorkflowService.stop(): the durable service
-  // promises that every published event was appended first, but cancellation
-  // and the terminal/interrupted marker still require asynchronous file I/O.
-  // A fire-and-forget stop here would let Electron tear main down between
-  // those writes, leaving a healthy user-initiated quit indistinguishable from
-  // a crash. Prevent exactly the first quit, drain once, then re-enter quit
-  // with the completion flag set so the ordinary lifecycle can finish.
-  if (workflowService && !workflowShutdownComplete) {
-    event.preventDefault()
-    if (!workflowShutdownPromise) {
-      workflowShutdownPromise = workflowService
-        .stop('Agent Code is quitting')
-        .catch(err => {
-          // An unconfirmed provider may still own descendants. Treating this as a warning and
-          // immediately calling app.quit() defeats Workflow MCP's fail-closed ownership fence.
-          // Keep Electron alive, retain the bridge for diagnostics, and let a later quit retry once
-          // the provider settles (or let the user make an explicit OS-level force-quit decision).
-          console.error('[workflows] graceful shutdown blocked:', err)
-          appRunJournal?.recordError('workflow_service.stop.error', err)
-          workflowShutdownPromise = null
-          void dialog.showMessageBox({
-            type: 'error',
-            title: 'Agent work is still shutting down',
-            message: 'Agent Code could not safely quit yet.',
-            detail: err instanceof Error ? err.message : String(err),
-            buttons: ['Keep Agent Code Open'],
-            defaultId: 0,
-            cancelId: 0,
-            noLink: true,
-          })
-          throw err
-        })
-        .then(() => {
-          workflowBridge?.dispose()
-          workflowShutdownComplete = true
-          workflowBridge = null
-          workflowService = null
-          app.quit()
-        })
-        .catch(() => undefined)
-    }
-    return
-  }
-  appRunJournal?.record({ area: 'app.lifecycle', name: 'app.before_quit' })
-  performanceService.mark('app.main.beforeQuit')
-  // WHY coalescers drain on the initial quit attempt: their buffers are cheap
-  // and safe to flush even when a renderer veto keeps the app alive. Terminal
-  // SessionManager teardown is deliberately deferred to will-quit below,
-  // because unlike a coalescer flush it cannot be rolled back after Keep Editing.
-  sessionForwarder?.flush()
-  void builtInMcpHost.stop()
-  void remoteController?.dispose()
-  void lspManager.dispose()
-  caffeinateController.dispose()
-  cleanupDictationIpcResources()
-  stopMainHeapWatchdog()
-  // Flush pending ghost writes. Fire-and-forget is fine — Electron's
-  // quit path gives us a tick before teardown. 100 ms queue depth is
-  // worst-case; in practice drains are empty at quit time because
-  // streaming is idle.
-  void ghostJournals.flushAll()
-  // Same one-tick-before-teardown rationale as ghostJournals; recordings are
-  // usually mid-stream at quit, so this drain matters more than the ghost one.
-  void sessionRecorders?.flushAll()
-  // Same rationale as ghostJournals — Electron gives us one tick before
-  // teardown. 100 ms queue depth is the worst case; in practice the
-  // dictation journal is idle at quit unless the user is pressing Fn
-  // at the exact moment of app shutdown.
-  void dictationDebugJournals.flushAll()
-  // Dictation HISTORY is a separate store from the debug journal above, and its
-  // flush is load-bearing rather than best-effort: `appendEntry` is called
-  // without await from the stream-stop handler (so a disk write never delays
-  // the transcript reaching the composer), which means a dictation finished
-  // seconds before quit can still be in flight right now. Without this the row
-  // is simply lost, with no error anywhere. See historyStore.ts.
-  void flushHistoryWrites()
-  void pasteDebugJournals.flushAll()
-  performanceService.stop()
-})
-
-const sessionShutdownGate = installSessionShutdownGate({
+// One composition owns every committed-quit disposer. Electron's before-quit
+// precedes renderer unload decisions, so only reversible preparation belongs
+// there. In particular, Keep Editing must leave workflow/MCP/LSP/remote/voice
+// services intact. The gate holds will-quit until this inventory has settled.
+const sessionShutdownGate = installApplicationShutdown({
   app,
-  getManager: () => {
-    const current = manager
-    if (!current) return null
-    return {
-      killAll: async () => {
-        await current.killAll()
-        // WHY a second sweep after killAll: killAll stops the sessions it
-        // knows about, and each ClaudeSession.stop() already terminates its
-        // own mitmdump under a deadline. This catches what that snapshot
-        // cannot — a proxy whose session was mid-start when shutdown began,
-        // or a stop() that gave up — by asking the kernel which marked
-        // mitmdumps still have THIS process as parent. Composed here rather
-        // than inside SessionManager or the gate so neither learns about a
-        // Claude-specific child process. Never rejects: a failed sweep must
-        // not hold quit (the gate is fail-closed on rejection), and the
-        // startup reaper on the next launch is the backstop anyway.
-        try {
-          const report = await reapOwnedMitmproxyProcesses()
-          if (report.owned > 0) {
-            appRunJournal?.record({
-              area: 'proxy',
-              name: 'proxy.mitmdump.quit_sweep',
-              severity: 'warn',
-              data: { ...report },
-            })
-          }
-        } catch (err) {
-          appRunJournal?.recordError('proxy.mitmdump.quit_sweep.error', err)
-        }
-      },
-    }
-  },
   platform: process.platform,
-  onLastWindowClosed: () => {
-    // WHY these provider-neutral resources still stop at last-window close on
-    // non-macOS: this preserves the established cleanup timing while the
-    // shutdown gate remains the exclusive owner of session/provider teardown.
-    // The built-in MCP host intentionally remains app-owned until before-quit.
-    void remoteController?.dispose()
-    void lspManager.dispose()
-    caffeinateController.dispose()
+  prepare: () => {
+    appRunJournal?.record({ area: 'app.lifecycle', name: 'app.before_quit' })
+    performanceService.mark('app.main.beforeQuit')
+    sessionForwarder?.flush()
+  },
+  services: {
+    getSessions: () => manager,
+    getWorkflows: () => workflowService,
+    startupSettled: () => startupTask ?? Promise.resolve(),
+    stopDictation: cleanupDictationIpcResources,
+    flushObservations: () => sessionForwarder?.flush(),
+    sweepOwnedProxies: async () => {
+      // Keep the existing best-effort backstop AFTER managed session teardown.
+      // This is a kernel sweep of our marked children, not proof that an
+      // uncertain provider stop succeeded; that stop already gates this stage.
+      try {
+        const report = await reapOwnedMitmproxyProcesses()
+        if (report.owned > 0) appRunJournal?.record({
+          area: 'proxy', name: 'proxy.mitmdump.quit_sweep', severity: 'warn', data: { ...report },
+        })
+      } catch (error) { appRunJournal?.recordError('proxy.mitmdump.quit_sweep.error', error) }
+    },
+    stopBuiltInMcp: () => builtInMcpHost.stop(),
+    stopRemote: () => remoteController?.dispose(),
+    stopLsp: () => lspManager.dispose(),
+    stopExternalControl: () => disposeExternalControl?.(),
+    disposeControl: () => disposeControlHost?.(),
+    disposeWorkflowBridge: () => workflowBridge?.dispose(),
+    disposeCaffeinate: () => caffeinateController.dispose(),
+    stopHeapWatchdog: stopMainHeapWatchdog,
+    drainWorkspace: () => shutdownWorkspaceStore?.drainAdmittedWrites(),
+    drainDictationHistory: flushHistoryWrites,
+    flushGhosts: () => ghostJournals.flushAll(),
+    flushRecordings: () => sessionRecorders?.flushAll(),
+    flushDictationDebug: () => dictationDebugJournals.flushAll(),
+    flushPasteDebug: () => pasteDebugJournals.flushAll(),
+    stopPerformance: () => performanceService.stop(),
   },
   onQuitAllowed: () => {
     appRunJournal?.record({ area: 'app.lifecycle', name: 'app.will_quit' })
-    appRunJournal?.markCleanShutdown('will-quit')
+    if (!startupFailed) appRunJournal?.markCleanShutdown('will-quit')
     appRunJournal?.stop()
     stateProcessLock?.releaseSync()
     stateProcessLock = null
   },
   onShutdownError: error => {
-    // WHY a rejected terminal drain blocks quit: SessionManager owns exact
-    // transcript leases and in-flight recovery claims. Exiting while their
-    // teardown is uncertain recreates the cross-process ownership ambiguity
-    // this PR is designed to eliminate. A later explicit quit retries.
-    console.error('[sessions] graceful shutdown blocked:', error)
-    appRunJournal?.recordError('session_manager.kill_all.error', error)
+    console.error('[app] graceful shutdown blocked:', error)
+    appRunJournal?.recordError('app.shutdown.error', error)
+    if (!app.isReady()) return
+    void dialog.showMessageBox({
+      type: 'error', title: 'Agent work is still shutting down',
+      message: 'Agent Code could not safely quit yet.',
+      detail: 'Shutdown is incomplete. Quit again to retry.\n\n' + (error instanceof AggregateError
+        ? error.errors.map(cause => cause instanceof Error ? cause.message : String(cause)).join('\n')
+        : error instanceof Error ? error.message : String(error)),
+      buttons: ['Keep Agent Code Open'], defaultId: 0, cancelId: 0, noLink: true,
+    }).catch(reportError => console.error('[app] could not show shutdown error:', reportError))
   },
+  onDiagnosticError: (stage, error) => appRunJournal?.recordError(`app.shutdown.${stage}.error`, error),
 })
+// Cover menu, IPC, external control and restoration through their shared factory,
+// not just the macOS activate callback. Failed committed shutdown is terminal;
+// a fresh renderer's unload veto cannot make partially stopped services usable.
+setWindowCreationAdmission(() => !sessionShutdownGate.isTerminalShutdownAdmitted())

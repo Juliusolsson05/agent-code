@@ -3,6 +3,7 @@ import type { MenuItemConstructorOptions } from 'electron'
 
 import {
   createAppWindow,
+  isWindowCreationAllowed,
   sendToFocusedWindow,
   zoomFocusedWindow,
 } from '@main/window/windowRegistry.js'
@@ -80,7 +81,7 @@ export function buildAppMenu(): Menu {
           // windows per press.
           label: 'New Window',
           click: () => {
-            createAppWindow()
+            if (isWindowCreationAllowed()) createAppWindow()
           },
         },
         { type: 'separator' },
