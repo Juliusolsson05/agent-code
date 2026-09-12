@@ -179,6 +179,33 @@ async function runOpencode(
         stdio: ['ignore', fd, 'pipe'],
       })
       let failure: Error | undefined
+      // WHY the lifecycle listeners come first, before timers and stdio: on
+      // EMFILE/ENFILE Node's spawn() returns early with no pid and NO stderr
+      // stream, then emits `error` (and `close`) on the next tick. Descriptor
+      // exhaustion is reachable in a busy Electron main process even though
+      // open() above succeeded, because the stderr pipe and the exec need more
+      // descriptors. The old order dereferenced `child.stderr!` first: that
+      // threw inside this executor, so the promise rejected with a TypeError,
+      // the timers and abort listener were never cleared, and the next-tick
+      // `error` had no listener. An unhandled ChildProcess `error` is an
+      // uncaught exception, and installCrashHooks exits the app on those.
+      // Nothing below this point may be allowed to run before these exist.
+      //
+      // Node also emits error when a kill fails, not just on failed spawn.
+      // Retain capture ownership until close (which follows spawn errors too),
+      // otherwise cleanup could unlink output while its producer is alive.
+      child.on('error', error => { failure ??= error })
+      child.once('close', (code, signal) => {
+        // Referencing the timers declared below is safe: `close` is always
+        // emitted asynchronously, after this executor has run to completion.
+        clearInterval(sizeGuard)
+        clearTimeout(deadline)
+        options.signal?.removeEventListener('abort', abort)
+        if (options.signal?.aborted) reject(new Error('OpenCode command cancelled'))
+        else if (failure) reject(failure)
+        else if (code !== 0) reject(new Error(stderrText().trim() || `exited with ${signal ?? code}`))
+        else resolve()
+      })
       const deadline = setTimeout(() => {
         failure ??= new Error(`timed out after ${timeoutMs} ms`)
         child.kill('SIGKILL')
@@ -202,23 +229,11 @@ async function runOpencode(
         }
       }, 100)
       sizeGuard.unref()
-      child.stderr!.on('data', (chunk: Buffer) => {
+      // Optional: absent when spawn failed before stdio setup (see above).
+      child.stderr?.on('data', (chunk: Buffer) => {
         const keep = Math.min(chunk.length, MAX_STDERR_BYTES - stderrBytes)
         if (keep > 0) { stderrChunks.push(Buffer.from(chunk.subarray(0, keep))); stderrBytes += keep }
         if (keep < chunk.length) stderrTruncated = true
-      })
-      // Node also emits error when a kill fails, not just on failed spawn.
-      // Retain capture ownership until close (which follows spawn errors too),
-      // otherwise cleanup could unlink output while its producer is alive.
-      child.on('error', error => { failure ??= error })
-      child.once('close', (code, signal) => {
-        clearInterval(sizeGuard)
-        clearTimeout(deadline)
-        options.signal?.removeEventListener('abort', abort)
-        if (options.signal?.aborted) reject(new Error('OpenCode command cancelled'))
-        else if (failure) reject(failure)
-        else if (code !== 0) reject(new Error(stderrText().trim() || `exited with ${signal ?? code}`))
-        else resolve()
       })
       // The signal may have fired while the capture was being minted, before
       // the listener existed; `once` listeners are not replayed for past aborts.

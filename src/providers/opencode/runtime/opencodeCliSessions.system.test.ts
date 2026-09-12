@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { mkdtemp, mkdir, readdir, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { EventEmitter } from 'node:events'
+import { EventEmitter, getEventListeners } from 'node:events'
 import { PassThrough } from 'node:stream'
 import { performance } from 'node:perf_hooks'
 import { spawn } from 'node:child_process'
@@ -139,6 +139,34 @@ describe('OpenCode CLI output integrity', () => {
     }
     expect(beforeClose).toBe('waiting for close')
     expect((await result as Error).message).toContain('controlled post-spawn error')
+    await expectClean()
+  })
+
+  it('rejects a spawn that failed before stdio existed without an uncaught child error', async () => {
+    // Node's spawn() returns early on EMFILE/ENFILE: no pid, no stderr stream,
+    // and `error` then `close` arrive on the next tick. Exhausting descriptors
+    // inside a shared test worker would break unrelated tests, so this double
+    // reproduces that exact shape instead. EventEmitter throws synchronously
+    // from emit('error') when nothing listens; catching it here turns what
+    // would be a process-level uncaught exception into an assertable value.
+    let uncaught: unknown
+    const child = Object.assign(new EventEmitter(), { kill: vi.fn() })
+    vi.mocked(spawn).mockImplementationOnce(() => {
+      process.nextTick(() => {
+        try { child.emit('error', Object.assign(new Error('spawn opencode EMFILE'), { code: 'EMFILE' })) } catch (error) { uncaught = error }
+        child.emit('close', -24, null)
+      })
+      return child as unknown as ReturnType<typeof spawn>
+    })
+    const controller = new AbortController()
+    const failure = await exportOpencodeSession({ ...options(), signal: controller.signal, timeoutMs: 50 }, 'ses_fixture').catch((error: Error) => error)
+    expect(uncaught).toBeUndefined()
+    expect((failure as Error).message).toContain('EMFILE')
+    expect(getEventListeners(controller.signal, 'abort')).toEqual([])
+    // Past the 50 ms deadline and two size-guard polls: a timer that survived
+    // settlement would try to kill the (never started) child.
+    await new Promise(resolve => setTimeout(resolve, 250))
+    expect(child.kill).not.toHaveBeenCalled()
     await expectClean()
   })
 })
