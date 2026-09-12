@@ -217,6 +217,12 @@ export const CORNER_STYLES: CornerStyleMeta[] = [
 
 export type DictationProviderId = DictationProvider
 
+/** The label is display-only, so an unplugged microphone remains recognizable.
+ * Device IDs are opaque browser identities; never recover by matching labels,
+ * which can collide across two identical headsets. null keeps the historical
+ * built-in preference, while deviceId 'default' follows the operating system. */
+export type DictationAudioInput = { deviceId: string; label: string }
+
 // Font choice for the entire app. This is the single source of truth for
 // "what monospace face does Agent Code render in" — normal DOM inherits
 // `--theme-app-font`, old `font-code` Tailwind classes alias to that same
@@ -450,6 +456,7 @@ export type Settings = {
    *  toggle recording. */
   dictationEnabled: boolean
   dictationProvider: DictationProviderId
+  dictationAudioInput: DictationAudioInput | null
   /** Arbitrary keyboard binding captured by the settings UI. The standalone
    *  dictation app historically offered fixed choices, but Agent Code needs the
    *  same "press the key you want" model because composer bindings compete
@@ -649,6 +656,7 @@ export const DEFAULT_SETTINGS: Settings = {
   useProxyStreaming: true,
   dictationEnabled: false,
   dictationProvider: 'deepgram',
+  dictationAudioInput: null,
   // WHY the default binding is Cmd+Shift+D and not Fn (packaged-mode fix):
   // the Fn key can only be captured on macOS via a CGEventTap, which
   // requires the app to hold the Accessibility permission — an OS-level

@@ -7,7 +7,7 @@ export const controlReference = [
     "id": "dictation",
     "title": "Voice dictation and history",
     "purpose": "Turn speech into composer text through the configured speech provider.",
-    "ui": "Dictation controls, shortcut/mouse trigger, settings and history.",
+    "ui": "Dictation controls, shortcut/mouse trigger, Settings → Dictation → Audio Input Device, and history. Microphone changes apply to the next desktop recording.",
     "prerequisites": "Configured speech provider and microphone permission.",
     "workflow": [
       "Start recording",

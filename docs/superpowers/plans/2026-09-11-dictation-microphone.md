@@ -2,9 +2,11 @@
 
 Issue: #902
 
+Status: Implemented; PR review and CI pending.
+
 ## Outcome
 
-Settings → Voice Dictation offers Audio Input Device with the existing automatic
+Settings → Dictation offers Audio Input Device with the existing automatic
 built-in preference, system default, and actual connected microphones. The
 preference survives restart and controls the next composer or terminal dictation
 recording, including keyboard and mouse triggers.
@@ -32,3 +34,18 @@ Run focused deterministic tests, type checking, the complete deterministic
 repository check, and review the final diff. Open a linked PR and inspect CI.
 Hardware verification requires a real headset/closed-lid session and must not be
 claimed from mocked browser-media tests.
+
+## Verification results
+
+- 74 tests passed across the focused settings/recorder suites and the separately
+  retried Claude prompt-acceptance suite; type checking passed.
+- Application build and required-entry-point verification passed.
+- The full deterministic run passed 3,274 tests but hit the existing image
+  provenance dependency on rotated personal history (#901) and a transient
+  Electron installation race. The latter suite passed after installation
+  completed; no unrelated production or fixture code was changed.
+- Visually inspected the actual settings row in an isolated Chrome preview with
+  a mocked device inventory and changed the selection from USB Headset to
+  AirPods Pro. This verifies UI behavior, not physical microphone capture.
+- Review added immediate permission-stream release on unmount and protection
+  against stale device enumeration erasing a permission error, with coverage.
