@@ -1,3 +1,4 @@
+import { sessionMcpOverrides } from '@renderer/workspace/mcpDomains'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { tldrIdentityForSession } from '@renderer/features/tldr/identity'
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
@@ -129,7 +130,6 @@ export function useProviderActions(
         kind,
         targetSessionId: sourceSessionId,
         resumeSessionId,
-        builtInMcpDomains: meta.builtInMcpDomains,
       })
       if (!newSessionId) return { status: 'failed', message: 'Replacement was not committed' }
       showPaneToast(
@@ -212,7 +212,6 @@ export function useProviderActions(
         const newSessionId = await sessionActions.replaceSession(meta.cwd, {
           kind,
           resumeSessionId: result.newProviderSessionId,
-          builtInMcpDomains: meta.builtInMcpDomains,
           targetSessionId: sourceSessionId,
         })
         if (!newSessionId) return { status: 'failed', message: 'Replacement was not committed' }
@@ -279,7 +278,9 @@ export function useProviderActions(
                 // native rewind/spawn awaited must remain recoverable by Undo.
                 previousDraftInput: runtime.draftInput,
                 previousDraftImages: runtime.draftImages.slice(),
-                builtInMcpDomains: meta.builtInMcpDomains,
+                // The ORIGINAL conversation's choices, beside its original
+                // transcript: undo restores the pane the user actually had.
+                builtInMcpOverrides: sessionMcpOverrides(meta),
               },
             },
           }
@@ -330,7 +331,7 @@ export function useProviderActions(
         kind: pending.provider,
         resumeSessionId: pending.previousProviderSessionId,
         restoreTldrIdentity: pending.previousTldrIdentity,
-        builtInMcpDomains: pending.builtInMcpDomains,
+        builtInMcpOverrides: pending.builtInMcpOverrides,
         targetSessionId: sourceSessionId,
       })
       if (!newSessionId) return { status: 'failed', message: 'Replacement was not committed' }
@@ -421,7 +422,6 @@ export function useProviderActions(
         const newSessionId = await sessionActions.replaceSession(meta.cwd, {
           kind: 'codex',
           resumeSessionId: result.newProviderSessionId,
-          builtInMcpDomains: meta.builtInMcpDomains,
           targetSessionId: sourceSessionId,
         })
         if (!newSessionId) return { status: 'failed', message: 'Replacement was not committed' }
@@ -447,7 +447,9 @@ export function useProviderActions(
                 rewoundPromptTimestamp: null,
                 previousDraftInput: runtime.draftInput,
                 previousDraftImages: runtime.draftImages.slice(),
-                builtInMcpDomains: meta.builtInMcpDomains,
+                // The ORIGINAL conversation's choices, beside its original
+                // transcript: undo restores the pane the user actually had.
+                builtInMcpOverrides: sessionMcpOverrides(meta),
               },
             },
           }

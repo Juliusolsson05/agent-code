@@ -92,9 +92,13 @@ a running session can move mid-task among Claude Code, Codex, and OpenCode.
 
 - **TLDR peek** — enable **TLDR MCP** for an agent, then hold **Cmd+L** to
   see each visible agent’s latest short status centered over its darkened pane.
-  Release to return. The **TLDR** palette command also opens the preview;
-  Escape dismisses it. Reporting is off by default, with an opt-in default for
-  new agents in Settings. The editor keeps Cmd+L Select Line.
+  A small footer shows **Last active** and **Note written** independently, using
+  relative times and calendar dates for older activity. Release to return. The
+  **TLDR** palette command also opens the preview; Escape dismisses it. Reporting
+  is off by default. MCP settings apply to new agents and existing agents on their
+  next reload, including the managed reporting skill. Explicit per-agent choices
+  take priority; **Use Global MCP Settings** clears those choices and reloads the
+  agent. The editor keeps Cmd+L Select Line.
 - **Prompt and transcript tools** — search, rewind, duplicate, resume-command
   copy, prompt templates. Reader Mode gives a paginated, distraction-free view
   of long sessions for reviewing what an agent actually did.

@@ -30,7 +30,7 @@ describe('TLDR placement in the actual workspace leaf', () => {
         detachedSessions: { child: { sessionId: 'child', surface: 'dispatch', projectTabId: 'project', detachedAt: 1 } },
         gridRelatedSelections: { parent: 'child' }, buried: [], pinnedSessionIds: [],
       },
-      getRuntime: () => emptyRuntime(),
+      getRuntime: (id: string) => ({ ...emptyRuntime(), lastJsonlEntryAt: Date.parse(id === 'child' ? '2026-09-10T01:00:00.000Z' : '2026-09-09T01:00:00.000Z') }),
     } as unknown as Workspace
     const readTldrs = vi.fn(async (ids: string[]) => Object.fromEntries(ids.map(id => [id, { text: `Saved ${id}.`, revision: 1, updatedAt: '2026-09-11T00:00:00.000Z' }])))
     window.api = { ...originalApi, readTldrs, onTldrChanged: () => () => {} }
@@ -40,6 +40,7 @@ describe('TLDR placement in the actual workspace leaf', () => {
     expect(screen.getAllByRole('note')).toHaveLength(1)
     expect(screen.queryByText('Saved parent-summary.')).toBeNull()
     expect(readTldrs).toHaveBeenCalledWith(['child-summary'])
+    expect(screen.getByLabelText(/^Last active /).getAttribute('datetime')).toBe('2026-09-10T01:00:00.000Z')
     expect(screen.getByText(mode === 'agent' ? 'Feed child' : 'Agent terminal child')).toBeTruthy()
     expect(screen.getByText('Shell terminal')).toBeTruthy()
 
@@ -47,6 +48,7 @@ describe('TLDR placement in the actual workspace leaf', () => {
     // their explicit session, without following a grid parent's selection.
     view.rerender(<AgentTerminalOwnershipProvider>{renderWorkspaceLeaf('parent', 'parent', workspace, 'project', mode, true, true)}</AgentTerminalOwnershipProvider>)
     expect(screen.getByText('TLDR is off')).toBeTruthy()
+    expect(screen.getByLabelText(/^Last active /).getAttribute('datetime')).toBe('2026-09-09T01:00:00.000Z')
     expect(screen.queryByText('Saved child-summary.')).toBeNull()
   })
 })
