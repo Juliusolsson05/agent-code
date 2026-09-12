@@ -161,7 +161,7 @@ describe('AgentTerminalLeaf status header', () => {
     // real leaf and reads the rendered text.
     const switched = {
       ...withStatus('idle'),
-      transcriptError: 'OpenCode switched to session ses_new inside the TUI. This pane still follows ses_old.',
+      transcriptChannelError: 'OpenCode switched to session ses_new inside the TUI. This pane still follows ses_old.',
     }
     const { container, rerender } = render(leaf(switched, true))
     const banner = container.querySelector('[data-terminal-transcript-error="true"]')
@@ -173,6 +173,13 @@ describe('AgentTerminalLeaf status header', () => {
     // The negative half: a banner that never clears would be its own lie, and
     // a leaf that only read the error at mount would pass the assertion above.
     rerender(leaf(withStatus('idle'), true))
+    expect(container.querySelector('[data-terminal-transcript-error="true"]')).toBeNull()
+
+    // A transient diagnostic must NOT take the pane's banner. `sink_failed` is
+    // an internal delivery hiccup that clears on the next successful read and
+    // that the user cannot act on; standing a warning over their terminal for
+    // it teaches them to ignore the banner that matters.
+    rerender(leaf({ ...withStatus('idle'), transcriptError: 'OpenCode durable channel (sink_failed): listener threw' }, true))
     expect(container.querySelector('[data-terminal-transcript-error="true"]')).toBeNull()
   })
 

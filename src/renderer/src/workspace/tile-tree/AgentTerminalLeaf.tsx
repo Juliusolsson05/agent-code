@@ -714,8 +714,17 @@ export function AgentTerminalLeaf({
           It takes layout space rather than overlaying: the terminal is the
           content, and covering a line of it to report a problem would be its
           own small lie. xterm's fit addon reflows on the resulting resize.
-          Nothing here is focusable, so the terminal keeps keyboard focus. */}
-      {runtime.transcriptError ? (
+          Nothing here is focusable, so the terminal keeps keyboard focus.
+
+          WHY `transcriptChannelError` and not `transcriptError`: the latter
+          also carries transient diagnostics — a `sink_failed` delivery hiccup,
+          a history read that the next read fixes — which the user can do
+          nothing about and which clear themselves. Standing a warning over
+          someone's terminal for those trains them to ignore the banner, which
+          costs exactly the one case it exists for. This field is the lifetime
+          marker: a channel that stopped for good, or a TUI that moved to
+          another session. Both stay true until something real changes. */}
+      {runtime.transcriptChannelError ? (
         <div
           data-terminal-transcript-error="true"
           role="status"
@@ -724,7 +733,7 @@ export function AgentTerminalLeaf({
             bg-warning-soft px-2 py-1 text-[10px] leading-snug text-warning
           "
         >
-          {runtime.transcriptError}
+          {runtime.transcriptChannelError}
         </div>
       ) : null}
 
