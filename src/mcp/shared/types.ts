@@ -2,6 +2,7 @@ import type { AgentProviderKind } from '@shared/types/providerKind.js'
 
 export type BuiltInMcpDomain =
   | 'tldr'
+  | 'goal'
   | 'ping'
   | 'orchestration'
   | 'ai_workspace'
@@ -12,6 +13,7 @@ export type BuiltInMcpDomain =
 
 export const BUILT_IN_MCP_DOMAINS = [
   'tldr',
+  'goal',
   'ping',
   'orchestration',
   'ai_workspace',
@@ -41,6 +43,7 @@ export const BUILT_IN_MCP_DOMAINS = [
  */
 export const CONFIGURABLE_BUILT_IN_MCP_DOMAINS = [
   'tldr',
+  'goal',
   'orchestration',
   'ai_workspace',
   'agent_transcripts',
@@ -97,6 +100,7 @@ export const CONFIRMATION_GATED_BUILT_IN_MCP_DOMAINS = [
 const BUILT_IN_MCP_DOMAINS_BY_PROVIDER = {
   claude: [
     'tldr',
+    'goal',
     'ping',
     'orchestration',
     'ai_workspace',

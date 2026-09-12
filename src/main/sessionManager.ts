@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto'
+import { hasReportingDomain } from '@shared/types/tldr.js'
 import { EventEmitter } from 'events'
 import path from 'node:path'
 import { performance } from 'perf_hooks'
@@ -2583,9 +2584,9 @@ export class SessionManager extends EventEmitter {
           await this.beforeAgentSessionStart(options)
         } catch (error) {
           this.journal?.recordError('conventions.pre_spawn_reconcile.error', error)
-          // TLDR explicitly promises a managed reporting skill. Do not launch
-          // an enabled session while silently omitting that requested contract.
-          if (options.builtInMcpDomains?.includes('tldr')) throw error
+          // TLDR and Goal each promise a managed skill. Do not launch an
+          // enabled session while silently omitting that requested contract.
+          if (hasReportingDomain(options.builtInMcpDomains)) throw error
         }
         this.throwIfSpawnCancelled(recoveryClaim, codexReplacementHandoff)
       }

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import { DEFAULT_SETTINGS } from '@renderer/app-state/settings/types'
+import { CONFIGURABLE_BUILT_IN_MCP_DOMAINS } from '@mcp/shared/types'
 import {
   getSettingsRegistry,
   settingMetadata,
@@ -29,6 +30,18 @@ describe('built-in MCP default settings', () => {
       'default-workflow-mcp',
     ]))
     expect(ids).not.toContain('default-ping-mcp')
+  })
+
+  it('gives every configurable domain exactly one default toggle that reads that domain', () => {
+    // Derived from the domain list rather than hand-listed ids, so a new
+    // capability (Goal, #936) cannot ship without its row, and a row copied
+    // from a sibling cannot keep reading the sibling's domain.
+    const toggles = getSettingsRegistry().filter((setting): setting is ToggleSetting =>
+      /^default-.*-mcp$/.test(setting.id) && setting.control.type === 'toggle')
+    for (const domain of CONFIGURABLE_BUILT_IN_MCP_DOMAINS) {
+      const reading = toggles.filter(setting => setting.control.getValue({ ...DEFAULT_SETTINGS, defaultBuiltInMcpDomains: [domain] }))
+      expect(reading.map(setting => setting.id), domain).toHaveLength(1)
+    }
   })
 
   it('adds and removes one domain without disturbing sibling defaults', async () => {
