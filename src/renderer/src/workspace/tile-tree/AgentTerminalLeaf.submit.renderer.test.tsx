@@ -30,6 +30,7 @@ const settings = vi.hoisted(() => ({
   dictationProvider: 'local',
   dictationShortcut: 'off',
   mouseModeEnabled: false,
+  dispatchColorFlags: {},
 }))
 
 // Read by the follow wiring in AgentTerminalLeaf; absent it would be
@@ -58,7 +59,7 @@ vi.mock('@xterm/xterm', () => ({
       this.onDataListener = listener
       return { dispose: this.inputDispose }
     }
-    // Follow wiring (agentTerminalFollow) subscribes to viewport movement on
+    // Follow wiring (terminalFollow) subscribes to viewport movement on
     // mount; these scroll surfaces exist so the Submit harness exercises the
     // same Terminal API the real component consumes.
     onScroll(listener: (line: number) => void) {
@@ -141,6 +142,7 @@ describe('AgentTerminalLeaf Mouse Mode Submit', () => {
             runtime={{ ...emptyRuntime(), processStatus: 'started' }}
             projectDir="/tmp/project"
             provider="codex"
+            showStatusMode={false}
           />
         </MountedAgentTerminalOwner>
       </AgentTerminalOwnershipProvider>

@@ -12,6 +12,9 @@ export type OpencodeCliSessionOptions = {
   binary: string
   cwd: string
   env?: NodeJS.ProcessEnv
+  signal?: AbortSignal
+  /** A stuck CLI must not hold startup or a transcript transform indefinitely. */
+  timeoutMs?: number
 }
 
 /**
@@ -134,10 +137,16 @@ async function runOpencode(
   options: OpencodeCliSessionOptions,
   args: string[],
 ): Promise<{ stdout: string; stderr: string }> {
-  const directory = await mkdtemp(join(tmpdir(), 'agent-code-opencode-output-'))
-  const outputPath = join(directory, 'stdout')
+  let directory: string | undefined
   let output: FileHandle | undefined
   try {
+    // Checked before minting the capture directory so an already-stopped
+    // caller creates nothing on disk. It sits inside this try (as it did when
+    // runOpencode still used execFile) so cancellation keeps the same wrapped
+    // `OpenCode <command> failed: ...` shape as every other failure.
+    options.signal?.throwIfAborted()
+    directory = await mkdtemp(join(tmpdir(), 'agent-code-opencode-output-'))
+    const outputPath = join(directory, 'stdout')
     // OpenCode 1.18.30 writes stdout, then process.exit() without awaiting the
     // pipe flush (cli/cmd/export.ts + index.ts). Raising execFile.maxBuffer
     // cannot recover bytes the producer never delivered: a real 14.6 MB export
@@ -149,12 +158,37 @@ async function runOpencode(
     let stderrBytes = 0
     let stderrTruncated = false
     const stderrText = () => Buffer.concat(stderrChunks).toString('utf8') + (stderrTruncated ? '\n[stderr truncated]' : '')
+    const timeoutMs = Math.max(1, options.timeoutMs ?? 30_000)
     await new Promise<void>((resolve, reject) => {
+      // Two changes met here when #846 was merged with main. Main (e9ac8bdf,
+      // Refs #864) bounded every CLI call with execFile's `timeout` plus an
+      // owned abort listener, both SIGKILL, so a hung empty-session import
+      // cannot hold OpenCode Terminal startup or survive stop(). This branch
+      // (#845) replaced execFile with spawn so stdout can be a regular file.
+      // spawn has no `timeout`/`killSignal`, and its own `signal` option sends
+      // SIGTERM, which a wedged CLI can ignore (the system test's fake CLI
+      // does exactly that). So both bounds are rebuilt by hand on SIGKILL.
+      //
+      // The invariant from main still holds: this promise settles ONLY from
+      // `close`, never from the abort or timeout event. Rejecting earlier
+      // would let the finally blocks here and in importOpencodeSession delete
+      // the capture and the import payload while the child is still alive and
+      // writing or reading them.
       const child = spawn(options.binary, args, {
         cwd: options.cwd, env: options.env ?? process.env,
         stdio: ['ignore', fd, 'pipe'],
       })
       let failure: Error | undefined
+      const deadline = setTimeout(() => {
+        failure ??= new Error(`timed out after ${timeoutMs} ms`)
+        child.kill('SIGKILL')
+      }, timeoutMs)
+      // No `failure` is recorded for abort: close checks `signal.aborted`
+      // first, so cancellation wins over any overflow or timeout that raced it.
+      // That matches the execFile version, which callers such as
+      // OpencodeTerminalSession treat as an expected stop, not a failure.
+      const abort = () => { child.kill('SIGKILL') }
+      options.signal?.addEventListener('abort', abort, { once: true })
       // Detect overflow while the producer runs, then check its final size
       // before allocating a string. Polling is a soft disk bound, not a hard
       // quota. Overflow fails the command; never parse a truncated prefix.
@@ -179,10 +213,16 @@ async function runOpencode(
       child.on('error', error => { failure ??= error })
       child.once('close', (code, signal) => {
         clearInterval(sizeGuard)
-        if (failure) reject(failure)
+        clearTimeout(deadline)
+        options.signal?.removeEventListener('abort', abort)
+        if (options.signal?.aborted) reject(new Error('OpenCode command cancelled'))
+        else if (failure) reject(failure)
         else if (code !== 0) reject(new Error(stderrText().trim() || `exited with ${signal ?? code}`))
         else resolve()
       })
+      // The signal may have fired while the capture was being minted, before
+      // the listener existed; `once` listeners are not replayed for past aborts.
+      if (options.signal?.aborted) abort()
     })
     if ((await output.stat()).size > MAX_EXPORT_BYTES) throw new Error('output exceeds the 256 MiB capture limit')
     return { stdout: await readFile(outputPath, 'utf8'), stderr: stderrText() }
@@ -193,8 +233,9 @@ async function runOpencode(
   } finally {
     // Wait for process/stdio completion before closing and deleting the private
     // capture. Match import cleanup policy without ever touching native history.
+    // `directory` is unset only when the pre-abort check or mkdtemp threw.
     try { await output?.close() }
-    finally { await rm(directory, { recursive: true, force: true }).catch(() => undefined) }
+    finally { if (directory) await rm(directory, { recursive: true, force: true }).catch(() => undefined) }
   }
 }
 

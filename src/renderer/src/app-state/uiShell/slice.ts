@@ -18,15 +18,19 @@ export const createUiShellSlice: StateCreator<
   tileTabsModalOpen: false,
   tileTabsInitialSelectedIds: [],
   reorderTabsOpen: false,
+  mergeProjectTabsOpen: false,
   pinAgentsOpen: false,
   settingsPageOpen: false,
   agentTitlePromptSessionId: null,
   buryPromptSessionId: null,
+  rootManagementPromptSessionId: null,
   debugBundleNotePrompt: null,
   recordingNotePrompt: null,
   viewPromptsSessionId: null,
+  tldrHistorySessionId: null,
   newAgentPlacementOpen: false,
   newAgentProjectIntent: null,
+  newAgentInOpen: false,
   tiledDispatchPromptOpen: false,
   dispatchRowProjectPickerRow: null,
   dispatchAttachIntent: null,
@@ -44,7 +48,8 @@ export const createUiShellSlice: StateCreator<
   performancePanelOpen: false,
   remotePanelOpen: false,
   globalEditorOpen: false,
-  promptSearchOpen: false,
+  conversationsOpen: false,
+  conversationsFocusSearch: false,
   agentActivityOpen: false,
   keyboardShortcutsOpen: false,
   closeOldAgentsOpen: false,
@@ -117,6 +122,10 @@ export const createUiShellSlice: StateCreator<
     set({ reorderTabsOpen: true }, false, 'uiShell/openReorderTabs'),
   closeReorderTabs: () =>
     set({ reorderTabsOpen: false }, false, 'uiShell/closeReorderTabs'),
+  openMergeProjectTabs: () =>
+    set({ mergeProjectTabsOpen: true }, false, 'uiShell/openMergeProjectTabs'),
+  closeMergeProjectTabs: () =>
+    set({ mergeProjectTabsOpen: false }, false, 'uiShell/closeMergeProjectTabs'),
 
   openPinAgents: () =>
     set({ pinAgentsOpen: true }, false, 'uiShell/openPinAgents'),
@@ -137,6 +146,11 @@ export const createUiShellSlice: StateCreator<
     set({ buryPromptSessionId: sessionId }, false, 'uiShell/openBuryPrompt'),
   closeBuryPrompt: () =>
     set({ buryPromptSessionId: null }, false, 'uiShell/closeBuryPrompt'),
+
+  openRootManagementPrompt: sessionId =>
+    set({ rootManagementPromptSessionId: sessionId }, false, 'uiShell/openRootManagementPrompt'),
+  closeRootManagementPrompt: () =>
+    set({ rootManagementPromptSessionId: null }, false, 'uiShell/closeRootManagementPrompt'),
 
   openDebugBundleNotePrompt: payload =>
     set({ debugBundleNotePrompt: payload }, false, 'uiShell/openDebugBundleNotePrompt'),
@@ -159,6 +173,11 @@ export const createUiShellSlice: StateCreator<
   closeViewPrompts: () =>
     set({ viewPromptsSessionId: null }, false, 'uiShell/closeViewPrompts'),
 
+  openTldrHistory: sessionId =>
+    set({ tldrHistorySessionId: sessionId }, false, 'uiShell/openTldrHistory'),
+  closeTldrHistory: () =>
+    set({ tldrHistorySessionId: null }, false, 'uiShell/closeTldrHistory'),
+
   openNewAgentPlacement: () =>
     set({ newAgentPlacementOpen: true }, false, 'uiShell/openNewAgentPlacement'),
   openNewAgentForProject: (tabId, anchorSessionId) =>
@@ -176,6 +195,10 @@ export const createUiShellSlice: StateCreator<
       false,
       'uiShell/closeNewAgentPlacement',
     ),
+  openNewAgentIn: () =>
+    set({ newAgentInOpen: true }, false, 'uiShell/openNewAgentIn'),
+  closeNewAgentIn: () =>
+    set({ newAgentInOpen: false }, false, 'uiShell/closeNewAgentIn'),
   openTiledDispatchPrompt: () =>
     set({ tiledDispatchPromptOpen: true }, false, 'uiShell/openTiledDispatchPrompt'),
   closeTiledDispatchPrompt: () =>
@@ -292,10 +315,10 @@ export const createUiShellSlice: StateCreator<
       'uiShell/setDispatchListRatio',
     ),
 
-  openPromptSearch: () =>
-    set({ promptSearchOpen: true }, false, 'uiShell/openPromptSearch'),
-  closePromptSearch: () =>
-    set({ promptSearchOpen: false }, false, 'uiShell/closePromptSearch'),
+  openConversations: ({ focusSearch }) =>
+    set({ conversationsOpen: true, conversationsFocusSearch: focusSearch }, false, 'uiShell/openConversations'),
+  closeConversations: () =>
+    set({ conversationsOpen: false, conversationsFocusSearch: false }, false, 'uiShell/closeConversations'),
 
   openAgentActivity: () =>
     set({ agentActivityOpen: true }, false, 'uiShell/openAgentActivity'),

@@ -48,6 +48,8 @@ export type UiShellSlice = UiShellState & {
   closeTileTabsModal: () => void
   openReorderTabs: () => void
   closeReorderTabs: () => void
+  openMergeProjectTabs: () => void
+  closeMergeProjectTabs: () => void
   openPinAgents: () => void
   closePinAgents: () => void
   openSettingsPage: () => void
@@ -56,6 +58,8 @@ export type UiShellSlice = UiShellState & {
   closeAgentTitlePrompt: () => void
   openBuryPrompt: (sessionId: SessionId) => void
   closeBuryPrompt: () => void
+  openRootManagementPrompt: (sessionId: SessionId) => void
+  closeRootManagementPrompt: () => void
   openDebugBundleNotePrompt: (payload: {
     bundlePath: string
     sessionId: SessionId
@@ -71,12 +75,17 @@ export type UiShellSlice = UiShellState & {
   closeRecordingNotePrompt: () => void
   openViewPrompts: (sessionId: SessionId) => void
   closeViewPrompts: () => void
+  openTldrHistory: (sessionId: SessionId) => void
+  closeTldrHistory: () => void
   openNewAgentPlacement: () => void
   /** Open the placement overlay pre-targeted at a specific project. Used by
    *  the Dispatch header "+"; see `newAgentProjectIntent` for why the target
    *  is captured here rather than resolved at commit time. */
   openNewAgentForProject: (tabId: TabId, anchorSessionId: SessionId) => void
   closeNewAgentPlacement: () => void
+  /** Open/close the New Agent In… dialog (#852). See `newAgentInOpen`. */
+  openNewAgentIn: () => void
+  closeNewAgentIn: () => void
   openTiledDispatchPrompt: () => void
   openDispatchRowProjectPicker: (rowIndex: number) => void
   closeDispatchRowProjectPicker: () => void
@@ -106,8 +115,8 @@ export type UiShellSlice = UiShellState & {
   closeGlobalEditor: () => void
   toggleGlobalEditor: () => void
   setDispatchListRatio: (ratio: number) => void
-  openPromptSearch: () => void
-  closePromptSearch: () => void
+  openConversations: (opts: { focusSearch: boolean }) => void
+  closeConversations: () => void
   openAgentActivity: () => void
   closeAgentActivity: () => void
   openKeyboardShortcuts: () => void

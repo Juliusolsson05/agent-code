@@ -6,6 +6,7 @@ import { extname, join, normalize, sep } from 'node:path'
 import type { Duplex } from 'node:stream'
 
 import { WebSocketServer } from 'ws'
+import { getMainProvider } from '@providers/registry.main.js'
 import { sendBoundedRemoteOutput, boundRemoteHistory } from './outputBudget.js'
 import { REMOTE_OUTPUT_MAX_BYTES, REMOTE_HISTORY_TOO_LARGE } from '@shared/remoteOutputLimits.js'
 import type { WebSocket } from 'ws'
@@ -14,6 +15,7 @@ import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import type { ResolveConditionResult } from '@shared/sessionFeed/types.js'
 import type { ConditionCustomAction } from '@shared/conditions-core/contract.js'
 import type { SessionKind } from '@shared/types/providerKind.js'
+import { isAgentProviderKind } from '@shared/types/providerKind.js'
 import type { PromptDeliveryResult } from '@shared/types/providerConfig.js'
 import type { SessionBackendSnapshot } from '@shared/types/session.js'
 
@@ -23,7 +25,9 @@ import { parseInboundFrame } from '@main/remote/protocol/scope.js'
 import type { InboundFrame, OutboundFrame } from '@main/remote/protocol/messages.js'
 import type { FeedChannel, SessionFeedSource } from '@main/remote/SessionFeedSource.js'
 import {
+  loadInitialHistoryChunk,
   loadInitialHistoryChunkFromFile,
+  loadOlderHistoryChunk,
   loadOlderHistoryChunkFromFile,
 } from '@main/sessions/historyLoader.js'
 import type { RemoteTransport } from '@main/remote/transport/RemoteTransport.js'
@@ -632,6 +636,13 @@ export class RemoteServer extends EventEmitter {
     this.send(ws, { type: 'reply', id: frame.id, ...result })
   }
 
+  /** Inbound writes are for agent sessions only (#866). A terminal is never
+   *  listed to a phone, so an inbound write to one is either stale or crafted,
+   *  and pressing Enter in a shell would run whatever sits on its line. */
+  private isAgentSession(sessionId: string): boolean {
+    return isAgentProviderKind(this.deps.manager.getSessionKind(sessionId))
+  }
+
   private async apply(frame: InboundFrame): Promise<RemoteReply> {
     const msg = frame.message
     switch (msg.type) {
@@ -656,16 +667,19 @@ export class RemoteServer extends EventEmitter {
       }
 
       case 'submit': {
+        if (!this.isAgentSession(msg.sessionId)) return { ok: false, error: 'not an agent session' }
         const wrote = this.deps.manager.submitStagedPrompt(msg.sessionId)
         return wrote ? { ok: true } : { ok: false, error: 'session not writable' }
       }
 
       case 'interrupt': {
+        if (!this.isAgentSession(msg.sessionId)) return { ok: false, error: 'not an agent session' }
         const wrote = this.deps.manager.write(msg.sessionId, INTERRUPT_BYTES, 'remote')
         return wrote ? { ok: true } : { ok: false, error: 'session not writable' }
       }
 
       case 'permission-reply':
+        if (!this.isAgentSession(msg.sessionId)) return { ok: false, error: 'not an agent session' }
         return this.applyPermissionReply(msg.sessionId, msg.action)
 
       case 'get-history': {
@@ -685,14 +699,33 @@ export class RemoteServer extends EventEmitter {
         if (!kind || kind === 'terminal') {
           return { ok: false, error: 'not an agent session' }
         }
-        const chunk = msg.beforeMarker
-          ? await loadOlderHistoryChunkFromFile(file, {
-              kind,
-              beforeMarker: msg.beforeMarker,
-              beforeOffset: msg.beforeOffset,
-              limit: msg.limit ?? 200,
-            })
-          : await loadInitialHistoryChunkFromFile(file, msg.limit ?? 120)
+        // Routing belongs to the registry capability, not a URI prefix. The
+        // provider also owns decoding its minted locator: resume history can
+        // be requested before any live entry has announced the native id.
+        const provider = getMainProvider(kind)
+        const providerSessionId = provider.parseTranscriptLocator?.(file)
+        if (provider.loadHistoryChunk && !providerSessionId) {
+          return { ok: false, error: 'provider transcript locator has no session identity' }
+        }
+        const cwd = this.deps.manager.getSpawnCwd(msg.sessionId) ?? ''
+        const chunk = provider.loadHistoryChunk
+          ? msg.beforeMarker
+            ? await loadOlderHistoryChunk({
+                kind,
+                cwd,
+                providerSessionId: providerSessionId!,
+                beforeMarker: msg.beforeMarker,
+                limit: msg.limit ?? 200,
+              })
+            : await loadInitialHistoryChunk({ kind, cwd, providerSessionId: providerSessionId!, limit: msg.limit ?? 120 })
+          : msg.beforeMarker
+            ? await loadOlderHistoryChunkFromFile(file, {
+                kind,
+                beforeMarker: msg.beforeMarker,
+                beforeOffset: msg.beforeOffset,
+                limit: msg.limit ?? 200,
+              })
+            : await loadInitialHistoryChunkFromFile(file, msg.limit ?? 120)
         // Raw records, same shape as the live jsonl frames' `entry` halves,
         // so the phone runs ONE mapper path for backfill and live. `file`
         // rides along so the client can detect a transcript ROLL: after

@@ -17,9 +17,11 @@ import { TileTabsModalSurface } from '@renderer/features/workspace/surfaces/Tile
 import { ReorderTabsSurface } from '@renderer/features/workspace/surfaces/ReorderTabsSurface'
 import { PinAgentsSurface } from '@renderer/features/dispatch-pin/surfaces/PinAgentsSurface'
 import { BuryPanePromptSurface } from '@renderer/features/workspace/surfaces/BuryPanePromptSurface'
+import { RootManagementConfirmSurface } from '@renderer/features/workspace/surfaces/RootManagementConfirmSurface'
+import { MergeProjectTabsSurface } from '@renderer/features/workspace/surfaces/MergeProjectTabsSurface'
 import { CloseConfirmationSurface } from '@renderer/features/workspace/surfaces/CloseConfirmationSurface'
 import { ViewPromptsSurface } from '@renderer/features/workspace/surfaces/ViewPromptsSurface'
-import { PromptSearchSurface } from '@renderer/features/workspace/surfaces/PromptSearchSurface'
+import { ConversationsSurface } from '@renderer/features/conversations/surfaces/ConversationsSurface'
 import { AgentActivitySurface } from '@renderer/features/workspace/surfaces/AgentActivitySurface'
 import { CloseOldAgentsSurface } from '@renderer/features/workspace/surfaces/CloseOldAgentsSurface'
 import { BulkProviderSwitchSurface } from '@renderer/features/workspace/surfaces/BulkProviderSwitchSurface'
@@ -30,6 +32,8 @@ import { RewindToPromptSurface } from '@renderer/features/workspace/surfaces/Rew
 import { AgentTitlePromptSurface } from '@renderer/features/workspace/surfaces/AgentTitlePromptSurface'
 import { ProviderSwitchPickerSurface } from '@renderer/features/workspace/surfaces/ProviderSwitchPickerSurface'
 import { KeyVaultModalSurface } from '@renderer/features/key-vault/surfaces/KeyVaultModalSurface'
+import { NewAgentInSurface } from '@renderer/features/workspace/surfaces/NewAgentInSurface'
+import { TldrHistorySurface } from '@renderer/features/tldr/surfaces/TldrHistorySurface'
 
 // The surface registry (issue #494). Adding a surface = write a wrapper
 // in the owning feature's surfaces/ folder + add ONE import + ONE array
@@ -76,7 +80,7 @@ export const modalSurfaces: SurfaceEntry[] = [
   { id: 'debug-bundle-note', Component: DebugBundleNoteSurface },
   { id: 'recording-note', Component: RecordingNoteSurface },
   { id: 'view-prompts', Component: ViewPromptsSurface },
-  { id: 'prompt-search', Component: PromptSearchSurface },
+  { id: 'conversations', Component: ConversationsSurface },
   { id: 'agent-activity', Component: AgentActivitySurface },
   { id: 'close-old-agents', Component: CloseOldAgentsSurface },
   { id: 'bulk-provider-switch', Component: BulkProviderSwitchSurface },
@@ -89,6 +93,20 @@ export const modalSurfaces: SurfaceEntry[] = [
   // established surface below one it used to cover; see the registry contract.
   { id: 'provider-switch-picker', Component: ProviderSwitchPickerSurface },
   { id: 'key-vault', Component: KeyVaultModalSurface },
+  // Appended per the contract above. It is only opened from a command, which
+  // closes the palette first, so it has no stacking relationship to reason
+  // about beyond "a new modal paints over the established ones".
+  { id: 'new-agent-in', Component: NewAgentInSurface },
+  // Appended per the contract above. Opened only from a session command that
+  // closes the palette first; it must paint over every established modal so
+  // the warning is never hidden behind the surface it is warning about.
+  { id: 'root-management-confirm', Component: RootManagementConfirmSurface },
+  // Appended per the contract above; opened only from a command that closes
+  // the palette first (#913).
+  { id: 'merge-project-tabs', Component: MergeProjectTabsSurface },
+  // Appended per the contract above. Opened only from a session command that
+  // closes the palette first, so it stacks over established modals by order.
+  { id: 'tldr-history', Component: TldrHistorySurface },
 ]
 
 /**

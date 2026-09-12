@@ -1,0 +1,25 @@
+{"timestamp":"2026-09-11T02:52:59.701Z","type":"session_meta","payload":{"id":"7ef23509-c0b4-4e30-b46f-7ed58d382b81","timestamp":"2026-09-11T02:52:59.701Z","cwd":"/fixture/other-1","originator":"agent-transcript-parser","cli_version":"p:46dc6ba3:7","source":"cli","model_provider":"openai","git":{}}}
+{"timestamp":"2026-09-09T22:27:25.381Z","type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"p:caba98e9:7422"},{"type":"input_text","text":"p:681b5ba5:362"},{"type":"input_text","text":"p:d4a43ed6:1328"}]}}
+{"timestamp":"2026-09-09T22:27:25.381Z","type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"p:47091490:2429"}]}}
+{"timestamp":"2026-09-09T22:27:25.382Z","type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"p:6ded806e:271"}]}}
+{"timestamp":"2026-09-09T22:27:25.382Z","type":"event_msg","payload":{"type":"task_started","turn_id":"p:88b2daae:36"}}
+{"timestamp":"2026-09-09T22:27:25.382Z","type":"turn_context","payload":{"turn_id":"p:88b2daae:36","cwd":"/fixture/other-1","current_date":"p:9b723f4d:10","approval_policy":"p:aae2d8c6:10","sandbox_policy":{"type":"workspace-write"},"model":"p:576a599a:11","summary":"p:929260ad:4"}}
+{"timestamp":"2026-09-09T22:27:25.382Z","type":"event_msg","payload":{"type":"user_message","message":"# AGENTS.md instructions forp:124680b0:4653"}}
+{"timestamp":"2026-09-09T22:27:25.382Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"# AGENTS.md instructions forp:26e39c29:4221"},{"type":"input_text","text":"<environment_context>p:179ec771:409"}]}}
+{"timestamp":"2026-09-09T22:27:25.411Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"p:88b2daae:36","last_agent_message":""}}
+{"timestamp":"2026-09-09T22:27:25.411Z","type":"event_msg","payload":{"type":"task_started","turn_id":"p:6bdaee84:36"}}
+{"timestamp":"2026-09-09T22:27:25.411Z","type":"turn_context","payload":{"turn_id":"p:6bdaee84:36","cwd":"/fixture/other-1","current_date":"p:9b723f4d:10","approval_policy":"p:aae2d8c6:10","sandbox_policy":{"type":"workspace-write"},"model":"p:576a599a:11","summary":"p:929260ad:4"}}
+{"timestamp":"2026-09-09T22:27:25.411Z","type":"event_msg","payload":{"type":"user_message","message":"p:32ffe367:185"}}
+{"timestamp":"2026-09-09T22:27:25.411Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"p:32ffe367:185"}]}}
+{"timestamp":"2026-09-09T22:27:28.370Z","type":"event_msg","payload":{"type":"agent_message","message":"p:7fa1041f:200","phase":"p:e53dab57:12"}}
+{"timestamp":"2026-09-09T22:27:28.370Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"p:7fa1041f:200"}],"phase":"p:e53dab57:12"}}
+{"timestamp":"2026-09-09T22:27:30.812Z","type":"response_item","payload":{"type":"custom_tool_call","call_id":"p:eac4c7e7:29","name":"p:2706c619:4","input":"p:7df23deb:452","status":"completed"}}
+{"timestamp":"2026-09-09T22:27:31.505Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"p:eac4c7e7:29","output":"p:ca117e06:9287"}}
+{"timestamp":"2026-09-09T22:27:35.106Z","type":"response_item","payload":{"type":"custom_tool_call","call_id":"p:15897379:29","name":"p:2706c619:4","input":"p:e0878b03:450","status":"completed"}}
+{"timestamp":"2026-09-09T22:27:35.202Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"p:15897379:29","output":"p:580ac3dd:40800"}}
+{"timestamp":"2026-09-09T22:27:37.690Z","type":"response_item","payload":{"type":"reasoning","summary":[{"type":"summary_text","text":""}],"encrypted_content":"p:2d827f39:1592"}}
+{"timestamp":"2026-09-09T22:27:41.896Z","type":"response_item","payload":{"type":"custom_tool_call","call_id":"p:25fe1ca3:29","name":"p:2706c619:4","input":"p:27f95aeb:961","status":"completed"}}
+{"timestamp":"2026-09-09T22:27:42.144Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"p:25fe1ca3:29","output":"p:e7efe46e:32452"}}
+{"timestamp":"2026-09-09T22:27:51.382Z","type":"response_item","payload":{"type":"reasoning","summary":[{"type":"summary_text","text":""}],"encrypted_content":"p:0a381e3c:3576"}}
+{"timestamp":"2026-09-09T22:27:52.512Z","type":"event_msg","payload":{"type":"agent_message","message":"p:a9ca4e3d:319","phase":"p:e53dab57:12"}}
+{"timestamp":"2026-09-09T22:27:52.512Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"p:a9ca4e3d:319"}],"phase":"p:e53dab57:12"}}

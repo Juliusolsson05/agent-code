@@ -18,7 +18,10 @@ import type { CSSProperties } from 'react'
 //   - Render a dropdown of suggestions below the input with keyboard
 //     (ArrowUp/Down) and mouse navigation.
 //   - Tab = apply the highlighted suggestion (like bash tab-complete).
-//   - Enter = submit the current value (caller validates + acts).
+//   - Enter = submit the current value (caller validates + acts). The
+//     modifier state rides along so the caller can offer a second submit
+//     (the picker's Shift+Enter = "new tab anyway", #913) without this
+//     component knowing what either one means.
 //   - Escape = cancel (if no suggestions open, delegates to onCancel).
 //
 // What this component deliberately DOESN'T do:
@@ -37,7 +40,7 @@ export type DirEntry = {
 type Props = {
   value: string
   onChange: (next: string) => void
-  onSubmit: () => void
+  onSubmit: (modifiers: { shift: boolean }) => void
   onCancel: () => void
   placeholder?: string
   /** If true (default), the dropdown only lists directories. */
@@ -190,7 +193,7 @@ export function PathInput({
     }
     if (e.key === 'Enter') {
       e.preventDefault()
-      onSubmit()
+      onSubmit({ shift: e.shiftKey })
       return
     }
     if (e.key === 'Escape') {

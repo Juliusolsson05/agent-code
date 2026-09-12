@@ -7,8 +7,9 @@ import type { SessionManager } from '@main/sessionManager.js'
 // SessionFeedSource is the remote subsystem's ONLY tap into SessionManager's
 // event stream — a second subscriber alongside the renderer forwarder, never
 // a replacement for it. These tests drive a bare EventEmitter standing in
-// for the manager, which is honest: the source consumes nothing but `on()`
-// and `getSessionKind()`.
+// for the manager, which is honest: the source consumes nothing but `on()`,
+// `getSessionKind()`, and `getSpawnKind()` (the latter used by the emit gate
+// for the pre-registration window, before getSessionKind is populated).
 
 function makeManager(live: string[] = []): SessionManager & EventEmitter {
   const emitter = new EventEmitter() as SessionManager & EventEmitter
@@ -16,6 +17,11 @@ function makeManager(live: string[] = []): SessionManager & EventEmitter {
   anyEmitter.getSessionKind = vi.fn(() => 'claude')
   anyEmitter.list = vi.fn(() => live)
   anyEmitter.getSpawnCwd = vi.fn(() => null)
+  // WHY default to null rather than mirroring getSessionKind: real callers
+  // only need getSpawnKind for the pre-registration window where
+  // getSessionKind is still null (see SessionFeedSource.emit's gate) — tests
+  // that don't care about that window should see the fallback stay inert.
+  anyEmitter.getSpawnKind = vi.fn(() => null)
   anyEmitter.getLastActivityAt = vi.fn(() => null)
   return emitter
 }
@@ -123,6 +129,52 @@ describe('SessionFeedSource', () => {
     // Untracked (e.g. terminal) removals stay silent.
     manager.emit('removed', { sessionId: 'never-tracked' })
     expect(seen.map(e => e.channel)).toEqual(['started', 'removed'])
+    source.dispose()
+  })
+
+  it('never forwards any frame for a terminal session, whatever the channel (#866)', () => {
+    // The listing filter only ever ran on `started`; input-readiness, exit and
+    // process-state still relayed terminal ids, which a client could then act on.
+    const manager = makeManager()
+    ;(manager.getSessionKind as unknown as ReturnType<typeof vi.fn>)
+      .mockImplementation((sessionId: string) => (sessionId === 'shell' ? 'terminal' : 'claude'))
+    const source = new SessionFeedSource(manager)
+    const seen: Array<[string, unknown]> = []
+    source.onEvent((channel, payload) => seen.push([channel, (payload as { sessionId?: unknown }).sessionId]))
+
+    manager.emit('input-readiness', { sessionId: 'shell', input: { ready: true } })
+    manager.emit('process-state', { sessionId: 'shell', active: true })
+    manager.emit('exit', { sessionId: 'shell', exitCode: 0 })
+    manager.emit('input-readiness', { sessionId: 'agent', input: { ready: true } })
+
+    expect(seen).toEqual([['input-readiness', 'agent']])
+    source.dispose()
+  })
+
+  it('gates on getSpawnKind during the pre-registration window (#866)', () => {
+    // A spawning terminal emits its first input-readiness frame BEFORE
+    // SessionManager registers the RegistryEntry that getSessionKind reads
+    // (sessionManager.ts: spawnInfo set ~:2484 / 'starting' emitted ~:2501,
+    // both before the terminal's registry insert ~:3113). getSessionKind
+    // returns null for 'shell' during that window; only getSpawnKind knows
+    // it's a terminal. Without the fallback this frame would leak through
+    // and get stuck forever in RemoteServer.lastInputReadiness, since the
+    // session's later exit/removed events ARE filtered once it IS registered.
+    const manager = makeManager()
+    ;(manager.getSessionKind as unknown as ReturnType<typeof vi.fn>).mockReturnValue(null)
+    ;(manager.getSpawnKind as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      (sessionId: string) => (sessionId === 'shell' ? 'terminal' : null),
+    )
+    const source = new SessionFeedSource(manager)
+    const seen: Array<[string, unknown]> = []
+    source.onEvent((channel, payload) =>
+      seen.push([channel, (payload as { sessionId?: unknown }).sessionId]),
+    )
+
+    manager.emit('input-readiness', { sessionId: 'shell', ready: false, reason: 'starting' })
+    manager.emit('input-readiness', { sessionId: 'agent', ready: false, reason: 'starting' })
+
+    expect(seen).toEqual([['input-readiness', 'agent']])
     source.dispose()
   })
 

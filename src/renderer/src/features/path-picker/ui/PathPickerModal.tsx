@@ -11,12 +11,11 @@ import {
   DialogTitle,
 } from '@renderer/components/ui/dialog'
 import { PathInput } from '@renderer/features/path-picker/ui/PathInput'
-import { relativeTime } from '@renderer/lib/relativeTime'
-// Canonical session listing shape — was a local duplicate of the preload
-// SessionInfo. The renderer tsconfig already includes `src/shared/types/**`,
-// so importing the shared type needs no preload reach-across. See
-// @shared/types/session.
-import type { SessionInfo } from '@shared/types/session'
+import { ConversationRow } from '@renderer/features/conversations/ui/ConversationRow'
+// Rows are the catalog's Conversation: the same shape the Conversations
+// picker renders, so a session looks the same in both places and the label,
+// provenance and ordering decisions live in main, not here.
+import type { Conversation } from '@shared/conversations/types'
 
 // PathPickerModal — modal that asks the user for a working directory
 // when they press ⌘T (or click the + button in the tab bar).
@@ -24,9 +23,9 @@ import type { SessionInfo } from '@shared/types/session'
 // Responsibilities:
 //   - Let the user type a path (with completion via PathInput).
 //   - Validate the path via window.api.expandCwd on submit/interaction.
-//   - Show the recent sessions recorded in that cwd (read from
-//     ~/.claude/projects/<sanitized-cwd>/) so the user can RESUME an
-//     existing session instead of starting fresh.
+//   - Show the conversations recorded in that cwd for the toggled provider
+//     (through the conversation catalog, scope 'cwd') so the user can
+//     RESUME an existing session instead of starting fresh.
 //   - On open: start a fresh session in the validated cwd.
 //   - On resume click: spawn with --resume <sessionId>.
 //
@@ -49,6 +48,33 @@ type Props = {
     sessionId: string,
     provider: AgentProvider,
   ) => void | Promise<void>
+  /**
+   * Tabs that already hold a session in `expandedPath` (#913), in tab order,
+   * with `current` marking the active tab. When any exist, Enter and the
+   * primary button go to one of them instead of creating a duplicate tab;
+   * "new tab anyway" and Shift+Enter keep the deliberate case. Absent means
+   * the caller has no workspace to consult (tests, embedding).
+   */
+  openTabsForPath?: (expandedPath: string) => OpenTabHolder[]
+  onActivateTab?: (tabId: string) => void
+}
+
+export type OpenTabHolder = { tabId: string; label: string; current: boolean }
+
+/**
+ * Which holder Enter goes to when several tabs hold the folder.
+ *
+ * WHY the current tab wins: ⌘T pre-fills the active tab's folder, so with
+ * tabs B, E and G all on the same repository and G active, "first in tab
+ * order" would jump the user from G to B for pressing Enter on the default.
+ * Staying put is the only answer that never surprises. Otherwise the first
+ * holder in tab order is taken, which is a guess the operator capability
+ * `projects.open` deliberately refuses to make (`ambiguous_owner`): an
+ * operator has no "current tab" and no hint on screen, while the user here
+ * sees every holder named and can still pick "new tab anyway".
+ */
+function preferredHolder(holders: OpenTabHolder[]): OpenTabHolder | null {
+  return holders.find(holder => holder.current) ?? holders[0] ?? null
 }
 
 export function PathPickerModal({
@@ -57,6 +83,8 @@ export function PathPickerModal({
   onCancel,
   onAccept,
   onResume,
+  openTabsForPath,
+  onActivateTab,
 }: Props) {
   const [value, setValue] = useState(defaultValue)
   const [error, setError] = useState<string | null>(null)
@@ -68,7 +96,7 @@ export function PathPickerModal({
   // changes and resolves to a valid directory — gives the user live
   // feedback as they type (e.g. "ah, no recorded sessions in this
   // folder yet, I'll start fresh").
-  const [sessions, setSessions] = useState<SessionInfo[]>([])
+  const [sessions, setSessions] = useState<Conversation[]>([])
   const [sessionsLoading, setSessionsLoading] = useState(false)
   const [listingError, setListingError] = useState<string | null>(null)
   const [listingTarget, setListingTarget] = useState<{
@@ -115,9 +143,9 @@ export function PathPickerModal({
   }, [open, defaultValue])
 
   // Refresh the sessions list whenever the typed path changes. Run
-  // expandCwd to both validate the path AND get the absolute form we
-  // use as the key for listSessionsForCwd. Debounced 150ms so we don't
-  // hammer main on every keystroke.
+  // expandCwd to both validate the path AND get the absolute form the
+  // catalog is asked about. Debounced 150ms so we don't hammer main on
+  // every keystroke.
   useEffect(() => {
     if (!open) return
     const v = ++reqVersion.current
@@ -156,9 +184,12 @@ export function PathPickerModal({
       setPendingCreatePath(null)
       setResolvedPath(result.path)
       try {
-        const list = await window.api.listSessionsForCwd(result.path, 20, provider)
+        // Scope 'cwd', not 'repository': this picker is about one typed
+        // directory, and a worktree's sessions listed under the main checkout
+        // would resume in the wrong tree.
+        const listing = await window.api.listConversations({ cwd: result.path, scope: 'cwd', providers: [provider], includeChildren: false, limit: 50 })
         if (v !== reqVersion.current) return
-        setSessions(list)
+        setSessions(listing.rows)
         setListingTarget({ cwd: result.path, provider })
         setListingError(null)
       } catch {
@@ -177,7 +208,16 @@ export function PathPickerModal({
     return () => clearTimeout(t)
   }, [value, open, provider])
 
-  const submit = async () => {
+  // Decided at submit time from the freshly expanded path, never from the
+  // debounced `resolvedPath` the hint below renders: the user can press Enter
+  // before the debounce settles, and the choice must follow the path that is
+  // actually about to be opened. The buttons are the one exception — see the
+  // footer: a button does what its label says, and the label is what the
+  // debounced hint knew.
+  const holdersOf = (expandedPath: string): OpenTabHolder[] =>
+    (onActivateTab && openTabsForPath ? openTabsForPath(expandedPath) : [])
+
+  const submit = async (options: { forceNewTab?: boolean } = {}) => {
     if (busy) return
     setBusy(true)
     setError(null)
@@ -189,6 +229,16 @@ export function PathPickerModal({
       // user input.
       const result = await window.api.expandCwd(value)
       if (result.ok) {
+        const holder = options.forceNewTab ? null : preferredHolder(holdersOf(result.path))
+        if (holder) {
+          // The folder is already on screen: go there instead of minting the
+          // duplicate tab that ⌘T used to create every time (#913). When the
+          // holder is the current tab this is a stay-put that only closes
+          // the picker; the primary button says so ("stay here"). The
+          // provider toggle is irrelevant on this path — nothing is spawned.
+          onActivateTab!(holder.tabId)
+          return
+        }
         await onAccept(result.path, provider)
         return
       }
@@ -224,17 +274,25 @@ export function PathPickerModal({
     // Rows exist only with an accepted listing target. Keeping this explicit
     // makes a stale closure or synthetic click fail closed instead of pairing
     // a historical session id with today's provider toggle.
-    if (!listingTarget || !sessions.some(session => session.sessionId === sessionId)) return
+    const row = sessions.find(session => session.nativeId === sessionId)
+    // An unavailable row (index remembers it, transcript file gone) is shown
+    // for the record and is never a resume target.
+    if (!listingTarget || !row || !row.available) return
     setBusy(true)
     setError(null)
     try {
-      await onResume(listingTarget.cwd, sessionId, listingTarget.provider)
+      await onResume(listingTarget.cwd, row.nativeId, row.provider)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
       setBusy(false)
     }
   }
+
+  // Display only; `submit` re-derives from the path it is about to open.
+  const alreadyOpenAs = resolvedPath && !pendingCreatePath ? holdersOf(resolvedPath) : []
+  const preferred = preferredHolder(alreadyOpenAs)
+  const otherHolders = alreadyOpenAs.filter(holder => holder !== preferred)
 
   return (
     <Dialog
@@ -287,7 +345,7 @@ export function PathPickerModal({
               setValue(next)
               if (error) setError(null)
             }}
-            onSubmit={() => void submit()}
+            onSubmit={({ shift }) => void submit({ forceNewTab: shift })}
             onCancel={onCancel}
             placeholder="/path/to/project or ~/…"
             directoriesOnly
@@ -322,7 +380,9 @@ export function PathPickerModal({
             </span>
           ) : (
             <span className="text-muted">
-              tab completes · ↑↓ to browse · enter to open · esc to cancel
+              {preferred
+                ? 'tab completes · ↑↓ to browse · enter to go there · ⇧enter for a new tab anyway · esc to cancel'
+                : 'tab completes · ↑↓ to browse · enter to open · esc to cancel'}
             </span>
           )}
         </div>
@@ -343,6 +403,15 @@ export function PathPickerModal({
           </div>
         )}
 
+        {preferred && (
+          <div role="status" className="mt-2 flex-shrink-0 text-[11px] text-muted">
+            {preferred.current
+              ? `Already open in this tab (${preferred.label})`
+              : `Already open as ${preferred.label}`}
+            {otherHolders.length > 0 ? `, and as ${otherHolders.map(tab => tab.label).join(', ')}` : ''}.
+          </div>
+        )}
+
         <div className="flex justify-end gap-2 mt-4 flex-shrink-0">
           <Button
             type="button"
@@ -352,13 +421,40 @@ export function PathPickerModal({
           >
             cancel
           </Button>
-          <Button
-            type="button"
-            onClick={() => void submit()}
-            disabled={busy || value.trim() === ''}
-          >
-            {pendingCreatePath ? 'create & open' : 'new session'}
-          </Button>
+          {/* WHY every button forces the action its label names: the labels
+              follow the debounced hint, and a click can land before the hint
+              has caught up with the typed path. Letting `submit` re-decide
+              would then switch tabs under a button that said "new session".
+              Enter is the only submit that decides at submit time, because
+              Enter carries no label to honour and reuse is the safer default
+              for a keypress that outran the hint. */}
+          {preferred ? (
+            <>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => void submit({ forceNewTab: true })}
+                disabled={busy}
+              >
+                new tab anyway
+              </Button>
+              <Button
+                type="button"
+                onClick={() => { onActivateTab?.(preferred.tabId) }}
+                disabled={busy}
+              >
+                {preferred.current ? 'stay here' : 'go to tab'}
+              </Button>
+            </>
+          ) : (
+            <Button
+              type="button"
+              onClick={() => void submit({ forceNewTab: true })}
+              disabled={busy || value.trim() === ''}
+            >
+              {pendingCreatePath ? 'create & open' : 'new session'}
+            </Button>
+          )}
         </div>
       </DialogContent>
     </Dialog>
@@ -377,7 +473,7 @@ function ResumeSection({
   disabled,
 }: {
   resolvedPath: string | null
-  sessions: SessionInfo[]
+  sessions: Conversation[]
   loading: boolean
   onResume: (sessionId: string) => void | Promise<void>
   disabled: boolean
@@ -400,62 +496,19 @@ function ResumeSection({
           no previous sessions recorded in this directory
         </div>
       ) : (
-        <div className="flex-1 min-h-0 overflow-auto -mx-2">
-          {sessions.map(s => (
-            <ResumeRow
-              key={s.sessionId}
-              session={s}
-              disabled={disabled}
-              onClick={() => void onResume(s.sessionId)}
+        <div className={`flex-1 min-h-0 overflow-auto -mx-2 ${disabled ? 'pointer-events-none opacity-50' : ''}`} role="listbox" aria-label="Previous sessions">
+          {sessions.map((row, i) => (
+            <ConversationRow
+              key={`${row.provider}:${row.nativeId}`}
+              row={row}
+              index={i}
+              selected={false}
+              onHover={() => {}}
+              onSelect={() => { if (row.available) void onResume(row.nativeId) }}
             />
           ))}
         </div>
       )}
     </div>
-  )
-}
-
-function ResumeRow({
-  session,
-  disabled,
-  onClick,
-}: {
-  session: SessionInfo
-  disabled: boolean
-  onClick: () => void
-}) {
-  const age = relativeTime(session.lastModified)
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className="
-        group w-full
-        flex items-baseline gap-3
-        text-left
-        px-2 py-2
-        hover:bg-surface-hi
-        transition-colors duration-120
-        disabled:opacity-50
-        border-b border-border last:border-b-0
-      "
-    >
-      <div className="flex-1 min-w-0">
-        <div className="text-[12px] text-ink truncate">{session.summary}</div>
-        <div className="text-[10px] text-muted mt-0.5 flex items-center gap-2">
-          <span className="font-code">{session.sessionId.slice(0, 8)}</span>
-          {session.gitBranch && (
-            <>
-              <span className="opacity-40">·</span>
-              <span className="truncate max-w-[140px]">{session.gitBranch}</span>
-            </>
-          )}
-        </div>
-      </div>
-      <div className="flex-shrink-0 text-[10px] text-muted tabular-nums">
-        {age}
-      </div>
-    </button>
   )
 }

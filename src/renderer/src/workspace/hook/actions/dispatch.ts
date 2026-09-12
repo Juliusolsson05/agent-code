@@ -623,11 +623,9 @@ export function useDispatchActions(
   )
 
   // Pin reducers. Three callbacks share the same invariant:
-  //   pinnedSessionIds[i] -> state.sessions[id] is an agent (not a terminal,
-  //   not undefined). The reducer is defensive on top of the command-palette
-  //   `when` guard and the modal's row filter — multiple write paths can
-  //   reach these (palette command, modal commit, programmatic) and the
-  //   invariant has to be local rather than relying on every call site.
+  //   pinnedSessionIds[i] -> state.sessions[id] exists. Any session kind can be
+  //   pinned (#865); terminals were excluded until shells became full Dispatch
+  //   rows (#671) made that exclusion a leftover of the #152 v1 scope.
   //
   // append-on-pin ordering is the user-facing spec: "order you pin in is
   // the order it displays." First pin lands at index 0; subsequent pins
@@ -636,8 +634,7 @@ export function useDispatchActions(
     (sessionId: SessionId) => {
       setState(prev => {
         if (prev.pinnedSessionIds.includes(sessionId)) return prev
-        const meta = prev.sessions[sessionId]
-        if (!meta || meta.kind === 'terminal') return prev
+        if (!prev.sessions[sessionId]) return prev
         return {
           ...prev,
           pinnedSessionIds: [...prev.pinnedSessionIds, sessionId],
@@ -668,10 +665,7 @@ export function useDispatchActions(
         // before they hit Enter) can never reintroduce an orphan into
         // the array. Same defensive shape as buildPinnedDispatchRows
         // at render time.
-        const filtered = ids.filter(id => {
-          const meta = prev.sessions[id]
-          return meta !== undefined && meta.kind !== 'terminal'
-        })
+        const filtered = ids.filter(id => prev.sessions[id] !== undefined)
         // Deduplicate while preserving caller order (first occurrence wins).
         // The modal already enforces this client-side, but a programmatic
         // caller could pass duplicates; keeping the dedupe here means the

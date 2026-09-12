@@ -1,8 +1,7 @@
 import { commandExecutionRequests, type CommandExecutionRequest } from '../commandExecutionRequests'
 import { useCommandExecutionRequest } from './useCommandExecutionRequest'
-import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
+import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
 import type { AgentProviderKind } from '@shared/types/providerKind'
-import { getProviderFeatures } from '@providers/shared/featureCapabilities'
 import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import ReactMarkdown from 'react-markdown'
 
@@ -56,7 +55,7 @@ import {
   allPromptTemplates,
 } from '@renderer/features/prompt-templates/templates'
 import { prepareTemplateText } from '@renderer/features/prompt-templates/keyReferences'
-import { deliverTextToSession } from '@renderer/features/session-text-delivery/deliverTextToSession'
+import { deliverTextToSession, textDeliverySurface } from '@renderer/features/session-text-delivery/deliverTextToSession'
 
 import {
   createSavedPromptTemplate,
@@ -80,6 +79,7 @@ import type {
 import { promptTemplateTargetSessionId } from '@renderer/features/prompt-templates/targetSession'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import { resolveAgentPaneLabel } from '@renderer/workspace/tile-tree/paneLabels'
+import { sessionDisplayTitle } from '@renderer/workspace/sessionDisplayTitle'
 import { useWorkspaceContext } from '@renderer/workspace/WorkspaceContext'
 import type { PaletteMode } from '@renderer/features/command-palette/paletteMode'
 import { commandOwnsOpenSurface } from '@renderer/features/command-palette/surfaceOwnership'
@@ -87,20 +87,11 @@ import { useAppStore } from '@renderer/app-state/hooks'
 import { useCaffeinateStore } from '@renderer/features/caffeinate/store'
 import { useDevDebugConfig } from '@renderer/features/debug/devDebugConfig'
 import { usePathPickerRequests } from '@renderer/features/path-picker/usePathPickerRequests'
-import { SessionPreviewPane } from '@renderer/features/session-preview/ui/SessionPreviewPane'
-import type { PreviewTarget } from '@renderer/features/session-preview/ui/SessionPreviewPane'
 import { useGlobalEditorStore } from '@renderer/features/global-editor/store'
 import { dirtyAiWorkspacePaths } from '@renderer/features/ai-workspace/lib/aiWorkspaceSurfaceCache'
 import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
 import { SafeMarkdownLink } from '@renderer/features/rendered-content/SafeMarkdownLink'
 import type { AiWorkspaceSummary } from '@mcp/shared/aiWorkspaceTypes'
-import { useResumeSessionListing } from '@renderer/features/command-palette/useResumeSessionListing'
-// Canonical session listing shape. This was a local copy that DROPPED
-// `fileSize` (and `customTitle`) — a concrete instance of the drift the
-// shared contract prevents: the palette consumes `SessionInfo[]` straight
-// from `window.api.listSessionsForCwd`, which always returns the full shape,
-// so the narrower local type was hiding fields rather than reflecting reality.
-import type { SessionInfo } from '@shared/types/session'
 
 // CommandPalette — VS Code-style ⌘⇧P command menu.
 //
@@ -275,10 +266,12 @@ function OpenCommandPalette({
     )
   }, [openTileTabsModal, workspace.activeTab, workspace.tileTabs])
   const onReorderTabsRequest = useAppStore(state => state.openReorderTabs)
+  const openMergeProjectTabs = useAppStore(state => state.openMergeProjectTabs)
   const onSettingsRequest = useAppStore(state => state.openSettingsPage)
   const openPaletteAction = useAppStore(state => state.openCommandPalette)
   const openViewPrompts = useAppStore(state => state.openViewPrompts)
-  const openPromptSearch = useAppStore(state => state.openPromptSearch)
+  const openTldrHistory = useAppStore(state => state.openTldrHistory)
+  const openConversations = useAppStore(state => state.openConversations)
   const openAgentActivity = useAppStore(state => state.openAgentActivity)
   const openKeyboardShortcuts = useAppStore(state => state.openKeyboardShortcuts)
   const openCloseOldAgents = useAppStore(state => state.openCloseOldAgents)
@@ -288,13 +281,15 @@ function OpenCommandPalette({
   const openAgentViewModePicker = useAppStore(state => state.openAgentViewModePicker)
   const openColorFlagPicker = useAppStore(state => state.openColorFlagPicker)
   const openAgentTitlePrompt = useAppStore(state => state.openAgentTitlePrompt)
+  const openRootManagementPrompt = useAppStore(state => state.openRootManagementPrompt)
   const closeUsageModal = useAppStore(state => state.closeUsageModal)
   const closeKeyboardShortcuts = useAppStore(state => state.closeKeyboardShortcuts)
   const closeAgentActivity = useAppStore(state => state.closeAgentActivity)
   const closeCloseOldAgents = useAppStore(state => state.closeCloseOldAgents)
   const closeBulkProviderSwitch = useAppStore(state => state.closeBulkProviderSwitch)
-  const closePromptSearch = useAppStore(state => state.closePromptSearch)
+  const closeConversations = useAppStore(state => state.closeConversations)
   const closeReorderTabs = useAppStore(state => state.closeReorderTabs)
+  const closeMergeProjectTabs = useAppStore(state => state.closeMergeProjectTabs)
   const closePinAgents = useAppStore(state => state.closePinAgents)
   const closePathPicker = useAppStore(state => state.closePathPicker)
   const openUsageModal = useAppStore(state => state.openUsageModal)
@@ -317,6 +312,7 @@ function OpenCommandPalette({
   const openTiledDispatchPrompt = useAppStore(state => state.openTiledDispatchPrompt)
   const openDispatchAttach = useAppStore(state => state.openDispatchAttach)
   const openLinkedAgent = useAppStore(state => state.openLinkedAgent)
+  const openNewAgentIn = useAppStore(state => state.openNewAgentIn)
   const openPinAgents = useAppStore(state => state.openPinAgents)
   const toggleCaffeinate = useCaffeinateStore(state => state.toggle)
   const caffeinateStatus = useCaffeinateStore(state => state.status)
@@ -360,9 +356,10 @@ function OpenCommandPalette({
   const agentActivityOpen = useAppStore(state => state.agentActivityOpen)
   const closeOldAgentsOpen = useAppStore(state => state.closeOldAgentsOpen)
   const bulkProviderSwitchOpen = useAppStore(state => state.bulkProviderSwitchOpen)
-  const promptSearchOpen = useAppStore(state => state.promptSearchOpen)
+  const conversationsOpen = useAppStore(state => state.conversationsOpen)
   const remotePanelOpen = useAppStore(state => state.remotePanelOpen)
   const reorderTabsOpen = useAppStore(state => state.reorderTabsOpen)
+  const mergeProjectTabsOpen = useAppStore(state => state.mergeProjectTabsOpen)
   const pinAgentsOpen = useAppStore(state => state.pinAgentsOpen)
   const pathPickerOpen = useAppStore(state => state.pathPickerOpen)
   const gitBarOpen = useAppStore(state => state.gitBarOpen)
@@ -389,13 +386,6 @@ function OpenCommandPalette({
   // component invisibly and destroys it in the same commit.
   const mode = useAppStore(state => state.paletteMode)
   const setMode = useAppStore(state => state.setPaletteMode)
-  const {
-    target: resumeTarget,
-    sessions,
-    loading: sessionsLoading,
-    error: sessionsError,
-    load: loadResumeSessions,
-  } = useResumeSessionListing()
   const [aiWorkspaces, setAiWorkspaces] = useState<AiWorkspaceSummary[]>([])
   const [aiWorkspacesLoading, setAiWorkspacesLoading] = useState(false)
   const [aiWorkspaceError, setAiWorkspaceError] = useState<string | null>(null)
@@ -418,44 +408,18 @@ function OpenCommandPalette({
   const promptTemplateSessionId = promptTemplateTargetSessionId(workspace)
   const promptTemplatesInCommandSearch =
     promptTemplatesInCommandSearchEnabled && promptTemplateSessionId !== null
+  // Both PromptTemplatePreviewPanel renders below (commands mode and
+  // dedicated prompt-template mode) share ONE target session — the command
+  // target — so this is computed once here rather than per render site.
+  // `?? undefined` narrows `textDeliverySurface`'s `null` ("no session") to
+  // the panel's optional-prop convention: undefined means "no answer, fall
+  // back to the template's own configured insert mode" (#865).
+  const templateDeliverySurface = promptTemplateSessionId
+    ? textDeliverySurface(workspace, promptTemplateSessionId) ?? undefined
+    : undefined
   const focusedCwd = focusedMeta?.cwd ?? null
   const focusedProvider = focusedMeta?.kind ?? DEFAULT_PROVIDER
   const customPromptTemplates = settings.savedPromptTemplates
-  // The provider whose sessions the resume picker lists and resumes into.
-  // Use the focused pane's ACTUAL provider so an opencode pane resumes
-  // opencode, a codex pane codex, etc. The three call sites below used to
-  // read `focusedProvider === 'codex' ? 'codex' : 'claude'`, which silently
-  // collapsed EVERY non-codex kind — including opencode (a registered
-  // provider since phase 7) — to Claude. That made an opencode-focused
-  // resume picker list Claude sessions and spawn a Claude pane, even though
-  // the picker header already displayed "resume opencode". Terminal / unknown
-  // kinds have no resume story, so fall back to the default provider.
-  // Which provider's saved sessions the Resume picker lists.
-  //
-  // The focused pane's provider, but ONLY if main can actually enumerate saved
-  // sessions for it. `listSessionsForCwd` has no index for OpenCode, so
-  // focusing an OpenCode pane and hitting Resume opened a picker that would
-  // always be empty — a dead end presented as a working feature, and the reason
-  // `savedSessionListing` existed with nothing reading it.
-  //
-  // Falling back to the default provider rather than hiding Resume entirely:
-  // the user's saved Claude sessions in this cwd are still there and still what
-  // they most likely want. Hiding the command would take a working action away
-  // because an unrelated pane happens to be focused.
-  const resumeProvider: AgentProviderKind =
-    isAgentProviderKind(focusedProvider) &&
-    getProviderFeatures(focusedProvider).savedSessionListing
-      ? focusedProvider
-      : DEFAULT_PROVIDER
-
-  const enterResumeMode = useCallback(async () => {
-    if (!focusedCwd) return
-    setMode('resume')
-    setQuery('')
-    setSelectedIndex(0)
-    await loadResumeSessions({ cwd: focusedCwd, provider: resumeProvider })
-  }, [focusedCwd, loadResumeSessions, resumeProvider])
-
   // Buried panes are scoped to the ACTIVE TAB. The natural temptation
   // is to show every buried pane in the workspace ("they're paused
   // work, the user might want any of them") but that mixes contexts:
@@ -477,10 +441,10 @@ function OpenCommandPalette({
         .map(entry => {
           const kind = entry.sessionMeta.kind ?? DEFAULT_PROVIDER
           const cwd = entry.sessionMeta.cwd
-          const cwdBase = cwd.split('/').filter(Boolean).pop() ?? cwd
           return {
             id: entry.id,
-            label: `${kind} · ${cwdBase}`,
+            // Same title rule as every other list (#865), kind as context.
+            label: `${sessionDisplayTitle(entry.sessionMeta)} · ${kind}`,
             description: `${entry.sourceTabTitle} · ${cwd}`,
             note: entry.note,
             buriedAt: entry.buriedAt,
@@ -608,6 +572,7 @@ function OpenCommandPalette({
         openNewTabPicker: onNewTabRequest,
         openTileTabs: onTileTabsRequest,
         openReorderTabs: onReorderTabsRequest,
+        openMergeProjectTabs,
         openSettings: onSettingsRequest,
         // Reachable through the gateway (keybinding, native menu, programmatic)
         // but never rendered as a palette row — see
@@ -615,7 +580,8 @@ function OpenCommandPalette({
         // structural rather than a visibility tier.
         openCommandPalette: openPaletteAction,
         openViewPrompts,
-        openPromptSearch,
+        openTldrHistory,
+        openConversations,
         openAgentActivity,
         openKeyboardShortcuts,
         openCloseOldAgents,
@@ -625,13 +591,15 @@ function OpenCommandPalette({
         openAgentViewModePicker,
         openColorFlagPicker,
         openAgentTitlePrompt,
+        openRootManagementPrompt,
         closeUsageModal,
         closeKeyboardShortcuts,
         closeAgentActivity,
         closeCloseOldAgents,
         closeBulkProviderSwitch,
-        closePromptSearch,
+        closeConversations,
         closeReorderTabs,
+        closeMergeProjectTabs,
         closePinAgents,
         closePathPicker,
         openUsageModal,
@@ -659,9 +627,9 @@ function OpenCommandPalette({
         openTiledDispatchPrompt,
         openDispatchAttach,
         openLinkedAgent,
+        openNewAgentIn,
         openPinAgents,
         setAggressiveDebugPersistence,
-        enterResumeMode,
         enterBuriedMode,
         enterKillBuriedMode,
         enterPromptTemplateMode,
@@ -686,9 +654,10 @@ function OpenCommandPalette({
         agentActivityOpen,
         closeOldAgentsOpen,
         bulkProviderSwitchOpen,
-        promptSearchOpen,
+        conversationsOpen,
         remotePanelOpen,
         reorderTabsOpen,
+        mergeProjectTabsOpen,
         pinAgentsOpen,
         pathPickerOpen,
         gitBarOpen,
@@ -724,9 +693,11 @@ function OpenCommandPalette({
       onNewTabRequest,
       onTileTabsRequest,
       onReorderTabsRequest,
+      openMergeProjectTabs,
       onSettingsRequest,
       openViewPrompts,
-      openPromptSearch,
+      openTldrHistory,
+      openConversations,
       openAgentActivity,
       openCloseOldAgents,
       openBulkProviderSwitch,
@@ -734,13 +705,15 @@ function OpenCommandPalette({
       openRewindPrompt,
       openAgentViewModePicker,
       openAgentTitlePrompt,
+      openRootManagementPrompt,
       closeUsageModal,
       closeKeyboardShortcuts,
       closeAgentActivity,
       closeCloseOldAgents,
       closeBulkProviderSwitch,
-      closePromptSearch,
+      closeConversations,
       closeReorderTabs,
+      closeMergeProjectTabs,
       closePinAgents,
       closePathPicker,
       openUsageModal,
@@ -768,9 +741,9 @@ function OpenCommandPalette({
       openTiledDispatchPrompt,
       openDispatchAttach,
       openLinkedAgent,
+      openNewAgentIn,
       openPinAgents,
       setAggressiveDebugPersistence,
-      enterResumeMode,
       enterBuriedMode,
       enterKillBuriedMode,
       enterPromptTemplateMode,
@@ -793,9 +766,10 @@ function OpenCommandPalette({
       agentActivityOpen,
       closeOldAgentsOpen,
       bulkProviderSwitchOpen,
-      promptSearchOpen,
+      conversationsOpen,
       remotePanelOpen,
       reorderTabsOpen,
+      mergeProjectTabsOpen,
       pinAgentsOpen,
       pathPickerOpen,
       gitBarOpen,
@@ -851,28 +825,6 @@ function OpenCommandPalette({
   // the user is typing the name of is `primary`, short supporting text is
   // `secondary`, and long prose is `body` — which `rankEntries` matches
   // by literal substring only, never by subsequence.
-  const filteredSessions = useMemo(
-    () =>
-      rankEntries(sessions, queryText, s => [
-        // `summary` is `customTitle ?? lastPrompt ?? firstPrompt`
-        // (sessionList.ts) — so for any session the user never titled by
-        // hand, this "name" is really a prompt, and it is what the row
-        // displays. Keeping it `primary` is a deliberate compromise: it
-        // means prose can still claim tiers 4/5 and can still be
-        // subsequence-matched at tier 1, which is the very thing this
-        // module distrusts. The alternative is worse — demote it and the
-        // text the user is LOOKING AT becomes the hardest thing to search
-        // by. Matching must follow what is on screen. If session titling
-        // ever becomes mandatory, revisit this.
-        primary(s.summary),
-        secondary(s.gitBranch),
-        // Not unbounded: `extractFirstUserPrompt` caps this at 200 chars.
-        // Still `body` — it is a prompt, not a label, and it is usually
-        // hidden behind `summary` in the row.
-        body(s.firstPrompt),
-      ]),
-    [sessions, queryText],
-  )
   const filteredBuried = useMemo(
     () =>
       rankEntries(buried, queryText, item => [
@@ -983,9 +935,8 @@ function OpenCommandPalette({
       historyScore: historyScoreMap,
       starred: commandStarred,
       sortMode: commandSortMode,
-      // A terminal is a valid generic command target but has no agent
-      // composer. Hiding templates there matches the dedicated picker and
-      // prevents an actionable-looking result whose execution can only no-op.
+      // Templates are valid for every target since #830: a terminal receives
+      // a bracketed paste (never Enter), so there is no dead result to hide.
       includePromptTemplates: promptTemplatesInCommandSearch,
     }),
     [
@@ -1096,9 +1047,7 @@ function OpenCommandPalette({
   }, [commandSortMode, commandStarred, paletteRows, queryText])
 
   const filteredLength =
-    mode === 'resume'
-      ? filteredSessions.length
-      : mode === 'buried' || mode === 'kill-buried'
+    mode === 'buried' || mode === 'kill-buried'
         ? filteredBuried.length
         : mode === 'prompt-template'
           ? filteredPromptTemplates.length
@@ -1238,9 +1187,9 @@ function OpenCommandPalette({
     // CAVEAT, because the rule is not unconditional: `dispatchCommand` is not
     // awaited, so this reads the flag at the first `await` inside `run`. A
     // command that opens the palette only AFTER an await would be closed in the
-    // same frame. All nine mode-entering commands set the mode in their
-    // synchronous prefix (`enterResumeMode` sets 'resume' before its await), so
-    // the property holds today — but a future command must open the palette
+    // same frame. Every mode-entering command sets its mode in its
+    // synchronous prefix before any await, so the property holds today — but
+    // a future command must open the palette
     // before its first await for it to keep holding.
     //
     // The test is the LIVE flag, read after `run`, rather than a hardcoded id
@@ -1254,18 +1203,6 @@ function OpenCommandPalette({
       onClose()
     }
   }, [commandContext, onClose, onMenuCommandHandled, pendingMenuCommand, showToast])
-
-  const executeResume = useCallback(
-    (session: SessionInfo) => {
-      onClose()
-      if (!resumeTarget) return
-      void workspace.replaceSession(resumeTarget.cwd, {
-        resumeSessionId: session.sessionId,
-        kind: resumeTarget.provider,
-      })
-    },
-    [onClose, resumeTarget, workspace],
-  )
 
   const executeBuried = useCallback(
     (item: BuriedPaneInfo) => {
@@ -1589,9 +1526,6 @@ function OpenCommandPalette({
         } else if (mode === 'ai-workspace-clear') {
           const workspace = filteredAiWorkspaces[selectedIndex]
           if (workspace) void clearAiWorkspace(workspace)
-        } else if (mode === 'resume') {
-          const session = filteredSessions[selectedIndex]
-          if (session) executeResume(session)
         } else if (mode === 'buried') {
           const item = filteredBuried[selectedIndex]
           if (item) executeBuried(item)
@@ -1616,13 +1550,11 @@ function OpenCommandPalette({
       paletteRows,
       filteredAiWorkspaces,
       filteredPromptTemplates,
-      filteredSessions,
       selectedIndex,
       executeBuried,
       executeCommand,
       executeKillBuried,
       executePromptTemplate,
-      executeResume,
       createAiWorkspace,
       clearAiWorkspace,
       openAiWorkspace,
@@ -1631,34 +1563,7 @@ function OpenCommandPalette({
     ],
   )
 
-  // In resume mode, the conversation preview pane mirrors the
-  // highlighted row. `selectedIndex` is driven by both keyboard (↑/↓)
-  // and hover (onMouseEnter on each row), so the preview follows
-  // either. A session's own cwd wins over the focused pane's cwd
-  // because the list can surface sessions from the focused project's
-  // history — same-cwd in practice, but be exact.
-  const resumePreviewTarget: PreviewTarget | null = (() => {
-    if (mode !== 'resume') return null
-    // `filteredSessions` is the resume-mode list `selectedIndex` indexes
-    // into (same array the keyboard handler and the rendered rows use).
-    // An earlier draft of this block referenced a `filtered` variable
-    // that a concurrent command-palette refactor had already renamed —
-    // the two changes merged cleanly as text but left this reference
-    // dangling. `filteredSessions` is typed `SessionInfo[]`, so the
-    // cast is belt-and-suspenders against noUncheckedIndexedAccess.
-    const session = filteredSessions[selectedIndex] as SessionInfo | undefined
-    if (!session) return null
-    const cwd = session.cwd ?? resumeTarget?.cwd
-    if (!cwd) return null
-    return {
-      kind: resumeTarget?.provider ?? resumeProvider,
-      cwd,
-      providerSessionId: session.sessionId,
-    }
-  })()
-
-  // The template preview panel mirrors the highlighted row for the same reason
-  // `resumePreviewTarget` does, and by the same mechanism: every row calls
+  // The template preview panel mirrors the highlighted row: every row calls
   // `onMouseEnter={() => setSelectedIndex(i)}`, so hover and keyboard (↑/↓)
   // both write this one index. Deriving the previewed template from it means
   // the panel follows hover AND arrow keys with no hover state of its own.
@@ -1669,8 +1574,8 @@ function OpenCommandPalette({
   // last touched. It also needs onMouseLeave handling that this does not.
   //
   // `filteredPromptTemplates` is the array `selectedIndex` indexes into — the
-  // same one the keyboard handler and the rendered rows use. The cast mirrors
-  // `resumePreviewTarget` above and exists for noUncheckedIndexedAccess.
+  // same one the keyboard handler and the rendered rows use. The cast exists
+  // for noUncheckedIndexedAccess.
   const selectedPromptTemplate: PromptTemplate | null = mode === 'prompt-template'
     ? (filteredPromptTemplates[selectedIndex] as PromptTemplate | undefined) ?? null
     : null
@@ -1695,9 +1600,7 @@ function OpenCommandPalette({
           shadow-[0_16px_48px_var(--theme-shadow-color)]
           overflow-hidden
           ${
-            mode === 'resume'
-              ? 'w-[min(1180px,95vw)] max-h-[80vh]'
-              : // `prompt-template` joins the other template modes rather than
+            // `prompt-template` joins the other template modes rather than
                 // sitting with the compact list modes. Two reasons, both from
                 // the preview panel:
                 //
@@ -1756,11 +1659,6 @@ function OpenCommandPalette({
             : 'Search application commands and related session workflows.'}
         </DialogDescription>
         <div className="flex-shrink-0 border-b border-border px-3 py-2 flex items-center gap-2">
-          {mode === 'resume' && (
-            <span className="text-accent text-[11px] flex-shrink-0 select-none">
-              resume {focusedProvider} &rsaquo;
-            </span>
-          )}
           {mode === 'buried' && (
             <span className="text-accent text-[11px] flex-shrink-0 select-none">
               revive &rsaquo;
@@ -1827,8 +1725,6 @@ function OpenCommandPalette({
                   ? 'Search managed templates…'
                 : mode === 'ai-workspace-create'
                   ? 'Workspace name…'
-                  : mode === 'resume'
-                    ? 'Search sessions…'
                     : mode === 'ai-workspace-open' || mode === 'ai-workspace-clear'
                       ? 'Search AI Workspaces…'
                       : mode === 'buried' || mode === 'kill-buried'
@@ -1908,9 +1804,7 @@ function OpenCommandPalette({
                 // stays for the single-column modes (editor/manager/fill).
                 mode === 'commands' || mode === 'prompt-template'
                   ? 'flex-1 min-w-0 overflow-y-auto md:basis-[70%] md:border-r md:border-border'
-                  : mode === 'resume'
-                    ? 'flex-1 min-w-0 overflow-y-auto md:flex-none md:w-[42%] md:border-r md:border-border'
-                    : 'flex-1 overflow-y-auto'
+                  : 'flex-1 overflow-y-auto'
               }
             `}
           >
@@ -1966,6 +1860,7 @@ function OpenCommandPalette({
                 template={promptTemplateFillState.template}
                 values={promptTemplateFillState.values}
                 insertMode={promptTemplateFillState.insertMode}
+                deliverySurface={textDeliverySurface(workspace, promptTemplateFillState.sessionId) ?? 'composer'}
                 onValueChange={(name, value) => {
                   setPromptTemplateFillState(state => state ? {
                     ...state,
@@ -2123,48 +2018,6 @@ function OpenCommandPalette({
                     </Fragment>
                   )
                 })
-              ))}
-
-            {mode === 'resume' &&
-              (sessionsLoading ? (
-                <div className="px-3 py-4 text-muted text-[12px] text-center">
-                  Loading sessions…
-                </div>
-              ) : sessionsError ? (
-                <div role="alert" className="px-3 py-4 text-danger text-[12px] text-center">
-                  {sessionsError}
-                </div>
-              ) : filteredSessions.length === 0 ? (
-                <div className="px-3 py-4 text-muted text-[12px] text-center">
-                  No matching sessions
-                </div>
-              ) : (
-                filteredSessions.map((session, i) => (
-                  <div
-                    key={session.sessionId}
-                    className={`
-                    px-3 py-2
-                    cursor-pointer
-                    border-b border-border last:border-b-0
-                    ${
-                      i === selectedIndex
-                        ? 'bg-row-selected-bg text-row-selected-fg'
-                        : 'text-ink-dim hover:bg-row-hover-bg'
-                    }
-                  `}
-                    data-palette-row={i}
-                    onMouseEnter={() => setSelectedIndex(i)}
-                    onClick={() => executeResume(session)}
-                  >
-                    <div className="text-[12px] truncate">
-                      {session.summary || session.firstPrompt || session.sessionId}
-                    </div>
-                    <div className="text-[10px] text-muted mt-0.5 truncate">
-                      {session.gitBranch ? `${session.gitBranch} · ` : ''}
-                      {session.cwd ?? resumeTarget?.cwd ?? ''}
-                    </div>
-                  </div>
-                ))
               ))}
 
             {(mode === 'ai-workspace-open' || mode === 'ai-workspace-clear') && (
@@ -2391,7 +2244,7 @@ function OpenCommandPalette({
 
           {mode === 'commands' && (
             selectedPaletteRow?.kind === 'prompt-template' ? (
-              <PromptTemplatePreviewPanel template={selectedPaletteRow.template} />
+              <PromptTemplatePreviewPanel template={selectedPaletteRow.template} deliverySurface={templateDeliverySurface} />
             ) : (
               <CommandDescriptionPanel
                 command={selectedCommand}
@@ -2405,22 +2258,9 @@ function OpenCommandPalette({
               template. Same breakpoint policy as the command description panel
               (hidden below md) so the narrow layout stays list-only. */}
           {mode === 'prompt-template' && (
-            <PromptTemplatePreviewPanel template={selectedPromptTemplate} />
+            <PromptTemplatePreviewPanel template={selectedPromptTemplate} deliverySurface={templateDeliverySurface} />
           )}
 
-          {/* Resume mode — conversation preview for the highlighted
-              session, rendered with the real feed rows. Hidden below
-              md (same breakpoint policy as the command description
-              panel) so the narrow layout stays list-only. */}
-          {mode === 'resume' && (
-            <aside
-              role="region"
-              aria-label="Session preview"
-              className="hidden md:block md:flex-1 md:min-w-0 min-h-0"
-            >
-              <SessionPreviewPane target={resumePreviewTarget} />
-            </aside>
-          )}
         </div>
       </DialogContent>
     </Dialog>

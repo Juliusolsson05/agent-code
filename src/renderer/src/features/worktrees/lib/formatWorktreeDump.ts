@@ -1,5 +1,6 @@
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
-import type { AgentProviderKind } from '@shared/types/providerKind'
+import { isAgentProviderKind } from '@shared/types/providerKind'
+import type { SessionKind } from '@shared/types/providerKind'
 import type { WorktreeDump, WorktreeDumpRow } from '@renderer/features/worktrees/lib/loadWorktreeDump'
 import { relativeTime } from '@renderer/lib/relativeTime'
 
@@ -130,8 +131,10 @@ export function labelFor(category: string): string {
   return 'Review'
 }
 
-export function providerLabel(kind: AgentProviderKind): string {
-  // Registry-derived (#394 phase 2c-2).
+export function providerLabel(kind: SessionKind): string {
+  // Registry-derived for agents (#394 phase 2c-2); terminal is the one
+  // non-registry session kind and keeps its literal (#865).
+  if (!isAgentProviderKind(kind)) return 'Terminal'
   return getRendererProviderCapabilities(kind).shortLabel
 }
 

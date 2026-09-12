@@ -39,7 +39,7 @@ export type SettingMetadata = {
   /** Whose behaviour this changes. */
   scope: 'app' | 'project' | 'session-default' | 'fresh-install'
   /** When the change takes effect. */
-  apply: 'immediate' | 'new-session' | 'reload-live-sessions' | 'restart-required'
+  apply: 'immediate' | 'next-recording' | 'new-session' | 'reload-live-sessions' | 'restart-required'
   /** Where the value actually lives. Not always renderer Settings — some rows
    *  front main-owned setup state, the keychain, or files on disk, which is
    *  what makes "Reset Settings" ambiguous today. */
@@ -88,6 +88,9 @@ type ChoiceOption<T extends string> = {
 }
 
 export type SettingDefinition =
+  // A live device inventory needs permission, hotplug and unavailable states,
+  // so it cannot be represented by the static generic select's options.
+  | { id: string; category: SettingCategoryId; title: string; description: string; keywords: string[]; metadata?: SettingMetadata; control: { type: 'dictation-audio-input' } }
   | { id: string; category: SettingCategoryId; title: string; description: string; keywords: string[]; metadata?: SettingMetadata; control: { type: 'external-control' } }
   | {
       id: string
@@ -330,6 +333,12 @@ function updateDefaultBuiltInMcpDomain(
   domain: ConfigurableBuiltInMcpDomain,
   enabled: boolean,
 ): void {
+  // WHY every built-in MCP row is 'Next session' rather than 'Reloads live
+  // agents': the capability list is fixed when a provider process launches, so
+  // honoring this edit means replacing that process. Doing it on a Settings
+  // toggle would kill work in flight across the whole fleet, so the edit is
+  // recorded and each agent picks it up the next time it starts — which now
+  // includes an ordinary reload of an existing agent (#904), not just creation.
   const current = ctx.settings.defaultBuiltInMcpDomains
   // WHY each row rewrites one shared ordered set instead of storing four
   // booleans: the session launch contract already speaks domain arrays, and a
@@ -475,7 +484,7 @@ export function getSettingsRegistry(): SettingDefinition[] {
       id: 'agent-names',
       category: 'workspace',
       title: 'Agent names',
-      description: 'Show a stable spoken name such as Apollo beside agent titles and in the Dispatch index, and expose the same name to external operator search. Names are separate from titles, are never reused after an agent closes, and are retained while this is off so re-enabling restores the same names. Past 100 names, explicit numeric suffixes such as "Apollo 2" keep every address distinct. Terminals are never named.',
+      description: 'Show a stable spoken name such as Apollo beside agent titles and in the Dispatch index, and expose the same name to external operator search. Names are separate from titles, are never reused after an agent closes, and are retained while this is off so re-enabling restores the same names. Past 100 names, explicit numeric suffixes such as "Apollo 2" keep every address distinct. Terminals are named too, from the same list.',
       keywords: ['voice', 'spoken', 'name', 'names', 'apollo', 'agent', 'mcp', 'operator', 'header', 'dispatch'],
       // No explicit `metadata`. DEFAULT_SETTING_METADATA is already exactly
       // right here — app-scoped, stored in renderer Settings, effective at
@@ -612,12 +621,27 @@ export function getSettingsRegistry(): SettingDefinition[] {
       control: { type: 'agent-code-installed-skills' },
     },
     {
+      id: 'default-tldr-mcp',
+      category: 'agents',
+      title: 'TLDR MCP',
+      description:
+        'Keep concise agent summaries with the managed reporting skill. Off by default. Applies to new agents and existing agents on their next reload. Per-agent overrides take precedence; Use Global MCP Settings clears them.',
+      keywords: ['mcp', 'tldr', 'default', 'reload', 'existing agents', 'claude', 'codex'],
+      metadata: { scope: 'app', apply: 'new-session', storage: 'settings' },
+      control: {
+        type: 'toggle',
+        getValue: settings => settings.defaultBuiltInMcpDomains.includes('tldr'),
+        onToggle: (ctx, value) => updateDefaultBuiltInMcpDomain(ctx, 'tldr', value),
+      },
+    },
+    {
       id: 'default-orchestration-mcp',
       category: 'agents',
-      title: 'Orchestration MCP for New Agents',
+      title: 'Orchestration MCP',
       description:
-        'Start new Claude and Codex agents with Agent Code orchestration tools. Existing sessions are unchanged and can still toggle this capability independently from the command picker.',
-      keywords: ['mcp', 'orchestration', 'default', 'new agents', 'claude', 'codex'],
+        'Let agents create and coordinate child agents. Applies to new agents and existing agents on their next reload. Per-agent overrides take precedence; Use Global MCP Settings clears them.',
+      keywords: ['mcp', 'orchestration', 'default', 'reload', 'existing agents', 'claude', 'codex'],
+      metadata: { scope: 'app', apply: 'new-session', storage: 'settings' },
       control: {
         type: 'toggle',
         getValue: settings => settings.defaultBuiltInMcpDomains.includes('orchestration'),
@@ -627,10 +651,11 @@ export function getSettingsRegistry(): SettingDefinition[] {
     {
       id: 'default-ai-workspace-mcp',
       category: 'agents',
-      title: 'AI Workspace MCP for New Agents',
+      title: 'AI Workspace MCP',
       description:
-        'Start new Claude and Codex agents with tools for curating cross-worktree review workspaces. Existing sessions keep their own command-picker selection.',
-      keywords: ['mcp', 'ai workspace', 'review', 'default', 'new agents', 'claude', 'codex'],
+        'Let agents curate review workspaces across worktrees. Applies to new agents and existing agents on their next reload. Per-agent overrides take precedence; Use Global MCP Settings clears them.',
+      keywords: ['mcp', 'ai workspace', 'review', 'default', 'reload', 'existing agents', 'claude', 'codex'],
+      metadata: { scope: 'app', apply: 'new-session', storage: 'settings' },
       control: {
         type: 'toggle',
         getValue: settings => settings.defaultBuiltInMcpDomains.includes('ai_workspace'),
@@ -640,10 +665,11 @@ export function getSettingsRegistry(): SettingDefinition[] {
     {
       id: 'default-agent-transcripts-mcp',
       category: 'agents',
-      title: 'Agent Transcripts MCP for New Agents',
+      title: 'Agent Transcripts MCP',
       description:
-        'Start new Claude and Codex agents with bounded transcript file tools. Existing sessions remain unchanged and can override this default independently.',
-      keywords: ['mcp', 'transcript', 'transcripts', 'default', 'new agents', 'claude', 'codex'],
+        'Give agents bounded transcript file tools. Applies to new agents and existing agents on their next reload. Per-agent overrides take precedence; Use Global MCP Settings clears them.',
+      keywords: ['mcp', 'transcript', 'transcripts', 'default', 'reload', 'existing agents', 'claude', 'codex'],
+      metadata: { scope: 'app', apply: 'new-session', storage: 'settings' },
       control: {
         type: 'toggle',
         getValue: settings => settings.defaultBuiltInMcpDomains.includes('agent_transcripts'),
@@ -653,10 +679,11 @@ export function getSettingsRegistry(): SettingDefinition[] {
     {
       id: 'default-agent-management-mcp',
       category: 'agents',
-      title: 'Agent Management MCP for New Agents',
+      title: 'Agent Management MCP',
       description:
-        'Start new Claude and Codex agents with project-wide agent inventory, transcript reading, prompting, and explicitly authorized close tools. Existing sessions remain unchanged and can override this default independently.',
-      keywords: ['mcp', 'agent management', 'agents', 'project', 'cleanup', 'default', 'new agents', 'claude', 'codex'],
+        'Let agents inspect project agents and send follow-ups; closing agents still requires explicit user authorization. Applies to new agents and existing agents on their next reload. Per-agent overrides take precedence; Use Global MCP Settings clears them.',
+      keywords: ['mcp', 'agent management', 'agents', 'project', 'cleanup', 'default', 'reload', 'existing agents', 'claude', 'codex'],
+      metadata: { scope: 'app', apply: 'new-session', storage: 'settings' },
       control: {
         type: 'toggle',
         getValue: settings => settings.defaultBuiltInMcpDomains.includes('agent_management'),
@@ -666,10 +693,11 @@ export function getSettingsRegistry(): SettingDefinition[] {
     {
       id: 'default-workflow-mcp',
       category: 'agents',
-      title: 'Workflow MCP for New Codex Agents',
+      title: 'Workflow MCP',
       description:
-        'Codex only. Claude uses its native workflow feature, so Agent Code never injects Workflow MCP into Claude sessions. Existing Codex sessions keep their own command-picker selection.',
-      keywords: ['mcp', 'workflow', 'workflows', 'codex', 'default', 'new agents', 'claude native'],
+        'Give Codex and OpenCode workflow tools. Claude uses its native workflow feature. Applies to new agents and existing agents on their next reload. Per-agent overrides take precedence; Use Global MCP Settings clears them.',
+      keywords: ['mcp', 'workflow', 'workflows', 'codex', 'default', 'reload', 'existing agents', 'claude native'],
+      metadata: { scope: 'app', apply: 'new-session', storage: 'settings' },
       control: {
         type: 'toggle',
         getValue: settings => settings.defaultBuiltInMcpDomains.includes('workflows'),
@@ -827,6 +855,15 @@ export function getSettingsRegistry(): SettingDefinition[] {
         onSelect: (ctx, value) =>
           ctx.onChange({ dictationProvider: value as Settings['dictationProvider'] }),
       },
+    },
+    {
+      id: 'dictation-audio-input',
+      category: 'dictation',
+      title: 'Audio Input Device',
+      description: 'Choose the microphone used for voice dictation in composers and terminals.',
+      keywords: ['voice', 'dictation', 'audio', 'input', 'device', 'microphone', 'headphones', 'headset', 'airpods', 'usb'],
+      metadata: { scope: 'app', apply: 'next-recording', storage: 'settings' },
+      control: { type: 'dictation-audio-input' },
     },
     {
       // Marker row rendered by <DictationApiKeyRow /> — see the registry

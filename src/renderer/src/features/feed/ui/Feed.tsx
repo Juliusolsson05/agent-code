@@ -1,3 +1,5 @@
+import { UsageLimitNoticeView } from '@providers/shared/renderer/protocols/usage-limit/UsageLimitNoticeView'
+import type { UsageLimitActions } from '@providers/shared/renderer/protocols/usage-limit/model'
 import { TaskNotificationsContext } from '@renderer/features/feed/context'
 import { useAgentTerminalOwnerVisible } from '@renderer/workspace/terminal/AgentTerminalOwnership'
 import { RenderShapeCaptureProvider } from '@renderer/features/feed/evidence/RenderShapeCaptureContext'
@@ -126,6 +128,7 @@ export type { AgentProvider, ScrollInfo } from '@renderer/features/feed/types'
 // this file.
 
 type Props = {
+  usageLimitActions?: UsageLimitActions
   /** Session identity — used as the key for per-session scroll
    *  position persistence across Feed unmount/remount (tab switches).
    *  See `scrollPositions` below. */
@@ -295,6 +298,7 @@ type Props = {
 export const Feed = memo(FeedImpl)
 
 function FeedImpl({
+  usageLimitActions,
   sessionId,
   provider = 'claude',
   entries,
@@ -966,6 +970,12 @@ function FeedImpl({
 
   const renderFeedItem = (item: FeedRenderItem) => {
     switch (item.type) {
+      case 'provider-notice':
+        return (
+          <RenderDebugBoundary key={item.key} snapshot={{ sourcePlane: item.sourcePlane === 'committed' ? 'feed-entry' : 'feed-semantic', lifecycle: 'visible', eventType: 'provider-notice', input: item.notice, routingTrace: [{ id: 'ledger-provider-notice', condition: 'Which provider status owns this notice?', outcome: item.key }] }}>
+            <UsageLimitNoticeView notice={item.notice} sessionRunId={item.sessionRunId} actions={usageLimitActions} />
+          </RenderDebugBoundary>
+        )
       case 'entry': {
         const e = item.entry
         const uuid = e.uuid

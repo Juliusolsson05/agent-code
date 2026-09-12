@@ -1,5 +1,7 @@
 import { isCompactSummaryEntry, isConversationEntry } from '@shared/types/transcript'
 import type { Entry } from '@shared/types/transcript'
+import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
+import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import type { SessionKind } from '@renderer/workspace/types'
 
 export type LatestUserPrompt = {
@@ -7,18 +9,25 @@ export type LatestUserPrompt = {
   timestamp: string | null
 }
 
-type UserPromptMeta = {
-  permissionMode?: string
-  isMeta?: boolean
-  uuid?: string
+function isMetaEntry(entry: Entry): boolean {
+  // `isMeta` is a Claude extension on user entries (auto-continue hints).
+  // It is checked here rather than in the provider rule because no provider
+  // uses it to mean "typed", so it filters uniformly and costs nothing.
+  return (entry as { isMeta?: boolean }).isMeta === true
 }
 
-function userPromptMeta(entry: Entry): UserPromptMeta {
-  // These fields are provider-specific extensions on Claude user
-  // entries. Keep the cast behind a named helper so the filtering
-  // invariant is visible at each call site without repeating the
-  // broad "Entry plus loose metadata" assertion three times.
-  return entry as Entry & UserPromptMeta
+// Which user rows are prompts the user actually typed is provider knowledge,
+// answered by each provider's `isTypedUserPrompt` capability (see
+// registry.renderer.capabilities.ts for why it is a capability, and each
+// provider's transcript mapper for its rule).
+//
+// A plain shell (`terminal`) never reaches here with conversation rows, and a
+// kind that predates the field is a legacy Claude session; both take the
+// default provider's (Claude's) rule, which is exactly what the old inline
+// switch did for them.
+function isTypedUserPrompt(entry: Entry, text: string, sessionKind: SessionKind | undefined): boolean {
+  const provider = isAgentProviderKind(sessionKind) ? sessionKind : DEFAULT_PROVIDER
+  return getRendererProviderCapabilities(provider).isTypedUserPrompt(entry, text)
 }
 
 function extractPromptText(entry: Entry): string {
@@ -45,14 +54,11 @@ export function extractLatestUserPrompts(
     if (!isConversationEntry(entry)) continue
     if (entry.message.role !== 'user') continue
     if (isCompactSummaryEntry(entry)) continue
-
-    const meta = userPromptMeta(entry)
-    if (meta.isMeta === true) continue
-    if (sessionKind !== 'codex' && meta.permissionMode === undefined) continue
+    if (isMetaEntry(entry)) continue
 
     const text = extractPromptText(entry)
     if (!text) continue
-    if (text.startsWith('<')) continue
+    if (!isTypedUserPrompt(entry, text, sessionKind)) continue
     if (chronological.length > 0 && chronological[chronological.length - 1]?.text === text) {
       continue
     }
@@ -77,14 +83,11 @@ export function extractLatestUserPrompt(
     if (!isConversationEntry(entry)) continue
     if (entry.message.role !== 'user') continue
     if (isCompactSummaryEntry(entry)) continue
-
-    const meta = userPromptMeta(entry)
-    if (meta.isMeta === true) continue
-    if (sessionKind !== 'codex' && meta.permissionMode === undefined) continue
+    if (isMetaEntry(entry)) continue
 
     const text = extractPromptText(entry)
     if (!text) continue
-    if (text.startsWith('<')) continue
+    if (!isTypedUserPrompt(entry, text, sessionKind)) continue
     return {
       text,
       timestamp: typeof entry.timestamp === 'string' ? entry.timestamp : null,

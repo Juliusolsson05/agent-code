@@ -37,6 +37,7 @@ import {
   useTileTabsSanity,
 } from '@renderer/workspace/hook/invalidation/effects'
 import { useIpcSubscriptions } from '@renderer/workspace/hook/ipc/useIpcSubscriptions'
+import { useTerminalForeground } from '@renderer/workspace/hook/ipc/useTerminalForeground'
 import { useWorkspaceAdoption } from '@renderer/workspace/hook/ipc/useWorkspaceAdoption'
 import { useSessionFeed } from '@renderer/features/sessionFeed/SessionFeedContext'
 import type { OrchestrationAgentRecord } from '@mcp/shared/orchestrationTypes'
@@ -53,11 +54,10 @@ import {
   additionalCloseImpact,
   assertManagedTarget,
   listManagedAgentDescriptors,
-  managedTranscriptUnavailableReason,
   readManagedAgentOutput,
   readManagedAgentOutputs,
 } from '@renderer/workspace/agentManagementMcp'
-import { loadInitialHistoryForSession } from '@renderer/workspace/hook/actions/initialHistory'
+import { hydrateTranscriptWithoutWaking as hydrateManagedTranscript } from '@renderer/workspace/hook/actions/hydrateTranscript'
 import { setAgentTitleInWorkspace } from '@renderer/workspace/agentTitle'
 
 // -----------------------------------------------------------------------------
@@ -231,8 +231,8 @@ export function useWorkspace(
   }, [refs.stateRef, setRuntimes, setState, showToast])
 
   const setAgentTitle = useCallback((sessionId: SessionId, title: string): boolean => {
-    const meta = refs.stateRef.current.sessions[sessionId]
-    if (!meta || !isAgentProviderKind(meta.kind ?? DEFAULT_PROVIDER)) return false
+    // Any existing session can carry a title (#865); only a vanished one is refused.
+    if (!refs.stateRef.current.sessions[sessionId]) return false
 
     // WHY the mutation is delegated to a pure workspace helper rather than
     // written inline here: `SessionMeta.title` is already consumed by several
@@ -271,8 +271,8 @@ export function useWorkspace(
     draftChanges.bump,
   )
   const {
-    setStreamingBaseline,
-    unwindStreamingBaseline,
+    beginOptimisticSubmit,
+    unwindOptimisticSubmit,
     clearPendingRewindUndo,
     addOptimisticCodexUserEntry,
     removeOptimisticCodexUserEntry,
@@ -365,6 +365,7 @@ export function useWorkspace(
           const agent = await createOrchestrationAgentRef.current({
             parentId: request.parentSessionId,
             kind: request.kind,
+            ...(request.providerRuntime ? { providerRuntime: request.providerRuntime } : {}),
             cwd: request.cwd,
             title: request.title,
             role: request.role,
@@ -578,30 +579,20 @@ export function useWorkspace(
       })
     }
 
-    const hydrateTranscriptWithoutWaking = async (
+    // See hydrateTranscript.ts for why reads never wake the agent and why the
+    // zustand store (not refs) is what gets read back.
+    const hydrateTranscriptWithoutWaking = (
       sessionId: string,
-    ): Promise<'transcript_unavailable' | 'not_created' | null> => {
-      const before = useAppStore.getState()
-      const meta = before.workspaceState.sessions[sessionId]
-      const runtime = before.workspaceRuntimes[sessionId]
-      if (!meta || !runtime || runtime.transcriptStatus === 'ready') {
-        return managedTranscriptUnavailableReason(runtime, meta)
-      }
-      // WHY audit reads call the durable-history loader directly instead of
-      // ensureSessionLive: restored and buried agents remain valid project
-      // records even with no provider process. Transcript inspection must not
-      // wake them, mutate their backend lifetime, or consume a provider turn.
-      await loadInitialHistoryForSession({ sessionId, refs, setRuntimes, meta })
-      // Zustand updates synchronously, while the React render that refreshes
-      // latestRuntimesRef may happen after this promise continuation. Reading
-      // the store directly prevents a successful/error hydration from being
-      // mistaken for the stale pre-load runtime in the same MCP request.
-      const after = useAppStore.getState()
-      return managedTranscriptUnavailableReason(
-        after.workspaceRuntimes[sessionId],
-        after.workspaceState.sessions[sessionId],
-      )
-    }
+    ): Promise<'transcript_unavailable' | 'not_created' | null> =>
+      hydrateManagedTranscript({
+        sessionId,
+        refs,
+        setRuntimes,
+        read: () => {
+          const current = useAppStore.getState()
+          return { state: current.workspaceState, runtimes: current.workspaceRuntimes }
+        },
+      })
 
     const off = window.api.onAgentManagementRequest(async request => {
       try {
@@ -833,7 +824,7 @@ export function useWorkspace(
     return off
   }, [refs, setRuntimes])
 
-  const { switchSessionProvider, reloadSessionAgent, rewindSessionToPrompt, undoSessionRewind, reloadFocusedAgent, rewindFocusedToPrompt, undoLastRewind } =
+  const { switchSessionProvider, reloadSessionAgent, rewindSessionToPrompt, undoSessionRewind, removeCodexCyberPolicyBlock, reloadFocusedAgent, rewindFocusedToPrompt, undoLastRewind, removeFocusedCyberPolicyBlock } =
     useProviderActions(refs, setRuntimes, showPaneToast, sessionActions)
 
   // Bulk provider switch (Switch Agents modal) + remembered-batch return. Uses
@@ -870,6 +861,7 @@ export function useWorkspace(
   // see the WHY on useIpcSubscriptions.
   const sessionFeed = useSessionFeed()
   useIpcSubscriptions(sessionFeed, refs, setState, setRuntimes, updateRuntime, appendFeedDebug)
+  useTerminalForeground(restoreStatus, setRuntimes)
   useWorkspaceAdoption(refs, setState, setRuntimes, bootstrapComplete)
   useBootstrap(
     refs,
@@ -967,14 +959,15 @@ export function useWorkspace(
     activateTab: tabActions.activateTab,
     activateTabByIndex: tabActions.activateTabByIndex,
     reorderTabs: tabActions.reorderTabs,
+    mergeTabs: tabActions.mergeTabs,
     nextTab: tabActions.nextTab,
     prevTab: tabActions.prevTab,
     resizeFocused,
     resizeFocusedDirectional,
     setSplitRatio,
     setSplitRatioInTab,
-    setStreamingBaseline,
-    unwindStreamingBaseline,
+    beginOptimisticSubmit,
+    unwindOptimisticSubmit,
     clearPendingRewindUndo,
     acknowledgeSession,
     appendFeedDebug,
@@ -997,10 +990,12 @@ export function useWorkspace(
     switchSessionProvider,
     reloadSessionAgent,
     rewindSessionToPrompt,
+    removeCodexCyberPolicyBlock,
     undoSessionRewind,
     switchAgentsToProvider,
     returnLastProviderSwitchBatch,
     rewindFocusedToPrompt,
+    removeFocusedCyberPolicyBlock,
     undoLastRewind,
     reloadAgentSessions,
     setSpotlightTarget,

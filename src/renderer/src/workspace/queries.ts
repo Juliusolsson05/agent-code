@@ -124,3 +124,31 @@ export function resolveAllSessions(state: WorkspaceState): SessionId[] {
 export function isDetached(state: WorkspaceState, sessionId: SessionId): boolean {
   return state.detachedSessions[sessionId] !== undefined
 }
+
+/**
+ * Tabs that currently hold a session whose working directory is exactly
+ * `cwd`, in tab order.
+ *
+ * WHY this is the definition of "this project is already open" (#913): a
+ * `Tab` carries no directory of its own; its title is the basename chosen at
+ * creation and the only durable link to a folder is the cwd of the sessions
+ * it holds. The operator capability `projects.open` has used this rule since
+ * it shipped; the path picker now shares it so ⌘T stops minting a fresh tab
+ * for a folder that is already on screen. Exact match on purpose: a worktree
+ * is a different directory, and Merge Project Tabs is the tool for folding
+ * worktree tabs together.
+ *
+ * The comparison is on the cwd string as stored. `expandCwd` resolves `~`
+ * and trailing slashes but not symlinks, so a session spawned through
+ * `projects.open` with a symlinked spelling of the same folder is a different
+ * directory here — consistent with how `projects.open` itself has always
+ * matched, and cheaper than a realpath round-trip per keystroke in the picker.
+ */
+export function findTabsHoldingDirectory(
+  state: WorkspaceState,
+  cwd: string,
+): WorkspaceState['tabs'] {
+  return state.tabs.filter(tab =>
+    resolveTabSessions(state, tab.id).some(id => state.sessions[id]?.cwd === cwd),
+  )
+}

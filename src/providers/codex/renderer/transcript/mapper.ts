@@ -72,3 +72,15 @@ export function createCodexTranscriptEntryMapper(
  * so the registry capability table imports one file per provider.
  */
 export { extractCodexProviderSessionId } from './entries'
+
+/**
+ * Is this text-bearing, non-meta Codex user row a prompt the user typed?
+ *
+ * Codex has no `permissionMode` stamp, but it records its injected context
+ * (`<environment_context>`, `<user_instructions>`) as ordinary user
+ * messages, and every one of those is a `<`-prefixed block. The entry itself
+ * carries nothing else that separates them, hence the unused parameter.
+ */
+export function isCodexTypedUserPrompt(_entry: unknown, text: string): boolean {
+  return !text.startsWith('<')
+}

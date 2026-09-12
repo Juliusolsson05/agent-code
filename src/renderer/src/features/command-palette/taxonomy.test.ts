@@ -104,7 +104,7 @@ describe('tier classification', () => {
   it('marks niche supported operations advanced rather than hiding them entirely', () => {
     // `advanced` is not `debug`: these are supported operations a power user
     // wants, just not ones that should crowd a fuzzy search.
-    for (const id of ['rewind-to-prompt', 'duplicate-agent', 'normalize-layout', 'bury-pane']) {
+    for (const id of ['rewind-to-prompt', 'remove-cybersecurity-block', 'duplicate-agent', 'normalize-layout', 'bury-pane']) {
       expect(byId(id).pickerVisibility).toBe('advanced')
     }
   })
