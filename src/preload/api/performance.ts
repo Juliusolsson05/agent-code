@@ -1,3 +1,5 @@
+import type { MonitorIncident } from '@shared/performance/monitorIncidents.js'
+import { completeMonitorResponse } from '../monitorOperations.js'
 import type { MonitorProcessPage } from '@shared/performance/processSnapshot.js'
 import type { MonitorSnapshot } from '@shared/performance/monitorSnapshot.js'
 import { parseMonitorRendererBatch } from '@shared/performance/monitorContracts.js'
@@ -12,10 +14,17 @@ import type {
   SystemPerformanceStats,
 } from '@shared/performance/types.js'
 
+let incidentRead: Promise<MonitorIncident | null> | null = null
 let monitorBatchInFlight = false
 let monitorSnapshotRead: Promise<MonitorSnapshot | null> | null = null
 let processReadInFlight = false
 export const performanceApi = {
+  completeMonitorResponse,
+  getMonitorIncident: (id: number): Promise<MonitorIncident | null> => {
+    if (incidentRead) return Promise.resolve(null)
+    incidentRead = ipcRenderer.invoke('performance:monitor-incident', id).finally(() => { incidentRead = null })
+    return incidentRead!
+  },
   getMonitorProcesses: async (offset = 0, sort: 'cpu' | 'memory' = 'cpu'): Promise<MonitorProcessPage | null> => {
     if (processReadInFlight) return null
     processReadInFlight = true

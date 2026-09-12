@@ -9,6 +9,7 @@ export type MonitorOperation = {
   // This is an opaque application ID, never an agent title or project path.
   // Main stamps source/run identity from the sender; neither is renderer input.
   sessionId?: string
+  operationId?: string
 }
 
 export type MonitorHeartbeat = {
@@ -30,7 +31,7 @@ export type MonitorRendererRecord = MonitorOperation | MonitorHeartbeat
 
 const operations = new Set<string>(MONITOR_OPERATIONS)
 const outcomes = new Set<string>(['success', 'error', 'cancelled', 'timeout'])
-const operationKeys = new Set(['kind', 'name', 'durationMs', 'outcome', 'sessionId'])
+const operationKeys = new Set(['kind', 'name', 'durationMs', 'outcome', 'sessionId', 'operationId'])
 const heartbeatKeys = new Set([
   'kind', 'monotonicMs', 'timeOriginMs', 'lagMs', 'visibility', 'longTaskCount',
   'longTaskTotalMs', 'longTaskMaxMs', 'heapUsedBytes', 'heapLimitBytes', 'inputCount', 'inputMaxMs',
@@ -57,11 +58,13 @@ export function parseMonitorRendererRecord(input: unknown): MonitorRendererRecor
     if (typeof value.name !== 'string' || !operations.has(value.name)
       || !finite(value.durationMs, 24 * 60 * 60_000)
       || typeof value.outcome !== 'string' || !outcomes.has(value.outcome)
-      || (value.sessionId !== undefined && !isMonitorId(value.sessionId))) return null
+      || (value.sessionId !== undefined && !isMonitorId(value.sessionId))
+      || (value.operationId !== undefined && !isMonitorId(value.operationId))) return null
     return {
       kind: 'operation', name: value.name as MonitorOperationName,
       durationMs: value.durationMs, outcome: value.outcome as MonitorOutcome,
       ...(value.sessionId === undefined ? {} : { sessionId: value.sessionId as string }),
+      ...(value.operationId === undefined ? {} : { operationId: value.operationId as string }),
     }
   }
   if (value.kind !== 'heartbeat' || keys.length !== heartbeatKeys.size

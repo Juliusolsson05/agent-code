@@ -1,3 +1,4 @@
+import { mainOperations } from '@main/performance/operations.js'
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
 import type { FileHandle } from 'fs/promises'
 import { open, stat } from 'fs/promises'
@@ -357,9 +358,13 @@ async function countNewlines(handle: FileHandle, from: number, to: number): Prom
 function parseJsonlLine(line: Buffer): Record<string, unknown> | null | undefined {
   const text = line.toString('utf8')
   if (!text.trim()) return undefined
+  const startedAt = performance.now()
   try {
-    return JSON.parse(text) as Record<string, unknown>
+    const parsed = JSON.parse(text) as Record<string, unknown>
+    mainOperations.observe('transcript.parse', performance.now() - startedAt)
+    return parsed
   } catch {
+    mainOperations.observe('transcript.parse', performance.now() - startedAt, 'error')
     return null
   }
 }

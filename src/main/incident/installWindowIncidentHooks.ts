@@ -208,6 +208,7 @@ export function installWindowIncidentHooks(journal: AppRunJournal): void {
     // misleading main-process crash incident. The numeric ID is the stable lifecycle key.
     const webContentsId = window.webContents.id
     windows.set(webContentsId, window)
+    monitorCoordinator.setWindowVisible(webContentsId, window.isVisible() && !window.isMinimized())
     const initialLiveness = freshLiveness(Date.now())
     recordWindowLifecycle(initialLiveness, window, 'created')
     liveness.set(webContentsId, initialLiveness)
@@ -223,6 +224,7 @@ export function installWindowIncidentHooks(journal: AppRunJournal): void {
     // whether occlusion, fullscreen Spaces, minimization, or focus churn happened immediately
     // before the last JavaScript heartbeat. The ring is deliberately tiny and metadata-only.
     const captureLifecycle = (eventName: string): void => {
+      monitorCoordinator.setWindowVisible(webContentsId, window.isVisible() && !window.isMinimized())
       const state = liveness.get(webContentsId)
       if (state) recordWindowLifecycle(state, window, eventName)
     }

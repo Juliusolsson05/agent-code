@@ -274,7 +274,7 @@ export function registerSessionIpc(
             })
           }
         : undefined
-      return await manager.deliverPromptToAgent(sessionId, prompt, imagePaths, record)
+      return await manager.deliverPromptToAgent(sessionId, prompt, imagePaths, record, deliveryId)
     },
   )
 

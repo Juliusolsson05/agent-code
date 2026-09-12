@@ -3,6 +3,7 @@
 // reads env flags at module load) is imported. See
 // `./loadEnv.ts` for the rationale.
 import '@main/loadEnv.js'
+import { mainOperations } from '@main/performance/operations.js'
 import { monitorCoordinator } from '@main/performance/MonitorCoordinator.js'
 import { mainProbe } from '@main/performance/MainProbe.js'
 import { TldrStore } from '@main/tldr/TldrStore.js'
@@ -1134,6 +1135,7 @@ async function startApp(): Promise<void> {
   // items dispatch command ids to THIS window's renderer (issue #148).
   Menu.setApplicationMenu(buildAppMenu())
   performanceService.mark('app.main.window.created')
+  mainOperations.observe('app.startup', performance.now())
 
   app.on('activate', () => {
     if (sessionShutdownGate.isTerminalShutdownAdmitted()) {

@@ -1,3 +1,4 @@
+import { Incidents } from './Incidents'
 import { useEffect, useMemo, useState } from 'react'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@renderer/components/ui/dialog'
 import { Button } from '@renderer/components/ui/button'
@@ -8,7 +9,7 @@ import { useMonitor } from './useMonitor'
 
 const bytes = (value: number | null | undefined) => value == null ? '—' : value >= 1024 ** 3 ? `${(value / 1024 ** 3).toFixed(2)} GiB` : `${(value / 1024 ** 2).toFixed(1)} MiB`
 const number = (value: number | null | undefined, suffix = '') => value == null ? '—' : `${value.toFixed(1)}${suffix}`
-type View = 'overview' | 'processes' | 'operations'
+type View = 'overview' | 'processes' | 'operations' | 'incidents'
 
 export function PerformanceMonitor({ onClose }: { onClose: () => void }) {
   const { snapshot, error } = useMonitor()
@@ -27,14 +28,14 @@ export function PerformanceMonitor({ onClose }: { onClose: () => void }) {
         </div>
       </DialogHeader>
       <nav aria-label="Performance views" className="flex gap-2 border-b border-border px-4 py-2">
-        {(['overview', 'processes', 'operations'] as const).map(tab => <Button key={tab} size="sm" variant={view === tab ? 'default' : 'ghost'} aria-pressed={view === tab} onClick={() => setView(tab)}>
+        {(['overview', 'processes', 'operations', 'incidents'] as const).map(tab => <Button key={tab} size="sm" variant={view === tab ? 'default' : 'ghost'} aria-pressed={view === tab} onClick={() => setView(tab)}>
           {tab[0].toUpperCase() + tab.slice(1)}
         </Button>)}
       </nav>
       <div className="overflow-auto p-4 text-[12px] min-h-[min(400px,50vh)]">
         {!snapshot ? <p className="text-muted" role="status">{error ? 'Performance readings are unavailable. Collection will reconnect automatically.' : 'Waiting for the first sample…'}</p>
           : view === 'overview' ? <Overview snapshot={snapshot} />
-            : view === 'processes' ? <Processes /> : <Operations snapshot={snapshot} />}
+            : view === 'processes' ? <Processes /> : view === 'incidents' ? <Incidents incidents={snapshot.incidents ?? []} /> : <Operations snapshot={snapshot} />}
       </div>
     </DialogContent>
   </Dialog>
@@ -139,7 +140,7 @@ function Processes() {
 
 function Operations({ snapshot }: { snapshot: MonitorSnapshot }) {
   const rows = useMemo(() => [...snapshot.operations].sort((a, b) => b.histogram.maxMs - a.histogram.maxMs), [snapshot.operations])
-  return <section className="space-y-3"><h2 className="font-medium">Operation latency</h2><p className="text-[11px] text-muted">Percentiles are histogram bucket upper bounds. Sample counts and outcomes keep slow failures visible.</p>
+  return <section className="space-y-3"><h2 className="font-medium">Operation latency</h2><p className="text-[11px] text-muted">Percentiles are histogram bucket upper bounds. Sample counts and outcomes keep slow failures visible. Provider and first-output durations include waiting; transcript.commit ends at React layout commit, before paint.</p>
     {!rows.length ? <p className="text-muted">No operations recorded in this run.</p> : <table className="w-full text-left text-[11px] tabular-nums"><thead className="text-muted"><tr>{['Operation', 'Outcome', 'Count', 'p50', 'p95', 'p99', 'Maximum'].map(label => <th className="py-2 font-normal" key={label}>{label}</th>)}</tr></thead><tbody>{rows.map(row => <tr className="border-t border-border" key={`${row.name}:${row.outcome}`}><td className="py-2">{row.name}</td><td>{row.outcome}</td><td>{row.histogram.count.toLocaleString()}</td>{[0.5, 0.95, 0.99].map(q => { const value = latencyQuantile(row.histogram, q); return <td key={q}>{value?.overflow ? '>60 s' : number(value?.upperBoundMs, ' ms')}</td> })}<td>{number(row.histogram.maxMs, ' ms')}</td></tr>)}</tbody></table>}
   </section>
 }

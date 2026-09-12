@@ -1,3 +1,4 @@
+import { useMonitorCommit } from '@renderer/performance/useMonitorCommit'
 import { useUsageLimitActions } from '@renderer/features/usage-limit/useUsageLimitActions'
 import { conditionStateByKind } from '@shared/types/providerConditions'
 import type { ClaudeAskUserQuestionState } from '@shared/types/providerConditions'
@@ -145,6 +146,7 @@ export function TileLeaf({
   // into "visible" for the mask below and into "owns keyboard input" for
   // every document-level router. See useInteractiveOwnership for why.
   const { interactive, hidden: workspaceHidden } = useInteractiveOwnership(focused)
+  useMonitorCommit(sessionId, runtime.semantic, !workspaceHidden)
   // This one OR is the ENTIRE implementation of "Tail All" scoping, and it is
   // load-bearing in a way that is easy to mistake for a shortcut.
   //

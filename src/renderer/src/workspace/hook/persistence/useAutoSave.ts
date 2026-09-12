@@ -1,3 +1,4 @@
+import { rendererOperations } from '@renderer/performance/monitorOperations'
 import { useCallback, useEffect, useRef } from 'react'
 
 import type { PersistedWorkspace } from '@renderer/workspace/persistence'
@@ -139,9 +140,12 @@ export function useAutoSave(
       drafts: Object.keys(drafts).length > 0 ? drafts : undefined,
     }
     let json = ''
+    const finishSerialize = rendererOperations.begin('persistence.serialize')
     try {
       json = JSON.stringify({ workspace: persisted }, null, 2)
+      finishSerialize()
     } catch (err) {
+      finishSerialize('error')
       saveSpan.fail(err)
       throw err
     }

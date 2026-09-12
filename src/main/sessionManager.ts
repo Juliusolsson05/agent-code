@@ -1,3 +1,5 @@
+import { mainOperations } from '@main/performance/operations.js'
+import { ResponseTracker } from '@shared/performance/responseTracker.js'
 import { randomUUID } from 'crypto'
 import { hasReportingDomain } from '@shared/types/tldr.js'
 import { EventEmitter } from 'events'
@@ -435,6 +437,7 @@ export type ResolveConditionResult =
     }
 
 export class SessionManager extends EventEmitter {
+  private readonly monitorResponses = new ResponseTracker(mainOperations)
   private readonly sessions = new Map<string, RegistryEntry>()
   private readonly spawningSessionGenerations = new Map<string, symbol>()
   private readonly sessionStateGenerations = new Map<string, symbol>()
@@ -859,6 +862,10 @@ export class SessionManager extends EventEmitter {
     ) {
       return false
     }
+    // Provider output can no longer arrive after the generation-owned entry is
+    // retired. End its bounded wait here so dead sessions do not occupy the
+    // first-output tracker until the ten-minute safety expiry.
+    this.monitorResponses.cancel(sessionId)
     const retiringEntry = expectedEntry ?? this.sessions.get(sessionId)
     if (kind === 'codex' && retiringEntry?.kind === 'codex') {
       // Record retirement before deleting the authoritative row. A synchronous
@@ -2504,6 +2511,7 @@ export class SessionManager extends EventEmitter {
     let entry: RegistryEntry | null = null
     let mcpRegistered = false
     let createdTmuxName: string | null = null
+    const finishSpawn = mainOperations.begin('session.spawn', sessionId)
     try {
     this.throwIfSpawnCancelled(recoveryClaim, codexReplacementHandoff)
     const spawnStartedAt = performance.now()
@@ -2869,6 +2877,7 @@ export class SessionManager extends EventEmitter {
       })
       session.on('semantic-event', (event: unknown) => {
         if (!ownsEntry()) return
+        this.monitorResponses.output(sessionId, event)
         this.markActivity(sessionId)
         if (kind === 'codex') {
           this.observeCodexSemanticEvent(sessionId, event, agentEntry.lifecycle.runId)
@@ -2922,7 +2931,8 @@ export class SessionManager extends EventEmitter {
         // measurement attached to it. This pair is always on. The perf span
         // stays for its richer sampling when someone deliberately enables it.
         this.lifecycle.session('provider.start.begin', sessionId, { kind })
-        await session.start()
+        const finishReady = mainOperations.begin('session.ready', sessionId)
+        try { await session.start(); finishReady() } catch (error) { finishReady('error'); throw error }
         await this.settleEntryStart(sessionId, agentEntry)
         this.throwIfSpawnCancelled(recoveryClaim, codexReplacementHandoff)
         if (!ownsEntry()) throw new RecoveryCancelledError()
@@ -2962,6 +2972,7 @@ export class SessionManager extends EventEmitter {
         sessionId,
         provider: kind,
       })
+      finishSpawn()
       const providerSessionId = session.getProviderSessionId?.() ?? null
       return {
         sessionId,
@@ -3121,7 +3132,8 @@ export class SessionManager extends EventEmitter {
     this.throwIfSpawnCancelled(recoveryClaim, codexReplacementHandoff)
     try {
       const terminalStartStartedAt = performance.now()
-      await session.start()
+      const finishReady = mainOperations.begin('session.ready', sessionId)
+      try { await session.start(); finishReady() } catch (error) { finishReady('error'); throw error }
       await this.settleEntryStart(sessionId, terminalEntry)
       this.throwIfSpawnCancelled(recoveryClaim, codexReplacementHandoff)
       if (!ownsEntry()) throw new RecoveryCancelledError()
@@ -3166,8 +3178,10 @@ export class SessionManager extends EventEmitter {
       sessionId,
       provider: 'terminal',
     })
+    finishSpawn()
     return { sessionId, tmuxName: tmuxSessionName ?? undefined }
     } catch (error) {
+      finishSpawn(error instanceof RecoveryCancelledError ? 'cancelled' : 'error')
       // WHY spawn is one transaction across provider construction, MCP
       // registration, registry publication, and start(): failures can occur at
       // every boundary, including cancellation while start() is still pending.
@@ -4039,6 +4053,7 @@ export class SessionManager extends EventEmitter {
     prompt: string,
     imagePaths?: string[],
     record?: (event: string, data?: Record<string, unknown>) => void,
+    operationId?: string,
   ): Promise<PromptDeliveryResult> {
     if (this.promptDeliveriesInFlight.has(sessionId)) {
       record?.('duplicate-blocked')
@@ -4096,8 +4111,11 @@ export class SessionManager extends EventEmitter {
     record?.('reserved')
     let promptWritten = false
     let enterWritten = false
+    const finishDelivery = mainOperations.begin('prompt.delivery', sessionId, operationId)
+    this.monitorResponses.sweep()
+    this.monitorResponses.begin(sessionId, operationId)
     try {
-      return await getMainProvider(entry.kind).deliverPrompt({
+      const delivery = await getMainProvider(entry.kind).deliverPrompt({
         session: entry.session,
         // WHY identity-check every delayed write: provider protocols await
         // absorption/readiness. A same-ID wake must never receive Enter from a
@@ -4114,7 +4132,12 @@ export class SessionManager extends EventEmitter {
         imagePaths,
         record,
       })
+      finishDelivery(delivery.ok ? 'success' : 'error')
+      if (!delivery.ok) this.monitorResponses.cancel(sessionId)
+      return delivery
     } catch (err) {
+      finishDelivery('error')
+      this.monitorResponses.cancel(sessionId)
       record?.('uncertain', { reason: 'provider-threw' })
       return {
         ok: false,
@@ -4133,6 +4156,10 @@ export class SessionManager extends EventEmitter {
         enterWritten,
       }
     } finally {
+      // A successful delivery only means the prompt reached the provider. The
+      // response tracker must survive this method and finish on the first
+      // semantic provider event; cancelling it here would reduce every normal
+      // first-output measurement to the prompt-write duration.
       this.promptDeliveriesInFlight.delete(sessionId)
       record?.('released')
     }

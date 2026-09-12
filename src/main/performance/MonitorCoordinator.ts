@@ -1,3 +1,6 @@
+import { parseMonitorIncident } from '@shared/performance/parseMonitorIncident.js'
+import type { MonitorIncident } from '@shared/performance/monitorIncidents.js'
+import { mainOperations, setMainOperationSink } from './operations.js'
 import { parseProcessChunk } from '@shared/performance/parseProcessChunk.js'
 import { parseMonitorSnapshot } from '@shared/performance/parseMonitorSnapshot.js'
 import { ElectronProcessSource } from './ElectronProcessSource.js'
@@ -23,7 +26,7 @@ export class MonitorCoordinator {
   private queue = new BoundedQueue<MonitorEnvelope>(1600, 1600 * MONITOR_RECORD_BYTES)
   private processQueue = new BoundedQueue<MonitorEnvelope>(2306, 2306 * MONITOR_RECORD_BYTES)
   private sequence = 0
-  private pending: { sequence: number; at: number; count: number } | null = null
+  private pending: { sequence: number; at: number; count: number; query?: { resolve: (value: MonitorIncident | null) => void } } | null = null
   private lost = 0
   private launches = 0
   private retryAt = 0
@@ -34,6 +37,16 @@ export class MonitorCoordinator {
   private processTransfer: { generation: number; rows: MonitorProcessRow[] } | null = null
   private moreProcesses = false
   private processReceivedAt = 0
+  private visibleWindows = new Set<number>()
+  private query: { id: number; resolve: (value: MonitorIncident | null) => void } | null = null
+  setWindowVisible(id: number, visible: boolean): void {
+    if (visible && this.visibleWindows.size < 64) this.visibleWindows.add(id)
+    else this.visibleWindows.delete(id)
+  }
+  readIncident(id: number): Promise<MonitorIncident | null> {
+    if (!Number.isSafeInteger(id) || id < 1 || this.query || this.pending?.query || this.stopped || !this.child) return Promise.resolve(null)
+    return new Promise(resolve => { this.query = { id, resolve } })
+  }
   private liveWindows = new Set<number>()
   private cache: MonitorSnapshot = {
     schemaVersion: 1, runId: getAppRunId(), enabled: true, sampledAt: 0,
@@ -45,6 +58,7 @@ export class MonitorCoordinator {
 
   start(): void {
     if (this.timer || this.stopped) return
+    setMainOperationSink(record => this.operation(record))
     mainProbe.start()
     this.unsubscribe = mainProbe.subscribe(sample => {
       const main = {
@@ -113,6 +127,7 @@ export class MonitorCoordinator {
 
   closeWindow(windowId: number): void {
     this.liveWindows.delete(windowId)
+    this.visibleWindows.delete(windowId)
     this.cache = { ...this.cache, windows: this.cache.windows.filter(window => window.windowId !== windowId) }
   }
 
@@ -123,6 +138,8 @@ export class MonitorCoordinator {
 
   stop(): void {
     this.stopped = true
+    this.query?.resolve(null); this.query = null
+    this.pending?.query?.resolve(null)
     this.processSource?.stop()
     if (this.timer) clearInterval(this.timer)
     this.timer = null
@@ -171,6 +188,11 @@ export class MonitorCoordinator {
               this.processTransfer = null
             }
           }
+          if (this.pending.query) {
+            const detail = message.incident === null ? null : parseMonitorIncident(message.incident)
+            if (message.incident !== null && !detail) { this.fail(child); return }
+            this.pending.query.resolve(detail)
+          }
           this.pending = null
           this.lastReplyAt = this.monotonicNow()
           if (snapshot) this.cache = {
@@ -189,6 +211,8 @@ export class MonitorCoordinator {
     this.child = null
     try { child?.kill() } catch { /* Exiting helpers can reject native handle access. */ }
     this.lost += this.pending?.count ?? 0
+    this.pending?.query?.resolve(null)
+    this.query?.resolve(null); this.query = null
     this.pending = null
     this.processTransfer = null
     this.moreProcesses = false
@@ -197,6 +221,7 @@ export class MonitorCoordinator {
   }
 
   private pump(): void {
+    mainOperations.sweep()
     try {
       if (this.pending && this.monotonicNow() - this.pending.at > 5000) this.fail(this.child)
       if (!this.child && this.monotonicNow() >= this.retryAt) this.launch()
@@ -208,13 +233,14 @@ export class MonitorCoordinator {
       // same half-transfer every five seconds. Both queues total <2 MiB.
       const processes = this.processQueue.drain(100, 100 * MONITOR_RECORD_BYTES)
       const records = [...processes, ...this.queue.drain(120 - processes.length, (120 - processes.length) * MONITOR_RECORD_BYTES)]
-      if (!records.length && !this.moreProcesses) return
+      if (!records.length && !this.moreProcesses && !this.query) return
       const sequence = ++this.sequence
       // One credit means a suspended worker cannot accumulate an invisible
       // Electron message-port queue. Timeout discards the in-flight evidence,
       // counts the loss, and caps process restarts for the entire app run.
-      this.pending = { sequence, at: this.monotonicNow(), count: records.length }
-      this.child.postMessage({ sequence, records, liveWindowIds: [...this.liveWindows] })
+      const query = this.query; this.query = null
+      this.pending = { sequence, at: this.monotonicNow(), count: records.length, ...(query ? { query } : {}) }
+      this.child.postMessage({ sequence, records, liveWindowIds: [...this.liveWindows], visibleWindowIds: [...this.visibleWindows], droppedRecords: this.queue.stats.dropped + this.processQueue.stats.dropped + this.lost, ...(query ? { query: { kind: 'incident', id: query.id } } : {}) })
     } catch { this.fail(this.child) }
   }
 }

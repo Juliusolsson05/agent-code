@@ -1,3 +1,4 @@
+import { IncidentEngine } from './IncidentEngine.js'
 import { performance } from 'node:perf_hooks'
 import { NativeProcessSampler } from './NativeProcessSampler.js'
 import type { MonitorProcessContext, MonitorProcessPage } from '@shared/performance/processSnapshot.js'
@@ -13,6 +14,8 @@ const parent = (process as unknown as { parentPort: {
   postMessage(message: unknown): void
 } }).parentPort
 const aggregator = new MonitorAggregator()
+const incidents = new IncidentEngine()
+setInterval(() => incidents.tick(Date.now(), performance.now()), 1000).unref()
 const processes = new NativeProcessSampler()
 let context: (MonitorProcessContext & { expected: number; received: number }) | null = null
 let lastSnapshotAt = -Infinity
@@ -22,6 +25,11 @@ let transferGeneration = 0
 let sentPage: MonitorProcessPage | null = null
 parent.on('message', ({ data }) => {
   aggregator.accept(data.records)
+  const now = Date.now()
+  const mono = performance.now()
+  incidents.reconcile(data.liveWindowIds ?? [], data.visibleWindowIds ?? [], mono)
+  incidents.accept(data.records, now, mono)
+  incidents.loss(data.droppedRecords ?? 0, now, mono)
   for (const record of data.records) {
     if (record.kind === 'process-context-start') {
       context = { ...record, targets: [], electron: [], received: 0 }
@@ -35,10 +43,8 @@ parent.on('message', ({ data }) => {
     }
   }
   if (data.liveWindowIds) aggregator.reconcileWindows(data.liveWindowIds)
-  const now = Date.now()
-  const mono = performance.now()
   const snapshot = mono - lastSnapshotAt >= 1000
-    ? aggregator.snapshot(now, process.memoryUsage.rss()) : undefined
+    ? { ...aggregator.snapshot(now, process.memoryUsage.rss()), incidents: incidents.summaries() } : undefined
   if (snapshot) lastSnapshotAt = mono
   const page = processes.read()
   if (!transfer && page !== sentPage) {
@@ -53,5 +59,5 @@ parent.on('message', ({ data }) => {
     transferOffset += processChunk.rows.length
     if (processChunk.complete) { sentPage = transfer; transfer = null }
   }
-  parent.postMessage({ sequence: data.sequence, snapshot, processChunk })
+  parent.postMessage({ sequence: data.sequence, snapshot, processChunk, ...(data.query?.kind === 'incident' ? { incident: incidents.detail(data.query.id) } : {}) })
 })
