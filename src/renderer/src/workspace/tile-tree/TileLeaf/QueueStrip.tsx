@@ -138,11 +138,18 @@ export function QueueStrip({
   // (useIpcSubscriptions, queue-operation branch). A drain and a new enqueue in
   // the same burst therefore go [A] → [B] with the intermediate [] never
   // published, so the strip never saw the boundary and B started hidden. What
-  // the component CAN observe is membership: when none of the items the user
-  // hid remain, the gesture has nothing left to apply to, whether the reducer
-  // passed through [] or not. An empty queue shares nothing, so the plain drain
-  // is the same rule. Growth ([A] → [A, B]) and a partial drain ([A, B] → [B])
-  // share an item and keep the collapse.
+  // the component CAN observe is membership between consecutive renders.
+  //
+  // The rule (#893 review round 2, R2-2): the collapse resets when no item of
+  // the PREVIOUS render survives into the next one, whether the reducer passed
+  // through [] or not. It is deliberately NOT "none of the items visible when
+  // the user collapsed remain". A chain of overlapping renders is one episode:
+  // [A] → [A, B] → [B] keeps the collapse even though A, the only item on
+  // screen at the gesture, has gone. So an item that joined while collapsed
+  // stays hidden behind the visible count until the episode ends. Changing
+  // that would make collapse last only until the next drain, rather than being
+  // a per-episode choice. An empty queue shares nothing, so the plain drain is
+  // the same rule.
   //
   // WHY state-during-render (React's "storing information from previous
   // renders" pattern) instead of an effect: an effect would commit one frame of
