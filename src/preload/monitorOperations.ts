@@ -9,21 +9,36 @@ import { isMonitorId } from '@shared/performance/monitorContracts.js'
 const records = new BoundedQueue<MonitorRendererRecord>(2000, 512 * 1024)
 const timers = new OperationTimers(record => records.push(record, MONITOR_RECORD_BYTES))
 const responses = new Map<string, { end: OperationEnd; at: number }>()
-const invoke = ipcRenderer.invoke.bind(ipcRenderer)
+type Invoke = typeof ipcRenderer.invoke
+let invoke: Invoke | undefined
 let installed = false
 let pending = false
 let transportLost = 0
 let reportedDropped = 0
 
+function getOriginalInvoke(): Invoke | undefined {
+  if (invoke) return invoke
+  // WHY this is captured lazily: domain API modules import this helper before
+  // the preload entrypoint installs the wrapper, and narrow test/fault harnesses
+  // deliberately provide only the Electron methods that domain uses. Requiring
+  // `invoke` while importing an unrelated one-way API makes the entire bridge
+  // fail before monitoring can degrade harmlessly.
+  if (typeof ipcRenderer.invoke !== 'function') return undefined
+  invoke = ipcRenderer.invoke.bind(ipcRenderer)
+  return invoke
+}
+
 export function installMonitorInvokes(): void {
   if (installed) return
+  const originalInvoke = getOriginalInvoke()
+  if (!originalInvoke) return
   installed = true
   ipcRenderer.invoke = (channel, ...args) => {
     // Exclude the diagnostic transport to prevent measurement recursion. Only
     // the fixed metric name survives this wrapper; channel/arguments never do.
-    if (channel.startsWith('performance:') || channel.startsWith('incident:') || channel.startsWith('lifecycle:')) return invoke(channel, ...args)
+    if (channel.startsWith('performance:') || channel.startsWith('incident:') || channel.startsWith('lifecycle:')) return originalInvoke(channel, ...args)
     const end = timers.begin('ipc.round-trip')
-    return invoke(channel, ...args).then(result => {
+    return originalInvoke(channel, ...args).then(result => {
       end()
       return result
     }, error => {
@@ -64,12 +79,18 @@ export function flushPreloadMonitoring(): void {
   for (const [id, response] of responses) if (performance.now() - response.at >= 10 * 60_000) { response.end('timeout'); responses.delete(id) }
   const dropped = records.stats.dropped + timers.dropped + transportLost
   if (pending || (!records.stats.records && dropped === reportedDropped)) return
+  const originalInvoke = getOriginalInvoke()
+  // Monitoring must remain optional during partial preload initialization and
+  // fault isolation. Keeping the bounded batch in memory lets a later healthy
+  // heartbeat retry without turning a missing diagnostic channel into an app
+  // startup failure.
+  if (!originalInvoke) return
   const reportLoss = dropped !== reportedDropped
   const batch = records.drain(reportLoss ? 119 : 120, (reportLoss ? 119 : 120) * MONITOR_RECORD_BYTES)
   if (reportLoss) batch.push({ kind: 'loss', source: 'preload', dropped })
   const observations = batch.filter(record => record.kind !== 'loss').length
   pending = true
-  void invoke('performance:monitor-batch', batch).then(() => { if (reportLoss) reportedDropped = dropped }, () => {
+  void originalInvoke('performance:monitor-batch', batch).then(() => { if (reportLoss) reportedDropped = dropped }, () => {
     // Drained observations cannot be retried without an unbounded replay lane.
     // Account them in the next monotonic health report instead.
     transportLost += observations
