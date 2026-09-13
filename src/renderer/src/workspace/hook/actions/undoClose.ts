@@ -12,7 +12,7 @@ import type {
 } from '@renderer/workspace/types'
 import { collectLeaves, remapTileTreeSessionIds } from '@renderer/workspace/tile-tree/treeOps'
 import { remapTiledLanes } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
-import { missingClosedTabLeafMetaIds, reinsertPane } from '@renderer/lib/undoClose'
+import { missingClosedTabLeafMetaIds, reinsertPane, remapMetaLineage } from '@renderer/lib/undoClose'
 import type { ClosedDetached, ClosedPane, ClosedTab } from '@renderer/lib/undoClose'
 
 import type { WorkspaceSetState } from '@renderer/workspace/hook/context'
@@ -210,9 +210,17 @@ export function useUndoCloseAction(
         return 'stale'
       }
 
+      // Older entries may anchor on this pane (a sibling split's
+      // siblingLeafId, a linked child's parent). Publish old -> new so they
+      // keep resolving; see UndoLineage.
+      if (entry.sessionId) {
+        refs.undoStackRef.current.remapLineage({
+          sessions: new Map([[entry.sessionId, newSessionId]]),
+        })
+      }
       return 'restored'
     },
-    [refs.stateRef, sessionActions, setState],
+    [refs.stateRef, refs.undoStackRef, sessionActions, setState],
   )
 
   const restoreTabEntry = useCallback(
@@ -299,6 +307,13 @@ export function useUndoCloseAction(
       // rebuild is tracked in `carried` and re-applied over the top — see
       // carryDurableMeta.
       const restoredDetached: Record<SessionId, DetachedSessionRecord> = {}
+      // Old -> new for EVERY session this restore brings back, grid and
+      // detached. It does two jobs: (1) a linked child restored beside its
+      // parent must point at the parent's NEW id — carryDurableMeta copies the
+      // closed `linkedParentId` verbatim, which used to leave restored children
+      // un-nested and no longer cascading; (2) it is published to the stack so
+      // older entries anchored on this tab or its sessions still resolve.
+      const lineageSessions = new Map(idMap)
       for (const detached of entry.detachedEntries ?? []) {
         try {
           const kind: SessionKind = detached.meta.kind ?? DEFAULT_PROVIDER
@@ -325,6 +340,7 @@ export function useUndoCloseAction(
           // durable metadata; the two routes back to one row must not
           // disagree about whether the agent keeps its name.
           carried.set(newId, detached.meta)
+          if (detached.sessionId) lineageSessions.set(detached.sessionId, newId)
           restoredDetached[newId] = {
             sessionId: newId,
             surface: 'dispatch',
@@ -352,7 +368,10 @@ export function useUndoCloseAction(
         tabs.splice(insertIdx, 0, restoredTab)
         const sessions = { ...prev.sessions }
         for (const [newId, closed] of carried) {
-          sessions[newId] = carryDurableMeta(sessions[newId], closed)
+          // Relationship pointers follow the restore: a linked child restored
+          // with this tab points at its parent's NEW id, so it renders nested
+          // and cascades again (see lineageSessions above).
+          sessions[newId] = remapMetaLineage(carryDurableMeta(sessions[newId], closed), lineageSessions)
         }
         return {
           ...prev,
@@ -366,9 +385,17 @@ export function useUndoCloseAction(
           dispatchMode: remapTiledLanes(prev.dispatchMode, idMap),
         }
       })
+      // The closed tab is back as a NEW tab id with NEW session ids. An older
+      // entry anchored on it — typically the Close Agent entry of the root this
+      // tab's root had replaced — must now name the restored ids, or the next
+      // undo judges it stale and the original root is lost (#886 finding 4).
+      refs.undoStackRef.current.remapLineage({
+        sessions: lineageSessions,
+        tabs: new Map([[entry.tab.id, restoredTab.id]]),
+      })
       return 'restored'
     },
-    [sessionActions, setState],
+    [refs.undoStackRef, sessionActions, setState],
   )
 
   const restoreDetachedEntry = useCallback(
@@ -414,9 +441,14 @@ export function useUndoCloseAction(
       // Set inside the updater and read after. Sound because setState is the
       // zustand store setter, which applies updaters synchronously — NOT a
       // React useState setter, whose updater would still be pending here.
-      // Deliberately not a `refs.stateRef` read: that ref only refreshes on a
-      // React render, so it can lag an awaited continuation and would report a
-      // successful restore as a failure, killing the session we just revived.
+      //
+      // History worth keeping: this was deliberately not a `refs.stateRef`
+      // read because that ref used to be a render-body mirror that lagged an
+      // awaited continuation, so it reported a successful restore as a failure
+      // and killed the session just revived. #886 subscribed stateRef to the
+      // store synchronously, so it no longer lags; the updater-local flag stays
+      // because it is correct by construction however the ref is wired (the
+      // test harnesses drive refs by hand).
       let refiled = false
       setState(prev => {
         // Re-check inside the updater: the tab can be closed between the
@@ -430,13 +462,35 @@ export function useUndoCloseAction(
         const restoreRoot = promoted && tab.root.type === 'leaf' &&
           tab.root.sessionId === promoted.sessionId && prev.sessions[promoted.sessionId]
         // Undo changes the root role back only if nobody has rearranged it.
-        // The survivor stays the same live backend and regains its exact old
+        // The survivor stays the same live backend and regains its old
         // Dispatch record. A later split wins; then restore just the row.
         const detachedSessions = { ...prev.detachedSessions }
-        if (restoreRoot) detachedSessions[promoted.sessionId] = promoted
-        else detachedSessions[newSessionId] = {
-          ...entry.record, sessionId: newSessionId,
-          projectTabTitle: tab.title, projectTabIndex: tabIndex,
+        if (restoreRoot) {
+          detachedSessions[promoted.sessionId] = {
+            // Verbatim for `detachedAt`: it alone orders rows inside a project
+            // group, so the survivor returns to its old position rather than
+            // the bottom of the list.
+            ...promoted,
+            // projectTabTitle/Index are display copies recomputed on render.
+            // Refresh them exactly like the branch below: the tab may have been
+            // renamed or moved while this entry waited on the stack, and a
+            // record read before the next render must not carry close-time
+            // values (#886 review m10).
+            projectTabTitle: tab.title,
+            projectTabIndex: tabIndex,
+          }
+        } else {
+          detachedSessions[newSessionId] = {
+            // The spawn minted a new local id; everything else about the
+            // record — project affinity and, critically, `detachedAt` — is
+            // restored verbatim so the row returns to its old position in the
+            // Dispatch list rather than jumping to the bottom.
+            ...entry.record,
+            sessionId: newSessionId,
+            // Display copies, refreshed for the reason given above.
+            projectTabTitle: tab.title,
+            projectTabIndex: tabIndex,
+          }
         }
         return {
           ...prev,
@@ -492,11 +546,16 @@ export function useUndoCloseAction(
         //
         // Kill with the kind/cwd resolved above rather than leaving it to
         // killSession's ownership proof, which re-reads them from
-        // `refs.stateRef`. That ref is a RENDER-BODY mirror, so immediately
-        // after an awaited spawn it does not yet contain the new session and
-        // the proof fails — meaning the kill would silently no-op and strand
-        // exactly the backend this bail exists to reclaim. killSession still
-        // runs for the renderer-side cleanup.
+        // `refs.stateRef`.
+        //
+        // History: that ref used to be a render-body mirror, so immediately
+        // after an awaited spawn it did not contain the new session, the proof
+        // failed, and the kill silently no-opped — stranding exactly the
+        // backend this bail exists to reclaim. #886 made stateRef a synchronous
+        // store subscription, so the proof would now succeed; the explicit
+        // owner stays as defense in depth, because this bail must reclaim the
+        // process however the ref happens to be wired. killSession still runs
+        // for the renderer-side cleanup.
         await window.api
           .killOwnedSession({ sessionId: newSessionId, kind, cwd: meta.cwd })
           .catch(() => undefined)
@@ -508,9 +567,17 @@ export function useUndoCloseAction(
         await sessionActions.killSession(newSessionId).catch(() => undefined)
         return 'stale'
       }
+      // The closed session is back under a new id. An older entry may anchor
+      // on it: the three-agent case is "close A (B promoted), close B (C
+      // promoted), undo, undo" — B's restore must tell A's entry that its
+      // promoted survivor is now B′, or A comes back as a trailing row instead
+      // of the original root (#886 review finding 4).
+      refs.undoStackRef.current.remapLineage({
+        sessions: new Map([[entry.record.sessionId, newSessionId]]),
+      })
       return 'restored'
     },
-    [refs.stateRef, sessionActions, setState],
+    [refs.stateRef, refs.undoStackRef, sessionActions, setState],
   )
 
   const undoClose = useCallback(async () => {
