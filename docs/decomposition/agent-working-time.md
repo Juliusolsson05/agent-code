@@ -1,14 +1,13 @@
 # Agent Working Time — Stage Decomposition
 
-> **Status:** DRAFT, awaiting approval. No implementation code exists yet. The
-> only code on the branch is the reproduction in Stage 1, which asserts today's
-> behaviour.
+> **Status:** decisions made 2026-09-12 (§6). Stages 2–3 (the #963 fix) are next.
+> The only code on the branch so far is the Stage 1 reproduction, which asserts
+> today's behaviour.
 >
 > **Branch:** `feat/agent-working-time`. **Worktree:** `.worktrees/agent-working-time`.
 > **Base:** `origin/main` at `d12cd347` (2026-09-12).
 > **Bug:** [#963](https://github.com/Juliusolsson05/agent-code/issues/963).
-> **Feature issue:** filed once the decisions in §6 are made (conventions require
-> motivation, intended behaviour and acceptance criteria, and §6 changes all three).
+> **Feature:** [#964](https://github.com/Juliusolsson05/agent-code/issues/964).
 >
 > **For agentic workers:** REQUIRED SUB-SKILL: `staged-decomposition`. Do not start a
 > stage before its predecessor's artifact exists and is verified independently. If
@@ -26,6 +25,9 @@
 > 3. "One thing we need to fix if we want to implement this new thing is [the bug]."
 > 4. On method: "I do not want to wait 20+ hours, we should just be able to read the
 >    code and maybe write an integration test to figure this out."
+> 5. Decisions: "the tab is the project, but it will actually show both, but just with
+>    the tab as the root level … 7a 8b forever, this should take almost no data if we
+>    do it correctly. 1a 2a 3a (so both is kind of the point) 4a" and "sure a for 5".
 
 ---
 
@@ -124,21 +126,28 @@ per agent per project.
 
 **Bug (#963).**
 1. After the machine sleeps, no pane shows a work counter that includes the sleep.
-2. A turn whose stream died during sleep and is not retried does not stay
-   `Thinking`: after a bounded grace period following wake it leaves the working
-   state (exact presentation is decision §6 Q1).
+2. A turn whose stream died during sleep and is not retried leaves the working state
+   after a bounded grace period following wake, and the feed shows a small
+   **"Interrupted while asleep"** marker where it stopped (§6 Q1).
 3. A turn that genuinely continues after wake shows working time **excluding** the
    sleep (§6 Q2).
 4. A prompt sent after wake starts its own clock.
 5. Dispatch "working" rows, Close Old Agents and Close Idle Orchestration Agents stop
    treating such a pane as working, because they read the same phase.
 
-**Analytics.**
-6. A palette command opens an Agent Analytics modal. For a selected range (default
-   last 7 days) it shows total agent working hours and the number of agents, and the
-   same two numbers per project, with the project's worktrees folded in.
-7. Sleep, unclean shutdowns and stuck phases never count as working time.
-8. The numbers are the same in every window, and they survive app restarts.
+**Analytics (#964).**
+6. A palette command opens an Agent Analytics window. For a selected range
+   (24 hours, 7 days, 30 days, all time) it shows, in total and per project:
+   **agent-hours** (three agents working for an hour = 3 h), **wall-clock hours**
+   (the same hour = 1 h), and the **number of agents** — agents the user started and
+   orchestration workers shown separately.
+7. **Projects are tabs at the root level**, with the repository and its worktree
+   directories listed underneath each tab (§6 Q6).
+8. Working time runs from a turn starting until it ends, including tool execution,
+   and excludes sleep and time blocked on a permission prompt or question (§6 Q4).
+   Unclean shutdowns and stuck phases never count.
+9. The numbers are identical in every window, survive restarts, start on the day the
+   recorder ships (§6 Q7), and are **kept forever** in a compact form (§6 Q8).
 
 ---
 
@@ -181,10 +190,8 @@ durations cannot be summed as-is** — two of three count sleep.
 | `workspace.json` | no timestamps except `detachedAt` | current panes only | cwd, tab | snapshot |
 | TLDR / Goal history | write times only, opt-in | via `tldrIdentity` only | none for closed panes | 100 entries/identity |
 
-Conclusion: forward analytics needs a new, small, durable record. Backfill from
-transcripts is possible but would include non–Agent Code CLI sessions and would have
-to subtract sleep that only the OS power log knows about (and on this Mac that log
-holds transitions only for 2026-08-29 → 09-02).
+Conclusion: the analytics needs a new, small, durable record. Backfill was rejected
+(§6 Q7): it would include CLI use outside Agent Code and cannot subtract sleep.
 
 ### 2.4 Evidence corpus (already on disk; privacy: timestamps, entry types, durations only)
 
@@ -204,40 +211,43 @@ holds transitions only for 2026-08-29 → 09-02).
 - **Controls.** Codex `rollout-2026-09-02T14-49-55-01a06419…jsonl` (11.76 h open turn,
   `duration_ms` equals wall span → idle-open, not sleep); OpenCode
   `ses_d7a1e6448f6a5a598dc28f42a08f4477` (9.53 h aborted message after a suspected crash).
+- **Volume** (for storage sizing): Claude wrote 2,083 `turn_duration` records in the
+  last 14 days; this week had 176 Claude, 166 Codex and 36 OpenCode sessions, and
+  22–107 active app sessions per day.
 
 ### 2.5 Identity facts (for the analytics)
 
-- **Project:** tab ids die on close/merge, differ per window and are unknown to main;
-  `cwd` splits worktrees into pseudo-projects (what #908 removed). The repository
-  family root (`src/main/conversations/family.ts:71-134`, first `git worktree list`
-  entry, normalized) survives restarts, tab changes, windows and worktrees, and main
-  can resolve it. It must be resolved **at record time** (a deleted worktree cannot be
-  resolved later).
+- **Tab (the project, §6 Q6):** `Tab = { id, title, root, focusedSessionId }`; ids are
+  UUIDs, per window, removed on close and on merge; the title is the folder basename
+  chosen at creation. Main has no notion of a tab, but reads it through the workspace
+  projection (`workspaceFileStore.observe`, already parsed by the conversation
+  ledger): grid leaves belong to their tab, Dispatch rows carry `projectTabId`.
+  Membership must therefore be captured **while the agent works**, not reconstructed
+  later.
+- **Repository and worktree (shown under each tab):** the repository family root
+  (`src/main/conversations/family.ts:71-134`, first `git worktree list` entry,
+  normalized) plus the spawn `cwd`. Resolved at record time; a deleted worktree
+  cannot be resolved later.
 - **Agent:** `sessionId` is replaced by reload/switch/rewind/resume (over-counts);
   `provider:nativeId` changes on switch/rewind and is missing for terminals;
   `agentNameId` is carried across replacement and new only for duplicates, but is
-  renderer-owned, can be absent when names are off, and reaches main only through
-  the workspace save (`ConversationLedger.projectWindows` already parses it).
+  renderer-owned and can be absent when names are off. Counting key:
+  `agentNameId ?? sessionId`. Orchestration role from `orchestrationParentId`.
 
 ---
 
 ## 3. Stages
 
-### Stage 1 — Reproduction and evidence fixtures
+### Stage 1 — Reproduction
 
-- [x] **1a. Integration reproduction** — `turnClockAcrossSleep.test.ts` (§2.1).
-- [ ] **1b. Evidence fixtures** — extract cases A, B, C and the controls into
-  `testing/fixtures/agent-working-time/` as JSON holding only timestamps, entry
-  types, durations, provider, anonymized cwd keys and the power-log transitions.
-  One small extractor script beside the existing `scripts/extract-*.mts`; no
-  verify gate (avoid enforcement bloat).
+- [x] **Integration reproduction** — `turnClockAcrossSleep.test.ts` (§2.1).
 
 | Field | |
 |---|---|
-| **Produces** | The reproduction test (done) and a fixture directory with one file per case. |
-| **Verified by** | 1a runs the real adapters and reducers and passes against today's code. 1b: each fixture names its source file and time window, and a reviewer can re-derive every timestamp from that source. |
+| **Produces** | The reproduction test (done). Evidence fixtures for the recorder are extracted at the start of Stage 4, where they are first needed. |
+| **Verified by** | Runs the real adapters and reducers and passes against today's code. |
 | **Why separate** | Stage 3 flips these tests from "today" to "correct". If the fix and its tests were written together, the tests would bless the fix's own assumptions — the 481/481 failure. |
-| **Reality check** | §2.4 recordings; the adapters' own code paths. |
+| **Reality check** | Case A timings (§2.4); the adapters' own code paths. |
 
 ### Stage 2 — One main-owned suspension signal
 
@@ -257,27 +267,29 @@ turn clock, the adapters and the recorder.
 | Field | |
 |---|---|
 | **Produces** | `SystemSuspension` contract, main detector, broadcast channel, journal event. |
-| **Verified by** | Unit tests with a fake power-monitor emitter and a fake clock: suspend/resume pair → one interval; missing `resume` but a tick gap → one interval from the gap; duplicate events → one interval. Journal record written. No later stage needed. |
+| **Verified by** | Unit tests with a fake power-monitor emitter and a fake clock: suspend/resume pair → one interval; missing `resume` but a tick gap → one interval from the gap; both sources for the same sleep → one interval. Journal record written. No later stage needed. |
 | **Why separate** | The turn clock (Stage 3) and the recorder (Stage 4) both need sleep intervals. Two consumers deriving sleep independently is two truths — the reconciliation rule. |
 | **Reality check** | Cases A and B timings; `MainProbe`'s existing suspend handling; the observation that `monotonicMs` does not pause. |
 
 ### Stage 3 — Fix the turn clock (#963)
 
-Three changes, each driven by flipping a Stage 1 row to its correct expectation
-**before** the change is made:
+Each change is driven by flipping a Stage 1 row to its decided expectation **before**
+the change is made:
 
 - **3a. Seal streams that died during sleep.** On resume, a proxy flow that has had no
   transport activity since before the suspension gets a grace window (default 60 s)
   to show life — a chunk, `response-end`, or a new flow (which already reaps it). If
-  none arrives it is sealed exactly like today's reap: `turn_stopped` (medium
-  confidence) + `idle`. Claude gains the resume hook and a periodic reap; Codex runs
-  its watchdog on resume and publishes `idle` when it seals. `awaiting-tool` is **not**
-  cleared on wake: the tool's process was suspended too and usually completes (row 6).
-  These are package changes (`claude-code-headless`, `codex-headless`) → package PRs,
-  gitlink bumps and a lockfile resync.
-- **3b. Working time excludes suspension.** One pure function owns the displayed
-  number: `workingSeconds(turnStartedAt, suspensions, now)`. `WorkIndicator` calls it
-  instead of raw `useElapsedSeconds`; the phone client gets the same function.
+  none arrives it is sealed like today's reap: `turn_stopped` with a stop reason that
+  says the machine slept, plus `idle`. The feed renders that stop as a small
+  **"Interrupted while asleep"** marker (§6 Q1a) — through the existing turn-stopped
+  rendering path, not a new ad-hoc row. Claude gains the resume hook and a periodic
+  reap; Codex runs its watchdog on resume and publishes `idle` when it seals.
+  `awaiting-tool` is **not** cleared on wake: the tool's process was suspended too and
+  usually completes (row 6). These are package changes (`claude-code-headless`,
+  `codex-headless`) → package PRs, gitlink bumps and a lockfile resync.
+- **3b. Working time excludes suspension (§6 Q2a).** One pure function owns the
+  displayed number: `workingSeconds(turnStartedAt, suspensions, now)`. `WorkIndicator`
+  calls it instead of raw `useElapsedSeconds`; the phone client gets the same function.
 - **3c. A prompt after wake starts its own clock.** Verify it falls out of 3a (the
   stale phase is gone, so `submitJoinsLiveWork` is false). Only if a flipped Stage 1
   test still fails does `submitJoinsLiveWork` itself change — its #889 queue contract
@@ -285,63 +297,93 @@ Three changes, each driven by flipping a Stage 1 row to its correct expectation
 
 | Field | |
 |---|---|
-| **Produces** | Adapter resume/seal behaviour, `workingSeconds`, the flipped Stage 1 suite. |
-| **Verified by** | Stage 1 rows 2, 5 and 6 inverted to the §6-decided behaviour and passing; rows 1, 3 and 4 unchanged; existing #889 queue tests (`streamingQueuedSubmit.renderer.test.tsx`, `useComposerKeybinds.queueAcceptance.renderer.test.tsx`) unchanged. |
+| **Produces** | Adapter resume/seal behaviour, the sleep stop reason and its feed marker, `workingSeconds`, the flipped Stage 1 suite. |
+| **Verified by** | Stage 1 rows 2, 5 and 6 inverted to the decided behaviour and passing; rows 1, 3 and 4 unchanged; existing #889 queue tests (`streamingQueuedSubmit.renderer.test.tsx`, `useComposerKeybinds.queueAcceptance.renderer.test.tsx`) unchanged; rendering shape coverage for the marker. |
 | **Why separate** | Stage 4 records working intervals from the same semantics. Recording before the substrate is right records the bug. |
-| **Reality check** | Stage 1 fixtures; the adapters' code paths in §1 A. |
+| **Reality check** | Stage 1 tests; the adapters' code paths in §1 A. |
 
-**Shippable on its own.** Stages 1–3 fix #963 and are a complete PR.
+**Ships on its own** as the #963 PR (§6 Q9).
 
 ### Stage 4 — Working-interval recorder (main, durable)
 
+- **Fixtures first:** extract cases A, B, C and the controls into
+  `testing/fixtures/agent-working-time/` as JSON holding only timestamps, journal
+  event names and order, transcript turn timings, provider, anonymized cwd keys and
+  the power-log transitions. One small extractor script beside the existing
+  `scripts/extract-*.mts`; no verify gate (avoid enforcement bloat).
 - **The hard part, isolated:** `src/shared/agentActivity/workingState.ts`, a pure
-  reducer over `semantic-event`, `process-state`, `conditions`, `removed`/`exit` and
-  Stage 2 suspensions → closed `WorkingInterval`s. It reuses the stream-phase machine
-  (moved from `src/renderer/src/session-runtime/semantic/` to `src/shared/` so main and
-  renderer run literally the same reducer — it is already pure and already shared
-  with the phone client).
+  reducer over `semantic-event`, `process-state`, `conditions` (blocked on the user →
+  not working, §6 Q4), `removed`/`exit` and Stage 2 suspensions → closed
+  `WorkingInterval`s. It reuses the stream-phase machine, moved from
+  `src/renderer/src/session-runtime/semantic/` to `src/shared/` so main and renderer
+  run literally the same reducer (it is already pure and already shared with the
+  phone client).
 - **Recorder:** `src/main/agentActivity/` subscribes to `SessionManager` like the
-  forwarder, seeding from `manager.list()`. Each interval row:
-  `{ sessionId, sessionRunId, provider, cwd, repoRoot, agentKey, orchestrationRole?,
-  startedAt, endedAt, endReason: completed | stopped | suspended | exit | quit | recovered-after-crash }`.
-  `repoRoot` is resolved at record time; `agentKey` is `agentNameId ?? sessionId`,
-  enriched from the workspace projection the way the conversation ledger is.
+  forwarder, seeding from `manager.list()`. Each interval row carries:
+  `{ agentKey, sessionId, sessionRunId, provider, role: user | orchestration,
+  tab: { id, title }, repoRoot, cwd, startedAt, endedAt, endReason }`.
+  Tab membership comes from the workspace projection at the time of work
+  (§2.5); `repoRoot` is resolved at record time; `agentKey` is `agentNameId ?? sessionId`.
 - **Crash / force quit:** an interval still open at startup is closed at the previous
   run's last heartbeat (run journal, 5 s cadence), so case C contributes seconds, not
   20.7 h.
-- **Storage:** append-only monthly JSONL under `STATE_DIR/agent-activity/`, serialized
-  writes, flushed on `before-quit`, pruned beyond the retention window. User data —
-  not registered with `debugRetention`. No prompt text, ever.
+- **Storage, kept forever (§6 Q8) and small by construction:**
+  - Raw intervals append to monthly JSONL under `STATE_DIR/agent-activity/intervals/`
+    (roughly 150 bytes per turn; at the observed few hundred turns a day that is well
+    under 100 KB/day).
+  - Days older than a raw window (default 35 days, so the 30-day range always has
+    exact wall-clock unions) are compacted into `rollups/YYYY.jsonl`: one row per
+    day × tab × repository/worktree × agent with `agentMs`, plus one row per day ×
+    tab (and per day overall) with the precomputed wall-clock union `wallMs`. All-time
+    ranges read rollups; a year of heavy use is expected to stay in the low megabytes.
+  - Serialized writes, flushed on `before-quit`. User data — not registered with
+    `debugRetention`. No prompt text, ever.
 
 | Field | |
 |---|---|
-| **Produces** | `workingState` reducer, recorder, interval store. |
-| **Verified by** | Event sequences built from the Stage 1 fixtures replayed into the recorder with a fake clock: case A yields working time that excludes 23:43:59 → 08:01:40; case B yields none across its sleep; case C yields an interval closed at the last heartbeat; a reload (new `sessionId`, same `agentNameId`) yields one agent. |
+| **Produces** | Evidence fixtures, `workingState` reducer, recorder, interval store, compactor. |
+| **Verified by** | Event sequences built from the fixtures replayed into the recorder with a fake clock: case A yields working time that excludes 23:43:59 → 08:01:40; case B yields none across its sleep; case C yields an interval closed at the last heartbeat; a reload (new `sessionId`, same `agentNameId`) yields one agent; a permission-prompt wait splits the interval. Compaction of a recorded month preserves every day's `agentMs` and `wallMs` exactly. |
 | **Why separate** | The query (Stage 5) must never re-derive working state. The reducer has exactly one consumer per process: the renderer counter and the main recorder. |
-| **Reality check** | §2.4 cases; `SessionManager` event map; ledger's workspace projection. |
+| **Reality check** | §2.4 cases; `SessionManager` event map; the ledger's workspace projection. |
 
 ### Stage 5 — Aggregation query (main, pure)
 
-`summarize(intervals, range, now)` →
-`{ range, totals: { agentHours, agents }, projects: [{ repoRoot, label, worktrees, agentHours, agents, … }], days: [...] }`,
-exposed as `agent-activity:summary(range)` through IPC and preload. Aggregated in
-main so every window gets the same answer.
+`summarize(store, range, now)` →
+
+```
+{ range,
+  totals:   { agentHours, wallHours, agents: { user, orchestration } },
+  projects: [ { tabKey, title, open: boolean,
+                agentHours, wallHours, agents: { user, orchestration },
+                repositories: [ { repoRoot, label, agentHours, wallHours, agents,
+                                  worktrees: [ { cwd, label, agentHours, agents } ] } ] } ],
+  days:     [ { date, agentHours, wallHours } ] }
+```
+
+- Agent-hours sum intervals; wall-clock hours are the union of intervals within the
+  row (tab, repository, or the whole range). Both are always returned (§6 Q3).
+- Root rows are tabs, grouped by tab title (§6 Q10) so a tab closed and reopened for
+  the same folder, or merged into another, stays one project; `open` marks whether a
+  tab with that title is open now.
+- Exposed as `agent-activity:summary(range)` through IPC and preload; aggregated in
+  main so every window gets the same answer.
 
 | Field | |
 |---|---|
 | **Produces** | Pure summarizer, IPC handler, preload API, shared result type. |
-| **Verified by** | Interval fixtures produced by running Stage 4 over the Stage 1 recordings (not hand-written intervals): totals, per-project split with worktrees folded, overlapping agents per §6 Q3, range boundaries cutting an interval. |
-| **Why separate** | The modal must not arbitrate sources or overlap rules; one pure function holds them. |
+| **Verified by** | Stores produced by running Stage 4 over the fixture sequences (never hand-written intervals): totals, agent-hours vs wall-clock for overlapping agents, tab root rows with repositories and worktrees beneath, a range boundary cutting an interval, all-time reading rollups and raw days together without double counting. |
+| **Why separate** | The window must not arbitrate sources, overlap or grouping; one pure function holds them. |
 | **Reality check** | Stage 4 output from real recordings. |
 
-### Stage 6 — Agent Analytics modal and command
+### Stage 6 — Agent Analytics window and command
 
 Command (title per `docs/command-style.md`, e.g. `Open Agent Analytics`, category
 `workspace-tools`, surface `app`), uiShell flag, surface registry entry,
 `CommandContext` ui/flags, `CommandPalette` context wiring, `surfaceOwnership`,
-`featureReference`/`controlReference`, catalog snapshot. The modal: range control
-like `performance-monitor/Timeline.tsx`, totals, per-project rows, hand-rolled SVG
-bars (no chart library exists and none is needed).
+`featureReference`/`controlReference`, catalog snapshot. The window: range control
+(24 h / 7 d / 30 d / all time) like `performance-monitor/Timeline.tsx`, totals, tab rows
+that expand to repositories and worktrees, both hour figures side by side, agents
+split user/orchestration, hand-rolled SVG bars (no chart library exists or is needed).
 
 | Field | |
 |---|---|
@@ -359,7 +401,7 @@ bars (no chart library exists and none is needed).
 | `src/main/…/systemSuspension` (Stage 2) | when the machine was not running | the broadcast/journal edge | any other `powerMonitor` subscription for session or activity purposes; clock-drift heuristics elsewhere |
 | `src/shared/agentActivity/workingState.ts` (Stage 4, with the moved phase machine) | whether an agent is working, per interval | renderer counter; main recorder | features computing working time from raw `turnStartedAt`/`streamPhase` themselves (WorkIndicator, analytics, future Dispatch durations) |
 | `workingSeconds` (Stage 3b) | the displayed number | `WorkIndicator` and the phone client | `useElapsedSeconds` for turn time |
-| `src/main/agentActivity/` (Stages 4–5) | durable intervals and summaries | the IPC handler | renderer reading activity files; any second activity store |
+| `src/main/agentActivity/` (Stages 4–5) | durable intervals, rollups and summaries | the IPC handler | renderer reading activity files; any second activity store |
 
 Existing divergent derivations noted, not in scope: #915 (two "last active" rules).
 
@@ -380,48 +422,34 @@ Existing divergent derivations noted, not in scope: #915 (two "last active" rule
 5. **OpenCode SSE reconnect**: no status re-sync was found (inferred); a turn could
    miss `session.idle` across a reconnect.
 6. **Codex `duration_ms` semantics**: what exactly it excludes.
-7. **Permission prompts and questions**: time a turn spends blocked on the user —
-   work or not (§6 Q4).
+7. **Tab titles**: whether a tab can be renamed, and how a rename should affect
+   grouping by title (§6 Q10).
 8. **Multiple windows and the phone client**: suspension must reach both; the phone
    has its own clock.
-9. **Orchestration children with inherited context** and native provider subagents:
-   whether and how they count as agents.
+9. **Native provider subagents**: excluded from agent counts (§6 Q5), but their work
+   happens inside the parent's turn and is already counted there.
 10. **The user's own report**: the power log shows no sleep since the 2026-09-10 boot,
     so the specific 20 h instance may have been a stuck phase rather than a sleep in
     that window. Rows 2 and 5 cover both.
 
 ---
 
-## 6. Decisions needed from the user
+## 6. Decisions
 
-Recommendations first; each changes tests in Stage 3 or 5.
+Recorded 2026-09-12.
 
-- **Q1. A stream that died during sleep and is not retried — what does the pane show
-  after the grace window?** *Recommended:* return to idle and leave a small
-  "interrupted while asleep" marker in the feed. Alternatives: idle silently; keep the
-  phase but stop the counter.
-- **Q2. A turn that continues after wake — what does the counter show?** *Recommended:*
-  working time excluding the sleep (e.g. `Thinking · 3m12s`). Alternative: restart
-  the counter at wake.
-- **Q3. "N hours" in the analytics.** *Recommended:* agent-hours (three agents working
-  for one hour = 3 h), because it answers "how much agent work ran", with wall-clock
-  hours per project as a secondary figure. Alternative: wall-clock only.
-- **Q4. What counts as working.** *Recommended:* from a turn starting until it ends,
-  including tool execution and `awaiting-tool`, excluding suspension and time blocked
-  on a permission prompt or question. Alternative: include blocked time.
-- **Q5. What counts as an agent.** *Recommended:* distinct agents
-  (`agentNameId ?? sessionId`) that did any work in the range; user-created and
-  orchestration agents shown separately; terminals and native provider subagents
-  excluded.
-- **Q6. What is a project.** *Recommended:* the repository, worktrees folded in,
-  labelled with the repository name (and the open tab letter when one holds it).
-- **Q7. History before the feature ships.** *Recommended:* forward-only — numbers start
-  on the day Stage 4 ships. Backfill from transcripts would include CLI use outside
-  Agent Code and cannot subtract sleep reliably (§2.2–2.3).
-- **Q8. Ranges and retention.** *Recommended:* 24 h / 7 d / 30 d, keep 90 days of
-  intervals.
-- **Q9. Shipping.** *Recommended:* Stages 1–3 as the #963 PR first (you hit it daily),
-  then Stages 4–6 as the analytics PR on top.
+| # | Question | Decision |
+|---|---|---|
+| Q1 | A stream that died during sleep and is not retried | **Return to idle and leave a small "Interrupted while asleep" marker in the feed.** |
+| Q2 | A turn that continues after wake | **The counter excludes the sleep.** |
+| Q3 | "N hours" in the analytics | **Both: agent-hours and wall-clock hours** ("both is kind of the point"). |
+| Q4 | What counts as working | **Turn start to turn end, including tool execution; excluding sleep and time blocked on a permission prompt or question.** |
+| Q5 | What counts as an agent | **Distinct agents (`agentNameId ?? sessionId`) that did work in the range; user-started and orchestration agents shown separately; terminals and native provider subagents excluded.** |
+| Q6 | What is a project | **The tab, at the root level; the repository and its worktrees shown underneath** ("it will actually show both, but just with the tab as the root level"). |
+| Q7 | History before the feature ships | **Forward-only.** |
+| Q8 | Retention | **Forever**, stored compactly ("this should take almost no data if we do it correctly"). Ranges: 24 h / 7 d / 30 d / all time. |
+| Q9 | Shipping | Not answered; proceeding with the recommendation: **Stages 1–3 as the #963 PR first, Stages 4–6 as the analytics PR.** |
+| Q10 | A tab closed and reopened for the same folder, or merged | Open. **Working default: group root rows by tab title**, so both stay one project. Confirm before Stage 5. |
 
 ---
 
@@ -430,10 +458,10 @@ Recommendations first; each changes tests in Stage 3 or 5.
 | Stage | Fixture | Source (produced by) |
 |---|---|---|
 | 1 | Timings in `turnClockAcrossSleep.test.ts` | Case A (§2.4), already in the test |
-| 1b → 2, 3 | `testing/fixtures/agent-working-time/case-a-sleep-turn.json`, `case-b-idle-sleep.json`, `case-c-unclean-shutdown.json`, `control-open-turn.json`, `control-opencode-abort.json` | Extracted from the §2.4 recordings: timestamps, entry types, durations, power transitions; no text, anonymized paths |
 | 3 | The Stage 1 suite, inverted per §6 | Stage 1 |
-| 4 | Event sequences for the recorder | Built from the Stage 1b fixtures (journal event names/order + transcript turn timings + power transitions) |
-| 5 | Interval sets | Stage 4 recorder run over the Stage 4 sequences — never hand-written intervals |
+| 4 | `testing/fixtures/agent-working-time/case-a-sleep-turn.json`, `case-b-idle-sleep.json`, `case-c-unclean-shutdown.json`, `control-open-turn.json`, `control-opencode-abort.json` | Extracted from the §2.4 recordings at the start of Stage 4: timestamps, event names/order, turn timings, power transitions; no text, anonymized paths |
+| 4 | Event sequences for the recorder | Built from those fixtures |
+| 5 | Stores (raw intervals + rollups) | Stage 4 recorder and compactor run over the Stage 4 sequences — never hand-written intervals |
 | 6 | Summary object | Stage 5 output |
 
 Every fixture names the recording and the time window it came from.
