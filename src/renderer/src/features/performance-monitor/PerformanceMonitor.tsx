@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@renderer/components/ui/dialog'
 import { Button } from '@renderer/components/ui/button'
 import type { MonitorMainSample, MonitorSnapshot } from '@shared/performance/monitorSnapshot.js'
+import type { MonitorReportPreview, MonitorTraceMode, MonitorTraceStatus } from '@shared/performance/monitorHistory.js'
 import type { MonitorProcessPage } from '@shared/performance/processSnapshot.js'
 import { latencyQuantile } from '@shared/performance/latencyHistogram.js'
 import { useMonitor } from './useMonitor'
@@ -46,6 +47,28 @@ function Recordings({ snapshot }: { snapshot: MonitorSnapshot }) {
   const [range, setRange] = useState(15 * 60_000)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
+  const [preview, setPreview] = useState<MonitorReportPreview | null>(null)
+  const [trace, setTrace] = useState<MonitorTraceStatus | null>(null)
+  // A preview estimates the selected range and data classes; it does not need
+  // to chase the worker's one-second newestAt value. Re-querying on every live
+  // sample would make an idle Recordings tab create constant disk work.
+  useEffect(() => {
+    let disposed = false
+    const end = Date.now()
+    void window.api.previewMonitorReport(Math.max(0, end - range), end).then(value => { if (!disposed) setPreview(value) }).catch(() => {})
+    return () => { disposed = true }
+  }, [range])
+  useEffect(() => {
+    let disposed = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const read = async () => {
+      try { const value = await window.api.getMonitorTraceStatus(); if (!disposed) setTrace(value) }
+      catch { /* Live monitoring remains available when profiling is unsupported. */ }
+      finally { if (!disposed) timer = setTimeout(read, trace?.state === 'recording' ? 1000 : 3000) }
+    }
+    void read()
+    return () => { disposed = true; clearTimeout(timer) }
+  }, [trace?.state])
   const save = async () => {
     setBusy(true); setMessage(null)
     try {
@@ -61,14 +84,39 @@ function Recordings({ snapshot }: { snapshot: MonitorSnapshot }) {
     catch { setMessage('History could not be cleared.') }
     finally { setBusy(false) }
   }
+  const startTrace = async (mode: MonitorTraceMode) => {
+    setBusy(true); setMessage(null)
+    try { const status = await window.api.startMonitorTrace(mode, 30_000); setTrace(status); if (status?.state === 'failed') setMessage(status.message) }
+    catch { setMessage('Recording could not start.') }
+    finally { setBusy(false) }
+  }
+  const stopTrace = async (cancel: boolean) => {
+    setBusy(true)
+    try { const status = await window.api.stopMonitorTrace(cancel); setTrace(status); setMessage(status?.message ?? null) }
+    catch { setMessage('Recording could not stop cleanly.') }
+    finally { setBusy(false) }
+  }
+  const heap = async () => {
+    setBusy(true); setMessage(null)
+    try { const result = await window.api.writeHeapSnapshot(); setMessage(result.ok ? 'Heap snapshot saved locally.' : result.error) }
+    catch { setMessage('Heap snapshot could not be captured.') }
+    finally { setBusy(false) }
+  }
   return <div className="space-y-5">
     <section className="rounded-slab border border-border bg-canvas p-4 space-y-3"><h2 className="font-medium">Local performance report</h2><p className="text-[11px] leading-5 text-muted">Includes bounded metric rollups, operation histograms, incidents, coverage and build metadata. It contains no prompts, transcript text, paths, DOM, audio, environment variables or stacks. Nothing is uploaded.</p>
       <label className="text-muted">Range <select className="ml-2 rounded-control border border-border bg-canvas p-1 text-ink" value={range} onChange={event => setRange(Number(event.target.value))}><option value={15 * 60_000}>15 minutes</option><option value={24 * 60 * 60_000}>24 hours</option><option value={7 * 24 * 60 * 60_000}>7 days</option></select></label>
       <div className="flex flex-wrap gap-2"><Button size="sm" disabled={busy} onClick={() => void save()}>Save Performance Report</Button><Button size="sm" variant="destructive-outline" disabled={busy || snapshot.history?.exporting} onClick={() => void clear()}>Clear Local History</Button></div>
+      <p className="text-[11px] text-muted">{preview ? `${preview.dataClasses.join(', ')} · estimated ${(preview.estimatedBytes / 1024).toFixed(1)} KiB · local file only` : 'Preparing report preview…'}</p>
       <p className="text-[11px] text-muted">{snapshot.history ? `${(snapshot.history.bytes / 1024 / 1024).toFixed(1)} MiB stored · ${snapshot.history.state}${snapshot.history.shortened ? ' · shortened' : ''}` : 'History is warming up.'}</p>
       {message && <p role="status" className="text-[11px]">{message}</p>}
     </section>
-    <section className="rounded-slab border border-border p-4"><h2 className="font-medium">Advanced recordings</h2><p className="mt-2 text-[11px] leading-5 text-muted">A performance trace is explicit, app-wide and limited to 30 seconds by default. Heap snapshots remain a separate manual action because they pause the main JavaScript isolate and may contain sensitive application memory.</p></section>
+    <section className="rounded-slab border border-border p-4 space-y-3"><h2 className="font-medium">Advanced recordings</h2><p className="text-[11px] leading-5 text-muted">Recordings are explicit, app-wide and limited to 30 seconds by default with a 60-second hard maximum and a 64 MiB artifact cap. Chromium traces use argument filtering. CPU profiles and heap snapshots can contain source paths or sensitive application memory; keep them local unless you inspect them first.</p>
+      <div className="flex flex-wrap gap-2">{trace?.state === 'recording' || trace?.state === 'starting' || trace?.state === 'stopping' ? <><Button size="sm" disabled={busy || trace.state !== 'recording' || trace.ownerWindowId === null} onClick={() => void stopTrace(false)}>Stop and Save</Button><Button size="sm" variant="destructive-outline" disabled={busy || trace.state === 'stopping' || trace.ownerWindowId === null} onClick={() => void stopTrace(true)}>Cancel Recording</Button></> : <><Button size="sm" disabled={busy} onClick={() => void startTrace('chromium')}>Record Chromium Trace</Button><Button size="sm" variant="outline" disabled={busy} onClick={() => void startTrace('main-cpu')}>Record Main CPU Profile</Button></>}
+        <Button size="sm" variant="outline" disabled={busy || trace?.state === 'recording'} onClick={() => void heap()}>Capture Heap Snapshot…</Button>
+        {trace?.path && <Button size="sm" variant="ghost" onClick={() => void window.api.revealPath(trace.path!)}>Reveal Recording</Button>}
+      </div>
+      <p className="text-[11px] text-muted">{trace ? `${trace.mode ?? 'Profiler'} · ${trace.state}${['starting', 'recording', 'stopping'].includes(trace.state) && trace.ownerWindowId === null ? ' · controlled from another window' : ''}${trace.state === 'recording' && trace.endsAt ? ` · up to ${Math.max(0, Math.ceil((trace.endsAt - Date.now()) / 1000))} s remaining` : ''}${trace.bytes !== null ? ` · ${(trace.bytes / 1024 / 1024).toFixed(1)} MiB` : ''}${trace.message ? ` · ${trace.message}` : ''}` : 'Checking profiler capability…'}</p>
+    </section>
   </div>
 }
 

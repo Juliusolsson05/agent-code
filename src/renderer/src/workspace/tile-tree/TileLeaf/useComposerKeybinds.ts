@@ -280,6 +280,10 @@ export function useComposerKeybinds({
       )
     }
 
+    // Start at the common submit boundary so raw-PTY Codex and main-owned
+    // Claude/OpenCode delivery receive the same first-output measurement.
+    // Only opaque IDs cross preload; the prompt and attachments never do.
+    window.api.beginMonitorResponse(sessionId, pasteId)
     try {
       // The submit protocol is provider-owned (#394 phase 2c-4) —
       // Codex's atomic bracketed-paste+Enter and Claude's three
@@ -345,7 +349,10 @@ export function useComposerKeybinds({
       // submit skipped its stamp because an EARLIER submit's `submitting` was
       // still waiting for its first provider event, that claim is not ours to
       // revert.
-      if (acceptance?.kind === 'queue') workspace.settleQueuedSubmit(sessionId, optimisticStamp)
+      if (acceptance?.kind === 'queue') {
+        workspace.settleQueuedSubmit(sessionId, optimisticStamp)
+        window.api.cancelMonitorResponse(sessionId)
+      }
       if (caps.supportsImageAttachments && draftImages.length > 0) {
         workspace.setDraftImages(
           sessionId,
@@ -376,6 +383,7 @@ export function useComposerKeybinds({
         ...(runtime.sessionRunId ? { sessionRunId: runtime.sessionRunId } : {}),
       })
     } catch (err) {
+      window.api.cancelMonitorResponse(sessionId)
       const delivery = (err as { promptDeliveryResult?: PromptDeliveryResult })
         .promptDeliveryResult
       // `bodyWritten`/`enterWritten` are the fields that decide whether this

@@ -13,19 +13,28 @@ const snapshot = (at: number): MonitorWorkerSnapshot => ({
   main: { at, cpuPercent: 2, rss: 1024, heapUsed: 256, heapLimit: 2048, loopMeanMs: 20, loopP99Ms: 22, loopMaxMs: 25, sleepGap: false },
   windows: [], operations: [], recent: [], workerRss: 4096,
 })
+const incident = {
+  id: 1, ruleVersion: 1 as const, rule: 'renderer-stall' as const, at: 10_000,
+  scope: 73, severity: 'error' as const, observed: 1500, threshold: 1000,
+  state: 'complete' as const, truncated: false, evidenceCount: 1,
+  evidence: [{ at: 9_000, kind: 'window' as const, scope: 73, value: 800,
+    cpuPercent: null, heapRatio: null, longTaskMs: 400, sleepGap: false }],
+}
 
 describe('bounded local performance history', () => {
   it('persists tiered points, pages them, rejects a corrupt privacy-bearing tail and exports incrementally', async () => {
     const root = await mkdtemp(join(tmpdir(), 'agent-code-monitor-'))
     roots.push(root)
     const store = new MonitorHistoryStore(root, 'run-a', () => 30_000)
-    for (let at = 1000; at <= 20_000; at += 1000) store.record(snapshot(at), null, [], 0, 0)
+    for (let at = 1000; at <= 20_000; at += 1000) store.record(snapshot(at), null, [incident], 0, 0)
     await store.settled()
 
     const first = await store.query(1000, 20_000, undefined, 7)
     expect(first.resolution).toBe('1s')
     expect(first.points).toHaveLength(7)
     expect(first.nextCursor).toBe('7')
+    expect(first.incidents).toEqual([expect.objectContaining({ id: 1, rule: 'renderer-stall', evidenceCount: 1 })])
+    expect(await store.readIncident(10_000, 1)).toEqual(incident)
     expect(store.status().bytes).toBeLessThan(128 * 1024 * 1024)
 
     await appendFile(join(root, 'runs', 'run-a', '1s.jsonl'), '{"schemaVersion":1,"prompt":"privacy-sentinel"}\n')
@@ -35,7 +44,14 @@ describe('bounded local performance history', () => {
     const report = await readFile(destination, 'utf8')
     expect(JSON.parse(report)).toMatchObject({ schemaVersion: 1, localOnly: true, build: { packageVersion: 'test' } })
     expect(report).not.toContain('privacy-sentinel')
+    expect(JSON.parse(report).incidents[0]).toMatchObject({ scope: 'window-1', evidence: [{ scope: 'window-1' }] })
+    expect(report).not.toContain('"scope":73')
     expect(store.status().state).toBe('degraded')
+
+    expect(await store.clear()).toMatchObject({ state: 'healthy', bytes: 0, points: 0 })
+    store.record(snapshot(20_000), null, [], 0, 0)
+    await store.settled()
+    expect((await store.query(20_000, 20_000, undefined, 7)).points).toHaveLength(1)
   })
 
   it('keeps an existing destination intact when report creation fails', async () => {
@@ -48,5 +64,44 @@ describe('bounded local performance history', () => {
     const result = await store.exportReport(2, 1, destination, {})
     expect(result).toEqual({ ok: false, code: 'invalid-range' })
     expect(await readFile(destination, 'utf8')).toBe('keep-me')
+  })
+
+  it('returns a bounded overview spanning the selected long range', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agent-code-monitor-'))
+    roots.push(root)
+    const store = new MonitorHistoryStore(root, 'run-c')
+    await store.settled()
+    const points = Array.from({ length: 2001 }, (_, index) => ({
+      schemaVersion: 1 as const, at: index * 60_000, resolution: '1m' as const,
+      main: { cpuPercent: 2, rss: 1024, heapUsed: 256, heapLimit: 2048,
+        loopP99Ms: 22, loopMaxMs: 25, sleepGap: false },
+      processes: null,
+      windows: { count: 0, visible: 0, maxLagMs: 0, longTaskMs: 0, maxInputMs: 0 },
+      workerRss: 4096, droppedRecords: 0, restarts: 0,
+    }))
+    await appendFile(join(root, 'runs', 'run-c', '1m.jsonl'), `${points.map(point => JSON.stringify(point)).join('\n')}\n`)
+
+    const overview = await store.query(0, 7 * 24 * 60 * 60_000, undefined, 1000)
+    expect(overview.points.length).toBeLessThanOrEqual(300)
+    expect(overview.points[0]!.at).toBeLessThanOrEqual(34 * 60_000)
+    expect(overview.points.at(-1)!.at).toBe(2000 * 60_000)
+    expect(overview).toMatchObject({ complete: true, nextCursor: null })
+  })
+
+  it('preserves and interrupts same-run incidents across a helper restart', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agent-code-monitor-'))
+    roots.push(root)
+    const first = new MonitorHistoryStore(root, 'run-restarted')
+    first.record(snapshot(10_000), null, [{ ...incident, state: 'capturing' }], 0, 0)
+    await first.settled()
+
+    const restarted = new MonitorHistoryStore(root, 'run-restarted')
+    await restarted.settled()
+    restarted.record(snapshot(11_000), null, [], 0, 1)
+    await restarted.settled()
+
+    expect(await restarted.readIncident(10_000, 1)).toMatchObject({
+      rule: 'renderer-stall', state: 'interrupted', evidenceCount: 1,
+    })
   })
 })

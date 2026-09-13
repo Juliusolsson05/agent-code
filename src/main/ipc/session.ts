@@ -2,6 +2,7 @@ import { ipcMain } from 'electron'
 import { createHash } from 'node:crypto'
 
 import type { SessionManager } from '@main/sessionManager.js'
+import { mainOperations } from '@main/performance/operations.js'
 import type { PasteDebugJournalRegistry } from '@main/pasteDebugJournal.js'
 import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import { sha8FromDigestBytes } from '@shared/code/sha8.js'
@@ -193,11 +194,13 @@ export function registerSessionIpc(
       const attributedPasteId = typeof pasteId === 'string' && pasteId.length > 0
         ? pasteId
         : null
+      const finishDelivery = attributedPasteId ? mainOperations.begin('prompt.delivery', sessionId, attributedPasteId) : null
       const ok = manager.write(
         sessionId,
         data,
         attributedPasteId ? 'renderer-paste' : 'renderer',
       )
+      finishDelivery?.(ok ? 'success' : 'error')
       if (attributedPasteId) {
         // WHY the combined phase exists: Codex's zero-delay bracketed-paste
         // path writes `body + paste-end + Enter` in ONE PTY call, while Claude

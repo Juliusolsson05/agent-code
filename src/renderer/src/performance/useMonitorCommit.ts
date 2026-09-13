@@ -13,7 +13,16 @@ export function useMonitorCommit(sessionId: string, revision: unknown, visible: 
   const startedAt = performance.now()
   useLayoutEffect(() => {
     rendererOperations.observe('transcript.commit', performance.now() - startedAt)
-    if (visible && document.visibilityState === 'visible' && pendingOutput.delete(sessionId)) window.api?.completeMonitorResponse?.(sessionId)
+    if (pendingOutput.delete(sessionId)) {
+      if (visible && document.visibilityState === 'visible') window.api?.completeMonitorResponse?.(sessionId)
+      else {
+        // A background tab still commits React state, but counting the time
+        // until somebody later opens it as "first rendered output" would fold
+        // arbitrary user attention into renderer latency. Provider first-output
+        // remains available; retire only the inapplicable render measurement.
+        window.api?.cancelMonitorResponse?.(sessionId)
+      }
+    }
   }, [sessionId, revision, visible])
   useLayoutEffect(() => () => { pendingOutput.delete(sessionId) }, [sessionId])
 }

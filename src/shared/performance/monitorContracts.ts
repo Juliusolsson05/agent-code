@@ -27,7 +27,13 @@ export type MonitorHeartbeat = {
   inputMaxMs: number
 }
 
-export type MonitorRendererRecord = MonitorOperation | MonitorHeartbeat
+export type MonitorProducerLoss = {
+  kind: 'loss'
+  source: 'preload' | 'renderer'
+  dropped: number
+}
+
+export type MonitorRendererRecord = MonitorOperation | MonitorHeartbeat | MonitorProducerLoss
 
 const operations = new Set<string>(MONITOR_OPERATIONS)
 const outcomes = new Set<string>(['success', 'error', 'cancelled', 'timeout'])
@@ -36,6 +42,7 @@ const heartbeatKeys = new Set([
   'kind', 'monotonicMs', 'timeOriginMs', 'lagMs', 'visibility', 'longTaskCount',
   'longTaskTotalMs', 'longTaskMaxMs', 'heapUsedBytes', 'heapLimitBytes', 'inputCount', 'inputMaxMs',
 ])
+const lossKeys = new Set(['kind', 'source', 'dropped'])
 const finite = (value: unknown, max = Number.MAX_SAFE_INTEGER): value is number =>
   typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= max
 const count = (value: unknown): value is number => finite(value) && Number.isSafeInteger(value)
@@ -66,6 +73,11 @@ export function parseMonitorRendererRecord(input: unknown): MonitorRendererRecor
       ...(value.sessionId === undefined ? {} : { sessionId: value.sessionId as string }),
       ...(value.operationId === undefined ? {} : { operationId: value.operationId as string }),
     }
+  }
+  if (value.kind === 'loss') {
+    if (keys.length !== lossKeys.size || keys.some(key => !lossKeys.has(key))
+      || (value.source !== 'preload' && value.source !== 'renderer') || !count(value.dropped)) return null
+    return { kind: 'loss', source: value.source, dropped: value.dropped }
   }
   if (value.kind !== 'heartbeat' || keys.length !== heartbeatKeys.size
     || keys.some(key => !heartbeatKeys.has(key))) return null

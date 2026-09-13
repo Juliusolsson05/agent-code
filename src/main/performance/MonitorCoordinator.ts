@@ -19,6 +19,7 @@ import type { MonitorEnvelope, MonitorSnapshot, MonitorWorkerResponse } from '@s
 import type { RendererFreezeHeartbeat } from '@shared/incident/rendererFreeze.js'
 import { mainProbe } from './MainProbe.js'
 import { getAppRunId } from '@main/incident/appRunIds.js'
+import { MONITOR_HISTORY_DIR } from '@main/storage/paths.js'
 
 export class MonitorCoordinator {
   private child: UtilityProcess | null = null
@@ -40,6 +41,7 @@ export class MonitorCoordinator {
   private processReceivedAt = 0
   private visibleWindows = new Set<number>()
   private query: QueryWaiter | null = null
+  private sourceDrops = new Map<string, number>()
   setWindowVisible(id: number, visible: boolean): void {
     if (visible && this.visibleWindows.size < 64) this.visibleWindows.add(id)
     else this.visibleWindows.delete(id)
@@ -47,6 +49,10 @@ export class MonitorCoordinator {
   readIncident(id: number): Promise<MonitorIncident | null> {
     if (!Number.isSafeInteger(id) || id < 1) return Promise.resolve(null)
     return this.request({ kind: 'incident', id }).then(result => result?.kind === 'incident' ? result.value : null)
+  }
+  readHistoryIncident(at: number, id: number): Promise<MonitorIncident | null> {
+    if (!Number.isFinite(at) || at < 0 || !Number.isSafeInteger(id) || id < 1) return Promise.resolve(null)
+    return this.request({ kind: 'history-incident', at, id }).then(result => result?.kind === 'history-incident' ? result.value : null)
   }
   readHistory(from: number, to: number, cursor?: string, limit = 500): Promise<MonitorHistoryPage | null> {
     if (!validRange(from, to) || (cursor !== undefined && !/^\d{1,7}$/.test(cursor))) return Promise.resolve(null)
@@ -118,7 +124,7 @@ export class MonitorCoordinator {
   read(): MonitorSnapshot {
     return {
       ...this.cache, processes: this.processSummary(), queuedBytes: this.queue.stats.bytes + this.processQueue.stats.bytes,
-      droppedRecords: this.queue.stats.dropped + this.processQueue.stats.dropped + this.lost,
+      droppedRecords: this.droppedRecords(),
       restarts: Math.max(0, this.launches - 1),
       collector: this.stopped ? 'stopped'
         : this.lastReplyAt && this.monotonicNow() - this.lastReplyAt > 5000 ? 'degraded' : this.cache.collector,
@@ -149,11 +155,27 @@ export class MonitorCoordinator {
     this.liveWindows.delete(windowId)
     this.visibleWindows.delete(windowId)
     this.cache = { ...this.cache, windows: this.cache.windows.filter(window => window.windowId !== windowId) }
+    this.sourceDrops.delete(`${windowId}:preload`)
+    this.sourceDrops.delete(`${windowId}:renderer`)
   }
 
   operation(sample: MonitorOperation, windowId: number | null = null): void {
     const parsed = parseMonitorRendererRecord(sample)
     if (parsed?.kind === 'operation') this.enqueue({ kind: 'operation', at: Date.now(), windowId, sample: parsed })
+  }
+
+  sourceLoss(windowId: number, source: 'preload' | 'renderer', dropped: number): void {
+    if (!Number.isSafeInteger(windowId) || windowId < 1 || !Number.isSafeInteger(dropped) || dropped < 0) return
+    const key = `${windowId}:${source}`
+    const previous = this.sourceDrops.get(key)
+    if (previous === undefined && this.sourceDrops.size >= MONITOR_POLICY.windowLimit * 2) return
+    // Producer counters are monotonic only for one renderer/preload lifetime.
+    // A reload resets them; establish the new baseline without subtracting the
+    // loss already accumulated from the retired producer.
+    if (previous === undefined || dropped >= previous) {
+      this.lost = Math.min(Number.MAX_SAFE_INTEGER, this.lost + dropped - (previous ?? 0))
+    }
+    this.sourceDrops.set(key, dropped)
   }
 
   stop(): void {
@@ -165,14 +187,56 @@ export class MonitorCoordinator {
     this.timer = null
     this.unsubscribe?.()
     this.unsubscribe = null
-    this.child?.kill()
+    // Detach before kill: UtilityProcess may emit `exit` synchronously from a
+    // test double and asynchronously in Electron. In either case the ordinary
+    // failure handler must not treat an intentional shutdown as a fresh crash
+    // and attempt to kill/count the same generation again.
+    const child = this.child
     this.child = null
+    try { child?.kill() } catch { /* The helper may already have exited. */ }
     this.queue.clear()
     this.processQueue.clear()
+    this.sourceDrops.clear()
+  }
+
+  async shutdown(deadlineMs = 2000): Promise<void> {
+    if (this.stopped) return
+    const deadline = this.monotonicNow() + Math.max(100, deadlineMs)
+    this.processSource?.stop()
+
+    // A renderer may have started a history query immediately before quit. It
+    // is safe to abandon a query that has not left main; allowing it to occupy
+    // the single-credit worker channel would make the durability flush wait
+    // behind UI work that can no longer be observed.
+    this.query?.resolve(null)
+    this.query = null
+
+    // An already-posted query cannot be revoked without killing the helper and
+    // losing its queued writes. Give it the same bounded grace period, then use
+    // the next credit for an explicit history flush. The outer quit gate also
+    // has a deadline, so every branch remains bounded if a disk stalls.
+    while (this.pending?.query && this.monotonicNow() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 20))
+    }
+    const remaining = deadline - this.monotonicNow()
+    if (remaining > 0 && this.child && !this.stopped) {
+      const flushed = this.request({ kind: 'history-flush' })
+      this.pump()
+      await Promise.race([
+        flushed,
+        new Promise<null>(resolve => setTimeout(() => resolve(null), remaining)),
+      ])
+    }
+    this.stop()
   }
 
   private enqueue(record: MonitorEnvelope): void {
     if (!this.stopped) this.queue.push(record, MONITOR_RECORD_BYTES)
+  }
+
+  private droppedRecords(): number {
+    return Math.min(Number.MAX_SAFE_INTEGER,
+      this.queue.stats.dropped + this.processQueue.stats.dropped + mainOperations.dropped + this.lost)
   }
 
   private launch(): void {
@@ -264,11 +328,12 @@ export class MonitorCoordinator {
       // Electron message-port queue. Timeout discards the in-flight evidence,
       // counts the loss, and caps process restarts for the entire app run.
       const query = this.query; this.query = null
-      const timeoutMs = query?.request.kind === 'report-export' ? 60_000 : query ? 10_000 : 5000
+      const timeoutMs = query?.request.kind === 'report-export' ? 60_000
+        : query?.request.kind === 'history-flush' ? 2500 : query ? 10_000 : 5000
       this.pending = { sequence, at: this.monotonicNow(), count: records.length, timeoutMs, ...(query ? { query } : {}) }
-      this.child.postMessage({ sequence, runId: this.cache.runId, restarts: Math.max(0, this.launches - 1), records,
+      this.child.postMessage({ sequence, runId: this.cache.runId, historyRoot: MONITOR_HISTORY_DIR, restarts: Math.max(0, this.launches - 1), records,
         liveWindowIds: [...this.liveWindows], visibleWindowIds: [...this.visibleWindows],
-        droppedRecords: this.queue.stats.dropped + this.processQueue.stats.dropped + this.lost,
+        droppedRecords: this.droppedRecords(),
         ...(query ? { query: query.request } : {}) })
     } catch { this.fail(this.child) }
   }

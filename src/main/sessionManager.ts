@@ -4165,6 +4165,14 @@ export class SessionManager extends EventEmitter {
     }
   }
 
+  beginMonitorResponse(sessionId: string, operationId?: string): void {
+    // Main owns live session identity. A renderer may request timing for a
+    // stable pane ID, but a stale/foreign ID cannot allocate baseline state.
+    if (this.sessions.has(sessionId)) this.monitorResponses.begin(sessionId, operationId)
+  }
+
+  cancelMonitorResponse(sessionId: string): void { this.monitorResponses.cancel(sessionId) }
+
   /** Submit staged composer content only when no finished-prompt transaction
    * owns the session. Remote's legacy `submit` command cannot be allowed to
    * inject Enter during paste absorption. */

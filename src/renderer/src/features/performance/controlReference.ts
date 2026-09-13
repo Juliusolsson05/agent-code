@@ -17,7 +17,9 @@ export const controlReference = [
     "outcome": "The panel exposes measured performance information.",
     "cautions": "Performance values are not provider usage totals or task-completion signals.",
     "commandIds": [
-      "toggle-performance-panel"
+      "toggle-performance-panel",
+      "save-performance-report",
+      "record-performance-trace"
     ]
   }
 ] satisfies FeatureReference[]

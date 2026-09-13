@@ -6,6 +6,7 @@ import '@main/loadEnv.js'
 import { mainOperations } from '@main/performance/operations.js'
 import { monitorCoordinator } from '@main/performance/MonitorCoordinator.js'
 import { mainProbe } from '@main/performance/MainProbe.js'
+import { performanceTraceController } from '@main/performance/PerformanceTraceController.js'
 import { TldrStore } from '@main/tldr/TldrStore.js'
 import { registerGoalIpc, registerTldrIpc } from '@main/tldr/ipc.js'
 import { TldrEnforcement } from '@main/tldr/enforcement.js'
@@ -1265,6 +1266,22 @@ const sessionShutdownGate = installSessionShutdownGate({
         } catch (err) {
           appRunJournal?.recordError('proxy.mitmdump.quit_sweep.error', err)
         }
+
+        // Baseline samples are queued to an isolated utility process so disk
+        // writes never touch the UI or agent paths. That also means killing the
+        // helper synchronously can lose its final seconds. Once will-quit has
+        // crossed the renderer-veto boundary, grant the history queue and any
+        // explicitly started profiler a short, shared drain window. The
+        // deadline is deliberate: performance diagnostics must never make the
+        // application impossible to quit when storage or Chromium tracing is
+        // unhealthy.
+        await Promise.race([
+          Promise.allSettled([
+            monitorCoordinator.shutdown(1800),
+            performanceTraceController.shutdown(),
+          ]).then(() => undefined),
+          new Promise<void>(resolve => setTimeout(resolve, 2000)),
+        ])
       },
     }
   },

@@ -9,12 +9,14 @@ export function isResponseOutput(event: unknown): boolean {
   return ['text_delta', 'thinking_delta', 'connector_text_delta', 'tool_input_delta', 'tool_input_finalized'].includes((event as { type?: string }).type ?? '')
 }
 export class ResponseTracker {
-  private pending = new Map<string, { end: OperationEnd; at: number }>()
+  private pending = new Map<string, { end: OperationEnd; at: number; operationId?: string }>()
   constructor(private timers: OperationTimers, private now: () => number = () => performance.now()) {}
   begin(sessionId: string, operationId?: string): void {
+    const current = this.pending.get(sessionId)
+    if (current && current.operationId === operationId) return
     this.cancel(sessionId)
     if (this.pending.size >= 2048) return
-    this.pending.set(sessionId, { end: this.timers.begin('provider.first-output', sessionId, operationId), at: this.now() })
+    this.pending.set(sessionId, { end: this.timers.begin('provider.first-output', sessionId, operationId), at: this.now(), ...(operationId ? { operationId } : {}) })
   }
   output(sessionId: string, event: unknown): void {
     if (!isResponseOutput(event)) return

@@ -31,4 +31,14 @@ describe('bounded real-operation timing', () => {
     expect(records).toHaveLength(1)
     expect(JSON.stringify(records)).not.toContain('sentinel')
   })
+  it('deduplicates the renderer and provider begin signals for one submitted operation', () => {
+    const records: MonitorOperation[] = []
+    const tracker = new ResponseTracker(new OperationTimers(record => records.push(record)))
+    tracker.begin('session', 'submit-a')
+    tracker.begin('session', 'submit-a')
+    expect(records).toHaveLength(0)
+    tracker.output('session', { type: 'text_delta' })
+    expect(records).toHaveLength(1)
+    expect(records[0]).toMatchObject({ outcome: 'success', operationId: 'submit-a' })
+  })
 })

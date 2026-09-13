@@ -3,23 +3,34 @@ import { Button } from '@renderer/components/ui/button'
 import type { MonitorIncident, MonitorIncidentSummary } from '@shared/performance/monitorIncidents.js'
 import { INCIDENT_EXPLANATIONS } from '@shared/performance/monitorIncidents.js'
 
-export function Incidents({ incidents }: { incidents: MonitorIncidentSummary[] }) {
-  const [selected, setSelected] = useState<number | null>(null)
+const readLiveIncident = (incident: MonitorIncidentSummary): Promise<MonitorIncident | null> => window.api.getMonitorIncident(incident.id)
+
+export function Incidents({ incidents, readIncident = readLiveIncident }: {
+  incidents: MonitorIncidentSummary[]
+  readIncident?: (incident: MonitorIncidentSummary) => Promise<MonitorIncident | null>
+}) {
+  const [selected, setSelected] = useState<MonitorIncidentSummary | null>(null)
   const [detail, setDetail] = useState<MonitorIncident | null>(null)
   const [loading, setLoading] = useState(false)
   const [revision, setRevision] = useState(0)
   const [offset, setOffset] = useState(0)
   useEffect(() => {
+    if (selected && !incidents.some(incident => incident.id === selected.id && incident.at === selected.at)) {
+      setSelected(null)
+      setDetail(null)
+    }
+  }, [incidents, selected])
+  useEffect(() => {
     if (selected === null) return
     let disposed = false
     setLoading(true); setDetail(null); setOffset(0)
-    void window.api.getMonitorIncident(selected).then(result => { if (!disposed) setDetail(result) })
+    void readIncident(selected).then(result => { if (!disposed) setDetail(result) })
       .catch(() => {}).finally(() => { if (!disposed) setLoading(false) })
     return () => { disposed = true }
-  }, [selected, revision])
+  }, [readIncident, revision, selected])
   if (!incidents.length) return <p className="text-muted">No incidents detected in the available history. Missing or dropped samples may limit coverage.</p>
   return <div className="grid gap-4 md:grid-cols-[260px_minmax(0,1fr)]">
-    <div className="space-y-2" aria-label="Detected incidents">{[...incidents].reverse().map(incident => <button key={incident.id} className={`block w-full rounded-slab border p-3 text-left ${selected === incident.id ? 'border-accent bg-accent/5' : 'border-border bg-canvas'}`} onClick={() => setSelected(incident.id)}>
+    <div className="space-y-2" aria-label="Detected incidents">{[...incidents].reverse().map(incident => <button key={`${incident.at}:${incident.id}`} className={`block w-full rounded-slab border p-3 text-left ${selected?.at === incident.at && selected.id === incident.id ? 'border-accent bg-accent/5' : 'border-border bg-canvas'}`} onClick={() => setSelected(incident)}>
       <div className="font-medium capitalize">{incident.rule.replace(/-/g, ' ')}</div>
       <div className="mt-1 text-[11px] text-muted">{new Date(incident.at).toLocaleTimeString()} · {incident.severity} · {incident.scope ? `Window ${incident.scope}` : 'Application'}</div>
       <div className="mt-1 text-[10px] text-muted">{incident.state}{incident.truncated ? ' · partial evidence' : ''}</div>

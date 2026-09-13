@@ -126,6 +126,19 @@ describe('monitor worker isolation', () => {
     coordinator.stop()
   })
 
+  it('accounts producer loss monotonically and treats reload as a new baseline', () => {
+    const coordinator = new MonitorCoordinator()
+    coordinator.sourceLoss(7, 'renderer', 4)
+    coordinator.sourceLoss(7, 'renderer', 9)
+    coordinator.sourceLoss(7, 'renderer', 2)
+    coordinator.sourceLoss(7, 'renderer', 5)
+    expect(coordinator.read().droppedRecords).toBe(12)
+    coordinator.closeWindow(7)
+    coordinator.sourceLoss(7, 'renderer', 3)
+    expect(coordinator.read().droppedRecords).toBe(15)
+    coordinator.stop()
+  })
+
   it('publishes process generations atomically and rejects missing chunks', () => {
     vi.useFakeTimers()
     const child = new FakeChild()
@@ -206,6 +219,31 @@ describe('monitor worker isolation', () => {
     } })
     expect(coordinator.readProcesses().rows).toEqual([row])
     coordinator.stop()
+  })
+
+  it('waits for the worker history queue before killing the helper at shutdown', async () => {
+    vi.useFakeTimers()
+    const child = new FakeChild()
+    harness.launch.mockReturnValue(child)
+    const coordinator = new MonitorCoordinator(() => Date.now())
+    coordinator.start()
+    coordinator.operation(operation)
+    vi.advanceTimersByTime(200)
+    const inFlight = child.postMessage.mock.calls[0]![0]
+
+    const shutdown = coordinator.shutdown()
+    child.emit('message', { sequence: inFlight.sequence })
+    vi.advanceTimersByTime(200)
+    const flush = child.postMessage.mock.calls[1]![0]
+    expect(flush.query).toEqual({ kind: 'history-flush' })
+    expect(child.kill).not.toHaveBeenCalled()
+
+    child.emit('message', {
+      sequence: flush.sequence,
+      queryResult: { kind: 'history-flush', value: true },
+    })
+    await shutdown
+    expect(child.kill).toHaveBeenCalledOnce()
   })
 
 })

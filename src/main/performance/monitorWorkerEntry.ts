@@ -8,7 +8,7 @@ import { MonitorAggregator } from './MonitorAggregator.js'
 import type { MonitorWorkerRequest } from '@shared/performance/monitorSnapshot.js'
 import type { MonitorHistoryStatus, MonitorWorkerQueryResult } from '@shared/performance/monitorHistory.js'
 import { isMonitorId } from '@shared/performance/monitorContracts.js'
-import { MONITOR_HISTORY_DIR } from '@main/storage/paths.js'
+import { isAbsolute } from 'node:path'
 
 // utilityProcess runs in Electron's signed helper, including distributions
 // whose RunAsNode fuse is disabled. No transcript/provider modules belong in
@@ -30,10 +30,13 @@ let transferGeneration = 0
 let sentPage: MonitorProcessPage | null = null
 const unavailableHistory = (): MonitorHistoryStatus => ({ state: 'unavailable', bytes: 0, oldestAt: null, newestAt: null, points: 0, incidents: 0, exporting: false, shortened: false })
 parent.on('message', async ({ data }) => {
-  if (!history && isMonitorId(data.runId)) history = new MonitorHistoryStore(MONITOR_HISTORY_DIR, data.runId)
+  if (!history && isMonitorId(data.runId) && typeof data.historyRoot === 'string' && data.historyRoot.length <= 4096 && isAbsolute(data.historyRoot)) {
+    history = new MonitorHistoryStore(data.historyRoot, data.runId)
+  }
   aggregator.accept(data.records)
   const now = Date.now()
   const mono = performance.now()
+  if (data.query?.kind === 'history-flush') incidents.interrupt()
   incidents.reconcile(data.liveWindowIds ?? [], data.visibleWindowIds ?? [], mono)
   incidents.accept(data.records, now, mono)
   incidents.loss(data.droppedRecords ?? 0, now, mono)
@@ -73,9 +76,10 @@ parent.on('message', async ({ data }) => {
   let queryResult: MonitorWorkerQueryResult | undefined
   const query = data.query
   if (query?.kind === 'incident') queryResult = { kind: 'incident', value: incidents.detail(query.id) }
+  else if (query?.kind === 'history-incident') queryResult = { kind: 'history-incident', value: history ? await history.readIncident(query.at, query.id) : null }
   else if (query?.kind === 'history') queryResult = { kind: 'history', value: history
     ? await history.query(query.from, query.to, query.cursor, query.limit)
-    : { resolution: '1s', from: query.from, to: query.to, points: [], nextCursor: null, complete: true, status: unavailableHistory() } }
+    : { resolution: '1s', from: query.from, to: query.to, points: [], incidents: [], nextCursor: null, complete: true, status: unavailableHistory() } }
   else if (query?.kind === 'history-status') queryResult = { kind: 'history-status', value: history?.status() ?? unavailableHistory() }
   else if (query?.kind === 'report-preview') queryResult = { kind: 'report-preview', value: history
     ? await history.preview(query.from, query.to)
@@ -84,5 +88,13 @@ parent.on('message', async ({ data }) => {
     ? await history.exportReport(query.from, query.to, query.destination, query.build)
     : { ok: false, code: 'unavailable' } }
   else if (query?.kind === 'history-clear') queryResult = { kind: 'history-clear', value: history ? await history.clear() : unavailableHistory() }
+  else if (query?.kind === 'history-flush') {
+    // The coordinator sends this only from Electron's admitted quit path. A
+    // normal snapshot reply proves aggregation finished, but it does not prove
+    // the store's deliberately detached append queue reached disk. Replying
+    // after settled() gives the quit gate that stronger durability boundary.
+    await history?.settled()
+    queryResult = { kind: 'history-flush', value: true }
+  }
   parent.postMessage({ sequence: data.sequence, snapshot, processChunk, ...(queryResult ? { queryResult } : {}) })
 })

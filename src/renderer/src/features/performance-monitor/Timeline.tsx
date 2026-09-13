@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Button } from '@renderer/components/ui/button'
 import type { MonitorHistoryPage } from '@shared/performance/monitorHistory.js'
 import type { MonitorIncidentSummary } from '@shared/performance/monitorIncidents.js'
+import { MONITOR_POLICY } from '@shared/performance/monitorPolicy.js'
 import { Incidents } from './Incidents'
 
 const ranges = [{ label: '15 min', ms: 15 * 60_000 }, { label: '24 hours', ms: 24 * 60 * 60_000 }, { label: '7 days', ms: 7 * 24 * 60 * 60_000 }] as const
@@ -29,13 +30,52 @@ export function Timeline({ incidents }: { incidents: MonitorIncidentSummary[] })
   }, [live, range, revision, to])
 
   const path = useMemo(() => {
-    const points = page?.points.filter(point => point.main?.loopMaxMs !== null) ?? []
+    const points = page?.points ?? []
     if (!points.length) return ''
     const first = points[0]!.at
     const duration = Math.max(1, points.at(-1)!.at - first)
+    const sourceStep = page?.resolution === '1s' ? 1000 : page?.resolution === '10s' ? 10_000 : 60_000
+    // The worker reserves response headroom for incident summaries and returns
+    // at most 300 chart buckets. Use that same density when recognizing gaps;
+    // a seven-day overview would otherwise mistake every healthy 34-minute
+    // bucket step for missing data and draw 300 disconnected points.
+    const expectedStep = Math.max(sourceStep, (page!.to - page!.from) / MONITOR_POLICY.historyPagePoints)
     const peak = Math.max(1, ...points.map(point => point.main?.loopMaxMs ?? 0))
-    return points.map((point, index) => `${index ? 'L' : 'M'}${(point.at - first) / duration * 600},${100 - (point.main?.loopMaxMs ?? 0) / peak * 90}`).join(' ')
+    let penDown = false
+    let previousAt: number | null = null
+    let result = ''
+    for (const point of points) {
+      const value = point.main?.loopMaxMs
+      if (value === null || value === undefined || point.main?.sleepGap) {
+        penDown = false
+        previousAt = point.at
+        continue
+      }
+      if (previousAt !== null && (point.at <= previousAt || point.at - previousAt > expectedStep * 3)) penDown = false
+      result += `${penDown ? 'L' : 'M'}${(point.at - first) / duration * 600},${100 - value / peak * 90} `
+      penDown = true
+      previousAt = point.at
+    }
+    return result
   }, [page])
+  const shownIncidents = useMemo(() => {
+    const merged = new Map<string, MonitorIncidentSummary>()
+    for (const incident of page?.incidents ?? []) merged.set(`${incident.at}:${incident.id}`, incident)
+    for (const incident of incidents) if (!page || (incident.at >= page.from && incident.at <= page.to)) {
+      merged.set(`${incident.at}:${incident.id}`, incident)
+    }
+    return [...merged.values()].sort((a, b) => a.at - b.at).slice(-50)
+  }, [incidents, page])
+  const liveSignature = incidents.map(incident => `${incident.at}:${incident.id}`).join('|')
+  const readIncident = useCallback((incident: MonitorIncidentSummary) => {
+    // Current-run captures keep changing during their 15-second post window,
+    // so ask the live engine for those. Older persisted summaries use their
+    // wall-time plus run-local ID to disambiguate IDs reused after restart.
+    const key = `${incident.at}:${incident.id}`
+    return liveSignature.split('|').includes(key)
+      ? window.api.getMonitorIncident(incident.id)
+      : window.api.getMonitorHistoryIncident(incident.at, incident.id)
+  }, [liveSignature])
 
   return <div className="space-y-5">
     <div className="flex flex-wrap items-center justify-between gap-3">
@@ -46,7 +86,7 @@ export function Timeline({ incidents }: { incidents: MonitorIncidentSummary[] })
     </div>
     {error ? <p role="status" className="text-muted">History is temporarily unavailable. Live monitoring continues.</p> : !page ? <p role="status" className="text-muted">Loading local history…</p> : <>
       <section className="rounded-slab border border-border bg-canvas p-3">
-        <div className="flex justify-between text-[11px]"><span>Main event-loop peak</span><span className="text-muted">{page.resolution} resolution · latest {page.points.length.toLocaleString()} points</span></div>
+        <div className="flex justify-between text-[11px]"><span>Main event-loop peak</span><span className="text-muted">{page.resolution} source · {page.points.length.toLocaleString()} chart points</span></div>
         <svg viewBox="0 0 600 112" className="my-2 h-28 w-full text-accent" role="img" aria-label={`Main event-loop peak over ${range.label}; ${page.points.length} local points`}>
           <path d="M0 100H600" stroke="currentColor" opacity="0.15" /><path d={path} stroke="currentColor" strokeWidth="2" fill="none" vectorEffect="non-scaling-stroke" />
         </svg>
@@ -54,6 +94,6 @@ export function Timeline({ incidents }: { incidents: MonitorIncidentSummary[] })
       </section>
       <p className="text-[11px] text-muted">{(page.status.bytes / 1024 / 1024).toFixed(1)} MiB stored · {page.status.points.toLocaleString()} tiered points · {page.status.state}{page.status.shortened ? ' · retention shortened by capacity' : ''}{page.nextCursor ? ' · older points available outside this bounded view' : ''}</p>
     </>}
-    <section className="space-y-3"><h2 className="font-medium">Detected incidents</h2><Incidents incidents={incidents} /></section>
+    <section className="space-y-3"><h2 className="font-medium">Detected incidents</h2><Incidents incidents={shownIncidents} readIncident={readIncident} /></section>
   </div>
 }

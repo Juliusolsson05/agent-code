@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { MONITOR_POLICY } from './monitorPolicy'
 import { MONITOR_RECORD_BYTES, parseMonitorRendererBatch, parseMonitorRendererRecord } from './monitorContracts'
-import type { MonitorHeartbeat, MonitorOperation } from './monitorContracts'
+import type { MonitorHeartbeat, MonitorOperation, MonitorProducerLoss } from './monitorContracts'
 
 const operation: MonitorOperation = { kind: 'operation', name: 'transcript.fold', durationMs: 12, outcome: 'success', sessionId: 'session-1' }
 const heartbeat: MonitorHeartbeat = {
@@ -9,10 +9,11 @@ const heartbeat: MonitorHeartbeat = {
   longTaskCount: 0, longTaskTotalMs: 0, longTaskMaxMs: 0, heapUsedBytes: null,
   heapLimitBytes: null, inputCount: 0, inputMaxMs: 0,
 }
+const loss: MonitorProducerLoss = { kind: 'loss', source: 'renderer', dropped: 12 }
 
 describe('content-minimized renderer ingress', () => {
   it('admits supported numeric records and copies them at the trust boundary', () => {
-    expect(parseMonitorRendererBatch([operation, heartbeat])).toEqual([operation, heartbeat])
+    expect(parseMonitorRendererBatch([operation, heartbeat, loss])).toEqual([operation, heartbeat, loss])
     expect(parseMonitorRendererRecord(operation)).not.toBe(operation)
   })
 
@@ -27,6 +28,8 @@ describe('content-minimized renderer ingress', () => {
     { ...heartbeat, longTaskCount: -1 },
     { ...heartbeat, inputCount: 0.5 },
     { ...heartbeat, heapUsedBytes: 'PRIVATE SENTINEL' },
+    { ...loss, source: 'PRIVATE SENTINEL' },
+    { ...loss, dropped: -1 },
   ])('rejects unsupported fields, identities and measurements: %#', value => {
     expect(parseMonitorRendererRecord(value)).toBeNull()
   })
@@ -45,7 +48,8 @@ describe('content-minimized renderer ingress', () => {
       }
     }
     const largestOperation = { ...operation, sessionId: 'a'.repeat(96), durationMs: 86_400_000 }
-    for (const record of [largeHeartbeat, largestOperation]) {
+    const largestLoss = { ...loss, dropped: Number.MAX_SAFE_INTEGER }
+    for (const record of [largeHeartbeat, largestOperation, largestLoss]) {
       expect(parseMonitorRendererRecord(record)).not.toBeNull()
       expect(Buffer.byteLength(JSON.stringify(record))).toBeLessThanOrEqual(MONITOR_RECORD_BYTES)
     }

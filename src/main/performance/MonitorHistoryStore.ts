@@ -1,12 +1,14 @@
 import { createReadStream, createWriteStream } from 'node:fs'
 import { appendFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { once } from 'node:events'
+import { finished } from 'node:stream/promises'
 import { dirname, join } from 'node:path'
 import { createInterface } from 'node:readline'
 import type { MonitorIncident } from '@shared/performance/monitorIncidents.js'
 import { parseMonitorIncident } from '@shared/performance/parseMonitorIncident.js'
 import { parseMonitorHistoryPoint } from '@shared/performance/parseMonitorHistory.js'
 import { parseMonitorSnapshot } from '@shared/performance/parseMonitorSnapshot.js'
+import { MONITOR_POLICY } from '@shared/performance/monitorPolicy.js'
 import type {
   MonitorHistoryPage, MonitorHistoryPoint, MonitorHistoryResolution,
   MonitorHistoryStatus, MonitorReportPreview, MonitorReportResult,
@@ -20,6 +22,10 @@ const HARD_BUDGET = 128 * 1024 * 1024
 const INCIDENT_BUDGET = 8 * 1024 * 1024
 const REPORT_BUDGET = 8 * 1024 * 1024
 const LINE_LIMIT = 16 * 1024
+// A valid point filled with MAX_SAFE_INTEGER values serializes to roughly 652
+// bytes. Three hundred points leave more than 60 KiB inside the shared 256 KiB
+// response ceiling for framing, status and fifty incident summaries.
+const QUERY_POINT_LIMIT = MONITOR_POLICY.historyPagePoints
 const RETENTION: Record<MonitorHistoryResolution, number> = {
   '1s': 15 * 60_000,
   '10s': 24 * 60 * 60_000,
@@ -36,6 +42,7 @@ function pointFrom(snapshot: MonitorWorkerSnapshot, processes: MonitorProcessSum
     main: snapshot.main && {
       cpuPercent: snapshot.main.cpuPercent, rss: snapshot.main.rss, heapUsed: snapshot.main.heapUsed,
       heapLimit: snapshot.main.heapLimit, loopP99Ms: snapshot.main.loopP99Ms, loopMaxMs: snapshot.main.loopMaxMs,
+      sleepGap: snapshot.main.sleepGap,
     },
     processes: processes && {
       cpuPercent: processes.cpuPercent, memoryBytes: processes.memoryBytes, count: processes.count,
@@ -70,6 +77,7 @@ export class MonitorHistoryStore {
   private lastMaintenanceAt = -Infinity
   private incidentFingerprint = ''
   private operationFingerprint = ''
+  private storedIncidents: MonitorIncident[] = []
 
   constructor(private readonly root: string, private readonly runId: string, private readonly now: () => number = () => Date.now()) {
     this.runDir = join(root, RUNS_DIR, runId)
@@ -99,8 +107,7 @@ export class MonitorHistoryStore {
     const incidentJson = JSON.stringify(incidents.slice(-50))
     if (incidentJson !== this.incidentFingerprint) {
       this.incidentFingerprint = incidentJson
-      this.enqueue(async () => this.replaceBounded(join(this.runDir, 'incidents.json'), incidentJson, INCIDENT_BUDGET))
-      this.incidentCount = Math.min(50, incidents.length)
+      this.enqueue(async () => this.persistIncidents(incidents))
     }
     const operationJson = JSON.stringify(snapshot.operations.slice(0, 100))
     if (operationJson !== this.operationFingerprint) {
@@ -116,8 +123,32 @@ export class MonitorHistoryStore {
   async query(from: number, to: number, cursor: string | undefined, limit: number): Promise<MonitorHistoryPage> {
     await this.settled()
     const resolution = this.resolution(from, to)
+    const incidentSummaries = (await this.incidents(from, to)).map(({ evidence, ...summary }) => ({
+      ...summary,
+      evidenceCount: evidence.length,
+    }))
     const skip = /^\d+$/.test(cursor ?? '') ? Math.min(1_000_000, Number(cursor)) : 0
-    const boundedLimit = Math.max(1, Math.min(1000, Math.floor(limit)))
+    const overview = cursor === undefined && Math.floor(limit) >= 1000
+    const boundedLimit = Math.max(1, Math.min(QUERY_POINT_LIMIT, Math.floor(limit)))
+    if (overview) {
+      // The timeline asks for the maximum bounded page because it needs an
+      // overview, not raw backward pagination. Time buckets cover the entire
+      // selected interval in one response, so "7 days" cannot silently become
+      // "the latest 16 hours" when the minute tier contains 10,080 points.
+      // Keeping the newest valid point in each bucket also preserves current
+      // state while staying inside the stricter serialized response budget.
+      const bucketMs = Math.max(INTERVAL[resolution], Math.ceil((to - from + 1) / boundedLimit))
+      const buckets = new Map<number, MonitorHistoryPoint>()
+      for (const file of await this.files(resolution)) {
+        for await (const line of this.lines(file)) {
+          const point = this.parseLine(line)
+          if (!point || point.at < from || point.at > to) continue
+          buckets.set(Math.floor((point.at - from) / bucketMs), point)
+        }
+      }
+      const points = [...buckets.values()].sort((a, b) => a.at - b.at)
+      return { resolution, from, to, points, incidents: incidentSummaries, nextCursor: null, complete: true, status: this.status() }
+    }
     const ring: MonitorHistoryPoint[] = []
     let eligible = 0
     for (const file of await this.files(resolution)) {
@@ -135,7 +166,13 @@ export class MonitorHistoryStore {
     const end = Math.max(0, ring.length - skip)
     const points = ring.slice(Math.max(0, end - boundedLimit), end)
     const hasMore = eligible > skip + points.length
-    return { resolution, from, to, points, nextCursor: hasMore ? String(skip + points.length) : null, complete: !hasMore, status: this.status() }
+    return { resolution, from, to, points, incidents: incidentSummaries, nextCursor: hasMore ? String(skip + points.length) : null, complete: !hasMore, status: this.status() }
+  }
+
+  async readIncident(at: number, id: number): Promise<MonitorIncident | null> {
+    if (!finite(at) || !Number.isSafeInteger(id) || id < 1) return null
+    await this.settled()
+    return (await this.incidents(at, at)).find(incident => incident.id === id && incident.at === at) ?? null
   }
 
   async preview(from: number, to: number): Promise<MonitorReportPreview> {
@@ -154,9 +191,13 @@ export class MonitorHistoryStore {
     this.exporting = true
     await this.settled()
     let stream: ReturnType<typeof createWriteStream> | null = null
+    const tempDestination = `${destination}.agent-code-${process.pid}.tmp`
     try {
       await mkdir(dirname(destination), { recursive: true })
-      const tempDestination = `${destination}.agent-code-${process.pid}.tmp`
+      // A process crash can strand this exact private scratch suffix. Remove
+      // it before opening with `wx`; the user-selected destination remains
+      // untouched until a complete report is atomically renamed over it.
+      await rm(tempDestination, { force: true })
       stream = createWriteStream(tempDestination, { encoding: 'utf8', flags: 'wx', mode: 0o600 })
       let written = 0
       const write = async (chunk: string): Promise<void> => {
@@ -179,14 +220,37 @@ export class MonitorHistoryStore {
       await write(await this.latestBoundedJson('operations.json', 1024 * 1024, '[]'))
       await write(',"incidents":[')
       const incidents = await this.incidents(from, to)
-      for (let index = 0; index < incidents.length; index++) await write(`${index ? ',' : ''}${JSON.stringify({ ...incidents[index], scope: incidents[index]!.scope ? `window-${incidents[index]!.scope}` : 'application' })}`)
+      const aliases = new Map<number, string>()
+      const alias = (scope: number): string => {
+        if (scope === 0) return 'application'
+        const existing = aliases.get(scope)
+        if (existing) return existing
+        const value = `window-${aliases.size + 1}`
+        aliases.set(scope, value)
+        return value
+      }
+      for (let index = 0; index < incidents.length; index++) {
+        const incident = incidents[index]!
+        // Runtime window IDs are useful while inspecting the live application,
+        // but they do not belong in the intentionally content-minimized report.
+        // Alias both the incident and every evidence row through one map so the
+        // correlation survives without exporting application identifiers.
+        const safe = {
+          ...incident,
+          scope: alias(incident.scope),
+          evidence: incident.evidence.map(point => ({ ...point, scope: alias(point.scope) })),
+        }
+        await write(`${index ? ',' : ''}${JSON.stringify(safe)}`)
+      }
       await write(']}')
       stream.end()
-      await once(stream, 'close')
+      // `finished` observes both close and error. Waiting only for `close`
+      // leaves a late ENOSPC error without a listener and can terminate the
+      // utility process instead of returning a bounded write-failed result.
+      await finished(stream)
       await rename(tempDestination, destination)
       return { ok: true, path: destination, bytes: written, points: pointCount, incidents: incidents.length }
     } catch {
-      const tempDestination = `${destination}.agent-code-${process.pid}.tmp`
       stream?.destroy()
       // Never remove the destination on failure: it may be an existing report
       // the user chose to replace, and the temporary file owns this attempt.
@@ -202,7 +266,10 @@ export class MonitorHistoryStore {
       await rm(join(this.root, RUNS_DIR), { recursive: true, force: true })
       await mkdir(this.runDir, { recursive: true })
       this.bytes = 0; this.points = 0; this.oldestAt = null; this.newestAt = null; this.incidentCount = 0
-      this.incidentFingerprint = ''; this.operationFingerprint = ''; this.shortened = false
+      this.incidentFingerprint = ''; this.operationFingerprint = ''; this.storedIncidents = []; this.shortened = false
+      this.lastAt = { '1s': -Infinity, '10s': -Infinity, '1m': -Infinity }
+      this.lastMaintenanceAt = -Infinity
+      this.degraded = false
     } catch { this.degraded = true }
     return this.status()
   }
@@ -228,7 +295,28 @@ export class MonitorHistoryStore {
           this.newestAt = this.newestAt === null ? point.at : Math.max(this.newestAt, point.at)
         }
       }
+      this.storedIncidents = await this.readIncidentFile(join(this.runDir, 'incidents.json'))
+      const interrupted = this.storedIncidents.map(incident => incident.state === 'capturing'
+        ? { ...incident, state: 'interrupted' as const }
+        : incident)
+      if (interrupted.some((incident, index) => incident !== this.storedIncidents[index])) {
+        this.storedIncidents = interrupted
+        await this.replaceBounded(join(this.runDir, 'incidents.json'), JSON.stringify(interrupted), INCIDENT_BUDGET)
+      }
+      this.incidentCount = (await this.incidents(0, Number.MAX_SAFE_INTEGER)).length
     } catch { this.degraded = true }
+  }
+
+  private async persistIncidents(current: MonitorIncident[]): Promise<void> {
+    // A helper restart keeps the same canonical appRunId but constructs a new
+    // IncidentEngine. Replacing the file with that engine's initially empty
+    // list erased the pre-crash evidence. Merge by wall-time + run-local ID so
+    // current captures can update in place while earlier generations survive.
+    const merged = new Map(this.storedIncidents.map(incident => [`${incident.at}:${incident.id}`, incident]))
+    for (const incident of current) merged.set(`${incident.at}:${incident.id}`, incident)
+    this.storedIncidents = [...merged.values()].sort((a, b) => a.at - b.at).slice(-50)
+    await this.replaceBounded(join(this.runDir, 'incidents.json'), JSON.stringify(this.storedIncidents), INCIDENT_BUDGET)
+    this.incidentCount = (await this.incidents(0, Number.MAX_SAFE_INTEGER)).length
   }
 
   private async appendPoint(point: MonitorHistoryPoint): Promise<void> {
@@ -264,6 +352,7 @@ export class MonitorHistoryStore {
       for (const file of await this.files(resolution)) await this.compact(file, now - RETENTION[resolution])
     }
     await this.pruneIncidents()
+    this.incidentCount = (await this.incidents(0, Number.MAX_SAFE_INTEGER)).length
     this.bytes = await this.diskBytes()
     await this.pruneRuns(DATA_BUDGET)
   }
@@ -311,8 +400,9 @@ export class MonitorHistoryStore {
     for (const entry of runs.filter(item => item.isDirectory()).sort((a, b) => a.name.localeCompare(b.name))) {
       const file = join(this.root, RUNS_DIR, entry.name, 'incidents.json')
       try {
-        const value: unknown = JSON.parse((await readFile(file, 'utf8')).slice(0, INCIDENT_BUDGET))
-        if (!Array.isArray(value)) continue
+        if ((await stat(file)).size > INCIDENT_BUDGET) { this.degraded = true; continue }
+        const value: unknown = JSON.parse(await readFile(file, 'utf8'))
+        if (!Array.isArray(value) || value.length > 50) { this.degraded = true; continue }
         for (const candidate of value) {
           const incident = parseMonitorIncident(candidate)
           if (incident && incident.at >= from && incident.at <= to) rows.push(incident)
@@ -322,12 +412,28 @@ export class MonitorHistoryStore {
     return rows.sort((a, b) => a.at - b.at).slice(-50)
   }
 
+  private async readIncidentFile(file: string): Promise<MonitorIncident[]> {
+    try {
+      if ((await stat(file)).size > INCIDENT_BUDGET) { this.degraded = true; return [] }
+      const text = await readFile(file, 'utf8')
+      const value: unknown = JSON.parse(text)
+      if (!Array.isArray(value) || value.length > 50) { this.degraded = true; return [] }
+      const parsed = value.map(parseMonitorIncident)
+      if (parsed.some(incident => incident === null)) { this.degraded = true; return [] }
+      return parsed as MonitorIncident[]
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') this.degraded = true
+      return []
+    }
+  }
+
   private async latestBoundedJson(name: string, limit: number, fallback: string): Promise<string> {
     const runs = await readdir(join(this.root, RUNS_DIR), { withFileTypes: true }).catch(() => [])
     for (const entry of runs.filter(item => item.isDirectory()).sort((a, b) => b.name.localeCompare(a.name))) {
       try {
-        const value = await readFile(join(this.root, RUNS_DIR, entry.name, name), 'utf8')
-        if (Buffer.byteLength(value) > limit) continue
+        const file = join(this.root, RUNS_DIR, entry.name, name)
+        if ((await stat(file)).size > limit) continue
+        const value = await readFile(file, 'utf8')
         const operations: unknown = JSON.parse(value)
         const parsed = parseMonitorSnapshot({ schemaVersion: 1, sampledAt: 0, main: null, windows: [], operations, recent: [], workerRss: 0 })
         if (parsed) return JSON.stringify(parsed.operations)
@@ -343,8 +449,9 @@ export class MonitorHistoryStore {
       const file = join(this.root, RUNS_DIR, entry.name, 'incidents.json')
       let valid: MonitorIncident[] = []
       try {
-        const value: unknown = JSON.parse((await readFile(file, 'utf8')).slice(0, INCIDENT_BUDGET))
-        if (Array.isArray(value)) valid = value.map(parseMonitorIncident).filter((row): row is MonitorIncident => row !== null)
+        if ((await stat(file)).size > INCIDENT_BUDGET) { this.degraded = true; continue }
+        const value: unknown = JSON.parse(await readFile(file, 'utf8'))
+        if (Array.isArray(value) && value.length <= 50) valid = value.map(parseMonitorIncident).filter((row): row is MonitorIncident => row !== null)
       } catch { continue }
       const keep = remaining > 0 ? valid.slice(-remaining) : []
       remaining = Math.max(0, remaining - keep.length)

@@ -1,11 +1,11 @@
-import type { MonitorIncident } from './monitorIncidents.js'
+import type { MonitorIncident, MonitorIncidentSummary } from './monitorIncidents.js'
 
 export type MonitorHistoryResolution = '1s' | '10s' | '1m'
 export type MonitorHistoryPoint = {
   schemaVersion: 1
   at: number
   resolution: MonitorHistoryResolution
-  main: null | { cpuPercent: number | null; rss: number; heapUsed: number; heapLimit: number; loopP99Ms: number | null; loopMaxMs: number | null }
+  main: null | { cpuPercent: number | null; rss: number; heapUsed: number; heapLimit: number; loopP99Ms: number | null; loopMaxMs: number | null; sleepGap: boolean }
   processes: null | { cpuPercent: number | null; memoryBytes: number | null; count: number; sessionCount: number; quality: string }
   windows: { count: number; visible: number; maxLagMs: number; longTaskMs: number; maxInputMs: number }
   workerRss: number
@@ -29,6 +29,7 @@ export type MonitorHistoryPage = {
   from: number
   to: number
   points: MonitorHistoryPoint[]
+  incidents: MonitorIncidentSummary[]
   nextCursor: string | null
   complete: boolean
   status: MonitorHistoryStatus
@@ -47,8 +48,10 @@ export type MonitorReportResult =
   | { ok: true; path: string; bytes: number; points: number; incidents: number }
   | { ok: false; code: 'cancelled' | 'busy' | 'write-failed' | 'invalid-range' | 'unavailable' }
 
+export type MonitorTraceMode = 'chromium' | 'main-cpu'
 export type MonitorTraceStatus = {
   state: 'idle' | 'starting' | 'recording' | 'stopping' | 'complete' | 'failed' | 'cancelled' | 'unsupported'
+  mode: MonitorTraceMode | null
   ownerWindowId: number | null
   startedAt: number | null
   endsAt: number | null
@@ -68,16 +71,20 @@ export type MonitorHistoryQuery = {
 
 export type MonitorWorkerQuery =
   | { kind: 'incident'; id: number }
+  | { kind: 'history-incident'; at: number; id: number }
   | MonitorHistoryQuery
   | { kind: 'history-status' }
   | { kind: 'report-preview'; from: number; to: number }
   | { kind: 'report-export'; from: number; to: number; destination: string; build: Record<string, string | boolean> }
   | { kind: 'history-clear' }
+  | { kind: 'history-flush' }
 
 export type MonitorWorkerQueryResult =
   | { kind: 'incident'; value: MonitorIncident | null }
+  | { kind: 'history-incident'; value: MonitorIncident | null }
   | { kind: 'history'; value: MonitorHistoryPage }
   | { kind: 'history-status'; value: MonitorHistoryStatus }
   | { kind: 'report-preview'; value: MonitorReportPreview }
   | { kind: 'report-export'; value: MonitorReportResult }
   | { kind: 'history-clear'; value: MonitorHistoryStatus }
+  | { kind: 'history-flush'; value: true }

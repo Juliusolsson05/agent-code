@@ -366,6 +366,27 @@ export const layoutCommands: CommandDef[] = [
     run: ({ ui }) => ui.togglePerformancePanel(),
   },
   {
+    id: 'save-performance-report',
+    category: 'workspace-tools',
+    surface: 'app',
+    title: 'Save Performance Report',
+    description: '**What it does:** Saves the last 15 minutes of bounded local performance history, operation timings, incidents and coverage metadata.\n\n**Use when:** You want a small report to inspect without transcript-heavy debug logs.\n\n**Notes:** A native picker chooses the destination. Nothing is uploaded.',
+    keywords: ['performance', 'report', 'export', 'slow', 'incident', 'local'],
+    run: async () => {
+      const to = Date.now()
+      await window.api.saveMonitorReport(Math.max(0, to - 15 * 60_000), to)
+    },
+  },
+  {
+    id: 'record-performance-trace',
+    category: 'workspace-tools',
+    surface: 'app',
+    title: 'Record Performance Trace',
+    description: '**What it does:** Records a filtered app-wide Chromium trace for up to 30 seconds.\n\n**Use when:** The live monitor identifies a slowdown that needs deeper scheduler or rendering evidence.\n\n**Notes:** Explicit recording can contain detailed runtime data. A native picker chooses the local destination first.',
+    keywords: ['performance', 'trace', 'profile', 'record', 'chromium', 'slow'],
+    run: async () => { await window.api.startMonitorTrace('chromium', 30_000) },
+  },
+  {
     id: 'toggle-caffeinate',
     category: 'workspace-tools',
     surface: 'app',

@@ -1,6 +1,6 @@
 import type { MonitorIncident } from '@shared/performance/monitorIncidents.js'
 import type { MonitorHistoryPage, MonitorHistoryStatus, MonitorReportPreview, MonitorReportResult, MonitorTraceStatus } from '@shared/performance/monitorHistory.js'
-import { completeMonitorResponse } from '../monitorOperations.js'
+import { beginMonitorResponse, cancelMonitorResponse, completeMonitorResponse } from '../monitorOperations.js'
 import type { MonitorProcessPage } from '@shared/performance/processSnapshot.js'
 import type { MonitorSnapshot } from '@shared/performance/monitorSnapshot.js'
 import { parseMonitorRendererBatch } from '@shared/performance/monitorContracts.js'
@@ -20,12 +20,16 @@ let monitorBatchInFlight = false
 let monitorSnapshotRead: Promise<MonitorSnapshot | null> | null = null
 let processReadInFlight = false
 export const performanceApi = {
+  beginMonitorResponse,
+  cancelMonitorResponse,
   completeMonitorResponse,
   getMonitorIncident: (id: number): Promise<MonitorIncident | null> => {
     if (incidentRead) return Promise.resolve(null)
     incidentRead = ipcRenderer.invoke('performance:monitor-incident', id).finally(() => { incidentRead = null })
     return incidentRead!
   },
+  getMonitorHistoryIncident: (at: number, id: number): Promise<MonitorIncident | null> =>
+    ipcRenderer.invoke('performance:monitor-history-incident', at, id),
   getMonitorHistory: (from: number, to: number, cursor?: string, limit = 500): Promise<MonitorHistoryPage | null> =>
     ipcRenderer.invoke('performance:monitor-history', from, to, cursor, limit),
   previewMonitorReport: (from: number, to: number): Promise<MonitorReportPreview | null> =>
@@ -34,6 +38,12 @@ export const performanceApi = {
     ipcRenderer.invoke('performance:monitor-save-report', from, to),
   clearMonitorHistory: (): Promise<MonitorHistoryStatus | null> =>
     ipcRenderer.invoke('performance:monitor-clear-history'),
+  getMonitorTraceStatus: (): Promise<MonitorTraceStatus | null> =>
+    ipcRenderer.invoke('performance:monitor-trace-status'),
+  startMonitorTrace: (mode: 'chromium' | 'main-cpu', durationMs = 30_000): Promise<MonitorTraceStatus | null> =>
+    ipcRenderer.invoke('performance:monitor-start-trace', mode, durationMs),
+  stopMonitorTrace: (cancel = false): Promise<MonitorTraceStatus | null> =>
+    ipcRenderer.invoke('performance:monitor-stop-trace', cancel),
   getMonitorProcesses: async (offset = 0, sort: 'cpu' | 'memory' = 'cpu'): Promise<MonitorProcessPage | null> => {
     if (processReadInFlight) return null
     processReadInFlight = true

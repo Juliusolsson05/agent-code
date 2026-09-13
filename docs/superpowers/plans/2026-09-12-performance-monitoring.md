@@ -2,7 +2,10 @@
 
 Issue: [#944](https://github.com/Juliusolsson05/agent-code/issues/944)
 
-Status: implementation authorized; stage 1 contracts and synthetic producer benchmark implemented (issue #948), awaiting review/CI. Stages 2–6 remain active work.
+Status: implementation active. Contracts/harness (#949), shared collector (#953),
+and product monitor/process attribution (#955) are merged. Per user direction,
+operations/incidents, durable history/local reports, advanced profiles and
+qualification ship together in the final implementation PR for #956.
 Audited base: `115e26fc9c67316a3b0b1b4318f47f7a2bea3606` (2026-09-12).
 Branch: `feat/performance-monitoring`.
 
@@ -18,12 +21,10 @@ agents, including detached agents and sessions in other project tabs. Detailed
 profiling is an explicit, time-limited action. Monitoring never changes agent
 state, kills processes, or submits prompts as a side effect of an incident.
 
-Working assumptions for this plan: local collection, explicit report export,
-and equal priority for live visibility and explanations. Centralized reporting
-remains an open product decision. Automatic uploads and a remote ingestion
-service are not prerequisites for the local implementation.
-The user authorized building the full plan on 2026-09-12. Local collection and
-explicit export remain the implementation defaults.
+The user chose local collection with explicit local-file export, no report
+sharing in the initial product, and equal priority for live responsiveness and
+agent performance. No automatic upload or remote ingestion path is implemented.
+The user authorized building the full plan on 2026-09-12.
 
 ### The experience to build
 
@@ -378,7 +379,7 @@ and records an explicit decision if an architecture change is necessary.
 | Main/renderer recording hook | p99 below 100 µs; no filesystem calls, transcript serialization, or stack capture |
 | Main/renderer collector callback | p99 below 2 ms; no new 50 ms long tasks attributable to monitoring |
 | Added main + renderer retained memory | At most 8 MiB at the reference workload |
-| Utility process total RSS | Target at most 64 MiB including runtime, buffers, aggregation, and recent history |
+| Utility process total RSS | Target at most 80 MiB including Electron/Node runtime, buffers, aggregation, and recent history; revised from the provisional 64 MiB after packaged smoke measured a stable ~68 MiB cold runtime floor |
 | Automatic disk retention | 128 MiB hard cap, including active files and temporary compaction files |
 | Dashboard impact | p95 app interaction latency delta below 5 ms in paired runs; charts at most 1 Hz |
 | Startup | Collector starts asynchronously; target under 25 ms added p95 time-to-interactive |
@@ -400,10 +401,11 @@ not brittle thresholds on arbitrary shared CI hardware.
 
 ## Implementation sequence and review gates
 
-Each row is a complete, independently reviewable PR with its own issue scope,
-tests, and updated implementation record. Do not close #944 after an early phase.
-The plan is the first commit before runtime implementation. No parallel rewrite
-of all diagnostics. Track existing #767 items rather than filing duplicate bugs.
+The table records the original review decomposition. After the first three
+pieces merged, the user explicitly asked to avoid a long chain of small PRs, so
+stages 4–6 are consolidated into one comprehensive PR for #956 with one combined
+verification and two-agent review gate. Do not close #944 before that PR lands.
+Track existing #767 items rather than filing duplicate bugs.
 
 | PR | Deliverable and primary files | Exit evidence |
 | --- | --- | --- |
@@ -447,17 +449,17 @@ an approved plan is not itself proof of a passing implementation or rollout.
   Do not freeze the user's daily app, harvest personal transcripts, enable proxy
   mirroring, or dump a real heap to validate this plan.
 
-## Decisions remaining and implementation readiness
+## Decisions and implementation readiness
 
-The architecture can proceed locally without choosing a cloud vendor. Product
-decisions left open are centralized uploads, whether users can pause baseline
-collection, and preferred initial emphasis if it differs from the assumptions.
-Before PR 2, benchmark the utility-process fixed cost and the batched process
-sampler on a reference Apple Silicon Mac and an Intel Mac. If the worker cost
-misses budget, revise the architecture explicitly; do not conceal its RSS or
-quietly broaden the budgets. Before PR 6, verify available tracing categories,
-artifact caps, main profiling capabilities, and DevTools interaction on the
-packaged Electron version; avoid depending on experimental heap profiling.
+The initial product decisions are settled: collection is always on, there is no
+ordinary pause control, reports are explicit local files with no sharing path,
+and live application responsiveness and agent performance have equal weight.
+A future upload feature would require a separate product/privacy decision.
+Qualification must keep utility-process fixed cost and batched process sampling
+visible on Apple Silicon and Intel Macs. If the worker misses budget, revise the
+architecture explicitly; do not conceal its RSS or quietly broaden the budgets.
+Verify tracing categories, artifact caps, main profiling capabilities and
+DevTools interaction on packaged Electron; avoid experimental heap profiling.
 
 Definition of complete: baseline works for every ordinary installation, the
 Settings/command UI explains both healthy and degraded states, recent incidents
@@ -466,11 +468,9 @@ advanced profiling is bounded, existing crash evidence remains intact, and the
 overhead/soak/review evidence meets the agreed gates. A CPU chart alone does not
 complete #944.
 
-Stage 1 validation: 20 focused tests passed for privacy/schema rejection, byte
-and record queue limits, overload, and weighted histogram rollups; the shared
-production modules pass a strict standalone TypeScript check. A synthetic
-100,000-operation producer benchmark on arm64/Node 25.5.0 measured p99 2.042 µs
-for validation + queue admission + histogram update (61.605 ms process CPU).
-This is a microbenchmark, not a packaged-app overhead measurement. Worker,
-on/off app, UI, and soak qualification remain later-stage checks. The harness is
-`npm run benchmark:monitoring`; no user recordings or credentials are read.
+Current qualification is recorded in
+`2026-09-12-performance-monitoring-qualification.md`. The latest synthetic
+100,000-operation producer benchmark on arm64/Node 25.5.0 measured p99 1.458 µs
+for validation, bounded queue admission and histogram update (62.456 ms process
+CPU). This remains a microbenchmark, not a packaged-app overhead measurement.
+No user recordings or credentials are read.
