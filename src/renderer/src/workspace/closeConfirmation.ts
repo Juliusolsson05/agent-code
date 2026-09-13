@@ -213,33 +213,12 @@ export async function runCloseConfirmationGate(input: {
   // Refusing outright (rather than closing the intersection) is deliberate for
   // single-pane closes: there is one target, so "it changed" means the thing
   // they approved is not the thing that would die. Bulk flows that should
-  // salvage the unchanged majority use `narrowGrantToCurrent` instead.
+  // salvage the unchanged majority go through `closeGrantedSessions`
+  // (bulkClose.ts) instead, which judges each member at its own kill boundary
+  // and drops only the ones that changed.
   const current = input.enumerate()
   if (!grantStillMatches(granted, current)) return { ok: false, reason: 'changed' }
   return { ok: true, targets: current, prompted: true }
-}
-
-/**
- * The subset of a grant that is still present, for a bulk flow that should
- * proceed with what survives rather than abandoning everything.
- *
- * Used by Close Old Agents: if two of twelve agents woke up between preview and
- * commit, killing the other ten is the useful behaviour — but the two that
- * changed must be DROPPED, never killed on the strength of the old preview.
- */
-export function narrowGrantToCurrent(
-  granted: readonly CloseTargetSnapshot[],
-  current: readonly CloseTargetSnapshot[],
-): CloseTargetSnapshot[] {
-  const currentById = new Map(current.map(target => [target.sessionId, target]))
-  return granted.flatMap(target => {
-    const now = currentById.get(target.sessionId)
-    if (!now) return []
-    // A session that STARTED working since the preview is no longer covered by
-    // the grant: the user approved closing an idle agent, not a busy one.
-    if (now.live && !target.live) return []
-    return [now]
-  })
 }
 
 export type PartialCloseOutcome = {
