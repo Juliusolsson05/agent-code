@@ -4,6 +4,7 @@ import process from 'node:process'
 
 const requiredOutputs = [
   'out/main/index.js',
+  'out/main/performanceWorker.js',
   // WHY `.mjs` is the contract here: electron-vite emits the preload as ESM,
   // and `createMainWindow()` loads this exact runtime path. Accepting the old
   // `.js` name would let CI bless a build that Electron cannot actually load;

@@ -223,6 +223,7 @@ export default defineConfig(({ mode }) => ({
           // function buried in the main bundle. The stable input name keeps
           // dev, preview, and packaged paths identical.
           workflowWorker: resolve(__dirname, 'src/main/workflows/workflowWorkerEntry.ts'),
+          performanceWorker: resolve(__dirname, 'src/main/performance/monitorWorkerEntry.ts'),
           // child_process.fork cannot address a function buried in the main
           // bundle. A stable sibling entry gives every Codex attempt its own
           // killable process group in preview and the packaged application;

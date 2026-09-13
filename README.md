@@ -91,7 +91,7 @@ a running session can move mid-task among Claude Code, Codex, and OpenCode.
   </p>
 
 - **TLDR peek** — enable **TLDR MCP** for an agent, then hold **Cmd+L** to
-  see each visible agent’s latest short status centered over its darkened pane.
+  see each visible agent’s latest short status centered over its pane.
   A small footer shows **Last active** and **Note written** independently, using
   relative times and calendar dates for older activity. Release to return. The
   **TLDR** palette command also opens the preview; Escape dismisses it. Reporting
@@ -99,9 +99,17 @@ a running session can move mid-task among Claude Code, Codex, and OpenCode.
   next reload, including the managed reporting skill. Explicit per-agent choices
   take priority; **Use Global MCP Settings** clears those choices and reloads the
   agent. Claude and Codex agents with TLDR are asked to set their goal on the
-  first prompt, and at turn end to update after work that used tools without a
+  first prompt (through Goal instead when Goal MCP is also on), and at turn end to update after work that used tools without a
   report; the footer notes when that check is not running. **View TLDR History**
   shows how an agent's status evolved. The editor keeps Cmd+L Select Line.
+- **Goal peek** — enable **Goal MCP** for an agent, then hold **Cmd+G** to see
+  what each visible agent’s work is for, next to the TLDR’s where-it-is status.
+  Agents set a goal once they understand a task and change it only when the
+  direction changes, so it stays meaningful while the TLDR moves. Goal has its
+  own MCP setting, off by default, and works with or without TLDR; only the agent
+  writes it. Claude and Codex agents with Goal are asked for one at the first
+  prompt and at turn end if it is still missing. **View TLDR History** shows goal
+  changes alongside status updates. The editor keeps Cmd+G Find Next.
 - **Prompt and transcript tools** — search, rewind, duplicate, resume-command
   copy, prompt templates. Reader Mode gives a paginated, distraction-free view
   of long sessions for reviewing what an agent actually did.

@@ -92,6 +92,7 @@ export type SettingDefinition =
   // so it cannot be represented by the static generic select's options.
   | { id: string; category: SettingCategoryId; title: string; description: string; keywords: string[]; metadata?: SettingMetadata; control: { type: 'dictation-audio-input' } }
   | { id: string; category: SettingCategoryId; title: string; description: string; keywords: string[]; metadata?: SettingMetadata; control: { type: 'external-control' } }
+  | { id: string; category: SettingCategoryId; title: string; description: string; keywords: string[]; metadata?: SettingMetadata; control: { type: 'performance-monitor' } }
   | {
       id: string
       category: SettingCategoryId
@@ -353,6 +354,13 @@ function updateDefaultBuiltInMcpDomain(
 
 export function getSettingsRegistry(): SettingDefinition[] {
   return [
+    {
+      id: 'performance-monitor', category: 'performance', title: 'Performance Monitor',
+      description: 'Always-on local CPU, memory, responsiveness and agent process monitoring. No automatic uploads.',
+      keywords: ['performance', 'monitor', 'cpu', 'memory', 'slow', 'freeze', 'diagnostics'],
+      metadata: { scope: 'app', apply: 'immediate', storage: 'external-files' },
+      control: { type: 'performance-monitor' },
+    },
     {
       id: 'theme-mode',
       category: 'appearance',
@@ -632,6 +640,20 @@ export function getSettingsRegistry(): SettingDefinition[] {
         type: 'toggle',
         getValue: settings => settings.defaultBuiltInMcpDomains.includes('tldr'),
         onToggle: (ctx, value) => updateDefaultBuiltInMcpDomain(ctx, 'tldr', value),
+      },
+    },
+    {
+      id: 'default-goal-mcp',
+      category: 'agents',
+      title: 'Goal MCP',
+      description:
+        'Let agents record their goal — what their work is for — with the managed goal skill, and hold Cmd+G to see it. Off by default. Applies to new agents and existing agents on their next reload. Per-agent overrides take precedence; Use Global MCP Settings clears them.',
+      keywords: ['mcp', 'goal', 'purpose', 'objective', 'default', 'reload', 'existing agents', 'claude', 'codex'],
+      metadata: { scope: 'app', apply: 'new-session', storage: 'settings' },
+      control: {
+        type: 'toggle',
+        getValue: settings => settings.defaultBuiltInMcpDomains.includes('goal'),
+        onToggle: (ctx, value) => updateDefaultBuiltInMcpDomain(ctx, 'goal', value),
       },
     },
     {

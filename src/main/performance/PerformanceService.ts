@@ -3,7 +3,8 @@ import type { Attributes } from '@opentelemetry/api'
 import { resourceFromAttributes } from '@opentelemetry/resources'
 import { BatchSpanProcessor } from '@opentelemetry/sdk-trace-base'
 import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node'
-import { monitorEventLoopDelay, performance } from 'perf_hooks'
+import { performance } from 'perf_hooks'
+import { mainProbe } from './MainProbe.js'
 import { arch, platform } from 'os'
 import { pid, versions } from 'process'
 
@@ -85,7 +86,6 @@ export class PerformanceService {
   private tracer = trace.getTracer(`${APP_SLUG}-main`)
   private flushTimer: ReturnType<typeof setInterval> | null = null
   private sampleTimer: ReturnType<typeof setInterval> | null = null
-  private eventLoopDelay: ReturnType<typeof monitorEventLoopDelay> | null = null
   private pending: PerformanceRecord[] = []
   private droppedPendingRecords = 0
 
@@ -152,8 +152,6 @@ export class PerformanceService {
     if (this.sampleTimer) clearInterval(this.sampleTimer)
     this.flushTimer = null
     this.sampleTimer = null
-    this.eventLoopDelay?.disable()
-    this.eventLoopDelay = null
     void this.flush()
     void this.tracerProvider?.shutdown()
   }
@@ -352,31 +350,21 @@ export class PerformanceService {
     this.flushTimer.unref?.()
   }
 
-  // NOTE on the deliberate overlap with AppRunJournal's heartbeat: both this
-  // probe loop and the journal's heartbeat sample the event loop + memory every
-  // 5s. That overlap exists ONLY when AGENT_CODE_PERF is enabled — in normal
-  // always-on runs the perf service never starts, so only the journal samples.
-  // The two feed different sinks (OTel metrics here vs. the always-on
-  // heartbeat.json there), so we keep both rather than coupling the heavy OTel
-  // pipeline to the always-on spine for the sake of one extra timer in dev/perf
-  // sessions. Run identity is already unified (see runId); the sampler dedup is
-  // intentionally NOT done here.
+  // Optional verbose recording consumes the same cached baseline. It does not
+  // acquire a second histogram or change interval ownership when enabled.
   private startProbes(): void {
-    this.eventLoopDelay = monitorEventLoopDelay({ resolution: 20 })
-    this.eventLoopDelay.enable()
     this.sampleTimer = setInterval(() => {
-      const memory = process.memoryUsage()
-      this.metric('main.memory.rss', memory.rss, 'gauge', { heapUsed: memory.heapUsed })
-      if (this.eventLoopDelay) {
-        this.metric('main.eventLoop.delay.mean', this.eventLoopDelay.mean / 1e6, 'sample', {
-          maxMs: this.eventLoopDelay.max / 1e6,
-          p99Ms: this.eventLoopDelay.percentile(99) / 1e6,
+      const sample = mainProbe.read()
+      this.metric('main.memory.rss', sample.rss, 'gauge', { heapUsed: sample.heapUsed })
+      if (sample.eventLoopDelay) {
+        this.metric('main.eventLoop.delay.mean', sample.eventLoopDelay.meanMs, 'sample', {
+          maxMs: sample.eventLoopDelay.maxMs, p99Ms: sample.eventLoopDelay.p99Ms,
         })
-        this.eventLoopDelay.reset()
       }
     }, SAMPLE_INTERVAL_MS)
     this.sampleTimer.unref?.()
   }
+
 }
 
 function toAttributes(data: Record<string, unknown> | undefined): Attributes | undefined {

@@ -1,3 +1,7 @@
+import type { MonitorProcessPage } from '@shared/performance/processSnapshot.js'
+import type { MonitorSnapshot } from '@shared/performance/monitorSnapshot.js'
+import { parseMonitorRendererBatch } from '@shared/performance/monitorContracts.js'
+import type { MonitorRendererRecord } from '@shared/performance/monitorContracts.js'
 import { ipcRenderer } from 'electron'
 
 import type {
@@ -8,7 +12,33 @@ import type {
   SystemPerformanceStats,
 } from '@shared/performance/types.js'
 
+let monitorBatchInFlight = false
+let monitorSnapshotRead: Promise<MonitorSnapshot | null> | null = null
+let processReadInFlight = false
 export const performanceApi = {
+  getMonitorProcesses: async (offset = 0, sort: 'cpu' | 'memory' = 'cpu'): Promise<MonitorProcessPage | null> => {
+    if (processReadInFlight) return null
+    processReadInFlight = true
+    try { return await ipcRenderer.invoke('performance:monitor-processes', offset, sort) }
+    finally { processReadInFlight = false }
+  },
+  getMonitorSnapshot: (): Promise<MonitorSnapshot | null> => {
+    // Closing/reopening a dialog while main is frozen must not bypass the
+    // per-mount request bound. One shared promise also handles StrictMode.
+    if (!monitorSnapshotRead) monitorSnapshotRead = ipcRenderer.invoke('performance:monitor-snapshot')
+      .finally(() => { monitorSnapshotRead = null })
+    return monitorSnapshotRead!
+  },
+  appendMonitorRecords: async (records: MonitorRendererRecord[]): Promise<boolean> => {
+    if (monitorBatchInFlight) return false
+    const parsed = parseMonitorRendererBatch(records)
+    if (!parsed) return false
+    monitorBatchInFlight = true
+    try {
+      await ipcRenderer.invoke('performance:monitor-batch', parsed)
+      return true
+    } finally { monitorBatchInFlight = false }
+  },
   getPerformanceConfig: (): Promise<PerformanceConfig> =>
     ipcRenderer.invoke('performance:get-config'),
 

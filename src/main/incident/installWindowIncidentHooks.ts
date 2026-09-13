@@ -1,7 +1,9 @@
+import { readElectronDiagnostics } from '@main/performance/ElectronProcessSource.js'
 import { app, ipcMain } from 'electron'
 import type { BrowserWindow, WebContents } from 'electron'
 import { execFile } from 'node:child_process'
-import { monitorEventLoopDelay } from 'node:perf_hooks'
+import { mainProbe } from '@main/performance/MainProbe.js'
+import { monitorCoordinator } from '@main/performance/MonitorCoordinator.js'
 
 import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import { getOutboundIpcDiagnostics } from '@main/window/windowRegistry.js'
@@ -58,8 +60,6 @@ type FreezeReason =
 export function installWindowIncidentHooks(journal: AppRunJournal): void {
   const windows = new Map<number, BrowserWindow>()
   const liveness = new Map<number, RendererLiveness>()
-  const mainLoopDelay = monitorEventLoopDelay({ resolution: 20 })
-  mainLoopDelay.enable()
   let lastWatchdogAt = Date.now()
   let lastWatchdogFailureLogAt = 0
 
@@ -67,8 +67,12 @@ export function installWindowIncidentHooks(journal: AppRunJournal): void {
   // when its IPC message was delivered. The payload tells us what the renderer observed on its last
   // successful turn; Date.now() here tells us exactly how long main has gone without hearing from it.
   ipcMain.on('incident:renderer-heartbeat', (event, value: unknown) => {
+    // ACK before validation so a malformed sample cannot wedge the preload credit.
+    try { event.reply('incident:renderer-heartbeat-ack') } catch { return }
+    if (!windows.has(event.sender.id)) return
     const heartbeat = parseHeartbeat(value)
     if (!heartbeat) return
+    monitorCoordinator.heartbeat(event.sender.id, heartbeat)
     const now = Date.now()
     const state = liveness.get(event.sender.id) ?? freshLiveness(now)
     const stalledForMs = state.stallStartedAt === null ? null : now - state.stallStartedAt
@@ -133,13 +137,11 @@ export function installWindowIncidentHooks(journal: AppRunJournal): void {
           ? 'foreground-heartbeat-stalled'
           : 'background-heartbeat-stalled',
         frozenSince: state.stallStartedAt,
-        mainLoopDelay,
         // This boolean expresses diagnostic value, not permission to run native tools. The
         // explicit AGENT_CODE_FREEZE_DIAGNOSTICS gate below is the production-safety boundary.
         includeProcessTree: firstLog && stallClassification === 'foreground',
       })
     }
-    mainLoopDelay.reset()
   }
   const watchdog = setInterval(() => {
     // WHY the watchdog has a top-level failure boundary: this is an always-on
@@ -160,7 +162,6 @@ export function installWindowIncidentHooks(journal: AppRunJournal): void {
   watchdog.unref()
   app.once('will-quit', () => {
     clearInterval(watchdog)
-    mainLoopDelay.disable()
   })
 
   // Renderer/GPU/utility process death. This is THE renderer-crash signal —
@@ -213,6 +214,7 @@ export function installWindowIncidentHooks(journal: AppRunJournal): void {
     window.once('closed', () => {
       windows.delete(webContentsId)
       liveness.delete(webContentsId)
+      monitorCoordinator.closeWindow(webContentsId)
     })
 
     // WHY these breadcrumbs live in main rather than relying on renderer visibilitychange: the
@@ -247,7 +249,6 @@ export function installWindowIncidentHooks(journal: AppRunJournal): void {
         state,
         reason: 'electron-unresponsive',
         frozenSince: unresponsiveSince,
-        mainLoopDelay,
         includeProcessTree: unresponsiveEvents === 1,
       })
       if (admitIncidentRecord(state)) {
@@ -273,7 +274,6 @@ export function installWindowIncidentHooks(journal: AppRunJournal): void {
         state,
         reason: 'responsive-again',
         frozenSince: unresponsiveSince,
-        mainLoopDelay,
         includeProcessTree: false,
       })
       unresponsiveSince = null
@@ -389,6 +389,11 @@ function parseHeartbeat(value: unknown): RendererFreezeHeartbeat | null {
   return {
     sentAt: value.sentAt,
     monotonicMs: value.monotonicMs,
+    longTasksSupported: value.longTasksSupported === true,
+    inputSupported: value.inputSupported === true,
+    ...(finite(value.timeOriginMs) ? { timeOriginMs: value.timeOriginMs } : {}),
+    ...(isObject(value.input) && finite(value.input.count) && finite(value.input.maxMs)
+      ? { input: { count: value.input.count, maxMs: value.input.maxMs } } : {}),
     eventLoopLagMs: value.eventLoopLagMs,
     visibilityState,
     longTasks: {
@@ -406,7 +411,6 @@ function logFreezeSnapshot(input: {
   state: RendererLiveness
   reason: FreezeReason
   frozenSince: number | null
-  mainLoopDelay: ReturnType<typeof monitorEventLoopDelay>
   includeProcessTree: boolean
 }): void {
   const now = Date.now()
@@ -422,7 +426,7 @@ function logFreezeSnapshot(input: {
   input.state.lastSnapshotAt = now
 
   try {
-    const mainMemory = process.memoryUsage()
+    const mainMemory = mainProbe.read()
     terminalFreezeLog('renderer freeze snapshot', {
       at: new Date(now).toISOString(),
       reason: input.reason,
@@ -443,25 +447,12 @@ function logFreezeSnapshot(input: {
         rssBytes: mainMemory.rss,
         heapUsedBytes: mainMemory.heapUsed,
         externalBytes: mainMemory.external,
-        cpu: process.getCPUUsage(),
-        eventLoop: {
-          meanMs: roundNs(input.mainLoopDelay.mean),
-          maxMs: roundNs(input.mainLoopDelay.max),
-          p99Ms: roundNs(input.mainLoopDelay.percentile(99)),
-        },
+        cpuPercent: mainMemory.cpuPercent,
+        eventLoop: mainMemory.eventLoopDelay,
       },
       outboundIpc: getOutboundIpcDiagnostics(),
-      electronProcesses: app.getAppMetrics().map(metric => ({
-        pid: metric.pid,
-        type: metric.type,
-        name: metric.name,
-        serviceName: metric.serviceName,
-        cpuPercent: Math.round(metric.cpu.percentCPUUsage * 100) / 100,
-        idleWakeupsPerSecond: metric.cpu.idleWakeupsPerSecond,
-        workingSetKb: metric.memory.workingSetSize,
-        peakWorkingSetKb: metric.memory.peakWorkingSetSize,
-        privateBytes: metric.memory.privateBytes,
-      })),
+      electronProcesses: readElectronDiagnostics().processes,
+      electronProcessesSampledAt: readElectronDiagnostics().sampledAt,
     })
   } catch (error) {
     terminalFreezeLog('renderer freeze snapshot failed', diagnosticFailureMetadata(error))
@@ -659,9 +650,6 @@ function safeRendererPid(webContents: WebContents): number | null {
   }
 }
 
-function roundNs(value: number): number | null {
-  return Number.isFinite(value) ? Math.round((value / 1e6) * 100) / 100 : null
-}
 
 function finite(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0

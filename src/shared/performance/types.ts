@@ -147,17 +147,9 @@ export type SystemPerformanceStats = {
    *  workers). Growth here means an iframe / webview / hidden window
    *  is being created without being torn down. */
   nativeContexts: number
-  /** Event-loop delay snapshot captured by a dedicated
-   *  perf_hooks.monitorEventLoopDelay() in ipc/performance.ts that
-   *  resets on each poll. Independent from PerformanceService's own
-   *  monitor so the IPC handler's view is not affected by the 5 s
-   *  probe resetting that histogram.
-   *
-   *  All values in milliseconds. mean is the average over the last
-   *  ~1 s; max is the worst single delay; p99 is the 99th-percentile.
-   *  When the main thread stalls (GC pause, sync IO), p99 spikes
-   *  well before mean does — so it's the headline number the
-   *  popover surfaces. */
+  /** Shared main probe's last completed one-second window, in milliseconds.
+   * Reads never reset the histogram; all windows and the incident journal see
+   * the same sample. Null means warming up or a sleep gap, not zero latency. */
   eventLoopDelay: {
     meanMs: number
     maxMs: number

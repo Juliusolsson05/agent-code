@@ -11,9 +11,9 @@
 // filesystem errors retry-safe without letting the renderer own any PTY timer.
 
 import type { ComposerSubmitIo } from '@providers/registry.renderer.capabilities'
-import type { PromptDeliveryResult } from '@shared/types/providerConfig'
+import type { PromptAcceptance, PromptDeliveryResult } from '@shared/types/providerConfig'
 
-export async function claudeComposerSubmit(io: ComposerSubmitIo): Promise<void> {
+export async function claudeComposerSubmit(io: ComposerSubmitIo): Promise<PromptAcceptance> {
   const { input, draftImages, pasteId } = io
 
   if (draftImages.length > 0) {
@@ -34,7 +34,7 @@ export async function claudeComposerSubmit(io: ComposerSubmitIo): Promise<void> 
     })
     const result = await io.deliverPrompt(input, imagePaths)
     if (!result.ok) throwDeliveryError(result)
-    return
+    return result.acceptance
   }
 
   window.api.recordPasteDebugEvent(pasteId, {
@@ -49,6 +49,10 @@ export async function claudeComposerSubmit(io: ComposerSubmitIo): Promise<void> 
   // acceptance, so it is the only process able to enforce the protocol.
   const result = await io.deliverPrompt(input)
   if (!result.ok) throwDeliveryError(result)
+  // The acceptance kind travels back to the composer: `queue` is the one
+  // outcome where the optimistic `submitting` phase must be settled by the
+  // caller because no turn will ever start for the prompt (#889).
+  return result.acceptance
 }
 
 function throwDeliveryError(result: Extract<PromptDeliveryResult, { ok: false }>): never {

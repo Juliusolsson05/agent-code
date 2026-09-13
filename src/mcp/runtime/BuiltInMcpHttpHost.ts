@@ -1,4 +1,5 @@
 import type { TldrStore } from '@main/tldr/TldrStore.js'
+import { hasReportingDomain } from '@shared/types/tldr.js'
 import { TLDR_HOOK_EVENTS } from '@main/tldr/enforcement.js'
 import type { TldrEnforcement, TldrHookEvent } from '@main/tldr/enforcement.js'
 import { randomBytes } from 'node:crypto'
@@ -63,6 +64,7 @@ type BuiltInMcpServerFactory = (
 
 export type BuiltInMcpDependencies = {
   tldrStore?: Pick<TldrStore, 'update'>
+  goalStore?: Pick<TldrStore, 'update'>
   tldrEnforcement?: Pick<TldrEnforcement, 'handle' | 'forget'>
   isTldrWriteAuthorized?: () => boolean
   orchestrationBridge?: OrchestrationBridge
@@ -243,7 +245,7 @@ export class BuiltInMcpHttpHost {
     this.revokeSession(scope.sessionId)
     const token = randomBytes(32).toString('base64url')
     const mcpScope = {
-      tldrIdentity: scope.tldrIdentity ?? (domains.includes('tldr') ? scope.sessionId : undefined),
+      tldrIdentity: scope.tldrIdentity ?? (hasReportingDomain(domains) ? scope.sessionId : undefined),
       sessionId: scope.sessionId,
       cwd: scope.cwd,
       domains,
@@ -259,7 +261,7 @@ export class BuiltInMcpHttpHost {
     this.tokensBySession.set(scope.sessionId, token)
 
     const config = this.serverConfig(token)
-    return [domains.includes('tldr')
+    return [hasReportingDomain(domains)
       ? { ...config, tldrHooks: { baseUrl: `http://127.0.0.1:${this.port}${TLDR_HOOK_PATH_PREFIX.slice(0, -1)}` } }
       : config]
   }
@@ -529,7 +531,7 @@ export class BuiltInMcpHttpHost {
     }
     const enforcement = this.dependencies.tldrEnforcement
     const identity = registration.scope.tldrIdentity
-    if (!enforcement || !identity || !registration.scope.domains.includes('tldr')) {
+    if (!enforcement || !identity || !hasReportingDomain(registration.scope.domains)) {
       this.writeJson(res, 200, {})
       return
     }
@@ -541,7 +543,10 @@ export class BuiltInMcpHttpHost {
       // recording; the rules only ever read `stop_hook_active` from it.
     }
     try {
-      const output = await enforcement.handle(registration.token, identity, event, input)
+      const domains = registration.scope.domains
+      const output = await enforcement.handle(registration.token, identity, event, input, {
+        tldr: domains.includes('tldr'), goal: domains.includes('goal'),
+      })
       // Re-check revocation after the async store read: an old process's Stop
       // must not block a turn in the process that just replaced it.
       this.writeJson(res, 200, registration.revoked ? {} : output)

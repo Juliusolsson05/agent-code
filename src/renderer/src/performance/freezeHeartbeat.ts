@@ -1,96 +1,85 @@
 import type { RendererFreezeHeartbeat } from '@shared/incident/rendererFreeze.js'
 
-const HEARTBEAT_INTERVAL_MS = 1_000
-// WHY DOM cardinality is sampled far less often than liveness: four whole-document collections are
-// useful context after a freeze, but they are not the heartbeat. A thirty-second cadence keeps the
-// always-on one-second path limited to clocks and numeric browser metrics.
-const DOM_SAMPLE_EVERY_TICKS = 30
+const HEARTBEAT_INTERVAL_MS = 1000
+let disposeCurrent: (() => void) | null = null
+const listeners = new Set<(sample: RendererFreezeHeartbeat) => void>()
 
-type PerformanceWithMemory = Performance & {
-  memory?: {
-    usedJSHeapSize: number
-    totalJSHeapSize: number
-    jsHeapSizeLimit: number
-  }
+export function subscribeRendererProbe(listener: (sample: RendererFreezeHeartbeat) => void): () => void {
+  listeners.add(listener)
+  return () => { listeners.delete(listener) }
 }
 
 /**
- * Start the always-on, deliberately tiny renderer liveness signal consumed by main's freeze
- * watchdog. This does not rely on the optional AGENT_CODE_PERF pipeline: when the renderer is
- * completely starved, main needs to know the age and content of the LAST successful tick even in a
- * normal user run. A recursive timeout measures scheduler delay directly and cannot accumulate a
- * backlog of interval callbacks after one long task.
+ * One renderer probe owns liveness, long tasks and Event Timing. The payload
+ * contains only numbers; Event Timing targets/names and Long Task attribution
+ * never leave this callback. Whole-document scans were removed because their
+ * cost grows with the exact large-render-tree failure we want to diagnose.
+ * Event Timing is thresholded (16ms minimum), not a full input distribution.
  */
-export function startRendererFreezeHeartbeat(): void {
+export function startRendererFreezeHeartbeat(): () => void {
+  if (disposeCurrent) return disposeCurrent
+  let stopped = false
   let expectedAt = performance.now() + HEARTBEAT_INTERVAL_MS
-  let tick = 0
   let longTaskCount = 0
   let longTaskTotalMs = 0
   let longestTaskMs = 0
-
-  try {
-    const observer = new PerformanceObserver((list) => {
-      for (const entry of list.getEntries()) {
-        longTaskCount += 1
-        longTaskTotalMs += entry.duration
-        longestTaskMs = Math.max(longestTaskMs, entry.duration)
-      }
-    })
-    observer.observe({ entryTypes: ['longtask'] })
-  } catch {
-    // Chromium normally exposes Long Task entries, but the heartbeat remains useful on builds or
-    // test environments that do not. Event-loop lag is measured without this observer.
+  let inputCount = 0
+  let inputMaxMs = 0
+  const observers: PerformanceObserver[] = []
+  const observe = (type: string, consume: (entry: PerformanceEntry) => void): boolean => {
+    try {
+      if (!PerformanceObserver.supportedEntryTypes.includes(type)) return false
+      const observer = new PerformanceObserver(list => { for (const entry of list.getEntries()) consume(entry) })
+      observer.observe({ type, buffered: false, ...(type === 'event' ? { durationThreshold: 16 } : {}) })
+      observers.push(observer)
+      return true
+    } catch { return false /* Unsupported APIs leave the independent lag probe available. */ }
   }
+  const longTasksSupported = observe('longtask', entry => {
+    longTaskCount++
+    longTaskTotalMs += entry.duration
+    longestTaskMs = Math.max(longestTaskMs, entry.duration)
+  })
+  const inputSupported = observe('event', entry => { inputCount++; inputMaxMs = Math.max(inputMaxMs, entry.duration) })
 
   const send = (): void => {
+    if (stopped) return
     try {
       const monotonicMs = performance.now()
-      tick += 1
-      const memory = (performance as PerformanceWithMemory).memory
+      const memory = (performance as Performance & { memory?: {
+        usedJSHeapSize: number; totalJSHeapSize: number; jsHeapSizeLimit: number
+      } }).memory
       const heartbeat: RendererFreezeHeartbeat = {
-        sentAt: Date.now(),
-        monotonicMs,
+        sentAt: Date.now(), monotonicMs, timeOriginMs: performance.timeOrigin,
+        longTasksSupported, inputSupported,
         eventLoopLagMs: Math.max(0, monotonicMs - expectedAt),
         visibilityState: document.visibilityState,
-        longTasks: {
-          count: longTaskCount,
-          totalMs: Math.round(longTaskTotalMs * 100) / 100,
-          maxMs: Math.round(longestTaskMs * 100) / 100,
-        },
-        ...(memory === undefined
-          ? {}
-          : {
-              heap: {
-                usedBytes: memory.usedJSHeapSize,
-                totalBytes: memory.totalJSHeapSize,
-                limitBytes: memory.jsHeapSizeLimit,
-              },
-            }),
-        ...(tick % DOM_SAMPLE_EVERY_TICKS !== 0
-          ? {}
-          : {
-              dom: {
-                nodes: document.getElementsByTagName('*').length,
-                preElements: document.getElementsByTagName('pre').length,
-                codeElements: document.getElementsByTagName('code').length,
-                workflowActivities: document.querySelectorAll('[data-workflow-activity-id]').length,
-              },
-            }),
+        longTasks: { count: longTaskCount, totalMs: longTaskTotalMs, maxMs: longestTaskMs },
+        input: { count: inputCount, maxMs: inputMaxMs },
+        ...(memory ? { heap: {
+          usedBytes: memory.usedJSHeapSize, totalBytes: memory.totalJSHeapSize, limitBytes: memory.jsHeapSizeLimit,
+        } } : {}),
       }
-      longTaskCount = 0
-      longTaskTotalMs = 0
-      longestTaskMs = 0
+      longTaskCount = longTaskTotalMs = longestTaskMs = inputCount = inputMaxMs = 0
       window.api.reportRendererHeartbeat(heartbeat)
-    } catch {
-      // WHY heartbeat failures are swallowed: preload teardown during reload,
-      // an unavailable Performance API in a test shell, or a transient DOM
-      // query failure must not break application rendering. The next timeout
-      // is scheduled in finally so diagnostics can recover independently.
-    } finally {
+      for (const listener of listeners) {
+        try { listener(heartbeat) } catch { /* Optional verbose sinks cannot break liveness. */ }
+      }
+    } catch { /* Preload teardown cannot break application rendering. */ }
+    finally {
       expectedAt = performance.now() + HEARTBEAT_INTERVAL_MS
-      window.setTimeout(send, HEARTBEAT_INTERVAL_MS)
+      if (!stopped) timer = window.setTimeout(send, HEARTBEAT_INTERVAL_MS)
     }
   }
-
-  window.setTimeout(send, HEARTBEAT_INTERVAL_MS)
+  let timer = window.setTimeout(send, HEARTBEAT_INTERVAL_MS)
+  const dispose = (): void => {
+    stopped = true
+    window.clearTimeout(timer)
+    for (const observer of observers) observer.disconnect()
+    window.removeEventListener('pagehide', dispose)
+    if (disposeCurrent === dispose) disposeCurrent = null
+  }
+  disposeCurrent = dispose
+  window.addEventListener('pagehide', dispose, { once: true })
+  return dispose
 }
