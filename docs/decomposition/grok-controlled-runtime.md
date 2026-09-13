@@ -134,6 +134,20 @@ Record counts by scenario, native version and observed variant. Report those as
 frequencies in the captured sample, never as production usage statistics. A
 scenario not safely exercisable is a coverage gap with a reason, not a fixture.
 
+**Stage 1 status (2026-09-13): exit gate met** in grok-code-headless PR #1.
+The recorder, strict verifier (evidence rules r3) and sealed verdicts are in
+`src/testing/controlled-runtime/`; every one of the 49 registered scenarios has a
+strictly verified private capture on installed Grok **1.0.30** (the A table's
+probes were 1.0.25). The shareable fixture set is
+`testing/fixtures/controlled-runtime/corpus/` with `manifest.json` (per-version
+verified/refused/failed counts, coverage gaps, every lossy transformation),
+guarded by an independent publication gate and passed by an independent
+privacy/fidelity review. `claude-shape-verdicts.json` gives a cited verdict for
+each of the 61 Claude render shapes plus recorded Grok behaviour with no Claude
+shape. Recorded coverage gap: no scenario cancels before native accepts the
+prompt. Stage 2 consumes the corpus and verdicts, and needs the user's
+ownership decisions wherever recordings conflict.
+
 ## Stage 2 — Catalog observations and settle the contract
 
 **Produces:** headless `testing/fixtures/controlled-runtime/catalog.json` and
