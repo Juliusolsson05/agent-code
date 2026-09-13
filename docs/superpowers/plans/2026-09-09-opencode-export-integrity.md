@@ -118,6 +118,15 @@ with comments). Every round-1 disposition held. Changes:
   deadline is a timer in Agent Code's main process and ends with it, so a
   dev-terminal Ctrl+C that kills Electron leaves a wedged CLI unbounded.
 
+- Inherited readiness race in main's hung-import stop/timeout tests
+  (e9ac8bdf). The tests waited up to 2 s for the fake CLI's status while the
+  timeout case's 1 s deadline was already running. During round-2
+  verification, at load average ~42 with most of swap in use, the stop case
+  failed before stop() was ever called. Those tests now use the same readiness
+  gate as the tree tests (testing/spawnReadiness.ts), own the child from spawn,
+  check its exit on the ChildProcess handle (SIGKILL within 2 s of the
+  trigger), and abort in cleanup. No budget was simply widened.
+
 Round-2 regression evidence, each with its fix reverted:
 - Signalling after the reap: the reaped-leader case fails with a recorded
   negative-pid SIGKILL.
