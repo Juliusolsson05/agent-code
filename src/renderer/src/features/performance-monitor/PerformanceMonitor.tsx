@@ -95,7 +95,8 @@ function Recordings({ snapshot, request, onRequestHandled }: { snapshot: Monitor
         : result.outcome === 'cancelled' ? null
           : result.outcome === 'busy' ? 'A report is being saved. Nothing was deleted; try again when it finishes.'
             : result.outcome === 'unavailable' ? 'History is temporarily unavailable. Nothing was deleted.'
-              : 'History could not be fully deleted. Some local files may remain.')
+              : result.outcome === 'unknown' ? 'The monitor did not confirm the clear. Some history may already be deleted; check again shortly.'
+                : 'History could not be fully deleted. Some local files may remain.')
     } catch { setMessage('History could not be cleared.') }
     finally { setBusy(false) }
   }

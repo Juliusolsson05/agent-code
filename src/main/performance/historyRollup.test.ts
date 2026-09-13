@@ -21,4 +21,12 @@ describe('tier rollups', () => {
     expect(emitted.map(row => row.at)).toEqual([10_000, 25_000])
     expect(emitted[1]!.main!.loopMaxMs).toBe(700)
   })
+
+  it('starts a new bucket after a large backward clock step instead of hiding new samples', () => {
+    const rollup = new TierRollup('10s')
+    expect(rollup.add(point(3_600_000))).toBeNull()
+    // An hour back: the open bucket is emitted and the new sample stays visible.
+    expect(rollup.add(point(10_000))!.at).toBe(3_600_000)
+    expect(rollup.peek()!.at).toBe(10_000)
+  })
 })

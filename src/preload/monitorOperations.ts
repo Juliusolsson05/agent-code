@@ -19,6 +19,11 @@ const timers = new OperationTimers(record => {
 })
 type PendingResponse = { end: OperationEnd; at: number; operationId?: string; armed: boolean; outputAt: number | null }
 const responses = new Map<string, PendingResponse>()
+// The submit main is timing, per session. Kept apart from the local render
+// timer because a hidden tile cancels that timer on every output commit; the
+// settle message must still reach main, or main's unarmed provider clock ends
+// ten minutes later as a `timeout` sample.
+const submits = new Map<string, string | undefined>()
 type Invoke = typeof ipcRenderer.invoke
 let invoke: Invoke | undefined
 let installed = false
@@ -77,10 +82,11 @@ function finishResponse(sessionId: string, outcome: MonitorOutcome, endedAt?: nu
  * acceptance is known instead of timing the second one. */
 export function beginMonitorResponse(sessionId: string, operationId?: string): void {
   if (!isMonitorId(sessionId)) return
-  finishResponse(sessionId, 'cancelled')
-  if (responses.size >= 2048) return
   const id = isMonitorId(operationId) ? operationId : undefined
-  responses.set(sessionId, {
+  finishResponse(sessionId, 'cancelled')
+  submits.delete(sessionId)
+  if (submits.size < 2048) submits.set(sessionId, id)
+  if (responses.size < 2048) responses.set(sessionId, {
     end: timers.begin('renderer.first-output', sessionId, id), at: performance.now(),
     ...(id ? { operationId: id } : {}), armed: false, outputAt: null,
   })
@@ -96,11 +102,13 @@ export function beginMonitorResponse(sessionId: string, operationId?: string): v
  * and a failed submit never produces output at all. Main is settled with the
  * same decision so its provider clock is armed or cancelled exactly once. */
 export function settleMonitorResponse(sessionId: string, outcome: 'started' | 'queued' | 'failed'): void {
-  if (!isMonitorId(sessionId)) return
-  const current = responses.get(sessionId)
-  if (!current) return
-  try { ipcRenderer.send('performance:monitor-response-settle', sessionId, current.operationId, outcome === 'started') }
+  if (!isMonitorId(sessionId) || !submits.has(sessionId)) return
+  const operationId = submits.get(sessionId)
+  submits.delete(sessionId)
+  try { ipcRenderer.send('performance:monitor-response-settle', sessionId, operationId, outcome === 'started') }
   catch { /* Main's unarmed timer still expires through its bounded sweep. */ }
+  const current = responses.get(sessionId)
+  if (!current || current.operationId !== operationId) return
   if (outcome !== 'started') { finishResponse(sessionId, 'cancelled'); return }
   current.armed = true
   // Output may already have committed while acceptance was pending; credit it.

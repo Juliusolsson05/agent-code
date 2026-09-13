@@ -21,6 +21,10 @@ import { mainProbe } from './MainProbe.js'
 import { getAppRunId } from '@main/incident/appRunIds.js'
 import { MONITOR_HISTORY_DIR } from '@main/storage/paths.js'
 
+// Queries whose late completion changes nothing the user was already told.
+// Only these may be abandoned at their deadline (see pump()).
+const READ_ONLY_QUERIES = new Set<MonitorWorkerQuery['kind']>(['incident', 'history-incident', 'history', 'history-status', 'report-preview'])
+
 export class MonitorCoordinator {
   private child: UtilityProcess | null = null
   private timer: ReturnType<typeof setInterval> | null = null
@@ -36,8 +40,14 @@ export class MonitorCoordinator {
   private priorityQueue = new BoundedQueue<MonitorEnvelope>(256, 256 * MONITOR_RECORD_BYTES)
   private processQueue = new BoundedQueue<MonitorEnvelope>(2306, 2306 * MONITOR_RECORD_BYTES)
   private sequence = 0
-  private pending: { sequence: number; at: number; count: number; timeoutMs: number; query?: QueryWaiter } | null = null
+  private pending: { sequence: number; at: number; count: number; priority: number; timeoutMs: number; query?: QueryWaiter } | null = null
   private lost = 0
+  // Lost records that could have carried liveness evidence: priority-lane
+  // evictions plus the main samples and heartbeats inside a batch lost with a
+  // failed helper. Reported separately because only these can explain a
+  // missing heartbeat; operation-queue drops cannot, now that heartbeats never
+  // share that queue.
+  private livenessLost = 0
   private launches = 0
   private retryAt = 0
   private stopped = false
@@ -103,8 +113,11 @@ export class MonitorCoordinator {
     if (!validRange(from, to) || !destination || destination.length > 4096) return Promise.resolve({ ok: false, code: 'invalid-range' })
     return this.request({ kind: 'report-export', from, to, destination, build }).then(result => result?.kind === 'report-export' ? result.value : { ok: false, code: 'unavailable' })
   }
-  clearHistory(): Promise<MonitorHistoryStatus | null> {
-    return this.request({ kind: 'history-clear' }).then(result => result?.kind === 'history-clear' ? result.value : null)
+  /** `sent` distinguishes "never reached the helper, nothing was deleted" from
+   * "sent but unconfirmed", where a clear may already be partly done. */
+  clearHistory(): Promise<{ sent: boolean; status: MonitorHistoryStatus | null }> {
+    const sent = this.canRequest('history-clear')
+    return this.request({ kind: 'history-clear' }).then(result => ({ sent, status: result?.kind === 'history-clear' ? result.value : null }))
   }
   private liveWindows = new Set<number>()
   private cache: MonitorSnapshot = {
@@ -360,6 +373,7 @@ export class MonitorCoordinator {
     try { child?.kill() } catch { /* Exiting helpers can reject native handle access. */ }
     this.abandoned = null
     this.lost += this.pending?.count ?? 0
+    this.livenessLost += this.pending?.priority ?? 0
     this.pending?.query?.resolve(null)
     // Waiters cannot carry over: the replacement helper may be seconds away
     // and each renderer caller already keeps its previous page on null.
@@ -371,8 +385,12 @@ export class MonitorCoordinator {
     this.cache = { ...this.cache, collector: 'degraded' }
   }
 
+  private canRequest(kind: MonitorWorkerQuery['kind']): boolean {
+    return !this.stopped && this.child !== null && (!this.closing || kind === 'history-flush') && this.queries.length < 8
+  }
+
   private request(request: MonitorWorkerQuery): Promise<MonitorWorkerQueryResult | null> {
-    if (this.stopped || !this.child || (this.closing && request.kind !== 'history-flush') || this.queries.length >= 8) return Promise.resolve(null)
+    if (!this.canRequest(request.kind)) return Promise.resolve(null)
     return new Promise(resolve => { this.queries.push({ request, resolve }) })
   }
 
@@ -381,9 +399,9 @@ export class MonitorCoordinator {
     try {
       if (this.pending && this.monotonicNow() - this.pending.at > this.pending.timeoutMs) {
         const query = this.pending.query
-        if (query && query.request.kind !== 'history-flush') {
-          // WHY a slow query no longer kills the helper: its deadline proves
-          // only that one disk scan is slow. Killing discarded open rollup
+        if (query && READ_ONLY_QUERIES.has(query.request.kind)) {
+          // WHY a slow read-only query no longer kills the helper: its deadline
+          // proves only that one disk scan is slow. Killing discarded open rollup
           // buckets and captures, and the replacement re-indexed history before
           // answering, so a Timeline polling a slow disk looped timeout, kill,
           // re-index until the launch budget ran out and monitoring stayed off
@@ -394,11 +412,21 @@ export class MonitorCoordinator {
           query.resolve(null)
           this.abandoned = { sequence: this.pending.sequence, at: this.monotonicNow() }
           this.pending = null
-        } else this.fail(this.child)
+        } else {
+          // Mutating work (report export, history clear, the quit flush) is
+          // never abandoned. The helper would keep going after its waiter was
+          // told "unavailable": an export could later replace the user's chosen
+          // file with no path or Reveal shown, and a clear could finish deleting
+          // after the UI said nothing was deleted. Killing the helper at the
+          // deadline is what makes the reported outcome true.
+          this.fail(this.child)
+        }
       }
-      // Record replies already prove liveness; if the abandoned scan never
-      // answers, reopen the query lane after two minutes rather than forever.
-      if (this.abandoned && this.monotonicNow() - this.abandoned.at > 120_000) this.abandoned = null
+      // An abandoned scan that never answers is a wedged read, not a slow one.
+      // Reopening the query lane would add another stuck scan to the helper's
+      // small I/O thread pool every two minutes and starve history writes, so
+      // restart the helper instead (this counts against the launch budget).
+      if (this.abandoned && this.monotonicNow() - this.abandoned.at > 120_000) this.fail(this.child)
       if (!this.child && this.monotonicNow() >= this.retryAt) this.launch()
       if (!this.child || this.pending) return
       // Reserve 100 of 120 slots for a complete process generation. At the
@@ -416,15 +444,22 @@ export class MonitorCoordinator {
       if (!records.length && !this.moreProcesses && !queryReady) return
       const sequence = ++this.sequence
       // One credit means a suspended worker cannot accumulate an invisible
-      // Electron message-port queue. Timeout discards the in-flight evidence,
-      // counts the loss, and caps process restarts for the entire app run.
+      // Electron message-port queue. A record batch or mutating query that
+      // misses its deadline kills the helper, counts its in-flight records as
+      // lost and consumes the app-run restart budget; a read-only query is
+      // abandoned instead (see above).
       const query = queryReady ? this.queries.shift() : undefined
-      const timeoutMs = query?.request.kind === 'report-export' ? 60_000
-        : query?.request.kind === 'history-flush' ? 2500 : query ? 10_000 : 5000
-      this.pending = { sequence, at: this.monotonicNow(), count: records.length, timeoutMs, ...(query ? { query } : {}) }
+      // A clear gets the export's longer deadline: removing a large history
+      // folder on a slow disk legitimately takes more than ten seconds, and it
+      // is no longer abandoned, so a short deadline would kill a working clear.
+      const kind = query?.request.kind
+      const timeoutMs = kind === 'report-export' || kind === 'history-clear' ? 60_000
+        : kind === 'history-flush' ? 2500 : query ? 10_000 : 5000
+      this.pending = { sequence, at: this.monotonicNow(), count: records.length, priority: priority.length, timeoutMs, ...(query ? { query } : {}) }
       this.child.postMessage({ sequence, runId: this.cache.runId, historyRoot: MONITOR_HISTORY_DIR, restarts: Math.max(0, this.launches - 1), records,
         liveWindowIds: [...this.liveWindows], visibleWindowIds: [...this.visibleWindows],
         droppedRecords: this.droppedRecords(),
+        livenessDroppedRecords: Math.min(Number.MAX_SAFE_INTEGER, this.priorityQueue.stats.dropped + this.livenessLost),
         ...(query ? { query: query.request } : {}) })
     } catch { this.fail(this.child) }
   }

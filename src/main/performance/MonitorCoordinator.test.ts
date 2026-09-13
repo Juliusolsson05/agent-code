@@ -296,6 +296,23 @@ describe('monitor worker isolation', () => {
     expect(child.kill).toHaveBeenCalledOnce()
   })
 
+  it('never abandons a mutating query at its deadline', async () => {
+    vi.useFakeTimers()
+    const child = new FakeChild()
+    harness.launch.mockReturnValue(child)
+    const coordinator = new MonitorCoordinator(() => Date.now())
+    coordinator.start()
+    const clearing = coordinator.clearHistory()
+    vi.advanceTimersByTime(200)
+    expect(child.postMessage.mock.calls[0]![0].query).toEqual({ kind: 'history-clear' })
+    // A clear that outlives its deadline is killed, so "unconfirmed" is honest:
+    // the helper cannot keep deleting after the UI has reported an outcome.
+    vi.advanceTimersByTime(60_400)
+    expect(await clearing).toEqual({ sent: true, status: null })
+    expect(child.kill).toHaveBeenCalledOnce()
+    coordinator.stop()
+  })
+
   it('abandons a slow query without killing the helper or piling up scans', async () => {
     vi.useFakeTimers()
     const child = new FakeChild()

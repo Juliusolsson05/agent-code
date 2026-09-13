@@ -91,15 +91,17 @@ export class TierRollup {
     const bucket = Math.floor(point.at / HISTORY_INTERVAL[this.resolution])
     const tagged: MonitorHistoryPoint = { ...point, resolution: this.resolution }
     // A sample for an EARLIER bucket means the wall clock stepped backwards.
-    // Reopening that bucket wrote a second point for a time already on disk
-    // and broke the per-file time order paged queries rely on. Merge it into
-    // the open bucket instead: after a large step, samples collapse into that
-    // bucket until wall time passes it, which is bounded and never duplicates.
-    if (this.current && bucket <= this.bucket) {
+    // A small step (NTP slew, at most two buckets) merges into the open bucket:
+    // reopening a closed one wrote a second point for a time already on disk.
+    // A LARGER step instead closes the open bucket and starts over. Merging
+    // every earlier sample collapsed a one-hour step into a single point stamped
+    // with the pre-step time, hiding all new samples from queries until wall
+    // time caught up. Paged queries tolerate the rare backwards file order.
+    if (this.current && bucket <= this.bucket && this.bucket - bucket <= 2) {
       this.current = mergePoints(this.current, tagged)
       return null
     }
-    // Only a later bucket closes the open one.
+    // A later bucket, or a large backward step, closes the open one.
     const done = this.current
     this.current = tagged
     this.bucket = bucket

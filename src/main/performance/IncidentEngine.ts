@@ -51,7 +51,8 @@ export class IncidentEngine {
   private windowState = new Map<number, WindowState>()
   private visibleWindows: Set<number> | null = null
   private drops: number | null = null
-  private lossAt = -Infinity
+  private livenessDrops: number | null = null
+  private livenessLossAt = -Infinity
 
   accept(records: MonitorEnvelope[], wall: number, mono: number): void {
     this.complete(mono)
@@ -143,16 +144,17 @@ export class IncidentEngine {
    * capture slot and one of the fifty retained incidents for every overload,
    * evicting the real stalls that overload usually accompanies. Drops now mark
    * any open capture as incomplete; totals stay visible in history coverage. */
-  loss(count: number, mono: number): void {
-    // The coordinator's counter is cumulative for the whole app run, but a
-    // restarted helper builds a fresh engine. Its first report is a baseline:
-    // counting it as new loss marked captures from the restarted helper's
-    // first batch truncated for drops that happened before they existed.
-    if (this.drops !== null && count > this.drops) {
-      this.lossAt = mono
+  loss(total: number, liveness: number, mono: number): void {
+    // Both counters are cumulative for the whole app run, but a restarted
+    // helper builds a fresh engine. Its first report is a baseline: counting
+    // it as new loss marked captures from the restarted helper's first batch
+    // truncated for drops that happened before they existed.
+    if (this.drops !== null && total > this.drops) {
       for (const capture of this.captures.values()) capture.incident.truncated = true
     }
-    this.drops = Math.max(this.drops ?? 0, count)
+    if (this.livenessDrops !== null && liveness > this.livenessDrops) this.livenessLossAt = mono
+    this.drops = Math.max(this.drops ?? 0, total)
+    this.livenessDrops = Math.max(this.livenessDrops ?? 0, liveness)
   }
   tick(wall: number, mono: number): void {
     this.complete(mono)
@@ -165,11 +167,14 @@ export class IncidentEngine {
       // source age alone can be fooled by a wall-clock step between samples.
       const receiveAge = mono - state.at
       const sourceAge = Number.isFinite(state.sourceAt) ? this.lastMainSourceAt - state.sourceAt : receiveAge
-      // Records were dropped after this window's last delivered heartbeat, so
-      // its silence may be lost evidence rather than a stalled renderer. Loss
-      // is reported as coverage; it must never manufacture a stall.
-      if (this.lossAt > state.at) continue
       const limit = state.heartbeated ? HEARTBEAT_STALE_MS : BOOT_GRACE_MS
+      // Liveness evidence was dropped after this window's last delivered
+      // heartbeat, so its silence may be a lost heartbeat rather than a stalled
+      // renderer. The excuse is deliberately narrow: only drops that can hold a
+      // heartbeat count (operation-queue loss cannot remove one), and only for
+      // one staleness interval. An unbounded excuse let a single unrelated drop
+      // hide a frozen renderer for as long as it stayed frozen.
+      if (this.livenessLossAt > state.at && mono - this.livenessLossAt <= limit) continue
       if (receiveAge > limit && sourceAge > limit) {
         this.trigger('renderer-stall', id, Math.min(receiveAge, sourceAge), limit, wall, mono)
       }

@@ -35,5 +35,5 @@ export type MonitorSnapshot = MonitorWorkerSnapshot & {
   processes?: MonitorProcessSummary
 }
 
-export type MonitorWorkerRequest = { sequence: number; runId: string; historyRoot: string; restarts: number; records: MonitorEnvelope[]; liveWindowIds?: number[]; visibleWindowIds?: number[]; droppedRecords?: number; query?: MonitorWorkerQuery }
+export type MonitorWorkerRequest = { sequence: number; runId: string; historyRoot: string; restarts: number; records: MonitorEnvelope[]; liveWindowIds?: number[]; visibleWindowIds?: number[]; droppedRecords?: number; livenessDroppedRecords?: number; query?: MonitorWorkerQuery }
 export type MonitorWorkerResponse = { sequence: number; snapshot?: MonitorWorkerSnapshot; processChunk?: MonitorProcessChunk; queryResult?: MonitorWorkerQueryResult }

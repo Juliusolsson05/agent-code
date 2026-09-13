@@ -95,14 +95,18 @@ export function registerPerformanceIpc(manager: SessionManager): void {
       buttons: ['Cancel', 'Clear History'], defaultId: 0, cancelId: 0, noLink: true,
     })
     if (answer.response !== 1) return { outcome: 'cancelled', status: null }
-    const status = await monitorCoordinator.clearHistory()
+    const { sent, status } = await monitorCoordinator.clearHistory()
     // WHY an explicit outcome: this is a destructive privacy action, and the
     // old UI printed "now uses X MiB" for a cancel, a busy export, a helper
-    // that was restarting, and a deletion that failed. The store's returned
-    // status distinguishes them: success leaves an empty healthy store, an
-    // export in progress refuses to clear, and a failed rm marks it degraded.
-    const outcome: MonitorClearHistoryResult['outcome'] = !status ? 'unavailable'
-      : status.exporting ? 'busy' : status.state === 'healthy' && status.bytes === 0 ? 'cleared' : 'failed'
+    // that was restarting, and a deletion that failed. `unavailable` is only
+    // claimed when the request never reached the helper (or the helper has no
+    // store), because only then is "nothing was deleted" known to be true. A
+    // sent request without a reply is `unknown`: the clear may be partly done.
+    // Otherwise the store's status tells: success leaves an empty healthy
+    // store, an export in progress refuses to clear, and a failed rm degrades.
+    const outcome: MonitorClearHistoryResult['outcome'] = !sent ? 'unavailable' : !status ? 'unknown'
+      : status.state === 'unavailable' ? 'unavailable' : status.exporting ? 'busy'
+        : status.state === 'healthy' && status.bytes === 0 ? 'cleared' : 'failed'
     return { outcome, status }
   })
   ipcMain.handle('performance:monitor-trace-status', event => BrowserWindow.fromWebContents(event.sender) ? traceStatusFor(event.sender.id) : null)

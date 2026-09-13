@@ -334,7 +334,7 @@ export class MonitorHistoryStore {
       const maintenance = this.maintenanceDue; this.maintenanceDue = null
       if (points.length) await step(() => this.appendPoints(points))
       if (incidents) await step(() => this.persistIncidents(incidents))
-      if (operations !== null) await step(() => this.replaceBounded(join(this.runDir, 'operations.json'), operations, OPERATIONS_BUDGET))
+      if (operations !== null) await step(async () => { await this.replaceBounded(join(this.runDir, 'operations.json'), operations, OPERATIONS_BUDGET) })
       if (maintenance !== null) await step(() => this.maintain(maintenance))
     }
   }
@@ -468,36 +468,47 @@ export class MonitorHistoryStore {
     } finally { await handle.close().catch(() => {}) }
   }
 
-  /** Recreate a run directory removed underneath the running helper (a Clear
-   * History that failed after deleting it, or a user removing the folder).
-   * Only startup and a successful clear created it, so every later write
-   * failed with ENOENT until the next launch. */
+  /** Recreate THIS run's directory if it was removed underneath the running
+   * helper (a Clear History that failed after deleting it, or a user removing
+   * the folder). Only startup and a successful clear created it, so every later
+   * write failed with ENOENT until the next launch. Another run's directory is
+   * never recreated: it is missing because pruning or retention removed it,
+   * possibly during this very write, and recreating it would resurrect a run
+   * the capacity budget had just decided to drop. */
   private async withDirectory<T>(file: string, write: () => Promise<T>): Promise<T> {
     try {
       return await write()
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-      await mkdir(dirname(file), { recursive: true })
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || dirname(file) !== this.runDir) throw error
+      await mkdir(this.runDir, { recursive: true })
       return await write()
     }
   }
 
-  private async replaceBounded(file: string, value: string, limit: number): Promise<void> {
+  /** Returns whether the value was written. `false` means capacity shortened
+   * it, or its run was pruned away mid-write; callers keep their prior index. */
+  private async replaceBounded(file: string, value: string, limit: number): Promise<boolean> {
     const size = Buffer.byteLength(value)
-    if (size > limit) { this.shortened = true; return }
+    if (size > limit) { this.shortened = true; return false }
     const old = await stat(file).then(result => result.size, () => 0)
     // Keep the operational set below 64 MiB so an atomic temporary copy plus
     // the live files can never cross the public 128 MiB hard ceiling.
     if (this.bytes - old + size * 2 > HARD_BUDGET || this.bytes - old + size > DATA_BUDGET) {
       await this.pruneRuns(Math.max(0, DATA_BUDGET - size))
     }
-    if (this.bytes - old + size > DATA_BUDGET) { this.shortened = true; return }
+    if (this.bytes - old + size > DATA_BUDGET) { this.shortened = true; return false }
     const temp = `${file}.${process.pid}.tmp`
     try {
       await this.withDirectory(temp, () => writeFile(temp, value, { encoding: 'utf8', mode: 0o600 }))
       await moveArtifact(temp, file)
+    } catch (error) {
+      // The pruning above can remove the very run being rewritten when it is
+      // the oldest one. That run is gone by decision, not by fault.
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT' && dirname(file) !== this.runDir) return false
+      throw error
     } finally { await rm(temp, { force: true }).catch(() => {}) }
     this.bytes = Math.max(0, this.bytes - old + size)
+    return true
   }
 
   private async maintain(now: number): Promise<void> {
@@ -554,7 +565,9 @@ export class MonitorHistoryStore {
       return
     }
     const value = `${kept.join('\n')}\n`
-    await this.replaceBounded(file, value, DATA_BUDGET)
+    // Update the index only for a completed rewrite: a capacity-shortened or
+    // pruned-away file must not be re-registered with counts it does not hold.
+    if (!(await this.replaceBounded(file, value, DATA_BUDGET))) return
     next.bytes = Buffer.byteLength(value)
     this.index.set(file, next)
   }
@@ -562,8 +575,7 @@ export class MonitorHistoryStore {
   private async writeRunIncidents(run: string, rows: MonitorIncident[]): Promise<void> {
     const file = join(this.root, RUNS_DIR, run, 'incidents.json')
     if (rows.length) {
-      await this.replaceBounded(file, JSON.stringify(rows), INCIDENT_BUDGET)
-      this.incidentRuns.set(run, rows)
+      if (await this.replaceBounded(file, JSON.stringify(rows), INCIDENT_BUDGET)) this.incidentRuns.set(run, rows)
     } else {
       await rm(file, { force: true })
       this.incidentRuns.delete(run)
@@ -688,8 +700,16 @@ export class MonitorHistoryStore {
   }
 
   private async runNames(): Promise<string[]> {
-    const runs = await readdir(join(this.root, RUNS_DIR), { withFileTypes: true }).catch(() => [])
-    return runs.filter(entry => entry.isDirectory()).map(entry => entry.name)
+    try {
+      const runs = await readdir(join(this.root, RUNS_DIR), { withFileTypes: true })
+      return runs.filter(entry => entry.isDirectory()).map(entry => entry.name)
+    } catch (error) {
+      // Only ENOENT really means "no runs yet". Any other readdir failure is
+      // unknown, not empty: treating it as empty let startup finish with an
+      // empty index, and retention then deleted every run once readdir worked.
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
+      throw error
+    }
   }
 
   private async cleanupTemps(): Promise<void> {

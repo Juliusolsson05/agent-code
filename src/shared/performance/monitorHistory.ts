@@ -51,7 +51,7 @@ export type MonitorReportResult =
 /** Clear History is destructive and privacy-motivated, so the renderer must
  * learn whether data was actually deleted rather than infer it from a status. */
 export type MonitorClearHistoryResult = {
-  outcome: 'cleared' | 'cancelled' | 'busy' | 'unavailable' | 'failed'
+  outcome: 'cleared' | 'cancelled' | 'busy' | 'unavailable' | 'unknown' | 'failed'
   status: MonitorHistoryStatus | null
 }
 
