@@ -821,7 +821,11 @@ export function useWorkspace(
           // most.
           if (!closed) {
             throw new Error(
-              'close_agent was declined: the user did not approve closing this agent.',
+              // false is not only a decline since #886: the close is also
+              // refused when the agent changed after approval or a linked
+              // session is still open. Say which ones are possible rather than
+              // telling the calling model the user said no.
+              'close_agent did not close this agent: the user declined, or the agent changed or still had a linked session open when it was about to close.',
             )
           }
         }
