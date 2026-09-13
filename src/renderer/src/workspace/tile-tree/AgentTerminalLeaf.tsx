@@ -21,6 +21,7 @@ import { useComposerDictation } from '@renderer/workspace/tile-tree/TileLeaf/use
 import { useAgentTerminalDimensionActive, useAgentTerminalOwnerVisible } from '@renderer/workspace/terminal/AgentTerminalOwnership'
 import { subscribeToAgentPtyData } from '@renderer/workspace/terminal/sessionDataDispatcher'
 import { attachXtermWebglRenderer } from '@renderer/workspace/terminal/xtermWebglRenderer'
+import { attachTerminalWheelBoundary } from '@renderer/workspace/terminal/terminalWheelBoundary'
 import { createTerminalInputForwarder } from '@renderer/workspace/tile-tree/terminalInputForwarder'
 import { encodeTerminalPaste, registerTerminalPasteTarget } from '@renderer/workspace/terminal/textPasteTarget'
 import { AgentTerminalActions } from '@renderer/workspace/tile-tree/AgentTerminalActions'
@@ -163,6 +164,7 @@ export function AgentTerminalLeaf({
     let term: Terminal | null = null
     let fit: FitAddon | null = null
     let webglRenderer: ReturnType<typeof attachXtermWebglRenderer> | null = null
+    let wheelBoundary: ReturnType<typeof attachTerminalWheelBoundary> | null = null
     let onDataDisposable: { dispose(): void } | null = null
     let offPtyData: (() => void) | null = null
     // Nullable like the disposables above: xterm init can throw before the
@@ -286,6 +288,9 @@ export function AgentTerminalLeaf({
       fit = new FitAddon()
       term.loadAddon(fit)
       term.open(container)
+      // Host-level, after open(): bubbles after every xterm wheel listener so
+      // xterm keeps first refusal — see terminalWheelBoundary.ts.
+      wheelBoundary = attachTerminalWheelBoundary(container)
       // A renderer change (DOM -> WebGL upgrade, or WebGL -> DOM after a
       // context loss) changes cell metrics without resizing the container, so
       // the ResizeObserver below would never refit it. Route it through the
@@ -540,6 +545,7 @@ export function AgentTerminalLeaf({
       offPtyData?.()
       offTextPaste?.()
       webglRenderer?.dispose()
+      wheelBoundary?.dispose()
       if (onThemeChangedListener) {
         window.removeEventListener(THEME_CHANGED_EVENT, onThemeChangedListener)
       }
