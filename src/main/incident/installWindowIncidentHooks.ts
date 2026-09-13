@@ -215,6 +215,15 @@ export function installWindowIncidentHooks(journal: AppRunJournal): void {
     // misleading main-process crash incident. The numeric ID is the stable lifecycle key.
     const webContentsId = window.webContents.id
     windows.set(webContentsId, window)
+    // Every app window is constructed with `show: false` and revealed on
+    // `ready-to-show` (window/appWindow.ts). Until that first show it is
+    // EXPECTED to be visible: a renderer that hangs before first paint never
+    // fires ready-to-show, so registering it as hidden made exactly that
+    // failure undetectable. The incident engine gives never-heartbeated
+    // windows a longer boot grace, so slow cold starts are not stalls.
+    let shownOnce = false
+    const monitorVisible = (): boolean => (window.isVisible() || !shownOnce) && !window.isMinimized()
+    monitorCoordinator.openWindow(webContentsId, monitorVisible())
     const initialLiveness = freshLiveness(Date.now())
     recordWindowLifecycle(initialLiveness, window, 'created')
     liveness.set(webContentsId, initialLiveness)
@@ -230,6 +239,8 @@ export function installWindowIncidentHooks(journal: AppRunJournal): void {
     // whether occlusion, fullscreen Spaces, minimization, or focus churn happened immediately
     // before the last JavaScript heartbeat. The ring is deliberately tiny and metadata-only.
     const captureLifecycle = (eventName: string): void => {
+      if (eventName === 'show') shownOnce = true
+      monitorCoordinator.setWindowVisible(webContentsId, monitorVisible())
       const state = liveness.get(webContentsId)
       if (state) recordWindowLifecycle(state, window, eventName)
     }

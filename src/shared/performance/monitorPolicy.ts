@@ -14,6 +14,9 @@ export const MONITOR_POLICY = Object.freeze({
   processLimit: 2_048,
   windowLimit: 64,
   seriesPoints: 1_000,
+  // Worst-case legal point widths plus 50 incident summaries stay below the
+  // 256 KiB cross-process query ceiling at this chart-page size.
+  historyPagePoints: 300,
   historyBytes: 128 * 1024 * 1024,
   incidentReserveBytes: 8 * 1024 * 1024,
   incidentBytes: 1024 * 1024,
@@ -52,6 +55,9 @@ export const MONITOR_OPERATIONS = [
   'orchestration.dispatch',
   'dictation.capture',
   'dictation.provider',
+  'profile.chromium',
+  'profile.main-cpu',
+  'heap.snapshot',
 ] as const
 
 export type MonitorOperationName = typeof MONITOR_OPERATIONS[number]

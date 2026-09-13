@@ -308,6 +308,7 @@ function OpenCommandPalette({
   const toggleDevDebugPanel = useAppStore(state => state.toggleDevDebugPanel)
   const toggleAgentStatusPanel = useAppStore(state => state.toggleAgentStatusPanel)
   const togglePerformancePanel = useAppStore(state => state.togglePerformancePanel)
+  const openPerformancePanel = useAppStore(state => state.openPerformancePanel)
   const toggleRemotePanel = useAppStore(state => state.toggleRemotePanel)
   const openGlobalEditorAction = useAppStore(state => state.openGlobalEditor)
   const closeGlobalEditorAction = useAppStore(state => state.closeGlobalEditor)
@@ -620,6 +621,7 @@ function OpenCommandPalette({
         toggleDevDebugPanel,
         toggleAgentStatusPanel,
         togglePerformancePanel,
+        openPerformancePanel,
         toggleRemotePanel,
         toggleCaffeinate,
         openGlobalEditor: openGlobalEditorAction,
@@ -743,6 +745,7 @@ function OpenCommandPalette({
       toggleDevDebugPanel,
       toggleAgentStatusPanel,
       togglePerformancePanel,
+      openPerformancePanel,
       toggleRemotePanel,
       toggleCaffeinate,
       openGlobalEditorAction,

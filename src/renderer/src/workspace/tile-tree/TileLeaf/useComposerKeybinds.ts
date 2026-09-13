@@ -280,6 +280,11 @@ export function useComposerKeybinds({
       )
     }
 
+    // Start at the common submit boundary so raw-PTY Codex and main-owned
+    // Claude/OpenCode delivery receive the same first-output measurement.
+    // Only opaque IDs cross preload; the prompt and attachments never do. The
+    // clock stays unarmed until acceptance below proves a turn started.
+    window.api.beginMonitorResponse(sessionId, pasteId)
     try {
       // The submit protocol is provider-owned (#394 phase 2c-4) —
       // Codex's atomic bracketed-paste+Enter and Claude's three
@@ -334,6 +339,10 @@ export function useComposerKeybinds({
         setInputText(acceptedDraft)
       }
       workspace.updateRuntime(sessionId, { promptDelivery: { kind: 'idle' } })
+      // Acceptance, not the write, decides whether first-output is measurable:
+      // a queued prompt's clock would otherwise stop on the running turn's
+      // output. Codex has no acceptance kind and always starts a turn.
+      window.api.settleMonitorResponse(sessionId, acceptance?.kind === 'queue' ? 'queued' : 'started')
       // A `queue` acceptance means the provider held the prompt behind a
       // running turn: no turn will start for it, so the optimistic
       // `submitting` phase stamped above would otherwise stand until the
@@ -345,7 +354,9 @@ export function useComposerKeybinds({
       // submit skipped its stamp because an EARLIER submit's `submitting` was
       // still waiting for its first provider event, that claim is not ours to
       // revert.
-      if (acceptance?.kind === 'queue') workspace.settleQueuedSubmit(sessionId, optimisticStamp)
+      if (acceptance?.kind === 'queue') {
+        workspace.settleQueuedSubmit(sessionId, optimisticStamp)
+      }
       if (caps.supportsImageAttachments && draftImages.length > 0) {
         workspace.setDraftImages(
           sessionId,
@@ -376,6 +387,7 @@ export function useComposerKeybinds({
         ...(runtime.sessionRunId ? { sessionRunId: runtime.sessionRunId } : {}),
       })
     } catch (err) {
+      window.api.settleMonitorResponse(sessionId, 'failed')
       const delivery = (err as { promptDeliveryResult?: PromptDeliveryResult })
         .promptDeliveryResult
       // `bodyWritten`/`enterWritten` are the fields that decide whether this

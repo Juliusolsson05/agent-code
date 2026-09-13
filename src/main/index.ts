@@ -3,8 +3,10 @@
 // reads env flags at module load) is imported. See
 // `./loadEnv.ts` for the rationale.
 import '@main/loadEnv.js'
+import { mainOperations } from '@main/performance/operations.js'
 import { monitorCoordinator } from '@main/performance/MonitorCoordinator.js'
 import { mainProbe } from '@main/performance/MainProbe.js'
+import { performanceTraceController } from '@main/performance/PerformanceTraceController.js'
 import { TldrStore } from '@main/tldr/TldrStore.js'
 import { registerGoalIpc, registerTldrIpc } from '@main/tldr/ipc.js'
 import { TldrEnforcement } from '@main/tldr/enforcement.js'
@@ -670,6 +672,9 @@ async function startApp(): Promise<void> {
   powerMonitor.on('suspend', () => mainProbe.noteSuspend())
   powerMonitor.on('resume', () => mainProbe.noteResume())
   monitorCoordinator.start()
+  // Remove capture scratch stranded by a crash or forced quit in an earlier
+  // run. It is app-owned, so nothing else can depend on those partial files.
+  void performanceTraceController.sweep().catch(() => {})
   void performanceService.start().catch(err => {
     console.warn('[performance] failed to start:', err)
     appRunJournal?.recordError('performance.start.error', err)
@@ -1208,6 +1213,10 @@ async function startApp(): Promise<void> {
   // items dispatch command ids to THIS window's renderer (issue #148).
   Menu.setApplicationMenu(buildAppMenu())
   performanceService.mark('app.main.window.created')
+  // Both belong at window creation. The startup timing is observed first so
+  // `app.startup` keeps meaning "process start until the first window exists"
+  // and never absorbs the synchronous prefix of extension activation.
+  mainOperations.observe('app.startup', performance.now())
   void extensionRuntime?.activateStartupExtensions().catch(error => console.error('[extensions] startup catalog failed:', error))
 
   app.on('activate', () => {
@@ -1356,6 +1365,22 @@ const sessionShutdownGate = installSessionShutdownGate({
         } catch (err) {
           appRunJournal?.recordError('proxy.mitmdump.quit_sweep.error', err)
         }
+
+        // Baseline samples are queued to an isolated utility process so disk
+        // writes never touch the UI or agent paths. That also means killing the
+        // helper synchronously can lose its final seconds. Once will-quit has
+        // crossed the renderer-veto boundary, grant the history queue and any
+        // explicitly started profiler a short, shared drain window. The
+        // deadline is deliberate: performance diagnostics must never make the
+        // application impossible to quit when storage or Chromium tracing is
+        // unhealthy.
+        await Promise.race([
+          Promise.allSettled([
+            monitorCoordinator.shutdown(1800),
+            performanceTraceController.shutdown(),
+          ]).then(() => undefined),
+          new Promise<void>(resolve => setTimeout(resolve, 2000)),
+        ])
       },
     }
   },

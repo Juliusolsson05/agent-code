@@ -1,3 +1,4 @@
+import { flushPreloadMonitoring } from '../monitorOperations.js'
 import { parseMonitorRendererRecord } from '@shared/performance/monitorContracts.js'
 import { ipcRenderer } from 'electron'
 
@@ -37,6 +38,7 @@ export const incidentApi = {
     // already cloned and queued the renderer object by then. Copying the fixed numeric schema here
     // prevents accidental/compromised renderer fields from turning the liveness channel into an
     // unbounded content transport before main gets a chance to validate it.
+    flushPreloadMonitoring()
     if (heartbeatInFlight) return
     const parsed = parseMonitorRendererRecord({
       kind: 'heartbeat', monotonicMs: heartbeat.monotonicMs,

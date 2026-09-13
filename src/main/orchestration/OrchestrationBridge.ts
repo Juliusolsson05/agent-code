@@ -1,3 +1,5 @@
+import { mainOperations } from '@main/performance/operations.js'
+import type { OperationEnd } from '@shared/performance/operationTimers.js'
 import { randomUUID } from 'node:crypto'
 
 import { sendToWindow, windowForSession } from '@main/window/windowRegistry.js'
@@ -22,6 +24,7 @@ type PendingRequest = {
 }
 
 type QueuedRendererRequest = {
+  finishQueue: OperationEnd
   request: OrchestrationRendererRequest
   resolve: (response: OrchestrationRendererResponse) => void
   reject: (err: Error) => void
@@ -469,7 +472,7 @@ export class OrchestrationBridge {
     // renderer to perform the workspace mutation and only handles MCP/PTY work
     // around it.
     return await new Promise<OrchestrationRendererResponse>((resolve, reject) => {
-      this.rendererQueue.push({ request, resolve, reject })
+      this.rendererQueue.push({ request, resolve, reject, finishQueue: mainOperations.begin('orchestration.queue') })
       this.drainRendererQueue()
     })
   }
@@ -480,9 +483,11 @@ export class OrchestrationBridge {
       this.rendererQueue.length > 0
     ) {
       const next = this.rendererQueue.shift()!
+      next.finishQueue()
+      const finishDispatch = mainOperations.begin('orchestration.dispatch')
       this.activeRendererRequests += 1
       void this.dispatchRendererRequest(next.request)
-        .then(next.resolve, next.reject)
+        .then(result => { finishDispatch(); next.resolve(result) }, error => { finishDispatch('error'); next.reject(error) })
         .finally(() => {
           this.activeRendererRequests -= 1
           this.drainRendererQueue()

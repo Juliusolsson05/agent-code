@@ -1,3 +1,4 @@
+import type { PerformancePanelRequest } from './uiShell/types'
 import type { PaletteMode } from '@renderer/features/command-palette/paletteMode'
 import type { Settings } from '@renderer/app-state/settings/types'
 import type {
@@ -113,6 +114,8 @@ export type UiShellSlice = UiShellState & {
   closeAgentStatusPanel: () => void
   toggleAgentStatusPanel: () => void
   togglePerformancePanel: () => void
+  openPerformancePanel: (request?: Omit<PerformancePanelRequest, 'id'>) => void
+  consumePerformancePanelRequest: (id: number) => void
   toggleRemotePanel: () => void
   openGlobalEditor: () => void
   closeGlobalEditor: () => void

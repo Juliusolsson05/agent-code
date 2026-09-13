@@ -276,6 +276,10 @@ export type UiShellState = {
    *  persisting an extra "inspected session" source of truth. */
   agentStatusPanelOpen: boolean
   performancePanelOpen: boolean
+  /** One-shot intent from a palette command (save a report, start a trace).
+   *  The monitor performs it so the result, file location and Reveal action
+   *  stay visible; a bare fire-and-forget command hid failures entirely. */
+  performancePanelRequest: PerformancePanelRequest | null
   remotePanelOpen: boolean
   /** When true, the Global Editor overlay is mounted. Splits the
    *  workspace area: left half is a file tree + Monaco editor rooted
@@ -444,4 +448,11 @@ export type UiShellState = {
    * take an explicit lane index rather than re-reading focusedLane.
    */
   dispatchRowProjectPickerRow: number | null
+}
+
+export type PerformancePanelRequest = {
+  /** Monotonic, so a handled request can never be replayed by a re-render. */
+  id: number
+  view: 'recordings'
+  action: 'save-report' | 'record-chromium'
 }

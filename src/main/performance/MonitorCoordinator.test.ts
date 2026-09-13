@@ -126,6 +126,22 @@ describe('monitor worker isolation', () => {
     coordinator.stop()
   })
 
+  it('accounts producer loss once per generation, including late reports from a retired producer', () => {
+    const coordinator = new MonitorCoordinator()
+    coordinator.sourceLoss(7, 'renderer', 'gen-a', 4)
+    coordinator.sourceLoss(7, 'renderer', 'gen-a', 9)
+    // Reload: the new generation's counter restarts, even above the old value.
+    coordinator.sourceLoss(7, 'renderer', 'gen-b', 12)
+    // A report the retired producer sent before the reload arrives late.
+    coordinator.sourceLoss(7, 'renderer', 'gen-a', 9)
+    coordinator.sourceLoss(7, 'renderer', 'gen-b', 15)
+    expect(coordinator.read().droppedRecords).toBe(24)
+    coordinator.closeWindow(7)
+    coordinator.sourceLoss(7, 'renderer', 'gen-c', 3)
+    expect(coordinator.read().droppedRecords).toBe(27)
+    coordinator.stop()
+  })
+
   it('publishes process generations atomically and rejects missing chunks', () => {
     vi.useFakeTimers()
     const child = new FakeChild()
@@ -205,6 +221,135 @@ describe('monitor worker isolation', () => {
         quality: 'warming-up', sessionCount: 0, missingRoots: 0, truncated: false },
     } })
     expect(coordinator.readProcesses().rows).toEqual([row])
+    coordinator.stop()
+  })
+
+  it('waits for the worker history queue before killing the helper at shutdown', async () => {
+    vi.useFakeTimers()
+    const child = new FakeChild()
+    harness.launch.mockReturnValue(child)
+    const coordinator = new MonitorCoordinator(() => Date.now())
+    coordinator.start()
+    coordinator.operation(operation)
+    vi.advanceTimersByTime(200)
+    const inFlight = child.postMessage.mock.calls[0]![0]
+
+    const shutdown = coordinator.shutdown()
+    child.emit('message', { sequence: inFlight.sequence })
+    await vi.advanceTimersByTimeAsync(200)
+    const flush = child.postMessage.mock.calls[1]![0]
+    expect(flush.query).toEqual({ kind: 'history-flush' })
+    expect(child.kill).not.toHaveBeenCalled()
+
+    child.emit('message', {
+      sequence: flush.sequence,
+      queryResult: { kind: 'history-flush', value: true },
+    })
+    await vi.advanceTimersByTimeAsync(40)
+    await shutdown
+    expect(child.kill).toHaveBeenCalledOnce()
+  })
+
+  it('drains every queued batch before the final history flush', async () => {
+    vi.useFakeTimers()
+    const child = new FakeChild()
+    harness.launch.mockReturnValue(child)
+    const coordinator = new MonitorCoordinator(() => Date.now())
+    coordinator.start()
+    for (let i = 0; i < 300; i++) coordinator.operation(operation)
+    vi.advanceTimersByTime(200)
+    const shutdown = coordinator.shutdown()
+    const sent: Array<{ sequence: number; records: unknown[]; query?: { kind: string } }> = []
+    for (let i = 0; i < 12; i++) {
+      const request = child.postMessage.mock.calls.at(-1)![0]
+      if (!sent.includes(request)) {
+        sent.push(request)
+        child.emit('message', request.query
+          ? { sequence: request.sequence, queryResult: { kind: 'history-flush', value: true } }
+          : { sequence: request.sequence })
+      }
+      await vi.advanceTimersByTimeAsync(20)
+    }
+    await shutdown
+    expect(sent.flatMap(request => request.records)).toHaveLength(300)
+    expect(sent.at(-1)!.query).toEqual({ kind: 'history-flush' })
+    expect(coordinator.read().droppedRecords).toBe(0)
+  })
+
+  it('lets an in-flight export finish at shutdown before the history flush', async () => {
+    vi.useFakeTimers()
+    const child = new FakeChild()
+    harness.launch.mockReturnValue(child)
+    const coordinator = new MonitorCoordinator(() => Date.now())
+    coordinator.start()
+    const exporting = coordinator.exportReport(0, 1, '/reports/report.json', {})
+    vi.advanceTimersByTime(200)
+    const exportRequest = child.postMessage.mock.calls[0]![0]
+    expect(exportRequest.query).toMatchObject({ kind: 'report-export' })
+    const shutdown = coordinator.shutdown()
+    await vi.advanceTimersByTimeAsync(40)
+    // The flush must not overlap a mutating query that still holds the credit.
+    expect(child.postMessage).toHaveBeenCalledTimes(1)
+    const saved = { ok: true, path: '/reports/report.json', bytes: 10, points: 1, incidents: 0 }
+    child.emit('message', { sequence: exportRequest.sequence, queryResult: { kind: 'report-export', value: saved } })
+    expect(await exporting).toEqual(saved)
+    await vi.advanceTimersByTimeAsync(40)
+    const flush = child.postMessage.mock.calls.at(-1)![0]
+    expect(flush.query).toEqual({ kind: 'history-flush' })
+    child.emit('message', { sequence: flush.sequence, queryResult: { kind: 'history-flush', value: true } })
+    await vi.advanceTimersByTimeAsync(40)
+    await shutdown
+    expect(child.kill).toHaveBeenCalledOnce()
+  })
+
+  it('never abandons a mutating query at its deadline', async () => {
+    vi.useFakeTimers()
+    const child = new FakeChild()
+    harness.launch.mockReturnValue(child)
+    const coordinator = new MonitorCoordinator(() => Date.now())
+    coordinator.start()
+    const clearing = coordinator.clearHistory()
+    vi.advanceTimersByTime(200)
+    expect(child.postMessage.mock.calls[0]![0].query).toEqual({ kind: 'history-clear' })
+    // A clear that outlives its deadline is killed, so "unconfirmed" is honest:
+    // the helper cannot keep deleting after the UI has reported an outcome.
+    vi.advanceTimersByTime(60_400)
+    expect(await clearing).toEqual({ sent: true, status: null })
+    expect(child.kill).toHaveBeenCalledOnce()
+    coordinator.stop()
+  })
+
+  it('abandons a slow query without killing the helper or piling up scans', async () => {
+    vi.useFakeTimers()
+    const child = new FakeChild()
+    harness.launch.mockReturnValue(child)
+    const coordinator = new MonitorCoordinator(() => Date.now())
+    coordinator.start()
+    const status = { state: 'healthy', bytes: 0, oldestAt: null, newestAt: null, points: 0, incidents: 0, exporting: false, shortened: false }
+    const first = coordinator.readHistoryStatus()
+    const second = coordinator.readHistoryStatus()
+    vi.advanceTimersByTime(200)
+    const slow = child.postMessage.mock.calls[0]![0]
+    vi.advanceTimersByTime(10_400)
+    expect(await first).toBeNull()
+    expect(child.kill).not.toHaveBeenCalled()
+    // Records keep flowing while the abandoned scan finishes...
+    coordinator.operation(operation)
+    vi.advanceTimersByTime(200)
+    const records = child.postMessage.mock.calls.at(-1)![0]
+    expect(records.query).toBeUndefined()
+    expect(records.records).toHaveLength(1)
+    child.emit('message', { sequence: records.sequence })
+    // ...but the next query waits for the late reply instead of running concurrently.
+    vi.advanceTimersByTime(200)
+    expect(child.postMessage).toHaveBeenCalledTimes(2)
+    child.emit('message', { sequence: slow.sequence, queryResult: { kind: 'history-status', value: status } })
+    vi.advanceTimersByTime(200)
+    const next = child.postMessage.mock.calls.at(-1)![0]
+    expect(next.query).toEqual({ kind: 'history-status' })
+    child.emit('message', { sequence: next.sequence, queryResult: { kind: 'history-status', value: status } })
+    expect(await second).toEqual(status)
+    expect(harness.launch).toHaveBeenCalledOnce()
     coordinator.stop()
   })
 

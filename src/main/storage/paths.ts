@@ -107,6 +107,11 @@ export const PROXY_EVENTS_DIR = join(STATE_DIR, 'proxy')
 // written only when AGENT_CODE_PERF=1.
 export const PERFORMANCE_RUNS_DIR = join(STATE_DIR, 'performance', 'runs')
 
+// Product monitoring is always on, so it cannot share the environment-gated
+// trace root above. A distinct root also lets its hard 128 MiB retention rule
+// prune only the bounded metric history it owns.
+export const MONITOR_HISTORY_DIR = join(STATE_DIR, 'performance-monitor')
+
 // Always-on app-run incident journals. Unlike performance traces, this root is
 // not gated by AGENT_CODE_PERF: it holds the small manifest/heartbeat/event
 // spine that explains crashes and restarts in normal user runs. Large forensic
@@ -120,6 +125,14 @@ export const INCIDENT_RUNS_DIR = join(STATE_DIR, 'incidents', 'runs')
 // `.heapsnapshot` somewhere else, that writer is opting out of the disk budget
 // and should justify it in the diff.
 export const HEAP_SNAPSHOT_DIR = join(STATE_DIR, 'heap-snapshots')
+
+// Explicit recordings (Chromium traces, main CPU profiles, heap snapshots) are
+// written here first and renamed to the user's chosen destination only once
+// complete. WHY not a temp file beside the destination: a quit or crash during
+// a 30-second trace stranded `*.agent-code-<pid>.tmp` files in the user's own
+// Desktop/Downloads, where nothing owned by the app would ever clean them.
+// This root is app-owned and swept at startup, before any capture can begin.
+export const PERFORMANCE_CAPTURE_TEMP_DIR = join(STATE_DIR, 'performance-capture-tmp')
 
 // Session recordings — continuous debug-gated capture of a session's
 // rendering-pipeline input stream, replayable in the test suite (see

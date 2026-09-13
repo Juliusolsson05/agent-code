@@ -9,6 +9,7 @@ export type MonitorOperation = {
   // This is an opaque application ID, never an agent title or project path.
   // Main stamps source/run identity from the sender; neither is renderer input.
   sessionId?: string
+  operationId?: string
 }
 
 export type MonitorHeartbeat = {
@@ -26,15 +27,25 @@ export type MonitorHeartbeat = {
   inputMaxMs: number
 }
 
-export type MonitorRendererRecord = MonitorOperation | MonitorHeartbeat
+export type MonitorProducerLoss = {
+  kind: 'loss'
+  source: 'preload' | 'renderer'
+  // Random per producer lifetime; a reload re-runs the producer module and
+  // gets a new one. Opaque, never derived from user or application data.
+  generation: string
+  dropped: number
+}
+
+export type MonitorRendererRecord = MonitorOperation | MonitorHeartbeat | MonitorProducerLoss
 
 const operations = new Set<string>(MONITOR_OPERATIONS)
 const outcomes = new Set<string>(['success', 'error', 'cancelled', 'timeout'])
-const operationKeys = new Set(['kind', 'name', 'durationMs', 'outcome', 'sessionId'])
+const operationKeys = new Set(['kind', 'name', 'durationMs', 'outcome', 'sessionId', 'operationId'])
 const heartbeatKeys = new Set([
   'kind', 'monotonicMs', 'timeOriginMs', 'lagMs', 'visibility', 'longTaskCount',
   'longTaskTotalMs', 'longTaskMaxMs', 'heapUsedBytes', 'heapLimitBytes', 'inputCount', 'inputMaxMs',
 ])
+const lossKeys = new Set(['kind', 'source', 'generation', 'dropped'])
 const finite = (value: unknown, max = Number.MAX_SAFE_INTEGER): value is number =>
   typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= max
 const count = (value: unknown): value is number => finite(value) && Number.isSafeInteger(value)
@@ -57,12 +68,19 @@ export function parseMonitorRendererRecord(input: unknown): MonitorRendererRecor
     if (typeof value.name !== 'string' || !operations.has(value.name)
       || !finite(value.durationMs, 24 * 60 * 60_000)
       || typeof value.outcome !== 'string' || !outcomes.has(value.outcome)
-      || (value.sessionId !== undefined && !isMonitorId(value.sessionId))) return null
+      || (value.sessionId !== undefined && !isMonitorId(value.sessionId))
+      || (value.operationId !== undefined && !isMonitorId(value.operationId))) return null
     return {
       kind: 'operation', name: value.name as MonitorOperationName,
       durationMs: value.durationMs, outcome: value.outcome as MonitorOutcome,
       ...(value.sessionId === undefined ? {} : { sessionId: value.sessionId as string }),
+      ...(value.operationId === undefined ? {} : { operationId: value.operationId as string }),
     }
+  }
+  if (value.kind === 'loss') {
+    if (keys.length !== lossKeys.size || keys.some(key => !lossKeys.has(key))
+      || (value.source !== 'preload' && value.source !== 'renderer') || !isMonitorId(value.generation) || !count(value.dropped)) return null
+    return { kind: 'loss', source: value.source, generation: value.generation, dropped: value.dropped }
   }
   if (value.kind !== 'heartbeat' || keys.length !== heartbeatKeys.size
     || keys.some(key => !heartbeatKeys.has(key))) return null
@@ -94,6 +112,7 @@ export function parseMonitorRendererBatch(input: unknown): MonitorRendererRecord
 
 // This conservative byte charge avoids JSON.stringify on instrumentation hot
 // paths. Every admitted record is a fixed set of finite numeric fields/enums
-// and at most one 96-byte ASCII ID. The tests prove its serialized upper bound;
+// and at most two 96-byte ASCII IDs (an operation's session and operation IDs;
+// a loss record's producer generation is one). The tests prove its serialized upper bound;
 // expanding the schema requires revisiting this charge and the batch limit.
 export const MONITOR_RECORD_BYTES = 512

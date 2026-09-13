@@ -240,6 +240,8 @@ export type CommandContext = {
     toggleDevDebugPanel: () => void
     toggleAgentStatusPanel: () => void
     togglePerformancePanel: () => void
+    /** Open the Performance Monitor, optionally performing a Recordings action there. */
+    openPerformancePanel: (request?: { view: 'recordings'; action: 'save-report' | 'record-chromium' }) => void
     toggleRemotePanel: () => void
     toggleCaffeinate: () => Promise<void> | void
     /** Idempotent open. Prefer this over `toggleGlobalEditor` whenever the

@@ -81,7 +81,7 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
   'clear-composer',
   'undo-clear-composer',
   'send-composer',
-  // layoutCommands (11: New Lane joins the two lane-removal commands)
+  // layoutCommands (performance report/trace are ordinary app commands)
   'dispatch-mode',
   'global-dispatch',
   'tiled-dispatch',
@@ -98,6 +98,8 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
   'hard-normalize-layout',
   'rotate-layout',
   'toggle-performance-panel',
+  'save-performance-report',
+  'record-performance-trace',
   'toggle-caffeinate',
   // globalEditorCommands (10)
   'toggle-global-editor',
@@ -228,11 +230,12 @@ describe('built-in command catalog — baseline characterization', () => {
     // with Root Agent Code Management (#906) → 121 with Use Global MCP
     // Settings (#904) → 122 with Merge Project Tabs (#913) → 123 with View
     // TLDR History (#917) → 125 with Goal preview and Goal MCP (#936) → 126
-    // with Auto-follow All Working Agents (#938).
+    // with Auto-follow All Working Agents (#938) → 128 with the two ordinary
+    // performance report/trace commands.
     // Each step of that arithmetic was a deliberate edit to this line, which is the entire point of pinning it. (The two test
     // titles above had drifted to "115" while this line said 116; they now
     // track it again.)
-    expect(builtInCommandCatalog).toHaveLength(126)
+    expect(builtInCommandCatalog).toHaveLength(128)
   })
 
   it('reports no structural defects', () => {
@@ -266,12 +269,12 @@ describe('generated per-provider split commands', () => {
   })
 
   it('accounts for the difference between literal and total command count', () => {
-    // 126 total - 4 generated = 122 literal `id:` fields across the command
+    // 128 total - 4 generated = 124 literal `id:` fields across the command
     // modules. At the original baseline this read 102 - 4 = 98; it moved down by
     // the five retirements, then back up by the nine additions, Grid Dispatch's
     // six row commands, New Window, and the later single additions recorded in
     // the count test above (through Auto-follow All Working Agents, #938).
-    expect(builtInCommandCatalog.length - nonDefaultProviders.length * 2).toBe(122)
+    expect(builtInCommandCatalog.length - nonDefaultProviders.length * 2).toBe(124)
   })
 
   it('emits both directions for every non-default provider', () => {
@@ -394,9 +397,10 @@ describe('governance targets', () => {
     // `enable-root-agent-code-management` (#906), and
     // `use-global-mcp-settings` (#904), `merge-project-tabs` (#913), and
     // `view-tldr-history` (#917), `goal-preview` and `enable-goal-mcp` (#936),
-    // and `toggle-tail-working` (#938).
-    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 29).toBe(102)
-    expect(builtInCommandCatalog).toHaveLength(126)
+    // `toggle-tail-working` (#938), `save-performance-report`, and
+    // `record-performance-trace` (#944).
+    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 31).toBe(102)
+    expect(builtInCommandCatalog).toHaveLength(128)
   })
 })
 
