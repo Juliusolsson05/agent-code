@@ -44,6 +44,9 @@ describe('bounded extension runtime transport', () => {
     expect(runtimeHostRequestSchema.safeParse({
       method: 'service', extensionId: 'timer', revision: 'generation-one', request: write,
     }).success).toBe(true)
+    expect(runtimeApiRequestSchema.safeParse({
+      method: 'notifications.show', message: 'Focus session complete',
+    }).success).toBe(true)
     for (const invalid of [
       { ...request, root: '/private/project' },
       { ...request, sessionId: '' },
@@ -54,6 +57,8 @@ describe('bounded extension runtime transport', () => {
       { ...write, expectedVersion: '' },
       { ...write, text: 'x'.repeat(64 * 1024 + 1) },
       { ...write, root: '/private/project' },
+      { method: 'notifications.show', message: '   ' },
+      { method: 'notifications.show', message: 'x'.repeat(201) },
     ]) {
       expect(runtimeApiRequestSchema.safeParse(invalid).success).toBe(false)
     }

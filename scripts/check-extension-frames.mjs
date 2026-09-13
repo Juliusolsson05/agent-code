@@ -17,6 +17,25 @@ const preloadArgument = process.argv.indexOf('--runtime-preload')
 const runtimePreload = preloadArgument < 0 ? null : process.argv[preloadArgument + 1]
 const externalArgument = process.argv.indexOf('--external-extension')
 const externalExtension = externalArgument < 0 ? null : process.argv[externalArgument + 1]
+const externalCommandArgument = process.argv.indexOf('--external-background-command')
+const externalBackgroundCommand = externalCommandArgument < 0
+  ? null
+  : process.argv[externalCommandArgument + 1]
+const externalBackgroundViewArgument = process.argv.indexOf('--external-background-view')
+const externalBackgroundViewValue = externalBackgroundViewArgument < 0
+  ? null
+  : process.argv[externalBackgroundViewArgument + 1]
+let externalBackgroundView = null
+if (externalBackgroundViewValue) {
+  const separator = externalBackgroundViewValue.indexOf('=')
+  if (separator < 1 || separator === externalBackgroundViewValue.length - 1) {
+    throw new Error('--external-background-view requires a view-id=state-selector pair')
+  }
+  externalBackgroundView = {
+    viewId: externalBackgroundViewValue.slice(0, separator),
+    selector: externalBackgroundViewValue.slice(separator + 1),
+  }
+}
 const externalViewChecks = []
 for (let index = 0; index < process.argv.length; index += 1) {
   if (process.argv[index] !== '--external-view') continue
@@ -35,6 +54,12 @@ if (externalArgument >= 0 && (!externalExtension || externalExtension.startsWith
 }
 if (externalViewChecks.length > 0 && !externalExtension) {
   throw new Error('--external-view requires --external-extension')
+}
+if ((externalBackgroundCommand || externalBackgroundView) && !externalExtension) {
+  throw new Error('external background checks require --external-extension')
+}
+if (Boolean(externalBackgroundCommand) !== Boolean(externalBackgroundView)) {
+  throw new Error('--external-background-command and --external-background-view must be used together')
 }
 // Electron 43's normal import downloads a missing binary lazily. Tests must be
 // offline: download it during dependency setup instead, and fail with an action
@@ -121,6 +146,10 @@ export const EXTENSION_STATE_DIR = join(STATE_DIR, 'extension-state');
     ...(externalExtension ? {
       AGENT_CODE_EXTENSION_EXTERNAL_SOURCE: resolve(externalExtension),
       AGENT_CODE_EXTENSION_EXTERNAL_VIEWS: JSON.stringify(externalViewChecks),
+      ...(externalBackgroundCommand ? {
+        AGENT_CODE_EXTENSION_EXTERNAL_BACKGROUND_COMMAND: externalBackgroundCommand,
+        AGENT_CODE_EXTENSION_EXTERNAL_BACKGROUND_VIEW: JSON.stringify(externalBackgroundView),
+      } : {}),
     } : {}),
   }
   delete env.ELECTRON_RUN_AS_NODE
@@ -132,8 +161,9 @@ export const EXTENSION_STATE_DIR = join(STATE_DIR, 'extension-state');
     // app alive. The journey now deliberately performs real fsync-backed writes,
     // so 60 seconds made healthy runs fail under filesystem/CPU contention after
     // every new service assertion had already passed.
-    // External bundles add one real modal lifecycle per requested view. Give that
-    // opt-in author check room without weakening the normal CI journey's bound.
+    // External bundles add real view lifecycles and may also hold a view closed
+    // while observing background state. Give that opt-in author check room
+    // without weakening the normal CI journey's bound.
     const deadline = setTimeout(() => { child.kill('SIGKILL') }, runtimeOnly ? 60_000 : externalExtension ? 120_000 : 90_000)
     child.once('error', error => { clearTimeout(deadline); reject(error) })
     child.once('exit', (code, signal) => {

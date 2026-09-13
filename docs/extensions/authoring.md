@@ -275,11 +275,11 @@ extension has been copied into place, and the installer refuses it.
 
 ## 5. The API
 
-The v2 runtime API provides identity and storage. The v2 view API (and v1 context
-API) additionally provides UI, theme and permissioned observation below. Remote
-reads/actions return Promises; view state reads and subscription setup are local
-synchronous operations. Background runtimes have no implicit window-scoped
-observation or UI API.
+The v2 runtime API provides identity, storage, scoped files and permissioned
+background notifications. The v2 view API (and v1 context API) additionally
+provides UI, theme and permissioned observation below. Remote reads/actions return
+Promises; view state reads and subscription setup are local synchronous operations.
+Background runtimes have no implicit window-scoped observation or view UI API.
 
 ### Tier 0 — always available, no permission needed
 
@@ -348,6 +348,17 @@ window, and a view's focus can change while an asynchronous read is pending. Use
 session id from your own workflow or from `sessions.observe` when that separately
 granted metadata permission is appropriate.
 
+### Background status notifications (API v2)
+
+```ts
+await api.notifications.show('Focus session complete')
+```
+
+Declare `"notifications.show"` in `permissions`. Runtime and view modules can send
+a short app-wide toast of at most 200 characters. Agent Code prefixes it with the
+installed extension's name, so pass only the status text. This channel remains
+available after the last view closes and does not create an OS notification.
+
 ### Reading a contributed setting
 
 A `contributes.settings` entry renders a row in Agent Code's Settings, and the value
@@ -385,7 +396,7 @@ Declare what you need in `permissions`. The user approves them in a blocking
 dialog at install time, and the grant is bound to the exact bytes installed — if
 you ship new code, the user is asked again.
 
-**Five permissions are currently implemented:**
+**Six permissions are currently implemented:**
 
 | Permission | Grants |
 |---|---|
@@ -394,11 +405,13 @@ you ship new code, the user is asked again.
 | `panes.observe` | `api.panes.observe` / `subscribe` |
 | `fs.read` | API v2 `api.files.readText({ sessionId, path })` in runtimes and views |
 | `fs.write` | API v2 atomic `api.files.writeText(...)` with create-only/version checks |
+| `notifications.show` | API v2 `api.notifications.show(message)` app toast, including from a background runtime |
 
 Anything else fails the install with a message naming what this build supports.
 Transcript, git, prompt-sending and network capabilities **do
 not exist** — they are unimplemented, and asking for one is an install error rather
-than a silent no-op. Scoped file services require API v2 because v1's per-view API is frozen.
+than a silent no-op. Scoped file and background notification services require API
+v2 because v1's per-view API is frozen.
 Omit `permissions` entirely to stay Tier 0, which installs with no prompt at all.
 
 ---

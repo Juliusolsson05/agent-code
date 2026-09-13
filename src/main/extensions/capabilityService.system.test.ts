@@ -28,16 +28,23 @@ const {
 } = await import('./capabilityService.js')
 const roots: string[] = []
 
-async function fixture(): Promise<{ root: string; service: InstanceType<typeof ExtensionCapabilityService> }> {
+async function fixture(): Promise<{
+  root: string
+  notifications: Array<{ extensionId: string; message: string }>
+  service: InstanceType<typeof ExtensionCapabilityService>
+}> {
   const root = await mkdtemp(join(tmpdir(), 'agent-code-extension-files-'))
+  const notifications: Array<{ extensionId: string; message: string }> = []
   roots.push(root)
   await mkdir(join(root, 'src'))
   await writeFile(join(root, 'src', 'note.txt'), 'hello extension\n')
-  authority.capabilities.mockResolvedValue(['fs.read', 'fs.write'])
+  authority.capabilities.mockResolvedValue(['fs.read', 'fs.write', 'notifications.show'])
   return {
     root,
+    notifications,
     service: new ExtensionCapabilityService({
       resolveSessionRoot: sessionId => sessionId === 'live-session' ? root : null,
+      notify: (extensionId, message) => notifications.push({ extensionId, message }),
     }),
   }
 }
@@ -48,7 +55,25 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })))
 })
 
-describe('scoped extension filesystem reads', () => {
+describe('permissioned extension services', () => {
+  it('delivers a bounded background notification only with explicit consent', async () => {
+    const { notifications, service } = await fixture()
+    try {
+      await expect(service.invoke('timer', 'generation-one', {
+        method: 'notifications.show', message: 'Focus session complete',
+      })).resolves.toBeUndefined()
+      expect(notifications).toEqual([
+        { extensionId: 'timer', message: 'Focus session complete' },
+      ])
+
+      authority.capabilities.mockResolvedValueOnce([])
+      await expect(service.invoke('quiet-timer', 'generation-one', {
+        method: 'notifications.show', message: 'Should not appear',
+      })).rejects.toThrow('capability "notifications.show" is not granted')
+      expect(notifications).toHaveLength(1)
+    } finally { service.dispose() }
+  })
+
   it('reads bounded UTF-8 through a session-derived project root and caches byte verification', async () => {
     const { service } = await fixture()
     try {
@@ -78,7 +103,7 @@ describe('scoped extension filesystem reads', () => {
       const original = await service.invoke('writer', 'generation-one', {
         method: 'fs.readText', sessionId: 'live-session', path: 'src/note.txt',
       })
-      if (!('text' in original)) throw new Error('Expected a file read')
+      if (!original || !('text' in original)) throw new Error('Expected a file read')
       const written = await service.invoke('writer', 'generation-one', {
         method: 'fs.writeText', sessionId: 'live-session', path: 'src/note.txt',
         text: 'updated by extension\n', expectedVersion: original.version,
@@ -112,7 +137,7 @@ describe('scoped extension filesystem reads', () => {
       const original = await service.invoke('writer', 'generation-one', {
         method: 'fs.readText', sessionId: 'live-session', path: 'src/note.txt',
       })
-      if (!('text' in original)) throw new Error('Expected a file read')
+      if (!original || !('text' in original)) throw new Error('Expected a file read')
       const results = await Promise.allSettled(['first', 'second'].map(text => service.invoke(
         'writer', 'generation-one', {
           method: 'fs.writeText', sessionId: 'live-session', path: 'src/note.txt',
@@ -141,7 +166,7 @@ describe('scoped extension filesystem reads', () => {
       const original = await service.invoke('writer', 'generation-one', {
         method: 'fs.readText', sessionId: 'live-session', path: 'src/note.txt',
       })
-      if (!('text' in original)) throw new Error('Expected a file read')
+      if (!original || !('text' in original)) throw new Error('Expected a file read')
       const write = service.invoke('writer', 'generation-one', {
         method: 'fs.writeText', sessionId: 'live-session', path: 'src/note.txt',
         text: 'retired write', expectedVersion: original.version,

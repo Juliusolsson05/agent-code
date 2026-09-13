@@ -76,9 +76,9 @@ export type ExtensionContributions = {
  * mechanism is what went wrong; the tier names below are a design note about
  * blast radius, not a roadmap that manifests may write against.
  *
- * Tier 1 is read-only metadata. `fs.read` and `fs.write` are the first scoped
- * services restored under this rule. Other Tier 2/3 powers remain unrepresentable until their
- * transports and target authority exist — a
+ * Tier 1 is read-only metadata. Scoped files and background notifications are
+ * the first services restored under this rule. Other Tier 2/3 powers remain
+ * unrepresentable until their transports and target authority exist — a
  * manifest asking for one fails install with a message naming it, which is
  * actionable, rather than being granted nothing in silence.
  */
@@ -94,6 +94,10 @@ export type ExtensionCapability =
   // canonical cwd is the filesystem authority.
   | 'fs.read'
   | 'fs.write'
+  // A background runtime has no visible view whose Tier-0 ui.showToast it can
+  // borrow. This explicit grant is the narrow channel used by timers and other
+  // requested background work to report a short status to application windows.
+  | 'notifications.show'
 
 export const EXTENSION_CAPABILITIES: readonly ExtensionCapability[] = [
   'workspace.observe',
@@ -101,6 +105,7 @@ export const EXTENSION_CAPABILITIES: readonly ExtensionCapability[] = [
   'panes.observe',
   'fs.read',
   'fs.write',
+  'notifications.show',
 ]
 
 /**

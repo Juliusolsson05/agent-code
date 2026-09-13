@@ -100,7 +100,9 @@ describe('publication revokes a live frame before React removes its DOM', () => 
       sessionId: 'session-one', path: 'notes.txt', text: 'hello', size: 5, mtimeMs: 1,
     })
     window.api.extensionsServiceRequest = service
-    window.api.extensionGrantedCapabilities = vi.fn().mockResolvedValue(['fs.read', 'fs.write'])
+    window.api.extensionGrantedCapabilities = vi.fn().mockResolvedValue([
+      'fs.read', 'fs.write', 'notifications.show',
+    ])
     const host = createFrameHost({ iframe, extensionId: 'timer', bundleRevision: 'generation-one', api: {} as AgentCodeApiV1 })
     const send = (id: string, request: Record<string, unknown> = {
       method: 'fs.readText', sessionId: 'session-one', path: 'notes.txt',
@@ -129,6 +131,13 @@ describe('publication revokes a live frame before React removes its DOM', () => 
           text: 'updated', expectedVersion: 'opaque-version',
         },
       ))
+      send('notification-allowed', {
+        method: 'notifications.show', message: 'Focus session complete',
+      })
+      await waitFor(() => expect(service).toHaveBeenCalledWith(
+        'timer', 'generation-one',
+        { method: 'notifications.show', message: 'Focus session complete' },
+      ))
 
       host.dispose()
       service.mockClear()
@@ -140,6 +149,14 @@ describe('publication revokes a live frame before React removes its DOM', () => 
       })
       await waitFor(() => expect(post).toHaveBeenCalledWith(
         expect.objectContaining({ id: 'denied', ok: false }), 'agent-code-ext://timer',
+      ))
+      expect(service).not.toHaveBeenCalled()
+      send('notification-denied', {
+        method: 'notifications.show', message: 'Should not appear',
+      })
+      await waitFor(() => expect(post).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'notification-denied', ok: false }),
+        'agent-code-ext://timer',
       ))
       expect(service).not.toHaveBeenCalled()
       deniedHost.dispose()

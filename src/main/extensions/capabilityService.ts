@@ -35,11 +35,14 @@ const MAX_PENDING_PER_EXTENSION = 16
 const REQUIRED_CAPABILITY: Record<ExtensionServiceRequest['method'], ExtensionCapability> = {
   'fs.readText': 'fs.read',
   'fs.writeText': 'fs.write',
+  'notifications.show': 'notifications.show',
 }
 
 export type ExtensionCapabilityServiceOptions = {
   /** Resolve a main-owned live session id to its spawn cwd. */
   resolveSessionRoot(sessionId: string): string | null
+  /** Deliver a bounded extension-attributed status to application windows. */
+  notify(extensionId: string, message: string): void
 }
 
 type GrantCheck = { value: Promise<ReadonlySet<ExtensionCapability>> }
@@ -80,7 +83,7 @@ export class ExtensionCapabilityService {
     this.pending.set(authority, count + 1)
     try {
       const check = await this.requireCapability(extensionId, revision, REQUIRED_CAPABILITY[request.method])
-      const result = await this.perform(request, authority, check)
+      const result = await this.perform(extensionId, request, authority, check)
       // Do not return user data to a runtime/frame whose generation was revoked
       // while filesystem I/O was pending. The caller transport independently
       // checks its own document/runtime identity; this closes the main-service
@@ -127,6 +130,7 @@ export class ExtensionCapabilityService {
   }
 
   private async perform(
+    extensionId: string,
     request: ExtensionServiceRequest,
     authority: string,
     check: GrantCheck,
@@ -146,6 +150,11 @@ export class ExtensionCapabilityService {
             }
           },
         )
+      case 'notifications.show':
+        // The caller's id is fixed by the authenticated runtime/frame. Keep it
+        // beside the message so renderer chrome can attribute third-party text.
+        this.options.notify(extensionId, request.message)
+        return undefined
       default: {
         const unhandled: never = request
         throw new Error(`Unhandled extension service request: ${String(unhandled)}`)

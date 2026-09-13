@@ -47,6 +47,8 @@ const CAPABILITY_DISCLOSURE: Record<ExtensionCapability, string> = {
     'The contents of text files it names inside projects belonging to active sessions.',
   'fs.write':
     'Create or replace text files it names inside projects belonging to active sessions.',
+  'notifications.show':
+    'Show short app-wide status notifications while it runs in the background.',
 }
 
 function consentPromptFor(evt: IpcMainInvokeEvent, source: string): ConsentPrompt {

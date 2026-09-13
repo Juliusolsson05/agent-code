@@ -1,4 +1,6 @@
-import { createContext, useCallback, useContext, useRef, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
+
+import { useAppStore } from '@renderer/app-state/hooks'
 
 // GlobalToast — app-wide toast system rendered in the top-right corner.
 //
@@ -49,6 +51,15 @@ export function GlobalToastProvider({ children }: { children: React.ReactNode })
       timerRef.current = null
     }, durationMs)
   }, [])
+
+  useEffect(() => window.api.onExtensionNotification?.(event => {
+    // Attribute extension-authored text with host-owned metadata. The id remains
+    // a reliable fallback during the short startup window before catalog load.
+    const name = useAppStore.getState().installedExtensions
+      .find(entry => entry.manifest.id === event.extensionId)?.manifest.name
+      ?? event.extensionId
+    showToast(`${name}: ${event.message}`, 6000)
+  }), [showToast])
 
   const dismiss = useCallback(() => {
     if (timerRef.current) {

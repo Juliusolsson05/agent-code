@@ -344,6 +344,7 @@ export class ExtensionRuntimeService {
         case 'storage.keys': result = await extensionStorageKeys(id); break
         case 'fs.readText':
         case 'fs.writeText':
+        case 'notifications.show':
           result = await this.options.capabilities.invoke(id, runtime.revision, request)
           break
         case 'views.publish': {

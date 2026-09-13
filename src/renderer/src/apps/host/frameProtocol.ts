@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { extensionJsonSchema, type RuntimeViewSnapshot } from '@shared/types/extensionRuntime'
-import { extensionFileReadRequestSchema, extensionFileWriteRequestSchema } from '@shared/types/extensionServices'
+import { extensionFileReadRequestSchema, extensionFileWriteRequestSchema, extensionNotificationRequestSchema } from '@shared/types/extensionServices'
 
 // The host <-> extension-frame message contract (WS4, sandbox substrate).
 //
@@ -74,6 +74,7 @@ export const frameRequestSchema = z.discriminatedUnion('method', [
   // child. Main resolves and contains the path again at the actual filesystem call.
   extensionFileReadRequestSchema,
   extensionFileWriteRequestSchema,
+  extensionNotificationRequestSchema,
 ])
 
 /**

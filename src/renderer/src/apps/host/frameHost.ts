@@ -132,6 +132,7 @@ export function createFrameHost(options: {
     'panes.observe': 'panes.observe',
     'fs.readText': 'fs.read',
     'fs.writeText': 'fs.write',
+    'notifications.show': 'notifications.show',
   }
 
   const perform = async (request: FrameRequest): Promise<unknown> => {
@@ -182,6 +183,7 @@ export function createFrameHost(options: {
       // filesystem I/O itself.
       case 'fs.readText':
       case 'fs.writeText':
+      case 'notifications.show':
         return window.api.extensionsServiceRequest(extensionId, bundleRevision, request)
       default:
         // Exhaustiveness. Without it an unhandled method fell off the end returning

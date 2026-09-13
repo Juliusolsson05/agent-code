@@ -635,6 +635,12 @@ async function startApp(): Promise<void> {
   // target still has to name a live main-owned session and therefore a real cwd.
   extensionCapabilities = new ExtensionCapabilityService({
     resolveSessionRoot: sessionId => manager?.getSpawnCwd(sessionId) ?? null,
+    // Background runtimes have no view-owned toast callback. Deliver through
+    // the registered window fan-out so one timer event appears in every live
+    // application window and never leaks into hidden extension BrowserWindows.
+    notify: (extensionId, message) => {
+      broadcastToWindows('extensions:notification', { extensionId, message })
+    },
   })
   extensionRuntime = new ExtensionRuntimeService({
     preload: join(__dirname, '../preload/extensionRuntime.js'),

@@ -38,6 +38,9 @@ const api = {
     readText: ({ sessionId, path }) => transport.request({ method: 'fs.readText', sessionId, path }),
     writeText: ({ sessionId, path, text, expectedVersion }) => transport.request({ method: 'fs.writeText', sessionId, path, text, expectedVersion }),
   },
+  notifications: {
+    show: (message) => transport.request({ method: 'notifications.show', message }),
+  },
 };
 function register(map, id, handler) {
   if (typeof handler !== 'function') throw new Error('A runtime handler must be a function.');

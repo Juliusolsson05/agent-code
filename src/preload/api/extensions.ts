@@ -2,7 +2,7 @@ import { ipcRenderer } from 'electron'
 import type { ExtensionJson, RuntimeViewEvent, RuntimeViewSnapshot } from '@shared/types/extensionRuntime.js'
 import { subscribe } from '@preload/api/ipc.js'
 import type { ExtensionInputBindings, ExtensionNativeInput } from '@shared/types/extensionInput.js'
-import type { ExtensionServiceRequest, ExtensionServiceResult } from '@shared/types/extensionServices.js'
+import type { ExtensionNotification, ExtensionServiceRequest, ExtensionServiceResult } from '@shared/types/extensionServices.js'
 
 import type {
   ExtensionCapability,
@@ -53,6 +53,8 @@ export const extensionsApi = {
   // forwarding a child request; the managed runtime uses its separate preload.
   extensionsServiceRequest: (extensionId: string, revision: string, request: ExtensionServiceRequest): Promise<ExtensionServiceResult> =>
     ipcRenderer.invoke('extensions:runtime-host', { method: 'service', extensionId, revision, request }),
+  onExtensionNotification: (handler: (event: ExtensionNotification) => void): (() => void) =>
+    subscribe('extensions:notification', handler),
 
   extensionStorageGet: (appId: string, key: string): Promise<unknown> =>
     ipcRenderer.invoke('extensions:storage-get', appId, key),

@@ -25,9 +25,18 @@ export const extensionFileWriteRequestSchema = z.object({
   text: z.string().max(64 * 1024),
 }).strict()
 
+export const extensionNotificationRequestSchema = z.object({
+  method: z.literal('notifications.show'),
+  // Background notifications are intentionally short status messages. A hard
+  // transport bound keeps a broken extension from turning one toast into an
+  // unbounded application overlay or IPC payload.
+  message: z.string().trim().min(1).max(200),
+}).strict()
+
 export const extensionServiceRequestSchema = z.discriminatedUnion('method', [
   extensionFileReadRequestSchema,
   extensionFileWriteRequestSchema,
+  extensionNotificationRequestSchema,
 ])
 
 export type ExtensionServiceRequest = z.infer<typeof extensionServiceRequestSchema>
@@ -55,7 +64,12 @@ export type ExtensionTextFileWrite = {
   version: string
 }
 
-export type ExtensionServiceResult = ExtensionTextFile | ExtensionTextFileWrite
+export type ExtensionServiceResult = ExtensionTextFile | ExtensionTextFileWrite | void
+
+export type ExtensionNotification = {
+  extensionId: string
+  message: string
+}
 
 export type ExtensionFilesApi = {
   /**
@@ -78,4 +92,9 @@ export type ExtensionFilesApi = {
     text: string
     expectedVersion: string | null
   }): Promise<ExtensionTextFileWrite>
+}
+
+export type ExtensionNotificationsApi = {
+  /** Show a short app-wide status toast. Requires `notifications.show`. */
+  show(message: string): Promise<void>
 }

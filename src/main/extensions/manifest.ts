@@ -174,9 +174,10 @@ export const extensionManifestSchema = z.object({
     .optional(),
   permissions: z.array(capabilityName).max(16).optional(),
 }).superRefine((manifest, context) => {
-  const v2OnlyPermission = manifest.permissions?.find(
-    permission => permission === 'fs.read' || permission === 'fs.write',
-  )
+  const v2OnlyPermission = manifest.permissions?.find(permission =>
+    permission === 'fs.read'
+    || permission === 'fs.write'
+    || permission === 'notifications.show')
   if (manifest.apiVersion === 1 && v2OnlyPermission) {
     // v1 owns one isolated view-local activation and its public API is frozen.
     // Advertising a capability that only the v2 runtime/view contract exposes

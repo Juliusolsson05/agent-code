@@ -242,6 +242,7 @@ const api = {
     readText: ({ sessionId, path }) => request('fs.readText', { sessionId, path }),
     writeText: ({ sessionId, path, text, expectedVersion }) => request('fs.writeText', { sessionId, path, text, expectedVersion }),
   },
+  notifications: { show: (message) => request('notifications.show', { message }) },
 };
 
 // Listeners for host-pushed change nudges (Tier-1 observe live updates), keyed by

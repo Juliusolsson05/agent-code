@@ -61,6 +61,7 @@ void (async () => {
   })
   const capabilities = new ExtensionCapabilityService({
     resolveSessionRoot: sessionId => sessionId === 'fixture-session' ? projectRoot : null,
+    notify: () => {},
   })
   const service = new ExtensionRuntimeService({ preload: process.env.AGENT_CODE_EXTENSION_RUNTIME_PRELOAD ?? join(root!, 'preload.cjs'), capabilities, startupTimeoutMs: 3000, invocationTimeoutMs: 1500, onStatus: status => statuses.push(status) })
 

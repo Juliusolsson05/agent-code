@@ -4,6 +4,7 @@ import { isExtensionJson, type ExtensionJson } from './extensionJson.js'
 import {
   extensionFileReadRequestSchema,
   extensionFileWriteRequestSchema,
+  extensionNotificationRequestSchema,
   extensionServiceRequestSchema,
 } from './extensionServices.js'
 export { isExtensionJson, type ExtensionJson } from './extensionJson.js'
@@ -23,6 +24,7 @@ export const runtimeApiRequestSchema = z.discriminatedUnion('method', [
   z.object({ method: z.literal('views.publish'), viewId: identifier, state: extensionJsonSchema }).strict(),
   extensionFileReadRequestSchema,
   extensionFileWriteRequestSchema,
+  extensionNotificationRequestSchema,
 ])
 export type RuntimeApiRequest = z.infer<typeof runtimeApiRequestSchema>
 

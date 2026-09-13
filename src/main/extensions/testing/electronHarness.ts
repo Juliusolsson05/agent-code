@@ -93,11 +93,13 @@ void (async () => {
   registerExtensionsIpc()
   const trusted = new Set<number>()
   const runtimeStarts: string[] = []
+  const extensionNotifications: Array<{ extensionId: string; message: string }> = []
   const projectRoot = join(root!, 'extension-project')
   await mkdir(projectRoot, { recursive: true })
   await writeFile(join(projectRoot, 'extension-readable.txt'), 'SDK service boundary\n')
   const capabilities = new ExtensionCapabilityService({
     resolveSessionRoot: sessionId => sessionId === 'fixture-session' ? projectRoot : null,
+    notify: (extensionId, message) => extensionNotifications.push({ extensionId, message }),
   })
   const service = new ExtensionRuntimeService({ preload: join(root!, 'runtime-preload.cjs'), capabilities, onStatus: status => {
     if (status.state === 'starting') runtimeStarts.push(status.extensionId)
@@ -143,6 +145,10 @@ void (async () => {
     if (attempts === 1) await new Promise(() => {});`)
   const externalSource = process.env.AGENT_CODE_EXTENSION_EXTERNAL_SOURCE
   const externalChecks = JSON.parse(process.env.AGENT_CODE_EXTENSION_EXTERNAL_VIEWS ?? '[]') as ExternalViewCheck[]
+  const externalBackgroundCommand = process.env.AGENT_CODE_EXTENSION_EXTERNAL_BACKGROUND_COMMAND
+  const externalBackgroundCheck = process.env.AGENT_CODE_EXTENSION_EXTERNAL_BACKGROUND_VIEW
+    ? JSON.parse(process.env.AGENT_CODE_EXTENSION_EXTERNAL_BACKGROUND_VIEW) as ExternalViewCheck
+    : null
   // This path installs an author's actual built directory into the same isolated
   // ledger as the synthetic fixtures. It exists because a browser preview can
   // prove the UI and the host fixture can prove the shell, while neither alone
@@ -154,7 +160,17 @@ void (async () => {
       const declaredMount: string | undefined = external.manifest.contributes?.views?.find(
         (view: { id: string; mount: string }) => view.id === check.viewId,
       )?.mount
-      assert.equal(declaredMount, 'modal', `${check.viewId} must be a contributed modal view`)
+      assert.ok(declaredMount, `${check.viewId} must be a contributed view`)
+    }
+    if (externalBackgroundCommand && externalBackgroundCheck) {
+      assert.ok(
+        external.manifest.contributes?.commands?.some(command => command.id === externalBackgroundCommand),
+        `${externalBackgroundCommand} must be a contributed command`,
+      )
+      assert.ok(
+        external.manifest.contributes?.views?.some(view => view.id === externalBackgroundCheck.viewId),
+        `${externalBackgroundCheck.viewId} must be a contributed view`,
+      )
     }
   }
   const win = new BrowserWindow({
@@ -225,6 +241,10 @@ void (async () => {
     assert.equal(managedWrite.path, 'extension-runtime-written.txt')
     assert.equal(typeof managedWrite.version, 'string')
     assert.equal(await readFile(join(projectRoot, 'extension-runtime-written.txt'), 'utf8'), 'written by SDK runtime\n')
+    assert.equal(await command('notify'), 'notified')
+    assert.deepEqual(extensionNotifications, [{
+      extensionId: 'managed', message: 'Managed background task complete',
+    }])
     assert.equal((await win.webContents.executeJavaScript('window.fixtureHarness.snapshot()')).src, null, 'cold commands must not open a view')
     await win.webContents.executeJavaScript('window.fixtureHarness.render("managed", 0, false, "managed.main", false, true)')
     const firstView = await waitFor(win, state => state.messages.some(message => message.kind === 'fixture:mount') && state.messages.some(message => message.kind === 'fixture:file'), 'first managed view and scoped file read')
@@ -321,25 +341,74 @@ void (async () => {
       if (external) {
         let firstDocument = ''
         for (const [index, check] of externalChecks.entries()) {
-          await win.webContents.executeJavaScript(`window.fixtureHarness.render(${JSON.stringify(external.manifest.id)}, 0, false, ${JSON.stringify(check.viewId)}, true, true)`)
+          const mount = external.manifest.contributes?.views?.find(view => view.id === check.viewId)?.mount
+          const modal = mount === 'modal'
+          await win.webContents.executeJavaScript(`window.fixtureHarness.render(${JSON.stringify(external.manifest.id)}, 0, false, ${JSON.stringify(check.viewId)}, ${modal}, true)`)
           const documentUrl = await waitForExtensionElement(win, external.manifest.id, check.selector)
           if (index === 0) firstDocument = documentUrl
           const state = await win.webContents.executeJavaScript('window.fixtureHarness.snapshot()') as Snapshot
           assert.equal(state.failures.some(failure => failure.error.includes(external.manifest.id)), false)
-          const frame = win.webContents.mainFrame.frames.find(candidate => candidate.url === documentUrl)!
-          await frame.executeJavaScript(`document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`)
-          await waitFor(win, snapshot => snapshot.src === null && snapshot.messages.some(message => message.kind === 'fixture:close'), `${check.viewId} modal close`)
+          if (modal) {
+            const frame = win.webContents.mainFrame.frames.find(candidate => candidate.url === documentUrl)!
+            await frame.executeJavaScript(`document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`)
+            await waitFor(win, snapshot => snapshot.src === null && snapshot.messages.some(message => message.kind === 'fixture:close'), `${check.viewId} modal close`)
+          } else {
+            await win.webContents.executeJavaScript('window.fixtureHarness.unmount()')
+          }
           await waitForDocumentTeardown(win)
         }
         if (externalChecks.length > 0) {
           const check = externalChecks[0]!
-          await win.webContents.executeJavaScript(`window.fixtureHarness.render(${JSON.stringify(external.manifest.id)}, 0, false, ${JSON.stringify(check.viewId)}, true, true)`)
+          const modal = external.manifest.contributes?.views?.find(view => view.id === check.viewId)?.mount === 'modal'
+          await win.webContents.executeJavaScript(`window.fixtureHarness.render(${JSON.stringify(external.manifest.id)}, 0, false, ${JSON.stringify(check.viewId)}, ${modal}, true)`)
           const reopened = await waitForExtensionElement(win, external.manifest.id, check.selector)
           assert.notEqual(reopened, firstDocument, 'reopening must create a fresh sandbox document')
           await win.webContents.executeJavaScript('window.fixtureHarness.unmount()')
           await waitForDocumentTeardown(win)
         }
-        console.log(`PASS external v2 bundle: installed ${external.manifest.id}; mounted, closed and reopened ${externalChecks.length} modal views`)
+        console.log(`PASS external v2 bundle: installed ${external.manifest.id}; mounted, closed and reopened ${externalChecks.length} views`)
+
+        if (externalBackgroundCommand && externalBackgroundCheck) {
+          await win.webContents.executeJavaScript('window.fixtureHarness.unmount()')
+          await waitForDocumentTeardown(win)
+          const revision = extensionRevision(external)
+          await win.webContents.executeJavaScript(
+            `window.api.extensionsRuntimeCommand(${JSON.stringify(external.manifest.id)}, ${JSON.stringify(revision)}, ${JSON.stringify(externalBackgroundCommand)})`,
+          )
+          assert.equal(
+            (await win.webContents.executeJavaScript('window.fixtureHarness.snapshot()')).src,
+            null,
+            'a background command must not open its contributed view',
+          )
+          const mount = external.manifest.contributes?.views
+            ?.find(view => view.id === externalBackgroundCheck.viewId)?.mount
+          const modal = mount === 'modal'
+          const renderBackgroundView = () => win.webContents.executeJavaScript(
+            `window.fixtureHarness.render(${JSON.stringify(external.manifest.id)}, 0, false, ${JSON.stringify(externalBackgroundCheck.viewId)}, ${modal}, true)`,
+          )
+          const readState = async (): Promise<string> => {
+            const documentUrl = await waitForExtensionElement(
+              win, external.manifest.id, externalBackgroundCheck.selector,
+            )
+            const frame = win.webContents.mainFrame.frames
+              .find(candidate => candidate.url === documentUrl)!
+            return frame.executeJavaScript(
+              `document.querySelector(${JSON.stringify(externalBackgroundCheck.selector)})?.textContent?.trim() ?? ''`,
+            ) as Promise<string>
+          }
+          await renderBackgroundView()
+          const before = await readState()
+          assert.ok(before, 'the external background state selector must contain text')
+          await win.webContents.executeJavaScript('window.fixtureHarness.unmount()')
+          await waitForDocumentTeardown(win)
+          await new Promise(resolve => setTimeout(resolve, 1_250))
+          await renderBackgroundView()
+          const after = await readState()
+          assert.notEqual(after, before, 'the external runtime state must advance with no view mounted')
+          await win.webContents.executeJavaScript('window.fixtureHarness.unmount()')
+          await waitForDocumentTeardown(win)
+          console.log(`PASS external v2 background: ${externalBackgroundCommand} advanced ${externalBackgroundCheck.selector} while the view was closed`)
+        }
       }
 
       // Theme ownership follows the real installer/catalog, independently of

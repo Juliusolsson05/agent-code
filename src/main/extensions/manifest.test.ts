@@ -157,7 +157,7 @@ describe('parseExtensionManifest — capabilities', () => {
     expect(parsed.permissions).toEqual([...EXTENSION_CAPABILITIES])
   })
 
-  it.each(['fs.read', 'fs.write'])('keeps %s on the v2 service contract', permission => {
+  it.each(['fs.read', 'fs.write', 'notifications.show'])('keeps %s on the v2 service contract', permission => {
     expect(() => parseExtensionManifest(manifest({ permissions: [permission] }))).toThrow(/requires Agent Code API v2/)
   })
 
