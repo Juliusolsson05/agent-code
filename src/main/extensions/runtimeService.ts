@@ -220,7 +220,18 @@ export class ExtensionRuntimeService {
       validate?.(installation)
       const existing = this.runtimes.get(extensionId)
       if (existing?.revision === revision) return existing
-      if (installation.manifest.apiVersion === 2 && !installation.manifest.activationEvents?.some(event => event === '*' || event === reason)) {
+      // `onStartupFinished` grants the same eligibility as `*`. Such an
+      // extension asked to run for the whole session, so refusing its own
+      // command or view merely because the engine is not running right now
+      // protects nothing: the startup pass would have started it anyway. The
+      // refusal instead stranded real states where a startup runtime is absent
+      // — a command deadline or crash destroyed it, activation failed and the
+      // user pressed Retry, or startup activation had not been enabled yet when
+      // it was installed. Timer (startup-only manifest) reproduced this in the
+      // Electron journey: its panel could never attach until an app restart.
+      // Lazy extensions keep exact matching, so an undeclared contribution still
+      // cannot start a cold engine that deliberately waits for a specific event.
+      if (installation.manifest.apiVersion === 2 && !installation.manifest.activationEvents?.some(event => event === '*' || event === 'onStartupFinished' || event === reason)) {
         throw new Error(`This extension does not declare activation for ${reason}.`)
       }
       if (existing) this.retire(existing, 'Extension generation changed.', 'stopped')

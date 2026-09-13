@@ -85,6 +85,11 @@ startup and after installation/update; `onCommand:<declared-id>` or
 activation events never start a cold runtime. Once active, registered commands
 execute without requiring another matching activation event.
 
+An `onStartupFinished` or `*` extension may also be started by any of its own
+commands or views. This lets its engine come back after a crash, a command
+deadline or a failed activation without an app restart, so a startup-only
+manifest does not need to list `onCommand`/`onView` events as well.
+
 A command matching a view id opens that view. `<extension-id>.open` also opens the
 view of a single-view extension. Other v2 commands run in the shared runtime and
 return an acknowledged result/error; they do not open a view. Declare startup or

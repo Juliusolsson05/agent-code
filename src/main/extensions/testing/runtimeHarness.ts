@@ -248,6 +248,11 @@ void (async () => {
 
     const startup = await install(1, 'startup-engine', undefined, '', 'startup')
     const lazy = await install(1, 'lazy-engine', undefined, '', 'lazy')
+    // Cold startup reactivation: startup activation is not enabled yet, so the
+    // startup-only engine is installed but absent — the same state it is in
+    // after a crash, deadline or failed activation. Its own contribution must
+    // start it; the startup pass below then reuses it instead of activating twice.
+    assert.equal(await service.invokeCommand('startup-engine', extensionRevision(startup), 'startup-engine.increment'), 1)
     await service.activateStartupExtensions()
     assert.equal(await extensionStorageGet('startup-engine', 'activations'), 1)
     assert.equal(await extensionStorageGet('lazy-engine', 'activations'), undefined)
@@ -261,7 +266,7 @@ void (async () => {
     await removeExtension('startup-engine')
     await removeExtension('lazy-engine')
     await until(async () => BrowserWindow.getAllWindows().length === 1, 'startup fixture teardown')
-    console.log('PASS runtime activation: explicit startup/lazy rules, update activation and no duplicate startup')
+    console.log('PASS runtime activation: explicit startup/lazy rules, cold startup reactivation, update activation and no duplicate startup')
 
     const reader = await install(1, 'file-engine', undefined, '', 'lazy', ['fs.read', 'fs.write'])
     const readerRevision = extensionRevision(reader)
