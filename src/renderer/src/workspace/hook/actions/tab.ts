@@ -8,8 +8,8 @@ import {
 } from '@renderer/workspace/closeConfirmation'
 import { requestCloseConfirmation } from '@renderer/workspace/closeConfirmationBroker'
 import { clearLiveEntryWindowSession } from '@renderer/session-runtime/liveEntryWindow'
-import { clearTiledLaneSessions } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
-import { sanitizeTileTabsState, titleFromCwd } from '@renderer/workspace/layout/helpers'
+import { titleFromCwd } from '@renderer/workspace/layout/helpers'
+import { clearRemovedTabTakeovers, workspaceWithoutTab } from '@renderer/workspace/hook/actions/tabRemoval'
 import { mergeProjectTabs, retargetTileTabsAfterMerge } from '@renderer/workspace/mergeProjectTabs'
 import type { MergeProjectTabsResult } from '@renderer/workspace/mergeProjectTabs'
 import { tabIndexLabel } from '@renderer/workspace/tile-tree/paneLabelFormat'
@@ -166,7 +166,10 @@ export function useTabActions(
         .flatMap(entry => {
           const meta = state.sessions[entry.sessionId]
           if (!meta) return []
-          return [{ meta, detachedAt: entry.detachedAt }]
+          // sessionId is the lineage anchor undo publishes when it restores
+          // this row, so older entries naming it (and linked children restored
+          // alongside) follow the respawned id — see UndoLineage.
+          return [{ sessionId: entry.sessionId, meta, detachedAt: entry.detachedAt }]
         })
       refs.undoStackRef.current.push({
         type: 'tab',
@@ -194,46 +197,14 @@ export function useTabActions(
         clearLiveEntryWindowSession(id)
         delete refs.latestScreenRef.current[id]
       }
-      setState(prev => {
-        const tabs = prev.tabs.filter(t => t.id !== tabId)
-        const sessions = { ...prev.sessions }
-        for (const id of idsToKill) delete sessions[id]
-        const detachedSessions = { ...prev.detachedSessions }
-        for (const id of detachedIds) delete detachedSessions[id]
-        const activeTabId =
-          prev.activeTabId === tabId
-            ? (tabs[0]?.id ?? '')
-            : prev.activeTabId
-        const dispatchFocused = prev.dispatchMode?.focusedSessionId
-        // Closing a tab kills all its sessions; clear any tiled lane pointing
-        // at one of them (else the lane dangles and auto-fill bounces to tile 0),
-        // then clear the classic focus if it pointed at a killed session.
-        const killed = new Set(idsToKill)
-        const clearedDispatch = clearTiledLaneSessions(prev.dispatchMode, killed)
-        return {
-          ...prev,
-          tabs,
-          activeTabId,
-          sessions,
-          detachedSessions,
-          dispatchMode: dispatchFocused && killed.has(dispatchFocused)
-            ? { ...clearedDispatch!, focusedSessionId: undefined }
-            : clearedDispatch,
-        }
-      })
-      setTileTabs(prev => {
-        if (!prev) return prev
-        const sanitized = sanitizeTileTabsState({
-          ...prev,
-          tabIds: prev.tabIds.filter(id => id !== tabId),
-          focusedTabId: prev.focusedTabId === tabId
-            ? (prev.tabIds.find(id => id !== tabId) ?? prev.focusedTabId)
-            : prev.focusedTabId,
-        })
-        return sanitized
-      })
-      setSpotlight(prev => (prev?.tabId === tabId ? null : prev))
-      setReaderMode(prev => (prev?.tabId === tabId ? null : prev))
+      // The removal tail is shared with closeSession's emptied-tab branch, which
+      // is what the root dialog's "Close Tab" button ends in. Same next-active
+      // tab (previous neighbour), same Dispatch lane/focus cleanup, same
+      // takeover cleanup — see tabRemoval.ts for why these had to converge.
+      // `detachedIds` need no separate pass: the helper deletes both the
+      // SessionMeta and any detached record for every removed id.
+      setState(prev => workspaceWithoutTab(prev, tabId, idsToKill))
+      clearRemovedTabTakeovers({ setTileTabs, setSpotlight, setReaderMode }, tabId)
     },
     // No `state.*` deps any more: this callback reads through refs, which is
     // the point. Depending on the state slices used to churn a new closure on
