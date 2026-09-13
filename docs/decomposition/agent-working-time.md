@@ -1,14 +1,15 @@
 # Agent Working Time — Stage Decomposition
 
-> **Status:** Stages 1–3 (the #963 fix) are built and in review:
-> [agent-code#967](https://github.com/Juliusolsson05/agent-code/pull/967), which depends on
+> **Status:** Stages 1–3 (the #963 fix) are merged:
+> [agent-code#967](https://github.com/Juliusolsson05/agent-code/pull/967) (`312012b5`) with
 > [claude-code-headless#59](https://github.com/Juliusolsson05/claude-code-headless/pull/59) and
-> [codex-headless#51](https://github.com/Juliusolsson05/codex-headless/pull/51) (merge those first,
-> then re-point the gitlinks at their merged commits). Stages 4–6 (analytics, #964) are next,
-> after §6 Q10 (grouping project rows by tab title) is confirmed. Merge requires explicit approval.
+> [codex-headless#51](https://github.com/Juliusolsson05/codex-headless/pull/51). Stages 4–6
+> (Agent Analytics, #964) are built with the defaults recorded in "Stages 4–6 build notes" and
+> are in review. Merge requires explicit approval.
 >
-> **Branch:** `feat/agent-working-time`. **Worktree:** `.worktrees/agent-working-time`.
-> **Base:** `origin/main` at `d12cd347` (2026-09-12).
+> **Branches:** `feat/agent-working-time` (Stages 1–3, merged); `feat/agent-analytics`, worktree
+> `.worktrees/agent-analytics` (Stages 4–6).
+> **Base:** `origin/main` at `d12cd347` (2026-09-12) for Stages 1–3; Stages 4–6 build on the #967 merge.
 > **Bug:** [#963](https://github.com/Juliusolsson05/agent-code/issues/963).
 > **Feature:** [#964](https://github.com/Juliusolsson05/agent-code/issues/964).
 >
@@ -364,28 +365,58 @@ defaults, recorded here and in #964:
 - **Scope of "time":** **agent working time only.** The user's own activity (prompts
   sent, focus per tab) is not recorded; it can be added later as a separate figure.
 
-Design as built, where it refines the stage text below:
+Design as built. Where this list and the Stage 4–6 text below differ, **this list is
+what exists**:
 
 - **Contract first:** `src/shared/agentActivity/summaryTypes.ts` fixes the summary
-  tree (projects → repositories → worktrees, plus each project's agents with labels,
-  agent-hours and wall-clock hours, days) so the window and the recorder are built
-  in parallel against one shape.
-- **Working state in main:** a pure reducer over the manager's `semantic-event`
-  (`stream_phase`, `turn_started`, `turn_completed`), `conditions` (blocked on the
-  user ⇒ not working), `removed` and `exit`. It follows the renderer's stream-phase
-  rules, and an equivalence test feeds the same real adapter event sequences to both
-  so they cannot drift. It does not import renderer code: the layering forbids it
-  and the renderer reducer needs the full semantic fold.
+  tree (projects → repositories → worktrees, each project's agents with the label the
+  user sees, agent-hours and wall-clock in milliseconds, days) so the window and the
+  recorder were built in parallel against one shape.
+- **Working state in main, restated — not moved:** `src/shared/agentActivity/workingState.ts`
+  restates the stream-phase rules instead of moving the renderer machine to shared as
+  Stage 4 proposed, because that machine's `turn_completed` guard consults the
+  renderer-only semantic fold. `workingStateEquivalence.test.ts` drives the real
+  Claude and Codex proxy adapters into both and requires the same working state after
+  **every** event. On its first run it caught a real divergence: adapters complete a
+  turn while a tool block is still owed a result, the counter stays working, and main
+  went idle for that event. Main now keeps the fold's minimal pending-tool bookkeeping.
+  The adapter drivers moved to `session-runtime/semantic/testing/proxyPaneDrivers.ts`,
+  shared with the #963 turn-clock test so both replay identical traffic.
+- **Blocked on the user:** the attention condition kinds moved out of the three
+  renderer condition policies into `src/shared/types/providerConditionAttention.ts`
+  (main cannot load the policies — they import the renderer capability registry). The
+  policies and main's recorder read the same sets.
+- **Where a session lives:** `src/main/agentActivity/workspaceProjection.ts` reads the
+  persisted workspace — grid leaves, Dispatch `projectTabId`, buried `sourceTabId`,
+  session meta, tab titles — plus agent-name assignments, like the conversation
+  ledger. Context is resolved when an interval **closes**, because a new agent's
+  metadata reaches main only through the renderer's debounced workspace autosave.
 - **Suspensions are stored, not baked in:** intervals are recorded as observed and
   the summary subtracts stored suspensions with `suspendedMsWithin`, the same rule
-  as the counter. Recording stays simple and a later fix to suspension detection
-  corrects history.
-- **Crash safety without growth:** open intervals live in one small `open.json`
-  rewritten on change and touched every 30 s; at startup any interval left open is
-  closed at that last touch, so an unclean shutdown contributes seconds, not hours.
-- **Storage:** closed intervals append to monthly JSONL under
-  `STATE_DIR/agent-activity/`; suspensions append to their own file. Older months
-  compact into per-day rollups (see Stage 4 storage) so all-time ranges stay cheap.
+  as the counter, so a later fix to suspension detection corrects history.
+- **Storage:** `STATE_DIR/agent-activity/YYYY-MM.jsonl` (UTC month of the interval's
+  start) holds one context line per distinct context per month and one short line per
+  working period; `suspensions.jsonl`; `open.json`. Not registered with
+  `debugRetention` (user data kept forever).
+- **Crash safety:** `open.json` is rewritten on every open/close and touched every
+  30 s — not the run journal Stage 4 proposed. Startup closes leftovers at that last
+  touch. There is no `before-quit` flush: a normal quit loses at most one touch period,
+  the same bound as a crash.
+- **Summary:** pure `src/main/agentActivity/summarize.ts` — agent-hours sum,
+  wall-clock union, suspensions subtracted from both, range cut, tab-title grouping,
+  repositories → worktrees, latest label per agent, a row for every local day in the
+  range. Agents working right now count up to now; the recorder settles pending writes
+  before summarizing so a turn that just ended is never missing.
+- **Deliberately not built:**
+  - Rollup compaction. An interval line is ~60 bytes and context is written once per
+    month, so a heavy year stays in single-digit megabytes and all-time reads every
+    month file. Add rollups when all-time becomes measurably slow, not before.
+  - The Stage 4 evidence-fixture extraction. Coverage instead: real adapters with
+    synthetic traffic (equivalence), the recorded case A timings already pinned in
+    `turnClockAcrossSleep.test.ts`, and a real store in a temp directory for the
+    recorder and store tests.
+  - Seeding from `manager.list()`: the recorder is wired before windows restore their
+    sessions, so it sees every `started`.
 
 ### Stage 4 — Working-interval recorder (main, durable)
 
