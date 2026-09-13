@@ -25,13 +25,14 @@ const tab = (id: string): Tab => ({
 
 function workspace(activeTabId: string): WorkspaceState {
   return {
-    tabs: [tab('a'), tab('b'), tab('c')],
+    tabs: [tab('a'), tab('b'), tab('c'), tab('d')],
     activeTabId,
     sessions: {
       'a-root': { cwd: '/a', kind: 'claude' },
       'b-root': { cwd: '/b', kind: 'claude' },
       'b-row': { cwd: '/b', kind: 'codex' },
       'c-root': { cwd: '/c', kind: 'claude' },
+      'd-root': { cwd: '/d', kind: 'claude' },
     },
     detachedSessions: {
       'b-row': { sessionId: 'b-row', surface: 'dispatch', projectTabId: 'b', projectTabTitle: 'B', projectTabIndex: 1, detachedAt: 1 },
@@ -46,13 +47,14 @@ function workspace(activeTabId: string): WorkspaceState {
 }
 
 describe('workspaceWithoutTab', () => {
-  it('activates the previous neighbour when the active middle tab closes', () => {
-    // The Close Tab command used to jump to tabs[0]; with three tabs that is
-    // indistinguishable from the neighbour rule, which is why the middle tab
-    // closing is the case that pins it.
-    const next = workspaceWithoutTab(workspace('b'), 'b', ['b-root', 'b-row'])
-    expect(next.tabs.map(candidate => candidate.id)).toEqual(['a', 'c'])
-    expect(next.activeTabId).toBe('a')
+  it('activates the previous neighbour when an active middle tab closes', () => {
+    // The Close Tab command used to jump to tabs[0]. Closing the second tab
+    // cannot tell the two rules apart (its previous neighbour IS the first tab),
+    // so this closes the third of four: the neighbour rule picks b, the old
+    // rule would pick a. A mutation check caught the weaker first version.
+    const next = workspaceWithoutTab(workspace('c'), 'c', ['c-root'])
+    expect(next.tabs.map(candidate => candidate.id)).toEqual(['a', 'b', 'd'])
+    expect(next.activeTabId).toBe('b')
   })
 
   it('activates the new first tab when the active first tab closes', () => {
@@ -65,7 +67,7 @@ describe('workspaceWithoutTab', () => {
 
   it('removes the sessions and rows it is given and clears their Dispatch lanes and focus', () => {
     const next = workspaceWithoutTab(workspace('b'), 'b', ['b-root', 'b-row'])
-    expect(Object.keys(next.sessions).sort()).toEqual(['a-root', 'c-root'])
+    expect(Object.keys(next.sessions).sort()).toEqual(['a-root', 'c-root', 'd-root'])
     expect(next.detachedSessions).toEqual({})
     expect(next.dispatchMode?.focusedSessionId).toBeUndefined()
     expect(next.dispatchMode?.tiled?.lanes.map(lane => lane.selectedSessionId)).toEqual([undefined, 'a-root'])
