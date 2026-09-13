@@ -152,10 +152,11 @@ describe('OpenCode CLI process-tree termination', () => {
     // The launcher exits 0 at once while an escaped helper keeps stderr open,
     // so the deadline fires after Node reaped the leader but before `close`.
     // Nothing reserves that group id any more: a negative-pid SIGKILL would be
-    // aimed at whatever group reused the number. The spy records requested
-    // targets; with the fix no group signal is ever requested, so no real
-    // process is at risk in this test either way.
-    const kills = vi.spyOn(process, 'kill')
+    // aimed at whatever group reused the number. So a regression is recorded,
+    // never delivered: the spy swallows every negative-pid request and passes
+    // only positive pids (liveness probes, cleanup) to the real kill.
+    const realKill = process.kill.bind(process)
+    const kills = vi.spyOn(process, 'kill').mockImplementation((pid, signal) => pid < 0 ? true : realKill(pid, signal))
     const run = startTree('escaped-exit', 1000)
     let tree: Tree | undefined
     try {
