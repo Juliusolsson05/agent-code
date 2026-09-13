@@ -19,6 +19,7 @@ import { dispatchColorFlagCommands } from '@renderer/features/workspace/commands
 import { agentTitleCommands } from '@renderer/features/workspace/commands/agentTitleCommands'
 import { remoteCommands } from '@renderer/features/remote/commands/remoteCommands'
 import { usageCommands } from '@renderer/features/usage/commands/usageCommands'
+import { agentAnalyticsCommands } from '@renderer/features/agent-analytics/commands/agentAnalyticsCommands'
 import { paletteCommands } from '@renderer/features/command-palette/commands/paletteCommands'
 import type { CommandDef } from '@renderer/features/command-palette/types'
 
@@ -89,6 +90,8 @@ export const builtInCommandCatalog: readonly CommandDef[] = Object.freeze([
   ...agentStatusCommands,
   ...remoteCommands,
   ...usageCommands,
+  // Beside Usage: both are app-wide "how much went where" reports (#964).
+  ...agentAnalyticsCommands,
   // Last: it is never rendered as a palette row (see
   // PALETTE_SELF_EXCLUDED_COMMAND_IDS), so its position cannot shift anything
   // the user browses. Appending also keeps every existing row's index stable.

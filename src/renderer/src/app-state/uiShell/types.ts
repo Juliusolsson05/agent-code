@@ -340,6 +340,10 @@ export type UiShellState = {
    * and persisting it in WorkspaceState would make a quota inspection look
    * like durable workspace data. */
   usageModalOpen: boolean
+  /** When true, the Agent Analytics modal is open (#964). App chrome, not
+   *  workspace data: it summarizes every tab and window, so no pane owns it and
+   *  persisting it would make a report look like durable workspace state. */
+  agentAnalyticsOpen: boolean
   /** When true, the API Key Vault modal is open (#831). Transient command
    *  chrome, not workspace data — same rationale as usageModalOpen above. */
   keyVaultOpen: boolean
