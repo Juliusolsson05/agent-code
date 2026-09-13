@@ -92,13 +92,15 @@ describe('Close Old Agents destructive scope (#886)', () => {
     expect(showToast).toHaveBeenLastCalledWith('Closed 1, 1 skipped (changed).', 6000)
   })
 
-  it('skips an eligible parent whose linked worker is excluded', async () => {
+  it('keeps an eligible parent whose linked worker is excluded, and says why', async () => {
     const { harness, onClose } = mountCleanup({ working: true, linked: true })
     fireEvent.click(screen.getByRole('button', { name: 'Close 1 Agent' }))
     await waitFor(() => expect(onClose).toHaveBeenCalledOnce())
     expect(killOwnedSession).not.toHaveBeenCalled()
     expect(Object.keys(harness.getState().sessions)).toEqual(['root', 'worker'])
-    expect(showToast).toHaveBeenLastCalledWith('Closed 0, 1 skipped (changed).', 6000)
+    // Its own bucket (#886 review m7): nothing about the parent changed; it is
+    // kept because killing it would orphan the working linked child.
+    expect(showToast).toHaveBeenLastCalledWith('Closed 0, 1 kept (linked agent still open).', 6000)
   })
 
   it('closes eligible linked children before their parent, counting each exactly once', async () => {

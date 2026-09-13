@@ -245,15 +245,26 @@ export function narrowGrantToCurrent(
 export type PartialCloseOutcome = {
   closed: SessionId[]
   failed: { sessionId: SessionId; error: unknown }[]
+  /**
+   * Still eligible, but kept because a linked session it owns is still open.
+   *
+   * Its own bucket (#886 review m7) because it is not a change: nothing about
+   * the parent moved. Bulk cleanup refuses to orphan a linked child, so a parent
+   * whose child was excluded, is working, or failed to close stays open by
+   * design. Reporting that as "skipped (changed)" told the user something false
+   * and gave them no way to learn why the agent survived.
+   */
+  kept: SessionId[]
   /** Dropped because they changed between grant and commit. */
   skipped: SessionId[]
 }
 
 /** Human-readable result for a bulk close that did not fully succeed. */
 export function describePartialClose(outcome: PartialCloseOutcome): string | null {
-  if (outcome.failed.length === 0 && outcome.skipped.length === 0) return null
+  if (outcome.failed.length === 0 && outcome.skipped.length === 0 && outcome.kept.length === 0) return null
   const parts = [`Closed ${outcome.closed.length}`]
   if (outcome.failed.length > 0) parts.push(`${outcome.failed.length} failed`)
+  if (outcome.kept.length > 0) parts.push(`${outcome.kept.length} kept (linked agent still open)`)
   if (outcome.skipped.length > 0) parts.push(`${outcome.skipped.length} skipped (changed)`)
   return `${parts.join(', ')}.`
 }

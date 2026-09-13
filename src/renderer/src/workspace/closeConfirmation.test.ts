@@ -106,20 +106,21 @@ describe('narrowing a stale grant', () => {
 
 describe('partial close reporting', () => {
   it('says nothing when everything succeeded', () => {
-    expect(describePartialClose({ closed: ['a', 'b'], failed: [], skipped: [] })).toBeNull()
+    expect(describePartialClose({ closed: ['a', 'b'], failed: [], kept: [], skipped: [] })).toBeNull()
   })
 
-  it('reports failures and skips separately', () => {
+  it('reports failures, linked keeps and skips separately', () => {
     // They mean different things: a failure is a backend problem worth
-    // retrying, a skip is the grant correctly refusing to cover new work.
+    // retrying, a skip is the grant correctly refusing to cover new work, and a
+    // keep is a parent deliberately left open because a linked session it owns
+    // is still open (#886 review m7) — nothing about it changed.
     const message = describePartialClose({
       closed: ['a'],
       failed: [{ sessionId: 'b', error: new Error('kill failed') }],
+      kept: ['d'],
       skipped: ['c'],
     })
-    expect(message).toContain('Closed 1')
-    expect(message).toContain('1 failed')
-    expect(message).toContain('1 skipped')
+    expect(message).toBe('Closed 1, 1 failed, 1 kept (linked agent still open), 1 skipped (changed).')
   })
 })
 

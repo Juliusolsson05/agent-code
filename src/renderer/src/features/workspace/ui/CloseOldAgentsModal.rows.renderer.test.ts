@@ -46,8 +46,13 @@ describe('cleanup activity evidence (#886)', () => {
       expect(row({ [field]: recent })).toMatchObject({ lastActiveAt: recent, ageMs: 60_000 })
     },
   )
-  it('uses the newest timestamp even when transcript records arrive out of order', () => {
-    expect(row({ entries: [entry(recent), entry(old)] }).lastActiveAt).toBe(recent)
+  it('keeps an agent recent when a newer record lands out of order, through the ingest watermark', () => {
+    // #886 review m2: the transcript tail is scanned from the end and stops at
+    // the first valid timestamp (a full O(n) scan ran on every streaming update
+    // while the modal was open). Safety does not rest on the tail: ingesting
+    // the out-of-order record advances lastJsonlEntryAt, and the newest of all
+    // evidence wins.
+    expect(row({ entries: [entry(recent), entry(old)], lastJsonlEntryAt: recent }).lastActiveAt).toBe(recent)
   })
   it('treats process activity as working even before derived status catches up', () => {
     expect(row({ processActive: true, sessionStatus: 'idle', streamPhase: 'idle' }).isLive).toBe(true)
