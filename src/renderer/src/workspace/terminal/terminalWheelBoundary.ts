@@ -64,12 +64,22 @@
  * scroll that reached the top or bottom went on to move the debug panel: the
  * #791 symptom for Alt users (PR #792 review). Alt never reaches this listener
  * in the alt buffer or under mouse reporting, because MouseService consumes it
- * there like any other wheel. Ctrl is Chromium's pinch/zoom channel and Meta
- * is platform navigation/zoom; neither is an xterm scroll gesture, so the
- * browser keeps them. Shift stays exempt deliberately: it is horizontal intent
- * (xterm's own `shiftConvert` turns it horizontal off macOS) and this boundary
- * does not own horizontal scrolling. The horizontal-delta check matches
- * xterm's predominant-axis rule, where a tie counts as vertical.
+ * there like any other wheel.
+ * Ctrl and Meta are a POLICY choice, not xterm behavior. xterm does not filter
+ * either one: while the viewport can move, `_handleMouseWheel` consumes a Ctrl
+ * or Meta wheel as ordinary scrollback before this listener runs. Only an
+ * unconsumed Ctrl/Meta wheel reaches the helper, and the helper deliberately
+ * leaves that one to the browser: Ctrl+wheel is Chromium's pinch/zoom channel
+ * and Meta+wheel belongs to platform navigation/zoom.
+ * Shift is exempt by policy too, as horizontal intent this boundary does not
+ * own. Off macOS, xterm's `shiftConvert` turns a Shift wheel horizontal. On
+ * macOS it does not, and the OS normally converts Shift+mouse-wheel into
+ * horizontal deltas, which the axis check passes anyway. A macOS Shift wheel
+ * that still arrives vertical (possibly from a trackpad) is scrolled
+ * vertically by xterm, so at a boundary it CAN chain to the parent exactly as
+ * Alt used to. That residual gap is unverified; do not narrow the Shift bail
+ * without probe evidence. The horizontal-delta check matches xterm's
+ * predominant-axis rule, where a tie counts as vertical.
  *
  * WHY `!event.cancelable` bails instead of fighting: Chromium latches a wheel
  * scroll sequence to one target, and "with latching enabled only the first
