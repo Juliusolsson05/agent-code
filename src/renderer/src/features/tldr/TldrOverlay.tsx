@@ -82,7 +82,11 @@ export function TldrOverlay({ kind = 'tldr', identity, enabled, runtime, provide
     {...(kind === 'tldr' ? { 'data-tldr-overlay': '' } : { 'data-goal-overlay': '' })}
     role="note"
     aria-label={source.ariaLabel}
-    className="absolute inset-0 z-50 bg-black/95 text-center text-white"
+    // Theme tokens, not black and white: the peek is part of the app, so it
+    // follows the active theme (light themes included) and reads in the same
+    // canvas and ink as the rest of the UI. Opaque canvas keeps the pane's own
+    // text from bleeding through behind the summary.
+    className="absolute inset-0 z-50 bg-canvas text-center text-ink"
     onMouseDown={event => { event.preventDefault(); event.stopPropagation() }}
     onClick={event => event.stopPropagation()}
   >
