@@ -96,3 +96,13 @@ export function queuePendingCommand(extensionId: string, commandId: string): voi
   if (queued) queued.push(commandId)
   else pending.set(extensionId, [commandId])
 }
+
+/**
+ * Drop commands queued for a frame that failed to start. Nothing cleared the
+ * buffer before, so the intent from a failed cold start fired on a much later,
+ * unrelated open — a "Reset" hours after the user gave up — contradicting the
+ * "if the frame never comes up, the intent is discarded" contract above.
+ */
+export function discardPendingCommands(extensionId: string): void {
+  pending.delete(extensionId)
+}

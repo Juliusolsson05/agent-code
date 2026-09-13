@@ -297,6 +297,14 @@ export function handleExtensionScheme(target: Protocol = protocol): void {
         // itself never fetches bundle assets — it only frames them — so it needs nothing
         // here.
         ...corsHeadersFor(request.headers.get('origin'), extensionId),
+        // A bundle file becomes a DOCUMENT when a view navigates its own frame to
+        // it (an .svg or .html in dist). Without a policy that document ran script
+        // at the extension origin with no CSP: it still passed the frame broker's
+        // source/origin checks and could send granted file contents to the
+        // network, breaking the "no network" promise the consent dialog makes.
+        // Script, style and image subresources ignore response CSP, so module
+        // imports and assets load exactly as before.
+        'content-security-policy': childFrameCsp(null, extensionId),
         // Bundles are replaced wholesale on update, and a stale cached module
         // after an update is a confusing, hard-to-diagnose bug class. Extensions
         // are local files; there is nothing to gain by caching them.

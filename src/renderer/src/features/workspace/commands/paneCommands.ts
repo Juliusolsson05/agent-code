@@ -707,13 +707,14 @@ export const paneCommands: CommandDef[] = [
     description:
       '**What it does:** Restores the draft removed by the last **Clear Composer** in this agent.\n\n**Use when:** You cleared the composer by mistake.\n\n**Notes:** Text only — attached images are not restored. Survives further typing, so it is still available after you start over.',
     keywords: ['undo', 'restore', 'composer', 'draft', 'clear', 'recover'],
-    // Plain terminals have no composer at all; the rendered-view policy cannot
-    // hide this for them because it answers "allowed" for non-agent kinds.
+    // Terminals and extension panes have no composer at all; the rendered-view
+    // policy cannot hide this for them because it answers "allowed" for non-agent
+    // kinds. Positive agent check, matching Clear Composer and Send Prompt.
     // This guard reads only the session kind, never the module-level stash,
     // so the staleness concern that kept this command guard-free does not apply.
     when: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
-      return sessionId !== null && workspace.state.sessions[sessionId]?.kind !== 'terminal'
+      return sessionId !== null && isAgentSessionKind(workspace.state.sessions[sessionId]?.kind)
     },
     run: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)

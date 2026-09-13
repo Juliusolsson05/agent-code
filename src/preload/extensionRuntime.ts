@@ -22,7 +22,15 @@ function admit(message: unknown): void {
 // a sandboxed extension into an application renderer with unrestricted authority.
 contextBridge.exposeInMainWorld('agentCodeRuntimeTransport', {
   request: async (request: RuntimeApiRequest) => { admit(request); return ipcRenderer.invoke('extensions:runtime-api', request) },
-  send: (event: RuntimeEvent) => { admit(event); ipcRenderer.send('extensions:runtime-event', event) },
+  send: (event: RuntimeEvent) => {
+    // Replies and lifecycle messages are NOT charged to the data-plane budget.
+    // They are bounded already (one result per pending invocation, one ready or
+    // failed per generation, one stopped per retirement), and charging them made
+    // a handler that issued ~130 fast API calls lose its own reply: the
+    // invocation then hit its 30 s deadline and the whole runtime was destroyed.
+    if (!isExtensionJson(event)) throw new Error('Extension runtime message exceeds the JSON limits.')
+    ipcRenderer.send('extensions:runtime-event', event)
+  },
   subscribe: (listener: (message: RuntimeInvocation) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, message: RuntimeInvocation) => listener(message)
     ipcRenderer.on('extensions:runtime-invoke', handler)

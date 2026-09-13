@@ -24,7 +24,7 @@ export class ExtensionRuntimeViews {
     this.unsubscribe = service.subscribe(this.onChange)
   }
 
-  async attach(owner: number, connectionId: string, extensionId: string, revision: string, viewId: string): Promise<{ instanceId: string; snapshot: RuntimeViewSnapshot }> {
+  async attach(owner: number, connectionId: string, extensionId: string, revision: string, viewId: string, gate?: () => Promise<void>): Promise<{ instanceId: string; snapshot: RuntimeViewSnapshot }> {
     if (this.closed) throw new Error('Extension view host is stopped.')
     if (!connectionId || connectionId.length > 128) throw new Error('Invalid extension view connection.')
     const key = this.key(owner, connectionId)
@@ -38,6 +38,15 @@ export class ExtensionRuntimeViews {
     // and state published during activation must reach the pending subscriber.
     this.connections.set(key, connection)
     try {
+      // The caller's ABI gate awaits a ledger read, so it runs only AFTER the
+      // connection is registered above. A detach arriving during that read must
+      // find and delete the reservation; when the gate ran first, the detach
+      // deleted nothing and the attach then registered a connection nobody owned,
+      // counting toward the per-window cap until the runtime or window went away.
+      if (gate) {
+        await gate()
+        this.assertCurrent(connection)
+      }
       await this.service.startView(extensionId, revision, viewId)
       this.assertCurrent(connection)
       return { instanceId: connection.instanceId, snapshot: this.service.viewSnapshot(extensionId, revision, viewId) }

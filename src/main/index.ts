@@ -1053,7 +1053,12 @@ async function startApp(): Promise<void> {
   setWindowCloseVetoedObserver(() => {
     quitting = false
     extensionQuitReady = false
-    void extensionRuntime?.resume().catch(error => console.error('[extensions] resume after cancelled quit failed:', error))
+    // Announce the resume so v2 views closed by the quit's pause re-attach
+    // (viewBridge retries only views that failed meanwhile). Without it every
+    // open extension view stayed on "failed to start" after Keep Editing.
+    void extensionRuntime?.resume()
+      .then(() => broadcastToWindows('extensions:runtime-resumed', null))
+      .catch(error => console.error('[extensions] resume after cancelled quit failed:', error))
   })
   setWindowClosedObserver(closedWindowId => {
     // WHY quitting is excluded: on quit every window closes, and collapsing all

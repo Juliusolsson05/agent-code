@@ -95,6 +95,7 @@ const unitTestIncludes = [
 // exactly what happened the first time the include was widened.
 export const unitTierExcludes = [
   '**/*.integration.test.ts',
+  '**/*.integration.test.tsx',
   '**/*.renderer.test.ts',
   '**/*.renderer.test.tsx',
   '**/*.system.test.ts',
@@ -110,11 +111,16 @@ export const unitTierExcludes = [
 export const systemTestIncludes = [
   'testing/system/**/*.test.ts',
   'src/**/*.system.test.ts',
+  // The `.tsx` forms mirror unitTierExcludes. Excluding a suffix from the unit
+  // project without including it here made such a test run in NO project while
+  // vitest still reported success.
+  'src/**/*.system.test.tsx',
   // WHY the legacy suffix stays accepted: Agent Code already has useful
   // operating-system-boundary coverage under `.integration.test.ts`. Renaming
   // those files is review noise and would not change their execution contract;
   // new cross-boundary tests should use the shared `.system.test.ts` suffix.
   'src/**/*.integration.test.ts',
+  'src/**/*.integration.test.tsx',
 ] as const
 
 export default defineConfig({

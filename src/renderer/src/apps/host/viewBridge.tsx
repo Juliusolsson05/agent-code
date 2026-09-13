@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useAppStore } from '@renderer/app-state/hooks'
 import type { AgentCodeApiV1 } from '@renderer/apps/api/types'
 import { createFrameHost } from '@renderer/apps/host/frameHost'
-import { clearFrameDispatch, setFrameDispatch } from '@renderer/apps/host/frameRegistry'
+import { clearFrameDispatch, discardPendingCommands, setFrameDispatch } from '@renderer/apps/host/frameRegistry'
 import { THEME_CHANGED_EVENT } from '@renderer/app-state/settings/theme'
 import type { ExtensionListEntry } from '@shared/types/extensions'
 import { extensionRevision } from '@shared/types/extensions'
@@ -82,6 +82,20 @@ function buildViewComponent(
     const [status, setStatus] = useState<'loading' | 'ready' | 'failed'>('loading')
     const [failureMessage, setFailureMessage] = useState('')
     const [attempt, setAttempt] = useState(0)
+    const statusRef = useRef(status)
+    statusRef.current = status
+    useEffect(() => {
+      if (!managed) return
+      // ⌘Q stops every runtime before window unload vetoes run, which closes each
+      // attached v2 view and lands it in fail() as "Agent Code is closing". When
+      // the unsaved-changes sheet cancels the quit, main resumes the host and
+      // announces it. Retry exactly the views that failed meanwhile, instead of
+      // leaving every open extension on "failed to start" until a manual Retry;
+      // a genuinely broken view simply fails once more.
+      return window.api.onExtensionsRuntimeResumed(() => {
+        if (statusRef.current === 'failed') setAttempt(current => current + 1)
+      })
+    }, [])
     useEffect(() => {
       // Keyboard navigation into an extension must move DOM focus too. Do not
       // refocus an already active iframe: that would reset its author's input.
@@ -156,6 +170,9 @@ function buildViewComponent(
         setStatus('failed')
         setFailureMessage(message)
         reportFailure(extensionId, message)
+        // A command queued for this start must not survive it: otherwise it fires
+        // on a later, unrelated open after Retry or Reload succeeds.
+        discardPendingCommands(extensionId)
         stop()
       }
 

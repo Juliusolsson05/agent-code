@@ -444,3 +444,29 @@ only helpers or mocked return values; add each regression alongside its implemen
   https://github.com/Juliusolsson05/agent-code-timer/pull/2 and depends on SDK PR #1 and
   this PR. Transcript, Git, prompt and network services remain unimplemented for this
   release; manifests requesting them fail validation instead of receiving partial access.
+
+- Pre-merge review by five Claude reviewers (install lifecycle, runtime and services, frames
+  and input, workspace integration, SDK) found one blocker and fifteen should-fix defects.
+  The maintainer merged Mini Games #9 and Timer #2 first; SDK #1 merged as `503bced` after its
+  two build-path fixes (production JSX transform, CommonJS config loading) and the submodule now
+  points at that merge commit. Host fixes in this round:
+  - Blocker: manifest keybindings could claim bare keys, Cmd+digit or editing chords app-wide.
+    Install now requires a Cmd chord; load-time admission drops first-party defaults, fixed tab
+    handlers and macOS editing chords, and built-in command ids always beat an extension id.
+  - Native input matches frames by instance id (hash/pushState views kept shortcuts), never lets
+    a focused extension close the window, and no longer swallows Cmd+Left/Right. Bundle assets
+    carry the child CSP, so a navigated SVG/HTML asset cannot reach the network.
+  - Processless panes are refused by text delivery, draft/condition/prompt control tools and
+    Undo Clear Composer; autosave persists drafts only for agents (Key Vault secret leak).
+    Opening a view with a related-agent tab selected splits the physical leaf.
+  - Legacy grants honour their original provenance binding; a same-id bundle from another source
+    is refused instead of inheriting data; staging normalizes directory modes and the sweep
+    continues past failures; the uninstall test exercises real storage.
+  - A cancelled quit re-attaches paused v2 views; expected runtime replies are not charged to the
+    API budget; attach registers before its ABI gate so a racing detach cannot leak; hidden
+    runtime windows are excluded from the renderer freeze watchdog; failed frames discard queued
+    commands.
+  Deferred: per-row ledger quarantine for a rollback past a future API version.
+  Verification for this round is app typecheck, the affected unit/renderer/system suites and
+  root CI, whose quality gate runs both Electron journeys. Local Electron reruns were skipped
+  at the maintainer's direction to ship.

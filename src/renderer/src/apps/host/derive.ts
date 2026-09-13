@@ -2,7 +2,8 @@ import type { CommandDef } from '@renderer/features/command-palette/types'
 import type { AppDefinition } from '@renderer/apps/types'
 import { viewComponentFor } from '@renderer/apps/host/viewBridge'
 import { dispatchToFrame, queuePendingCommand } from '@renderer/apps/host/frameRegistry'
-import type { CommandBindingDefault } from '@renderer/features/command-keybindings/defaults'
+import { buildDefaultKeybindings, type CommandBindingDefault } from '@renderer/features/command-keybindings/defaults'
+import { builtInCommandCatalog } from '@renderer/features/command-palette/catalog'
 import { tryNormalizeKeybinding } from '@renderer/features/command-keybindings/normalize'
 import type { Keybinding } from '@renderer/features/command-keybindings/normalize'
 import { extensionRevision, type ExtensionListEntry } from '@shared/types/extensions'
@@ -75,7 +76,12 @@ export function deriveExtensionCommands(
     const viewMountById = new Map(views.map(view => [view.id, view.mount]))
 
     for (const command of entry.manifest.contributes?.commands ?? []) {
-      if (seen.has(command.id)) continue
+      // Namespacing alone does not prevent a first-party collision: built-in ids
+      // such as `usage.open` or `agent.title.set` are dotted, so an extension whose
+      // id is `usage` may legally declare `usage.open`. Its definition then
+      // replaced the built-in shortcut in every resolver and duplicated the palette
+      // row. First party always wins; the extension's copy is dropped.
+      if (seen.has(command.id) || builtInCommandIds().has(command.id)) continue
       seen.add(command.id)
 
       // `timer.open` -> view `timer.main`: an extension's "open" command with no
@@ -158,6 +164,37 @@ export function deriveExtensionCommands(
   return commands
 }
 
+let builtInIds: ReadonlySet<string> | null = null
+function builtInCommandIds(): ReadonlySet<string> {
+  // Lazy rather than at import: reading the catalog while this module evaluates
+  // would make derive.ts depend on the whole command graph's evaluation order.
+  builtInIds ??= new Set(builtInCommandCatalog.map(command => command.id))
+  return builtInIds
+}
+
+// Chords no first-party DEFAULT names but the app still owns: the router's fixed
+// tab handlers (Cmd+digit, Cmd+Alt+digit, tiled resize) and the macOS app/editing
+// chords the menu or a text field handles natively. An extension taking Cmd+C
+// would break copy in every composer and terminal.
+const RESERVED_EXTENSION_CHORDS: ReadonlySet<Keybinding> = new Set([
+  ...Array.from({ length: 10 }, (_, digit) => [`Cmd+${digit}`, `Cmd+Alt+${digit}`]).flat(),
+  'Cmd+Left', 'Cmd+Right',
+  'Cmd+A', 'Cmd+C', 'Cmd+V', 'Cmd+X', 'Cmd+Z', 'Cmd+Shift+Z',
+  'Cmd+Q', 'Cmd+H', 'Cmd+Alt+H', 'Cmd+M', 'Cmd+W', 'Cmd+Shift+W', 'Cmd+,',
+  'Cmd+=', 'Cmd+-', 'Cmd+Shift+=',
+])
+
+/**
+ * Whether a contributed chord may be bound at all. Requires Cmd, because a bare
+ * key or a Shift/Alt/Ctrl-only chord collides with typing: Ctrl+letter is what
+ * shells and TUIs read inside terminal panes. The install-time manifest check
+ * enforces the same Cmd rule so authors see an error; this is the load-time
+ * guard for rows installed before it and for the renderer-only reserved sets.
+ */
+function extensionMayClaim(chord: Keybinding, firstPartyChords: ReadonlySet<Keybinding>): boolean {
+  return chord.startsWith('Cmd+') && !RESERVED_EXTENSION_CHORDS.has(chord) && !firstPartyChords.has(chord)
+}
+
 /**
  * `CommandBindingDefault`s for every contributed keybinding.
  *
@@ -175,20 +212,25 @@ export function deriveExtensionCommands(
  * - Context is always 'global'. The manifest declares none, and 'global' is the
  *   strictest for collision-checking (it overlaps every context), so an extension
  *   binding errs toward being reported as a conflict rather than silently
- *   shadowing a contextual first-party chord. The reservation check that consumes
- *   these is what actually lets first-party win; see the WS2 wiring.
+ *   shadowing a contextual first-party chord.
+ * - First party wins HERE, by filtering (see extensionMayClaim). Every consumer
+ *   reads this list, and the keyboard router consults these defaults BEFORE its
+ *   fixed handlers, so an unfiltered `a`, `Enter` or `Cmd+1` used to be swallowed
+ *   app-wide — typing in a composer ran the extension command instead.
  */
 export function deriveExtensionKeybindings(
   installed: ExtensionListEntry[],
 ): CommandBindingDefault[] {
   const byCommand = new Map<string, Keybinding[]>()
   const order: string[] = []
+  const firstPartyChords = new Set(buildDefaultKeybindings().flatMap(entry => entry.bindings))
 
   for (const entry of installed) {
     if (!entry.present) continue
     for (const binding of entry.manifest.contributes?.keybindings ?? []) {
+      if (builtInCommandIds().has(binding.command)) continue
       const chord = tryNormalizeKeybinding(binding.key)
-      if (!chord) continue
+      if (!chord || !extensionMayClaim(chord, firstPartyChords)) continue
       let chords = byCommand.get(binding.command)
       if (chords === undefined) {
         chords = []

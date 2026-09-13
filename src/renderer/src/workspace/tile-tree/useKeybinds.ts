@@ -402,7 +402,13 @@ export function useKeybinds(
     // These are the fixed workspace interactions below, not palette commands.
     // Their number-row continuation includes zero and directional tab resizing.
     for (let digit = 0; digit <= 9; digit++) bindings.push(`Cmd+${digit}`, `Cmd+Alt+${digit}`)
-    bindings.push('Cmd+Left', 'Cmd+Right', 'Alt+Home', 'Alt+End', 'Alt+PageUp', 'Alt+PageDown', 'Alt+=', 'Alt+-')
+    // Cmd+Left/Right are deliberately NOT captured. Their only app meaning is the
+    // tiled-tab resize continuation, which acts only while a Cmd+Alt+digit resize
+    // is pending; capturing them unconditionally made main preventDefault the
+    // standard macOS caret-to-line-start/end motion inside every extension text
+    // field, while the forwarded event almost always did nothing. Losing resize
+    // continuation while an extension pane holds focus is the cheaper trade.
+    bindings.push('Alt+Home', 'Alt+End', 'Alt+PageUp', 'Alt+PageDown', 'Alt+=', 'Alt+-')
     const modal = [...bindingIndex].filter(([, entries]) => entries.some(entry => ['open-command-palette', 'close-pane'].includes(entry.commandId))).map(([binding]) => binding)
     // Suppress native window-close defaults even when the user unbinds pane
     // close. The existing modal gate decides whether there is an app action.

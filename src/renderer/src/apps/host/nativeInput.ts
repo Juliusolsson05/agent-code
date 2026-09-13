@@ -12,13 +12,30 @@ function focusedFrame(): HTMLIFrameElement | null {
   return active instanceof HTMLIFrameElement && frames.has(active) ? active : null
 }
 
+// Match by the parent-minted `instance` id, not by full URL string equality.
+// `iframe.src` is the attribute the parent set and never changes, while main
+// reports the frame's last committed URL, which includes fragments and
+// pushState/replaceState edits. A hash-routed view therefore never matched:
+// main had already swallowed the key and the renderer dropped it, so every app
+// shortcut was dead while that pane had focus. A replaced document still gets a
+// fresh instance id, so stale documents keep failing this check.
+function sameInstance(frame: HTMLIFrameElement, url: string): boolean {
+  try {
+    const expected = new URL(frame.src)
+    const actual = new URL(url)
+    const instance = expected.searchParams.get('instance')
+    return !!instance && actual.protocol === expected.protocol && actual.host === expected.host
+      && actual.searchParams.get('instance') === instance
+  } catch { return false }
+}
+
 function receive(message: ExtensionNativeInput): void {
   const frame = focusedFrame()
-  if (!frame || frame.src !== message.url) return
+  if (!frame || !sameInstance(frame, message.url)) return
   // React's keyboard listener closes over workspace selection. Commit the
   // selected pane before dispatching Cmd+W or it can close the previous pane.
   flushSync(() => frames.get(frame)?.())
-  if (focusedFrame() !== frame || frame.src !== message.url) return
+  if (focusedFrame() !== frame || !sameInstance(frame, message.url)) return
   if (message.kind === 'key') frame.dispatchEvent(new KeyboardEvent(message.type, { ...message.input, bubbles: true, cancelable: true }))
 }
 

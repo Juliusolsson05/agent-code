@@ -69,13 +69,16 @@ export type FrameDocumentInput = {
  * exists is the host, which is trusted. If the host ever gains a stable origin, add
  * the header — until then this is the record that the absence was reasoned about.
  */
-export function childFrameCsp(nonce: string, extensionId: string): string {
+// `nonce: null` is the policy for plain bundle assets (see scheme.ts): identical
+// origin restrictions, but no inline script source because the host minted no
+// document for that response.
+export function childFrameCsp(nonce: string | null, extensionId: string): string {
   const self = `agent-code-ext://${extensionId}`
   return [
     "default-src 'none'",
     "base-uri 'none'",
     "form-action 'none'",
-    `script-src '${`nonce-${nonce}`}' ${self}`,
+    `script-src ${nonce ? `'nonce-${nonce}' ` : ''}${self}`,
     `style-src 'unsafe-inline' ${self}`,
     `img-src ${self} data: blob:`,
     `font-src ${self} data:`,

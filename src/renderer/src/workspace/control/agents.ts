@@ -274,6 +274,12 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
         if (session.provider === 'terminal') {
           throw new ControlError('unavailable', 'This session is a terminal. Send text with terminals.input; agents.prompt only drives provider agents')
         }
+        // Extension panes are processless sessions with no provider at all. Main
+        // has no delivery entry for them and logs that miss as registry
+        // split-brain, which misled both the calling agent and diagnostics.
+        if (session.provider === 'extension-view') {
+          throw new ControlError('unavailable', 'This session is an extension view, not an agent; agents.prompt only drives provider agents')
+        }
         // Codex's text-only delivery currently ignores imagePaths. Refuse
         // unsupported attachments BEFORE wake/write instead of silently sending
         // a different task from the one the operator supplied.

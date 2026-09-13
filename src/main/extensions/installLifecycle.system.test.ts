@@ -1,4 +1,4 @@
-import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'fs/promises'
+import { chmod, cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
@@ -48,6 +48,7 @@ const { extensionBundleDirectory, readLedger, listInstalledExtensions, removeExt
 const { installedExtensionCapabilities, recordGrant } = await import('./grants.js')
 const { computeBundleHash } = await import('./bundleHash.js')
 const { handleExtensionScheme } = await import('./scheme.js')
+const { extensionStorageGet, extensionStorageSet } = await import('./storage.js')
 handleExtensionScheme()
 
 async function source(id = 'timer', permission = 'workspace.observe'): Promise<string> {
@@ -146,14 +147,45 @@ describe('atomic extension publication', () => {
 
   it('uninstalls authority and bundles while preserving saved extension data', async () => {
     const installed = await installExtensionFromPath(await source(), async () => true)
-    const saved = join(stateRoot, 'extension-state/timer.json')
-    await mkdir(join(saved, '..'), { recursive: true })
-    await writeFile(saved, '{"saved":true}')
+    // Write through the real storage module. A hand-written file at a path
+    // storage never reads kept passing even if uninstall deleted the actual state.
+    await extensionStorageSet('timer', 'saved', true)
     await removeExtension('timer')
     expect(await readLedger()).toEqual([])
     expect(await installedExtensionCapabilities('timer')).toEqual([])
     await expect(readFile(join(extensionBundleDirectory(installed), 'dist/index.js'))).rejects.toMatchObject({ code: 'ENOENT' })
-    expect(await readFile(saved, 'utf8')).toBe('{"saved":true}')
+    expect(await extensionStorageGet('timer', 'saved')).toBe(true)
+    await installExtensionFromPath(await source(), async () => true)
+    expect(await extensionStorageGet('timer', 'saved')).toBe(true)
+  })
+
+  it('refuses a bundle from a different source that claims an installed id', async () => {
+    // Storage is keyed only by id, so a silent replacement handed the newcomer
+    // the installed extension's saved data without any prompt.
+    const folder = await source()
+    await installExtensionFromPath(folder, async () => true)
+    const impostor = join(root, 'impostor')
+    await cp(folder, impostor, { recursive: true })
+    await expect(installExtensionFromPath(impostor, async () => true)).rejects.toThrow(/already installed from/)
+    expect((await readLedger()).map(row => row.repo)).toEqual([expect.stringContaining('sources')])
+  })
+
+  it('reclaims superseded generations of a bundle with read-only directories', async () => {
+    // Read-only trees (Nix, Bazel, cp -p) used to leave one full bundle copy per
+    // update on disk forever, and made the startup sweep reject for everyone.
+    const folder = await source()
+    const locked = join(folder, 'dist/locked')
+    await mkdir(locked)
+    await writeFile(join(locked, 'asset.json'), '{}')
+    await chmod(locked, 0o555)
+    try {
+      await installExtensionFromPath(folder, async () => true)
+      const second = await installExtensionFromPath(folder, async () => true)
+      expect(await readdir(join(stateRoot, 'extensions/.bundles/timer'))).toEqual([second.installation!.id])
+      await removeExtension('timer')
+      await sweepAbandonedInstallDirectories()
+      expect(await readdir(join(stateRoot, 'extensions/.bundles/timer'))).toEqual([])
+    } finally { await chmod(locked, 0o755) }
   })
 
   it('preserves legacy bytes and consent until the first generation update', async () => {
@@ -162,7 +194,10 @@ describe('atomic extension publication', () => {
     const { installation: _, ...legacy } = installed
     await cp(extensionBundleDirectory(installed), extensionBundleDirectory(legacy), { recursive: true })
     await writeLedger([legacy])
-    await recordGrant('timer', await computeBundleHash(extensionBundleDirectory(legacy)), ['workspace.observe'])
+    // Legacy builds recorded the ledger's tarball provenance hash in the grant,
+    // never a whole-bundle hash. Seed exactly what they wrote; a bundle-hash seed
+    // passed while every real upgraded install lost its permissions.
+    await recordGrant('timer', legacy.sha256, ['workspace.observe'])
     expect(await installedExtensionCapabilities('timer')).toEqual(['workspace.observe'])
     await sweepAbandonedInstallDirectories()
     expect(await listInstalledExtensions()).toEqual([{ ...legacy, present: true }])

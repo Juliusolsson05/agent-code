@@ -2,6 +2,7 @@ import { z } from 'zod'
 
 import { EXTENSION_CAPABILITIES } from '@shared/types/extensions.js'
 import { extensionThemeColorsSchema } from '@shared/types/extensionThemes.js'
+import { tryNormalizeKeybinding } from '@shared/keybindings.js'
 import type {
   ExtensionActivationEvent,
   ExtensionManifest,
@@ -291,6 +292,24 @@ function assertContributionsAreCoherent(manifest: ExtensionManifest): void {
   assertUnique(views.map(v => v.id), 'view')
   assertUnique(settings.map(s => s.id), 'setting')
   assertUnique(themes.map(theme => theme.id), 'theme')
+
+  // A contributed keybinding is consulted app-wide, including while the user
+  // types into an agent composer or a terminal. A bare key ("a", "Enter") or a
+  // chord without Cmd would be swallowed from every text field, so only Cmd
+  // chords install. Chords first-party features already own are dropped again at
+  // load time (apps/host/derive.ts), where the renderer's binding table is known.
+  // Kept out of the zod schema on purpose: the ledger re-validates installed rows
+  // with that schema on every launch, and tightening it would make an existing
+  // install vanish instead of merely losing its unusable binding.
+  for (const binding of keybindings) {
+    const chord = tryNormalizeKeybinding(binding.key)
+    if (!chord || !chord.startsWith('Cmd+')) {
+      throw new ManifestError(
+        `keybinding "${binding.key}" must be a single chord that includes Cmd — ` +
+          `extensions cannot claim bare keys or shortcuts without Cmd`,
+      )
+    }
+  }
 
   const commandIds = new Set(commands.map(command => command.id))
   for (const binding of keybindings) {

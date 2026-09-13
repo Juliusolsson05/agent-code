@@ -223,6 +223,12 @@ export default extensionViteConfig({
 })
 ```
 
+For React, spread the whole preset and add the plugin:
+`{ ...extensionViteConfig({ entries }), plugins: [react()] }`. Do not copy selected keys
+out of it: the preset also pins the production JSX transform, so the build works
+whatever `NODE_ENV` your shell exports. Author packages are expected to be ESM
+(`"type": "module"`).
+
 The SDK is optional. It gives you `ExtensionManifest`, `ExtensionContext` and
 `AgentCodeApiV1` types plus the build preset; an extension is a plain ES module and
 nothing in the host requires you to depend on it.
@@ -250,6 +256,11 @@ build: {
 
 // REQUIRED if you depend on anything from the React ecosystem.
 define: { 'process.env.NODE_ENV': JSON.stringify('production') },
+
+// REQUIRED with JSX. Vite otherwise picks the dev transform from your shell's
+// NODE_ENV, and the production React bundled by the define above has no jsxDEV:
+// the view installs cleanly, then throws "jsxDEV is not a function" on render.
+esbuild: { jsxDev: false },
 ```
 
 ### ⚠️ `process is not defined` — read this before you debug it
@@ -518,9 +529,9 @@ Archives are capped at **32 MB**.
 | *"Manifest points at … which does not exist in the repository"* | `dist/` not committed, or a wrong `entry` |
 | *"contribution id … must start with …"* | a contributed id outside your namespace |
 | *"registerCommand(x) — not declared"* | id missing from `contributes.commands` |
-| *"entry module does not export an activate(context) function"* | wrong export, or the bundle is not an ES module |
+| *"View entry must export mount(element, context)."* (v2) or *"Extension entry must export activate(context) or a default extension module."* (v1) | wrong export, or the bundle is not an ES module |
 | *"unknown capability … not available yet"* | you asked for a permission this build does not implement (§6) |
-| *"extension targets Agent Code API v2, this build implements v1"* | Agent Code is older than your extension |
+| *"extension targets Agent Code API v3, this build implements v2"* | Agent Code is older than your extension |
 | *"The repository contains a symlink … that points outside"* | make internal symlinks relative (§4) |
 | *"Extension failed to load: process is not defined"* | missing `define` — see §4 |
 | *"The extension frame did not start"* | the bundle could not be served or was blocked by the frame CSP |

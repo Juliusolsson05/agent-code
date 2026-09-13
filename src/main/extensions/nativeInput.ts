@@ -19,15 +19,18 @@ export function registerExtensionInputIpc(isApplicationContents: (contents: WebC
     let owner = owners.get(contents.id)
     if (!owner) {
       const pressed = new Set<string>()
+      // Any direct agent-code-ext child of the application main frame is an
+      // extension frame: the host CSP frames nothing else. Do NOT require the
+      // reserved frame-document path or the `instance` query here. A view using a
+      // history router rewrites both with pushState/replaceState; the old check
+      // then stopped capturing entirely, so Cmd+W fell through to the native
+      // close-window menu item and closed the app window instead of the pane.
+      // key() below forwards only frames that still carry an instance id.
       const focusedUrl = () => {
         if (contents.isDestroyed() || !isApplicationContents(contents)) return null
         const frame = contents.focusedFrame
         if (!frame || frame.parent !== contents.mainFrame) return null
-        try {
-          const url = new URL(frame.url)
-          if (url.protocol !== 'agent-code-ext:' || !url.pathname.endsWith('/__agent-code-frame__.html') || !url.searchParams.get('instance')) return null
-          return frame.url
-        } catch { return null }
+        try { return new URL(frame.url).protocol === 'agent-code-ext:' ? frame.url : null } catch { return null }
       }
       const send = (message: ExtensionNativeInput) => contents.send('extensions:native-input', message)
       const key = (event: Electron.Event, input: Electron.Input) => {
@@ -37,10 +40,18 @@ export function registerExtensionInputIpc(isApplicationContents: (contents: WebC
         const value = { key: input.key, code: input.code, metaKey: input.meta, ctrlKey: input.control,
           altKey: input.alt, shiftKey: input.shift, repeat: !!input.isAutoRepeat, isComposing: !!input.isComposing }
         const binding = keybindingFromEvent(value)
+        const parsed = new URL(url)
+        // A view that discarded the host query cannot be matched to its pane by
+        // the renderer, so nothing is forwarded. Still refuse native window close:
+        // a focused extension must never be able to close the whole app window.
+        if (!parsed.searchParams.get('instance')) {
+          if (input.type === 'keyDown' && (binding === 'Cmd+W' || binding === 'Cmd+Shift+W')) event.preventDefault()
+          return
+        }
         // A modal owns editing and blocks hidden workspace mutations. Capture
         // only its palette/close access; Option composition and native editing
-        // remain in the author's document. The parent verifies this exact URL.
-        const bindings = new URL(url).searchParams.get('shell') === 'modal' ? owner!.modalBindings : owner!.bindings
+        // remain in the author's document. The parent verifies the instance id.
+        const bindings = parsed.searchParams.get('shell') === 'modal' ? owner!.modalBindings : owner!.bindings
         const release = input.type === 'keyUp' && (pressed.has(input.code) || (pressed.size > 0 && ['Meta', 'Control', 'Alt', 'Shift'].includes(input.key)))
         if (input.type === 'keyDown' ? !binding || !bindings.has(binding) : !release) return
         if (input.type === 'keyDown') pressed.add(input.code)
@@ -56,7 +67,7 @@ export function registerExtensionInputIpc(isApplicationContents: (contents: WebC
         // parent again. Correct workspace selection even in that case; first
         // entry is also covered by the parent's activeElement/blur observation.
         const url = focusedUrl()
-        if (url) send({ kind: 'focus', url })
+        if (url && new URL(url).searchParams.get('instance')) send({ kind: 'focus', url })
       }
       const navigate = (_event: Electron.Event, _url: string, sameDocument: boolean, main: boolean) => {
         if (main && !sameDocument) { owner!.bindings.clear(); owner!.modalBindings.clear(); pressed.clear() }

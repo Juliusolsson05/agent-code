@@ -112,6 +112,19 @@ it('rejects a delayed native event after the same iframe element changes documen
   expect(focused).toHaveBeenCalledOnce()
 })
 
+it('routes keys for a view whose document changed only its own fragment or path', () => {
+  // Main reports the frame's committed URL, which includes hash-router and
+  // pushState edits, while iframe.src keeps the parent-set attribute. Matching
+  // by full URL killed every app shortcut in such a pane.
+  const focused = vi.fn()
+  const element = frame('one', focused)
+  element.focus()
+  receive(key(`${element.src}#/settings`))
+  expect(focused).toHaveBeenCalledOnce()
+  receive(key(element.src.replace('__agent-code-frame__.html', 'settings')))
+  expect(focused).toHaveBeenCalledTimes(2)
+})
+
 it('removes native ownership on disposal and releases the shared subscription after the last view', () => {
   const first = vi.fn(), second = vi.fn()
   const a = frame('one', first), b = frame('two', second)

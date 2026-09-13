@@ -152,7 +152,15 @@ export async function installedExtensionCapabilities(extensionId: string, expect
       if (row.installation) {
         return actual === row.installation.bundleSha256 ? [...(row.manifest.permissions ?? [])] : []
       }
-      return [...await grantedCapabilities(extensionId, actual)]
+      const granted = await grantedCapabilities(extensionId, actual)
+      if (granted.size > 0) return [...granted]
+      // Pre-generation builds bound the grant to the ledger's tarball provenance
+      // sha256, never to a whole-bundle hash, so a real legacy grant can never
+      // match `actual`. Honour that original binding: it carries over exactly the
+      // trust the old build granted, instead of silently denying every capability
+      // after upgrade with nothing in Settings explaining why. The next update
+      // publishes an `installation` record bound to verified bytes.
+      return [...await grantedCapabilities(extensionId, row.sha256)]
     } catch {
       return []
     }

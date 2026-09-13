@@ -9,6 +9,7 @@ import { onExtensionPublication, readLedger, withLedgerLock } from './ledger.js'
 import { extensionStorageDelete, extensionStorageGet, extensionStorageKeys, extensionStorageSet } from './storage.js'
 import { EXTENSION_SCHEME, handleExtensionScheme } from './scheme.js'
 import { RUNTIME_DOCUMENT } from './runtimeDocument.js'
+import { createExtensionRuntimeWindow } from './runtimeWindowMarker.js'
 import type { ExtensionCapabilityService } from './capabilityService.js'
 
 type PendingInvocation = {
@@ -267,12 +268,12 @@ export class ExtensionRuntimeService {
     isolated.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*', 'ws://*/*', 'wss://*/*', 'file://*/*'] }, (_details, callback) => callback({ cancel: true }))
     let window: BrowserWindow
     try {
-      window = new BrowserWindow({
+      window = createExtensionRuntimeWindow(() => new BrowserWindow({
         // Background code must not gain a keyboard target or a taskbar surface
         // by calling window.focus(). Views are the only visible extension UI.
         show: false, focusable: false, skipTaskbar: true, width: 1, height: 1,
         webPreferences: { preload: this.options.preload, session: isolated, sandbox: true, contextIsolation: true, nodeIntegration: false, nodeIntegrationInSubFrames: false, backgroundThrottling: false },
-      })
+      }))
     } catch (error) {
       isolated.protocol.unhandle(EXTENSION_SCHEME)
       throw error
@@ -326,17 +327,24 @@ export class ExtensionRuntimeService {
     return this.runtimes.get(runtime.installation.manifest.id) === runtime && (runtime.state === 'starting' || runtime.state === 'ready')
   }
 
-  private authenticate(event: IpcMainEvent | IpcMainInvokeEvent): ManagedRuntime {
+  private authenticate(event: IpcMainEvent | IpcMainInvokeEvent, charge = true): ManagedRuntime {
     const runtime = this.senders.get(event.sender.id)
     if (!runtime || !this.active(runtime) || event.senderFrame !== event.sender.mainFrame || event.senderFrame?.url !== runtime.url) throw new Error('Request is not from an active extension runtime.')
     // Per-runtime budget covers both successful and malformed messages. Counting
     // only accepted requests would let invalid payloads monopolize the main loop.
+    // Replies are authenticated with charge=false and pay only when unexpected;
+    // see onEvent.
+    if (charge && !this.spend(runtime)) throw new Error('Extension runtime message rate exceeded.')
+    return runtime
+  }
+
+  private spend(runtime: ManagedRuntime): boolean {
     const now = performance.now()
     runtime.credits = Math.min(128, runtime.credits + (now - runtime.creditedAt) * 0.128)
     runtime.creditedAt = now
-    if (runtime.credits < 1) throw new Error('Extension runtime message rate exceeded.')
+    if (runtime.credits < 1) return false
     runtime.credits -= 1
-    return runtime
+    return true
   }
 
   private onApi = async (event: IpcMainInvokeEvent, raw: unknown): Promise<unknown> => {
@@ -390,13 +398,21 @@ export class ExtensionRuntimeService {
       return
     }
     let runtime: ManagedRuntime
-    try { runtime = this.authenticate(event) } catch { return }
+    // Expected replies are not charged to the API budget. IPC delivers them
+    // bunched after a burst of API calls, so charging them let main reject a
+    // reply the preload had just admitted; the invocation then reached its
+    // deadline and the runtime was destroyed as "result is unknown". Invalid
+    // events still retire the runtime below, and UNEXPECTED ones (a duplicate
+    // ready, a result for no pending id) spend credits and retire it when the
+    // budget is exhausted, so this path cannot flood the main loop either.
+    try { runtime = this.authenticate(event, false) } catch { return }
+    const unexpected = () => { if (!this.spend(runtime)) this.retire(runtime, 'Extension runtime sent too many unexpected responses.') }
     if (!isExtensionJson(raw)) { this.retire(runtime, 'Extension runtime response exceeds the JSON limits.'); return }
     const parsed = runtimeEventSchema.safeParse(raw)
     if (!parsed.success) { this.retire(runtime, 'Extension runtime sent an invalid response.'); return }
     const message = parsed.data
     if (message.kind === 'ready') {
-      if (runtime.state !== 'starting') return
+      if (runtime.state !== 'starting') { unexpected(); return }
       clearTimeout(runtime.startupTimer)
       runtime.state = 'ready'
       runtime.resolveReady()
@@ -404,7 +420,7 @@ export class ExtensionRuntimeService {
     } else if (message.kind === 'failed') this.retire(runtime, message.error)
     else if (message.kind === 'result') {
       const pending = runtime.pending.get(message.id)
-      if (!pending) return
+      if (!pending) { unexpected(); return }
       runtime.pending.delete(message.id)
       clearTimeout(pending.timer)
       if (message.ok) pending.resolve(message.value)

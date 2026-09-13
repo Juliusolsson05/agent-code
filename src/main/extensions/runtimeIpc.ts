@@ -52,16 +52,25 @@ export function registerExtensionRuntimeIpc(
     const { owner, assertCurrent } = authenticate(event)
     if (!isExtensionJson(raw)) throw new Error('Extension host request exceeds the JSON limits.')
     const request = runtimeHostRequestSchema.parse(raw)
-    if (request.method === 'command' || request.method === 'view.attach' || request.method === 'service') {
-      const entry = (await readLedger()).find(candidate => candidate.manifest.id === request.extensionId)
-      if (!entry || extensionRevision(entry) !== request.revision || entry.manifest.apiVersion !== 2) throw new Error('This installation does not support the managed extension runtime.')
-      // ensure() rechecks the same generation under the publication lock. This
-      // earlier version check is only an ABI gate, never the authority snapshot.
+    // ensure() rechecks the same generation under the publication lock. This
+    // earlier version check is only an ABI gate, never the authority snapshot.
+    const assertManaged = async (extensionId: string, revision: string): Promise<void> => {
+      const entry = (await readLedger()).find(candidate => candidate.manifest.id === extensionId)
+      if (!entry || extensionRevision(entry) !== revision || entry.manifest.apiVersion !== 2) throw new Error('This installation does not support the managed extension runtime.')
     }
+    if (request.method === 'view.attach') {
+      // Called without an await first, so the connection is registered in this
+      // same IPC turn; the gate then runs inside attach (see its comment).
+      const { connectionId, extensionId, revision, viewId } = request
+      return views.attach(owner, connectionId, extensionId, revision, viewId, async () => {
+        await assertManaged(extensionId, revision)
+        assertCurrent()
+      })
+    }
+    if (request.method === 'command' || request.method === 'service') await assertManaged(request.extensionId, request.revision)
     assertCurrent()
     switch (request.method) {
       case 'command': return service.invokeCommand(request.extensionId, request.revision, request.commandId)
-      case 'view.attach': return views.attach(owner, request.connectionId, request.extensionId, request.revision, request.viewId)
       case 'view.request': return views.request(owner, request.connectionId, request.name, request.input)
       case 'view.detach': views.detach(owner, request.connectionId); return
       case 'service': return capabilities.invoke(request.extensionId, request.revision, request.request)

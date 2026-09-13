@@ -122,6 +122,21 @@ describe('parseExtensionManifest — contribution namespacing', () => {
     ).toThrow(/does not contribute/)
   })
 
+  it.each(['a', 'Enter', 'shift+k', 'ctrl+r', 'alt+j'])('rejects a keybinding without Cmd (%s)', key => {
+    // Contributed chords are consulted app-wide, including while the user types
+    // in a composer or terminal, so a chord without Cmd would swallow typing.
+    expect(() =>
+      parseExtensionManifest(
+        manifest({
+          contributes: {
+            commands: [{ id: 'timer.start', title: 'Start' }],
+            keybindings: [{ command: 'timer.start', key }],
+          },
+        }),
+      ),
+    ).toThrow(/must be a single chord that includes Cmd/)
+  })
+
   it('rejects an activation event naming a contribution that does not exist', () => {
     // A dead activation event is the hardest authoring mistake to diagnose: the
     // extension simply never activates, with no error anywhere.

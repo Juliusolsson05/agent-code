@@ -55,6 +55,10 @@ export const extensionsApi = {
     ipcRenderer.invoke('extensions:runtime-host', { method: 'service', extensionId, revision, request }),
   onExtensionNotification: (handler: (event: ExtensionNotification) => void): (() => void) =>
     subscribe('extensions:notification', handler),
+  // A cancelled quit stops every runtime (closing attached views) before the
+  // unsaved-changes sheet can veto; main sends this once the host has resumed.
+  onExtensionsRuntimeResumed: (handler: () => void): (() => void) =>
+    subscribe('extensions:runtime-resumed', handler),
 
   extensionStorageGet: (appId: string, key: string): Promise<unknown> =>
     ipcRenderer.invoke('extensions:storage-get', appId, key),

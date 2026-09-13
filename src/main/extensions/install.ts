@@ -2,6 +2,7 @@ import { spawn } from 'child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import {
   access,
+  chmod,
   constants as fsConstants,
   cp,
   lstat,
@@ -442,6 +443,12 @@ async function assertBundleTreeIsSafe(bundleDir: string): Promise<void> {
       }
 
       if (stats.isDirectory()) {
+        // Normalize owner access while staging. fs.cp and tar both preserve
+        // directory modes, and unlinking inside a read-only directory fails, so a
+        // bundle built by Nix/Bazel or copied with -p left every superseded
+        // generation on disk forever. Content is unchanged; only the owner bits
+        // needed to remove this generation later are added.
+        if ((stats.mode & 0o700) !== 0o700) await chmod(absolute, stats.mode | 0o700)
         await walk(absolute)
         continue
       }
@@ -553,6 +560,16 @@ async function finalizeInstall(
   await withLedgerLock(async () => {
     const rows = await readLedger()
     const previous = rows.find(row => row.manifest.id === manifest.id)
+    // The same id from a different source is a different extension, not an
+    // update. Replacing it silently handed the newcomer the previous extension's
+    // saved data (storage is keyed only by id), with no prompt at all for a
+    // Tier-0 manifest. Update and Reload reuse the recorded source, so they pass.
+    if (previous && (previous.origin !== provenance.origin || previous.repo !== provenance.repo)) {
+      throw new InstallError(
+        `${manifest.id} is already installed from ${previous.repo}. ` +
+          `Remove it before installing another extension with the same id.`,
+      )
+    }
     const finalDir = extensionBundleDirectory(record)
     await mkdir(join(finalDir, '..'), { recursive: true })
     // Immutable generations make the ledger rename the ONLY commit point.
@@ -573,6 +590,18 @@ async function finalizeInstall(
   return record
 }
 
+// Housekeeping is best effort PER ENTRY. One unremovable directory (for example
+// a read-only tree published before staging normalized modes) used to reject the
+// whole sweep, so every later extension's abandoned generations stayed on disk
+// too. The error is logged and the next entry is still reclaimed.
+async function removeAbandoned(path: string): Promise<void> {
+  try {
+    await rm(path, { recursive: true, force: true })
+  } catch (error) {
+    console.warn('[extensions] could not reclaim abandoned bundle directory:', path, error)
+  }
+}
+
 /**
  * Collect only unpublished staging and unreferenced immutable generations.
  * Called before windows start, under the same lock that publishes installations.
@@ -589,7 +618,7 @@ export async function sweepAbandonedInstallDirectories(): Promise<void> {
     for (const name of entries) {
       const path = join(EXTENSIONS_DIR, name)
       if (name.startsWith('.staging-') && !activeStagingDirectories.has(path)) {
-        await rm(path, { recursive: true, force: true })
+        await removeAbandoned(path)
       }
     }
     const referenced = new Set((await readLedger()).map(extensionBundleDirectory))
@@ -606,7 +635,7 @@ export async function sweepAbandonedInstallDirectories(): Promise<void> {
       for (const generation of await readdir(parent, { withFileTypes: true })) {
         const path = join(parent, generation.name)
         if (generation.isDirectory() && !referenced.has(path)) {
-          await rm(path, { recursive: true, force: true })
+          await removeAbandoned(path)
         }
       }
     }

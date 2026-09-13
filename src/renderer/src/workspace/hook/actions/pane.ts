@@ -2348,7 +2348,12 @@ export function usePaneActions(
 
         const tab = prev.tabs.find(t => t.id === prev.activeTabId)
         if (!tab) return prev
-        const parentSessionId = commandTargetSessionIdForState(prev)
+        // Anchor on the PHYSICAL focused leaf, exactly like splitFocused. The
+        // command target can be a related-agent mini-tab's session, which is a
+        // detached child and never a leaf of tab.root, so splitLeaf returned the
+        // same root and opening a view silently did nothing while such a tab was
+        // selected.
+        const parentSessionId = tab.focusedSessionId
         if (!parentSessionId) return prev
         const root = splitLeaf(tab.root, parentSessionId, direction, sessionId)
         // Only a real split owns metadata. This also guards stale tile focus.
