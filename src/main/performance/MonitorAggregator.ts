@@ -41,6 +41,15 @@ export class MonitorAggregator {
     }
   }
 
+  /** Clear History also deletes the persisted operation histograms. Those are
+   * cumulative for the run, so leaving them in memory would rewrite the
+   * deleted distribution to disk on the next snapshot. Latest main/window
+   * samples are live state rather than history and intentionally survive. */
+  clearHistory(): void {
+    this.recent.clear()
+    this.operations.clear()
+  }
+
   reconcileWindows(liveWindowIds: number[]): void {
     const live = new Set(liveWindowIds.slice(0, MONITOR_POLICY.windowLimit))
     for (const id of this.windows.keys()) if (!live.has(id)) this.windows.delete(id)

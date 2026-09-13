@@ -11,6 +11,8 @@ export function SettingsBar() {
   const setSettings = useAppStore(state => state.setSettings)
   const performancePanelOpen = useAppStore(state => state.performancePanelOpen)
   const togglePerformancePanel = useAppStore(state => state.togglePerformancePanel)
+  const performancePanelRequest = useAppStore(state => state.performancePanelRequest)
+  const consumePerformancePanelRequest = useAppStore(state => state.consumePerformancePanelRequest)
   const caffeinateStatus = useCaffeinateStore(state => state.status)
   const toggleCaffeinate = useCaffeinateStore(state => state.toggle)
 
@@ -73,7 +75,7 @@ export function SettingsBar() {
           caff
         </button>
         {/* Mount owns only display polling; closing it leaves baseline collection running. */}
-        {performancePanelOpen ? <PerformanceMonitor onClose={togglePerformancePanel} /> : null}
+        {performancePanelOpen ? <PerformanceMonitor onClose={togglePerformancePanel} request={performancePanelRequest} onRequestHandled={consumePerformancePanelRequest} /> : null}
       </div>
     </div>
   )

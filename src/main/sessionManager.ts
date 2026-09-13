@@ -4113,7 +4113,11 @@ export class SessionManager extends EventEmitter {
     let enterWritten = false
     const finishDelivery = mainOperations.begin('prompt.delivery', sessionId, operationId)
     this.monitorResponses.sweep()
-    this.monitorResponses.begin(sessionId, operationId)
+    // Start unarmed: the clock begins at delivery, but only the acceptance
+    // below knows whether this prompt starts a turn or waits in the provider
+    // queue. This covers every main-delivered source (composer, remote and
+    // agent management), not only renderer submits that can cancel over IPC.
+    this.monitorResponses.begin(sessionId, operationId, false)
     try {
       const delivery = await getMainProvider(entry.kind).deliverPrompt({
         session: entry.session,
@@ -4133,7 +4137,8 @@ export class SessionManager extends EventEmitter {
         record,
       })
       finishDelivery(delivery.ok ? 'success' : 'error')
-      if (!delivery.ok) this.monitorResponses.cancel(sessionId)
+      if (!delivery.ok || delivery.acceptance.kind === 'queue') this.monitorResponses.cancel(sessionId)
+      else this.monitorResponses.arm(sessionId, operationId)
       return delivery
     } catch (err) {
       finishDelivery('error')
@@ -4168,10 +4173,10 @@ export class SessionManager extends EventEmitter {
   beginMonitorResponse(sessionId: string, operationId?: string): void {
     // Main owns live session identity. A renderer may request timing for a
     // stable pane ID, but a stale/foreign ID cannot allocate baseline state.
+    // The renderer sends this only AFTER a non-queued acceptance, so it arms
+    // immediately (raw-PTY Codex) or joins main's own delivery timer.
     if (this.sessions.has(sessionId)) this.monitorResponses.begin(sessionId, operationId)
   }
-
-  cancelMonitorResponse(sessionId: string): void { this.monitorResponses.cancel(sessionId) }
 
   /** Submit staged composer content only when no finished-prompt transaction
    * owns the session. Remote's legacy `submit` command cannot be allowed to

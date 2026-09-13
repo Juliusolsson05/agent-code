@@ -5,9 +5,9 @@ import type { MonitorEnvelope } from '@shared/performance/monitorSnapshot.js'
 const main = (at: number, delay = 20, sleepGap = false, heapUsed = 10): MonitorEnvelope => ({ kind: 'main', sample: {
   at, cpuPercent: 1, rss: 100, heapUsed, heapLimit: 100, loopMeanMs: delay, loopP99Ms: delay, loopMaxMs: delay, sleepGap,
 } })
-const windowSample = (at: number, visible = true): MonitorEnvelope => ({ kind: 'window', sample: {
+const windowSample = (at: number, visible = true, lagMs = 0): MonitorEnvelope => ({ kind: 'window', sample: {
   kind: 'heartbeat', windowId: 1, receivedAt: at, monotonicMs: at, timeOriginMs: 0, visibility: visible ? 'visible' : 'hidden',
-  lagMs: 0, longTaskCount: 0, longTaskTotalMs: 0, longTaskMaxMs: 0, inputCount: 0, inputMaxMs: 0,
+  lagMs, longTaskCount: 0, longTaskTotalMs: 0, longTaskMaxMs: 0, inputCount: 0, inputMaxMs: 0,
   heapUsedBytes: null, heapLimitBytes: null, longTasksSupported: true, inputSupported: true,
 } })
 
@@ -60,5 +60,29 @@ describe('incident evidence and exclusion rules', () => {
     expect(engine.summaries()).toHaveLength(0)
     engine.accept([main(8001)], 8001, 8001)
     expect(engine.summaries()[0]).toMatchObject({ rule: 'renderer-stall', scope: 1, threshold: 4000 })
+  })
+  it('captures unrelated scopes independently and records loss as coverage, not an incident', () => {
+    const engine = new IncidentEngine()
+    engine.reconcile([1], [1], 1000)
+    engine.accept([main(1000), windowSample(1000)], 1000, 1000)
+    engine.accept([windowSample(2000, true, 1500)], 2000, 2000)
+    // The window capture is still open; a main stall must not be swallowed by it.
+    engine.accept([main(3000, 2000)], 3000, 3000)
+    expect(engine.summaries().map(row => [row.rule, row.scope])).toEqual([['renderer-stall', 1], ['main-stall', 0]])
+    engine.loss(500)
+    expect(engine.summaries()).toHaveLength(2)
+    expect(engine.summaries().every(row => row.truncated)).toBe(true)
+    engine.clear()
+    expect(engine.summaries()).toEqual([])
+  })
+  it('does not treat a delivery backlog as a missing renderer heartbeat', () => {
+    const engine = new IncidentEngine()
+    engine.reconcile([1], [1], 1000)
+    engine.accept([main(1000), windowSample(1000)], 1000, 1000)
+    // Main stamped both records one second apart, but the helper received them
+    // nine seconds later. Receive age alone would have blamed the renderer.
+    engine.accept([main(2000)], 2000, 10_000)
+    engine.tick(10_000, 10_000)
+    expect(engine.summaries()).toHaveLength(0)
   })
 })

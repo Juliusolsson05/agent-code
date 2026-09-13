@@ -21,7 +21,11 @@ export function Timeline({ incidents }: { incidents: MonitorIncidentSummary[] })
       const end = live ? Date.now() : to
       try {
         const result = await window.api.getMonitorHistory(Math.max(0, end - range.ms), end, undefined, 1000)
-        if (!disposed) { setPage(result); setError(result === null) }
+        // WHY keep the previous page on null: the helper answers null while
+        // busy, restarting or shedding a concurrent query. Replacing a valid
+        // chart with "unavailable" on every transient miss made the timeline
+        // flicker; the status line below still says the reading is delayed.
+        if (!disposed) { if (result) setPage(result); setError(result === null) }
       } catch { if (!disposed) setError(true) }
       finally { if (!disposed && live) timer = setTimeout(read, 10_000) }
     }
@@ -84,7 +88,8 @@ export function Timeline({ incidents }: { incidents: MonitorIncidentSummary[] })
         <Button size="sm" variant="outline" onClick={() => { if (live) { setTo(Date.now()); setLive(false) } else { setLive(true); setRevision(value => value + 1) } }}>{live ? 'Pause timeline' : 'Resume live'}</Button>
       </div>
     </div>
-    {error ? <p role="status" className="text-muted">History is temporarily unavailable. Live monitoring continues.</p> : !page ? <p role="status" className="text-muted">Loading local history…</p> : <>
+    {!page ? <p role="status" className="text-muted">{error ? 'History is temporarily unavailable. Live monitoring continues.' : 'Loading local history…'}</p> : <>
+      {error && <p role="status" className="text-[11px] text-muted">History reading delayed; showing the last loaded view.</p>}
       <section className="rounded-slab border border-border bg-canvas p-3">
         <div className="flex justify-between text-[11px]"><span>Main event-loop peak</span><span className="text-muted">{page.resolution} source · {page.points.length.toLocaleString()} chart points</span></div>
         <svg viewBox="0 0 600 112" className="my-2 h-28 w-full text-accent" role="img" aria-label={`Main event-loop peak over ${range.label}; ${page.points.length} local points`}>

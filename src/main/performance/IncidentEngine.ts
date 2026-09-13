@@ -9,35 +9,54 @@ const operationThresholds: Partial<Record<MonitorOperationName, number>> = {
   'transcript.commit': 100, 'terminal.write': 250, 'persistence.serialize': 100,
   'persistence.write': 2000, 'worktree.refresh': 5000,
 }
+// Each capture retains at most 160 evidence points. Eight simultaneous scopes
+// bound post-trigger memory to ~1.3k points even during an app-wide storm,
+// while still letting unrelated windows record their own incidents.
+const CAPTURE_LIMIT = 8
+const HEARTBEAT_STALE_MS = 4000
 type Capture = { incident: MonitorIncident; endAt: number }
+type WindowState = { at: number; sourceAt: number; visible: boolean; slow: number[] }
 
 /** Worker-only deterministic observations; no automatic profiler or payloads. */
 export class IncidentEngine {
   private evidence: MonitorEvidencePoint[] = []
   private incidents: MonitorIncident[] = []
-  private active: Capture | null = null
+  // WHY per scope instead of one global capture: a single app-wide slot let a
+  // 15-second capture for window A (or the former monitoring-loss rule)
+  // silently swallow a genuine main stall or a stall in window B. Scope is the
+  // unit whose evidence a capture actually collects, so it is also the unit of
+  // coalescing: repeated triggers for the same scope join the open capture.
+  private captures = new Map<number, Capture>()
   private sequence = 0
   private cooldown = new Map<string, number>()
   private mainWindows: Array<{ at: number; slow: boolean; value: number }> = []
   private lastMainAt = -Infinity
+  // Main's own wall timestamp for its newest sample. Heartbeat staleness is
+  // judged against this SOURCE clock as well as the helper's receive clock: a
+  // transport backlog delays both heartbeats and main samples equally, so
+  // comparing the times main stamped them keeps delivery lag from being
+  // misreported as a renderer stall.
+  private lastMainSourceAt = -Infinity
   private sleepUntil = -Infinity
   private heapHigh = 0
   private heapAt = -Infinity
-  private windowState = new Map<number, { at: number; visible: boolean; slow: number[] }>()
+  private windowState = new Map<number, WindowState>()
   private visibleWindows: Set<number> | null = null
   private drops = 0
 
   accept(records: MonitorEnvelope[], wall: number, mono: number): void {
-    if (this.active && mono >= this.active.endAt) { this.active.incident.state = 'complete'; this.active = null }
+    this.complete(mono)
     for (const record of records) {
       if (record.kind === 'main') {
         const sample = record.sample
         this.lastMainAt = mono
+        this.lastMainSourceAt = Math.max(this.lastMainSourceAt, sample.at)
+        for (const state of this.windowState.values()) if (!Number.isFinite(state.sourceAt)) state.sourceAt = sample.at
         this.add({ at: sample.at, kind: 'main', scope: 0, value: sample.loopMaxMs, cpuPercent: sample.cpuPercent,
           heapRatio: sample.heapLimit ? sample.heapUsed / sample.heapLimit : null, longTaskMs: null, sleepGap: sample.sleepGap })
         if (sample.sleepGap) {
           this.sleepUntil = mono + 5000; this.mainWindows = []; this.heapHigh = 0
-          for (const state of this.windowState.values()) { state.at = mono; state.slow = [] }
+          for (const state of this.windowState.values()) { state.at = mono; state.sourceAt = sample.at; state.slow = [] }
           continue
         }
         if (mono < this.sleepUntil) continue
@@ -55,11 +74,12 @@ export class IncidentEngine {
         }
       } else if (record.kind === 'window') {
         const sample = record.sample
-        const state = this.windowState.get(sample.windowId) ?? { at: mono, visible: false, slow: [] }
+        const state = this.windowState.get(sample.windowId) ?? { at: mono, sourceAt: sample.receivedAt, visible: false, slow: [] }
         // Main's BrowserWindow lifecycle is authoritative for whether missing
         // renderer evidence is actionable. A delayed renderer heartbeat must
         // not classify a hidden window as visible.
-        state.at = mono; state.visible = this.visibleWindows?.has(sample.windowId) ?? sample.visibility === 'visible'
+        state.at = mono; state.sourceAt = Math.max(Number.isFinite(state.sourceAt) ? state.sourceAt : 0, sample.receivedAt)
+        state.visible = this.visibleWindows?.has(sample.windowId) ?? sample.visibility === 'visible'
         if (this.windowState.size < 64 || this.windowState.has(sample.windowId)) this.windowState.set(sample.windowId, state)
         this.add({ at: sample.receivedAt, kind: 'window', scope: sample.windowId, value: sample.lagMs, cpuPercent: null,
           heapRatio: sample.heapLimitBytes ? (sample.heapUsedBytes ?? 0) / sample.heapLimitBytes : null,
@@ -86,13 +106,14 @@ export class IncidentEngine {
       const visible = this.visibleWindows.has(id)
       const state = this.windowState.get(id)
       if (!state) {
-        // Start the clock from main's first observation of a live window.
-        // Otherwise a renderer that never boots can never produce an incident.
-        this.windowState.set(id, { at: mono, visible, slow: [] })
+        // Main registers a window when BrowserWindow is created, before its
+        // renderer can heartbeat. Starting the clock here is what lets a
+        // renderer that never boots produce an incident at all.
+        if (this.windowState.size < 64) this.windowState.set(id, { at: mono, sourceAt: this.lastMainSourceAt, visible, slow: [] })
       } else {
         // A newly shown window gets a full heartbeat grace interval. Reusing
         // its hidden timestamp would report a stall the instant it opens.
-        if (visible && !state.visible) state.at = mono
+        if (visible && !state.visible) { state.at = mono; state.sourceAt = this.lastMainSourceAt }
         state.visible = visible
         if (!visible) state.slow = []
       }
@@ -102,35 +123,67 @@ export class IncidentEngine {
       if (scope && !live.has(scope)) this.cooldown.delete(key)
     }
   }
-  loss(count: number, wall: number, mono: number): void {
-    if (count > this.drops) this.trigger('monitoring-loss', 0, count - this.drops, 1, wall, mono)
-    this.drops = count
+  /** Loss is coverage, not an incident. A former `monitoring-loss` rule took the
+   * capture slot and one of the fifty retained incidents for every overload,
+   * evicting the real stalls that overload usually accompanies. Drops now mark
+   * any open capture as incomplete; totals stay visible in history coverage. */
+  loss(count: number): void {
+    if (count > this.drops) for (const capture of this.captures.values()) capture.incident.truncated = true
+    this.drops = Math.max(this.drops, count)
   }
   tick(wall: number, mono: number): void {
-    if (this.active && mono >= this.active.endAt) { this.active.incident.state = 'complete'; this.active = null }
+    this.complete(mono)
     // An absent renderer is not blamed while main itself cannot deliver the
     // frames, during sleep, or after Electron reports it hidden/minimized.
     if (mono < this.sleepUntil || mono - this.lastMainAt > 2500) return
-    for (const [id, state] of this.windowState) if (state.visible && this.visibleWindows?.has(id) && mono - state.at > 4000) {
-      this.trigger('renderer-stall', id, mono - state.at, 4000, wall, mono)
+    for (const [id, state] of this.windowState) {
+      if (!state.visible || !this.visibleWindows?.has(id)) continue
+      // Both clocks must agree. Receive age alone blames transport backlog;
+      // source age alone can be fooled by a wall-clock step between samples.
+      const receiveAge = mono - state.at
+      const sourceAge = Number.isFinite(state.sourceAt) ? this.lastMainSourceAt - state.sourceAt : receiveAge
+      if (receiveAge > HEARTBEAT_STALE_MS && sourceAge > HEARTBEAT_STALE_MS) {
+        this.trigger('renderer-stall', id, Math.min(receiveAge, sourceAge), HEARTBEAT_STALE_MS, wall, mono)
+      }
     }
   }
   summaries(): MonitorIncidentSummary[] { return this.incidents.map(({ evidence, ...summary }) => ({ ...summary, evidenceCount: evidence.length })) }
   detail(id: number): MonitorIncident | null { const incident = this.incidents.find(row => row.id === id); return incident ? { ...incident, evidence: [...incident.evidence], evidenceCount: incident.evidence.length } : null }
-  interrupt(): void { if (this.active) { this.active.incident.state = 'interrupted'; this.active = null } }
+  interrupt(): void {
+    for (const capture of this.captures.values()) capture.incident.state = 'interrupted'
+    this.captures.clear()
+  }
+  /** Clear History deletes incident evidence on disk. The pre-trigger ring and
+   * retained incidents are the same evidence in memory; keeping them would
+   * re-persist deleted incidents on the next snapshot and seed new captures
+   * with samples from before the user's clear. Sequence keeps counting so
+   * `at:id` identities stay unique within the run. */
+  clear(): void {
+    this.evidence = []
+    this.incidents = []
+    this.captures.clear()
+    this.cooldown.clear()
+  }
 
+  private complete(mono: number): void {
+    for (const [scope, capture] of this.captures) if (mono >= capture.endAt) {
+      capture.incident.state = 'complete'
+      this.captures.delete(scope)
+    }
+  }
   private add(point: MonitorEvidencePoint): void {
     this.evidence.push(point)
     // 64 windows + main at 1 Hz, with a count cap independent of clock jumps.
     if (this.evidence.length > 4000) this.evidence.splice(0, this.evidence.length - 4000)
-    if (this.active && (point.kind === 'main' || point.scope === this.active.incident.scope)) {
-      if (this.active.incident.evidence.length < 160) this.active.incident.evidence.push(point)
-      else this.active.incident.truncated = true
+    for (const capture of this.captures.values()) {
+      if (point.kind !== 'main' && point.scope !== capture.incident.scope) continue
+      if (capture.incident.evidence.length < 160) capture.incident.evidence.push(point)
+      else capture.incident.truncated = true
     }
   }
   private trigger(rule: MonitorIncidentRule, scope: number, observed: number, threshold: number, wall: number, mono: number, operation?: MonitorOperationName): void {
     const key = `${rule}:${scope}`
-    if (this.active || mono < (this.cooldown.get(key) ?? -Infinity)) return
+    if (this.captures.has(scope) || this.captures.size >= CAPTURE_LIMIT || mono < (this.cooldown.get(key) ?? -Infinity)) return
     // Finite rules × 65 scopes bounds cooldown even in a long-running app.
     if (!this.cooldown.has(key) && this.cooldown.size >= 390) return
     this.cooldown.set(key, mono + 60_000)
@@ -139,6 +192,6 @@ export class IncidentEngine {
       observed, threshold, ...(operation ? { operation } : {}), state: 'capturing', truncated: candidates.length > 160, evidenceCount: 0, evidence: candidates.slice(-160) }
     this.incidents.push(incident)
     if (this.incidents.length > 50) this.incidents.shift()
-    this.active = { incident, endAt: mono + 15_000 }
+    this.captures.set(scope, { incident, endAt: mono + 15_000 })
   }
 }

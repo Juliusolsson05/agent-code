@@ -1,4 +1,4 @@
-import { appendFile, mkdtemp, readFile, rm } from 'node:fs/promises'
+import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -69,8 +69,6 @@ describe('bounded local performance history', () => {
   it('returns a bounded overview spanning the selected long range', async () => {
     const root = await mkdtemp(join(tmpdir(), 'agent-code-monitor-'))
     roots.push(root)
-    const store = new MonitorHistoryStore(root, 'run-c')
-    await store.settled()
     const points = Array.from({ length: 2001 }, (_, index) => ({
       schemaVersion: 1 as const, at: index * 60_000, resolution: '1m' as const,
       main: { cpuPercent: 2, rss: 1024, heapUsed: 256, heapLimit: 2048,
@@ -79,7 +77,12 @@ describe('bounded local performance history', () => {
       windows: { count: 0, visible: 0, maxLagMs: 0, longTaskMs: 0, maxInputMs: 0 },
       workerRss: 4096, droppedRecords: 0, restarts: 0,
     }))
+    // The store indexes history once at startup and is its only writer, so
+    // the fixture must exist before construction.
+    await mkdir(join(root, 'runs', 'run-c'), { recursive: true })
     await appendFile(join(root, 'runs', 'run-c', '1m.jsonl'), `${points.map(point => JSON.stringify(point)).join('\n')}\n`)
+    const store = new MonitorHistoryStore(root, 'run-c')
+    await store.settled()
 
     const overview = await store.query(0, 7 * 24 * 60 * 60_000, undefined, 1000)
     expect(overview.points.length).toBeLessThanOrEqual(300)
@@ -103,5 +106,34 @@ describe('bounded local performance history', () => {
     expect(await restarted.readIncident(10_000, 1)).toMatchObject({
       rule: 'renderer-stall', state: 'interrupted', evidenceCount: 1,
     })
+  })
+
+  it('repairs a torn append and keeps coarse tiers peak-preserving', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agent-code-monitor-'))
+    roots.push(root)
+    await mkdir(join(root, 'runs', 'run-d'), { recursive: true })
+    await writeFile(join(root, 'runs', 'run-d', '10s.jsonl'), '{"schemaVersion":1,"at":')
+    const store = new MonitorHistoryStore(root, 'run-d', () => 30_000)
+    for (let at = 1000; at <= 12_000; at += 1000) {
+      const sample = snapshot(at)
+      store.record(at === 5000 ? { ...sample, main: { ...sample.main!, loopMaxMs: 900 } } : sample, null, [], 0, 0)
+    }
+    await store.flush()
+    const lines = (await readFile(join(root, 'runs', 'run-d', '10s.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line))
+    // The torn fragment is gone rather than fused with the first valid line,
+    // and the 10 s bucket reports the 900 ms peak instead of its last sample.
+    expect(lines.map(line => line.at)).toEqual([9000, 12_000])
+    expect(lines[0].main.loopMaxMs).toBe(900)
+    expect(store.status()).toMatchObject({ state: 'healthy', points: 12 + 2 + 1 })
+  })
+
+  it('falls back to a coarser tier when the fine tier no longer retains the range start', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agent-code-monitor-'))
+    roots.push(root)
+    const store = new MonitorHistoryStore(root, 'run-e', () => 20 * 60_000)
+    for (let at = 0; at <= 20 * 60_000; at += 10_000) store.record(snapshot(at), null, [], 0, 0)
+    await store.settled()
+    expect((await store.query(60_000, 16 * 60_000, undefined, 7)).resolution).toBe('10s')
+    expect((await store.query(10 * 60_000, 16 * 60_000, undefined, 7)).resolution).toBe('1s')
   })
 })

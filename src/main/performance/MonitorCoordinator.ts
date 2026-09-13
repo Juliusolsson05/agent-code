@@ -40,11 +40,35 @@ export class MonitorCoordinator {
   private moreProcesses = false
   private processReceivedAt = 0
   private visibleWindows = new Set<number>()
-  private query: QueryWaiter | null = null
+  // WHY a small FIFO instead of one waiter slot: the Timeline, report preview
+  // and incident drawer can legitimately ask at the same moment. A single slot
+  // turned the second request into an immediate null ("history unavailable")
+  // even though the helper was healthy. Eight waiters bound memory and keep a
+  // stalled helper from accumulating renderer promises.
+  private queries: QueryWaiter[] = []
   private sourceDrops = new Map<string, number>()
+  // Query deadlines prove only that one disk scan was slow, not that the
+  // helper crashed. Those restarts are refunded from the four-launch crash
+  // budget (up to a separate cap) so a slow 7-day overview cannot permanently
+  // disable live monitoring for the rest of the app run.
+  private queryTimeouts = 0
+  private refundedLaunches = 0
   setWindowVisible(id: number, visible: boolean): void {
     if (visible && this.visibleWindows.size < 64) this.visibleWindows.add(id)
     else this.visibleWindows.delete(id)
+  }
+  /** Register a BrowserWindow when main creates it, not at its first heartbeat.
+   * Liveness learned from heartbeats can never detect a renderer that fails
+   * to boot, which is precisely the renderer-stall case with no other signal. */
+  openWindow(id: number, visible: boolean): void {
+    if (!Number.isSafeInteger(id) || id < 1) return
+    if (this.liveWindows.has(id) || this.liveWindows.size < MONITOR_POLICY.windowLimit) this.liveWindows.add(id)
+    this.setWindowVisible(id, visible)
+  }
+  /** A reload or crashed renderer restarts its producer loss counters. */
+  resetProducers(windowId: number): void {
+    this.sourceDrops.delete(`${windowId}:preload`)
+    this.sourceDrops.delete(`${windowId}:renderer`)
   }
   readIncident(id: number): Promise<MonitorIncident | null> {
     if (!Number.isSafeInteger(id) || id < 1) return Promise.resolve(null)
@@ -54,9 +78,13 @@ export class MonitorCoordinator {
     if (!Number.isFinite(at) || at < 0 || !Number.isSafeInteger(id) || id < 1) return Promise.resolve(null)
     return this.request({ kind: 'history-incident', at, id }).then(result => result?.kind === 'history-incident' ? result.value : null)
   }
-  readHistory(from: number, to: number, cursor?: string, limit = 500): Promise<MonitorHistoryPage | null> {
-    if (!validRange(from, to) || (cursor !== undefined && !/^\d{1,7}$/.test(cursor))) return Promise.resolve(null)
-    return this.request({ kind: 'history', from, to, ...(cursor ? { cursor } : {}), limit: Math.max(1, Math.min(1000, Math.floor(limit))) })
+  readHistory(from: number, to: number, cursor?: string, limit: unknown = 500): Promise<MonitorHistoryPage | null> {
+    if (!validRange(from, to) || (cursor !== undefined && (typeof cursor !== 'string' || !/^\d{1,7}$/.test(cursor)))) return Promise.resolve(null)
+    // IPC arguments are untyped at runtime. NaN or an object limit used to
+    // survive Math.floor as NaN and reach the helper, which rejected the
+    // parsed request shape and killed itself as malformed.
+    const bounded = typeof limit === 'number' && Number.isFinite(limit) ? Math.max(1, Math.min(1000, Math.floor(limit))) : 500
+    return this.request({ kind: 'history', from, to, ...(cursor ? { cursor } : {}), limit: bounded })
       .then(result => result?.kind === 'history' ? result.value : null)
   }
   readHistoryStatus(): Promise<MonitorHistoryStatus | null> {
@@ -155,8 +183,7 @@ export class MonitorCoordinator {
     this.liveWindows.delete(windowId)
     this.visibleWindows.delete(windowId)
     this.cache = { ...this.cache, windows: this.cache.windows.filter(window => window.windowId !== windowId) }
-    this.sourceDrops.delete(`${windowId}:preload`)
-    this.sourceDrops.delete(`${windowId}:renderer`)
+    this.resetProducers(windowId)
   }
 
   operation(sample: MonitorOperation, windowId: number | null = null): void {
@@ -170,17 +197,18 @@ export class MonitorCoordinator {
     const previous = this.sourceDrops.get(key)
     if (previous === undefined && this.sourceDrops.size >= MONITOR_POLICY.windowLimit * 2) return
     // Producer counters are monotonic only for one renderer/preload lifetime.
-    // A reload resets them; establish the new baseline without subtracting the
-    // loss already accumulated from the retired producer.
-    if (previous === undefined || dropped >= previous) {
-      this.lost = Math.min(Number.MAX_SAFE_INTEGER, this.lost + dropped - (previous ?? 0))
-    }
+    // A value below the baseline proves a new generation; its whole counter is
+    // new loss. (Discarding it lost the first report after every reload.) The
+    // navigation hook also resets the baseline for reloads whose first value
+    // happens to exceed the retired producer's last report.
+    const delta = previous === undefined || dropped < previous ? dropped : dropped - previous
+    this.lost = Math.min(Number.MAX_SAFE_INTEGER, this.lost + delta)
     this.sourceDrops.set(key, dropped)
   }
 
   stop(): void {
     this.stopped = true
-    this.query?.resolve(null); this.query = null
+    for (const query of this.queries.splice(0)) query.resolve(null)
     this.pending?.query?.resolve(null)
     this.processSource?.stop()
     if (this.timer) clearInterval(this.timer)
@@ -202,30 +230,32 @@ export class MonitorCoordinator {
   async shutdown(deadlineMs = 2000): Promise<void> {
     if (this.stopped) return
     const deadline = this.monotonicNow() + Math.max(100, deadlineMs)
+    const sleep = () => new Promise(resolve => setTimeout(resolve, 20))
     this.processSource?.stop()
 
     // A renderer may have started a history query immediately before quit. It
-    // is safe to abandon a query that has not left main; allowing it to occupy
-    // the single-credit worker channel would make the durability flush wait
-    // behind UI work that can no longer be observed.
-    this.query?.resolve(null)
-    this.query = null
+    // is safe to abandon queries that have not left main; letting them occupy
+    // the single-credit channel would make durability wait behind UI work that
+    // can no longer be observed.
+    for (const query of this.queries.splice(0)) query.resolve(null)
 
-    // An already-posted query cannot be revoked without killing the helper and
-    // losing its queued writes. Give it the same bounded grace period, then use
-    // the next credit for an explicit history flush. The outer quit gate also
-    // has a deadline, so every branch remains bounded if a disk stalls.
-    while (this.pending?.query && this.monotonicNow() < deadline) {
-      await new Promise(resolve => setTimeout(resolve, 20))
+    // WHY drain before flushing: one batch carries at most 120 records, and
+    // stop() clears whatever is still queued. The old sequence flushed a single
+    // batch, so an operation storm right before quit (exactly when evidence
+    // matters) lost everything behind it. Reserve up to half the budget, capped
+    // at one second, for the flush itself so draining cannot starve it.
+    const drainUntil = deadline - Math.min(1000, (deadline - this.monotonicNow()) / 2)
+    while (this.child && this.monotonicNow() < drainUntil && (this.pending || this.queue.stats.records > 0)) {
+      if (!this.pending) this.pump()
+      await sleep()
     }
-    const remaining = deadline - this.monotonicNow()
-    if (remaining > 0 && this.child && !this.stopped) {
-      const flushed = this.request({ kind: 'history-flush' })
-      this.pump()
-      await Promise.race([
-        flushed,
-        new Promise<null>(resolve => setTimeout(() => resolve(null), remaining)),
-      ])
+    if (this.child && this.monotonicNow() < deadline) {
+      let flushed = false
+      void this.request({ kind: 'history-flush' }).then(() => { flushed = true })
+      while (!flushed && this.child && this.monotonicNow() < deadline) {
+        if (!this.pending) this.pump()
+        await sleep()
+      }
     }
     this.stop()
   }
@@ -240,7 +270,7 @@ export class MonitorCoordinator {
   }
 
   private launch(): void {
-    if (this.stopped || this.child || this.launches >= 4) return
+    if (this.stopped || this.child || this.launches - this.refundedLaunches >= 4) return
     this.launches++
     try {
       const child = utilityProcess.fork(fileURLToPath(new URL('./performanceWorker.js', import.meta.url)), [], {
@@ -290,29 +320,37 @@ export class MonitorCoordinator {
     } catch { this.fail(null) }
   }
 
-  private fail(child: UtilityProcess | null): void {
+  private fail(child: UtilityProcess | null, refund = false): void {
     if (child !== this.child) return
     this.child = null
     try { child?.kill() } catch { /* Exiting helpers can reject native handle access. */ }
+    if (refund) this.refundedLaunches++
     this.lost += this.pending?.count ?? 0
     this.pending?.query?.resolve(null)
-    this.query?.resolve(null); this.query = null
+    // Waiters cannot carry over: the replacement helper may be seconds away
+    // and each renderer caller already keeps its previous page on null.
+    for (const query of this.queries.splice(0)) query.resolve(null)
     this.pending = null
     this.processTransfer = null
     this.moreProcesses = false
-    this.retryAt = this.monotonicNow() + 5000 * this.launches
+    this.retryAt = this.monotonicNow() + 5000 * Math.max(1, this.launches - this.refundedLaunches)
     this.cache = { ...this.cache, collector: 'degraded' }
   }
 
   private request(request: MonitorWorkerQuery): Promise<MonitorWorkerQueryResult | null> {
-    if (this.query || this.pending?.query || this.stopped || !this.child) return Promise.resolve(null)
-    return new Promise(resolve => { this.query = { request, resolve } })
+    if (this.stopped || !this.child || this.queries.length >= 8) return Promise.resolve(null)
+    return new Promise(resolve => { this.queries.push({ request, resolve }) })
   }
 
   private pump(): void {
     mainOperations.sweep()
     try {
-      if (this.pending && this.monotonicNow() - this.pending.at > this.pending.timeoutMs) this.fail(this.child)
+      if (this.pending && this.monotonicNow() - this.pending.at > this.pending.timeoutMs) {
+        const kind = this.pending.query?.request.kind
+        const refund = kind !== undefined && kind !== 'history-flush' && this.queryTimeouts < 3
+        if (refund) this.queryTimeouts++
+        this.fail(this.child, refund)
+      }
       if (!this.child && this.monotonicNow() >= this.retryAt) this.launch()
       if (!this.child || this.pending) return
       // Reserve 100 of 120 slots for a complete process generation. At the
@@ -322,12 +360,12 @@ export class MonitorCoordinator {
       // same half-transfer every five seconds. Both queues total <2 MiB.
       const processes = this.processQueue.drain(100, 100 * MONITOR_RECORD_BYTES)
       const records = [...processes, ...this.queue.drain(120 - processes.length, (120 - processes.length) * MONITOR_RECORD_BYTES)]
-      if (!records.length && !this.moreProcesses && !this.query) return
+      if (!records.length && !this.moreProcesses && !this.queries.length) return
       const sequence = ++this.sequence
       // One credit means a suspended worker cannot accumulate an invisible
       // Electron message-port queue. Timeout discards the in-flight evidence,
       // counts the loss, and caps process restarts for the entire app run.
-      const query = this.query; this.query = null
+      const query = this.queries.shift()
       const timeoutMs = query?.request.kind === 'report-export' ? 60_000
         : query?.request.kind === 'history-flush' ? 2500 : query ? 10_000 : 5000
       this.pending = { sequence, at: this.monotonicNow(), count: records.length, timeoutMs, ...(query ? { query } : {}) }

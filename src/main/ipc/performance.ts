@@ -7,12 +7,13 @@ import { windowForSession, windowIdFor } from '@main/window/windowRegistry.js'
 import { parseMonitorRendererBatch } from '@shared/performance/monitorContracts.js'
 import { getHeapStatistics, writeHeapSnapshot } from 'node:v8'
 import { mainProbe } from '@main/performance/MainProbe.js'
-import { mkdir, statfs } from 'node:fs/promises'
-import { join } from 'node:path'
+import { mkdir, rm, statfs } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
+import { moveArtifact } from '@main/performance/moveArtifact.js'
 
 import { performanceService } from '@main/performance/PerformanceService.js'
 import { ProcessTelemetry } from '@main/performance/ProcessTelemetry.js'
-import { HEAP_SNAPSHOT_DIR } from '@main/storage/paths.js'
+import { HEAP_SNAPSHOT_DIR, PERFORMANCE_CAPTURE_TEMP_DIR } from '@main/storage/paths.js'
 import type { SessionManager } from '@main/sessionManager.js'
 import type {
   PerformanceRecord,
@@ -53,9 +54,11 @@ export function registerPerformanceIpc(manager: SessionManager): void {
     if (!BrowserWindow.fromWebContents(event.sender)) return null
     return monitorCoordinator.readHistoryIncident(at, id)
   })
-  ipcMain.handle('performance:monitor-history', (event, from: number, to: number, cursor?: string, limit?: number) => {
+  ipcMain.handle('performance:monitor-history', (event, from: number, to: number, cursor?: unknown, limit?: unknown) => {
     if (!BrowserWindow.fromWebContents(event.sender)) return null
-    return monitorCoordinator.readHistory(from, to, cursor, limit)
+    // Renderer arguments are untyped at runtime; the coordinator validates the
+    // limit and rejects a non-string cursor before anything reaches the helper.
+    return monitorCoordinator.readHistory(from, to, typeof cursor === 'string' ? cursor : undefined, limit)
   })
   ipcMain.handle('performance:monitor-report-preview', (event, from: number, to: number) => {
     if (!BrowserWindow.fromWebContents(event.sender)) return null
@@ -142,11 +145,10 @@ export function registerPerformanceIpc(manager: SessionManager): void {
       || windowIdFor(event.sender) !== windowForSession(sessionId)) return
     manager.beginMonitorResponse(sessionId, typeof operationId === 'string' ? operationId : undefined)
   })
-  ipcMain.on('performance:monitor-response-cancel', (event, sessionId: unknown) => {
-    if (!BrowserWindow.fromWebContents(event.sender) || typeof sessionId !== 'string'
-      || windowIdFor(event.sender) !== windowForSession(sessionId)) return
-    manager.cancelMonitorResponse(sessionId)
-  })
+  // No cancel channel: renderer cancellations are local. Main never starts a
+  // renderer-requested timer before acceptance, and main-delivered prompts
+  // cancel themselves from the delivery result, so a per-commit cancel IPC
+  // from hidden tiles was pure main-process traffic.
 
   ipcMain.handle('performance:get-config', () => performanceService.getConfig())
 
@@ -202,37 +204,52 @@ export function registerPerformanceIpc(manager: SessionManager): void {
   }> => {
     const window = BrowserWindow.fromWebContents(event.sender)
     if (!window) return { ok: false, error: 'Heap snapshot is unavailable.' }
+    const usedHeap = getHeapStatistics().used_heap_size
     const answer = await dialog.showMessageBox(window, {
       type: 'warning', title: 'Capture heap snapshot?',
       message: 'Agent Code may pause while the main JavaScript heap is written.',
-      detail: 'Heap snapshots can be large and may contain sensitive application memory. Capture only when you intend to inspect the file locally.',
-      buttons: ['Cancel', 'Capture Snapshot'], defaultId: 0, cancelId: 0, noLink: true,
+      detail: `The file is usually at least ${(usedHeap / 1024 ** 2).toFixed(0)} MiB. Heap snapshots can contain sensitive application memory. Capture only when you intend to inspect the file locally.`,
+      buttons: ['Cancel', 'Choose Location…'], defaultId: 0, cancelId: 0, noLink: true,
     })
     if (answer.response !== 1) return { ok: false, error: 'Capture cancelled.' }
-    const dir = HEAP_SNAPSHOT_DIR
     try {
-      await mkdir(dir, { recursive: true })
+      await mkdir(HEAP_SNAPSHOT_DIR, { recursive: true })
+      await mkdir(PERFORMANCE_CAPTURE_TEMP_DIR, { recursive: true, mode: 0o700 })
     } catch (err) {
       console.warn('[perf-snapshot] mkdir failed', err)
       return { ok: false, error: 'Snapshot storage is unavailable.' }
     }
-    const file = join(
-      dir,
-      `manual-${new Date().toISOString().replace(/[:.]/g, '-')}-${process.pid}.heapsnapshot`,
-    )
+    // WHY a picker: snapshots used to land silently in app state, so the user
+    // saw "saved locally" with no idea where a multi-hundred-megabyte file
+    // went. The default still points at the retention-managed root.
+    const selection = await dialog.showSaveDialog(window, {
+      title: 'Save Heap Snapshot',
+      defaultPath: join(HEAP_SNAPSHOT_DIR, `agent-code-main-${new Date().toISOString().replace(/[:.]/g, '-')}.heapsnapshot`),
+      filters: [{ name: 'Heap snapshot', extensions: ['heapsnapshot'] }],
+    })
+    if (selection.canceled || !selection.filePath) return { ok: false, error: 'Capture cancelled.' }
+    const destination = selection.filePath
+    const temporary = join(PERFORMANCE_CAPTURE_TEMP_DIR, `heap-${process.pid}-${Date.now()}.tmp`)
     let finishSnapshot: ReturnType<typeof mainOperations.begin> | null = null
     try {
-      const disk = await statfs(dir)
-      const available = disk.bavail * disk.bsize
-      const required = Math.max(512 * 1024 * 1024, getHeapStatistics().used_heap_size * 3)
-      if (available < required) return { ok: false, error: 'Not enough free disk space for a heap snapshot.' }
+      // WHY headroom instead of a hard size cap: a large heap is exactly the
+      // leak this capture diagnoses, so refusing big snapshots would defeat
+      // it. Instead require space for the estimate on both the scratch volume
+      // and the destination volume (a cross-volume move copies the file).
+      const required = Math.max(512 * 1024 * 1024, usedHeap * 3)
+      for (const dir of new Set([PERFORMANCE_CAPTURE_TEMP_DIR, dirname(destination)])) {
+        const disk = await statfs(dir)
+        if (disk.bavail * disk.bsize < required) return { ok: false, error: 'Not enough free disk space for a heap snapshot.' }
+      }
       finishSnapshot = mainOperations.begin('heap.snapshot')
-      writeHeapSnapshot(file)
+      writeHeapSnapshot(temporary)
+      await moveArtifact(temporary, destination)
       finishSnapshot()
-      rememberRevealable(file)
-      return { ok: true, path: file }
+      rememberRevealable(destination)
+      return { ok: true, path: destination }
     } catch (err) {
       finishSnapshot?.('error')
+      await rm(temporary, { force: true }).catch(() => {})
       console.warn('[perf-snapshot] write failed', err)
       return {
         ok: false,

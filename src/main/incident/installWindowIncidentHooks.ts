@@ -208,7 +208,13 @@ export function installWindowIncidentHooks(journal: AppRunJournal): void {
     // misleading main-process crash incident. The numeric ID is the stable lifecycle key.
     const webContentsId = window.webContents.id
     windows.set(webContentsId, window)
-    monitorCoordinator.setWindowVisible(webContentsId, window.isVisible() && !window.isMinimized())
+    monitorCoordinator.openWindow(webContentsId, window.isVisible() && !window.isMinimized())
+    // A reload or renderer crash keeps the WebContents ID but restarts the
+    // preload/renderer loss counters. Resetting the producer baseline here is
+    // what keeps a new generation's first loss report from being subtracted
+    // from the retired generation's last one.
+    window.webContents.on('did-navigate', () => monitorCoordinator.resetProducers(webContentsId))
+    window.webContents.on('render-process-gone', () => monitorCoordinator.resetProducers(webContentsId))
     const initialLiveness = freshLiveness(Date.now())
     recordWindowLifecycle(initialLiveness, window, 'created')
     liveness.set(webContentsId, initialLiveness)

@@ -36,10 +36,15 @@ parent.on('message', async ({ data }) => {
   aggregator.accept(data.records)
   const now = Date.now()
   const mono = performance.now()
-  if (data.query?.kind === 'history-flush') incidents.interrupt()
   incidents.reconcile(data.liveWindowIds ?? [], data.visibleWindowIds ?? [], mono)
   incidents.accept(data.records, now, mono)
-  incidents.loss(data.droppedRecords ?? 0, now, mono)
+  incidents.loss(data.droppedRecords ?? 0)
+  // WHY interrupt only after this batch is accepted: the coordinator sends its
+  // final drained records together with the flush. Interrupting first closed
+  // captures before the last seconds of evidence (often the stall that made
+  // the user quit) could join them, and those records then started nothing.
+  const flushing = data.query?.kind === 'history-flush'
+  if (flushing) incidents.interrupt()
   for (const record of data.records) {
     if (record.kind === 'process-context-start') {
       context = { ...record, targets: [], electron: [], received: 0 }
@@ -54,7 +59,10 @@ parent.on('message', async ({ data }) => {
   }
   if (data.liveWindowIds) aggregator.reconcileWindows(data.liveWindowIds)
   const page = processes.read()
-  const snapshot = mono - lastSnapshotAt >= 1000
+  // A flush always records. The one-second snapshot throttle otherwise skips
+  // the final message when quit follows a reply within a second, so the
+  // interrupted incident states above would never reach the store.
+  const snapshot = flushing || mono - lastSnapshotAt >= 1000
     ? { ...aggregator.snapshot(now, process.memoryUsage.rss()), incidents: incidents.summaries(), history: history?.status() ?? unavailableHistory() } : undefined
   if (snapshot) lastSnapshotAt = mono
   if (snapshot && history) {
@@ -87,13 +95,21 @@ parent.on('message', async ({ data }) => {
   else if (query?.kind === 'report-export') queryResult = { kind: 'report-export', value: history
     ? await history.exportReport(query.from, query.to, query.destination, query.build)
     : { ok: false, code: 'unavailable' } }
-  else if (query?.kind === 'history-clear') queryResult = { kind: 'history-clear', value: history ? await history.clear() : unavailableHistory() }
+  else if (query?.kind === 'history-clear') {
+    // Reset in-memory evidence synchronously, before the first await. The
+    // one-second tick timer can run while clear() awaits disk work, and every
+    // later snapshot would otherwise re-persist the incidents and operation
+    // histograms the user just deleted.
+    incidents.clear()
+    aggregator.clearHistory()
+    queryResult = { kind: 'history-clear', value: history ? await history.clear() : unavailableHistory() }
+  }
   else if (query?.kind === 'history-flush') {
     // The coordinator sends this only from Electron's admitted quit path. A
     // normal snapshot reply proves aggregation finished, but it does not prove
-    // the store's deliberately detached append queue reached disk. Replying
-    // after settled() gives the quit gate that stronger durability boundary.
-    await history?.settled()
+    // the store's coalesced writer reached disk. flush() also emits partially
+    // filled 10 s / 1 m rollup buckets, which would otherwise die with the run.
+    await history?.flush()
     queryResult = { kind: 'history-flush', value: true }
   }
   parent.postMessage({ sequence: data.sequence, snapshot, processChunk, ...(queryResult ? { queryResult } : {}) })

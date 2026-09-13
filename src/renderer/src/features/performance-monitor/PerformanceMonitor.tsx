@@ -1,5 +1,6 @@
 import { Timeline } from './Timeline'
 import { useEffect, useMemo, useState } from 'react'
+import type { PerformancePanelRequest } from '@renderer/app-state/uiShell/types'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@renderer/components/ui/dialog'
 import { Button } from '@renderer/components/ui/button'
 import type { MonitorMainSample, MonitorSnapshot } from '@shared/performance/monitorSnapshot.js'
@@ -11,10 +12,14 @@ import { useMonitor } from './useMonitor'
 const bytes = (value: number | null | undefined) => value == null ? '—' : value >= 1024 ** 3 ? `${(value / 1024 ** 3).toFixed(2)} GiB` : `${(value / 1024 ** 2).toFixed(1)} MiB`
 const number = (value: number | null | undefined, suffix = '') => value == null ? '—' : `${value.toFixed(1)}${suffix}`
 type View = 'overview' | 'timeline' | 'processes' | 'operations' | 'recordings'
+// Module scope, not a ref: StrictMode and a close/reopen both remount the
+// component, and a replayed request would open a second native dialog.
+let lastHandledRequest = 0
 
-export function PerformanceMonitor({ onClose }: { onClose: () => void }) {
+export function PerformanceMonitor({ onClose, request = null, onRequestHandled }: { onClose: () => void; request?: PerformancePanelRequest | null; onRequestHandled?: (id: number) => void }) {
   const { snapshot, error } = useMonitor()
-  const [view, setView] = useState<View>('overview')
+  const [view, setView] = useState<View>(request?.view ?? 'overview')
+  useEffect(() => { if (request) setView(request.view) }, [request])
   return <Dialog open onOpenChange={open => { if (!open) onClose() }}>
     <DialogContent className="w-[min(1040px,94vw)] max-h-[90vh] grid-rows-[auto_auto_minmax(0,1fr)]" showCloseButton>
       <DialogHeader>
@@ -37,16 +42,19 @@ export function PerformanceMonitor({ onClose }: { onClose: () => void }) {
         {!snapshot ? <p className="text-muted" role="status">{error ? 'Performance readings are unavailable. Collection will reconnect automatically.' : 'Waiting for the first sample…'}</p>
           : view === 'overview' ? <Overview snapshot={snapshot} />
             : view === 'timeline' ? <Timeline incidents={snapshot.incidents ?? []} />
-              : view === 'processes' ? <Processes /> : view === 'recordings' ? <Recordings snapshot={snapshot} /> : <Operations snapshot={snapshot} />}
+              : view === 'processes' ? <Processes /> : view === 'recordings' ? <Recordings snapshot={snapshot} request={request} onRequestHandled={onRequestHandled} /> : <Operations snapshot={snapshot} />}
       </div>
     </DialogContent>
   </Dialog>
 }
 
-function Recordings({ snapshot }: { snapshot: MonitorSnapshot }) {
+function Recordings({ snapshot, request, onRequestHandled }: { snapshot: MonitorSnapshot; request: PerformancePanelRequest | null; onRequestHandled?: (id: number) => void }) {
   const [range, setRange] = useState(15 * 60_000)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
+  // The last file this tab saved. Reports and heap snapshots are written to a
+  // user-chosen path, so the result must say where and offer Reveal.
+  const [artifact, setArtifact] = useState<string | null>(null)
   const [preview, setPreview] = useState<MonitorReportPreview | null>(null)
   const [trace, setTrace] = useState<MonitorTraceStatus | null>(null)
   // A preview estimates the selected range and data classes; it does not need
@@ -70,10 +78,11 @@ function Recordings({ snapshot }: { snapshot: MonitorSnapshot }) {
     return () => { disposed = true; clearTimeout(timer) }
   }, [trace?.state])
   const save = async () => {
-    setBusy(true); setMessage(null)
+    setBusy(true); setMessage(null); setArtifact(null)
     try {
       const result = await window.api.saveMonitorReport(Math.max(0, Date.now() - range), Date.now())
-      setMessage(result.ok ? `Saved ${(result.bytes / 1024).toFixed(1)} KiB with ${result.points.toLocaleString()} metric points and ${result.incidents} incidents.`
+      if (result.ok) setArtifact(result.path)
+      setMessage(result.ok ? `Saved ${(result.bytes / 1024).toFixed(1)} KiB with ${result.points.toLocaleString()} metric points and ${result.incidents} incidents to ${result.path}.`
         : result.code === 'cancelled' ? 'Save cancelled.' : `Report was not saved (${result.code}).`)
     } catch { setMessage('Report was not saved.') }
     finally { setBusy(false) }
@@ -96,9 +105,22 @@ function Recordings({ snapshot }: { snapshot: MonitorSnapshot }) {
     catch { setMessage('Recording could not stop cleanly.') }
     finally { setBusy(false) }
   }
+  useEffect(() => {
+    if (!request || request.id <= lastHandledRequest) return
+    lastHandledRequest = request.id
+    onRequestHandled?.(request.id)
+    if (request.action === 'save-report') void save()
+    else void startTrace('chromium')
+    // Keyed by the request identity only; the handlers read current state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [request?.id])
   const heap = async () => {
-    setBusy(true); setMessage(null)
-    try { const result = await window.api.writeHeapSnapshot(); setMessage(result.ok ? 'Heap snapshot saved locally.' : result.error) }
+    setBusy(true); setMessage(null); setArtifact(null)
+    try {
+      const result = await window.api.writeHeapSnapshot()
+      if (result.ok) setArtifact(result.path)
+      setMessage(result.ok ? `Heap snapshot saved to ${result.path}.` : result.error)
+    }
     catch { setMessage('Heap snapshot could not be captured.') }
     finally { setBusy(false) }
   }
@@ -108,7 +130,8 @@ function Recordings({ snapshot }: { snapshot: MonitorSnapshot }) {
       <div className="flex flex-wrap gap-2"><Button size="sm" disabled={busy} onClick={() => void save()}>Save Performance Report</Button><Button size="sm" variant="destructive-outline" disabled={busy || snapshot.history?.exporting} onClick={() => void clear()}>Clear Local History</Button></div>
       <p className="text-[11px] text-muted">{preview ? `${preview.dataClasses.join(', ')} · estimated ${(preview.estimatedBytes / 1024).toFixed(1)} KiB · local file only` : 'Preparing report preview…'}</p>
       <p className="text-[11px] text-muted">{snapshot.history ? `${(snapshot.history.bytes / 1024 / 1024).toFixed(1)} MiB stored · ${snapshot.history.state}${snapshot.history.shortened ? ' · shortened' : ''}` : 'History is warming up.'}</p>
-      {message && <p role="status" className="text-[11px]">{message}</p>}
+      {message && <p role="status" className="text-[11px] break-all">{message}</p>}
+      {artifact && <Button size="sm" variant="ghost" onClick={() => void window.api.revealPath(artifact)}>Reveal Saved File</Button>}
     </section>
     <section className="rounded-slab border border-border p-4 space-y-3"><h2 className="font-medium">Advanced recordings</h2><p className="text-[11px] leading-5 text-muted">Recordings are explicit, app-wide and limited to 30 seconds by default with a 60-second hard maximum and a 64 MiB artifact cap. Chromium traces use argument filtering. CPU profiles and heap snapshots can contain source paths or sensitive application memory; keep them local unless you inspect them first.</p>
       <div className="flex flex-wrap gap-2">{trace?.state === 'recording' || trace?.state === 'starting' || trace?.state === 'stopping' ? <><Button size="sm" disabled={busy || trace.state !== 'recording' || trace.ownerWindowId === null} onClick={() => void stopTrace(false)}>Stop and Save</Button><Button size="sm" variant="destructive-outline" disabled={busy || trace.state === 'stopping' || trace.ownerWindowId === null} onClick={() => void stopTrace(true)}>Cancel Recording</Button></> : <><Button size="sm" disabled={busy} onClick={() => void startTrace('chromium')}>Record Chromium Trace</Button><Button size="sm" variant="outline" disabled={busy} onClick={() => void startTrace('main-cpu')}>Record Main CPU Profile</Button></>}

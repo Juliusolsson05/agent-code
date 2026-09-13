@@ -93,6 +93,14 @@ export const INCIDENT_RUNS_DIR = join(STATE_DIR, 'incidents', 'runs')
 // and should justify it in the diff.
 export const HEAP_SNAPSHOT_DIR = join(STATE_DIR, 'heap-snapshots')
 
+// Explicit recordings (Chromium traces, main CPU profiles, heap snapshots) are
+// written here first and renamed to the user's chosen destination only once
+// complete. WHY not a temp file beside the destination: a quit or crash during
+// a 30-second trace stranded `*.agent-code-<pid>.tmp` files in the user's own
+// Desktop/Downloads, where nothing owned by the app would ever clean them.
+// This root is app-owned and swept at startup, before any capture can begin.
+export const PERFORMANCE_CAPTURE_TEMP_DIR = join(STATE_DIR, 'performance-capture-tmp')
+
 // Session recordings — continuous debug-gated capture of a session's
 // rendering-pipeline input stream, replayable in the test suite (see
 // docs/rendering/session-recording-plan-2026-07.md, issue #467). Written

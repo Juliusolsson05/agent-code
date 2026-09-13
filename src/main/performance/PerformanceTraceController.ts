@@ -1,10 +1,13 @@
 import { contentTracing } from 'electron'
 import { Session as InspectorSession } from 'node:inspector'
-import { rename, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import type { MonitorTraceMode, MonitorTraceStatus } from '@shared/performance/monitorHistory.js'
 import { MONITOR_POLICY } from '@shared/performance/monitorPolicy.js'
 import { mainOperations } from './operations.js'
+import { moveArtifact } from './moveArtifact.js'
+import { PERFORMANCE_CAPTURE_TEMP_DIR } from '@main/storage/paths.js'
 import type { OperationEnd } from '@shared/performance/operationTimers.js'
 
 const TRACE_LIMIT = MONITOR_POLICY.traceBytes
@@ -29,6 +32,8 @@ export class PerformanceTraceController {
   private current = initial()
   private cancelledOwners = new Set<number>()
 
+  constructor(private readonly tempDir: string = PERFORMANCE_CAPTURE_TEMP_DIR) {}
+
   status(): MonitorTraceStatus { return { ...this.current } }
 
   async start(ownerWindowId: number, mode: MonitorTraceMode, destination: string, durationMs: number = MONITOR_POLICY.profileMs): Promise<MonitorTraceStatus> {
@@ -38,13 +43,15 @@ export class PerformanceTraceController {
     const duration = Math.max(1000, Math.min(MONITOR_POLICY.maxProfileMs, Math.floor(durationMs)))
     const startedAt = Date.now()
     const startedMono = performance.now()
-    const temporary = `${destination}.agent-code-${process.pid}.tmp`
+    // Scratch lives in the app-owned capture root (see paths.ts), never beside
+    // the user's destination, so a quit or crash cannot strand it there.
+    const temporary = join(this.tempDir, `${mode}-${process.pid}-${startedAt}.tmp`)
     const finishOperation = mainOperations.begin(mode === 'chromium' ? 'profile.chromium' : 'profile.main-cpu')
     this.cancelledOwners.delete(ownerWindowId)
     this.current = { state: 'starting', mode, ownerWindowId, startedAt, endsAt: startedAt + duration, path: null, bytes: null, truncated: false, message: null }
     let inspector: InspectorSession | null = null
     try {
-      await rm(temporary, { force: true })
+      await mkdir(this.tempDir, { recursive: true, mode: 0o700 })
       if (mode === 'chromium') {
         const available = new Set(await contentTracing.getCategories())
         const included = CHROMIUM_CATEGORIES.filter(category => available.has(category))
@@ -108,7 +115,7 @@ export class PerformanceTraceController {
         active.finishOperation('error')
         this.current = { ...initial(), state: 'failed', mode: active.mode, ownerWindowId: active.ownerWindowId, bytes: size, truncated: size > TRACE_LIMIT, message: size > TRACE_LIMIT ? 'Recording exceeded the 64 MiB artifact limit and was removed.' : 'Recording produced no artifact.' }
       } else {
-        await rename(artifact, active.destination)
+        await moveArtifact(artifact, active.destination)
         active.finishOperation()
         this.current = { ...initial(), state: 'complete', mode: active.mode, ownerWindowId: active.ownerWindowId, path: active.destination, bytes: size, message: 'Recording saved locally.' }
       }
@@ -126,6 +133,14 @@ export class PerformanceTraceController {
   async cancelOwner(ownerWindowId: number): Promise<void> {
     if (this.current.state === 'starting' && this.current.ownerWindowId === ownerWindowId) this.cancelledOwners.add(ownerWindowId)
     if (this.active?.ownerWindowId === ownerWindowId) await this.stop(ownerWindowId, true)
+  }
+  /** Startup cleanup for scratch left by a previous crash or forced quit. Runs
+   * only while idle so it can never delete a capture this process is writing. */
+  async sweep(): Promise<void> {
+    if (this.active || this.current.state === 'starting' || this.current.state === 'stopping') return
+    for (const entry of await readdir(this.tempDir, { withFileTypes: true }).catch(() => [])) {
+      if (entry.isFile()) await rm(join(this.tempDir, entry.name), { force: true }).catch(() => {})
+    }
   }
   async shutdown(): Promise<void> {
     // A tracing backend can still be inside its asynchronous start when quit

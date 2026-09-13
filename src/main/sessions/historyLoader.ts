@@ -355,18 +355,36 @@ async function countNewlines(handle: FileHandle, from: number, to: number): Prom
  * reviewing machine). Splitting on the 0x0A byte alone is the JSONL
  * contract; those records now parse intact and count once.
  */
-function parseJsonlLine(line: Buffer): Record<string, unknown> | null | undefined {
+type ParseStats = { ms: number; lines: number; errors: number }
+const parseStats = (): ParseStats => ({ ms: 0, lines: 0, errors: 0 })
+
+function parseJsonlLine(line: Buffer, stats: ParseStats): Record<string, unknown> | null | undefined {
   const text = line.toString('utf8')
   if (!text.trim()) return undefined
   const startedAt = performance.now()
   try {
-    const parsed = JSON.parse(text) as Record<string, unknown>
-    mainOperations.observe('transcript.parse', performance.now() - startedAt)
-    return parsed
+    return JSON.parse(text) as Record<string, unknown>
   } catch {
-    mainOperations.observe('transcript.parse', performance.now() - startedAt, 'error')
+    stats.errors += 1
     return null
+  } finally {
+    stats.ms += performance.now() - startedAt
+    stats.lines += 1
   }
+}
+
+/**
+ * One `transcript.parse` observation per read call, not per line.
+ *
+ * WHY: a single initial load parses thousands of lines. Emitting one record
+ * per line filled the 2,000-record producer queue from one scroll, dropped the
+ * operations that actually diagnose slowness, and made the histogram describe
+ * "one small JSON.parse" (always ~0 ms) instead of the question that matters:
+ * how long did this read hold the main thread in parsing. The 100 ms incident
+ * threshold applies to that per-read total.
+ */
+function observeParse(stats: ParseStats): void {
+  if (stats.lines) mainOperations.observe('transcript.parse', stats.ms, stats.errors ? 'error' : 'success')
 }
 
 function isValidOffset(offset: unknown, size: number): offset is number {
@@ -390,6 +408,7 @@ async function anchorLineCarriesMarker(
   blockBytes: number,
   markerOf: (entry: Record<string, unknown>) => string | null,
   marker: string,
+  stats: ParseStats,
 ): Promise<boolean> {
   if (offset > 0) {
     const before = await readRange(handle, offset - 1, offset)
@@ -397,7 +416,7 @@ async function anchorLineCarriesMarker(
   }
   let carries = false
   await readLinesForward(handle, offset, size, blockBytes, line => {
-    const value = parseJsonlLine(line)
+    const value = parseJsonlLine(line, stats)
     carries = value !== null && value !== undefined && markerOf(value) === marker
     return true
   })
@@ -435,6 +454,7 @@ async function readInitialTranscriptTail(
     if (strict) throw error
     return empty
   }
+  const stats = parseStats()
   try {
     let parseErrors = 0
     let parsedInTail = 0
@@ -451,7 +471,7 @@ async function readInitialTranscriptTail(
     // via `parsed > limit`. Finding the (limit+1)th record proves that
     // without parsing anything further; the record itself is dropped.
     const tailBytes = await readLinesBackward(handle, size, blockBytes, (line, start) => {
-      const value = parseJsonlLine(line)
+      const value = parseJsonlLine(line, stats)
       if (value === undefined) return false
       if (value === null) {
         parseErrors += 1
@@ -480,6 +500,7 @@ async function readInitialTranscriptTail(
     if (strict) throw error
     return empty
   } finally {
+    observeParse(stats)
     await handle.close().catch(() => {})
   }
 }
@@ -555,6 +576,7 @@ async function readOlderTranscriptWindow(
     if (params.beforeRecordHash) throw error
     return empty
   }
+  const stats = parseStats()
   try {
     let parseErrors = 0
     let parsed = 0
@@ -565,13 +587,13 @@ async function readOlderTranscriptWindow(
 
     if (
       isValidOffset(params.beforeOffset, size) &&
-      (await anchorLineCarriesMarker(handle, params.beforeOffset, size, blockBytes, markerOf, params.beforeRecordHash ?? params.beforeMarker))
+      (await anchorLineCarriesMarker(handle, params.beforeOffset, size, blockBytes, markerOf, params.beforeRecordHash ?? params.beforeMarker, stats))
     ) {
       // Exact path: the cursor line is where the renderer says it is, so the
       // page is simply the records before that byte. Newest first, reversed
       // at the end.
       tailBytes = await readLinesBackward(handle, params.beforeOffset, blockBytes, (line, start) => {
-        const value = parseJsonlLine(line)
+        const value = parseJsonlLine(line, stats)
         if (value === undefined) return false
         if (value === null) {
           parseErrors += 1
@@ -602,7 +624,7 @@ async function readOlderTranscriptWindow(
     // durable transcript never got.
     let found = false
     tailBytes = await readLinesForward(handle, 0, size, blockBytes, (line, start) => {
-      const value = parseJsonlLine(line)
+      const value = parseJsonlLine(line, stats)
       if (value === undefined) return false
       if (value === null) {
         parseErrors += 1
@@ -622,6 +644,7 @@ async function readOlderTranscriptWindow(
     if (params.beforeRecordHash) throw error
     return empty
   } finally {
+    observeParse(stats)
     await handle.close().catch(() => {})
   }
 }

@@ -41,4 +41,20 @@ describe('bounded real-operation timing', () => {
     expect(records).toHaveLength(1)
     expect(records[0]).toMatchObject({ outcome: 'success', operationId: 'submit-a' })
   })
+  it('credits output only after acceptance says the prompt started a turn', () => {
+    let now = 0
+    const records: MonitorOperation[] = []
+    const tracker = new ResponseTracker(new OperationTimers(record => records.push(record), () => now), () => now)
+    tracker.begin('queued', 'submit-q', false)
+    now = 20; tracker.output('queued', { type: 'text_delta' })
+    tracker.cancel('queued')
+    // A late renderer begin for the retired submit cannot restart its clock.
+    tracker.begin('queued', 'submit-q')
+    now = 900; tracker.output('queued', { type: 'text_delta' })
+    expect(records).toEqual([expect.objectContaining({ outcome: 'cancelled', operationId: 'submit-q' })])
+    tracker.begin('idle', 'submit-i', false)
+    now = 1000; tracker.output('idle', { type: 'text_delta' })
+    now = 1500; tracker.arm('idle', 'submit-i')
+    expect(records[1]).toMatchObject({ outcome: 'success', durationMs: 100, operationId: 'submit-i' })
+  })
 })

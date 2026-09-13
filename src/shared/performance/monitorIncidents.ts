@@ -1,5 +1,8 @@
 import type { MonitorOperationName } from './monitorPolicy.js'
 
+// `monitoring-loss` is no longer produced: loss is coverage (see
+// IncidentEngine.loss). It stays in the vocabulary so retained history written
+// before that change still parses and renders instead of becoming a corrupt run.
 export const INCIDENT_RULES = ['main-stall', 'renderer-stall', 'renderer-long-tasks', 'memory-pressure', 'slow-operation', 'monitoring-loss'] as const
 export type MonitorIncidentRule = typeof INCIDENT_RULES[number]
 export type MonitorEvidencePoint = {

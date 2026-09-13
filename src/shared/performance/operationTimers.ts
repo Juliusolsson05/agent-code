@@ -2,7 +2,10 @@ import type { MonitorOperation } from './monitorContracts.js'
 import { isMonitorId } from './monitorContracts.js'
 import type { MonitorOperationName, MonitorOutcome } from './monitorPolicy.js'
 
-export type OperationEnd = (outcome?: MonitorOutcome) => void
+// `endedAt` exists for waits whose end is observed before it is known to
+// count (see ResponseTracker): the caller passes the remembered clock value
+// instead of the later moment it decided to finish.
+export type OperationEnd = (outcome?: MonitorOutcome, endedAt?: number) => void
 const noop: OperationEnd = () => {}
 
 /** Pending spans retain only finite names, a clock and opaque correlation IDs.
@@ -18,7 +21,7 @@ export class OperationTimers {
     if (this.pending.size >= this.capacity) { this.dropped++; return noop }
     const token = ++this.sequence
     this.pending.set(token, { name, startedAt: this.now(), ...(isMonitorId(sessionId) ? { sessionId } : {}), ...(isMonitorId(operationId) ? { operationId } : {}) })
-    return (outcome = 'success') => this.finish(token, outcome)
+    return (outcome = 'success', endedAt) => this.finish(token, outcome, endedAt)
   }
   observe(name: MonitorOperationName, durationMs: number, outcome: MonitorOutcome = 'success'): void {
     if (!Number.isFinite(durationMs) || durationMs < 0 || durationMs > 24 * 60 * 60_000) return
@@ -28,11 +31,12 @@ export class OperationTimers {
     const now = this.now()
     for (const [token, entry] of this.pending) if (now - entry.startedAt >= this.expiryMs) this.finish(token, 'timeout')
   }
-  private finish(token: number, outcome: MonitorOutcome): void {
+  private finish(token: number, outcome: MonitorOutcome, endedAt?: number): void {
     const entry = this.pending.get(token)
     if (!entry) return
     this.pending.delete(token)
-    const durationMs = Math.max(0, Math.min(24 * 60 * 60_000, this.now() - entry.startedAt))
+    const end = typeof endedAt === 'number' && Number.isFinite(endedAt) ? endedAt : this.now()
+    const durationMs = Math.max(0, Math.min(24 * 60 * 60_000, end - entry.startedAt))
     try { this.emit({ kind: 'operation', name: entry.name, durationMs, outcome, ...(entry.sessionId ? { sessionId: entry.sessionId } : {}), ...(entry.operationId ? { operationId: entry.operationId } : {}) }) }
     catch { this.dropped++ /* A diagnostic sink cannot alter application outcomes. */ }
   }

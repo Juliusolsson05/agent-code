@@ -370,21 +370,23 @@ export const layoutCommands: CommandDef[] = [
     category: 'workspace-tools',
     surface: 'app',
     title: 'Save Performance Report',
-    description: '**What it does:** Saves the last 15 minutes of bounded local performance history, operation timings, incidents and coverage metadata.\n\n**Use when:** You want a small report to inspect without transcript-heavy debug logs.\n\n**Notes:** A native picker chooses the destination. Nothing is uploaded.',
+    description: '**What it does:** Saves the last 15 minutes of bounded local performance history, operation timings, incidents and coverage metadata.\n\n**Use when:** You want a small report to inspect without transcript-heavy debug logs.\n\n**Notes:** Opens Performance Monitor → Recordings, where a native picker chooses the destination and the saved file can be revealed. Nothing is uploaded.',
     keywords: ['performance', 'report', 'export', 'slow', 'incident', 'local'],
-    run: async () => {
-      const to = Date.now()
-      await window.api.saveMonitorReport(Math.max(0, to - 15 * 60_000), to)
-    },
+    // WHY route through the monitor instead of calling the API here: the
+    // palette closes before the native picker returns, so a direct call had
+    // nowhere to show the saved path, a Reveal action or a write failure.
+    run: ({ ui }) => ui.openPerformancePanel({ view: 'recordings', action: 'save-report' }),
   },
   {
     id: 'record-performance-trace',
     category: 'workspace-tools',
     surface: 'app',
     title: 'Record Performance Trace',
-    description: '**What it does:** Records a filtered app-wide Chromium trace for up to 30 seconds.\n\n**Use when:** The live monitor identifies a slowdown that needs deeper scheduler or rendering evidence.\n\n**Notes:** Explicit recording can contain detailed runtime data. A native picker chooses the local destination first.',
+    description: '**What it does:** Records a filtered app-wide Chromium trace for up to 30 seconds.\n\n**Use when:** The live monitor identifies a slowdown that needs deeper scheduler or rendering evidence.\n\n**Notes:** Explicit recording can contain detailed runtime data. A native picker chooses the local destination first; Recordings shows progress, Stop and the saved file.',
     keywords: ['performance', 'trace', 'profile', 'record', 'chromium', 'slow'],
-    run: async () => { await window.api.startMonitorTrace('chromium', 30_000) },
+    // An app-wide recording must be visibly in progress and stoppable. Opening
+    // Recordings gives it the indicator and controls a background start lacked.
+    run: ({ ui }) => ui.openPerformancePanel({ view: 'recordings', action: 'record-chromium' }),
   },
   {
     id: 'toggle-caffeinate',

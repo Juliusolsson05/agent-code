@@ -282,7 +282,8 @@ export function useComposerKeybinds({
 
     // Start at the common submit boundary so raw-PTY Codex and main-owned
     // Claude/OpenCode delivery receive the same first-output measurement.
-    // Only opaque IDs cross preload; the prompt and attachments never do.
+    // Only opaque IDs cross preload; the prompt and attachments never do. The
+    // clock stays unarmed until acceptance below proves a turn started.
     window.api.beginMonitorResponse(sessionId, pasteId)
     try {
       // The submit protocol is provider-owned (#394 phase 2c-4) —
@@ -338,6 +339,10 @@ export function useComposerKeybinds({
         setInputText(acceptedDraft)
       }
       workspace.updateRuntime(sessionId, { promptDelivery: { kind: 'idle' } })
+      // Acceptance, not the write, decides whether first-output is measurable:
+      // a queued prompt's clock would otherwise stop on the running turn's
+      // output. Codex has no acceptance kind and always starts a turn.
+      window.api.acceptMonitorResponse(sessionId, acceptance?.kind === 'queue')
       // A `queue` acceptance means the provider held the prompt behind a
       // running turn: no turn will start for it, so the optimistic
       // `submitting` phase stamped above would otherwise stand until the
@@ -351,7 +356,6 @@ export function useComposerKeybinds({
       // revert.
       if (acceptance?.kind === 'queue') {
         workspace.settleQueuedSubmit(sessionId, optimisticStamp)
-        window.api.cancelMonitorResponse(sessionId)
       }
       if (caps.supportsImageAttachments && draftImages.length > 0) {
         workspace.setDraftImages(

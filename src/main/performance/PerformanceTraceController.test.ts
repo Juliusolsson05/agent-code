@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -35,7 +35,7 @@ describe('explicit performance trace ownership', () => {
     roots.push(root)
     const destination = join(root, 'trace.json')
     tracing.stop.mockImplementationOnce(async path => { await writeFile(path, '{"traceEvents":[]}'); return path })
-    const controller = new PerformanceTraceController()
+    const controller = new PerformanceTraceController(join(root, 'scratch'))
 
     expect(await controller.start(7, 'chromium', destination, 30_000)).toMatchObject({ state: 'recording', ownerWindowId: 7 })
     expect(tracing.start).toHaveBeenCalledWith(expect.objectContaining({
@@ -46,6 +46,9 @@ describe('explicit performance trace ownership', () => {
     expect(await controller.stop(8, false)).toMatchObject({ state: 'recording' })
     expect(await controller.stop(7, false)).toMatchObject({ state: 'complete', path: destination, bytes: 18 })
     expect(await readFile(destination, 'utf8')).toBe('{"traceEvents":[]}')
+    // No scratch file is ever created in the user's destination folder.
+    expect((await readdir(root)).sort()).toEqual(['scratch', 'trace.json'])
+    expect(await readdir(join(root, 'scratch'))).toEqual([])
   })
 
   it('cancels a start that finishes after its owner closes', async () => {
@@ -55,7 +58,7 @@ describe('explicit performance trace ownership', () => {
     let release!: () => void
     tracing.start.mockImplementationOnce(() => new Promise<void>(resolve => { release = resolve }))
     tracing.stop.mockImplementationOnce(async path => { await writeFile(path, '{}'); return path })
-    const controller = new PerformanceTraceController()
+    const controller = new PerformanceTraceController(join(root, 'scratch'))
     const starting = controller.start(9, 'chromium', destination)
     await vi.waitFor(() => expect(tracing.start).toHaveBeenCalledOnce())
     await controller.cancelOwner(9)
@@ -68,11 +71,14 @@ describe('explicit performance trace ownership', () => {
     const root = await mkdtemp(join(tmpdir(), 'agent-code-trace-'))
     roots.push(root)
     const destination = join(root, 'main.cpuprofile')
-    const controller = new PerformanceTraceController()
+    const controller = new PerformanceTraceController(join(root, 'scratch'))
 
     expect(await controller.start(11, 'main-cpu', destination)).toMatchObject({ state: 'recording' })
     expect(inspector.post.mock.calls.map(call => call[0])).toEqual(['Profiler.enable', 'Profiler.start'])
     expect(await controller.stop(11, false)).toMatchObject({ state: 'complete', ownerWindowId: 11, path: destination })
     expect(JSON.parse(await readFile(destination, 'utf8'))).toEqual({ nodes: [], samples: [] })
+    await writeFile(join(root, 'scratch', 'chromium-1-1.tmp'), 'stale')
+    await controller.sweep()
+    expect(await readdir(join(root, 'scratch'))).toEqual([])
   })
 })

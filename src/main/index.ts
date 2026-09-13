@@ -607,6 +607,9 @@ async function startApp(): Promise<void> {
   powerMonitor.on('suspend', () => mainProbe.noteSuspend())
   powerMonitor.on('resume', () => mainProbe.noteResume())
   monitorCoordinator.start()
+  // Remove capture scratch stranded by a crash or forced quit in an earlier
+  // run. It is app-owned, so nothing else can depend on those partial files.
+  void performanceTraceController.sweep().catch(() => {})
   void performanceService.start().catch(err => {
     console.warn('[performance] failed to start:', err)
     appRunJournal?.recordError('performance.start.error', err)
