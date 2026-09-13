@@ -157,8 +157,8 @@ describe('parseExtensionManifest — capabilities', () => {
     expect(parsed.permissions).toEqual([...EXTENSION_CAPABILITIES])
   })
 
-  it('keeps filesystem reads on the v2 service contract', () => {
-    expect(() => parseExtensionManifest(manifest({ permissions: ['fs.read'] }))).toThrow(/requires Agent Code API v2/)
+  it.each(['fs.read', 'fs.write'])('keeps %s on the v2 service contract', permission => {
+    expect(() => parseExtensionManifest(manifest({ permissions: [permission] }))).toThrow(/requires Agent Code API v2/)
   })
 
   // ── THE REGRESSION THIS BLOCK EXISTS FOR ──
@@ -169,7 +169,7 @@ describe('parseExtensionManifest — capabilities', () => {
   // grant was written for capabilities that did nothing. Refusing the install is
   // the honest outcome — it tells the author their extension needs a newer host
   // instead of silently granting them nothing.
-  it.each(['fs.write', 'git.read', 'git.commit', 'transcript.read', 'sessions.prompt', 'network.fetch'])(
+  it.each(['git.read', 'git.commit', 'transcript.read', 'sessions.prompt', 'network.fetch'])(
     'refuses to install a manifest requesting the unimplemented capability %s',
     capability => {
       expect(() => parseExtensionManifest(manifest({ permissions: [capability] }))).toThrow(
@@ -179,7 +179,7 @@ describe('parseExtensionManifest — capabilities', () => {
   )
 
   it('names the accepted set in the failure message rather than reading as a typo report', () => {
-    expect(() => parseExtensionManifest(manifest({ permissions: ['fs.write'] }))).toThrow(
+    expect(() => parseExtensionManifest(manifest({ permissions: ['git.read'] }))).toThrow(
       /not available yet/,
     )
   })

@@ -100,12 +100,14 @@ describe('publication revokes a live frame before React removes its DOM', () => 
       sessionId: 'session-one', path: 'notes.txt', text: 'hello', size: 5, mtimeMs: 1,
     })
     window.api.extensionsServiceRequest = service
-    window.api.extensionGrantedCapabilities = vi.fn().mockResolvedValue(['fs.read'])
+    window.api.extensionGrantedCapabilities = vi.fn().mockResolvedValue(['fs.read', 'fs.write'])
     const host = createFrameHost({ iframe, extensionId: 'timer', bundleRevision: 'generation-one', api: {} as AgentCodeApiV1 })
-    const send = (id: string) => window.dispatchEvent(new MessageEvent('message', {
+    const send = (id: string, request: Record<string, unknown> = {
+      method: 'fs.readText', sessionId: 'session-one', path: 'notes.txt',
+    }) => window.dispatchEvent(new MessageEvent('message', {
       source: iframe.contentWindow,
       origin: 'agent-code-ext://timer',
-      data: { kind: 'agent-code-ext:request', id, request: { method: 'fs.readText', sessionId: 'session-one', path: 'notes.txt' } },
+      data: { kind: 'agent-code-ext:request', id, request },
     }))
     try {
       send('allowed')
@@ -116,12 +118,26 @@ describe('publication revokes a live frame before React removes its DOM', () => 
       await waitFor(() => expect(post).toHaveBeenCalledWith(
         expect.objectContaining({ id: 'allowed', ok: true }), 'agent-code-ext://timer',
       ))
+      send('write-allowed', {
+        method: 'fs.writeText', sessionId: 'session-one', path: 'notes.txt',
+        text: 'updated', expectedVersion: 'opaque-version',
+      })
+      await waitFor(() => expect(service).toHaveBeenCalledWith(
+        'timer', 'generation-one',
+        {
+          method: 'fs.writeText', sessionId: 'session-one', path: 'notes.txt',
+          text: 'updated', expectedVersion: 'opaque-version',
+        },
+      ))
 
       host.dispose()
       service.mockClear()
       window.api.extensionGrantedCapabilities = vi.fn().mockResolvedValue([])
       const deniedHost = createFrameHost({ iframe, extensionId: 'timer', bundleRevision: 'generation-one', api: {} as AgentCodeApiV1 })
-      send('denied')
+      send('denied', {
+        method: 'fs.writeText', sessionId: 'session-one', path: 'notes.txt',
+        text: 'denied', expectedVersion: 'opaque-version',
+      })
       await waitFor(() => expect(post).toHaveBeenCalledWith(
         expect.objectContaining({ id: 'denied', ok: false }), 'agent-code-ext://timer',
       ))

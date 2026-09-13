@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { extensionJsonSchema, type RuntimeViewSnapshot } from '@shared/types/extensionRuntime'
-import { extensionFileReadRequestSchema } from '@shared/types/extensionServices'
+import { extensionFileReadRequestSchema, extensionFileWriteRequestSchema } from '@shared/types/extensionServices'
 
 // The host <-> extension-frame message contract (WS4, sandbox substrate).
 //
@@ -73,6 +73,7 @@ export const frameRequestSchema = z.discriminatedUnion('method', [
   // Tier 2. The target is a main-owned session id, never a root supplied by the
   // child. Main resolves and contains the path again at the actual filesystem call.
   extensionFileReadRequestSchema,
+  extensionFileWriteRequestSchema,
 ])
 
 /**

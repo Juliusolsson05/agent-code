@@ -78,7 +78,8 @@ describe('grant store hostile-file handling', () => {
   }
 
   it('drops a capability the host does not implement', async () => {
-    // The seven Tier 2/3 capabilities were removed from the manifest schema. A
+    // Tier 2/3 capabilities were removed from the manifest schema until their
+    // transports existed. A
     // grants file written by an older build still names them, and the store used to
     // parse capabilities as `z.array(z.string())` — carrying them forward verbatim
     // into the Set that frameHost checks against. Parsing against the real enum
@@ -94,7 +95,7 @@ describe('grant store hostile-file handling', () => {
         },
       ]),
     )
-    expect([...(await grantedCapabilities('timer', HASH_A))]).toEqual(['workspace.observe'])
+    expect([...(await grantedCapabilities('timer', HASH_A))]).toEqual(['workspace.observe', 'fs.write'])
   })
 
   it('survives a corrupt file rather than throwing', async () => {

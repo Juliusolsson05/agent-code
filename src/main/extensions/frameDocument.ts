@@ -238,7 +238,10 @@ const api = {
   panes: { observe: () => request('panes.observe', {}), subscribe: (cb) => subscribeTopic('panes', cb) },
   // v2 views and runtimes share this call shape. Main resolves sessionId to its
   // own spawn cwd, so the frame never gets to promote a path string into a root.
-  files: { readText: ({ sessionId, path }) => request('fs.readText', { sessionId, path }) },
+  files: {
+    readText: ({ sessionId, path }) => request('fs.readText', { sessionId, path }),
+    writeText: ({ sessionId, path, text, expectedVersion }) => request('fs.writeText', { sessionId, path, text, expectedVersion }),
+  },
 };
 
 // Listeners for host-pushed change nudges (Tier-1 observe live updates), keyed by

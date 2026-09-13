@@ -76,8 +76,8 @@ export type ExtensionContributions = {
  * mechanism is what went wrong; the tier names below are a design note about
  * blast radius, not a roadmap that manifests may write against.
  *
- * Tier 1 is read-only metadata. `fs.read` is the first Tier-2 service restored
- * under this rule. Other Tier 2/3 powers remain unrepresentable until their
+ * Tier 1 is read-only metadata. `fs.read` and `fs.write` are the first scoped
+ * services restored under this rule. Other Tier 2/3 powers remain unrepresentable until their
  * transports and target authority exist — a
  * manifest asking for one fails install with a message naming it, which is
  * actionable, rather than being granted nothing in silence.
@@ -89,16 +89,18 @@ export type ExtensionCapability =
   | 'workspace.observe'
   | 'sessions.observe'
   | 'panes.observe'
-  // Tier 2 — real project contents. Implemented for API v2 through the
+  // Tier 2/3 — real project contents. Implemented for API v2 through the
   // main-owned service broker; every call names a live session target whose
   // canonical cwd is the filesystem authority.
   | 'fs.read'
+  | 'fs.write'
 
 export const EXTENSION_CAPABILITIES: readonly ExtensionCapability[] = [
   'workspace.observe',
   'sessions.observe',
   'panes.observe',
   'fs.read',
+  'fs.write',
 ]
 
 /**

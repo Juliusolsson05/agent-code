@@ -36,6 +36,7 @@ const api = {
   // main resolves that id to its own spawn cwd and rejects arbitrary roots.
   files: {
     readText: ({ sessionId, path }) => transport.request({ method: 'fs.readText', sessionId, path }),
+    writeText: ({ sessionId, path, text, expectedVersion }) => transport.request({ method: 'fs.writeText', sessionId, path, text, expectedVersion }),
   },
 };
 function register(map, id, handler) {

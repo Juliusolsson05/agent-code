@@ -6,6 +6,7 @@ import { z } from 'zod'
 // on whether the author happened to call it from a view or from the background.
 const sessionId = z.string().min(1).max(128)
 const projectPath = z.string().min(1).max(1024)
+const fileVersion = z.string().min(1).max(512)
 
 export const extensionFileReadRequestSchema = z.object({
   method: z.literal('fs.readText'),
@@ -13,8 +14,20 @@ export const extensionFileReadRequestSchema = z.object({
   path: projectPath,
 }).strict()
 
+export const extensionFileWriteRequestSchema = z.object({
+  method: z.literal('fs.writeText'),
+  sessionId,
+  path: projectPath,
+  // null is deliberately distinct from omission: it means "create only".
+  // Replacing an existing file always requires a version returned by readText,
+  // so an extension cannot unknowingly overwrite an editor or agent mutation.
+  expectedVersion: fileVersion.nullable(),
+  text: z.string().max(64 * 1024),
+}).strict()
+
 export const extensionServiceRequestSchema = z.discriminatedUnion('method', [
   extensionFileReadRequestSchema,
+  extensionFileWriteRequestSchema,
 ])
 
 export type ExtensionServiceRequest = z.infer<typeof extensionServiceRequestSchema>
@@ -28,7 +41,21 @@ export type ExtensionTextFile = {
   text: string
   size: number
   mtimeMs: number
+  /** Opaque compare-and-swap token accepted by writeText. */
+  version: string
 }
+
+/** Metadata for a safely published UTF-8 project file. */
+export type ExtensionTextFileWrite = {
+  sessionId: string
+  path: string
+  size: number
+  mtimeMs: number
+  /** The next opaque token required to replace this version. */
+  version: string
+}
+
+export type ExtensionServiceResult = ExtensionTextFile | ExtensionTextFileWrite
 
 export type ExtensionFilesApi = {
   /**
@@ -39,4 +66,16 @@ export type ExtensionFilesApi = {
    * cannot substitute an arbitrary absolute root.
    */
   readText(options: { sessionId: string; path: string }): Promise<ExtensionTextFile>
+
+  /**
+   * Atomically create or replace a bounded text file. Requires `fs.write`.
+   * Use expectedVersion: null for create-only, or pass readText().version when
+   * replacing a file. A stale token rejects without overwriting newer bytes.
+   */
+  writeText(options: {
+    sessionId: string
+    path: string
+    text: string
+    expectedVersion: string | null
+  }): Promise<ExtensionTextFileWrite>
 }

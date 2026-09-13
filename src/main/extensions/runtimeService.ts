@@ -342,7 +342,10 @@ export class ExtensionRuntimeService {
         case 'storage.set': await extensionStorageSet(id, request.key, request.value); break
         case 'storage.delete': await extensionStorageDelete(id, request.key); break
         case 'storage.keys': result = await extensionStorageKeys(id); break
-        case 'fs.readText': result = await this.options.capabilities.invoke(id, runtime.revision, request); break
+        case 'fs.readText':
+        case 'fs.writeText':
+          result = await this.options.capabilities.invoke(id, runtime.revision, request)
+          break
         case 'views.publish': {
           if (!runtime.installation.manifest.contributes?.views?.some(view => view.id === request.viewId)) throw new Error('View is not declared by this extension.')
           const snapshot = { sequence: (runtime.viewStates.get(request.viewId)?.sequence ?? 0) + 1, state: request.state }

@@ -1,8 +1,9 @@
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { serializeEditorFileMutation } from '@main/editorFileIO.js'
 
 const authority = vi.hoisted(() => ({
   capabilities: vi.fn<() => Promise<string[]>>(),
@@ -20,7 +21,11 @@ vi.mock('./ledger.js', () => ({
   },
 }))
 
-const { ExtensionCapabilityService, MAX_EXTENSION_TEXT_FILE_BYTES } = await import('./capabilityService.js')
+const {
+  ExtensionCapabilityService,
+  MAX_EXTENSION_TEXT_FILE_BYTES,
+  MAX_EXTENSION_TEXT_WRITE_BYTES,
+} = await import('./capabilityService.js')
 const roots: string[] = []
 
 async function fixture(): Promise<{ root: string; service: InstanceType<typeof ExtensionCapabilityService> }> {
@@ -28,7 +33,7 @@ async function fixture(): Promise<{ root: string; service: InstanceType<typeof E
   roots.push(root)
   await mkdir(join(root, 'src'))
   await writeFile(join(root, 'src', 'note.txt'), 'hello extension\n')
-  authority.capabilities.mockResolvedValue(['fs.read'])
+  authority.capabilities.mockResolvedValue(['fs.read', 'fs.write'])
   return {
     root,
     service: new ExtensionCapabilityService({
@@ -51,6 +56,7 @@ describe('scoped extension filesystem reads', () => {
         method: 'fs.readText', sessionId: 'live-session', path: 'src/note.txt',
       })).resolves.toMatchObject({
         sessionId: 'live-session', path: 'src/note.txt', text: 'hello extension\n', size: 16,
+        version: expect.any(String),
       })
       authority.publish?.([
         { manifest: { id: 'reader' }, installation: { id: 'generation-one', bundleSha256: 'hash' }, sha256: 'hash' },
@@ -63,6 +69,124 @@ describe('scoped extension filesystem reads', () => {
       // generation; otherwise repeated small reads scale with bundle size.
       expect(authority.capabilities).toHaveBeenCalledOnce()
       expect(authority.capabilities).toHaveBeenCalledWith('reader', 'generation-one')
+    } finally { service.dispose() }
+  })
+
+  it('atomically creates and replaces files without overwriting a stale version', async () => {
+    const { root, service } = await fixture()
+    try {
+      const original = await service.invoke('writer', 'generation-one', {
+        method: 'fs.readText', sessionId: 'live-session', path: 'src/note.txt',
+      })
+      if (!('text' in original)) throw new Error('Expected a file read')
+      const written = await service.invoke('writer', 'generation-one', {
+        method: 'fs.writeText', sessionId: 'live-session', path: 'src/note.txt',
+        text: 'updated by extension\n', expectedVersion: original.version,
+      })
+      expect(written).toMatchObject({
+        sessionId: 'live-session', path: 'src/note.txt', size: 21, version: expect.any(String),
+      })
+      expect(await readFile(join(root, 'src', 'note.txt'), 'utf8')).toBe('updated by extension\n')
+
+      await expect(service.invoke('writer', 'generation-one', {
+        method: 'fs.writeText', sessionId: 'live-session', path: 'src/note.txt',
+        text: 'stale overwrite', expectedVersion: original.version,
+      })).rejects.toThrow('changed after it was read')
+      expect(await readFile(join(root, 'src', 'note.txt'), 'utf8')).toBe('updated by extension\n')
+
+      await expect(service.invoke('writer', 'generation-one', {
+        method: 'fs.writeText', sessionId: 'live-session', path: 'src/created.txt',
+        text: 'created once', expectedVersion: null,
+      })).resolves.toMatchObject({ path: 'src/created.txt', size: 12 })
+      await expect(service.invoke('writer', 'generation-one', {
+        method: 'fs.writeText', sessionId: 'live-session', path: 'src/created.txt',
+        text: 'must not clobber', expectedVersion: null,
+      })).rejects.toThrow('changed after it was read')
+      expect(await readFile(join(root, 'src', 'created.txt'), 'utf8')).toBe('created once')
+    } finally { service.dispose() }
+  })
+
+  it('serializes competing writers so one stale compare-and-swap loses without clobbering', async () => {
+    const { root, service } = await fixture()
+    try {
+      const original = await service.invoke('writer', 'generation-one', {
+        method: 'fs.readText', sessionId: 'live-session', path: 'src/note.txt',
+      })
+      if (!('text' in original)) throw new Error('Expected a file read')
+      const results = await Promise.allSettled(['first', 'second'].map(text => service.invoke(
+        'writer', 'generation-one', {
+          method: 'fs.writeText', sessionId: 'live-session', path: 'src/note.txt',
+          text, expectedVersion: original.version,
+        },
+      )))
+      expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1)
+      expect(results.filter(result => result.status === 'rejected')).toHaveLength(1)
+      expect(['first', 'second']).toContain(await readFile(join(root, 'src', 'note.txt'), 'utf8'))
+    } finally { service.dispose() }
+  })
+
+  it('rechecks generation authority after waiting for an editor mutation', async () => {
+    const { root, service } = await fixture()
+    const target = join(root, 'src', 'note.txt')
+    let release!: () => void
+    let entered!: () => void
+    const holding = new Promise<void>(resolve => { release = resolve })
+    const enteredQueue = new Promise<void>(resolve => { entered = resolve })
+    const editorWrite = serializeEditorFileMutation(target, async () => {
+      entered()
+      await holding
+    })
+    await enteredQueue
+    try {
+      const original = await service.invoke('writer', 'generation-one', {
+        method: 'fs.readText', sessionId: 'live-session', path: 'src/note.txt',
+      })
+      if (!('text' in original)) throw new Error('Expected a file read')
+      const write = service.invoke('writer', 'generation-one', {
+        method: 'fs.writeText', sessionId: 'live-session', path: 'src/note.txt',
+        text: 'retired write', expectedVersion: original.version,
+      })
+      // Let the write finish preflight and take its place behind the editor's
+      // held mutation before simulating an update that retires this generation.
+      await new Promise(resolve => setImmediate(resolve))
+      authority.publish?.([])
+      release()
+      await editorWrite
+      await expect(write).rejects.toThrow('no longer active')
+      expect(await readFile(target, 'utf8')).toBe('hello extension\n')
+    } finally {
+      release()
+      await editorWrite
+      service.dispose()
+    }
+  })
+
+  it('rejects ungranted, escaped, non-text, oversized and invalid-target writes', async () => {
+    const { service } = await fixture()
+    try {
+      authority.capabilities.mockResolvedValueOnce(['fs.read'])
+      await expect(service.invoke('write-denied', 'generation-one', {
+        method: 'fs.writeText', sessionId: 'live-session', path: 'src/denied.txt',
+        text: 'denied', expectedVersion: null,
+      })).rejects.toThrow('capability "fs.write" is not granted')
+
+      const requests = [
+        { path: '../outside.txt', text: 'nope', error: 'escapes project root' },
+        { path: '/tmp/outside.txt', text: 'nope', error: 'relative to project root' },
+        { path: 'missing/child.txt', text: 'nope', error: 'ENOENT' },
+        { path: 'src', text: 'nope', error: 'not a file' },
+        { path: 'src/nul.txt', text: 'bad\u0000text', error: 'valid UTF-8 text' },
+        {
+          path: 'src/large.txt', text: 'x'.repeat(MAX_EXTENSION_TEXT_WRITE_BYTES + 1),
+          error: `limited to ${MAX_EXTENSION_TEXT_WRITE_BYTES} bytes`,
+        },
+      ]
+      for (const request of requests) {
+        await expect(service.invoke('writer', 'generation-one', {
+          method: 'fs.writeText', sessionId: 'live-session', path: request.path,
+          text: request.text, expectedVersion: null,
+        })).rejects.toThrow(request.error)
+      }
     } finally { service.dispose() }
   })
 
@@ -109,6 +233,14 @@ describe('scoped extension filesystem reads', () => {
       })).rejects.toThrow('symbolic links are not supported')
       await expect(service.invoke('reader', 'generation-one', {
         method: 'fs.readText', sessionId: 'live-session', path: 'directory-link/secret.txt',
+      })).rejects.toThrow('escapes project root')
+      await expect(service.invoke('reader', 'generation-one', {
+        method: 'fs.writeText', sessionId: 'live-session', path: 'leaf-link',
+        text: 'overwrite', expectedVersion: null,
+      })).rejects.toThrow('symbolic links are not supported')
+      await expect(service.invoke('reader', 'generation-one', {
+        method: 'fs.writeText', sessionId: 'live-session', path: 'directory-link/new.txt',
+        text: 'escape', expectedVersion: null,
       })).rejects.toThrow('escapes project root')
     } finally { service.dispose() }
   })

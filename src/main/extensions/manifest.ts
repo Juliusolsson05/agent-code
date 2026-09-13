@@ -119,8 +119,8 @@ const keybindingContribution = z.object({
 //
 // ONLY IMPLEMENTED CAPABILITIES BELONG HERE. The Tier 2/3 names this enum used to
 // accept had no request method, broker arm or API surface — approving them granted
-// nothing while showing the user a warning dialog that said otherwise. `fs.read`
-// returned only after all three layers shipped together. See the
+// nothing while showing the user a warning dialog that said otherwise. Scoped
+// reads and writes returned only after all three layers shipped together. See the
 // ExtensionCapability doc comment for the rule that replaced the old vocabulary.
 const capabilityName = z.enum(EXTENSION_CAPABILITIES, {
   // zod's default enum message lists the accepted values, which reads as a typo
@@ -129,7 +129,7 @@ const capabilityName = z.enum(EXTENSION_CAPABILITIES, {
   // in the same shape as the apiVersion mismatch below.
   message:
     `unknown capability — this build implements only ${EXTENSION_CAPABILITIES.join(', ')}. ` +
-    `Filesystem writes, transcript, git, prompt and network capabilities are not available yet.`,
+    `Transcript, git, prompt and network capabilities are not available yet.`,
 })
 
 // `.refine` validates but does not narrow, so the parsed type would be `string`
@@ -174,11 +174,18 @@ export const extensionManifestSchema = z.object({
     .optional(),
   permissions: z.array(capabilityName).max(16).optional(),
 }).superRefine((manifest, context) => {
-  if (manifest.apiVersion === 1 && manifest.permissions?.includes('fs.read')) {
+  const v2OnlyPermission = manifest.permissions?.find(
+    permission => permission === 'fs.read' || permission === 'fs.write',
+  )
+  if (manifest.apiVersion === 1 && v2OnlyPermission) {
     // v1 owns one isolated view-local activation and its public API is frozen.
     // Advertising a capability that only the v2 runtime/view contract exposes
     // would recreate the consent-with-no-call-path bug this schema prevents.
-    context.addIssue({ code: 'custom', path: ['permissions'], message: 'fs.read requires Agent Code API v2' })
+    context.addIssue({
+      code: 'custom',
+      path: ['permissions'],
+      message: `${v2OnlyPermission} requires Agent Code API v2`,
+    })
   }
   if (manifest.apiVersion !== 2) return
   for (const [index, view] of (manifest.contributes?.views ?? []).entries()) {

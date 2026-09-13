@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { join } from 'node:path'
 import { app, BrowserWindow } from 'electron'
@@ -75,9 +75,9 @@ void (async () => {
     // no test pretends legacy registerView closures can cross this boundary.
     await writeFile(join(source, 'agent-code.extension.json'), JSON.stringify({
       id, name: id, description: 'Managed runtime integration fixture', version: String(generation), apiVersion: activationMode ? 2 : 1, entry: 'index.js',
-      ...(activationMode ? { activationEvents: activationMode === 'startup' ? ['onStartupFinished'] : [`onCommand:${id}.increment`, `onCommand:${id}.read`, `onView:${id}.main`] } : {}),
+      ...(activationMode ? { activationEvents: activationMode === 'startup' ? ['onStartupFinished'] : [`onCommand:${id}.increment`, `onCommand:${id}.read`, `onCommand:${id}.write`, `onView:${id}.main`] } : {}),
       ...(permissions.length ? { permissions } : {}),
-      contributes: { commands: ['increment', 'snapshot', 'fail', 'hang', 'arm', 'disarm', 'sandbox', 'navigate', 'read'].map(name => ({ id: `${id}.${name}`, title: name })),
+      contributes: { commands: ['increment', 'snapshot', 'fail', 'hang', 'arm', 'disarm', 'sandbox', 'navigate', 'read', 'write'].map(name => ({ id: `${id}.${name}`, title: name })),
         views: [{ id: `${id}.main`, title: id, mount: 'panel', ...(activationMode ? { entry: 'view.js' } : {}) }] },
     }))
     if (activationMode) await writeFile(join(source, 'view.js'), 'export function mount() {}')
@@ -108,6 +108,10 @@ void (async () => {
       ctx.registerCommand('${id}.disarm', () => clearInterval(interval));
       ctx.registerCommand('${id}.fail', () => { throw new Error('fixture command failed'); });
       ctx.registerCommand('${id}.read', () => ctx.api.files.readText({ sessionId: 'fixture-session', path: 'nested/note.txt' }));
+      ctx.registerCommand('${id}.write', () => ctx.api.files.writeText({
+        sessionId: 'fixture-session', path: 'nested/runtime-written.txt',
+        text: 'permissioned runtime write\\n', expectedVersion: null,
+      }));
       ctx.registerCommand('${id}.hang', async () => {
         await ctx.api.storage.set('runs', (await ctx.api.storage.get('runs') || 0) + 1);
         await ctx.api.storage.set('entered', ${generation});
@@ -258,14 +262,20 @@ void (async () => {
     await until(async () => BrowserWindow.getAllWindows().length === 1, 'startup fixture teardown')
     console.log('PASS runtime activation: explicit startup/lazy rules, update activation and no duplicate startup')
 
-    const reader = await install(1, 'file-engine', undefined, '', 'lazy', ['fs.read'])
+    const reader = await install(1, 'file-engine', undefined, '', 'lazy', ['fs.read', 'fs.write'])
     const readerRevision = extensionRevision(reader)
     const fileRead = object(await service.invokeCommand('file-engine', readerRevision, 'file-engine.read'))
     assert.equal(typeof fileRead.mtimeMs, 'number')
-    assert.deepEqual({ ...fileRead, mtimeMs: 0 }, {
+    assert.equal(typeof fileRead.version, 'string')
+    const { mtimeMs: _mtimeMs, version: _version, ...stableFileRead } = fileRead
+    assert.deepEqual(stableFileRead, {
       sessionId: 'fixture-session', path: 'nested/note.txt', text: 'permissioned project text\n',
-      size: 26, mtimeMs: 0,
+      size: 26,
     })
+    const fileWrite = object(await service.invokeCommand('file-engine', readerRevision, 'file-engine.write'))
+    assert.equal(fileWrite.path, 'nested/runtime-written.txt')
+    assert.equal(typeof fileWrite.version, 'string')
+    assert.equal(await readFile(join(projectRoot, 'nested', 'runtime-written.txt'), 'utf8'), 'permissioned runtime write\n')
     await assert.rejects(
       capabilities.invoke('file-engine', readerRevision, { method: 'fs.readText', sessionId: 'fixture-session', path: '../outside.txt' }),
       /escapes project root/,
@@ -284,9 +294,10 @@ void (async () => {
     )
     const denied = await install(1, 'denied-engine', undefined, '', 'lazy')
     await assert.rejects(service.invokeCommand('denied-engine', extensionRevision(denied), 'denied-engine.read'), /capability "fs.read" is not granted/)
+    await assert.rejects(service.invokeCommand('denied-engine', extensionRevision(denied), 'denied-engine.write'), /capability "fs.write" is not granted/)
     await removeExtension('file-engine')
     await removeExtension('denied-engine')
-    console.log('PASS runtime files: real preload call, explicit session scope, consent, traversal, binary and size denial')
+    console.log('PASS runtime files: real preload reads/writes, explicit session scope, consent, traversal, binary and size denial')
 
     const broken = await install(1, 'broken-engine', 'throw new Error("fixture activation failed");')
     await assert.rejects(service.start('broken-engine', extensionRevision(broken)), /fixture activation failed/)

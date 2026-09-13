@@ -1,6 +1,6 @@
 # Extension platform completion
 
-Status: active implementation loop. Continues PR #577 from `9dad5b13`.
+Status: active implementation loop. Continues PR #577 from clean foundation `e13a9910`.
 Tracking issue: #934. Latest integrated main: `69d3022a`.
 
 The maintainer authorized completing the reviewed platform on 2026-09-12, including
@@ -69,7 +69,7 @@ Keep a concise session status and preserve unrelated work in other worktrees.
   PR branch without rewriting its history; reconcile changed workspace/command/settings
   contracts; isolate node_modules/submodules; establish typecheck and relevant suite
   baseline. Retain evidence for unrelated baseline failures.
-- [ ] **2. Runtime and SDK contract.** Implement requested startup/lazy activation,
+- [x] **2. Runtime and SDK contract.** Implement requested startup/lazy activation,
   extension-wide command ownership, independent view lifecycle, bounded activation and
   shutdown, and useful state/error reporting. Verify a headless command-only extension
   and multiple views against one shared runtime. Update the companion SDK in its own PR.
@@ -91,7 +91,9 @@ Keep a concise session status and preserve unrelated work in other worktrees.
 - [ ] **7. Authoring and examples.** Align SDK source, generated output, manifest schema,
   authoring guide and examples. Move Timer shared state into its runtime, consume declared
   settings, exercise permissioned observation and closed-view reminders, and validate
-  committed build artifacts from a clean checkout. Keep companion work reviewable.
+  committed build artifacts from a clean checkout. Migrate Mini Games from its v1
+  same-document modal to v2 runtime/view modules and validate the actual bundle through
+  Agent Code's installer, scheme and modal lifecycle. Keep companion work reviewable.
 - [ ] **8. End-to-end acceptance and review.** Run the matrix below, full relevant local
   checks, build/package verification, and current CI. Review changes for security,
   lifecycle, data recovery, accessibility and unrelated diffs; fix every valid finding.
@@ -119,6 +121,7 @@ only helpers or mocked return values; add each regression alongside its implemen
 | Malformed/hostile bundle or messages | Bounded resource use and enforced origin/capability/target scope |
 | Uninstall/reinstall | Runtime stopped and contributions removed; user data retained |
 | Packaged Electron | Production file origin, scheme/CSP, frame startup, installed built artifact |
+| Mini Games migration | Four command-routed modal entries install, open directly, close and reopen from its committed v2 bundle |
 
 ## Progress and evidence
 
@@ -378,3 +381,33 @@ only helpers or mocked return values; add each regression alongside its implemen
   traversal/binary/size/target denial through the production preload, while the
   full journey calls the SDK-built API from both its runtime and sandboxed view.
   SDK 0.6.0 is pinned at `aa2084b`, with generated output and author contracts.
+
+- The accumulated implementation history was rebuilt into one reviewable foundation
+  commit, `e13a9910`, on current main; its tree differs only by the intentionally newer
+  SDK gitlink. Exact pre-cleanup backup branches retain both original histories. PR #577's
+  three obsolete July status dumps were removed after confirming there were no review
+  comments, and both root CI gates pass on the cleaned head. The SDK was likewise rebuilt
+  as one foundation commit before later service work, with its authoring CI green.
+
+- Scoped project writes now use an explicit `fs.write` grant and API v2 only. A write
+  names a live session and relative project path, accepts UTF-8 text up to 64 KiB, denies
+  traversal and symlinks, and publishes atomically through the editor's serialized file
+  mutation path. Creation requires `expectedVersion: null`; replacement requires the
+  opaque version returned by `readText`, so concurrent editor/agent/extension changes
+  reject instead of being overwritten. Consent distinguishes mutating access and editor
+  caches are invalidated after publication. Seventy-four focused schema, manifest,
+  permission, broker and real-filesystem checks pass, including concurrent compare-and-
+  swap, stale versions, binary text, oversized data and containment failures. Typecheck,
+  the production-preload runtime journey and the full SDK-built Electron journey pass.
+  SDK 0.7.0 commit `9c30b919` supplies matching types, docs and runtime/view author tests.
+
+- The Mini Games 0.8.0 migration now builds an empty managed runtime plus one shared view
+  module behind four declarative modal ids. Command and view ids intentionally match so
+  a cold game command opens the requested route without background DOM or an extra
+  message protocol. Its 22 deterministic engine checks, API v2 manifest/artifact contract,
+  typecheck/build, and Chromium interaction suite pass. The host's reusable external-
+  bundle Electron path installs the actual source bundle, mounts all four routes through
+  the production custom scheme and Dialog shell, closes each surface, and verifies a
+  reopen gets a fresh sandbox document while the complete host lifecycle/security/theme
+  journey remains green. Companion commit `5385992` is published for review in Mini
+  Games PR #9; its CI and the host/SDK dependency chain must remain green before merge.

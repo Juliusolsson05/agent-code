@@ -15,8 +15,26 @@ const repo = resolve(fileURLToPath(new URL('..', import.meta.url)))
 const runtimeOnly = process.argv.includes('--runtime-only')
 const preloadArgument = process.argv.indexOf('--runtime-preload')
 const runtimePreload = preloadArgument < 0 ? null : process.argv[preloadArgument + 1]
+const externalArgument = process.argv.indexOf('--external-extension')
+const externalExtension = externalArgument < 0 ? null : process.argv[externalArgument + 1]
+const externalViewChecks = []
+for (let index = 0; index < process.argv.length; index += 1) {
+  if (process.argv[index] !== '--external-view') continue
+  const value = process.argv[index + 1]
+  const separator = value?.indexOf('=') ?? -1
+  if (separator < 1 || separator === value.length - 1) {
+    throw new Error('--external-view requires a view-id=selector pair')
+  }
+  externalViewChecks.push({ viewId: value.slice(0, separator), selector: value.slice(separator + 1) })
+}
 if (preloadArgument >= 0 && (!runtimeOnly || !runtimePreload || runtimePreload.startsWith('--'))) {
   throw new Error('--runtime-preload requires --runtime-only and a built preload file path')
+}
+if (externalArgument >= 0 && (!externalExtension || externalExtension.startsWith('--') || runtimeOnly)) {
+  throw new Error('--external-extension requires a source directory and the full Electron journey')
+}
+if (externalViewChecks.length > 0 && !externalExtension) {
+  throw new Error('--external-view requires --external-extension')
 }
 // Electron 43's normal import downloads a missing binary lazily. Tests must be
 // offline: download it during dependency setup instead, and fail with an action
@@ -54,6 +72,9 @@ export const EXTENSION_STATE_DIR = join(STATE_DIR, 'extension-state');
     outfile: join(root, 'preload.cjs'), bundle: true, platform: 'node', format: 'cjs',
     external: ['electron'], tsconfig: 'tsconfig.node.json', logLevel: 'warning',
   })
+  }
+  if (externalExtension) {
+    await access(join(resolve(externalExtension), 'agent-code.extension.json'))
   }
   if (!runtimeOnly) {
     await build({
@@ -93,13 +114,27 @@ export const EXTENSION_STATE_DIR = join(STATE_DIR, 'extension-state');
     const css = await access(join(root, 'renderer.css')).then(() => '<link rel="stylesheet" href="renderer.css">', () => '')
     await writeFile(join(root, 'host.html'), `<!doctype html><meta charset="utf-8">${csp}${css}<body><div id="host"></div><script src="renderer.js"></script>`)
   }
-  const env = { ...process.env, AGENT_CODE_EXTENSION_TEST_ROOT: root, AGENT_CODE_EXTENSION_RUNTIME_PRELOAD: runtimePreload ? resolve(runtimePreload) : join(root, 'preload.cjs') }
+  const env = {
+    ...process.env,
+    AGENT_CODE_EXTENSION_TEST_ROOT: root,
+    AGENT_CODE_EXTENSION_RUNTIME_PRELOAD: runtimePreload ? resolve(runtimePreload) : join(root, 'preload.cjs'),
+    ...(externalExtension ? {
+      AGENT_CODE_EXTENSION_EXTERNAL_SOURCE: resolve(externalExtension),
+      AGENT_CODE_EXTENSION_EXTERNAL_VIEWS: JSON.stringify(externalViewChecks),
+    } : {}),
+  }
   delete env.ELECTRON_RUN_AS_NODE
   await new Promise((resolve, reject) => {
     const child = spawn(electron, [join(root, 'main.cjs')], { env, stdio: 'inherit' })
-    // A hung runtime is one of the scenarios. The app's own deadline should win;
-    // this outer deadline prevents a broken test from leaving a hidden app alive.
-    const deadline = setTimeout(() => { child.kill('SIGKILL') }, 60_000)
+    // A hung runtime is one of the scenarios. The app's own narrow deadlines
+    // should win; this outer budget covers the complete legacy/runtime/input/
+    // theme/service matrix and only prevents a broken test from leaving a hidden
+    // app alive. The journey now deliberately performs real fsync-backed writes,
+    // so 60 seconds made healthy runs fail under filesystem/CPU contention after
+    // every new service assertion had already passed.
+    // External bundles add one real modal lifecycle per requested view. Give that
+    // opt-in author check room without weakening the normal CI journey's bound.
+    const deadline = setTimeout(() => { child.kill('SIGKILL') }, runtimeOnly ? 60_000 : externalExtension ? 120_000 : 90_000)
     child.once('error', error => { clearTimeout(deadline); reject(error) })
     child.once('exit', (code, signal) => {
       clearTimeout(deadline)

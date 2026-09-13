@@ -1,10 +1,24 @@
-import { realpath, stat } from 'node:fs/promises'
+import { lstat, realpath, stat } from 'node:fs/promises'
 import { relative, resolve } from 'node:path'
 
-import { readBoundedTextFile } from '@main/editorFileIO.js'
-import { resolveInsideRoot, validateExistingTarget } from '@main/ipc/editorFs.js'
+import {
+  atomicWriteTextFile,
+  readBoundedTextFile,
+  serializeEditorFileMutation,
+} from '@main/editorFileIO.js'
+import {
+  invalidateEditorFsCache,
+  resolveInsideRoot,
+  resolveThroughExistingParent,
+  validateExistingTarget,
+} from '@main/ipc/editorFs.js'
 import { extensionRevision, type ExtensionCapability } from '@shared/types/extensions.js'
-import type { ExtensionServiceRequest, ExtensionTextFile } from '@shared/types/extensionServices.js'
+import type {
+  ExtensionServiceRequest,
+  ExtensionServiceResult,
+  ExtensionTextFile,
+  ExtensionTextFileWrite,
+} from '@shared/types/extensionServices.js'
 import { installedExtensionCapabilities } from './grants.js'
 import { onExtensionPublication } from './ledger.js'
 
@@ -12,7 +26,16 @@ import { onExtensionPublication } from './ledger.js'
 // for object keys and path metadata, and bound bytes before UTF-8 decoding so a
 // hostile sparse/generated file cannot create an oversized IPC allocation.
 export const MAX_EXTENSION_TEXT_FILE_BYTES = 96 * 1024
+export const MAX_EXTENSION_TEXT_WRITE_BYTES = 64 * 1024
 const MAX_PENDING_PER_EXTENSION = 16
+
+// A service method cannot compile until its permission is named here. Keeping
+// this as data beside the main implementation avoids a new mutation accidentally
+// inheriting the read grant just because both methods live under api.files.
+const REQUIRED_CAPABILITY: Record<ExtensionServiceRequest['method'], ExtensionCapability> = {
+  'fs.readText': 'fs.read',
+  'fs.writeText': 'fs.write',
+}
 
 export type ExtensionCapabilityServiceOptions = {
   /** Resolve a main-owned live session id to its spawn cwd. */
@@ -48,7 +71,7 @@ export class ExtensionCapabilityService {
     })
   }
 
-  async invoke(extensionId: string, revision: string, request: ExtensionServiceRequest): Promise<ExtensionTextFile> {
+  async invoke(extensionId: string, revision: string, request: ExtensionServiceRequest): Promise<ExtensionServiceResult> {
     const authority = `${extensionId}\u0000${revision}`
     const count = this.pending.get(authority) ?? 0
     if (count >= MAX_PENDING_PER_EXTENSION) {
@@ -56,8 +79,8 @@ export class ExtensionCapabilityService {
     }
     this.pending.set(authority, count + 1)
     try {
-      const check = await this.requireCapability(extensionId, revision, 'fs.read')
-      const result = await this.perform(request)
+      const check = await this.requireCapability(extensionId, revision, REQUIRED_CAPABILITY[request.method])
+      const result = await this.perform(request, authority, check)
       // Do not return user data to a runtime/frame whose generation was revoked
       // while filesystem I/O was pending. The caller transport independently
       // checks its own document/runtime identity; this closes the main-service
@@ -103,11 +126,31 @@ export class ExtensionCapabilityService {
     return check
   }
 
-  private async perform(request: ExtensionServiceRequest): Promise<ExtensionTextFile> {
-    // This direct access is intentionally compile-sensitive: when the request
-    // union gains a second member, TypeScript will stop allowing its fields here
-    // until dispatch for that new member is made explicit.
-    return this.readText(request.sessionId, request.path)
+  private async perform(
+    request: ExtensionServiceRequest,
+    authority: string,
+    check: GrantCheck,
+  ): Promise<ExtensionServiceResult> {
+    switch (request.method) {
+      case 'fs.readText':
+        return this.readText(request.sessionId, request.path)
+      case 'fs.writeText':
+        return this.writeText(
+          request.sessionId,
+          request.path,
+          request.text,
+          request.expectedVersion,
+          () => {
+            if (this.grants.get(authority) !== check) {
+              throw new Error('This extension installation is no longer active.')
+            }
+          },
+        )
+      default: {
+        const unhandled: never = request
+        throw new Error(`Unhandled extension service request: ${String(unhandled)}`)
+      }
+    }
   }
 
   private async readText(sessionId: string, path: string): Promise<ExtensionTextFile> {
@@ -130,6 +173,68 @@ export class ExtensionCapabilityService {
       text: bounded.text,
       size: bounded.stat.size,
       mtimeMs: bounded.stat.mtimeMs,
+      version: bounded.version,
     }
+  }
+
+  private async writeText(
+    sessionId: string,
+    path: string,
+    text: string,
+    expectedVersion: string | null,
+    assertCanPublish: () => void,
+  ): Promise<ExtensionTextFileWrite> {
+    const requestedRoot = this.options.resolveSessionRoot(sessionId)
+    if (!requestedRoot) throw new Error('The target session is not active.')
+    if (text.includes('\u0000') || Buffer.from(text, 'utf8').toString('utf8') !== text) {
+      throw new Error('Extension file writes require valid UTF-8 text without NUL bytes.')
+    }
+    if (Buffer.byteLength(text, 'utf8') > MAX_EXTENSION_TEXT_WRITE_BYTES) {
+      throw new Error(`Extension text writes are limited to ${MAX_EXTENSION_TEXT_WRITE_BYTES} bytes.`)
+    }
+
+    const root = await realpath(resolve(requestedRoot))
+    const target = resolveInsideRoot(root, path)
+    // New files have no leaf to canonicalize, so resolve the existing parent and
+    // perform the syscall through that physical path. This is the same authority
+    // rule as the editor: a symlinked parent cannot redirect a write outside the
+    // session project after a purely lexical containment check.
+    const physicalTarget = await resolveThroughExistingParent(root, target)
+    const exists = await lstat(physicalTarget).then(
+      () => true,
+      error => {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+        throw error
+      },
+    )
+    if (exists) await validateExistingTarget(root, physicalTarget)
+
+    return serializeEditorFileMutation(physicalTarget, async () => {
+      const result = await atomicWriteTextFile({
+        absolutePath: physicalTarget,
+        text,
+        expectedVersion,
+        maxBytes: MAX_EXTENSION_TEXT_WRITE_BYTES,
+        assertCanPublish,
+      })
+      if (!result.ok) {
+        throw new Error(
+          result.conflictKind === 'deleted'
+            ? 'The target file was deleted after it was read.'
+            : 'The target file changed after it was read.',
+        )
+      }
+      const projectPath = relative(root, target).replace(/\\/g, '/')
+      // The editor cache is shared process state. A safe extension write that
+      // leaves it populated would make the trusted editor show obsolete bytes.
+      invalidateEditorFsCache(root, projectPath)
+      return {
+        sessionId,
+        path: projectPath,
+        size: result.stat.size,
+        mtimeMs: result.stat.mtimeMs,
+        version: result.version,
+      }
+    })
   }
 }

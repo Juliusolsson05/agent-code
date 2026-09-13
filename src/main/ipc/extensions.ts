@@ -45,6 +45,8 @@ const CAPABILITY_DISCLOSURE: Record<ExtensionCapability, string> = {
   'panes.observe': 'How your panes are arranged, and which session is in each one.',
   'fs.read':
     'The contents of text files it names inside projects belonging to active sessions.',
+  'fs.write':
+    'Create or replace text files it names inside projects belonging to active sessions.',
 }
 
 function consentPromptFor(evt: IpcMainInvokeEvent, source: string): ConsentPrompt {
@@ -52,14 +54,13 @@ function consentPromptFor(evt: IpcMainInvokeEvent, source: string): ConsentPromp
     const win = BrowserWindow.fromWebContents(evt.sender)
     const permissions = manifest.permissions ?? []
     const detail = permissions.map(cap => `  • ${CAPABILITY_DISCLOSURE[cap]}`).join('\n')
+    const canWrite = permissions.includes('fs.write')
 
     const options = {
-      // 'question', not 'warning'. Every remaining capability is a read-only
-      // metadata snapshot; the ones that ACTED were removed because nothing
-      // implemented them. A warning triangle over three read permissions trains
-      // click-through exactly as reliably as saying too little does, and the next
-      // capability that genuinely deserves alarm would inherit a numb user.
-      type: 'question' as const,
+      // Read-only requests stay a question. A real project mutation uses warning
+      // chrome so the first acting capability does not inherit the visual weight
+      // of metadata observation and train users to treat both grants as equal.
+      type: canWrite ? 'warning' as const : 'question' as const,
       buttons: ['Cancel', 'Grant & install'],
       // Both point at Cancel: Return, Escape and closing the window all decline.
       defaultId: 0,
@@ -72,8 +73,9 @@ function consentPromptFor(evt: IpcMainInvokeEvent, source: string): ConsentPromp
       // (`id`), never as the identity itself.
       message: `Install ${manifest.id} from ${source}?`,
       detail:
-        `"${manifest.name}" wants to read:\n\n${detail}\n\n` +
-        `It cannot change anything, and it has no network access. ` +
+        `"${manifest.name}" wants these capabilities:\n\n${detail}\n\n` +
+        `${canWrite ? 'It can change project files.' : 'It cannot change project files.'} ` +
+        `It has no network access. ` +
         `Install it only if you trust ${source}.`,
     }
     const result = win

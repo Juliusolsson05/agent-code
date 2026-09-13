@@ -131,6 +131,7 @@ export function createFrameHost(options: {
     'sessions.observe': 'sessions.observe',
     'panes.observe': 'panes.observe',
     'fs.readText': 'fs.read',
+    'fs.writeText': 'fs.write',
   }
 
   const perform = async (request: FrameRequest): Promise<unknown> => {
@@ -180,6 +181,7 @@ export function createFrameHost(options: {
       // authenticated broker, but never receives an arbitrary root or performs
       // filesystem I/O itself.
       case 'fs.readText':
+      case 'fs.writeText':
         return window.api.extensionsServiceRequest(extensionId, bundleRevision, request)
       default:
         // Exhaustiveness. Without it an unhandled method fell off the end returning

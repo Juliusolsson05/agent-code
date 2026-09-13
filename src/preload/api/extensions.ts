@@ -2,7 +2,7 @@ import { ipcRenderer } from 'electron'
 import type { ExtensionJson, RuntimeViewEvent, RuntimeViewSnapshot } from '@shared/types/extensionRuntime.js'
 import { subscribe } from '@preload/api/ipc.js'
 import type { ExtensionInputBindings, ExtensionNativeInput } from '@shared/types/extensionInput.js'
-import type { ExtensionServiceRequest, ExtensionTextFile } from '@shared/types/extensionServices.js'
+import type { ExtensionServiceRequest, ExtensionServiceResult } from '@shared/types/extensionServices.js'
 
 import type {
   ExtensionCapability,
@@ -51,7 +51,7 @@ export const extensionsApi = {
     subscribe('extensions:runtime-view', handler),
   // Host-only service adapter. frameHost fixes extension identity/revision before
   // forwarding a child request; the managed runtime uses its separate preload.
-  extensionsServiceRequest: (extensionId: string, revision: string, request: ExtensionServiceRequest): Promise<ExtensionTextFile> =>
+  extensionsServiceRequest: (extensionId: string, revision: string, request: ExtensionServiceRequest): Promise<ExtensionServiceResult> =>
     ipcRenderer.invoke('extensions:runtime-host', { method: 'service', extensionId, revision, request }),
 
   extensionStorageGet: (appId: string, key: string): Promise<unknown> =>

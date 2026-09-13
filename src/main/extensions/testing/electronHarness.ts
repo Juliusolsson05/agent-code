@@ -24,7 +24,8 @@ app.setPath('userData', join(root, 'electron-data'))
 // Otherwise Electron may exit zero between destroy() and our completion record.
 app.on('window-all-closed', () => {})
 
-type Snapshot = { text: string; src: string | null; failures: Array<{ error: string }>; messages: Array<{ kind: string; theme?: string; preload?: string; parentAccessible?: boolean; instanceId?: string; count?: number; command?: string; selected?: string; fileText?: string }> }
+type Snapshot = { text: string; src: string | null; failures: Array<{ error: string }>; messages: Array<{ kind: string; theme?: string; preload?: string; parentAccessible?: boolean; instanceId?: string; count?: number; command?: string; selected?: string; fileText?: string; fileVersion?: string; writtenPath?: string }> }
+type ExternalViewCheck = { viewId: string; selector: string }
 
 async function fixture(id: string, activation: string, mount = '', moduleKind: 'named' | 'default' | 'missing' = 'named'): Promise<InstalledExtension> {
   const folder = join(root!, 'sources', id)
@@ -69,6 +70,21 @@ async function waitForDocumentTeardown(win: BrowserWindow): Promise<void> {
     await new Promise(resolve => setTimeout(resolve, 25))
   }
   throw new Error(`Failed extension document is still alive: ${win.webContents.mainFrame.frames.map(frame => frame.url).join(', ')}`)
+}
+
+async function waitForExtensionElement(win: BrowserWindow, extensionId: string, selector: string): Promise<string> {
+  const deadline = performance.now() + 15_000
+  let lastUrl = ''
+  while (performance.now() < deadline) {
+    const frame = win.webContents.mainFrame.frames.find(candidate => candidate.url.startsWith(`agent-code-ext://${extensionId}/`))
+    if (frame) {
+      lastUrl = frame.url
+      const found = await frame.executeJavaScript(`Boolean(document.querySelector(${JSON.stringify(selector)}))`).catch(() => false)
+      if (found) return frame.url
+    }
+    await new Promise(resolve => setTimeout(resolve, 25))
+  }
+  throw new Error(`External extension ${extensionId} did not render ${selector}; last frame was ${lastUrl || 'absent'}`)
 }
 
 void (async () => {
@@ -125,6 +141,22 @@ void (async () => {
   await fixture('retry', `const attempts = (await context.api.storage.get('attempts') || 0) + 1;
     await context.api.storage.set('attempts', attempts);
     if (attempts === 1) await new Promise(() => {});`)
+  const externalSource = process.env.AGENT_CODE_EXTENSION_EXTERNAL_SOURCE
+  const externalChecks = JSON.parse(process.env.AGENT_CODE_EXTENSION_EXTERNAL_VIEWS ?? '[]') as ExternalViewCheck[]
+  // This path installs an author's actual built directory into the same isolated
+  // ledger as the synthetic fixtures. It exists because a browser preview can
+  // prove the UI and the host fixture can prove the shell, while neither alone
+  // catches a real manifest/entry/scheme mismatch in the author's bundle.
+  const external = externalSource ? await installExtensionFromPath(externalSource, async () => true) : null
+  if (external) {
+    assert.equal(external.manifest.apiVersion, 2, 'external integration checks require an API v2 bundle')
+    for (const check of externalChecks) {
+      const declaredMount: string | undefined = external.manifest.contributes?.views?.find(
+        (view: { id: string; mount: string }) => view.id === check.viewId,
+      )?.mount
+      assert.equal(declaredMount, 'modal', `${check.viewId} must be a contributed modal view`)
+    }
+  }
   const win = new BrowserWindow({
     show: false, width: 800, height: 600,
     webPreferences: { preload: join(root!, 'preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false },
@@ -182,13 +214,25 @@ void (async () => {
     await assert.rejects(command('snapshot'), /does not declare activation/)
     assert.equal(await command('increment'), 1)
     assert.deepEqual(await command('snapshot'), { count: 1, activations: 1 })
-    assert.deepEqual({ ...(await command('read')), mtimeMs: 0 }, {
-      sessionId: 'fixture-session', path: 'extension-readable.txt', text: 'SDK service boundary\n', size: 21, mtimeMs: 0,
+    const managedRead = await command('read') as Record<string, unknown>
+    assert.equal(typeof managedRead.mtimeMs, 'number')
+    assert.equal(typeof managedRead.version, 'string')
+    const { mtimeMs: _managedMtime, version: _managedVersion, ...stableManagedRead } = managedRead
+    assert.deepEqual(stableManagedRead, {
+      sessionId: 'fixture-session', path: 'extension-readable.txt', text: 'SDK service boundary\n', size: 21,
     })
+    const managedWrite = await command('write') as Record<string, unknown>
+    assert.equal(managedWrite.path, 'extension-runtime-written.txt')
+    assert.equal(typeof managedWrite.version, 'string')
+    assert.equal(await readFile(join(projectRoot, 'extension-runtime-written.txt'), 'utf8'), 'written by SDK runtime\n')
     assert.equal((await win.webContents.executeJavaScript('window.fixtureHarness.snapshot()')).src, null, 'cold commands must not open a view')
     await win.webContents.executeJavaScript('window.fixtureHarness.render("managed", 0, false, "managed.main", false, true)')
     const firstView = await waitFor(win, state => state.messages.some(message => message.kind === 'fixture:mount') && state.messages.some(message => message.kind === 'fixture:file'), 'first managed view and scoped file read')
-    assert.equal(firstView.messages.find(message => message.kind === 'fixture:file')?.fileText, 'SDK service boundary\n')
+    const firstFile = firstView.messages.find(message => message.kind === 'fixture:file')!
+    assert.equal(firstFile.fileText, 'SDK service boundary\n')
+    assert.equal(typeof firstFile.fileVersion, 'string')
+    assert.match(String(firstFile.writtenPath), /^extension-view-[0-9a-f-]+\.txt$/)
+    assert.equal(await readFile(join(projectRoot, String(firstFile.writtenPath)), 'utf8'), 'written by SDK view\n')
     const other = new BrowserWindow({ show: false, webPreferences: { preload: join(root!, 'preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false } })
     trusted.add(other.webContents.id)
     try {
@@ -273,6 +317,30 @@ void (async () => {
       assert.ok(snapshot.count > 2, 'background runtime must progress with every view closed')
       assert.equal(snapshot.activations, 1)
       console.log('PASS public v2: cold commands, independent view modules in two windows, shared state and zero-view background work')
+
+      if (external) {
+        let firstDocument = ''
+        for (const [index, check] of externalChecks.entries()) {
+          await win.webContents.executeJavaScript(`window.fixtureHarness.render(${JSON.stringify(external.manifest.id)}, 0, false, ${JSON.stringify(check.viewId)}, true, true)`)
+          const documentUrl = await waitForExtensionElement(win, external.manifest.id, check.selector)
+          if (index === 0) firstDocument = documentUrl
+          const state = await win.webContents.executeJavaScript('window.fixtureHarness.snapshot()') as Snapshot
+          assert.equal(state.failures.some(failure => failure.error.includes(external.manifest.id)), false)
+          const frame = win.webContents.mainFrame.frames.find(candidate => candidate.url === documentUrl)!
+          await frame.executeJavaScript(`document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`)
+          await waitFor(win, snapshot => snapshot.src === null && snapshot.messages.some(message => message.kind === 'fixture:close'), `${check.viewId} modal close`)
+          await waitForDocumentTeardown(win)
+        }
+        if (externalChecks.length > 0) {
+          const check = externalChecks[0]!
+          await win.webContents.executeJavaScript(`window.fixtureHarness.render(${JSON.stringify(external.manifest.id)}, 0, false, ${JSON.stringify(check.viewId)}, true, true)`)
+          const reopened = await waitForExtensionElement(win, external.manifest.id, check.selector)
+          assert.notEqual(reopened, firstDocument, 'reopening must create a fresh sandbox document')
+          await win.webContents.executeJavaScript('window.fixtureHarness.unmount()')
+          await waitForDocumentTeardown(win)
+        }
+        console.log(`PASS external v2 bundle: installed ${external.manifest.id}; mounted, closed and reopened ${externalChecks.length} modal views`)
+      }
 
       // Theme ownership follows the real installer/catalog, independently of
       // any runtime. A failed update must leave the selected palette intact;

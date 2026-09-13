@@ -314,20 +314,34 @@ api.panes.subscribe(listener)
 `subscribe` gives you a change *nudge* carrying no data — re-read with `observe()`
 when it fires. Calling `observe()` without the matching permission rejects.
 
-### Tier 2 — scoped project files (API v2)
+### Tier 2/3 — scoped project files (API v2)
 
 ```ts
 const file = await api.files.readText({
   sessionId: 'the-session-you-are-targeting',
   path: 'src/index.ts',
 })
+
+await api.files.writeText({
+  sessionId: file.sessionId,
+  path: file.path,
+  text: file.text.replace('old value', 'new value'),
+  expectedVersion: file.version,
+})
 ```
 
-Declare `"fs.read"` in `permissions`. The session must still be active, and main
+Declare `"fs.read"` and/or `"fs.write"` in `permissions`. The session must still be active, and main
 derives its project root from the session's spawn record. Paths are relative to
 that root; absolute paths, traversal, symlink escapes, directories, binary data and
 invalid UTF-8 reject. Reads are capped at 96 KiB so their result fits the bounded
-extension transport. Both the v2 runtime and its views expose the same method.
+extension transport. Writes are capped at 64 KiB, publish atomically, and share the
+editor's mutation queue and cache invalidation.
+
+Every write is an explicit compare-and-swap. Pass `expectedVersion: null` to create
+a file only if it does not exist. To replace a file, pass the opaque `version` from
+`readText`; if an editor, agent or other extension changed or deleted that version,
+the write rejects and preserves the newer bytes. Both the v2 runtime and its views
+expose the same methods.
 
 There is deliberately no implicit focused session. Background code has no focused
 window, and a view's focus can change while an asynchronous read is pending. Use a
@@ -371,7 +385,7 @@ Declare what you need in `permissions`. The user approves them in a blocking
 dialog at install time, and the grant is bound to the exact bytes installed — if
 you ship new code, the user is asked again.
 
-**Four permissions are currently implemented:**
+**Five permissions are currently implemented:**
 
 | Permission | Grants |
 |---|---|
@@ -379,11 +393,12 @@ you ship new code, the user is asked again.
 | `sessions.observe` | `api.sessions.observe` / `subscribe` |
 | `panes.observe` | `api.panes.observe` / `subscribe` |
 | `fs.read` | API v2 `api.files.readText({ sessionId, path })` in runtimes and views |
+| `fs.write` | API v2 atomic `api.files.writeText(...)` with create-only/version checks |
 
 Anything else fails the install with a message naming what this build supports.
-Filesystem writes, transcript, git, prompt-sending and network capabilities **do
+Transcript, git, prompt-sending and network capabilities **do
 not exist** — they are unimplemented, and asking for one is an install error rather
-than a silent no-op. `fs.read` requires API v2 because v1's per-view API is frozen.
+than a silent no-op. Scoped file services require API v2 because v1's per-view API is frozen.
 Omit `permissions` entirely to stay Tier 0, which installs with no prompt at all.
 
 ---
@@ -509,7 +524,7 @@ Recorded so you know these are decisions, not oversights:
 - **No background execution.** Activation events do not fire; your code runs while
   a view of yours is open (§1).
 - **No network.** The frame's CSP permits only your own origin (§0).
-- **No filesystem, transcript, git or prompt access.** The scoped filesystem API
+- **No filesystem, transcript, git or prompt access.** The scoped filesystem APIs
   belongs to v2; v1 remains frozen (§6).
 - **No marketplace.** The repo name is the trust decision.
 - **No cross-extension communication.** Each extension is its own origin and cannot

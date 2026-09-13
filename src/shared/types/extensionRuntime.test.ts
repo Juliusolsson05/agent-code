@@ -30,11 +30,19 @@ describe('bounded extension runtime transport', () => {
     expect(runtimeEventSchema.safeParse({ kind: 'result', id: 'call', ok: true, value: NaN }).success).toBe(false)
   })
 
-  it('admits only the scoped filesystem read shape on both runtime and view transports', () => {
+  it('admits only bounded, versioned scoped filesystem shapes on both transports', () => {
     const request = { method: 'fs.readText', sessionId: 'session-one', path: 'src/index.ts' }
+    const write = {
+      method: 'fs.writeText', sessionId: 'session-one', path: 'src/index.ts',
+      text: 'updated', expectedVersion: 'opaque-version',
+    }
     expect(runtimeApiRequestSchema.parse(request)).toEqual(request)
+    expect(runtimeApiRequestSchema.parse(write)).toEqual(write)
     expect(runtimeHostRequestSchema.safeParse({
       method: 'service', extensionId: 'timer', revision: 'generation-one', request,
+    }).success).toBe(true)
+    expect(runtimeHostRequestSchema.safeParse({
+      method: 'service', extensionId: 'timer', revision: 'generation-one', request: write,
     }).success).toBe(true)
     for (const invalid of [
       { ...request, root: '/private/project' },
@@ -42,6 +50,10 @@ describe('bounded extension runtime transport', () => {
       { ...request, path: '' },
       { ...request, path: 'x'.repeat(1025) },
       { method: 'fs.readFile', sessionId: 'session-one', path: 'src/index.ts' },
+      { ...write, expectedVersion: undefined },
+      { ...write, expectedVersion: '' },
+      { ...write, text: 'x'.repeat(64 * 1024 + 1) },
+      { ...write, root: '/private/project' },
     ]) {
       expect(runtimeApiRequestSchema.safeParse(invalid).success).toBe(false)
     }

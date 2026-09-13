@@ -1,7 +1,11 @@
 import { z } from 'zod'
 
 import { isExtensionJson, type ExtensionJson } from './extensionJson.js'
-import { extensionFileReadRequestSchema, extensionServiceRequestSchema } from './extensionServices.js'
+import {
+  extensionFileReadRequestSchema,
+  extensionFileWriteRequestSchema,
+  extensionServiceRequestSchema,
+} from './extensionServices.js'
 export { isExtensionJson, type ExtensionJson } from './extensionJson.js'
 
 export const extensionJsonSchema = z.custom<ExtensionJson>(isExtensionJson, 'Expected bounded JSON (4096 values, depth 32, 128 Ki characters)')
@@ -18,6 +22,7 @@ export const runtimeApiRequestSchema = z.discriminatedUnion('method', [
   z.object({ method: z.literal('storage.keys') }).strict(),
   z.object({ method: z.literal('views.publish'), viewId: identifier, state: extensionJsonSchema }).strict(),
   extensionFileReadRequestSchema,
+  extensionFileWriteRequestSchema,
 ])
 export type RuntimeApiRequest = z.infer<typeof runtimeApiRequestSchema>
 

@@ -161,6 +161,7 @@ export async function atomicWriteTextFile(params: {
   temporaryPath?: string
   captureDirectory?: string
   expectedSha256?: string
+  assertCanPublish?: () => void
 }): Promise<AtomicTextWriteResult> {
   const bytes = Buffer.from(params.text, 'utf8')
   return atomicWriteFile({ ...params, bytes })
@@ -175,6 +176,7 @@ export async function atomicWriteFile(params: {
   temporaryPath?: string
   captureDirectory?: string
   expectedSha256?: string
+  assertCanPublish?: () => void
 }): Promise<AtomicTextWriteResult> {
   const bytes = params.bytes
   if (bytes.byteLength > params.maxBytes) throw new Error('file is too large')
@@ -247,6 +249,13 @@ export async function atomicWriteFile(params: {
         return { ok: false, conflictKind: 'changed' }
       }
     }
+
+    // Some callers derive authority before joining the shared mutation queue.
+    // Re-check it after staging and version validation, immediately before the
+    // first publishing syscall. The callback must stay synchronous: with no
+    // await between it and rename/link, a JS-side revocation cannot interleave
+    // and let retired authority mutate bytes after it has been withdrawn.
+    params.assertCanPublish?.()
 
     if (current && params.captureDirectory) {
       if (typeof params.expectedVersion !== 'string') {
