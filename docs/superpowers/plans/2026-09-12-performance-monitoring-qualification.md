@@ -1,7 +1,7 @@
 # Performance monitoring qualification
 
-Date: 2026-09-12  
-Platform: macOS arm64, 8 logical CPUs, Node 25.5.0  
+Date: 2026-09-12
+Platform: macOS arm64, 8 logical CPUs, Node 25.5.0
 Scope: implementation PR for #944/#956
 
 This record separates deterministic bounds we can prove quickly from packaged
