@@ -752,10 +752,17 @@ export function useWorkspace(
         }
 
         // Closing is structurally narrower than the UI close operation. The UI
-        // intentionally cascades linked children and can remove a whole tab;
-        // MCP must refuse those shapes so one named target never silently means
-        // several agents. The model-facing tool adds the separate requirement
-        // that the current user explicitly requested closure.
+        // intentionally cascades linked children; MCP must refuse that shape so
+        // one named target never silently means several agents.
+        //
+        // A project's last grid leaf is NOT such a shape any more (#886 review
+        // M1). It used to be, because closing it removed the tab with every
+        // detached session in it. The close below passes requireConfirmation,
+        // which never offers the human-only Close Tab choice, so it is
+        // session-scoped and promotes the next Dispatch row into the grid.
+        // additionalCloseImpact therefore reports linked descendants only. The
+        // model-facing tool adds the separate requirement that the current
+        // user explicitly requested closure.
         const affected = additionalCloseImpact({
           state: refs.stateRef.current,
           callerSessionId: request.callerSessionId,
