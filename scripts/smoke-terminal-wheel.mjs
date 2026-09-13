@@ -31,8 +31,14 @@
 // - No scrollback or boundary wheel produces PTY input: the helper cancels a
 //   browser default and never synthesizes terminal input.
 // - Alternate screen converts wheel to an arrow key (ESC [ A) and mouse
-//   reporting (DECSET 1000 + 1006) sends exactly one SGR wheel report; neither
-//   moves the parent. These prove xterm/provider first refusal survives.
+//   reporting (DECSET 1000 + 1006) sends exactly one SGR wheel report. These
+//   prove xterm/provider first refusal survives. The parent is first reset to
+//   0px, because in --control the two boundary leaks leave it around 240px and
+//   the fixed pointer would then miss xterm's screen. Both protocol wheels must
+//   leave it at 0px in both modes.
+// The happy-dom test terminalWheelBoundary.xterm.renderer.test.ts covers the
+// same xterm decisions in CI. It cannot see native scroll chaining, latching or
+// WebGL, which is why this probe still exists.
 //
 // Re-run BOTH modes on every @xterm/xterm, @xterm/addon-webgl or Electron bump.
 // The helper's correctness is derived from xterm's internal wheel handling and
@@ -125,6 +131,11 @@ if (!process.versions.electron) {
       report.boundaryDown = await wheel(-120)
       // Same boundary, Alt held: the case the helper used to exempt.
       report.altBoundaryDown = await wheel(-120, ['alt'])
+      // Both boundary states are recorded. In --control they scrolled #outer by
+      // about 240px, which moves the fixed (200,100) pointer below xterm's
+      // 20-row screen. Reset the parent so the protocol wheels below hit xterm
+      // in both modes. See resetOuter in the fixture.
+      report.outerReset = await js('probe.resetOuter()')
       await js('probe.alternate()')
       report.alternateUp = await wheel(120)
       await js('probe.alternate(true)')
@@ -152,11 +163,12 @@ if (!process.versions.electron) {
         assert.equal(report.boundaryDown.outer, 0, 'Boundary input must stay inside terminal')
         assert.equal(report.altBoundaryDown.outer, 0, 'Alt fast-scroll boundary input must stay inside terminal')
       }
+      assert.equal(report.outerReset.outer, 0, 'Parent reset must take effect before the protocol wheels')
       assert.deepEqual(report.alternateUp.writes, ['\x1b[A'])
       assert.equal(report.mouseUp.writes.length, 1)
       assert.match(report.mouseUp.writes[0], /^\x1b\[<64;\d+;\d+M$/)
-      assert.equal(report.alternateUp.outer, report.altBoundaryDown.outer)
-      assert.equal(report.mouseUp.outer, report.altBoundaryDown.outer)
+      assert.equal(report.alternateUp.outer, 0, 'Alternate-screen wheel must not move the parent')
+      assert.equal(report.mouseUp.outer, 0, 'Mouse-report wheel must not move the parent')
       status = 0
     } catch (error) {
       console.error(error)

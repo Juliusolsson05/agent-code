@@ -44,6 +44,17 @@ export async function alternate(mouse = false) {
   return state()
 }
 
+// --control deliberately lets the boundary wheels scroll #outer (about 240px
+// after the plain and Alt leaks). The parent script aims every wheel at a fixed
+// window point, so without this reset later wheels land below xterm's 20-row
+// screen and miss xterm entirely. Restoring 0px keeps that point on xterm in
+// both modes.
+export async function resetOuter() {
+  document.getElementById('outer')!.scrollTop = 0
+  await settle()
+  return state()
+}
+
 export async function bottom() {
   terminal.scrollToBottom()
   await settle()
