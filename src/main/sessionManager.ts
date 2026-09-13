@@ -4584,6 +4584,7 @@ export class SessionManager extends EventEmitter {
   }
 
   getProcessTelemetryTargets(sessionIds?: string[]): Array<{
+    generation?: string
     sessionId: string
     kind: SessionKind
     pid: number | null
@@ -4607,6 +4608,7 @@ export class SessionManager extends EventEmitter {
       const s = entry.session
       return {
         sessionId,
+        generation: entry.lifecycle.runId,
         kind: entry.kind,
         pid: s.getProcessPid?.() ?? null,
         exited: s.isExited?.() === true,

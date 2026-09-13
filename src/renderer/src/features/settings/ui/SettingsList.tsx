@@ -1,3 +1,4 @@
+import { useAppStore } from '@renderer/app-state/hooks'
 import { ExternalControlRow } from './ExternalControlRow'
 import type { Settings } from '@renderer/app-state/settings/types'
 import type {
@@ -216,6 +217,13 @@ function SettingRow({
               because the value lives in setup.json (main-owned), not
               in the renderer Settings store. See
               features/cli-updates/CliUpdateBehaviorRow.tsx. */}
+          {control.type === 'performance-monitor' ? (
+            <Button size="sm" variant="outline" onClick={() => {
+              actionContext.onClose()
+              const state = useAppStore.getState()
+              if (!state.performancePanelOpen) state.togglePerformancePanel()
+            }}>Open Performance Monitor</Button>
+          ) : null}
           {control.type === 'external-control' ? <ExternalControlRow /> : null}
 
           {control.type === 'command-keybindings' ? <CommandKeybindingsRow /> : null}

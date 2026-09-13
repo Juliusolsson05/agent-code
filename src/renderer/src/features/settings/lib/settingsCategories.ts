@@ -4,6 +4,7 @@ export type SettingCategoryId =
   | 'agents'
   | 'commands'
   | 'dictation'
+  | 'performance'
   | 'experimental'
   | 'safety'
   | 'apps'
@@ -40,6 +41,7 @@ export const SETTING_CATEGORIES: SettingCategory[] = [
     label: 'Dictation',
     description: 'Inline speech-to-text for the active composer.',
   },
+  { id: 'performance', label: 'Performance', description: 'Live health, resource use and local slowdown evidence.' },
   {
     id: 'experimental',
     label: 'Experimental',

@@ -93,6 +93,7 @@ export type SettingDefinition =
   // so it cannot be represented by the static generic select's options.
   | { id: string; category: SettingCategoryId; title: string; description: string; keywords: string[]; metadata?: SettingMetadata; control: { type: 'dictation-audio-input' } }
   | { id: string; category: SettingCategoryId; title: string; description: string; keywords: string[]; metadata?: SettingMetadata; control: { type: 'external-control' } }
+  | { id: string; category: SettingCategoryId; title: string; description: string; keywords: string[]; metadata?: SettingMetadata; control: { type: 'performance-monitor' } }
   | {
       id: string
       category: SettingCategoryId
@@ -450,6 +451,13 @@ export function getSettingsRegistry(
     // Derived from manifests (no bundle import); an uninstall drops the manifest
     // from installedExtensions and the rows vanish with it, leaving a clean block.
     ...deriveExtensionSettings(installedExtensions),
+    {
+      id: 'performance-monitor', category: 'performance', title: 'Performance Monitor',
+      description: 'Always-on local CPU, memory, responsiveness and agent process monitoring. No automatic uploads.',
+      keywords: ['performance', 'monitor', 'cpu', 'memory', 'slow', 'freeze', 'diagnostics'],
+      metadata: { scope: 'app', apply: 'immediate', storage: 'external-files' },
+      control: { type: 'performance-monitor' },
+    },
     {
       id: 'theme-mode',
       category: 'appearance',

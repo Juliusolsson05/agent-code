@@ -102,6 +102,10 @@ export const referenceOwnership = {
   "copy-assistant": "copy-assistant",
   "copy-code-block": "copy-code-block",
   "performance": "performance",
+  // The monitor is the product surface for the existing performance feature.
+  // Keeping one reference page avoids presenting the old verbose diagnostics
+  // and the always-on monitor as unrelated user capabilities.
+  "performance-monitor": "performance",
   "prompt-templates": "prompt-templates",
   "key-vault": "key-vault",
   // Shared insertion path behind templates + the vault (#830): no UI of

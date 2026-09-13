@@ -273,6 +273,7 @@ export function useWorkspace(
   const {
     beginOptimisticSubmit,
     unwindOptimisticSubmit,
+    settleQueuedSubmit,
     clearPendingRewindUndo,
     addOptimisticCodexUserEntry,
     removeOptimisticCodexUserEntry,
@@ -969,6 +970,7 @@ export function useWorkspace(
     setSplitRatioInTab,
     beginOptimisticSubmit,
     unwindOptimisticSubmit,
+    settleQueuedSubmit,
     clearPendingRewindUndo,
     acknowledgeSession,
     appendFeedDebug,

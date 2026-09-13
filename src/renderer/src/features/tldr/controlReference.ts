@@ -13,7 +13,7 @@ export const controlReference = [{
     'Open View TLDR History to read how the focused agent’s status evolved, newest first.',
     'Enable Goal MCP for an agent; it records what its work is for. Hold the Goal shortcut to peek at goals.',
   ],
-  outcome: 'Each visible agent pane shows its own latest saved summary, or with the Goal preview its recorded goal, in centered white text over a dark overlay.',
+  outcome: 'Each visible agent pane shows its own latest saved summary, or with the Goal preview its recorded goal, in centered text over an overlay in the app’s background color.',
   cautions: 'Reading summaries makes no model calls. Claude and Codex agents are asked to update at turn end when they used tools without reporting; they may decline when nothing changed. A summary describes the last report, not live activity or permission to act. Minor unchanged clarifications need no update. Goals are written by the agent and change only when its direction changes; users cannot edit them. The editor retains its native Select Line and Find Next shortcuts.',
   commandIds: ['enable-tldr-mcp', 'tldr-preview', 'view-tldr-history', 'enable-goal-mcp', 'goal-preview'],
 }] satisfies FeatureReference[]
