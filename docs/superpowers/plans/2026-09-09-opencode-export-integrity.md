@@ -137,3 +137,24 @@ Round-2 regression evidence, each with its fix reverted:
   - no stderr destroy: both escaped-helper cases pending;
   - no group kill: descendants survive, or the timeout-then-stop case never
     triggers its stop.
+
+## Review round 3 (2026-09-12)
+
+Both reviewers approved 3096ed25 with comments. The production fixes were
+verified with real processes, and the remaining items were test-only or record
+keeping:
+
+- An escaped fixture descendant was not reclaimed when readiness failed,
+  because cleanup found descendants only through the ready status. The
+  launcher fixture now records the descendant's pid as soon as spawn()
+  returns. Cleanup kills that owned identity after the command settles, whether
+  or not readiness succeeded, and a forced-readiness-failure case for the
+  escaped fixture proves no survivor remains.
+- A failed test could leave its queued spawn gate for the next test's spawn.
+  Both system files now reset the spawn mock after each test.
+- The reaped-leader regression's spy passed calls through, so under the very
+  mutation it guards it would have delivered a real negative-pid SIGKILL. It
+  now records such requests without delivering them.
+- The polling helpers that the file split duplicated now live in
+  testing/processWait.ts.
+- The PR body was brought up to date for rounds 2 and 3.
