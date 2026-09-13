@@ -353,6 +353,40 @@ the change is made:
 
 **Ships on its own** as the #963 PR (§6 Q9).
 
+### Stages 4–6 build notes (2026-09-12, branch `feat/agent-analytics`)
+
+The user asked to build without further questions ("go about and build the goal
+here… do not waste our time"), so the two open questions take their recommended
+defaults, recorded here and in #964:
+
+- **§6 Q10 — grouping:** project rows group by **tab title**. A tab closed and
+  reopened for the same folder, or merged into another, stays one project.
+- **Scope of "time":** **agent working time only.** The user's own activity (prompts
+  sent, focus per tab) is not recorded; it can be added later as a separate figure.
+
+Design as built, where it refines the stage text below:
+
+- **Contract first:** `src/shared/agentActivity/summaryTypes.ts` fixes the summary
+  tree (projects → repositories → worktrees, plus each project's agents with labels,
+  agent-hours and wall-clock hours, days) so the window and the recorder are built
+  in parallel against one shape.
+- **Working state in main:** a pure reducer over the manager's `semantic-event`
+  (`stream_phase`, `turn_started`, `turn_completed`), `conditions` (blocked on the
+  user ⇒ not working), `removed` and `exit`. It follows the renderer's stream-phase
+  rules, and an equivalence test feeds the same real adapter event sequences to both
+  so they cannot drift. It does not import renderer code: the layering forbids it
+  and the renderer reducer needs the full semantic fold.
+- **Suspensions are stored, not baked in:** intervals are recorded as observed and
+  the summary subtracts stored suspensions with `suspendedMsWithin`, the same rule
+  as the counter. Recording stays simple and a later fix to suspension detection
+  corrects history.
+- **Crash safety without growth:** open intervals live in one small `open.json`
+  rewritten on change and touched every 30 s; at startup any interval left open is
+  closed at that last touch, so an unclean shutdown contributes seconds, not hours.
+- **Storage:** closed intervals append to monthly JSONL under
+  `STATE_DIR/agent-activity/`; suspensions append to their own file. Older months
+  compact into per-day rollups (see Stage 4 storage) so all-time ranges stay cheap.
+
 ### Stage 4 — Working-interval recorder (main, durable)
 
 - **Fixtures first:** extract cases A, B, C and the controls into
