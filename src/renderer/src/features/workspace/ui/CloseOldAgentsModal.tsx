@@ -57,19 +57,7 @@ type AgentRow = {
   ageMs: number | null
 }
 
-/**
- * Build the preview rows from a workspace snapshot.
- *
- * Module-level and snapshot-in / rows-out so the SAME derivation runs in the
- * render memo and again inside the close loop's per-kill revalidation. The
- * revalidation previously re-read only `sessions` + liveness, which meant it
- * could not see the two criteria that actually put a row in the list — its age
- * and its project. An agent that received a message after the preview and went
- * idle again passed a liveness check while no longer being an OLD agent.
- *
- * Exported for its colocated test; still the one derivation the render memo
- * and the close loop share.
- */
+/** One preview row for a session filed under `tab` (null without metadata). */
 function agentRowFor(
   state: Workspace['state'],
   runtimes: Workspace['runtimes'],
@@ -136,6 +124,19 @@ export function buildAgentRow(
   return null
 }
 
+/**
+ * Build the preview rows from a workspace snapshot.
+ *
+ * Module-level and snapshot-in / rows-out so the SAME row derivation runs in the
+ * render memo and again at the close loop's per-kill revalidation (which builds
+ * just its target's row through buildAgentRow). The revalidation previously
+ * re-read only `sessions` + liveness, which meant it could not see the two
+ * criteria that actually put a row in the list — its age and its project. An
+ * agent that received a message after the preview and went idle again passed a
+ * liveness check while no longer being an OLD agent.
+ *
+ * Exported for its colocated test.
+ */
 export function buildAgentRows(
   state: Workspace['state'],
   runtimes: Workspace['runtimes'],
