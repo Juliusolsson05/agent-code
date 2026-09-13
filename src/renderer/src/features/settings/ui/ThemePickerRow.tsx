@@ -1,6 +1,9 @@
 import { THEME_MODES } from '@renderer/app-state/settings/types'
 import type { Settings, ThemeModeValue } from '@renderer/app-state/settings/types'
 import type { SavedTheme } from '@renderer/app-state/settings/savedThemes'
+import { useAppStore } from '@renderer/app-state/hooks'
+import { installedThemeContributions } from '@renderer/app-state/settings/extensionThemes'
+import { isExtensionThemeMode } from '@shared/types/extensionThemes'
 
 type Props = {
   settings: Settings
@@ -23,6 +26,8 @@ type Props = {
 // the trailing "+ New theme…" cell is an action rather than a value. Same
 // escape hatch cli-update-behavior and dictation-api-key already use.
 export function ThemePickerRow({ settings, onSelect, onCreate, onEdit, onDelete }: Props) {
+  const entries = useAppStore(state => state.installedExtensions)
+  const themes = installedThemeContributions(entries)
   return (
     // gap-px over a bg-panel-border parent draws the grid lines as gaps rather
     // than per-cell borders, which keeps the double-border seams out and
@@ -102,6 +107,28 @@ export function ThemePickerRow({ settings, onSelect, onCreate, onEdit, onDelete 
           </span>
         </div>
       ))}
+
+      {themes.map(theme => (
+        <button
+          key={theme.mode}
+          type="button"
+          onClick={() => onSelect(theme.mode)}
+          aria-pressed={settings.mode === theme.mode}
+          className={`flex items-center justify-between gap-2 px-3 py-2 text-left text-[12px] ${
+            settings.mode === theme.mode
+              ? 'bg-row-selected-solid-bg text-row-selected-fg'
+              : 'bg-panel-bg text-ink-dim hover:bg-row-hover-bg'
+          }`}
+        >
+          <span className="min-w-0 truncate">{theme.title}</span>
+          <span className="truncate text-[9px] text-muted" title={theme.extensionName}>{theme.extensionName}</span>
+        </button>
+      ))}
+      {isExtensionThemeMode(settings.mode) && !themes.some(theme => theme.mode === settings.mode) ? (
+        <p className="col-span-2 bg-panel-bg px-3 py-2 text-[12px] text-muted" role="status">
+          Selected extension theme is unavailable. Using Dark until it returns.
+        </p>
+      ) : null}
 
       {/* Always the last cell, so the grid stays a filled rectangle as themes
           are added instead of leaving a hole somewhere in the middle. */}

@@ -43,6 +43,15 @@ export type CloseConfirmationRequest =
       targets: readonly CloseTargetSnapshot[]
       /** One-line summary naming the exact count. */
       summary: string
+      /** Root rows also own a project. The choice must spell out both scopes;
+       * approving the tab list must never be inferred from an agent close.
+       * `noun` follows the root's kind: since #865/#872 a terminal can be the
+       * root, and "Close Agent ends zsh" names the wrong thing. */
+      agentOnly?: {
+        title: string
+        targets: readonly CloseTargetSnapshot[]
+        noun: 'agent' | 'terminal'
+      }
     }
 
 /** The count-and-liveness sentence, shared by the judged and forced paths so
@@ -118,8 +127,13 @@ export function grantStillMatches(
   current: readonly CloseTargetSnapshot[],
 ): boolean {
   if (granted.length !== current.length) return false
-  const currentIds = new Set(current.map(target => target.sessionId))
-  return granted.every(target => currentIds.has(target.sessionId))
+  const currentById = new Map(current.map(target => [target.sessionId, target]))
+  // A matching ID does not authorize newly started work. A user who approved
+  // an idle agent must see a new confirmation if it wakes under the dialog.
+  return granted.every(target => {
+    const now = currentById.get(target.sessionId)
+    return now !== undefined && (!now.live || target.live)
+  })
 }
 
 export type CloseGateOutcome =
@@ -231,15 +245,26 @@ export function narrowGrantToCurrent(
 export type PartialCloseOutcome = {
   closed: SessionId[]
   failed: { sessionId: SessionId; error: unknown }[]
+  /**
+   * Still eligible, but kept because a linked session it owns is still open.
+   *
+   * Its own bucket (#886 review m7) because it is not a change: nothing about
+   * the parent moved. Bulk cleanup refuses to orphan a linked child, so a parent
+   * whose child was excluded, is working, or failed to close stays open by
+   * design. Reporting that as "skipped (changed)" told the user something false
+   * and gave them no way to learn why the agent survived.
+   */
+  kept: SessionId[]
   /** Dropped because they changed between grant and commit. */
   skipped: SessionId[]
 }
 
 /** Human-readable result for a bulk close that did not fully succeed. */
 export function describePartialClose(outcome: PartialCloseOutcome): string | null {
-  if (outcome.failed.length === 0 && outcome.skipped.length === 0) return null
+  if (outcome.failed.length === 0 && outcome.skipped.length === 0 && outcome.kept.length === 0) return null
   const parts = [`Closed ${outcome.closed.length}`]
   if (outcome.failed.length > 0) parts.push(`${outcome.failed.length} failed`)
+  if (outcome.kept.length > 0) parts.push(`${outcome.kept.length} kept (linked agent still open)`)
   if (outcome.skipped.length > 0) parts.push(`${outcome.skipped.length} skipped (changed)`)
   return `${parts.join(', ')}.`
 }
@@ -262,7 +287,12 @@ export type CloseExpansionState = {
  *  CloseOldAgentsModal already uses, so preview and confirmation agree. */
 export type CloseExpansionRuntimes = Record<
   string,
-  { sessionStatus?: string; streamPhase?: string | null } | undefined
+  {
+    sessionStatus?: string
+    streamPhase?: string | null
+    processActive?: boolean
+    terminalForeground?: { busy: boolean } | null
+  } | undefined
 >
 
 /** Exported so paths that judge ONE session (Kill Buried) use the same
@@ -280,7 +310,9 @@ function isLive(runtimes: CloseExpansionRuntimes, sessionId: string): boolean {
   if (!runtime) return false
   const running = runtime.sessionStatus === 'running'
   const streaming = runtime.streamPhase != null && runtime.streamPhase !== 'idle'
-  return Boolean(running || streaming)
+  // Process/foreground events can lead the derived status. For destructive
+  // decisions, positive evidence of work from either channel must win.
+  return Boolean(running || streaming || runtime.processActive || runtime.terminalForeground?.busy)
 }
 
 function snapshot(

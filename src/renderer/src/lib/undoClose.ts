@@ -26,6 +26,12 @@ import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 //            undo respawns the session and re-files its
 //            `detachedSessions` record instead.
 //
+//   'group' — one close OPERATION committed several units (a linked
+//            cascade, a Close Tab reaching into other projects, a partial
+//            close whose named session stayed open). It holds one entry of
+//            the shapes above per unit, in commit order; undo replays them
+//            last-first so each restore's new ids re-anchor the older ones.
+//
 // The stack is LIFO — the user undoes the most recent close first, which
 // matches Cmd+Shift+T muscle memory from every browser ever. Multiple
 // undoes pop successively older entries.
@@ -78,6 +84,15 @@ export type ClosedPane = {
   type: 'pane'
   closedAt: number
   tabId: string
+  /**
+   * The closed pane's own launch-local id. Undo mints a NEW id for it, and
+   * older entries still on the stack may name the old one (a later pane's
+   * `siblingLeafId`, a child's `linkedParentId`). Restore publishes old -> new
+   * through `UndoCloseStack.remapLineage` so those anchors keep resolving.
+   * Optional only because fixtures predating #886 omit it; every production
+   * capture sets it, and an entry without it simply cannot be remapped.
+   */
+  sessionId?: SessionId
   /** Session metadata for the closed pane — cwd, kind, providerSessionId. */
   sessionMeta: SessionMeta
   /** Split direction the parent had. */
@@ -104,6 +119,10 @@ export type ClosedPane = {
  * old in the dispatch list.
  */
 export type ClosedTabDetachedEntry = {
+  /** Old id, for the same lineage reason as `ClosedPane.sessionId`: a linked
+   *  child restored with this tab must follow its restored parent, and older
+   *  entries may anchor on this row. Optional for pre-#886 fixtures only. */
+  sessionId?: SessionId
   meta: SessionMeta
   detachedAt: number
 }
@@ -159,9 +178,155 @@ export type ClosedDetached = {
   sessionMeta: SessionMeta
   /** The detached record as it stood at close time, `detachedAt` included. */
   record: DetachedSessionRecord
+  /** Closing the last grid agent can promote a detached survivor. Restore the
+   * original root only if that survivor still occupies the whole grid; later
+   * user layout edits win, with the recovered agent restored as a row.
+   *
+   * Both `sessionId` and `projectTabId` here are LINEAGE anchors, not frozen
+   * facts: undoing a later close of that survivor (or of its whole tab) brings
+   * it back under a new session id and possibly a new tab id, and
+   * `remapLineage` rewrites this record so the earlier root still recognizes
+   * its slot (#886 review finding 4). */
+  replacedRoot?: DetachedSessionRecord
 }
 
-export type ClosedEntry = ClosedPane | ClosedTab | ClosedDetached
+/** The shapes that restore ONE placement unit; a group is built from these. */
+export type SingleClosedEntry = ClosedPane | ClosedTab | ClosedDetached
+
+/**
+ * Everything one close OPERATION committed, as a single undo unit.
+ *
+ * WHY a group rather than one entry per session or one entry for the named
+ * session only (#886 review round 2): an operation can end several sessions in
+ * different shapes — a linked child closed as a Dispatch row, another as a split
+ * pane in another project, the parent as a promoted root — and it can be
+ * PARTIAL: the parent kept because a child changed, while the children that
+ * already closed are really gone. Recording only the named session lost those
+ * children entirely (they had no entry and the toast never mentioned them);
+ * recording each separately flooded the 10-entry stack with one decision and
+ * made ⌘⇧T restore half an operation at a time.
+ *
+ * `entries` is in COMMIT order. Undo replays it from the END: the last commit is
+ * the outermost state change (a parent, a tab removal), and each restore
+ * publishes lineage (new ids) that the older members still anchor on — a
+ * child's `linkedParentId`, a pane's `siblingLeafId`, a row's `projectTabId`.
+ */
+export type ClosedGroup = {
+  type: 'group'
+  closedAt: number
+  entries: SingleClosedEntry[]
+}
+
+export type ClosedEntry = SingleClosedEntry | ClosedGroup
+
+/**
+ * Old -> new ids published by one successful restore.
+ *
+ * WHY undo needs lineage at all: every restore respawns under a fresh
+ * launch-local SessionId, and a restored tab gets a fresh TabId. Entries still
+ * on the stack were captured against the OLD ids. Without rewriting them, the
+ * natural sequence "close A (B promoted), close B (tab removed), undo, undo"
+ * loses A: its entry names tab T and survivor B, but the first undo recreated
+ * them as T′ and B′, so the second undo judged A stale and consumed it.
+ *
+ * WHY this is not "recreate any missing tab": a tab can also disappear because
+ * the user MERGED it into another project (#913/#914). Merge has no undo entry
+ * and never publishes lineage, so an entry anchored on a merged-away tab still
+ * resolves to nothing and is correctly treated as stale — restoring it would
+ * resurrect a project the user deliberately folded away. Lineage only flows
+ * from restores, which is exactly the set of disappearances undo may reverse.
+ */
+export type UndoLineage = {
+  sessions?: ReadonlyMap<SessionId, SessionId>
+  tabs?: ReadonlyMap<string, string>
+}
+
+/** Rewrite a meta's cross-session pointers through a lineage map. Unlike
+ *  `remapSessionMetaRelationships`, ids absent from the map are KEPT: lineage
+ *  describes one restore, not the full set of surviving sessions, so an
+ *  unmapped parent is simply one this restore did not touch. */
+export function remapMetaLineage(
+  meta: SessionMeta,
+  sessions: ReadonlyMap<SessionId, SessionId> | undefined,
+): SessionMeta {
+  if (!sessions || sessions.size === 0) return meta
+  const mapped = (id: SessionId | undefined) => (id ? sessions.get(id) ?? id : id)
+  const linkedParentId = mapped(meta.linkedParentId)
+  const orchestrationParentId = mapped(meta.orchestrationParentId)
+  const orchestrationRootId = mapped(meta.orchestrationRootId)
+  if (
+    linkedParentId === meta.linkedParentId &&
+    orchestrationParentId === meta.orchestrationParentId &&
+    orchestrationRootId === meta.orchestrationRootId
+  ) return meta
+  return {
+    ...meta,
+    ...(linkedParentId ? { linkedParentId } : {}),
+    ...(orchestrationParentId ? { orchestrationParentId } : {}),
+    ...(orchestrationRootId ? { orchestrationRootId } : {}),
+  }
+}
+
+/**
+ * Apply one restore's lineage to an entry still waiting on the stack.
+ *
+ * Only ANCHORS are rewritten — the ids an entry uses to find where it belongs
+ * (sibling leaf, project tab, promoted survivor) and the relationship pointers
+ * its respawned session will carry. An entry's OWN closed ids (`sessionId`,
+ * `record.sessionId`, a closed tab's leaves) are never remapped: those
+ * sessions are dead and the entry is the only thing that will ever revive them.
+ */
+export function remapClosedEntryLineage(entry: ClosedEntry, lineage: UndoLineage): ClosedEntry {
+  if (entry.type === 'group') {
+    return { ...entry, entries: entry.entries.map(member => remapSingleEntryLineage(member, lineage)) }
+  }
+  return remapSingleEntryLineage(entry, lineage)
+}
+
+/** remapClosedEntryLineage for one placement unit; group restore uses it to
+ *  re-anchor the members it has not replayed yet. */
+export function remapSingleEntryLineage(entry: SingleClosedEntry, lineage: UndoLineage): SingleClosedEntry {
+  const session = (id: SessionId) => lineage.sessions?.get(id) ?? id
+  const tab = (id: string) => lineage.tabs?.get(id) ?? id
+  if (entry.type === 'pane') {
+    return {
+      ...entry,
+      tabId: tab(entry.tabId),
+      siblingLeafId: session(entry.siblingLeafId),
+      sessionMeta: remapMetaLineage(entry.sessionMeta, lineage.sessions),
+    }
+  }
+  if (entry.type === 'detached') {
+    return {
+      ...entry,
+      sessionMeta: remapMetaLineage(entry.sessionMeta, lineage.sessions),
+      record: { ...entry.record, projectTabId: tab(entry.record.projectTabId) },
+      ...(entry.replacedRoot
+        ? {
+            replacedRoot: {
+              ...entry.replacedRoot,
+              sessionId: session(entry.replacedRoot.sessionId),
+              projectTabId: tab(entry.replacedRoot.projectTabId),
+            },
+          }
+        : {}),
+    }
+  }
+  return {
+    ...entry,
+    sessionMetas: Object.fromEntries(
+      Object.entries(entry.sessionMetas).map(([id, meta]) => [id, remapMetaLineage(meta, lineage.sessions)]),
+    ),
+    ...(entry.detachedEntries
+      ? {
+          detachedEntries: entry.detachedEntries.map(detached => ({
+            ...detached,
+            meta: remapMetaLineage(detached.meta, lineage.sessions),
+          })),
+        }
+      : {}),
+  }
+}
 
 export function missingClosedTabLeafMetaIds(entry: ClosedTab): SessionId[] {
   // WHY this validation lives beside the entry type instead of being inlined
@@ -209,6 +374,13 @@ export class UndoCloseStack {
   get length(): number {
     this.prune()
     return this.entries.length
+  }
+
+  /** Rewrite every waiting entry's anchors after a successful restore. See
+   *  `UndoLineage` for why this runs on restore and never on merge. */
+  remapLineage(lineage: UndoLineage): void {
+    if (!lineage.sessions?.size && !lineage.tabs?.size) return
+    this.entries = this.entries.map(entry => remapClosedEntryLineage(entry, lineage))
   }
 
   private prune(): void {

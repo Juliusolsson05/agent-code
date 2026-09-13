@@ -16,7 +16,9 @@ import type { SessionId, SessionMeta, WorkspaceState } from '@renderer/workspace
 // `silentIfSoleTarget` (see the WHY on OrchestrationCloseSession). That option
 // is the whole safety argument: it stays silent when the close kills exactly
 // the named agent, and asks when it would reach further — a linked agent the
-// user attached, or a tab's sole leaf taking every detached session with it.
+// user attached. (A tab's sole grid leaf used to be the second such shape,
+// taking every detached session with it; since #886 it closes alone and a
+// Dispatch sibling is promoted. closeAgentScope's renderer test pins that.)
 //
 // So the option itself is part of the contract in both directions: a regression
 // that swapped it for `preConfirmed: true` would destroy user-created sessions

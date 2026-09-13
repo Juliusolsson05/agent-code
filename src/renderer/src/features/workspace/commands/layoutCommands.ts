@@ -167,6 +167,15 @@ export const layoutCommands: CommandDef[] = [
       // resolves would shrink the grid while the user was still deciding, and
       // a declined confirm would leave the layout changed with the agent alive
       // — the worst of both outcomes.
+      //
+      // What `true` means is exactly "the session THIS lane shows was closed"
+      // (#886 review round 2). It stays false when the close was declined,
+      // refused (the agent changed, or a linked session is still open) or the
+      // session was already gone — even if the operation closed some of its
+      // linked children first, which closeSession reports in its own toast and
+      // undo entry. So the lane is removed only when its agent is really gone.
+      // A root close that promoted a Dispatch row into the grid still resolves
+      // true; the survivor keeps its own lane, untouched here.
       const closed = await workspace.closeSession(sessionId)
       if (closed) workspace.removeTiledLane(laneIndex)
     },

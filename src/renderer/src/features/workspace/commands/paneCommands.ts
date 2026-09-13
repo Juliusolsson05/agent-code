@@ -1,4 +1,10 @@
-import { AGENT_PROVIDER_KINDS, DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
+import {
+  AGENT_PROVIDER_KINDS,
+  DEFAULT_PROVIDER,
+  isAgentProviderKind,
+  isAgentSessionKind,
+  isProcessSessionKind,
+} from '@shared/types/providerKind'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { extractLastAssistantText } from '@renderer/lib/copyAssistant'
 import type { CommandContext, CommandDef } from '@renderer/features/command-palette/types'
@@ -553,9 +559,9 @@ export const paneCommands: CommandDef[] = [
     },
     when: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
-      // Every session follows (#865): agents through the feed or the raw
-      // terminal view, plain shells through the same xterm follow hook.
-      return sessionId !== null && Boolean(workspace.state.sessions[sessionId])
+      const meta = sessionId ? workspace.state.sessions[sessionId] : undefined
+      // Shell and agent panes both follow; a processless extension has no output to follow.
+      return Boolean(meta && isProcessSessionKind(meta.kind))
     },
     run: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
@@ -613,9 +619,8 @@ export const paneCommands: CommandDef[] = [
     // the surface where returning to the bottom is most often needed.
     when: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
-      // Every session follows (#865): agents through the feed or the raw
-      // terminal view, plain shells through the same xterm follow hook.
-      return sessionId !== null && Boolean(workspace.state.sessions[sessionId])
+      const meta = sessionId ? workspace.state.sessions[sessionId] : undefined
+      return Boolean(meta && isProcessSessionKind(meta.kind))
     },
     run: ({ workspace }) => {
       workspace.scrollFocusedToLatest()
@@ -630,7 +635,7 @@ export const paneCommands: CommandDef[] = [
     when: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return false
-      // WHY hide this for terminals: terminal output is not an assistant
+      // WHY hide this on non-agent panes: terminal output is not an assistant
       // transcript, and extractLastAssistantText intentionally reads provider
       // entries. Showing the command on a shell row would imply there is an
       // assistant response to copy when there is only PTY scrollback.
@@ -667,12 +672,13 @@ export const paneCommands: CommandDef[] = [
       '**What it does:** Empties the composer draft for the focused agent.\n\n**Use when:** You typed or dictated something you want to start over from — with a mouse there is no select-all-and-delete.\n\n**Notes:** Reversible with **Undo Clear Composer**. Attached images are removed but not restored by the undo.',
     keywords: ['clear', 'composer', 'draft', 'erase', 'reset', 'prompt', 'delete'],
     // Terminals have no composer draft — their input goes straight to the PTY —
-    // so offering this on a shell row would imply a draft that cannot exist.
-    // Same reasoning as copy-last-assistant above.
+    // and extension-view panes have no composer at all, so offering this on
+    // either would imply a draft that cannot exist. Same reasoning as
+    // copy-last-assistant above.
     when: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return false
-      return workspace.state.sessions[sessionId]?.kind !== 'terminal'
+      return isAgentSessionKind(workspace.state.sessions[sessionId]?.kind)
     },
     run: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
@@ -701,13 +707,14 @@ export const paneCommands: CommandDef[] = [
     description:
       '**What it does:** Restores the draft removed by the last **Clear Composer** in this agent.\n\n**Use when:** You cleared the composer by mistake.\n\n**Notes:** Text only — attached images are not restored. Survives further typing, so it is still available after you start over.',
     keywords: ['undo', 'restore', 'composer', 'draft', 'clear', 'recover'],
-    // Plain terminals have no composer at all; the rendered-view policy cannot
-    // hide this for them because it answers "allowed" for non-agent kinds.
+    // Terminals and extension panes have no composer at all; the rendered-view
+    // policy cannot hide this for them because it answers "allowed" for non-agent
+    // kinds. Positive agent check, matching Clear Composer and Send Prompt.
     // This guard reads only the session kind, never the module-level stash,
     // so the staleness concern that kept this command guard-free does not apply.
     when: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
-      return sessionId !== null && workspace.state.sessions[sessionId]?.kind !== 'terminal'
+      return sessionId !== null && isAgentSessionKind(workspace.state.sessions[sessionId]?.kind)
     },
     run: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
@@ -736,7 +743,7 @@ export const paneCommands: CommandDef[] = [
     when: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return false
-      return workspace.state.sessions[sessionId]?.kind !== 'terminal'
+      return isAgentSessionKind(workspace.state.sessions[sessionId]?.kind)
     },
     // Routed through the Enter registry rather than reimplemented: `submit` is
     // built from `submitCurrentDraft`, which owns provider capability dispatch,

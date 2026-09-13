@@ -7,6 +7,7 @@ import { monitorCoordinator } from '@main/performance/MonitorCoordinator.js'
 
 import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import { getOutboundIpcDiagnostics } from '@main/window/windowRegistry.js'
+import { isCreatingExtensionRuntimeWindow } from '@main/extensions/runtimeWindowMarker.js'
 import type { RendererFreezeHeartbeat } from '@shared/incident/rendererFreeze.js'
 
 const HEARTBEAT_STALL_MS = 4_000
@@ -198,6 +199,12 @@ export function installWindowIncidentHooks(journal: AppRunJournal): void {
   })
 
   app.on('browser-window-created', (_event, window) => {
+    // Hidden extension runtime windows are not application renderers: they never
+    // send the renderer heartbeat, so enrolling them produced a false freeze
+    // snapshot every 30 s per running extension and recorded extension crashes
+    // as application renderer crashes. Their lifecycle belongs to the runtime
+    // service, which already retires them on crash/close.
+    if (isCreatingExtensionRuntimeWindow()) return
     // Track when this window went unresponsive so 'responsive' can report how
     // long it was frozen. Keyed by window id; cleared on recovery.
     let unresponsiveSince: number | null = null

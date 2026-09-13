@@ -1,3 +1,4 @@
+import { isAgentSessionKind } from '@shared/types/providerKind'
 import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 import type { SessionId, SessionKind, TabId, WorkspaceState } from '@renderer/workspace/types'
 
@@ -18,7 +19,7 @@ export function buildGridRelatedAgentTabs(
   ownerSessionId: SessionId,
 ): GridRelatedAgentTab[] {
   const ownerMeta = state.sessions[ownerSessionId]
-  if (!ownerMeta || ownerMeta.kind === 'terminal') return []
+  if (!ownerMeta || !isAgentSessionKind(ownerMeta.kind)) return []
 
   const candidateIds = sessionIdsOwnedByTab(state, tabId)
   const tabs: GridRelatedAgentTab[] = [{
@@ -33,7 +34,7 @@ export function buildGridRelatedAgentTabs(
   for (const sessionId of candidateIds) {
     if (sessionId === ownerSessionId) continue
     const meta = state.sessions[sessionId]
-    if (!meta || meta.kind === 'terminal') continue
+    if (!meta || !isAgentSessionKind(meta.kind)) continue
 
     // WHY direct linked parent and orchestration root both count here:
     // linked agents flatten to one parent by construction, while orchestration

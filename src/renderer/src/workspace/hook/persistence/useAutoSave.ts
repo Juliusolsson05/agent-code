@@ -5,6 +5,7 @@ import type { PersistedWorkspace } from '@renderer/workspace/persistence'
 import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
 import { pruneSessionOwnership, repairPersistedTabs } from '@renderer/workspace/sessionOwnership'
 import { withNormalizedBuiltInMcpDomains } from '@renderer/workspace/mcpDomains'
+import { isAgentSessionKind } from '@shared/types/providerKind'
 
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import * as perf from '@renderer/performance/client'
@@ -93,10 +94,14 @@ export function useAutoSave(
       )
     }
 
-    // Collect non-empty drafts so in-progress prompts survive crashes.
+    // Collect non-empty drafts so in-progress prompts survive crashes. Only agent
+    // panes own a composer. Extension panes stay in `pruned.sessions` so their
+    // metadata persists, which let any path that wrote an invisible draft into
+    // one (Key Vault insertion did) make that text — a secret — durable in
+    // workspace.json with no UI to see or clear it.
     const drafts: Record<SessionId, string> = {}
     for (const [id, rt] of Object.entries(refs.latestRuntimesRef.current)) {
-      if (pruned.sessions[id] && rt.draftInput) drafts[id] = rt.draftInput
+      if (pruned.sessions[id] && isAgentSessionKind(pruned.sessions[id].kind) && rt.draftInput) drafts[id] = rt.draftInput
     }
     // Filter pins against the pruned `sessions` map so a stale entry
     // (kill-races, hand-edited workspace.json, mid-rehydrate

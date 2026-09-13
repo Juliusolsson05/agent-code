@@ -45,6 +45,9 @@ function renderPaneActionsHarness(
     seenUuidsRef: ref<Record<SessionId, Set<string>>>({}),
     latestScreenRef: ref<Record<SessionId, string>>({}),
     undoStackRef: ref(new UndoCloseStack()),
+    // Close operations release a pending bootstrap debounce for each session
+    // they end, as sessionActions.killSession always did (#886 round 2).
+    bootstrapTimersRef: ref(new Map()),
   } as unknown as WorkspaceRefs
   const setState = (next: WorkspaceState | ((prev: WorkspaceState) => WorkspaceState)) => {
     state = typeof next === 'function' ? next(state) : next
@@ -70,6 +73,7 @@ function renderPaneActionsHarness(
     state,
     setState,
     setRuntimes,
+    vi.fn(),
     vi.fn(),
     vi.fn(),
     refs,
@@ -124,6 +128,7 @@ describe('pane recovery ownership', () => {
       seenUuidsRef: ref<Record<SessionId, Set<string>>>({}),
       latestScreenRef: ref<Record<SessionId, string>>({}),
       undoStackRef: ref(new UndoCloseStack()),
+      bootstrapTimersRef: ref(new Map()),
     } as unknown as WorkspaceRefs
     const setState = (next: WorkspaceState | ((prev: WorkspaceState) => WorkspaceState)) => {
       state = typeof next === 'function' ? next(state) : next
@@ -150,6 +155,7 @@ describe('pane recovery ownership', () => {
       state,
       setState,
       setRuntimes,
+      vi.fn(),
       vi.fn(),
       vi.fn(),
       refs,
@@ -248,7 +254,10 @@ describe('pane recovery ownership', () => {
     const undoEntry = harness.refs.undoStackRef.current.pop()
     expect(undoEntry?.type).toBe('tab')
     if (undoEntry?.type === 'tab') {
+      // sessionId is the lineage anchor undo publishes when this row is
+      // restored, so older entries naming it keep resolving (#886 finding 4).
       expect(undoEntry.detachedEntries).toEqual([{
+        sessionId: detachedId,
         meta: state.sessions[detachedId],
         detachedAt: 123,
       }])

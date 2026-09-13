@@ -11,10 +11,26 @@
       directive, workers fall back to script-src 'self', which blocks
       blob: — the TS/JSON/CSS/HTML workers die silently and tokenization
       goes blank intermittently (#513).
+      ── agent-code-ext: APPEARS IN frame-src AND NOWHERE ELSE ──
+      That single directive is what contains extension frames, and it is the
+      one doing the real work here — everything above describes the other
+      directives, so someone tidying this line has no way to know that.
+
+      It was previously also in script-src, connect-src, img-src, style-src and
+      font-src, to serve ExtensionHost.activate() — a host-realm
+      import('agent-code-ext://…') that evaluates third-party extension code in
+      THIS realm, where window.api exposes every IPC handler including
+      extensions:install and extensions:remove. That path has no callers: command
+      execution moved into the sandboxed frame. So the concession bought nothing
+      and left the renderer permitted to run extension code directly.
+
+      The child loads its own assets under its own far stricter policy (see
+      childFrameCsp), so the host needs none of these. If background activation
+      is added later it must be a hidden FRAME, not a host-realm import.
     -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; script-src 'self'; worker-src 'self' blob:"
+      content="default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; script-src 'self'; connect-src 'self'; frame-src agent-code-ext:; worker-src 'self' blob:"
     />
     <title>Agent Code</title>
   </head>
