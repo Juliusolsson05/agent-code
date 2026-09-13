@@ -24,6 +24,8 @@ import { join } from 'path'
 import { performance } from 'perf_hooks'
 
 import { SessionManager } from '@main/sessionManager.js'
+import { SystemSuspensionTracker } from '@main/systemSuspension/SystemSuspensionTracker.js'
+import { readDarwinLastWakeAt } from '@main/systemSuspension/darwinWakeTime.js'
 import { createControlHost } from '@main/control/createControlHost.js'
 import { sessionHistoryControlCapabilities } from '@main/sessions/control.js'
 import { nativeHistoryControlCapabilities } from '@main/sessions/nativeHistoryControl.js'
@@ -669,8 +671,25 @@ async function startApp(): Promise<void> {
   // owners. Keep both before window creation: monitoring otherwise misses the
   // startup interval, while extension frames can race an unregistered scheme or
   // an unfinished install sweep if a window is allowed to open first.
-  powerMonitor.on('suspend', () => mainProbe.noteSuspend())
-  powerMonitor.on('resume', () => mainProbe.noteResume())
+  // #963: ONE owner of "the machine was not running". It is the only
+  // powerMonitor subscriber; MainProbe keeps its Electron-only suspend/resume
+  // evidence through the tracker's power-monitor events, and every working-time
+  // consumer (turn clock, provider adapters, journal) reads the same intervals
+  // instead of deriving sleep on its own. Started before any window or session
+  // exists so a sleep during startup is not missed.
+  const systemSuspension = new SystemSuspensionTracker({ power: powerMonitor, readLastWakeAt: readDarwinLastWakeAt })
+  systemSuspension.on('suspend', () => mainProbe.noteSuspend())
+  systemSuspension.on('resume', () => mainProbe.noteResume())
+  systemSuspension.on('suspension', (suspension: import('@shared/types/systemSuspension.js').SystemSuspension) => {
+    // Journaled so a debug bundle finally shows when the machine slept: before
+    // this, no run journal on record contained a single power event.
+    appRunJournal?.record({
+      area: 'system.power',
+      name: 'system.suspension',
+      data: { ...suspension, durationMs: suspension.resumedAt - suspension.suspendedAt },
+    })
+  })
+  systemSuspension.start()
   monitorCoordinator.start()
   // Remove capture scratch stranded by a crash or forced quit in an earlier
   // run. It is app-owned, so nothing else can depend on those partial files.
@@ -886,6 +905,11 @@ async function startApp(): Promise<void> {
       )
     },
   )
+  // Adapters seal streams a sleep severed (#963); the manager fans each
+  // suspension out to the live agent runtimes.
+  systemSuspension.on('suspension', (suspension: import('@shared/types/systemSuspension.js').SystemSuspension) => {
+    manager?.noteSystemSuspension(suspension)
+  })
   // Project ownership lives in renderer state, while backend/transcript facts
   // live in SessionManager. Construct this bridge only after both the MCP host
   // and manager exist so tool calls cannot observe a half-wired authority.
@@ -1154,6 +1178,7 @@ async function startApp(): Promise<void> {
     agentCodeConventionsService,
     workspaceFileStore,
     conversationService,
+    systemSuspension,
   })
   // Boot probe runs after the IPC is wired so its first `state` push
   // has a live subscriber to receive it on the renderer side.

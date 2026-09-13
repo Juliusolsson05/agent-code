@@ -946,6 +946,16 @@ export class CodexSession extends EventEmitter {
     return this.pty?.pid ?? null
   }
 
+  /**
+   * The machine was suspended (#963). Seal the proxy streams the sleep severed
+   * right away: unlike Claude, a Codex retry cannot take the active slot while a
+   * dead flow still holds it, so a grace period would only delay the retry. The
+   * adapter touches only flows with no event since the suspension began.
+   */
+  noteSystemSuspension(suspension: import('@shared/types/systemSuspension.js').SystemSuspension): void {
+    this.proxyAdapter?.sealFlowsSilentSince(suspension.suspendedAt, 'system-suspended')
+  }
+
   async stop(): Promise<void> {
     const attempt = this.activeStartAttempt
     if (attempt) {

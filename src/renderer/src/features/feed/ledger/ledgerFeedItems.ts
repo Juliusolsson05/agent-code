@@ -308,6 +308,12 @@ export function ledgerToFeedItems(
             toolUseId: ctx.streamPhasePendingToolUseId,
             order: orderAt(items.length, 'work'),
           })
+        } else if (c.contentKind === 'sleep-interruption') {
+          items.push({
+            type: 'sleep-interruption',
+            key: c.id,
+            order: orderAt(items.length, 'work'),
+          })
         } else {
           items.push({
             type: 'empty',
@@ -333,10 +339,10 @@ export function ledgerToFeedItems(
   // upstream data decision—Feed receives an explicit empty item and never
   // filters a selected row itself.
   const hasPaintedContent = items.some(item =>
-    item.type !== 'absorbed-entry' && item.type !== 'empty' && item.type !== 'work',
+    item.type !== 'absorbed-entry' && item.type !== 'empty' && item.type !== 'work' && item.type !== 'sleep-interruption',
   )
   if (!hasPaintedContent && !items.some(item => item.type === 'empty')) {
-    const workIndex = items.findIndex(item => item.type === 'work')
+    const workIndex = items.findIndex(item => item.type === 'work' || item.type === 'sleep-interruption')
     const insertionIndex = workIndex < 0 ? items.length : workIndex
     items.splice(insertionIndex, 0, {
       type: 'empty',
@@ -347,7 +353,7 @@ export function ledgerToFeedItems(
     // Keep the order metadata truthful after inserting before a work item.
     for (let index = insertionIndex + 1; index < items.length; index += 1) {
       const item = items[index]
-      const phase = item.type === 'work' ? 'work' : item.type === 'empty' ? 'empty' : 'content'
+      const phase = item.type === 'work' || item.type === 'sleep-interruption' ? 'work' : item.type === 'empty' ? 'empty' : 'content'
       item.order = orderAt(index, phase)
     }
   }

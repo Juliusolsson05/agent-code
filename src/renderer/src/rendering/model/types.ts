@@ -65,6 +65,11 @@ export type RenderContentKind =
   | 'compact-boundary'
   | 'compact-summary'
   | 'work'
+  /** Lifecycle marker, owner `work`: the newest turn was sealed because the
+   *  machine slept and nothing is running now (#963). Deliberately NOT a new
+   *  RenderOwner — it is a phase fact of the process plane exactly like the work
+   *  chip, carries no provider content, and paints at the tail. */
+  | 'sleep-interruption'
   | 'empty'
   | 'unknown'
 
