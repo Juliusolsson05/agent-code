@@ -151,3 +151,12 @@ export const SESSION_RECORDING_DIR = join(STATE_DIR, 'session-recordings')
 // file because it must outlive any pane the workspace forgets.
 export const CONVERSATIONS_DIR = join(STATE_DIR, 'conversations')
 export const CONVERSATIONS_LEDGER_FILE = join(CONVERSATIONS_DIR, 'ledger.jsonl')
+
+// Agent working-time history for Agent Analytics (#964): monthly interval files,
+// machine suspensions and the crash-safe open-interval file.
+//
+// WHY deliberately NOT registered with debugRetention: this is user data kept
+// forever by decision (docs/decomposition/agent-working-time.md §6 Q8), not a
+// disposable diagnostic cache. A retention sweep would delete the history the
+// feature exists to keep. Growth is bounded by construction (AgentActivityStore).
+export const AGENT_ACTIVITY_DIR = join(STATE_DIR, 'agent-activity')
