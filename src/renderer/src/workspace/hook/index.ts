@@ -123,10 +123,21 @@ export function useWorkspace(
   refs.latestStateRef.current = state
   refs.latestRuntimesRef.current = runtimes
   useLayoutEffect(() => {
-    refs.latestRuntimesRef.current = useAppStore.getState().workspaceRuntimes
-    return useAppStore.subscribe(store => store.workspaceRuntimes, next => {
+    const current = useAppStore.getState()
+    refs.latestRuntimesRef.current = current.workspaceRuntimes
+    refs.stateRef.current = current.workspaceState
+    refs.latestStateRef.current = current.workspaceState
+    // Sequential bulk closes resume before React necessarily commits a render.
+    // Keep both ownership and activity current synchronously; a render-body
+    // mirror can otherwise re-close a promoted root using yesterday's layout.
+    const unsubscribeRuntime = useAppStore.subscribe(store => store.workspaceRuntimes, next => {
       refs.latestRuntimesRef.current = next
     })
+    const unsubscribeState = useAppStore.subscribe(store => store.workspaceState, next => {
+      refs.stateRef.current = next
+      refs.latestStateRef.current = next
+    })
+    return () => { unsubscribeRuntime(); unsubscribeState() }
   }, [refs])
   refs.latestTileTabsRef.current = tileTabs
   refs.dangerousAgentsRef.current = dangerousAgentsEnabled
@@ -329,7 +340,6 @@ export function useWorkspace(
     state,
     tileTabs,
     setState,
-    setRuntimes,
     setTileTabs,
     setSpotlight,
     setReaderMode,
@@ -344,6 +354,7 @@ export function useWorkspace(
     setRuntimes,
     setSpotlight,
     setTileTabs,
+    setReaderMode,
     refs,
     showToast,
     openBuryPrompt,
@@ -741,10 +752,17 @@ export function useWorkspace(
         }
 
         // Closing is structurally narrower than the UI close operation. The UI
-        // intentionally cascades linked children and can remove a whole tab;
-        // MCP must refuse those shapes so one named target never silently means
-        // several agents. The model-facing tool adds the separate requirement
-        // that the current user explicitly requested closure.
+        // intentionally cascades linked children; MCP must refuse that shape so
+        // one named target never silently means several agents.
+        //
+        // A project's last grid leaf is NOT such a shape any more (#886 review
+        // M1). It used to be, because closing it removed the tab with every
+        // detached session in it. The close below passes requireConfirmation,
+        // which never offers the human-only Close Tab choice, so it is
+        // session-scoped and promotes the next Dispatch row into the grid.
+        // additionalCloseImpact therefore reports linked descendants only. The
+        // model-facing tool adds the separate requirement that the current
+        // user explicitly requested closure.
         const affected = additionalCloseImpact({
           state: refs.stateRef.current,
           callerSessionId: request.callerSessionId,
@@ -803,7 +821,11 @@ export function useWorkspace(
           // most.
           if (!closed) {
             throw new Error(
-              'close_agent was declined: the user did not approve closing this agent.',
+              // false is not only a decline since #886: the close is also
+              // refused when the agent changed after approval or a linked
+              // session is still open. Say which ones are possible rather than
+              // telling the calling model the user said no.
+              'close_agent did not close this agent: the user declined, or the agent changed or still had a linked session open when it was about to close.',
             )
           }
         }
@@ -928,7 +950,10 @@ export function useWorkspace(
     updateRuntime,
     // actions
     newTab: tabActions.newTab,
-    closeTab: tabActions.closeTab,
+    // Close Tab runs through the pane close executor, beside closeSession, so
+    // the command and the root dialog's "Close Tab" button are one operation
+    // (#886 review round 2; see the note in tab.ts).
+    closeTab: paneActions.closeTab,
     spawn,
     ensureSessionLive,
     killSession,

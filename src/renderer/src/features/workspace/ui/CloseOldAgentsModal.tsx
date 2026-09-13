@@ -27,14 +27,16 @@ import {
 } from '@renderer/features/workspace/lib/projectScope'
 import type { ProjectScopeRow } from '@renderer/features/workspace/lib/projectScope'
 import { tabIndexLabel } from '@renderer/workspace/tile-tree/paneLabelFormat'
+import { sessionDisplayTitle } from '@renderer/workspace/sessionDisplayTitle'
 import { resolveTabSessions } from '@renderer/workspace/queries'
+import type { CloseRefusalReason } from '@renderer/workspace/hook/actions/pane'
 import type { SessionId, Tab } from '@renderer/workspace/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { Entry } from '@shared/types/transcript'
 
 type Props = {
   open: boolean
-  workspace: Workspace
+  workspace: Pick<Workspace, 'state' | 'runtimes' | 'closeSession'>
   onClose: () => void
 }
 
@@ -45,6 +47,7 @@ type AgentRow = {
   sessionId: SessionId
   tabId: string
   tabTitle: string
+  title: string
   tabIndex: number
   kind: SessionKind
   cwd: string
@@ -54,18 +57,85 @@ type AgentRow = {
   ageMs: number | null
 }
 
+/** One preview row for a session filed under `tab` (null without metadata). */
+function agentRowFor(
+  state: Workspace['state'],
+  runtimes: Workspace['runtimes'],
+  now: number,
+  tab: Tab,
+  tabIndex: number,
+  sessionId: SessionId,
+): AgentRow | null {
+  const meta = state.sessions[sessionId]
+  if (!meta) return null
+  const kind = meta.kind ?? DEFAULT_PROVIDER
+
+  const runtime = runtimes[sessionId]
+  // Every session kind can be old (#865). Agents age by transcript
+  // timestamps; shells by their last foreground change (a command
+  // starting/finishing or a cd), which is the only activity a shell has.
+  const lastActiveAt = runtime
+    ? kind === 'terminal'
+      ? runtime.terminalForeground?.changedAt ?? null
+      : latestAgentActivityAt(runtime)
+    : null
+
+  return {
+    sessionId,
+    tabId: tab.id,
+    tabTitle: tab.title,
+    title: sessionDisplayTitle(meta),
+    tabIndex,
+    kind,
+    cwd: meta.cwd,
+    cwdBase: cwdBasename(meta.cwd),
+    // Shared with every other close path (expansion, the confirmation
+    // dialog, Kill Buried). Three private copies of "is this busy" is how a
+    // preview and a confirmation come to disagree about the same session.
+    isLive: isSessionLiveForClose(runtimes, sessionId),
+    lastActiveAt,
+    ageMs: lastActiveAt == null ? null : Math.max(0, now - lastActiveAt),
+  }
+}
+
+/**
+ * The single row `buildAgentRows` would produce for `sessionId`, without
+ * building every other row.
+ *
+ * WHY (#886 review m2): the close loop revalidates one target per kill — once
+ * before calling closeSession and once more inside its synchronous `onlyIf` —
+ * and each of those used to rebuild rows for the whole workspace, scanning
+ * every transcript, although only one row was needed. It uses the same
+ * first-owning-tab rule as the `seen` set in buildAgentRows, so the single row
+ * and the full list cannot disagree about a session's project.
+ */
+export function buildAgentRow(
+  state: Workspace['state'],
+  runtimes: Workspace['runtimes'],
+  now: number,
+  sessionId: SessionId,
+): AgentRow | null {
+  for (let tabIndex = 0; tabIndex < state.tabs.length; tabIndex += 1) {
+    const tab = state.tabs[tabIndex]
+    if (resolveTabSessions(state, tab.id).includes(sessionId)) {
+      return agentRowFor(state, runtimes, now, tab, tabIndex, sessionId)
+    }
+  }
+  return null
+}
+
 /**
  * Build the preview rows from a workspace snapshot.
  *
- * Module-level and snapshot-in / rows-out so the SAME derivation runs in the
- * render memo and again inside the close loop's per-kill revalidation. The
- * revalidation previously re-read only `sessions` + liveness, which meant it
- * could not see the two criteria that actually put a row in the list — its age
- * and its project. An agent that received a message after the preview and went
- * idle again passed a liveness check while no longer being an OLD agent.
+ * Module-level and snapshot-in / rows-out so the SAME row derivation runs in the
+ * render memo and again at the close loop's per-kill revalidation (which builds
+ * just its target's row through buildAgentRow). The revalidation previously
+ * re-read only `sessions` + liveness, which meant it could not see the two
+ * criteria that actually put a row in the list — its age and its project. An
+ * agent that received a message after the preview and went idle again passed a
+ * liveness check while no longer being an OLD agent.
  *
- * Exported for its colocated test; still the one derivation the render memo
- * and the close loop share.
+ * Exported for its colocated test.
  */
 export function buildAgentRows(
   state: Workspace['state'],
@@ -79,36 +149,8 @@ export function buildAgentRows(
     for (const sessionId of resolveTabSessions(state, tab.id)) {
       if (seen.has(sessionId)) continue
       seen.add(sessionId)
-
-      const meta = state.sessions[sessionId]
-      if (!meta) continue
-      const kind = meta.kind ?? DEFAULT_PROVIDER
-
-      const runtime = runtimes[sessionId]
-      // Every session kind can be old (#865). Agents age by transcript
-      // timestamps; shells by their last foreground change (a command
-      // starting/finishing or a cd), which is the only activity a shell has.
-      const lastActiveAt = runtime
-        ? kind === 'terminal'
-          ? runtime.terminalForeground?.changedAt ?? null
-          : extractLatestEntryTs(runtime.entries) ?? runtime.turnStartedAt ?? null
-        : null
-
-      rows.push({
-        sessionId,
-        tabId: tab.id,
-        tabTitle: tab.title,
-        tabIndex,
-        kind,
-        cwd: meta.cwd,
-        cwdBase: cwdBasename(meta.cwd),
-        // Shared with every other close path (expansion, the confirmation
-        // dialog, Kill Buried). Three private copies of "is this busy" is how a
-        // preview and a confirmation come to disagree about the same session.
-        isLive: isSessionLiveForClose(runtimes, sessionId),
-        lastActiveAt,
-        ageMs: lastActiveAt == null ? null : Math.max(0, now - lastActiveAt),
-      })
+      const row = agentRowFor(state, runtimes, now, tab, tabIndex, sessionId)
+      if (row) rows.push(row)
     }
   })
 
@@ -131,7 +173,7 @@ function filterEligibleRows(
   if (criteria.thresholdMs == null) return []
   const thresholdMs = criteria.thresholdMs
   return rows.filter(row => {
-    if (row.ageMs == null || row.ageMs < thresholdMs) return false
+    if (row.ageMs == null || !Number.isFinite(row.ageMs) || row.ageMs < thresholdMs) return false
     if (!criteria.includeLive && row.isLive) return false
     return true
   })
@@ -166,17 +208,56 @@ function absoluteTime(ts: number): string {
   })
 }
 
-// Same activity source as AgentActivityModal: transcript timestamps are the
-// only durable provider-agnostic signal the renderer already has for both
-// Claude and Codex. Main tracks PTY activity too, but the workspace command
-// needs to preview and filter before it asks main to kill anything; keeping the
-// derivation local makes the modal deterministic from the state it displays.
+// Cleanup uses renderer evidence from both durable history and live work. PTY
+// screen receipt alone is not activity: cursor redraws must not make an idle
+// agent look new. Unknown/bootstrap history remains ineligible until observed.
+//
+// WHY this is its own, deliberately conservative rule instead of a shared
+// "last active" helper (#886 review m1): #915 documents that the TLDR footer
+// (features/tldr/freshness.ts) and Agent Management (agentManagementMcp.ts)
+// already derive last-active differently, and unifying them changes Agent
+// Management's MCP output for existing callers — #915 owns that decision, so
+// this PR does not pre-empt it. This rule answers a narrower question, "is it
+// SAFE to kill this as old?", so it takes the newest of every channel
+// (transcript tail, ingest watermark, submission, phase, semantic turns) and
+// refuses to age incomplete history. It can call an agent recent that Agent
+// Activity (AgentActivityModal: last entry ?? turnStartedAt) shows as "8h ago";
+// for a destructive filter that is the right direction to be wrong in. When
+// #915 lands one helper, this should become its most conservative consumer,
+// not be loosened to match the display surfaces.
+function latestAgentActivityAt(runtime: Workspace['runtimes'][string]): number | null {
+  // A replayed transcript is historical evidence, not proof that this live
+  // agent has been idle since then. Submission/phase clocks survive the gap
+  // before the provider commits new history; use the newest evidence, never
+  // `oldTranscript ?? newerTurn`. An in-flight bootstrap cannot prove age.
+  if (runtime.bootstrapping || runtime.processStatus === 'spawning' || runtime.transcriptStatus === 'loading') return null
+  const turns = [runtime.semantic.currentTurn, ...runtime.semantic.history]
+  const timestamps = [
+    extractLatestEntryTs(runtime.entries), runtime.lastJsonlEntryAt,
+    runtime.turnStartedAt, runtime.phaseChangedAt, runtime.submittedAt,
+    ...turns.flatMap(turn => turn ? [turn.startedAt, turn.endedAt] : []),
+  ].filter((value): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0)
+  return timestamps.length ? Math.max(...timestamps) : null
+}
+
+/**
+ * Newest valid transcript timestamp: scan from the end, stop at the first one.
+ *
+ * WHY not a full max over every entry (the first #886 version, review m2):
+ * this runs inside the preview memo, which recomputes on every streaming
+ * runtime update while the modal is open, for every session, and again at each
+ * kill. freshness.ts made the same trade for the TLDR footer. The O(n) scan
+ * bought nothing for safety: freshly ingested records also advance
+ * `lastJsonlEntryAt`, and latestAgentActivityAt takes the max of this with that
+ * watermark and the submission/phase/turn clocks, so a newer record that lands
+ * out of order still makes the agent recent.
+ */
 function extractLatestEntryTs(entries: Entry[]): number | null {
   for (let i = entries.length - 1; i >= 0; i--) {
     const raw = (entries[i] as { timestamp?: unknown }).timestamp
     if (typeof raw !== 'string') continue
     const parsed = Date.parse(raw)
-    if (!Number.isNaN(parsed)) return parsed
+    if (Number.isFinite(parsed)) return parsed
   }
   return null
 }
@@ -304,19 +385,24 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
   const workspaceRef = useRef(workspace)
   workspaceRef.current = workspace
 
-  /** Re-run the FULL eligibility predicate against live state, in the shape the
-   *  grant comparison expects. Not just liveness: age and project scope are
-   *  what put a row in the list, so they are what a stale grant must be
-   *  re-checked against. */
-  const buildCloseTargets = useCallback((): CloseTargetSnapshot[] => {
-    const ws = workspaceRef.current
-    const rows = buildAgentRows(ws.state, ws.runtimes, Date.now())
-    const eligible = filterEligibleRows(rows, { thresholdMs, includeLive })
+  /** Re-run the FULL eligibility predicate for ONE session against the given
+   *  state, in the shape the grant comparison expects. Not just liveness: age
+   *  and project scope are what put a row in the list, so they are what a
+   *  stale grant must be re-checked against. One row rather than the whole
+   *  workspace, because each kill needs only its own target (see buildAgentRow). */
+  const currentCloseTarget = useCallback((
+    state: Workspace['state'],
+    runtimes: Workspace['runtimes'],
+    sessionId: SessionId,
+  ): CloseTargetSnapshot[] => {
+    const row = buildAgentRow(state, runtimes, Date.now(), sessionId)
+    if (!row) return []
+    const eligible = filterEligibleRows([row], { thresholdMs, includeLive })
     return filterMatchingRows(eligible, { scopeMode, selectedProjects: selectedProjectSet })
-      .map(row => ({
-        sessionId: row.sessionId,
-        title: `${row.tabTitle} · ${row.cwdBase}`,
-        live: row.isLive,
+      .map(match => ({
+        sessionId: match.sessionId,
+        title: `${match.title} · ${match.cwdBase}`,
+        live: match.isLive,
       }))
   }, [thresholdMs, includeLive, scopeMode, selectedProjectSet])
 
@@ -332,12 +418,27 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
       // THE GRANT. What the user saw and approved, captured at click time.
       const granted = matchingRows.map(row => ({
         sessionId: row.sessionId,
-        title: `${row.tabTitle} · ${row.cwdBase}`,
+        title: `${row.title} · ${row.cwdBase}`,
         live: row.isLive,
       }))
 
-      const outcome: PartialCloseOutcome = { closed: [], failed: [], skipped: [] }
+      const outcome: PartialCloseOutcome = { closed: [], failed: [], kept: [], skipped: [] }
 
+      // Close linked descendants first. A parent whose child is still present —
+      // excluded from the preview, woke up, or failed to close — is KEPT by
+      // closeSession's linked-child verdict and reported in its own bucket
+      // (onRefused 'linked-session-open'). This preserves the lifecycle edge
+      // without implicitly granting the parent permission to kill more sessions.
+      const sessions = workspaceRef.current.state.sessions
+      const depth = (id: SessionId): number => {
+        const seen = new Set<SessionId>()
+        while (sessions[id]?.linkedParentId && !seen.has(id)) {
+          seen.add(id)
+          id = sessions[id].linkedParentId!
+        }
+        return seen.size
+      }
+      granted.sort((a, b) => depth(b.sessionId) - depth(a.sessionId))
       for (const target of granted) {
         // RE-ENUMERATE BEFORE EVERY KILL, not once after confirmation.
         //
@@ -349,7 +450,8 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
         // Re-reading per iteration is affordable because the loop is already
         // sequential (closeSession mutates the tree, so concurrency would make
         // each call read a stale snapshot) and bulk cleanup is rare.
-        const current = buildCloseTargets()
+        const ws = workspaceRef.current
+        const current = currentCloseTarget(ws.state, ws.runtimes, target.sessionId)
         const stillGranted = narrowGrantToCurrent([target], current)
         if (stillGranted.length === 0) {
           outcome.skipped.push(target.sessionId)
@@ -366,11 +468,25 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
           // Dispatch-heavy workspace are overwhelmingly detached rows. Capturing one
           // entry each would flush the user's real close history out of the 10-entry
           // stack, so ⌘⇧T would resurrect something they just deliberately cleared.
-          await workspaceRef.current.closeSession(target.sessionId, {
+          // onRefused: closeSession's boolean cannot say WHY it refused, and a
+          // parent kept for its still-open linked child is not a "changed" skip
+          // (#886 review m7). Holder object for the same TypeScript narrowing
+          // reason as elsewhere: a `let` would stay typed as its initial value.
+          const refusal: { reason?: CloseRefusalReason } = {}
+          const closed = await ws.closeSession(target.sessionId, {
             preConfirmed: true,
             captureUndo: false,
+            // Synchronous, and built for this one session only: it runs at the
+            // kill boundary with the action's live state (see onlyIf).
+            onlyIf: (state, runtimes) => {
+              const [row] = currentCloseTarget(state, runtimes, target.sessionId)
+              return row !== undefined && (!row.live || target.live)
+            },
+            onRefused: reason => { refusal.reason = reason },
           })
-          outcome.closed.push(target.sessionId)
+          if (closed) outcome.closed.push(target.sessionId)
+          else if (refusal.reason === 'linked-session-open') outcome.kept.push(target.sessionId)
+          else outcome.skipped.push(target.sessionId)
         } catch (error) {
           // One backend refusing must not abandon the rest of the batch — the
           // user asked for twelve agents closed, and nine succeeding is a
@@ -380,12 +496,12 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
       }
 
       const report = describePartialClose(outcome)
-      if (report) showToast(report, 6000)
+      showToast(report ?? `Closed ${outcome.closed.length} session${outcome.closed.length === 1 ? '' : 's'}.`, 6000)
       onClose()
     } finally {
       setClosing(false)
     }
-  }, [buildCloseTargets, closing, matchingRows, onClose, showToast])
+  }, [currentCloseTarget, closing, matchingRows, onClose, showToast])
 
   return (
     <Dialog
@@ -604,7 +720,7 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className="text-[12px] text-ink truncate">
-                        {row.cwdBase}
+                        {row.title}
                       </div>
                       <div className="mt-0.5 text-[10px] text-muted truncate">
                         {tabIndexLabel(row.tabIndex)} · {row.tabTitle} · {row.cwd}
