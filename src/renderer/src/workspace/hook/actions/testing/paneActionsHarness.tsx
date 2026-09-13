@@ -7,6 +7,7 @@ import type { SessionActions } from '@renderer/workspace/hook/actions/session'
 import { usePaneActions } from '@renderer/workspace/hook/actions/pane'
 import { useUndoCloseAction } from '@renderer/workspace/hook/actions/undoClose'
 import type {
+  WorkspaceSetReaderMode,
   WorkspaceSetRuntimes,
   WorkspaceSetSpotlight,
   WorkspaceSetState,
@@ -128,6 +129,7 @@ export function mountPaneActions(
       (() => undefined) as WorkspaceSetRuntimes,
       (() => undefined) as WorkspaceSetSpotlight,
       (() => undefined) as WorkspaceSetTileTabs,
+      (() => undefined) as WorkspaceSetReaderMode,
       refs,
       showToast,
       vi.fn(),
@@ -140,7 +142,19 @@ export function mountPaneActions(
   }
 
   const mounted = render(<Harness />)
-  return { actions, mounted, spawn, showToast, refs, sessionActions, getState: writer.getState }
+  // setState is exposed so a spec can apply a concurrent workspace change
+  // (a link created mid-cascade, a tab merge, a lane removal) through the SAME
+  // synchronous writer the actions use, keeping refs and getState coherent.
+  return {
+    actions,
+    mounted,
+    spawn,
+    showToast,
+    refs,
+    sessionActions,
+    getState: writer.getState,
+    setState: writer.setState,
+  }
 }
 
 export function mountUndoCloseAction(

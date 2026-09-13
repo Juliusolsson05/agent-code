@@ -72,6 +72,7 @@ function renderPaneActionsHarness(
     setRuntimes,
     vi.fn(),
     vi.fn(),
+    vi.fn(),
     refs,
     vi.fn(),
     vi.fn(),
@@ -150,6 +151,7 @@ describe('pane recovery ownership', () => {
       state,
       setState,
       setRuntimes,
+      vi.fn(),
       vi.fn(),
       vi.fn(),
       refs,
@@ -248,7 +250,10 @@ describe('pane recovery ownership', () => {
     const undoEntry = harness.refs.undoStackRef.current.pop()
     expect(undoEntry?.type).toBe('tab')
     if (undoEntry?.type === 'tab') {
+      // sessionId is the lineage anchor undo publishes when this row is
+      // restored, so older entries naming it keep resolving (#886 finding 4).
       expect(undoEntry.detachedEntries).toEqual([{
+        sessionId: detachedId,
         meta: state.sessions[detachedId],
         detachedAt: 123,
       }])

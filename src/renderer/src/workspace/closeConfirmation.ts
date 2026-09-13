@@ -44,8 +44,14 @@ export type CloseConfirmationRequest =
       /** One-line summary naming the exact count. */
       summary: string
       /** Root rows also own a project. The choice must spell out both scopes;
-       * approving the tab list must never be inferred from an agent close. */
-      agentOnly?: { title: string; targets: readonly CloseTargetSnapshot[] }
+       * approving the tab list must never be inferred from an agent close.
+       * `noun` follows the root's kind: since #865/#872 a terminal can be the
+       * root, and "Close Agent ends zsh" names the wrong thing. */
+      agentOnly?: {
+        title: string
+        targets: readonly CloseTargetSnapshot[]
+        noun: 'agent' | 'terminal'
+      }
     }
 
 /** The count-and-liveness sentence, shared by the judged and forced paths so

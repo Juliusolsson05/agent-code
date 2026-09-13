@@ -9,6 +9,11 @@ import {
 } from '@renderer/workspace/closeConfirmation'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type { CloseExpansionRuntimes, CloseTargetSnapshot } from '@renderer/workspace/closeConfirmation'
+import {
+  clearRemovedTabTakeovers,
+  dispatchModeAfterSessionRemovals,
+  workspaceWithoutTab,
+} from '@renderer/workspace/hook/actions/tabRemoval'
 import { requestCloseConfirmation, requestRootCloseConfirmation } from '@renderer/workspace/closeConfirmationBroker'
 import { sessionDisplayTitle } from '@renderer/workspace/sessionDisplayTitle'
 import { useCallback, useRef } from 'react'
@@ -40,7 +45,7 @@ import {
 } from '@renderer/workspace/tile-tree/treeOps'
 import { findBestRemainingFocus, findDirectionalNeighbor } from '@renderer/workspace/tile-tree/geometry'
 import { findParentSplitInfo } from '@renderer/lib/undoClose'
-import type { ClosedTabDetachedEntry } from '@renderer/lib/undoClose'
+import type { ClosedTabDetachedEntry, UndoCloseStack } from '@renderer/lib/undoClose'
 import { titleFromCwd } from '@renderer/workspace/layout/helpers'
 import {
   buildVisibleDispatchRows,
@@ -63,6 +68,7 @@ import { forgetDebugTrace } from '@renderer/features/debug/renderTrace'
 import { clearLiveEntryWindowSession } from '@renderer/session-runtime/liveEntryWindow'
 
 import type {
+  WorkspaceSetReaderMode,
   WorkspaceSetRuntimes,
   WorkspaceSetSpotlight,
   WorkspaceSetState,
@@ -99,13 +105,49 @@ function forgetClosedSessionDebugState(refs: WorkspaceRefs, sessionId: SessionId
 }
 
 /**
- * Preconfirmation is a grant for a SESSION close, never implicit tab intent.
- * Cascade children may reuse the parent's expanded grant. Bulk cleanup pairs
- * preConfirmed with onlyIf, which narrows the operation to one still-eligible
- * session and refuses linked descendants. Human row/keybinding closes omit
- * it and share the same scope-choice and working-session confirmation path.
- * Automation uses silentIfSoleTarget / requireConfirmation instead: permission
- * to name a session is not permission to kill user-created linked children.
+ * Why an approved close stopped before its kill request.
+ *
+ *   - 'gone': no longer a grid leaf or Dispatch row (closed elsewhere, or
+ *     buried — Kill Buried owns that irreversible act, closeSession never does).
+ *   - 'linked-session-open': a session still names it as `linkedParentId`.
+ *     Killing the parent would orphan that child, so the parent is KEPT. This
+ *     covers a child that was never approved (bulk cleanup, or one linked after
+ *     the dialog), one that changed and was refused, and one whose kill failed.
+ *   - 'changed': it started working, moved project, or no longer satisfies the
+ *     caller's `onlyIf` since it was approved.
+ */
+export type CloseRefusalReason = 'gone' | 'linked-session-open' | 'changed'
+
+/**
+ * The ways to skip `closeSession`'s own confirmation.
+ *
+ * `preConfirmed` is an ASSERTION with a precise meaning: the caller already put
+ * the full expanded target set in front of the user, received an explicit
+ * approval, and keeps that grant honest at the kill boundary. It grants a
+ * SESSION close, never tab intent — only the human root dialog can choose
+ * Close Tab. It is deliberately not a convenience for "this close feels safe";
+ * omitting it is the gated default.
+ *
+ * May assert it:
+ *   - bulk cleanup (Close Old Agents), and only together with `onlyIf`, which
+ *     narrows the grant to the one previewed session and is re-run
+ *     synchronously immediately before that session's kill request.
+ *
+ * No longer asserts it:
+ *   - linked cascade children. They used to be re-entered with a bare
+ *     `preConfirmed: true`, a reusable boolean that let a child which started
+ *     working during an earlier sibling's awaited kill die anyway (#886 review
+ *     finding 2). They are now closed inside the parent's `CloseOperation`,
+ *     which carries the exact approved ids and the activity the user saw.
+ *
+ * Must NOT assert it:
+ *   - the Agent Activity modal's Close button (one button in a list, no
+ *     preview of the cascade it triggers), Dispatch row buttons and keyboard
+ *     closes — they omit it and get the scope choice / working-session gate;
+ *   - automation (orchestration MCP, Agent Management MCP, the operator
+ *     `agents.close` capability): permission to NAME a session is not
+ *     permission to kill user-created linked children. They use
+ *     `silentIfSoleTarget` / `requireConfirmation` below.
  */
 export type CloseSessionOptions = {
   preConfirmed?: boolean
@@ -114,6 +156,17 @@ export type CloseSessionOptions = {
    * preview. This callback is intentionally synchronous: no await may separate
    * its verdict from dispatching the ownership-checked kill request. */
   onlyIf?: (state: WorkspaceState, runtimes: Record<SessionId, SessionRuntime>) => boolean
+  /**
+   * Receive the reason an approved close was refused, instead of a toast.
+   *
+   * For callers that report outcomes themselves: Close Old Agents buckets a
+   * parent kept for a still-open linked child separately from one that changed
+   * (#886 review m7), and closeSession's boolean cannot carry that. When this is
+   * provided closeSession does not toast the refusal. It is not called for a
+   * declined dialog (the user's own choice) or a thrown kill failure (that
+   * still rejects, so the caller's `failed` bucket keeps working).
+   */
+  onRefused?: (reason: CloseRefusalReason) => void
   /**
    * Skip pushing an Undo Close entry for this close. Defaults to capturing.
    *
@@ -126,13 +179,16 @@ export type CloseSessionOptions = {
    * minutes ago. ⌘⇧T would then respawn an agent they had deliberately purged
    * instead of restoring the thing they wanted back.
    *
-   * It also removes a dangling-reference hazard on cascades. `closeSession`
-   * runs `closeLinkedChildren` BEFORE pushing the parent's entry, so a parent
-   * with two children left three entries. Undo restores the parent under a NEW
-   * session id, and the children's entries still carry the OLD `linkedParentId`
-   * — so they came back un-nested, stopped cascading, and wrote a dead parent
-   * id into workspace.json that nothing scrubs. Not capturing cascade children
-   * means the only entry is the parent's, which is the unit the user closed.
+   * It also removes a dangling-reference hazard on cascades. A close operation
+   * ends linked children BEFORE recording the parent's entry, so capturing each
+   * child would leave a parent with two children as three entries. Undo
+   * restores the parent under a NEW session id, and the children's entries
+   * carried the OLD `linkedParentId` — so they came back un-nested, stopped
+   * cascading, and wrote a dead parent id into workspace.json that nothing
+   * scrubs. Only the operation's named session records an entry, which is the
+   * unit the user closed; when the operation empties the project, its closed
+   * members ride along as rows of that one tab entry, and tab undo remaps their
+   * parent pointers (see recordCloseUndo and UndoLineage).
    */
   captureUndo?: boolean
   /**
@@ -148,9 +204,14 @@ export type CloseSessionOptions = {
    * orchestration child; that agent has no orchestration ownership fields, so
    * only the expanded close gate can explain the additional impact.
    *
-   * A sole grid leaf used to take the entire project with it too (#886).
-   * Session-only scope now promotes a survivor instead. Automation never gets
-   * the human-only Close Tab choice and cannot turn this flag into tab intent.
+   * History: a tab's SOLE grid leaf used to take every detached session in
+   * that tab with it (the caller's siblings, the user's parked agents), so it
+   * was the second shape this flag had to confirm. Since #886 a close is
+   * session-scoped and promotes the next Dispatch row into the grid instead,
+   * so a sole root with detached siblings now expands to exactly itself and
+   * closes SILENTLY, promoting a sibling. That is a deliberate automation
+   * behavior change (listed in PR #887). Automation never gets the human-only
+   * Close Tab choice and cannot turn this flag into tab intent.
    */
   silentIfSoleTarget?: { headline: string }
   /**
@@ -174,7 +235,6 @@ export type CloseSessionOptions = {
 type DetachedTabChildren = {
   records: DetachedSessionRecord[]
   ids: SessionId[]
-  entries: ClosedTabDetachedEntry[]
 }
 
 function detachedTabChildren(state: WorkspaceState, tabId: string): DetachedTabChildren {
@@ -189,23 +249,322 @@ function detachedTabChildren(state: WorkspaceState, tabId: string): DetachedTabC
   return {
     records,
     ids: records.map(entry => entry.sessionId),
-    entries: records.flatMap(entry => {
-      const meta = state.sessions[entry.sessionId]
-      return meta ? [{ meta, detachedAt: entry.detachedAt }] : []
-    }),
   }
 }
 
-/** The next displayed Dispatch row becomes the grid root. Object insertion
+/**
+ * The next displayed Dispatch row becomes the grid root. Object insertion
  * order is not row order after persistence/undo; reuse the list's ordering so
- * closing the first agent does not shuffle the remaining project. */
+ * closing the first agent does not shuffle the remaining project.
+ *
+ * `excluded` must be EVERY session the current close operation has approved
+ * and not yet finished — not just the session whose leaf is being removed.
+ * #886 review finding 3: parent P (detached) with linked child C as the tab's
+ * sole grid leaf. Closing P closes C first; C's promotion used to exclude only
+ * C, so it promoted P into the root, and P's own close then deleted P's
+ * metadata while the tab's root and focus still named it — a tab rooted at a
+ * deleted session. A session the operation is about to kill can never be the
+ * survivor that keeps a project alive.
+ */
 function detachedRootReplacement(
   state: WorkspaceState,
   tabId: TabId,
-  closing: readonly SessionId[],
+  excluded: ReadonlySet<SessionId>,
 ): DetachedSessionRecord | undefined {
-  const id = detachedDispatchSessionIdsForTab(state, tabId).find(id => !closing.includes(id))
+  const id = detachedDispatchSessionIdsForTab(state, tabId).find(id => !excluded.has(id))
   return id === undefined ? undefined : state.detachedSessions[id]
+}
+
+/**
+ * Where a session lives right now. Buried sessions resolve to null on purpose:
+ * closeSession never ends them (Kill Buried owns that irreversible act).
+ */
+type SessionPlacement =
+  | { kind: 'grid'; tab: Tab; tabIndex: number }
+  | { kind: 'detached'; record: DetachedSessionRecord }
+
+function sessionPlacement(state: WorkspaceState, sessionId: SessionId): SessionPlacement | null {
+  const tabIndex = state.tabs.findIndex(tab => collectLeaves(tab.root).includes(sessionId))
+  if (tabIndex >= 0) return { kind: 'grid', tab: state.tabs[tabIndex], tabIndex }
+  const record = state.detachedSessions[sessionId]
+  return record ? { kind: 'detached', record } : null
+}
+
+/** A session's project: the tab owning its grid leaf, or its Dispatch row's
+ *  projectTabId. The approved plan records this so a session moved to another
+ *  project under the dialog (attach, merge) is refused rather than killed. */
+function placementProjectTabId(placement: SessionPlacement | null): TabId | null {
+  if (!placement) return null
+  return placement.kind === 'grid' ? placement.tab.id : placement.record.projectTabId
+}
+
+function linkedChildIds(state: WorkspaceState, parentId: SessionId): SessionId[] {
+  // A malformed self-link is not a child: a session cannot orphan itself, and
+  // counting it would make that session permanently uncloseable.
+  return Object.entries(state.sessions)
+    .filter(([id, meta]) => id !== parentId && meta.linkedParentId === parentId)
+    .map(([id]) => id)
+}
+
+/** Distance to the top of a linked chain, cycle-safe. Deeper sessions close
+ *  first so a tab-scope operation reaches children before their parents. */
+function linkedDepth(state: WorkspaceState, sessionId: SessionId): number {
+  const seen = new Set<SessionId>()
+  let current = sessionId
+  while (state.sessions[current]?.linkedParentId && !seen.has(current)) {
+    seen.add(current)
+    current = state.sessions[current].linkedParentId!
+  }
+  return seen.size
+}
+
+function closeNoun(meta: SessionMeta | undefined): 'agent' | 'terminal' {
+  return meta?.kind === 'terminal' ? 'terminal' : 'agent'
+}
+
+function sameTargetIds(a: readonly CloseTargetSnapshot[], b: readonly CloseTargetSnapshot[]): boolean {
+  if (a.length !== b.length) return false
+  const ids = new Set(b.map(target => target.sessionId))
+  return a.every(target => ids.has(target.sessionId))
+}
+
+type ApprovedCloseTarget = {
+  /** Activity the approver saw. Idle then + working now = refused. */
+  live: boolean
+  /** Project at approval; see placementProjectTabId. */
+  projectTabId: TabId | null
+  /** Captured at approval for the operation's Undo Close entry: by the time the
+   *  top-level target records undo, each member's own close has already deleted
+   *  its metadata and Dispatch record from state. */
+  meta: SessionMeta | undefined
+  record: DetachedSessionRecord | undefined
+}
+
+/**
+ * One approved close, carried through every kill it performs.
+ *
+ * WHY an explicit operation instead of re-entering closeSession per child with
+ * `preConfirmed: true` (what linked cascades used to do): that boolean was a
+ * grant with no memory. #886 review finding 2 — approve closing P with idle
+ * linked children C1 and C2; hold C1's backend kill pending; submit work to C2.
+ * When C1 resolved, C2 was killed on the strength of a dialog that showed it
+ * idle, and P died too. A child linked to P after the dialog survived while P
+ * was killed. The same gap existed on main; bulk cleanup alone was protected by
+ * its `onlyIf`.
+ *
+ * The invariants this carries:
+ *   - `approved` is exactly what the user (or the policy) authorized, with the
+ *     activity and project each session had then. Nothing outside it is ever
+ *     killed; each member is re-judged against it synchronously right before
+ *     its own kill request (`closeRefusal`), using the same liveness rule as
+ *     bulk cleanup and the caller's `onlyIf` when there is one.
+ *   - Linked children close before their parent, and a parent is KEPT while any
+ *     linked child still exists afterwards — refused, failed, never approved,
+ *     or linked after the snapshot. Never orphan a lifecycle-bound child.
+ *   - `pending` (approved, not yet closed or refused) is excluded from root
+ *     promotion, and every member re-resolves its placement after its children
+ *     closed, so the operation always commits a surviving root that is not
+ *     about to die, or removes the emptied tab (finding 3).
+ *   - `visited` makes traversal cycle-safe: a malformed parent loop leaves both
+ *     sides kept instead of recursing forever.
+ */
+type CloseOperation = {
+  /** The session the caller named. Never re-entered as someone's child. */
+  rootId: SessionId
+  approved: ReadonlyMap<SessionId, ApprovedCloseTarget>
+  admit?: CloseSessionOptions['onlyIf']
+  visited: Set<SessionId>
+  pending: Set<SessionId>
+  closed: SessionId[]
+  refused: Map<SessionId, CloseRefusalReason>
+  failed: Set<SessionId>
+  /** Tabs this operation emptied, so a member still filed under one (finding
+   *  3's detached parent) can record a restorable tab entry instead of a
+   *  detached entry anchored on a tab that no longer exists. */
+  removedTabs: Map<TabId, { tab: Tab; tabIndex: number }>
+  startedAt: number
+}
+
+function beginCloseOperation(
+  state: WorkspaceState,
+  rootId: SessionId,
+  approvedTargets: readonly CloseTargetSnapshot[],
+  admit: CloseSessionOptions['onlyIf'],
+): CloseOperation {
+  const approved = new Map<SessionId, ApprovedCloseTarget>()
+  for (const target of approvedTargets) {
+    approved.set(target.sessionId, {
+      live: target.live,
+      projectTabId: placementProjectTabId(sessionPlacement(state, target.sessionId)),
+      meta: state.sessions[target.sessionId],
+      record: state.detachedSessions[target.sessionId],
+    })
+  }
+  return {
+    rootId,
+    approved,
+    admit,
+    visited: new Set(),
+    pending: new Set(approved.keys()),
+    closed: [],
+    refused: new Map(),
+    failed: new Set(),
+    removedTabs: new Map(),
+    startedAt: Date.now(),
+  }
+}
+
+/**
+ * The kill-boundary verdict. MUST stay synchronous and be called with no await
+ * between it and `killSessionBackendIfOwned`: an await there reopens exactly
+ * the window finding 2 exploited.
+ */
+function closeRefusal(
+  state: WorkspaceState,
+  runtimes: Record<SessionId, SessionRuntime>,
+  operation: CloseOperation,
+  sessionId: SessionId,
+): CloseRefusalReason | null {
+  const placement = sessionPlacement(state, sessionId)
+  if (!placement || !state.sessions[sessionId]) return 'gone'
+  if (linkedChildIds(state, sessionId).length > 0) return 'linked-session-open'
+  const approved = operation.approved.get(sessionId)
+  if (!approved) return 'changed'
+  if (placementProjectTabId(placement) !== approved.projectTabId) return 'changed'
+  if (isSessionLiveForClose(runtimes, sessionId) && !approved.live) return 'changed'
+  if (operation.admit && !operation.admit(state, runtimes)) return 'changed'
+  return null
+}
+
+/** Members this operation closed, as tab-undo rows. External linked children
+ *  (a grid leaf attached in another tab) have no detachedAt and sort after the
+ *  project's own rows — the same place createLinkedAgent files a new child. */
+function operationDetachedEntries(operation: CloseOperation, exceptId: SessionId): ClosedTabDetachedEntry[] {
+  return operation.closed.flatMap(id => {
+    const approved = operation.approved.get(id)
+    if (id === exceptId || !approved?.meta) return []
+    return [{
+      sessionId: id,
+      meta: approved.meta,
+      detachedAt: approved.record?.detachedAt ?? operation.startedAt,
+    }]
+  })
+}
+
+type CommittedClose =
+  | { kind: 'gone' }
+  | { kind: 'detached'; record: DetachedSessionRecord }
+  | { kind: 'pane'; tabId: TabId; parentInfo: NonNullable<ReturnType<typeof findParentSplitInfo>> }
+  | { kind: 'promoted'; tab: Tab; tabIndex: number; survivor: DetachedSessionRecord }
+  | { kind: 'tab-removed'; tab: Tab; tabIndex: number }
+
+const UNDO_HINT = ' — ⌘⇧T Undo Close; repeat for earlier closes'
+
+/**
+ * Record the Undo Close entry for what ACTUALLY committed, and return its toast.
+ *
+ * Runs after the kill and the state commit, not before: an entry pushed before
+ * a kill that then throws described a close that never happened, and undo would
+ * respawn a duplicate of a session that is still running.
+ */
+function recordCloseUndo(
+  stack: UndoCloseStack,
+  committed: CommittedClose,
+  targetId: SessionId,
+  meta: SessionMeta | undefined,
+  operation: CloseOperation,
+  capture: boolean,
+): string | null {
+  const kindLabel = meta?.kind ?? DEFAULT_PROVIDER
+  const cwdBase = meta?.cwd.split('/').filter(Boolean).pop() ?? meta?.cwd ?? 'session'
+  const closedAt = Date.now()
+  const detachedEntries = () => {
+    const entries = operationDetachedEntries(operation, targetId)
+    return entries.length > 0 ? entries : undefined
+  }
+  if (committed.kind === 'detached') {
+    const removedTab = operation.removedTabs.get(committed.record.projectTabId)
+    if (meta && capture && removedTab) {
+      // Finding 3's shape: this operation already emptied the row's project
+      // (its child was the sole grid leaf). A detached entry would be anchored
+      // on a tab that no longer exists and be discarded as stale, so record the
+      // project itself, rooted at the session the user actually closed, with
+      // the other closed members as its rows.
+      stack.push({
+        type: 'tab',
+        closedAt,
+        tab: {
+          ...removedTab.tab,
+          root: { type: 'leaf', sessionId: targetId },
+          focusedSessionId: targetId,
+        },
+        tabIndex: removedTab.tabIndex,
+        sessionMetas: { [targetId]: meta },
+        detachedEntries: detachedEntries(),
+      })
+      return `Closed “${removedTab.tab.title}”${UNDO_HINT}`
+    }
+    // WHY a detached close captures undo history too:
+    //
+    // Closing a Dispatch TERMINAL (#671) stops the attach PTY but leaves the
+    // tmux session alive; once its row is gone from workspace.json the next
+    // launch's tmux reconcile classifies it as an orphan and kills it
+    // (src/main/tmux/tmuxRecovery.ts). This entry is the only way back to that
+    // scrollback. The record is stored verbatim so `detachedAt` — the only
+    // thing ordering rows inside a project group — survives, and undo puts the
+    // row back where it was rather than at the bottom of the list.
+    if (meta && capture) {
+      stack.push({ type: 'detached', closedAt, sessionMeta: meta, record: committed.record })
+      return `Closed detached ${kindLabel} session (${cwdBase})${UNDO_HINT}`
+    }
+    // The undo hint is conditional on having actually captured an entry:
+    // promising ⌘⇧T when nothing was captured would advertise a recovery that
+    // cannot happen.
+    return `Closed detached ${kindLabel} session (${cwdBase})`
+  }
+  if (!meta || !capture) return null
+  if (committed.kind === 'pane') {
+    stack.push({
+      type: 'pane',
+      closedAt,
+      tabId: committed.tabId,
+      sessionId: targetId,
+      sessionMeta: meta,
+      direction: committed.parentInfo.direction,
+      ratio: committed.parentInfo.ratio,
+      side: committed.parentInfo.side,
+      siblingLeafId: committed.parentInfo.siblingLeafId,
+    })
+    return `Closed ${kindLabel} pane (${cwdBase})${UNDO_HINT}`
+  }
+  if (committed.kind === 'promoted') {
+    // The project survives. Undo restores this session within that project and
+    // never respawns the promoted survivor or duplicates the whole tab.
+    stack.push({
+      type: 'detached',
+      closedAt,
+      sessionMeta: meta,
+      record: detachedDispatchRecord(targetId, committed.tab, committed.tabIndex),
+      replacedRoot: committed.survivor,
+    })
+    return `Closed ${closeNoun(meta)}${UNDO_HINT}`
+  }
+  if (committed.kind === 'tab-removed') {
+    // Every other member this operation closed rides along as a row: a Close
+    // Tab, or a Close Agent whose linked children were the project's last rows,
+    // is one decision and one undo unit. Members closed in OTHER shapes (a pane
+    // or detached parent's children) stay unrecoverable, as they always were.
+    stack.push({
+      type: 'tab',
+      closedAt,
+      tab: { ...committed.tab },
+      tabIndex: committed.tabIndex,
+      sessionMetas: { [targetId]: meta },
+      detachedEntries: detachedEntries(),
+    })
+    return `Closed “${committed.tab.title}”${UNDO_HINT}`
+  }
+  return null
 }
 
 /**
@@ -235,18 +594,36 @@ function paneCloseTargets(
   )
 }
 
-/** Capture the command's explicit target once. closeSession carries that ID
- * through the dialog rather than rereading whichever row gains focus later. */
-function resolveFocusedCloseTarget(state: WorkspaceState): {
-  targetId: SessionId | undefined
-} {
-  const dispatchTargetId = state.dispatchMode
-    ? commandTargetSessionIdForState(state)
-    : null
-  const targetId = dispatchTargetId
-    ?? commandTargetSessionIdForState(state)
-    ?? state.tabs.find(tab => tab.id === state.activeTabId)?.focusedSessionId
-  return { targetId }
+/**
+ * The session Close Focused Session would end, captured ONCE. closeSession
+ * carries that id through any dialog rather than rereading whichever row
+ * gains focus later.
+ *
+ * WHY Dispatch Mode never falls back to grid focus (#886 review finding 1,
+ * a blocker): `Tab.focusedSessionId` is grid-only, and in Tiled Dispatch the
+ * grid is hidden. `commandTargetSessionIdForState` deliberately returns null
+ * for an empty lane, a lane holding a dead id, or a lane holding a session
+ * outside the visible scope — visually "no agent is selected here". The first
+ * version of this helper then fell through to the active tab's grid focus, so
+ * pressing Close Focused Session on an empty lane killed the hidden grid agent
+ * (silently when idle, taking the project with it when it was the sole leaf).
+ * Main's old closeFocused had an `if (snapshot.dispatchMode) return` guard;
+ * this is that guard, stated where the target is chosen.
+ *
+ * In CLASSIC Dispatch the strict resolver still yields a row when
+ * `dispatchMode.focusedSessionId` is stale (after a scope switch, rehydrate
+ * miss or rapid close): it applies the same fallback DispatchLayout uses to
+ * highlight a row — classic focus, then grid focus, then the first visible
+ * row — so the highlighted row and the destructive target cannot diverge. Only
+ * Tiled Dispatch's lanes are strict, because an empty lane is a real visual
+ * state there. Outside Dispatch the command target already includes a
+ * visibly selected related child; the grid focus is its own fallback.
+ */
+function resolveFocusedCloseTarget(state: WorkspaceState): SessionId | undefined {
+  const commandTarget = commandTargetSessionIdForState(state)
+  if (commandTarget) return commandTarget
+  if (state.dispatchMode) return undefined
+  return state.tabs.find(tab => tab.id === state.activeTabId)?.focusedSessionId
 }
 
 /**
@@ -257,17 +634,6 @@ function resolveFocusedCloseTarget(state: WorkspaceState): {
  */
 const CLOSE_CHANGED_TOAST =
   'Close cancelled — these sessions changed while the dialog was open. Try again.'
-
-function dispatchModeAfterSessionRemovals(
-  dispatchMode: DispatchModeState | null,
-  removedSessionIds: ReadonlySet<SessionId>,
-): DispatchModeState | null {
-  const cleared = clearTiledLaneSessions(dispatchMode, removedSessionIds)
-  if (!cleared?.focusedSessionId || !removedSessionIds.has(cleared.focusedSessionId)) {
-    return cleared
-  }
-  return { ...cleared, focusedSessionId: undefined }
-}
 
 // Update dispatchMode after a new dispatch agent is spawned. In Tiled
 // Dispatch the new agent takes over the lane the user is commanding
@@ -353,6 +719,10 @@ export function usePaneActions(
   setRuntimes: WorkspaceSetRuntimes,
   setSpotlight: WorkspaceSetSpotlight,
   setTileTabs: WorkspaceSetTileTabs,
+  // Reader Mode joins the other takeover setters so an emptied tab is cleaned
+  // up by the same tail as the Close Tab command (tabRemoval.ts), instead of
+  // leaving a Reader takeover on a removed tab for an effect to heal later.
+  setReaderMode: WorkspaceSetReaderMode,
   refs: WorkspaceRefs,
   showToast: (message: string, durationMs?: number) => void,
   openBuryPrompt: (sessionId: SessionId) => void,
@@ -583,15 +953,16 @@ export function usePaneActions(
           // rather than leaving it to killSession's ownership proof, which
           // re-reads them from `refs.stateRef`.
           //
-          // That ref is a RENDER-BODY mirror (assigned while the workspace hook
-          // renders), not something the store setter writes. Immediately after
-          // an awaited spawn React has not re-rendered, so the ref does not yet
-          // contain the new session, the proof bails on missing metadata, and
-          // the kill silently no-ops — which means this guard never actually
-          // reclaimed anything. killSession still runs for the renderer-side
-          // cleanup (spawn did register SessionMeta in the store); its own
-          // ownership check then returns false for the same stale-ref reason,
-          // harmlessly, because the backend is already gone.
+          // History: that ref used to be a RENDER-BODY mirror (assigned while
+          // the workspace hook rendered). Immediately after an awaited spawn
+          // React had not re-rendered, so the ref lacked the new session, the
+          // proof bailed on missing metadata, and the kill silently no-opped —
+          // this guard never actually reclaimed anything. #886 subscribed
+          // stateRef to the store synchronously, so the proof would now see the
+          // session; the explicit owner stays as defense in depth, because this
+          // reclaim must not depend on how the ref happens to be wired.
+          // killSession still runs for the renderer-side cleanup; its own
+          // ownership check may then find the backend already gone, harmlessly.
           await window.api.killOwnedSession({
             sessionId,
             kind,
@@ -1001,35 +1372,139 @@ export function usePaneActions(
     [refs.stateRef, sessionActions, setState],
   )
 
-  // Close every linked child of `parentId`, recursively. Linked
-  // agents are lifecycle-bound to their parent: when the parent is
-  // closed, every session that named it as `linkedParentId` is
-  // closed too. Recursion via closeSessionRef means a (rare) chain
-  // unwinds fully even though createLinkedAgent never builds one.
-  // closeSession owns this for both grid and detached targets; focused
-  // commands delegate there too. Guarded cleanup refuses this cascade.
-  const closeLinkedChildren = useCallback(async (parentId: SessionId) => {
-    const sessions = refs.stateRef.current.sessions
-    const childIds = Object.keys(sessions).filter(
-      id => sessions[id]?.linkedParentId === parentId,
-    )
-    for (const childId of childIds) {
-      // preConfirmed: the caller's gate expanded the cascade TRANSITIVELY, so
-      // every id reached here was already named in the dialog the user
-      // approved. Re-prompting per child would ask N times about one decision,
-      // and — worse — each re-prompt would re-enumerate a workspace the
-      // preceding kills had already changed, so a long cascade would abort
-      // itself halfway through with "these sessions changed".
-      // captureUndo: false — the cascade is one user decision, so the parent's
-      // entry is the whole unit. Capturing children too would both flood the
-      // 10-entry stack and let them be restored pointing at a parent id that no
-      // longer exists (see CloseSessionOptions.captureUndo).
-      await closeSessionRef.current?.(childId, {
-        preConfirmed: true,
-        captureUndo: false,
+  // Execute ONE member of an approved CloseOperation: its approved linked
+  // children first, then the synchronous kill-boundary verdict, the
+  // ownership-checked kill, and a state commit that re-resolves placement from
+  // the live store. See CloseOperation for the invariants.
+  //
+  // Linked agents are lifecycle-bound to their parent, so children still close
+  // first — but only children the operation APPROVED. Re-prompting per child
+  // would ask N times about one decision; re-entering closeSession with
+  // `preConfirmed: true` (the previous shape) spent the parent's grant on
+  // whatever each child had become by the time its turn came. The named
+  // function expression lets children recurse through this same executor.
+  //
+  // captureUndo is false for every member but the one the caller named: the
+  // operation is one user decision, so its entry is the unit. Capturing
+  // children separately would flood the 10-entry stack; recordCloseUndo folds
+  // them into the tab entry when the operation empties their project.
+  const closeApprovedTarget = useCallback(
+    async function closeTarget(
+      targetId: SessionId,
+      operation: CloseOperation,
+      captureUndo: boolean,
+    ): Promise<{ closed: false } | { closed: true; toast: string | null }> {
+      if (operation.visited.has(targetId)) return { closed: false }
+      operation.visited.add(targetId)
+
+      // Children come from LIVE state, not the approval snapshot: a child
+      // linked after the dialog is found here, is not approved, is skipped, and
+      // then keeps its parent open through closeRefusal below.
+      for (const childId of linkedChildIds(refs.stateRef.current, targetId)) {
+        if (childId === operation.rootId || !operation.approved.has(childId)) continue
+        try {
+          await closeTarget(childId, operation, false)
+        } catch (error) {
+          // A child whose backend kill threw keeps its metadata, so the parent
+          // verdict below keeps the parent as well. Recorded for the summary
+          // rather than rejecting a whole operation from inside its cascade.
+          operation.pending.delete(childId)
+          operation.failed.add(childId)
+          console.warn('[workspace] linked session failed to close; keeping its parent open:', error)
+        }
+      }
+
+      // ---- Kill boundary: synchronous from this verdict to the kill request ----
+      const state = refs.stateRef.current
+      const refusal = closeRefusal(state, refs.latestRuntimesRef.current, operation, targetId)
+      if (refusal) {
+        operation.pending.delete(targetId)
+        operation.refused.set(targetId, refusal)
+        return { closed: false }
+      }
+      const sessionMeta = state.sessions[targetId]
+      // killSessionBackendIfOwned issues window.api.killOwnedSession before its
+      // first await, so the verdict above and main's atomic ownership check
+      // judge the same workspace. Its boolean is deliberately not a refusal:
+      // main rejecting an ownership-conflict pane still lets the renderer drop
+      // that stale pane (paneRecoveryOwnership tests), as it always has.
+      await killSessionBackendIfOwned(refs, targetId)
+
+      setRuntimes(prev => {
+        const next = { ...prev }
+        delete next[targetId]
+        return next
       })
-    }
-  }, [refs.stateRef])
+      forgetClosedSessionDebugState(refs, targetId)
+
+      // Holder object, not a `let`: TypeScript keeps a `let` narrowed to its
+      // initial value across the updater call. Reading it back is sound only
+      // because setState is the synchronous zustand setter.
+      const committed: { value: CommittedClose } = { value: { kind: 'gone' } }
+      setState(prev => {
+        // Placement is re-resolved from `prev`, never from the pre-kill
+        // snapshot: the kill was an await, and this member's own children may
+        // have promoted a row or emptied the tab before it (finding 3).
+        const placement = sessionPlacement(prev, targetId)
+        const sessions = { ...prev.sessions }
+        delete sessions[targetId]
+        if (!placement) return prev.sessions[targetId] ? { ...prev, sessions } : prev
+        if (placement.kind === 'detached') {
+          committed.value = { kind: 'detached', record: placement.record }
+          const detachedSessions = { ...prev.detachedSessions }
+          delete detachedSessions[targetId]
+          const next = { ...prev, sessions, detachedSessions }
+          return { ...next, dispatchMode: dispatchModeAfterSessionRemoval(prev, next, targetId) }
+        }
+        const { tab, tabIndex } = placement
+        const tabs = [...prev.tabs]
+        const nextRoot = closeLeaf(tab.root, targetId)
+        if (nextRoot) {
+          const parentInfo = findParentSplitInfo(tab.root, targetId)
+          if (parentInfo) committed.value = { kind: 'pane', tabId: tab.id, parentInfo }
+          tabs[tabIndex] = {
+            ...tab,
+            root: nextRoot,
+            focusedSessionId: findBestRemainingFocus(tab.root, nextRoot, targetId) ?? collectLeaves(nextRoot)[0],
+          }
+          const next = { ...prev, tabs, sessions }
+          return { ...next, dispatchMode: dispatchModeAfterSessionRemoval(prev, next, targetId) }
+        }
+        // A nonempty project must keep its identity. Promote an existing
+        // detached backend into the mandatory grid leaf; never spawn a shell or
+        // restart a working agent just to satisfy the layout type. Every
+        // session this operation still intends to close is excluded (finding 3).
+        const survivor = detachedRootReplacement(prev, tab.id, new Set([targetId, ...operation.pending]))
+        if (survivor) {
+          committed.value = { kind: 'promoted', tab, tabIndex, survivor }
+          tabs[tabIndex] = {
+            ...tab,
+            root: { type: 'leaf', sessionId: survivor.sessionId },
+            focusedSessionId: survivor.sessionId,
+          }
+          const detachedSessions = { ...prev.detachedSessions }
+          delete detachedSessions[survivor.sessionId]
+          const next = { ...prev, tabs, sessions, detachedSessions }
+          return { ...next, dispatchMode: dispatchModeAfterSessionRemoval(prev, next, targetId) }
+        }
+        committed.value = { kind: 'tab-removed', tab, tabIndex }
+        return workspaceWithoutTab(prev, tab.id, [targetId])
+      })
+
+      operation.pending.delete(targetId)
+      operation.closed.push(targetId)
+      const outcome = committed.value
+      if (outcome.kind === 'tab-removed') {
+        operation.removedTabs.set(outcome.tab.id, { tab: outcome.tab, tabIndex: outcome.tabIndex })
+        clearRemovedTabTakeovers({ setTileTabs, setSpotlight, setReaderMode }, outcome.tab.id)
+      }
+      return {
+        closed: true,
+        toast: recordCloseUndo(refs.undoStackRef.current, outcome, targetId, sessionMeta, operation, captureUndo),
+      }
+    },
+    [refs, setReaderMode, setRuntimes, setSpotlight, setState, setTileTabs],
+  )
 
   // Promote a detached dispatch session into the grid at a chosen placement
   // target.
@@ -1351,8 +1826,9 @@ export function usePaneActions(
   // One close implementation owns both row buttons and the keyboard command.
   // The former focused-grid copy silently made the sole leaf a tab close;
   // delegating by stable ID ensures every human entry sees the scope choice.
+  // A missing Dispatch target closes NOTHING — see resolveFocusedCloseTarget.
   const closeFocused = useCallback(async () => {
-    const { targetId } = resolveFocusedCloseTarget(refs.stateRef.current)
+    const targetId = resolveFocusedCloseTarget(refs.stateRef.current)
     if (targetId) await closeSessionRef.current?.(targetId)
   }, [refs.stateRef])
 
@@ -1370,10 +1846,21 @@ export function usePaneActions(
       // Cheap existence check first, so we never open a dialog about a session
       // that has already gone.
       const initial = refs.stateRef.current
-      if (
-        !initial.tabs.some(t => collectLeaves(t.root).includes(targetId)) &&
-        !initial.detachedSessions[targetId]
-      ) {
+      if (!sessionPlacement(initial, targetId)) return false
+
+      // One place turns a refusal into what the caller sees. A silent no-op
+      // after the user approved a close is indistinguishable from a broken
+      // button, so human paths get a toast; callers that report outcomes
+      // themselves (onRefused) get the reason instead.
+      const refuse = (reason: CloseRefusalReason): false => {
+        if (options?.onRefused) {
+          options.onRefused(reason)
+        } else if (reason === 'changed') {
+          showToast(CLOSE_CHANGED_TOAST)
+        } else if (reason === 'linked-session-open') {
+          const meta = refs.stateRef.current.sessions[targetId] ?? initial.sessions[targetId]
+          showToast(`Kept “${meta ? sessionDisplayTitle(meta) : 'this session'}” open — a linked session is still open.`)
+        }
         return false
       }
 
@@ -1382,302 +1869,132 @@ export function usePaneActions(
       // the Agent Activity modal's Close button and every MCP-driven close ran
       // straight through, cascade and all, with no dialog. `closeFocused`
       // delegates here for every surface, so they ask exactly once.
-      // Resolve the orchestration mode into the two existing ones, HERE, where
-      // paneCloseTargets is in scope — it is the only code that computes the
-      // full set a close destroys, which is exactly what the caller cannot
-      // know from the outside.
+      //
+      // Every branch below ends in ONE value: `approved`, the exact snapshot
+      // list the user (or the policy) authorized, with the activity they saw.
+      // The operation then executes that list and nothing else.
       let scope: 'session' | 'tab' = 'session'
-      let effectivePreConfirmed = options?.preConfirmed === true
+      let approved: readonly CloseTargetSnapshot[] | null = null
       const rootTab = initial.tabs.find(tab => tab.root.type === 'leaf' && tab.root.sessionId === targetId)
       if (rootTab && detachedTabChildren(initial, rootTab.id).ids.length > 0 &&
-          !effectivePreConfirmed && !options?.silentIfSoleTarget && !options?.requireConfirmation) {
+          !options?.preConfirmed && !options?.silentIfSoleTarget && !options?.requireConfirmation) {
         const agentTargets = paneCloseTargets(initial, refs.latestRuntimesRef.current, targetId)
         const tabTargets = paneCloseTargets(initial, refs.latestRuntimesRef.current, targetId, 'tab')
-        const choice = await requestRootCloseConfirmation({
-          required: true, reason: 'multi', targets: tabTargets,
-          summary: `“${rootTab.title}” contains ${tabTargets.length} sessions.`,
-          agentOnly: { title: agentTargets[0]?.title ?? targetId, targets: agentTargets },
-        })
-        if (!choice) return false
-        scope = choice === 'tab' ? 'tab' : 'session'
-        const current = refs.stateRef.current
-        // A changed root role/tab invalidates even an unchanged list of IDs.
-        // Never let the scope choice transfer to another project under a dialog.
-        if (!current.tabs.some(tab => tab.id === rootTab.id && tab.root.type === 'leaf' && tab.root.sessionId === targetId) ||
-            !grantStillMatches(choice === 'tab' ? tabTargets : agentTargets,
-              paneCloseTargets(current, refs.latestRuntimesRef.current, targetId, scope))) {
-          showToast(CLOSE_CHANGED_TOAST)
-          return false
-        }
-        effectivePreConfirmed = true
-      }
-      let effectiveRequireConfirmation = options?.requireConfirmation
-      if (options?.silentIfSoleTarget) {
-        const expanded = paneCloseTargets(
-          refs.stateRef.current,
-          refs.latestRuntimesRef.current,
-          targetId,
-        )
-        const soleTarget = expanded.length === 1 && expanded[0]?.sessionId === targetId
-        if (soleTarget) {
-          effectivePreConfirmed = true
-        } else {
-          effectiveRequireConfirmation = options.silentIfSoleTarget
+        // WHY the three-way choice is skipped when both scopes name the same
+        // sessions (#886 review n4): a root whose only Dispatch rows are its own
+        // linked children ends the identical set either way, and two buttons
+        // that close the same sessions are noise. The ordinary gate below lists
+        // them once. Undo is not worse for it: those children were the
+        // project's last rows, so the session-scoped operation removes the tab
+        // and folds them into one tab entry (recordCloseUndo).
+        if (!sameTargetIds(agentTargets, tabTargets)) {
+          const choice = await requestRootCloseConfirmation({
+            required: true, reason: 'multi', targets: tabTargets,
+            summary: `“${rootTab.title}” contains ${tabTargets.length} sessions.`,
+            agentOnly: {
+              title: agentTargets[0]?.title ?? targetId,
+              targets: agentTargets,
+              noun: closeNoun(initial.sessions[targetId]),
+            },
+          })
+          if (!choice) return false
+          scope = choice === 'tab' ? 'tab' : 'session'
+          const shown = choice === 'tab' ? tabTargets : agentTargets
+          const current = refs.stateRef.current
+          // A changed root role/tab invalidates even an unchanged list of IDs.
+          // Never let the scope choice transfer to another project under a dialog.
+          if (!current.tabs.some(tab => tab.id === rootTab.id && tab.root.type === 'leaf' && tab.root.sessionId === targetId) ||
+              !grantStillMatches(shown, paneCloseTargets(current, refs.latestRuntimesRef.current, targetId, scope))) {
+            return refuse('changed')
+          }
+          approved = shown
         }
       }
-
-      if (!effectivePreConfirmed) {
+      // Resolve the automation modes HERE, where paneCloseTargets is in scope —
+      // it is the only code that computes the full set a close destroys, which
+      // is exactly what the caller cannot know from the outside.
+      let force = options?.requireConfirmation
+      if (!approved && options?.preConfirmed) {
+        const current = paneCloseTargets(refs.stateRef.current, refs.latestRuntimesRef.current, targetId)
+        // A bulk grant names exactly one session (see onlyIf); its linked
+        // children are never approved, so they keep it open.
+        approved = options.onlyIf ? current.filter(target => target.sessionId === targetId) : current
+      } else if (!approved && options?.silentIfSoleTarget) {
+        const expanded = paneCloseTargets(refs.stateRef.current, refs.latestRuntimesRef.current, targetId)
+        if (expanded.length === 1 && expanded[0]?.sessionId === targetId) approved = expanded
+        else force = options.silentIfSoleTarget
+      }
+      if (!approved) {
+        let shown: readonly CloseTargetSnapshot[] = []
         const gate = await runCloseConfirmationGate({
           enumerate: () =>
             paneCloseTargets(refs.stateRef.current, refs.latestRuntimesRef.current, targetId, scope),
-          ask: requestCloseConfirmation,
-          force: effectiveRequireConfirmation,
+          ask: request => {
+            shown = request.targets
+            return requestCloseConfirmation(request)
+          },
+          force,
         })
-        if (!gate.ok) {
-          if (gate.reason === 'changed') showToast(CLOSE_CHANGED_TOAST)
-          return false
+        if (!gate.ok) return gate.reason === 'changed' ? refuse('changed') : false
+        // The gate returns its post-dialog re-enumeration, whose liveness is
+        // NOW. The grant is what the user SAW: a session they approved while it
+        // was working may idle and work again without invalidating their
+        // decision, while one they saw idle must not be killed once it works.
+        const shownLive = new Set(shown.filter(target => target.live).map(target => target.sessionId))
+        approved = gate.targets.map(target => (shownLive.has(target.sessionId) ? { ...target, live: true } : target))
+      }
+
+      // Built synchronously after approval, so the recorded project and meta of
+      // every approved session describe the workspace the user approved.
+      const operation = beginCloseOperation(refs.stateRef.current, targetId, approved, options?.onlyIf)
+      if (scope === 'tab') {
+        // Close Tab executes the SAME plan the dialog listed (#886 review
+        // finding 5). The dialog expands every linked descendant transitively,
+        // including a child attached into ANOTHER project's grid; the first
+        // version of this branch killed only the root and this tab's Dispatch
+        // rows, so that child was listed as ending and survived with a dead
+        // parent. Members close deepest-first through the same executor, each
+        // revalidated at its own kill boundary, and the root comes last: if
+        // every member closed, its close removes the emptied tab and records
+        // one undo entry carrying them all; if one changed or failed, the root
+        // promotes that survivor instead of deleting a nonempty project.
+        const approvalState = refs.stateRef.current
+        const members = [...operation.approved.keys()]
+          .filter(id => id !== targetId)
+          .sort((a, b) => linkedDepth(approvalState, b) - linkedDepth(approvalState, a))
+        for (const memberId of members) {
+          try {
+            await closeApprovedTarget(memberId, operation, false)
+          } catch (error) {
+            operation.pending.delete(memberId)
+            operation.failed.add(memberId)
+            console.warn('[workspace] session in a Close Tab failed to close; it stays open:', error)
+          }
         }
       }
 
-      // Read AFTER the gate: a dialog is
-      // an await, and the undo entry, the detached-children list and the
-      // session metadata below must describe the workspace we are about to
-      // mutate, not the one that existed when the user was asked.
-      const snapshot = refs.stateRef.current
-      const owningTab = snapshot.tabs.find(t => collectLeaves(t.root).includes(targetId))
-      const sessionMeta = snapshot.sessions[targetId]
-      const detached = snapshot.detachedSessions[targetId]
-      if (!owningTab && !detached) return false
-
-      // Linked agents are lifecycle-bound to their parent — close
-      // any session that named `targetId` as its linkedParentId
-      // before we close the parent itself.
-      if (options?.onlyIf) {
-        // Bulk cleanup never inherits the lifecycle cascade. Eligible children
-        // are closed first by the caller; a surviving child makes its parent
-        // ineligible, including children born after the preview was approved.
-        if (paneCloseTargets(snapshot, refs.latestRuntimesRef.current, targetId).length !== 1 ||
-            !options.onlyIf(snapshot, refs.latestRuntimesRef.current)) return false
-      } else if (scope !== 'tab') {
-        await closeLinkedChildren(targetId)
+      // The named session itself. A thrown kill still rejects here, as before,
+      // so bulk cleanup's `failed` bucket and orchestration's catch keep working.
+      const result = await closeApprovedTarget(targetId, operation, options?.captureUndo !== false)
+      if (!result.closed) {
+        const reason = operation.refused.get(targetId)
+        return reason ? refuse(reason) : false
       }
-      // Whole-tab close captures all detached/linked rows in one undo entry;
-      // pre-closing linked children would erase them before that capture.
-      const closeSnapshot = refs.stateRef.current
-
-      if (!owningTab && detached) {
-        // WHY a detached close captures undo history too:
-        //
-        // Undo capture used to live only in the `owningTab` arms below, which
-        // was survivable while every detached row was an agent whose transcript
-        // is durable on disk. It stopped being survivable once Dispatch
-        // TERMINALS became detached rows (#671): closing one stops the attach
-        // PTY but leaves the tmux session alive, and because the session row is
-        // gone from workspace.json the next launch's tmux reconcile sees a live
-        // session with no persisted owner, classifies it as an orphan, and
-        // silently kills it (src/main/tmux/tmuxRecovery.ts). The scrollback was
-        // then unrecoverable — where before #671 the same terminal was a grid
-        // leaf and ⌘⇧T restored it with `recoverTmuxName`.
-        //
-        // Capturing here restores that affordance and extends it to detached
-        // agents, which never had it. The record is stored verbatim so
-        // `detachedAt` — the only thing ordering rows inside a project group —
-        // survives, and undo puts the row back where it was rather than at the
-        // bottom of the list.
-        if (sessionMeta && options?.captureUndo !== false) {
-          refs.undoStackRef.current.push({
-            type: 'detached',
-            closedAt: Date.now(),
-            sessionMeta,
-            record: detached,
-          })
-        }
-
-        await killSessionBackendIfOwned(refs, targetId)
-
-        setRuntimes(prev => {
-          const next = { ...prev }
-          delete next[targetId]
-          return next
-        })
-        forgetClosedSessionDebugState(refs, targetId)
-
-        setState(prev => {
-          const sessions = { ...prev.sessions }
-          delete sessions[targetId]
-          const detachedSessions = { ...prev.detachedSessions }
-          delete detachedSessions[targetId]
-          const next = {
-            ...prev,
-            sessions,
-            detachedSessions,
-          }
-          return {
-            ...next,
-            dispatchMode: dispatchModeAfterSessionRemoval(prev, next, targetId),
-          }
-        })
-        const kindLabel = sessionMeta?.kind ?? DEFAULT_PROVIDER
-        const cwdBase = sessionMeta?.cwd.split('/').filter(Boolean).pop() ?? sessionMeta?.cwd ?? 'session'
-        // The undo hint is conditional on having actually captured an entry:
-        // promising ⌘⇧T when `sessionMeta` was missing would advertise a
-        // recovery that cannot happen.
+      const leftOpen = operation.refused.size + operation.failed.size
+      if (leftOpen > 0 && !options?.onRefused) {
         showToast(
-          sessionMeta && options?.captureUndo !== false
-            ? `Closed detached ${kindLabel} session (${cwdBase}) — ⌘⇧T Undo Close; repeat for earlier closes`
-            : `Closed detached ${kindLabel} session (${cwdBase})`,
+          `Closed ${operation.closed.length} of ${operation.approved.size} listed sessions — `
+          + `${leftOpen} stayed open because ${leftOpen === 1 ? 'it' : 'they'} changed or failed to close.`,
         )
-        return true
+      } else if (result.toast) {
+        showToast(result.toast)
       }
-      if (!owningTab) return false
-
-      // Capture the operation that actually happened: split leaf, root
-      // replacement within a surviving project, or an emptied/explicit tab.
-      const parentInfo = findParentSplitInfo(owningTab.root, targetId)
-      const detachedChildren = parentInfo || scope === 'session'
-        ? { records: [], ids: [], entries: [] }
-        : detachedTabChildren(closeSnapshot, owningTab.id)
-      const closedSessionIds = [targetId, ...detachedChildren.ids]
-      const replacement = !parentInfo && scope === 'session'
-        ? detachedRootReplacement(closeSnapshot, owningTab.id, closedSessionIds)
-        : undefined
-      if (parentInfo && sessionMeta && options?.captureUndo !== false) {
-        refs.undoStackRef.current.push({
-          type: 'pane',
-          closedAt: Date.now(),
-          tabId: owningTab.id,
-          sessionMeta,
-          direction: parentInfo.direction,
-          ratio: parentInfo.ratio,
-          side: parentInfo.side,
-          siblingLeafId: parentInfo.siblingLeafId,
-        })
-        const kindLabel = sessionMeta.kind ?? DEFAULT_PROVIDER
-        const cwdBase = sessionMeta.cwd.split('/').filter(Boolean).pop() ?? sessionMeta.cwd
-        showToast(`Closed ${kindLabel} pane (${cwdBase}) — ⌘⇧T Undo Close; repeat for earlier closes`)
-      } else if (replacement && sessionMeta && options?.captureUndo !== false) {
-        // The project survives. Undo restores this agent within that project,
-        // never respawns the surviving worker or duplicates the whole tab.
-        refs.undoStackRef.current.push({
-          type: 'detached', closedAt: Date.now(), sessionMeta,
-          record: detachedDispatchRecord(targetId, owningTab, closeSnapshot.tabs.indexOf(owningTab)),
-          replacedRoot: replacement,
-        })
-        showToast(`Closed agent — ⌘⇧T Undo Close; repeat for earlier closes`)
-      } else if (!parentInfo && sessionMeta && options?.captureUndo !== false) {
-        const tabIdx = closeSnapshot.tabs.findIndex(t => t.id === owningTab.id)
-        const allMetas: Record<SessionId, SessionMeta> = {}
-        for (const leafId of collectLeaves(owningTab.root)) {
-          if (closeSnapshot.sessions[leafId]) allMetas[leafId] = closeSnapshot.sessions[leafId]
-        }
-        refs.undoStackRef.current.push({
-          type: 'tab',
-          closedAt: Date.now(),
-          tab: { ...owningTab },
-          tabIndex: tabIdx,
-          sessionMetas: allMetas,
-          detachedEntries: detachedChildren.entries.length > 0
-            ? detachedChildren.entries
-            : undefined,
-        })
-        showToast(`Closed “${owningTab.title}” — ⌘⇧T Undo Close; repeat for earlier closes`)
-      }
-
-      await Promise.all(closedSessionIds.map(id => killSessionBackendIfOwned(refs, id)))
-
-      setRuntimes(prev => {
-        const next = { ...prev }
-        for (const id of closedSessionIds) delete next[id]
-        return next
-      })
-      for (const id of closedSessionIds) forgetClosedSessionDebugState(refs, id)
-
-      setState(prev => {
-        const tabs = [...prev.tabs]
-        const tabIdx = tabs.findIndex(t => t.id === owningTab.id)
-        // Tab may have been closed between modal-open and confirm.
-        // Treat that as a no-op — the row will disappear on next
-        // render anyway via the "visible sessions" selector.
-        if (tabIdx === -1) return prev
-        const currentTab = tabs[tabIdx]
-        const nextRoot = closeLeaf(currentTab.root, targetId)
-
-        if (nextRoot === null && scope === 'session') {
-          // A nonempty project must keep its identity. Promote an existing
-          // detached backend into the mandatory grid leaf; never spawn a shell
-          // or restart a working agent just to satisfy the layout type.
-          const survivor = detachedRootReplacement(prev, currentTab.id, closedSessionIds)
-          if (survivor) {
-            tabs[tabIdx] = { ...currentTab, root: { type: 'leaf', sessionId: survivor.sessionId }, focusedSessionId: survivor.sessionId }
-            const sessions = { ...prev.sessions }
-            delete sessions[targetId]
-            const detachedSessions = { ...prev.detachedSessions }
-            delete detachedSessions[survivor.sessionId]
-            const next = { ...prev, tabs, sessions, detachedSessions }
-            return { ...next, dispatchMode: dispatchModeAfterSessionRemoval(prev, next, targetId) }
-          }
-        }
-        if (nextRoot === null) {
-          const remaining = tabs.filter((_, i) => i !== tabIdx)
-          const sessions = { ...prev.sessions }
-          for (const id of closedSessionIds) delete sessions[id]
-          const detachedSessions = { ...prev.detachedSessions }
-          for (const id of detachedChildren.ids) delete detachedSessions[id]
-          // Only retarget activeTabId if we just removed the active
-          // tab. Closing a pane in a BACKGROUND tab from the modal
-          // must not yank the user out of the tab they see when the
-          // modal closes.
-          const nextActiveTabId = prev.activeTabId === owningTab.id
-            ? (remaining[Math.max(0, tabIdx - 1)]?.id ?? '')
-            : prev.activeTabId
-          const next = {
-            ...prev,
-            tabs: remaining,
-            activeTabId: nextActiveTabId,
-            sessions,
-            detachedSessions,
-          }
-          return {
-            ...next,
-            dispatchMode: dispatchModeAfterSessionRemovals(
-              next.dispatchMode,
-              new Set(closedSessionIds),
-            ),
-          }
-        }
-
-        const nextFocused =
-          findBestRemainingFocus(currentTab.root, nextRoot, targetId) ??
-          collectLeaves(nextRoot)[0]
-        tabs[tabIdx] = {
-          ...currentTab,
-          root: nextRoot,
-          focusedSessionId: nextFocused,
-        }
-        const sessions = { ...prev.sessions }
-        delete sessions[targetId]
-        const next = { ...prev, tabs, sessions }
-        return {
-          ...next,
-          dispatchMode: dispatchModeAfterSessionRemoval(prev, next, targetId),
-        }
-      })
-      // Reached only after the pane/tab close actually committed. Every
+      // Reached only after the named session's close actually committed. Every
       // earlier exit returns false, so a caller can distinguish "closed" from
-      // "declined at the confirmation" or "session was already gone".
+      // "declined at the confirmation", "refused" or "session was already gone".
       return true
     },
-    [
-      closeLinkedChildren,
-      refs.latestRuntimesRef,
-      refs.latestScreenRef,
-      refs.seenUuidsRef,
-      refs.stateRef,
-      refs.undoStackRef,
-      setRuntimes,
-      setState,
-      showToast,
-    ],
+    [closeApprovedTarget, refs.latestRuntimesRef, refs.stateRef, showToast],
   )
   closeSessionRef.current = closeSession
 
@@ -1769,7 +2086,7 @@ export function usePaneActions(
         note: note?.trim() ? note.trim() : undefined,
       }
       const detachedChildren = parentInfo
-        ? { records: [], ids: [], entries: [] }
+        ? { records: [], ids: [] }
         : detachedTabChildren(snapshot, owningTab.id)
       // WHY last-pane bury transfers detached children into the buried archive
       // instead of killing them: Bury is explicitly the non-destructive close.

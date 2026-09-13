@@ -354,6 +354,7 @@ export function useWorkspace(
     setRuntimes,
     setSpotlight,
     setTileTabs,
+    setReaderMode,
     refs,
     showToast,
     openBuryPrompt,
