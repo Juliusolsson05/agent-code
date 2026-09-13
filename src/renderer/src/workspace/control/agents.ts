@@ -47,7 +47,14 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
   return [
     defineCapability({
       id: 'agents.close', target: { kind: 'session', field: 'sessionId' }, title: 'Close an agent', execution: 'window', effect: 'mutation', completion: 'accepted',
-      description: 'Request the normal close of an exact agent, including the app’s existing child-cascade confirmation. Returns an accepted callId immediately; finish any confirmation with computer use and read operations.read for the eventual closed result. Does not bypass confirmation or force-kill a process.',
+      // WHY the root-dialog sentence (#886 review m5): this capability calls
+      // closeSession with no options, i.e. the HUMAN path. For a project's root
+      // with other sessions that path asks Close Agent (Close Terminal for a
+      // terminal root) vs Close Tab, and operations.read reports `closed: true`
+      // either way — so an operator that picks the prominent destructive button
+      // silently ends the whole project. The description is the only place an
+      // operator learns which button matches "close agent X".
+      description: 'Request the normal close of an exact agent, including the app’s existing child-cascade confirmation. Closing a project’s root agent while other sessions exist asks whether to close only that agent (Close Agent, or Close Terminal for a terminal) or the whole tab (Close Tab); choose Close Agent unless the user asked to close the whole project. Returns an accepted callId immediately; finish any confirmation with computer use and read operations.read for the eventual closed result. Does not bypass confirmation or force-kill a process.',
       input: sessionInput, output: z.object({ callId: z.string(), accepted: z.literal(true) }),
       handler: ({ sessionId }, context) => {
         requireUi(); requireSession(sessionId)
