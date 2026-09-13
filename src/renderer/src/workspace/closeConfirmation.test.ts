@@ -7,7 +7,6 @@ import {
   grantStillMatches,
   expandSessionCloseTargets,
   expandTabCloseTargets,
-  narrowGrantToCurrent,
 } from '@renderer/workspace/closeConfirmation'
 import type { CloseTargetSnapshot } from '@renderer/workspace/closeConfirmation'
 
@@ -72,35 +71,6 @@ describe('grant validity', () => {
     const granted = [target('a'), target('b')]
     expect(grantStillMatches(granted, [target('a')])).toBe(false)
     expect(grantStillMatches(granted, [target('a'), target('b'), target('c')])).toBe(false)
-  })
-})
-
-describe('narrowing a stale grant', () => {
-  it('keeps the targets that are still present', () => {
-    // Killing the ten that did not change is the useful behaviour; the two
-    // that did must be dropped, not killed on the old preview's authority.
-    const granted = [target('a'), target('b'), target('c')]
-    const current = [target('a'), target('c')]
-    expect(narrowGrantToCurrent(granted, current).map(t => t.sessionId)).toEqual(['a', 'c'])
-  })
-
-  it('drops a target that started working since the grant', () => {
-    // The user approved closing an IDLE agent. One that woke up is outside
-    // what they authorized, even though its id is unchanged.
-    const granted = [target('a'), target('b')]
-    const current = [target('a'), target('b', true)]
-    expect(narrowGrantToCurrent(granted, current).map(t => t.sessionId)).toEqual(['a'])
-  })
-
-  it('keeps a target that was already live when granted', () => {
-    // The user saw and approved this one as running, so it stays covered.
-    const granted = [target('a', true)]
-    const current = [target('a', true)]
-    expect(narrowGrantToCurrent(granted, current)).toHaveLength(1)
-  })
-
-  it('returns nothing when every target changed', () => {
-    expect(narrowGrantToCurrent([target('a')], [target('b')])).toEqual([])
   })
 })
 

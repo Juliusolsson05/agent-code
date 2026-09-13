@@ -67,7 +67,8 @@ a running session can move mid-task among Claude Code, Codex, and OpenCode.
 - **Fleet management** — manage detached agents outside the fixed grid. Bulk
   actions cover the multi-project cases: closing agents that have been inactive
   across every project, pinning them for quick access, or reattaching them to
-  the grid.
+  the grid. **Close Idle Orchestration Agents** sweeps up the finished workers an
+  orchestration run leaves behind, after confirming the list.
 
   <p align="center">
     <img src="docs/screenshots/close-old-agents.png" alt="Agent Code Close Old Agents modal — inactive-hours threshold, per-project scope, and a preview of the Claude and Codex agents that will be closed" />

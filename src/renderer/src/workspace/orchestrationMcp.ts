@@ -388,10 +388,9 @@ function buildAgentRecord(params: {
   const latestAssistantText = statusOnly
     ? undefined
     : (params.latestAssistantText ?? latestAssistant(messages))
-  const hasDurableOutput = statusOnly
-    ? hasAssistantOutput(params.runtime, params.meta)
-    : Boolean(latestAssistantText)
-  const lifecycleState = lifecycleStateForRuntime(params.runtime, hasDurableOutput)
+  const lifecycleState = statusOnly
+    ? orchestrationChildLifecycle(params.runtime, params.meta)
+    : lifecycleStateForRuntime(params.runtime, Boolean(latestAssistantText))
   const activityAt = lastActivityAt(params.runtime, messages)
   return {
     sessionId: params.sessionId,
@@ -429,7 +428,7 @@ function buildAgentRecord(params: {
     // see buildAgentOutput). The full capped copy lives ONLY at
     // output.latestAssistantText.
     //
-    // LIFECYCLE HAZARD: hasDurableOutput above is derived from
+    // LIFECYCLE HAZARD: the output-mode lifecycle above is derived from
     // latestAssistantText. Excerpting must never turn non-empty text into
     // empty/absent, or completed children regress to `waiting` and
     // wait_agents never resolves. mirrorExcerpt only shortens, never drops.
@@ -442,6 +441,23 @@ function buildAgentRecord(params: {
     messageCount: params.messageCount
       ?? (statusOnly ? cheapMessageCount(params.runtime, params.meta) : messages.length),
   }
+}
+
+/**
+ * The lifecycle `orchestration_list_agents` reports for a child, derived from
+ * renderer state alone (main later overlays `prompt_sent`; see stage 1 below).
+ *
+ * Exported for Close Idle Orchestration Agents. "Idle" there must mean what a
+ * parent agent coordinating on this child sees as `completed`, not a second,
+ * slightly different reading of the same runtime: if the user's cleanup and the
+ * parent's `wait_agents` could disagree about whether a worker is done, one of
+ * them would be acting on a state the other would call running.
+ */
+export function orchestrationChildLifecycle(
+  runtime: SessionRuntime | null,
+  meta: SessionMeta,
+): OrchestrationLifecycleState {
+  return lifecycleStateForRuntime(runtime, hasAssistantOutput(runtime, meta))
 }
 
 function lifecycleStateForRuntime(
