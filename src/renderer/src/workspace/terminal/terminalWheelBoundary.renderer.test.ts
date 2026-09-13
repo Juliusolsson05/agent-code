@@ -1,30 +1,23 @@
-// WHY these tests stand in for xterm with plain DOM listeners instead of
-// opening the real pinned @xterm/xterm. The PR #792 review asked for
-// real-xterm coverage (consumed scrollback, an unconsumed boundary, alternate-
-// screen arrows, SGR mouse reports, Alt fast scroll). A throwaway probe on
-// 2026-09-12 showed this project's happy-dom cannot host it:
-// - No canvas: happy-dom's `getContext('2d')` returns null. xterm
-//   6.1.0-beta.304 `open()` creates its DOM renderer, whose WidthCache passes
-//   that context to `throwIfFalsy`, so `open()` throws "value must not be
-//   falsy". It has already appended `.xterm`, but it has not yet created the
-//   Viewport or bound MouseService. In the probe every wheel went uncanceled
-//   and no arrow or SGR data was sent, because no xterm wheel listener
-//   existed, not because xterm refused the event.
-// - No layout: even past that, offsetWidth/offsetHeight and bounding rects
-//   are 0. CharSizeService measures 0x0, so cell height and scrollHeight are
-//   0 and the viewport can never move ("xterm consumed normal scrollback" is
-//   unreachable). MouseCoordsService also yields no report coordinates, so
-//   no SGR report is sent.
-// Faking a 2D context, glyph metrics and rects would make each assertion echo
-// the fake numbers rather than xterm or Chromium. Green results would then
-// look like real-xterm coverage without being it.
-// So this file pins only the helper's own contract: bubble-phase
-// registration, which unconsumed events it cancels, and disposal. The
-// real-xterm, real-Chromium oracle is the user-run
-// scripts/smoke-terminal-wheel.mjs. The xterm-facing claims are
-// source-verified in terminalWheelBoundary.ts and must be re-checked on every
-// xterm bump. If the repo gains a real browser test runner, a real-xterm
-// version of these cases belongs there.
+// WHY plain DOM stand-ins here instead of the real @xterm/xterm. This file pins
+// the helper's OWN contract, independent of xterm internals:
+// - bubble-phase registration;
+// - exactly which unconsumed events it cancels (modifier, axis, consumed and
+//   non-cancelable policy);
+// - disposal.
+// What the real pinned xterm does with a wheel lives in
+// terminalWheelBoundary.xterm.renderer.test.ts: consuming movable scrollback,
+// leaving an exhausted wheel unconsumed, Alt fast scroll, alternate-screen
+// arrows and SGR mouse reports. That file opens xterm under two narrow
+// happy-dom shims; its header says what they fake and why its assertions do
+// not echo them.
+// Neither file can observe Chromium's native scroll chaining, wheel latching or
+// WebGL. The user-run scripts/smoke-terminal-wheel.mjs is the oracle for those.
+//
+// History: review round 1 of PR #792 recorded real-xterm coverage as
+// infeasible. Unshimmed happy-dom does make `open()` throw (null 2D context
+// in xterm's WidthCache) and has no layout. Round 2 showed that a fake 2D
+// context plus a fixed glyph size is enough, because every asserted behavior
+// is still computed by xterm itself.
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { attachTerminalWheelBoundary } from './terminalWheelBoundary'
 
@@ -67,8 +60,8 @@ describe('terminal wheel boundary', () => {
 
   // Pins bubble-phase registration only: the stand-in listener below plays
   // xterm's part, so it must see the event before the boundary has touched it.
-  // Whether the real xterm consumes a given wheel is not modeled here (see the
-  // header of this file for why that cannot be done in happy-dom).
+  // Whether the real xterm consumes a given wheel is not modeled here; that is
+  // terminalWheelBoundary.xterm.renderer.test.ts's job.
   it('registers in the bubble phase so xterm decides before the boundary', () => {
     const { screen } = mount()
     const provider = vi.fn((event: Event) => {
@@ -81,7 +74,10 @@ describe('terminal wheel boundary', () => {
     expect(provider).toHaveBeenCalledOnce()
   })
 
-  it.each(['ctrlKey', 'metaKey', 'shiftKey'] as const)('preserves browser-owned modified gestures: %s', modifier => {
+  // Policy, not xterm behavior: xterm may already have consumed these as
+  // scrollback. The helper only declines to cancel an UNCONSUMED Ctrl/Meta/Shift
+  // wheel, leaving pinch-zoom, navigation and horizontal intent to the browser.
+  it.each(['ctrlKey', 'metaKey', 'shiftKey'] as const)('leaves an unconsumed %s wheel to the browser', modifier => {
     const { screen } = mount()
     const event = wheel({ [modifier]: true })
     screen.dispatchEvent(event)
