@@ -18,6 +18,7 @@ vi.mock('node:child_process', async importOriginal => {
 })
 import { exportOpencodeSession } from './opencodeCliSessions.js'
 import { holdNextSpawnUntilReady } from './testing/spawnReadiness.js'
+import { alive, waitUntil, within } from './testing/processWait.js'
 
 const { spawn: realSpawn } = await vi.importActual<typeof import('node:child_process')>('node:child_process')
 
@@ -47,6 +48,12 @@ beforeEach(async () => {
   vi.stubEnv('TEMP', root)
 })
 afterEach(async () => {
+  // mockReset, not only clearAllMocks: mockClear keeps queued
+  // once-implementations. A test that fails after startTree queued its readiness
+  // gate, but before runOpencode reached spawn, would otherwise hand that gate
+  // to the next test's first spawn. Vitest 4 resets vi.fn(actual.spawn) back to
+  // the real spawn.
+  vi.mocked(spawn).mockReset()
   vi.clearAllMocks()
   vi.unstubAllEnvs()
   await rm(root, { recursive: true, force: true })
@@ -195,24 +202,3 @@ describe('OpenCode CLI process-tree termination', () => {
     }
   }, TEST_TIMEOUT_MS)
 })
-
-function alive(pid: number) {
-  try { process.kill(pid, 0); return true } catch { return false }
-}
-
-async function within<T>(promise: Promise<T>, ms: number): Promise<T | 'pending'> {
-  let timer: ReturnType<typeof setTimeout> | undefined
-  try {
-    return await Promise.race([promise, new Promise<'pending'>(resolve => { timer = setTimeout(() => resolve('pending'), Math.max(0, ms)) })])
-  } finally {
-    clearTimeout(timer)
-  }
-}
-
-async function waitUntil(predicate: () => boolean, timeoutMs: number, label: string): Promise<void> {
-  const deadline = performance.now() + timeoutMs
-  while (!predicate()) {
-    if (performance.now() >= deadline) throw new Error(`timed out waiting for ${label}`)
-    await new Promise(resolve => setImmediate(resolve))
-  }
-}

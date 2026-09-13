@@ -28,6 +28,7 @@ import {
 } from './opencodeCliSessions.js'
 import { OpencodeTerminalSession } from './opencodeTerminalSession.js'
 import { holdNextSpawnUntilReady } from './testing/spawnReadiness.js'
+import { alive, waitUntil, within } from './testing/processWait.js'
 
 const { spawn: realSpawn } = await vi.importActual<typeof import('node:child_process')>('node:child_process')
 
@@ -42,6 +43,12 @@ beforeEach(async () => {
   vi.stubEnv('TEMP', root)
 })
 afterEach(async () => {
+  // mockReset, not only clearAllMocks: mockClear keeps queued
+  // once-implementations. A test that fails after queuing a readiness gate or a
+  // process double, but before runOpencode reaches spawn, would otherwise hand
+  // that implementation to the next test's first spawn. Vitest 4 resets
+  // vi.fn(actual.spawn) back to the real spawn.
+  vi.mocked(spawn).mockReset()
   vi.clearAllMocks()
   vi.unstubAllEnvs()
   await rm(root, { recursive: true, force: true })
@@ -192,10 +199,6 @@ async function fixture() {
     return { dir, binary, statusFile }
   } catch (error) { await rm(dir, { recursive: true, force: true }); throw error }
 }
-function alive(pid: number) {
-  try { process.kill(pid, 0); return true } catch { return false }
-}
-
 // Generous, because the readiness gate spends it before the deadline or stop()
 // can fire. The bounds asserted below stay as tight as main's originals.
 const IMPORT_READY_BUDGET_MS = 10_000
@@ -292,20 +295,3 @@ it('kills a CLI whose stop arrived while its capture was still being prepared', 
 // The launcher process-tree termination cases live in
 // opencodeCliSessions.processTree.system.test.ts, next to the spawn readiness
 // seam they need.
-
-async function within<T>(promise: Promise<T>, ms: number): Promise<T | 'pending'> {
-  let timer: ReturnType<typeof setTimeout> | undefined
-  try {
-    return await Promise.race([promise, new Promise<'pending'>(resolve => { timer = setTimeout(() => resolve('pending'), Math.max(0, ms)) })])
-  } finally {
-    clearTimeout(timer)
-  }
-}
-
-async function waitUntil(predicate: () => boolean, timeoutMs: number, label: string): Promise<void> {
-  const deadline = performance.now() + timeoutMs
-  while (!predicate()) {
-    if (performance.now() >= deadline) throw new Error(`timed out waiting for ${label}`)
-    await new Promise(resolve => setImmediate(resolve))
-  }
-}
