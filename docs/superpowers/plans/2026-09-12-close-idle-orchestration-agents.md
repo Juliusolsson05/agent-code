@@ -1,6 +1,7 @@
 # Close Idle Orchestration Agents
 
-Status: in progress. This plan is the first commit; the implementation follows on the same branch.
+Status: implemented as designed below; type check and targeted tests green, new tests mutation-checked. PR open, awaiting CI and review.
+PR: [agent-code#962](https://github.com/Juliusolsson05/agent-code/pull/962). Merge requires explicit approval.
 Feature Issue: [agent-code#960](https://github.com/Juliusolsson05/agent-code/issues/960).
 Branch: `feat/close-idle-orchestration-agents`. Worktree: `.worktrees/close-idle-orchestration-agents`.
 Base: `origin/main` at `40377871` (2026-09-12). Merge requires explicit approval.
