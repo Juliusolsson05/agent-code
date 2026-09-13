@@ -56,6 +56,8 @@ import { registerAgentCodeInstalledSkillsIpc } from '@main/ipc/agentCodeInstalle
 import { registerAgentSkillsIpc } from '@main/ipc/agentSkills.js'
 import type { WorkflowBridge } from '@main/workflows/WorkflowBridge.js'
 import { registerExtensionsIpc } from '@main/ipc/extensions.js'
+import { registerSystemSuspensionIpc } from '@main/ipc/systemSuspension.js'
+import type { SystemSuspensionTracker } from '@main/systemSuspension/SystemSuspensionTracker.js'
 
 // IPC registration aggregator.
 //
@@ -89,6 +91,7 @@ export type IpcDeps = {
   agentCodeConventionsService: AgentCodeConventionsService
   workspaceFileStore: WorkspaceFileStore
   conversationService: ConversationService
+  systemSuspension: SystemSuspensionTracker
 }
 
 export function registerAllIpc(deps: IpcDeps): void {
@@ -143,4 +146,5 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerAgentCodeCustomSkillsIpc(deps.agentCodeConventionsService)
   registerAgentCodeInstalledSkillsIpc(deps.agentCodeConventionsService)
   registerAgentSkillsIpc(deps.agentCodeConventionsService)
+  registerSystemSuspensionIpc(deps.systemSuspension)
 }

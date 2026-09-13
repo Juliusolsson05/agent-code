@@ -467,6 +467,17 @@ export interface AgentSession extends AgentSessionEmitter {
   /** Optional: has the underlying process exited? Same rationale. */
   isExited?(): boolean
   /**
+   * Optional (proxy-streaming providers): the machine was suspended between
+   * `suspendedAt` and `resumedAt` (#963).
+   *
+   * WHY on the session contract: a stream whose socket died while the lid was
+   * closed never receives a transport end, and only the provider's adapter knows
+   * which of its flows were silent since before the suspension. The manager fans
+   * this out; each runtime decides what "sealing a severed stream" means for its
+   * transport. Providers without such state simply do not implement it.
+   */
+  noteSystemSuspension?(suspension: import('@shared/types/systemSuspension.js').SystemSuspension): void
+  /**
    * Optional startup-time durable provider identity.
    *
    * Most providers discover this later from transcript traffic. A native
