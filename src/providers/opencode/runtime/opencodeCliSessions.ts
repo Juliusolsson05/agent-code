@@ -241,9 +241,15 @@ async function runOpencode(
         //
         // Consequences: the child has no controlling terminal (these commands
         // are non-interactive and stdin is ignored), and a Ctrl+C in a dev
-        // terminal no longer reaches it directly; it runs to its own end or to
-        // the deadline. On Windows `detached` would open a console window and
-        // there is no process-group kill, so it keeps the direct-child kill.
+        // terminal no longer reaches it directly, so the CLI runs to its own
+        // end. The deadline is not a property of the child: it is a timer in
+        // Agent Code's main process and ends with it. A Ctrl+C that kills
+        // Electron therefore leaves a wedged CLI unbounded, where the old
+        // non-detached child sat in the terminal's foreground group and got the
+        // SIGINT (which the npm launcher forwards). Packaged quits already
+        // orphaned these children before this change. On Windows `detached`
+        // would open a console window and there is no process-group kill, so it
+        // keeps the direct-child kill.
         detached: process.platform !== 'win32',
       })
       let failure: Error | undefined
