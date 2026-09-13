@@ -89,8 +89,14 @@ function Recordings({ snapshot, request, onRequestHandled }: { snapshot: Monitor
   }
   const clear = async () => {
     setBusy(true); setMessage(null)
-    try { const status = await window.api.clearMonitorHistory(); if (status) setMessage(`Local history now uses ${(status.bytes / 1024 / 1024).toFixed(1)} MiB.`) }
-    catch { setMessage('History could not be cleared.') }
+    try {
+      const result = await window.api.clearMonitorHistory()
+      setMessage(result.outcome === 'cleared' ? 'Local performance history and incident evidence were deleted.'
+        : result.outcome === 'cancelled' ? null
+          : result.outcome === 'busy' ? 'A report is being saved. Nothing was deleted; try again when it finishes.'
+            : result.outcome === 'unavailable' ? 'History is temporarily unavailable. Nothing was deleted.'
+              : 'History could not be fully deleted. Some local files may remain.')
+    } catch { setMessage('History could not be cleared.') }
     finally { setBusy(false) }
   }
   const startTrace = async (mode: MonitorTraceMode) => {

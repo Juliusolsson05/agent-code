@@ -58,6 +58,11 @@ export class ResponseTracker {
     else current.outputAt ??= this.now()
   }
   cancel(sessionId: string): void { this.finish(sessionId, 'cancelled') }
+  /** Cancel only the named submit. A settle message for an older submit must
+   * never cancel the newer submit that already replaced it in this session. */
+  cancelOperation(sessionId: string, operationId?: string): void {
+    if (this.pending.get(sessionId)?.operationId === operationId) this.finish(sessionId, 'cancelled')
+  }
   sweep(): void { for (const [id, entry] of this.pending) if (this.now() - entry.at >= 10 * 60_000) this.finish(id, 'timeout') }
 
   private finish(sessionId: string, outcome: MonitorOutcome, endedAt?: number): void {

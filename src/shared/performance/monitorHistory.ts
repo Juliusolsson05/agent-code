@@ -48,6 +48,13 @@ export type MonitorReportResult =
   | { ok: true; path: string; bytes: number; points: number; incidents: number }
   | { ok: false; code: 'cancelled' | 'busy' | 'write-failed' | 'invalid-range' | 'unavailable' }
 
+/** Clear History is destructive and privacy-motivated, so the renderer must
+ * learn whether data was actually deleted rather than infer it from a status. */
+export type MonitorClearHistoryResult = {
+  outcome: 'cleared' | 'cancelled' | 'busy' | 'unavailable' | 'failed'
+  status: MonitorHistoryStatus | null
+}
+
 export type MonitorTraceMode = 'chromium' | 'main-cpu'
 export type MonitorTraceStatus = {
   state: 'idle' | 'starting' | 'recording' | 'stopping' | 'complete' | 'failed' | 'cancelled' | 'unsupported'

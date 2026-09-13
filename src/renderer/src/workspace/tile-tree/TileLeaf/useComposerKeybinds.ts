@@ -342,7 +342,7 @@ export function useComposerKeybinds({
       // Acceptance, not the write, decides whether first-output is measurable:
       // a queued prompt's clock would otherwise stop on the running turn's
       // output. Codex has no acceptance kind and always starts a turn.
-      window.api.acceptMonitorResponse(sessionId, acceptance?.kind === 'queue')
+      window.api.settleMonitorResponse(sessionId, acceptance?.kind === 'queue' ? 'queued' : 'started')
       // A `queue` acceptance means the provider held the prompt behind a
       // running turn: no turn will start for it, so the optimistic
       // `submitting` phase stamped above would otherwise stand until the
@@ -387,7 +387,7 @@ export function useComposerKeybinds({
         ...(runtime.sessionRunId ? { sessionRunId: runtime.sessionRunId } : {}),
       })
     } catch (err) {
-      window.api.cancelMonitorResponse(sessionId)
+      window.api.settleMonitorResponse(sessionId, 'failed')
       const delivery = (err as { promptDeliveryResult?: PromptDeliveryResult })
         .promptDeliveryResult
       // `bodyWritten`/`enterWritten` are the fields that decide whether this

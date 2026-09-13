@@ -4179,9 +4179,14 @@ export class SessionManager extends EventEmitter {
   beginMonitorResponse(sessionId: string, operationId?: string): void {
     // Main owns live session identity. A renderer may request timing for a
     // stable pane ID, but a stale/foreign ID cannot allocate baseline state.
-    // The renderer sends this only AFTER a non-queued acceptance, so it arms
-    // immediately (raw-PTY Codex) or joins main's own delivery timer.
-    if (this.sessions.has(sessionId)) this.monitorResponses.begin(sessionId, operationId)
+    // Renderer submits begin unarmed at Enter. deliverPromptToAgent joins the
+    // same operation ID, and acceptance arms or cancels it exactly once.
+    if (this.sessions.has(sessionId)) this.monitorResponses.begin(sessionId, operationId, false)
+  }
+
+  settleMonitorResponse(sessionId: string, operationId: string | undefined, started: boolean): void {
+    if (started) this.monitorResponses.arm(sessionId, operationId)
+    else this.monitorResponses.cancelOperation(sessionId, operationId)
   }
 
   /** Submit staged composer content only when no finished-prompt transaction

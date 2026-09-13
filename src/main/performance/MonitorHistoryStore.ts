@@ -2,7 +2,7 @@ import { createReadStream, createWriteStream } from 'node:fs'
 import { appendFile, mkdir, open, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { once } from 'node:events'
 import { finished } from 'node:stream/promises'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { createInterface } from 'node:readline'
 import type { MonitorIncident } from '@shared/performance/monitorIncidents.js'
 import { parseMonitorIncident } from '@shared/performance/parseMonitorIncident.js'
@@ -65,6 +65,14 @@ export class MonitorHistoryStore {
   private index = new Map<string, FileStat>()
   private incidentRuns = new Map<string, MonitorIncident[]>()
   private repairedTails = new Set<string>()
+  // False until startup indexing completes. Retention deletes any run the
+  // index does not know about, so a partial index (EPERM, ENOSPC or an I/O
+  // error during startup) must never be treated as "those runs are empty":
+  // that would silently erase a week of history exactly when storage is sick.
+  private indexed = false
+  // Runs with a file that could not be indexed. Retention must treat them as
+  // unknown, not empty; only the capacity budget may still remove them.
+  private unindexedRuns = new Set<string>()
   private rollups: Record<MonitorHistoryResolution, TierRollup> = { '1s': new TierRollup('1s'), '10s': new TierRollup('10s'), '1m': new TierRollup('1m') }
   // Coalesced work. Incidents and operations are whole-value replacements, so
   // only the newest value matters; the old promise chain queued one rewrite
@@ -74,7 +82,6 @@ export class MonitorHistoryStore {
   private pendingOperations: string | null = null
   private maintenanceDue: number | null = null
   private lastMaintenanceAt = -Infinity
-  private incidentFingerprint = ''
   private operationFingerprint = ''
 
   constructor(private readonly root: string, private readonly runId: string, private readonly now: () => number = () => Date.now()) {
@@ -104,23 +111,25 @@ export class MonitorHistoryStore {
     }
   }
 
-  record(snapshot: MonitorWorkerSnapshot, processes: MonitorProcessSummary | null, incidents: MonitorIncident[], droppedRecords: number, restarts: number): void {
+  record(snapshot: MonitorWorkerSnapshot, processes: MonitorProcessSummary | null, incidents: MonitorIncident[] | null, droppedRecords: number, restarts: number): void {
     const point = pointFrom(snapshot, processes, '1s', droppedRecords, restarts)
     for (const tier of TIERS) {
       const done = this.rollups[tier].add(point)
       if (done) this.queuePoint(done)
     }
-    const incidentJson = JSON.stringify(incidents.slice(-INCIDENT_LIMIT))
-    if (incidentJson !== this.incidentFingerprint) {
-      this.incidentFingerprint = incidentJson
-      this.pendingIncidents = incidents.slice(-INCIDENT_LIMIT)
-    }
+    // `null` means unchanged. The worker detects change from a cheap summary
+    // fingerprint; stringifying up to fifty full evidence sets here every
+    // second cost ~1 MiB of JSON per second of helper CPU for no new data.
+    if (incidents) this.pendingIncidents = incidents.slice(-INCIDENT_LIMIT)
     const operationJson = JSON.stringify(snapshot.operations.slice(0, 100))
     if (operationJson !== this.operationFingerprint) {
       this.operationFingerprint = operationJson
       this.pendingOperations = operationJson
     }
-    if (snapshot.sampledAt - this.lastMaintenanceAt >= 60_000) {
+    // A backward wall-clock step also counts as due: otherwise compaction,
+    // retention and pruning pause for the size of the step and a multi-day
+    // step ends with every tier shortened by the capacity budget instead.
+    if (snapshot.sampledAt - this.lastMaintenanceAt >= 60_000 || snapshot.sampledAt < this.lastMaintenanceAt) {
       this.lastMaintenanceAt = snapshot.sampledAt
       this.maintenanceDue = snapshot.sampledAt
     }
@@ -283,9 +292,9 @@ export class MonitorHistoryStore {
     try {
       await rm(join(this.root, RUNS_DIR), { recursive: true, force: true })
       await mkdir(this.runDir, { recursive: true })
-      this.index.clear(); this.incidentRuns.clear(); this.repairedTails.clear()
+      this.index.clear(); this.incidentRuns.clear(); this.repairedTails.clear(); this.indexed = true
       this.bytes = 0; this.shortened = false; this.degraded = false
-      this.incidentFingerprint = ''; this.operationFingerprint = ''
+      this.operationFingerprint = ''; this.unindexedRuns.clear()
       this.lastMaintenanceAt = -Infinity
     } catch { this.degraded = true }
     return this.status()
@@ -331,24 +340,34 @@ export class MonitorHistoryStore {
   }
 
   private async initialize(): Promise<void> {
+    // Each step degrades on its own. A failed scratch cleanup or one unreadable
+    // file used to abort the whole pass and leave the index partial, after
+    // which retention treated every unindexed run as empty and deleted it.
+    await mkdir(this.runDir, { recursive: true }).catch(() => { this.degraded = true })
+    await rm(join(this.root, EXPORTS_DIR), { recursive: true, force: true }).catch(() => { this.degraded = true })
     try {
-      await mkdir(this.runDir, { recursive: true })
-      await rm(join(this.root, EXPORTS_DIR), { recursive: true, force: true })
       await this.cleanupTemps()
       for (const run of await this.runNames()) {
         for (const resolution of TIERS) {
           const file = join(this.root, RUNS_DIR, run, `${resolution}.jsonl`)
-          // Repair before indexing: a torn final append from a crashed helper
-          // is expected crash residue, not corruption worth a degraded state.
-          await this.repairTail(file)
-          const size = await stat(file).then(value => value.size, () => null)
-          if (size === null) continue
-          const entry: FileStat = { run, resolution, points: 0, bytes: size, oldestAt: null, newestAt: null }
-          for await (const line of this.lines(file)) {
-            const point = this.parseLine(line)
-            if (point) this.notePoint(entry, point)
+          try {
+            // Repair before indexing: a torn final append from a crashed helper
+            // is expected crash residue, not corruption worth a degraded state.
+            await this.repairTail(file)
+            const size = await stat(file).then(value => value.size, () => null)
+            if (size === null) continue
+            const entry: FileStat = { run, resolution, points: 0, bytes: size, oldestAt: null, newestAt: null }
+            const failure = { failed: false }
+            for await (const line of this.lines(file, failure)) {
+              const point = this.parseLine(line)
+              if (point) this.notePoint(entry, point)
+            }
+            if (failure.failed) throw new Error('index-read-failed')
+            this.index.set(file, entry)
+          } catch {
+            this.degraded = true
+            this.unindexedRuns.add(run)
           }
-          this.index.set(file, entry)
         }
         const file = join(this.root, RUNS_DIR, run, 'incidents.json')
         const stored = await this.readIncidentFile(file)
@@ -364,6 +383,7 @@ export class MonitorHistoryStore {
       await this.enforceIncidentLimit()
       this.bytes = await this.diskBytes()
       await this.pruneRuns(DATA_BUDGET)
+      this.indexed = true
     } catch { this.degraded = true }
   }
 
@@ -403,7 +423,15 @@ export class MonitorHistoryStore {
       if (this.bytes + size > DATA_BUDGET) { this.shortened = true; continue }
       const file = join(this.runDir, `${resolution}.jsonl`)
       await this.repairTail(file)
-      await appendFile(file, value, { encoding: 'utf8', mode: 0o600 })
+      try {
+        await this.withDirectory(file, () => appendFile(file, value, { encoding: 'utf8', mode: 0o600 }))
+      } catch (error) {
+        // ENOSPC/EIO can leave part of a line on disk. Forget that this tail
+        // was verified so the next append truncates back to the last newline
+        // instead of fusing a new record onto the fragment.
+        this.repairedTails.delete(file)
+        throw error
+      }
       const entry = this.index.get(file) ?? { run: this.runId, resolution, points: 0, bytes: 0, oldestAt: null, newestAt: null }
       entry.bytes += size
       for (const point of rows) this.notePoint(entry, point)
@@ -440,6 +468,20 @@ export class MonitorHistoryStore {
     } finally { await handle.close().catch(() => {}) }
   }
 
+  /** Recreate a run directory removed underneath the running helper (a Clear
+   * History that failed after deleting it, or a user removing the folder).
+   * Only startup and a successful clear created it, so every later write
+   * failed with ENOENT until the next launch. */
+  private async withDirectory<T>(file: string, write: () => Promise<T>): Promise<T> {
+    try {
+      return await write()
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      await mkdir(dirname(file), { recursive: true })
+      return await write()
+    }
+  }
+
   private async replaceBounded(file: string, value: string, limit: number): Promise<void> {
     const size = Buffer.byteLength(value)
     if (size > limit) { this.shortened = true; return }
@@ -452,7 +494,7 @@ export class MonitorHistoryStore {
     if (this.bytes - old + size > DATA_BUDGET) { this.shortened = true; return }
     const temp = `${file}.${process.pid}.tmp`
     try {
-      await writeFile(temp, value, { encoding: 'utf8', mode: 0o600 })
+      await this.withDirectory(temp, () => writeFile(temp, value, { encoding: 'utf8', mode: 0o600 }))
       await moveArtifact(temp, file)
     } finally { await rm(temp, { force: true }).catch(() => {}) }
     this.bytes = Math.max(0, this.bytes - old + size)
@@ -485,8 +527,8 @@ export class MonitorHistoryStore {
     // Expired runs used to live until the byte budget forced them out. A run
     // with no remaining points or incidents holds only an unattributable
     // operations snapshot, so it is retention-expired, not capacity-pruned.
-    for (const run of await this.runNames()) {
-      if (run === this.runId || this.incidentRuns.has(run) || [...this.index.values()].some(entry => entry.run === run)) continue
+    if (this.indexed) for (const run of await this.runNames()) {
+      if (run === this.runId || this.incidentRuns.has(run) || this.unindexedRuns.has(run) || [...this.index.values()].some(entry => entry.run === run)) continue
       await rm(join(this.root, RUNS_DIR, run), { recursive: true, force: true })
     }
     this.bytes = await this.diskBytes()
@@ -496,12 +538,16 @@ export class MonitorHistoryStore {
   private async compact(file: string, entry: FileStat, cutoff: number): Promise<void> {
     const kept: string[] = []
     const next: FileStat = { ...entry, points: 0, oldestAt: null, newestAt: null }
-    for await (const line of this.lines(file)) {
+    const failure = { failed: false }
+    for await (const line of this.lines(file, failure)) {
       const point = this.parseLine(line)
       if (!point || point.at < cutoff) continue
       kept.push(JSON.stringify(point))
       this.notePoint(next, point)
     }
+    // A read error mid-file yields only a prefix. Rewriting from it would
+    // replace unexpired history with a truncated copy, so skip this pass.
+    if (failure.failed) return
     if (!kept.length) {
       await rm(file, { force: true })
       this.index.delete(file)
@@ -548,13 +594,13 @@ export class MonitorHistoryStore {
     catch { this.degraded = true; return null }
   }
 
-  private async *lines(file: string): AsyncGenerator<string> {
+  private async *lines(file: string, failure?: { failed: boolean }): AsyncGenerator<string> {
     const input = createReadStream(file, { encoding: 'utf8' })
-    input.on('error', () => { this.degraded = true })
+    input.on('error', () => { this.degraded = true; if (failure) failure.failed = true })
     try {
       const reader = createInterface({ input, crlfDelay: Infinity })
       for await (const line of reader) if (line) yield line
-    } catch { this.degraded = true }
+    } catch { this.degraded = true; if (failure) failure.failed = true }
   }
 
   /** Stored points in range, then the still-open rollup bucket for "now". */
@@ -681,6 +727,7 @@ export class MonitorHistoryStore {
       await rm(join(this.root, RUNS_DIR, run), { recursive: true, force: true })
       for (const [file, entry] of [...this.index]) if (entry.run === run) { this.index.delete(file); this.repairedTails.delete(file) }
       this.incidentRuns.delete(run)
+      this.unindexedRuns.delete(run)
       total = Math.max(0, total - size); this.shortened = true
     }
     this.bytes = total

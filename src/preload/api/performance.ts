@@ -1,6 +1,6 @@
 import type { MonitorIncident } from '@shared/performance/monitorIncidents.js'
-import type { MonitorHistoryPage, MonitorHistoryStatus, MonitorReportPreview, MonitorReportResult, MonitorTraceStatus } from '@shared/performance/monitorHistory.js'
-import { acceptMonitorResponse, beginMonitorResponse, cancelMonitorResponse, completeMonitorResponse } from '../monitorOperations.js'
+import type { MonitorClearHistoryResult, MonitorHistoryPage, MonitorReportPreview, MonitorReportResult, MonitorTraceStatus } from '@shared/performance/monitorHistory.js'
+import { beginMonitorResponse, cancelMonitorResponse, completeMonitorResponse, settleMonitorResponse } from '../monitorOperations.js'
 import type { MonitorProcessPage } from '@shared/performance/processSnapshot.js'
 import type { MonitorSnapshot } from '@shared/performance/monitorSnapshot.js'
 import { parseMonitorRendererBatch } from '@shared/performance/monitorContracts.js'
@@ -21,7 +21,7 @@ let monitorSnapshotRead: Promise<MonitorSnapshot | null> | null = null
 let processReadInFlight = false
 export const performanceApi = {
   beginMonitorResponse,
-  acceptMonitorResponse,
+  settleMonitorResponse,
   cancelMonitorResponse,
   completeMonitorResponse,
   getMonitorIncident: (id: number): Promise<MonitorIncident | null> => {
@@ -37,7 +37,7 @@ export const performanceApi = {
     ipcRenderer.invoke('performance:monitor-report-preview', from, to),
   saveMonitorReport: (from: number, to: number): Promise<MonitorReportResult> =>
     ipcRenderer.invoke('performance:monitor-save-report', from, to),
-  clearMonitorHistory: (): Promise<MonitorHistoryStatus | null> =>
+  clearMonitorHistory: (): Promise<MonitorClearHistoryResult> =>
     ipcRenderer.invoke('performance:monitor-clear-history'),
   getMonitorTraceStatus: (): Promise<MonitorTraceStatus | null> =>
     ipcRenderer.invoke('performance:monitor-trace-status'),

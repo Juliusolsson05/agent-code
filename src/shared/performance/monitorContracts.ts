@@ -30,6 +30,9 @@ export type MonitorHeartbeat = {
 export type MonitorProducerLoss = {
   kind: 'loss'
   source: 'preload' | 'renderer'
+  // Random per producer lifetime; a reload re-runs the producer module and
+  // gets a new one. Opaque, never derived from user or application data.
+  generation: string
   dropped: number
 }
 
@@ -42,7 +45,7 @@ const heartbeatKeys = new Set([
   'kind', 'monotonicMs', 'timeOriginMs', 'lagMs', 'visibility', 'longTaskCount',
   'longTaskTotalMs', 'longTaskMaxMs', 'heapUsedBytes', 'heapLimitBytes', 'inputCount', 'inputMaxMs',
 ])
-const lossKeys = new Set(['kind', 'source', 'dropped'])
+const lossKeys = new Set(['kind', 'source', 'generation', 'dropped'])
 const finite = (value: unknown, max = Number.MAX_SAFE_INTEGER): value is number =>
   typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= max
 const count = (value: unknown): value is number => finite(value) && Number.isSafeInteger(value)
@@ -76,8 +79,8 @@ export function parseMonitorRendererRecord(input: unknown): MonitorRendererRecor
   }
   if (value.kind === 'loss') {
     if (keys.length !== lossKeys.size || keys.some(key => !lossKeys.has(key))
-      || (value.source !== 'preload' && value.source !== 'renderer') || !count(value.dropped)) return null
-    return { kind: 'loss', source: value.source, dropped: value.dropped }
+      || (value.source !== 'preload' && value.source !== 'renderer') || !isMonitorId(value.generation) || !count(value.dropped)) return null
+    return { kind: 'loss', source: value.source, generation: value.generation, dropped: value.dropped }
   }
   if (value.kind !== 'heartbeat' || keys.length !== heartbeatKeys.size
     || keys.some(key => !heartbeatKeys.has(key))) return null
@@ -109,6 +112,7 @@ export function parseMonitorRendererBatch(input: unknown): MonitorRendererRecord
 
 // This conservative byte charge avoids JSON.stringify on instrumentation hot
 // paths. Every admitted record is a fixed set of finite numeric fields/enums
-// and at most one 96-byte ASCII ID. The tests prove its serialized upper bound;
+// and at most two 96-byte ASCII IDs (an operation's session and operation IDs;
+// a loss record's producer generation is one). The tests prove its serialized upper bound;
 // expanding the schema requires revisiting this charge and the batch limit.
 export const MONITOR_RECORD_BYTES = 512

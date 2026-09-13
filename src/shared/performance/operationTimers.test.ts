@@ -57,4 +57,14 @@ describe('bounded real-operation timing', () => {
     now = 1500; tracker.arm('idle', 'submit-i')
     expect(records[1]).toMatchObject({ outcome: 'success', durationMs: 100, operationId: 'submit-i' })
   })
+  it('settles only the named submit', () => {
+    let now = 0
+    const records: MonitorOperation[] = []
+    const tracker = new ResponseTracker(new OperationTimers(record => records.push(record), () => now), () => now)
+    tracker.begin('pane', 'submit-new', false)
+    tracker.cancelOperation('pane', 'submit-old')
+    now = 40; tracker.output('pane', { type: 'text_delta' })
+    tracker.arm('pane', 'submit-new')
+    expect(records).toEqual([expect.objectContaining({ outcome: 'success', durationMs: 40, operationId: 'submit-new' })])
+  })
 })

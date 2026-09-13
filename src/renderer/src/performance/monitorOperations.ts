@@ -18,11 +18,17 @@ let pending = false
 let flushScheduled = false
 let transportLost = 0
 let reportedDropped = 0
+let lastFlushAt = -Infinity
+// One opaque ID per renderer lifetime; a reload gets a new one (see preload).
+const producerGeneration = globalThis.crypto.randomUUID()
 
 function scheduleFlush(): void {
   if (flushScheduled || pending) return
   flushScheduled = true
-  queueMicrotask(() => { flushScheduled = false; flush() })
+  // At most one threshold batch per 100 ms (1,200 records/s per producer).
+  // Unthrottled flushing only moved overflow from this queue into main's
+  // shared queue, where it evicted heartbeats instead of operations.
+  setTimeout(() => { flushScheduled = false; flush() }, Math.max(0, lastFlushAt + 100 - performance.now()))
 }
 
 function flush(): void {
@@ -34,9 +40,10 @@ function flush(): void {
   const reportLoss = dropped !== reportedDropped
   const size = reportLoss ? BATCH_RECORDS - 1 : BATCH_RECORDS
   const records = queue.drain(size, size * MONITOR_RECORD_BYTES)
-  if (reportLoss) records.push({ kind: 'loss', source: 'renderer', dropped })
+  if (reportLoss) records.push({ kind: 'loss', source: 'renderer', generation: producerGeneration, dropped })
   const observations = records.filter(record => record.kind !== 'loss').length
   pending = true
+  lastFlushAt = performance.now()
   void append(records).then(ok => {
     if (ok && reportLoss) reportedDropped = dropped
     else if (!ok) transportLost += observations

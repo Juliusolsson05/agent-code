@@ -26,6 +26,10 @@ let pending = false
 let flushScheduled = false
 let transportLost = 0
 let reportedDropped = 0
+let lastFlushAt = -Infinity
+// One opaque ID per preload lifetime. A reload re-runs this module, so main can
+// tell a restarted counter from a late report sent by the retired producer.
+const producerGeneration = globalThis.crypto.randomUUID()
 
 function getOriginalInvoke(): Invoke | undefined {
   if (invoke) return invoke
@@ -66,8 +70,11 @@ function finishResponse(sessionId: string, outcome: MonitorOutcome, endedAt?: nu
   current.end(outcome, endedAt)
 }
 
-/** Starts the renderer clock at Enter, unarmed. Nothing crosses IPC yet: only
- * the provider acceptance can say whether this submit starts a turn. */
+/** Starts both clocks at Enter, unarmed: this renderer's commit clock and
+ * main's provider first-output clock. Starting main here rather than after
+ * acceptance keeps raw-PTY Codex on the same boundary as main-delivered
+ * Claude/OpenCode, and lets main remember a first delta that arrives before
+ * acceptance is known instead of timing the second one. */
 export function beginMonitorResponse(sessionId: string, operationId?: string): void {
   if (!isMonitorId(sessionId)) return
   finishResponse(sessionId, 'cancelled')
@@ -77,28 +84,27 @@ export function beginMonitorResponse(sessionId: string, operationId?: string): v
     end: timers.begin('renderer.first-output', sessionId, id), at: performance.now(),
     ...(id ? { operationId: id } : {}), armed: false, outputAt: null,
   })
+  // Instrumentation is observational: a closing renderer can reject IPC
+  // synchronously, and that must never turn Enter into a failed submit.
+  try { ipcRenderer.send('performance:monitor-response-begin', sessionId, id) }
+  catch { /* Main will simply lack this optional correlation boundary. */ }
 }
 
-/** Acceptance decides whether the unarmed clock measures anything. A queued
- * prompt waits behind a running turn, whose output would otherwise complete
- * this timer and record a response that belonged to a different prompt. */
-export function acceptMonitorResponse(sessionId: string, queued: boolean): void {
+/** Provider acceptance decides whether the unarmed clocks measure anything. A
+ * queued prompt waits behind a running turn whose output would otherwise
+ * complete both timers with a response that belonged to a different prompt,
+ * and a failed submit never produces output at all. Main is settled with the
+ * same decision so its provider clock is armed or cancelled exactly once. */
+export function settleMonitorResponse(sessionId: string, outcome: 'started' | 'queued' | 'failed'): void {
+  if (!isMonitorId(sessionId)) return
   const current = responses.get(sessionId)
   if (!current) return
-  if (queued) { finishResponse(sessionId, 'cancelled'); return }
+  try { ipcRenderer.send('performance:monitor-response-settle', sessionId, current.operationId, outcome === 'started') }
+  catch { /* Main's unarmed timer still expires through its bounded sweep. */ }
+  if (outcome !== 'started') { finishResponse(sessionId, 'cancelled'); return }
   current.armed = true
-  if (current.outputAt !== null) {
-    // Output already committed while acceptance was pending. Main has seen
-    // that output too, so asking it to begin now would time the NEXT turn.
-    finishResponse(sessionId, 'success', current.outputAt)
-    return
-  }
-  // Raw-PTY providers (Codex) never enter main's delivery path, so main starts
-  // provider first-output here. Main-delivered prompts share the operation ID
-  // and join the timer main already armed. Instrumentation is observational:
-  // a closing renderer can reject IPC synchronously without failing submit.
-  try { ipcRenderer.send('performance:monitor-response-begin', sessionId, current.operationId) }
-  catch { /* Main will simply lack this optional correlation boundary. */ }
+  // Output may already have committed while acceptance was pending; credit it.
+  if (current.outputAt !== null) finishResponse(sessionId, 'success', current.outputAt)
 }
 
 /** Local only, and only for a pending timer. Hidden tiles call this on every
@@ -120,7 +126,10 @@ export function completeMonitorResponse(sessionId: string): void {
 function scheduleFlush(): void {
   if (flushScheduled || pending) return
   flushScheduled = true
-  queueMicrotask(() => { flushScheduled = false; flushPreloadMonitoring() })
+  // At most one threshold batch per 100 ms (1,200 records/s per producer).
+  // Unthrottled flushing only moved overflow from this queue into main's
+  // shared queue, where it evicted heartbeats instead of operations.
+  setTimeout(() => { flushScheduled = false; flushPreloadMonitoring() }, Math.max(0, lastFlushAt + 100 - performance.now()))
 }
 
 export function flushPreloadMonitoring(): void {
@@ -137,9 +146,10 @@ export function flushPreloadMonitoring(): void {
   const reportLoss = dropped !== reportedDropped
   const size = reportLoss ? BATCH_RECORDS - 1 : BATCH_RECORDS
   const batch = records.drain(size, size * MONITOR_RECORD_BYTES)
-  if (reportLoss) batch.push({ kind: 'loss', source: 'preload', dropped })
+  if (reportLoss) batch.push({ kind: 'loss', source: 'preload', generation: producerGeneration, dropped })
   const observations = batch.filter(record => record.kind !== 'loss').length
   pending = true
+  lastFlushAt = performance.now()
   void originalInvoke('performance:monitor-batch', batch).then(() => { if (reportLoss) reportedDropped = dropped }, () => {
     // Drained observations cannot be retried without an unbounded replay lane.
     // Account them in the next monotonic health report instead.

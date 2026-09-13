@@ -28,6 +28,7 @@ let transfer: MonitorProcessPage | null = null
 let transferOffset = 0
 let transferGeneration = 0
 let sentPage: MonitorProcessPage | null = null
+let incidentFingerprint = ''
 const unavailableHistory = (): MonitorHistoryStatus => ({ state: 'unavailable', bytes: 0, oldestAt: null, newestAt: null, points: 0, incidents: 0, exporting: false, shortened: false })
 parent.on('message', async ({ data }) => {
   if (!history && isMonitorId(data.runId) && typeof data.historyRoot === 'string' && data.historyRoot.length <= 4096 && isAbsolute(data.historyRoot)) {
@@ -37,8 +38,10 @@ parent.on('message', async ({ data }) => {
   const now = Date.now()
   const mono = performance.now()
   incidents.reconcile(data.liveWindowIds ?? [], data.visibleWindowIds ?? [], mono)
+  // Loss first: the reported count covers records dropped BEFORE this batch,
+  // so it must not mark captures this batch is about to open as truncated.
+  incidents.loss(data.droppedRecords ?? 0, mono)
   incidents.accept(data.records, now, mono)
-  incidents.loss(data.droppedRecords ?? 0)
   // WHY interrupt only after this batch is accepted: the coordinator sends its
   // final drained records together with the flush. Interrupting first closed
   // captures before the last seconds of evidence (often the stall that made
@@ -66,13 +69,24 @@ parent.on('message', async ({ data }) => {
     ? { ...aggregator.snapshot(now, process.memoryUsage.rss()), incidents: incidents.summaries(), history: history?.status() ?? unavailableHistory() } : undefined
   if (snapshot) lastSnapshotAt = mono
   if (snapshot && history) {
-    const detail = incidents.summaries().map(summary => incidents.detail(summary.id)).filter((row): row is NonNullable<typeof row> => row !== null)
+    // Full evidence is copied only when a summary field that persistence
+    // reflects actually changed (a new incident, a state change, truncation
+    // or more captured evidence). Rebuilding and serializing fifty evidence
+    // sets every second was the helper's largest steady CPU cost.
+    const summaries = incidents.summaries()
+    const fingerprint = summaries.map(row => `${row.at}:${row.id}:${row.state}:${row.truncated}:${row.evidenceCount}`).join('|')
+    const detail = fingerprint === incidentFingerprint ? null
+      : summaries.map(summary => incidents.detail(summary.id)).filter((row): row is NonNullable<typeof row> => row !== null)
+    incidentFingerprint = fingerprint
     history.record(snapshot, page.summary.sampledAt > 0 ? page.summary : null, detail, data.droppedRecords ?? 0, data.restarts ?? 0)
   }
   if (!transfer && page !== sentPage) {
     transfer = page; transferOffset = 0; transferGeneration++
   }
-  const processChunk = transfer ? {
+  // Query replies never carry process chunks. The coordinator may abandon a
+  // slow query and apply later replies first; a chunk inside that late reply
+  // would arrive out of offset order and fail the whole process transfer.
+  const processChunk = transfer && !data.query ? {
     generation: transferGeneration, offset: transferOffset, summary: transfer.summary,
     rows: transfer.rows.slice(transferOffset, transferOffset + 120),
     complete: transferOffset + 120 >= transfer.rows.length,
@@ -102,6 +116,7 @@ parent.on('message', async ({ data }) => {
     // histograms the user just deleted.
     incidents.clear()
     aggregator.clearHistory()
+    incidentFingerprint = ''
     queryResult = { kind: 'history-clear', value: history ? await history.clear() : unavailableHistory() }
   }
   else if (query?.kind === 'history-flush') {

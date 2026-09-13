@@ -14,7 +14,19 @@ export async function moveArtifact(source: string, destination: string): Promise
     await rename(source, destination)
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'EXDEV') throw error
-    await copyFile(source, destination)
+    // Never copy straight onto the destination: copyFile truncates an existing
+    // file before writing, so ENOSPC or an I/O error mid-copy would destroy the
+    // user's previous report or trace. Copy to a sibling on the destination's
+    // volume, then rename over it atomically. The sibling exists only for the
+    // length of this copy and is removed if it fails.
+    const partial = `${destination}.agent-code-partial`
+    try {
+      await copyFile(source, partial)
+      await rename(partial, destination)
+    } catch (copyError) {
+      await rm(partial, { force: true }).catch(() => {})
+      throw copyError
+    }
     await rm(source, { force: true })
   }
 }

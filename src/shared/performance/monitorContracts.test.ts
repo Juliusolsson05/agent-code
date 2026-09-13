@@ -9,7 +9,7 @@ const heartbeat: MonitorHeartbeat = {
   longTaskCount: 0, longTaskTotalMs: 0, longTaskMaxMs: 0, heapUsedBytes: null,
   heapLimitBytes: null, inputCount: 0, inputMaxMs: 0,
 }
-const loss: MonitorProducerLoss = { kind: 'loss', source: 'renderer', dropped: 12 }
+const loss: MonitorProducerLoss = { kind: 'loss', source: 'renderer', generation: 'producer-1', dropped: 12 }
 
 describe('content-minimized renderer ingress', () => {
   it('admits supported numeric records and copies them at the trust boundary', () => {
@@ -30,6 +30,8 @@ describe('content-minimized renderer ingress', () => {
     { ...heartbeat, heapUsedBytes: 'PRIVATE SENTINEL' },
     { ...loss, source: 'PRIVATE SENTINEL' },
     { ...loss, dropped: -1 },
+    { ...loss, generation: '/Users/private/project' },
+    { kind: 'loss', source: 'renderer', dropped: 12 },
   ])('rejects unsupported fields, identities and measurements: %#', value => {
     expect(parseMonitorRendererRecord(value)).toBeNull()
   })
@@ -47,8 +49,8 @@ describe('content-minimized renderer ingress', () => {
         Object.assign(largeHeartbeat, { [key]: Number.MAX_SAFE_INTEGER })
       }
     }
-    const largestOperation = { ...operation, sessionId: 'a'.repeat(96), durationMs: 86_400_000 }
-    const largestLoss = { ...loss, dropped: Number.MAX_SAFE_INTEGER }
+    const largestOperation = { ...operation, sessionId: 'a'.repeat(96), operationId: 'b'.repeat(96), durationMs: 86_400_000 }
+    const largestLoss = { ...loss, generation: 'g'.repeat(96), dropped: Number.MAX_SAFE_INTEGER }
     for (const record of [largeHeartbeat, largestOperation, largestLoss]) {
       expect(parseMonitorRendererRecord(record)).not.toBeNull()
       expect(Buffer.byteLength(JSON.stringify(record))).toBeLessThanOrEqual(MONITOR_RECORD_BYTES)

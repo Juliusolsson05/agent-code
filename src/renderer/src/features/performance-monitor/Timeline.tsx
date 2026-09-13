@@ -19,15 +19,26 @@ export function Timeline({ incidents }: { incidents: MonitorIncidentSummary[] })
     let timer: ReturnType<typeof setTimeout> | undefined
     const read = async () => {
       const end = live ? Date.now() : to
+      const from = Math.max(0, end - range.ms)
+      let ok = false
       try {
-        const result = await window.api.getMonitorHistory(Math.max(0, end - range.ms), end, undefined, 1000)
+        const result = await window.api.getMonitorHistory(from, end, undefined, 1000)
+        ok = result !== null
         // WHY keep the previous page on null: the helper answers null while
         // busy, restarting or shedding a concurrent query. Replacing a valid
         // chart with "unavailable" on every transient miss made the timeline
         // flicker; the status line below still says the reading is delayed.
-        if (!disposed) { if (result) setPage(result); setError(result === null) }
+        // Only a page for the SAME range may stand in, though: after a range
+        // change a stale 15-minute chart under a "7 days" label is wrong data,
+        // not a delayed view. Live pages slide, so they match by duration.
+        const sameRange = (previous: MonitorHistoryPage) => live
+          ? previous.to - previous.from === end - from
+          : previous.from === from && previous.to === end
+        if (!disposed) { setPage(previous => result ?? (previous && sameRange(previous) ? previous : null)); setError(!ok) }
       } catch { if (!disposed) setError(true) }
-      finally { if (!disposed && live) timer = setTimeout(read, 10_000) }
+      // A paused timeline has no polling loop, so a failed read must schedule
+      // its own retry or the view stays "unavailable" until the user acts.
+      finally { if (!disposed && (live || !ok)) timer = setTimeout(read, live ? 10_000 : 5000) }
     }
     void read()
     return () => { disposed = true; clearTimeout(timer) }

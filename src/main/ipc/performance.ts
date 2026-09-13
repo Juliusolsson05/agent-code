@@ -14,6 +14,7 @@ import { moveArtifact } from '@main/performance/moveArtifact.js'
 import { performanceService } from '@main/performance/PerformanceService.js'
 import { ProcessTelemetry } from '@main/performance/ProcessTelemetry.js'
 import { HEAP_SNAPSHOT_DIR, PERFORMANCE_CAPTURE_TEMP_DIR } from '@main/storage/paths.js'
+import type { MonitorClearHistoryResult } from '@shared/performance/monitorHistory.js'
 import type { SessionManager } from '@main/sessionManager.js'
 import type {
   PerformanceRecord,
@@ -84,16 +85,25 @@ export function registerPerformanceIpc(manager: SessionManager): void {
     if (result.ok) rememberRevealable(selection.filePath)
     return result.ok ? { ...result, path: selection.filePath } : result
   })
-  ipcMain.handle('performance:monitor-clear-history', async event => {
+  ipcMain.handle('performance:monitor-clear-history', async (event): Promise<MonitorClearHistoryResult> => {
     const window = BrowserWindow.fromWebContents(event.sender)
-    if (!window) return null
+    if (!window) return { outcome: 'unavailable', status: null }
     const answer = await dialog.showMessageBox(window, {
       type: 'warning', title: 'Clear performance history?',
       message: 'Delete locally stored performance history and incident evidence?',
       detail: 'Live monitoring continues immediately. Saved reports and performance traces are not deleted.',
       buttons: ['Cancel', 'Clear History'], defaultId: 0, cancelId: 0, noLink: true,
     })
-    return answer.response === 1 ? monitorCoordinator.clearHistory() : monitorCoordinator.readHistoryStatus()
+    if (answer.response !== 1) return { outcome: 'cancelled', status: null }
+    const status = await monitorCoordinator.clearHistory()
+    // WHY an explicit outcome: this is a destructive privacy action, and the
+    // old UI printed "now uses X MiB" for a cancel, a busy export, a helper
+    // that was restarting, and a deletion that failed. The store's returned
+    // status distinguishes them: success leaves an empty healthy store, an
+    // export in progress refuses to clear, and a failed rm marks it degraded.
+    const outcome: MonitorClearHistoryResult['outcome'] = !status ? 'unavailable'
+      : status.exporting ? 'busy' : status.state === 'healthy' && status.bytes === 0 ? 'cleared' : 'failed'
+    return { outcome, status }
   })
   ipcMain.handle('performance:monitor-trace-status', event => BrowserWindow.fromWebContents(event.sender) ? traceStatusFor(event.sender.id) : null)
   ipcMain.handle('performance:monitor-start-trace', async (event, mode: unknown, durationMs?: number) => {
@@ -137,7 +147,7 @@ export function registerPerformanceIpc(manager: SessionManager): void {
     if (!records) return
     for (const record of records) {
       if (record.kind === 'operation') monitorCoordinator.operation(record, event.sender.id)
-      else if (record.kind === 'loss') monitorCoordinator.sourceLoss(event.sender.id, record.source, record.dropped)
+      else if (record.kind === 'loss') monitorCoordinator.sourceLoss(event.sender.id, record.source, record.generation, record.dropped)
     }
   })
   ipcMain.on('performance:monitor-response-begin', (event, sessionId: unknown, operationId?: unknown) => {
@@ -145,10 +155,14 @@ export function registerPerformanceIpc(manager: SessionManager): void {
       || windowIdFor(event.sender) !== windowForSession(sessionId)) return
     manager.beginMonitorResponse(sessionId, typeof operationId === 'string' ? operationId : undefined)
   })
-  // No cancel channel: renderer cancellations are local. Main never starts a
-  // renderer-requested timer before acceptance, and main-delivered prompts
-  // cancel themselves from the delivery result, so a per-commit cancel IPC
-  // from hidden tiles was pure main-process traffic.
+  // Settle, not cancel: hidden tiles cancel only their local render clock on
+  // each commit (that per-commit IPC was pure main-process traffic). Main's
+  // provider clock is settled once per submit by the provider acceptance.
+  ipcMain.on('performance:monitor-response-settle', (event, sessionId: unknown, operationId: unknown, started: unknown) => {
+    if (!BrowserWindow.fromWebContents(event.sender) || typeof sessionId !== 'string' || typeof started !== 'boolean'
+      || windowIdFor(event.sender) !== windowForSession(sessionId)) return
+    manager.settleMonitorResponse(sessionId, typeof operationId === 'string' ? operationId : undefined, started)
+  })
 
   ipcMain.handle('performance:get-config', () => performanceService.getConfig())
 
