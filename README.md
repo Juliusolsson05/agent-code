@@ -91,7 +91,7 @@ a running session can move mid-task among Claude Code, Codex, and OpenCode.
   </p>
 
 - **TLDR peek** — enable **TLDR MCP** for an agent, then hold **Cmd+L** to
-  see each visible agent’s latest short status centered over its darkened pane.
+  see each visible agent’s latest short status centered over its pane.
   A small footer shows **Last active** and **Note written** independently, using
   relative times and calendar dates for older activity. Release to return. The
   **TLDR** palette command also opens the preview; Escape dismisses it. Reporting

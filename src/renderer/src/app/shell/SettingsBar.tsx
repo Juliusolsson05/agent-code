@@ -1,15 +1,12 @@
 import { AppearanceMenu } from '@renderer/features/feed/AppearanceMenu'
-import { PerformancePanel } from '@renderer/features/performance/ui/PerformancePanel'
-import { SystemPerfHeader } from '@renderer/features/system-perf/ui/SystemPerfHeader'
+import { PerformanceMonitor } from '@renderer/features/performance-monitor/PerformanceMonitor'
 import { UsageHeaderIndicator } from '@renderer/features/usage/ui/UsageHeaderIndicator'
 import { useAppStore } from '@renderer/app-state/hooks'
 import { useCaffeinateStore } from '@renderer/features/caffeinate/store'
-import { useWorkspaceLayoutContext } from '@renderer/workspace/WorkspaceContext'
 
 // Settings bar — compact row under tabs holding app chrome.
 // (Extracted verbatim from App.tsx by #494.)
 export function SettingsBar() {
-  const workspace = useWorkspaceLayoutContext()
   const settings = useAppStore(state => state.settings)
   const setSettings = useAppStore(state => state.setSettings)
   const performancePanelOpen = useAppStore(state => state.performancePanelOpen)
@@ -38,6 +35,8 @@ export function SettingsBar() {
         <button
           type="button"
           onClick={togglePerformancePanel}
+          aria-label="Open Performance Monitor"
+          aria-expanded={performancePanelOpen}
           className={`rounded-control
             px-2 py-1 border text-[10px] font-code transition-colors
             ${
@@ -47,7 +46,7 @@ export function SettingsBar() {
             }
           `}
         >
-          perf
+          performance
         </button>
         <button
           type="button"
@@ -73,15 +72,8 @@ export function SettingsBar() {
         >
           caff
         </button>
-        <PerformancePanel open={performancePanelOpen} workspace={workspace} />
-        {/*
-          Always-visible main-process heap + RSS badge with a 60s
-          sparkline. Self-gates on AGENT_CODE_PERF — renders null
-          until the first IPC probe confirms telemetry is on.
-          Click expands to a PerformancePanel-sized popover with
-          the full buffered window and growth rates.
-        */}
-        <SystemPerfHeader />
+        {/* Mount owns only display polling; closing it leaves baseline collection running. */}
+        {performancePanelOpen ? <PerformanceMonitor onClose={togglePerformancePanel} /> : null}
       </div>
     </div>
   )
