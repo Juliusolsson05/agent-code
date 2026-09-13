@@ -2,6 +2,18 @@
 
 **Status: APPROVED for staged execution. Stage 1 is next.**
 
+**Amended 2026-09-12 (user decision):** the Grok package and app provider mirror
+Claude, Codex and OpenCode one-to-one. The original Stage 3 put a process-owning
+`src/session-runtime/` coordinator inside the package; the user rejected that
+("making it handle its own process is pure stupidity"). Every sibling root class
+takes a consumer-spawned PTY and never spawns or kills a process
+(`ClaudeCodeHeadless`, `CodexHeadless`, `OpencodeTerminalHeadless`), and every
+side process a session needs is started by the app session through a package
+helper whose handle the session owns (`createProxyServer` in `claudeSession.ts`,
+`prepareOpencodeTerminalLaunch` in `opencodeTerminalSession.ts`). Stages 3 and 4
+and the isolation rules below are rewritten to that shape; any remaining
+structural divergence from the siblings is a defect, not a design option.
+
 The user approved this written decomposition after reasserting the
 recorded-evidence-first methodology. Execution in #832 / #844 now begins with
 Stage 1 recording. Approval does not skip independent stage exit gates: do not
@@ -141,29 +153,47 @@ would recreate the same error one layer deeper.
 observed cases. Existing hand-authored fault tests are supplemental robustness
 coverage and cannot fill a missing recorded case.
 
-## Stage 3 — Build the single provider-runtime owner
+## Stage 3 — Build the Grok headless package in the sibling shape
 
-**Produces:** headless `src/session-runtime/` containing a coordinator, its public
-event/state contract, and adapters over the existing control/guard/PTY/history
-primitives. Its sole production consumer will be the app's Grok AgentSession.
-The recorded catalog decides the exact extraction/reuse of `GrokHeadless`; do not
-turn that class into a collection of mode flags or create another competing
-history watcher as a shortcut.
+**Produces:** the headless package laid out like `opencode-terminal-headless`,
+`claude-code-headless` and `codex-headless`:
 
-In particular, legacy `GrokHeadless` activity inference and the control client's
-pending-turn bookkeeping must not become competing app state machines. The
-catalog must distinguish primitive transport facts from the coordinator's public
-activity/acceptance decisions before that code is reused or extracted.
+- `src/GrokHeadless.ts` — the root class. It takes a consumer-spawned `pty` and
+  never spawns or kills a process. Today it spawns its own PTY internally; that
+  is removed, not wrapped or hidden behind a mode flag.
+- `src/launch/prepareLaunch.ts` — returns the exact TUI `{ binary, args, env }`
+  plus the private per-lifetime leader/guard socket paths, like
+  `prepareOpencodeTerminalLaunch`. Prepared values only; nothing is started.
+- `src/control/` — the native leader (`GrokNativeControl`) and TUI socket guard
+  as consumer-started helpers returning a handle the app session owns, starts
+  and disposes, like `createProxyServer` → `proxy.start()` in `claudeSession.ts`.
+  The ordering is forced by native behavior: the TUI uses unbounded
+  connect_or_spawn with no connect-only flag, so the owned leader and guard must
+  exist before the app spawns the TUI or the TUI launches an unowned leader.
+- `src/reconcile/` — the isolated sequencing of control, screen and history
+  observations, whose single consumer is `GrokHeadless`, exactly like
+  OpenCode's `reconcile/SessionSequencer.ts`. It detects; it never owns a
+  process or makes app policy.
+- `channels/`, `conditions/`, `terminal/`, `transcript/` as in the siblings.
+
+There is no `src/session-runtime/` coordinator and no package class that owns a
+process lifetime. Legacy `GrokHeadless` activity inference and the control
+client's pending-turn bookkeeping must not become competing state machines; the
+Stage 2 catalog distinguishes primitive transport facts from the root class's
+public activity/acceptance events before that code is reused.
 
 **Verified by:** tests written first from Stage 1 traces and Stage 2 outcomes.
 Demonstrate failure against the absent/incorrect behavior, then implement each
 observed case. Replay must produce one consistent provider-state/event stream,
-with stale epochs unable to mutate it. Then rerun native scenarios through this
-owner rather than the probe's hand-assembled resource lifetimes.
+with stale epochs unable to mutate it. Then rerun native scenarios through
+`GrokHeadless` using the same sequence the app will use (prepare launch → start
+leader and guard helpers → spawn PTY → attach), rather than the recorder's
+hand-assembled resource lifetimes.
 
-**Why separate:** teardown, identity, acceptance and replay arbitration belong in
-one place. Distributing them across AgentSession, IPC and renderer callbacks
-creates disagreements that later look like UI bugs.
+**Why separate:** identity, acceptance and replay arbitration belong inside the
+package root class and its reconcile layer, as for OpenCode. Process lifetime
+belongs to the app session, as for every sibling. Splitting either across IPC or
+renderer callbacks creates disagreements that later look like UI bugs.
 
 **Reality check:** the recorded multi-source corpus. Missing proof of acceptance,
 session-changing behavior, binary-version agreement or startup deadlines blocks
@@ -171,9 +201,22 @@ the corresponding capability; it does not authorize a heuristic.
 
 ## Stage 4 — Adapt once to the app's existing contracts
 
-**Produces:** app `src/providers/grok/runtime/` with the single AgentSession
-adapter, plus the minimal explicit history-boundary contract extensions required
-in `src/shared/types/session.ts` and `src/shared/sessionFeed/`.
+**Produces:** app `src/providers/grok/` with the same files as the siblings:
+
+- `runtime/grokSession.ts` — the AgentSession. It prepares the launch, starts the
+  leader and guard helpers, spawns the TUI PTY with node-pty, constructs
+  `GrokHeadless({ pty, launch, ... })`, forwards its events, and owns rollback and
+  teardown order (the guarded-spawn rollback shape of `claudeSession.ts` and
+  `codexSession.ts`).
+- `runtime/promptDelivery.ts` and `runtime/skillDiscovery.ts`.
+- `renderer/` starting from OpenCode's minimal set: `composerSubmit.ts`,
+  `conditions/{policy.ts,views.tsx}`, `identity.ts`, `rows/dispatch.tsx`,
+  `semanticFoldPolicy.ts`, `shapes.ts`, `transcript/mapper.ts`.
+- `types/` for the native transcript types.
+
+Plus only the history-boundary contract extensions in
+`src/shared/types/session.ts` and `src/shared/sessionFeed/` that Stage 2 proves
+are needed.
 
 **Verified by:** recorded provider output passed through this adapter and the real
 manager batching/retirement boundary, capturing the actual emitted app events.
@@ -236,15 +279,20 @@ and report the missing gate honestly until that run is performed.
 ## Isolation and forbidden dependencies
 
 ```text
-native primitives → headless session-runtime → app Grok AgentSession
-                 → existing manager/SessionFeed → app ledger/stores → display
+app grokSession: prepareLaunch → start leader/guard helpers → spawn TUI PTY
+               → GrokHeadless (consumer-owned PTY; reconcile/ internal)
+               → existing manager/SessionFeed → app ledger/stores → display
 ```
 
 - Capture helpers have one consumer: the recorder/replay harness. Production
-  runtime, parser, UI and packaging entrypoints may not import them.
-- `src/session-runtime/` owns provider lifetime reconciliation. Its only app
-  consumer is `src/providers/grok/runtime/`. SessionManager, control SDK, preload,
-  desktop renderer and phone may not reach into its control/guard internals.
+  runtime, parser, UI and packaging entrypoints may not import them. They may
+  spawn native processes because they are instrumentation; production package
+  code may not.
+- Process lifetimes (TUI PTY, leader, guard) are owned by
+  `src/providers/grok/runtime/grokSession.ts`, exactly as Claude's session owns
+  its proxy and OpenCode's session owns its PTY. `src/reconcile/` is internal to
+  the package; its only consumer is `GrokHeadless`. SessionManager, control SDK,
+  preload, desktop renderer and phone may not reach into control/guard internals.
 - AgentSession exposes the shared app contract. Transports must preserve it;
   they may not infer native idle, acceptance or session ownership from content.
 - The app's ledger/transcript machinery owns row reconciliation. Display modules

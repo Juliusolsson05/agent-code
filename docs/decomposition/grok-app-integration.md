@@ -4,6 +4,8 @@
 > That replacement decomposition is approved for staged execution.
 > Evidence capture and an observed-case catalog must precede the combined runtime;
 > follow its independent exit gates rather than jumping to registration below.
+> Amended 2026-09-12: runtime and app layout mirror Claude/Codex/OpenCode 1:1 —
+> the app session spawns and owns every process; the package never does.
 
 Continues the approved Grok provider design and agent-code#832. The user has
 authorized component commits, pushes and linked PRs, but no merges. Parent
