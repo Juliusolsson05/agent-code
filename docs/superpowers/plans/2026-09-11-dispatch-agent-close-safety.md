@@ -47,4 +47,16 @@ Two independent reviews of `8d3a4018` (Codex: request changes, 1 blocker + 4 maj
 - **Dispatch focused close is strict:** an empty, dead or out-of-scope tiled lane closes nothing (no grid fallback).
 - One tab-removal tail (`tabRemoval.ts`) for the Close Tab command and emptied-tab closes: previous-neighbour next tab, Dispatch cleanup, Tiled Tabs/Spotlight/Reader cleanup. The command previously activated the first tab.
 - Automation: Agent Management no longer reports a sole grid leaf's siblings as affected; `silentIfSoleTarget` on such a root closes silently and promotes; `agents.close` and the operator guide name the Close Agent vs Close Tab choice.
-- Declined here: unifying "last active" rules (#915 owns it; WHY added at `latestAgentActivityAt`); the #863 row-binding scrub (coordinator comments on #863).
+- Declined here: unifying "last active" rules (#915 owns it; WHY added at `latestAgentActivityAt`); the #863 row-binding scrub (coordinator comments on #863); making Close Agent `destructive` (n3: it stays `secondary` so the dialog steers toward the narrower scope, WHY at the button).
+
+## Review round 2 (2026-09-13)
+
+Both reviews of `23ada8d9` requested changes (Codex: 3 major; Claude: N1 major, N2–N4 minor, N5–N8 nits). Current main merged first. Decisions:
+
+- **One executor for both Close Tab entry points.** `closeTab` moved from `tab.ts` into `usePaneActions` beside `closeSession`; its gate's expanded plan is the kill list, members close deepest-first then the tab's grid leaves, sequentially, each revalidated at its own kill boundary. The old copy's pre-kill undo, early "Closed" toast and `Promise.all` are gone; a partial close leaves a tab rooted and focused on a survivor.
+- **Undo is operation-level.** The executor only records commits; after the whole operation, `recordOperationUndo` pushes one entry: a removed project as a tab entry built from its approval snapshot (original tree pruned to closed leaves, closed rows folded in), every other commit as its own shape, and several units as a new `group` entry replayed last-first with lineage threaded through the unreplayed members. A retryable spawn failure before anything came back keeps the group; after partial success the rest goes back as a smaller group.
+- **Promotion fallback (N1).** Prefer a row the operation is not closing, fall back to a pending member rather than remove a tab that still files one. The round-1 "member in a removed tab" undo branch is therefore dead and deleted.
+- **Partial operations are reported, not refused.** If earlier members committed and the named session is kept or fails, one toast names both ("Closed 1 of 3 listed sessions — kept “Parent” open because a linked session is still open") and the committed members are recorded for undo. `closeSession` still resolves false then, because the named session is still running; the return doc and Close Agent and Remove Lane's WHY say so. A thrown named kill is reported and recorded before it is rethrown.
+- **Bare `preConfirmed` approves only the named session (N7)**, so naming a session can never approve its linked children; only bulk cleanup uses it, with `onlyIf`.
+- Agent Management's close error no longer claims the user declined when the close was refused.
+- Commit history from round 1 is not rewritten (N8).
