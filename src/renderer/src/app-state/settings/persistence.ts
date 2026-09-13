@@ -17,6 +17,7 @@ import {
   isV4MigratedTheme,
 } from '@renderer/app-state/settings/savedThemes'
 import type { SavedTheme } from '@renderer/app-state/settings/savedThemes'
+import { isExtensionThemeMode } from '@shared/types/extensionThemes'
 import { parseCustomAppearanceJson } from '@renderer/app-state/settings/customAppearance'
 import { isCommandSortMode } from '@renderer/features/command-palette/lib/sortCommands'
 import type { CommandSortMode } from '@renderer/features/command-palette/lib/sortCommands'
@@ -255,6 +256,9 @@ function resolvePersistedMode(
     return migrated ? migrated.id : DEFAULT_SETTINGS.mode
   }
   if (isBuiltInThemeMode(parsed.mode)) return parsed.mode
+  // Catalog hydration happens after Settings. Erasing a valid extension id here
+  // would lose the selected theme on every restart and prevent reinstall restore.
+  if (isExtensionThemeMode(parsed.mode)) return parsed.mode
   if (isSavedThemeId(parsed.mode) && findSavedTheme(savedThemes, parsed.mode)) {
     return parsed.mode
   }

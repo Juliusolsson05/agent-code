@@ -1,3 +1,5 @@
+import { mainOperations } from './operations.js'
+import { LEGACY_MONITOR_OPERATIONS } from '@shared/performance/operationTimers.js'
 import { SpanStatusCode, trace } from '@opentelemetry/api'
 import type { Attributes } from '@opentelemetry/api'
 import { resourceFromAttributes } from '@opentelemetry/resources'
@@ -229,10 +231,12 @@ export class PerformanceService {
   }
 
   span(name: string, attributes?: Record<string, unknown>) {
+    const monitorName = LEGACY_MONITOR_OPERATIONS[name]
+    const finishMonitor = monitorName ? mainOperations.begin(monitorName) : () => {}
     if (!this.enabled) {
       return {
-        end() {},
-        fail() {},
+        end() { finishMonitor() },
+        fail() { finishMonitor('error') },
       }
     }
     const span = this.tracer.startSpan(name, {
@@ -240,11 +244,13 @@ export class PerformanceService {
     })
     return {
       end: (endAttributes?: Record<string, unknown>) => {
+        finishMonitor()
         const attrs = toAttributes(sanitizeData(endAttributes, this.verbose))
         if (attrs) span.setAttributes(attrs)
         span.end()
       },
       fail: (err: unknown, endAttributes?: Record<string, unknown>) => {
+        finishMonitor('error')
         const attrs = toAttributes(sanitizeData(endAttributes, this.verbose))
         if (attrs) span.setAttributes(attrs)
         span.recordException(err instanceof Error ? err : String(err))

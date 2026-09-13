@@ -79,6 +79,7 @@ import {
   killSessionBackendIfOwned,
   type SessionActions,
 } from '@renderer/workspace/hook/actions/session'
+import type { AgentProviderKind } from '@shared/types/providerKind'
 
 // -----------------------------------------------------------------------------
 // Pane / focus / navigation actions.
@@ -867,7 +868,7 @@ export function usePaneActions(
     placement?: { selectCreated: boolean },
   ) => Promise<SessionId | null>
   createLinkedAgent: (
-    selection: SessionSpawnSelection & { kind: Exclude<SessionKind, 'terminal'> },
+    selection: SessionSpawnSelection & { kind: AgentProviderKind },
     parentId: SessionId,
   ) => Promise<void>
   createOrchestrationAgent: (params: {
@@ -913,6 +914,7 @@ export function usePaneActions(
   focusSession: (sessionId: SessionId) => void
   focusSessionInTab: (tabId: string, sessionId: SessionId) => void
   navigate: (direction: 'left' | 'right' | 'up' | 'down') => void
+  openExtensionViewInPane: (viewId: string, direction?: SplitDirection) => void
 } {
   const closeSessionRef = useRef<
     ((targetId: SessionId, options?: CloseSessionOptions) => Promise<boolean>) | null
@@ -1269,7 +1271,7 @@ export function usePaneActions(
   // focus cannot drift.
   const createLinkedAgent = useCallback(
     async (
-      selection: SessionSpawnSelection & { kind: Exclude<SessionKind, 'terminal'> },
+      selection: SessionSpawnSelection & { kind: AgentProviderKind },
       parentId: SessionId,
     ) => {
       const { kind, providerRuntime } = selection
@@ -2705,6 +2707,79 @@ export function usePaneActions(
     [focusSession, state.activeTabId, state.tabs],
   )
 
+  // Open a contributed extension view as a PANE (a tile leaf), not a modal.
+  //
+  // Unlike every other pane this creates NO backing process: an extension view is
+  // pure renderer UI reconstructed from SessionMeta.extensionViewId by
+  // ExtensionViewLeaf. So it deliberately does NOT call sessionActions.spawn (which
+  // mints the SessionId in MAIN by starting a PTY/agent). It mints its own id — the
+  // one place the renderer is allowed to, the same as tab ids — writes the meta
+  // directly, and splits beside the focused pane. collectLiveProcessIds excludes
+  // 'extension-view', so rehydrate reconstructs this leaf from metadata and never
+  // tries to recover a process for it.
+  const openExtensionViewInPane = useCallback(
+    (viewId: string, direction: SplitDirection = 'vertical') => {
+      // Resolve placement INSIDE the synchronous workspace update. There is no
+      // process await here, so metadata, ownership and visible focus can land as
+      // one change rather than leaving a session whose split silently failed.
+      setState(prev => {
+        const sessionId = crypto.randomUUID() as SessionId
+        if (prev.dispatchMode) {
+          // Dispatch may focus a detached row in a different project from the
+          // active grid tab. Such a row is not a split anchor. Follow the same
+          // placement contract as new terminals/agents: file a detached row under
+          // the visible target's project and select it in the focused lane.
+          const target = resolveDispatchSpawnTarget(prev)
+          const tabIndex = prev.tabs.findIndex(t => t.id === target.tabId)
+          const tab = prev.tabs[tabIndex]
+          if (!tab) return prev
+          const cwd = (target.cwdSessionId ? prev.sessions[target.cwdSessionId]?.cwd : undefined)
+            ?? prev.sessions[tab.focusedSessionId]?.cwd
+            ?? ''
+          return {
+            ...prev,
+            activeTabId: tab.id,
+            sessions: {
+              ...prev.sessions,
+              [sessionId]: { cwd, kind: 'extension-view', extensionViewId: viewId },
+            },
+            detachedSessions: {
+              ...prev.detachedSessions,
+              [sessionId]: detachedDispatchRecord(sessionId, tab, tabIndex),
+            },
+            dispatchMode: applyDispatchSpawnFocus(prev.dispatchMode, sessionId, target.laneIndex),
+          }
+        }
+
+        const tab = prev.tabs.find(t => t.id === prev.activeTabId)
+        if (!tab) return prev
+        // Anchor on the PHYSICAL focused leaf, exactly like splitFocused. The
+        // command target can be a related-agent mini-tab's session, which is a
+        // detached child and never a leaf of tab.root, so splitLeaf returned the
+        // same root and opening a view silently did nothing while such a tab was
+        // selected.
+        const parentSessionId = tab.focusedSessionId
+        if (!parentSessionId) return prev
+        const root = splitLeaf(tab.root, parentSessionId, direction, sessionId)
+        // Only a real split owns metadata. This also guards stale tile focus.
+        if (root === tab.root) return prev
+        return {
+          ...prev,
+          tabs: prev.tabs.map(t => t.id === tab.id ? { ...t, root, focusedSessionId: sessionId } : t),
+          sessions: {
+            ...prev.sessions,
+            [sessionId]: {
+              cwd: prev.sessions[parentSessionId]?.cwd ?? '',
+              kind: 'extension-view',
+              extensionViewId: viewId,
+            },
+          },
+        }
+      })
+    },
+    [setState],
+  )
+
   return {
     splitFocused,
     startNewAgentPlacement,
@@ -2729,6 +2804,7 @@ export function usePaneActions(
     focusSession,
     focusSessionInTab,
     navigate,
+    openExtensionViewInPane,
   }
 }
 

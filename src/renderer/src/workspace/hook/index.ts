@@ -976,6 +976,7 @@ export function useWorkspace(
     ensureSessionLive,
     killSession,
     splitFocused: paneActions.splitFocused,
+    openExtensionViewInPane: paneActions.openExtensionViewInPane,
     startNewAgentPlacement: paneActions.startNewAgentPlacement,
     commitNewAgentPlacement: paneActions.commitNewAgentPlacement,
     createDetachedDispatchAgent: paneActions.createDetachedDispatchAgent,

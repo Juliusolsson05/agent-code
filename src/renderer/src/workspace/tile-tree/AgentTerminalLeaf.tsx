@@ -27,6 +27,7 @@ import { encodeTerminalPaste, registerTerminalPasteTarget } from '@renderer/work
 import { AgentTerminalActions } from '@renderer/workspace/tile-tree/AgentTerminalActions'
 import { useTerminalFollow } from '@renderer/workspace/tile-tree/terminalFollow'
 import type { GridRelatedAgentTab } from '@renderer/workspace/gridRelatedAgents'
+import type { AgentProviderKind } from '@shared/types/providerKind'
 
 type Props = {
   sessionId: SessionId
@@ -37,7 +38,7 @@ type Props = {
   workspace: Workspace
   runtime: SessionRuntime
   projectDir: string | null
-  provider: Exclude<SessionKind, 'terminal'>
+  provider: AgentProviderKind
   /** The window's Status Mode setting. It is threaded exactly like TileLeaf's
    *  so both surfaces light the header under the same rule. Required, not
    *  defaulted: an omitted prop is exactly how the terminal branch went unlit

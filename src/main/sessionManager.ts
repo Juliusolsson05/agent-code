@@ -1,3 +1,5 @@
+import { mainOperations } from '@main/performance/operations.js'
+import { ResponseTracker } from '@shared/performance/responseTracker.js'
 import { randomUUID } from 'crypto'
 import { hasReportingDomain } from '@shared/types/tldr.js'
 import { EventEmitter } from 'events'
@@ -54,6 +56,7 @@ import {
   DEFAULT_PROVIDER,
   isAgentProviderRuntime,
   isAgentProviderKind,
+  isAgentSessionKind,
   isSessionKind,
 } from '@shared/types/providerKind.js'
 import type {
@@ -435,6 +438,7 @@ export type ResolveConditionResult =
     }
 
 export class SessionManager extends EventEmitter {
+  private readonly monitorResponses = new ResponseTracker(mainOperations)
   private readonly sessions = new Map<string, RegistryEntry>()
   private readonly spawningSessionGenerations = new Map<string, symbol>()
   private readonly sessionStateGenerations = new Map<string, symbol>()
@@ -835,7 +839,7 @@ export class SessionManager extends EventEmitter {
     sessionId: string,
     kind: SessionKind,
     expectedEntry?: RegistryEntry,
-    revokeAgentMcp = kind !== 'terminal',
+    revokeAgentMcp = isAgentSessionKind(kind),
     expectedGeneration = expectedEntry?.lifecycle.generation,
   ): boolean {
     // WHY this helper exists even before the larger SessionState consolidation:
@@ -859,6 +863,10 @@ export class SessionManager extends EventEmitter {
     ) {
       return false
     }
+    // Provider output can no longer arrive after the generation-owned entry is
+    // retired. End its bounded wait here so dead sessions do not occupy the
+    // first-output tracker until the ten-minute safety expiry.
+    this.monitorResponses.cancel(sessionId)
     const retiringEntry = expectedEntry ?? this.sessions.get(sessionId)
     if (kind === 'codex' && retiringEntry?.kind === 'codex') {
       // Record retirement before deleting the authoritative row. A synchronous
@@ -1461,6 +1469,18 @@ export class SessionManager extends EventEmitter {
         code: 'start-failed',
         retryable: false,
         message: 'This Agent Code version does not support the requested provider.',
+      })
+    }
+    // Same fence as spawnWithId: an extension-view leaf is process-less and is
+    // excluded from the rehydrate live-process set (collectLiveProcessIds), so a
+    // recover for one should never be issued. If a stale renderer does, refuse
+    // rather than fall through and spawn a terminal shell for it.
+    if (requestedKind === 'extension-view') {
+      return Promise.resolve({
+        ok: false,
+        code: 'start-failed',
+        retryable: false,
+        message: 'extension-view panes have no process to recover.',
       })
     }
     const kind = options.kind ?? DEFAULT_PROVIDER
@@ -2455,6 +2475,14 @@ export class SessionManager extends EventEmitter {
     if (requestedKind !== undefined && !isSessionKind(requestedKind)) {
       throw new Error('Unsupported session provider')
     }
+    // Extension-view "sessions" are renderer-only tile leaves with NO process; they
+    // are created directly in the workspace store (openExtensionViewInPane) and must
+    // never reach main. isSessionKind now accepts 'extension-view', so without this
+    // it would fall through to the terminal-spawn branch below and start a stray
+    // shell. A spawn request for one is a stale or hostile caller — refuse it.
+    if (requestedKind === 'extension-view') {
+      throw new Error('extension-view panes have no process and cannot be spawned')
+    }
     const kind: SessionKind = options.kind ?? DEFAULT_PROVIDER
     const providerRuntime = resolveProviderRuntime(kind, options.providerRuntime)
     // Fail here rather than in the forked child. See
@@ -2504,6 +2532,7 @@ export class SessionManager extends EventEmitter {
     let entry: RegistryEntry | null = null
     let mcpRegistered = false
     let createdTmuxName: string | null = null
+    const finishSpawn = mainOperations.begin('session.spawn', sessionId)
     try {
     this.throwIfSpawnCancelled(recoveryClaim, codexReplacementHandoff)
     const spawnStartedAt = performance.now()
@@ -2869,6 +2898,7 @@ export class SessionManager extends EventEmitter {
       })
       session.on('semantic-event', (event: unknown) => {
         if (!ownsEntry()) return
+        this.monitorResponses.output(sessionId, event)
         this.markActivity(sessionId)
         if (kind === 'codex') {
           this.observeCodexSemanticEvent(sessionId, event, agentEntry.lifecycle.runId)
@@ -2922,7 +2952,8 @@ export class SessionManager extends EventEmitter {
         // measurement attached to it. This pair is always on. The perf span
         // stays for its richer sampling when someone deliberately enables it.
         this.lifecycle.session('provider.start.begin', sessionId, { kind })
-        await session.start()
+        const finishReady = mainOperations.begin('session.ready', sessionId)
+        try { await session.start(); finishReady() } catch (error) { finishReady('error'); throw error }
         await this.settleEntryStart(sessionId, agentEntry)
         this.throwIfSpawnCancelled(recoveryClaim, codexReplacementHandoff)
         if (!ownsEntry()) throw new RecoveryCancelledError()
@@ -2962,6 +2993,7 @@ export class SessionManager extends EventEmitter {
         sessionId,
         provider: kind,
       })
+      finishSpawn()
       const providerSessionId = session.getProviderSessionId?.() ?? null
       return {
         sessionId,
@@ -3121,7 +3153,8 @@ export class SessionManager extends EventEmitter {
     this.throwIfSpawnCancelled(recoveryClaim, codexReplacementHandoff)
     try {
       const terminalStartStartedAt = performance.now()
-      await session.start()
+      const finishReady = mainOperations.begin('session.ready', sessionId)
+      try { await session.start(); finishReady() } catch (error) { finishReady('error'); throw error }
       await this.settleEntryStart(sessionId, terminalEntry)
       this.throwIfSpawnCancelled(recoveryClaim, codexReplacementHandoff)
       if (!ownsEntry()) throw new RecoveryCancelledError()
@@ -3166,8 +3199,10 @@ export class SessionManager extends EventEmitter {
       sessionId,
       provider: 'terminal',
     })
+    finishSpawn()
     return { sessionId, tmuxName: tmuxSessionName ?? undefined }
     } catch (error) {
+      finishSpawn(error instanceof RecoveryCancelledError ? 'cancelled' : 'error')
       // WHY spawn is one transaction across provider construction, MCP
       // registration, registry publication, and start(): failures can occur at
       // every boundary, including cancellation while start() is still pending.
@@ -4039,6 +4074,7 @@ export class SessionManager extends EventEmitter {
     prompt: string,
     imagePaths?: string[],
     record?: (event: string, data?: Record<string, unknown>) => void,
+    operationId?: string,
   ): Promise<PromptDeliveryResult> {
     if (this.promptDeliveriesInFlight.has(sessionId)) {
       record?.('duplicate-blocked')
@@ -4096,8 +4132,15 @@ export class SessionManager extends EventEmitter {
     record?.('reserved')
     let promptWritten = false
     let enterWritten = false
+    const finishDelivery = mainOperations.begin('prompt.delivery', sessionId, operationId)
+    this.monitorResponses.sweep()
+    // Start unarmed: the clock begins at delivery, but only the acceptance
+    // below knows whether this prompt starts a turn or waits in the provider
+    // queue. This covers every main-delivered source (composer, remote and
+    // agent management), not only renderer submits that can cancel over IPC.
+    this.monitorResponses.begin(sessionId, operationId, false)
     try {
-      return await getMainProvider(entry.kind).deliverPrompt({
+      const delivery = await getMainProvider(entry.kind).deliverPrompt({
         session: entry.session,
         // WHY identity-check every delayed write: provider protocols await
         // absorption/readiness. A same-ID wake must never receive Enter from a
@@ -4114,7 +4157,19 @@ export class SessionManager extends EventEmitter {
         imagePaths,
         record,
       })
+      finishDelivery(delivery.ok ? 'success' : 'error')
+      // Instrumentation must never change a delivery outcome. `acceptance` is
+      // read defensively because a provider result without it made
+      // `acceptance.kind` throw, and the catch below then reported a delivery
+      // that had SUCCEEDED as transport-failed (caught by
+      // sessionManager.recover.test's in-flight adoption case).
+      const queued = delivery.ok && delivery.acceptance?.kind === 'queue'
+      if (!delivery.ok || queued) this.monitorResponses.cancel(sessionId)
+      else this.monitorResponses.arm(sessionId, operationId)
+      return delivery
     } catch (err) {
+      finishDelivery('error')
+      this.monitorResponses.cancel(sessionId)
       record?.('uncertain', { reason: 'provider-threw' })
       return {
         ok: false,
@@ -4133,9 +4188,26 @@ export class SessionManager extends EventEmitter {
         enterWritten,
       }
     } finally {
+      // A successful delivery only means the prompt reached the provider. The
+      // response tracker must survive this method and finish on the first
+      // semantic provider event; cancelling it here would reduce every normal
+      // first-output measurement to the prompt-write duration.
       this.promptDeliveriesInFlight.delete(sessionId)
       record?.('released')
     }
+  }
+
+  beginMonitorResponse(sessionId: string, operationId?: string): void {
+    // Main owns live session identity. A renderer may request timing for a
+    // stable pane ID, but a stale/foreign ID cannot allocate baseline state.
+    // Renderer submits begin unarmed at Enter. deliverPromptToAgent joins the
+    // same operation ID, and acceptance arms or cancels it exactly once.
+    if (this.sessions.has(sessionId)) this.monitorResponses.begin(sessionId, operationId, false)
+  }
+
+  settleMonitorResponse(sessionId: string, operationId: string | undefined, started: boolean): void {
+    if (started) this.monitorResponses.arm(sessionId, operationId)
+    else this.monitorResponses.cancelOperation(sessionId, operationId)
   }
 
   /** Submit staged composer content only when no finished-prompt transaction
@@ -4294,7 +4366,7 @@ export class SessionManager extends EventEmitter {
         sessionId,
         recovery.kind,
         undefined,
-        recovery.kind !== 'terminal',
+        isAgentSessionKind(recovery.kind),
         generation,
       )
     }
@@ -4352,6 +4424,13 @@ export class SessionManager extends EventEmitter {
   ): Promise<boolean> {
     const requestedKind: unknown = options.kind
     if (requestedKind !== undefined && !isSessionKind(requestedKind)) return false
+    // The THIRD renderer→main path that can carry an extension-view kind, after
+    // spawnWithId and recover. Every close path in the renderer sends the pane's
+    // kind here, and this returned false for an extension pane already — but by
+    // accident of the ownership tables being empty for it, not by a decision.
+    // Stating it makes the boundary three-for-three and stops a future ownership
+    // change from turning "nothing to kill" into "kill something".
+    if (requestedKind === 'extension-view') return false
     const kind = options.kind ?? DEFAULT_PROVIDER
     let providerRuntime: AgentProviderRuntime | undefined
     try {
@@ -4474,7 +4553,7 @@ export class SessionManager extends EventEmitter {
         sessionId,
         claim.kind,
         undefined,
-        claim.kind !== 'terminal',
+        isAgentSessionKind(claim.kind),
         claim.spawnGeneration,
       )
     }
@@ -4683,7 +4762,7 @@ export class SessionManager extends EventEmitter {
     if (observed) return observed
     const info = this.spawnInfo.get(sessionId)
     const kind = this.getSessionKind(sessionId)
-    if (!info?.resumeSessionId || !kind || kind === 'terminal') return null
+    if (!info?.resumeSessionId || !isAgentProviderKind(kind)) return null
     try {
       // Resume metadata is available before any new committed entry. Providers
       // with their own history mint the durable locator from that identity;

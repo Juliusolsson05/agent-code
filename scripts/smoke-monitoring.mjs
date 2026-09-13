@@ -28,7 +28,8 @@ try {
       let operationSeen = false;
       let processSeen = false;
       const deadline = setTimeout(() => { child.kill(); app.exit(2); }, 15000);
-      const send = records => child.postMessage({ sequence: ++sequence, records });
+      const send = records => child.postMessage({ sequence: ++sequence, runId: 'smoke-run',
+        historyRoot: ${JSON.stringify(join(directory, 'monitor-history'))}, restarts: 0, records });
       child.on('message', response => {
         if (response.sequence !== sequence) { child.kill(); app.exit(3); return; }
         if (response.snapshot) {

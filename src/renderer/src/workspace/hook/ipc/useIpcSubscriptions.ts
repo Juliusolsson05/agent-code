@@ -1,3 +1,5 @@
+import { isResponseOutput } from '@shared/performance/responseTracker.js'
+import { noteMonitorOutput } from '@renderer/performance/useMonitorCommit'
 import {
   AGENT_PROVIDER_KINDS,
   DEFAULT_PROVIDER,
@@ -1062,6 +1064,7 @@ export function useIpcSubscriptions(
         spanClosed = true
         span.end({ ...data, rawEventCount })
       }
+      if (isResponseOutput(event)) noteMonitorOutput(sessionId)
       const semanticEvent = asRecord(event) ?? {}
       const observedProvider = providerSessionObservedEvent(event)
       if (observedProvider) {

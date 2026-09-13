@@ -35,6 +35,7 @@ import type {
 } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import type { SessionActions } from '@renderer/workspace/hook/actions/session'
+import { isProcessSessionKind } from '@shared/types/providerKind'
 
 /**
  * Write row METADATA without touching any row length.
@@ -634,7 +635,8 @@ export function useDispatchActions(
     (sessionId: SessionId) => {
       setState(prev => {
         if (prev.pinnedSessionIds.includes(sessionId)) return prev
-        if (!prev.sessions[sessionId]) return prev
+        const meta = prev.sessions[sessionId]
+        if (!meta || !isProcessSessionKind(meta.kind)) return prev
         return {
           ...prev,
           pinnedSessionIds: [...prev.pinnedSessionIds, sessionId],
@@ -665,7 +667,10 @@ export function useDispatchActions(
         // before they hit Enter) can never reintroduce an orphan into
         // the array. Same defensive shape as buildPinnedDispatchRows
         // at render time.
-        const filtered = ids.filter(id => prev.sessions[id] !== undefined)
+        const filtered = ids.filter(id => {
+          const meta = prev.sessions[id]
+          return meta !== undefined && isProcessSessionKind(meta.kind)
+        })
         // Deduplicate while preserving caller order (first occurrence wins).
         // The modal already enforces this client-side, but a programmatic
         // caller could pass duplicates; keeping the dedupe here means the

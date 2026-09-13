@@ -1,12 +1,15 @@
 import { ControlError, defineCapability, nativeInputOutput, conditionTargetInput, conditionReadOutput, conditionReplyInput, conditionReplyOutput } from '@control-sdk'
 import { useAppStore } from '@renderer/app-state/store'
+import { isAgentSessionKind } from '@shared/types/providerKind'
 import { z } from 'zod'
 
 export function conditionControlCapabilities() {
   const invoke = async (capabilityId: string, input: { sessionId: string }) => {
     const state = useAppStore.getState().workspaceState
     const meta = state.sessions[input.sessionId]
-    if (!meta || meta.kind === 'terminal' || state.buried.some(item => item.sessionId === input.sessionId)) throw new ControlError('unavailable', 'Choose a current, non-buried agent')
+    // Positive agent check: a terminal-only guard sent extension panes to main
+    // as `provider: 'extension-view'`, a provider main has no backend for.
+    if (!meta || !isAgentSessionKind(meta.kind) || state.buried.some(item => item.sessionId === input.sessionId)) throw new ControlError('unavailable', 'Choose a current, non-buried agent')
     const result = await window.api.controlInvoke({ capabilityId, input: { ...input, cwd: meta.cwd, provider: meta.kind ?? 'claude' } })
     if (!result.ok) throw new ControlError(result.error.code, result.error.message, result.error.outcome)
     return result.value

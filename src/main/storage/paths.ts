@@ -21,6 +21,39 @@ export const STATE_DIR = join(homedir(), '.config', APP_SLUG)
 // The renderer owns the JSON shape; main is a byte mover.
 export const STATE_FILE = join(STATE_DIR, 'workspace.json')
 
+// Installed extension bundles — immutable generations under .bundles/<id>/<uuid>.
+// The ledger selects the published generation. Older installs remain directly
+// under <id> until updated; never infer installation from a directory scan.
+//
+// This is CODE, fetched from a remote repository. It is disposable in the sense
+// that reinstalling restores it, and it is the directory a future privileged
+// scheme serves from.
+export const EXTENSIONS_DIR = join(STATE_DIR, 'extensions')
+
+// The install ledger: which extensions are installed, from which repo and ref, at
+// which content hash. Separate from the bundles so a corrupt or half-extracted
+// bundle directory can never make the app forget what is supposed to be installed.
+export const EXTENSIONS_LOCKFILE = join(STATE_DIR, 'extensions.json')
+
+// Per-extension state, one JSON file per extension id.
+//
+// WHY this is a SIBLING of EXTENSIONS_DIR rather than living inside each bundle:
+// the bundle directory is replaced wholesale on install and update — extracting a
+// new version over it, or removing it first, would take the user's saved state with
+// it. Keeping state outside means an update never touches it and an uninstall can
+// choose whether to. It also means the scheme that serves extension code can be
+// pointed at EXTENSIONS_DIR without ever exposing state files over that origin.
+//
+// WHY main-owned rather than the renderer's zustand-persist blob: app-state/store.ts
+// records that adding a field without bumping the persist version black-screened
+// launch twice (#249). Extension state is authored outside the app's release cycle —
+// by definition nobody bumps a version for it — so it must not be able to reach that
+// failure mode at all.
+//
+// WHY deliberately NOT registered with debugRetention, unlike every debug root
+// below: those are disposable forensic caches with a disk budget, and this is *user
+// data*. A retention sweep would silently delete an extension's saved state.
+export const EXTENSION_STATE_DIR = join(STATE_DIR, 'extension-state')
 // Main-owned desired state and ownership journal for the optional personal
 // conventions skill. Provider copies are integration surfaces, never the source
 // of truth; keeping this beside workspace state gives recovery one stable path.
@@ -74,6 +107,11 @@ export const PROXY_EVENTS_DIR = join(STATE_DIR, 'proxy')
 // written only when AGENT_CODE_PERF=1.
 export const PERFORMANCE_RUNS_DIR = join(STATE_DIR, 'performance', 'runs')
 
+// Product monitoring is always on, so it cannot share the environment-gated
+// trace root above. A distinct root also lets its hard 128 MiB retention rule
+// prune only the bounded metric history it owns.
+export const MONITOR_HISTORY_DIR = join(STATE_DIR, 'performance-monitor')
+
 // Always-on app-run incident journals. Unlike performance traces, this root is
 // not gated by AGENT_CODE_PERF: it holds the small manifest/heartbeat/event
 // spine that explains crashes and restarts in normal user runs. Large forensic
@@ -87,6 +125,14 @@ export const INCIDENT_RUNS_DIR = join(STATE_DIR, 'incidents', 'runs')
 // `.heapsnapshot` somewhere else, that writer is opting out of the disk budget
 // and should justify it in the diff.
 export const HEAP_SNAPSHOT_DIR = join(STATE_DIR, 'heap-snapshots')
+
+// Explicit recordings (Chromium traces, main CPU profiles, heap snapshots) are
+// written here first and renamed to the user's chosen destination only once
+// complete. WHY not a temp file beside the destination: a quit or crash during
+// a 30-second trace stranded `*.agent-code-<pid>.tmp` files in the user's own
+// Desktop/Downloads, where nothing owned by the app would ever clean them.
+// This root is app-owned and swept at startup, before any capture can begin.
+export const PERFORMANCE_CAPTURE_TEMP_DIR = join(STATE_DIR, 'performance-capture-tmp')
 
 // Session recordings — continuous debug-gated capture of a session's
 // rendering-pipeline input stream, replayable in the test suite (see

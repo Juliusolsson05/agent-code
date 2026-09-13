@@ -13,8 +13,22 @@ const snapshot: MonitorSnapshot = {
 function api(
   read: () => Promise<MonitorSnapshot | null>,
   getMonitorProcesses: (offset: number, sort: 'cpu' | 'memory') => Promise<MonitorProcessPage | null> = vi.fn(async () => null),
+  overrides: Record<string, unknown> = {},
 ) {
-  Object.defineProperty(window, 'api', { value: { getMonitorSnapshot: read, getMonitorProcesses }, configurable: true })
+  Object.defineProperty(window, 'api', { value: {
+    getMonitorSnapshot: read, getMonitorProcesses,
+    previewMonitorReport: vi.fn(async () => ({ from: 0, to: 1, estimatedBytes: 4096,
+      dataClasses: ['metrics', 'operations', 'incidents', 'coverage', 'build'], localOnly: true,
+      status: { state: 'healthy', bytes: 4096, oldestAt: 0, newestAt: 1, points: 2,
+        incidents: 0, exporting: false, shortened: false } })),
+    getMonitorTraceStatus: vi.fn(async () => ({ state: 'idle', mode: null, ownerWindowId: null,
+      startedAt: null, endsAt: null, path: null, bytes: null, truncated: false, message: null })),
+    saveMonitorReport: vi.fn(async () => ({ ok: false, code: 'cancelled' })),
+    clearMonitorHistory: vi.fn(async () => null),
+    startMonitorTrace: vi.fn(async () => null), stopMonitorTrace: vi.fn(async () => null),
+    writeHeapSnapshot: vi.fn(async () => ({ ok: false, error: 'cancelled' })), revealPath: vi.fn(async () => {}),
+    ...overrides,
+  }, configurable: true })
 }
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
 
@@ -68,5 +82,20 @@ describe('monitor display lifecycle', () => {
     await act(async () => { vi.advanceTimersByTime(2000); await Promise.resolve() })
     await act(async () => { await Promise.resolve() })
     expect(readProcesses).toHaveBeenLastCalledWith(0, 'cpu')
+  })
+
+  it('previews local-only reports and starts an explicitly selected trace', async () => {
+    const start = vi.fn(async () => ({ state: 'recording' as const, mode: 'chromium' as const,
+      ownerWindowId: 7, startedAt: 1, endsAt: 30_001, path: null, bytes: null,
+      truncated: false, message: null }))
+    api(vi.fn(async () => ({ ...snapshot, history: { state: 'healthy' as const, bytes: 4096,
+      oldestAt: 0, newestAt: 1, points: 2, incidents: 0, exporting: false, shortened: false } })), undefined, { startMonitorTrace: start })
+    render(<PerformanceMonitor onClose={vi.fn()} />)
+    screen.getByRole('button', { name: 'Recordings' }).click()
+
+    expect(await screen.findByText(/metrics, operations, incidents, coverage, build/)).toHaveTextContent('local file only')
+    screen.getByRole('button', { name: 'Record Chromium Trace' }).click()
+    await vi.waitFor(() => expect(start).toHaveBeenCalledWith('chromium', 30_000))
+    expect(await screen.findByRole('button', { name: 'Stop and Save' })).toBeInTheDocument()
   })
 })

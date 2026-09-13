@@ -7,6 +7,7 @@ import { monitorCoordinator } from '@main/performance/MonitorCoordinator.js'
 
 import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import { getOutboundIpcDiagnostics } from '@main/window/windowRegistry.js'
+import { isCreatingExtensionRuntimeWindow } from '@main/extensions/runtimeWindowMarker.js'
 import type { RendererFreezeHeartbeat } from '@shared/incident/rendererFreeze.js'
 
 const HEARTBEAT_STALL_MS = 4_000
@@ -198,6 +199,12 @@ export function installWindowIncidentHooks(journal: AppRunJournal): void {
   })
 
   app.on('browser-window-created', (_event, window) => {
+    // Hidden extension runtime windows are not application renderers: they never
+    // send the renderer heartbeat, so enrolling them produced a false freeze
+    // snapshot every 30 s per running extension and recorded extension crashes
+    // as application renderer crashes. Their lifecycle belongs to the runtime
+    // service, which already retires them on crash/close.
+    if (isCreatingExtensionRuntimeWindow()) return
     // Track when this window went unresponsive so 'responsive' can report how
     // long it was frozen. Keyed by window id; cleared on recovery.
     let unresponsiveSince: number | null = null
@@ -208,6 +215,15 @@ export function installWindowIncidentHooks(journal: AppRunJournal): void {
     // misleading main-process crash incident. The numeric ID is the stable lifecycle key.
     const webContentsId = window.webContents.id
     windows.set(webContentsId, window)
+    // Every app window is constructed with `show: false` and revealed on
+    // `ready-to-show` (window/appWindow.ts). Until that first show it is
+    // EXPECTED to be visible: a renderer that hangs before first paint never
+    // fires ready-to-show, so registering it as hidden made exactly that
+    // failure undetectable. The incident engine gives never-heartbeated
+    // windows a longer boot grace, so slow cold starts are not stalls.
+    let shownOnce = false
+    const monitorVisible = (): boolean => (window.isVisible() || !shownOnce) && !window.isMinimized()
+    monitorCoordinator.openWindow(webContentsId, monitorVisible())
     const initialLiveness = freshLiveness(Date.now())
     recordWindowLifecycle(initialLiveness, window, 'created')
     liveness.set(webContentsId, initialLiveness)
@@ -223,6 +239,8 @@ export function installWindowIncidentHooks(journal: AppRunJournal): void {
     // whether occlusion, fullscreen Spaces, minimization, or focus churn happened immediately
     // before the last JavaScript heartbeat. The ring is deliberately tiny and metadata-only.
     const captureLifecycle = (eventName: string): void => {
+      if (eventName === 'show') shownOnce = true
+      monitorCoordinator.setWindowVisible(webContentsId, monitorVisible())
       const state = liveness.get(webContentsId)
       if (state) recordWindowLifecycle(state, window, eventName)
     }
