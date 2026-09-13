@@ -340,7 +340,6 @@ export function useWorkspace(
     state,
     tileTabs,
     setState,
-    setRuntimes,
     setTileTabs,
     setSpotlight,
     setReaderMode,
@@ -947,7 +946,10 @@ export function useWorkspace(
     updateRuntime,
     // actions
     newTab: tabActions.newTab,
-    closeTab: tabActions.closeTab,
+    // Close Tab runs through the pane close executor, beside closeSession, so
+    // the command and the root dialog's "Close Tab" button are one operation
+    // (#886 review round 2; see the note in tab.ts).
+    closeTab: paneActions.closeTab,
     spawn,
     ensureSessionLive,
     killSession,

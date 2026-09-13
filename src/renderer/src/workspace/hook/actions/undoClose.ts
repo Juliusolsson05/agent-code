@@ -12,8 +12,21 @@ import type {
 } from '@renderer/workspace/types'
 import { collectLeaves, remapTileTreeSessionIds } from '@renderer/workspace/tile-tree/treeOps'
 import { remapTiledLanes } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
-import { missingClosedTabLeafMetaIds, reinsertPane, remapMetaLineage } from '@renderer/lib/undoClose'
-import type { ClosedDetached, ClosedPane, ClosedTab } from '@renderer/lib/undoClose'
+import {
+  missingClosedTabLeafMetaIds,
+  reinsertPane,
+  remapMetaLineage,
+  remapSingleEntryLineage,
+} from '@renderer/lib/undoClose'
+import type {
+  ClosedDetached,
+  ClosedEntry,
+  ClosedGroup,
+  ClosedPane,
+  ClosedTab,
+  SingleClosedEntry,
+  UndoLineage,
+} from '@renderer/lib/undoClose'
 
 import type { WorkspaceSetState } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
@@ -21,6 +34,11 @@ import type { SessionActions } from '@renderer/workspace/hook/actions/session'
 import { resumableProviderSessionId } from '@renderer/workspace/providerSessionIdentity'
 
 type RestoreResult = 'restored' | 'stale' | 'retryable-failure'
+
+/** Where a successful restore sends its old -> new ids. A top-level entry
+ *  publishes to the stack; a group member publishes to the stack AND to the
+ *  group's members that have not been replayed yet (restoreGroupEntry). */
+type PublishLineage = (lineage: UndoLineage) => void
 
 /**
  * The durable metadata a respawn cannot rebuild, carried onto the new session ID.
@@ -105,7 +123,7 @@ export function useUndoCloseAction(
   const [, bumpUndoCloseVersion] = useState(0)
 
   const restorePaneEntry = useCallback(
-    async (entry: ClosedPane): Promise<RestoreResult> => {
+    async (entry: ClosedPane, publish: PublishLineage): Promise<RestoreResult> => {
       // Find which tab the sibling leaf is in now.
       const targetTab = refs.stateRef.current.tabs.find(t =>
         collectLeaves(t.root).includes(entry.siblingLeafId),
@@ -214,7 +232,7 @@ export function useUndoCloseAction(
       // siblingLeafId, a linked child's parent). Publish old -> new so they
       // keep resolving; see UndoLineage.
       if (entry.sessionId) {
-        refs.undoStackRef.current.remapLineage({
+        publish({
           sessions: new Map([[entry.sessionId, newSessionId]]),
         })
       }
@@ -224,7 +242,7 @@ export function useUndoCloseAction(
   )
 
   const restoreTabEntry = useCallback(
-    async (entry: ClosedTab): Promise<RestoreResult> => {
+    async (entry: ClosedTab, publish: PublishLineage): Promise<RestoreResult> => {
       // Tab undo: respawn every session and remap the tree.
       const idMap = new Map<SessionId, SessionId>()
       // New session ID → the meta the closed session actually had, for both
@@ -389,7 +407,7 @@ export function useUndoCloseAction(
       // entry anchored on it — typically the Close Agent entry of the root this
       // tab's root had replaced — must now name the restored ids, or the next
       // undo judges it stale and the original root is lost (#886 finding 4).
-      refs.undoStackRef.current.remapLineage({
+      publish({
         sessions: lineageSessions,
         tabs: new Map([[entry.tab.id, restoredTab.id]]),
       })
@@ -399,7 +417,7 @@ export function useUndoCloseAction(
   )
 
   const restoreDetachedEntry = useCallback(
-    async (entry: ClosedDetached): Promise<RestoreResult> => {
+    async (entry: ClosedDetached, publish: PublishLineage): Promise<RestoreResult> => {
       // The project tab is a detached row's only anchor. `buildDispatchGroups`
       // walks `state.tabs` and files each detached record under its
       // `projectTabId`, so a record whose tab is gone renders in no group at
@@ -572,12 +590,64 @@ export function useUndoCloseAction(
       // promoted), undo, undo" — B's restore must tell A's entry that its
       // promoted survivor is now B′, or A comes back as a trailing row instead
       // of the original root (#886 review finding 4).
-      refs.undoStackRef.current.remapLineage({
+      publish({
         sessions: new Map([[entry.record.sessionId, newSessionId]]),
       })
       return 'restored'
     },
     [refs.stateRef, refs.undoStackRef, sessionActions, setState],
+  )
+
+  const restoreSingleEntry = useCallback(
+    (entry: SingleClosedEntry, publish: PublishLineage): Promise<RestoreResult> =>
+      entry.type === 'pane'
+        ? restorePaneEntry(entry, publish)
+        : entry.type === 'detached'
+          ? restoreDetachedEntry(entry, publish)
+          : restoreTabEntry(entry, publish),
+    [restoreDetachedEntry, restorePaneEntry, restoreTabEntry],
+  )
+
+  // Replay one close OPERATION's units last-first (see ClosedGroup).
+  //
+  // WHY last-first with lineage threaded through the members not yet replayed:
+  // the last commit is the outermost change — the parent, the tab removal — and
+  // older units anchor on what it restores: a child's linkedParentId, a pane's
+  // siblingLeafId, a row's projectTabId. Every restore mints new ids and
+  // publishes them, so each older member is re-anchored before it runs, and the
+  // rest of the stack is re-anchored as for any other restore.
+  //
+  // Failure policy mirrors the single-entry loop, per member. A stale member is
+  // skipped: the rest of the operation may still be restorable. A retryable
+  // failure stops the replay: if nothing had come back yet the whole group is
+  // reported retryable and undoClose pushes it back untouched; if some members
+  // already came back, the members left (already re-anchored) go back on the
+  // stack as a smaller group so the next ⌘⇧T continues where this one stopped
+  // instead of respawning the ones that are already live.
+  const restoreGroupEntry = useCallback(
+    async (entry: ClosedGroup): Promise<RestoreResult> => {
+      let remaining: SingleClosedEntry[] = [...entry.entries]
+      let restoredAny = false
+      while (remaining.length > 0) {
+        const member = remaining[remaining.length - 1]
+        remaining = remaining.slice(0, -1)
+        const result = await restoreSingleEntry(member, lineage => {
+          remaining = remaining.map(older => remapSingleEntryLineage(older, lineage))
+          refs.undoStackRef.current.remapLineage(lineage)
+        })
+        if (result === 'restored') {
+          restoredAny = true
+        } else if (result === 'retryable-failure') {
+          if (!restoredAny) return 'retryable-failure'
+          const rest = [...remaining, member]
+          const leftover: ClosedEntry = rest.length === 1 ? rest[0] : { ...entry, entries: rest }
+          refs.undoStackRef.current.push(leftover)
+          return 'restored'
+        }
+      }
+      return restoredAny ? 'restored' : 'stale'
+    },
+    [refs.undoStackRef, restoreSingleEntry],
   )
 
   const undoClose = useCallback(async () => {
@@ -601,11 +671,9 @@ export function useUndoCloseAction(
         }
         return
       }
-      const result = entry.type === 'pane'
-        ? await restorePaneEntry(entry)
-        : entry.type === 'detached'
-          ? await restoreDetachedEntry(entry)
-          : await restoreTabEntry(entry)
+      const result = entry.type === 'group'
+        ? await restoreGroupEntry(entry)
+        : await restoreSingleEntry(entry, lineage => refs.undoStackRef.current.remapLineage(lineage))
       if (result === 'restored') return
       if (result === 'retryable-failure') {
         refs.undoStackRef.current.push(entry)
@@ -616,7 +684,7 @@ export function useUndoCloseAction(
       }
       staleEntryConsumed = true
     }
-  }, [bumpUndoCloseVersion, refs.undoStackRef, restoreDetachedEntry, restorePaneEntry, restoreTabEntry])
+  }, [bumpUndoCloseVersion, refs.undoStackRef, restoreGroupEntry, restoreSingleEntry])
 
   // Peek at the undo stack length — used by the command palette to
   // show/hide the "Undo Close" command.

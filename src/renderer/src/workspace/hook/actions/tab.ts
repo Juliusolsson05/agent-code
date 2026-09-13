@@ -1,22 +1,13 @@
 import { useCallback } from 'react'
 
-import type { DetachedSessionRecord, SessionId, SessionKind, SessionMeta, Tab, TabId, WorkspaceState } from '@renderer/workspace/types'
-import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
-import {
-  expandTabCloseTargets,
-  runCloseConfirmationGate,
-} from '@renderer/workspace/closeConfirmation'
-import { requestCloseConfirmation } from '@renderer/workspace/closeConfirmationBroker'
-import { clearLiveEntryWindowSession } from '@renderer/session-runtime/liveEntryWindow'
+import type { DetachedSessionRecord, SessionId, SessionKind, SessionMeta, Tab, TabId } from '@renderer/workspace/types'
 import { titleFromCwd } from '@renderer/workspace/layout/helpers'
-import { clearRemovedTabTakeovers, workspaceWithoutTab } from '@renderer/workspace/hook/actions/tabRemoval'
 import { mergeProjectTabs, retargetTileTabsAfterMerge } from '@renderer/workspace/mergeProjectTabs'
 import type { MergeProjectTabsResult } from '@renderer/workspace/mergeProjectTabs'
 import { tabIndexLabel } from '@renderer/workspace/tile-tree/paneLabelFormat'
 
 import type {
   WorkspaceSetReaderMode,
-  WorkspaceSetRuntimes,
   WorkspaceSetSpotlight,
   WorkspaceSetState,
   WorkspaceSetTileTabs,
@@ -35,7 +26,6 @@ export function useTabActions(
   },
   tileTabs: { tabIds: TabId[]; focusedTabId: TabId } | null,
   setState: WorkspaceSetState,
-  setRuntimes: WorkspaceSetRuntimes,
   setTileTabs: WorkspaceSetTileTabs,
   setSpotlight: WorkspaceSetSpotlight,
   setReaderMode: WorkspaceSetReaderMode,
@@ -44,7 +34,6 @@ export function useTabActions(
   sessionActions: SessionActions,
 ): {
   newTab: (cwd: string, resumeSessionId?: string, kind?: SessionKind) => Promise<{ tabId: TabId; sessionId: SessionId }>
-  closeTab: (tabId: TabId) => Promise<void>
   activateTab: (tabId: TabId) => void
   activateTabByIndex: (index: number) => void
   reorderTabs: (tabIds: TabId[]) => void
@@ -89,143 +78,14 @@ export function useTabActions(
     [sessionActions, setState, showToast],
   )
 
-  // Enumerate everything closing `tabId` will end, from a given snapshot.
-  //
-  // Both the gate and the kill list derive from this ONE function, so they
-  // cannot drift: the detached records that feed the undo entry are the same
-  // records the dialog counted. Detached sessions are the ones people forget —
-  // they have no tile in the tab on screen, so closing what looks like a
-  // two-pane tab can end eight agents.
-  const enumerateTabClose = useCallback((snapshot: WorkspaceState, tabId: TabId) => {
-    const tab = snapshot.tabs.find(t => t.id === tabId)
-    if (!tab) return null
-    const detachedRecords = Object.values(snapshot.detachedSessions)
-      .filter(entry => entry.projectTabId === tabId)
-    return {
-      tab,
-      tabIdx: snapshot.tabs.findIndex(t => t.id === tabId),
-      ids: collectLeaves(tab.root),
-      detachedRecords,
-      detachedIds: detachedRecords.map(entry => entry.sessionId),
-    }
-  }, [])
-
-  const closeTab = useCallback(
-    async (tabId: TabId) => {
-      // CONFIRMATION GATE, before any kill.
-      //
-      // Reads through `stateRef`, not the `state` prop. The prop is the value
-      // from the render that built this callback: already one render behind
-      // when a burst of closes queues up, and definitively stale once the gate
-      // has awaited a dialog. Every derivation below — the undo entry, the kill
-      // list, the detached metas — came from that captured value, so a
-      // confirmed tab close could resurrect sessions the intervening state had
-      // already removed.
-      const gate = await runCloseConfirmationGate({
-        enumerate: () => {
-          const snapshot = refs.stateRef.current
-          const plan = enumerateTabClose(snapshot, tabId)
-          if (!plan) return []
-          return expandTabCloseTargets(
-            snapshot,
-            refs.latestRuntimesRef.current,
-            plan.ids,
-            plan.detachedIds,
-          )
-        },
-        ask: requestCloseConfirmation,
-      })
-      if (!gate.ok) {
-        if (gate.reason === 'changed') {
-          showToast('Close cancelled — this tab changed while the dialog was open. Try again.')
-        }
-        return
-      }
-
-      // Re-read for the mutation itself. When nothing was prompted this is the
-      // same snapshot the gate just enumerated from.
-      const state = refs.stateRef.current
-      const plan = enumerateTabClose(state, tabId)
-      if (!plan) return
-      const { tab, tabIdx, ids, detachedRecords, detachedIds } = plan
-
-      const idsToKill = [...ids, ...detachedIds]
-      const allMetas: Record<SessionId, SessionMeta> = {}
-      for (const id of ids) {
-        if (state.sessions[id]) allMetas[id] = state.sessions[id]
-      }
-      // Capture detached agents associated with this tab so undoClose
-      // can re-spawn them. They DO get killed below as part of
-      // idsToKill — without capturing their metas here, undo would
-      // restore the tile-tree panes but silently drop every detached
-      // dispatch agent the user had parked in this project. Skip
-      // records whose SessionMeta is missing (defensive — an undo
-      // entry that referenced a non-existent meta would throw at
-      // restore time).
-      const detachedEntries = detachedRecords
-        .flatMap(entry => {
-          const meta = state.sessions[entry.sessionId]
-          if (!meta) return []
-          // sessionId is the lineage anchor undo publishes when it restores
-          // this row, so older entries naming it (and linked children restored
-          // alongside) follow the respawned id — see UndoLineage.
-          return [{ sessionId: entry.sessionId, meta, detachedAt: entry.detachedAt }]
-        })
-      refs.undoStackRef.current.push({
-        type: 'tab',
-        closedAt: Date.now(),
-        tab: { ...tab },
-        tabIndex: tabIdx,
-        sessionMetas: allMetas,
-        detachedEntries: detachedEntries.length > 0 ? detachedEntries : undefined,
-      })
-      // Surface a brief undo hint. The label uses the tab title so
-      // the user can confirm at a glance which thing they killed.
-      showToast(`Closed “${tab.title}” — ⌘⇧T Undo Close; repeat for earlier closes`)
-
-      // Kill every session in this tab.
-      await Promise.all(idsToKill.map(id => sessionActions.killSession(id)))
-      setRuntimes(prev => {
-        const next = { ...prev }
-        for (const id of idsToKill) delete next[id]
-        return next
-      })
-      for (const id of idsToKill) {
-        delete refs.seenUuidsRef.current[id]
-        // Live-window bookkeeping follows the seen-uuid lifecycle
-        // (liveEntryWindow.ts).
-        clearLiveEntryWindowSession(id)
-        delete refs.latestScreenRef.current[id]
-      }
-      // The removal tail is shared with closeSession's emptied-tab branch, which
-      // is what the root dialog's "Close Tab" button ends in. Same next-active
-      // tab (previous neighbour), same Dispatch lane/focus cleanup, same
-      // takeover cleanup — see tabRemoval.ts for why these had to converge.
-      // `detachedIds` need no separate pass: the helper deletes both the
-      // SessionMeta and any detached record for every removed id.
-      setState(prev => workspaceWithoutTab(prev, tabId, idsToKill))
-      clearRemovedTabTakeovers({ setTileTabs, setSpotlight, setReaderMode }, tabId)
-    },
-    // No `state.*` deps any more: this callback reads through refs, which is
-    // the point. Depending on the state slices used to churn a new closure on
-    // every workspace mutation while STILL capturing a stale value inside it —
-    // the worst of both.
-    [
-      enumerateTabClose,
-      refs.latestRuntimesRef,
-      refs.latestScreenRef,
-      refs.seenUuidsRef,
-      refs.stateRef,
-      refs.undoStackRef,
-      sessionActions,
-      setReaderMode,
-      setRuntimes,
-      setSpotlight,
-      setState,
-      setTileTabs,
-      showToast,
-    ],
-  )
+  // WHY Close Tab no longer lives here (#886 review round 2): the command used
+  // its own hand-written close — it listed a tab's linked descendants in the
+  // dialog but killed only the tab's leaves and rows, pushed its undo entry and
+  // "Closed" toast before killing, and killed concurrently, so one rejected kill
+  // left a tab whose tree named a deleted session plus an undo entry for a tab
+  // that was never removed. The root dialog's "Close Tab" button already ran
+  // through the approved-operation executor. Both now do: `closeTab` is exposed
+  // by usePaneActions, beside closeSession, and the workspace wires it there.
 
   const activateTab = useCallback(
     (tabId: TabId) => {
@@ -388,7 +248,6 @@ export function useTabActions(
 
   return {
     newTab,
-    closeTab,
     activateTab,
     activateTabByIndex,
     reorderTabs,

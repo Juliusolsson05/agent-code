@@ -26,6 +26,12 @@ import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 //            undo respawns the session and re-files its
 //            `detachedSessions` record instead.
 //
+//   'group' — one close OPERATION committed several units (a linked
+//            cascade, a Close Tab reaching into other projects, a partial
+//            close whose named session stayed open). It holds one entry of
+//            the shapes above per unit, in commit order; undo replays them
+//            last-first so each restore's new ids re-anchor the older ones.
+//
 // The stack is LIFO — the user undoes the most recent close first, which
 // matches Cmd+Shift+T muscle memory from every browser ever. Multiple
 // undoes pop successively older entries.
@@ -184,7 +190,34 @@ export type ClosedDetached = {
   replacedRoot?: DetachedSessionRecord
 }
 
-export type ClosedEntry = ClosedPane | ClosedTab | ClosedDetached
+/** The shapes that restore ONE placement unit; a group is built from these. */
+export type SingleClosedEntry = ClosedPane | ClosedTab | ClosedDetached
+
+/**
+ * Everything one close OPERATION committed, as a single undo unit.
+ *
+ * WHY a group rather than one entry per session or one entry for the named
+ * session only (#886 review round 2): an operation can end several sessions in
+ * different shapes — a linked child closed as a Dispatch row, another as a split
+ * pane in another project, the parent as a promoted root — and it can be
+ * PARTIAL: the parent kept because a child changed, while the children that
+ * already closed are really gone. Recording only the named session lost those
+ * children entirely (they had no entry and the toast never mentioned them);
+ * recording each separately flooded the 10-entry stack with one decision and
+ * made ⌘⇧T restore half an operation at a time.
+ *
+ * `entries` is in COMMIT order. Undo replays it from the END: the last commit is
+ * the outermost state change (a parent, a tab removal), and each restore
+ * publishes lineage (new ids) that the older members still anchor on — a
+ * child's `linkedParentId`, a pane's `siblingLeafId`, a row's `projectTabId`.
+ */
+export type ClosedGroup = {
+  type: 'group'
+  closedAt: number
+  entries: SingleClosedEntry[]
+}
+
+export type ClosedEntry = SingleClosedEntry | ClosedGroup
 
 /**
  * Old -> new ids published by one successful restore.
@@ -244,6 +277,15 @@ export function remapMetaLineage(
  * sessions are dead and the entry is the only thing that will ever revive them.
  */
 export function remapClosedEntryLineage(entry: ClosedEntry, lineage: UndoLineage): ClosedEntry {
+  if (entry.type === 'group') {
+    return { ...entry, entries: entry.entries.map(member => remapSingleEntryLineage(member, lineage)) }
+  }
+  return remapSingleEntryLineage(entry, lineage)
+}
+
+/** remapClosedEntryLineage for one placement unit; group restore uses it to
+ *  re-anchor the members it has not replayed yet. */
+export function remapSingleEntryLineage(entry: SingleClosedEntry, lineage: UndoLineage): SingleClosedEntry {
   const session = (id: SessionId) => lineage.sessions?.get(id) ?? id
   const tab = (id: string) => lineage.tabs?.get(id) ?? id
   if (entry.type === 'pane') {

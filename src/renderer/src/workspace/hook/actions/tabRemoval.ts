@@ -17,11 +17,13 @@ import type {
 // The ONE tab-removal tail (#153 acceptance: "root-pane close and tab close have
 // consistent, documented semantics").
 //
-// WHY this exists: two actions remove a project tab. `closeTab` (the Close Tab
-// command, ⌘⇧W) and `closeSession` when its final grid leaf closes with no
-// surviving Dispatch row to promote — which is also what the root dialog's
-// "Close Tab" button ends in. Before #886's review they were hand-written twice
-// and had drifted:
+// WHY this exists: a project tab disappears in exactly one place — when a close
+// operation commits the removal of the tab's last grid leaf and no Dispatch row
+// is left to promote (`closeApprovedTarget` in pane.ts). Both "Close Tab" entry
+// points reach that commit through the SAME executor since #886 review round 2:
+// the Close Tab command (⌘⇧W, the tab bar ×) and the root dialog's "Close Tab"
+// button. Before that the command had a hand-written copy, and its removal
+// tail had drifted from the pane path's:
 //
 //   - next active tab: the command activated `tabs[0]`, the pane path the
 //     previous neighbour;
@@ -29,9 +31,11 @@ import type {
 //     removed tab, the pane path left them for the invalidation effects to heal
 //     on a later render.
 //
-// Nothing was corrupted (the heal effects exist for exactly this), but the
-// dialog now puts a button labelled "Close Tab" next to the command of the same
-// name, so the two must be the same operation from the user's point of view.
+// Round 1 converged only this tail, which was not enough: the command still
+// killed a narrower set than its own dialog listed, pushed undo before killing
+// and killed concurrently. Now the whole operation is shared, and this module is
+// the shape of its one tab-removing commit, so the two buttons named "Close
+// Tab" cannot diverge again.
 //
 // WHY the previous neighbour wins over `tabs[0]`: every other removal in this
 // codebase keeps the cursor near where it was (bury's emptied tab, Dispatch's
