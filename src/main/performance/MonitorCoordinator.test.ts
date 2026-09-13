@@ -276,7 +276,7 @@ describe('monitor worker isolation', () => {
     expect(coordinator.read().droppedRecords).toBe(0)
   })
 
-  it('abandons an in-flight export at shutdown so the history flush still runs', async () => {
+  it('lets an in-flight export finish at shutdown before the history flush', async () => {
     vi.useFakeTimers()
     const child = new FakeChild()
     harness.launch.mockReturnValue(child)
@@ -284,9 +284,15 @@ describe('monitor worker isolation', () => {
     coordinator.start()
     const exporting = coordinator.exportReport(0, 1, '/reports/report.json', {})
     vi.advanceTimersByTime(200)
-    expect(child.postMessage.mock.calls[0]![0].query).toMatchObject({ kind: 'report-export' })
+    const exportRequest = child.postMessage.mock.calls[0]![0]
+    expect(exportRequest.query).toMatchObject({ kind: 'report-export' })
     const shutdown = coordinator.shutdown()
-    expect(await exporting).toEqual({ ok: false, code: 'unavailable' })
+    await vi.advanceTimersByTimeAsync(40)
+    // The flush must not overlap a mutating query that still holds the credit.
+    expect(child.postMessage).toHaveBeenCalledTimes(1)
+    const saved = { ok: true, path: '/reports/report.json', bytes: 10, points: 1, incidents: 0 }
+    child.emit('message', { sequence: exportRequest.sequence, queryResult: { kind: 'report-export', value: saved } })
+    expect(await exporting).toEqual(saved)
     await vi.advanceTimersByTimeAsync(40)
     const flush = child.postMessage.mock.calls.at(-1)![0]
     expect(flush.query).toEqual({ kind: 'history-flush' })

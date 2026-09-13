@@ -36,7 +36,8 @@ const unavailableHistory = (): MonitorHistoryStatus => ({ state: 'unavailable', 
 // the same files. That is harmless on POSIX, where unlinking or renaming an open
 // file succeeds; on Windows those calls can fail with EBUSY and the store marks
 // itself degraded until the scan finishes. Mutating queries (export, clear,
-// flush) are never abandoned, so they never overlap later batches.
+// flush) are never abandoned, not even at quit, so they never overlap later
+// batches.
 parent.on('message', async ({ data }) => {
   if (!history && isMonitorId(data.runId) && typeof data.historyRoot === 'string' && data.historyRoot.length <= 4096 && isAbsolute(data.historyRoot)) {
     history = new MonitorHistoryStore(data.historyRoot, data.runId)
@@ -127,8 +128,12 @@ parent.on('message', async ({ data }) => {
     if (status.state === 'healthy' && status.bytes === 0 && !status.exporting) {
       incidents.clear()
       aggregator.clearHistory()
-      incidentFingerprint = ''
     }
+    // Always force the next snapshot to persist what memory still holds. A
+    // clear that failed after partly deleting files had already dropped the
+    // store's pending writes, and an unchanged fingerprint would keep the
+    // surviving live incidents off disk until some summary happened to change.
+    incidentFingerprint = ''
     queryResult = { kind: 'history-clear', value: status }
   }
   else if (query?.kind === 'history-flush') {

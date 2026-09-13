@@ -289,6 +289,10 @@ export class MonitorHistoryStore {
     // Open buckets and coalesced values belong to the history being deleted.
     this.pendingPoints = []; this.pendingIncidents = null; this.pendingOperations = null; this.maintenanceDue = null
     for (const tier of TIERS) this.rollups[tier].reset()
+    // Reset before deleting, not only on success: if the delete fails partway,
+    // the next snapshot must rewrite the operations file rather than assume
+    // the one it last wrote is still on disk.
+    this.operationFingerprint = ''
     try {
       await rm(join(this.root, RUNS_DIR), { recursive: true, force: true })
       await mkdir(this.runDir, { recursive: true })
@@ -402,7 +406,9 @@ export class MonitorHistoryStore {
     const merged = new Map(existing.map(incident => [`${incident.at}:${incident.id}`, incident]))
     for (const incident of current) merged.set(`${incident.at}:${incident.id}`, incident)
     const rows = [...merged.values()].sort((a, b) => a.at - b.at).slice(-INCIDENT_LIMIT)
-    await this.replaceBounded(join(this.runDir, 'incidents.json'), JSON.stringify(rows), INCIDENT_BUDGET)
+    // Memory mirrors disk: a capacity-shortened write keeps the previous rows,
+    // which is what status, queries and the next launch will actually find.
+    if (!(await this.replaceBounded(join(this.runDir, 'incidents.json'), JSON.stringify(rows), INCIDENT_BUDGET))) return
     this.incidentRuns.set(this.runId, rows)
     await this.enforceIncidentLimit()
   }

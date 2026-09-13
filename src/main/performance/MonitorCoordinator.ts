@@ -114,10 +114,14 @@ export class MonitorCoordinator {
     return this.request({ kind: 'report-export', from, to, destination, build }).then(result => result?.kind === 'report-export' ? result.value : { ok: false, code: 'unavailable' })
   }
   /** `sent` distinguishes "never reached the helper, nothing was deleted" from
-   * "sent but unconfirmed", where a clear may already be partly done. */
+   * "sent but unconfirmed", where a clear may already be partly done. It is
+   * read from the waiter when the reply settles, not when the clear is queued:
+   * a clear still waiting in the queue when the helper fails is resolved with
+   * null too, and calling that "possibly deleted" would be false the other way. */
   clearHistory(): Promise<{ sent: boolean; status: MonitorHistoryStatus | null }> {
-    const sent = this.canRequest('history-clear')
-    return this.request({ kind: 'history-clear' }).then(result => ({ sent, status: result?.kind === 'history-clear' ? result.value : null }))
+    let waiter: QueryWaiter | undefined
+    return this.request({ kind: 'history-clear' }, queued => { waiter = queued })
+      .then(result => ({ sent: waiter?.sent === true, status: result?.kind === 'history-clear' ? result.value : null }))
   }
   private liveWindows = new Set<number>()
   private cache: MonitorSnapshot = {
@@ -267,12 +271,16 @@ export class MonitorCoordinator {
     // the single-credit channel would make durability wait behind UI work that
     // can no longer be observed.
     for (const query of this.queries.splice(0)) query.resolve(null)
-    // An already-posted query holds the single credit, and a report export can
-    // hold it for up to 60 s, so the flush would never be sent before the quit
-    // deadline. Abandon it: its records were delivered with the request, the
-    // helper's export writes only app-owned scratch until its final move, and
-    // a late reply carries a stale sequence the message handler ignores.
-    if (this.pending?.query) {
+    // An already-posted READ-ONLY query holds the single credit for nothing the
+    // user can still see, so abandon it: its records were delivered with the
+    // request, and a late reply carries a stale sequence that is ignored.
+    // A posted export or clear is NOT abandoned. The flush would otherwise run
+    // beside it: a clear still deleting would see the pre-clear incidents and
+    // histograms re-persisted by the flush, and an export could finish moving
+    // onto the user's file after its caller was told it failed. It keeps the
+    // credit through the drain window below; if it still has not replied, the
+    // flush is skipped and stop() kills the helper mid-operation instead.
+    if (this.pending?.query && READ_ONLY_QUERIES.has(this.pending.query.request.kind)) {
       this.pending.query.resolve(null)
       this.pending = null
     }
@@ -287,7 +295,7 @@ export class MonitorCoordinator {
       if (!this.pending) this.pump()
       await sleep()
     }
-    if (this.child && this.monotonicNow() < deadline) {
+    if (this.child && this.monotonicNow() < deadline && !this.pending?.query) {
       let flushed = false
       void this.request({ kind: 'history-flush' }).then(() => { flushed = true })
       while (!flushed && this.child && this.monotonicNow() < deadline) {
@@ -389,9 +397,13 @@ export class MonitorCoordinator {
     return !this.stopped && this.child !== null && (!this.closing || kind === 'history-flush') && this.queries.length < 8
   }
 
-  private request(request: MonitorWorkerQuery): Promise<MonitorWorkerQueryResult | null> {
+  private request(request: MonitorWorkerQuery, onQueued?: (waiter: QueryWaiter) => void): Promise<MonitorWorkerQueryResult | null> {
     if (!this.canRequest(request.kind)) return Promise.resolve(null)
-    return new Promise(resolve => { this.queries.push({ request, resolve }) })
+    return new Promise(resolve => {
+      const waiter: QueryWaiter = { request, resolve, sent: false }
+      this.queries.push(waiter)
+      onQueued?.(waiter)
+    })
   }
 
   private pump(): void {
@@ -449,6 +461,7 @@ export class MonitorCoordinator {
       // lost and consumes the app-run restart budget; a read-only query is
       // abandoned instead (see above).
       const query = queryReady ? this.queries.shift() : undefined
+      if (query) query.sent = true
       // A clear gets the export's longer deadline: removing a large history
       // folder on a slow disk legitimately takes more than ten seconds, and it
       // is no longer abandoned, so a short deadline would kill a working clear.
@@ -465,7 +478,7 @@ export class MonitorCoordinator {
   }
 }
 
-type QueryWaiter = { request: MonitorWorkerQuery; resolve: (value: MonitorWorkerQueryResult | null) => void }
+type QueryWaiter = { request: MonitorWorkerQuery; resolve: (value: MonitorWorkerQueryResult | null) => void; sent: boolean }
 const validRange = (from: number, to: number): boolean => Number.isFinite(from) && Number.isFinite(to)
   && from >= 0 && to >= from && to <= Number.MAX_SAFE_INTEGER && to - from <= MONITOR_POLICY.historyMs
 
