@@ -141,6 +141,11 @@ export interface ClaudeSession {
   ): Promise<PromptReadinessOutcome>
 }
 
+
+/** How long a stream severed by sleep may wait for Claude Code to retry before
+ *  it is sealed as interrupted (#963). See ClaudeSession.noteSystemSuspension. */
+const CLAUDE_SLEEP_SEAL_GRACE_MS = 60_000
+
 export class ClaudeSession extends EventEmitter {
   private headless: ClaudeCodeHeadless | null = null
   private pty: ReturnType<typeof ptySpawn> | null = null
@@ -162,6 +167,8 @@ export class ClaudeSession extends EventEmitter {
   private transcriptReplayQuiesced = false
   private transcriptTailAttached = false
   private transcriptReplayTimer: NodeJS.Timeout | null = null
+  /** Pending seal of streams the last machine suspension severed (#963). */
+  private sleepSealTimer: NodeJS.Timeout | null = null
   private promptGateState: PromptGateState = { kind: 'terminal', reason: 'no-headless' }
   private promptGateRefreshQueued = false
   private readonly promptAcceptanceWaiters = new Set<{
@@ -1063,10 +1070,36 @@ export class ClaudeSession extends EventEmitter {
     for (const waiter of [...this.promptAcceptanceWaiters]) waiter.finish(outcome)
   }
 
+  /**
+   * The machine was suspended (#963). Claude's proxy adapter only reaps a dead
+   * stream when the NEXT request streams, so a stream the sleep severed stays
+   * `Thinking` forever if Claude Code does not retry after wake.
+   *
+   * WHY a grace period before sealing: after wake the network comes back within
+   * seconds and Claude Code may retry the request; that retry reaps the dead
+   * flow through the normal path and the turn simply continues. Sealing at once
+   * would stop a turn that was about to resume. One minute is far longer than a
+   * reconnect and far shorter than anyone leaving a pane on a false `Thinking`.
+   * Only flows with no chunk since the suspension began are sealed, so a stream
+   * that did survive is never cut.
+   */
+  noteSystemSuspension(suspension: import('@shared/types/systemSuspension.js').SystemSuspension): void {
+    if (this.sleepSealTimer) clearTimeout(this.sleepSealTimer)
+    this.sleepSealTimer = setTimeout(() => {
+      this.sleepSealTimer = null
+      this.headless?.proxy?.sealFlowsSilentSince(suspension.suspendedAt, 'system-suspended')
+    }, CLAUDE_SLEEP_SEAL_GRACE_MS)
+    this.sleepSealTimer.unref?.()
+  }
+
   async stop(): Promise<void> {
     if (this.transcriptReplayTimer) {
       clearTimeout(this.transcriptReplayTimer)
       this.transcriptReplayTimer = null
+    }
+    if (this.sleepSealTimer) {
+      clearTimeout(this.sleepSealTimer)
+      this.sleepSealTimer = null
     }
     this.finishPromptAcceptanceWaiters({ kind: 'session-exited' })
     this.transcriptTailAttached = false
