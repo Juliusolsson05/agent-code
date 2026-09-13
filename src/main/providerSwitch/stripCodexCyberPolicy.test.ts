@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
+import type { TranscriptPublication } from './transcriptEngine.js'
 
 const mocks = vi.hoisted(() => ({
   locate: vi.fn(),
@@ -44,9 +45,10 @@ describe('stripCodexCyberPolicy', () => {
     vi.clearAllMocks()
     mocks.locate.mockResolvedValue('/tmp/source.jsonl')
     mocks.readFile.mockResolvedValue(fixture)
-    mocks.sessionId.mockImplementation((values: Array<{ payload?: { id?: string } }>) => (
-      values[0]?.payload?.id ?? 'missing'
-    ))
+    mocks.sessionId.mockImplementation(({ values }: TranscriptPublication) => {
+      const payload = values[0]?.payload as { id?: string } | undefined
+      return payload?.id ?? 'missing'
+    })
     mocks.write.mockResolvedValue('/target/rollout.jsonl')
   })
 
@@ -59,8 +61,10 @@ describe('stripCodexCyberPolicy', () => {
 
     expect(mocks.readFile).toHaveBeenCalledWith('/tmp/source.jsonl', 'utf8')
     expect(mocks.write).toHaveBeenCalledOnce()
-    const written = mocks.write.mock.calls[0]?.[1] as Array<Record<string, unknown>>
-    const serialized = JSON.stringify(written)
+    const publication = mocks.write.mock.calls[0]?.[1] as TranscriptPublication
+    expect(Array.isArray(publication.values)).toBe(true)
+    expect(mocks.sessionId).toHaveBeenCalledWith(publication)
+    const serialized = JSON.stringify(publication.values)
     expect(serialized).toContain('"type":"agent_message"')
     expect(serialized).toContain('inter_agent_communication_metadata')
     expect(serialized).not.toContain('cyber_policy')

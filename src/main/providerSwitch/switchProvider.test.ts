@@ -84,7 +84,8 @@ const projection = {
 
 // A Claude-target projection for the Codex -> Claude cases. Only the target
 // provider and its report header differ from `projection`; nothing in
-// switchProvider reads past `values`, which is what write()/sessionId() receive.
+// switchProvider interprets the target-specific contents; the complete projection
+// reaches write()/sessionId() so native sidecar metadata is not discarded.
 const claudeProjection = {
   ...projection,
   targetProvider: 'claude',
@@ -129,7 +130,7 @@ describe('switchProvider neutral hub integration', () => {
         targetSessionId: '00000000-0000-4000-8000-000000000099',
       }),
     )
-    expect(mocks.targetWrite).toHaveBeenCalledWith('/target', projection.values)
+    expect(mocks.targetWrite).toHaveBeenCalledWith('/target', projection)
     expect(result).toEqual({
       kind: 'switched',
       targetKind: 'codex',
@@ -140,6 +141,14 @@ describe('switchProvider neutral hub integration', () => {
       strategy: 'native',
       shrinkSummary: null,
     })
+  })
+
+  it('preserves projection sidecars through the switch publication boundary', async () => {
+    const publication = { ...projection, summary: { info: { id: 'target-session', cwd: '/target' } } }
+    mocks.targetProject.mockResolvedValue(publication)
+    await switchProvider({ sourceKind: 'claude', targetKind: 'codex', sourceProviderSessionId: 'source-session', cwd: '/target' })
+    expect(mocks.targetSessionId).toHaveBeenCalledWith(publication)
+    expect(mocks.targetWrite).toHaveBeenCalledWith('/target', publication)
   })
 
   it.each([

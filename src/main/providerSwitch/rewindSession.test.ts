@@ -29,6 +29,7 @@ vi.mock('@main/providerSwitch/transcriptEngine.js', () => ({
 }))
 
 import { listRewindPrompts, rewindSession } from './rewindSession.js'
+import { projectGrokNativeResume } from 'agent-transcript-parser'
 
 const sourceConversation = {
   schemaVersion: 1 as const,
@@ -124,6 +125,20 @@ describe('rewindSession neutral integration', () => {
     })).resolves.toEqual([
       { address: { provider: 'codex', line: 7, sessionId: 'source-session' }, text: 'second', timestamp: null },
     ])
+  })
+
+  it('does not discard a native projection sidecar when publishing a rewind', async () => {
+    const projection = projectGrokNativeResume({ ...sourceConversation, entries: sourceConversation.entries.slice(0, 2) }, {
+      cwd: '/project', targetSessionId: '00000000-0000-4000-8000-000000000097',
+      now: '2026-09-08T00:00:00.000Z', model: 'fixture-model',
+    })
+    mocks.project.mockResolvedValue(projection)
+    await rewindSession({
+      provider: 'codex', sourceProviderSessionId: 'source-session', cwd: '/project',
+      anchor: { provider: 'codex', line: 7, sessionId: 'source-session' },
+    })
+    expect(mocks.sessionId).toHaveBeenCalledWith(projection)
+    expect(mocks.write).toHaveBeenCalledWith('/project', projection)
   })
 
   it('rejects a cross-provider address before reading or writing', async () => {

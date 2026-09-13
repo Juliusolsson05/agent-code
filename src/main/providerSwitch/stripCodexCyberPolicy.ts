@@ -40,11 +40,15 @@ export async function stripCodexCyberPolicy(
     targetSessionId: randomUUID(),
     now: new Date().toISOString(),
   })
-  const newProviderSessionId = adapter.sessionId(values)
+  // The host boundary carries a complete publication, even for a native-only
+  // clone whose provider needs no sidecars. Passing a bare array here bypasses
+  // the same metadata-preserving contract used by switch/duplicate/rewind.
+  const publication = { values }
+  const newProviderSessionId = adapter.sessionId(publication)
 
   // Write last: a missing block or a cut that leaves nothing must not create
   // a half-written Codex rollout. The source file is never touched.
-  const newFilePath = await adapter.write(request.cwd, values)
+  const newFilePath = await adapter.write(request.cwd, publication)
   return {
     provider: 'codex',
     newProviderSessionId,

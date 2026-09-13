@@ -115,7 +115,7 @@ describe('host transcript adapter registry', () => {
     mocks.importOpencodeSession.mockResolvedValue('ses_target')
     const value = { info: { id: 'ses_target' }, messages: [] }
 
-    await expect(getHostTranscriptAdapter('opencode').write('/project', [value]))
+    await expect(getHostTranscriptAdapter('opencode').write('/project', { values: [value] }))
       .resolves.toBe('opencode://session/ses_target')
     // A projected import carries a whole conversation, so it must not inherit
     // the 30 s bound meant for the terminal's empty-session startup import.
