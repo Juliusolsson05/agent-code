@@ -17,6 +17,7 @@ vi.mock('node:child_process', async importOriginal => {
   return { ...actual, spawn: vi.fn(actual.spawn) }
 })
 import { exportOpencodeSession } from './opencodeCliSessions.js'
+import { holdNextSpawnUntilReady } from './testing/spawnReadiness.js'
 
 const { spawn: realSpawn } = await vi.importActual<typeof import('node:child_process')>('node:child_process')
 
@@ -32,7 +33,7 @@ type Run = {
   statusFile: string
   controller: AbortController
   outcome: Promise<Error>
-  launcher: { child?: ChildProcess; spawnedAt?: number }
+  launcher: { child?: ChildProcess; readyAt?: number }
 }
 
 let root: string
@@ -55,32 +56,13 @@ async function expectClean() { expect(await readdir(root)).toEqual(['project']) 
 /**
  * Start one export against a real launcher tree that is ready before any bound arms.
  *
- * WHY runOpencode's spawn() call is held until the descendant reports: the
- * deadline and the size guard are armed only after spawn returns. Handing the
- * launcher back at once let a slow Node start on a loaded runner race a correct
- * short deadline. The tree could be killed before the descendant existed, and
- * the test then failed on readiness without ever exercising termination of an
- * established tree. Blocking the synchronous spawn call makes readiness a
- * precondition of every bound instead of a competitor, so the bounds can stay
- * tight. Atomics.wait is the only synchronous sleep available; both fixture
- * processes keep running while this worker waits.
- *
- * The seam also hands the test the launcher's ChildProcess at spawn time, so
- * cleanup owns the launcher even when readiness never arrives. If the budget
- * runs out, spawn returns anyway and ready() fails with its own message.
+ * runOpencode's spawn() call is held until the descendant reports (see
+ * holdNextSpawnUntilReady for why readiness must precede the bounds rather than
+ * race them). The test owns the launcher's ChildProcess from spawn.
  */
 function startTree(descendant: 'hang' | 'overflow' | 'escaped' | 'escaped-exit', timeoutMs?: number): Run {
   const statusFile = join(cwd, 'descendant.json')
-  const launcher: Run['launcher'] = {}
-  vi.mocked(spawn).mockImplementationOnce(((...args: Parameters<typeof realSpawn>) => {
-    const child = realSpawn(...args)
-    launcher.child = child
-    const readyBy = performance.now() + READY_BUDGET_MS
-    const pause = new Int32Array(new SharedArrayBuffer(4))
-    while (!existsSync(statusFile) && performance.now() < readyBy) Atomics.wait(pause, 0, 0, 10)
-    launcher.spawnedAt = performance.now()
-    return child
-  }) as typeof spawn)
+  const launcher = holdNextSpawnUntilReady(vi.mocked(spawn), realSpawn, () => existsSync(statusFile), READY_BUDGET_MS)
   const controller = new AbortController()
   const env = { ...process.env, NODE_OPTIONS: `--import=${new URL('./testing/launcherCli.mjs', import.meta.url).href}`, OPENCODE_LAUNCHER_DESCENDANT: descendant, OPENCODE_LAUNCHER_STATUS: statusFile }
   const outcome = exportOpencodeSession({ binary: process.execPath, cwd, env, signal: controller.signal, ...(timeoutMs === undefined ? {} : { timeoutMs }) }, 'ses_fixture')
@@ -89,7 +71,7 @@ function startTree(descendant: 'hang' | 'overflow' | 'escaped' | 'escaped-exit',
 }
 
 async function ready(run: Run): Promise<Tree> {
-  await waitUntil(() => run.launcher.spawnedAt !== undefined, READY_BUDGET_MS + 5_000, 'launcher spawn')
+  await waitUntil(() => run.launcher.readyAt !== undefined, READY_BUDGET_MS + 5_000, 'launcher spawn')
   expect(existsSync(run.statusFile), 'fixture tree ready before runOpencode armed its bounds').toBe(true)
   const tree = JSON.parse(readFileSync(run.statusFile, 'utf8')) as Tree
   // The launcher reports its own pid. A descendant's ppid is not evidence: an
@@ -129,7 +111,7 @@ describe('OpenCode CLI process-tree termination', () => {
       // Every bound counts from spawn's return, which is also readiness, and
       // sits far below the 30 s default: a broken kill path fails here instead
       // of being rescued by the default deadline.
-      const settleBy = run.launcher.spawnedAt! + (trigger === 'timeout' ? 1000 : 0) + SETTLE_MARGIN_MS
+      const settleBy = run.launcher.readyAt! + (trigger === 'timeout' ? 1000 : 0) + SETTLE_MARGIN_MS
       const failure = await within(run.outcome, settleBy - performance.now())
       expect(failure, `${trigger} settles within its bound`).toBeInstanceOf(Error)
       expect((failure as Error).message).toContain(message)
@@ -149,7 +131,7 @@ describe('OpenCode CLI process-tree termination', () => {
     let tree: Tree | undefined
     try {
       tree = await ready(run)
-      const failure = await within(run.outcome, run.launcher.spawnedAt! + 1000 + SETTLE_MARGIN_MS - performance.now())
+      const failure = await within(run.outcome, run.launcher.readyAt! + 1000 + SETTLE_MARGIN_MS - performance.now())
       expect(failure, 'timeout settles within its bound').toBeInstanceOf(Error)
       expect((failure as Error).message).toContain('timed out after 1000 ms')
       expect(run.launcher.child!.signalCode).toBe('SIGKILL')
@@ -174,8 +156,8 @@ describe('OpenCode CLI process-tree termination', () => {
       const launcher = run.launcher.child!
       await waitUntil(() => launcher.exitCode !== null, 2000, 'launcher reaped')
       expect(launcher.exitCode).toBe(0)
-      expect(performance.now() - run.launcher.spawnedAt!, 'leader reaped before the deadline fires').toBeLessThan(1000)
-      const failure = await within(run.outcome, run.launcher.spawnedAt! + 1000 + SETTLE_MARGIN_MS - performance.now())
+      expect(performance.now() - run.launcher.readyAt!, 'leader reaped before the deadline fires').toBeLessThan(1000)
+      const failure = await within(run.outcome, run.launcher.readyAt! + 1000 + SETTLE_MARGIN_MS - performance.now())
       expect(failure, 'timeout still settles by releasing stderr').toBeInstanceOf(Error)
       expect((failure as Error).message).toContain('timed out after 1000 ms')
       expect(kills.mock.calls.filter(([pid]) => pid < 0)).toEqual([])
@@ -200,7 +182,7 @@ describe('OpenCode CLI process-tree termination', () => {
     let tree: Tree | undefined
     try {
       tree = await ready(run)
-      const failure = await within(run.outcome, run.launcher.spawnedAt! + 1000 + SETTLE_MARGIN_MS - performance.now())
+      const failure = await within(run.outcome, run.launcher.readyAt! + 1000 + SETTLE_MARGIN_MS - performance.now())
       expect(failure, 'timeout then stop settles within its bound').toBeInstanceOf(Error)
       // Cancellation still takes precedence over the timeout it raced.
       expect((failure as Error).message).toContain('OpenCode command cancelled')

@@ -27,6 +27,9 @@ import {
   readResolvedOpencodeConfig,
 } from './opencodeCliSessions.js'
 import { OpencodeTerminalSession } from './opencodeTerminalSession.js'
+import { holdNextSpawnUntilReady } from './testing/spawnReadiness.js'
+
+const { spawn: realSpawn } = await vi.importActual<typeof import('node:child_process')>('node:child_process')
 
 let root: string
 let cwd: string
@@ -193,31 +196,49 @@ function alive(pid: number) {
   try { process.kill(pid, 0); return true } catch { return false }
 }
 
+// Generous, because the readiness gate spends it before the deadline or stop()
+// can fire. The bounds asserted below stay as tight as main's originals.
+const IMPORT_READY_BUDGET_MS = 10_000
+
 it.each(['stop', 'timeout'] as const)('bounds a hung import on %s and removes its payload', async mode => {
   const { dir, binary, statusFile } = await fixture()
   const spawnPty = vi.fn()
   const prepareLaunch = vi.fn()
   const session = new OpencodeTerminalSession({ cwd: dir, binary, env: { IMPORT_STATUS_FILE: statusFile } }, { spawnPty, prepareLaunch })
-  let status: { pid: number; file: string } | undefined
+  // main's version (e9ac8bdf) waited up to 2 s for this status while the
+  // timeout case's 1 s deadline was already running, and on a loaded machine
+  // the stop case failed before stop() was ever called. The gate makes the child
+  // report before either trigger can fire, and hands the test its ChildProcess
+  // at spawn.
+  const importChild = holdNextSpawnUntilReady(vi.mocked(spawn), realSpawn, () => existsSync(statusFile), IMPORT_READY_BUDGET_MS)
+  // Exists so cleanup can end a child the timeout case never observed. It is not
+  // aborted before the outcome is recorded, so that case still proves the deadline.
+  const controller = new AbortController()
   let starting: Promise<unknown> | undefined
   try {
-    starting = mode === 'stop' ? session.start() : createEmptyOpencodeSession({ cwd: dir, binary, env: { IMPORT_STATUS_FILE: statusFile }, timeoutMs: 1000 })
+    starting = mode === 'stop' ? session.start() : createEmptyOpencodeSession({ cwd: dir, binary, env: { IMPORT_STATUS_FILE: statusFile }, signal: controller.signal, timeoutMs: 1000 })
     // Attach the rejection observer before waiting for startup so a timeout is
     // never reported as an unhandled rejection while the fixture is inspected.
     const outcome = starting.then(() => 'resolved', () => 'rejected')
-    await waitUntil(() => existsSync(statusFile), 2000, 'import child status')
-    status = JSON.parse(readFileSync(statusFile, 'utf8'))
-    expect(existsSync(status!.file)).toBe(true)
+    await waitUntil(() => importChild.readyAt !== undefined, IMPORT_READY_BUDGET_MS + 5000, 'import child spawn')
+    expect(existsSync(statusFile), 'import child ready before its deadline or stop() can fire').toBe(true)
+    const status = JSON.parse(readFileSync(statusFile, 'utf8')) as { pid: number; file: string }
+    const child = importChild.child!
+    expect(status.pid).toBe(child.pid)
+    expect(existsSync(status.file)).toBe(true)
     // While the child runs, its import payload still needs a path (`opencode
     // import <path>` reads it by name), but the stdout capture must already be
     // unnamed: nothing an app quit at this moment could leave on disk.
     expect((await readdir(root)).filter(name => name.startsWith('agent-code-opencode-output-'))).toEqual([])
     const stoppedAt = performance.now()
     if (mode === 'stop') await session.stop()
-    await waitUntil(() => !alive(status!.pid), 2000, 'import child exit')
+    // Read from the ChildProcess handle, not a raw pid that could be reused once
+    // reaped. The fixture ignores SIGTERM, so only SIGKILL ends it in time.
+    await waitUntil(() => child.exitCode !== null || child.signalCode !== null, 2000, 'import child exit')
     expect(performance.now() - stoppedAt).toBeLessThan(2000)
+    expect(child.signalCode).toBe('SIGKILL')
     expect(await outcome).toBe(mode === 'stop' ? 'resolved' : 'rejected')
-    expect(existsSync(dirname(status!.file))).toBe(false)
+    expect(existsSync(dirname(status.file))).toBe(false)
     // Since #845 the import also mints a private stdout capture directory
     // next to the payload, and the timeout and stop kill paths are owned by
     // runOpencode rather than delegated to spawn's built-in options. A
@@ -227,12 +248,16 @@ it.each(['stop', 'timeout'] as const)('bounds a hung import on %s and removes it
     expect(spawnPty).not.toHaveBeenCalled()
     expect(prepareLaunch).not.toHaveBeenCalled()
   } finally {
-    if (status && alive(status.pid)) process.kill(status.pid, 'SIGKILL')
+    // Abort before awaiting: runOpencode's own terminate() ends a child the test
+    // never observed, through `controller` for the direct helper call and
+    // through stop() for the session. The handle kill is a no-op once reaped.
+    controller.abort()
     await session.stop()
+    importChild.child?.kill('SIGKILL')
     await starting?.catch(() => {})
     await rm(dir, { recursive: true, force: true })
   }
-})
+}, 30_000)
 
 it('kills a CLI whose stop arrived while its capture was still being prepared', async () => {
   // runOpencode runs synchronously until mkdtemp suspends, so an abort issued
