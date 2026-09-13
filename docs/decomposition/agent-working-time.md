@@ -136,6 +136,12 @@ per agent per project.
    treating such a pane as working, because they read the same phase.
 
 **Analytics (#964).**
+
+Purpose, in the user's words: "the main point for the analytics is me as a founder to
+see what I have spent time on, so that I can go about and make sure I do not waste any
+of my time." The window therefore has to answer *what the time went to*, not only how
+much there was — which is why every project lists its agents with what they were doing.
+
 6. A palette command opens an Agent Analytics window. For a selected range
    (24 hours, 7 days, 30 days, all time) it shows, in total and per project:
    **agent-hours** (three agents working for an hour = 3 h), **wall-clock hours**
@@ -251,6 +257,18 @@ Conclusion: the analytics needs a new, small, durable record. Backfill was rejec
 
 ### Stage 2 — One main-owned suspension signal
 
+- [x] **Implemented.** `src/main/systemSuspension/SystemSuspensionTracker.ts` (the only
+  `powerMonitor` subscriber; MainProbe now reads its power-monitor events),
+  `darwinWakeTime.ts` (`kern.waketime`), contract `src/shared/types/systemSuspension.ts`,
+  IPC `src/main/ipc/systemSuspension.ts` + preload `listSystemSuspensions` /
+  `onSystemSuspension`, journal event `system.power / system.suspension`, and
+  `SessionManager.noteSystemSuspension` fanning out to the optional
+  `AgentSession.noteSystemSuspension`.
+- **Revision forced by the evidence:** a tick gap alone is not published. MainProbe
+  already warns that an awake main-thread stall produces the same gap, and provider
+  CLIs keep working during a main stall, so a gap counts only when the OS reports a
+  wake inside it (`kern.waketime`). Off macOS, tick gaps are never published.
+
 A single source of "the machine was not running between S and R", consumed by the
 turn clock, the adapters and the recorder.
 
@@ -272,6 +290,34 @@ turn clock, the adapters and the recorder.
 | **Reality check** | Cases A and B timings; `MainProbe`'s existing suspend handling; the observation that `monotonicMs` does not pause. |
 
 ### Stage 3 — Fix the turn clock (#963)
+
+- [x] **Implemented.** The Stage 1 suite was inverted first (4 tests red on
+  `sealFlowsSilentSince is not a function` and the missing Codex deferral), then made
+  green. What shipped, and where it departs from the plan below:
+  - **Adapter API** is synchronous `sealFlowsSilentSince(silentSince, 'system-suspended')`
+    in both packages; `turn_stopped` gains an optional `interruption` field, kept out of
+    `stopReason` (upstream's vocabulary). The host owns timing.
+  - **Claude** (`claudeSession.noteSystemSuspension`): seal after a 60 s grace so a Claude
+    Code retry can reap the flow normally. The "periodic reap" in 3a was **dropped**: the
+    bug is sleep-specific and a timer reap would change behaviour for every silent stream.
+  - **Codex** (`codexSession.noteSystemSuspension`): seal immediately — a retry cannot
+    claim the active slot while the dead flow holds it. **New:** a watchdog tick that
+    arrives more than `WATCHDOG_STALE_MS` late defers one tick, so the anonymous timeout
+    cannot pre-empt the sleep seal; without a notice the next tick still releases.
+  - **Counter** (3b): `workingSeconds`/`suspendedMsWithin` in `src/shared/agentActivity/`;
+    `WorkIndicator` subtracts suspensions from `useSystemSuspensions()` (a module store fed
+    by the preload bridge). The phone client does not render `WorkIndicator`, so it is
+    unaffected.
+  - **Marker** (Q1a): a process-plane lifecycle candidate (owner `work`, content kind
+    `sleep-interruption`) minted by `collectLifecycleCandidates` when the pane is idle and
+    the newest turn carries `interruption`; the view bridge emits a `sleep-interruption`
+    item painted in the work slot. No new RenderOwner. It gives way to the work chip as
+    soon as the next prompt makes the pane work.
+  - **3c** fell out of 3a: after a seal `submitJoinsLiveWork` is false (asserted);
+    `submitJoinsLiveWork` is unchanged.
+  - Verified: reproduction suite 12/12 through the real adapters, fold, ledger and view
+    bridge; every sealing/deferral/marker rule mutation-checked; both package proxy and
+    channel suites green.
 
 Each change is driven by flipping a Stage 1 row to its decided expectation **before**
 the change is made:
