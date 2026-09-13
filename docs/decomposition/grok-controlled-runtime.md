@@ -148,6 +148,28 @@ shape. Recorded coverage gap: no scenario cancels before native accepts the
 prompt. Stage 2 consumes the corpus and verdicts, and needs the user's
 ownership decisions wherever recordings conflict.
 
+**Stage 2 evidence (2026-09-13):** three more scenarios were recorded on 1.0.30
+because the contract could not settle acceptance, Stop or terminal session
+changes without them (52 scenarios; the 49 earlier timelines are byte-identical).
+Native adopts a client-chosen `_meta.promptId` for the running prompt, its
+completion and its result, which gives the root class an acceptance correlation
+that does not depend on echoed text (unknown 1, for one prompt at a time).
+`session/cancel` with a prompt queued behind a held turn cancels only the running
+turn, and the queued prompt still runs. `/new` typed in the native terminal
+requests `session/new` on the terminal's own connection, and the terminal then
+shows the new session. Nothing is announced to the control client, the original
+session keeps answering control prompts, and native keeps writing that
+session's updates to the terminal connection (33 during one control prompt),
+which the terminal did not draw within a 5 s sample. The screen and the wire
+disagree about which conversation the terminal is on, so neither control traffic
+nor the updates the terminal receives reveal the move; only the terminal's own
+requests do, and the conversation-identity rule's fence must be driven from
+those (unknown 3, `/new` only; `/resume`, `/fork` and `/rewind` are still
+unrecorded). The coverage gap narrows to a cancel racing the first
+prompt write. Before the catalog is written the user must decide whether Stop
+also clears queued prompts, and how prompts typed directly in the terminal are
+shown.
+
 ## Stage 2 — Catalog observations and settle the contract
 
 **Produces:** headless `testing/fixtures/controlled-runtime/catalog.json` and
