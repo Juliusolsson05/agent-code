@@ -33,6 +33,7 @@ import { controlReference as reference30 } from '@renderer/features/workflows/co
 import { controlReference as reference31 } from '@renderer/features/worktrees/controlReference'
 import { controlReference as reference33 } from '@renderer/features/conversations/controlReference'
 import { controlReference as tldrReference } from '@renderer/features/tldr/controlReference'
+import { controlReference as agentAnalyticsReference } from '@renderer/features/agent-analytics/controlReference'
 
 export const featureReferences = [
   ...reference0,
@@ -70,6 +71,7 @@ export const featureReferences = [
   ...reference32,
   ...reference33,
   ...tldrReference,
+  ...agentAnalyticsReference,
 ]
 
 // These directories implement shared infrastructure rather than separate UI
@@ -91,6 +93,7 @@ export const referenceOwnership = {
   "command-keybindings": "keybindings",
   "workflows": "workflows",
   "usage": "usage",
+  "agent-analytics": "agent-analytics",
   "usage-limit": "usage",
   "rendered-content": "rendered-content",
   "dispatch-pin": "pins",

@@ -1,18 +1,24 @@
-import { Buffer } from 'node:buffer'
-
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-
-import { SemanticChannel } from 'claude-code-headless/channels/SemanticChannel'
-import { ClaudeProxyAdapter } from 'claude-code-headless/proxy/ClaudeProxyAdapter'
-import { createRecordedAdapterHarness } from 'codex-headless/proxy/testing/adapterHarness'
 
 import { workingSeconds } from '@shared/agentActivity/workingSeconds'
 import type { SystemSuspension } from '@shared/types/systemSuspension'
-import { foldSemanticEvent } from '@renderer/session-runtime/semantic/foldEvent'
-import { reduceStreamPhase } from '@renderer/session-runtime/semantic/streamPhaseMachine'
 import type { StreamPhaseState } from '@renderer/session-runtime/semantic/streamPhaseMachine'
-import { emptySemanticRuntime } from '@renderer/session-runtime/state'
-import type { SemanticRuntimeState, StreamPhase } from '@renderer/session-runtime/state'
+import {
+  chunk,
+  completed,
+  created,
+  functionCall,
+  messageEnd,
+  messageStart,
+  mountClaudePane,
+  mountCodexPane,
+  reasoningAdded,
+  request,
+  responseEnd,
+  thinkingDelta,
+  thinkingStart,
+} from '@renderer/session-runtime/semantic/testing/proxyPaneDrivers'
+import type { Pane } from '@renderer/session-runtime/semantic/testing/proxyPaneDrivers'
 import { submitJoinsLiveWork } from '@renderer/workspace/hook/actions/streaming'
 import { createLedgerInputAdapter } from '@renderer/rendering/adapter/collectLedgerInput'
 import { createSessionLedger } from '@renderer/rendering/model/ledger'
@@ -57,109 +63,6 @@ const SLEEP_AT = PDT('2026-08-31T23:43:59')
 const WAKE_AT = PDT('2026-09-01T08:01:40')
 const SLEEP: SystemSuspension = { suspendedAt: SLEEP_AT, resumedAt: WAKE_AT, source: 'power-monitor' }
 const CLAUDE_SEAL_GRACE_MS = 60_000
-
-const MODEL = 'claude-opus-4-8'
-
-type Frame = Record<string, unknown>
-
-function sse(frames: Frame[]): string {
-  return frames.map(frame => `event: ${String(frame.type)}\ndata: ${JSON.stringify(frame)}\n\n`).join('')
-}
-
-function request(adapter: ClaudeProxyAdapter, flowId: number): void {
-  // The sidecar filter reads the request body; a primary-model conversation
-  // request with tools and a system prompt is what a real turn sends.
-  const body = {
-    model: MODEL,
-    max_tokens: 64_000,
-    tools: new Array(10).fill({ name: 'Bash' }),
-    system: [{ type: 'text', text: 'You are Claude Code' }],
-    messages: [{ role: 'user', content: 'synthetic prompt' }],
-  }
-  adapter.handleTransportEvent({
-    kind: 'request',
-    flow_id: flowId,
-    method: 'POST',
-    url: 'https://api.anthropic.com/v1/messages',
-    host: 'api.anthropic.com',
-    path: '/v1/messages',
-    body_b64: Buffer.from(JSON.stringify(body)).toString('base64'),
-  } as never)
-}
-
-function chunk(adapter: ClaudeProxyAdapter, flowId: number, frames: Frame[]): void {
-  adapter.handleTransportEvent({
-    kind: 'response-chunk',
-    flow_id: flowId,
-    path: '/v1/messages',
-    chunk_b64: Buffer.from(sse(frames)).toString('base64'),
-  } as never)
-}
-
-function responseEnd(adapter: ClaudeProxyAdapter, flowId: number): void {
-  adapter.handleTransportEvent({ kind: 'response-end', flow_id: flowId, path: '/v1/messages' } as never)
-}
-
-const messageStart = (id: string): Frame => ({
-  type: 'message_start',
-  message: { id, model: MODEL, usage: { input_tokens: 10 } },
-})
-const thinkingStart = (index: number): Frame => ({
-  type: 'content_block_start',
-  index,
-  content_block: { type: 'thinking', thinking: '' },
-})
-const thinkingDelta = (index: number): Frame => ({
-  type: 'content_block_delta',
-  index,
-  delta: { type: 'thinking_delta', thinking: 'synthetic thinking' },
-})
-const messageEnd = (): Frame[] => [
-  { type: 'content_block_stop', index: 0 },
-  { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 42 } },
-  { type: 'message_stop' },
-]
-
-type Pane = { semantic: SemanticRuntimeState; phase: StreamPhaseState }
-
-const IDLE_PHASE: StreamPhaseState = {
-  streamPhase: 'idle',
-  streamPhasePendingToolName: null,
-  streamPhasePendingToolUseId: null,
-  turnStartedAt: null,
-  phaseChangedAt: null,
-  submittedAt: null,
-}
-
-/** Fold one semantic event exactly as the desktop hook does, recording phases
- *  and stops for assertions. */
-function paneReducer(kind: 'claude' | 'codex') {
-  let pane: Pane = { semantic: emptySemanticRuntime(), phase: IDLE_PHASE }
-  const phases: StreamPhase[] = []
-  const stops: Record<string, unknown>[] = []
-  return {
-    apply(ev: Record<string, unknown>): void {
-      const semantic = foldSemanticEvent(pane.semantic, ev, kind)
-      pane = { semantic, phase: reduceStreamPhase(pane.phase, ev, semantic.currentTurn) }
-      if (ev.type === 'stream_phase') phases.push(ev.phase as StreamPhase)
-      if (ev.type === 'turn_stopped') stops.push(ev)
-    },
-    phases,
-    stops,
-    get pane(): Pane {
-      return pane
-    },
-  }
-}
-
-/** One Claude pane: adapter → channel → the renderer's fold + phase machine. */
-function mountClaudePane() {
-  const channel = new SemanticChannel()
-  const adapter = new ClaudeProxyAdapter({ channel, getSessionModel: () => MODEL })
-  const reducer = paneReducer('claude')
-  channel.on('event', (ev: Record<string, unknown>) => reducer.apply(ev))
-  return { adapter, reducer }
-}
 
 /** What WorkIndicator paints after its phase label, in seconds: working time
  *  that excludes the machine's suspensions. */
@@ -338,37 +241,6 @@ describe('in-feed turn clock across a laptop sleep (Claude proxy)', () => {
 // releases a silent active flow. Timers do not fire while the machine sleeps, so
 // the first tick after wake is `advanceTimersByTime(10_000)` after the jump.
 // ---------------------------------------------------------------------------
-
-const CODEX_UPSTREAM = 'https://chatgpt.com/backend-api/codex/responses'
-
-function mountCodexPane() {
-  const { proxy, semantic, adapter } = createRecordedAdapterHarness()
-  const reducer = paneReducer('codex')
-  semantic.on('event', (ev: Record<string, unknown>) => reducer.apply(ev))
-  const request = (requestId: string): void => {
-    proxy.emit('event', { kind: 'request', requestId, method: 'POST', path: '/v1/responses', upstream: CODEX_UPSTREAM, endpoint: 'responses' })
-  }
-  const frames = (requestId: string, payloads: Frame[]): void => {
-    const body = Buffer.from(payloads.map(payload => `data: ${JSON.stringify(payload)}\n\n`).join(''))
-    proxy.emit('event', { kind: 'response-chunk', requestId, path: '/v1/responses', size: body.length, chunk: body, endpoint: 'responses' })
-  }
-  const end = (requestId: string): void => {
-    proxy.emit('event', { kind: 'response-end', requestId, path: '/v1/responses', bytes: 0, endpoint: 'responses' })
-  }
-  return { adapter, reducer, request, frames, end }
-}
-
-const created = (id: string): Frame => ({ type: 'response.created', response: { id } })
-const reasoningAdded = (index: number): Frame => ({
-  type: 'response.output_item.added',
-  output_index: index,
-  item: { id: `rs_${index}`, type: 'reasoning' },
-})
-const functionCall = (index: number): Frame[] => [
-  { type: 'response.output_item.added', output_index: index, item: { id: `fc_${index}`, type: 'function_call', call_id: `call_${index}`, name: 'exec_command', status: 'in_progress' } },
-  { type: 'response.output_item.done', output_index: index, item: { id: `fc_${index}`, type: 'function_call', call_id: `call_${index}`, name: 'exec_command', arguments: '{}' } },
-]
-const completed = (id: string): Frame => ({ type: 'response.completed', response: { id } })
 
 describe('in-feed turn clock across a laptop sleep (Codex proxy)', () => {
   it('a watchdog tick that arrives hours late defers instead of releasing, so the sleep seal can say why the turn stopped', () => {

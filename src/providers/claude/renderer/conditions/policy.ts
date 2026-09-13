@@ -13,6 +13,7 @@
 // actionable). Derivation from views would silently change both.
 
 import type { ProviderConditionPolicy } from '@providers/registry.renderer.capabilities'
+import { CLAUDE_ATTENTION_CONDITION_KINDS } from '@shared/types/providerConditionAttention'
 
 export const CLAUDE_CONDITION_POLICY: ProviderConditionPolicy = {
   destinations: {
@@ -23,15 +24,10 @@ export const CLAUDE_CONDITION_POLICY: ProviderConditionPolicy = {
     'claude.ask-user-question': 'feed-inline',
     'claude.slash-picker': 'composer',
   },
-  // Live, user-actionable prompts. EXCLUDES claude.compaction
-  // (progress, not actionable) and claude.slash-picker (a composer
-  // affordance, not an attention surface).
-  attentionKinds: new Set([
-    'claude.trust-dialog',
-    'claude.resume-prompt',
-    'claude.permission-prompt',
-    'claude.ask-user-question',
-  ]),
+  // Live, user-actionable prompts. The list lives in shared types because main's
+  // Agent Analytics recorder must agree on "blocked on the user" (#964); the
+  // exclusions are documented there.
+  attentionKinds: CLAUDE_ATTENTION_CONDITION_KINDS,
   // Blocking-input kinds for keystroke routing (presence-gated, not
   // visible-gated — see hasActionCondition's docstring). Same
   // membership as attentionKinds today; kept separate because the

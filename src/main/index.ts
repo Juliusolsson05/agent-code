@@ -26,6 +26,9 @@ import { performance } from 'perf_hooks'
 import { SessionManager } from '@main/sessionManager.js'
 import { SystemSuspensionTracker } from '@main/systemSuspension/SystemSuspensionTracker.js'
 import { readDarwinLastWakeAt } from '@main/systemSuspension/darwinWakeTime.js'
+import { AgentActivityRecorder } from '@main/agentActivity/AgentActivityRecorder.js'
+import { AgentActivityStore } from '@main/agentActivity/AgentActivityStore.js'
+import { AGENT_ACTIVITY_DIR } from '@main/storage/paths.js'
 import { createControlHost } from '@main/control/createControlHost.js'
 import { sessionHistoryControlCapabilities } from '@main/sessions/control.js'
 import { nativeHistoryControlCapabilities } from '@main/sessions/nativeHistoryControl.js'
@@ -1069,6 +1072,34 @@ async function startApp(): Promise<void> {
     workspaceFileStore.observe(projectConversations)
     projectConversations(workspaceFileStore.windows())
   }
+  // Agent Analytics (#964): record when each agent works, per tab, repository
+  // and agent. Wired here because it needs all three owners it joins — the
+  // session manager's events, the persisted workspace (tabs, titles, names)
+  // and the machine suspensions it must never count as work.
+  const agentActivityRecorder = new AgentActivityRecorder({
+    manager: manager!,
+    store: new AgentActivityStore(AGENT_ACTIVITY_DIR),
+    // The first worktree entry is the main checkout, so every worktree of one
+    // repository folds into it (the conversations picker's family rule).
+    resolveRepoRoot: cwd => listWorktreesForCwd(cwd).then(worktrees => worktrees[0]?.path ?? cwd),
+  })
+  const projectActivity = (windows: readonly PersistedWindow[]) => {
+    void readAgentNameAssignments(AGENT_NAMES_FILE)
+      .then(names => agentActivityRecorder.updateWorkspace(windows, names))
+      .catch(() => undefined)
+  }
+  workspaceFileStore.observe(projectActivity)
+  projectActivity(workspaceFileStore.windows())
+  systemSuspension.on('suspension', (suspension: import('@shared/types/systemSuspension.js').SystemSuspension) => {
+    agentActivityRecorder.noteSuspension(suspension)
+  })
+  // Not awaited: recovering a crashed run's open intervals is file I/O, and window
+  // restore must not wait on analytics. No turn can start before a window has
+  // loaded and restored its sessions, so nothing is missed in the gap.
+  void agentActivityRecorder.start().catch((error: unknown) => {
+    // History is a convenience; failing to open it must never break startup.
+    console.warn('[agent-activity] recorder failed to start', error)
+  })
   // Dragging a window to the other monitor changes nothing the renderer knows
   // about, so it triggers no autosave. Without this, the feature's central
   // promise — it comes back where you left it — would depend on the user
@@ -1179,6 +1210,7 @@ async function startApp(): Promise<void> {
     workspaceFileStore,
     conversationService,
     systemSuspension,
+    agentActivityRecorder,
   })
   // Boot probe runs after the IPC is wired so its first `state` push
   // has a live subscriber to receive it on the renderer side.

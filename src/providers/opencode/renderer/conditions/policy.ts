@@ -9,13 +9,15 @@
 // forced onto the raw terminal surface and never uses this policy.
 
 import type { ProviderConditionPolicy } from '@providers/registry.renderer.capabilities'
+import { OPENCODE_ATTENTION_CONDITION_KINDS } from '@shared/types/providerConditionAttention'
 
 export const OPENCODE_CONDITION_POLICY: ProviderConditionPolicy = {
   destinations: {
     'opencode.permission': 'condition-outlet',
     'opencode.question': 'condition-outlet',
   },
-  attentionKinds: new Set(['opencode.permission', 'opencode.question']),
+  // Shared with main's Agent Analytics recorder (#964) — see the shared module.
+  attentionKinds: OPENCODE_ATTENTION_CONDITION_KINDS,
   actionKinds: new Set(),
   attentionLabels: [
     { kind: 'opencode.permission', label: 'ACTION' },
