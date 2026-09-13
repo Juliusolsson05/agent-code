@@ -89,3 +89,42 @@ running child; and no named capture while an import child runs. With its fix
 reverted, each regression failed for the expected reason: an uncaught EMFILE,
 a call still pending past its bound, a surviving descendant, a link count of 1,
 or a named capture directory.
+
+## Review round 2 (2026-09-12)
+
+Both reviewers re-checked 8c94da7e (Codex: request changes; Claude: approve
+with comments). Every round-1 disposition held. Changes:
+
+- terminate() could signal a released process-group id. Node reaps the direct
+  child before `exit`, but `close` also waits for stderr EOF, so the deadline,
+  stop() and the size guard stay armed after the reap while an escaped helper
+  holds stderr, and by then the group id is free for reuse. A timeout or
+  overflow followed by stop() also signalled twice. The group is now signalled
+  at most once, and only while exitCode and signalCode are both null. After
+  the reap, terminate() only destroys stderr, which is enough to release
+  `close`. Trade-off: a same-group member that outlives an exited leader is no
+  longer killed. It can only append to the unlinked capture, and readCapture
+  is bounded by the fstat size. The npm launcher waits for its native child,
+  so the tree the group exists for is unaffected.
+- The launcher-tree tests armed a 2 s deadline at spawn but allowed 5 s for
+  fixture readiness, and read the launcher pid from a possibly reparented
+  ppid. A failed readiness wait also left unobserved trees running. The tests
+  now live in opencodeCliSessions.processTree.system.test.ts behind a spawn
+  seam that returns only after the fixture reports, so readiness precedes
+  every bound and the bounds stay tight. The launcher passes its own pid, the
+  test owns the launcher's ChildProcess from spawn, and cleanup aborts the
+  command before awaiting it.
+- The detached-group comment said a wedged child runs "to the deadline". The
+  deadline is a timer in Agent Code's main process and ends with it, so a
+  dev-terminal Ctrl+C that kills Electron leaves a wedged CLI unbounded.
+
+Round-2 regression evidence, each with its fix reverted:
+- Signalling after the reap: the reaped-leader case fails with a recorded
+  negative-pid SIGKILL.
+- Removing the once-only guard: the timeout-then-stop case records two group
+  signals.
+- The round-1 kill-path mutations still fail the moved tree tests:
+  - direct-child kill only: all six cases pending past their bound;
+  - no stderr destroy: both escaped-helper cases pending;
+  - no group kill: descendants survive, or the timeout-then-stop case never
+    triggers its stop.
