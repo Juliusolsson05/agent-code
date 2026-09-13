@@ -7,7 +7,9 @@ reaches the terminal host unconsumed. Preserve modifier and horizontal gestures.
 
 1. Add a disposable, bubble-phase boundary helper to all three xterm hosts.
 2. Cover ordinary scrollback ownership, boundary cancellation, modifier/horizontal
-   escape, and cleanup without scheduling React, repaint, or PTY work.
+   escape, and cleanup without scheduling React, repaint, or PTY work. (Review
+   round: Alt is not a browser gesture but xterm's fast scroll, so only
+   Ctrl/Meta/Shift and horizontal input escape; see "Review round" below.)
 3. Verify with real Chromium wheel input, including alternate-screen and mouse
    reporting. Re-run affected host tests and type-checking.
 4. Review and open a separate PR; no merge without final user confirmation.
@@ -50,3 +52,47 @@ re-derived from the installed beta, checked against its shipped bundle
   `tsc -p tsconfig.node.json` and `tsc -p tsconfig.web.json` are clean. The
   boundary helper tests plus every AgentTerminalLeaf / TerminalLeaf renderer
   test file pass: 9 files, 62 tests.
+
+## Review round (Codex + Claude reviews of 05567575)
+
+- Alt+wheel (Codex major, Claude F5): Alt is xterm's `fastScrollSensitivity`
+  gesture, and at a boundary xterm leaves it unconsumed like a plain wheel.
+  The helper no longer exempts Alt. Ctrl/Meta (browser zoom/navigation) and
+  Shift/horizontal stay exempt. The unit regression covers both boundary
+  directions, and a mutation check (re-adding the `altKey` bail) turns it red.
+- CSS premise (Claude F1): the rejected-alternative comment was stale. Chrome
+  144+ applies `overscroll-behavior` to non-scrollable scroll containers, and
+  Electron 43.1.1 ships Chrome 150. The comment now says CSS might work, that
+  it was never probed, and what a user-run probe must show before swapping.
+  The helper stays in this PR.
+- Real-xterm unit coverage (Codex minor, Claude F8): attempted and not
+  feasible. In happy-dom, xterm's `open()` throws in the DOM renderer's
+  WidthCache (`getContext('2d')` is null) before the Viewport or MouseService
+  exist, and the missing layout leaves cell and scroll geometry at 0. The WHY
+  is at the top of terminalWheelBoundary.renderer.test.ts. The over-claiming
+  test title is renamed to the bubble-phase contract it actually pins.
+- Smoke probe (Claude F2, F4): kept as a manual, user-run probe with a WHY
+  header. It gains Alt fast-scroll steps (mid-history and boundary) and is
+  referenced from the helper's WHEN BUMPING XTERM note. It was not added to
+  tsconfig.web.json: terminal-wheel/smoke.ts type-checks, but the sibling
+  terminal-renderer/smoke.ts fails TS2683 (implicit `this`, line 16), so both
+  stay out. No npm script or CI gate.
+- Chromium latching (Claude F6): cited the explainer and marked the
+  `!event.cancelable` path as reasoned, not probe-verified. ARCHITECTURE.md
+  §6.6.2 names the wheel boundary (F7). F9 (a merge-commit subject) needs no
+  change.
+
+Review-round verification (Node 24.14.1, run on the exact tree committed with
+this section; after it, only these markdown lines changed):
+- Raw `tsc -p tsconfig.node.json` then `tsc -p tsconfig.web.json`: both clean.
+- Focused renderer tests (boundary helper plus every AgentTerminalLeaf and
+  TerminalLeaf renderer file): 9 files, 63 tests pass (13 in the helper
+  file). `vitest related --run` on terminalWheelBoundary.ts: 16 files, 99
+  tests pass.
+- Alt mutation check: restoring the `altKey` bail fails exactly the two Alt
+  boundary cases (11 others still pass). The source was then restored
+  byte-identical.
+- The Electron probe is still pending a user re-run on the current stack
+  (xterm 6.1.0-beta.304, addon-webgl 0.20.0-beta.300, Electron 43.1.1). Its
+  Alt steps have never run. The CI result for the final head lives in the PR
+  body, because recording it here would change the head.

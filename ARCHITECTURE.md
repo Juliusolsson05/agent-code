@@ -1717,9 +1717,11 @@ The mismatch is directly visible in [startup reconciliation](src/main/index.ts),
 
 WebGL renderer creation and disposal follow terminal visibility/lifetime so hidden panes do not indefinitely retain GPU contexts. Renderer fallback and context-loss behavior belong in the centralized xterm renderer helper.
 
+Wheel containment at scrollback boundaries is a shared host-level helper that every xterm host attaches right after `open()`, so xterm (scrollback, alternate-screen arrows, mouse reporting) keeps first refusal and only a wheel it left unconsumed is kept from scrolling an ancestor panel; re-check it, and have its opt-in Electron probe re-run, on every xterm bump.
+
 At this revision, the pinned xterm core also requires a local patch to remove a resize-time queued-write flush that can replay/drop terminal writes. The patch is enforced both after installation and whenever the Electron Vite configuration loads. Version or bundle-shape mismatch aborts the build. Vite prebundling is disabled for xterm so a stale optimized copy cannot bypass the patched installed bundle during development.
 
-Sources: [tmux registry](src/main/tmux/TmuxRegistry.ts), [terminal dispatcher](src/renderer/src/workspace/terminal/sessionDataDispatcher.ts), [WebGL lifecycle](src/renderer/src/workspace/terminal/xtermWebglRenderer.ts), [xterm patch](scripts/patch-xterm.mjs), [build configuration](electron.vite.config.ts).
+Sources: [tmux registry](src/main/tmux/TmuxRegistry.ts), [terminal dispatcher](src/renderer/src/workspace/terminal/sessionDataDispatcher.ts), [WebGL lifecycle](src/renderer/src/workspace/terminal/xtermWebglRenderer.ts), [wheel boundary](src/renderer/src/workspace/terminal/terminalWheelBoundary.ts), [xterm patch](scripts/patch-xterm.mjs), [build configuration](electron.vite.config.ts).
 
 ## 7. Deployment view
 
