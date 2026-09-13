@@ -1,4 +1,5 @@
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
+import { build as buildEsbuild } from 'esbuild'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { execFileSync, execSync } from 'node:child_process'
@@ -90,6 +91,33 @@ const headlessExclude = [
   // hidden "build the child package first" prerequisite.
   'workflow-mcp',
 ]
+
+function extensionRuntimePreloadPlugin(): Plugin {
+  let source = ''
+  return {
+    name: 'agent-code-extension-runtime-preload',
+    async buildStart() {
+      // Sandbox preload can require Electron, but not sibling chunks or npm
+      // modules. A second ordinary Rollup entry could start sharing imports with
+      // the full application preload after an innocent helper refactor. Emit a
+      // standalone asset using the same bundler as the real Electron fixture.
+      // electron-vite 5's experimental isolatedEntries was tried first; its
+      // transform reporter calls stdout.clearLine in non-TTY builds and fails CI.
+      const result = await buildEsbuild({
+        absWorkingDir: __dirname,
+        entryPoints: [resolve(__dirname, 'src/preload/extensionRuntime.ts')],
+        bundle: true, platform: 'node', format: 'cjs', target: 'es2020',
+        external: ['electron'], tsconfig: 'tsconfig.node.json',
+        write: false, metafile: true, logLevel: 'warning',
+      })
+      for (const file of Object.keys(result.metafile.inputs)) this.addWatchFile(resolve(__dirname, file))
+      source = result.outputFiles[0].text
+    },
+    generateBundle() {
+      this.emitFile({ type: 'asset', fileName: 'extensionRuntime.js', source })
+    },
+  }
+}
 
 function copyMainRuntimeResourcesPlugin(): Plugin {
   const resources = [
@@ -226,6 +254,7 @@ export default defineConfig(({ mode }) => ({
           // function buried in the main bundle. The stable input name keeps
           // dev, preview, and packaged paths identical.
           workflowWorker: resolve(__dirname, 'src/main/workflows/workflowWorkerEntry.ts'),
+          performanceWorker: resolve(__dirname, 'src/main/performance/monitorWorkerEntry.ts'),
           // child_process.fork cannot address a function buried in the main
           // bundle. A stable sibling entry gives every Codex attempt its own
           // killable process group in preview and the packaged application;
@@ -254,7 +283,7 @@ export default defineConfig(({ mode }) => ({
     }
   },
   preload: {
-    plugins: [externalizeDepsPlugin({ exclude: headlessExclude })],
+    plugins: [externalizeDepsPlugin({ exclude: headlessExclude }), extensionRuntimePreloadPlugin()],
     resolve: { alias: [...headlessAlias, ...Object.entries(projectAlias).map(([find, replacement]) => ({ find, replacement }))] },
     build: {
       rollupOptions: {

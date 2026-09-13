@@ -1,3 +1,6 @@
+import { rendererOperations } from './monitorOperations'
+import { LEGACY_MONITOR_OPERATIONS } from '@shared/performance/operationTimers.js'
+import { subscribeRendererProbe } from './freezeHeartbeat.js'
 import { SpanStatusCode, trace } from '@opentelemetry/api'
 import type { Attributes } from '@opentelemetry/api'
 import { BasicTracerProvider, BatchSpanProcessor } from '@opentelemetry/sdk-trace-base'
@@ -195,10 +198,12 @@ export function error(name: string, err: unknown, data?: Record<string, unknown>
 }
 
 export function span(name: string, data?: Record<string, unknown>) {
+  const monitorName = LEGACY_MONITOR_OPERATIONS[name]
+  const finishMonitor = monitorName ? rendererOperations.begin(monitorName) : () => {}
   if (!initialized || !config.enabled) {
     return {
-      end() {},
-      fail() {},
+      end() { finishMonitor() },
+      fail() { finishMonitor('error') },
     }
   }
   const active = tracer.startSpan(name, {
@@ -210,11 +215,13 @@ export function span(name: string, data?: Record<string, unknown>) {
   })
   return {
     end(endData?: Record<string, unknown>) {
+      finishMonitor()
       const attrs = toAttributes(sanitizeData(endData))
       if (attrs) active.setAttributes(attrs)
       active.end()
     },
     fail(err: unknown, endData?: Record<string, unknown>) {
+      finishMonitor('error')
       const attrs = toAttributes(sanitizeData(endData))
       if (attrs) active.setAttributes(attrs)
       active.recordException(err instanceof Error ? err : String(err))
@@ -255,46 +262,27 @@ export async function flushPerformance(): Promise<void> {
 }
 
 export async function shutdownPerformance(): Promise<void> {
+  stopRendererProbeSubscription?.()
+  stopRendererProbeSubscription = null
   if (flushTimer) clearInterval(flushTimer)
   flushTimer = null
   await flushPerformance()
   await tracerProvider?.shutdown()
 }
 
+let stopRendererProbeSubscription: (() => void) | null = null
 function setupRendererPerformanceProbes(): void {
-  try {
-    const observer = new PerformanceObserver(list => {
-      for (const entry of list.getEntries()) {
-        mark('renderer.longtask', {
-          durationMs: entry.duration,
-          startTime: entry.startTime,
-          entryType: entry.entryType,
-          name: entry.name,
-        })
-      }
-    })
-    observer.observe({ entryTypes: ['longtask'] })
-  } catch {
-    // Long Task API is Chromium-only and may not be exposed in every context.
-  }
-
-  setInterval(() => {
-    const memory = performanceMemory()
-    if (!memory) return
-    gauge('renderer.memory.usedJSHeapSize', memory.usedJSHeapSize, {
-      totalJSHeapSize: memory.totalJSHeapSize,
-      jsHeapSizeLimit: memory.jsHeapSizeLimit,
-    })
-  }, 5000)
-}
-
-function performanceMemory():
-  | { usedJSHeapSize: number; totalJSHeapSize: number; jsHeapSizeLimit: number }
-  | null {
-  const maybePerformance = performance as Performance & {
-    memory?: { usedJSHeapSize: number; totalJSHeapSize: number; jsHeapSizeLimit: number }
-  }
-  return maybePerformance.memory ?? null
+  stopRendererProbeSubscription?.()
+  let lastMemoryAt = 0
+  stopRendererProbeSubscription = subscribeRendererProbe(sample => {
+    if (sample.longTasks.count > 0) mark('renderer.longtask', sample.longTasks)
+    if (sample.heap && sample.sentAt - lastMemoryAt >= 5000) {
+      lastMemoryAt = sample.sentAt
+      gauge('renderer.memory.usedJSHeapSize', sample.heap.usedBytes, {
+        totalJSHeapSize: sample.heap.totalBytes, jsHeapSizeLimit: sample.heap.limitBytes,
+      })
+    }
+  })
 }
 
 const serializeError = serializePerformanceError

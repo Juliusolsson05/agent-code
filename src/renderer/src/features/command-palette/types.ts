@@ -65,6 +65,14 @@ export type CommandCategory =
   | 'preferences'
   /** Diagnostics, recording, raw inspection, or support artifacts. */
   | 'developer'
+  /**
+   * Contributed by an installed extension, not a first-party command. Kept as a
+   * distinct category so the keybind editor and any grouped command UI list
+   * extension commands under their own heading — and so a third party can never
+   * masquerade as a first-party group. Extension commands are assigned this
+   * category at derivation time; the manifest never sets a category itself.
+   */
+  | 'extensions'
 
 /**
  * A closed family of commands controlled as ONE product unit.
@@ -196,6 +204,7 @@ export type CommandContext = {
      *  of a hard-coded callback that nothing could rebind or collision-check. */
     openCommandPalette: () => void
     openViewPrompts: (sessionId: string) => void
+    openTldrHistory: (sessionId: string) => void
     openConversations: (opts: { focusSearch: boolean }) => void
     openAgentActivity: () => void
     /** Open the read-only Keyboard Shortcuts reference. */
@@ -204,6 +213,9 @@ export type CommandContext = {
     openBulkProviderSwitch: () => void
     openProviderSwitchPicker: (sessionId: string) => void
     openRewindPrompt: (sessionId: string) => void
+    /** Open a built-in app by its AppDefinition id. The host surface resolves the
+     *  id and treats a miss as closed, so a stale id here cannot throw. */
+    openApp: (appId: string) => void
     openAgentViewModePicker: (sessionId: string) => void
     /** Open the Dispatch color-flag swatch picker for a session. */
     openColorFlagPicker: (sessionId: string) => void
@@ -224,9 +236,12 @@ export type CommandContext = {
     toggleRenderingDebugMode: () => void
     /** Flip workspace-wide feed auto-follow (every visible agent pane). */
     toggleTailAllMode: () => void
+    toggleTailWorkingMode: () => void
     toggleDevDebugPanel: () => void
     toggleAgentStatusPanel: () => void
     togglePerformancePanel: () => void
+    /** Open the Performance Monitor, optionally performing a Recordings action there. */
+    openPerformancePanel: (request?: { view: 'recordings'; action: 'save-report' | 'record-chromium' }) => void
     toggleRemotePanel: () => void
     toggleCaffeinate: () => Promise<void> | void
     /** Idempotent open. Prefer this over `toggleGlobalEditor` whenever the
@@ -357,6 +372,8 @@ export type CommandContext = {
      *  (its own on/off label) and per-session `Tail`, which must not report
      *  "Off" while the pane it targets is visibly tailing because of this. */
     tailAllMode: boolean
+    /** Window-wide follow applies only while the target agent is working. */
+    tailWorkingMode: boolean
     devDebugEnabled: boolean
     /** The recording CAPABILITY is available (dev-debug on). Gates the
      *  Start/Stop Session Recording and Attach-Recording-Note commands (plan

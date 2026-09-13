@@ -26,7 +26,7 @@ export const createSettingsSlice: StateCreator<
   setSettings: patch =>
     set(state => {
       const next = { ...state.settings, ...patch }
-      applyTheme(next)
+      applyTheme(next, state.installedExtensions)
       return { settings: next }
     }, false, 'settings/setSettings'),
   resetSettings: () =>
@@ -50,7 +50,7 @@ export const createSettingsSlice: StateCreator<
         ...state.settings,
         showStatusMode: !state.settings.showStatusMode,
       }
-      applyTheme(next)
+      applyTheme(next, state.installedExtensions)
       return { settings: next }
     }, false, 'settings/toggleStatusMode'),
   toggleWorktreeBadges: () =>
@@ -59,7 +59,7 @@ export const createSettingsSlice: StateCreator<
         ...state.settings,
         showWorktreeBadges: !state.settings.showWorktreeBadges,
       }
-      applyTheme(next)
+      applyTheme(next, state.installedExtensions)
       return { settings: next }
     }, false, 'settings/toggleWorktreeBadges'),
   toggleUsageHeader: () =>
@@ -68,7 +68,7 @@ export const createSettingsSlice: StateCreator<
         ...state.settings,
         usageHeaderEnabled: !state.settings.usageHeaderEnabled,
       }
-      applyTheme(next)
+      applyTheme(next, state.installedExtensions)
       return { settings: next }
     }, false, 'settings/toggleUsageHeader'),
   cycleUsageHeaderLevel: () =>
@@ -85,7 +85,7 @@ export const createSettingsSlice: StateCreator<
         // command does nothing.
         usageHeaderEnabled: true,
       }
-      applyTheme(next)
+      applyTheme(next, state.installedExtensions)
       return { settings: next }
     }, false, 'settings/cycleUsageHeaderLevel'),
 })

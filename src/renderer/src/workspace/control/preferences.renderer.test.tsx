@@ -30,3 +30,29 @@ it('uses real follow owners, preserves lanes and other agents, and reports Tail 
   expect(await invoke('views.preferencesRead', { sessionId: 'first' })).toMatchObject({ ok: true, value: { followEnabled: false } })
   expect(await invoke('views.preferencesRead', { sessionId: 'second' })).toMatchObject({ ok: true, value: { followEnabled: true } })
 })
+
+
+it('reports working follow dynamically and invalidates stale preference revisions', async () => {
+  useAppStore.setState({ tailAllMode: false, tailWorkingMode: true,
+    workspaceState: { ...original.workspaceState, sessions: { first: { kind: 'claude', cwd: '/trial' } } },
+    workspaceRuntimes: { first: { ...emptyRuntime(), sessionStatus: 'running' } },
+  })
+  const caps = preferenceControlCapabilities(() => ({ restoreStatus: 'fresh' }) as Workspace)
+  const invoke = (id: string, input: unknown) => caps.find(cap => cap.descriptor.id === id)!.execute(input, context)
+  const busy = await invoke('views.preferencesRead', { sessionId: 'first' })
+  expect(busy).toMatchObject({ ok: true, value: { autoFollow: false, tailAll: false, tailWorking: true, followEnabled: true } })
+  if (!busy.ok) throw new Error('No preferences')
+  const revision = (busy.value as { revision: string }).revision
+  useAppStore.setState({ workspaceRuntimes: { first: { ...emptyRuntime(), sessionStatus: 'running', streamPhase: 'awaiting-tool',
+    conditions: { provider: 'claude', ts: 1, conditions: {
+      'claude.permission-prompt': { kind: 'claude.permission-prompt', state: { visible: true }, actions: [] },
+    } },
+  } } })
+  expect(await invoke('views.preferencesRead', { sessionId: 'first' })).toMatchObject({ ok: true, value: { tailWorking: true, followEnabled: false } })
+  expect(await invoke('views.followSet', { sessionId: 'first', revision, enabled: false })).toMatchObject({ ok: false, error: { code: 'stale_cursor' } })
+  useAppStore.setState({ workspaceRuntimes: { first: emptyRuntime() } })
+  expect(await invoke('views.preferencesRead', { sessionId: 'first' })).toMatchObject({ ok: true, value: { tailWorking: true, followEnabled: false } })
+  expect(await invoke('views.followSet', { sessionId: 'first', revision, enabled: false })).toMatchObject({ ok: false, error: { code: 'stale_cursor' } })
+  expect(await invoke('views.tailAllSet', { expected: false, enabled: true })).toMatchObject({ ok: true })
+  expect(await invoke('views.preferencesRead', { sessionId: 'first' })).toMatchObject({ ok: true, value: { tailAll: true, tailWorking: false, followEnabled: true } })
+})

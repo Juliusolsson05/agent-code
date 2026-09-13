@@ -4,6 +4,7 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 
 import { useAppStore } from '@renderer/app-state/hooks'
+import { agentFollowEnabled } from '@renderer/workspace/agentFollow'
 import {
   THEME_CHANGED_EVENT,
   getActiveAppFontFamily,
@@ -20,11 +21,13 @@ import { useComposerDictation } from '@renderer/workspace/tile-tree/TileLeaf/use
 import { useAgentTerminalDimensionActive, useAgentTerminalOwnerVisible } from '@renderer/workspace/terminal/AgentTerminalOwnership'
 import { subscribeToAgentPtyData } from '@renderer/workspace/terminal/sessionDataDispatcher'
 import { attachXtermWebglRenderer } from '@renderer/workspace/terminal/xtermWebglRenderer'
+import { attachTerminalWheelBoundary } from '@renderer/workspace/terminal/terminalWheelBoundary'
 import { createTerminalInputForwarder } from '@renderer/workspace/tile-tree/terminalInputForwarder'
 import { encodeTerminalPaste, registerTerminalPasteTarget } from '@renderer/workspace/terminal/textPasteTarget'
 import { AgentTerminalActions } from '@renderer/workspace/tile-tree/AgentTerminalActions'
 import { useTerminalFollow } from '@renderer/workspace/tile-tree/terminalFollow'
 import type { GridRelatedAgentTab } from '@renderer/workspace/gridRelatedAgents'
+import type { AgentProviderKind } from '@shared/types/providerKind'
 
 type Props = {
   sessionId: SessionId
@@ -35,7 +38,7 @@ type Props = {
   workspace: Workspace
   runtime: SessionRuntime
   projectDir: string | null
-  provider: Exclude<SessionKind, 'terminal'>
+  provider: AgentProviderKind
   /** The window's Status Mode setting. It is threaded exactly like TileLeaf's
    *  so both surfaces light the header under the same rule. Required, not
    *  defaulted: an omitted prop is exactly how the terminal branch went unlit
@@ -110,12 +113,13 @@ export function AgentTerminalLeaf({
   const dimensionActive = useAgentTerminalDimensionActive()
   const ownerVisible = useAgentTerminalOwnerVisible()
   const tailAllMode = useAppStore(state => state.tailAllMode)
+  const tailWorkingMode = useAppStore(state => state.tailWorkingMode)
   // Feed-parity tail mask (TileLeaf's effectiveTailMode): per-session Tail OR
-  // Tail All, suppressed while this subtree is hidden (editor fullscreen /
+  // the active bulk policy, suppressed while this subtree is hidden (editor fullscreen /
   // Reader/Spotlight/Settings takeover) — a display:none pane cannot scroll,
   // and folding visibility into the mask makes re-reveal a genuine transition
   // that re-engages follow.
-  const tailActive = (runtime.tailMode || tailAllMode) && ownerVisible
+  const tailActive = agentFollowEnabled(provider, runtime, { tailAllMode, tailWorkingMode }) && ownerVisible
   // WHY this hook must be called BEFORE the xterm mount effect below: its
   // effects read termRef.current at effect time and React runs passive effects
   // in declaration order — when tail is already on at mount, the terminal does
@@ -161,6 +165,7 @@ export function AgentTerminalLeaf({
     let term: Terminal | null = null
     let fit: FitAddon | null = null
     let webglRenderer: ReturnType<typeof attachXtermWebglRenderer> | null = null
+    let wheelBoundary: ReturnType<typeof attachTerminalWheelBoundary> | null = null
     let onDataDisposable: { dispose(): void } | null = null
     let offPtyData: (() => void) | null = null
     // Nullable like the disposables above: xterm init can throw before the
@@ -284,6 +289,9 @@ export function AgentTerminalLeaf({
       fit = new FitAddon()
       term.loadAddon(fit)
       term.open(container)
+      // Host-level, after open(): bubbles after every xterm wheel listener so
+      // xterm keeps first refusal — see terminalWheelBoundary.ts.
+      wheelBoundary = attachTerminalWheelBoundary(container)
       // A renderer change (DOM -> WebGL upgrade, or WebGL -> DOM after a
       // context loss) changes cell metrics without resizing the container, so
       // the ResizeObserver below would never refit it. Route it through the
@@ -538,6 +546,7 @@ export function AgentTerminalLeaf({
       offPtyData?.()
       offTextPaste?.()
       webglRenderer?.dispose()
+      wheelBoundary?.dispose()
       if (onThemeChangedListener) {
         window.removeEventListener(THEME_CHANGED_EVENT, onThemeChangedListener)
       }

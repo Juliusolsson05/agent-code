@@ -1,16 +1,20 @@
 import { DEFAULT_PALETTE_MODE } from '@renderer/features/command-palette/paletteMode'
 import type { PaletteMode } from '@renderer/features/command-palette/paletteMode'
 import type { StateCreator } from 'zustand'
+import { applyTheme } from '@renderer/app-state/settings/theme'
 
 import type { AppStore, UiShellSlice } from '@renderer/app-state/types'
 import type { PendingCommandInvocation } from '@renderer/app-state/uiShell/types'
+
+// Last issued Performance Monitor command-request ID (see openPerformancePanel).
+let lastPerformancePanelRequestId = 0
 
 export const createUiShellSlice: StateCreator<
   AppStore,
   [['zustand/devtools', never], ['zustand/subscribeWithSelector', never]],
   [],
   UiShellSlice
-> = set => ({
+> = (set, get) => ({
   commandPaletteOpen: false,
   paletteMode: DEFAULT_PALETTE_MODE,
   pathPickerOpen: false,
@@ -27,6 +31,7 @@ export const createUiShellSlice: StateCreator<
   debugBundleNotePrompt: null,
   recordingNotePrompt: null,
   viewPromptsSessionId: null,
+  tldrHistorySessionId: null,
   newAgentPlacementOpen: false,
   newAgentProjectIntent: null,
   newAgentInOpen: false,
@@ -42,9 +47,11 @@ export const createUiShellSlice: StateCreator<
   htmlDebugPanelOpen: false,
   renderingDebugMode: false,
   tailAllMode: false,
+  tailWorkingMode: false,
   devDebugPanelOpen: false,
   agentStatusPanelOpen: false,
   performancePanelOpen: false,
+  performancePanelRequest: null,
   remotePanelOpen: false,
   globalEditorOpen: false,
   conversationsOpen: false,
@@ -58,6 +65,14 @@ export const createUiShellSlice: StateCreator<
   providerSwitchPickerSessionId: null,
   rewindPromptSessionId: null,
   agentViewModePickerSessionId: null,
+  openAppId: null,
+  installedExtensions: [],
+  // False until the first SUCCESSFUL extensionsList(). Distinguishes "no extensions"
+  // from "not asked yet", which the pane leaf needs to avoid claiming an installed
+  // extension is missing during the async gap on every reload.
+  installedExtensionsLoaded: false,
+  installedExtensionsError: null,
+  extensionFailures: [],
   colorFlagPickerSessionId: null,
   // Default keeps the dispatch list at 25% (matching the
   // previous-hardcoded `basis-1/4`) so the migration is visually a
@@ -172,6 +187,11 @@ export const createUiShellSlice: StateCreator<
   closeViewPrompts: () =>
     set({ viewPromptsSessionId: null }, false, 'uiShell/closeViewPrompts'),
 
+  openTldrHistory: sessionId =>
+    set({ tldrHistorySessionId: sessionId }, false, 'uiShell/openTldrHistory'),
+  closeTldrHistory: () =>
+    set({ tldrHistorySessionId: null }, false, 'uiShell/closeTldrHistory'),
+
   openNewAgentPlacement: () =>
     set({ newAgentPlacementOpen: true }, false, 'uiShell/openNewAgentPlacement'),
   openNewAgentForProject: (tabId, anchorSessionId) =>
@@ -248,9 +268,17 @@ export const createUiShellSlice: StateCreator<
     ),
   toggleTailAllMode: () =>
     set(
-      state => ({ tailAllMode: !state.tailAllMode }),
+      // Atomic policy switch: no intermediate render may follow idle panes
+      // while the palette already claims the narrower Working mode is active.
+      state => ({ tailAllMode: !state.tailAllMode, tailWorkingMode: false }),
       false,
       'uiShell/toggleTailAllMode',
+    ),
+  toggleTailWorkingMode: () =>
+    set(
+      state => ({ tailWorkingMode: !state.tailWorkingMode, tailAllMode: false }),
+      false,
+      'uiShell/toggleTailWorkingMode',
     ),
   toggleDevDebugPanel: () =>
     set(
@@ -270,9 +298,31 @@ export const createUiShellSlice: StateCreator<
     ),
   togglePerformancePanel: () =>
     set(
-      state => ({ performancePanelOpen: !state.performancePanelOpen }),
+      // Closing drops an unhandled command intent; otherwise the next manual
+      // open would unexpectedly show a save dialog or start a recording.
+      state => ({ performancePanelOpen: !state.performancePanelOpen, ...(state.performancePanelOpen ? { performancePanelRequest: null } : {}) }),
       false,
       'uiShell/togglePerformancePanel',
+    ),
+  openPerformancePanel: request =>
+    set(
+      state => {
+        if (!request) return { performancePanelOpen: true }
+        // Strictly increasing across the whole renderer session. The monitor
+        // ignores any request ID it has already handled, so an ID derived
+        // from the previous request could move backwards and silently drop a
+        // later command.
+        lastPerformancePanelRequestId = Math.max(Date.now(), lastPerformancePanelRequestId + 1)
+        return { performancePanelOpen: true, performancePanelRequest: { ...request, id: lastPerformancePanelRequestId } }
+      },
+      false,
+      'uiShell/openPerformancePanel',
+    ),
+  consumePerformancePanelRequest: id =>
+    set(
+      state => (state.performancePanelRequest?.id === id ? { performancePanelRequest: null } : {}),
+      false,
+      'uiShell/consumePerformancePanelRequest',
     ),
   toggleRemotePanel: () =>
     set(
@@ -355,6 +405,24 @@ export const createUiShellSlice: StateCreator<
     set({ rewindPromptSessionId: sessionId }, false, 'uiShell/openRewindPrompt'),
   closeRewindPrompt: () =>
     set({ rewindPromptSessionId: null }, false, 'uiShell/closeRewindPrompt'),
+
+  openApp: appId => set({ openAppId: appId }, false, 'uiShell/openApp'),
+  closeApp: () => set({ openAppId: null }, false, 'uiShell/closeApp'),
+
+  setInstalledExtensions: entries => {
+    set(
+      { installedExtensions: entries, installedExtensionsLoaded: true, installedExtensionsError: null },
+      false,
+      'uiShell/setInstalledExtensions',
+    )
+    // Reconcile immediately on install/update/remove. A selected extension
+    // palette must never linger until the user changes an unrelated setting.
+    applyTheme(get().settings, entries)
+  },
+  setInstalledExtensionsError: error =>
+    set({ installedExtensionsError: error }, false, 'uiShell/setInstalledExtensionsError'),
+  setExtensionFailures: failures =>
+    set({ extensionFailures: failures }, false, 'uiShell/setExtensionFailures'),
 
   openAgentViewModePicker: sessionId =>
     set(

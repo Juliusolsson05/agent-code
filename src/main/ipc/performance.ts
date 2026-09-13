@@ -1,79 +1,172 @@
-import { ipcMain, shell } from 'electron'
-import { getHeapSpaceStatistics, getHeapStatistics, writeHeapSnapshot } from 'node:v8'
-import { monitorEventLoopDelay } from 'node:perf_hooks'
-import { mkdir } from 'node:fs/promises'
-import { join } from 'node:path'
+import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { monitorCoordinator } from '@main/performance/MonitorCoordinator.js'
+import { performanceTraceController } from '@main/performance/PerformanceTraceController.js'
+import { mainOperations } from '@main/performance/operations.js'
+import { getBuildInfo } from '@main/buildInfo.js'
+import { windowForSession, windowIdFor } from '@main/window/windowRegistry.js'
+import { parseMonitorRendererBatch } from '@shared/performance/monitorContracts.js'
+import { getHeapStatistics, writeHeapSnapshot } from 'node:v8'
+import { mainProbe } from '@main/performance/MainProbe.js'
+import { mkdir, rm, statfs } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
+import { moveArtifact } from '@main/performance/moveArtifact.js'
 
 import { performanceService } from '@main/performance/PerformanceService.js'
 import { ProcessTelemetry } from '@main/performance/ProcessTelemetry.js'
-import { HEAP_SNAPSHOT_DIR } from '@main/storage/paths.js'
+import { HEAP_SNAPSHOT_DIR, PERFORMANCE_CAPTURE_TEMP_DIR } from '@main/storage/paths.js'
+import type { MonitorClearHistoryResult } from '@shared/performance/monitorHistory.js'
 import type { SessionManager } from '@main/sessionManager.js'
 import type {
-  HeapSpaceStats,
   PerformanceRecord,
   SystemPerformanceStats,
 } from '@shared/performance/types.js'
 
-// Local event-loop monitor for the system-stats handler.
-//
-// WHY we own a dedicated monitor here instead of borrowing
-// PerformanceService's own monitorEventLoopDelay():
-//
-//  - PerformanceService samples + resets its histogram on a 5 s
-//    cadence. Reading its current state from the 1 Hz IPC handler
-//    would race that probe and give us either stale or partial
-//    windows depending on timing.
-//  - The "current event-loop delay over the last second" answer the
-//    popover wants is structurally a per-poll question. A local
-//    monitor that resets on each read gives exactly the right window.
-//  - The cost of running a second monitor is negligible (`resolution`
-//    is the sample interval; perf_hooks samples on a libuv timer
-//    that fires whether or not anyone is reading the histogram).
-//
-// We initialize lazily on the first system-stats call so that when
-// AGENT_CODE_PERF is off and the renderer never calls in, we don't
-// spin up the monitor at all.
-const EVENT_LOOP_RESOLUTION_MS = 20
-let eventLoopMonitor: ReturnType<typeof monitorEventLoopDelay> | null = null
+const revealablePerformancePaths = new Set<string>()
 
-function readAndResetEventLoopDelay(): SystemPerformanceStats['eventLoopDelay'] {
-  if (!eventLoopMonitor) {
-    eventLoopMonitor = monitorEventLoopDelay({ resolution: EVENT_LOOP_RESOLUTION_MS })
-    eventLoopMonitor.enable()
-    // First read after enabling has no data yet — return null so the
-    // popover can show "—" instead of misleading zeros.
-    return null
+function rememberRevealable(path: string): void {
+  // Renderer callers may reveal only artifacts this process actually created.
+  // A small insertion-ordered set avoids turning the convenience IPC into a
+  // general filesystem browser while still covering several captures in one
+  // diagnostic session.
+  if (revealablePerformancePaths.size >= 32) {
+    const oldest = revealablePerformancePaths.values().next().value
+    if (oldest) revealablePerformancePaths.delete(oldest)
   }
-  const meanMs = eventLoopMonitor.mean / 1e6
-  const maxMs = eventLoopMonitor.max / 1e6
-  const p99Ms = eventLoopMonitor.percentile(99) / 1e6
-  eventLoopMonitor.reset()
-  // perf_hooks reports Infinity for max/p99 before the first sample
-  // lands in a fresh histogram. Coerce those to 0 so the popover
-  // doesn't render "Infinity ms" the second after a reset.
-  return {
-    meanMs: Number.isFinite(meanMs) ? meanMs : 0,
-    maxMs: Number.isFinite(maxMs) ? maxMs : 0,
-    p99Ms: Number.isFinite(p99Ms) ? p99Ms : 0,
-  }
+  revealablePerformancePaths.add(path)
 }
 
-function readHeapSpaces(): HeapSpaceStats[] {
-  // v8.getHeapSpaceStatistics returns snake_case fields; we re-map
-  // to camelCase at the boundary so the popover doesn't have to fight
-  // the project's TypeScript style for what is purely a transport
-  // detail. Cheap (single allocation per space, ~8 entries).
-  return getHeapSpaceStatistics().map(entry => ({
-    spaceName: entry.space_name,
-    spaceSize: entry.space_size,
-    spaceUsedSize: entry.space_used_size,
-    spaceAvailableSize: entry.space_available_size,
-    physicalSpaceSize: entry.physical_space_size,
-  }))
+function traceStatusFor(windowId: number) {
+  const status = performanceTraceController.status()
+  // A trace is app-wide, so every window needs its state and lock owner. Its
+  // user-selected filesystem destination belongs only to the initiating
+  // renderer and is unnecessary for cross-window coordination.
+  if (status.path && status.ownerWindowId === windowId) rememberRevealable(status.path)
+  return status.ownerWindowId === windowId ? status : { ...status, ownerWindowId: null, path: null }
 }
 
 export function registerPerformanceIpc(manager: SessionManager): void {
   const processTelemetry = new ProcessTelemetry(manager)
+  monitorCoordinator.startProcesses(() => manager.getProcessTelemetryTargets())
+  ipcMain.handle('performance:monitor-incident', (event, id: number) => {
+    if (!BrowserWindow.fromWebContents(event.sender)) return null
+    return monitorCoordinator.readIncident(id)
+  })
+  ipcMain.handle('performance:monitor-history-incident', (event, at: number, id: number) => {
+    if (!BrowserWindow.fromWebContents(event.sender)) return null
+    return monitorCoordinator.readHistoryIncident(at, id)
+  })
+  ipcMain.handle('performance:monitor-history', (event, from: number, to: number, cursor?: unknown, limit?: unknown) => {
+    if (!BrowserWindow.fromWebContents(event.sender)) return null
+    // Renderer arguments are untyped at runtime; the coordinator validates the
+    // limit and rejects a non-string cursor before anything reaches the helper.
+    return monitorCoordinator.readHistory(from, to, typeof cursor === 'string' ? cursor : undefined, limit)
+  })
+  ipcMain.handle('performance:monitor-report-preview', (event, from: number, to: number) => {
+    if (!BrowserWindow.fromWebContents(event.sender)) return null
+    return monitorCoordinator.previewReport(from, to)
+  })
+  ipcMain.handle('performance:monitor-save-report', async (event, from: number, to: number) => {
+    const window = BrowserWindow.fromWebContents(event.sender)
+    if (!window) return { ok: false, code: 'unavailable' as const }
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+    const selection = await dialog.showSaveDialog(window, {
+      title: 'Save Performance Report',
+      defaultPath: `agent-code-performance-${stamp}.json`,
+      filters: [{ name: 'JSON report', extensions: ['json'] }],
+    })
+    if (selection.canceled || !selection.filePath) return { ok: false, code: 'cancelled' as const }
+    // The renderer never supplies a filesystem path. Main receives the native
+    // picker result and the worker receives only that explicit destination,
+    // preventing this narrow report API from becoming arbitrary file write.
+    const result = await monitorCoordinator.exportReport(from, to, selection.filePath, {
+      ...getBuildInfo(), platform: process.platform, architecture: process.arch,
+      electron: process.versions.electron ?? 'unknown', node: process.versions.node,
+    })
+    if (result.ok) rememberRevealable(selection.filePath)
+    return result.ok ? { ...result, path: selection.filePath } : result
+  })
+  ipcMain.handle('performance:monitor-clear-history', async (event): Promise<MonitorClearHistoryResult> => {
+    const window = BrowserWindow.fromWebContents(event.sender)
+    if (!window) return { outcome: 'unavailable', status: null }
+    const answer = await dialog.showMessageBox(window, {
+      type: 'warning', title: 'Clear performance history?',
+      message: 'Delete locally stored performance history and incident evidence?',
+      detail: 'Live monitoring continues immediately. Saved reports and performance traces are not deleted.',
+      buttons: ['Cancel', 'Clear History'], defaultId: 0, cancelId: 0, noLink: true,
+    })
+    if (answer.response !== 1) return { outcome: 'cancelled', status: null }
+    const { sent, status } = await monitorCoordinator.clearHistory()
+    // WHY an explicit outcome: this is a destructive privacy action, and the
+    // old UI printed "now uses X MiB" for a cancel, a busy export, a helper
+    // that was restarting, and a deletion that failed. `unavailable` is only
+    // claimed when the request never reached the helper (or the helper has no
+    // store), because only then is "nothing was deleted" known to be true. A
+    // sent request without a reply is `unknown`: the clear may be partly done.
+    // Otherwise the store's status tells: success leaves an empty healthy
+    // store, an export in progress refuses to clear, and a failed rm degrades.
+    const outcome: MonitorClearHistoryResult['outcome'] = !sent ? 'unavailable' : !status ? 'unknown'
+      : status.state === 'unavailable' ? 'unavailable' : status.exporting ? 'busy'
+        : status.state === 'healthy' && status.bytes === 0 ? 'cleared' : 'failed'
+    return { outcome, status }
+  })
+  ipcMain.handle('performance:monitor-trace-status', event => BrowserWindow.fromWebContents(event.sender) ? traceStatusFor(event.sender.id) : null)
+  ipcMain.handle('performance:monitor-start-trace', async (event, mode: unknown, durationMs?: number) => {
+    const window = BrowserWindow.fromWebContents(event.sender)
+    if (!window || (mode !== 'chromium' && mode !== 'main-cpu')) return null
+    const existing = performanceTraceController.status()
+    if (existing.state === 'starting' || existing.state === 'recording' || existing.state === 'stopping') return traceStatusFor(event.sender.id)
+    const label = mode === 'chromium' ? 'Chromium Performance Trace' : 'Main CPU Profile'
+    const extension = mode === 'chromium' ? 'json' : 'cpuprofile'
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+    const selection = await dialog.showSaveDialog(window, {
+      title: `Save ${label}`, defaultPath: `agent-code-${mode}-${stamp}.${extension}`,
+      filters: [{ name: label, extensions: [extension] }],
+    })
+    if (selection.canceled || !selection.filePath) return traceStatusFor(event.sender.id)
+    // Closing the owner while Chromium or Inspector is still starting must not
+    // leave a hidden app-wide profiler behind. The controller remembers this
+    // cancellation even if startRecording has not resolved yet.
+    const ownerId = event.sender.id
+    event.sender.once('destroyed', () => { void performanceTraceController.cancelOwner(ownerId) })
+    await performanceTraceController.start(ownerId, mode, selection.filePath, durationMs)
+    return traceStatusFor(ownerId)
+  })
+  ipcMain.handle('performance:monitor-stop-trace', (event, cancel?: boolean) => {
+    if (!BrowserWindow.fromWebContents(event.sender)) return null
+    const ownerId = event.sender.id
+    return performanceTraceController.stop(ownerId, cancel === true).then(() => traceStatusFor(ownerId))
+  })
+  ipcMain.handle('performance:monitor-processes', (event, offset?: number, sort?: unknown) => {
+    if (!BrowserWindow.fromWebContents(event.sender)) return null
+    return monitorCoordinator.readProcesses(offset, sort === 'memory' ? 'memory' : 'cpu')
+  })
+
+  ipcMain.handle('performance:monitor-snapshot', event => {
+    if (!BrowserWindow.fromWebContents(event.sender)) return null
+    return monitorCoordinator.read()
+  })
+  ipcMain.handle('performance:monitor-batch', (event, input: unknown) => {
+    if (!BrowserWindow.fromWebContents(event.sender)) return
+    const records = parseMonitorRendererBatch(input)
+    if (!records) return
+    for (const record of records) {
+      if (record.kind === 'operation') monitorCoordinator.operation(record, event.sender.id)
+      else if (record.kind === 'loss') monitorCoordinator.sourceLoss(event.sender.id, record.source, record.generation, record.dropped)
+    }
+  })
+  ipcMain.on('performance:monitor-response-begin', (event, sessionId: unknown, operationId?: unknown) => {
+    if (!BrowserWindow.fromWebContents(event.sender) || typeof sessionId !== 'string'
+      || windowIdFor(event.sender) !== windowForSession(sessionId)) return
+    manager.beginMonitorResponse(sessionId, typeof operationId === 'string' ? operationId : undefined)
+  })
+  // Settle, not cancel: hidden tiles cancel only their local render clock on
+  // each commit (that per-commit IPC was pure main-process traffic). Main's
+  // provider clock is settled once per submit by the provider acceptance.
+  ipcMain.on('performance:monitor-response-settle', (event, sessionId: unknown, operationId: unknown, started: unknown) => {
+    if (!BrowserWindow.fromWebContents(event.sender) || typeof sessionId !== 'string' || typeof started !== 'boolean'
+      || windowIdFor(event.sender) !== windowForSession(sessionId)) return
+    manager.settleMonitorResponse(sessionId, typeof operationId === 'string' ? operationId : undefined, started)
+  })
 
   ipcMain.handle('performance:get-config', () => performanceService.getConfig())
 
@@ -92,72 +185,11 @@ export function registerPerformanceIpc(manager: SessionManager): void {
     processTelemetry.snapshot(Array.isArray(sessionIds) ? sessionIds : undefined),
   )
 
-  // Main-process heap + RSS snapshot for the header badge.
-  //
-  // WHY this single handler returns BOTH the basic aggregate numbers
-  // (heapUsed/heapTotal/heapLimit/rss/external/arrayBuffers) and the
-  // deep-dive fields (per-space breakdown, detached/native contexts,
-  // event-loop delay):
-  //
-  //  - The popover wants ONE consistent timestamped sample to render
-  //    against. Splitting into two IPC calls would put us into the
-  //    "the chart line is from t and the table row is from t+50ms"
-  //    failure mode — small but visible jitter for the user.
-  //  - All the calls underneath (process.memoryUsage,
-  //    v8.getHeapStatistics, v8.getHeapSpaceStatistics,
-  //    monitorEventLoopDelay.percentile) are O(1) and don't touch
-  //    disk. The combined work per tick is well under a millisecond.
-  //  - The renderer poller already discards the payload entirely
-  //    when `enabled: false` — gating per-field would add complexity
-  //    for no win.
-  //
-  // WHY gated on performanceService.getConfig().enabled (which
-  // mirrors AGENT_CODE_PERF): the badge is an opt-in diagnostic, not
-  // a feature for end users. When disabled we still respond with a
-  // valid shape so the renderer hook can detect the gate on its first
-  // probe without throwing. The poller stops after seeing enabled=false;
-  // subsequent ticks never fire so the zero values are never
-  // displayed.
-  ipcMain.handle('performance:system-stats', (): SystemPerformanceStats => {
-    const enabled = performanceService.getConfig().enabled
-    if (!enabled) {
-      return {
-        enabled: false,
-        sampledAt: Date.now(),
-        heapUsed: 0,
-        heapTotal: 0,
-        heapLimit: 0,
-        rss: 0,
-        external: 0,
-        arrayBuffers: 0,
-        heapSpaces: [],
-        detachedContexts: 0,
-        nativeContexts: 0,
-        eventLoopDelay: null,
-      }
-    }
-    const mem = process.memoryUsage()
-    const heap = getHeapStatistics()
-    return {
-      enabled: true,
-      sampledAt: Date.now(),
-      heapUsed: heap.used_heap_size,
-      heapTotal: heap.total_heap_size,
-      heapLimit: heap.heap_size_limit,
-      rss: mem.rss,
-      external: mem.external,
-      arrayBuffers: mem.arrayBuffers,
-      heapSpaces: readHeapSpaces(),
-      // These two come from the same getHeapStatistics() call above
-      // — v8 reports them as siblings of used_heap_size in the same
-      // struct, so no extra cost. Native contexts ≈ BrowserWindow
-      // count + service workers (normally 1–3 in this app); detached
-      // contexts should be 0 always.
-      detachedContexts: heap.number_of_detached_contexts ?? 0,
-      nativeContexts: heap.number_of_native_contexts ?? 0,
-      eventLoopDelay: readAndResetEventLoopDelay(),
-    }
-  })
+  // Keep the legacy endpoint compatible, but UI reads now share the same
+  // timestamped sample as the monitor and journal and never reset a window.
+  ipcMain.handle('performance:system-stats', (): SystemPerformanceStats => ({
+    ...mainProbe.read(), enabled: performanceService.getConfig().enabled,
+  }))
 
   // On-demand heap snapshot. Writes a .heapsnapshot file the user
   // can load into Chrome DevTools' Memory tab to see retainer chains
@@ -181,34 +213,65 @@ export function registerPerformanceIpc(manager: SessionManager): void {
   // (which already implies the flag is on, since the popover only
   // renders when enabled), letting them capture is the right move
   // regardless of the broader telemetry pipeline state.
-  ipcMain.handle('performance:write-heap-snapshot', async (): Promise<{
+  ipcMain.handle('performance:write-heap-snapshot', async (event): Promise<{
     ok: true
     path: string
   } | {
     ok: false
     error: string
   }> => {
-    const dir = HEAP_SNAPSHOT_DIR
+    const window = BrowserWindow.fromWebContents(event.sender)
+    if (!window) return { ok: false, error: 'Heap snapshot is unavailable.' }
+    const usedHeap = getHeapStatistics().used_heap_size
+    const answer = await dialog.showMessageBox(window, {
+      type: 'warning', title: 'Capture heap snapshot?',
+      message: 'Agent Code may pause while the main JavaScript heap is written.',
+      detail: `The file is usually at least ${(usedHeap / 1024 ** 2).toFixed(0)} MiB. Heap snapshots can contain sensitive application memory. Capture only when you intend to inspect the file locally.`,
+      buttons: ['Cancel', 'Choose Location…'], defaultId: 0, cancelId: 0, noLink: true,
+    })
+    if (answer.response !== 1) return { ok: false, error: 'Capture cancelled.' }
     try {
-      await mkdir(dir, { recursive: true })
+      await mkdir(HEAP_SNAPSHOT_DIR, { recursive: true })
+      await mkdir(PERFORMANCE_CAPTURE_TEMP_DIR, { recursive: true, mode: 0o700 })
     } catch (err) {
-      // mkdir failure is recoverable — writeHeapSnapshot still tries
-      // CWD as a fallback inside v8 — but log it so future-me sees
-      // the actual failure mode if the snapshot ends up somewhere
-      // surprising.
       console.warn('[perf-snapshot] mkdir failed', err)
+      return { ok: false, error: 'Snapshot storage is unavailable.' }
     }
-    const file = join(
-      dir,
-      `manual-${new Date().toISOString().replace(/[:.]/g, '-')}-${process.pid}.heapsnapshot`,
-    )
+    // WHY a picker: snapshots used to land silently in app state, so the user
+    // saw "saved locally" with no idea where a multi-hundred-megabyte file
+    // went. The default still points at the retention-managed root.
+    const selection = await dialog.showSaveDialog(window, {
+      title: 'Save Heap Snapshot',
+      defaultPath: join(HEAP_SNAPSHOT_DIR, `agent-code-main-${new Date().toISOString().replace(/[:.]/g, '-')}.heapsnapshot`),
+      filters: [{ name: 'Heap snapshot', extensions: ['heapsnapshot'] }],
+    })
+    if (selection.canceled || !selection.filePath) return { ok: false, error: 'Capture cancelled.' }
+    const destination = selection.filePath
+    const temporary = join(PERFORMANCE_CAPTURE_TEMP_DIR, `heap-${process.pid}-${Date.now()}.tmp`)
+    let finishSnapshot: ReturnType<typeof mainOperations.begin> | null = null
     try {
-      writeHeapSnapshot(file)
-      return { ok: true, path: file }
+      // WHY headroom instead of a hard size cap: a large heap is exactly the
+      // leak this capture diagnoses, so refusing big snapshots would defeat
+      // it. Instead require space for the estimate on both the scratch volume
+      // and the destination volume (a cross-volume move copies the file).
+      const required = Math.max(512 * 1024 * 1024, usedHeap * 3)
+      for (const dir of new Set([PERFORMANCE_CAPTURE_TEMP_DIR, dirname(destination)])) {
+        const disk = await statfs(dir)
+        if (disk.bavail * disk.bsize < required) return { ok: false, error: 'Not enough free disk space for a heap snapshot.' }
+      }
+      finishSnapshot = mainOperations.begin('heap.snapshot')
+      writeHeapSnapshot(temporary)
+      await moveArtifact(temporary, destination)
+      finishSnapshot()
+      rememberRevealable(destination)
+      return { ok: true, path: destination }
     } catch (err) {
+      finishSnapshot?.('error')
+      await rm(temporary, { force: true }).catch(() => {})
+      console.warn('[perf-snapshot] write failed', err)
       return {
         ok: false,
-        error: err instanceof Error ? err.message : String(err),
+        error: 'Heap snapshot could not be written.',
       }
     }
   })
@@ -223,7 +286,7 @@ export function registerPerformanceIpc(manager: SessionManager): void {
   // → click to reveal" state immediately after the path is returned,
   // and reveal becomes a separate near-instant IPC.
   ipcMain.handle('performance:reveal-path', async (_evt, path: string): Promise<void> => {
-    if (typeof path !== 'string' || !path) return
+    if (typeof path !== 'string' || !revealablePerformancePaths.has(path)) return
     shell.showItemInFolder(path)
   })
 }

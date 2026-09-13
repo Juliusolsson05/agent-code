@@ -1,5 +1,30 @@
-import { TLDR_INSTRUCTIONS, TLDR_SKILL_NAME, TLDR_SKILL_DESCRIPTION } from '@shared/types/tldr.js'
+import {
+  GOAL_INSTRUCTIONS, GOAL_SKILL_DESCRIPTION, GOAL_SKILL_NAME,
+  TLDR_INSTRUCTIONS, TLDR_SKILL_DESCRIPTION, TLDR_SKILL_NAME,
+} from '@shared/types/tldr.js'
+
+// Product-owned skills (TLDR #888, Goal #936). They ride the same write-ahead
+// ownership journal as personal skills but belong to an MCP capability, so
+// users cannot create, edit, disable, or delete them, and their names are
+// reserved. One table keeps the two capabilities' guarantees identical: a rule
+// fixed for one can never be forgotten for the other.
+type ProductSkill = {
+  id: string
+  name: string
+  description: string
+  markdown: string
+  label: string
+  managedBy: 'tldr' | 'goal'
+}
+const PRODUCT_SKILLS: readonly ProductSkill[] = [
+  { id: 'builtin:agent-code-tldr', name: TLDR_SKILL_NAME, description: TLDR_SKILL_DESCRIPTION, markdown: TLDR_INSTRUCTIONS, label: 'TLDR', managedBy: 'tldr' },
+  { id: 'builtin:agent-code-goal', name: GOAL_SKILL_NAME, description: GOAL_SKILL_DESCRIPTION, markdown: GOAL_INSTRUCTIONS, label: 'Goal', managedBy: 'goal' },
+]
+const productSkillById = (id: string) => PRODUCT_SKILLS.find(skill => skill.id === id)
+const productSkillByName = (name: string) => PRODUCT_SKILLS.find(skill => skill.name === name)
 import { randomUUID } from 'crypto'
+import type { AgentProviderKind } from '@shared/types/providerKind.js'
+import type { ManagedAgentSkillLocations } from '@shared/types/agentSkills.js'
 import { homedir } from 'os'
 import { isAbsolute, relative, resolve, sep } from 'path'
 
@@ -258,6 +283,57 @@ export class AgentCodeManagedSkillsService {
     })
   }
 
+  getInstalledSkillLocations(provider: AgentProviderKind): Promise<ManagedAgentSkillLocations> {
+    return this.serialize(async () => {
+      // Status is strictly observational. Unlike Settings' audit, it must not
+      // initialize/reconcile or repair provider files. Main initializes this
+      // service before registering IPC; callers arriving earlier get an honest
+      // unavailable result. The mutation queue still gives us coherent state.
+      if (!this.initialized || this.recovery) {
+        return { paths: [], notices: ['Agent Code skill deployment status is unavailable.'] }
+      }
+      // WHY paths come from the resolved target registry and the document, not
+      // from a status's `displayPath`: displayPath is a UI string. It is
+      // `~`-abbreviated with the platform separator (`~\…` on win32, which a
+      // `'~/'` parse silently resolved against the process cwd), and it is not
+      // the value materialization writes to. `this.targets` is. A status whose
+      // id no longer names a current target (retired, unsupported, the
+      // initialization-error placeholder) resolves to nothing, so it can never
+      // grant an Agent Code label.
+      const targetsById = new Map(this.targets.targets.map(target => [target.id, target]))
+      const paths: string[] = []
+      let needsAttention = false
+      const collect = (
+        statuses: readonly AgentCodeConventionsTargetStatus[],
+        skillFile: (target: AgentCodeConventionsTarget) => string,
+      ) => {
+        for (const status of statuses) {
+          const target = targetsById.get(status.id)
+          if (!target?.providers.includes(provider)) continue
+          if (status.state === 'installed') paths.push(skillFile(target))
+          else if (status.state === 'missing' || status.state === 'conflict' || status.state === 'error') {
+            needsAttention = true
+          }
+        }
+      }
+      collect(this.targetStatuses, target => target.skillFile)
+      for (const [skillId, statuses] of this.customTargetStatuses) {
+        const skill = this.document.customSkills[skillId]
+        if (skill) collect(statuses, target => resolve(target.skillsDirectory, skill.name, 'SKILL.md'))
+      }
+      for (const [skillId, statuses] of this.installedTargetStatuses) {
+        const skill = this.document.installedSkills[skillId]
+        if (skill) collect(statuses, target => resolve(target.skillsDirectory, skill.name, 'SKILL.md'))
+      }
+      return {
+        paths: [...new Set(paths)],
+        notices: needsAttention
+          ? ['Some Agent Code skills need attention in Settings; only files found on disk are listed here.']
+          : [],
+      }
+    })
+  }
+
   audit(): Promise<AgentCodeConventionsSnapshot> {
     return this.serialize(async () => {
       await this.ensureInitializedLocked()
@@ -343,7 +419,7 @@ export class AgentCodeManagedSkillsService {
         return { ok: false, code: 'validation', message: 'The review contains duplicate skill names.' }
       }
       const managedNames = this.managedSkillNames()
-      const collision = selectedNames.find(name => name === TLDR_SKILL_NAME || managedNames.has(name))
+      const collision = selectedNames.find(name => Boolean(productSkillByName(name)) || managedNames.has(name))
       if (collision) {
         return {
           ok: false,
@@ -722,31 +798,40 @@ export class AgentCodeManagedSkillsService {
    * inactive without the current session's TLDR tool. Disabling one session
    * must not delete a file another running session still depends on. */
   ensureTldrSkill(): Promise<void> {
+    return this.ensureProductSkill(PRODUCT_SKILLS[0]!)
+  }
+
+  /** Goal (#936) carries TLDR's contract exactly: same journal, same collision
+   * checks, same "inactive without this session's tool" instructions. */
+  ensureGoalSkill(): Promise<void> {
+    return this.ensureProductSkill(PRODUCT_SKILLS[1]!)
+  }
+
+  private ensureProductSkill(product: ProductSkill): Promise<void> {
     return this.serialize(async () => {
       await this.ensureInitializedLocked()
-      if (this.recovery) throw new Error('Managed skills require recovery in Settings before TLDR can start.')
-      const id = 'builtin:agent-code-tldr'
-      const existing = this.document.customSkills[id]
-      if (existing && existing.name !== TLDR_SKILL_NAME) throw new Error('TLDR skill identity conflicts with existing managed state.')
-      if (Object.values(this.document.customSkills).some(skill => skill.name === TLDR_SKILL_NAME && skill.id !== id)
-        || Object.values(this.document.installedSkills).some(skill => skill.name === TLDR_SKILL_NAME)) {
-        throw new Error('A managed skill already uses the reserved TLDR name.')
+      if (this.recovery) throw new Error(`Managed skills require recovery in Settings before ${product.label} can start.`)
+      const existing = this.document.customSkills[product.id]
+      if (existing && existing.name !== product.name) throw new Error(`${product.label} skill identity conflicts with existing managed state.`)
+      if (Object.values(this.document.customSkills).some(skill => skill.name === product.name && skill.id !== product.id)
+        || Object.values(this.document.installedSkills).some(skill => skill.name === product.name)) {
+        throw new Error(`A managed skill already uses the reserved ${product.label} name.`)
       }
       const timestamp = this.now().toISOString()
       const desired: AgentCodeCustomSkillRecord = {
-        id, name: TLDR_SKILL_NAME, description: TLDR_SKILL_DESCRIPTION,
-        markdown: TLDR_INSTRUCTIONS, enabled: true,
+        id: product.id, name: product.name, description: product.description,
+        markdown: product.markdown, enabled: true,
         createdAt: existing?.createdAt ?? timestamp, updatedAt: timestamp,
       }
       if (existing?.enabled && existing.description === desired.description && existing.markdown === desired.markdown) {
         await this.reconcileCustomEnabledLocked(existing)
       } else {
         const result = await this.enableCustomLocked(desired, this.document.revision + 1)
-        if (!result.ok) throw new Error('TLDR skill deployment failed. Review managed skill health in Settings.')
+        if (!result.ok) throw new Error(`${product.label} skill deployment failed. Review managed skill health in Settings.`)
       }
-      const skill = this.document.customSkills[id]
-      if (!skill || this.customHealth(skill, this.customTargetStatuses.get(id) ?? []) !== 'active') {
-        throw new Error('TLDR skill is unavailable or conflicts with an existing file. Review managed skill health in Settings.')
+      const skill = this.document.customSkills[product.id]
+      if (!skill || this.customHealth(skill, this.customTargetStatuses.get(product.id) ?? []) !== 'active') {
+        throw new Error(`${product.label} skill is unavailable or conflicts with an existing file. Review managed skill health in Settings.`)
       }
     })
   }
@@ -765,8 +850,9 @@ export class AgentCodeManagedSkillsService {
           message: `Agent Code manages at most ${AGENT_CODE_CUSTOM_SKILL_MAX_COUNT} custom skills.`,
         }
       }
-      if (request.name.trim() === TLDR_SKILL_NAME) {
-        return { ok: false, code: 'validation', message: 'That name is reserved for TLDR MCP.' }
+      const reserved = productSkillByName(request.name.trim())
+      if (reserved) {
+        return { ok: false, code: 'validation', message: `That name is reserved for ${reserved.label} MCP.` }
       }
       const normalized = normalizeAgentCodeCustomSkill(request, {
         requireContent: request.enabled,
@@ -838,8 +924,9 @@ export class AgentCodeManagedSkillsService {
   ): Promise<AgentCodeCustomSkillsMutationResult> {
     return this.serialize(async () => {
       await this.ensureInitializedLocked()
-      if (request.skillId === 'builtin:agent-code-tldr') {
-        return { ok: false, code: 'validation', message: 'This skill is managed by TLDR MCP. Enable or disable TLDR for the agent instead.' }
+      const product = productSkillById(request.skillId)
+      if (product) {
+        return { ok: false, code: 'validation', message: `This skill is managed by ${product.label} MCP. Enable or disable ${product.label} for the agent instead.` }
       }
       const unavailable = this.customMutationUnavailable(request.expectedRevision)
       if (unavailable) return unavailable
@@ -916,8 +1003,9 @@ export class AgentCodeManagedSkillsService {
   ): Promise<AgentCodeCustomSkillsMutationResult> {
     return this.serialize(async () => {
       await this.ensureInitializedLocked()
-      if (request.skillId === 'builtin:agent-code-tldr') {
-        return { ok: false, code: 'validation', message: 'This skill is managed by TLDR MCP. Enable or disable TLDR for the agent instead.' }
+      const product = productSkillById(request.skillId)
+      if (product) {
+        return { ok: false, code: 'validation', message: `This skill is managed by ${product.label} MCP. Enable or disable ${product.label} for the agent instead.` }
       }
       const unavailable = this.customMutationUnavailable(request.expectedRevision)
       if (unavailable) return unavailable
@@ -940,8 +1028,9 @@ export class AgentCodeManagedSkillsService {
   ): Promise<AgentCodeCustomSkillsMutationResult> {
     return this.serialize(async () => {
       await this.ensureInitializedLocked()
-      if (request.skillId === 'builtin:agent-code-tldr') {
-        return { ok: false, code: 'validation', message: 'This skill is managed by TLDR MCP. Enable or disable TLDR for the agent instead.' }
+      const product = productSkillById(request.skillId)
+      if (product) {
+        return { ok: false, code: 'validation', message: `This skill is managed by ${product.label} MCP. Enable or disable ${product.label} for the agent instead.` }
       }
       const unavailable = this.customMutationUnavailable(request.expectedRevision)
       if (unavailable) return unavailable
@@ -2931,7 +3020,7 @@ export class AgentCodeManagedSkillsService {
             .sort((left, right) => left.id.localeCompare(right.id))
           return {
             ...skill,
-            ...(skill.id === 'builtin:agent-code-tldr' ? { managedBy: 'tldr' as const } : {}),
+            ...(productSkillById(skill.id) ? { managedBy: productSkillById(skill.id)!.managedBy } : {}),
             health: this.customHealth(skill, targets),
             targets,
           } satisfies AgentCodeCustomSkill

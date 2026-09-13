@@ -19,6 +19,9 @@ import {
   resolveSavedThemeColors,
 } from '@renderer/app-state/settings/savedThemes'
 import { APP_SLUG } from '@shared/appIdentity'
+import type { ExtensionListEntry } from '@shared/types/extensions'
+import { isExtensionThemeMode } from '@shared/types/extensionThemes'
+import { resolveExtensionThemeColors } from './extensionThemes'
 
 // Event name fired on `window` after every applyTheme run. Subscribers
 // (currently: xterm panes that can't see CSS variables) re-read state
@@ -68,7 +71,8 @@ const FALLBACK_APP_FONT_FAMILY =
 // or a Settings blob synced from a machine with different themes). The safe
 // degradation is a built-in theme that definitely renders, not a
 // half-remembered palette the user may never have seen.
-export function resolveThemePayload(settings: Settings): CustomAppearanceColors | null {
+export function resolveThemePayload(settings: Settings, extensions: readonly ExtensionListEntry[] = []): CustomAppearanceColors | null {
+  if (isExtensionThemeMode(settings.mode)) return resolveExtensionThemeColors(extensions, settings.mode)
   if (isSavedThemeId(settings.mode)) {
     const theme = findSavedTheme(settings.savedThemes, settings.mode)
     if (!theme) return null
@@ -89,7 +93,7 @@ export function resolveThemePayload(settings: Settings): CustomAppearanceColors 
   return null
 }
 
-export function applyTheme(settings: Settings): void {
+export function applyTheme(settings: Settings, extensions: readonly ExtensionListEntry[] = []): void {
   // Renderer capability registries are also consumed by Node-side replay,
   // policy, and transcript tests. A presentational component may therefore
   // pull the settings store into a graph that has no DOM. Theme application
@@ -98,7 +102,7 @@ export function applyTheme(settings: Settings): void {
   // forcing each pure consumer to mock `document` merely to inspect policy.
   if (typeof document === 'undefined' || typeof window === 'undefined') return
   const root = document.documentElement
-  const payload = resolveThemePayload(settings)
+  const payload = resolveThemePayload(settings, extensions)
   // WHY data-mode is never allowed to hold a raw `theme:<uuid>`:
   //
   // With a payload, 'custom' is written because the 81 inline properties fully
@@ -161,6 +165,17 @@ export function applyTheme(settings: Settings): void {
   root.style.setProperty(CORNER_SLAB_CSS_VAR, corners.slab)
   root.style.setProperty(CORNER_FLOAT_CSS_VAR, corners.float)
   window.dispatchEvent(new CustomEvent(THEME_CHANGED_EVENT, { detail: settings }))
+}
+
+export function themeSettingsForRemote(settings: Settings, extensions: readonly ExtensionListEntry[]): Settings {
+  if (!isExtensionThemeMode(settings.mode)) return settings
+  const colors = resolveThemePayload(settings, extensions)
+  // The phone has no installed extension catalog. Send concrete presentation
+  // values through its existing custom-theme path without persisting a copy or
+  // replacing the desktop's stable selection. Missing bundles use the same
+  // built-in fallback on both clients until their catalog contribution returns.
+  return colors ? { ...settings, mode: 'custom', customAppearanceJson: JSON.stringify(colors) }
+    : { ...settings, mode: DEFAULT_SETTINGS.mode }
 }
 
 function applyCustomAppearance(root: HTMLElement, colors: CustomAppearanceColors): void {

@@ -133,13 +133,18 @@ export function readOrchestrationRunOutputs(params: {
  *
  * WHY `silentIfSoleTarget` and not `preConfirmed`: the ownership gate below
  * scopes WHICH SESSION MAY BE NAMED, not WHICH SESSIONS DIE. `closeSession`
- * kills a set, and two shapes reach past the named target — a linked agent the
- * USER attached to a child (it carries no orchestration fields, so the gate
- * cannot see it), and a tab's sole grid leaf (which takes every detached
- * session in that tab, including the caller's siblings and the user's parked
- * agents). Asserting preConfirmed would destroy those silently. This mode stays
- * silent for the routine case — a detached child that expands to exactly
- * itself — and falls back to a dialog naming the requester for the rest.
+ * kills a set when the target has linked descendants — a linked agent the USER
+ * attached to a child carries no orchestration fields, so the gate cannot see
+ * it. Asserting preConfirmed would destroy it silently. This mode stays silent
+ * when the close expands to exactly the named agent and falls back to a dialog
+ * naming the requester otherwise.
+ *
+ * History (#886): a tab's SOLE grid leaf used to be the second shape that
+ * reached past the target, because closing it took every detached session in
+ * the tab — the caller's siblings and the user's parked agents. Closes are now
+ * session-scoped: that leaf closes alone and the next Dispatch row is promoted
+ * into the grid, so it expands to itself and closes silently. Automation never
+ * receives the human-only Close Tab choice.
  *
  * Returns whether the session actually closed, so a caller can report an
  * already-gone agent as skipped rather than claiming it closed one.
@@ -215,13 +220,20 @@ export async function closeOrchestrationRun(params: {
       // impossible, but a session that is simply gone still returns false and
       // is now correctly reported as skipped.
       //
-      // Be precise about what false means: closeSession returns it whenever the
-      // id is in neither `tabs` nor `detachedSessions`. The id list here is
-      // computed once from a pre-loop snapshot, so a sibling taken out by an
-      // EARLIER iteration's tab cascade also reports false — i.e. "skipped" can
-      // include "already closed by this very operation". The error direction is
-      // the safe one (it over-reports survival, where the old code
-      // over-reported success), but do not read skipped as "still running".
+      // Be precise about what false means: closeSession returns it when the id
+      // is in neither `tabs` nor `detachedSessions`, when the close was refused
+      // because the session changed or still has a linked child open, or when
+      // a dialog was declined. The id list is computed once from a pre-loop
+      // snapshot, so a session closed elsewhere during the loop also reports
+      // false.
+      //
+      // History (#886): a sibling taken out by an EARLIER iteration's tab
+      // cascade used to be the common "already closed by this very operation"
+      // case — a sole grid leaf took every detached session in its tab. Closes
+      // are session-scoped now (that leaf closes alone and a sibling is
+      // promoted), so that shape is gone. The error direction is still the
+      // safe one (over-reporting survival, where the old code over-reported
+      // success), but do not read skipped as "still running".
       // captureUndo: false — a run close is a fleet reaping its own children,
       // often a dozen at once. Those are agent-created sessions the user never
       // opened by hand, so pushing one undo entry each would evict the user's
@@ -376,10 +388,9 @@ function buildAgentRecord(params: {
   const latestAssistantText = statusOnly
     ? undefined
     : (params.latestAssistantText ?? latestAssistant(messages))
-  const hasDurableOutput = statusOnly
-    ? hasAssistantOutput(params.runtime, params.meta)
-    : Boolean(latestAssistantText)
-  const lifecycleState = lifecycleStateForRuntime(params.runtime, hasDurableOutput)
+  const lifecycleState = statusOnly
+    ? orchestrationChildLifecycle(params.runtime, params.meta)
+    : lifecycleStateForRuntime(params.runtime, Boolean(latestAssistantText))
   const activityAt = lastActivityAt(params.runtime, messages)
   return {
     sessionId: params.sessionId,
@@ -417,7 +428,7 @@ function buildAgentRecord(params: {
     // see buildAgentOutput). The full capped copy lives ONLY at
     // output.latestAssistantText.
     //
-    // LIFECYCLE HAZARD: hasDurableOutput above is derived from
+    // LIFECYCLE HAZARD: the output-mode lifecycle above is derived from
     // latestAssistantText. Excerpting must never turn non-empty text into
     // empty/absent, or completed children regress to `waiting` and
     // wait_agents never resolves. mirrorExcerpt only shortens, never drops.
@@ -430,6 +441,23 @@ function buildAgentRecord(params: {
     messageCount: params.messageCount
       ?? (statusOnly ? cheapMessageCount(params.runtime, params.meta) : messages.length),
   }
+}
+
+/**
+ * The lifecycle `orchestration_list_agents` reports for a child, derived from
+ * renderer state alone (main later overlays `prompt_sent`; see stage 1 below).
+ *
+ * Exported for Close Idle Orchestration Agents. "Idle" there must mean what a
+ * parent agent coordinating on this child sees as `completed`, not a second,
+ * slightly different reading of the same runtime: if the user's cleanup and the
+ * parent's `wait_agents` could disagree about whether a worker is done, one of
+ * them would be acting on a state the other would call running.
+ */
+export function orchestrationChildLifecycle(
+  runtime: SessionRuntime | null,
+  meta: SessionMeta,
+): OrchestrationLifecycleState {
+  return lifecycleStateForRuntime(runtime, hasAssistantOutput(runtime, meta))
 }
 
 function lifecycleStateForRuntime(

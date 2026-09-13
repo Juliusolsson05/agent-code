@@ -178,6 +178,24 @@ const codexAdapter: HostTranscriptAdapter = {
   },
 }
 
+// WHY transcript transforms get their own, much larger OpenCode deadline:
+// runOpencode's 30 s default came from e9ac8bdf (Refs #864), where it bounds a
+// hung *empty-session* import that would otherwise hold OpenCode Terminal
+// startup. A transform exports or imports a whole conversation instead. The
+// session that exposed #845 was a 14.6 MB / 804-message export, and its export
+// duration was never measured (the live probe ran before any deadline existed).
+// Applying the startup bound here could turn the fixed truncation into a
+// timeout on exactly the large sessions #845 made switchable, duplicable and
+// rewindable. Five minutes still ends a genuinely wedged CLI, and runOpencode
+// SIGKILLs its whole process group when it does.
+//
+// These transform calls carry no AbortSignal (nothing between the IPC handlers
+// and this adapter threads one), so the deadline is their only bound; stop()
+// cancellation exists for the terminal startup import alone. The target-profile
+// probes (`debug config`, `models`) keep the 30 s default because their cost
+// does not grow with conversation size.
+const OPENCODE_TRANSFORM_TIMEOUT_MS = 5 * 60_000
+
 const opencodeAdapter: HostTranscriptAdapter = {
   provider: 'opencode',
   async read(cwd, providerSessionId) {
@@ -205,7 +223,7 @@ const opencodeAdapter: HostTranscriptAdapter = {
       throw new Error('Projected OpenCode resume must contain exactly one export object.')
     }
     const binary = getToolPath('opencode', 'opencode')
-    const sessionId = await importOpencodeSession({ binary, cwd }, values[0])
+    const sessionId = await importOpencodeSession({ binary, cwd, timeoutMs: OPENCODE_TRANSFORM_TIMEOUT_MS }, values[0])
     return opencodeTranscriptFile(sessionId)
   },
   sessionId({ values }) {
@@ -354,7 +372,7 @@ async function loadOpencodeSnapshot(
   providerSessionId: string,
 ): Promise<TranscriptSnapshot> {
   const binary = getToolPath('opencode', 'opencode')
-  const exported = await exportOpencodeSession({ binary, cwd }, providerSessionId)
+  const exported = await exportOpencodeSession({ binary, cwd, timeoutMs: OPENCODE_TRANSFORM_TIMEOUT_MS }, providerSessionId)
   assertStableOpencodeExport(exported, providerSessionId)
   const conversation = decodeOpencodeConversation(exported)
   // OpenCode exports one complete native message per array position. That

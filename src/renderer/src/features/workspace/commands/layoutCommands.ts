@@ -167,6 +167,15 @@ export const layoutCommands: CommandDef[] = [
       // resolves would shrink the grid while the user was still deciding, and
       // a declined confirm would leave the layout changed with the agent alive
       // — the worst of both outcomes.
+      //
+      // What `true` means is exactly "the session THIS lane shows was closed"
+      // (#886 review round 2). It stays false when the close was declined,
+      // refused (the agent changed, or a linked session is still open) or the
+      // session was already gone — even if the operation closed some of its
+      // linked children first, which closeSession reports in its own toast and
+      // undo entry. So the lane is removed only when its agent is really gone.
+      // A root close that promoted a Dispatch row into the grid still resolves
+      // true; the survivor keeps its own lane, untouched here.
       const closed = await workspace.closeSession(sessionId)
       if (closed) workspace.removeTiledLane(laneIndex)
     },
@@ -355,15 +364,38 @@ export const layoutCommands: CommandDef[] = [
   // duplicates a durable preference gives the same setting two owners and two
   // places to look when it is wrong.
   {
+    // Preserve this ID so saved bindings keep opening the promoted product surface.
     id: 'toggle-performance-panel',
-    category: 'developer',
-    pickerVisibility: 'debug',
-    surface: 'debug',
-    title: 'Performance Stats',
-    description: '**What it does:** Shows or hides the performance stats panel.\n\n**Use when:** You want render, pane, or runtime performance details.\n\n**Notes:** Mostly useful while debugging the app.',
+    category: 'workspace-tools',
+    surface: 'app',
+    title: 'Performance Monitor',
+    description: '**What it does:** Opens live CPU, memory, responsiveness and agent process monitoring.\n\n**Use when:** Agent Code feels slow or you want to understand resource use.\n\n**Notes:** Local baseline collection is always on; opening this view shows the existing measurements.',
     keywords: ['performance', 'stats', 'cpu', 'memory', 'panes'],
     getState: ({ flags }) => toggle(flags.performancePanelOpen),
     run: ({ ui }) => ui.togglePerformancePanel(),
+  },
+  {
+    id: 'save-performance-report',
+    category: 'workspace-tools',
+    surface: 'app',
+    title: 'Save Performance Report',
+    description: '**What it does:** Saves the last 15 minutes of bounded local performance history, operation timings, incidents and coverage metadata.\n\n**Use when:** You want a small report to inspect without transcript-heavy debug logs.\n\n**Notes:** Opens Performance Monitor → Recordings, where a native picker chooses the destination and the saved file can be revealed. Nothing is uploaded.',
+    keywords: ['performance', 'report', 'export', 'slow', 'incident', 'local'],
+    // WHY route through the monitor instead of calling the API here: the
+    // palette closes before the native picker returns, so a direct call had
+    // nowhere to show the saved path, a Reveal action or a write failure.
+    run: ({ ui }) => ui.openPerformancePanel({ view: 'recordings', action: 'save-report' }),
+  },
+  {
+    id: 'record-performance-trace',
+    category: 'workspace-tools',
+    surface: 'app',
+    title: 'Record Performance Trace',
+    description: '**What it does:** Records a filtered app-wide Chromium trace for up to 30 seconds.\n\n**Use when:** The live monitor identifies a slowdown that needs deeper scheduler or rendering evidence.\n\n**Notes:** Explicit recording can contain detailed runtime data. A native picker chooses the local destination first; Recordings shows progress, Stop and the saved file.',
+    keywords: ['performance', 'trace', 'profile', 'record', 'chromium', 'slow'],
+    // An app-wide recording must be visibly in progress and stoppable. Opening
+    // Recordings gives it the indicator and controls a background start lacked.
+    run: ({ ui }) => ui.openPerformancePanel({ view: 'recordings', action: 'record-chromium' }),
   },
   {
     id: 'toggle-caffeinate',

@@ -696,7 +696,7 @@ export class RemoteServer extends EventEmitter {
           return { ok: false, error: 'no transcript on disk yet for this session' }
         }
         const kind = this.deps.manager.getSessionKind(msg.sessionId)
-        if (!kind || kind === 'terminal') {
+        if (!isAgentProviderKind(kind)) {
           return { ok: false, error: 'not an agent session' }
         }
         // Routing belongs to the registry capability, not a URI prefix. The

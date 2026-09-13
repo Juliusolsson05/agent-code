@@ -78,6 +78,7 @@ import type {
 } from '@renderer/features/prompt-templates/types'
 import { promptTemplateTargetSessionId } from '@renderer/features/prompt-templates/targetSession'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
+import { deriveExtensionCommands, deriveExtensionKeybindings } from '@renderer/apps/host/derive'
 import { resolveAgentPaneLabel } from '@renderer/workspace/tile-tree/paneLabels'
 import { sessionDisplayTitle } from '@renderer/workspace/sessionDisplayTitle'
 import { useWorkspaceContext } from '@renderer/workspace/WorkspaceContext'
@@ -270,6 +271,7 @@ function OpenCommandPalette({
   const onSettingsRequest = useAppStore(state => state.openSettingsPage)
   const openPaletteAction = useAppStore(state => state.openCommandPalette)
   const openViewPrompts = useAppStore(state => state.openViewPrompts)
+  const openTldrHistory = useAppStore(state => state.openTldrHistory)
   const openConversations = useAppStore(state => state.openConversations)
   const openAgentActivity = useAppStore(state => state.openAgentActivity)
   const openKeyboardShortcuts = useAppStore(state => state.openKeyboardShortcuts)
@@ -292,6 +294,7 @@ function OpenCommandPalette({
   const closePinAgents = useAppStore(state => state.closePinAgents)
   const closePathPicker = useAppStore(state => state.closePathPicker)
   const openUsageModal = useAppStore(state => state.openUsageModal)
+  const openApp = useAppStore(state => state.openApp)
   const openKeyVault = useAppStore(state => state.openKeyVault)
   const toggleGitBar = useAppStore(state => state.toggleGitBar)
   const toggleWorktreesBar = useAppStore(state => state.toggleWorktreesBar)
@@ -301,9 +304,11 @@ function OpenCommandPalette({
   const toggleHtmlDebugPanel = useAppStore(state => state.toggleHtmlDebugPanel)
   const toggleRenderingDebugMode = useAppStore(state => state.toggleRenderingDebugMode)
   const toggleTailAllMode = useAppStore(state => state.toggleTailAllMode)
+  const toggleTailWorkingMode = useAppStore(state => state.toggleTailWorkingMode)
   const toggleDevDebugPanel = useAppStore(state => state.toggleDevDebugPanel)
   const toggleAgentStatusPanel = useAppStore(state => state.toggleAgentStatusPanel)
   const togglePerformancePanel = useAppStore(state => state.togglePerformancePanel)
+  const openPerformancePanel = useAppStore(state => state.openPerformancePanel)
   const toggleRemotePanel = useAppStore(state => state.toggleRemotePanel)
   const openGlobalEditorAction = useAppStore(state => state.openGlobalEditor)
   const closeGlobalEditorAction = useAppStore(state => state.closeGlobalEditor)
@@ -369,6 +374,7 @@ function OpenCommandPalette({
   const htmlDebugPanelOpen = useAppStore(state => state.htmlDebugPanelOpen)
   const renderingDebugMode = useAppStore(state => state.renderingDebugMode)
   const tailAllMode = useAppStore(state => state.tailAllMode)
+  const tailWorkingMode = useAppStore(state => state.tailWorkingMode)
   const devDebugPanelOpen = useAppStore(state => state.devDebugPanelOpen)
   const agentStatusPanelOpen = useAppStore(state => state.agentStatusPanelOpen)
   const performancePanelOpen = useAppStore(state => state.performancePanelOpen)
@@ -579,6 +585,7 @@ function OpenCommandPalette({
         // structural rather than a visibility tier.
         openCommandPalette: openPaletteAction,
         openViewPrompts,
+        openTldrHistory,
         openConversations,
         openAgentActivity,
         openKeyboardShortcuts,
@@ -610,9 +617,11 @@ function OpenCommandPalette({
         toggleHtmlDebugPanel,
         toggleRenderingDebugMode,
         toggleTailAllMode,
+        toggleTailWorkingMode,
         toggleDevDebugPanel,
         toggleAgentStatusPanel,
         togglePerformancePanel,
+        openPerformancePanel,
         toggleRemotePanel,
         toggleCaffeinate,
         openGlobalEditor: openGlobalEditorAction,
@@ -636,7 +645,13 @@ function OpenCommandPalette({
         enterAiWorkspaceOpenMode,
         enterAiWorkspaceCreateMode,
         enterAiWorkspaceClearMode,
+        openApp,
         closePalette: onClose,
+        // NOTE: openApp is in the dep array below alongside every other store
+        // action. Zustand action identities are stable, so omitting it was
+        // benign — but it would become a stale closure the instant that
+        // assumption changed, and there is no lint rule in this repo to catch
+        // it (no eslint config, no `lint` script).
       },
       flags: {
         statusModeEnabled,
@@ -666,6 +681,7 @@ function OpenCommandPalette({
         htmlDebugPanelOpen,
         renderingDebugMode,
         tailAllMode,
+        tailWorkingMode,
         devDebugEnabled,
         sessionRecordingEnabled,
         devDebugPanelOpen,
@@ -694,6 +710,7 @@ function OpenCommandPalette({
       openMergeProjectTabs,
       onSettingsRequest,
       openViewPrompts,
+      openTldrHistory,
       openConversations,
       openAgentActivity,
       openCloseOldAgents,
@@ -714,6 +731,7 @@ function OpenCommandPalette({
       closePinAgents,
       closePathPicker,
       openUsageModal,
+      openApp,
       openKeyVault,
       toggleGitBar,
       toggleWorktreesBar,
@@ -723,9 +741,11 @@ function OpenCommandPalette({
       toggleHtmlDebugPanel,
       toggleRenderingDebugMode,
       toggleTailAllMode,
+      toggleTailWorkingMode,
       toggleDevDebugPanel,
       toggleAgentStatusPanel,
       togglePerformancePanel,
+      openPerformancePanel,
       toggleRemotePanel,
       toggleCaffeinate,
       openGlobalEditorAction,
@@ -777,6 +797,7 @@ function OpenCommandPalette({
       htmlDebugPanelOpen,
       renderingDebugMode,
       tailAllMode,
+      tailWorkingMode,
       devDebugEnabled,
       sessionRecordingEnabled,
       devDebugPanelOpen,
@@ -798,9 +819,28 @@ function OpenCommandPalette({
     ],
   )
 
-  useCommandExecutionRequest(executionRequest, commandContext)
+  // Extension commands are derived from installed MANIFESTS, not from loaded
+  // modules — that is what lets the palette list an extension's commands before
+  // a single byte of it has been imported. `run` activates on demand.
+  const installedExtensions = useAppStore(state => state.installedExtensions)
+  const extensionCommands = useMemo(
+    () =>
+      deriveExtensionCommands(installedExtensions, openApp, workspace.openExtensionViewInPane),
+    [installedExtensions, openApp, workspace.openExtensionViewInPane],
+  )
+  // Extension keybinding defaults, so a palette row for an extension command shows
+  // its shipped chord. Independent of the host (manifests only), unlike commands.
+  const extensionKeybindings = useMemo(
+    () => deriveExtensionKeybindings(installedExtensions),
+    [installedExtensions],
+  )
 
-  const commands = useMemo(() => buildCommandRegistry(commandContext), [commandContext])
+  const commands = useMemo(
+    () => buildCommandRegistry(commandContext, extensionCommands, extensionKeybindings),
+    [commandContext, extensionCommands, extensionKeybindings],
+  )
+
+  useCommandExecutionRequest(executionRequest, commandContext, extensionCommands)
 
   const promptTemplates = useMemo(
     () => allPromptTemplates(customPromptTemplates),
@@ -1174,6 +1214,10 @@ function OpenCommandPalette({
       source: pendingMenuCommand.source,
       ctx: commandContext,
       reportError: message => showToast(message, 6000),
+      // Without these a contributed keybinding resolved to nothing here, and the
+      // outcome — `status: 'unknown'` — is not inspected by the keybinding path, so
+      // every manifest-declared shortcut was a silent no-op.
+      extraCommands: extensionCommands,
     })
     onMenuCommandHandled()
     // A command that OPENED the palette must not be closed by the "return to

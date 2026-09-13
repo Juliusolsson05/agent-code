@@ -92,7 +92,7 @@ jobs:
           fi
 
           # WHY no hard-fail when both secrets are absent: every submodule
-          # repo (the five Juliusolsson05 packages/* repos and openai/codex)
+          # repo (every Juliusolsson05 packages/* repo and openai/codex)
           # is PUBLIC, so the plain HTTPS URLs in .gitmodules clone fine
           # anonymously. The exit-1 here predated the repos going public and
           # contradicted README.md's "no special access needed" (#506
@@ -198,7 +198,7 @@ jobs:
           fi
 
           # WHY no hard-fail when both secrets are absent: every submodule
-          # repo (the five Juliusolsson05 packages/* repos and openai/codex)
+          # repo (every Juliusolsson05 packages/* repo and openai/codex)
           # is PUBLIC, so the plain HTTPS URLs in .gitmodules clone fine
           # anonymously. The exit-1 here predated the repos going public and
           # contradicted README.md's "no special access needed" (#506
@@ -325,7 +325,7 @@ jobs:
 
       - name: Create GitHub Release
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.publish_release == 'true' }}
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
         with:
           tag_name: ${{ github.event.inputs.release_tag }}
           name: ${{ github.event.inputs.release_name }}

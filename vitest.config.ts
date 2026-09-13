@@ -72,28 +72,57 @@ const exclude = [
 // credentials. Keeping the exact patterns inspectable lets a focused contract
 // test prevent a future broad `**/*.test.ts` edit from silently pulling those
 // files back into the parallel core project.
-export const unitTestIncludes = [
+export // ── `.tsx` IS INCLUDED SO A TEST CANNOT FALL BETWEEN PROJECTS ──
+// The renderer project takes only `*.renderer.test.tsx`, and this one used to take
+// only `.ts`. A file named `Foo.test.tsx` therefore matched NO project: vitest ran
+// it nowhere, reported success, and `check-test-contract.mjs` — which greps for
+// `.only`, not for project membership — agreed. A test that silently never runs is
+// worse than a missing one, because the coverage it appears to provide is counted.
+//
+// Every one of the ~300 current test files maps to exactly one project, so this
+// closes a hole rather than fixing a live miss. A `.tsx` test that needs a DOM must
+// still be named `*.renderer.test.tsx`; this catches the ones that do not.
+const unitTestIncludes = [
   'testing/unit/**/*.test.ts',
   'src/**/*.test.ts',
+  'src/**/*.test.tsx',
 ] as const
 
+// Every tier suffix, in BOTH extensions.
+//
+// The `.tsx` half is not decorative: the unit project's include list covers
+// `src/**/*.test.tsx`, and `*.renderer.test.tsx` matches that glob too. Without the
+// `.tsx` excludes here, every renderer test would ALSO be collected into the
+// node-environment unit project and fail with "document is not defined" — which is
+// exactly what happened the first time the include was widened.
 export const unitTierExcludes = [
   '**/*.integration.test.ts',
+  '**/*.integration.test.tsx',
   '**/*.renderer.test.ts',
+  '**/*.renderer.test.tsx',
   '**/*.system.test.ts',
+  '**/*.system.test.tsx',
   '**/*.live.test.ts',
+  '**/*.live.test.tsx',
   '**/*.soak.test.ts',
+  '**/*.soak.test.tsx',
   '**/*.corpus.test.ts',
+  '**/*.corpus.test.tsx',
 ] as const
 
 export const systemTestIncludes = [
   'testing/system/**/*.test.ts',
   'src/**/*.system.test.ts',
+  // The `.tsx` forms mirror unitTierExcludes. Excluding a suffix from the unit
+  // project without including it here made such a test run in NO project while
+  // vitest still reported success.
+  'src/**/*.system.test.tsx',
   // WHY the legacy suffix stays accepted: Agent Code already has useful
   // operating-system-boundary coverage under `.integration.test.ts`. Renaming
   // those files is review noise and would not change their execution contract;
   // new cross-boundary tests should use the shared `.system.test.ts` suffix.
   'src/**/*.integration.test.ts',
+  'src/**/*.integration.test.tsx',
 ] as const
 
 export default defineConfig({
@@ -177,7 +206,14 @@ export default defineConfig({
       // app-only. Each submodule has its own honest coverage gate; counting the
       // same file here at near-zero would violate the ownership boundary and
       // make a pointer update rewrite Agent Code's baseline.
-      exclude: ['packages/**'],
+      exclude: [
+        'packages/**',
+        // These are executable test fixtures bundled into a separate Electron
+        // process, not shipping application code. Production extension modules
+        // remain in the denominator; do not count the assertion harness itself.
+        'src/main/extensions/testing/**',
+        'src/renderer/src/apps/host/testing/**',
+      ],
       // WHY the first floor matches the measured all-app baseline: this turns
       // coverage into a ratchet immediately without pretending the existing
       // application has already covered every Electron/UI boundary. New tests

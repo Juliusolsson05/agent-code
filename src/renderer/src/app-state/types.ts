@@ -1,3 +1,4 @@
+import type { PerformancePanelRequest } from './uiShell/types'
 import type { PaletteMode } from '@renderer/features/command-palette/paletteMode'
 import type { Settings } from '@renderer/app-state/settings/types'
 import type {
@@ -8,6 +9,8 @@ import type {
 import type { SessionId, TabId } from '@renderer/workspace/types'
 import type { WorkspaceState } from '@renderer/workspace/types'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
+import type { ExtensionListEntry } from '@shared/types/extensions'
+import type { ExtensionFailure } from '@renderer/apps/types'
 import type {
   ReaderModeState,
   SpotlightState,
@@ -75,6 +78,8 @@ export type UiShellSlice = UiShellState & {
   closeRecordingNotePrompt: () => void
   openViewPrompts: (sessionId: SessionId) => void
   closeViewPrompts: () => void
+  openTldrHistory: (sessionId: SessionId) => void
+  closeTldrHistory: () => void
   openNewAgentPlacement: () => void
   /** Open the placement overlay pre-targeted at a specific project. Used by
    *  the Dispatch header "+"; see `newAgentProjectIntent` for why the target
@@ -103,11 +108,14 @@ export type UiShellSlice = UiShellState & {
    *  app-state/uiShell/types.ts for why this is an OR-mask rather than a bulk
    *  write over every session's `tailMode`. */
   toggleTailAllMode: () => void
+  toggleTailWorkingMode: () => void
   toggleDevDebugPanel: () => void
   openAgentStatusPanel: () => void
   closeAgentStatusPanel: () => void
   toggleAgentStatusPanel: () => void
   togglePerformancePanel: () => void
+  openPerformancePanel: (request?: Omit<PerformancePanelRequest, 'id'>) => void
+  consumePerformancePanelRequest: (id: number) => void
   toggleRemotePanel: () => void
   openGlobalEditor: () => void
   closeGlobalEditor: () => void
@@ -131,6 +139,11 @@ export type UiShellSlice = UiShellState & {
   closeKeyVault: () => void
   openRewindPrompt: (sessionId: SessionId) => void
   closeRewindPrompt: () => void
+  openApp: (appId: string) => void
+  closeApp: () => void
+  setInstalledExtensions: (entries: ExtensionListEntry[]) => void
+  setInstalledExtensionsError: (error: string | null) => void
+  setExtensionFailures: (failures: ExtensionFailure[]) => void
   openAgentViewModePicker: (sessionId: SessionId) => void
   closeAgentViewModePicker: () => void
   openColorFlagPicker: (sessionId: SessionId) => void

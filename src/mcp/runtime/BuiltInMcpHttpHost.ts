@@ -1,4 +1,7 @@
 import type { TldrStore } from '@main/tldr/TldrStore.js'
+import { hasReportingDomain } from '@shared/types/tldr.js'
+import { TLDR_HOOK_EVENTS } from '@main/tldr/enforcement.js'
+import type { TldrEnforcement, TldrHookEvent } from '@main/tldr/enforcement.js'
 import { randomBytes } from 'node:crypto'
 import { createServer } from 'node:http'
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
@@ -24,6 +27,30 @@ import type {
 } from '@mcp/shared/types.js'
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
 
+// Hook bodies are small provider payloads (session ids, a cwd, a flag, and at
+// most the last assistant message). The cap bounds memory for a hostile or
+// runaway client without ever truncating a real one.
+const TLDR_HOOK_MAX_BODY_BYTES = 256 * 1024
+const TLDR_HOOK_PATH_PREFIX = '/hooks/tldr/'
+
+function readBody(req: IncomingMessage, limit: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = []
+    let size = 0
+    req.on('data', (chunk: Buffer) => {
+      size += chunk.length
+      if (size > limit) {
+        reject(new Error('Hook body exceeds its size limit.'))
+        req.destroy()
+        return
+      }
+      chunks.push(chunk)
+    })
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')))
+    req.on('error', reject)
+  })
+}
+
 type SessionRegistration = {
   token: string
   scope: McpSessionScope
@@ -37,6 +64,8 @@ type BuiltInMcpServerFactory = (
 
 export type BuiltInMcpDependencies = {
   tldrStore?: Pick<TldrStore, 'update'>
+  goalStore?: Pick<TldrStore, 'update'>
+  tldrEnforcement?: Pick<TldrEnforcement, 'handle' | 'forget'>
   isTldrWriteAuthorized?: () => boolean
   orchestrationBridge?: OrchestrationBridge
   agentManagementBridge?: AgentManagementBridge
@@ -216,7 +245,7 @@ export class BuiltInMcpHttpHost {
     this.revokeSession(scope.sessionId)
     const token = randomBytes(32).toString('base64url')
     const mcpScope = {
-      tldrIdentity: scope.tldrIdentity ?? (domains.includes('tldr') ? scope.sessionId : undefined),
+      tldrIdentity: scope.tldrIdentity ?? (hasReportingDomain(domains) ? scope.sessionId : undefined),
       sessionId: scope.sessionId,
       cwd: scope.cwd,
       domains,
@@ -231,7 +260,10 @@ export class BuiltInMcpHttpHost {
     })
     this.tokensBySession.set(scope.sessionId, token)
 
-    return [this.serverConfig(token)]
+    const config = this.serverConfig(token)
+    return [hasReportingDomain(domains)
+      ? { ...config, tldrHooks: { baseUrl: `http://127.0.0.1:${this.port}${TLDR_HOOK_PATH_PREFIX.slice(0, -1)}` } }
+      : config]
   }
 
   sessionServers(sessionId: string): BuiltInMcpServerConfig[] {
@@ -277,6 +309,7 @@ export class BuiltInMcpHttpHost {
     // ends when the agent's socket closes on exit. There is no cached server to
     // tear down — each request owns and closes its own scoped server.
     if (registration) registration.revoked = true
+    this.dependencies.tldrEnforcement?.forget(token)
   }
 
   private serverConfig(token: string): BuiltInMcpServerConfig {
@@ -300,6 +333,10 @@ export class BuiltInMcpHttpHost {
       return
     }
     const url = new URL(req.url, 'http://127.0.0.1')
+    if (url.pathname.startsWith(TLDR_HOOK_PATH_PREFIX)) {
+      await this.handleTldrHook(req, res, url)
+      return
+    }
     if (url.pathname !== '/mcp') {
       this.writeJson(res, 404, { error: 'not_found' })
       return
@@ -460,6 +497,62 @@ export class BuiltInMcpHttpHost {
         activeStandaloneGetStreams: this.activeStandaloneGetStreams,
       },
     })
+  }
+
+  /**
+   * Provider turn hooks for TLDR enforcement.
+   *
+   * WHY these ride the MCP host instead of a separate listener: they need the
+   * exact authority the MCP endpoint already enforces — a per-process bearer
+   * that identifies one session and dies with it. Reusing the registration means
+   * a hook can never read or steer another agent's reporting state, and a
+   * reload's revocation stops an old process's hooks at the same moment it
+   * stops that process's tool calls.
+   *
+   * WHY failures return an empty allow instead of an error status: a provider
+   * treats a failed hook as non-blocking anyway, and Codex's curl uses `-f`, so
+   * the one thing an error could achieve is noise in the agent's transcript.
+   * Enforcement is a nudge; it must never be the reason a turn cannot end.
+   */
+  private async handleTldrHook(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+    const event = url.pathname.slice(TLDR_HOOK_PATH_PREFIX.length) as TldrHookEvent
+    if (req.method !== 'POST' || !TLDR_HOOK_EVENTS.includes(event)) {
+      this.writeJson(res, 404, { error: 'not_found' })
+      return
+    }
+    if (!this.isAllowedOrigin(req)) {
+      this.writeJson(res, 403, { error: 'forbidden_origin' })
+      return
+    }
+    const registration = this.registrationForRequest(req, url)
+    if (!registration) {
+      this.writeJson(res, 401, { error: 'unauthorized' })
+      return
+    }
+    const enforcement = this.dependencies.tldrEnforcement
+    const identity = registration.scope.tldrIdentity
+    if (!enforcement || !identity || !hasReportingDomain(registration.scope.domains)) {
+      this.writeJson(res, 200, {})
+      return
+    }
+    let input: unknown = null
+    try {
+      input = JSON.parse(await readBody(req, TLDR_HOOK_MAX_BODY_BYTES))
+    } catch {
+      // A malformed or oversized body is still a turn boundary worth
+      // recording; the rules only ever read `stop_hook_active` from it.
+    }
+    try {
+      const domains = registration.scope.domains
+      const output = await enforcement.handle(registration.token, identity, event, input, {
+        tldr: domains.includes('tldr'), goal: domains.includes('goal'),
+      })
+      // Re-check revocation after the async store read: an old process's Stop
+      // must not block a turn in the process that just replaced it.
+      this.writeJson(res, 200, registration.revoked ? {} : output)
+    } catch {
+      this.writeJson(res, 200, {})
+    }
   }
 
   private registrationForRequest(

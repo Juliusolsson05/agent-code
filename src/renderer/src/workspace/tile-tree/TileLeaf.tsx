@@ -1,3 +1,4 @@
+import { useMonitorCommit } from '@renderer/performance/useMonitorCommit'
 import { useUsageLimitActions } from '@renderer/features/usage-limit/useUsageLimitActions'
 import { conditionStateByKind } from '@shared/types/providerConditions'
 import type { ClaudeAskUserQuestionState } from '@shared/types/providerConditions'
@@ -7,6 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
+import { agentFollowEnabled } from '@renderer/workspace/agentFollow'
 import { focusIsUnowned, useInteractiveOwnership } from '@renderer/workspace/tile-tree/TileLeaf/useInteractiveOwnership'
 import { useGlobalToast } from '@renderer/ui/GlobalToast'
 import { Feed } from '@renderer/features/feed/ui/Feed'
@@ -136,6 +138,7 @@ export function TileLeaf({
   const feed = useSessionFeed()
   const htmlDebugPanelOpen = useAppStore(state => state.htmlDebugPanelOpen)
   const tailAllMode = useAppStore(state => state.tailAllMode)
+  const tailWorkingMode = useAppStore(state => state.tailWorkingMode)
   // The one place the "mounted ⇒ visible" shortcut genuinely breaks: Global
   // Editor fullscreen (GlobalEditorWorkspaceSlot) and the Reader/Spotlight/
   // Settings takeover (RetainedWorkspaceSurface, #752) both hide the whole
@@ -145,6 +148,7 @@ export function TileLeaf({
   // into "visible" for the mask below and into "owns keyboard input" for
   // every document-level router. See useInteractiveOwnership for why.
   const { interactive, hidden: workspaceHidden } = useInteractiveOwnership(focused)
+  useMonitorCommit(sessionId, runtime.semantic, !workspaceHidden)
   // This one OR is the ENTIRE implementation of "Tail All" scoping, and it is
   // load-bearing in a way that is easy to mistake for a shortcut.
   //
@@ -204,7 +208,11 @@ export function TileLeaf({
   // Note that the *flag* restoring is not the same as the *scroll position*
   // restoring — see the tail-mode guard in Feed's scroll listener for why the
   // pre-tail position has to be protected for that promise to hold.
-  const effectiveTailMode = (runtime.tailMode || tailAllMode) && !workspaceHidden
+  // Working adds an activity filter to this same visibility boundary. It must
+  // not enumerate sessions or change the per-session preference described above.
+  const effectiveTailMode = agentFollowEnabled(workspace.state.sessions[sessionId]?.kind, runtime, {
+    tailAllMode, tailWorkingMode,
+  }) && !workspaceHidden
   const dictationEnabled = useAppStore(state => state.settings.dictationEnabled)
   const dictationProvider = useAppStore(state => state.settings.dictationProvider)
   const dictationShortcut = useAppStore(state => state.settings.dictationShortcut)

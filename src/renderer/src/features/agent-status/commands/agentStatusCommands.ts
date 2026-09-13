@@ -16,8 +16,8 @@ export const agentStatusCommands: CommandDef[] = [
     category: 'workspace-tools',
     surface: 'session',
     title: 'Agent Status',
-    description: '**What it does:** Shows or hides a compact **Agent Status** panel for the focused agent or terminal.\n\n**Use when:** You need identity, placement, runtime status, MCP domains, or orchestration/link metadata without opening raw debug panels.\n\n**Notes:** Follows the current command target, including focused Dispatch rows.',
-    keywords: ['agent', 'status', 'show', 'state', 'inspect', 'runtime', 'session', 'mcp', 'orchestration', 'linked'],
+    description: '**What it does:** Shows or hides a compact **Agent Status** panel for the focused agent or terminal, including installed Agent Code-managed and provider skills.\n\n**Use when:** You need identity, placement, runtime status, installed skills, MCP domains, or orchestration/link metadata without opening raw debug panels.\n\n**Notes:** Follows the current command target, including focused Dispatch rows. Skill discovery lists installed files; it does not prove the running agent has loaded them.',
+    keywords: ['agent', 'status', 'show', 'state', 'inspect', 'runtime', 'session', 'mcp', 'orchestration', 'linked', 'skills', 'installed', 'defaults'],
     when: ctx => focusedSessionId(ctx) !== null,
     getState: ({ flags }) => toggle(flags.agentStatusPanelOpen),
     run: ({ ui }) => {

@@ -1,4 +1,10 @@
-import { AGENT_PROVIDER_KINDS, DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
+import {
+  AGENT_PROVIDER_KINDS,
+  DEFAULT_PROVIDER,
+  isAgentProviderKind,
+  isAgentSessionKind,
+  isProcessSessionKind,
+} from '@shared/types/providerKind'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { extractLastAssistantText } from '@renderer/lib/copyAssistant'
 import type { CommandContext, CommandDef } from '@renderer/features/command-palette/types'
@@ -18,6 +24,7 @@ import { dispatchFocusedSessionId } from '@renderer/workspace/dispatch/tiledDisp
 import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 import { submitActiveComposer } from '@renderer/workspace/tile-tree/TileLeaf/composerEnterRegistry'
 import { sessionHasTranscript } from '@renderer/workspace/transcriptAvailability'
+import { isWorkingAgent } from '@renderer/workspace/agentFollow'
 
 /**
  * Buried panes visible from the CURRENT tab.
@@ -524,7 +531,7 @@ export const paneCommands: CommandDef[] = [
         ? workspace.getRuntime(sessionId).tailMode
         : false
       // WHY this consults Tail All: the pane's actual behavior is
-      // `runtime.tailMode || tailAllMode` (see TileLeaf). Reporting the raw
+      // the individual flag OR the active bulk policy (see agentFollow). Reporting the raw
       // per-session flag would print "Off" next to a pane that is visibly
       // pinned to the bottom, which reads as a broken command. The distinct
       // 'On (all)' label says the state is real but not this session's to own —
@@ -542,13 +549,19 @@ export const paneCommands: CommandDef[] = [
         // doing the whole job.
         return toggle(true, { detail: 'On via Auto-follow All Visible Agents' })
       }
+      if (
+        !tailMode && flags.tailWorkingMode && sessionId
+        && isWorkingAgent(workspace.state.sessions[sessionId]?.kind, workspace.getRuntime(sessionId))
+      ) {
+        return toggle(true, { detail: 'On via Auto-follow All Working Agents' })
+      }
       return toggle(Boolean(tailMode))
     },
     when: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
-      // Every session follows (#865): agents through the feed or the raw
-      // terminal view, plain shells through the same xterm follow hook.
-      return sessionId !== null && Boolean(workspace.state.sessions[sessionId])
+      const meta = sessionId ? workspace.state.sessions[sessionId] : undefined
+      // Shell and agent panes both follow; a processless extension has no output to follow.
+      return Boolean(meta && isProcessSessionKind(meta.kind))
     },
     run: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
@@ -567,7 +580,7 @@ export const paneCommands: CommandDef[] = [
     surface: 'app',
     title: 'Auto-follow All Visible Agents',
     description:
-      '**What it does:** Toggles **auto-follow for every visible agent** at once.\n\n**Use when:** You are watching several agents work and want them all pinned to the bottom.\n\n**Notes:** Scopes to what is on screen — in **single dispatch** that is the one agent, in **tiled** every lane, in the **grid** the current tab\'s panes only. Panes you open afterward tail too, until you toggle it off. Plain terminals and raw agent terminal views follow too.\n\n**Caution:** A tailing pane cannot be scrolled up. Turning this off leaves individually enabled followers on; other panes restore their earlier reading position where that content is still retained. Raw terminal follow controls xterm scrollback, not a TUI\'s internal history.',
+      '**What it does:** Toggles **auto-follow for every visible agent** at once.\n\n**Use when:** You are watching several agents work and want them all pinned to the bottom.\n\n**Notes:** Scopes to what is on screen — in **single dispatch** that is the one agent, in **tiled** every lane, in the **grid** the current tab\'s panes only. Panes you open afterward tail too, until you toggle it off. Enabling this switches off Auto-follow All Working Agents. Plain terminals and raw agent terminal views follow too.\n\n**Caution:** A tailing pane cannot be scrolled up. Turning this off leaves individually enabled followers on; other panes restore their earlier reading position where that content is still retained. Raw terminal follow controls xterm scrollback, not a TUI\'s internal history.',
     keywords: ['tail', 'all', 'follow', 'auto-scroll', 'bulk', 'every', 'watch', 'tail all', 'tail'],
     // WHY no `renderedViewPolicy` — Tail All is a stance over whatever is
     // mounted, on either agent surface (rendered feed or raw terminal view,
@@ -582,6 +595,20 @@ export const paneCommands: CommandDef[] = [
     run: ({ ui }) => ui.toggleTailAllMode(),
   },
   {
+    id: 'toggle-tail-working',
+    category: 'layout-dispatch',
+    pickerVisibility: 'advanced',
+    surface: 'app',
+    title: 'Auto-follow All Working Agents',
+    description: '**What it does:** Keeps working agents pinned to their latest output.\n\n**Use when:** You want to watch active work while reading idle conversations freely.\n\n**Notes:** Applies automatically as agents start and stop working, in rendered feeds and raw agent terminal views. Agents waiting for your approval or an answer release follow so you can read the context. Hidden panes suspend scrolling. Plain shell terminals are excluded. Enabling this switches off Auto-follow All Visible Agents. Individually enabled followers stay on.\n\n**Caution:** A following pane cannot be scrolled up. When work ends or this mode is switched off, other panes restore their earlier reading position where retained. Raw terminal follow controls xterm scrollback, not a TUI’s internal history.',
+    keywords: ['tail', 'all', 'working', 'busy', 'running', 'follow', 'auto-scroll', 'watch'],
+    // This is a policy for future work too, so it stays available with no busy
+    // target and on either view surface. The leaf observes activity changes;
+    // the command never wakes agents or snapshots the current working set.
+    getState: ({ flags }) => toggle(flags.tailWorkingMode),
+    run: ({ ui }) => ui.toggleTailWorkingMode(),
+  },
+  {
     id: 'jump-latest-message',
     category: 'navigate',
     surface: 'session',
@@ -592,9 +619,8 @@ export const paneCommands: CommandDef[] = [
     // the surface where returning to the bottom is most often needed.
     when: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
-      // Every session follows (#865): agents through the feed or the raw
-      // terminal view, plain shells through the same xterm follow hook.
-      return sessionId !== null && Boolean(workspace.state.sessions[sessionId])
+      const meta = sessionId ? workspace.state.sessions[sessionId] : undefined
+      return Boolean(meta && isProcessSessionKind(meta.kind))
     },
     run: ({ workspace }) => {
       workspace.scrollFocusedToLatest()
@@ -609,7 +635,7 @@ export const paneCommands: CommandDef[] = [
     when: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return false
-      // WHY hide this for terminals: terminal output is not an assistant
+      // WHY hide this on non-agent panes: terminal output is not an assistant
       // transcript, and extractLastAssistantText intentionally reads provider
       // entries. Showing the command on a shell row would imply there is an
       // assistant response to copy when there is only PTY scrollback.
@@ -646,12 +672,13 @@ export const paneCommands: CommandDef[] = [
       '**What it does:** Empties the composer draft for the focused agent.\n\n**Use when:** You typed or dictated something you want to start over from — with a mouse there is no select-all-and-delete.\n\n**Notes:** Reversible with **Undo Clear Composer**. Attached images are removed but not restored by the undo.',
     keywords: ['clear', 'composer', 'draft', 'erase', 'reset', 'prompt', 'delete'],
     // Terminals have no composer draft — their input goes straight to the PTY —
-    // so offering this on a shell row would imply a draft that cannot exist.
-    // Same reasoning as copy-last-assistant above.
+    // and extension-view panes have no composer at all, so offering this on
+    // either would imply a draft that cannot exist. Same reasoning as
+    // copy-last-assistant above.
     when: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return false
-      return workspace.state.sessions[sessionId]?.kind !== 'terminal'
+      return isAgentSessionKind(workspace.state.sessions[sessionId]?.kind)
     },
     run: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
@@ -680,13 +707,14 @@ export const paneCommands: CommandDef[] = [
     description:
       '**What it does:** Restores the draft removed by the last **Clear Composer** in this agent.\n\n**Use when:** You cleared the composer by mistake.\n\n**Notes:** Text only — attached images are not restored. Survives further typing, so it is still available after you start over.',
     keywords: ['undo', 'restore', 'composer', 'draft', 'clear', 'recover'],
-    // Plain terminals have no composer at all; the rendered-view policy cannot
-    // hide this for them because it answers "allowed" for non-agent kinds.
+    // Terminals and extension panes have no composer at all; the rendered-view
+    // policy cannot hide this for them because it answers "allowed" for non-agent
+    // kinds. Positive agent check, matching Clear Composer and Send Prompt.
     // This guard reads only the session kind, never the module-level stash,
     // so the staleness concern that kept this command guard-free does not apply.
     when: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
-      return sessionId !== null && workspace.state.sessions[sessionId]?.kind !== 'terminal'
+      return sessionId !== null && isAgentSessionKind(workspace.state.sessions[sessionId]?.kind)
     },
     run: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
@@ -715,7 +743,7 @@ export const paneCommands: CommandDef[] = [
     when: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return false
-      return workspace.state.sessions[sessionId]?.kind !== 'terminal'
+      return isAgentSessionKind(workspace.state.sessions[sessionId]?.kind)
     },
     // Routed through the Enter registry rather than reimplemented: `submit` is
     // built from `submitCurrentDraft`, which owns provider capability dispatch,

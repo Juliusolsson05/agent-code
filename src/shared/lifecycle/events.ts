@@ -613,6 +613,11 @@ export const SESSION_LIFECYCLE_DATA_KEYS = [
   'hasResumeId',
   'deliveryInFlight',
   'subagentHeaderPresent',
+  // How main accepted a delivered prompt: 'user' (a turn starts), 'queue'
+  // (Claude holds it behind the running turn), 'transport' (OpenCode HTTP).
+  // The `queue` value is what makes the #889 stuck-`Sending` shape
+  // attributable from the journal alone.
+  'acceptance',
 
   // shape / volume
   'tabs',
@@ -775,6 +780,13 @@ export function pickCodexTranscriptObservationData(
     case 'submit.result':
       provider()
       boolean('ok')
+      string('acceptance', ['user', 'queue', 'transport'])
+      // WHY an explicit null survives here although `string()` drops it: null
+      // is the Codex composer's real answer today (raw PTY writes carry no
+      // delivery result), and dropping it made every Codex `submit.result`
+      // indistinguishable from a row written before the field existed. Only
+      // null is added; the string vocabulary above stays closed.
+      if (input.acceptance === null) out.acceptance = null
       deliveryCode()
       deliveryStage()
       boolean('bodyWritten')

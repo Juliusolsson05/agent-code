@@ -7,7 +7,6 @@ import {
   grantStillMatches,
   expandSessionCloseTargets,
   expandTabCloseTargets,
-  narrowGrantToCurrent,
 } from '@renderer/workspace/closeConfirmation'
 import type { CloseTargetSnapshot } from '@renderer/workspace/closeConfirmation'
 
@@ -75,51 +74,23 @@ describe('grant validity', () => {
   })
 })
 
-describe('narrowing a stale grant', () => {
-  it('keeps the targets that are still present', () => {
-    // Killing the ten that did not change is the useful behaviour; the two
-    // that did must be dropped, not killed on the old preview's authority.
-    const granted = [target('a'), target('b'), target('c')]
-    const current = [target('a'), target('c')]
-    expect(narrowGrantToCurrent(granted, current).map(t => t.sessionId)).toEqual(['a', 'c'])
-  })
-
-  it('drops a target that started working since the grant', () => {
-    // The user approved closing an IDLE agent. One that woke up is outside
-    // what they authorized, even though its id is unchanged.
-    const granted = [target('a'), target('b')]
-    const current = [target('a'), target('b', true)]
-    expect(narrowGrantToCurrent(granted, current).map(t => t.sessionId)).toEqual(['a'])
-  })
-
-  it('keeps a target that was already live when granted', () => {
-    // The user saw and approved this one as running, so it stays covered.
-    const granted = [target('a', true)]
-    const current = [target('a', true)]
-    expect(narrowGrantToCurrent(granted, current)).toHaveLength(1)
-  })
-
-  it('returns nothing when every target changed', () => {
-    expect(narrowGrantToCurrent([target('a')], [target('b')])).toEqual([])
-  })
-})
-
 describe('partial close reporting', () => {
   it('says nothing when everything succeeded', () => {
-    expect(describePartialClose({ closed: ['a', 'b'], failed: [], skipped: [] })).toBeNull()
+    expect(describePartialClose({ closed: ['a', 'b'], failed: [], kept: [], skipped: [] })).toBeNull()
   })
 
-  it('reports failures and skips separately', () => {
+  it('reports failures, linked keeps and skips separately', () => {
     // They mean different things: a failure is a backend problem worth
-    // retrying, a skip is the grant correctly refusing to cover new work.
+    // retrying, a skip is the grant correctly refusing to cover new work, and a
+    // keep is a parent deliberately left open because a linked session it owns
+    // is still open (#886 review m7) — nothing about it changed.
     const message = describePartialClose({
       closed: ['a'],
       failed: [{ sessionId: 'b', error: new Error('kill failed') }],
+      kept: ['d'],
       skipped: ['c'],
     })
-    expect(message).toContain('Closed 1')
-    expect(message).toContain('1 failed')
-    expect(message).toContain('1 skipped')
+    expect(message).toBe('Closed 1, 1 failed, 1 kept (linked agent still open), 1 skipped (changed).')
   })
 })
 

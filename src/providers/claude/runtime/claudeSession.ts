@@ -1,4 +1,5 @@
 import { excludeExternalControlFromClaude } from '@providers/shared/runtime/externalControlExclusion.js'
+import { CLAUDE_TLDR_HOOK_TOKEN_ENV, claudeTldrHookSettings, tldrHookServer } from '@providers/shared/runtime/tldrHooks.js'
 import { EventEmitter } from 'events'
 import { randomUUID } from 'crypto'
 import { spawn as ptySpawn } from 'node-pty'
@@ -376,7 +377,7 @@ export class ClaudeSession extends EventEmitter {
       // Wrap the spawn so a failure rolls the proxy back (#495 A9; same
       // shape as codexSession's guarded spawn).
       try {
-        await this.appendPrivateMcpConfig(args)
+        await this.appendPrivateMcpConfig(args, proxyEnv)
         this.pty = ptySpawn(this.binary, args, {
           name: 'xterm-256color',
           cols: this.cols,
@@ -393,7 +394,7 @@ export class ClaudeSession extends EventEmitter {
       // kept anyway so both spawn paths share one failure contract and a
       // future resource acquired before this point is covered by default.
       try {
-        await this.appendPrivateMcpConfig(args)
+        await this.appendPrivateMcpConfig(args, cleanEnv)
         this.pty = ptySpawn(this.binary, args, {
           name: 'xterm-256color',
           cols: this.cols,
@@ -1130,11 +1131,17 @@ export class ClaudeSession extends EventEmitter {
     this.proxyServer = null
   }
 
-  private async appendPrivateMcpConfig(args: string[]): Promise<void> {
+  private async appendPrivateMcpConfig(args: string[], env: Record<string, string>): Promise<void> {
     // WHY materialization happens immediately before spawn inside the rollback-protected region:
     // proxy setup contains several awaited operations. Creating the credential file at the top of
     // start() left it behind when any of those operations failed before the old catch boundary.
-    excludeExternalControlFromClaude(args)
+    //
+    // TLDR turn hooks (#917) authenticate with this session's MCP bearer. The value goes into the
+    // child's environment, which dies with the process; the settings JSON on argv names only the
+    // variable. Sessions without the TLDR domain receive no hooks at all.
+    const tldrHooks = tldrHookServer(this.builtInMcpServers)
+    if (tldrHooks) env[CLAUDE_TLDR_HOOK_TOKEN_ENV] = tldrHooks.bearerToken
+    excludeExternalControlFromClaude(args, tldrHooks ? claudeTldrHookSettings(tldrHooks.tldrHooks.baseUrl) : {})
     this.privateMcpConfig = await createPrivateClaudeMcpConfig(this.builtInMcpServers)
     if (this.privateMcpConfig) args.push('--mcp-config', this.privateMcpConfig.path)
   }

@@ -2,7 +2,7 @@ import { useAppStore } from '@renderer/app-state/hooks'
 import { applyPromptTemplateInsertMode } from '@renderer/features/prompt-templates/interpolate'
 import { getEffectiveAgentSurfaceForSession } from '@renderer/workspace/agentDisplayMode'
 import { isSessionExited } from '@renderer/workspace/providerSessionIdentity'
-import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
+import { DEFAULT_PROVIDER, isAgentSessionKind } from '@shared/types/providerKind'
 import { getTerminalPasteTarget } from '@renderer/workspace/terminal/textPasteTarget'
 import type { SessionId } from '@renderer/workspace/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
@@ -76,6 +76,12 @@ export function textDeliverySurface(workspace: Workspace, sessionId: SessionId):
   // `kind`; an undefined kind must not silently mean "rendered".
   const kind = session.kind ?? DEFAULT_PROVIDER
   if (kind === 'terminal') return 'pty'
+  // Processless panes (extension views) have neither a composer nor a PTY. The
+  // agent-surface resolver below treats every non-agent kind as "rendered", so
+  // without this Key Vault and template insertion wrote into an invisible
+  // composer draft, reported success, and autosave then persisted a vault secret
+  // to workspace.json in plain text. null makes every caller refuse visibly.
+  if (!isAgentSessionKind(kind)) return null
   return getEffectiveAgentSurfaceForSession({
     kind,
     providerRuntime: session.providerRuntime,

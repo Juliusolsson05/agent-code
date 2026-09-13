@@ -2,6 +2,7 @@ import type { AgentProviderKind } from '@shared/types/providerKind.js'
 
 export type BuiltInMcpDomain =
   | 'tldr'
+  | 'goal'
   | 'ping'
   | 'orchestration'
   | 'ai_workspace'
@@ -12,6 +13,7 @@ export type BuiltInMcpDomain =
 
 export const BUILT_IN_MCP_DOMAINS = [
   'tldr',
+  'goal',
   'ping',
   'orchestration',
   'ai_workspace',
@@ -41,6 +43,7 @@ export const BUILT_IN_MCP_DOMAINS = [
  */
 export const CONFIGURABLE_BUILT_IN_MCP_DOMAINS = [
   'tldr',
+  'goal',
   'orchestration',
   'ai_workspace',
   'agent_transcripts',
@@ -97,6 +100,7 @@ export const CONFIRMATION_GATED_BUILT_IN_MCP_DOMAINS = [
 const BUILT_IN_MCP_DOMAINS_BY_PROVIDER = {
   claude: [
     'tldr',
+    'goal',
     'ping',
     'orchestration',
     'ai_workspace',
@@ -123,6 +127,15 @@ export type BuiltInMcpServerConfig = {
    */
   bearerToken?: string
   headers: Record<string, string>
+  /**
+   * Present only on a TLDR-enabled registration's own launch config. Provider launchers inject
+   * turn hooks that post to `${baseUrl}/<event>` with this same bearer, so a hook can only ever
+   * read or change its own session's reporting state and is revoked with it.
+   *
+   * WHY it is absent from `sessionServers()`: workflow subagents reuse the parent's token, and
+   * enforcing the parent's TLDR on each subagent's turns would block work that owns no summary.
+   */
+  tldrHooks?: { baseUrl: string }
 }
 
 export type McpSessionScope = {

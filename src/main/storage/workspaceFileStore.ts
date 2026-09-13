@@ -1,3 +1,4 @@
+import { mainOperations } from '@main/performance/operations.js'
 import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, unlink, writeFile } from 'fs/promises'
 
@@ -254,10 +255,16 @@ export class WorkspaceFileStore {
       const tmp = `${STATE_FILE}.${process.pid}.${Date.now()}.${Math.random()
         .toString(36)
         .slice(2)}.tmp`
+      const serializeStartedAt = performance.now()
+      const json = serializeWorkspaceFile(next)
+      mainOperations.observe('persistence.serialize', performance.now() - serializeStartedAt)
+      const finishWrite = mainOperations.begin('persistence.write')
       try {
-        await writeFile(tmp, serializeWorkspaceFile(next), 'utf8')
+        await writeFile(tmp, json, 'utf8')
         await rename(tmp, STATE_FILE)
+        finishWrite()
       } catch (error) {
+        finishWrite('error')
         // WHY cleanup is scoped to this exact nonce path: a rename failure can
         // leave a complete scratch file behind, and durability retry creates a
         // new nonce on every attempt. Without unlink, a persistent destination

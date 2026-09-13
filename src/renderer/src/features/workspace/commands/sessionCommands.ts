@@ -15,6 +15,7 @@ import { buildProviderResumeCommand } from '@renderer/workspace/providerResumeCo
 import { providerSupportsBuiltInMcpDomain } from '@mcp/shared/types'
 import type { BuiltInMcpDomain, BuiltInMcpOverrides } from '@mcp/shared/types'
 import { clearAgentComposer } from '@renderer/workspace/tile-tree/TileLeaf/clearAgentComposer'
+import { hasOrchestrationAgents } from '@renderer/workspace/idleOrchestrationAgents'
 import { sessionHasTranscript } from '@renderer/workspace/transcriptAvailability'
 import {
   reloadSessionWithBuiltInMcpChoice,
@@ -361,6 +362,49 @@ export const sessionCommands: CommandDef[] = [
     },
   },
   {
+    // Close Idle Orchestration Agents (#960) — the end of an orchestration run
+    // whose parent never called close_run: every worker that has finished and
+    // is idle, across the window, after one confirmation listing them.
+    //
+    // WHY app-surface: like Close Old Agents, this cleans the workspace rather
+    // than acting on the focused pane, and the workers are usually Dispatch
+    // rows the user is not looking at.
+    //
+    // WHY no ellipsis although a dialog opens: the dialog confirms, it asks for
+    // no further input (docs/command-style.md rule 8), the same shape as Close
+    // Tab.
+    //
+    // WHY the default picker tier while Close Old Agents is `advanced`:
+    // `advanced` hides a command from the palette until the user reveals hidden
+    // commands, and this is the everyday end of an orchestration run rather
+    // than niche maintenance.
+    id: 'close-idle-orchestration-agents',
+    category: 'workspace-tools',
+    surface: 'app',
+    title: 'Close Idle Orchestration Agents',
+    description: '**What it does:** Closes every **orchestration agent** that has finished its work and is idle, after confirming the list.\n\n**Use when:** An orchestration run left finished workers behind in Dispatch.\n\n**Notes:** Working, starting, exited and failed agents stay open, and so do the agents that started them.',
+    keywords: [
+      'close',
+      'idle',
+      'orchestration',
+      'orchestrated',
+      'workers',
+      'children',
+      'finished',
+      'done',
+      'cleanup',
+      'dispatch',
+      'batch',
+    ],
+    when: ({ workspace }) => hasOrchestrationAgents(workspace.state),
+    run: async ({ workspace, ui }) => {
+      // Before the dialog opens, so the confirmation is not layered under the
+      // palette.
+      ui.closePalette()
+      await workspace.closeIdleOrchestrationAgents()
+    },
+  },
+  {
     // Switch Agents — bulk provider switch for usage-limit escapes.
     //
     // WHY app-surface (not session): like Close Old Agents, the user is acting
@@ -690,6 +734,38 @@ export const sessionCommands: CommandDef[] = [
       await reloadSessionWithBuiltInMcpChoice(workspace, sessionId, 'tldr', enable, {
         reloaded: enable ? 'Reloaded with TLDR MCP' : 'Reloaded without TLDR MCP',
         failed: 'TLDR MCP reload failed',
+      })
+    },
+  },
+  {
+    id: 'enable-goal-mcp',
+    category: 'session',
+    surface: 'session',
+    title: 'Goal MCP',
+    description: '**What it does:** Reloads the focused agent with goal recording on or off.\n\n**Use when:** You want this agent to record what its work is for, so you can see its purpose at a glance.\n\n**Notes:** Deploys the managed goal skill. Hold the Goal shortcut to read goals across visible agents. Works with or without TLDR.',
+    keywords: ['goal', 'purpose', 'objective', 'intent', 'mcp', 'why'],
+    when: ({ workspace }) => {
+      return targetSupportsBuiltInMcpDomain(workspace, 'goal')
+    },
+    getState: ctx => builtInMcpDomainState(ctx, 'goal'),
+    run: async ({ workspace, ui }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return
+      const meta = workspace.state.sessions[sessionId]
+      const kind = meta?.kind ?? DEFAULT_PROVIDER
+      // Provider policy is repeated at the mutation boundary: visibility is
+      // advisory and the command stays reachable from keybindings and control.
+      if (
+        !isAgentProviderKind(kind) ||
+        !providerSupportsBuiltInMcpDomain(kind, 'goal') ||
+        !meta
+      ) return
+
+      ui.closePalette()
+      const enable = !meta.builtInMcpDomains?.includes('goal')
+      await reloadSessionWithBuiltInMcpChoice(workspace, sessionId, 'goal', enable, {
+        reloaded: enable ? 'Reloaded with Goal MCP' : 'Reloaded without Goal MCP',
+        failed: 'Goal MCP reload failed',
       })
     },
   },
