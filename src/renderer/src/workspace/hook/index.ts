@@ -59,6 +59,8 @@ import {
 } from '@renderer/workspace/agentManagementMcp'
 import { hydrateTranscriptWithoutWaking as hydrateManagedTranscript } from '@renderer/workspace/hook/actions/hydrateTranscript'
 import { setAgentTitleInWorkspace } from '@renderer/workspace/agentTitle'
+import { requestCloseConfirmation } from '@renderer/workspace/closeConfirmationBroker'
+import { closeIdleOrchestrationAgents as runIdleOrchestrationCleanup } from '@renderer/workspace/idleOrchestrationAgents'
 
 // -----------------------------------------------------------------------------
 // useWorkspace — the composer.
@@ -857,6 +859,22 @@ export function useWorkspace(
   const { switchAgentsToProvider, returnLastProviderSwitchBatch } =
     useBulkProviderSwitchActions(refs, setState, setRuntimes, showToast, sessionActions)
 
+  // Close Idle Orchestration Agents (#960). Wired here rather than inside the
+  // command because it needs two things a command context does not have: the
+  // GLOBAL toast (the operation spans many rows, so a pane toast would land on
+  // an arbitrary one, the same reason Switch Agents reports here) and the
+  // action's live refs, which the flow reads before and after its dialog.
+  const closeIdleOrchestrationAgents = useCallback(
+    () => runIdleOrchestrationCleanup({
+      readState: () => refs.stateRef.current,
+      readRuntimes: () => refs.latestRuntimesRef.current,
+      closeSession: paneActions.closeSession,
+      confirm: requestCloseConfirmation,
+      showToast,
+    }),
+    [paneActions.closeSession, refs, showToast],
+  )
+
   const { loadOlderHistory } = useHistoryActions(setRuntimes, refs, updateRuntime)
 
   const { undoClose, undoCloseCount } = useUndoCloseAction(
@@ -970,6 +988,7 @@ export function useWorkspace(
     detachFocusedToDispatch: paneActions.detachFocusedToDispatch,
     closeFocused: paneActions.closeFocused,
     closeSession: paneActions.closeSession,
+    closeIdleOrchestrationAgents,
     requestBuryFocused: paneActions.requestBuryFocused,
     buryFocused: paneActions.buryFocused,
     reviveBuried: paneActions.reviveBuried,

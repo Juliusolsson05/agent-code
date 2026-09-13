@@ -15,6 +15,7 @@ import { buildProviderResumeCommand } from '@renderer/workspace/providerResumeCo
 import { providerSupportsBuiltInMcpDomain } from '@mcp/shared/types'
 import type { BuiltInMcpDomain, BuiltInMcpOverrides } from '@mcp/shared/types'
 import { clearAgentComposer } from '@renderer/workspace/tile-tree/TileLeaf/clearAgentComposer'
+import { hasOrchestrationAgents } from '@renderer/workspace/idleOrchestrationAgents'
 import { sessionHasTranscript } from '@renderer/workspace/transcriptAvailability'
 import {
   reloadSessionWithBuiltInMcpChoice,
@@ -358,6 +359,49 @@ export const sessionCommands: CommandDef[] = [
       }
       ui.openCloseOldAgents()
       ui.closePalette()
+    },
+  },
+  {
+    // Close Idle Orchestration Agents (#960) — the end of an orchestration run
+    // whose parent never called close_run: every worker that has finished and
+    // is idle, across the window, after one confirmation listing them.
+    //
+    // WHY app-surface: like Close Old Agents, this cleans the workspace rather
+    // than acting on the focused pane, and the workers are usually Dispatch
+    // rows the user is not looking at.
+    //
+    // WHY no ellipsis although a dialog opens: the dialog confirms, it asks for
+    // no further input (docs/command-style.md rule 8), the same shape as Close
+    // Tab.
+    //
+    // WHY the default picker tier while Close Old Agents is `advanced`:
+    // `advanced` hides a command from the palette until the user reveals hidden
+    // commands, and this is the everyday end of an orchestration run rather
+    // than niche maintenance.
+    id: 'close-idle-orchestration-agents',
+    category: 'workspace-tools',
+    surface: 'app',
+    title: 'Close Idle Orchestration Agents',
+    description: '**What it does:** Closes every **orchestration agent** that has finished its work and is idle, after confirming the list.\n\n**Use when:** An orchestration run left finished workers behind in Dispatch.\n\n**Notes:** Working, starting, exited and failed agents stay open, and so do the agents that started them.',
+    keywords: [
+      'close',
+      'idle',
+      'orchestration',
+      'orchestrated',
+      'workers',
+      'children',
+      'finished',
+      'done',
+      'cleanup',
+      'dispatch',
+      'batch',
+    ],
+    when: ({ workspace }) => hasOrchestrationAgents(workspace.state),
+    run: async ({ workspace, ui }) => {
+      // Before the dialog opens, so the confirmation is not layered under the
+      // palette.
+      ui.closePalette()
+      await workspace.closeIdleOrchestrationAgents()
     },
   },
   {
