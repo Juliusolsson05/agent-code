@@ -1,8 +1,11 @@
 # Agent Working Time — Stage Decomposition
 
-> **Status:** decisions made 2026-09-12 (§6). Stages 2–3 (the #963 fix) are next.
-> The only code on the branch so far is the Stage 1 reproduction, which asserts
-> today's behaviour.
+> **Status:** Stages 1–3 (the #963 fix) are built and in review:
+> [agent-code#967](https://github.com/Juliusolsson05/agent-code/pull/967), which depends on
+> [claude-code-headless#59](https://github.com/Juliusolsson05/claude-code-headless/pull/59) and
+> [codex-headless#51](https://github.com/Juliusolsson05/codex-headless/pull/51) (merge those first,
+> then re-point the gitlinks at their merged commits). Stages 4–6 (analytics, #964) are next,
+> after §6 Q10 (grouping project rows by tab title) is confirmed. Merge requires explicit approval.
 >
 > **Branch:** `feat/agent-working-time`. **Worktree:** `.worktrees/agent-working-time`.
 > **Base:** `origin/main` at `d12cd347` (2026-09-12).
