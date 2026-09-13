@@ -5,9 +5,13 @@ import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/comma
 import { commandExecutionRequests, type CommandExecutionRequest } from '../commandExecutionRequests'
 import { commandOwnsOpenSurface } from '../surfaceOwnership'
 import { dispatchCommand } from '../executeCommand'
-import type { CommandContext } from '../types'
+import type { CommandContext, CommandDef } from '../types'
 
-export function useCommandExecutionRequest(request: CommandExecutionRequest | null, context: CommandContext) {
+export function useCommandExecutionRequest(
+  request: CommandExecutionRequest | null,
+  context: CommandContext,
+  extraCommands?: readonly CommandDef[],
+) {
   useLayoutEffect(() => {
     if (!request || !commandExecutionRequests.claim(request.token)) return
     const unavailable = (reason: string) => commandExecutionRequests.complete(request.token,
@@ -27,10 +31,13 @@ export function useCommandExecutionRequest(request: CommandExecutionRequest | nu
     if (hasAppInteractionOwner() && !commandOwnsOpenSurface(request.commandId, useAppStore.getState())) {
       unavailable('Another surface owns input; inspect or dismiss it first'); return
     }
-    void dispatchCommand({ id: request.commandId, source: 'programmatic', ctx: context })
+    // The external invocation path must resolve the same installed contributions
+    // as the palette and keyboard paths. Its frozen built-in catalog cannot see
+    // extension IDs added after launch; inject the current manifest-derived set.
+    void dispatchCommand({ id: request.commandId, source: 'programmatic', ctx: context, extraCommands })
       .then(result => commandExecutionRequests.complete(request.token, result), error =>
         commandExecutionRequests.complete(request.token, { status: 'failed', id: request.commandId, source: 'programmatic', error }))
     // A rerender/StrictMode repeat cannot claim the token twice. Async domain
     // work retains its ordinary lifetime; unmount does not undo its effects.
-  }, [request, context])
+  }, [request, context, extraCommands])
 }

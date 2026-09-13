@@ -1,5 +1,5 @@
 import { sessionMcpOverrides } from '@renderer/workspace/mcpDomains'
-import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
+import { DEFAULT_PROVIDER, isAgentSessionKind } from '@shared/types/providerKind'
 import { useCallback, useState } from 'react'
 
 import type {
@@ -75,6 +75,10 @@ type PublishLineage = (lineage: UndoLineage) => void
  * workspace state itself, so in the app it is normally present.
  */
 function carryDurableMeta(spawned: SessionMeta | undefined, closed: SessionMeta): SessionMeta {
+  // Extension panes skip spawn entirely: all of their metadata is durable UI
+  // identity, including the view ID. The process-specific allowlist below is
+  // for real backends whose new connection identity must win after respawn.
+  if (closed.kind === 'extension-view') return { ...closed }
   return {
     ...(spawned ?? { cwd: closed.cwd, kind: closed.kind ?? DEFAULT_PROVIDER }),
     ...(closed.title ? { title: closed.title } : {}),
@@ -157,22 +161,38 @@ export function useUndoCloseAction(
       //     point of having a tmux backing.
       const meta = entry.sessionMeta
       let newSessionId: SessionId
-      try {
-        newSessionId = await sessionActions.spawn(meta.cwd, {
-          kind: meta.kind ?? DEFAULT_PROVIDER,
-          ...(meta.providerRuntime ? { providerRuntime: meta.providerRuntime } : {}),
-          resumeSessionId: resumableProviderSessionId(meta),
-          recoverTmuxName: meta.kind === 'terminal' ? meta.tmuxName : undefined,
-          // WHY capability intent is restored but credentials are not: closing a pane revokes its
-          // session token. Undo must ask main to mint a fresh token from the pane's durable
-          // choices; dropping them makes an undo-restored transcript silently lose tools. The
-          // effective list is deliberately not restored — the restored pane is a NEW provider
-          // process, so it resolves those choices against current Settings like any other launch.
-          tldrIdentity: meta.tldrIdentity,
-          builtInMcpOverrides: sessionMcpOverrides(meta),
-        })
-      } catch {
-        return 'retryable-failure'
+      if (meta.kind === 'extension-view') {
+        // ── A PROCESS-LESS LEAF IS RESTORED, NOT SPAWNED ──
+        // Undo previously called spawn() for every kind. Main rejects an
+        // extension-view spawn outright, the catch below turned that into
+        // 'retryable-failure', and undoClose PUSHES A FAILED ENTRY BACK — so the
+        // stack head became permanently poisoned. Every later Cmd+Shift+T popped the
+        // same entry, failed, re-pushed, and returned: all older undo history became
+        // unreachable for the rest of the session.
+        //
+        // Minting the id mirrors openExtensionViewInPane; there is nothing to
+        // recover because there was never a process. The METADATA is written in the
+        // setState below — see the note there, because getting that half wrong is
+        // worse than the bug this branch was added to fix.
+        newSessionId = crypto.randomUUID() as SessionId
+      } else {
+        try {
+          newSessionId = await sessionActions.spawn(meta.cwd, {
+            kind: meta.kind ?? DEFAULT_PROVIDER,
+            ...(meta.providerRuntime ? { providerRuntime: meta.providerRuntime } : {}),
+            resumeSessionId: resumableProviderSessionId(meta),
+            recoverTmuxName: meta.kind === 'terminal' ? meta.tmuxName : undefined,
+            // WHY capability intent is restored but credentials are not: closing a pane revokes its
+            // session token. Undo must ask main to mint a fresh token from the pane's durable
+            // choices; dropping them makes an undo-restored transcript silently lose tools. The
+            // effective list is deliberately not restored — the restored pane is a NEW provider
+            // process, so it resolves those choices against current Settings like any other launch.
+            tldrIdentity: meta.tldrIdentity,
+            builtInMcpOverrides: sessionMcpOverrides(meta),
+          })
+        } catch {
+          return 'retryable-failure'
+        }
       }
 
       let inserted = false
@@ -224,7 +244,9 @@ export function useUndoCloseAction(
         // alive would produce a hidden process that cannot be focused or
         // closed from the UI, so failed insertion must undo the spawn before
         // the undo loop walks to older entries.
-        await sessionActions.killSession(newSessionId).catch(() => undefined)
+        if (meta.kind !== 'extension-view') {
+          await sessionActions.killSession(newSessionId).catch(() => undefined)
+        }
         return 'stale'
       }
 
@@ -265,6 +287,20 @@ export function useUndoCloseAction(
         if (!meta) {
           return 'stale'
         }
+        // Same process-less restore as the pane branch, and it matters MORE here:
+        // this loop spawns leaves in order, so hitting an extension-view leaf used to
+        // throw partway through, and the catch below then killed every sibling it had
+        // just spawned. Undoing a tab that contained one extension pane started N real
+        // claude/codex processes and their proxies, killed them all, restored nothing,
+        // and poisoned the undo stack.
+        if (meta.kind === 'extension-view') {
+          const newId = crypto.randomUUID() as SessionId
+          idMap.set(oldId, newId)
+          carried.set(newId, meta)
+          // Deliberately NOT pushed to spawnedIds: there is no process to kill on
+          // rollback, and adding it would make the failure path try to terminate one.
+          continue
+        }
         try {
           const kind: SessionKind = meta.kind ?? DEFAULT_PROVIDER
           // Same per-kind recover hint as the pane-undo branch
@@ -273,7 +309,7 @@ export function useUndoCloseAction(
           const newId = await sessionActions.spawn(meta.cwd, {
             kind,
             ...(meta.providerRuntime ? { providerRuntime: meta.providerRuntime } : {}),
-            resumeSessionId: kind !== 'terminal' ? resumableProviderSessionId(meta) : undefined,
+            resumeSessionId: isAgentSessionKind(kind) ? resumableProviderSessionId(meta) : undefined,
             recoverTmuxName: kind === 'terminal' ? meta.tmuxName : undefined,
             tldrIdentity: meta.tldrIdentity,
             builtInMcpOverrides: sessionMcpOverrides(meta),
@@ -341,18 +377,23 @@ export function useUndoCloseAction(
           // parked in Dispatch. Gating the recover hint on kind is what lets a
           // restored terminal re-attach its tmux session instead of coming back
           // as a fresh shell with the user's scrollback gone.
-          const newId = await sessionActions.spawn(detached.meta.cwd, {
-            kind,
-            ...(detached.meta.providerRuntime
-              ? { providerRuntime: detached.meta.providerRuntime }
-              : {}),
-            resumeSessionId: kind !== 'terminal'
-              ? resumableProviderSessionId(detached.meta)
-              : undefined,
-            recoverTmuxName: kind === 'terminal' ? detached.meta.tmuxName : undefined,
-            tldrIdentity: detached.meta.tldrIdentity,
-            builtInMcpOverrides: sessionMcpOverrides(detached.meta),
-          })
+          // A detached extension has the same processless identity as a grid
+          // extension. The two loops must agree: otherwise undo restores the
+          // tab but silently drops every extension parked in Dispatch.
+          const newId = kind === 'extension-view'
+            ? crypto.randomUUID() as SessionId
+            : await sessionActions.spawn(detached.meta.cwd, {
+                kind,
+                ...(detached.meta.providerRuntime
+                  ? { providerRuntime: detached.meta.providerRuntime }
+                  : {}),
+                resumeSessionId: isAgentSessionKind(kind)
+                  ? resumableProviderSessionId(detached.meta)
+                  : undefined,
+                recoverTmuxName: kind === 'terminal' ? detached.meta.tmuxName : undefined,
+                tldrIdentity: detached.meta.tldrIdentity,
+                builtInMcpOverrides: sessionMcpOverrides(detached.meta),
+              })
           // A detached child restored with its tab is the same population
           // restoreDetachedEntry covers on its own, so it gets the same
           // durable metadata; the two routes back to one row must not
@@ -437,23 +478,30 @@ export function useUndoCloseAction(
       const meta = entry.sessionMeta
       const kind: SessionKind = meta.kind ?? DEFAULT_PROVIDER
       let newSessionId: SessionId
-      try {
-        // Same respawn contract as restorePaneEntry: --resume for an agent with
-        // a durable transcript, `recoverTmuxName` for a terminal so the still
-        // alive tmux session is re-attached rather than replaced by an empty
-        // shell. The latter is the whole reason this entry type exists.
-        newSessionId = await sessionActions.spawn(meta.cwd, {
-          kind,
-          ...(meta.providerRuntime ? { providerRuntime: meta.providerRuntime } : {}),
-          resumeSessionId: kind !== 'terminal'
-            ? resumableProviderSessionId(meta)
-            : undefined,
-          recoverTmuxName: kind === 'terminal' ? meta.tmuxName : undefined,
-          tldrIdentity: meta.tldrIdentity,
-          builtInMcpOverrides: sessionMcpOverrides(meta),
-        })
-      } catch {
-        return 'retryable-failure'
+      if (kind === 'extension-view') {
+        // Main correctly rejects spawning an extension. Treating that as a
+        // retryable provider failure puts this entry back forever, hiding all
+        // older undo history. Restoring its saved metadata is the whole wake.
+        newSessionId = crypto.randomUUID() as SessionId
+      } else {
+        try {
+          // Same respawn contract as restorePaneEntry: --resume for an agent with
+          // a durable transcript, `recoverTmuxName` for a terminal so the still
+          // alive tmux session is re-attached rather than replaced by an empty
+          // shell. The latter is the whole reason this entry type exists.
+          newSessionId = await sessionActions.spawn(meta.cwd, {
+            kind,
+            ...(meta.providerRuntime ? { providerRuntime: meta.providerRuntime } : {}),
+            resumeSessionId: isAgentSessionKind(kind)
+              ? resumableProviderSessionId(meta)
+              : undefined,
+            recoverTmuxName: kind === 'terminal' ? meta.tmuxName : undefined,
+            tldrIdentity: meta.tldrIdentity,
+            builtInMcpOverrides: sessionMcpOverrides(meta),
+          })
+        } catch {
+          return 'retryable-failure'
+        }
       }
 
       // Set inside the updater and read after. Sound because setState is the
@@ -558,6 +606,8 @@ export function useUndoCloseAction(
       })
 
       if (!refiled) {
+        // No backend or renderer metadata was created for an unfiled view.
+        if (kind === 'extension-view') return 'stale'
         // Mirror restorePaneEntry's bail: the spawn already registered a live
         // backend, so a placement that did not happen must not leave it
         // running with no row pointing at it.

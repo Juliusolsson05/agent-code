@@ -31,6 +31,7 @@ import { getSettingsRegistry, matchesSettingQuery } from '@renderer/features/set
 import { SettingsList } from '@renderer/features/settings/ui/SettingsList'
 import { SettingsSearch } from '@renderer/features/settings/ui/SettingsSearch'
 import { SettingsSidebar } from '@renderer/features/settings/ui/SettingsSidebar'
+import { useAppStore } from '@renderer/app-state/store'
 
 type Props = {
   onClose: () => void
@@ -53,7 +54,16 @@ export function SettingsPage({ onClose, workspace, settings, onChange, onReset }
   // (null) distinguishable from "creating" (id: null).
   const [editorTarget, setEditorTarget] = useState<{ id: string | null } | null>(null)
 
-  const registry = useMemo(() => getSettingsRegistry(), [])
+  // Contributed settings rows are derived from installed MANIFESTS, so Settings
+  // lists them without importing a single extension bundle.
+  //
+  // There used to be an `extensionCommands` memo here too. It was dead: an earlier
+  // revision passed it to getSettingsRegistry for a "Commands" settings category
+  // that was replaced upstream by CommandKeybindingsRow, which derives its own. The
+  // memo survived as a dependency of the line below and nothing else — computing a
+  // command list on every install just to feed it to an array it was not in.
+  const installedExtensions = useAppStore(state => state.installedExtensions)
+  const registry = useMemo(() => getSettingsRegistry(installedExtensions), [installedExtensions])
   const visibleDefinitions = useMemo(
     () =>
       registry.filter(definition => {

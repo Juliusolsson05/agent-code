@@ -54,6 +54,7 @@ import {
   DEFAULT_PROVIDER,
   isAgentProviderRuntime,
   isAgentProviderKind,
+  isAgentSessionKind,
   isSessionKind,
 } from '@shared/types/providerKind.js'
 import type {
@@ -835,7 +836,7 @@ export class SessionManager extends EventEmitter {
     sessionId: string,
     kind: SessionKind,
     expectedEntry?: RegistryEntry,
-    revokeAgentMcp = kind !== 'terminal',
+    revokeAgentMcp = isAgentSessionKind(kind),
     expectedGeneration = expectedEntry?.lifecycle.generation,
   ): boolean {
     // WHY this helper exists even before the larger SessionState consolidation:
@@ -1461,6 +1462,18 @@ export class SessionManager extends EventEmitter {
         code: 'start-failed',
         retryable: false,
         message: 'This Agent Code version does not support the requested provider.',
+      })
+    }
+    // Same fence as spawnWithId: an extension-view leaf is process-less and is
+    // excluded from the rehydrate live-process set (collectLiveProcessIds), so a
+    // recover for one should never be issued. If a stale renderer does, refuse
+    // rather than fall through and spawn a terminal shell for it.
+    if (requestedKind === 'extension-view') {
+      return Promise.resolve({
+        ok: false,
+        code: 'start-failed',
+        retryable: false,
+        message: 'extension-view panes have no process to recover.',
       })
     }
     const kind = options.kind ?? DEFAULT_PROVIDER
@@ -2454,6 +2467,14 @@ export class SessionManager extends EventEmitter {
     const requestedKind: unknown = options.kind
     if (requestedKind !== undefined && !isSessionKind(requestedKind)) {
       throw new Error('Unsupported session provider')
+    }
+    // Extension-view "sessions" are renderer-only tile leaves with NO process; they
+    // are created directly in the workspace store (openExtensionViewInPane) and must
+    // never reach main. isSessionKind now accepts 'extension-view', so without this
+    // it would fall through to the terminal-spawn branch below and start a stray
+    // shell. A spawn request for one is a stale or hostile caller — refuse it.
+    if (requestedKind === 'extension-view') {
+      throw new Error('extension-view panes have no process and cannot be spawned')
     }
     const kind: SessionKind = options.kind ?? DEFAULT_PROVIDER
     const providerRuntime = resolveProviderRuntime(kind, options.providerRuntime)
@@ -4294,7 +4315,7 @@ export class SessionManager extends EventEmitter {
         sessionId,
         recovery.kind,
         undefined,
-        recovery.kind !== 'terminal',
+        isAgentSessionKind(recovery.kind),
         generation,
       )
     }
@@ -4352,6 +4373,13 @@ export class SessionManager extends EventEmitter {
   ): Promise<boolean> {
     const requestedKind: unknown = options.kind
     if (requestedKind !== undefined && !isSessionKind(requestedKind)) return false
+    // The THIRD renderer→main path that can carry an extension-view kind, after
+    // spawnWithId and recover. Every close path in the renderer sends the pane's
+    // kind here, and this returned false for an extension pane already — but by
+    // accident of the ownership tables being empty for it, not by a decision.
+    // Stating it makes the boundary three-for-three and stops a future ownership
+    // change from turning "nothing to kill" into "kill something".
+    if (requestedKind === 'extension-view') return false
     const kind = options.kind ?? DEFAULT_PROVIDER
     let providerRuntime: AgentProviderRuntime | undefined
     try {
@@ -4474,7 +4502,7 @@ export class SessionManager extends EventEmitter {
         sessionId,
         claim.kind,
         undefined,
-        claim.kind !== 'terminal',
+        isAgentSessionKind(claim.kind),
         claim.spawnGeneration,
       )
     }
@@ -4683,7 +4711,7 @@ export class SessionManager extends EventEmitter {
     if (observed) return observed
     const info = this.spawnInfo.get(sessionId)
     const kind = this.getSessionKind(sessionId)
-    if (!info?.resumeSessionId || !kind || kind === 'terminal') return null
+    if (!info?.resumeSessionId || !isAgentProviderKind(kind)) return null
     try {
       // Resume metadata is available before any new committed entry. Providers
       // with their own history mint the durable locator from that identity;

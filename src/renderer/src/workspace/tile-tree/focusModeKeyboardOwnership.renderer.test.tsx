@@ -10,6 +10,14 @@ const harness = vi.hoisted(() => ({
   appState: {} as Record<string, unknown>,
 }))
 
+// useKeybinds reads the extension slice to fold contributed chords into the
+// binding index. The harness builds `appState` by hand, so every slice the hook
+// touches has to be present here or the mock stops resembling the real store —
+// which is how this file started failing the moment extension keybindings landed.
+// Empty is the honest value: these assertions are about first-party focus-mode
+// ownership, and a contributed chord would be a different test.
+const EXTENSION_SLICE = { installedExtensions: [], installedExtensionsLoaded: true }
+
 vi.mock('@renderer/app-state/hooks', () => {
   const useAppStore = Object.assign(
     (selector: (state: Record<string, unknown>) => unknown) => selector(harness.appState),
@@ -117,6 +125,7 @@ function pressOptionArrow(key: 'ArrowUp' | 'ArrowDown'): void {
 describe('focus-mode keyboard ownership', () => {
   beforeEach(() => {
     harness.appState = {
+      ...EXTENSION_SLICE,
       settingsPageOpen: false,
       requestCommandInvocation: vi.fn(),
       settings: {

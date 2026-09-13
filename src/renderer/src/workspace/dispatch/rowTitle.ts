@@ -1,3 +1,4 @@
+import { isAgentSessionKind } from '@shared/types/providerKind'
 import { extractLatestUserPrompt } from '@renderer/features/workspace/lib/latestUserPrompts'
 import type { Entry } from '@shared/types/transcript'
 import type { DispatchAgentRow } from './dispatchSelectors'
@@ -44,7 +45,7 @@ export function dispatchRowTitle(
   liveCwd?: string | null,
 ): string {
   if (row.agentTitle) return row.agentTitle
-  if (row.kind !== 'terminal' && entries) {
+  if (isAgentSessionKind(row.kind) && entries) {
     return cachedLatestPromptTitle(entries, row.kind) ?? row.title
   }
   if (row.kind === 'terminal' && liveCwd) return cwdBasename(liveCwd) || row.title
