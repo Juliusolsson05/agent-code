@@ -4137,7 +4137,13 @@ export class SessionManager extends EventEmitter {
         record,
       })
       finishDelivery(delivery.ok ? 'success' : 'error')
-      if (!delivery.ok || delivery.acceptance.kind === 'queue') this.monitorResponses.cancel(sessionId)
+      // Instrumentation must never change a delivery outcome. `acceptance` is
+      // read defensively because a provider result without it made
+      // `acceptance.kind` throw, and the catch below then reported a delivery
+      // that had SUCCEEDED as transport-failed (caught by
+      // sessionManager.recover.test's in-flight adoption case).
+      const queued = delivery.ok && delivery.acceptance?.kind === 'queue'
+      if (!delivery.ok || queued) this.monitorResponses.cancel(sessionId)
       else this.monitorResponses.arm(sessionId, operationId)
       return delivery
     } catch (err) {
