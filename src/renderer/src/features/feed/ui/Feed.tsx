@@ -1075,6 +1075,16 @@ function FeedImpl({
             toolHint={toolHintFromTurn(renderedSemanticTurn, item.toolUseId)}
           />
         )
+      case 'sleep-interruption':
+        // #963 decision Q1a: say why the turn stopped instead of leaving a
+        // silent tail or a counter that kept running through the night.
+        return (
+          <MarkerRow key={item.key} marker="" tone="muted">
+            <div className="py-0.5 text-[13px] leading-[1.55] text-muted">
+              Interrupted while asleep
+            </div>
+          </MarkerRow>
+        )
       case 'empty':
         return (
           <div

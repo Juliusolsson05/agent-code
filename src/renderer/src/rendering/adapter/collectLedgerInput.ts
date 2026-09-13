@@ -62,6 +62,8 @@ export type RuntimeSemanticTurn = {
   startedAt: number
   endedAt: number | null
   isCompactionSynthesis?: boolean
+  /** #963: the adapter sealed this turn because the machine slept. */
+  interruption?: 'system-suspended'
   /** Runtime lookup snapshot — tool-call status by id. Optional because
    *  hand-written fixtures omit it. `toTurnLike` reads
    *  lookups.toolCallsById[toolUseId].status to stamp lookupStatus onto
@@ -190,6 +192,7 @@ export function createLedgerInputAdapter(): (slices: RuntimeLedgerSlices) => Led
   } | null = null
   let staticsCache: {
     streamPhaseIdle: boolean
+    sleepInterruptedTurnId: string | null
     provider: AgentProviderKind
     candidates: readonly RenderCandidate[]
   } | null = null
@@ -363,18 +366,30 @@ export function createLedgerInputAdapter(): (slices: RuntimeLedgerSlices) => Led
     // hasContentCandidates from the key also stops a raw candidate count from
     // busting this cache when a candidate that gets suppressed anyway appears.
     const streamPhaseIdle = slices.streamPhase === 'idle'
+    // #963: the newest turn (still mounted when pending tools keep it current,
+    // otherwise the last archived one) ended because the machine slept. Keyed
+    // into the statics cache as a turn id, not a boolean, so the marker row
+    // keeps its identity for that turn and a later sleep-sealed turn replaces it.
+    const newestTurn = slices.semanticCurrent ?? slices.semanticHistory.at(-1) ?? null
+    const sleepInterruptedTurnId =
+      newestTurn?.interruption === 'system-suspended' && newestTurn.endedAt !== null
+        ? newestTurn.turnId
+        : null
     if (
       !staticsCache ||
       staticsCache.streamPhaseIdle !== streamPhaseIdle ||
+      staticsCache.sleepInterruptedTurnId !== sleepInterruptedTurnId ||
       staticsCache.provider !== provider
     ) {
       staticsCache = {
         streamPhaseIdle,
+        sleepInterruptedTurnId,
         provider,
         candidates: collectLifecycleCandidates({
           provider,
           sessionId,
           streamPhaseIdle,
+          sleepInterruptedTurnId,
         }),
       }
     }

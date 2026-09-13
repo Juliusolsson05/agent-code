@@ -95,6 +95,8 @@ const shape = (i: FeedRenderItem): string => {
       return `semantic-text:${i.turnId}`
     case 'work':
       return 'work'
+    case 'sleep-interruption':
+      return `sleep-interruption:${i.key}`
     case 'empty':
       return 'empty'
   }
