@@ -20,6 +20,11 @@
 //   whose root finished while a daemonized helper still holds stderr. The
 //   parent reaps the launcher long before `close`, and the launcher's group id
 //   is released while the command is still pending.
+//
+// OPENCODE_LAUNCHER_SPAWNED names the file where the launcher records the
+// descendant's pid as soon as spawn() returns. OPENCODE_LAUNCHER_DESCENDANT_DELAY_MS
+// delays only the descendant's readiness report, so a test can force a
+// readiness failure while the descendant demonstrably exists.
 import { spawn } from 'node:child_process'
 import { ftruncateSync, renameSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -32,16 +37,28 @@ if (process.env.OPENCODE_LAUNCHER_ROLE === 'descendant') {
   // an escaped descendant whose launcher already exited has been reparented.
   // Status comes before overflow so the test learns both pids before the size
   // guard kills the tree.
-  writeFileSync(`${statusFile}.tmp`, JSON.stringify({ pid: process.pid, launcherPid: Number(process.env.OPENCODE_LAUNCHER_PID) }))
-  renameSync(`${statusFile}.tmp`, statusFile)
-  // Sparse, as in abruptCli.mjs: over the limit without writing 256 MiB.
-  if (behaviour === 'overflow') ftruncateSync(1, 256 * 1024 * 1024 + 1)
+  const report = () => {
+    writeFileSync(`${statusFile}.tmp`, JSON.stringify({ pid: process.pid, launcherPid: Number(process.env.OPENCODE_LAUNCHER_PID) }))
+    renameSync(`${statusFile}.tmp`, statusFile)
+    // Sparse, as in abruptCli.mjs: over the limit without writing 256 MiB.
+    if (behaviour === 'overflow') ftruncateSync(1, 256 * 1024 * 1024 + 1)
+  }
+  const delay = Number(process.env.OPENCODE_LAUNCHER_DESCENDANT_DELAY_MS ?? 0)
+  if (delay > 0) setTimeout(report, delay)
+  else report()
 } else {
-  spawn(process.execPath, [fileURLToPath(import.meta.url)], {
+  const descendant = spawn(process.execPath, [fileURLToPath(import.meta.url)], {
     env: { ...process.env, NODE_OPTIONS: '', OPENCODE_LAUNCHER_ROLE: 'descendant', OPENCODE_LAUNCHER_PID: String(process.pid) },
     stdio: 'inherit',
     detached: behaviour === 'escaped' || behaviour === 'escaped-exit',
   })
+  // Record the descendant's pid the moment it exists, before it initializes or
+  // reports. A test whose readiness wait failed never gets the status file, and
+  // an escaped descendant is out of reach of the process-group kill, so this
+  // record is the only way cleanup can still find and reclaim it.
+  const spawned = process.env.OPENCODE_LAUNCHER_SPAWNED
+  writeFileSync(`${spawned}.tmp`, String(descendant.pid))
+  renameSync(`${spawned}.tmp`, spawned)
   // spawn() has already forked and exec'd, so the helper keeps its inherited
   // descriptors after this exit.
   if (behaviour === 'escaped-exit') process.exit(0)

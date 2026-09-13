@@ -32,6 +32,8 @@ const TEST_TIMEOUT_MS = 30_000
 type Tree = { pid: number; launcherPid: number }
 type Run = {
   statusFile: string
+  /** Where the launcher records the descendant's pid the moment it spawns it. */
+  spawnedFile: string
   controller: AbortController
   outcome: Promise<Error>
   launcher: { child?: ChildProcess; readyAt?: number }
@@ -67,14 +69,37 @@ async function expectClean() { expect(await readdir(root)).toEqual(['project']) 
  * holdNextSpawnUntilReady for why readiness must precede the bounds rather than
  * race them). The test owns the launcher's ChildProcess from spawn.
  */
-function startTree(descendant: 'hang' | 'overflow' | 'escaped' | 'escaped-exit', timeoutMs?: number): Run {
+type TreeOptions = {
+  timeoutMs?: number
+  // What the readiness gate waits for. 'status' (the default) is the
+  // descendant's own report. 'spawned' is only the launcher's record that the
+  // descendant exists, used with descendantDelayMs to force a readiness failure
+  // on a descendant that is alive but has not reported.
+  readyWhen?: 'status' | 'spawned'
+  descendantDelayMs?: number
+}
+
+function startTree(descendant: 'hang' | 'overflow' | 'escaped' | 'escaped-exit', { timeoutMs, readyWhen = 'status', descendantDelayMs }: TreeOptions = {}): Run {
   const statusFile = join(cwd, 'descendant.json')
-  const launcher = holdNextSpawnUntilReady(vi.mocked(spawn), realSpawn, () => existsSync(statusFile), READY_BUDGET_MS)
+  const spawnedFile = join(cwd, 'descendant.spawned')
+  const launcher = holdNextSpawnUntilReady(vi.mocked(spawn), realSpawn, () => existsSync(readyWhen === 'status' ? statusFile : spawnedFile), READY_BUDGET_MS)
   const controller = new AbortController()
-  const env = { ...process.env, NODE_OPTIONS: `--import=${new URL('./testing/launcherCli.mjs', import.meta.url).href}`, OPENCODE_LAUNCHER_DESCENDANT: descendant, OPENCODE_LAUNCHER_STATUS: statusFile }
+  const env = {
+    ...process.env,
+    NODE_OPTIONS: `--import=${new URL('./testing/launcherCli.mjs', import.meta.url).href}`,
+    OPENCODE_LAUNCHER_DESCENDANT: descendant,
+    OPENCODE_LAUNCHER_STATUS: statusFile,
+    OPENCODE_LAUNCHER_SPAWNED: spawnedFile,
+    ...(descendantDelayMs === undefined ? {} : { OPENCODE_LAUNCHER_DESCENDANT_DELAY_MS: String(descendantDelayMs) }),
+  }
   const outcome = exportOpencodeSession({ binary: process.execPath, cwd, env, signal: controller.signal, ...(timeoutMs === undefined ? {} : { timeoutMs }) }, 'ses_fixture')
     .then(() => new Error('resolved'), (error: Error) => error)
-  return { statusFile, controller, outcome, launcher }
+  return { statusFile, spawnedFile, controller, outcome, launcher }
+}
+
+/** The descendant pid the launcher recorded at spawn, if it got that far. */
+function spawnedDescendant(run: Run): number | undefined {
+  return existsSync(run.spawnedFile) ? Number(readFileSync(run.spawnedFile, 'utf8')) : undefined
 }
 
 async function ready(run: Run): Promise<Tree> {
@@ -84,6 +109,9 @@ async function ready(run: Run): Promise<Tree> {
   // The launcher reports its own pid. A descendant's ppid is not evidence: an
   // escaped child whose launcher already exited has been reparented.
   expect(tree.launcherPid).toBe(run.launcher.child?.pid)
+  // The reporting descendant must be the one recorded at spawn: that record is
+  // the identity release() relies on when readiness fails.
+  expect(tree.pid).toBe(spawnedDescendant(run))
   return tree
 }
 
@@ -96,12 +124,20 @@ async function ready(run: Run): Promise<Tree> {
  * wait for the 30 s default deadline while the tree outlived the test. The
  * launcher is killed through its ChildProcess, which Node makes a no-op once
  * reaped, never through a raw pid that could since have been reused.
+ *
+ * The descendant is found through the pid the launcher recorded at spawn, not
+ * through the ready status. A test that failed in ready() has no status, and
+ * the group kill cannot reach an escaped descendant, so without that record it
+ * would outlive the test. The record is read only after the command has
+ * settled: by then the launcher is dead (or never ran) and cannot start another
+ * descendant.
  */
-async function release(run: Run, tree: Tree | undefined) {
+async function release(run: Run) {
   run.controller.abort()
   run.launcher.child?.kill('SIGKILL')
-  if (tree && alive(tree.pid)) process.kill(tree.pid, 'SIGKILL')
   await run.outcome
+  const descendant = spawnedDescendant(run)
+  if (descendant !== undefined && alive(descendant)) process.kill(descendant, 'SIGKILL')
 }
 
 describe('OpenCode CLI process-tree termination', () => {
@@ -110,7 +146,7 @@ describe('OpenCode CLI process-tree termination', () => {
     { trigger: 'stop', descendant: 'hang', message: 'OpenCode command cancelled' },
     { trigger: 'output overflow', descendant: 'overflow', message: 'output exceeds' },
   ] as const)('settles on $trigger and kills a descendant holding stdout and stderr', async ({ trigger, descendant, message }) => {
-    const run = startTree(descendant, trigger === 'timeout' ? 1000 : undefined)
+    const run = startTree(descendant, trigger === 'timeout' ? { timeoutMs: 1000 } : {})
     let tree: Tree | undefined
     try {
       tree = await ready(run)
@@ -125,7 +161,7 @@ describe('OpenCode CLI process-tree termination', () => {
       await waitUntil(() => !alive(tree!.pid), 2000, 'descendant exit')
       await expectClean()
     } finally {
-      await release(run, tree)
+      await release(run)
     }
   }, TEST_TIMEOUT_MS)
 
@@ -134,7 +170,7 @@ describe('OpenCode CLI process-tree termination', () => {
     // still bounded because terminate() releases stderr, the pipe `close` would
     // otherwise wait on. The survivor is out of reach by design, so release()
     // kills it rather than the test asserting it dead.
-    const run = startTree('escaped', 1000)
+    const run = startTree('escaped', { timeoutMs: 1000 })
     let tree: Tree | undefined
     try {
       tree = await ready(run)
@@ -144,8 +180,29 @@ describe('OpenCode CLI process-tree termination', () => {
       expect(run.launcher.child!.signalCode).toBe('SIGKILL')
       await expectClean()
     } finally {
-      await release(run, tree)
+      await release(run)
     }
+  }, TEST_TIMEOUT_MS)
+
+  it('reclaims an escaped descendant whose readiness never arrived', async () => {
+    // Forces the path a failed readiness wait takes. spawn returns once the
+    // launcher has recorded its escaped descendant, but the descendant delays
+    // its own report far past that, so ready() fails with no status and no
+    // tree. The group kill cannot reach an escaped descendant, so only the
+    // spawn-time record lets release() reclaim it.
+    const run = startTree('escaped', { readyWhen: 'spawned', descendantDelayMs: 60_000 })
+    let descendant: number | undefined
+    try {
+      await expect(ready(run)).rejects.toThrow('fixture tree ready before runOpencode armed its bounds')
+      descendant = spawnedDescendant(run)
+      expect(descendant, 'launcher recorded the escaped descendant at spawn').toBeGreaterThan(0)
+      expect(alive(descendant!), 'descendant alive and unobserved before cleanup').toBe(true)
+    } finally {
+      await release(run)
+    }
+    await waitUntil(() => !alive(descendant!), 2000, 'escaped descendant reclaimed')
+    expect((await run.outcome).message).toContain('OpenCode command cancelled')
+    await expectClean()
   }, TEST_TIMEOUT_MS)
 
   it('never signals the process group once its leader has been reaped', async () => {
@@ -157,7 +214,7 @@ describe('OpenCode CLI process-tree termination', () => {
     // only positive pids (liveness probes, cleanup) to the real kill.
     const realKill = process.kill.bind(process)
     const kills = vi.spyOn(process, 'kill').mockImplementation((pid, signal) => pid < 0 ? true : realKill(pid, signal))
-    const run = startTree('escaped-exit', 1000)
+    const run = startTree('escaped-exit', { timeoutMs: 1000 })
     let tree: Tree | undefined
     try {
       tree = await ready(run)
@@ -172,7 +229,7 @@ describe('OpenCode CLI process-tree termination', () => {
       await expectClean()
     } finally {
       kills.mockRestore()
-      await release(run, tree)
+      await release(run)
     }
   }, TEST_TIMEOUT_MS)
 
@@ -181,7 +238,7 @@ describe('OpenCode CLI process-tree termination', () => {
     // signal: later than the timeout, earlier than any I/O callback, so always
     // before `close` (which needs the reap). A second group signal there would
     // reuse a number that the first SIGKILL may already have released.
-    const run = startTree('hang', 1000)
+    const run = startTree('hang', { timeoutMs: 1000 })
     const realKill = process.kill.bind(process)
     const kills = vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
       if (pid < 0 && !run.controller.signal.aborted) queueMicrotask(() => run.controller.abort())
@@ -199,7 +256,7 @@ describe('OpenCode CLI process-tree termination', () => {
       await expectClean()
     } finally {
       kills.mockRestore()
-      await release(run, tree)
+      await release(run)
     }
   }, TEST_TIMEOUT_MS)
 })
