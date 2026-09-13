@@ -88,7 +88,7 @@ Keep a concise session status and preserve unrelated work in other worktrees.
   and themes using current app-owned services. Each route must enforce installed-byte
   identity, consent and target scope; unsupported capabilities must fail clearly. Preserve
   the existing first-party command, theme and settings ownership contracts.
-- [ ] **7. Authoring and examples.** Align SDK source, generated output, manifest schema,
+- [x] **7. Authoring and examples.** Align SDK source, generated output, manifest schema,
   authoring guide and examples. Move Timer shared state into its runtime, consume declared
   settings, exercise permissioned observation and closed-view reminders, and validate
   committed build artifacts from a clean checkout. Migrate Mini Games from its v1
@@ -411,3 +411,36 @@ only helpers or mocked return values; add each regression alongside its implemen
   reopen gets a fresh sandbox document while the complete host lifecycle/security/theme
   journey remains green. Companion commit `5385992` is published for review in Mini
   Games PR #9; its CI and the host/SDK dependency chain must remain green before merge.
+
+- Background status notifications ship as API v2 `notifications.show` (commit `29c4ae2f`).
+  A runtime or view posts a trimmed message of at most 200 characters; main verifies
+  consent against the installed generation and broadcasts one event that every window
+  renders as a toast attributed to the extension's catalog name. API v1 rejects the
+  capability. Schema, manifest, consent, renderer broker and toast attribution tests pass,
+  and the SDK-built managed fixture posts a runtime notification in the full Electron
+  journey. SDK 0.8.0 commit `96acc89` supplies types, contexts, docs and author fixtures.
+  Safety is intentionally proportional (maintainer direction, 2026-09-12): declared
+  permission, bounded text and host attribution, no rate limiting or notification center.
+
+- Timer 0.4.0 moves to an API v2 runtime (companion commit `65519c5`). One engine owns
+  timing, commands, reminders and wall-clock persistence; the panel subscribes to published
+  state; completion and reminders use `notifications.show`. The external-bundle Electron
+  path now runs a command with no view mounted, reads the view, closes it, waits and
+  requires the countdown to have advanced on reopen. The first run failed before that
+  check: the host refused `onView:timer.main` because Timer declares only
+  `onStartupFinished` and the harness installs it before startup activation is enabled.
+  The same refusal strands any startup extension after a crash, command deadline or failed
+  activation until app restart. `onStartupFinished` now grants `*` eligibility (commit
+  `4ff23df3`); lazy extensions keep exact matching, and the runtime journey covers a cold
+  command on an installed-but-stopped startup extension without a duplicate activation.
+
+- Integrated current main `173a5702` in merge `d810f130`; no extension files overlapped.
+  On the merged tree, the notification schema/manifest/consent/broker/toast files pass
+  (71 tests across 5 files) and app typecheck passes. The managed-runtime Electron journey
+  passes, including the new cold startup reactivation check. The full production Electron
+  journey passes with the committed Timer bundle: install, panel mount/close/reopen into a
+  fresh sandbox document, and a viewless `timer.start` whose countdown advanced while the
+  view was closed. Timer migration is published for review in
+  https://github.com/Juliusolsson05/agent-code-timer/pull/2 and depends on SDK PR #1 and
+  this PR. Transcript, Git, prompt and network services remain unimplemented for this
+  release; manifests requesting them fail validation instead of receiving partial access.
