@@ -76,11 +76,24 @@ function OpenExtensionView({ definition }: { definition: AppDefinition }) {
       {/* Content-width, not a fixed 560: the frame reports its natural size and the
           iframe takes a definite width/height, so a small extension stays snug while a
           large one (a game canvas) grows the modal up to the cap. Inline style beats
-          the primitive's own `w-[…]` utility. */}
+          the primitive's own `w-[…]` utility.
+
+          WHY `max-content` AND NOT `auto` (#969): DialogContent is centered with
+          `position: fixed; left: 50%` plus a translate. For a fixed box with `left`
+          set and `width: auto`, CSS shrink-to-fits against the space right of `left`,
+          which is only HALF the window. The grid track's `auto` minimum used to hold
+          the modal open at the iframe wrapper's explicit width, but the primitive's
+          `minmax(0,1fr)` track (#682, correct for text dialogs) zeroes that minimum.
+          The modal then silently capped at 50vw and `overflow-hidden` clipped every
+          wider view: Mini Games' launcher and Blackjack were cut off, while narrower
+          games fit and made the modal look stuck at their size. `max-content` sizes to
+          the wrapper regardless of where the box starts, and `maxWidth` still bounds
+          it. viewBridge already scales an oversized frame to 90% of the window, so the
+          content never needs the cap to shrink it. */}
       <DialogContent
         showCloseButton
         className="overflow-hidden"
-        style={{ width: 'auto', maxWidth: 'min(1160px, 94vw)' }}
+        style={{ width: 'max-content', maxWidth: 'min(1160px, 94vw)' }}
       >
         {/* Radix requires an accessible title on every Dialog; visually hidden
             because an extension owns its own header treatment. Omitting it logs

@@ -317,7 +317,11 @@ function buildViewComponent(
           <div className="px-6 py-8 text-[12px] text-muted">Loading {displayName}…</div>
         ) : null}
         {status === 'failed' ? (
-          <div role="alert" className="break-words px-6 py-8">
+          // The host modal sizes to max-content (AppHostSurface, #969), so an
+          // unconstrained error message would lay out on one line and stretch the
+          // modal to its 1160px cap. Hold it to the primitive's normal dialog width
+          // so the message wraps the way every other dialog's text does.
+          <div role="alert" className="max-w-[min(520px,92vw)] break-words px-6 py-8">
             <div className="text-[13px] text-ink">{displayName} failed to start</div>
             <div className="mt-1 text-[12px] text-muted">
               {failureMessage}
