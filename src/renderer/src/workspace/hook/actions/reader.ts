@@ -90,18 +90,19 @@ export function useReaderActions(
       // (e.g. the external operator's agents.show, which after #865 no longer
       // refuses terminals for placement/metadata capabilities) could point
       // Reader Mode at a session it cannot render. Refuse without changing
-      // reader state — though, as the M5 note below explains, the predicate
-      // this guard refuses on is now STRICTER than the siblings' own guard,
-      // not identical to it.
+      // reader state — on the same transcript predicate the command surface
+      // uses, so visibility and this direct-entry guard cannot disagree (see
+      // the M5 note below for how that predicate evolved).
       //
       // WHY sessionHasTranscript instead of isAgentProviderKind (M5): the two
-      // predicates diverged. isAgentProviderKind admits OpenCode Terminal
-      // (kind 'opencode', providerRuntime 'terminal') — it IS an agent-kind
-      // session — but it never loads a transcript (see
-      // transcriptAvailability.ts's WHY), so Reader would accept it here and
-      // then render nothing. readerCommands.ts already gates on
-      // sessionHasTranscript for the same reason; this guard must agree with
-      // its own command's own visibility rule.
+      // predicates used to diverge — isAgentProviderKind admits sessions with
+      // no entries at all, and sessionHasTranscript existed to name that
+      // difference. Since #971 they agree on OpenCode Terminal (its committed
+      // entries load per #882, and Reader renders them as an overlay), so the
+      // remaining gap this guard closes is a plain terminal slipping in
+      // directly. readerCommands.ts gates on sessionHasTranscript for the same
+      // reason; this guard must agree with its own command's own visibility
+      // rule.
       if (!sessionHasTranscript(snapshot.sessions[sessionId])) return
       const rows = snapshot.dispatchMode
         ? buildVisibleDispatchRows(snapshot)

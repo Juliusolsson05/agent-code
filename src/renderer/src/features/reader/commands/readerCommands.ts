@@ -20,7 +20,10 @@ export const readerCommands: CommandDef[] = [
       // raw PTY scrollback through xterm.js and has no assistant-message
       // model, so allowing Reader from a terminal would either show an empty
       // surface or pretend terminal output is provider prose. OpenCode
-      // Terminal is excluded for the same reason: it never loads a transcript.
+      // Terminal is welcome since #971: its committed entries load like every
+      // other agent (#882), and Reader is an overlay that never mounts
+      // anything on the TUI pane — it pages committed assistant prose only,
+      // because this runtime has no live semantic text.
       return sessionHasTranscript(workspace.state.sessions[sessionId])
     },
     run: ({ workspace }) => workspace.toggleReaderMode(),
