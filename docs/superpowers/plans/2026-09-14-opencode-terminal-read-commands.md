@@ -1,7 +1,7 @@
 # OpenCode Terminal Read Commands Implementation Plan
 
 > Status: IMPLEMENTED on `feat/opencode-terminal-read-commands`. Closes #971.
-> §4 records the verification.
+> §4 records the verification. §5 records the review round (2026-09-14).
 
 **Goal:** Reader Mode, View Prompts, and Copy Last Response work on OpenCode
 Terminal panes off the committed history PR #882 already loads — without
@@ -122,3 +122,29 @@ a turn commits. No special casing in Reader is needed or added.
   `klay` project missing from this machine) reproduces on `main` and is
   unrelated. `npm run test:package` (skipped by the chain after that failure)
   run separately: pass.
+
+## 5. Review round (2026-09-14)
+
+Two independent Claude orchestration reviewers were dispatched but both hit
+the account's monthly Claude spend limit ~8 minutes in and were closed; the
+implementer performed the two mandates (invariant + contract) instead — an
+acknowledged loss of independence.
+
+- **Fixed during review:** the feat commit had swept in a 512-line
+  `package-lock.json` rewrite from the worktree's `npm install`; restored
+  from base and pushed as a separate chore commit. The PR diff is now 11
+  files, no lockfile churn.
+- **Verified:** exhaustive `sessionHasTranscript` consumer sweep (exactly the
+  five sites + tests); stale-claim sweep (only the historical
+  2026-09-10-terminal-session-parity plan still carries the old exclusion
+  text — left as a period record, the living docs carry the correction);
+  surface-pin consumers (TileTree, palette registry, deliverTextToSession,
+  preferences) all route through the unchanged pin/policy; remote client has
+  no Reader Mode surface; rehydrate/invalidation filters
+  (`isAgentSessionKind`) agree with the flip; the reader action-layer guards
+  (`toggleReaderMode`/`setReaderModeTarget`, `isAgentProviderKind`) already
+  admitted these panes, so the flip closes a pre-existing palette-vs-action
+  inconsistency rather than opening new surface; degenerate states (zero
+  entries) behave like any fresh agent pane. 37 targeted tests re-run green
+  (focus-mode keyboard ownership, invalidation, rehydrate persistence,
+  documentation, command palette).
