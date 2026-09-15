@@ -1,6 +1,7 @@
 # OpenCode Terminal Read Commands Implementation Plan
 
-> Status: IN PROGRESS on `feat/opencode-terminal-read-commands`. Closes #971.
+> Status: IMPLEMENTED on `feat/opencode-terminal-read-commands`. Closes #971.
+> §4 records the verification.
 
 **Goal:** Reader Mode, View Prompts, and Copy Last Response work on OpenCode
 Terminal panes off the committed history PR #882 already loads — without
@@ -109,3 +110,15 @@ a turn commits. No special casing in Reader is needed or added.
   `opencodeTerminalHistory` suites pass unchanged (D2 assertions intact).
 - `npm run check` green: contract checks, typecheck, unit + system + renderer
   suites, package verification.
+
+### Record (2026-09-14)
+
+- Red→green: `transcriptAvailability.test.ts` and the new
+  `opencodeTerminalReadCommands.renderer.test.ts` failed on the old predicate
+  (3 read-command `when`s false) and pass after the flip; the negative
+  controls (plain terminal hidden, rewind hidden) passed throughout.
+- `npm run check`: 4274/4275 tests pass. The one failure
+  (`imageAttachment.test.ts` corpus traceability, a Claude transcript in a
+  `klay` project missing from this machine) reproduces on `main` and is
+  unrelated. `npm run test:package` (skipped by the chain after that failure)
+  run separately: pass.
