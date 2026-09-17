@@ -72,18 +72,43 @@ export const layoutCommands: CommandDef[] = [
   {
     id: 'new-tiled-lane',
     category: 'layout-dispatch',
-    surface: 'dispatch',
+    // `app`, not `dispatch` (#978): New Lane is the primary incremental way
+    // to grow the grid, and gating it behind Grid Dispatch already being on
+    // forced every first lane through the shape-editor modal — bulk setup
+    // standing in for a one-lane gesture. From any surface the command now
+    // either inserts (grid on) or enters the grid directly (grid off).
+    surface: 'app',
     title: 'New Lane',
-    description: '**What it does:** Inserts a new lane immediately to the **right of the focused lane**, lengthening only that row.\n\n**Use when:** You want another live agent view without reshaping the grid or disturbing the lanes around it.\n\n**Notes:** Rows are independent — this never widens any other row. The current lane stays focused and the new lane arrives empty, because adding a lane asks for space, not for a particular agent. Focus it and press ⌥↓ to put the first agent in it, or pick one from its strip.',
-    keywords: ['new lane', 'add lane', 'insert lane', 'tiled dispatch', 'expand', 'right'],
-    when: ({ workspace }) => canInsertLaneInFocusedRow(workspace.state),
-    run: ({ workspace }) => {
+    description: '**What it does:** Inserts a new lane immediately to the **right of the focused lane**, lengthening only that row. When Grid Dispatch is off, it turns Grid Dispatch on first — your focused agent lands in the first lane and the new lane appears beside it.\n\n**Use when:** You want another live agent view without reshaping the grid or disturbing the lanes around it.\n\n**Notes:** Rows are independent — this never widens any other row. The current lane stays focused and the new lane arrives empty, because adding a lane asks for space, not for a particular agent. Focus it and press ⌥↓ to put the first agent in it, or pick one from its strip.',
+    keywords: ['new lane', 'add lane', 'insert lane', 'tiled dispatch', 'expand', 'right', 'grid dispatch'],
+    when: ({ workspace }) => {
+      // Entry path first (#978): with no `tiled` block there is no focused
+      // lane and no cap to consult — the [2] shape the run applies is always
+      // legal (MAX per row 10, total 16). Refusing here is what made the
+      // command invisible from the grid in the first place.
+      if (!workspace.state.dispatchMode?.tiled) return true
+      return canInsertLaneInFocusedRow(workspace.state)
+    },
+    run: async ({ workspace }) => {
+      // Entry path (#978): Grid Dispatch is off, so "a lane right of my
+      // focused one" becomes the smallest grid that honors it — lane 0 seeded
+      // with the focused agent by enterTiledDispatch (#977), lane 1 the new
+      // empty lane. No insertTiledLaneRight call: the shape already contains
+      // the new lane, and inserting again would hand the user three lanes for
+      // one command.
+      //
+      // No pane toast here, deliberately: the whole surface swaps to the grid
+      // layout, which is feedback no toast could improve on, and the seeded
+      // pane's identity belongs to the reducer, not to this snapshot.
+      if (!workspace.state.dispatchMode?.tiled) {
+        await workspace.enterTiledDispatch([2])
+        return
+      }
       // Re-checked here, not only in `when`, so a programmatic invocation that
       // never went through the palette stays inert instead of relying on the
       // reducer's refusal to be silent.
       if (!canInsertLaneInFocusedRow(workspace.state)) return
-      const tiled = workspace.state.dispatchMode?.tiled
-      if (!tiled) return
+      const tiled = workspace.state.dispatchMode.tiled
       const laneIndex = tiled.focusedLane
       const sourceLane = tiled.lanes[laneIndex]
       if (!sourceLane) return
