@@ -119,4 +119,26 @@ describe('durable control execution (real temporary files, injected contract fau
     }
     expect(collected.map(event => event.sequence)).toEqual(records.map(event => event.sequence))
   })
+
+  it('keeps events appended without a request key JSON-identical to their durable form', async () => {
+    // #975: a call without a request key used to append events whose
+    // requestKey survived schema parsing as an explicit `undefined`
+    // own-property. JSON.stringify dropped it on disk but the in-memory
+    // cache kept it, so every history read covering those events failed
+    // the capability output guard ("non-JSON value") until a restart
+    // re-loaded the clean lines. The in-memory and durable shapes must
+    // stay identical, whatever future writers pass in.
+    const { history } = await setup()
+    const run = executor(history)
+    const result = await run.invoke({ capabilityId: 'trial.act', input: { text: 'no request key' } }, caller)
+    expect(result).toMatchObject({ ok: true })
+    // The exact operator read that failed in the wild: a capability
+    // returning events appended by this same process.
+    const read = await run.invoke({ capabilityId: 'history.list', input: { limit: 50 } }, caller)
+    expect(read).toMatchObject({ ok: true })
+    for (const event of await history.events()) {
+      expect(() => z.json().parse(event)).not.toThrow()
+      expect(JSON.parse(JSON.stringify(event))).toEqual(event)
+    }
+  })
 })
