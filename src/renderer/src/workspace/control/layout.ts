@@ -83,7 +83,7 @@ export function layoutControlCapabilities(getWorkspace: () => Workspace) {
     }),
     defineCapability({
       id: 'dispatch.configure', title: 'Configure Dispatch rows and lanes', execution: 'window', effect: 'ui',
-      description: 'Change one explicit Dispatch setting through normal workspace actions, then return the resulting layout. Requires layout.read revision; refresh it between actions. Enter/scope resets tiled lanes to ordinary Dispatch. Grid sets row lengths, preserving existing lane assignments where the domain permits. Row project filters promote scope to global. Lane selection may wake the chosen existing agent; it never creates one. Exiting Dispatch returns to the project grid.',
+      description: 'Change one explicit Dispatch setting through normal workspace actions, then return the resulting layout. Requires layout.read revision; refresh it between actions. Enter/scope resets tiled lanes to ordinary Dispatch. Grid sets row lengths, preserving existing lane assignments where the domain permits; a grid entered from Dispatch seeds lane 0 with the focused agent, waking it first when it is detached. Row project filters promote scope to global. Lane selection may wake the chosen existing agent; it never creates one. Exiting Dispatch returns to the project grid.',
       input: z.object({ revision, change: z.discriminatedUnion('action', [
         z.object({ action: z.literal('enter'), scope }).strict(),
         z.object({ action: z.literal('exit') }).strict(),

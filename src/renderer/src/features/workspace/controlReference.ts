@@ -41,7 +41,7 @@ export const controlReference = [
       "pin frequently used sessions."
     ],
     "outcome": "Each lane shows its selected session; mirrored lanes share the same session.",
-    "cautions": "To focus an agent already shown in another lane, use agents.show with reuse-existing-view. Clicking the shared index replaces the focused lane selection, and intentional mirrors remain supported. Visible labels are window-local; agents.search accepts exact label plus windowId. Removing a lane and closing its agent are separate actions. Empty lanes stay empty until selected. layout.read returns the revision required by dispatch.configure, layout.adjust and tabs.reorder. Grid edits carry explicit sourceRow identities to preserve each retained row's agents and project filters.",
+    "cautions": "To focus an agent already shown in another lane, use agents.show with reuse-existing-view. Clicking the shared index replaces the focused lane selection, and intentional mirrors remain supported. Visible labels are window-local; agents.search accepts exact label plus windowId. Removing a lane and closing its agent are separate actions. Empty lanes stay empty until selected, except that a grid entered from Dispatch seeds lane 0 with the focused agent. layout.read returns the revision required by dispatch.configure, layout.adjust and tabs.reorder. Grid edits carry explicit sourceRow identities to preserve each retained row's agents and project filters.",
     "commandIds": [
       "dispatch-mode",
       "global-dispatch",
