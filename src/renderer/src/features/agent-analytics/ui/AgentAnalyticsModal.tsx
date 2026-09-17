@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 
 import { Button } from '@renderer/components/ui/button'
+import { BarChart } from '@renderer/components/charts/BarChart'
 import {
   Dialog,
   DialogClose,
@@ -62,50 +63,47 @@ function Stat({ label, value, detail }: { label: string; value: string; detail?:
   )
 }
 
+const DAY_SERIES = [
+  { id: 'agent', label: 'Agent-hours', colorClass: 'text-accent' },
+  { id: 'wall', label: 'Wall-clock', colorClass: 'text-info' },
+]
+
+function shortDay(date: string): string {
+  // YYYY-MM-DD is a LOCAL calendar date. `new Date('2026-09-10')` would parse
+  // it as UTC midnight and print the previous day west of Greenwich.
+  const [year, month, day] = date.split('-').map(Number)
+  return new Date(year!, month! - 1, day!).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+
 /**
- * Agent-hours per day as plain SVG bars.
+ * Agent-hours per day with wall-clock drawn inside each bar.
  *
- * WHY hand-rolled: there is no chart library in the app, and one bar series does
- * not justify adding one. Each bar carries a <title> so hovering names the day and
- * both hour figures without a tooltip component.
+ * WHY nested rather than side by side: agent-hours always contain their
+ * wall-clock union (three agents in one hour = 3 h agent, 1 h wall), so one
+ * bar shows both and the gap between them is the parallelism, which is the
+ * part a founder cares about. Hover or arrow keys read both figures.
  */
-function DayBars({ days }: { days: readonly AgentActivityDay[] }) {
+function DayChart({ days }: { days: readonly AgentActivityDay[] }) {
   if (days.length === 0) return null
-  const width = 600
-  const height = 72
-  const gap = 2
-  const max = Math.max(...days.map(day => day.agentMs), 1)
-  const barWidth = Math.max(1, width / days.length - gap)
   return (
-    <svg
-      viewBox={`0 0 ${width} ${height}`}
-      className="h-[72px] w-full"
-      role="img"
-      aria-label="Agent-hours per day"
-    >
-      {days.map((day, index) => {
-        const barHeight = Math.max(1, Math.round((day.agentMs / max) * (height - 4)))
-        return (
-          <rect
-            key={day.date}
-            x={index * (barWidth + gap)}
-            y={height - barHeight}
-            width={barWidth}
-            height={barHeight}
-            className="fill-accent"
-            rx={1}
-          >
-            <title>
-              {`${formatDayLabel(day.date)}: ${formatAgentTime(day.agentMs)} agent-hours, ${formatAgentTime(day.wallMs)} wall-clock`}
-            </title>
-          </rect>
-        )
-      })}
-    </svg>
+    <section className="rounded-slab border border-border bg-surface px-3 pb-1 pt-2" aria-label="Working time per day">
+      <div className="flex items-baseline justify-between gap-2">
+        <h2 className="text-[12px] font-semibold text-ink">Working time per day</h2>
+        <span className="flex items-center gap-3 text-[10px] text-muted">
+          {DAY_SERIES.map(series => <span key={series.id} className="flex items-center gap-1"><span className={`inline-block size-2 rounded-full bg-current ${series.colorClass}`} />{series.label}</span>)}
+        </span>
+      </div>
+      <BarChart
+        label="Agent-hours and wall-clock per day"
+        series={DAY_SERIES}
+        bars={days.map(day => ({ key: day.date, heading: formatDayLabel(day.date), tick: shortDay(day.date), values: [day.agentMs, day.wallMs] }))}
+        formatValue={value => (value === 0 ? '0' : formatAgentTime(value))}
+      />
+    </section>
   )
 }
 
-function ProjectRow({ project }: { project: AgentActivityProjectRow }) {
+function ProjectRow({ project, totalMs }: { project: AgentActivityProjectRow; totalMs: number }) {
   // Collapsed by default: the per-project totals and agent names answer the
   // founder's question; repository and worktree detail is there on demand.
   const [expanded, setExpanded] = useState(false)
@@ -124,6 +122,14 @@ function ProjectRow({ project }: { project: AgentActivityProjectRow }) {
           </div>
           <div className="mt-0.5 text-[10px] text-muted">
             {totalAgents(project.agents)} agents · {agentsBreakdown(project.agents)}
+          </div>
+          {/* Share of all agent-hours in the range: the ranking alone says
+              which project was first, not whether it took 90% or 30%. */}
+          <div className="mt-1.5 flex items-center gap-2" aria-label={`${Math.round(totalMs > 0 ? project.agentMs / totalMs * 100 : 0)}% of agent-hours`}>
+            <span className="h-1.5 w-40 overflow-hidden rounded-full bg-surface-hi" aria-hidden="true">
+              <span className="block h-full rounded-full bg-accent" style={{ width: `${Math.max(1, totalMs > 0 ? project.agentMs / totalMs * 100 : 0)}%` }} />
+            </span>
+            <span className="text-[10px] tabular-nums text-muted" aria-hidden="true">{Math.round(totalMs > 0 ? project.agentMs / totalMs * 100 : 0)}%</span>
           </div>
         </div>
         <div className="flex flex-shrink-0 gap-4 text-right tabular-nums">
@@ -221,7 +227,7 @@ export function AgentAnalyticsModal({ open, onClose }: Props) {
         if (!nextOpen) onClose()
       }}
     >
-      <DialogContent className="flex max-h-[88vh] w-[min(820px,calc(100vw-2rem))] flex-col">
+      <DialogContent className="flex max-h-[90vh] w-[min(1040px,calc(100vw-2rem))] flex-col">
         <DialogHeader className="flex-row items-start justify-between gap-4">
           <div>
             <DialogTitle className="font-semibold">Agent Analytics</DialogTitle>
@@ -271,7 +277,7 @@ export function AgentAnalyticsModal({ open, onClose }: Props) {
             </div>
           ) : (
             <div className="flex flex-col gap-3">
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
                 <Stat label="Agent-hours" value={formatAgentTime(showing.totals.agentMs)} detail="summed across agents" />
                 <Stat label="Wall-clock" value={formatAgentTime(showing.totals.wallMs)} detail="time any agent was working" />
                 <Stat
@@ -279,10 +285,18 @@ export function AgentAnalyticsModal({ open, onClose }: Props) {
                   value={String(totalAgents(showing.totals.agents))}
                   detail={agentsBreakdown(showing.totals.agents)}
                 />
+                {/* Parallelism is the figure that explains the other two: 9 h
+                    of agent time in 5 h of wall-clock means ~1.8 agents were
+                    working at once on average. */}
+                <Stat
+                  label="Parallelism"
+                  value={showing.totals.wallMs > 0 ? `${(showing.totals.agentMs / showing.totals.wallMs).toFixed(1)}×` : '—'}
+                  detail="agents working at once, on average"
+                />
               </div>
-              <DayBars days={showing.days} />
+              <DayChart days={showing.days} />
               {showing.projects.map(project => (
-                <ProjectRow key={project.projectKey} project={project} />
+                <ProjectRow key={project.projectKey} project={project} totalMs={showing.totals.agentMs} />
               ))}
             </div>
           )}
