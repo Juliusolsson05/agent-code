@@ -273,8 +273,12 @@ function migrateLegacyCustomAppearance(
 // later picks Dark again keeps Dark. Same reasoning as
 // migrateLegacyCustomAppearance for living in coerceSettings: `migrate` only
 // fires for older versions, `merge` coerces every launch.
+// Deliberately typed `string`, not `AccentId`: 'lime' was REMOVED from the
+// union, but the whole point of this check is to catch blobs persisted while
+// it was still selectable. A literal-typed constant would make TS reject the
+// comparison as a no-overlap error and hide the migration.
 const LEGACY_DEFAULT_MODE = 'dark'
-const LEGACY_DEFAULT_ACCENT = 'lime'
+const LEGACY_DEFAULT_ACCENT: string = 'lime'
 
 function migrateLegacyDefaultAppearance(
   parsed: Partial<Settings>,
