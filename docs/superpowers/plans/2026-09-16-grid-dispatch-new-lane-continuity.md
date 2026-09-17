@@ -37,29 +37,53 @@ consulted; the other lanes stay empty exactly as #681 requires. The rejected
 alternative (render-time healer) is the mechanism #681 deleted; the fix lives
 solely in the entry reducer.
 
-### Why the wake-before-place rule (#690) is not violated
+### Why the wake-before-place rule (#690) is satisfied by waking the seed
+
+> **Corrected after review (2026-09-16, PR #979 review).** The first draft of
+> this section argued the seed "is the session whose pane is already mounted
+> … live by definition," so no wake was needed. That is a heuristic, not a
+> definition: classic Dispatch mounts the focused agent's view WITHOUT waking
+> it (`DispatchLayout.tsx` calls `renderWorkspaceLeaf` directly), a restart
+> leaves the persisted focus on a deliberately-unrespawned detached agent,
+> and `dispatch.ts` itself documents that grid-placed is "NOT a guarantee that
+> it is live." Writing that id into a lane raw is exactly the #690 bug class
+> (dead pane that rejects the first prompt). The implemented rule below wakes
+> detached seeds before the write.
 
 Every path that moves a *new* session into a lane wakes it first
-(`selectTiledLaneSession`). The seed is the session whose pane is already
-mounted — classic Dispatch renders the focused agent's view, and the grid's
-focused tile is mounted by definition. A stale-but-recorded id (e.g. a
-rehydrated pane whose respawn failed) is guarded below and otherwise behaves
-exactly as it does in classic Dispatch today; no new dead-pane path opens.
+(`selectTiledLaneSession`), and the seed now does too: a detached seed is
+`ensureSessionLive`-woken BEFORE `enterTiledDispatch`'s state write (reason
+`grid-dispatch.entry-seed`), using the same detached predicate as
+`selectTiledLaneSession`. Grid-placed seeds skip the wake for the same reason
+that gesture does — rehydrate already respawned them. The guard set on the
+resolver itself is *recorded and non-buried* (NOT a liveness check):
+rejecting detached ids outright would kill the common case, because in an
+ordinary session every dispatch agent is detached. A failed wake costs the
+seed, never the entry; a focus that moves during the (up to 30s cold) wake
+drops the seed rather than raw-writing an unvalidated id from inside the sync
+updater.
 
 ## Changes
 
 1. **`src/renderer/src/workspace/dispatch/tiledDispatchSelectors.ts`** — new
    pure resolver `dispatchEntrySeedSessionId(state)`:
-   `dispatchMode?.focusedSessionId ?? activeTab?.focusedSessionId`, returned
-   only when the session exists in `state.sessions` and is not buried.
-   Buried guard mirrors the control plane's `lane-select` admission; a
-   missing/hibernated id returns null and the lane stays empty (honest, no
-   worse than today). Lives with the other lane-content helpers so lane
-   construction rules stay in one file.
+   `dispatchFocusedSessionId(dispatchMode) ?? activeTab?.focusedSessionId`,
+   returned only when the session exists in `state.sessions` and is not
+   buried. Buried guard mirrors the control plane's `lane-select` admission;
+   a missing id returns null and the lane stays empty (honest, no worse than
+   today). Lives with the other lane-content helpers so lane construction
+   rules stay in one file.
+
+   > **Amended during implementation.** The draft read the raw
+   > `dispatchMode?.focusedSessionId`; the shipped resolver goes through the
+   > tiled-aware `dispatchFocusedSessionId` instead, so re-entering over an
+   > existing grid carries the focused LANE's agent. Strictly better
+   > continuity, same precedence otherwise.
 
 2. **`src/renderer/src/workspace/hook/actions/dispatch.ts`** —
    `enterTiledDispatch` seeds lane 0 via `withLaneSession` when the resolver
-   returns an id. Only lane 0; only on entry. `focusedLane: 0` unchanged, so
+   returns an id, after waking a detached candidate (see the corrected #690
+   section above). Only lane 0; only on entry. `focusedLane: 0` unchanged, so
    the seeded lane is the focused lane.
 
 3. **`src/renderer/src/features/workspace/commands/layoutCommands.ts`** —
@@ -77,18 +101,32 @@ exactly as it does in classic Dispatch today; no new dead-pane path opens.
      today's.
    - Description text updated to say it can be run from anywhere and enters
      Grid Dispatch when it is off.
+   - Control-plane contract updated to match: `dispatch.configure`'s
+     description and the workspace `controlReference` cautions now state
+     that a grid entered from Dispatch seeds lane 0 with the focused agent
+     (review finding: the seeding silently changed that external surface).
 
 4. **Tests:**
-   - `tiledDispatchSelectors.test.ts`: resolver contract — classic focus
-     wins, grid focus is the fallback, buried/absent ids return null.
+   - `entryContinuity.renderer.test.tsx` (hook harness over the real
+     `useDispatchActions`, eagerly-applying `setState`): seeding contract —
+     classic focus seeds lane 0 and only lane 0, grid pane is the fallback,
+     classic focus wins, tiled re-entry carries the focused lane, and
+     buried/absent/no-focus degrade to empty lanes; wake contract — detached
+     seed wakes before the write, failed wake enters unseeded with a toast,
+     grid-placed seed skips the wake, focus moved during the wake drops the
+     seed.
    - `layoutCommands.renderer.test.ts`: the classic-Dispatch `when` case
      flips from `false` to `true`; a no-`tiled` `run` calls
      `enterTiledDispatch` with `[2]` and does not call
      `insertTiledLaneRight`; existing tiled-path cases unchanged.
-   - Seeding in the reducer is covered through the resolver + the thin
-     wiring rule (helper output → `withLaneSession` on lane 0); the hook
-     harness cost of rendering `useDispatchActions` would buy no additional
-     contract.
+
+   > **Amended during implementation.** The draft planned selector unit tests
+   > in a `tiledDispatchSelectors.test.ts` and argued a hook harness "would
+   > buy no additional contract." Overruled: the bug (#977) lives in the
+   > reducer's wiring, and the `laneSelectionWake.renderer.test.tsx`
+   > precedent showed the harness cost is one `renderHook` — the delivered
+   > tests pin seed→lane-0 AND the wake ordering through the real action,
+   > which selector tests alone could not.
 
 ## Out of scope
 
@@ -99,11 +137,14 @@ exactly as it does in classic Dispatch today; no new dead-pane path opens.
 
 ## Verification
 
-- `npx vitest run` on: `tiledDispatchSelectors`, `gridShape`,
-  `gridShapeMutations`, `gridPersistence`, `layoutCommands.renderer`,
-  `dispatchSelectors`, `rowScopedRows`.
-- Typecheck + lint per `package.json` scripts.
-- Full `npm test` if runtime allows.
+- `npx vitest run` on: `entryContinuity.renderer`, `laneSelectionWake.renderer`,
+  `gridShape`, `gridShapeMutations`, `gridPersistence`,
+  `layoutCommands.renderer`, `dispatchSelectors`, `rowScopedRows`, and the
+  command-palette suites (catalog, pickerVisibility, keybindingBaseline) for
+  the surface change.
+- `npm run typecheck`, `npm run check:keybindings`, `npm run test:contract`.
+- Full `npm run test:unit` (one pre-existing environment failure in
+  `imageAttachment.test.ts`, reproduced on unmodified main).
 
 ## Commit / PR shape
 
