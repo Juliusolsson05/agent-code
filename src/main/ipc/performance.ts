@@ -12,14 +12,10 @@ import { dirname, join } from 'node:path'
 import { moveArtifact } from '@main/performance/moveArtifact.js'
 
 import { performanceService } from '@main/performance/PerformanceService.js'
-import { ProcessTelemetry } from '@main/performance/ProcessTelemetry.js'
 import { HEAP_SNAPSHOT_DIR, PERFORMANCE_CAPTURE_TEMP_DIR } from '@main/storage/paths.js'
 import type { MonitorClearHistoryResult } from '@shared/performance/monitorHistory.js'
 import type { SessionManager } from '@main/sessionManager.js'
-import type {
-  PerformanceRecord,
-  SystemPerformanceStats,
-} from '@shared/performance/types.js'
+import type { PerformanceRecord } from '@shared/performance/types.js'
 
 const revealablePerformancePaths = new Set<string>()
 
@@ -45,7 +41,6 @@ function traceStatusFor(windowId: number) {
 }
 
 export function registerPerformanceIpc(manager: SessionManager): void {
-  const processTelemetry = new ProcessTelemetry(manager)
   monitorCoordinator.startProcesses(() => manager.getProcessTelemetryTargets())
   ipcMain.handle('performance:monitor-incident', (event, id: number) => {
     if (!BrowserWindow.fromWebContents(event.sender)) return null
@@ -181,24 +176,14 @@ export function registerPerformanceIpc(manager: SessionManager): void {
 
   ipcMain.handle('performance:snapshot', async () => performanceService.snapshot())
 
-  ipcMain.handle('performance:pane-stats', async (_evt, sessionIds?: string[]) =>
-    processTelemetry.snapshot(Array.isArray(sessionIds) ? sessionIds : undefined),
-  )
-
-  // Keep the legacy endpoint compatible, but UI reads now share the same
-  // timestamped sample as the monitor and journal and never reset a window.
-  ipcMain.handle('performance:system-stats', (): SystemPerformanceStats => ({
-    ...mainProbe.read(), enabled: performanceService.getConfig().enabled,
-  }))
-
   // On-demand heap snapshot. Writes a .heapsnapshot file the user
   // can load into Chrome DevTools' Memory tab to see retainer chains
   // and per-constructor instance counts — the gold-standard
   // diagnostic when the live numbers say "leak" but you need to know
   // WHICH object is being retained.
   //
-  // WHY this is a separate handler instead of folding it into the
-  // 1 Hz system-stats poll: writeHeapSnapshot is a multi-second
+  // WHY this is a separate handler instead of folding it into a poll:
+  // writeHeapSnapshot is a multi-second
   // stop-the-world operation that produces a 100 MB-to-3 GB file. It
   // is appropriate behind an explicit "user clicked Capture" gesture,
   // never as a passive sample.
@@ -209,10 +194,9 @@ export function registerPerformanceIpc(manager: SessionManager): void {
   // operation testable without scraping log output.
   //
   // WHY no AGENT_CODE_PERF gate: heap snapshots are a debugging
-  // escape hatch, not telemetry. If the user has the popover open
-  // (which already implies the flag is on, since the popover only
-  // renders when enabled), letting them capture is the right move
-  // regardless of the broader telemetry pipeline state.
+  // escape hatch, not telemetry. They are offered from the Performance
+  // Monitor, which a user investigating memory has deliberately opened;
+  // letting them capture is right regardless of the telemetry pipeline.
   ipcMain.handle('performance:write-heap-snapshot', async (event): Promise<{
     ok: true
     path: string

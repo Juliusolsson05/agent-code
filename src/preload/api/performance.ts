@@ -9,10 +9,8 @@ import { ipcRenderer } from 'electron'
 
 import type {
   PerformanceConfig,
-  PanePerformanceSnapshot,
   PerformanceRecord,
   PerformanceSnapshot,
-  SystemPerformanceStats,
 } from '@shared/performance/types.js'
 
 let incidentRead: Promise<MonitorIncident | null> | null = null
@@ -80,11 +78,7 @@ export const performanceApi = {
   getPerformanceSnapshot: (): Promise<PerformanceSnapshot> =>
     ipcRenderer.invoke('performance:snapshot'),
 
-  getPanePerformanceStats: (sessionIds: string[]): Promise<PanePerformanceSnapshot> =>
-    ipcRenderer.invoke('performance:pane-stats', sessionIds),
 
-  getSystemPerformanceStats: (): Promise<SystemPerformanceStats> =>
-    ipcRenderer.invoke('performance:system-stats'),
 
   writeHeapSnapshot: (): Promise<
     { ok: true; path: string } | { ok: false; error: string }
