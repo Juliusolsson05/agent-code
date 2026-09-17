@@ -443,6 +443,14 @@ export type Settings = {
    *  Toggle is read per-session at spawn time — flipping it mid-session
    *  has no effect; the next new session picks up the new value. */
   useProxyStreaming: boolean
+  /** Use the GitHub CLI's login for extension-install API requests. ON by
+   *  default: the anonymous api.github.com bucket is 60/hour per IP — two
+   *  requests per install attempt — which normal iteration exhausts (#980,
+   *  #982). The credential raises that to 5000/hour, is read from `gh auth
+   *  token` per install attempt, lives only in main-process memory for that
+   *  request, and is never persisted or logged. Turning this off also stops
+   *  the subprocess entirely. */
+  extensionsGithubCliAuth: boolean
   /** Inline voice dictation for the active composer. This is intentionally
    *  an Agent Code setting instead of an agent-voice-dictation setting:
    *  package code provides STT primitives, while Agent Code decides whether
@@ -648,6 +656,7 @@ export const DEFAULT_SETTINGS: Settings = {
   showWorktreeBadges: true,
   dangerousAgentsEnabled: false,
   useProxyStreaming: true,
+  extensionsGithubCliAuth: true,
   dictationEnabled: false,
   dictationProvider: 'deepgram',
   dictationAudioInput: null,
