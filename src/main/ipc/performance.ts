@@ -9,6 +9,7 @@ import { getHeapStatistics, writeHeapSnapshot } from 'node:v8'
 import { mainProbe } from '@main/performance/MainProbe.js'
 import { mkdir, rm, statfs } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
+import { totalmem } from 'node:os'
 import { moveArtifact } from '@main/performance/moveArtifact.js'
 
 import { performanceService } from '@main/performance/PerformanceService.js'
@@ -134,6 +135,14 @@ export function registerPerformanceIpc(manager: SessionManager): void {
   ipcMain.handle('performance:monitor-processes', (event, offset?: number, sort?: unknown) => {
     if (!BrowserWindow.fromWebContents(event.sender)) return null
     return monitorCoordinator.readProcesses(offset, sort === 'memory' ? 'memory' : 'cpu')
+  })
+
+  // Per-agent memory/CPU with fifteen minutes of history for the monitor's
+  // first page. Read-only and served from main's cached process page, so it
+  // never waits on the helper.
+  ipcMain.handle('performance:monitor-agents', event => {
+    if (!BrowserWindow.fromWebContents(event.sender)) return null
+    return monitorCoordinator.readAgentUsage(totalmem())
   })
 
   ipcMain.handle('performance:monitor-snapshot', event => {
