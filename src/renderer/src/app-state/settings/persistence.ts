@@ -83,6 +83,10 @@ export function coerceSettings(value: unknown): Settings {
     // that flipping the default must not break for users who turned proxy
     // streaming off on purpose.
     useProxyStreaming: parsed.useProxyStreaming !== false,
+    // Same absent-key → on idiom: the gh credential upgrade must reach every
+    // existing install, while an explicit persisted `false` (the privacy
+    // opt-out in Settings → Extensions) stays honored.
+    extensionsGithubCliAuth: parsed.extensionsGithubCliAuth !== false,
     dictationEnabled: parsed.dictationEnabled === true,
     // Keep disconnected devices: hydration cannot inventory hardware, and
     // forgetting the choice here would silently switch a docked user's mic.

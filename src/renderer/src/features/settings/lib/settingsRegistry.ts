@@ -514,6 +514,27 @@ export function getSettingsRegistry(
       },
     },
     {
+      // WHY this lives under Extensions and defaults to ON: the anonymous
+      // api.github.com bucket is 60/hour per IP and an install spends two
+      // requests, so iterating on installs exhausts it and every further
+      // attempt 403s (#980). Reading `gh auth token` raises the limit to
+      // 5000/hour. The credential is used only for those two requests, held
+      // only in main-process memory, never logged or persisted — and turning
+      // this off stops the gh subprocess entirely, restoring fully anonymous
+      // behavior.
+      id: 'extensions-github-cli-auth',
+      category: 'apps',
+      title: 'GitHub CLI Authentication',
+      description:
+        'Use your GitHub CLI login for extension installs and updates (5000 instead of 60 API requests per hour). The token is read per install, kept in memory only, and never stored. Turning this off makes installs fully anonymous again.',
+      keywords: ['github', 'cli', 'gh', 'authentication', 'token', 'rate limit', 'extensions', 'install'],
+      control: {
+        type: 'toggle',
+        getValue: settings => settings.extensionsGithubCliAuth,
+        onToggle: (ctx, value) => ctx.onChange({ extensionsGithubCliAuth: value }),
+      },
+    },
+    {
       // Title is a stable noun per docs/command-style.md — "Corners", not
       // "Rounded Corners" or "Toggle Corner Radius". The selected tier is the
       // state; the row name is the concept.
