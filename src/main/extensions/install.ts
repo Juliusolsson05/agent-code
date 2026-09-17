@@ -99,6 +99,52 @@ export function normalizeRepo(input: string): string {
   return `${owner}/${repo}`
 }
 
+/**
+ * True when a 403 from api.github.com means the anonymous per-IP quota is
+ * spent, not "forbidden". GitHub signals this with `x-ratelimit-remaining: 0`;
+ * the comparison is a string equality on purpose — the header is absent from
+ * non-throttled responses, and treating absence or a parse failure as
+ * "rate limited" would replace one lie with another (#980).
+ */
+function isRateLimited(res: Response): boolean {
+  return res.status === 403 && res.headers.get('x-ratelimit-remaining') === '0'
+}
+
+/**
+ * Turn a non-OK api.github.com response into the most actionable InstallError
+ * we can render. Pure on an already-received Response so the diagnosis is unit
+ * testable without a network — the sibling of normalizeRepo's testability
+ * stance in install.test.ts.
+ */
+export function githubApiFailure(res: Response, repo: string): InstallError {
+  if (isRateLimited(res)) {
+    // `x-ratelimit-reset` is epoch SECONDS. Anything unparseable means we
+    // simply omit the time; rendering "Invalid Date" would be worse than
+    // saying nothing, and a zero/negative reset is not a time anyone can wait
+    // for.
+    const resetSeconds = Number(res.headers.get('x-ratelimit-reset'))
+    const resetAt = Number.isFinite(resetSeconds) && resetSeconds > 0
+      ? new Date(resetSeconds * 1000)
+      : null
+    const resetPhrase = resetAt ? ` (resets at ${resetAt.toLocaleTimeString()})` : ''
+    return new InstallError(
+      `GitHub's API rate limit for this network is exhausted${resetPhrase}. ` +
+        `Agent Code makes unauthenticated requests, so waiting is the only automatic ` +
+        `recovery — or install ${repo} through "Load extension from folder".`,
+    )
+  }
+  if (res.status === 403) {
+    // A 403 WITH remaining quota is genuinely forbidden territory (a blocked
+    // repo, a credential-requiring action). Keep it distinct from throttling so
+    // the message never claims a limit that is not the cause.
+    return new InstallError(
+      `GitHub returned 403 for ${repo} without throttling — the repository may be ` +
+        `blocked, or this request needs credentials Agent Code does not have.`,
+    )
+  }
+  return new InstallError(`GitHub returned ${res.status} for ${repo}.`)
+}
+
 type ResolvedSource = { ref: string; tarballUrl: string }
 
 /**
@@ -125,10 +171,18 @@ async function resolveSource(repo: string): Promise<ResolvedSource> {
         return { ref: body.tag_name, tarballUrl: body.tarball_url }
       }
     }
-  } catch {
+    // A throttled 403 here means the repo-metadata call below is equally doomed
+    // — diagnose now instead of spending a second request of a quota we already
+    // know is empty. Every other non-OK status (404 on a repo with no releases
+    // is the common one) still falls through to the default-branch path.
+    if (isRateLimited(res)) throw githubApiFailure(res, repo)
+  } catch (error) {
     // Network failure here is not fatal — fall through to the default branch, which
     // uses a different host (codeload) and may still succeed. A hard failure will
-    // surface there with a better message.
+    // surface there with a better message. The rate-limit diagnosis above is an
+    // InstallError, not a network failure, and must propagate rather than be
+    // swallowed into a second doomed request.
+    if (error instanceof InstallError) throw error
   }
 
   const res = await fetchWithDeadline(`https://api.github.com/repos/${repo}`, headers)
@@ -136,7 +190,7 @@ async function resolveSource(repo: string): Promise<ResolvedSource> {
     throw new InstallError(`Repository ${repo} not found, or it is private.`)
   }
   if (!res.ok) {
-    throw new InstallError(`GitHub returned ${res.status} for ${repo}.`)
+    throw githubApiFailure(res, repo)
   }
   const body = (await res.json()) as { default_branch?: string }
   const branch = body.default_branch
