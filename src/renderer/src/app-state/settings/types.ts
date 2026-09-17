@@ -14,6 +14,7 @@ import type { CommandSortMode } from '@renderer/features/command-palette/lib/sor
 // that it sat at index 5 to make the Appearance grid an even 3x2 — are gone.
 // The grid is now variable-length and always ends with a "+ New theme…" cell.
 export type ThemeMode =
+  | 'dark-nord'
   | 'dark'
   | 'dark-dim'
   | 'dark-tokyonight'
@@ -32,6 +33,10 @@ export type ThemeModeMeta = {
 }
 
 export const THEME_MODES: ThemeModeMeta[] = [
+  // Nord is first because it is the default: the picker grid reads top-left
+  // as "what the app ships with", and the previous first entry was also the
+  // previous default. Its palette lives in styles.css like every built-in.
+  { id: 'dark-nord', label: 'Nord', family: 'dark' },
   { id: 'dark', label: 'Dark', family: 'dark' },
   { id: 'dark-dim', label: 'Gray Dark', family: 'dark' },
   { id: 'dark-tokyonight', label: 'Tokyonight', family: 'dark' },
@@ -65,13 +70,12 @@ export function isDarkThemeMode(mode: ThemeModeValue): boolean {
 }
 
 export type AccentId =
-  | 'lime'
+  | 'frost'
   | 'amber'
   | 'sky'
   | 'magenta'
   | 'gold'
   | 'coral'
-  | 'sage'
   | 'lavender'
 
 export type AccentMeta = {
@@ -83,14 +87,23 @@ export type AccentMeta = {
   fgLight: string
 }
 
+// WHY Lime and Sage are gone rather than merely demoted: the public-release
+// audit (#973) asked for no green in any default, and the green accents WERE
+// the old identity — every marker, dot and focus ring wore Lime. Leaving them
+// selectable would keep two entries whose only purpose was the look we are
+// replacing. coerceSettings maps a persisted 'lime'/'sage' to Frost, so an
+// existing install lands on the new default rather than on garbage.
+//
+// Frost is Nord's `nord8` (#88c0d0) on dark canvases and `nord10` (#5e81ac)
+// on the cream light canvases, where nord8 has too little contrast to carry
+// focus rings.
 export const ACCENTS: AccentMeta[] = [
-  { id: 'lime', name: 'Lime', dark: '#7dd3a0', light: '#2f6f46', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
+  { id: 'frost', name: 'Frost', dark: '#88c0d0', light: '#5e81ac', fgDark: '#171b21', fgLight: '#faf9f6' },
   { id: 'amber', name: 'Amber', dark: '#ff9f4a', light: '#8a470b', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
   { id: 'sky', name: 'Sky', dark: '#6bb6ff', light: '#1f5eaa', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
   { id: 'magenta', name: 'Magenta', dark: '#e66ed9', light: '#8b247f', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
   { id: 'gold', name: 'Gold', dark: '#f5d64a', light: '#735905', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
   { id: 'coral', name: 'Coral', dark: '#ff6b6b', light: '#9f2929', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
-  { id: 'sage', name: 'Sage', dark: '#a8c49a', light: '#4d6a3f', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
   { id: 'lavender', name: 'Lavender', dark: '#b5a3ff', light: '#5a43b4', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
 ]
 
@@ -645,12 +658,15 @@ export type Settings = {
 }
 
 export const DEFAULT_SETTINGS: Settings = {
-  mode: 'dark',
+  // Nord + Frost are the public-release look (#973). The old Dark + Lime pair
+  // is still selectable; installs sitting on exactly that pair are migrated
+  // by coerceSettings so "the default changed" reaches existing users too.
+  mode: 'dark-nord',
   savedThemes: [],
   savedPromptTemplates: [],
   dispatchColorFlags: {},
   contrast: false,
-  accent: 'lime',
+  accent: 'frost',
   customAppearanceJson: DEFAULT_CUSTOM_APPEARANCE_JSON,
   showStatusMode: true,
   showWorktreeBadges: true,

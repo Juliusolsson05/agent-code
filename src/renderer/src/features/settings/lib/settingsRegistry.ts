@@ -464,7 +464,7 @@ export function getSettingsRegistry(
       title: 'Theme',
       description: 'Switch between built-in themes and your saved color schemes.',
       keywords: [
-        'theme', 'mode', 'dark', 'light', 'tokyonight', 'dim',
+        'theme', 'mode', 'nord', 'dark', 'light', 'tokyonight', 'dim',
         'custom', 'color', 'colour', 'scheme', 'saved', 'palette',
       ],
       control: { type: 'theme-picker' },
