@@ -49,6 +49,8 @@ export function coerceSettings(value: unknown): Settings {
   // silently reset itself.
   const savedThemes = migrateLegacyCustomAppearance(parsed, coerceSavedThemes(parsed.savedThemes))
   const savedPromptTemplates = coerceSavedPromptTemplates(parsed.savedPromptTemplates)
+  // Must run before mode/accent are resolved below — see migrateLegacyDefaultAppearance.
+  const legacyAppearance = migrateLegacyDefaultAppearance(parsed)
 
   return {
     ...DEFAULT_SETTINGS,
@@ -62,12 +64,15 @@ export function coerceSettings(value: unknown): Settings {
     savedThemes,
     savedPromptTemplates,
     dispatchColorFlags: coerceDispatchColorFlags(parsed.dispatchColorFlags),
-    mode: resolvePersistedMode(parsed, savedThemes),
+    mode: legacyAppearance?.mode ?? resolvePersistedMode(parsed, savedThemes),
     contrast: parsed.contrast === true,
     agentNamesEnabled: parsed.agentNamesEnabled === true,
-    accent: ACCENTS.some(a => a.id === parsed.accent)
-      ? (parsed.accent as AccentId)
-      : DEFAULT_SETTINGS.accent,
+    // A retired accent id ('lime', 'sage') fails the membership test and lands
+    // on Frost — that is the intended landing for the green accents (#973).
+    accent: legacyAppearance?.accent
+      ?? (ACCENTS.some(a => a.id === parsed.accent)
+        ? (parsed.accent as AccentId)
+        : DEFAULT_SETTINGS.accent),
     customAppearanceJson: coerceCustomAppearanceJson(parsed.customAppearanceJson),
     showStatusMode: parsed.showStatusMode !== false,
     showWorktreeBadges: parsed.showWorktreeBadges !== false,
@@ -242,6 +247,28 @@ function migrateLegacyCustomAppearance(
   ]
 }
 
+// The pre-Nord default appearance. A blob sitting on EXACTLY this pair never
+// had its appearance touched — Dark was the only mode that shipped selected
+// and Lime the only accent — so following the default to Nord + Frost is what
+// "the default changed" means for an existing install (#973). Any other mode
+// or accent is a choice the user made and is left alone.
+//
+// WHY this is safe to run on every hydration rather than only in `migrate`:
+// after it runs the accent is 'frost', and 'lime' no longer exists as a
+// selectable accent, so the condition can never be true twice. A user who
+// later picks Dark again keeps Dark. Same reasoning as
+// migrateLegacyCustomAppearance for living in coerceSettings: `migrate` only
+// fires for older versions, `merge` coerces every launch.
+const LEGACY_DEFAULT_MODE = 'dark'
+const LEGACY_DEFAULT_ACCENT = 'lime'
+
+function migrateLegacyDefaultAppearance(
+  parsed: Partial<Settings>,
+): Pick<Settings, 'mode' | 'accent'> | null {
+  if (parsed.mode !== LEGACY_DEFAULT_MODE || parsed.accent !== LEGACY_DEFAULT_ACCENT) return null
+  return { mode: DEFAULT_SETTINGS.mode, accent: DEFAULT_SETTINGS.accent }
+}
+
 const LEGACY_CUSTOM_THEME_NAME = 'Custom'
 
 // Accepts a built-in id, or a saved theme id that actually resolves against the
@@ -310,7 +337,20 @@ const RETIRED_BUILT_IN_COMMAND_IDS: ReadonlySet<string> = new Set([
  * ensureDispatchTerminal action — so the preference has nothing left to
  * control.
  */
-const RETIRED_SETTINGS_KEYS: readonly string[] = ['dispatchProjectTerminal']
+const RETIRED_SETTINGS_KEYS: readonly string[] = [
+  'dispatchProjectTerminal',
+  // Found still riding in a long-lived install's blob during the #973 audit:
+  // each was a real Settings field once, and because `...parsed` copies
+  // whatever it finds, every one survived every save since its field was
+  // deleted. Nothing reads them; listing them here is what finally lets them
+  // go. Add to this list whenever a Settings field is removed.
+  'customRendering',
+  'codeLineWrap',
+  'showTerminalPreview',
+  'showSystemEvents',
+  'highContrast',
+  'eventDrivenPasteSubmit',
+]
 
 function omitRetiredSettingsKeys(parsed: Partial<Settings>): Partial<Settings> {
   const result: Record<string, unknown> = {}

@@ -94,3 +94,55 @@ describe('coerceSettings agentNamesEnabled', () => {
     expect(coerceSettings({ agentNamesEnabled: null }).agentNamesEnabled).toBe(false)
   })
 })
+
+describe('coerceSettings default appearance (#973)', () => {
+  it('opens a fresh install in Nord with the Frost accent', () => {
+    const settings = coerceSettings({})
+    expect(settings.mode).toBe('dark-nord')
+    expect(settings.accent).toBe('frost')
+  })
+
+  // The one deliberate exception to "persisted values win": a blob on exactly
+  // the OLD default pair never had its appearance touched, so it follows the
+  // default to Nord. Anything else is a choice and stays.
+  it('moves an untouched Dark + Lime install to Nord + Frost', () => {
+    const settings = coerceSettings({ mode: 'dark', accent: 'lime' })
+    expect(settings.mode).toBe('dark-nord')
+    expect(settings.accent).toBe('frost')
+  })
+
+  it('leaves a deliberate Dark theme alone when the accent was changed', () => {
+    const settings = coerceSettings({ mode: 'dark', accent: 'gold' })
+    expect(settings.mode).toBe('dark')
+    expect(settings.accent).toBe('gold')
+  })
+
+  it('keeps a non-default theme and only replaces the retired green accents', () => {
+    expect(coerceSettings({ mode: 'dark-dim', accent: 'lime' })).toMatchObject({ mode: 'dark-dim', accent: 'frost' })
+    expect(coerceSettings({ mode: 'light', accent: 'sage' })).toMatchObject({ mode: 'light', accent: 'frost' })
+  })
+
+  it('is idempotent across a second hydration', () => {
+    const once = coerceSettings({ mode: 'dark', accent: 'lime' })
+    expect(coerceSettings(JSON.parse(JSON.stringify(once)))).toMatchObject({ mode: 'dark-nord', accent: 'frost' })
+    // …and a user who goes back to Dark afterwards is not migrated again.
+    expect(coerceSettings({ ...once, mode: 'dark' })).toMatchObject({ mode: 'dark', accent: 'frost' })
+  })
+})
+
+describe('coerceSettings retired keys', () => {
+  // Found riding in a long-lived install's blob during the #973 audit: each
+  // was a Settings field once, and `...parsed` copies whatever it finds, so
+  // every one had survived every save since its field was deleted.
+  it.each([
+    'customRendering',
+    'codeLineWrap',
+    'showTerminalPreview',
+    'showSystemEvents',
+    'highContrast',
+    'eventDrivenPasteSubmit',
+    'dispatchProjectTerminal',
+  ])('drops %s instead of carrying it forever', key => {
+    expect(coerceSettings({ [key]: true })).not.toHaveProperty(key)
+  })
+})
