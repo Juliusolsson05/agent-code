@@ -79,13 +79,14 @@ export const layoutCommands: CommandDef[] = [
     // either inserts (grid on) or enters the grid directly (grid off).
     surface: 'app',
     title: 'New Lane',
-    description: '**What it does:** Inserts a new lane immediately to the **right of the focused lane**, lengthening only that row. When Grid Dispatch is off, it turns Grid Dispatch on first — your focused agent lands in the first lane and the new lane appears beside it.\n\n**Use when:** You want another live agent view without reshaping the grid or disturbing the lanes around it.\n\n**Notes:** Rows are independent — this never widens any other row. The current lane stays focused and the new lane arrives empty, because adding a lane asks for space, not for a particular agent. Focus it and press ⌥↓ to put the first agent in it, or pick one from its strip.',
+    description: '**What it does:** Inserts a new lane immediately to the **right of the focused lane**, lengthening only that row. When Grid Dispatch is off, it turns Grid Dispatch on first — your focused agent, when one is focused, lands in the first lane and the new lane appears beside it.\n\n**Use when:** You want another live agent view without reshaping the grid or disturbing the lanes around it.\n\n**Notes:** Rows are independent — this never widens any other row. The current lane stays focused and the new lane arrives empty, because adding a lane asks for space, not for a particular agent. Focus it and press ⌥↓ to put the first agent in it, or pick one from its strip.',
     keywords: ['new lane', 'add lane', 'insert lane', 'tiled dispatch', 'expand', 'right', 'grid dispatch'],
     when: ({ workspace }) => {
       // Entry path first (#978): with no `tiled` block there is no focused
       // lane and no cap to consult — the [2] shape the run applies is always
-      // legal (MAX per row 10, total 16). Refusing here is what made the
-      // command invisible from the grid in the first place.
+      // legal (it is one lane each under MAX_DISPATCH_TILES and half of
+      // MAX_DISPATCH_LANES). Refusing here is what made the command invisible
+      // from the grid in the first place.
       if (!workspace.state.dispatchMode?.tiled) return true
       return canInsertLaneInFocusedRow(workspace.state)
     },
@@ -96,6 +97,12 @@ export const layoutCommands: CommandDef[] = [
       // empty lane. No insertTiledLaneRight call: the shape already contains
       // the new lane, and inserting again would hand the user three lanes for
       // one command.
+      //
+      // This snapshot read of `tiled` is one render stale by design — every
+      // command here captures one coherent UI snapshot. The cost when a grid
+      // appears in that frame is that entry REPLACEs it wholesale, which is
+      // enterTiledDispatch's documented replace-on-entry semantics, not a
+      // silent partial merge.
       //
       // No pane toast here, deliberately: the whole surface swaps to the grid
       // layout, which is feedback no toast could improve on, and the seeded

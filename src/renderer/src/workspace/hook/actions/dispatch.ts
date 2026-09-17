@@ -212,11 +212,36 @@ export function useDispatchActions(
   // session the user was ALREADY focused on — classic Dispatch's focus, an
   // existing grid's focused lane, or the grid pane they left behind. That is
   // continuity with what they were commanding, not a prediction from the
-  // index, so it does not reopen #681. A missing, buried, or stale focus id
-  // resolves to null and lane 0 stays empty exactly like every other lane.
+  // index, so it does not reopen #681. A missing or buried focus id resolves
+  // to null and lane 0 stays empty exactly like every other lane.
+  //
+  // A DETACHED seed is woken BEFORE the write (#690 parity): the seed is a
+  // lane placement like any other, and a hibernated agent written into a lane
+  // unwoken renders a pane that rejects the first prompt with "not a live
+  // agent session". In an ordinary session every dispatch agent is detached,
+  // so the wake is the COMMON path here, not an exception. Grid-placed seeds
+  // skip it — same predicate selectTiledLaneSession uses — because rehydrate
+  // already respawned those. A failed wake costs the seed, never the entry:
+  // the user asked for a grid, and the toast reports what was declined.
   const enterTiledDispatch = useCallback(
     async (rowLengths: number[]) => {
       closeNewAgentPlacement()
+      // Resolved from the live ref, not the hook's render snapshot: focus may
+      // have moved since the command was admitted, and seeding an agent the
+      // user is no longer commanding would be a guess.
+      let candidate = dispatchEntrySeedSessionId(refs.stateRef.current)
+      if (candidate && refs.stateRef.current.detachedSessions[candidate] !== undefined) {
+        try {
+          await ensureSessionLive(candidate, 'grid-dispatch.entry-seed')
+        } catch (error) {
+          showToast(
+            error instanceof Error && error.message.length > 0
+              ? error.message
+              : 'Could not wake agent',
+          )
+          candidate = null
+        }
+      }
       setState(prev => {
         const scope = prev.dispatchMode?.scope ?? 'project'
         // Takes a length PER ROW rather than a single count, because the grid
@@ -236,8 +261,17 @@ export function useDispatchActions(
         }
         const shape = capped.length > 0 ? capped : [{ length: clampTileCount(1) }]
         const lanes = emptyLanes(shape.reduce((sum, row) => sum + row.length, 0))
-        const seed = dispatchEntrySeedSessionId(prev)
-        if (seed) lanes[0] = withLaneSession(lanes[0]!, seed)
+        // Re-resolved and IDENTITY-MATCHED against the validated candidate.
+        // The wake window is up to 30s cold; if focus moved underneath it,
+        // the new focus has been neither validated nor woken on this path,
+        // and raw-writing it from inside this sync updater would reopen the
+        // exact #690 gap the wake above closes. Dropping the seed mirrors
+        // selectTiledLaneSession's membership-change drop: predictable over
+        // clever.
+        const resolved = dispatchEntrySeedSessionId(prev)
+        if (candidate !== null && resolved === candidate) {
+          lanes[0] = withLaneSession(lanes[0]!, candidate)
+        }
         return {
           ...prev,
           dispatchMode: {
@@ -256,7 +290,7 @@ export function useDispatchActions(
       })
       setTileTabs(null)
     },
-    [closeNewAgentPlacement, setState, setTileTabs],
+    [closeNewAgentPlacement, ensureSessionLive, refs, setState, setTileTabs, showToast],
   )
 
   // Return to classic single-view Dispatch. Agents keep running — we only

@@ -31,6 +31,12 @@ function harness(options: {
   buriedIds?: SessionId[]
   /** Omit the candidate from `sessions` entirely. */
   candidateAbsent?: boolean
+  /** Ids to record as detached (hibernated, no live backend). */
+  detachedIds?: SessionId[]
+  /** Anything the caller wants to happen WHILE a wake is in flight. */
+  duringWake?: (ref: { current: WorkspaceState }) => void
+  /** Make the wake fail. */
+  wakeRejects?: boolean
 } = {}) {
   const candidate = options.tiledFocus ?? options.classicFocus ?? options.gridFocus
   const sessions: Record<string, { cwd: string; kind: 'claude' }> = {}
@@ -39,6 +45,9 @@ function harness(options: {
   if (candidate && !options.candidateAbsent) {
     sessions[candidate] = { cwd: `/work/${candidate}`, kind: 'claude' }
   }
+  // A second, VALID focus target for the focus-moved-during-wake case: live
+  // and recorded, so only the wake-window movement distinguishes it.
+  sessions['moved-to-focus'] = { cwd: '/work/moved-to', kind: 'claude' }
   const state = {
     activeTabId: 'tab-a',
     tabs: [{
@@ -61,17 +70,33 @@ function harness(options: {
         : null,
     sessions,
     buried: (options.buriedIds ?? []).map(id => ({ sessionId: id })),
-    detachedSessions: {},
+    detachedSessions: Object.fromEntries(
+      (options.detachedIds ?? []).map(id => [
+        id,
+        { sessionId: id, surface: 'dispatch', projectTabId: 'tab-b' },
+      ]),
+    ),
   }
   const stateRef = { current: state as unknown as WorkspaceState }
+  // Order is the contract for the wake cases: a lane written before the wake
+  // is the #690 dead-pane state all over again.
+  const order: string[] = []
   // Apply updaters eagerly so the resulting tiled state is observable — the
   // whole point of these tests is what the reducer WROTE, not that it ran.
   const setState = vi.fn((updater: unknown) => {
     if (typeof updater === 'function') {
+      order.push('write')
       stateRef.current = (updater as (p: WorkspaceState) => WorkspaceState)(stateRef.current)
     }
     return updater
   })
+  const ensureSessionLive = vi.fn(async () => {
+    order.push('wake')
+    options.duringWake?.(stateRef)
+    if (options.wakeRejects) throw new Error('boom')
+    return { sessionId: candidate, builtInMcpDomains: undefined }
+  })
+  const showToast = vi.fn()
   const hook = renderHook(() =>
     useDispatchActions(
       state,
@@ -79,11 +104,11 @@ function harness(options: {
       vi.fn(),
       vi.fn(),
       { stateRef } as unknown as WorkspaceRefs,
-      vi.fn() as never,
-      vi.fn(),
+      ensureSessionLive as never,
+      showToast,
     ),
   )
-  return { hook, stateRef }
+  return { hook, stateRef, order, ensureSessionLive, showToast }
 }
 
 describe('entering Grid Dispatch keeps the focused agent (#977)', () => {
@@ -182,6 +207,93 @@ describe('entering Grid Dispatch keeps the focused agent (#977)', () => {
       await hook.result.current.enterTiledDispatch([2])
     })
 
+    const lanes = stateRef.current.dispatchMode?.tiled?.lanes ?? []
+    expect(lanes.every(lane => lane.selectedSessionId === undefined)).toBe(true)
+  })
+})
+
+describe('a detached seed is woken before it is written (#690 parity)', () => {
+  // The seed is a lane placement like any other: a hibernated agent written
+  // into a lane without a wake renders a pane that rejects the first prompt
+  // with "not a live agent session". The strip-selection gesture wakes for
+  // exactly this reason; entry seeding must not be the one path exempt from
+  // the rule. In an ordinary session EVERY dispatch agent is detached, so
+  // this is the COMMON seeding path, not an edge case.
+
+  it('wakes a hibernated focus before seeding lane 0', async () => {
+    const { hook, stateRef, order, ensureSessionLive } = harness({
+      classicFocus: CLASSIC_FOCUS,
+      detachedIds: [CLASSIC_FOCUS],
+    })
+
+    await act(async () => {
+      await hook.result.current.enterTiledDispatch([2])
+    })
+
+    expect(ensureSessionLive).toHaveBeenCalledWith(CLASSIC_FOCUS, 'grid-dispatch.entry-seed')
+    // Order is the contract: writing the lane first is the dead-pane state.
+    expect(order).toEqual(['wake', 'write'])
+    expect(stateRef.current.dispatchMode?.tiled?.lanes[0]?.selectedSessionId)
+      .toBe(CLASSIC_FOCUS)
+  })
+
+  it('enters without a seed when the wake fails', async () => {
+    // Entry is the user's primary request; a failed wake costs the seed, not
+    // the layout. Showing a pane whose backend refused to come back is the
+    // exact failure mode the wake exists to prevent.
+    const { hook, stateRef, order, showToast } = harness({
+      classicFocus: CLASSIC_FOCUS,
+      detachedIds: [CLASSIC_FOCUS],
+      wakeRejects: true,
+    })
+
+    await act(async () => {
+      await hook.result.current.enterTiledDispatch([2])
+    })
+
+    expect(order).toEqual(['wake', 'write'])
+    expect(showToast).toHaveBeenCalled()
+    const tiled = stateRef.current.dispatchMode?.tiled
+    expect(tiled?.lanes).toHaveLength(2)
+    expect(tiled?.lanes.every(lane => lane.selectedSessionId === undefined)).toBe(true)
+  })
+
+  it('does not wake a grid-placed focus', async () => {
+    // Owned by a tile tree, so rehydrate already respawned it — the identical
+    // predicate selectTiledLaneSession uses. A spurious wake would make every
+    // ordinary entry pay a recover round-trip for nothing.
+    const { hook, order, ensureSessionLive } = harness({ gridFocus: GRID_FOCUS })
+
+    await act(async () => {
+      await hook.result.current.enterTiledDispatch([2])
+    })
+
+    expect(ensureSessionLive).not.toHaveBeenCalled()
+    expect(order).toEqual(['write'])
+  })
+
+  it('drops the seed when focus moves during the wake', async () => {
+    // The wake window is up to 30s cold. The new focus was neither validated
+    // nor woken on this path, and seeding it from inside the sync updater
+    // would raw-write a possibly-detached id — the gap this describe closes.
+    // Dropping mirrors selectTiledLaneSession's membership-change drop:
+    // predictable over clever.
+    const { hook, stateRef, ensureSessionLive } = harness({
+      classicFocus: CLASSIC_FOCUS,
+      detachedIds: [CLASSIC_FOCUS],
+      duringWake: ref => {
+        ref.current = {
+          ...ref.current,
+          dispatchMode: { scope: 'global', focusedSessionId: 'moved-to-focus' as SessionId },
+        }
+      },
+    })
+
+    await act(async () => {
+      await hook.result.current.enterTiledDispatch([2])
+    })
+
+    expect(ensureSessionLive).toHaveBeenCalledWith(CLASSIC_FOCUS, 'grid-dispatch.entry-seed')
     const lanes = stateRef.current.dispatchMode?.tiled?.lanes ?? []
     expect(lanes.every(lane => lane.selectedSessionId === undefined)).toBe(true)
   })

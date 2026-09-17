@@ -514,6 +514,11 @@ export const WAKE_CALLERS = [
   // the high-frequency in-layout gestures: a storm here means lane churn (a
   // held arrow key), not command-palette navigation.
   'dispatch-lane.select',
+  // Seeding the focused agent into lane 0 when Grid Dispatch turns on (#977).
+  // Separate from `dispatch-lane.select` because entry is a once-per-layout
+  // gesture, not in-layout churn: a storm here means something is repeatedly
+  // entering/exiting the grid, not that lanes are being driven.
+  'grid-dispatch.entry-seed',
   // Wake the source pane before provider-switch compaction (#590).
   'provider-switch.wake-source',
   // MCP-driven: reading a child agent, and sending it a prompt. The only wake

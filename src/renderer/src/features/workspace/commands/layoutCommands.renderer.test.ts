@@ -68,7 +68,7 @@ function commandContext(options: {
 }
 
 describe('New Lane command', () => {
-  it('is admitted only for a live tiled coordinate below the lane ceiling', () => {
+  it('is admitted for a live tiled coordinate below the lane ceiling, and always when Grid Dispatch is off', () => {
     expect(newLaneCommand.when?.(commandContext().context)).toBe(true)
 
     const atCeiling = commandContext({
