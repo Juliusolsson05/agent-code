@@ -106,10 +106,10 @@ export const sessionCommands: CommandDef[] = [
       // the moment a switch edge was added for a provider whose prompts we
       // cannot parse, or an adapter for one with no switch edge.
       //
-      // sessionHasTranscript additionally excludes OpenCode Terminal (kind
-      // 'opencode', providerRuntime 'terminal'): its history loaders never
-      // populate `runtime.entries`, so prompt extraction had nothing to read
-      // even though promptHistoryExtraction is true for plain OpenCode.
+      // sessionHasTranscript keeps plain terminals out (no entries to extract
+      // from). OpenCode Terminal passes it since #971: #882's Stage 6 loads
+      // its history into `runtime.entries`, so prompt extraction reads real
+      // prompts — the modal opens over the TUI pane and mounts nothing on it.
       return getProviderFeatures(kind).promptHistoryExtraction && sessionHasTranscript(meta)
     },
     run: ({ workspace, ui }) => {

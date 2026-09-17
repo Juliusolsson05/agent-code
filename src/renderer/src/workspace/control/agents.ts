@@ -150,14 +150,15 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
         // independent layer in case some other caller reaches it directly.
         //
         // WHY sessionHasTranscript instead of `session.provider === 'terminal'`
-        // (M5): a plain terminal is not the only kind Reader can't render.
-        // OpenCode Terminal (provider 'opencode', providerRuntime 'terminal')
-        // is agent-provider-kind but also never loads a transcript — see
-        // transcriptAvailability.ts. readerCommands.ts and reader.ts's own
-        // setReaderModeSession guard already use sessionHasTranscript; this
-        // refusal has to agree with them or an OpenCode Terminal could slip
-        // past this check and hit the exact same "can't render" failure one
-        // layer down. Read from raw workspace state (not the sessionReference
+        // (M5): a plain terminal is the only kind Reader can't render — it has
+        // no assistant-message model at all. OpenCode Terminal (provider
+        // 'opencode', providerRuntime 'terminal') DOES carry entries since #882
+        // and Reader pages them as an overlay (see transcriptAvailability.ts's
+        // WHY, revised for #971), so it must pass here. readerCommands.ts and
+        // reader.ts's own setReaderModeSession guard use sessionHasTranscript;
+        // this refusal has to agree with them or a session could slip past
+        // this check and hit the exact same "can't render" failure one layer
+        // down. Read from raw workspace state (not the sessionReference
         // `session` above) because sessionHasTranscript's shape is keyed on
         // SessionMeta's `kind`/`providerRuntime` fields, not the observation
         // schema's renamed `provider` field.

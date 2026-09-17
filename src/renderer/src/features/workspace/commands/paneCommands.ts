@@ -639,8 +639,8 @@ export const paneCommands: CommandDef[] = [
       // transcript, and extractLastAssistantText intentionally reads provider
       // entries. Showing the command on a shell row would imply there is an
       // assistant response to copy when there is only PTY scrollback.
-      // sessionHasTranscript also excludes OpenCode Terminal, which never has
-      // entries to copy.
+      // sessionHasTranscript admits OpenCode Terminal since #971 — #882 loads
+      // its committed entries, so there is a real last response to copy.
       return sessionHasTranscript(workspace.state.sessions[sessionId])
     },
     run: ({ workspace }) => {
