@@ -3,6 +3,20 @@ import { mkdir, readFile, open, rename, rm, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { historyEventSchema, type ControlHistory, type HistoryEvent, type HistoryWrite } from '@control-sdk'
 
+// An event's in-memory shape must be byte-identical to its durable JSON
+// shape. Zod preserves explicit-`undefined` optional properties while
+// JSON.stringify drops them on disk, so a writer passing `field: undefined`
+// would otherwise cache events that later fail every JSON output guard
+// until a restart re-loads the clean lines (#975). Load-path events cannot
+// contain undefined (JSON.parse never produces it); normalizing here at the
+// append boundary closes the hole for every writer at once.
+function durable(event: HistoryEvent): HistoryEvent {
+  for (const key of Object.keys(event)) {
+    if (event[key as keyof HistoryEvent] === undefined) delete event[key as keyof HistoryEvent]
+  }
+  return event
+}
+
 // This journal deliberately does not use the diagnostic incident recorder:
 // diagnostics are bounded and summarized, whereas operation history must keep
 // exact prompts/results and survive restarts. Only the process holding the
@@ -43,8 +57,8 @@ export class FileControlHistory implements ControlHistory {
       if (this.poisoned) throw new Error('Control history write failed; reopen before inspecting recovery')
       const events = await this.load()
       const payloadId = payload === undefined ? undefined : await this.putPayload(payload)
-      const event = historyEventSchema.parse({ ...write, sequence: events.length + 1,
-        ...(payloadId ? { payload: payloadId } : {}) })
+      const event = durable(historyEventSchema.parse({ ...write, sequence: events.length + 1,
+        ...(payloadId ? { payload: payloadId } : {}) }))
       const file = await open(join(this.directory, 'events.jsonl'), 'a', 0o600)
       try {
         await file.writeFile(`${JSON.stringify(event)}\n`)
