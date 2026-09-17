@@ -138,7 +138,10 @@ describe('durable control execution (real temporary files, injected contract fau
     expect(read).toMatchObject({ ok: true })
     for (const event of await history.events()) {
       expect(() => z.json().parse(event)).not.toThrow()
-      expect(JSON.parse(JSON.stringify(event))).toEqual(event)
+      // toStrictEqual, not toEqual: toEqual ignores undefined-valued own
+      // properties, so it would pass on exactly the poisoned shape (#975)
+      // this loop exists to reject.
+      expect(JSON.parse(JSON.stringify(event))).toStrictEqual(event)
     }
   })
 })
