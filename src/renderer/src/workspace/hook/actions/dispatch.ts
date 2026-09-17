@@ -11,7 +11,7 @@ import type {
 } from '@renderer/workspace/types'
 import {
   clampTileCount,
-  dispatchFocusedSessionId,
+  dispatchEntrySeedSessionId,
   withLaneSession,
 } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import type { GridShapeRow } from '@renderer/workspace/dispatch/gridShape'
@@ -199,13 +199,21 @@ export function useDispatchActions(
   // Enter (or freshly build) a Tiled Dispatch layout. Enters Dispatch if it
   // wasn't already on and clears tiled-tabs (mutually exclusive top-level mode).
   //
-  // The lanes arrive EMPTY (#681). This used to auto-fill from unclaimed visible
-  // agents on the theory that asking for N tiles means wanting to see N agents.
-  // The cost of that convenience was a layout that rearranges itself: the same
-  // helper ran on growth, and the render-time healer ran on every unresolved
-  // lane, so killing an agent replaced it with an unrelated one. Making entry
-  // the single exception would have left the user unable to predict which of
-  // their slots the app feels entitled to fill.
+  // The lanes other than lane 0 arrive EMPTY (#681). This used to auto-fill
+  // from unclaimed visible agents on the theory that asking for N tiles means
+  // wanting to see N agents. The cost of that convenience was a layout that
+  // rearranges itself: the same helper ran on growth, and the render-time
+  // healer ran on every unresolved lane, so killing an agent replaced it with
+  // an unrelated one. Making entry the single exception would have left the
+  // user unable to predict which of their slots the app feels entitled to
+  // fill.
+  //
+  // Lane 0 is the one deliberate exception (#977): it is seeded with the
+  // session the user was ALREADY focused on — classic Dispatch's focus, an
+  // existing grid's focused lane, or the grid pane they left behind. That is
+  // continuity with what they were commanding, not a prediction from the
+  // index, so it does not reopen #681. A missing, buried, or stale focus id
+  // resolves to null and lane 0 stays empty exactly like every other lane.
   const enterTiledDispatch = useCallback(
     async (rowLengths: number[]) => {
       closeNewAgentPlacement()
@@ -227,14 +235,20 @@ export function useDispatchActions(
           total += length
         }
         const shape = capped.length > 0 ? capped : [{ length: clampTileCount(1) }]
+        const lanes = emptyLanes(shape.reduce((sum, row) => sum + row.length, 0))
+        const seed = dispatchEntrySeedSessionId(prev)
+        if (seed) lanes[0] = withLaneSession(lanes[0]!, seed)
         return {
           ...prev,
           dispatchMode: {
             scope,
             focusedSessionId: prev.dispatchMode?.focusedSessionId,
             tiled: {
-              lanes: emptyLanes(shape.reduce((sum, row) => sum + row.length, 0)),
+              lanes,
               rows: shape,
+              // Focus on the seeded lane: the agent the user was commanding
+              // stays the agent every keyboard command targets. With no seed
+              // this is simply the left edge of the grid, as before.
               focusedLane: 0,
             },
           },
