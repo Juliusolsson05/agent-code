@@ -5,15 +5,26 @@ import { INCIDENT_EXPLANATIONS } from '@shared/performance/monitorIncidents.js'
 
 const readLiveIncident = (incident: MonitorIncidentSummary): Promise<MonitorIncident | null> => window.api.getMonitorIncident(incident.id)
 
-export function Incidents({ incidents, readIncident = readLiveIncident }: {
+export function Incidents({ incidents, readIncident = readLiveIncident, focus = null }: {
   incidents: MonitorIncidentSummary[]
   readIncident?: (incident: MonitorIncidentSummary) => Promise<MonitorIncident | null>
+  /** Select an incident from outside (a timeline marker). The nonce lets the
+   * same marker be clicked twice after the user picked something else. */
+  focus?: { key: string; nonce: number } | null
 }) {
   const [selected, setSelected] = useState<MonitorIncidentSummary | null>(null)
   const [detail, setDetail] = useState<MonitorIncident | null>(null)
   const [loading, setLoading] = useState(false)
   const [revision, setRevision] = useState(0)
   const [offset, setOffset] = useState(0)
+  useEffect(() => {
+    if (!focus) return
+    const match = incidents.find(incident => `${incident.at}:${incident.id}` === focus.key)
+    if (match) setSelected(match)
+    // Keyed by nonce only: re-running on every incidents poll would snap the
+    // selection back to the marker after the user chose another incident.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focus?.nonce])
   useEffect(() => {
     if (selected && !incidents.some(incident => incident.id === selected.id && incident.at === selected.at)) {
       setSelected(null)
