@@ -6,6 +6,11 @@ import type { DictationProvider } from '@shared/types/dictation'
 import type { MouseButtonBinding, MouseChordBinding } from '@renderer/lib/mouseBinding'
 import type { ConfigurableBuiltInMcpDomain } from '@mcp/shared/types'
 import type { CommandSortMode } from '@renderer/features/command-palette/lib/sortCommands'
+// Value import (not type-only): DEFAULT_SETTINGS.dictationShortcut shares ONE
+// source of truth with the HotkeyInput reset button and coerceHotkeyBinding's
+// corrupted-value fallback. hotkeyBinding.ts imports nothing from this file,
+// so the cycle check that governs this folder's import direction is safe.
+import { DEFAULT_DICTATION_HOTKEY } from '@renderer/lib/hotkeyBinding'
 
 // Built-in theme ids only. 'custom' used to live here as a sentinel that
 // rendered as a picker cell but acted as a button (it opened the JSON editor
@@ -670,37 +675,32 @@ export const DEFAULT_SETTINGS: Settings = {
   customAppearanceJson: DEFAULT_CUSTOM_APPEARANCE_JSON,
   showStatusMode: true,
   showWorktreeBadges: true,
-  dangerousAgentsEnabled: false,
+  // On by default for the public build — the owner's explicit call (#973):
+  // Agent Code is a workspace for people who run many agents at once, and the
+  // permission prompts were the first thing every user turned off. The
+  // Settings row stays marked dangerous and reloads live sessions on change.
+  dangerousAgentsEnabled: true,
   useProxyStreaming: true,
   extensionsGithubCliAuth: true,
   dictationEnabled: false,
   dictationProvider: 'deepgram',
   dictationAudioInput: null,
-  // WHY the default binding is Cmd+Shift+D and not Fn (packaged-mode fix):
-  // the Fn key can only be captured on macOS via a CGEventTap, which
-  // requires the app to hold the Accessibility permission — an OS-level
-  // prompt every user gets on first launch. Wispr Flow's own docs confirm
-  // the same constraint and use Ctrl+Opt as their fallback for exactly
-  // this reason. Shipping Fn as the default meant every packaged Agent
-  // Code launch nagged for Accessibility before the user had chosen to
-  // enable dictation at all. Cmd+Shift+D is a plain keyboard accelerator
-  // that main can register via Electron globalShortcut with NO OS prompt
-  // at all; power users can still switch to Fn from Settings, which
-  // re-arms the Accessibility-gated CGEventTap helper. The literal string
-  // matches the hotkeyBinding.ts vocabulary (see modifierParts + the
-  // `mod-shift-d -> Cmd+Shift+D` alias in coerceHotkeyBinding) so it
-  // round-trips through the settings persistence layer without any
-  // special-casing.
-  dictationShortcut: 'Cmd+Shift+D',
-  // Off by default. Every bindable button already has a job — middle click
-  // is paste/new-tab and the side buttons are history navigation — so
-  // claiming one without the user asking would silently break a gesture they
-  // rely on. Opt-in only.
-  dictationMouseButton: '',
-  // Off by default for the same reason as dictationMouseButton: the chord
-  // suppresses both of its buttons while held, and claiming a gesture the
-  // user never asked for is how you break something they relied on.
-  paletteMouseChord: '',
+  // WHY Fn, after this file spent a long comment explaining why Cmd+Shift+D
+  // replaced it: the objection was a first-launch Accessibility prompt, and
+  // that no longer applies — useDictationHotkeySync sends an EMPTY binding
+  // to main while dictation is off, so the CGEventTap helper is never armed
+  // until the user enables dictation. With that gate in place the binding
+  // can be the one the owner actually uses (#973). Same source of truth as
+  // DEFAULT_DICTATION_HOTKEY in hotkeyBinding.ts, which the "reset" button
+  // and corrupted-value coercion also read.
+  dictationShortcut: DEFAULT_DICTATION_HOTKEY,
+  // Middle click for hold-to-talk, and Middle+Right for the command palette:
+  // the owner's bindings, shipped as the public defaults (#973). The mouse
+  // dictation trigger is gated on dictationEnabled just like the key, so the
+  // button claims nothing until dictation is on; the palette chord is live
+  // immediately, which is the point of shipping it.
+  dictationMouseButton: 'Middle',
+  paletteMouseChord: 'Middle+Right',
   aggressiveDebugPersistence: false,
   // Dispatch is the product's command-center view and the way the owner runs
   // the app all day; a public fresh install should open there (#973). The
@@ -709,10 +709,14 @@ export const DEFAULT_SETTINGS: Settings = {
   defaultWorkspaceMode: 'dispatch',
   agentNamesEnabled: false,
   agentViewMode: 'agent',
-  // Preserve today's opt-in behavior. Users choose which capabilities become
-  // defaults; session commands remain available regardless of this empty seed.
-  defaultBuiltInMcpDomains: [],
-  autoSendPromptSuggestion: true,
+  // The owner's day-to-day set, shipped as the default (#973). TLDR and Goal
+  // are the Cmd+L / Cmd+G peeks — with no domains on, a new user never sees
+  // them do anything. AI Workspace and Agent Management stay opt-in. An
+  // explicitly persisted list (including `[]`) always wins in coerceSettings.
+  defaultBuiltInMcpDomains: ['tldr', 'goal', 'orchestration', 'agent_transcripts', 'workflows'],
+  // Off (#973): a click that immediately sends a prompt to an agent surprised
+  // the owner enough to turn it off; fill-then-edit is the safer public default.
+  autoSendPromptSuggestion: false,
   fontFamily: 'jetbrains-mono',
   // WHY `round` and not the historical `sharp`: this axis exists because the
   // blanket square look was retired deliberately, and defaulting to the tier
@@ -728,15 +732,16 @@ export const DEFAULT_SETTINGS: Settings = {
   // Nothing starred until the user stars something. The palette's resting
   // order is otherwise exactly the catalog order it has always been.
   commandStarred: {},
-  // Catalog order is what the palette has always shown, so it stays the
-  // default and the sort control is a pure opt-in.
-  commandSortMode: 'catalog',
+  // Recent (#973): with no history it IS catalog order, so a new user loses
+  // nothing, and it improves the moment they run a command.
+  commandSortMode: 'recent',
   // Off by default so upgrading users keep the exact command-search surface
   // they already know. Enabling it still leaves the empty browse menu alone.
   promptTemplatesInCommandSearchEnabled: false,
-  // Off by default. The composer buttons cost ~28px of pane height per pane
-  // and a keyboard user gets nothing from them, so this is opt-in.
-  mouseModeEnabled: false,
+  // On (#973): the Send/Stop buttons are the only discoverable way to drive a
+  // pane for someone who has not learned the keys yet; the ~28px per pane is
+  // worth it for the public build, and keyboard users can still turn it off.
+  mouseModeEnabled: true,
   // Off on a fresh install: the six members duplicate shortcuts users already
   // have, so the default that costs nothing is the one that keeps them out of
   // the picker. Their keyboard behavior is unaffected either way.
@@ -745,6 +750,8 @@ export const DEFAULT_SETTINGS: Settings = {
   // Seeding this with today's defaults would pin every command to this
   // release's chords and make future default improvements invisible.
   commandKeybindingOverrides: {},
-  usageHeaderEnabled: true,
+  // Off (#973): the header quota indicator is opt-in for the public build;
+  // the Usage command and modal are unaffected.
+  usageHeaderEnabled: false,
   usageHeaderLevel: 'all',
 }

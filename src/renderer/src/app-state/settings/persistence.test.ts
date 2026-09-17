@@ -60,8 +60,13 @@ describe('coerceSettings agentViewMode', () => {
       .promptTemplatesInCommandSearchEnabled).toBe(true)
   })
 
-  it('defaults missing built-in MCP defaults to an empty list', () => {
-    expect(coerceSettings({}).defaultBuiltInMcpDomains).toEqual([])
+  it('defaults missing built-in MCP defaults to the shipped public set', () => {
+    expect(coerceSettings({}).defaultBuiltInMcpDomains)
+      .toEqual(['tldr', 'goal', 'orchestration', 'agent_transcripts', 'workflows'])
+  })
+
+  it('respects an explicit empty MCP domain list', () => {
+    expect(coerceSettings({ defaultBuiltInMcpDomains: [] }).defaultBuiltInMcpDomains).toEqual([])
   })
 
   it('keeps only configurable built-in MCP defaults in first-seen order', () => {
@@ -154,5 +159,40 @@ describe('coerceSettings default workspace mode (#973)', () => {
 
   it('keeps an explicit Grid preference', () => {
     expect(coerceSettings({ defaultWorkspaceMode: 'grid' }).defaultWorkspaceMode).toBe('grid')
+  })
+})
+
+describe('coerceSettings public-release defaults (#973)', () => {
+  // Each pair: an absent key resolves to the new default; an explicit value
+  // — including the old default — is preserved. This is the promise that a
+  // default flip never overrides a persisted choice.
+  it.each([
+    ['mouseModeEnabled', true, false],
+    ['dangerousAgentsEnabled', true, false],
+    ['usageHeaderEnabled', false, true],
+    ['autoSendPromptSuggestion', false, true],
+  ] as const)('%s defaults to %s but keeps an explicit %s', (key, fresh, explicit) => {
+    expect(coerceSettings({})[key]).toBe(fresh)
+    expect(coerceSettings({ [key]: explicit })[key]).toBe(explicit)
+  })
+
+  it('sorts the command picker by recency on a fresh install', () => {
+    expect(coerceSettings({}).commandSortMode).toBe('recent')
+    expect(coerceSettings({ commandSortMode: 'catalog' }).commandSortMode).toBe('catalog')
+  })
+
+  it('ships the owner dictation and palette bindings without turning dictation on', () => {
+    const fresh = coerceSettings({})
+    expect(fresh.dictationEnabled).toBe(false)
+    expect(fresh.dictationShortcut).toBe('Fn')
+    expect(fresh.dictationMouseButton).toBe('Middle')
+    expect(fresh.paletteMouseChord).toBe('Middle+Right')
+  })
+
+  it('keeps explicitly cleared bindings cleared', () => {
+    const cleared = coerceSettings({ dictationShortcut: 'off', dictationMouseButton: '', paletteMouseChord: '' })
+    expect(cleared.dictationShortcut).toBe('')
+    expect(cleared.dictationMouseButton).toBe('')
+    expect(cleared.paletteMouseChord).toBe('')
   })
 })
