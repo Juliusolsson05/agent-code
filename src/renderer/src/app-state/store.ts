@@ -59,7 +59,7 @@ export const useAppStore = create<AppStore>()(
         // v5 adds `settings.savedThemes` and widens `settings.mode` to hold a
         // `theme:<uuid>` id. Without a bump, an existing v4 user sitting on
         // `mode: 'custom'` would skip migration, keep a mode value that no
-        // longer resolves to anything, and boot to Dark with their custom
+        // longer resolves to anything, and boot to the default theme with their custom
         // palette silently orphaned inside customAppearanceJson.
         //
         // v6 adds `settings.savedPromptTemplates`. v7 adds
