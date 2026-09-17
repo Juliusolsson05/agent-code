@@ -71,6 +71,14 @@ export async function resolveGitHubCliToken(
           if (error) return done(null)
           const token = stdout.trim()
           if (token.length === 0 || token.length > MAX_TOKEN_CHARS) return done(null)
+          // Single line, no interior whitespace: a gh wrapper/shim that exits 0
+          // with a banner plus the token (or any pager output) must not become
+          // an Authorization header value — fetch THROWS on a header value
+          // containing a newline, and the metadata call sits outside
+          // resolveSource's try, so that throw would both fail an install the
+          // anonymous path would have completed and embed the value in the
+          // user-facing error. Shape is part of the fail-safe contract.
+          if (!/^\S+$/.test(token)) return done(null)
           done(token)
         },
       )
@@ -84,7 +92,7 @@ export async function resolveGitHubCliToken(
 /**
  * Headers for api.github.com, with or without the resolved credential.
  * Kept pure so the exact wire shape (and the never-send-an-empty-bearer rule)
- * is unit-testable beside the installer's other pure helpers.
+ * is unit-testable beside the resolver it serves.
  */
 export function githubApiHeaders(token: string | null): Record<string, string> {
   const headers: Record<string, string> = {

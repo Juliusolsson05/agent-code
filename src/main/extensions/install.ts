@@ -130,8 +130,8 @@ export function githubApiFailure(res: Response, repo: string): InstallError {
     const resetPhrase = resetAt ? ` (resets at ${resetAt.toLocaleTimeString()})` : ''
     return new InstallError(
       `GitHub's API rate limit for this network is exhausted${resetPhrase}. ` +
-        `Agent Code makes unauthenticated requests, so waiting is the only automatic ` +
-        `recovery — or install ${repo} through "Load extension from folder".`,
+        `Waiting is the only automatic recovery — or install ${repo} through ` +
+        `"Load extension from folder".`,
     )
   }
   if (res.status === 403) {

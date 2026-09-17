@@ -12,8 +12,8 @@ Implements #982. Worktree `.worktrees/feat-install-gh-cli-auth`, branch `feat/in
 
 ## Tasks
 
-- [x] `githubCli.test.ts`: DI-runner tests — success trims; ENOENT → null; non-zero exit → null; timeout error → null; empty/garbage/oversized output → null; never throws
-- [x] `install.test.ts`: `githubApiHeaders` with/without token
+- [x] `githubCli.test.ts`: DI-runner tests — success trims; ENOENT → null; non-zero exit → null; timeout error → null; empty/garbage/oversized/multi-line output → null; never throws
+- [x] `githubCli.test.ts`: `githubApiHeaders` with/without token (lives beside the resolver, not in `install.test.ts`)
 - [x] Implement `githubCli.ts`; thread through `install.ts` (options param, token resolve, `apiGet` 401 retry)
 - [x] IPC + preload parameter passthrough
 - [x] Settings type + default + registry toggle row

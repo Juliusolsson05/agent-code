@@ -46,6 +46,8 @@ describe('resolveGitHubCliToken', () => {
     ['empty output', ''],
     ['whitespace only', '   \n\t '],
     ['oversized output (not a token)', 'x'.repeat(4097)],
+    ['multi-line banner plus token (shape guard)', 'before\ntoken\nafter'],
+    ['token with interior space', 'abc def'],
   ])('returns null for %s', async (_label, stdout) => {
     const impl = runner(callback => callback(null, stdout, ''))
     await expect(resolveGitHubCliToken(impl)).resolves.toBeNull()

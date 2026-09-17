@@ -517,7 +517,7 @@ export function getSettingsRegistry(
       // WHY this lives under Extensions and defaults to ON: the anonymous
       // api.github.com bucket is 60/hour per IP and an install spends two
       // requests, so iterating on installs exhausts it and every further
-      // attempt 403s (#980). Reading `gh auth token` raises the limit to
+      // attempt 403s (#980, #982). Reading `gh auth token` raises the limit to
       // 5000/hour. The credential is used only for those two requests, held
       // only in main-process memory, never logged or persisted — and turning
       // this off stops the gh subprocess entirely, restoring fully anonymous
