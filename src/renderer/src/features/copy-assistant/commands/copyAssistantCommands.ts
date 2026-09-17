@@ -12,7 +12,9 @@ export const copyAssistantCommands: CommandDef[] = [
   {
     id: 'copy-assistant-message',
     category: 'session',
-    pickerVisibility: 'advanced',
+    // Default tier since the public-release audit (#973): un-hidden by hand
+    // on the owner's install, i.e. a daily action, not a niche one.
+
     surface: 'session',
     title: 'Copy Assistant Message…',
     description: '**What it does:** Opens a picker to copy a specific **assistant message**.\n\n**Use when:** You need an older response, not just the latest one.\n\n**Notes:** Use arrows, **Enter**, and **Esc** after opening.',
