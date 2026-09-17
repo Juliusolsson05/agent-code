@@ -146,3 +146,13 @@ describe('coerceSettings retired keys', () => {
     expect(coerceSettings({ [key]: true })).not.toHaveProperty(key)
   })
 })
+
+describe('coerceSettings default workspace mode (#973)', () => {
+  it('opens a fresh install in Dispatch', () => {
+    expect(coerceSettings({}).defaultWorkspaceMode).toBe('dispatch')
+  })
+
+  it('keeps an explicit Grid preference', () => {
+    expect(coerceSettings({ defaultWorkspaceMode: 'grid' }).defaultWorkspaceMode).toBe('grid')
+  })
+})

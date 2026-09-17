@@ -702,7 +702,11 @@ export const DEFAULT_SETTINGS: Settings = {
   // user never asked for is how you break something they relied on.
   paletteMouseChord: '',
   aggressiveDebugPersistence: false,
-  defaultWorkspaceMode: 'grid',
+  // Dispatch is the product's command-center view and the way the owner runs
+  // the app all day; a public fresh install should open there (#973). The
+  // setting still only seeds a workspace that has no workspace.json yet —
+  // existing workspaces keep their last-used mode.
+  defaultWorkspaceMode: 'dispatch',
   agentNamesEnabled: false,
   agentViewMode: 'agent',
   // Preserve today's opt-in behavior. Users choose which capabilities become
