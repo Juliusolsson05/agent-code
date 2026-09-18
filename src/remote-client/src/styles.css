@@ -68,7 +68,17 @@ html, body, #root {
   }
 }
 
-.app { display: flex; flex-direction: column; height: 100%; }
+/* The app column. WHY var(--app-visible-height, 100dvh) instead of the old
+ * height:100%: iOS Safari keeps the layout viewport at window height when
+ * the on-screen keyboard opens — only visualViewport shrinks — so a
+ * 100%-tall flex column put the composer below the visible area while
+ * typing. Scaffold.tsx writes the live visible height into the var (rAF-
+ * throttled); before JS runs, on desktop, and wherever dvh is supported,
+ * 100dvh is already the correct self-updating default. */
+.app {
+  display: flex; flex-direction: column;
+  height: var(--app-visible-height, 100dvh);
+}
 
 .topbar {
   display: flex; align-items: center; gap: 10px;
