@@ -19,6 +19,7 @@ import type { WebSocketSessionFeed, ConnectionState } from '../WebSocketSessionF
 import type { TranscriptStore } from '../transcript/store'
 import { useMobileDictation } from '../dictation/mobileDictation'
 import { ToastHostProvider } from './ToastHost'
+import { IconMic } from './icons'
 
 // The phone has no optimistic-echo plane: it renders committed + semantic
 // state streamed from the desktop, never a locally-minted ghost (see the
@@ -520,11 +521,13 @@ export function SessionView({
               }
               title={dictation.label}
             >
-              {dictation.status === 'recording'
-                ? '⏺'
-                : dictation.status === 'starting' || dictation.status === 'stopping'
-                  ? '…'
-                  : '🎤'}
+              {dictation.status === 'recording' ? (
+                <IconMic active />
+              ) : dictation.status === 'starting' || dictation.status === 'stopping' ? (
+                '…'
+              ) : (
+                <IconMic />
+              )}
             </button>
             {working ? (
               <button className="stop" onClick={interrupt}>
