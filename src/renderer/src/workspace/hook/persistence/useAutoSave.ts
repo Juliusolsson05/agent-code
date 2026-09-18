@@ -5,6 +5,7 @@ import type { PersistedWorkspace } from '@renderer/workspace/persistence'
 import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
 import { pruneSessionOwnership, repairPersistedTabs } from '@renderer/workspace/sessionOwnership'
 import { withNormalizedBuiltInMcpDomains } from '@renderer/workspace/mcpDomains'
+import { migrateWorkspaceToStage, projectAffinityOf } from '@renderer/workspace/workspaceShape'
 import { isAgentSessionKind } from '@shared/types/providerKind'
 
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
@@ -133,7 +134,15 @@ export function useAutoSave(
       sessions: Object.fromEntries(
         Object.entries(pruned.sessions).map(([id, meta]) => [
           id,
-          withNormalizedBuiltInMcpDomains(meta),
+          {
+            ...withNormalizedBuiltInMcpDomains(meta),
+            // Pool membership (#992): stamped with the SAME shared affinity
+            // precedence the migration and live selectors use. WHY durable
+            // NOW rather than derived-on-read forever: the v2 sources of the
+            // affinity (tab leaves, detached records) are deleted in stage 3,
+            // so the field must already be durable the day the sources go.
+            projectId: projectAffinityOf(s, id) ?? s.activeTabId,
+          },
         ]),
       ),
       detachedSessions: pruned.detachedSessions,
@@ -144,6 +153,18 @@ export function useAutoSave(
       tileTabs: repairedTabs.tileTabs,
       drafts: Object.keys(drafts).length > 0 ? drafts : undefined,
     }
+    // Unified-layout v3 triple (#992): derived by running the SAME migration
+    // that will read this file back. WHY through the migration instead of
+    // hand-assembling projects/stage here: whatever v2 fields sit beside the
+    // triple in workspace.json, the v3 half is by construction exactly what
+    // the next launch's migration would produce from them — the two halves
+    // of the file can never disagree. Stage 3 deletes the v2 half and this
+    // becomes the only writer. Cheap: pure functions over small structures,
+    // already debounced at the autosave cadence.
+    const stageShape = migrateWorkspaceToStage(persisted)
+    persisted.projects = stageShape.projects
+    persisted.activeProjectId = stageShape.activeProjectId
+    persisted.stage = stageShape.stage
     let json = ''
     const finishSerialize = rendererOperations.begin('persistence.serialize')
     try {

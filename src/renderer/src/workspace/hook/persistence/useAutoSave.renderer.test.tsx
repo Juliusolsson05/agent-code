@@ -84,6 +84,60 @@ describe('workspace autosave durability retry', () => {
     unmount()
   })
 
+  it('writes the v3 stage triple beside the v2 fields, migration-consistent (#992)', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const state: WorkspaceState = {
+      tabs: [{
+        id: 'tab-a',
+        title: 'recorded',
+        root: { type: 'leaf', sessionId: 'successor' },
+        focusedSessionId: 'successor',
+      }],
+      activeTabId: 'tab-a',
+      // No stored grid: the v3 half must be exactly what the read-time
+      // migration derives from the v2 half — the seeded [2] default with
+      // the focused session in lane 0.
+      dispatchMode: null,
+      sessions: {
+        successor: { cwd: '/recorded/worktree', kind: 'codex' },
+      },
+      detachedSessions: {},
+      buried: [],
+      pinnedSessionIds: [],
+    }
+    const refs = {
+      latestStateRef: ref(state),
+      latestRuntimesRef: ref({ successor: emptyRuntime() }),
+      latestTileTabsRef: ref(null),
+      saveTimerRef: ref<ReturnType<typeof setTimeout> | null>(null),
+    } as unknown as WorkspaceRefs
+    const saveWorkspace = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: { saveWorkspace },
+    })
+
+    const { unmount } = renderHook(() => useAutoSave(state, 0, refs, true))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(400)
+    })
+    expect(saveWorkspace).toHaveBeenCalledTimes(1)
+
+    const saved = JSON.parse(saveWorkspace.mock.calls[0][0]).workspace
+    expect(saved.projects).toEqual([{ id: 'tab-a', title: 'recorded' }])
+    expect(saved.activeProjectId).toBe('tab-a')
+    expect(saved.stage).toMatchObject({
+      lanes: [{ selectedSessionId: 'successor' }, {}],
+      rows: [{ length: 2 }],
+      focusedLane: 0,
+    })
+    // The session row carries its pool membership.
+    expect(saved.sessions.successor).toMatchObject({ projectId: 'tab-a' })
+
+    unmount()
+  })
+
   it('retries a failed unload flush when another guard vetoes the unload', async () => {
     vi.useFakeTimers()
     vi.spyOn(console, 'warn').mockImplementation(() => undefined)
