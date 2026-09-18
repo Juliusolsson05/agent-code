@@ -77,6 +77,10 @@ export type SessionTranscript = {
    *  the phone was actually talking to an outdated backend. Benign
    *  no-transcript-yet failures are not recorded. */
   historyError: string | null
+  /** Why the live transcript channels last failed (jsonl-error), or null.
+   *  Distinct from historyError (a backfill failure): a session can have a
+   *  healthy loaded window AND a dead live channel, or vice versa. */
+  statusError: string | null
   exited: boolean
   hasOlderHistory: boolean
   loadingOlderHistory: boolean
@@ -148,6 +152,7 @@ function emptyTranscript(): SessionTranscript {
     subAgents: null,
     screenText: '',
     historyError: null,
+    statusError: null,
     exited: false,
     hasOlderHistory: false,
     loadingOlderHistory: false,
@@ -186,6 +191,15 @@ export class TranscriptStore {
       feed.onSessionSemanticEvent(e => {
         this.ingestSemanticEvent(e.sessionId, e.event)
       }),
+      feed.onSessionJsonlError(e => {
+        // v2: the durable/live transcript channels FAILED — OpenCode's
+        // provider_session_switched notice and SSE/SQLite failures ride
+        // here. Previously the phone dropped these entirely and a session
+        // just silently stopped updating; now the status surface shows why.
+        // Kept raw (the message string): filtering benign variants is a
+        // presentation decision that belongs to the UI, not the store.
+        this.mutate(e.sessionId, t => ({ ...t, statusError: e.message }))
+      }),
       feed.onSessionConditions(e => {
         this.mutate(e.sessionId, t => ({ ...t, conditions: e.snapshot }))
       }),
@@ -222,6 +236,9 @@ export class TranscriptStore {
           semanticTurn: null,
           semantic: clearedSemantic,
           conditions: null,
+          // A dead process owns no live channel either; a session-switched
+          // or channel-failure notice about it is stale by definition.
+          statusError: null,
         }))
       }),
       // Eviction + backfill retry both key off the session list, which the

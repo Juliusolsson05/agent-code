@@ -27,6 +27,7 @@ import type {
   RemoteNoteRecord,
   RemoteSessionSummary,
 } from './wire'
+import type { UsageSnapshot } from '@shared/types/usage'
 
 function applyRemoteThemeSettings(settings: Record<string, unknown> | null | undefined): void {
   if (!settings) return
@@ -121,6 +122,11 @@ export class WebSocketSessionFeed implements SessionFeed {
   private readonly goalBySession = new Map<string, RemoteNoteRecord>()
   private readonly tldrListeners = new Set<(e: { sessionId: string; record: RemoteNoteRecord }) => void>()
   private readonly goalListeners = new Set<(e: { sessionId: string; record: RemoteNoteRecord }) => void>()
+  // v2: last account usage snapshot (global, not per-session). null until
+  // the server pushes one — the UI keeps the indicator hidden rather than
+  // guessing "normal".
+  private usageSnapshot: UsageSnapshot | null = null
+  private readonly usageListeners = new Set<(snapshot: UsageSnapshot | null) => void>()
   private readonly pending = new Map<string, Pending>()
   private socket: WebSocketLike | null = null
   private disposed = false
@@ -187,6 +193,15 @@ export class WebSocketSessionFeed implements SessionFeed {
   onGoalChanged(cb: (e: { sessionId: string; record: RemoteNoteRecord }) => void): Unsub {
     this.goalListeners.add(cb)
     return () => this.goalListeners.delete(cb)
+  }
+
+  getUsage(): UsageSnapshot | null {
+    return this.usageSnapshot
+  }
+
+  onUsage(cb: (snapshot: UsageSnapshot | null) => void): Unsub {
+    this.usageListeners.add(cb)
+    return () => this.usageListeners.delete(cb)
   }
 
   dispose(): void {
@@ -534,6 +549,10 @@ export class WebSocketSessionFeed implements SessionFeed {
         for (const cb of [...this.goalListeners]) cb({ sessionId: frame.sessionId, record })
         return
       }
+      case 'usage-snapshot':
+        this.usageSnapshot = frame.snapshot
+        for (const cb of [...this.usageListeners]) cb(frame.snapshot)
+        return
       case 'error':
         return
     }

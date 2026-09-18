@@ -350,12 +350,12 @@ export function SessionView({
         !ledgerFeedPlan.items.some(item => item.type === 'provider-notice') &&
         transcript.screenText ? (
           <div className="screen">
-            {transcript.historyError && (
+            {transcript.statusError ?? transcript.historyError ? (
               <div className="working" style={{ color: 'var(--danger)' }}>
-                Rich transcript unavailable ({transcript.historyError}) — showing
+                Live transcript unavailable ({transcript.statusError ?? transcript.historyError}) — showing
                 raw terminal. The desktop app may need an update/restart.
               </div>
-            )}
+            ) : null}
             <pre className="terminal">{transcript.screenText}</pre>
             {/* Working state lives HERE only in the fallback branch: the
                 rendered Feed draws its own WorkIndicator row (phase-driven,
@@ -400,8 +400,13 @@ export function SessionView({
         </div>
         )}
 
-        {transcript.historyError && transcript.entries.length > 0 && (
-          <div className="working" role="status">{transcript.historyError}</div>
+        {/* ONE status surface: live-channel failure (statusError) takes
+            precedence over backfill failure (historyError) — a dead live
+            channel is the more actionable "why is nothing happening". The
+            doubled `.working` strip class is just affordance, not a second
+            indicator. */}
+        {(transcript.statusError ?? transcript.historyError) && transcript.entries.length > 0 && (
+          <div className="working" role="status">{transcript.statusError ?? transcript.historyError}</div>
         )}
 
         {/* The REAL desktop condition rendering. The generic core outlet routes

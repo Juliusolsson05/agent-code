@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import type { PromptDeliveryResult } from '@shared/types/providerConfig.js'
+import type { UsageSnapshot } from '@shared/types/usage.js'
 
 // Wire schemas for the remote mobile companion's WebSocket protocol.
 //
@@ -210,6 +211,11 @@ export type OutboundFrame =
       updatedAt: string
       revision: number
     }
+  // v2: account usage snapshot (normalized provider limit rows), pushed at
+  // connect and on a slow interval while phones are connected. Read-only;
+  // the shape is the shared UsageSnapshot so the phone renders the same
+  // rows the desktop's Usage view does. Old bundles drop the frame safely.
+  | { type: 'usage-snapshot'; snapshot: UsageSnapshot }
   | {
       type: 'session-event'
       channel:

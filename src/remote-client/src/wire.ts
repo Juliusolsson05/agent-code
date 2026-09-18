@@ -11,6 +11,7 @@
 // RemoteStatus. If a field changes shape, the client<->server integration
 // test (WebSocketSessionFeed.integration.test.ts) is what catches drift.
 import type { PromptDeliveryResult } from '@shared/types/providerConfig'
+import type { UsageSnapshot } from '@shared/types/usage'
 
 export type RemoteSessionSummary = {
   sessionId: string
@@ -76,6 +77,10 @@ export type OutboundFrame =
   // them there, and the peek surfaces show their "unavailable" state.
   | { type: 'tldr-updated'; sessionId: string } & RemoteNoteRecord
   | { type: 'goal-updated'; sessionId: string } & RemoteNoteRecord
+  // v2: account usage rows, same shared shape the desktop Usage view
+  // renders. Pushed at connect and per connected minute; absent servers
+  // simply never send it and the indicator stays hidden.
+  | { type: 'usage-snapshot'; snapshot: UsageSnapshot }
   | { type: 'session-event'; channel: FeedChannel; payload: unknown }
   | {
       type: 'reply'

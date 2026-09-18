@@ -119,6 +119,9 @@ export type RemoteControllerDeps = {
   /** v2 TLDR/Goal stores for the note frames; getter for the same
    *  construction-order reason as getWorkspace. */
   getNotes?: () => { tldr: RemoteNoteStore; goal: RemoteNoteStore } | null
+  /** v2 usage snapshot source; getter for the same construction-order
+   *  reasons as every other v2 dep. */
+  getUsageSnapshot?: () => Promise<import('@shared/types/usage.js').UsageSnapshot | null>
 }
 
 export class RemoteController extends EventEmitter {
@@ -204,6 +207,7 @@ export class RemoteController extends EventEmitter {
         journal: this.deps.journal ?? null,
         workspace: this.deps.getWorkspace?.() ?? null,
         notes: this.deps.getNotes?.() ?? null,
+        getUsageSnapshot: this.deps.getUsageSnapshot,
         transcribeAudio: async (audio, mimeType) => {
           // The Deepgram key stays here in the main process — the phone never
           // receives it. Mirrors ipc/dictation's env-only key resolution and

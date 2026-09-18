@@ -523,3 +523,29 @@ describe('v2 sub-agents channel', () => {
     late.ws.close()
   })
 })
+
+// ── v2 usage snapshot frame ───────────────────────────────────────────────
+describe('v2 usage snapshot frame', () => {
+  it('pushes the shared snapshot at connect and keeps it server-shaped', async () => {
+    await restartServer({
+      notes: undefined,
+      getUsageSnapshot: async () => ({
+        fetchedAt: '2026-09-17T10:00:00Z',
+        cache: { hit: true, ttlMs: 30_000 },
+        providers: [
+          {
+            provider: 'claude',
+            ok: true,
+            limits: [],
+            spend: { cost: null, tasks: null, requests: null },
+          },
+        ],
+      }),
+    })
+    const { ws, frames } = await openAuthed()
+    await waitFor(frames, f => framesOfType(f, 'usage-snapshot').length > 0)
+    const snapshot = framesOfType(frames, 'usage-snapshot')[0]?.snapshot as Record<string, unknown>
+    expect(snapshot.fetchedAt).toBe('2026-09-17T10:00:00Z')
+    ws.close()
+  })
+})

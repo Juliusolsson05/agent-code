@@ -107,6 +107,7 @@ import { createConversationService } from '@main/conversations/service.js'
 import { listWorktreesForCwd } from '@main/ipc/git.js'
 import { AGENT_NAMES_FILE } from '@main/agentNames/ipc.js'
 import { RemoteWorkspaceProjection } from '@main/remote/workspaceProjection.js'
+import { getUsageSnapshot } from '@main/usage/usageService.js'
 import { CONVERSATIONS_LEDGER_FILE } from '@main/storage/paths.js'
 import { isSessionRecordingEnabled, isSessionRecordingAutoStart } from '@main/ipc/devDebug.js'
 import { registerAllIpc } from '@main/ipc/index.js'
@@ -943,6 +944,11 @@ async function startApp(): Promise<void> {
     // desktop's IPC surface); remote only reads and subscribes, the MCP
     // tools remain the only writers.
     getNotes: () => ({ tldr: tldrStore, goal: goalStore }),
+    // v2 usage indicator on the phone: the shared service's cached snapshot
+    // getter (a cache read per connected minute, never a fresh provider
+    // call unless the TTL already expired).
+    getUsageSnapshot: () =>
+      getUsageSnapshot().then(snapshot => snapshot).catch(() => null),
     clientDistDir: join(app.getAppPath(), 'out', 'remote-client'),
     // Tunnel binary resolution — bundled artifact first (packaged app),
     // then the third_party dev cache (populated by `npm run

@@ -20,6 +20,7 @@ import type { PromptDeliveryResult } from '@shared/types/providerConfig.js'
 import type { SessionBackendSnapshot } from '@shared/types/session.js'
 import type { RemoteSessionIdentity } from './workspaceProjection.js'
 import type { TldrRecord, TldrUpdate } from '@shared/types/tldr.js'
+import type { UsageSnapshot } from '@shared/types/usage.js'
 
 import { DevicePairing } from '@main/remote/auth/DevicePairing.js'
 import type { DeviceRegistry } from '@main/remote/auth/deviceRegistry.js'
@@ -166,6 +167,9 @@ export type RemoteServerDeps = {
   /** v2 TLDR/Goal stores for the note frames. Absent = no note frames at
    *  all (the phone's peek surfaces show their "unavailable" state). */
   notes?: { tldr: RemoteNoteStore; goal: RemoteNoteStore } | null
+  /** v2 account usage snapshot source (the shared usage service's cached
+   *  getter). Absent = no usage frames; a null return skips that push. */
+  getUsageSnapshot?: () => Promise<UsageSnapshot | null>
 }
 
 const INTERRUPT_BYTES = '\x1b'
@@ -201,6 +205,10 @@ export class RemoteServer extends EventEmitter {
   private feedUnsub: (() => void) | null = null
   private workspaceUnsub: (() => void) | null = null
   private readonly noteUnsubs: Array<() => void> = []
+  /** v2: slow usage push interval while phones are connected. The service
+   *  caches (30–60s TTL), so this tick is a cache read, not a provider API
+   *  call. Only runs while at least one socket exists. */
+  private usageTimer: ReturnType<typeof setInterval> | null = null
 
   // Late-joiner bootstrap caches. A phone that connects while every agent is
   // idle would otherwise stare at blank panes until the next event happens
@@ -277,6 +285,16 @@ export class RemoteServer extends EventEmitter {
       )
     }
 
+    // v2: usage snapshots — one push per connected minute. Started here (not
+    // per socket) because the frame is identical for every phone; the
+    // per-connection push happens in handleConnection so a freshly connected
+    // phone doesn't wait out the interval.
+    if (this.deps.getUsageSnapshot) {
+      this.usageTimer = setInterval(() => {
+        void this.broadcastUsageSnapshot()
+      }, 60_000)
+    }
+
     // Prime the late-joiner caches from the manager's own snapshot caches.
     // The feed tap only observes events AFTER enable; without this, an agent
     // blocked on a permission prompt raised BEFORE the user enabled remote
@@ -332,6 +350,10 @@ export class RemoteServer extends EventEmitter {
     this.feedUnsub = null
     this.workspaceUnsub?.()
     this.workspaceUnsub = null
+    if (this.usageTimer) {
+      clearInterval(this.usageTimer)
+      this.usageTimer = null
+    }
     for (const unsub of this.noteUnsubs.splice(0)) unsub()
     for (const client of this.sockets) {
       client.ws.close(1001, 'server stopping')
@@ -642,6 +664,9 @@ export class RemoteServer extends EventEmitter {
     // socket's hello path, and a failed read degrades to the peek's
     // "unavailable" state — never an error frame.
     void this.sendNoteBootstrap(ws)
+    // v2: current usage snapshot for THIS phone (see the interval note in
+    // start()).
+    void this.broadcastUsageSnapshot()
     ws.on('error', () => ws.terminate())
     ws.on('message', data => {
       void this.onMessage(ws, String(data))
@@ -964,6 +989,14 @@ export class RemoteServer extends EventEmitter {
       if (record.tldrIdentity === identity) out.push(sessionId)
     }
     return out
+  }
+
+  private async broadcastUsageSnapshot(): Promise<void> {
+    if (!this.server || this.sockets.size === 0) return
+    const snapshot = await this.deps.getUsageSnapshot?.().catch(() => null)
+    // Stopped while the (cached) read was in flight, or no source wired.
+    if (!snapshot || !this.server || this.sockets.size === 0) return
+    this.broadcast({ type: 'usage-snapshot', snapshot })
   }
 
   /** Send the CURRENT tldr/goal records for every listed session that has
