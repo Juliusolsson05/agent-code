@@ -344,19 +344,33 @@ export function SessionView({
             semantic channels (trust dialog body, login prompts, provider
             crash output) exist ONLY as TUI text. Render it until the feed
             has real content — dropping this entirely made a fresh session's
-            trust dialog a blank page (review finding). */}
+            trust dialog a blank page (review finding).
+
+            The SAME branch is the no-screen status surface: providers
+            without a PTY screen (BOTH OpenCode runtimes) can never produce
+            screenText, so before their first committed entry — and
+            especially when the backfill FAILED — the old condition rendered
+            a completely blank page with no explanation. screenText OR a
+            status condition (working/bootstrapping/error) now holds the
+            branch; the <pre> renders only when there is terminal text. */}
         {transcript.entries.length === 0 &&
         !transcript.semanticTurn &&
         !ledgerFeedPlan.items.some(item => item.type === 'provider-notice') &&
-        transcript.screenText ? (
+        (transcript.screenText || transcript.statusError || transcript.historyError || transcript.bootstrapping) ? (
           <div className="screen">
             {transcript.statusError ?? transcript.historyError ? (
               <div className="working" style={{ color: 'var(--danger)' }}>
-                Live transcript unavailable ({transcript.statusError ?? transcript.historyError}) — showing
-                raw terminal. The desktop app may need an update/restart.
+                Live transcript unavailable ({transcript.statusError ?? transcript.historyError})
+                {transcript.screenText
+                  ? ' — showing raw terminal. The desktop app may need an update/restart.'
+                  : ''}
               </div>
             ) : null}
-            <pre className="terminal">{transcript.screenText}</pre>
+            {transcript.screenText ? (
+              <pre className="terminal">{transcript.screenText}</pre>
+            ) : transcript.bootstrapping ? (
+              <div className="working">Loading transcript…</div>
+            ) : null}
             {/* Working state lives HERE only in the fallback branch: the
                 rendered Feed draws its own WorkIndicator row (phase-driven,
                 fixed-height). Showing the shell strip too painted the same

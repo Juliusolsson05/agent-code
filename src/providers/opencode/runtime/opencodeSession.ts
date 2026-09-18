@@ -473,7 +473,23 @@ export class OpencodeSession extends EventEmitter implements AgentSession {
    *  write. Permanent no-op by design; input flows through sendPrompt (HTTP)
    *  and condition custom actions (#406 §B). The separate terminal runtime
    *  implements real write/resize methods. */
-  write(_data: string): void {}
+  write(data: string): void {
+    // The structured runtime has no PTY to write bytes into — EXCEPT that
+    // the app's universal interrupt is the Esc byte, and this runtime DOES
+    // have a real abort: the HTTP abort endpoint. Routing '\x1b' there (and
+    // ONLY there — every other byte would be a PTY-ism this runtime cannot
+    // honor) makes the phone's Stop button and the desktop's Esc actually
+    // stop a running turn instead of silently succeeding at nothing, which
+    // was the "interrupt is a no-op that reports true" finding.
+    //
+    // Fire-and-forget: write is synchronous by contract, and an abort that
+    // fails over HTTP still surfaces through the SSE api_error channel, so
+    // the user is not left without a signal. Any other input is dropped —
+    // prompt delivery owns the input path for this runtime.
+    if (data === '\x1b' && this.headless) {
+      void this.headless.abort().catch(() => {})
+    }
+  }
 
   /** No PTY on this structured runtime → no terminal geometry. */
   resize(_cols: number, _rows: number): void {}
