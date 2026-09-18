@@ -9,6 +9,24 @@ import type { ReactNode } from 'react'
 // should look like the streaming patch surface they replace.
 
 /**
+ * Shared class for inline disclosure controls ("… more output",
+ * previous/next paging, "view paged content", "collapse", "copy").
+ *
+ * WHY this exists: every one of these controls was born as
+ * `text-[11px] text-muted hover:text-ink cursor-pointer` — a hover-era
+ * affordance with an ~14px hit area. On the phone (and on any touch
+ * device) that is far below the 44pt guidance and the worst offenders
+ * sit INSIDE expanded tool output, where a mis-tap scrolls the feed
+ * instead of paging. The class grows only the HIT AREA (min-h + x
+ * padding + negative-x margin so visual alignment is pixel-identical)
+ * and adds a pressed state; typography stays exactly as dense as the
+ * desktop designed it. Desktop visuals do not change — the padding is
+ * invisible on text that already occupied the line.
+ */
+export const feedDisclosureClass =
+  'inline-flex items-center min-h-[44px] px-1 -mx-1 text-[11px] text-muted hover:text-ink active:text-ink cursor-pointer select-none'
+
+/**
  * UserBand — a horizontal highlight band that sits behind a *user
  * prompt* so real user turns are easy to spot when scanning a long
  * feed. Only ever wraps text content that originated as a user prompt.

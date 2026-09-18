@@ -1,6 +1,7 @@
 import { memo, useMemo, useState } from 'react'
 
 import { boundedTextPage } from '@renderer/lib/text/boundedText'
+import { feedDisclosureClass } from '@renderer/features/feed/ui/rows/primitives'
 
 export const PagedTextViewer = memo(function PagedTextViewer({
   source,
@@ -39,7 +40,7 @@ export const PagedTextViewer = memo(function PagedTextViewer({
           {page.hasPrevious ? (
             <button
               type="button"
-              className="hover:text-ink cursor-pointer"
+              className={feedDisclosureClass}
               onClick={() => setPageStarts(current => current.length > 1 ? current.slice(0, -1) : current)}
             >
               previous
@@ -48,7 +49,7 @@ export const PagedTextViewer = memo(function PagedTextViewer({
           {page.hasNext ? (
             <button
               type="button"
-              className="hover:text-ink cursor-pointer"
+              className={feedDisclosureClass}
               onClick={() => setPageStarts(current => [...current, page.end])}
             >
               next

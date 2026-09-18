@@ -7,6 +7,7 @@ import {
   collapsedTextPreview,
   exceedsInlineTextBudget,
 } from '@renderer/lib/text/boundedText'
+import { feedDisclosureClass } from '@renderer/features/feed/ui/rows/primitives'
 
 // Phone substitute for @renderer/lib/code/CodeBlock (aliased in
 // vite.config.ts — see the alias table there and the semantic-rendering
@@ -133,7 +134,7 @@ export function CodeBlock({
         {!largeContentOpen ? (
           <button
             type="button"
-            className="hover:text-ink cursor-pointer"
+            className={feedDisclosureClass}
             onClick={() => setLargeContentOpen(true)}
           >
             view paged content
@@ -143,7 +144,7 @@ export function CodeBlock({
             {visiblePage.hasPrevious ? (
               <button
                 type="button"
-                className="hover:text-ink cursor-pointer"
+                className={feedDisclosureClass}
                 onClick={() =>
                   setPageStarts(current => (current.length > 1 ? current.slice(0, -1) : current))
                 }
@@ -154,7 +155,7 @@ export function CodeBlock({
             {visiblePage.hasNext ? (
               <button
                 type="button"
-                className="hover:text-ink cursor-pointer"
+                className={feedDisclosureClass}
                 onClick={() => setPageStarts(current => [...current, visiblePage.end])}
               >
                 next
@@ -162,7 +163,7 @@ export function CodeBlock({
             ) : null}
             <button
               type="button"
-              className="hover:text-ink cursor-pointer"
+              className={feedDisclosureClass}
               onClick={() => {
                 setLargeContentOpen(false)
                 setPageStarts([0])
@@ -172,7 +173,7 @@ export function CodeBlock({
             </button>
             <button
               type="button"
-              className="hover:text-ink cursor-pointer"
+              className={feedDisclosureClass}
               onClick={() => void navigator.clipboard.writeText(code)}
             >
               copy full content
