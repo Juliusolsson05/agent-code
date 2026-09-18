@@ -12,7 +12,7 @@ import {
   scrubPairingCodeFromHash,
 } from '../pairing'
 import { PairScreen } from './PairScreen'
-import { SessionList } from './SessionList'
+import { FleetHome } from './v2/FleetHome'
 import { EMPTY_MOBILE_COMPOSER_STATE, SessionView } from './SessionView'
 import type { MobileComposerState } from './SessionView'
 import { Scaffold } from './Scaffold'
@@ -116,7 +116,7 @@ export function App(): React.JSX.Element {
   if (!selectedSessionId) {
     return (
       <Scaffold>
-        <SessionList
+        <FleetHome
           feed={feed}
           connection={connection}
           onSelect={setSelectedSessionId}

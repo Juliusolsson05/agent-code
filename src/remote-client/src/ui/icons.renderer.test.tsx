@@ -35,7 +35,16 @@ describe('phone chrome icons', () => {
   })
 
   it('keeps chrome source free of emoji glyphs', () => {
-    const files = ['SessionView.tsx', 'SessionList.tsx', 'PairScreen.tsx', 'App.tsx', 'ToastHost.tsx', 'icons.tsx']
+    const files = [
+      'SessionView.tsx',
+      'PairScreen.tsx',
+      'App.tsx',
+      'ToastHost.tsx',
+      'icons.tsx',
+      'v2/FleetHome.tsx',
+      'v2/PeekOverlay.tsx',
+      'v2/providerIdentity.ts',
+    ]
     for (const file of files) {
       const source = readFileSync(resolve(here, file), 'utf8')
       const hits = source.match(EMOJI_RE)
