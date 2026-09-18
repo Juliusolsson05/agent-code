@@ -344,3 +344,27 @@ html, body, #root {
 }
 .reader-pager button:disabled { opacity: 0.4; }
 .reader-count { flex: 1; text-align: center; font-size: 11px; color: var(--muted); }
+
+/* Condition dialogs become BOTTOM SHEETS on the phone. The desktop's
+ * DialogContent is a centered 520px Radix modal with NO max-height — a
+ * long permission command clipped off both ends of a phone screen with
+ * no way to scroll (the worst mobile-rendering finding). Anchoring the
+ * same element to the bottom, capping its height, and making it scroll
+ * converts every provider condition view (permission, trust, approval)
+ * into a touch-sane sheet without forking one line of provider code.
+ * Only the TOP corners round — a sheet is detached from the bottom edge,
+ * and radius marks detachment on exactly that boundary.
+ *
+ * Scoped to [data-slot="dialog-content"] (the primitive's own slot
+ * attribute) so this can only affect dialogs; the phone mounts none
+ * besides condition views today. */
+[data-slot="dialog-content"] {
+  left: 0 !important; right: 0; bottom: 0; top: auto !important;
+  transform: none !important;
+  width: 100% !important; max-width: 100% !important;
+  max-height: calc(var(--app-visible-height, 100dvh) - 88px);
+  overflow-y: auto;
+  border-radius: var(--theme-radius-float) var(--theme-radius-float) 0 0;
+  border-bottom: none;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
