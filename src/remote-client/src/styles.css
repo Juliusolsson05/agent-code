@@ -196,7 +196,18 @@ html, body, #root {
  * selector outranks that single Tailwind class (no !important needed) and
  * restores the 16px anti-zoom floor on the phone only — the desktop has no
  * .composer wrapper, so its 12px is untouched. */
+/* iOS Safari zooms the page when a focused input's font-size is < 16px. The
+ * mounted desktop ComposerInput textarea is text-[12px]; this element+class
+ * selector outranks that single Tailwind class (no !important needed) and
+ * restores the 16px anti-zoom floor on the phone only — the desktop has no
+ * .composer wrapper, so its 12px is untouched.
+ *
+ * The floor extends to IN-FEED inputs (the AskUserQuestion custom-answer
+ * input renders at the desktop's 13px inside .feed-host): the composer-only
+ * rule used to be the single 16px island, so tapping "Type something" in an
+ * AUQ card zoomed the page anyway. */
 .composer textarea { font-size: 16px; }
+.feed-host input, .feed-host textarea { font-size: 16px; }
 
 .composer-actions {
   display: flex; align-items: center; gap: 8px;
