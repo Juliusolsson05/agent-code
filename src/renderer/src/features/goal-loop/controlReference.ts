@@ -8,7 +8,7 @@ export const controlReference = [{
   id: 'goal-loop',
   title: 'Harness-owned goal loops',
   purpose: 'Keep an agent working toward a goal across turn boundaries until it reports the goal complete, without the user re-prompting.',
-  ui: 'An always-on per-pane status strip while a loop exists, a latched Goal Loop overlay with pause, resume, raise-cap and stop controls, and a Stop Goal Loop session command.',
+  ui: 'An always-on per-pane status strip while a loop exists, a latched Goal Loop overlay with pause, resume, raise-cap and stop controls (Close leaves it), Dismiss on an ended loop to clear its strip, and a Stop Goal Loop session command.',
   prerequisites: 'Enable Goal Loop MCP for the agent that should run loops (off by default). The agent starts the loop itself with goal_loop_start when asked; users never write the continuation prompt.',
   workflow: [
     'Enable Goal Loop MCP for the agent; it reloads with the loop tools.',

@@ -43,4 +43,34 @@ describe('GoalLoopPane', () => {
     toggleGoalLoop()
     expect(await screen.findByRole('dialog')).toBeTruthy()
   })
+  it('offers Dismiss, and only Dismiss, on an ended loop', async () => {
+    // An ended loop is persisted and its strip covers the pane's top line;
+    // without Dismiss it had no controls at all and could never be cleared.
+    api.readGoalLoops.mockResolvedValueOnce({ s1: loop({ phase: 'ended', endReason: 'done', completionSummary: 'All migrated.' }) })
+    render(<GoalLoopPane sessionId="s1" />)
+    ;(await screen.findByText('Dismiss')).click()
+    expect(api.controlGoalLoop).toHaveBeenCalledWith({ sessionId: 's1', action: 'dismiss', value: undefined })
+    expect(screen.queryByText('Stop')).toBeNull()
+    expect(screen.queryByText('Pause')).toBeNull()
+  })
+  it('clamps Raise cap to the ceiling main accepts and hides it once there', async () => {
+    // 190 + 25 exceeded the IPC schema maximum, so main rejected the request
+    // and the button did nothing.
+    api.readGoalLoops.mockResolvedValueOnce({ s1: loop({ phase: 'paused', pauseReason: 'cap', maxContinuations: 190, continuationsDelivered: 190 }) })
+    const first = render(<GoalLoopPane sessionId="s1" />)
+    ;(await screen.findByText('Raise cap')).click()
+    expect(api.controlGoalLoop).toHaveBeenCalledWith({ sessionId: 's1', action: 'raise-cap', value: 200 })
+    first.unmount()
+    api.readGoalLoops.mockResolvedValueOnce({ s1: loop({ phase: 'paused', pauseReason: 'cap', maxContinuations: 200, continuationsDelivered: 200 }) })
+    render(<GoalLoopPane sessionId="s1" />)
+    await screen.findByText('Resume')
+    expect(screen.queryByText('Raise cap')).toBeNull()
+  })
+  it('closes the latched overlay from inside it', async () => {
+    toggleGoalLoop()
+    render(<GoalLoopPane sessionId="s1" />)
+    await screen.findByRole('dialog')
+    screen.getByText('Close').click()
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  })
 })

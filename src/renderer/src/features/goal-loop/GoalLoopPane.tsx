@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
-import type { GoalLoopState } from '@shared/types/goalLoop'
-import { useGoalLoopView } from './viewState'
+import { GOAL_LOOP_MAX_CONTINUATIONS_CEILING } from '@shared/types/goalLoop'
+import type { GoalLoopControlAction, GoalLoopState } from '@shared/types/goalLoop'
+import { dismissGoalLoop, useGoalLoopView } from './viewState'
 
 const PHASE_LABEL: Record<GoalLoopState['phase'], string> = {
   active: 'active', paused: 'paused', ended: 'ended',
@@ -41,11 +42,20 @@ export function GoalLoopPane({ sessionId }: { sessionId: string }) {
     return () => { current = false; unsubscribe() }
   }, [sessionId])
   if (!loop) return null
-  const control = (action: 'pause' | 'resume' | 'stop' | 'raise-cap') => () => {
+  // Raise cap is clamped to the ceiling main enforces: past 175 an unclamped
+  // +25 exceeded the IPC schema's maximum, so the request was rejected and the
+  // button silently did nothing. At the ceiling there is nothing to raise, so
+  // the button is not offered at all.
+  const raisedCap = Math.min(loop.maxContinuations + 25, GOAL_LOOP_MAX_CONTINUATIONS_CEILING)
+  const canRaise = loop.phase === 'paused' && loop.pauseReason === 'cap' && raisedCap > loop.maxContinuations
+  const control = (action: GoalLoopControlAction) => () => {
+    // A rejected control call changes nothing in main, and the next changed
+    // ping re-reads the truth; the catch only keeps a rejection from becoming
+    // an unhandled one in the renderer.
     void window.api.controlGoalLoop({
       sessionId, action,
-      value: action === 'raise-cap' ? loop.maxContinuations + 25 : undefined,
-    })
+      value: action === 'raise-cap' ? raisedCap : undefined,
+    }).catch(() => {})
   }
   const strip = <div
     data-agent-code-interaction-owner="app"
@@ -58,8 +68,13 @@ export function GoalLoopPane({ sessionId }: { sessionId: string }) {
     <span className="flex shrink-0 gap-2">
       {loop.phase === 'active' && <button type="button" onClick={control('pause')}>Pause</button>}
       {loop.phase === 'paused' && <button type="button" onClick={control('resume')}>Resume</button>}
-      {loop.phase === 'paused' && loop.pauseReason === 'cap' && <button type="button" onClick={control('raise-cap')}>Raise cap</button>}
+      {canRaise && <button type="button" onClick={control('raise-cap')}>Raise cap</button>}
       {loop.phase !== 'ended' && <button type="button" onClick={control('stop')}>Stop</button>}
+      {/* An ended loop has nothing left to control, but its strip still sits
+          over the pane's top line — and ended loops are persisted, so without
+          this it would stay there across restarts until a new loop replaced
+          it. Dismiss removes the ended record in main. */}
+      {loop.phase === 'ended' && <button type="button" onClick={control('dismiss')}>Dismiss</button>}
     </span>
   </div>
   if (!latched) return strip
@@ -82,8 +97,15 @@ export function GoalLoopPane({ sessionId }: { sessionId: string }) {
         <div className="flex gap-3 text-sm">
           {loop.phase === 'active' && <button type="button" onClick={control('pause')}>Pause</button>}
           {loop.phase === 'paused' && <button type="button" onClick={control('resume')}>Resume</button>}
-          {loop.phase === 'paused' && loop.pauseReason === 'cap' && <button type="button" onClick={control('raise-cap')}>Raise cap +25</button>}
+          {canRaise && <button type="button" onClick={control('raise-cap')}>Raise cap to {raisedCap}</button>}
           {loop.phase !== 'ended' && <button type="button" onClick={control('stop')}>Stop</button>}
+          {loop.phase === 'ended' && <button type="button" onClick={control('dismiss')}>Dismiss</button>}
+          {/* The latch is one app-wide flag and this overlay is opaque over
+              the whole pane, so it needs an exit that does not depend on
+              remembering the chord. Escape is deliberately NOT bound here: in
+              an agent pane Escape interrupts the running turn, and the
+              capture-phase owner of that key is useKeybinds, not this pane. */}
+          <button type="button" onClick={dismissGoalLoop}>Close</button>
         </div>
       </div>
     </div>
