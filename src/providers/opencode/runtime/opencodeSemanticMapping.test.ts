@@ -16,17 +16,23 @@ import { mapOpenCodeSemanticEvent, OpenCodeBlockIndexTracker } from './semanticM
 // field names is already pinned by the renderer's own fold tests. The drift
 // risk this file guards is the MAPPING, not the fold.
 
-const map = (ev: SemanticEvent): Record<string, unknown> =>
-  mapOpenCodeSemanticEvent(ev, new OpenCodeBlockIndexTracker()) as Record<string, unknown>
+// Optional tracker: most tests want a fresh one per event (field-shape
+// assertions don't care about ordering); the ordering test passes a shared
+// one to assert continuity.
+const map = (
+  ev: SemanticEvent,
+  tracker: OpenCodeBlockIndexTracker = new OpenCodeBlockIndexTracker(),
+): Record<string, unknown> => mapOpenCodeSemanticEvent(ev, tracker) as Record<string, unknown>
 
 const TURN = { turnId: 'trn_1', source: 'opencode-sse' as const }
 
 describe('opencode semantic mapping onto the fold vocabulary', () => {
   it('stamps stable block indexes in first-seen order', () => {
-    expect(map({ ...TURN, type: 'block_started', blockId: 'a', kind: 'text', ts: 1 } as never)).toMatchObject({ blockIndex: 0 })
-    expect(map({ ...TURN, type: 'block_started', blockId: 'b', kind: 'tool_use', ts: 2 } as never)).toMatchObject({ blockIndex: 1 })
+    const turn = new OpenCodeBlockIndexTracker()
+    expect(map({ ...TURN, type: 'block_started', blockId: 'a', kind: 'text', ts: 1 } as never, turn)).toMatchObject({ blockIndex: 0 })
+    expect(map({ ...TURN, type: 'block_started', blockId: 'b', kind: 'tool_use', ts: 2 } as never, turn)).toMatchObject({ blockIndex: 1 })
     // Same block keeps its index across the whole turn.
-    expect(map({ ...TURN, type: 'text_delta', blockId: 'a', textDelta: 'x', fullText: 'x', ts: 3 } as never)).toMatchObject({ blockIndex: 0 })
+    expect(map({ ...TURN, type: 'text_delta', blockId: 'a', textDelta: 'x', fullText: 'x', ts: 3 } as never, turn)).toMatchObject({ blockIndex: 0 })
   })
 
   it('aligns tool_use fields with what the fold reads', () => {
