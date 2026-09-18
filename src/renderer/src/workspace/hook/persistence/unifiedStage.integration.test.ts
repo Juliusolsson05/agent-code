@@ -111,10 +111,6 @@ function makeHarness() {
       runtimes = typeof next === 'function' ? next(runtimes) : next
       refs.latestRuntimesRef.current = runtimes
     },
-    setTileTabs(_next: unknown) {
-      // The unified layout drops tile tabs; rehydrate still offers the
-      // setter. Recording it is enough for this suite.
-    },
   }
 }
 
@@ -167,7 +163,6 @@ describe('unified layout boot — recorded owner workspace', () => {
       harness.refs,
       harness.setState,
       harness.setRuntimes,
-      harness.setTileTabs,
       vi.fn(),
       makeLiveRecoveryApi(calls),
     )
@@ -219,7 +214,6 @@ describe('unified layout boot — recorded owner workspace', () => {
       harness.refs,
       harness.setState,
       harness.setRuntimes,
-      harness.setTileTabs,
       vi.fn(),
       makeLiveRecoveryApi(),
     )
@@ -247,7 +241,6 @@ describe('unified layout boot — pure-grid v2 workspace', () => {
       harness.refs,
       harness.setState,
       harness.setRuntimes,
-      harness.setTileTabs,
       vi.fn(),
       makeLiveRecoveryApi(calls),
     )
@@ -302,7 +295,6 @@ describe('unified layout boot — pure-grid v2 workspace', () => {
       harness.refs,
       harness.setState,
       harness.setRuntimes,
-      harness.setTileTabs,
       vi.fn(),
       makeLiveRecoveryApi(),
     )
@@ -320,7 +312,6 @@ describe('unified layout boot — runtime seeds survive a first interaction', ()
       harness.refs,
       harness.setState,
       harness.setRuntimes,
-      harness.setTileTabs,
       vi.fn(),
       makeLiveRecoveryApi(),
     )
@@ -335,5 +326,43 @@ describe('unified layout boot — runtime seeds survive a first interaction', ()
     const parked = runtimes['6d6cac8c-fe3d-4f5e-82e3-740036b4aebd']
     expect(parked).toBeDefined()
     expect(parked?.processStatus ?? emptyRuntime().processStatus).toBeTruthy()
+  })
+})
+
+describe('unified layout boot — buried sessions', () => {
+  it('boots an old file\'s buried session as a parked, listed pool row', async () => {
+    // Bury/Revive were deleted in #992. An old workspace.json can still carry
+    // buried records — including ones whose metadata lives ONLY in the record.
+    // After a real rehydrate the session must be owned, listed in its
+    // project's index, addressable by a runtime, and not spawned.
+    const persisted = gridHeavyV2Workspace()
+    persisted.buried = [{
+      id: 's-hidden',
+      sessionId: 's-hidden',
+      sessionMeta: { cwd: '/x/app', kind: 'codex' },
+      buriedAt: 5,
+      sourceTabId: 'tab-a',
+      sourceTabTitle: 'app',
+      sourceTabIndex: 0,
+    }]
+    const harness = makeHarness()
+    const calls: SessionRecoverOptions[] = []
+    const result = await rehydrateWorkspace(
+      persisted,
+      harness.refs,
+      harness.setState,
+      harness.setRuntimes,
+      vi.fn(),
+      makeLiveRecoveryApi(calls),
+    )
+    expect(result.complete).toBe(true)
+    expect(calls.map(call => call.sessionId)).not.toContain('s-hidden')
+
+    const state = harness.state()
+    expect(state.buried).toEqual([])
+    expect(state.sessions['s-hidden']).toEqual({ cwd: '/x/app', kind: 'codex' })
+    expect(state.detachedSessions['s-hidden']).toMatchObject({ projectTabId: 'tab-a', detachedAt: 5 })
+    expect(buildVisibleDispatchRows(state).map(row => row.sessionId)).toContain('s-hidden')
+    expect(harness.refs.latestRuntimesRef.current['s-hidden']?.processStatus).toBe('idle')
   })
 })

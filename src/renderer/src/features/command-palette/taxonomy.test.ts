@@ -109,7 +109,7 @@ describe('tier classification', () => {
   it('marks niche supported operations advanced rather than hiding them entirely', () => {
     // `advanced` is not `debug`: these are supported operations a power user
     // wants, just not ones that should crowd a fuzzy search.
-    for (const id of ['remove-cybersecurity-block', 'bury-pane', 'soft-reload-agent', 'switch-agents-provider']) {
+    for (const id of ['remove-cybersecurity-block', 'soft-reload-agent', 'switch-agents-provider']) {
       expect(byId(id).pickerVisibility).toBe('advanced')
     }
   })
@@ -133,7 +133,6 @@ describe('Navigation Commands group', () => {
       'jump-latest-message',
       'toggle-spotlight',
       'toggle-reader-mode',
-      'tiled-tabs',
       'reorder-tabs',
     ]) {
       expect(byId(id).category).toBe('navigate')

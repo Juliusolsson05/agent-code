@@ -14,8 +14,6 @@ import { useStreamingActions } from '@renderer/workspace/hook/actions/streaming'
 import { usePickerActions } from '@renderer/workspace/hook/actions/picker'
 import { useSpotlightActions } from '@renderer/workspace/hook/actions/spotlight'
 import { useReaderActions } from '@renderer/workspace/hook/actions/reader'
-import { useTileTabsActions } from '@renderer/workspace/hook/actions/tileTabs'
-import { useResizeActions } from '@renderer/workspace/hook/actions/resize'
 import { useSessionActions } from '@renderer/workspace/hook/actions/session'
 import { useTabActions } from '@renderer/workspace/hook/actions/tab'
 import { usePaneActions } from '@renderer/workspace/hook/actions/pane'
@@ -34,7 +32,6 @@ import {
   usePinnedSessionIdsSanity,
   useReaderModeSanity,
   useSpotlightSanity,
-  useTileTabsSanity,
 } from '@renderer/workspace/hook/invalidation/effects'
 import { useIpcSubscriptions } from '@renderer/workspace/hook/ipc/useIpcSubscriptions'
 import { useTerminalForeground } from '@renderer/workspace/hook/ipc/useTerminalForeground'
@@ -91,8 +88,6 @@ export function useWorkspace(
 ) {
   // ---- Zustand subscriptions (these drive re-renders) ----
   const { showToast } = useGlobalToast()
-  const openBuryPrompt = useAppStore(store => store.openBuryPrompt)
-  const closeBuryPrompt = useAppStore(store => store.closeBuryPrompt)
   const openNewAgentPlacement = useAppStore(store => store.openNewAgentPlacement)
   const closeNewAgentPlacement = useAppStore(store => store.closeNewAgentPlacement)
 
@@ -105,8 +100,6 @@ export function useWorkspace(
   const setRuntimes = useAppStore(store => store.setWorkspaceRuntimes)
   const spotlight = useAppStore(store => store.workspaceSpotlight)
   const setSpotlight = useAppStore(store => store.setWorkspaceSpotlight)
-  const tileTabs = useAppStore(store => store.workspaceTileTabs)
-  const setTileTabs = useAppStore(store => store.setWorkspaceTileTabs)
   const readerMode = useAppStore(store => store.workspaceReaderMode)
   const setReaderMode = useAppStore(store => store.setWorkspaceReaderMode)
 
@@ -114,7 +107,6 @@ export function useWorkspace(
   const refs = useWorkspaceRefs(
     state,
     runtimes,
-    tileTabs,
     dangerousAgentsEnabled,
     useProxyStreaming,
     defaultBuiltInMcpDomains,
@@ -141,7 +133,6 @@ export function useWorkspace(
     })
     return () => { unsubscribeRuntime(); unsubscribeState() }
   }, [refs])
-  refs.latestTileTabsRef.current = tileTabs
   refs.dangerousAgentsRef.current = dangerousAgentsEnabled
   refs.useProxyStreamingRef.current = useProxyStreaming
   refs.defaultBuiltInMcpDomainsRef.current = defaultBuiltInMcpDomains
@@ -305,23 +296,9 @@ export function useWorkspace(
     setState,
     refs,
   )
-  const {
-    openTileTabs,
-    closeTileTabs,
-    focusTiledTab,
-    focusTiledTabByIndex,
-    resizeFocusedTiledTab,
-    resizeTiledTabByIndex,
-  } = useTileTabsActions(setTileTabs, setSpotlight, setState, refs)
-  const {
-    resizeFocused,
-    resizeFocusedDirectional,
-    setSplitRatio,
-    setSplitRatioInTab,
-    normalizeLayout,
-    hardNormalizeLayout,
-    rotateLayout,
-  } = useResizeActions(setState, setTileTabs)
+  // useTileTabsActions and useResizeActions were composed here until the
+  // unified layout (#992): Tile Tabs and split resizing both died with the
+  // tile tree. Lane/row sizing lives in useDispatchActions.
 
   // Session lifecycle + derivatives that depend on it
   const sessionActions = useSessionActions(state, setState, setRuntimes, refs)
@@ -332,7 +309,6 @@ export function useWorkspace(
 
   const { focusAgentByPaneLabel, focusAgentBySessionId } = useAgentIndexNavigationActions(
     setState,
-    setTileTabs,
     refs,
     sessionActions,
     showToast,
@@ -340,9 +316,7 @@ export function useWorkspace(
 
   const tabActions = useTabActions(
     state,
-    tileTabs,
     setState,
-    setTileTabs,
     setSpotlight,
     setReaderMode,
     refs,
@@ -355,12 +329,9 @@ export function useWorkspace(
     setState,
     setRuntimes,
     setSpotlight,
-    setTileTabs,
     setReaderMode,
     refs,
     showToast,
-    openBuryPrompt,
-    closeBuryPrompt,
     openNewAgentPlacement,
     closeNewAgentPlacement,
     sessionActions,
@@ -369,8 +340,6 @@ export function useWorkspace(
   createOrchestrationAgentRef.current = paneActions.createOrchestrationAgent
   const closeOrchestrationSessionRef = useRef(paneActions.closeSession)
   closeOrchestrationSessionRef.current = paneActions.closeSession
-  const killBuriedSessionRef = useRef(paneActions.killBuried)
-  killBuriedSessionRef.current = paneActions.killBuried
 
   useEffect(() => {
     const off = window.api.onOrchestrationRequest(async request => {
@@ -788,11 +757,14 @@ export function useWorkspace(
           callerSessionId: request.callerSessionId,
           sessionId: request.sessionId,
         })
-        if (placement.placement === 'buried') {
-          const buried = current.buried.find(item => item.sessionId === request.sessionId)
-          if (!buried) throw new Error('agent_not_found')
-          await killBuriedSessionRef.current(buried.id)
-        } else {
+        // A 'buried' placement used to branch to Kill Buried here. Buried
+        // sessions fold into the pool at every read boundary now (#992, see
+        // foldBuriedIntoDetached), so live state never reports one and every
+        // managed close takes the one authorized path below. `placement` is
+        // still resolved for its side effect: assertManagedTarget throws when
+        // the caller does not manage this target.
+        void placement
+        {
           // THE authorization check for the Agent Management close tool.
           //
           // The tool's rule used to be prose in its description ("never close
@@ -887,7 +859,6 @@ export function useWorkspace(
   const dispatchActions = useDispatchActions(
     state,
     setState,
-    setTileTabs,
     closeNewAgentPlacement,
     refs,
     sessionActions.ensureSessionLive,
@@ -908,7 +879,6 @@ export function useWorkspace(
     refs,
     setState,
     setRuntimes,
-    setTileTabs,
     tabActions.newTab,
     setBootstrapComplete,
     setRestoreStatus,
@@ -922,7 +892,6 @@ export function useWorkspace(
   useFeedDebugPersist(refs)
   useSpotlightSanity(spotlight, state, setSpotlight)
   useReaderModeSanity(readerMode, state, setReaderMode)
-  useTileTabsSanity(tileTabs, state.tabs, setTileTabs)
   usePinnedSessionIdsSanity(state, setState)
   // Beside the sanity hooks because it is the same kind of thing: a
   // membership-driven correction that keeps an orthogonal slice consistent
@@ -951,7 +920,6 @@ export function useWorkspace(
     }),
     activeTab,
     spotlight,
-    tileTabs,
     readerMode,
     dispatchMode: state.dispatchMode,
     restoreStatus,
@@ -979,22 +947,13 @@ export function useWorkspace(
     splitFocused: paneActions.splitFocused,
     openExtensionViewInPane: paneActions.openExtensionViewInPane,
     startNewAgentPlacement: paneActions.startNewAgentPlacement,
-    commitNewAgentPlacement: paneActions.commitNewAgentPlacement,
     createDetachedDispatchAgent: paneActions.createDetachedDispatchAgent,
     createDetachedSession: paneActions.createDetachedSession,
     createLinkedAgent: paneActions.createLinkedAgent,
     createOrchestrationAgent: paneActions.createOrchestrationAgent,
-    attachDetachedToGrid: paneActions.attachDetachedToGrid,
-    attachAllDetachedForTab: paneActions.attachAllDetachedForTab,
-    detachSessionToDispatch: paneActions.detachSessionToDispatch,
-    detachFocusedToDispatch: paneActions.detachFocusedToDispatch,
     closeFocused: paneActions.closeFocused,
     closeSession: paneActions.closeSession,
     closeIdleOrchestrationAgents,
-    requestBuryFocused: paneActions.requestBuryFocused,
-    buryFocused: paneActions.buryFocused,
-    reviveBuried: paneActions.reviveBuried,
-    killBuried: paneActions.killBuried,
     focusSession: paneActions.focusSession,
     focusSessionInTab: paneActions.focusSessionInTab,
     focusAgentByPaneLabel,
@@ -1002,17 +961,12 @@ export function useWorkspace(
     setAgentTitle,
     setSessionAgentViewModeOverride,
     selectGridRelatedSession,
-    navigate: paneActions.navigate,
     activateTab: tabActions.activateTab,
     activateTabByIndex: tabActions.activateTabByIndex,
     reorderTabs: tabActions.reorderTabs,
     mergeTabs: tabActions.mergeTabs,
     nextTab: tabActions.nextTab,
     prevTab: tabActions.prevTab,
-    resizeFocused,
-    resizeFocusedDirectional,
-    setSplitRatio,
-    setSplitRatioInTab,
     beginOptimisticSubmit,
     unwindOptimisticSubmit,
     settleQueuedSubmit,
@@ -1029,9 +983,6 @@ export function useWorkspace(
     showPaneToast,
     undoClose,
     undoCloseCount,
-    normalizeLayout,
-    hardNormalizeLayout,
-    rotateLayout,
     replaceSession,
     reloadFocusedAgent,
     softReloadAgentView,
@@ -1049,12 +1000,6 @@ export function useWorkspace(
     setSpotlightTarget,
     toggleSpotlight,
     setSpotlightSession,
-    openTileTabs,
-    closeTileTabs,
-    focusTiledTab,
-    focusTiledTabByIndex,
-    resizeFocusedTiledTab,
-    resizeTiledTabByIndex,
     toggleTailMode,
     acquireRenderedViewLease,
     releaseRenderedViewLease,

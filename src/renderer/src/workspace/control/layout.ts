@@ -2,7 +2,6 @@ import { z } from 'zod'
 import { ControlError, defineCapability, paginate } from '@control-sdk'
 import { useAppStore } from '@renderer/app-state/store'
 import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
-import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 import { normalizeGridShape, MAX_DISPATCH_ROWS, MAX_DISPATCH_TILES, MAX_DISPATCH_LANES, INDEX_FRACTION_MIN, INDEX_FRACTION_MAX } from '@renderer/workspace/dispatch/gridShape'
 import { observeWorkspace } from '@renderer/workspace/control'
 import type { Workspace } from '@renderer/workspace/hook'
@@ -48,27 +47,9 @@ export function layoutControlCapabilities(getWorkspace: () => Workspace) {
       description: 'Read exact project tile trees, active tab and normalized Dispatch rows/lanes with a revision for edits. Tree split direction vertical means left/right; horizontal means top/bottom; ratio is the a-child share. Dispatch lanes are flat row-major indices, rows specify their lengths. effectiveFocusedSessionId is the current command target; dispatch.classicFocusedSessionId is only remembered classic selection. Reading does not focus or wake agents.',
       handler: read,
     }),
-    defineCapability({
-      id: 'layout.adjust', title: 'Adjust a project grid', execution: 'window', effect: 'ui', target: { kind: 'project', field: 'tabId' },
-      description: 'Adjust an explicit project using the existing layout operations. Equalize preserves the tree, balance rebuilds equal-sized cells, rotate swaps rows/columns, and divider sets the shared split between two leaves (and activates that tab). Never creates or closes sessions. For new panes, use agents.create then placement.list/attach.',
-      input: z.object({ tabId, revision, change: z.discriminatedUnion('action', [
-        z.object({ action: z.enum(['equalize', 'balance', 'rotate']) }).strict(),
-        z.object({ action: z.literal('divider'), fromSessionId: z.string().describe('Leaf on the a side of the intended divider.'), toSessionId: z.string().describe('Leaf on its b side.'), ratio: z.number().min(0.1).max(0.9).describe('Share of the split allocated to its a child; between 0.1 and 0.9.') }).strict(),
-      ]) }).strict(), output: layoutOutput,
-      handler: input => {
-        admit(input.revision)
-        const tab = project(input.tabId)
-        const change = input.change
-        if (change.action === 'divider') {
-          const leaves = collectLeaves(tab.root)
-          if (change.fromSessionId === change.toSessionId || !leaves.includes(change.fromSessionId) || !leaves.includes(change.toSessionId)) throw new ControlError('unavailable', 'Choose two different leaves in the target grid')
-          getWorkspace().setSplitRatioInTab(input.tabId, change.fromSessionId, change.toSessionId, change.ratio)
-        } else if (change.action === 'equalize') getWorkspace().normalizeLayout(input.tabId)
-        else if (change.action === 'balance') getWorkspace().hardNormalizeLayout(input.tabId)
-        else getWorkspace().rotateLayout(input.tabId)
-        return read()
-      },
-    }),
+    // layout.adjust (equalize / balance / rotate / divider) died with the tile
+    // tree (#992). Lane and row sizing is dispatch.configure's lane-weights,
+    // row-heights and row-index-width actions.
     defineCapability({
       id: 'tabs.reorder', title: 'Reorder project tabs', execution: 'window', effect: 'ui',
       description: 'Set the complete project tab order in this window. Requires every current tab ID exactly once and a fresh layout revision. Uses normal tab ordering without moving sessions between projects.',

@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
-import { mergeProjectTabs, retargetTileTabsAfterMerge } from '@renderer/workspace/mergeProjectTabs'
+import { mergeProjectTabs } from '@renderer/workspace/mergeProjectTabs'
 import { collectOwnedSessionIds } from '@renderer/workspace/sessionOwnership'
 import { resolveTabSessions } from '@renderer/workspace/queries'
-import type { SessionMeta, TileTabsState, WorkspaceState } from '@renderer/workspace/types'
+import type { SessionMeta, WorkspaceState } from '@renderer/workspace/types'
 
 // The workspace that motivated #913, reduced: three tabs for one repository
 // (two of them holding worktree agents) plus an unrelated project, with every
@@ -134,24 +134,3 @@ describe('mergeProjectTabs', () => {
   })
 })
 
-describe('retargetTileTabsAfterMerge', () => {
-  const tiled: TileTabsState = { tabIds: ['tab-b', 'tab-e', 'tab-g'], focusedTabId: 'tab-g', direction: 'vertical', ratios: [0.2, 0.5, 0.3] }
-
-  it('drops merged tabs, moves focus to the target and keeps the surviving ratios aligned', () => {
-    expect(retargetTileTabsAfterMerge(tiled, ['tab-g'], 'tab-e')).toMatchObject({ tabIds: ['tab-b', 'tab-e'], focusedTabId: 'tab-e' })
-    const ratios = retargetTileTabsAfterMerge(tiled, ['tab-g'], 'tab-e')!.ratios
-    expect(ratios[0]! / ratios[1]!).toBeCloseTo(0.4)
-  })
-
-  it('gives a tiled source\'s slot to a target that was not tiled, so the kept tab stays on screen', () => {
-    const twoTiled: TileTabsState = { tabIds: ['tab-b', 'tab-g'], focusedTabId: 'tab-g', direction: 'vertical', ratios: [0.3, 0.7] }
-    expect(retargetTileTabsAfterMerge(twoTiled, ['tab-g'], 'tab-e')).toMatchObject({ tabIds: ['tab-b', 'tab-e'], focusedTabId: 'tab-e', ratios: [0.3, 0.7] })
-    // Two tiled sources into an untiled target: one slot, the other leaves.
-    expect(retargetTileTabsAfterMerge(tiled, ['tab-b', 'tab-g'], 'tab-startup')).toMatchObject({ tabIds: ['tab-startup', 'tab-e'], focusedTabId: 'tab-startup' })
-  })
-
-  it('exits tiled tabs when fewer than two remain, and leaves an absent layout absent', () => {
-    expect(retargetTileTabsAfterMerge(tiled, ['tab-b', 'tab-g'], 'tab-e')).toBeNull()
-    expect(retargetTileTabsAfterMerge(null, ['tab-b'], 'tab-e')).toBeNull()
-  })
-})

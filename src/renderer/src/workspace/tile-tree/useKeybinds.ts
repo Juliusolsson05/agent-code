@@ -334,22 +334,17 @@ export function useKeybinds(
   const installedExtensions = useAppStore(state => state.installedExtensions)
   const agentViewMode = useAppStore(state => state.settings.agentViewMode)
   const closeSettingsPage = useAppStore(state => state.closeSettingsPage)
-  const buryPromptSessionId = useAppStore(state => state.buryPromptSessionId)
-  const closeBuryPrompt = useAppStore(state => state.closeBuryPrompt)
   const newAgentPlacementOpen = useAppStore(state => state.newAgentPlacementOpen)
   const closeNewAgentPlacement = useAppStore(state => state.closeNewAgentPlacement)
   // The placement overlay is opened from TWO independent flows:
-  // - newAgentPlacementOpen: the cmd+T / new-agent-placement flow
-  // - dispatchAttachIntent: attach-detached-to-grid
+  // - newAgentPlacementOpen: the new-agent kind picker
   // - linkedAgentParentId: linked-agent kind picker
-  // App.tsx already unifies them as `placementOverlayOpen` and
-  // closes them together via `closePlacementOverlay`. We must
-  // subscribe to all three here — an earlier revision only checked
+  // usePlacementOverlay unifies them and closes them together. We must
+  // subscribe to both here — an earlier revision only checked
   // newAgentPlacementOpen, so cmd+W / cmd+1..9 / alt+d still
-  // mutated the workspace under sibling overlay modes before the
+  // mutated the workspace under the sibling overlay mode before the
   // overlay's own listener could stop propagation. See PR #75 review.
-  const dispatchAttachIntent = useAppStore(state => state.dispatchAttachIntent)
-  const closeDispatchAttach = useAppStore(state => state.closeDispatchAttach)
+  // (A third flow, attach-detached-to-grid, died with the tile tree in #992.)
   const linkedAgentParentId = useAppStore(state => state.linkedAgentParentId)
   const closeLinkedAgent = useAppStore(state => state.closeLinkedAgent)
   // Reorder Tabs and Pin Agents are modal overlays with their own
@@ -400,15 +395,10 @@ export function useKeybinds(
       !SURFACE_OWNED_COMMAND_IDS.has(entry.commandId) && ['global', 'grid', 'dispatch'].includes(entry.context),
     )).map(([binding]) => binding)
     // These are the fixed workspace interactions below, not palette commands.
-    // Their number-row continuation includes zero and directional tab resizing.
+    // The number-row continuation includes zero (two-digit index rows).
     for (let digit = 0; digit <= 9; digit++) bindings.push(`Cmd+${digit}`, `Cmd+Alt+${digit}`)
-    // Cmd+Left/Right are deliberately NOT captured. Their only app meaning is the
-    // tiled-tab resize continuation, which acts only while a Cmd+Alt+digit resize
-    // is pending; capturing them unconditionally made main preventDefault the
-    // standard macOS caret-to-line-start/end motion inside every extension text
-    // field, while the forwarded event almost always did nothing. Losing resize
-    // continuation while an extension pane holds focus is the cheaper trade.
-    bindings.push('Alt+Home', 'Alt+End', 'Alt+PageUp', 'Alt+PageDown', 'Alt+=', 'Alt+-')
+    // The fn+alt+arrow / alt+= / alt+- resize chords were forwarded here until
+    // the tile tree died (#992); nothing resizes splits any more.
     const modal = [...bindingIndex].filter(([, entries]) => entries.some(entry => ['open-command-palette', 'close-pane'].includes(entry.commandId))).map(([binding]) => binding)
     // Suppress native window-close defaults even when the user unbinds pane
     // close. The existing modal gate decides whether there is an app action.
@@ -424,7 +414,6 @@ export function useKeybinds(
   // hook unmount ends it.
   useEffect(() => () => { tldrHoldRef.current?.release(); dismissTldr() }, [])
   useEffect(() => {
-    let pendingTiledResizeIndex: number | null = null
     let pendingDispatchDigit: number | null = null
     let pendingDispatchDigitTimer: number | null = null
 
@@ -517,7 +506,7 @@ export function useKeybinds(
       // `placementOverlayOpen` so create, attach, and linked-agent
       // modes share one keyboard bailout.
       const placementOverlayOpen =
-        newAgentPlacementOpen || dispatchAttachIntent !== null || linkedAgentParentId !== null
+        newAgentPlacementOpen || linkedAgentParentId !== null
 
       // Placement overlay (create-new, attach-detached, or linked
       // agent) and the two draft modals (reorder / pin) all share
@@ -541,7 +530,6 @@ export function useKeybinds(
         if (k === 'Escape') {
           e.preventDefault()
           if (newAgentPlacementOpen) closeNewAgentPlacement()
-          if (dispatchAttachIntent !== null) closeDispatchAttach()
           if (linkedAgentParentId !== null) closeLinkedAgent()
           if (reorderTabsOpen) closeReorderTabs()
           if (pinAgentsOpen) closePinAgents()
@@ -719,12 +707,6 @@ export function useKeybinds(
         return
       }
 
-      if (k === 'Escape' && buryPromptSessionId) {
-        e.preventDefault()
-        closeBuryPrompt()
-        return
-      }
-
       const handleTldrHold = (commandId: string | null): boolean => {
         // Goal (#936) shares TLDR's synchronous hold path, including the
         // Spotlight admission below and the editor yield: Monaco owns Cmd+G as
@@ -847,30 +829,6 @@ export function useKeybinds(
 
       // --- CMD: tab management ---
       if (cmd && !alt) {
-        if (workspace.tileTabs && pendingTiledResizeIndex !== null) {
-          if (k === 'ArrowLeft') {
-            e.preventDefault()
-            workspace.resizeTiledTabByIndex(pendingTiledResizeIndex, -0.03)
-            return
-          }
-          if (k === 'ArrowRight') {
-            e.preventDefault()
-            workspace.resizeTiledTabByIndex(pendingTiledResizeIndex, 0.03)
-            return
-          }
-          if (workspace.tileTabs.direction === 'horizontal') {
-            if (k === 'ArrowUp') {
-              e.preventDefault()
-              workspace.resizeTiledTabByIndex(pendingTiledResizeIndex, -0.03)
-              return
-            }
-            if (k === 'ArrowDown') {
-              e.preventDefault()
-              workspace.resizeTiledTabByIndex(pendingTiledResizeIndex, 0.03)
-              return
-            }
-          }
-        }
         // In the unified layout the numbered command grammar is always
         // "session row N" — the lane grid is the only workspace. Tab
         // switching remains available via cmd-[ / ]. The row labels keep
@@ -900,18 +858,9 @@ export function useKeybinds(
             return
           }
         }
-        // cmd-1..9 → tab index
-        const digit = digitFromKeyboardEvent(e)
-        if (digit !== null) {
-          e.preventDefault()
-          if (workspace.tileTabs) {
-            pendingTiledResizeIndex = digit - 1
-            workspace.focusTiledTabByIndex(digit - 1)
-          } else {
-            workspace.activateTabByIndex(digit - 1)
-          }
-          return
-        }
+        // A plain "cmd-1..9 → tab index" branch used to follow. It became
+        // unreachable the day the lane grid became the only workspace: the row
+        // grammar above consumes every digit. Projects keep ⌘⌥1..9.
       }
 
       // --- ALT: pane management ---
@@ -960,68 +909,19 @@ export function useKeybinds(
           }
         }
 
-        // --- Directional resize: fn+alt+arrow ---
+        // Split resizing (fn+alt+arrow, alt+= / alt+-) lived here until the
+        // tile tree died (#992). Lane and row sizes are dragged, or set through
+        // dispatch.configure.
         //
-        // On macOS, holding Fn while pressing an arrow is translated by
-        // the OS to Home/End/PageUp/PageDown BEFORE the event reaches
-        // the app — so what the user types as "fn+option+←" arrives
-        // here as altKey=true, e.key==='Home'. We never see the Fn
-        // modifier directly (it isn't exposed to the browser), and we
-        // don't need to: the translated key is unambiguous.
-        //
-        // Must come BEFORE plain alt+arrow navigation so the two
-        // handlers don't collide (they're disjoint by key name, but
-        // keeping the directional block first matches how the old
-        // shift-gated version was ordered and makes the precedence
-        // obvious).
-        //
-        // Why not alt+shift+arrow like before: Option+Shift+Arrow is
-        // the macOS system shortcut for word-by-word text selection.
-        // Stealing it broke selection inside the composer and any
-        // other text field. Fn+Option+Arrow has no system meaning so
-        // we can claim it cleanly.
-        //
-        // Semantics unchanged: the arrow moves the divider of the
-        // nearest matching split. Whether the focused pane grows or
-        // shrinks is determined by which side of the divider it's on.
-        //
-        // 0.02 delta per press gives about 45 keystrokes across the
-        // clamp range, which is fine-grained enough to land on exact
-        // 50/50 or 25/75 ratios without overshooting. Hold the key
-        // for coarse moves.
-        if (k === 'Home') {
-          e.preventDefault()
-          workspace.resizeFocusedDirectional('left', 0.02)
-          return
-        }
-        if (k === 'End') {
-          e.preventDefault()
-          workspace.resizeFocusedDirectional('right', 0.02)
-          return
-        }
-        if (k === 'PageUp') {
-          e.preventDefault()
-          workspace.resizeFocusedDirectional('up', 0.02)
-          return
-        }
-        if (k === 'PageDown') {
-          e.preventDefault()
-          workspace.resizeFocusedDirectional('down', 0.02)
-          return
-        }
-
-        // Vim navigation (e.code) + arrow keys (e.key)
-        // Resize — use physical codes for punctuation too
-        if (code === 'Equal' || k === '=' || k === '+') {
-          e.preventDefault()
-          workspace.resizeFocused(+0.05)
-          return
-        }
-        if (code === 'Minus' || k === '-' || k === '_') {
-          e.preventDefault()
-          workspace.resizeFocused(-0.05)
-          return
-        }
+        // RESERVED-CHORD RECORD — keep this even though the handler is gone,
+        // because it is the only place the fact is written down and
+        // check:keybindings cannot see it: Option+Shift+Arrow is the macOS
+        // system shortcut for word-by-word text selection and is load-bearing
+        // for every text field in the app (including our composer). It was
+        // tried for directional resize, broke selection, and was replaced by
+        // fn+alt+arrow. Never bind it. On macOS, Fn+arrow reaches the app as
+        // Home/End/PageUp/PageDown with altKey set; the Fn modifier itself is
+        // never visible to the page.
       }
 
     }
@@ -1029,7 +929,6 @@ export function useKeybinds(
     const onKeyUp = (e: KeyboardEvent) => {
       tldrHold.keyUp(e)
       if (e.key === 'Meta') {
-        pendingTiledResizeIndex = null
         clearPendingDispatchDigit()
       }
     }
@@ -1037,7 +936,6 @@ export function useKeybinds(
     const onBlur = () => {
       tldrHold.release()
       dismissTldr()
-      pendingTiledResizeIndex = null
       clearPendingDispatchDigit()
     }
 
@@ -1059,14 +957,10 @@ export function useKeybinds(
   }, [
     agentViewMode,
     closeSettingsPage,
-    closeBuryPrompt,
     closeNewAgentPlacement,
-    closeDispatchAttach,
     closeLinkedAgent,
     closeReorderTabs,
     closePinAgents,
-    buryPromptSessionId,
-    dispatchAttachIntent,
     linkedAgentParentId,
     newAgentPlacementOpen,
     pinAgentsOpen,

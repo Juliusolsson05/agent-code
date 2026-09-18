@@ -80,7 +80,6 @@ import { promptTemplateTargetSessionId } from '@renderer/features/prompt-templat
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import { deriveExtensionCommands, deriveExtensionKeybindings } from '@renderer/apps/host/derive'
 import { resolveAgentPaneLabel } from '@renderer/workspace/tile-tree/paneLabels'
-import { sessionDisplayTitle } from '@renderer/workspace/sessionDisplayTitle'
 import { useWorkspaceContext } from '@renderer/workspace/WorkspaceContext'
 import type { PaletteMode } from '@renderer/features/command-palette/paletteMode'
 import { commandOwnsOpenSurface } from '@renderer/features/command-palette/surfaceOwnership'
@@ -100,14 +99,6 @@ import type { AiWorkspaceSummary } from '@mcp/shared/aiWorkspaceTypes'
 // sub-mode UI. The command registry lives outside this component
 // under feature-owned folders, so adding a feature command no longer
 // requires editing the palette implementation itself.
-
-type BuriedPaneInfo = {
-  id: string
-  label: string
-  description: string
-  note?: string
-  buriedAt: number
-}
 
 type PromptTemplateFillState = {
   sessionId: string
@@ -260,12 +251,6 @@ function OpenCommandPalette({
   const setSettings = useAppStore(state => state.setSettings)
   const { onNewTabRequest } = usePathPickerRequests()
 
-  const openTileTabsModal = useAppStore(state => state.openTileTabsModal)
-  const onTileTabsRequest = useCallback(() => {
-    openTileTabsModal(
-      workspace.tileTabs?.tabIds ?? (workspace.activeTab ? [workspace.activeTab.id] : []),
-    )
-  }, [openTileTabsModal, workspace.activeTab, workspace.tileTabs])
   const onReorderTabsRequest = useAppStore(state => state.openReorderTabs)
   const openMergeProjectTabs = useAppStore(state => state.openMergeProjectTabs)
   const onSettingsRequest = useAppStore(state => state.openSettingsPage)
@@ -316,7 +301,6 @@ function OpenCommandPalette({
   const closeGlobalEditorAction = useAppStore(state => state.closeGlobalEditor)
   const toggleGlobalEditor = useAppStore(state => state.toggleGlobalEditor)
   const openTiledDispatchPrompt = useAppStore(state => state.openTiledDispatchPrompt)
-  const openDispatchAttach = useAppStore(state => state.openDispatchAttach)
   const openLinkedAgent = useAppStore(state => state.openLinkedAgent)
   const openNewAgentIn = useAppStore(state => state.openNewAgentIn)
   const openPinAgents = useAppStore(state => state.openPinAgents)
@@ -428,50 +412,8 @@ function OpenCommandPalette({
   const focusedCwd = focusedMeta?.cwd ?? null
   const focusedProvider = focusedMeta?.kind ?? DEFAULT_PROVIDER
   const customPromptTemplates = settings.savedPromptTemplates
-  // Buried panes are scoped to the ACTIVE TAB. The natural temptation
-  // is to show every buried pane in the workspace ("they're paused
-  // work, the user might want any of them") but that mixes contexts:
-  // a buried Codex agent from project A appears alongside a buried
-  // Claude agent from project B with no surface-level indication
-  // they're cross-project. Scoping by sourceTabId matches the rest of
-  // the workspace's per-tab discipline and prevents revive-into-wrong-
-  // tab footguns (revive places the pane back into the tab the user
-  // is currently in, not the tab it was buried from).
-  //
-  // Buried panes from other tabs are not lost — switching to that tab
-  // surfaces them in its palette.
-  const activeTabId = workspace.state.activeTabId
-  const buried = useMemo<BuriedPaneInfo[]>(
-    () =>
-      [...workspace.state.buried]
-        .filter(entry => entry.sourceTabId === activeTabId)
-        .sort((a, b) => b.buriedAt - a.buriedAt)
-        .map(entry => {
-          const kind = entry.sessionMeta.kind ?? DEFAULT_PROVIDER
-          const cwd = entry.sessionMeta.cwd
-          return {
-            id: entry.id,
-            // Same title rule as every other list (#865), kind as context.
-            label: `${sessionDisplayTitle(entry.sessionMeta)} · ${kind}`,
-            description: `${entry.sourceTabTitle} · ${cwd}`,
-            note: entry.note,
-            buriedAt: entry.buriedAt,
-          }
-        }),
-    [activeTabId, workspace.state.buried],
-  )
-
-  const enterBuriedMode = useCallback(() => {
-    setMode('buried')
-    setQuery('')
-    setSelectedIndex(0)
-  }, [])
-
-  const enterKillBuriedMode = useCallback(() => {
-    setMode('kill-buried')
-    setQuery('')
-    setSelectedIndex(0)
-  }, [])
+  // The buried / kill-buried picker modes lived here until #992: an unplaced
+  // pool session is already "hidden but alive", and every index lists it.
 
   const enterPromptTemplateMode = useCallback(() => {
     setMode('prompt-template')
@@ -578,7 +520,6 @@ function OpenCommandPalette({
       workspace,
       ui: {
         openNewTabPicker: onNewTabRequest,
-        openTileTabs: onTileTabsRequest,
         openReorderTabs: onReorderTabsRequest,
         openMergeProjectTabs,
         openSettings: onSettingsRequest,
@@ -637,13 +578,10 @@ function OpenCommandPalette({
         enterGlobalDispatch,
         exitDispatchMode,
         openTiledDispatchPrompt,
-        openDispatchAttach,
         openLinkedAgent,
         openNewAgentIn,
         openPinAgents,
         setAggressiveDebugPersistence,
-        enterBuriedMode,
-        enterKillBuriedMode,
         enterPromptTemplateMode,
         enterManagePromptTemplateMode,
         enterSavePromptTemplateMode,
@@ -711,7 +649,6 @@ function OpenCommandPalette({
     [
       workspace,
       onNewTabRequest,
-      onTileTabsRequest,
       onReorderTabsRequest,
       openMergeProjectTabs,
       onSettingsRequest,
@@ -764,13 +701,10 @@ function OpenCommandPalette({
       enterGlobalDispatch,
       exitDispatchMode,
       openTiledDispatchPrompt,
-      openDispatchAttach,
       openLinkedAgent,
       openNewAgentIn,
       openPinAgents,
       setAggressiveDebugPersistence,
-      enterBuriedMode,
-      enterKillBuriedMode,
       enterPromptTemplateMode,
       enterManagePromptTemplateMode,
       enterSavePromptTemplateMode,
@@ -871,25 +805,6 @@ function OpenCommandPalette({
   // the user is typing the name of is `primary`, short supporting text is
   // `secondary`, and long prose is `body` — which `rankEntries` matches
   // by literal substring only, never by subsequence.
-  const filteredBuried = useMemo(
-    () =>
-      rankEntries(buried, queryText, item => [
-        // `note` is the ONLY human-authored, row-distinguishing field
-        // here, so it is the primary one despite not being the row's
-        // headline. `label` is generated (`${kind} · ${cwdBase}`) and is
-        // byte-identical for every pane buried from the same repo — as
-        // primary it made tier 4 a mass tie that the note could never
-        // break, and let an unrelated repo's provider name outrank a note
-        // that literally started with the query.
-        primary(item.note),
-        secondary(item.label),
-        // `${sourceTabTitle} · ${cwd}` — contains an absolute path, so as
-        // a secondary field every buried pane matched "users",
-        // "development", and every other path segment at tier 3.
-        body(item.description),
-      ]),
-    [buried, queryText],
-  )
   const filteredPromptTemplates = useMemo(
     () =>
       rankEntries(promptTemplates, queryText, template => [
@@ -1004,10 +919,9 @@ function OpenCommandPalette({
       ? resolveAgentPaneLabel(
           workspace.state,
           directAgentQuery.label,
-          workspace.tileTabs,
         )
       : null,
-    [directAgentQuery, workspace.state, workspace.tileTabs],
+    [directAgentQuery, workspace.state],
   )
   // WHY the syntax intent is normalized against the visible surface before we
   // build the row: `A2!` can only mean "Here" when a Tiled Dispatch lane is on
@@ -1017,7 +931,6 @@ function OpenCommandPalette({
   // promise "Open Here" while Enter actually switches to an existing pane.
   const directAgentIntent =
     directAgentQuery?.intent === 'open-in-focused-tiled-dispatch-lane' &&
-    !workspace.tileTabs &&
     workspace.state.dispatchMode?.tiled
       ? directAgentQuery.intent
       : 'reuse-existing-view'
@@ -1093,15 +1006,13 @@ function OpenCommandPalette({
   }, [commandSortMode, commandStarred, paletteRows, queryText])
 
   const filteredLength =
-    mode === 'buried' || mode === 'kill-buried'
-        ? filteredBuried.length
-        : mode === 'prompt-template'
-          ? filteredPromptTemplates.length
-          : mode === 'ai-workspace-open' || mode === 'ai-workspace-clear'
-            ? filteredAiWorkspaces.length
-            : mode === 'commands'
-              ? paletteRows.length
-              : 0
+    mode === 'prompt-template'
+      ? filteredPromptTemplates.length
+      : mode === 'ai-workspace-open' || mode === 'ai-workspace-clear'
+        ? filteredAiWorkspaces.length
+        : mode === 'commands'
+          ? paletteRows.length
+          : 0
 
   const selectedPaletteRow = useMemo(() => {
     if (mode !== 'commands') return null
@@ -1253,25 +1164,6 @@ function OpenCommandPalette({
       onClose()
     }
   }, [commandContext, onClose, onMenuCommandHandled, pendingMenuCommand, showToast])
-
-  const executeBuried = useCallback(
-    (item: BuriedPaneInfo) => {
-      onClose()
-      void workspace.reviveBuried(item.id)
-    },
-    [onClose, workspace],
-  )
-
-  const executeKillBuried = useCallback(
-    (item: BuriedPaneInfo) => {
-      const remainingCount = filteredBuried.filter(candidate => candidate.id !== item.id).length
-      void workspace.killBuried(item.id).then(() => {
-        if (remainingCount === 0) onClose()
-        else setSelectedIndex(i => Math.max(0, Math.min(i, remainingCount - 1)))
-      })
-    },
-    [filteredBuried, onClose, workspace],
-  )
 
   const executePromptTemplate = useCallback(
     async (template: PromptTemplate, originSelectedIndex = selectedIndex) => {
@@ -1576,12 +1468,6 @@ function OpenCommandPalette({
         } else if (mode === 'ai-workspace-clear') {
           const workspace = filteredAiWorkspaces[selectedIndex]
           if (workspace) void clearAiWorkspace(workspace)
-        } else if (mode === 'buried') {
-          const item = filteredBuried[selectedIndex]
-          if (item) executeBuried(item)
-        } else if (mode === 'kill-buried') {
-          const item = filteredBuried[selectedIndex]
-          if (item) executeKillBuried(item)
         } else if (mode === 'prompt-template') {
           const template = filteredPromptTemplates[selectedIndex]
           if (template) void executePromptTemplate(template)
@@ -1596,14 +1482,11 @@ function OpenCommandPalette({
       mode,
       aiWorkspacePending,
       filteredLength,
-      filteredBuried,
       paletteRows,
       filteredAiWorkspaces,
       filteredPromptTemplates,
       selectedIndex,
-      executeBuried,
       executeCommand,
-      executeKillBuried,
       executePromptTemplate,
       createAiWorkspace,
       clearAiWorkspace,
@@ -1709,16 +1592,6 @@ function OpenCommandPalette({
             : 'Search application commands and related session workflows.'}
         </DialogDescription>
         <div className="flex-shrink-0 border-b border-border px-3 py-2 flex items-center gap-2">
-          {mode === 'buried' && (
-            <span className="text-accent text-[11px] flex-shrink-0 select-none">
-              revive &rsaquo;
-            </span>
-          )}
-          {mode === 'kill-buried' && (
-            <span className="text-danger text-[11px] flex-shrink-0 select-none">
-              kill buried &rsaquo;
-            </span>
-          )}
           {mode === 'prompt-template' && (
             <span className="text-accent text-[11px] flex-shrink-0 select-none">
               template &rsaquo;
@@ -1777,9 +1650,7 @@ function OpenCommandPalette({
                   ? 'Workspace name…'
                     : mode === 'ai-workspace-open' || mode === 'ai-workspace-clear'
                       ? 'Search AI Workspaces…'
-                      : mode === 'buried' || mode === 'kill-buried'
-                        ? 'Search buried panes…'
-                        : mode === 'prompt-template'
+                      : mode === 'prompt-template'
                           ? 'Search prompt templates…'
                           : 'Type a command…'
             }
@@ -1826,7 +1697,7 @@ function OpenCommandPalette({
             </Button>
           )}
           {/* Commands mode only. The other ten modes render short, intrinsically
-              ordered lists (session recency, buried-at time, [...custom,
+              ordered lists (session recency, [...custom,
               ...builtin]) where a sort control would be chrome without a
               purpose — the command list is the only one long enough to be hard
               to scan. */}
@@ -2171,65 +2042,6 @@ function OpenCommandPalette({
               </div>
             )}
 
-            {mode === 'buried' &&
-              (filteredBuried.length === 0 ? (
-                <div className="px-3 py-4 text-muted text-[12px] text-center">No buried panes</div>
-              ) : (
-                filteredBuried.map((item, i) => (
-                  <div
-                    key={item.id}
-                    className={`
-                    px-3 py-2
-                    cursor-pointer
-                    border-b border-border last:border-b-0
-                    ${
-                      i === selectedIndex
-                        ? 'bg-row-selected-bg text-row-selected-fg'
-                        : 'text-ink-dim hover:bg-row-hover-bg'
-                    }
-                  `}
-                    data-palette-row={i}
-                    onMouseEnter={() => setSelectedIndex(i)}
-                    onClick={() => executeBuried(item)}
-                  >
-                    <div className="text-[12px] truncate">{item.label}</div>
-                    {item.note && (
-                      <div className="text-[11px] text-ink mt-0.5 truncate">{item.note}</div>
-                    )}
-                    <div className="text-[10px] text-muted mt-0.5 truncate">{item.description}</div>
-                  </div>
-                ))
-              ))}
-
-            {mode === 'kill-buried' &&
-              (filteredBuried.length === 0 ? (
-                <div className="px-3 py-4 text-muted text-[12px] text-center">No buried panes</div>
-              ) : (
-                filteredBuried.map((item, i) => (
-                  <div
-                    key={item.id}
-                    className={`
-                    px-3 py-2
-                    cursor-pointer
-                    border-b border-border last:border-b-0
-                    ${
-                      i === selectedIndex
-                        ? 'bg-row-danger-selected-bg text-row-selected-fg'
-                        : 'text-ink-dim hover:bg-row-hover-bg'
-                    }
-                  `}
-                    data-palette-row={i}
-                    onMouseEnter={() => setSelectedIndex(i)}
-                    onClick={() => executeKillBuried(item)}
-                  >
-                    <div className="text-[12px] truncate">{item.label}</div>
-                    {item.note && (
-                      <div className="text-[11px] text-ink mt-0.5 truncate">{item.note}</div>
-                    )}
-                    <div className="text-[10px] text-muted mt-0.5 truncate">{item.description}</div>
-                  </div>
-                ))
-              ))}
 
             {mode === 'prompt-template' &&
               (filteredPromptTemplates.length === 0 ? (

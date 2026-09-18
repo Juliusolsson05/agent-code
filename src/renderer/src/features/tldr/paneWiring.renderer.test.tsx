@@ -1,7 +1,7 @@
 import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { emptyRuntime } from '@renderer/session-runtime/state'
-import { TileTree, renderWorkspaceLeaf } from '@renderer/workspace/tile-tree/TileTree'
+import { renderWorkspaceLeaf } from '@renderer/workspace/tile-tree/TileTree'
 import { AgentTerminalOwnershipProvider } from '@renderer/workspace/terminal/AgentTerminalOwnership'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { dismissTldr, toggleTldr } from './viewState'
@@ -34,7 +34,13 @@ describe('TLDR placement in the actual workspace leaf', () => {
     } as unknown as Workspace
     const readTldrs = vi.fn(async (ids: string[]) => Object.fromEntries(ids.map(id => [id, { text: `Saved ${id}.`, revision: 1, updatedAt: '2026-09-11T00:00:00.000Z' }])))
     window.api = { ...originalApi, readTldrs, onTldrChanged: () => () => {} }
-    const view = render(<AgentTerminalOwnershipProvider><TileTree tabId="project" node={node} focusedSessionId="parent" workspace={workspace} agentViewMode={mode} showStatusMode showWorktreeBadges /></AgentTerminalOwnershipProvider>)
+    // The recursive TileTree component died with the tile tree (#992). What it
+    // did for this contract was call renderWorkspaceLeaf once per leaf with
+    // related-agent tabs ON; calling it directly keeps the same wiring under test.
+    const view = render(<AgentTerminalOwnershipProvider>
+      {renderWorkspaceLeaf('parent', 'parent', workspace, 'project', mode, true, true, undefined, true)}
+      {renderWorkspaceLeaf('shell', 'parent', workspace, 'project', mode, true, true, undefined, true)}
+    </AgentTerminalOwnershipProvider>)
     act(toggleTldr)
     await screen.findByText('Saved child-summary.')
     expect(screen.getAllByRole('note')).toHaveLength(1)

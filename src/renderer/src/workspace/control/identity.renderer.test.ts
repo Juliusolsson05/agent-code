@@ -14,7 +14,7 @@ it('resolves the recorded visible Dispatch label instead of its different projec
   const fixture = JSON.parse(readFileSync('testing/fixtures/worktree-context/dispatch-global-d23.json', 'utf8'))
   const bundle = JSON.parse(readFileSync('testing/fixtures/rendering-bundles/2026-05-20T19-11-51-193-d4a44a16.json', 'utf8'))
   const id = fixture.$fixture.observed.targetSessionId
-  useAppStore.setState({ workspaceState: fixture.state as WorkspaceState, workspaceTileTabs: null, workspaceReaderMode: null, workspaceSpotlight: null,
+  useAppStore.setState({ workspaceState: fixture.state as WorkspaceState, workspaceReaderMode: null, workspaceSpotlight: null,
     workspaceRuntimes: { [id]: { ...emptyRuntime(), entries: bundle.input.entries } } })
   const observed = observeWorkspace(() => ({ restoreStatus: 'fresh' }))
   const target = observed.sessions.find(session => session.sessionId === id)!

@@ -27,7 +27,7 @@ function workspace(): WorkspaceState {
 describe('workspace control observation', () => {
   it('preserves related and buried identities and reads fresh state without waking providers', async () => {
     const state = workspace()
-    useAppStore.setState({ workspaceState: state, workspaceTileTabs: null })
+    useAppStore.setState({ workspaceState: state })
     const capability = workspaceControlCapabilities(() => ({ restoreStatus: 'pending' }))[0]
     const result = await capability.execute({}, context)
     expect(result.ok).toBe(true)
@@ -41,20 +41,18 @@ describe('workspace control observation', () => {
     expect(next.ok && next.value.sessions.find(session => session.sessionId === 'child')?.title).toBe('Changed after registration')
   })
 
-  it('reports both mirrored lanes under one session and respects tiled-tabs precedence', async () => {
+  it('reports both mirrored lanes under one session', async () => {
     const state = workspace()
     state.dispatchMode = { scope: 'global', tiled: { focusedLane: 1, lanes: [{ selectedSessionId: 'child' }, { selectedSessionId: 'child' }] } }
-    useAppStore.setState({ workspaceState: state, workspaceTileTabs: null })
+    useAppStore.setState({ workspaceState: state })
     const capability = workspaceControlCapabilities(() => ({ restoreStatus: 'pending' }))[0]
     const result = await capability.execute({}, context)
     if (!result.ok) throw new Error(result.error.message)
     expect(result.value.sessions.filter(session => session.sessionId === 'child')).toHaveLength(1)
     expect(result.value.sessions.find(session => session.sessionId === 'child')?.placements.filter(p => p.kind === 'dispatch'))
       .toEqual([{ kind: 'dispatch', lane: 0, visible: true }, { kind: 'dispatch', lane: 1, visible: true }])
-    useAppStore.setState({ workspaceTileTabs: { tabIds: ['alpha'], focusedTabId: 'alpha', direction: 'vertical', ratios: [1] } })
-    const tiled = await capability.execute({}, context)
-    if (!tiled.ok) throw new Error(tiled.error.message)
-    expect(tiled.value.mode).toBe('tiled-tabs')
-    expect(tiled.value.sessions.flatMap(session => session.placements).filter(p => p.kind === 'dispatch').every(p => !p.visible)).toBe(true)
+    // A Tile Tabs precedence case lived here until #992 deleted Tile Tabs;
+    // the stage is the only layout, so lane placements are always visible.
+    expect(result.value.mode).toBe('tiled-dispatch')
   })
 })

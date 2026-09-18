@@ -131,7 +131,6 @@ export function MainSurface({ onNewTabRequest }: { onNewTabRequest: () => void }
                 open={placement.open}
                 workspace={workspace}
                 onClose={placement.close}
-                attachIntent={placement.attachIntent}
                 linkedAgentParentId={placement.linkedAgentParentId}
                 projectIntent={placement.projectIntent}
               />

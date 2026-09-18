@@ -1,9 +1,10 @@
 import { act, cleanup, fireEvent, render } from '@testing-library/react'
-import { useEffect } from 'react'
+import { Fragment, useEffect } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useAppStore } from '@renderer/app-state/hooks'
 import { emptyRuntime, type SessionRuntime } from '@renderer/session-runtime/state'
-import { TileTree } from '@renderer/workspace/tile-tree/TileTree'
+import { renderWorkspaceLeaf } from '@renderer/workspace/tile-tree/TileTree'
+import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 import type { TileNode, WorkspaceState } from '@renderer/workspace/types'
 import { useWorkspace } from './index'
 import { useRenderedLeaseHygiene } from './effects/useRenderedLeaseHygiene'
@@ -28,7 +29,9 @@ vi.mock('@renderer/features/sessionFeed/SessionFeedContext', () => ({ useSession
 vi.mock('./persistence/useBootstrap', async () => {
   const { useEffect } = await import('react')
   return { useBootstrap: (...args: Parameters<typeof import('./persistence/useBootstrap').useBootstrap>) => {
-    useEffect(() => args[5](true), [args[5]])
+    // args[4] is setBootstrapComplete (it was [5] until #992 removed the
+    // setTileTabs parameter that sat before it).
+    useEffect(() => args[4](true), [args[4]])
   } }
 })
 
@@ -45,9 +48,18 @@ function Controller({ legacy = false }: { legacy?: boolean }) {
   current = useWorkspace(false)
   useRenderedLeaseHygiene(current)
   counts.controller += 1
-  return <>{current.runtimeServices}<TileTree tabId="tab" node={current.activeTab!.root}
-    focusedSessionId="one" workspace={current} agentViewMode="agent"
-    showStatusMode showWorktreeBadges /></>
+  // One subscribed leaf per session the workspace currently holds, mounted the
+  // way every surface mounts them now that the recursive TileTree component is
+  // gone (#992). Deriving the list from live state is what lets the "leaf
+  // changes session" case below observe a subscription MOVE rather than a
+  // fixed pair of panes.
+  return <>{current.runtimeServices}
+    {collectLeaves(current.activeTab!.root).map(sessionId => (
+      <Fragment key={sessionId}>
+        {renderWorkspaceLeaf(sessionId, current.activeTab!.focusedSessionId, current, 'tab', 'agent', true, true)}
+      </Fragment>
+    ))}
+  </>
 }
 
 beforeEach(() => {

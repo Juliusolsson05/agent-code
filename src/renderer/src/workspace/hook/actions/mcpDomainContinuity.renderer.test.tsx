@@ -31,27 +31,6 @@ function makeState(dispatchMode: DispatchModeState | null): WorkspaceState {
 }
 
 describe('built-in MCP continuity at session resurrection boundaries', () => {
-  it('scopes a normal split clone to the selected source cwd, not its physical parent', async () => {
-    const harness = mountPaneActions(makeState(null))
-
-    await act(async () => {
-      await harness.actions.splitFocused('vertical', 'codex', {
-        resumeSessionId: 'provider-clone',
-        builtInMcpOverrides: { workflows: true },
-        cwd: '/projects/related-child',
-      })
-    })
-
-    // WHY this deliberately disagrees with the parent fixture cwd: related agents can render as
-    // tabs inside a parent pane while running in another worktree. The spawn boundary is where an
-    // incorrect fallback would become a valid-but-wrong project-scoped bearer credential.
-    expect(harness.spawn).toHaveBeenCalledWith('/projects/related-child', {
-      kind: 'codex',
-      resumeSessionId: 'provider-clone',
-      builtInMcpOverrides: { workflows: true },
-    })
-    harness.mounted.unmount()
-  })
 
   it('keeps the explicit source cwd when Dispatch turns a split into a detached clone', async () => {
     const harness = mountPaneActions(makeState({
@@ -76,7 +55,10 @@ describe('built-in MCP continuity at session resurrection boundaries', () => {
   })
 
   it('keeps the OpenCode terminal runtime when a transcript clone is spawned', async () => {
-    const harness = mountPaneActions(makeState(null))
+    // Re-based onto the stage (#992): cloning outside Dispatch used to split
+    // the tile tree, and that branch no longer exists. The contract under test
+    // is the spawn boundary, which is identical on the surviving path.
+    const harness = mountPaneActions(makeState({ scope: 'project', focusedSessionId: 'parent' }))
 
     await act(async () => {
       await harness.actions.splitFocused('vertical', 'opencode', {

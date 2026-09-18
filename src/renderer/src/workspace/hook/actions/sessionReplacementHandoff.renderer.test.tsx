@@ -66,7 +66,6 @@ describe('renderer session replacement handoff', () => {
       stateRef: ref(state),
       latestStateRef: ref(state),
       latestRuntimesRef: ref(runtimes),
-      latestTileTabsRef: ref(null),
       dangerousAgentsRef: ref(false),
       useProxyStreamingRef: ref(true),
       defaultBuiltInMcpDomainsRef: ref([]),

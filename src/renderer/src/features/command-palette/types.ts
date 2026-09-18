@@ -2,7 +2,6 @@ import type { PaletteMode } from '@renderer/features/command-palette/paletteMode
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { AgentViewMode, UsageHeaderLevel } from '@renderer/app-state/settings/types'
 import type { RenderedViewPolicy } from '@renderer/workspace/agentDisplayMode'
-import type { DispatchAttachIntent } from '@renderer/app-state/uiShell/types'
 
 /**
  * What a command's badge MEANS, not how it looks.
@@ -197,7 +196,6 @@ export type CommandContext = {
   workspace: Workspace
   ui: {
     openNewTabPicker: () => void
-    openTileTabs: () => void
     openReorderTabs: () => void
     /** Open the Merge Project Tabs modal (#913); the modal performs the merge. */
     openMergeProjectTabs: () => void
@@ -270,7 +268,6 @@ export type CommandContext = {
      *  mode for the given sessionId. The session must exist in
      *  workspace.state.detachedSessions; the command's `when` guard is
      *  responsible for that check. */
-    openDispatchAttach: (intent: DispatchAttachIntent) => void
     /** Open the shared placement overlay in "Linked Agent" mode. The
      *  session id is the parent agent; the overlay only asks for
      *  Claude/Codex and then delegates to workspace.createLinkedAgent. */
@@ -284,8 +281,6 @@ export type CommandContext = {
      *  modal itself, not the store. */
     openPinAgents: () => void
     setAggressiveDebugPersistence: (enabled: boolean) => void
-    enterBuriedMode: () => void
-    enterKillBuriedMode: () => void
     enterPromptTemplateMode: () => void
     enterManagePromptTemplateMode: () => void
     enterSavePromptTemplateMode: () => void

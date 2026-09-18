@@ -9,37 +9,24 @@ import { getRendererProviderCapabilities } from '@providers/registry.renderer.ca
 import { extractLastAssistantText } from '@renderer/lib/copyAssistant'
 import type { CommandContext, CommandDef } from '@renderer/features/command-palette/types'
 import { panel, toggle } from '@renderer/features/command-palette/commandState'
-import {
-  commandTargetSessionId,
-  commandTargetSessionIdForState,
-} from '@renderer/workspace/hook/selectors/commandTargetSessionId'
-import { isDetached } from '@renderer/workspace/queries'
+import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import {
   buildVisibleDispatchRows,
-  detachedDispatchSessionIdsForTab,
   selectVisibleDispatchRow,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
-import { resolveDispatchAttachTarget } from '@renderer/workspace/dispatch/dispatchTarget'
 import { dispatchFocusedSessionId } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
-import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 import { submitActiveComposer } from '@renderer/workspace/tile-tree/TileLeaf/composerEnterRegistry'
 import { sessionHasTranscript } from '@renderer/workspace/transcriptAvailability'
 import { isWorkingAgent } from '@renderer/workspace/agentFollow'
 
-/**
- * Buried panes visible from the CURRENT tab.
- *
- * The buried picker is deliberately tab-scoped (see the note in
- * CommandPalette's `buried` memo: a buried Codex agent from project A listed
- * beside a buried Claude agent from project B mixes contexts and invites
- * revive-into-the-wrong-tab). Admission has to use the same scope, or the row
- * appears for a tab with nothing to revive.
- */
-function buriedInActiveTab(workspace: CommandContext['workspace']): number {
-  const activeTabId = workspace.state.activeTabId
-  return workspace.state.buried.filter(entry => entry.sourceTabId === activeTabId).length
-}
-
+// DELETED with the unified layout (#992) — see RETIRED_COMMAND_IDS in
+// catalog.test.ts for the ledger:
+//   bury-pane / revive-pane / kill-buried-pane — "hide but keep alive" is the
+//     pool's default state now, so there is nothing to bury into or revive
+//     from; a session not shown in a lane is simply unplaced.
+//   attach-detached-to-grid / attach-all-detached-for-tab /
+//   detach-to-dispatch — there is no grid to attach into or detach from;
+//     showing a pool session is a lane selection.
 export const paneCommands: CommandDef[] = [
   {
     id: 'new-agent',
@@ -54,7 +41,7 @@ export const paneCommands: CommandDef[] = [
     title: 'New Agent…',
     description: '**What it does:** Starts a **new agent or terminal**.\n\n**Use when:** You want another Claude, Codex, OpenCode, or shell pane.\n\n**Notes:** OpenCode and OpenCode Terminal are separate choices. In **Dispatch**, agents become detached rows.',
     keywords: ['new', 'agent', 'placement', 'claude', 'codex', 'opencode', 'terminal'],
-    when: ({ workspace }) => Boolean(workspace.activeTab && !workspace.tileTabs),
+    when: ({ workspace }) => Boolean(workspace.activeTab),
     run: ({ workspace }) => workspace.startNewAgentPlacement(),
   },
   {
@@ -82,7 +69,7 @@ export const paneCommands: CommandDef[] = [
     keywords: ['new', 'agent', 'project', 'lane', 'fill', 'empty', 'dispatch', 'claude', 'codex', 'opencode'],
     // Same data gate as New Agent…. Tiled Tabs covers Dispatch, so the lane the
     // agent would fill is not the thing on screen.
-    when: ({ workspace }) => Boolean(workspace.activeTab && !workspace.tileTabs),
+    when: ({ workspace }) => Boolean(workspace.activeTab),
     run: ({ ui }) => ui.openNewAgentIn(),
   },
   {
@@ -140,16 +127,6 @@ export const paneCommands: CommandDef[] = [
     run: ({ workspace }) => workspace.closeFocused(),
   },
   {
-    id: 'bury-pane',
-    category: 'layout-dispatch',
-    pickerVisibility: 'advanced',
-    surface: 'session',
-    title: 'Bury Session',
-    keywords: ['pane'],
-    description: '**What it does:** Hides the pane but keeps the **session alive**.\n\n**Use when:** You want it out of the layout without killing it.\n\n**Notes:** Buried panes can be revived later.',
-    run: ({ workspace }) => workspace.requestBuryFocused(),
-  },
-  {
     id: 'linked-agent',
     category: 'create',
     pickerVisibility: 'advanced',
@@ -169,36 +146,6 @@ export const paneCommands: CommandDef[] = [
       const kind = workspace.state.sessions[sessionId]?.kind
       if (!isAgentProviderKind(kind)) return
       ui.openLinkedAgent(sessionId)
-    },
-  },
-  {
-    // Promote the dispatch-focused detached session into the active
-    // tab's grid via the existing placement-target picker. Available
-    // only when Dispatch Mode is active AND its current focus is on a
-    // detached session (grid-focused rows in the dispatch list don't
-    // need attaching — they're already attached).
-    id: 'attach-detached-to-grid',
-    category: 'layout-dispatch',
-    pickerVisibility: 'advanced',
-    // `dispatch` surface: the old `when` opened with
-    // `if (!workspace.dispatchMode) return false`. That mode check now
-    // lives in the registry's surface gate, so `when` only carries the
-    // data condition (the focused row is a detached session).
-    surface: 'workspace',
-    title: 'Attach Detached Session to Grid…',
-    description: '**What it does:** Moves one **detached Dispatch session** into the grid.\n\n**Use when:** You want to pin background work into the normal layout.\n\n**Notes:** Uses the placement picker so you can choose where it lands.',
-    keywords: ['attach', 'detached', 'dispatch', 'grid', 'pin', 'place'],
-    when: ({ workspace }) => {
-      const target = resolveDispatchAttachTarget(workspace.state)
-      if (!target) return false
-      return isDetached(workspace.state, target.sessionId)
-    },
-    run: ({ workspace, ui }) => {
-      if (!workspace.dispatchMode) return
-      const target = resolveDispatchAttachTarget(workspace.state)
-      if (!target) return
-      if (!isDetached(workspace.state, target.sessionId)) return
-      ui.openDispatchAttach(target)
     },
   },
   {
@@ -265,74 +212,6 @@ export const paneCommands: CommandDef[] = [
       if (!sessionId) return
       workspace.unpinSession(sessionId)
     },
-  },
-  {
-    // Available in BOTH grid and Dispatch modes. The original gate was
-    // `dispatchCommandTabId`, which returned null whenever the workspace
-    // was not in Dispatch — that was the wrong shape for this command.
-    // Detached agents can outlive a Dispatch session (you can leave
-    // Dispatch with agents still parked), and the natural recovery flow
-    // is "from the regular grid, bring my parked agents back into this
-    // tab." Forcing the user to flip into Dispatch first was friction
-    // with no upside. In Dispatch we still delegate to the dispatch-
-    // aware resolver so global Dispatch can target the focused row's
-    // tab (which may differ from `activeTabId`).
-    id: 'attach-all-detached-for-tab',
-    category: 'layout-dispatch',
-    pickerVisibility: 'advanced',
-    // `app`, NOT `dispatch`: this command deliberately works in both
-    // modes (see the comment above) — detached agents outlive Dispatch,
-    // and the recovery flow is "from the grid, bring my parked agents
-    // back." Surface-gating it to `dispatch` would break that. Its
-    // `when` already hides it when there is nothing to attach.
-    surface: 'app',
-    title: 'Attach All Dispatch Sessions for Tab',
-    description: '**What it does:** Moves all detached **Dispatch** sessions for a tab into the grid.\n\n**Use when:** You want to bring a whole tab’s background work into view.\n\n**Notes:** Preserves the existing grid and adds the sessions beside it. Works in both Grid and Dispatch modes.',
-    keywords: ['attach', 'all', 'detached', 'dispatch', 'grid', 'tab', 'pin'],
-    when: ({ workspace }) => {
-      const tabId = attachAllCommandTabId(workspace)
-      if (!tabId) return false
-      return detachedDispatchSessionIdsForTab(workspace.state, tabId).length > 0
-    },
-    run: ({ workspace }) => {
-      const tabId = attachAllCommandTabId(workspace)
-      if (!tabId) return
-      return workspace.attachAllDetachedForTab(tabId)
-    },
-  },
-  {
-    // The reverse of attach: take the focused grid pane out of the
-    // tile tree without killing it and add it to the dispatch
-    // detached bucket. The action side refuses the only-leaf-in-tab
-    // case; this `when` check gates on an actual grid leaf so the command
-    // does not show for a session that is already detached.
-    id: 'detach-to-dispatch',
-    category: 'layout-dispatch',
-    pickerVisibility: 'advanced',
-    // `session`: works in both modes against the Dispatch-aware target
-    // (the `when` below requires that target to be a real grid leaf).
-    surface: 'session',
-    title: 'Detach Session to Dispatch',
-    description: '**What it does:** Moves a grid session into **Dispatch** without killing it.\n\n**Use when:** You want to park work in the background.\n\n**Notes:** The last pane in a tab cannot be detached.',
-    keywords: ['detach', 'dispatch', 'park', 'background', 'unpin'],
-    when: ({ workspace }) => {
-      // Use the Dispatch-aware target resolver, not tab.focusedSessionId.
-      // tab.focusedSessionId has a "must be a leaf in tab.root" invariant
-      // — i.e. it's grid-only. In Dispatch Mode the user has a row
-      // selected, not a grid focus, and reading tab.focusedSessionId
-      // silently misses that selection: the command would either gate
-      // off entirely or target a stale grid leaf. The action itself
-      // (`workspace.detachFocusedToDispatch`) already routes through
-      // the Dispatch-aware target; this gate must agree or the palette
-      // shows/hides the command for the wrong reason.
-      if (!workspace.activeTab) return false
-      const sessionId = commandTargetSessionIdForState(workspace.state)
-      if (!sessionId) return false
-      const meta = workspace.state.sessions[sessionId]
-      const owner = workspace.state.tabs.find(tab => collectLeaves(tab.root).includes(sessionId))
-      return Boolean(meta && owner)
-    },
-    run: ({ workspace }) => workspace.detachFocusedToDispatch(),
   },
   {
     id: 'terminal-horizontal',
@@ -420,58 +299,6 @@ export const paneCommands: CommandDef[] = [
     title: 'Undo Close',
     description: '**What it does:** Restores the most recent closed **pane, tab, or Dispatch row** from a small recent-close history.\n\n**Use when:** You closed something by mistake, or repeat it to walk back through earlier closes.\n\n**Notes:** A restored **Dispatch** terminal re-attaches its tmux session, so its scrollback comes back.',
     run: ({ workspace }) => workspace.undoClose(),
-  },
-  {
-    id: 'revive-pane',
-    category: 'layout-dispatch',
-    pickerVisibility: 'advanced',
-    // `app`: buried panes are mode-independent state, and a revived
-    // session re-enters the grid tree — which also makes it a Dispatch
-    // row — so the command is meaningful from either mode.
-    surface: 'app',
-    title: 'Revive Buried Session…',
-    keywords: ['pane'],
-    description: '**What it does:** Restores a **buried live pane**.\n\n**Use when:** You parked a session and want it back.\n\n**Notes:** Opens a picker when multiple buried panes exist.',
-    keepPaletteOpen: true,
-    // Scoped to the ACTIVE TAB, matching the list the picker actually renders.
-    //
-    // This read `state.buried.length > 0` — the whole workspace — while the
-    // picker filters by `sourceTabId`, so both buried commands could be
-    // admitted from a tab with nothing buried and land the user on an empty
-    // list. Admission has to agree with what the command will show, or the
-    // command is advertising something it cannot deliver.
-    when: ({ workspace }) => buriedInActiveTab(workspace) > 0,
-    run: ({ ui, flags }) => {
-      // Already showing this mode? Dismiss. A mode-entering command whose
-      // second press re-enters the mode it is already in reads as a dead key,
-      // which is the same complaint that started this whole change.
-      if (flags.paletteMode === 'buried') {
-        ui.closePalette()
-        return
-      }
-      ui.enterBuriedMode()
-    },
-  },
-  {
-    id: 'kill-buried-pane',
-    category: 'layout-dispatch',
-    pickerVisibility: 'advanced',
-    surface: 'app',
-    title: 'Kill Buried Session…',
-    description: '**What it does:** Permanently kills a **buried session**.\n\n**Use when:** You no longer need hidden background work.\n\n**Notes:** This is destructive.',
-    keywords: ['kill', 'buried', 'hidden', 'pane', 'session', 'pane'],
-    keepPaletteOpen: true,
-    when: ({ workspace }) => buriedInActiveTab(workspace) > 0,
-    run: ({ ui, flags }) => {
-      // Already showing this mode? Dismiss. A mode-entering command whose
-      // second press re-enters the mode it is already in reads as a dead key,
-      // which is the same complaint that started this whole change.
-      if (flags.paletteMode === 'kill-buried') {
-        ui.closePalette()
-        return
-      }
-      ui.enterKillBuriedMode()
-    },
   },
   {
     id: 'toggle-tail',
@@ -744,9 +571,3 @@ function dispatchCommandTabId(
 // Dispatch can target the focused row's tab (potentially != activeTabId).
 // Outside Dispatch we use the active tab — there is no dispatch focus
 // to consult and the user's only reasonable target is "this tab."
-function attachAllCommandTabId(
-  workspace: CommandContext['workspace'],
-): string | null {
-  if (workspace.dispatchMode) return dispatchCommandTabId(workspace)
-  return workspace.state.activeTabId || null
-}

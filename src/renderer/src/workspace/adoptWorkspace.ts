@@ -8,6 +8,7 @@ import type {
   WorkspaceState,
 } from '@renderer/workspace/types'
 import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
+import { foldBuriedIntoDetached } from '@renderer/workspace/workspaceShape'
 
 // Taking over a closed window's workspace.
 //
@@ -73,8 +74,15 @@ export type WorkspaceAdoption =
  */
 export function adoptWorkspace(
   current: WorkspaceState,
-  incoming: PersistedWorkspace,
+  incomingInput: PersistedWorkspace,
 ): WorkspaceAdoption {
+  // Same read-boundary fold as rehydrate (#992): a closing window's buried
+  // sessions must arrive here as parked pool rows, because this window has
+  // no Revive UI to reach them with either. Guarded on `tabs` because the
+  // slice is another window's file and is read defensively throughout.
+  const incoming = Array.isArray(incomingInput.tabs)
+    ? foldBuriedIntoDetached(incomingInput)
+    : incomingInput
   const currentSessionIds = new Set(Object.keys(current.sessions))
   const currentTabIds = new Set(current.tabs.map(tab => tab.id))
 

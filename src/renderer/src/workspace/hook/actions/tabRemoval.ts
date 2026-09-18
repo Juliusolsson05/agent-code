@@ -2,15 +2,12 @@ import type {
   DispatchModeState,
   SessionId,
   TabId,
-  TileTabsState,
   WorkspaceState,
 } from '@renderer/workspace/types'
 import { clearTiledLaneSessions } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
-import { sanitizeTileTabsState } from '@renderer/workspace/layout/helpers'
 import type {
   WorkspaceSetReaderMode,
   WorkspaceSetSpotlight,
-  WorkspaceSetTileTabs,
 } from '@renderer/workspace/hook/context'
 
 // -----------------------------------------------------------------------------
@@ -104,29 +101,15 @@ export function workspaceWithoutTab(
   }
 }
 
-/** Tiled Tabs without a removed tab; sanitize exits the mode below two tabs. */
-export function tileTabsWithoutTab(prev: TileTabsState | null, tabId: TabId): TileTabsState | null {
-  if (!prev) return prev
-  return sanitizeTileTabsState({
-    ...prev,
-    tabIds: prev.tabIds.filter(id => id !== tabId),
-    focusedTabId: prev.focusedTabId === tabId
-      ? (prev.tabIds.find(id => id !== tabId) ?? prev.focusedTabId)
-      : prev.focusedTabId,
-  })
-}
-
 /** Drop view takeovers that framed the removed tab. Called after the state
  *  commit so a refused removal never clears a takeover the user still has. */
 export function clearRemovedTabTakeovers(
   setters: {
-    setTileTabs: WorkspaceSetTileTabs
     setSpotlight: WorkspaceSetSpotlight
     setReaderMode: WorkspaceSetReaderMode
   },
   tabId: TabId,
 ): void {
-  setters.setTileTabs(prev => tileTabsWithoutTab(prev, tabId))
   setters.setSpotlight(prev => (prev?.tabId === tabId ? null : prev))
   setters.setReaderMode(prev => (prev?.tabId === tabId ? null : prev))
 }

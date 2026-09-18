@@ -48,7 +48,6 @@ export type {
 export type {
   ReaderModeState,
   SpotlightState,
-  TileTabsState,
 } from '@renderer/workspace/types'
 
 // Re-exported from ./types so external callers (ReaderView, etc.)

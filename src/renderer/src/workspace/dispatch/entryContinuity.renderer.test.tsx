@@ -102,7 +102,6 @@ function harness(options: {
       state,
       setState as never,
       vi.fn(),
-      vi.fn(),
       { stateRef } as unknown as WorkspaceRefs,
       ensureSessionLive as never,
       showToast,

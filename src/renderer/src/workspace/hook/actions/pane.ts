@@ -19,7 +19,6 @@ import { sessionDisplayTitle } from '@renderer/workspace/sessionDisplayTitle'
 import { useCallback, useRef } from 'react'
 
 import type {
-  BuriedPaneRecord,
   DetachedSessionRecord,
   DispatchModeState,
   SessionId,
@@ -33,20 +32,12 @@ import type {
   WorkspaceState,
 } from '@renderer/workspace/types'
 import type { AgentProviderRuntime } from '@shared/types/providerKind'
-import { RATIO_DEFAULT } from '@renderer/workspace/types'
 import {
   closeLeaf,
   collectLeaves,
-  insertBesideLeaf,
-  normalizeTree,
-  splitLeaf,
-  wrapRootWithLeaf,
-  wrapRootWithNode,
 } from '@renderer/workspace/tile-tree/treeOps'
-import { findBestRemainingFocus, findDirectionalNeighbor } from '@renderer/workspace/tile-tree/geometry'
 import { findParentSplitInfo } from '@renderer/lib/undoClose'
 import type { ClosedTab, ClosedTabDetachedEntry, SingleClosedEntry, UndoCloseStack } from '@renderer/lib/undoClose'
-import { titleFromCwd } from '@renderer/workspace/layout/helpers'
 import {
   buildVisibleDispatchRows,
   detachedDispatchSessionIdsForTab,
@@ -58,7 +49,6 @@ import {
   withLaneSession,
 } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import { commandTargetSessionIdForState } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
-import type { PlacementTarget } from '@renderer/features/workspace/lib/newAgentPlacement'
 import type { BuiltInMcpDomain, BuiltInMcpOverrides } from '@mcp/shared/types'
 import type {
   OrchestrationAgentKind,
@@ -72,7 +62,6 @@ import type {
   WorkspaceSetRuntimes,
   WorkspaceSetSpotlight,
   WorkspaceSetState,
-  WorkspaceSetTileTabs,
 } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import {
@@ -84,9 +73,10 @@ import type { AgentProviderKind } from '@shared/types/providerKind'
 // -----------------------------------------------------------------------------
 // Pane / focus / navigation actions.
 //
-// Covers: splitFocused, startNewAgentPlacement, commitNewAgentPlacement,
-// closeFocused, closeSession, requestBuryFocused, buryFocused,
-// reviveBuried, killBuried, focusSession, focusSessionInTab, navigate.
+// Covers: splitFocused, startNewAgentPlacement, the pool creators
+// (createDetachedDispatchAgent / createLinkedAgent / createOrchestrationAgent),
+// closeFocused, closeSession, closeTab, focusSession, focusSessionInTab,
+// openExtensionViewInPane.
 // -----------------------------------------------------------------------------
 
 function forgetClosedSessionDebugState(refs: WorkspaceRefs, sessionId: SessionId): void {
@@ -827,15 +817,12 @@ export function usePaneActions(
   setState: WorkspaceSetState,
   setRuntimes: WorkspaceSetRuntimes,
   setSpotlight: WorkspaceSetSpotlight,
-  setTileTabs: WorkspaceSetTileTabs,
   // Reader Mode joins the other takeover setters so an emptied tab is cleaned
   // up by the same tail as the Close Tab command (tabRemoval.ts), instead of
   // leaving a Reader takeover on a removed tab for an effect to heal later.
   setReaderMode: WorkspaceSetReaderMode,
   refs: WorkspaceRefs,
   showToast: (message: string, durationMs?: number) => void,
-  openBuryPrompt: (sessionId: SessionId) => void,
-  closeBuryPrompt: () => void,
   openNewAgentPlacement: () => void,
   closeNewAgentPlacement: () => void,
   sessionActions: SessionActions,
@@ -846,7 +833,6 @@ export function usePaneActions(
     continuation?: SplitFocusedContinuation,
   ) => Promise<void>
   startNewAgentPlacement: () => void
-  commitNewAgentPlacement: (selection: SessionSpawnSelection, target: PlacementTarget) => Promise<void>
   createDetachedSession: (selection: SessionSpawnSelection, projectOverride?: { tabId: TabId; anchorSessionId: SessionId }, continuation?: SplitFocusedContinuation, placement?: { selectCreated: boolean }) => Promise<SessionId | null>
   // WHY `kind` is the full SessionKind here (unlike createLinkedAgent right
   // below, which stays narrowed to agent providers): Dispatch's "New Agent…"
@@ -880,10 +866,6 @@ export function usePaneActions(
     runId?: string
     builtInMcpDomains?: BuiltInMcpDomain[]
   }) => Promise<OrchestrationAgentRecord>
-  attachDetachedToGrid: (sessionId: SessionId, targetTabId: string, target: PlacementTarget) => Promise<void>
-  attachAllDetachedForTab: (tabId: string) => Promise<void>
-  detachSessionToDispatch: (sessionId: SessionId) => void
-  detachFocusedToDispatch: () => void
   closeFocused: () => Promise<void>
   /**
    * Resolves true exactly when the NAMED session's close committed.
@@ -907,13 +889,8 @@ export function usePaneActions(
   /** The Close Tab command: end the project's approved plan through the same
    *  executor as closeSession (see its implementation's WHY). */
   closeTab: (tabId: TabId) => Promise<void>
-  requestBuryFocused: () => void
-  buryFocused: (note?: string, targetSessionId?: SessionId) => void
-  reviveBuried: (buriedId: string) => Promise<void>
-  killBuried: (buriedId: string) => Promise<void>
   focusSession: (sessionId: SessionId) => void
   focusSessionInTab: (tabId: string, sessionId: SessionId) => void
-  navigate: (direction: 'left' | 'right' | 'up' | 'down') => void
   openExtensionViewInPane: (viewId: string, direction?: SplitDirection) => void
 } {
   const closeSessionRef = useRef<
@@ -1103,40 +1080,15 @@ export function usePaneActions(
         return
       }
 
-      const tab = state.tabs.find(t => t.id === state.activeTabId)
-      if (!tab) return
-      const parentSessionId = tab.focusedSessionId
-      const spawnCwd = continuation?.cwd ?? state.sessions[parentSessionId]?.cwd
-      if (!spawnCwd) return
-
-      let newSessionId: SessionId
-      try {
-        newSessionId = await sessionActions.spawn(spawnCwd, {
-          kind,
-          ...(providerRuntime ? { providerRuntime } : {}),
-          resumeSessionId,
-          builtInMcpOverrides,
-        })
-      } catch (err) {
-        showToast(
-          err instanceof Error && err.message.length > 0
-            ? err.message
-            : 'Failed to split pane',
-        )
-        return
-      }
-
-      setState(prev => ({
-        ...prev,
-        tabs: prev.tabs.map(t => {
-          if (t.id !== prev.activeTabId) return t
-          return {
-            ...t,
-            root: splitLeaf(t.root, parentSessionId, direction, newSessionId),
-            focusedSessionId: newSessionId,
-          }
-        }),
-      }))
+      // The tile-tree branch lived here until #992: outside Dispatch this
+      // spawned in the focused pane's cwd and split the tree beside it. The
+      // stage is the only workspace now, so the branch above is the whole
+      // creation flow. Reaching this line means the stage has not been seeded
+      // yet (the instant between a fresh install's first tab and bootstrap's
+      // ensureStage) — there is no lane or project focus to resolve a target
+      // from, so creating nothing is the honest outcome. `direction` is inert;
+      // stage 4 renames these commands to what they now are (New Agent / New
+      // Terminal) and drops the argument.
     },
     [
       closeNewAgentPlacement,
@@ -1144,9 +1096,6 @@ export function usePaneActions(
       sessionActions,
       setState,
       showToast,
-      state.activeTabId,
-      state.sessions,
-      state.tabs,
     ],
   )
 
@@ -1600,7 +1549,11 @@ export function usePaneActions(
           tabs[tabIndex] = {
             ...tab,
             root: nextRoot,
-            focusedSessionId: findBestRemainingFocus(tab.root, nextRoot, targetId) ?? collectLeaves(nextRoot)[0],
+            // The geometrically nearest surviving pane used to be chosen here
+            // (findBestRemainingFocus). Nothing renders the tree any more
+            // (#992), so the field only has to keep its invariant — name a
+            // leaf this tab contains — until stage 3b deletes it.
+            focusedSessionId: collectLeaves(nextRoot)[0],
           }
           const next = { ...prev, tabs, sessions }
           return { ...next, dispatchMode: dispatchModeAfterSessionRemoval(prev, next, targetId) }
@@ -1640,11 +1593,11 @@ export function usePaneActions(
       const outcome = committed.value
       operation.commits.push({ sessionId: targetId, meta: sessionMeta, outcome })
       if (outcome.kind === 'tab-removed') {
-        clearRemovedTabTakeovers({ setTileTabs, setSpotlight, setReaderMode }, outcome.tab.id)
+        clearRemovedTabTakeovers({ setSpotlight, setReaderMode }, outcome.tab.id)
       }
       return { closed: true }
     },
-    [refs, setReaderMode, setRuntimes, setSpotlight, setState, setTileTabs],
+    [refs, setReaderMode, setRuntimes, setSpotlight, setState],
   )
 
   // Close several approved members one at a time, in the order given. A member
@@ -1672,322 +1625,11 @@ export function usePaneActions(
     [closeApprovedTarget],
   )
 
-  // Promote a detached dispatch session into the grid at a chosen placement
-  // target.
-  //
-  // WHY this wakes before the state move:
-  // Detached sessions are "live" only inside a single app process. After a full
-  // Agent Code restart, rehydrate intentionally keeps their SessionMeta but
-  // does not respawn their provider PTY; otherwise a workspace with dozens of
-  // parked agents would fork-bomb on launch. Attaching one back to the grid is
-  // the explicit user action that makes it live again. We wake under the same
-  // SessionId before inserting the leaf so every relationship pointer
-  // (orchestrationParentId/rootId, linkedParentId, tiled lanes, pins) remains
-  // intact and the pane never becomes visibly commandable while main would drop
-  // writes for a missing session.
-  //
-  // The target tab need not equal the detached record's projectTabId.
-  // projectTabId was always *affinity* (cwd defaults / dispatch
-  // grouping / terminal selection), never *ownership*. Letting the
-  // user pin a project-A detached agent into project-B's grid is the
-  // whole point of having a placement step.
-  const attachDetachedToGrid = useCallback(
-    async (sessionId: SessionId, targetTabId: string, target: PlacementTarget) => {
-      try {
-        await sessionActions.ensureSessionLive(sessionId, 'pane.attach-detached')
-      } catch (err) {
-        showToast(
-          err instanceof Error && err.message.length > 0
-            ? err.message
-            : 'Could not wake detached session before attaching it.',
-        )
-        return
-      }
-      setState(prev => {
-        const detached = prev.detachedSessions[sessionId]
-        if (!detached) return prev
-        const targetTab = prev.tabs.find(t => t.id === targetTabId)
-        if (!targetTab) return prev
-        // For a split-leaf target, the anchor must still exist in the
-        // chosen tab's tree. The placement overlay computes targets from
-        // a snapshot of the tree, so a stale target after a concurrent
-        // tab close would silently no-op via insertBesideLeaf returning
-        // the input. Bail with no state change so the user can re-open
-        // the picker rather than getting a confusing "I clicked place
-        // and nothing happened."
-        if (target.kind === 'split-leaf') {
-          const anchorStillThere = collectLeaves(targetTab.root).includes(target.targetSessionId)
-          if (!anchorStillThere) return prev
-        }
-        const detachedSessions = { ...prev.detachedSessions }
-        delete detachedSessions[sessionId]
-        return {
-          ...prev,
-          // WHY activeTabId follows the explicit attach target:
-          // attaching into a tab is a visible grid-focus change. Classic
-          // Dispatch used to make this incidental because row focus synced
-          // activeTabId before the overlay opened; Tiled Dispatch does not
-          // touch activeTabId when a lane is selected. Capturing the tab in the
-          // attach intent and committing it here keeps the grid focus context
-          // aligned with the actual insertion tab instead of whatever tab was
-          // active before the user entered global Tiled Dispatch.
-          activeTabId: targetTabId,
-          detachedSessions,
-          tabs: prev.tabs.map(currentTab => {
-            if (currentTab.id !== targetTabId) return currentTab
-            return {
-              ...currentTab,
-              root:
-                target.kind === 'wrap-root'
-                  ? wrapRootWithLeaf(
-                      currentTab.root,
-                      target.direction,
-                      target.side,
-                      sessionId,
-                    )
-                  : insertBesideLeaf(
-                      currentTab.root,
-                      target.targetSessionId,
-                      target.direction,
-                      RATIO_DEFAULT,
-                      target.side,
-                      sessionId,
-                    ),
-              focusedSessionId: sessionId,
-            }
-          }),
-          // Drop dispatch focus if it was pointing at this session —
-          // the session now lives in the grid, and grid focus on the
-          // active tab is what owns selection going forward. Leaving
-          // the dispatch focus pointing at a now-grid-placed session
-          // would make the dispatch list highlight a row that has
-          // moved out of detachedSessions on the next render.
-          dispatchMode:
-            prev.dispatchMode?.focusedSessionId === sessionId
-              ? { ...prev.dispatchMode, focusedSessionId: undefined }
-              : prev.dispatchMode,
-        }
-      })
-    },
-    [sessionActions, setState, showToast],
-  )
-
-  const attachAllDetachedForTab = useCallback(
-    async (tabId: string) => {
-      let attachedCount = 0
-      const snapshot = refs.stateRef.current
-      const detachedIds = detachedDispatchSessionIdsForTab(snapshot, tabId)
-      if (detachedIds.length === 0) return
-      const liveIds: SessionId[] = []
-      for (const sessionId of detachedIds) {
-        try {
-          await sessionActions.ensureSessionLive(sessionId, 'pane.attach-all-detached')
-          liveIds.push(sessionId)
-        } catch (err) {
-          console.warn('[workspace] failed to wake detached session before bulk attach:', err)
-        }
-      }
-      if (liveIds.length === 0) {
-        showToast('Could not wake any detached sessions for this tab')
-        return
-      }
-      setState(prev => {
-        const tab = prev.tabs.find(t => t.id === tabId)
-        if (!tab) return prev
-        const attachableIds = liveIds.filter(sessionId => prev.detachedSessions[sessionId])
-        if (attachableIds.length === 0) return prev
-        attachedCount = attachableIds.length
-
-        const detachedSessions = { ...prev.detachedSessions }
-        for (const sessionId of attachableIds) {
-          delete detachedSessions[sessionId]
-        }
-
-        // Bulk attach deliberately creates one new subtree for the
-        // incoming Dispatch sessions and hard-normalizes ONLY that
-        // subtree. The existing tab root is preserved byte-for-byte
-        // below a single wrapper split; its internal ratios and pane
-        // arrangement are not flattened. This gives users a predictable
-        // "pin all background work beside my current grid" action
-        // without punishing the layout they already curated.
-        const attachedSubtree = normalizeTree(attachableIds)
-        const nextRoot = wrapRootWithNode(
-          tab.root,
-          'vertical',
-          'b',
-          attachedSubtree,
-        )
-        const focusedSessionId = attachableIds[0]
-
-        return {
-          ...prev,
-          activeTabId: tabId,
-          detachedSessions,
-          tabs: prev.tabs.map(currentTab =>
-            currentTab.id === tabId
-              ? {
-                  ...currentTab,
-                  root: nextRoot,
-                  focusedSessionId,
-                }
-              : currentTab,
-          ),
-          // The attached sessions stop being detached records, but the first
-          // one is still the user's target for the bulk attach action. Keep
-          // Dispatch focus explicit so the highlighted row and command target
-          // do not depend on selectVisibleDispatchRow's grid-focus fallback.
-          dispatchMode: prev.dispatchMode
-            ? { ...prev.dispatchMode, focusedSessionId }
-            : prev.dispatchMode,
-        }
-      })
-      if (attachedCount > 0) {
-        showToast(
-          `Attached ${attachedCount} Dispatch ${attachedCount === 1 ? 'session' : 'sessions'} to grid`,
-        )
-      }
-    },
-    [refs.stateRef, sessionActions, setState, showToast],
-  )
-
-  // The reverse direction: take the focused grid pane out of the tile
-  // tree without killing its session, and add it to the dispatch
-  // detached bucket.
-  //
-  // Refuses in two cases, each surfaced as a toast so the user
-  // understands why nothing happened:
-  //   1. No focused session — nothing to detach.
-  //   2. The focused pane is the only leaf in its tab — closeLeaf would
-  //      return null and the tab.root type cannot represent an empty
-  //      tree. We don't want to silently close the tab either, so we
-  //      refuse and ask the user to add another pane first.
-  const detachSessionToDispatch = useCallback((sessionId: SessionId) => {
-    const snapshot = refs.stateRef.current
-    const meta = snapshot.sessions[sessionId]
-    if (!meta) return
-    const tab = snapshot.tabs.find(t => collectLeaves(t.root).includes(sessionId))
-    if (!tab) {
-      // WHY detached rows no-op here instead of re-detaching:
-      // This action means "move the grid pane out to Dispatch." A detached
-      // session is already there; treating it as success would hide a stale
-      // command-target bug, while trying to mutate it would duplicate the
-      // ownership record. The attach command owns the reverse direction.
-      showToast('Session is already detached to Dispatch')
-      return
-    }
-    const leaves = collectLeaves(tab.root)
-    if (leaves.length <= 1) {
-      showToast('Cannot detach the last pane in a tab — add another pane first')
-      return
-    }
-    const tabIndex = snapshot.tabs.findIndex(t => t.id === tab.id)
-
-    setState(prev => {
-      const latestTab = prev.tabs.find(t => t.id === tab.id)
-      if (!latestTab) return prev
-      const nextRoot = closeLeaf(latestTab.root, sessionId)
-      // Defensive guard: closeLeaf returning null here would mean a
-      // race against a concurrent close emptied the tab between the
-      // snapshot read and the setState. The leaves.length check above
-      // already filtered the common case; this is for race-window
-      // safety so the type stays sound.
-      if (!nextRoot) return prev
-      const nextLeafIds = collectLeaves(nextRoot)
-      const nextFocus =
-        latestTab.focusedSessionId === sessionId
-          ? nextLeafIds[0] ?? ''
-          : latestTab.focusedSessionId
-
-      return {
-        ...prev,
-        tabs: prev.tabs.map(t =>
-          t.id === tab.id
-            ? { ...t, root: nextRoot, focusedSessionId: nextFocus }
-            : t,
-        ),
-        detachedSessions: {
-          ...prev.detachedSessions,
-          [sessionId]: detachedDispatchRecord(sessionId, latestTab, tabIndex),
-        },
-        // If Dispatch is currently active, focus the freshly detached
-        // session so the user sees the result of their action. If
-        // Dispatch is not active, leave dispatchMode alone — toggling
-        // into Dispatch later will pick this up via the existing
-        // first-row fallback in selectActiveRow.
-        dispatchMode: prev.dispatchMode
-          ? { ...prev.dispatchMode, focusedSessionId: sessionId }
-          : prev.dispatchMode,
-      }
-    })
-    const cwdBase = meta.cwd.split('/').filter(Boolean).pop() ?? 'session'
-    showToast(`Detached "${cwdBase}" to Dispatch`)
-  }, [refs.stateRef, setState, showToast])
-
-
-  const detachFocusedToDispatch = useCallback(() => {
-    const id = commandTargetSessionIdForState(refs.stateRef.current)
-    if (id) detachSessionToDispatch(id)
-    else showToast('No focused session to detach')
-  }, [refs.stateRef, detachSessionToDispatch, showToast])
-
-  const commitNewAgentPlacement = useCallback(
-    async (selection: SessionSpawnSelection, target: PlacementTarget) => {
-      const { kind, providerRuntime } = selection
-      const tab = state.tabs.find(t => t.id === state.activeTabId)
-      if (!tab) return
-      const anchorSessionId = tab.focusedSessionId
-      const cwd = state.sessions[anchorSessionId]?.cwd
-      if (!cwd) return
-
-      let newSessionId: SessionId
-      try {
-        newSessionId = await sessionActions.spawn(cwd, { kind, providerRuntime })
-      } catch (err) {
-        showToast(
-          err instanceof Error && err.message.length > 0
-            ? err.message
-            : 'Failed to create pane',
-        )
-        return
-      }
-      setState(prev => ({
-        ...prev,
-        tabs: prev.tabs.map(currentTab => {
-          if (currentTab.id !== prev.activeTabId) return currentTab
-          return {
-            ...currentTab,
-            root:
-              target.kind === 'wrap-root'
-                ? wrapRootWithLeaf(
-                    currentTab.root,
-                    target.direction,
-                    target.side,
-                    newSessionId,
-                  )
-                : insertBesideLeaf(
-                    currentTab.root,
-                    target.targetSessionId,
-                    target.direction,
-                    RATIO_DEFAULT,
-                    target.side,
-                    newSessionId,
-                  ),
-            focusedSessionId: newSessionId,
-          }
-        }),
-      }))
-      closeNewAgentPlacement()
-    },
-    [
-      closeNewAgentPlacement,
-      sessionActions,
-      setState,
-      showToast,
-      state.activeTabId,
-      state.sessions,
-      state.tabs,
-    ],
-  )
+  // attachDetachedToGrid, attachAllDetachedForTab, detachSessionToDispatch,
+  // detachFocusedToDispatch and commitNewAgentPlacement lived here until the
+  // unified layout (#992). All five moved a session between a tile tree and
+  // the pool, or spawned one at a chosen split. There is no tree: every
+  // session is a pool member and is shown by selecting it into a lane.
 
   // One close implementation owns both row buttons and the keyboard command.
   // The former focused-grid copy silently made the sole leaf a tab close;
@@ -2244,418 +1886,12 @@ export function usePaneActions(
     [closeOperationMembers, refs.latestRuntimesRef, refs.stateRef, refs.undoStackRef, showToast],
   )
 
-  // Bury: remove the focused pane from the visible layout without
-  // killing the underlying session. The session keeps running in
-  // the background and remains eligible for revive.
-  //
-  // WHY commandTargetSessionIdForState instead of tab.focusedSessionId:
-  // tab.focusedSessionId has a "must be a leaf in tab.root" invariant —
-  // it's grid-only. In Dispatch Mode the user has a row selected, not
-  // a grid focus, and reading tab.focusedSessionId silently opens the
-  // bury prompt on whatever grid pane is focused underneath the
-  // visible dispatch row — exactly the bug class issue #94 tracks.
-  // Routing through commandTargetSessionIdForState makes Bury agree
-  // with every other "act on the visible thing" command (close,
-  // copy-assistant, scroll-to-latest, switch-provider, reload, rewind,
-  // soft-reload-view — all already use this resolver).
-  const requestBuryFocused = useCallback(() => {
-    const snapshot = refs.stateRef.current
-    const sessionId = commandTargetSessionIdForState(snapshot)
-    if (!sessionId) return
-    // Bury moves a GRID PANE out of the layout: `buryFocused` resolves the
-    // owning tab, records the split position needed to revive it, and bails
-    // when the target has no tab. A detached Dispatch row has none, so the
-    // prompt would open, accept a note, and then silently do nothing.
-    //
-    // WHY the check is here rather than in `buryFocused`: failing at confirm
-    // time means the user has already typed the note. Refusing before the
-    // modal opens is the same judgement, made where it still costs nothing.
-    //
-    // WHY a toast rather than hiding the command: bury is a reasonable thing
-    // to WANT for a Dispatch row, and detached sessions are already parked
-    // out of the layout, so the honest answer is "this does not apply here" —
-    // not a command that vanishes with no explanation. This became reachable
-    // for terminals when Dispatch terminals stopped being grid leaves (#671);
-    // detached agents always had it.
-    if (!snapshot.tabs.some(tab => collectLeaves(tab.root).includes(sessionId))) {
-      showToast('Bury applies to grid panes — this session is already parked in Dispatch')
-      return
-    }
-    openBuryPrompt(sessionId)
-  }, [openBuryPrompt, refs.stateRef, showToast])
-
-  const buryFocused = useCallback(
-    (note?: string, targetSessionId?: SessionId) => {
-      // The bury prompt is modal on a specific session, not a
-      // specific tab. It can outlive a tab switch: user opens the
-      // prompt on pane X in tab A, switches to tab B, then hits
-      // Enter. Earlier we resolved `tab` via `state.activeTabId`,
-      // which meant that confirm-after-switch mutated tab B's tree
-      // even though targetId still pointed at pane X in tab A.
-      // Resolve the owning tab from the target session instead.
-      const snapshot = refs.stateRef.current
-      const activeTab = snapshot.tabs.find(t => t.id === snapshot.activeTabId)
-      // The `?? activeTab?.focusedSessionId` fallback is intentionally
-      // defensive belt-and-suspenders: every current caller passes an
-      // explicit `targetSessionId` (the bury-prompt modal in App.tsx
-      // owns the resolved id at confirm time; requestBuryFocused
-      // resolves it via commandTargetSessionIdForState before opening
-      // the prompt). The fallback exists so a future caller that
-      // forgets to pass an id doesn't no-op silently — but it MUST
-      // NOT become the primary path, because activeTab.focusedSessionId
-      // is grid-only and would re-introduce the Dispatch-misses-target
-      // bug from #94.
-      const targetId = targetSessionId ?? activeTab?.focusedSessionId
-      if (!targetId) return
-
-      const owningTab = snapshot.tabs.find(t => collectLeaves(t.root).includes(targetId))
-      if (!owningTab) return
-
-      const sessionMeta = snapshot.sessions[targetId]
-      if (!sessionMeta) return
-
-      const parentInfo = findParentSplitInfo(owningTab.root, targetId)
-      const tabIndex = snapshot.tabs.findIndex(t => t.id === owningTab.id)
-      const buriedAt = Date.now()
-      const buriedRecord: BuriedPaneRecord = {
-        id: targetId,
-        sessionId: targetId,
-        sessionMeta,
-        buriedAt,
-        sourceTabId: owningTab.id,
-        sourceTabTitle: owningTab.title,
-        sourceTabIndex: tabIndex,
-        direction: parentInfo?.direction,
-        ratio: parentInfo?.ratio,
-        side: parentInfo?.side,
-        siblingLeafId: parentInfo?.siblingLeafId,
-        note: note?.trim() ? note.trim() : undefined,
-      }
-      const detachedChildren = parentInfo
-        ? { records: [], ids: [] }
-        : detachedTabChildren(snapshot, owningTab.id)
-      // WHY last-pane bury transfers detached children into the buried archive
-      // instead of killing them: Bury is explicitly the non-destructive close.
-      // Once the source tab disappears, leaving its dispatch children detached
-      // would make them ownerless and the persistence sanitizer would discard
-      // them on the next save. Giving every live child an archive record keeps
-      // it discoverable and revivable while preserving its running backend.
-      const detachedBuriedRecords: BuriedPaneRecord[] = detachedChildren.records
-        .flatMap(entry => {
-          const meta = snapshot.sessions[entry.sessionId]
-          if (!meta) return []
-          return [{
-            id: entry.sessionId,
-            sessionId: entry.sessionId,
-            sessionMeta: meta,
-            buriedAt,
-            sourceTabId: owningTab.id,
-            sourceTabTitle: owningTab.title,
-            sourceTabIndex: tabIndex,
-          }]
-        })
-
-      const kindLabel = sessionMeta.kind ?? DEFAULT_PROVIDER
-      const cwdBase = sessionMeta.cwd.split('/').filter(Boolean).pop() ?? sessionMeta.cwd
-      showToast(`Buried ${kindLabel} pane (${cwdBase})`)
-
-      setState(prev => {
-        const tabs = [...prev.tabs]
-        const tabIdx = tabs.findIndex(t => t.id === owningTab.id)
-        // Tab may have been closed between prompt-open and confirm.
-        // Treat that as a no-op rather than mutating an unrelated tab.
-        if (tabIdx === -1) return prev
-
-        const currentTab = tabs[tabIdx]
-        const nextRoot = closeLeaf(currentTab.root, targetId)
-        if (nextRoot === null) {
-          const remaining = tabs.filter((_, i) => i !== tabIdx)
-          const detachedSessions = { ...prev.detachedSessions }
-          for (const id of detachedChildren.ids) delete detachedSessions[id]
-          const buriedSessionIds = new Set([
-            targetId,
-            ...detachedBuriedRecords.map(entry => entry.sessionId),
-          ])
-          const hiddenSessionIds = new Set([targetId, ...detachedChildren.ids])
-          // Only retarget activeTabId if we just removed the active
-          // tab. Burying a pane in a background tab must not yank
-          // the user out of the tab they're currently looking at.
-          const nextActiveTabId = prev.activeTabId === owningTab.id
-            ? (remaining[Math.max(0, tabIdx - 1)]?.id ?? '')
-            : prev.activeTabId
-          return {
-            ...prev,
-            tabs: remaining,
-            activeTabId: nextActiveTabId,
-            detachedSessions,
-            buried: [
-              ...prev.buried.filter(entry => !buriedSessionIds.has(entry.sessionId)),
-              buriedRecord,
-              ...detachedBuriedRecords,
-            ],
-            // A buried session is hidden from the dispatch rows, so a tiled
-            // lane still pointing at it would dangle; clear it so the lane
-            // re-homes cleanly instead of bouncing to tile 0.
-            dispatchMode: dispatchModeAfterSessionRemovals(
-              prev.dispatchMode,
-              hiddenSessionIds,
-            ),
-          }
-        }
-
-        const nextFocused =
-          findBestRemainingFocus(currentTab.root, nextRoot, targetId) ??
-          collectLeaves(nextRoot)[0]
-        tabs[tabIdx] = {
-          ...currentTab,
-          root: nextRoot,
-          focusedSessionId: nextFocused,
-        }
-        return {
-          ...prev,
-          tabs,
-          buried: [
-            ...prev.buried.filter(entry => entry.sessionId !== targetId),
-            buriedRecord,
-          ],
-          // See above: clear any tiled lane pointing at the buried session.
-          dispatchMode: clearTiledLaneSessions(prev.dispatchMode, targetId),
-        }
-      })
-      setSpotlight(prev => (prev?.tabId === owningTab.id ? null : prev))
-      closeBuryPrompt()
-    },
-    [closeBuryPrompt, refs.stateRef, setSpotlight, setState, showToast],
-  )
-
-  // Restores a buried session into the most plausible visible
-  // location. First choice is the original sibling anchor, then the
-  // original tab, then the best current tab by cwd/kind/title
-  // affinity, and finally a fresh single-pane tab if no good target
-  // exists.
-  const reviveBuried = useCallback(
-    async (buriedId: string) => {
-      const initialEntry = refs.stateRef.current.buried.find(item => item.id === buriedId)
-      if (!initialEntry) return
-      try {
-        await sessionActions.ensureSessionLive(initialEntry.sessionId, 'pane.revive-buried')
-      } catch (err) {
-        showToast(
-          err instanceof Error && err.message.length > 0
-            ? err.message
-            : 'Could not wake buried session before reviving it.',
-        )
-        return
-      }
-
-      // WHY re-read after wake: ensureSessionLive can update runtime metadata,
-      // clear stale backend errors, or lose a race to another revive/kill action.
-      // Placement should be based on the workspace that actually exists after
-      // the backend is live, not the pre-wake snapshot we used only to discover
-      // which session needed waking.
-      const current = refs.stateRef.current
-      const entry = current.buried.find(item => item.id === buriedId)
-      if (!entry) return
-
-      const chooseFallbackTab = (): Tab | null => {
-        const scored = current.tabs
-          .map(tab => {
-            let score = 0
-            if (tab.id === entry.sourceTabId) score += 100
-            if (tab.title === entry.sourceTabTitle) score += 20
-            const leafIds = collectLeaves(tab.root)
-            for (const leafId of leafIds) {
-              const meta = current.sessions[leafId]
-              if (!meta) continue
-              if (meta.cwd === entry.sessionMeta.cwd) score += 15
-              if ((meta.kind ?? DEFAULT_PROVIDER) === (entry.sessionMeta.kind ?? DEFAULT_PROVIDER)) score += 5
-            }
-            return { tab, score }
-          })
-          .filter(candidate => candidate.score > 0)
-          .sort((a, b) => b.score - a.score)
-        return scored[0]?.tab ?? current.tabs[0] ?? null
-      }
-
-      const anchorTab = entry.siblingLeafId
-        ? current.tabs.find(tab => collectLeaves(tab.root).includes(entry.siblingLeafId!))
-        : null
-      const targetTab = anchorTab ?? chooseFallbackTab()
-
-      setState(prev => {
-        const nextBuried = prev.buried.filter(item => item.id !== buriedId)
-
-        if (!targetTab) {
-          const tabId = crypto.randomUUID()
-          const title = titleFromCwd(entry.sessionMeta.cwd)
-          const revivedTab: Tab = {
-            id: tabId,
-            title,
-            root: { type: 'leaf', sessionId: entry.sessionId },
-            focusedSessionId: entry.sessionId,
-          }
-          return {
-            ...prev,
-            tabs: [...prev.tabs, revivedTab],
-            activeTabId: tabId,
-            buried: nextBuried,
-          }
-        }
-
-        const target = prev.tabs.find(tab => tab.id === targetTab.id)
-        if (!target) {
-          const tabId = crypto.randomUUID()
-          const title = titleFromCwd(entry.sessionMeta.cwd)
-          const revivedTab: Tab = {
-            id: tabId,
-            title,
-            root: { type: 'leaf', sessionId: entry.sessionId },
-            focusedSessionId: entry.sessionId,
-          }
-          return {
-            ...prev,
-            tabs: [...prev.tabs, revivedTab],
-            activeTabId: tabId,
-            buried: nextBuried,
-          }
-        }
-
-        const leafIds = collectLeaves(target.root)
-        const cwdLeaf =
-          leafIds.find(leafId => prev.sessions[leafId]?.cwd === entry.sessionMeta.cwd) ?? null
-        const anchorLeafId =
-          (entry.siblingLeafId && leafIds.includes(entry.siblingLeafId))
-            ? entry.siblingLeafId
-            : (cwdLeaf ?? target.focusedSessionId ?? leafIds[0] ?? null)
-
-        if (!anchorLeafId) {
-          const tabId = crypto.randomUUID()
-          const title = titleFromCwd(entry.sessionMeta.cwd)
-          const revivedTab: Tab = {
-            id: tabId,
-            title,
-            root: { type: 'leaf', sessionId: entry.sessionId },
-            focusedSessionId: entry.sessionId,
-          }
-          return {
-            ...prev,
-            tabs: [...prev.tabs, revivedTab],
-            activeTabId: tabId,
-            buried: nextBuried,
-          }
-        }
-
-        const revivedRoot = insertBesideLeaf(
-          target.root,
-          anchorLeafId,
-          entry.direction ?? 'vertical',
-          entry.ratio ?? RATIO_DEFAULT,
-          entry.side ?? 'b',
-          entry.sessionId,
-        )
-
-        return {
-          ...prev,
-          tabs: prev.tabs.map(tab =>
-            tab.id === target.id
-              ? {
-                  ...tab,
-                  root: revivedRoot,
-                  focusedSessionId: entry.sessionId,
-                }
-              : tab,
-          ),
-          activeTabId: target.id,
-          buried: nextBuried,
-        }
-      })
-    },
-    [refs.stateRef, sessionActions, setState, showToast],
-  )
-
-  const killBuried = useCallback(
-    async (buriedId: string) => {
-      const snapshot = refs.stateRef.current
-      const entry = snapshot.buried.find(item => item.id === buriedId)
-      if (!entry) return
-
-      // SECOND CONFIRMATION. The buried picker is already an explicit,
-      // deliberate selection — but this is the one close in the app with NO
-      // undo at all: a buried session is not on the undo-close stack, so the
-      // kill is final. The picker's own selection is not consent to that.
-      //
-      // Confirmation is unconditional, unlike the ordinary close paths. There
-      // is no cheap idle case to protect here, because there is no recovery
-      // even when the session is idle.
-      const buriedConfirmed = await requestCloseConfirmation({
-        required: true,
-        // Its OWN reason. Borrowing 'running' made the dialog title an idle
-        // buried session "Close a working session?", contradicting both its
-        // body and the actual state — on the one close with no undo, where the
-        // dialog's credibility is the entire mechanism.
-        reason: 'irreversible',
-        targets: [{
-          sessionId: entry.sessionId,
-          // A buried entry always carries its own sessionMeta, even after the
-          // session has left `sessions` entirely — so read from there rather
-          // than the (possibly absent) live sessions record (#865).
-          title: sessionDisplayTitle(entry.sessionMeta),
-          live: isSessionLiveForClose(refs.latestRuntimesRef.current, entry.sessionId),
-        }],
-        summary: 'Killing a buried session is permanent — Undo Close cannot restore it.',
-      })
-      if (!buriedConfirmed) return
-
-      // Buried panes are live sessions removed from every visible tab
-      // tree. `closeSession` intentionally only handles visible panes
-      // because it needs tree geometry and undo-close placement data;
-      // using it here would no-op. Killing a buried pane is a different
-      // operation: terminate the hidden backend and delete the buried
-      // record directly, without briefly reviving or mutating layout.
-      await killSessionBackendIfOwned(refs, entry.sessionId)
-
-      setRuntimes(prev => {
-        const next = { ...prev }
-        delete next[entry.sessionId]
-        return next
-      })
-      forgetClosedSessionDebugState(refs, entry.sessionId)
-      const bootstrapTimer = refs.bootstrapTimersRef.current.get(entry.sessionId)
-      if (bootstrapTimer) {
-        clearTimeout(bootstrapTimer)
-        refs.bootstrapTimersRef.current.delete(entry.sessionId)
-      }
-      const paneToastTimer = refs.paneToastTimers.current[entry.sessionId]
-      if (paneToastTimer) {
-        clearTimeout(paneToastTimer)
-        delete refs.paneToastTimers.current[entry.sessionId]
-      }
-
-      setState(prev => {
-        const sessions = { ...prev.sessions }
-        delete sessions[entry.sessionId]
-        return {
-          ...prev,
-          sessions,
-          buried: prev.buried.filter(item => item.id !== buriedId),
-        }
-      })
-
-      const kindLabel = entry.sessionMeta.kind ?? DEFAULT_PROVIDER
-      const cwdBase = entry.sessionMeta.cwd.split('/').filter(Boolean).pop() ?? entry.sessionMeta.cwd
-      showToast(`Killed buried ${kindLabel} pane (${cwdBase})`)
-    },
-    [
-      refs.bootstrapTimersRef,
-      refs.latestScreenRef,
-      refs.paneToastTimers,
-      refs.seenUuidsRef,
-      refs.stateRef,
-      setRuntimes,
-      setState,
-      showToast,
-    ],
-  )
+  // requestBuryFocused / buryFocused / reviveBuried / killBuried lived here
+  // until #992. Bury took a pane out of the tree and kept it alive in an
+  // archive; in the pool-first workspace that is simply an unplaced session,
+  // so there is nothing to bury into, revive from, or kill separately.
+  // Persisted `buried` records are folded into the pool at the read boundary
+  // (workspaceShape.ts foldBuriedIntoDetached).
 
   const focusSession = useCallback(
     (sessionId: SessionId) => {
@@ -2688,24 +1924,10 @@ export function usePaneActions(
           ? { ...prev, focusedSessionId: sessionId }
           : prev
       ))
-      setTileTabs(prev => (
-        prev && prev.tabIds.includes(tabId)
-          ? { ...prev, focusedTabId: tabId }
-          : prev
-      ))
     },
-    [setSpotlight, setState, setTileTabs],
+    [setSpotlight, setState],
   )
 
-  const navigate = useCallback(
-    (direction: 'left' | 'right' | 'up' | 'down') => {
-      const tab = state.tabs.find(t => t.id === state.activeTabId)
-      if (!tab) return
-      const next = findDirectionalNeighbor(tab.root, tab.focusedSessionId, direction)
-      if (next) focusSession(next)
-    },
-    [focusSession, state.activeTabId, state.tabs],
-  )
 
   // Open a contributed extension view as a PANE (a tile leaf), not a modal.
   //
@@ -2751,30 +1973,10 @@ export function usePaneActions(
           }
         }
 
-        const tab = prev.tabs.find(t => t.id === prev.activeTabId)
-        if (!tab) return prev
-        // Anchor on the PHYSICAL focused leaf, exactly like splitFocused. The
-        // command target can be a related-agent mini-tab's session, which is a
-        // detached child and never a leaf of tab.root, so splitLeaf returned the
-        // same root and opening a view silently did nothing while such a tab was
-        // selected.
-        const parentSessionId = tab.focusedSessionId
-        if (!parentSessionId) return prev
-        const root = splitLeaf(tab.root, parentSessionId, direction, sessionId)
-        // Only a real split owns metadata. This also guards stale tile focus.
-        if (root === tab.root) return prev
-        return {
-          ...prev,
-          tabs: prev.tabs.map(t => t.id === tab.id ? { ...t, root, focusedSessionId: sessionId } : t),
-          sessions: {
-            ...prev.sessions,
-            [sessionId]: {
-              cwd: prev.sessions[parentSessionId]?.cwd ?? '',
-              kind: 'extension-view',
-              extensionViewId: viewId,
-            },
-          },
-        }
+        // A tile-tree branch lived here until #992 (split beside the focused
+        // leaf). The stage is the only workspace; before bootstrap has seeded
+        // it there is no lane to show the view in, so nothing is created.
+        return prev
       })
     },
     [setState],
@@ -2783,27 +1985,17 @@ export function usePaneActions(
   return {
     splitFocused,
     startNewAgentPlacement,
-    commitNewAgentPlacement,
     // Shells and agents share detached placement and post-spawn ownership
     // checks. Preserve the narrower agent entry point for existing pickers.
     createDetachedSession: createDetachedDispatchAgent,
     createDetachedDispatchAgent,
     createLinkedAgent,
     createOrchestrationAgent,
-    attachDetachedToGrid,
-    attachAllDetachedForTab,
-    detachSessionToDispatch,
-    detachFocusedToDispatch,
     closeFocused,
     closeSession,
     closeTab,
-    requestBuryFocused,
-    buryFocused,
-    reviveBuried,
-    killBuried,
     focusSession,
     focusSessionInTab,
-    navigate,
     openExtensionViewInPane,
   }
 }

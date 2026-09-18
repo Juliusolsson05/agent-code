@@ -47,7 +47,6 @@ describe('NewAgentPlacementOverlay OpenCode runtime choices', () => {
         open
         workspace={workspace}
         onClose={onClose}
-        attachIntent={null}
         linkedAgentParentId={null}
         projectIntent={null}
       />,
@@ -89,7 +88,7 @@ describe('NewAgentPlacementOverlay OpenCode runtime choices', () => {
 
     render(
       <NewAgentPlacementOverlay open workspace={workspace} onClose={vi.fn()}
-        attachIntent={null} linkedAgentParentId={null} projectIntent={projectIntent} />,
+        linkedAgentParentId={null} projectIntent={projectIntent} />,
     )
     fireEvent.click(screen.getByText('Terminal').closest('button')!)
     expect(createDetachedDispatchAgent).toHaveBeenCalledWith({ kind: 'terminal', providerRuntime: undefined }, projectIntent)

@@ -205,7 +205,6 @@ function makeRefs(state: WorkspaceState, runtimes: Record<SessionId, SessionRunt
     stateRef: ref(state),
     latestStateRef: ref(state),
     latestRuntimesRef: ref(runtimes),
-    latestTileTabsRef: ref(null),
     dangerousAgentsRef: ref(false),
     useProxyStreamingRef: ref(false),
     defaultBuiltInMcpDomainsRef: ref([]),
@@ -276,7 +275,6 @@ function makeReloadHarness() {
       runtimes = typeof next === 'function' ? next(runtimes) : next
       refs.latestRuntimesRef.current = runtimes
     },
-    setTileTabs: vi.fn(),
   }
 }
 
@@ -442,7 +440,6 @@ describe('recorded Codex 0.151 live continuity across app layers', () => {
       reload.refs,
       reload.setState,
       reload.setRuntimes,
-      reload.setTileTabs,
       vi.fn(),
       {
         recoverSession: restartedManager.recover.bind(restartedManager),

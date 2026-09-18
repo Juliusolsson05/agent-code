@@ -3,9 +3,11 @@ import { describe, expect, it } from 'vitest'
 import type { PersistedWorkspace } from '@renderer/workspace/persistence'
 import type { SessionId, TabId } from '@renderer/workspace/types'
 import {
+  foldBuriedIntoDetached,
   isStageWorkspace,
   migrateWorkspaceToStage,
 } from '@renderer/workspace/workspaceShape'
+import { collectOwnedSessionIds } from '@renderer/workspace/sessionOwnership'
 import { ownerV2Workspace } from '@renderer/workspace/workspaceShape.ownerV2Fixture'
 
 // The migration contract (plan 2026-09-17-unified-stage-layout.md §6, §10).
@@ -377,5 +379,51 @@ describe('migrateWorkspaceToStage — degenerate and affinity guards', () => {
       ],
     })
     expect(migrated.sessions[sessionId]?.projectId).toBe(TAB_A)
+  })
+})
+
+describe('foldBuriedIntoDetached — buried sessions become parked pool rows', () => {
+  // Bury / Revive were deleted (#992 stage 3a). These pin the read-boundary
+  // rule that keeps an old file's buried sessions reachable without them.
+  const buriedRecord = (sessionId: SessionId, sourceTabId: TabId, buriedAt = 7) => ({
+    id: sessionId,
+    sessionId,
+    sessionMeta: { cwd: '/x/hidden', kind: 'codex' as const },
+    buriedAt,
+    sourceTabId,
+    sourceTabTitle: 'app',
+    sourceTabIndex: 0,
+  })
+
+  it('returns the same object when nothing is buried', () => {
+    const base = gridHeavyV2Workspace()
+    expect(foldBuriedIntoDetached(base)).toBe(base)
+  })
+
+  it('files a buried session under its source project, ordered by when it left the screen', () => {
+    const base = gridHeavyV2Workspace()
+    const folded = foldBuriedIntoDetached({ ...base, buried: [buriedRecord(S('hidden'), TAB_B, 42)] })
+    expect(folded.buried).toEqual([])
+    expect(folded.detachedSessions?.[S('hidden')]).toMatchObject({
+      surface: 'dispatch', projectTabId: TAB_B, projectTabTitle: 'service', projectTabIndex: 1, detachedAt: 42,
+    })
+    // A buried record can carry the ONLY copy of its metadata.
+    expect(folded.sessions[S('hidden')]).toEqual({ cwd: '/x/hidden', kind: 'codex' })
+  })
+
+  it('re-parents a buried session whose source project is gone instead of orphaning it', () => {
+    // v2 kept buried sessions unconditionally; a detached record naming a dead
+    // project would be dropped by ownership, i.e. silent data loss.
+    const base = gridHeavyV2Workspace()
+    const folded = foldBuriedIntoDetached({ ...base, buried: [buriedRecord(S('hidden'), 'tab-ghost')] })
+    expect(folded.detachedSessions?.[S('hidden')]?.projectTabId).toBe(TAB_A)
+    expect(collectOwnedSessionIds(folded).has(S('hidden'))).toBe(true)
+  })
+
+  it('never gives a session a second owner', () => {
+    const base = gridHeavyV2Workspace()
+    const folded = foldBuriedIntoDetached({ ...base, buried: [buriedRecord(S('a1'), TAB_A)] })
+    expect(folded.detachedSessions?.[S('a1')]).toBeUndefined()
+    expect(folded.sessions[S('a1')]).toEqual(base.sessions[S('a1')])
   })
 })

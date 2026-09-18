@@ -85,7 +85,6 @@ export function useAutoSave(
       tabs: s.tabs,
       sessions: pruned.sessions,
       activeTabId: s.activeTabId,
-      tileTabs: refs.latestTileTabsRef.current,
     })
     if (repairedTabs.droppedLeafSessionIds.length > 0) {
       // eslint-disable-next-line no-console
@@ -150,7 +149,6 @@ export function useAutoSave(
       pinnedSessionIds: persistedPinnedSessionIds.length > 0
         ? persistedPinnedSessionIds
         : undefined,
-      tileTabs: repairedTabs.tileTabs,
       drafts: Object.keys(drafts).length > 0 ? drafts : undefined,
     }
     // Unified-layout v3 triple (#992): derived by running the SAME migration
@@ -198,7 +196,6 @@ export function useAutoSave(
         saveSpan.end({
           tabs: persisted.tabs.length,
           sessions: Object.keys(persisted.sessions).length,
-          tileTabs: persisted.tileTabs?.tabIds.length ?? 0,
           bytes: json.length,
         })
       })
@@ -231,7 +228,6 @@ export function useAutoSave(
   }, [
     refs.latestRuntimesRef,
     refs.latestStateRef,
-    refs.latestTileTabsRef,
     refs.pendingAdoptionWindowIdsRef,
   ])
 

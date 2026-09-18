@@ -6,7 +6,6 @@ import {
   focusedLaneBoundProjectTabIds,
   resolveDispatchSpawnTarget,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
-import { resolveDispatchAttachTarget } from '@renderer/workspace/dispatch/dispatchTarget'
 import { nextTiledRowIndex } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import { resolveFocusSurfaceTarget } from '@renderer/workspace/hook/actions/focusSurfaceTarget'
 import { commandTargetSessionIdForState } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
@@ -257,47 +256,6 @@ describe('strict Dispatch command target', () => {
   })
 })
 
-describe('resolveDispatchAttachTarget', () => {
-  it('captures the visible row tab instead of stale activeTabId', () => {
-    const state = makeState({
-      scope: 'global',
-      focusedSessionId: 'a1',
-      tiled: {
-        focusedLane: 1,
-        lanes: [{ selectedSessionId: 'a1' }, { selectedSessionId: 'b2' }],
-      },
-    })
-    state.sessions.b2 = { cwd: '/work/project-b', kind: 'claude' }
-    state.detachedSessions = {
-      b2: {
-        sessionId: 'b2',
-        surface: 'dispatch',
-        projectTabId: 'tabB',
-        projectTabTitle: 'project-b',
-        projectTabIndex: 1,
-        detachedAt: 10,
-      },
-    }
-
-    expect(resolveDispatchAttachTarget(state)).toEqual({
-      sessionId: 'b2',
-      targetTabId: 'tabB',
-    })
-  })
-
-  it('returns null for an unresolved focused tiled lane', () => {
-    const state = makeState({
-      scope: 'global',
-      focusedSessionId: 'a1',
-      tiled: {
-        focusedLane: 1,
-        lanes: [{ selectedSessionId: 'a1' }, {}],
-      },
-    })
-
-    expect(resolveDispatchAttachTarget(state)).toBeNull()
-  })
-})
 
 describe('nextTiledRowIndex', () => {
   it('lands on the first row from no selection, whichever direction is pressed', () => {

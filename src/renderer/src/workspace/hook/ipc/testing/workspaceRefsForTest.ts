@@ -16,7 +16,6 @@ export function makeWorkspaceRefsForTest(state: WorkspaceState): WorkspaceRefs {
     stateRef: ref(state),
     latestStateRef: ref(state),
     latestRuntimesRef: ref({}),
-    latestTileTabsRef: ref(null),
     dangerousAgentsRef: ref(false),
     useProxyStreamingRef: ref(false),
     defaultBuiltInMcpDomainsRef: ref([]),

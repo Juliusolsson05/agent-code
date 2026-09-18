@@ -2,11 +2,9 @@ import type {
   DetachedSessionRecord,
   SessionId,
   TabId,
-  TileTabsState,
   WorkspaceState,
 } from '@renderer/workspace/types'
 import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
-import { sanitizeTileTabsState } from '@renderer/workspace/layout/helpers'
 import { hasSessionMeta } from '@renderer/workspace/sessionOwnership'
 
 // Merge Project Tabs (#913): fold source tabs into a target tab WITHOUT
@@ -205,44 +203,3 @@ export function mergeProjectTabs(
   }
 }
 
-/**
- * The tiled-tabs half of a merge, shaped as a functional update so the hook
- * can apply it through `setTileTabs(prev => ...)` against the live value
- * rather than a render-time snapshot.
- *
- * WHY a tiled source is REPLACED by the target rather than dropped when the
- * target is not itself tiled: the user was looking at that source's tile, and
- * after the merge its agents belong to the target. Dropping the slot would
- * leave `activeTabId` on the target while `MainSurface` keeps rendering the
- * tiled set (it renders tiled tabs whenever the layout is set), so the tab the
- * user just kept would be the one tab not on screen. Only the first tiled
- * source takes the slot; the rest leave, and `sanitizeTileTabsState` exits
- * tiled tabs below two. Focus follows the same rule, so a focus that sat on a
- * source always lands on the target, which is tiled in either branch.
- */
-export function retargetTileTabsAfterMerge(
-  tileTabs: TileTabsState | null,
-  sourceTabIds: readonly TabId[],
-  targetTabId: TabId,
-): TileTabsState | null {
-  if (!tileTabs) return null
-  const sourceSet = new Set(sourceTabIds)
-  let slotTaken = tileTabs.tabIds.includes(targetTabId)
-  const kept = tileTabs.tabIds
-    .map((id, index) => ({ id, ratio: tileTabs.ratios[index] }))
-    .flatMap(item => {
-      if (!sourceSet.has(item.id)) return [item]
-      if (slotTaken) return []
-      slotTaken = true
-      return [{ id: targetTabId, ratio: item.ratio }]
-    })
-  const tabIds = kept.map(item => item.id)
-  const ratios = kept.map(item => item.ratio).filter((ratio): ratio is number => typeof ratio === 'number')
-  const focusedTabId = sourceSet.has(tileTabs.focusedTabId) ? targetTabId : tileTabs.focusedTabId
-  return sanitizeTileTabsState({
-    ...tileTabs,
-    tabIds,
-    focusedTabId,
-    ratios: ratios.length === tabIds.length ? ratios : [],
-  })
-}

@@ -261,7 +261,6 @@ describe('repairPersistedTabs', () => {
       tabs: state.tabs,
       sessions,
       activeTabId: state.activeTabId,
-      tileTabs: null,
     })
   }
 
@@ -334,49 +333,16 @@ describe('repairPersistedTabs', () => {
     expect(result.activeTabId).toBe('tabB')
   })
 
-  it('drops a dead tab out of tileTabs rather than persisting a dangling id', () => {
-    const state = makeOrphanLeafState()
-    state.tabs = [
-      { id: 'tabA', title: 'agent-code', root: leaf('orphan'), focusedSessionId: 'orphan' },
-      { id: 'tabB', title: 'b', root: leaf('live'), focusedSessionId: 'live' },
-      { id: 'tabC', title: 'c', root: leaf('live'), focusedSessionId: 'live' },
-    ]
-
-    const result = repairPersistedTabs({
-      tabs: state.tabs,
-      sessions: { live: state.sessions.live },
-      activeTabId: 'tabB',
-      tileTabs: {
-        tabIds: ['tabA', 'tabB', 'tabC'],
-        focusedTabId: 'tabA',
-        direction: 'vertical',
-        ratios: [0.34, 0.33, 0.33],
-      },
-    })
-
-    expect(result.tileTabs?.tabIds).toEqual(['tabB', 'tabC'])
-    // Focus pointed at the dropped tab, and ratios must match the new count.
-    expect(result.tileTabs?.focusedTabId).toBe('tabB')
-    expect(result.tileTabs?.ratios).toHaveLength(2)
-  })
 
   it('keeps every tab when nothing was dropped', () => {
     const state = makeOrphanLeafState()
-    const tileTabs = {
-      tabIds: ['tabA', 'tabB'],
-      focusedTabId: 'tabA',
-      direction: 'vertical' as const,
-      ratios: [0.5, 0.5],
-    }
-
     const result = repairPersistedTabs({
       tabs: state.tabs,
       sessions: { live: state.sessions.live },
       activeTabId: state.activeTabId,
-      tileTabs,
     })
-
-    // Only a dropped TAB can invalidate tileTabs; a collapsed split cannot.
-    expect(result.tileTabs).toBe(tileTabs)
+    // A collapsed split never drops its tab; only an emptied root can.
+    expect(result.droppedTabIds).toEqual([])
+    expect(result.tabs.map(t => t.id)).toEqual(state.tabs.map(t => t.id))
   })
 })

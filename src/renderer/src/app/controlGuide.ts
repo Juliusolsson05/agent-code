@@ -109,7 +109,7 @@ The operation history records retained MCP requests, arguments, steps, results a
 4. Read conversation depth incrementally for both agents. Expand to activity or full detail only when a question needs it.
 5. Find the session needing attention and show its existing view. Use the UI for a provider-specific dialog or visual inspection when appropriate.
 6. Observe again after computer use. Inspect diffs/results and ask for any missing verification before treating the work as finished.
-7. Retrieve operation history if any outcome is uncertain. Keep, detach, bury or close sessions according to the user's requested cleanup, respecting close impact.
+7. Retrieve operation history if any outcome is uncertain. Keep or close sessions according to the user's requested cleanup, respecting close impact. A session that should stay alive but off screen needs no action: select another session into its lane and it remains in the pool.
 
 For deeper instruction, request a section from this tool or page through full mode. The feature reference explains individual workflows; the command and interaction catalogs provide the exact names, descriptions and current shortcuts for this build.`,
   },

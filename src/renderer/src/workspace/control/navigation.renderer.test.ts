@@ -5,7 +5,7 @@ import { navigationControlCapabilities } from './navigation'
 const original = useAppStore.getState()
 afterEach(() => { useAppStore.setState(original, true); vi.unstubAllGlobals() })
 it('refuses acknowledgment when effective focus moves during workspace navigation', async () => {
-  useAppStore.setState({ workspaceReaderMode: null, workspaceSpotlight: null, workspaceTileTabs: null,
+  useAppStore.setState({ workspaceReaderMode: null, workspaceSpotlight: null,
     workspaceState: { ...original.workspaceState, activeTabId: 'project', dispatchMode: null,
       tabs: [{ id: 'project', title: 'Project', root: { type: 'leaf', sessionId: 'target' }, focusedSessionId: 'target' }, { id: 'other-project', title: 'Other', root: { type: 'leaf', sessionId: 'other' }, focusedSessionId: 'other' }],
       sessions: { target: { kind: 'claude', cwd: '/trial' }, other: { kind: 'claude', cwd: '/trial' } }, buried: [], detachedSessions: {},

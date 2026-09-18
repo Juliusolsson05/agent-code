@@ -135,25 +135,8 @@ describe('Dispatch terminal placement (#671)', () => {
     harness.mounted.unmount()
   })
 
-  it('normal (non-Dispatch) mode still splits the grid', async () => {
-    // The merged branch is gated on `dispatchMode`; ⌥T outside Dispatch must
-    // keep its old grid behaviour. Without this, "merge the flows" could
-    // quietly mean "terminals never enter the grid again".
-    const state = makeDispatchState({ scope: 'project', focusedSessionId: 'a1' })
-    const harness = mountPaneActions(
-      { ...state, dispatchMode: null },
-      { spawnSessionId: 'aTerm' },
-    )
-
-    await act(async () => {
-      await harness.actions.splitFocused('vertical', 'terminal')
-    })
-
-    const next = harness.getState()
-    expect(collectLeaves(next.tabs[0]!.root)).toEqual(['a1', 'aTerm'])
-    expect(next.detachedSessions['aTerm' as SessionId]).toBeUndefined()
-    harness.mounted.unmount()
-  })
+  // 'normal (non-Dispatch) mode still splits the grid' lived here until #992:
+  // there is no grid to split, so the stage branch above is the whole flow.
 })
 
 describe('closing a detached Dispatch session is undoable (#671)', () => {

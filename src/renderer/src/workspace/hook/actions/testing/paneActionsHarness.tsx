@@ -11,7 +11,6 @@ import type {
   WorkspaceSetRuntimes,
   WorkspaceSetSpotlight,
   WorkspaceSetState,
-  WorkspaceSetTileTabs,
 } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import type { WorkspaceState } from '@renderer/workspace/types'
@@ -37,7 +36,6 @@ export function makeRefs(state: WorkspaceState): WorkspaceRefs {
     stateRef: ref(state),
     latestStateRef: ref(state),
     latestRuntimesRef: ref({}),
-    latestTileTabsRef: ref(null),
     dangerousAgentsRef: ref(false),
     useProxyStreamingRef: ref(false),
     defaultBuiltInMcpDomainsRef: ref([]),
@@ -128,12 +126,9 @@ export function mountPaneActions(
       writer.setState,
       (() => undefined) as WorkspaceSetRuntimes,
       (() => undefined) as WorkspaceSetSpotlight,
-      (() => undefined) as WorkspaceSetTileTabs,
       (() => undefined) as WorkspaceSetReaderMode,
       refs,
       showToast,
-      vi.fn(),
-      vi.fn(),
       vi.fn(),
       vi.fn(),
       sessionActions,

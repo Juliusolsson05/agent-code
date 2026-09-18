@@ -75,10 +75,7 @@ function renderPaneActionsHarness(
     setRuntimes,
     vi.fn(),
     vi.fn(),
-    vi.fn(),
     refs,
-    vi.fn(),
-    vi.fn(),
     vi.fn(),
     vi.fn(),
     vi.fn(),
@@ -157,10 +154,7 @@ describe('pane recovery ownership', () => {
       setRuntimes,
       vi.fn(),
       vi.fn(),
-      vi.fn(),
       refs,
-      vi.fn(),
-      vi.fn(),
       vi.fn(),
       vi.fn(),
       vi.fn(),
@@ -264,54 +258,4 @@ describe('pane recovery ownership', () => {
     }
   })
 
-  it('moves detached children into the buried archive when bury removes their tab', () => {
-    const paneId = 'visible-pane'
-    const detachedId = 'detached-child'
-    const state = {
-      tabs: [{
-        id: 'tab-1',
-        title: 'Project',
-        focusedSessionId: paneId,
-        root: { type: 'leaf' as const, sessionId: paneId },
-      }],
-      activeTabId: 'tab-1',
-      sessions: {
-        [paneId]: { cwd: '/tmp/project', kind: 'claude' as const },
-        [detachedId]: { cwd: '/tmp/project', kind: 'codex' as const },
-      },
-      detachedSessions: {
-        [detachedId]: {
-          sessionId: detachedId,
-          surface: 'dispatch' as const,
-          projectTabId: 'tab-1',
-          projectTabTitle: 'Project',
-          projectTabIndex: 0,
-          detachedAt: 123,
-        },
-      },
-      buried: [],
-      pinnedSessionIds: [],
-      dispatchMode: null,
-    } as WorkspaceState
-    const harness = renderPaneActionsHarness(state, {
-      [paneId]: emptyRuntime(),
-      [detachedId]: emptyRuntime(),
-    })
-
-    act(() => {
-      harness.result.current.buryFocused('keep this work', paneId)
-    })
-
-    // Bury is a non-destructive visibility operation. Both sessions remain
-    // live, but both acquire durable archive ownership before the tab vanishes.
-    expect(harness.killOwnedSession).not.toHaveBeenCalled()
-    expect(harness.getState().tabs).toEqual([])
-    expect(harness.getState().detachedSessions).toEqual({})
-    expect(harness.getState().buried.map(entry => entry.sessionId)).toEqual([
-      paneId,
-      detachedId,
-    ])
-    expect(harness.getState().sessions).toEqual(state.sessions)
-    expect(Object.keys(harness.getRuntimes())).toEqual([paneId, detachedId])
-  })
 })

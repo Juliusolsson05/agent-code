@@ -7,7 +7,6 @@ import { tabCommands } from '@renderer/features/workspace/commands/tabCommands'
 import { windowCommands } from '@renderer/features/workspace/commands/windowCommands'
 import { settingsCommands } from '@renderer/features/settings/commands/settingsCommands'
 import { spotlightCommands } from '@renderer/features/spotlight/commands/spotlightCommands'
-import { tileTabsCommands } from '@renderer/features/tile-tabs/commands/tileTabsCommands'
 import { readerCommands } from '@renderer/features/reader/commands/readerCommands'
 import { copyAssistantCommands } from '@renderer/features/copy-assistant/commands/copyAssistantCommands'
 import { copyCodeBlockCommands } from '@renderer/features/copy-code-block/commands/copyCodeBlockCommands'
@@ -77,7 +76,6 @@ export const builtInCommandCatalog: readonly CommandDef[] = Object.freeze([
   ...spotlightCommands,
   ...tldrCommands,
   ...readerCommands,
-  ...tileTabsCommands,
   ...settingsCommands,
   ...copyAssistantCommands,
   ...copyCodeBlockCommands,

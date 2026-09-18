@@ -444,6 +444,54 @@ Each stage leaves `npm run check` green and is one PR-sized review.
 
 ---
 
+### 9.1 Stage 3 execution record (amended during implementation)
+
+The survey before stage 3 counted 48 non-test files reading the tile tree and
+about 100 touching the v2 buckets, so stage 3 was split. Each half leaves the
+branch green.
+
+**3a — delete features nothing renders, state shape unchanged.** Tile Tabs
+(feature, store slot, persisted field, `setTileTabs` threaded through eight
+action hooks), Bury / Revive / Kill Buried (commands, prompt, two palette
+modes, activity-modal action, `agents.bury` / `agents.restore`), the grid
+attach / detach pair and `placement.list` / `placement.attach` /
+`placement.detach` / `placement.inspect`, `layout.adjust`, split resize and
+`Focus Pane` actions and their key handlers, the placement step of New Agent,
+`geometry.ts`, `newAgentPlacement.ts`, the recursive `TileTree` component, and
+the grid branches of agent-index navigation.
+
+Decisions made in 3a that were not in the original plan:
+
+- **Buried sessions fold into the pool at every read boundary**
+  (`foldBuriedIntoDetached`, applied by rehydrate and by window adoption). With
+  the revive UI gone, a record left in `buried` would be alive, owned and
+  unreachable. A buried session whose source project is gone re-parents to the
+  active project rather than being dropped, because v2 kept buried sessions
+  unconditionally. The `buried` field itself survives until 3b, always empty.
+- **Three keyboard reservations were released** (split resize, directional
+  split resize, Tile Tabs resize continuation). A reservation with no owner
+  only fences off free chords. The macOS Option+Shift+Arrow record was kept in
+  `useKeybinds` as a comment, because it is the only place that fact lives.
+- **Related-agent mini-tabs are currently unreachable.** Only the recursive
+  tree passed `showRelatedAgentTabs`; lanes pass `false`. `gridRelatedSelections`
+  therefore has no writer on screen. Stage 4 decides whether lanes show the
+  mini-tabs or the field is deleted; §2.1's "survives, lane-local" is a
+  proposal until then.
+
+**3b — invert the stored authority.** `Tab` loses `root` and
+`focusedSessionId`; `dispatchMode` becomes a required `stage`;
+`detachedSessions` and `buried` are deleted. Two consequences to settle there:
+
+- `detachedAt` is the ONLY key ordering rows inside a project group. Deleting
+  the record needs a replacement order key on `SessionMeta`, seeded by the
+  migration from `detachedAt`, tree order for former leaves.
+- Boot spawns tile leaves today. With no leaves, the honest rule is **lane
+  occupants spawn, everything else stays parked**. That is bounded by the
+  16-lane cap, unlike the invisible 40-record herd of #258, and it closes the
+  restored-lane shape of #690 where a hibernated lane occupant rejects its
+  first prompt. It is a behavior change for a workspace like the owner's
+  (3 leaves spawn today, 12 lane occupants would) and is called out in the PR.
+
 ## 10. Testing strategy
 
 Per `docs/testing/standard.md` — suffix picks the tier, each test protects

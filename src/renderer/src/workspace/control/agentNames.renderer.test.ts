@@ -32,7 +32,6 @@ it('publishes enabled names and resolves an exact spoken name across windows', a
 
   useAppStore.setState({
     workspaceState: claimed,
-    workspaceTileTabs: null,
     workspaceReaderMode: null,
     workspaceSpotlight: null,
     workspaceRuntimes: {},
@@ -81,7 +80,6 @@ it('hides names and name lookup while the setting is off', async () => {
 
   useAppStore.setState({
     workspaceState: claimed,
-    workspaceTileTabs: null,
     workspaceReaderMode: null,
     workspaceSpotlight: null,
     workspaceRuntimes: {},

@@ -70,7 +70,6 @@ function makeHarness() {
     dispatchMode: null,
   } as unknown as WorkspaceState
   let runtimes: Record<SessionId, SessionRuntime> = {}
-  let tileTabs: null = null
   const refs = {
     dangerousAgentsRef: ref(false),
     useProxyStreamingRef: ref(false),
@@ -98,11 +97,6 @@ function makeHarness() {
       runtimes = typeof next === 'function' ? next(runtimes) : next
       refs.latestRuntimesRef.current = runtimes
     },
-    setTileTabs: (next: unknown) => {
-      tileTabs = typeof next === 'function'
-        ? (next as (prev: null) => null)(tileTabs)
-        : next as null
-    },
   }
 }
 
@@ -121,7 +115,7 @@ describe('rehydrateWorkspace backend reconciliation', () => {
         },
       })),
     } })
-    await rehydrateWorkspace(persisted, harness.refs, harness.setState, harness.setRuntimes, harness.setTileTabs, vi.fn())
+    await rehydrateWorkspace(persisted, harness.refs, harness.setState, harness.setRuntimes, vi.fn())
     expect(harness.state().sessions['stable-session']?.tldrIdentity).toBe('main-summary')
   })
 
@@ -181,7 +175,6 @@ describe('rehydrateWorkspace backend reconciliation', () => {
       harness.refs,
       harness.setState,
       harness.setRuntimes,
-      harness.setTileTabs,
       vi.fn(),
     )
 
@@ -244,7 +237,6 @@ describe('rehydrateWorkspace backend reconciliation', () => {
       harness.refs,
       harness.setState,
       harness.setRuntimes,
-      harness.setTileTabs,
       vi.fn(),
     )
 
@@ -267,7 +259,7 @@ describe('rehydrateWorkspace backend reconciliation', () => {
       },
     }))
     Object.defineProperty(window, 'api', { configurable: true, value: { recoverSession, defaultCwd: vi.fn() } })
-    await rehydrateWorkspace(persisted, harness.refs, harness.setState, harness.setRuntimes, harness.setTileTabs, vi.fn())
+    await rehydrateWorkspace(persisted, harness.refs, harness.setState, harness.setRuntimes, vi.fn())
     // Recovery may adopt an existing process. Settings describe the next
     // launch; they cannot change the tools that process already started with.
     expect(recoverSession).toHaveBeenCalledWith(expect.objectContaining({ builtInMcpDomains: ['tldr'] }))
@@ -305,7 +297,6 @@ describe('rehydrateWorkspace backend reconciliation', () => {
       harness.refs,
       harness.setState,
       harness.setRuntimes,
-      harness.setTileTabs,
       vi.fn(),
     )
 
@@ -352,7 +343,6 @@ describe('rehydrateWorkspace backend reconciliation', () => {
       harness.refs,
       harness.setState,
       harness.setRuntimes,
-      harness.setTileTabs,
       vi.fn(),
     )
     await vi.waitFor(() => expect(recoverSession).toHaveBeenCalledTimes(1))
@@ -408,7 +398,6 @@ describe('rehydrateWorkspace backend reconciliation', () => {
       harness.refs,
       harness.setState,
       harness.setRuntimes,
-      harness.setTileTabs,
       newTab,
     )
 
@@ -465,7 +454,6 @@ describe('rehydrateWorkspace backend reconciliation', () => {
       harness.refs,
       harness.setState,
       harness.setRuntimes,
-      harness.setTileTabs,
       vi.fn(),
     )
 
@@ -516,7 +504,6 @@ describe('rehydrateWorkspace backend reconciliation', () => {
       harness.refs,
       harness.setState,
       harness.setRuntimes,
-      harness.setTileTabs,
       vi.fn(),
     )
 
@@ -564,7 +551,6 @@ describe('rehydrateWorkspace backend reconciliation', () => {
       harness.refs,
       harness.setState,
       harness.setRuntimes,
-      harness.setTileTabs,
       vi.fn(),
       recoveryApi,
     )
@@ -667,7 +653,6 @@ describe('rehydrateWorkspace backend reconciliation', () => {
       harness.refs,
       harness.setState,
       harness.setRuntimes,
-      harness.setTileTabs,
       vi.fn(),
       recoveryApi,
       5,
@@ -749,7 +734,6 @@ describe('rehydrateWorkspace backend reconciliation', () => {
       harness.refs,
       harness.setState,
       harness.setRuntimes,
-      harness.setTileTabs,
       vi.fn(),
     )
 
@@ -843,7 +827,6 @@ describe('rehydrateWorkspace backend reconciliation', () => {
       harness.refs,
       harness.setState,
       harness.setRuntimes,
-      harness.setTileTabs,
       vi.fn(),
     )
 

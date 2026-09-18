@@ -6,10 +6,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { UndoCloseStack } from '@renderer/lib/undoClose'
 import { useAgentIndexNavigationActions } from '@renderer/workspace/hook/actions/agentIndexNavigation'
 import type { SessionActions } from '@renderer/workspace/hook/actions/session'
-import type {
-  WorkspaceSetState,
-  WorkspaceSetTileTabs,
-} from '@renderer/workspace/hook/context'
+import type { WorkspaceSetState } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import type { WorkspaceState } from '@renderer/workspace/types'
 
@@ -22,7 +19,15 @@ function makeState(): WorkspaceState {
       focusedSessionId: 'a1',
     }],
     activeTabId: 'tab-a',
-    dispatchMode: null,
+    // The stage is the workspace (#992): a1 sits in lane 0, lane 1 is empty and
+    // focused, so "navigate to A2" means "fill the focused lane with the parked
+    // agent". Before the unified layout this fixture had no Dispatch state and
+    // these cases exercised the tile-tree swap, which no longer exists.
+    dispatchMode: {
+      scope: 'global',
+      focusedSessionId: 'a1',
+      tiled: { focusedLane: 1, lanes: [{ selectedSessionId: 'a1' }, {}], rows: [{ length: 2 }] },
+    },
     sessions: {
       a1: { cwd: '/work/alpha/foreground', kind: 'claude' },
       a2: { cwd: '/work/alpha/background', kind: 'codex' },
@@ -48,7 +53,6 @@ function makeRefs(state: WorkspaceState): WorkspaceRefs {
     stateRef: ref(state),
     latestStateRef: ref(state),
     latestRuntimesRef: ref({}),
-    latestTileTabsRef: ref(null),
     dangerousAgentsRef: ref(false),
     useProxyStreamingRef: ref(false),
     defaultBuiltInMcpDomainsRef: ref([]),
@@ -76,17 +80,12 @@ function mountNavigation(
     refs.stateRef.current = state
     refs.latestStateRef.current = state
   }
-  const setTileTabs: WorkspaceSetTileTabs = next => {
-    const current = refs.latestTileTabsRef.current
-    refs.latestTileTabsRef.current = typeof next === 'function' ? next(current) : next
-  }
   const showToast = vi.fn()
   let actions!: ReturnType<typeof useAgentIndexNavigationActions>
 
   function Harness(): React.JSX.Element {
     actions = useAgentIndexNavigationActions(
       setState,
-      setTileTabs,
       refs,
       { ensureSessionLive } as unknown as SessionActions,
       showToast,
@@ -97,6 +96,9 @@ function mountNavigation(
   const mounted = render(<Harness />)
   return { actions, mounted, showToast, getState: () => state, setState }
 }
+
+const laneIds = (state: WorkspaceState) =>
+  state.dispatchMode?.tiled?.lanes.map(lane => lane.selectedSessionId ?? null)
 
 describe('useAgentIndexNavigationActions', () => {
   it('uses the same navigation result for a stable ID and its UI label', async () => {
@@ -110,34 +112,25 @@ describe('useAgentIndexNavigationActions', () => {
     stable.mounted.unmount()
   })
 
-  it('does not replace a different pane after focus moves while waking', async () => {
-    const state = makeState()
-    state.sessions.a3 = { cwd: '/work/alpha', kind: 'claude' }
-    state.tabs[0].root = { type: 'split', direction: 'vertical', ratio: 0.5,
-      a: { type: 'leaf', sessionId: 'a1' }, b: { type: 'leaf', sessionId: 'a3' } }
+  it('does not replace a different lane after focus moves while waking', async () => {
+    // A wake can take seconds. "Fill the focused lane" is meaningful only for
+    // the lane that was focused when navigation began; if the user moves focus
+    // during the wake, the newly focused lane must not be silently repurposed.
     let finish!: () => void
     const gate = new Promise<void>(resolve => { finish = resolve })
-    const harness = mountNavigation(vi.fn(() => gate), state)
+    const harness = mountNavigation(vi.fn(() => gate))
     const navigation = harness.actions.focusAgentBySessionId('a2')
-    harness.setState(current => ({ ...current, tabs: current.tabs.map(tab => ({ ...tab, focusedSessionId: 'a3' })) }))
+    harness.setState(current => ({
+      ...current,
+      dispatchMode: { ...current.dispatchMode!, tiled: { ...current.dispatchMode!.tiled!, focusedLane: 0 } },
+    }))
     await act(async () => { finish(); expect(await navigation).toBe(false) })
-    expect(harness.getState().tabs[0].root).toEqual(state.tabs[0].root)
-    expect(harness.getState().tabs[0].focusedSessionId).toBe('a3')
+    expect(laneIds(harness.getState())).toEqual(['a1', null])
+    expect(harness.getState().dispatchMode?.tiled?.focusedLane).toBe(0)
     harness.mounted.unmount()
   })
 
-  it('reveals a hidden related child without moving it out of its parent view', async () => {
-    const state = makeState()
-    state.sessions.a2.linkedParentId = 'a1'
-    const harness = mountNavigation(vi.fn().mockResolvedValue('a2'), state)
-    await act(async () => { expect(await harness.actions.focusAgentBySessionId('a2')).toBe(true) })
-    expect(harness.getState().tabs[0].root).toEqual(state.tabs[0].root)
-    expect(harness.getState().gridRelatedSelections).toEqual({ a1: 'a2' })
-    expect(harness.getState().detachedSessions.a2).toBeDefined()
-    harness.mounted.unmount()
-  })
-
-  it('wakes a detached target before swapping it into the focused grid slot', async () => {
+  it('wakes a parked target before placing it in the focused lane', async () => {
     const ensureSessionLive = vi.fn().mockResolvedValue('a2')
     const harness = mountNavigation(ensureSessionLive)
 
@@ -146,9 +139,10 @@ describe('useAgentIndexNavigationActions', () => {
     })
 
     expect(ensureSessionLive).toHaveBeenCalledWith('a2', 'agent-index.navigate')
-    expect(harness.getState().tabs[0].root).toEqual({ type: 'leaf', sessionId: 'a2' })
-    expect(harness.getState().detachedSessions.a1?.sessionId).toBe('a1')
-    expect(harness.getState().detachedSessions.a2).toBeUndefined()
+    expect(laneIds(harness.getState())).toEqual(['a1', 'a2'])
+    // Placement never changes pool membership: a2 is still the same parked
+    // record, now shown in a lane.
+    expect(harness.getState().detachedSessions.a2?.sessionId).toBe('a2')
     expect(harness.showToast).not.toHaveBeenCalled()
     harness.mounted.unmount()
   })
@@ -187,7 +181,7 @@ describe('useAgentIndexNavigationActions', () => {
     harness.mounted.unmount()
   })
 
-  it('keeps layout unchanged when a hibernated target cannot be woken', async () => {
+  it('keeps the stage unchanged when a hibernated target cannot be woken', async () => {
     const ensureSessionLive = vi.fn().mockRejectedValue(new Error('provider unavailable'))
     const harness = mountNavigation(ensureSessionLive)
 
@@ -195,7 +189,7 @@ describe('useAgentIndexNavigationActions', () => {
       expect(await harness.actions.focusAgentByPaneLabel('A2')).toBe(false)
     })
 
-    expect(harness.getState().tabs[0].root).toEqual({ type: 'leaf', sessionId: 'a1' })
+    expect(laneIds(harness.getState())).toEqual(['a1', null])
     expect(harness.getState().detachedSessions.a2?.sessionId).toBe('a2')
     expect(harness.showToast).toHaveBeenCalledWith('provider unavailable')
     harness.mounted.unmount()

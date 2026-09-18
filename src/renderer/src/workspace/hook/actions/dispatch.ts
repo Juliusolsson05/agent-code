@@ -31,7 +31,6 @@ import {
 } from '@renderer/workspace/dispatch/gridShape'
 import type {
   WorkspaceSetState,
-  WorkspaceSetTileTabs,
 } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import type { SessionActions } from '@renderer/workspace/hook/actions/session'
@@ -92,7 +91,6 @@ function emptyLanes(count: number): DispatchLane[] {
 export function useDispatchActions(
   state: { activeTabId: TabId; dispatchMode: DispatchModeState | null; sessions: Record<SessionId, SessionMeta> },
   setState: WorkspaceSetState,
-  setTileTabs: WorkspaceSetTileTabs,
   closeNewAgentPlacement: () => void,
   refs: WorkspaceRefs,
   ensureSessionLive: SessionActions['ensureSessionLive'],
@@ -136,9 +134,8 @@ export function useDispatchActions(
           focusedSessionId: prev.dispatchMode?.focusedSessionId,
         },
       }))
-      setTileTabs(null)
     },
-    [closeNewAgentPlacement, setState, setTileTabs, state.dispatchMode?.scope],
+    [closeNewAgentPlacement, setState, state.dispatchMode?.scope],
   )
 
   const exitDispatchMode = useCallback(() => {
@@ -200,7 +197,7 @@ export function useDispatchActions(
   // longer reject a session that's open elsewhere.
 
   // Enter (or freshly build) a Tiled Dispatch layout. Enters Dispatch if it
-  // wasn't already on and clears tiled-tabs (mutually exclusive top-level mode).
+  // wasn't already on. (It used to clear Tile Tabs too; Tile Tabs died in #992.)
   //
   // The lanes other than lane 0 arrive EMPTY (#681). This used to auto-fill
   // from unclaimed visible agents on the theory that asking for N tiles means
@@ -293,9 +290,8 @@ export function useDispatchActions(
           },
         }
       })
-      setTileTabs(null)
     },
-    [closeNewAgentPlacement, ensureSessionLive, refs, setState, setTileTabs, showToast],
+    [closeNewAgentPlacement, ensureSessionLive, refs, setState, showToast],
   )
 
   // Return to classic single-view Dispatch. Agents keep running — we only

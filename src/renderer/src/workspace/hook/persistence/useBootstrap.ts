@@ -6,7 +6,6 @@ import type { WorkspaceModeId } from '@renderer/app-state/settings/types'
 import type {
   WorkspaceSetRuntimes,
   WorkspaceSetState,
-  WorkspaceSetTileTabs,
 } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import type { DispatchModeState } from '@renderer/workspace/types'
@@ -53,7 +52,6 @@ export function useBootstrap(
   refs: WorkspaceRefs,
   setState: WorkspaceSetState,
   setRuntimes: WorkspaceSetRuntimes,
-  setTileTabs: WorkspaceSetTileTabs,
   newTab: (cwd: string) => Promise<unknown>,
   setBootstrapComplete: (complete: boolean) => void,
   // Mirrors setBootstrapComplete in lifetime — set once at the end of
@@ -138,7 +136,6 @@ export function useBootstrap(
                 refs,
                 setState,
                 setRuntimes,
-                setTileTabs,
                 newTab,
               ),
             {

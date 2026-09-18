@@ -76,7 +76,6 @@ function closedWindowWorkspace(): PersistedWorkspace {
       sourceTabIndex: 0,
     }],
     pinnedSessionIds: ['parked'],
-    tileTabs: null,
     drafts: { 'grid-a': 'half-written prompt' },
   }
 }
@@ -173,7 +172,6 @@ describe('adopting a closed window', () => {
       activeTabId: 'gone',
       dispatchMode: null,
       sessions: {},
-      tileTabs: null,
     })
     if (!adoption.ok) throw new Error('expected adoption')
     expect(adoption.state.tabs).toHaveLength(1)

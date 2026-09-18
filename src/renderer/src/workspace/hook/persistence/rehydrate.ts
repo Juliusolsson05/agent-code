@@ -13,9 +13,7 @@ import type {
 } from '@shared/types/session'
 import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
-import type { TileTabsState } from '@renderer/workspace/types'
 import type {
-  BuriedPaneRecord,
   DetachedSessionRecord,
   SessionId,
   SessionKind,
@@ -30,8 +28,8 @@ import {
   remapTiledLanes,
 } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import { remapSessionMetaRelationships } from '@renderer/workspace/idRemap'
-import { sanitizeTileTabsState } from '@renderer/workspace/layout/helpers'
 import type { PersistedWorkspace } from '@renderer/workspace/persistence'
+import { foldBuriedIntoDetached } from '@renderer/workspace/workspaceShape'
 import {
   collectLiveProcessIds,
   collectOwnedSessionIds,
@@ -41,7 +39,6 @@ import {
 import type {
   WorkspaceSetRuntimes,
   WorkspaceSetState,
-  WorkspaceSetTileTabs,
 } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import { resolveSessionBuiltInMcpDomains, sessionMcpOverrides } from '@renderer/workspace/mcpDomains'
@@ -133,20 +130,25 @@ async function recoverSessionBeforeDeadline(
 // atomicity that actually belongs to main.
 
 export async function rehydrateWorkspace(
-  persisted: PersistedWorkspace,
+  persistedInput: PersistedWorkspace,
   refs: WorkspaceRefs,
   setState: WorkspaceSetState,
   setRuntimes: WorkspaceSetRuntimes,
-  setTileTabs: WorkspaceSetTileTabs,
   newTab: (cwd: string) => Promise<unknown>,
   recoveryApi: WorkspaceRecoveryApi = window.api,
   recoveryTimeoutMs = DEFAULT_SESSION_RECOVERY_TIMEOUT_MS,
 ): Promise<{ restoredSessions: number; expectedSessions: number; complete: boolean }> {
+  // Buried sessions become parked pool rows BEFORE anything reasons about
+  // ownership (#992): the revive UI is gone, so a record left in `buried`
+  // would be alive and unreachable. Everything below sees a workspace whose
+  // `buried` is empty; the raw count is still reported so the journal shows
+  // what the file actually contained.
+  const persisted = foldBuriedIntoDetached(persistedInput)
   perf.mark('workspace.rehydrate.start', {
     tabs: persisted.tabs.length,
     sessions: Object.keys(persisted.sessions).length,
     detachedSessions: Object.keys(persisted.detachedSessions ?? {}).length,
-    buried: persisted.buried?.length ?? 0,
+    buried: persistedInput.buried?.length ?? 0,
   })
   // The always-on twin of the perf mark above. The perf channel is gated behind
   // AGENT_CODE_PERF and is off by default, which is exactly why no cold boot has
@@ -158,7 +160,7 @@ export async function rehydrateWorkspace(
     tabs: persisted.tabs.length,
     leaves: Object.keys(persisted.sessions).length,
     detached: Object.keys(persisted.detachedSessions ?? {}).length,
-    buried: persisted.buried?.length ?? 0,
+    buried: persistedInput.buried?.length ?? 0,
   })
   const rehydrateStartedAt = Date.now()
   const idMap = new Map<SessionId, SessionId>()
@@ -265,29 +267,6 @@ export async function rehydrateWorkspace(
       })
       .filter((t): t is Tab => t !== null)
 
-  const buildRemappedBuried = (): BuriedPaneRecord[] =>
-    (persisted.buried ?? [])
-      .flatMap(entry => {
-        // WHY fall back to the original sessionId when idMap has no entry:
-        //
-        // Buried panes are hibernated by design — no PTY, no rehydrate spawn,
-        // metadata only. They never appear in idMap because the spawn loop
-        // skipped them (see liveProcessIds filter). The previous behavior
-        // ("drop if not in idMap") silently lost the buried pane on every
-        // restart, defeating the purpose of "bury this for later". Use the
-        // original sessionId as the key so the record round-trips intact.
-        const mappedSessionId = idMap.get(entry.sessionId) ?? entry.sessionId
-        const remapped: BuriedPaneRecord = {
-          ...entry,
-          id: mappedSessionId,
-          sessionId: mappedSessionId,
-        }
-        if (entry.siblingLeafId) {
-          remapped.siblingLeafId = idMap.get(entry.siblingLeafId) ?? entry.siblingLeafId
-        }
-        return [remapped]
-      })
-
   // WHY this still projects through idMap even though recovery maps id->id:
   // the layout code historically consumes one common identity projection for
   // leaves, pins, lanes, and relationship fields. Keeping that path while the
@@ -383,18 +362,6 @@ export async function rehydrateWorkspace(
       out[sessionId] = remapSessionMetaRelationships(meta, idMap, knownSessionIds)
     }
     return out
-  }
-
-  const buildRemappedTileTabs = (tabs: Tab[]): TileTabsState | null => {
-    const persistedTileTabs = persisted.tileTabs
-    if (!persistedTileTabs) return null
-    const validTabIds = persistedTileTabs.tabIds.filter(id =>
-      tabs.some(tab => tab.id === id),
-    )
-    return sanitizeTileTabsState({
-      ...persistedTileTabs,
-      tabIds: validTabIds,
-    })
   }
 
   let initialWorkspacePublished = false
@@ -518,7 +485,6 @@ export async function rehydrateWorkspace(
     const newTabs = buildRemappedTabs()
     if (newTabs.length === 0) return false
 
-    const restoredTileTabs = buildRemappedTileTabs(newTabs)
     if (!initialWorkspacePublished) {
       initialWorkspacePublished = true
       const initialSessions = buildRemappedSessions()
@@ -529,8 +495,7 @@ export async function rehydrateWorkspace(
         const currentActiveTabStillExists = newTabs.some(t => t.id === prev.activeTabId)
         const activeTabId = currentActiveTabStillExists
           ? prev.activeTabId
-          : restoredTileTabs?.focusedTabId
-            ?? newTabs.find(t => t.id === persisted.activeTabId)?.id
+          : newTabs.find(t => t.id === persisted.activeTabId)?.id
             ?? newTabs[0].id
         // Grid shape is normalized OUTERMOST so the shape rules see the final
         // lane array: a workspace written before Grid Dispatch has no `rows`
@@ -565,11 +530,12 @@ export async function rehydrateWorkspace(
           dispatchMode: remappedDispatchMode,
           sessions: initialSessions,
           detachedSessions: buildRemappedDetachedSessions(),
-          buried: buildRemappedBuried(),
+          // Always empty: foldBuriedIntoDetached moved every buried record
+          // into detachedSessions above. The field itself goes in stage 3b.
+          buried: [],
           pinnedSessionIds: buildRemappedPinnedSessionIds(),
         }
       })
-      setTileTabs(restoredTileTabs)
       setRuntimes(prev => {
         const out: Record<SessionId, SessionRuntime> = {}
         for (const sessionId of Object.keys(freshSessions)) {

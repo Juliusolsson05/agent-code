@@ -43,7 +43,8 @@ vi.mock('@renderer/workspace/hook/ipc/useWorkspaceAdoption', () => ({ useWorkspa
 vi.mock('@renderer/workspace/hook/persistence/useBootstrap', async () => {
   const { useEffect } = await import('react')
   return { useBootstrap: (...args: Parameters<typeof import('@renderer/workspace/hook/persistence/useBootstrap').useBootstrap>) => {
-    useEffect(() => args[5](true), [args[5]])
+    // args[4] is setBootstrapComplete ([5] until #992 removed setTileTabs).
+    useEffect(() => args[4](true), [args[4]])
   } }
 })
 

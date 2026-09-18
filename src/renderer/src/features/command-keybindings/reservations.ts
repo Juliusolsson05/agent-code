@@ -130,18 +130,11 @@ export const RESERVED_INTERACTIONS: readonly ReservedInteraction[] = [
     context: 'dispatch',
     owner: 'Dispatch row and lane selection',
   },
-  {
-    bindings: ['Alt+=', 'Alt+-'],
-    context: 'global',
-    owner: 'Split resize',
-  },
-  {
-    // Fn+Option+Arrow arrives as Option + Home/End/PageUp/PageDown, because
-    // macOS translates Fn before the event reaches the app.
-    bindings: ['Alt+Home', 'Alt+End', 'Alt+PageUp', 'Alt+PageDown'],
-    context: 'global',
-    owner: 'Directional split resize',
-  },
+  // 'Split resize' (Alt+= / Alt+-) and 'Directional split resize'
+  // (Alt+Home/End/PageUp/PageDown, i.e. Fn+Option+Arrow) were reserved here
+  // until the tile tree died (#992). A reservation exists to stop a user
+  // binding a chord the app will swallow; nothing swallows these any more, so
+  // keeping the entries would have fenced off six free chords for no owner.
   {
     bindings: ['Escape'],
     context: 'global',
@@ -188,16 +181,9 @@ export const RESERVED_INTERACTIONS: readonly ReservedInteraction[] = [
     context: 'global',
     owner: 'Native editing commands',
   },
-  {
-    // Tiled-tab resize CONTINUATION. After Cmd+N focuses a tiled tab, arrows
-    // held under Cmd resize it (useKeybinds' pendingTiledResizeIndex). Stateful
-    // and therefore easy to miss when transcribing owners: the chord only does
-    // anything in the window between Cmd+N and releasing Cmd, but during that
-    // window it beats anything else bound to the same keys.
-    bindings: ['Cmd+Left', 'Cmd+Right', 'Cmd+Up', 'Cmd+Down'],
-    context: 'global',
-    owner: 'Tiled tab resize (after numbered selection)',
-  },
+  // The Tile Tabs resize continuation (Cmd+Arrow after a numbered selection)
+  // was reserved here until #992 deleted Tile Tabs. Cmd+Arrow is caret motion
+  // in every text field again, with nothing of ours competing for it.
   {
     // The agent pane IS a terminal, and these go to the process, not to us.
     //

@@ -23,19 +23,6 @@ it('returns the exact created ID with project affinity and leaves the grid intac
   harness.mounted.unmount()
 })
 
-it('restores a buried record under its existing ID without spawning another agent', async () => {
-  const initial = state()
-  initial.sessions.archived = { kind: 'codex', cwd: '/project' }
-  initial.buried = [{ id: 'buried-record', sessionId: 'archived', sessionMeta: initial.sessions.archived,
-    buriedAt: 1, sourceTabId: 'project', sourceTabTitle: 'Project', sourceTabIndex: 0 }]
-  const harness = mountPaneActions(initial)
-  await act(async () => { await harness.actions.reviveBuried('buried-record') })
-  expect(harness.sessionActions.ensureSessionLive).toHaveBeenCalledWith('archived', 'pane.revive-buried')
-  expect(harness.getState().buried).toEqual([])
-  expect(collectLeaves(harness.getState().tabs[0].root).filter(id => id === 'archived')).toHaveLength(1)
-  expect(harness.spawn).not.toHaveBeenCalled()
-  harness.mounted.unmount()
-})
 
 it('keeps native continuation cwd and target project separate from focus', async () => {
   const initial = state()

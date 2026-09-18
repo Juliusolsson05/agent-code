@@ -12,15 +12,8 @@ type Props = {
 
 export function PerformancePanel({ open, workspace }: Props) {
   const visible = useMemo(
-    () =>
-      workspace.tileTabs
-        ? workspace.tileTabs.tabIds
-            .map(id => workspace.state.tabs.find(tab => tab.id === id))
-            .filter((tab): tab is NonNullable<typeof tab> => Boolean(tab))
-        : workspace.activeTab
-          ? [workspace.activeTab]
-          : [],
-    [workspace.activeTab, workspace.state.tabs, workspace.tileTabs],
+    () => (workspace.activeTab ? [workspace.activeTab] : []),
+    [workspace.activeTab],
   )
   const visibleIds = useMemo(
     () => visible.flatMap(tab => resolveTabSessions(workspace.state, tab.id)),

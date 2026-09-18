@@ -6,10 +6,8 @@ import type {
   SessionMeta,
   TabId,
   TileNode,
-  TileTabsState,
 } from '@renderer/workspace/types'
 import { closeLeaf, collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
-import { sanitizeTileTabsState } from '@renderer/workspace/layout/helpers'
 import {
   keepTiledLaneSessions,
   scrubGridRowMetadata,
@@ -337,8 +335,8 @@ export function pruneSessionOwnership(
  *
  * A tab that loses every leaf is dropped: its root would be empty, which
  * `TileNode` cannot represent and no pane could render. That is the one
- * destructive branch here, which is why `activeTabId` and `tileTabs` are
- * repaired in the same pure function rather than at the call site — it keeps
+ * destructive branch here, which is why `activeTabId` is repaired in the same
+ * pure function rather than at the call site — it keeps
  * the whole destructive path testable without a React harness.
  */
 export function repairPersistedTabs<
@@ -347,11 +345,9 @@ export function repairPersistedTabs<
   tabs: readonly TTab[]
   sessions: Record<SessionId, SessionMeta>
   activeTabId: TabId
-  tileTabs: TileTabsState | null
 }): {
   tabs: TTab[]
   activeTabId: TabId
-  tileTabs: TileTabsState | null
   droppedLeafSessionIds: SessionId[]
   droppedTabIds: TabId[]
 } {
@@ -406,21 +402,10 @@ export function repairPersistedTabs<
   const activeTabId = kept.some(t => t.id === input.activeTabId)
     ? input.activeTabId
     : kept[0]?.id ?? input.activeTabId
-  const survivingTabIds = new Set(kept.map(t => t.id))
-  const tileTabs = input.tileTabs === null || droppedTabIds.length === 0
-    ? input.tileTabs
-    // sanitizeTileTabsState re-picks focus, re-derives ratios to match the new
-    // tab count, and collapses to null below two tabs — so filtering the ids is
-    // all this needs to do.
-    : sanitizeTileTabsState({
-        ...input.tileTabs,
-        tabIds: input.tileTabs.tabIds.filter(id => survivingTabIds.has(id)),
-      })
 
   return {
     tabs: kept,
     activeTabId,
-    tileTabs,
     droppedLeafSessionIds: [...droppedLeafSessionIds],
     droppedTabIds,
   }

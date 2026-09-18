@@ -9,7 +9,6 @@ import type {
   TiledDispatchState,
   TileNode,
 } from '@renderer/workspace/types'
-import type { TileTabsState } from '@renderer/workspace/types'
 
 // ---------------------------------------------------------------------------
 // Persisted state shape (serialized to ~/.config/agent-code/workspace.json)
@@ -47,7 +46,8 @@ export type PersistedWorkspace = {
    * removed during rehydrate.
    */
   pinnedSessionIds?: SessionId[]
-  tileTabs?: TileTabsState | null
+  // `tileTabs` was persisted here until #992 deleted Tile Tabs. Old files
+  // may still carry it; it is ignored on read and never written again.
   /** Draft input text per session, keyed by sessionId. Persisted so
    * in-progress prompts survive app crashes and restarts. Only
    * non-empty drafts are saved to keep the file small. */

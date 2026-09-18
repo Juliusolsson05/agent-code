@@ -648,10 +648,12 @@ export const RATIO_DEFAULT = 0.5
 // -----------------------------------------------------------------------------
 // Mode-surface layout states. These lived in workspaceState.ts until the #493
 // layer split moved SessionRuntime (and everything the runtime object is made
-// of) into session-runtime/state.ts. Spotlight / Reader / TileTabs are pure
-// tile-tree VIEW selections — they reference TabId/SessionId and nothing from
-// the runtime — so they belong with the rest of the layout data model here,
-// not in the ingest layer.
+// of) into session-runtime/state.ts. Spotlight / Reader are pure VIEW
+// selections — they reference TabId/SessionId and nothing from the runtime —
+// so they belong with the rest of the layout data model here, not in the
+// ingest layer. TileTabsState lived here too until the unified layout (#992)
+// deleted Tile Tabs: rows bound to different projects are the stage's way of
+// showing several projects at once.
 // -----------------------------------------------------------------------------
 
 export type SpotlightState = {
@@ -664,9 +666,3 @@ export type ReaderModeState = {
   focusedSessionId: SessionId
 }
 
-export type TileTabsState = {
-  tabIds: TabId[]
-  focusedTabId: TabId
-  direction: SplitDirection
-  ratios: number[]
-}

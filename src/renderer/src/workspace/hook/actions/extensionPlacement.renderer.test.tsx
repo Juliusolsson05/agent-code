@@ -42,16 +42,6 @@ function workspace(): WorkspaceState {
 }
 
 describe('extension view placement follows the visible command target', () => {
-  it('splits the grid and persists metadata without spawning a backend', () => {
-    const harness = mountPaneActions(workspace())
-    act(() => { harness.actions.openExtensionViewInPane('timer.main') })
-    const state = harness.getState()
-    const id = state.tabs[0]!.focusedSessionId
-    expect(collectLeaves(state.tabs[0]!.root)).toEqual(['a', id])
-    expect(state.sessions[id]).toEqual({ kind: 'extension-view', cwd: '/projects/a', extensionViewId: 'timer.main' })
-    expect(harness.spawn).not.toHaveBeenCalled()
-    harness.mounted.unmount()
-  })
 
   it.each([false, true])('opens from a detached global Dispatch target (tiled=%s)', tiled => {
     const initial = workspace()

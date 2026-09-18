@@ -151,7 +151,6 @@ function makeRendererHarness() {
     dispatchMode: null,
   } as unknown as WorkspaceState
   let runtimes: Record<SessionId, SessionRuntime> = {}
-  let tileTabs: unknown = null
   const refs = {
     dangerousAgentsRef: ref(false),
     useProxyStreamingRef: ref(false),
@@ -177,11 +176,6 @@ function makeRendererHarness() {
     ) => {
       runtimes = typeof next === 'function' ? next(runtimes) : next
       refs.latestRuntimesRef.current = runtimes
-    },
-    setTileTabs: (next: unknown) => {
-      tileTabs = typeof next === 'function'
-        ? (next as (prev: unknown) => unknown)(tileTabs)
-        : next
     },
   }
 }
@@ -217,7 +211,6 @@ describe('cross-layer session restart reconciliation', () => {
       firstRenderer.refs,
       firstRenderer.setState,
       firstRenderer.setRuntimes,
-      firstRenderer.setTileTabs,
       vi.fn(),
       recoveryApi,
     )
@@ -227,7 +220,6 @@ describe('cross-layer session restart reconciliation', () => {
       reloadedRenderer.refs,
       reloadedRenderer.setState,
       reloadedRenderer.setRuntimes,
-      reloadedRenderer.setTileTabs,
       vi.fn(),
       recoveryApi,
     )
@@ -276,7 +268,6 @@ describe('cross-layer session restart reconciliation', () => {
       restartedRenderer.refs,
       restartedRenderer.setState,
       restartedRenderer.setRuntimes,
-      restartedRenderer.setTileTabs,
       vi.fn(),
       recoveryApi,
     )
@@ -317,7 +308,6 @@ describe('cross-layer session restart reconciliation', () => {
       failedRenderer.refs,
       failedRenderer.setState,
       failedRenderer.setRuntimes,
-      failedRenderer.setTileTabs,
       vi.fn(),
       recoveryApi,
     )
@@ -342,7 +332,6 @@ describe('cross-layer session restart reconciliation', () => {
       retryRenderer.refs,
       retryRenderer.setState,
       retryRenderer.setRuntimes,
-      retryRenderer.setTileTabs,
       vi.fn(),
       recoveryApi,
     )
@@ -388,7 +377,6 @@ describe('cross-layer session restart reconciliation', () => {
       renderer.refs,
       renderer.setState,
       renderer.setRuntimes,
-      renderer.setTileTabs,
       vi.fn(),
       recoveryApi,
     )

@@ -1,6 +1,6 @@
 import { TldrPane } from '@renderer/features/tldr/TldrOverlay'
 import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
-import { memo, useCallback, useRef } from 'react'
+import { memo, useCallback } from 'react'
 import { useSessionRuntime } from '@renderer/workspace/useSessionRuntime'
 
 import { getRendererProvider } from '@providers/registry.renderer'
@@ -15,93 +15,23 @@ import { MountedAgentTerminalOwner } from '@renderer/workspace/terminal/AgentTer
 import { TerminalLeaf } from '@renderer/workspace/tile-tree/TerminalLeaf'
 import { ExtensionViewLeaf } from '@renderer/workspace/tile-tree/ExtensionViewLeaf'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
-import type { SessionId, TabId, TileNode } from '@renderer/workspace/types'
+import type { SessionId, TabId } from '@renderer/workspace/types'
 import { paneLabelForSession } from '@renderer/workspace/tile-tree/paneLabels'
 
-// TileTree — recursive renderer for a tab's binary-split tree.
+// The workspace leaf renderer.
 //
-// A leaf is a TileLeaf. A split is two TileTrees laid side-by-side (or
-// stacked) with a draggable divider in between. The recursion makes
-// arbitrary split nesting Just Work — the tree is literally the layout.
+// This file used to be the recursive renderer for a tab's binary-split tree:
+// a `TileTree` component, a draggable `SplitContainer`, and the leaf renderer
+// below. The unified layout (#992) deleted the tree — the stage's lanes are the
+// only place a session is shown — and what survives is the part every surface
+// always funnelled through: `renderWorkspaceLeaf`, which picks the right view
+// (terminal, extension view, raw agent terminal, provider feed) for a session.
+// Lanes, Spotlight and tests all call it; the file keeps its path so those
+// importers did not have to move in the same change.
 
-type Props = {
-  tabId: TabId
-  node: TileNode
-  focusedSessionId: SessionId | null
-  workspace: Workspace
-  agentViewMode: AgentViewMode
-  // WHY both display settings are required rather than defaulted to `true`
-  // (#856): Spotlight and Tiled Tabs never passed them. They silently got the
-  // defaults, so a user who turned Status Mode or worktree badges off still
-  // saw them there. A default here only ever means "some surface forgot to
-  // read the setting". Required props make tsc name every surface that has to
-  // thread the real value.
-  showStatusMode: boolean
-  showWorktreeBadges: boolean
-}
-
-export const TileTree = memo(function TileTree({
-  tabId,
-  node,
-  focusedSessionId,
-  workspace,
-  agentViewMode,
-  showStatusMode,
-  showWorktreeBadges,
-}: Props) {
-  if (node.type === 'leaf') {
-    return renderWorkspaceLeaf(
-      node.sessionId,
-      focusedSessionId,
-      workspace,
-      tabId,
-      agentViewMode,
-      showStatusMode,
-      showWorktreeBadges,
-      undefined,
-      true,
-    )
-  }
-
-  return (
-    <SplitContainer
-      direction={node.direction}
-      ratio={node.ratio}
-      a={
-        <TileTree
-          tabId={tabId}
-          node={node.a}
-          focusedSessionId={focusedSessionId}
-          workspace={workspace}
-          agentViewMode={agentViewMode}
-          showStatusMode={showStatusMode}
-          showWorktreeBadges={showWorktreeBadges}
-        />
-      }
-      b={
-        <TileTree
-          tabId={tabId}
-          node={node.b}
-          focusedSessionId={focusedSessionId}
-          workspace={workspace}
-          agentViewMode={agentViewMode}
-          showStatusMode={showStatusMode}
-          showWorktreeBadges={showWorktreeBadges}
-        />
-      }
-      // Resize dragging needs to know which sessions to update the
-      // ratio between. We pick the first leaf on each side as the
-      // identity for this split.
-      aSessionId={firstLeafId(node.a)}
-      bSessionId={firstLeafId(node.b)}
-      tabId={tabId}
-      workspace={workspace}
-    />
-  )
-})
-
-// No defaults for the tab, view mode or display settings, for the same reason
-// as TileTree's props (#856). Every caller is a surface that knows these
+// No defaults for the tab, view mode or display settings (#856): Spotlight and
+// Tiled Tabs once silently got `true` for Status Mode and worktree badges
+// because a default existed. Every caller is a surface that knows these
 // values, and a default would hide the one that doesn't pass them.
 export function renderWorkspaceLeaf(
   sessionId: SessionId,
@@ -264,117 +194,3 @@ const WorkspaceLeaf = memo(function WorkspaceLeaf({
     </TldrPane>
   )
 })
-
-function firstLeafId(n: TileNode): SessionId {
-  let current = n
-  while (current.type !== 'leaf') current = current.a
-  return current.sessionId
-}
-
-// ---------------------------------------------------------------------------
-// SplitContainer — CSS flex with a draggable divider.
-// ---------------------------------------------------------------------------
-
-type SplitProps = {
-  tabId: TabId
-  direction: 'vertical' | 'horizontal'
-  ratio: number
-  a: React.ReactNode
-  b: React.ReactNode
-  aSessionId: SessionId
-  bSessionId: SessionId
-  workspace: Workspace
-}
-
-function SplitContainer({
-  direction,
-  ratio,
-  a,
-  b,
-  aSessionId,
-  bSessionId,
-  tabId,
-  workspace,
-}: SplitProps) {
-  const containerRef = useRef<HTMLDivElement>(null)
-
-  // vertical split = side-by-side (flex-row), divider is a vertical bar
-  // that resizes horizontally. horizontal split = stacked (flex-col),
-  // divider is a horizontal bar that resizes vertically.
-  const isVertical = direction === 'vertical'
-  const flexDir = isVertical ? 'flex-row' : 'flex-col'
-  const cursor = isVertical ? 'cursor-col-resize' : 'cursor-row-resize'
-  const dividerDims = isVertical ? 'w-[3px] h-full' : 'h-[3px] w-full'
-
-  const aFlex = { flexBasis: `${ratio * 100}%` }
-  const bFlex = { flexBasis: `${(1 - ratio) * 100}%` }
-
-  // Drag handler: measure the container and map mouse position → new ratio.
-  // Uses document-level listeners so dragging past the divider edge still
-  // works even if the mouse leaves the container bounds.
-  const onDividerMouseDown = useCallback(
-    (e: React.MouseEvent) => {
-      e.preventDefault()
-      const container = containerRef.current
-      if (!container) return
-      const rect = container.getBoundingClientRect()
-      let frame: number | null = null
-      let pendingRatio: number | null = null
-      let lastSentRatio = ratio
-
-      const flush = () => {
-        frame = null
-        if (pendingRatio === null) return
-        const nextRatio = pendingRatio
-        pendingRatio = null
-        // WHY a tiny epsilon matters here: pointermove fires far more often
-        // than CSS flex-basis visibly changes, and many adjacent events clamp
-        // to the same effective split ratio. Skipping no-op-ish commits avoids
-        // rewriting workspace state, re-rendering every pane, and triggering
-        // terminal ResizeObservers for movements that cannot affect layout.
-        if (Math.abs(nextRatio - lastSentRatio) < 0.001) return
-        lastSentRatio = nextRatio
-        workspace.setSplitRatioInTab(tabId, aSessionId, bSessionId, nextRatio)
-      }
-
-      const onMove = (ev: MouseEvent) => {
-        pendingRatio = isVertical
-          ? (ev.clientX - rect.left) / rect.width
-          : (ev.clientY - rect.top) / rect.height
-        if (frame === null) frame = requestAnimationFrame(flush)
-      }
-      const onUp = () => {
-        if (frame !== null) {
-          cancelAnimationFrame(frame)
-          frame = null
-        }
-        flush()
-        document.removeEventListener('mousemove', onMove)
-        document.removeEventListener('mouseup', onUp)
-      }
-      document.addEventListener('mousemove', onMove)
-      document.addEventListener('mouseup', onUp)
-    },
-    [aSessionId, bSessionId, isVertical, tabId, workspace],
-  )
-
-  return (
-    <div
-      ref={containerRef}
-      className={`flex ${flexDir} w-full h-full min-h-0 min-w-0`}
-    >
-      <div style={aFlex} className="min-h-0 min-w-0 overflow-hidden">
-        {a}
-      </div>
-      <div
-        role="separator"
-        aria-orientation={isVertical ? 'vertical' : 'horizontal'}
-        className={`${dividerDims} ${cursor} bg-border hover:bg-accent transition-colors flex-shrink-0`}
-        onMouseDown={onDividerMouseDown}
-      />
-      <div style={bFlex} className="min-h-0 min-w-0 overflow-hidden">
-        {b}
-      </div>
-    </div>
-  )
-}

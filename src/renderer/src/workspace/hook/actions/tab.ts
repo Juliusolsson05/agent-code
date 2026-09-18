@@ -2,7 +2,7 @@ import { useCallback } from 'react'
 
 import type { DetachedSessionRecord, SessionId, SessionKind, SessionMeta, Tab, TabId } from '@renderer/workspace/types'
 import { titleFromCwd } from '@renderer/workspace/layout/helpers'
-import { mergeProjectTabs, retargetTileTabsAfterMerge } from '@renderer/workspace/mergeProjectTabs'
+import { mergeProjectTabs } from '@renderer/workspace/mergeProjectTabs'
 import type { MergeProjectTabsResult } from '@renderer/workspace/mergeProjectTabs'
 import { tabIndexLabel } from '@renderer/workspace/tile-tree/paneLabelFormat'
 
@@ -10,7 +10,6 @@ import type {
   WorkspaceSetReaderMode,
   WorkspaceSetSpotlight,
   WorkspaceSetState,
-  WorkspaceSetTileTabs,
 } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import type { SessionActions } from '@renderer/workspace/hook/actions/session'
@@ -24,9 +23,7 @@ export function useTabActions(
     sessions: Record<SessionId, SessionMeta>
     tabs: Tab[]
   },
-  tileTabs: { tabIds: TabId[]; focusedTabId: TabId } | null,
   setState: WorkspaceSetState,
-  setTileTabs: WorkspaceSetTileTabs,
   setSpotlight: WorkspaceSetSpotlight,
   setReaderMode: WorkspaceSetReaderMode,
   refs: WorkspaceRefs,
@@ -91,22 +88,8 @@ export function useTabActions(
     (tabId: TabId) => {
       setState(prev => ({ ...prev, activeTabId: tabId }))
       setSpotlight(null)
-      // Preserve tile-tabs mode when the activated tab is part of
-      // the tiled set — just shift the focused tile. If it's NOT
-      // part of the set, leave tile-tabs ALONE rather than nuking
-      // the mode. The previous behavior (setting null) caused the
-      // tile layout to silently collapse whenever the user clicked
-      // any other tab in the bar, which read as a phantom
-      // "auto-deselect."
-      setTileTabs(prev => {
-        if (!prev) return prev
-        if (prev.tabIds.includes(tabId)) {
-          return { ...prev, focusedTabId: tabId }
-        }
-        return prev
-      })
     },
-    [setSpotlight, setState, setTileTabs],
+    [setSpotlight, setState],
   )
 
   const activateTabByIndex = useCallback(
@@ -116,18 +99,8 @@ export function useTabActions(
         return t ? { ...prev, activeTabId: t.id } : prev
       })
       setSpotlight(null)
-      // Same preservation rule as activateTab — see comment there.
-      setTileTabs(prev => {
-        const target = refs.stateRef.current.tabs[index]
-        if (!prev) return prev
-        if (!target) return prev
-        if (prev.tabIds.includes(target.id)) {
-          return { ...prev, focusedTabId: target.id }
-        }
-        return prev
-      })
     },
-    [refs.stateRef, setSpotlight, setState, setTileTabs],
+    [setSpotlight, setState],
   )
 
   const mergeTabs = useCallback(
@@ -164,7 +137,6 @@ export function useTabActions(
         )
         return result
       }
-      setTileTabs(prev => retargetTileTabsAfterMerge(prev, sourceTabIds, targetTabId))
       // Spotlight and Reader zoom a GRID pane of a tab; the pane they named
       // is now a Dispatch agent of another tab, so the takeover has nothing
       // to frame.
@@ -180,7 +152,7 @@ export function useTabActions(
       )
       return result
     },
-    [setReaderMode, setSpotlight, setState, setTileTabs, showToast],
+    [setReaderMode, setSpotlight, setState, showToast],
   )
 
   const reorderTabs = useCallback(
@@ -210,14 +182,6 @@ export function useTabActions(
   )
 
   const nextTab = useCallback(() => {
-    const tiled = tileTabs
-    if (tiled && tiled.tabIds.length > 1) {
-      const idx = tiled.tabIds.indexOf(tiled.focusedTabId)
-      const nextId = tiled.tabIds[(idx + 1 + tiled.tabIds.length) % tiled.tabIds.length]
-      setState(prev => ({ ...prev, activeTabId: nextId }))
-      setTileTabs(prev => (prev ? { ...prev, focusedTabId: nextId } : prev))
-      return
-    }
     setState(prev => {
       const idx = prev.tabs.findIndex(t => t.id === prev.activeTabId)
       if (idx === -1) return prev
@@ -225,18 +189,9 @@ export function useTabActions(
       return { ...prev, activeTabId: next.id }
     })
     setSpotlight(null)
-  }, [setSpotlight, setState, setTileTabs, tileTabs])
+  }, [setSpotlight, setState])
 
   const prevTab = useCallback(() => {
-    const tiled = tileTabs
-    if (tiled && tiled.tabIds.length > 1) {
-      const idx = tiled.tabIds.indexOf(tiled.focusedTabId)
-      const nextId =
-        tiled.tabIds[(idx - 1 + tiled.tabIds.length) % tiled.tabIds.length]
-      setState(prev => ({ ...prev, activeTabId: nextId }))
-      setTileTabs(prev => (prev ? { ...prev, focusedTabId: nextId } : prev))
-      return
-    }
     setState(prev => {
       const idx = prev.tabs.findIndex(t => t.id === prev.activeTabId)
       if (idx === -1) return prev
@@ -244,7 +199,7 @@ export function useTabActions(
       return { ...prev, activeTabId: next.id }
     })
     setSpotlight(null)
-  }, [setSpotlight, setState, setTileTabs, tileTabs])
+  }, [setSpotlight, setState])
 
   return {
     newTab,

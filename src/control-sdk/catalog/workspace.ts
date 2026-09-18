@@ -10,7 +10,11 @@ export const placementSchema = z.object({
 
 export const workspaceObservationSchema = z.object({
   observedAt: z.number(), focusedSessionId: z.string().nullable(), ui: z.object({ commandPickerOpen: z.boolean(), settingsOpen: z.boolean(), inputOwnedBySurface: z.boolean() }), restoreStatus: z.string(), activeTabId: z.string(),
-  mode: z.enum(['grid', 'tiled-tabs', 'dispatch', 'tiled-dispatch']),
+  // 'tiled-tabs' left this enum with the Tile Tabs feature (#992). The
+  // remaining modes describe the stored layout shape until the stage is the
+  // only shape (stage 3b of the unified layout); 'grid' and 'dispatch' then
+  // go too.
+  mode: z.enum(['grid', 'dispatch', 'tiled-dispatch']),
   tabs: z.array(z.object({ id: z.string(), title: z.string(), focusedSessionId: z.string(), sessionIds: z.array(z.string()) })),
   sessions: z.array(z.object({
     sessionId: z.string(), title: z.string(), displayLabel: z.string().nullable().default(null).describe('Current window-local visible coordinate; can change with layout. Never use as a stable ID.'),

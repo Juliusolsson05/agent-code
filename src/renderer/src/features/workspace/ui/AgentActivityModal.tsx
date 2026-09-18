@@ -105,12 +105,6 @@ export function AgentActivityModal({ open, workspace, onClose }: Props) {
   const [nowTick, setNowTick] = useState(0)
   const inputRef = useRef<HTMLDivElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
-  // Used by the bury action — we need to open the note-prompt modal
-  // targeting a specific session id without touching whatever pane
-  // is currently focused. openBuryPrompt takes a sessionId directly,
-  // which is exactly the handle we have here.
-  const openBuryPrompt = useAppStore(s => s.openBuryPrompt)
-
   // Re-render on a timer so relative-time strings ("3m ago") don't
   // get visually stale while the modal is open. 10s is fine-grained
   // enough to feel live without churning the DOM excessively.
@@ -301,20 +295,9 @@ export function AgentActivityModal({ open, workspace, onClose }: Props) {
     [workspace],
   )
 
-  const buryRow = useCallback(
-    (row: Row) => {
-      // Any session can be buried (#865). Bury keeps the process alive, and a
-      // terminal revives by re-attaching its tmux session. The old comment
-      // ("no notion of a resumable conversation") confused bury with resume.
-      // Close our modal before the bury-note prompt opens so the
-      // two dialogs don't stack visually. buryFocused(note, id)
-      // already accepts an explicit target id, so the note prompt
-      // does the right thing even after we close here.
-      onClose()
-      openBuryPrompt(row.sessionId)
-    },
-    [onClose, openBuryPrompt],
-  )
+  // The row-level Bury action lived here until #992. In the pool-first
+  // workspace "hide but keep alive" is what an unplaced session already is,
+  // so the modal keeps Focus and Close only.
 
   const switchSortMode = useCallback((mode: SortMode) => {
     setSortMode(mode)
@@ -363,16 +346,8 @@ export function AgentActivityModal({ open, workspace, onClose }: Props) {
         if (row) void closeRow(row)
         return
       }
-      // Lowercase b = bury. Uppercase treated the same — the user
-      // may hold shift out of muscle memory, shouldn't punish them.
-      if (e.key === 'b' || e.key === 'B') {
-        e.preventDefault()
-        const row = rows[selectedIdx]
-        if (row) buryRow(row)
-        return
-      }
     },
-    [rows, selectedIdx, onClose, focusRow, closeRow, buryRow],
+    [rows, selectedIdx, onClose, focusRow, closeRow],
   )
 
   function renderRow(row: Row, idx: number) {
@@ -452,14 +427,6 @@ export function AgentActivityModal({ open, workspace, onClose }: Props) {
         >
           <button
             type="button"
-            onClick={() => buryRow(row)}
-            className="rounded-control px-2 py-0.5 text-[10px] border border-border text-ink-dim hover:border-border-hi hover:text-ink"
-            title="Bury (b)"
-          >
-            bury
-          </button>
-          <button
-            type="button"
             onClick={() => void closeRow(row)}
             className="rounded-control px-2 py-0.5 text-[10px] border border-danger-border text-danger hover:bg-danger-soft"
             title="Close (del)"
@@ -490,7 +457,7 @@ export function AgentActivityModal({ open, workspace, onClose }: Props) {
               </DialogDescription>
             </div>
             <div className="text-[10px] uppercase tracking-wider text-muted">
-              Enter focus · Del close · B bury · Esc dismiss
+              Enter focus · Del close · Esc dismiss
             </div>
           </div>
           <div className="mt-3 flex items-center gap-2">

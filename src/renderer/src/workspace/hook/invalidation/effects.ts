@@ -4,7 +4,6 @@ import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type {
   ReaderModeState,
   SpotlightState,
-  TileTabsState,
 } from '@renderer/workspace/types'
 import type { SessionId, Tab, TabId, WorkspaceState } from '@renderer/workspace/types'
 import { resolveTabSessions } from '@renderer/workspace/queries'
@@ -14,14 +13,12 @@ import {
 import {
   assistantUuidsWithText,
 } from '@renderer/lib/copyAssistant'
-import { ratiosEqual, sanitizeTileTabsState } from '@renderer/workspace/layout/helpers'
 
 import { isAgentSessionKind, isProcessSessionKind } from '@shared/types/providerKind'
 
 import type {
   WorkspaceSetReaderMode,
   WorkspaceSetSpotlight,
-  WorkspaceSetTileTabs,
 } from '@renderer/workspace/hook/context'
 
 // Invalidation effects — these fire when state changes and adjust
@@ -193,34 +190,3 @@ export function usePinnedSessionIdsSanity(
   }, [setState, state])
 }
 
-export function useTileTabsSanity(
-  tileTabs: TileTabsState | null,
-  tabs: Tab[],
-  setTileTabs: WorkspaceSetTileTabs,
-): void {
-  useEffect(() => {
-    if (!tileTabs) return
-    const nextTileTabs = sanitizeTileTabsState(tileTabs)
-    if (!nextTileTabs) {
-      setTileTabs(null)
-      return
-    }
-    const validTabIds = nextTileTabs.tabIds.filter(id => tabs.some(t => t.id === id))
-    const sanitized = sanitizeTileTabsState({
-      ...nextTileTabs,
-      tabIds: validTabIds,
-    })
-    if (!sanitized) {
-      setTileTabs(null)
-      return
-    }
-    if (
-      sanitized.tabIds.length !== tileTabs.tabIds.length ||
-      sanitized.focusedTabId !== tileTabs.focusedTabId ||
-      sanitized.direction !== tileTabs.direction ||
-      !ratiosEqual(sanitized.ratios, tileTabs.ratios)
-    ) {
-      setTileTabs(sanitized)
-    }
-  }, [setTileTabs, tabs, tileTabs])
-}

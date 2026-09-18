@@ -6,7 +6,6 @@ import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type {
   ReaderModeState,
   SpotlightState,
-  TileTabsState,
 } from '@renderer/workspace/types'
 
 function applyUpdater<T>(prev: T, next: T | ((prev: T) => T)): T {
@@ -38,7 +37,6 @@ export const createWorkspaceSlice: StateCreator<
   workspaceRuntimes: {},
   workspaceSpotlight: null,
   workspaceReaderMode: null,
-  workspaceTileTabs: null,
   workspaceAgentNames: {},
 
   setWorkspaceState: next =>
@@ -68,12 +66,6 @@ export const createWorkspaceSlice: StateCreator<
       const workspaceReaderMode = applyUpdater<ReaderModeState | null>(state.workspaceReaderMode, next)
       return Object.is(workspaceReaderMode, state.workspaceReaderMode) ? state : { workspaceReaderMode }
     }, false, 'workspace/setWorkspaceReaderMode'),
-
-  setWorkspaceTileTabs: next =>
-    set(state => {
-      const workspaceTileTabs = applyUpdater<TileTabsState | null>(state.workspaceTileTabs, next)
-      return Object.is(workspaceTileTabs, state.workspaceTileTabs) ? state : { workspaceTileTabs }
-    }, false, 'workspace/setWorkspaceTileTabs'),
 
   setWorkspaceAgentNames: next =>
     set(state => {

@@ -32,12 +32,12 @@ export function observeWorkspace(getWorkspace: () => Pick<Workspace, 'restoreSta
   // Closed-panel cost stays independent of token streaming; the workspace
   // file's debounce window never masquerades as current UI state.
   const store = useAppStore.getState()
-  const { workspaceState: state, workspaceTileTabs: tileTabs, workspaceReaderMode: reader, workspaceSpotlight: spotlight } = store
+  const { workspaceState: state, workspaceReaderMode: reader, workspaceSpotlight: spotlight } = store
   const takeover = reader ?? spotlight
   const placements = new Map<string, Placement[]>()
   const add = (id: string, placement: Placement) => placements.set(id, [...(placements.get(id) ?? []), placement])
   for (const tab of state.tabs) {
-    const tabVisible = tileTabs ? tileTabs.tabIds.includes(tab.id) : !state.dispatchMode && state.activeTabId === tab.id
+    const tabVisible = !state.dispatchMode && state.activeTabId === tab.id
     for (const id of collectLeaves(tab.root)) {
       const visibleSession = selectedGridRelatedSessionId(state, tab.id, id) ?? id
       add(id, { kind: 'grid', tabId: tab.id, visible: tabVisible && visibleSession === id })
@@ -49,31 +49,28 @@ export function observeWorkspace(getWorkspace: () => Pick<Workspace, 'restoreSta
   for (const [id, detached] of Object.entries(state.detachedSessions)) add(id, { kind: 'detached', tabId: detached.projectTabId, visible: false })
   if (state.dispatchMode?.tiled) {
     state.dispatchMode.tiled.lanes.forEach((lane, index) => {
-      if (lane.selectedSessionId) add(lane.selectedSessionId, { kind: 'dispatch', lane: index, visible: !tileTabs })
+      if (lane.selectedSessionId) add(lane.selectedSessionId, { kind: 'dispatch', lane: index, visible: true })
     })
   } else if (state.dispatchMode?.focusedSessionId) {
-    add(state.dispatchMode.focusedSessionId, { kind: 'dispatch', visible: !tileTabs })
+    add(state.dispatchMode.focusedSessionId, { kind: 'dispatch', visible: true })
   }
   if (takeover) {
     for (const rows of placements.values()) for (const placement of rows) placement.visible = false
     add(takeover.focusedSessionId, { kind: reader ? 'reader' : 'spotlight', tabId: takeover.tabId, visible: true })
   }
-  const focusedTab = state.tabs.find(tab => tab.id === (tileTabs?.focusedTabId ?? state.activeTabId))
-  const focusedSessionId = takeover?.focusedSessionId ?? (tileTabs
-    ? selectedGridRelatedSessionId(state, focusedTab?.id ?? '', focusedTab?.focusedSessionId)
-    : commandTargetSessionIdForState(state))
+  const focusedSessionId = takeover?.focusedSessionId ?? commandTargetSessionIdForState(state)
   for (const buried of state.buried) add(buried.sessionId, { kind: 'buried', tabId: buried.sourceTabId, visible: false })
   // Buried metadata can outlive its sessions entry. Preserve that real
   // identity rather than dropping it or inventing a second agent.
   const sessions = { ...Object.fromEntries(state.buried.map(record => [record.sessionId, record.sessionMeta])), ...state.sessions }
-  const dispatchRows = state.dispatchMode && !tileTabs ? buildVisibleDispatchRows(state) : []
+  const dispatchRows = state.dispatchMode ? buildVisibleDispatchRows(state) : []
   const identity = (sessionId: string, meta: (typeof sessions)[string]) => {
     const row = dispatchRows.find(row => row.sessionId === sessionId)
     const tab = state.tabs.find(tab => resolveTabSessions(state, tab.id).includes(sessionId))
     const localLabel = tab ? paneLabelForSession(state, tab.id, sessionId) : null
     // Dispatch labels can shadow project-local labels. Only advertise a
     // fallback that the app's label resolver maps back to this same session.
-    const displayLabel = row?.label ?? (localLabel && resolveAgentPaneLabel(state, localLabel, tileTabs)?.sessionId === sessionId ? localLabel : null)
+    const displayLabel = row?.label ?? (localLabel && resolveAgentPaneLabel(state, localLabel)?.sessionId === sessionId ? localLabel : null)
     const runtime = store.workspaceRuntimes[sessionId]
     const displayedTitle = row
       ? dispatchRowTitle(row, runtime?.entries, runtime?.terminalForeground?.cwd)
@@ -90,7 +87,9 @@ export function observeWorkspace(getWorkspace: () => Pick<Workspace, 'restoreSta
   }
   return {
     observedAt: Date.now(), focusedSessionId, ui: { commandPickerOpen: store.commandPaletteOpen, settingsOpen: store.settingsPageOpen, inputOwnedBySurface: hasAppInteractionOwner() }, restoreStatus: getWorkspace().restoreStatus, activeTabId: state.activeTabId,
-    mode: tileTabs ? 'tiled-tabs' as const : state.dispatchMode?.tiled ? 'tiled-dispatch' as const : state.dispatchMode ? 'dispatch' as const : 'grid' as const,
+    // Tile Tabs left this ladder with #992; the remaining shapes describe the
+    // stored layout until the stage is the only one (stage 3b).
+    mode: state.dispatchMode?.tiled ? 'tiled-dispatch' as const : state.dispatchMode ? 'dispatch' as const : 'grid' as const,
     tabs: state.tabs.map(tab => ({ id: tab.id, title: tab.title, focusedSessionId: tab.focusedSessionId, sessionIds: resolveTabSessions(state, tab.id) })),
     sessions: Object.entries(sessions).map(([sessionId, meta]) => ({
       sessionId, ...identity(sessionId, meta), title: meta.title ?? '', cwd: meta.cwd, provider: meta.kind ?? DEFAULT_PROVIDER,

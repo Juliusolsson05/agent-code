@@ -58,7 +58,7 @@ function tiledProject(): WorkspaceState {
 function mount() {
   const harness = mountPaneActions(tiledProject())
   const dispatch = renderHook(() => useDispatchActions(
-    harness.getState(), harness.setState, vi.fn(), vi.fn(), harness.refs, vi.fn(), vi.fn(),
+    harness.getState(), harness.setState, vi.fn(), harness.refs, vi.fn(), vi.fn(),
   ))
   render(<CloseConfirmationDialog />)
   const workspace = {

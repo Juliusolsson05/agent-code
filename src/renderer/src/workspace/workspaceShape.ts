@@ -164,6 +164,66 @@ function buriedProjectOf(input: SessionOwnershipInput): Map<SessionId, TabId> {
 }
 
 /**
+ * Turn persisted `buried` records into ordinary parked pool sessions.
+ *
+ * WHY this exists (#992 stage 3a): Bury / Revive / Kill Buried were deleted —
+ * "hidden but alive" is simply what an unplaced pool session is — but old
+ * workspace files (and a closing window's slice handed to adoptWorkspace)
+ * still carry `buried[]`. With the revive UI gone, a record left in that
+ * bucket would be alive, owned, and unreachable from any surface. Folding at
+ * the READ boundary means live state never holds a buried session at all:
+ * they arrive as parked Dispatch rows, listed in their project's index and
+ * woken on first placement like any other parked agent.
+ *
+ * Rules:
+ *  - A buried record carries its OWN SessionMeta and that meta can be absent
+ *    from `sessions` (control.ts documents "buried metadata can outlive its
+ *    sessions entry"), so the fold restores it; an existing row wins.
+ *  - v2 ownership kept buried sessions UNCONDITIONALLY, even when their
+ *    source tab had been closed (Revive minted a tab for them). A detached
+ *    record whose project is gone is dropped by ownership, so a dead source
+ *    tab re-parents to the active project instead of silently deleting the
+ *    agent. No project at all => nothing can list it; the record is dropped,
+ *    exactly as rehydrate would have been unable to show it.
+ *  - `buriedAt` becomes `detachedAt`: it is the only ordering key inside a
+ *    project group, and "when it left the screen" is the honest value.
+ *  - A session that is somehow ALSO a tile leaf or already detached keeps
+ *    that placement; the fold never creates a second owner.
+ *
+ * migrateWorkspaceToStage does NOT call this: it folds buried into the v3
+ * pool through projectAffinityOf and must keep excluding a buried session
+ * from the entry seed (the user hid it on purpose). Two folds, one outcome —
+ * every buried session is a pool member owned by a live project.
+ */
+export function foldBuriedIntoDetached(persisted: PersistedWorkspace): PersistedWorkspace {
+  const buried = persisted.buried ?? []
+  if (buried.length === 0) return persisted
+  const tabIndexById = new Map(persisted.tabs.map((tab, index) => [tab.id, index]))
+  const fallbackTabId = tabIndexById.has(persisted.activeTabId)
+    ? persisted.activeTabId
+    : persisted.tabs[0]?.id
+  const leafIds = new Set(persisted.tabs.flatMap(tab => collectLeaves(tab.root)))
+  const sessions = { ...persisted.sessions }
+  const detachedSessions = { ...(persisted.detachedSessions ?? {}) }
+  for (const record of buried) {
+    const projectTabId = tabIndexById.has(record.sourceTabId) ? record.sourceTabId : fallbackTabId
+    if (projectTabId === undefined) continue
+    if (sessions[record.sessionId] === undefined) sessions[record.sessionId] = record.sessionMeta
+    if (leafIds.has(record.sessionId) || detachedSessions[record.sessionId] !== undefined) continue
+    const projectTabIndex = tabIndexById.get(projectTabId) ?? 0
+    detachedSessions[record.sessionId] = {
+      sessionId: record.sessionId,
+      surface: 'dispatch',
+      projectTabId,
+      projectTabTitle: persisted.tabs[projectTabIndex]?.title ?? record.sourceTabTitle,
+      projectTabIndex,
+      detachedAt: record.buriedAt,
+    }
+  }
+  return { ...persisted, sessions, detachedSessions, buried: [] }
+}
+
+/**
  * The default stage minted for a workspace that has no stored one:
  * `[{ length: 2 }]`, lane 0 seeded, focused.
  *

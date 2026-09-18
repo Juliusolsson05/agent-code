@@ -3,17 +3,12 @@ import {
   selectVisibleDispatchRow,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
 import type { DispatchAgentRow } from '@renderer/workspace/dispatch/dispatchSelectors'
-import type { SessionId, TabId, WorkspaceState } from '@renderer/workspace/types'
+import type { WorkspaceState } from '@renderer/workspace/types'
 
 export type DispatchVisualTarget = {
   row: DispatchAgentRow
   laneIndex: number | null
   source: 'tiled-lane' | 'classic-focus' | 'grid-fallback' | 'first-row'
-}
-
-export type DispatchAttachTarget = {
-  sessionId: SessionId
-  targetTabId: TabId
 }
 
 /**
@@ -69,15 +64,4 @@ export function resolveStrictDispatchCommandTarget(
   state: WorkspaceState,
 ): DispatchVisualTarget | null {
   return resolveDispatchVisualTarget(state, { strictTiledLane: true })
-}
-
-export function resolveDispatchAttachTarget(
-  state: WorkspaceState,
-): DispatchAttachTarget | null {
-  const target = resolveStrictDispatchCommandTarget(state)
-  if (!target) return null
-  return {
-    sessionId: target.row.sessionId,
-    targetTabId: target.row.tabId,
-  }
 }

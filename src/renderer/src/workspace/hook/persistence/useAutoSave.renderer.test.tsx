@@ -51,7 +51,6 @@ describe('workspace autosave durability retry', () => {
     const refs = {
       latestStateRef: ref(state),
       latestRuntimesRef: ref({ successor: emptyRuntime() }),
-      latestTileTabsRef: ref(null),
       saveTimerRef: ref<ReturnType<typeof setTimeout> | null>(null),
     } as unknown as WorkspaceRefs
     const saveWorkspace = vi.fn()
@@ -109,7 +108,6 @@ describe('workspace autosave durability retry', () => {
     const refs = {
       latestStateRef: ref(state),
       latestRuntimesRef: ref({ successor: emptyRuntime() }),
-      latestTileTabsRef: ref(null),
       saveTimerRef: ref<ReturnType<typeof setTimeout> | null>(null),
     } as unknown as WorkspaceRefs
     const saveWorkspace = vi.fn().mockResolvedValue(undefined)
@@ -160,7 +158,6 @@ describe('workspace autosave durability retry', () => {
     const refs = {
       latestStateRef: ref(state),
       latestRuntimesRef: ref({ successor: emptyRuntime() }),
-      latestTileTabsRef: ref(null),
       saveTimerRef: ref<ReturnType<typeof setTimeout> | null>(null),
     } as unknown as WorkspaceRefs
     const saveWorkspace = vi.fn()
@@ -218,7 +215,6 @@ describe('workspace autosave durability retry', () => {
     const refs = {
       latestStateRef: ref(state),
       latestRuntimesRef: ref({ successor: emptyRuntime() }),
-      latestTileTabsRef: ref(null),
       saveTimerRef: ref<ReturnType<typeof setTimeout> | null>(null),
     } as unknown as WorkspaceRefs
     const saveWorkspace = vi.fn().mockRejectedValue(
