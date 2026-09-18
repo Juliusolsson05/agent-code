@@ -11,6 +11,7 @@ import { isAgentProviderKind } from '@shared/types/providerKind'
 import type { AgentProviderKind } from '@shared/types/providerKind'
 import type { Entry, ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 import type { ProviderConditionSnapshot } from '@shared/types/providerConditions'
+import type { SubAgentState } from '@shared/sessionFeed/types'
 import { asRecord } from '@shared/lib/asRecord'
 
 import type { WebSocketSessionFeed } from '../WebSocketSessionFeed'
@@ -58,6 +59,11 @@ export type SessionTranscript = {
   toolIndexVersion: number
   conditions: ProviderConditionSnapshot | null
   workingStatus: string | null
+  /** Live sub-agent fleet under this session (v2 sub-agents channel).
+   *  Null until the server has emitted one — Feed treats null and {} the
+   *  same for rendering, but null keeps the transcript reference-stable
+   *  for sessions that never spawn children. */
+  subAgents: Record<string, SubAgentState> | null
   /** Latest TUI text (`recent` window). The feed does NOT render this in
    *  normal operation — it is the fallback for pre-transcript states
    *  (trust dialog body, login errors, provider crashes) that never reach
@@ -139,6 +145,7 @@ function emptyTranscript(): SessionTranscript {
     toolIndexVersion: 0,
     conditions: null,
     workingStatus: null,
+    subAgents: null,
     screenText: '',
     historyError: null,
     exited: false,
@@ -181,6 +188,14 @@ export class TranscriptStore {
       }),
       feed.onSessionConditions(e => {
         this.mutate(e.sessionId, t => ({ ...t, conditions: e.snapshot }))
+      }),
+      feed.onSessionSubAgents(e => {
+        // v2: the parent's live sub-agent fleet. Reference-equality check in
+        // the mutate keeps an unchanged map from repainting the feed — the
+        // server re-emits the whole map on every member change.
+        this.mutate(e.sessionId, t =>
+          t.subAgents === e.subAgents ? t : { ...t, subAgents: e.subAgents },
+        )
       }),
       feed.onSessionProcessState(e => {
         this.mutate(e.sessionId, t => ({

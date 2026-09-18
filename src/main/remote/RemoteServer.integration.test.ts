@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { WebSocket } from 'ws'
-import { manager, registry, pairing, baseUrl, restartServer, pairDevice, connect, waitFor, framesOfType, openAuthed } from './RemoteServer.testSupport.js'
+import { manager, registry, pairing, baseUrl, dir, restartServer, pairDevice, connect, waitFor, framesOfType, openAuthed } from './RemoteServer.testSupport.js'
 
 describe('pairing endpoint', () => {
   it('redeems a live code and rejects a bogus one', async () => {
@@ -462,5 +462,64 @@ describe('v2 TLDR/Goal note frames', () => {
     await new Promise(resolve => setImmediate(resolve))
     expect(framesOfType(frames, 'tldr-updated')).toHaveLength(0)
     ws.close()
+  })
+})
+
+// ── v2 sub-agents channel end to end ──────────────────────────────────────
+//
+// Full production path: a Claude sidecar directory on disk, discovered by
+// the remote subsystem's own SubAgentWatcherManager through the same
+// jsonl-entry stream the desktop forwarder feeds its instance from, then
+// broadcast on the reserved channel and cached for late joiners/summary
+// counts. No mocks between the filesystem and the socket.
+describe('v2 sub-agents channel', () => {
+  it('discovers a sidecar fleet, broadcasts it, caches it, and stamps counts', async () => {
+    const { join: joinPath } = await import('node:path')
+    const { mkdir, writeFile: writeFileAsync } = await import('node:fs/promises')
+    // A transcript path whose basename derives the subagents dir, exactly
+    // like ~/.claude/projects/<dir>/<session>.jsonl does in production.
+    const transcriptFile = joinPath(dir, 'proj', '11111111-2222-3333-4444-555555555555.jsonl')
+    const subagentsDir = joinPath(dir, 'proj', '11111111-2222-3333-4444-555555555555', 'subagents')
+    await mkdir(subagentsDir, { recursive: true })
+
+    manager.emit('started', { sessionId: 's1', kind: 'claude', projectDir: dir })
+    // Feed the transcript stream: this creates the watcher bound to the
+    // sidecar dir above.
+    manager.emit('jsonl-entry', {
+      sessionId: 's1',
+      entry: { type: 'user', uuid: 'u0', message: { role: 'user', content: [] } },
+      file: transcriptFile,
+    })
+
+    const { ws, frames } = await openAuthed()
+
+    // A sub-agent appears: meta + one entry line.
+    await writeFileAsync(joinPath(subagentsDir, 'agent-side1.meta.json'), JSON.stringify({ description: 'Research the fold', toolUseId: 'tu-1' }))
+    await writeFileAsync(joinPath(subagentsDir, 'agent-side1.jsonl'), JSON.stringify({ type: 'assistant', uuid: 'a1', timestamp: '2026-09-17T10:00:00.000Z', message: { role: 'assistant', content: [{ type: 'text', text: 'Digging' }] } }) + '\n')
+
+    await waitFor(frames, f =>
+      framesOfType(f, 'session-event').some(
+        e => e.channel === 'sub-agents' &&
+          Object.keys((e.payload as { subAgents?: Record<string, unknown> }).subAgents ?? {}).length > 0,
+      ),
+    )
+
+    // Late joiner: the cached fleet replays without any new disk activity,
+    // and the session summary carries the live count.
+    const late = await connect(await pairDevice('second phone'))
+    await waitFor(late.frames, f =>
+      framesOfType(f, 'session-event').some(
+        e => e.channel === 'sub-agents' &&
+          Object.keys((e.payload as { subAgents?: Record<string, unknown> }).subAgents ?? {}).length > 0,
+      ),
+    )
+    await waitFor(late.frames, f => {
+      const lists = framesOfType(f, 'session-list')
+      return lists.some(list =>
+        ((list.sessions as Array<Record<string, unknown>>) ?? []).some(s => s.sessionId === 's1' && s.subAgentCount === 1),
+      )
+    })
+    ws.close()
+    late.ws.close()
   })
 })

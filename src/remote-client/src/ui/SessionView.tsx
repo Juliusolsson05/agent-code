@@ -383,6 +383,10 @@ export function SessionView({
             toolResultIndex={transcript.toolResultIndex}
             toolIndexVersion={transcript.toolIndexVersion}
             askUserQuestionState={askUserQuestionState}
+            // v2: the parent's live sub-agent fleet renders in-feed through
+            // the same SubAgentsContext the desktop uses — the channel was
+            // reserved on the wire since v1; the server now emits it.
+            subAgents={transcript.subAgents ?? undefined}
             hasOlderHistory={transcript.hasOlderHistory}
             loadingOlderHistory={transcript.loadingOlderHistory}
             onLoadOlderHistory={() => store.loadOlderHistory(sessionId)}

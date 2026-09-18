@@ -213,6 +213,10 @@ export class RemoteServer extends EventEmitter {
   private readonly lastConditions = new Map<string, unknown>()
   private readonly lastProcessState = new Map<string, unknown>()
   private readonly lastInputReadiness = new Map<string, unknown>()
+  // v2: last sub-agent fleet per parent session — replayed to late joiners
+  // (a phone connecting mid-orchestration must see the live fleet) and the
+  // source of subAgentCount on summaries.
+  private readonly lastSubAgents = new Map<string, unknown>()
 
   constructor(private readonly deps: RemoteServerDeps) {
     super()
@@ -342,6 +346,7 @@ export class RemoteServer extends EventEmitter {
     this.lastConditions.clear()
     this.lastProcessState.clear()
     this.lastInputReadiness.clear()
+    this.lastSubAgents.clear()
     this.deps.journal?.record({ area: 'remote.server', name: 'remote_server.stopped' })
   }
 
@@ -665,6 +670,7 @@ export class RemoteServer extends EventEmitter {
       ['conditions', this.lastConditions],
       ['process-state', this.lastProcessState],
       ['input-readiness', this.lastInputReadiness],
+      ['sub-agents', this.lastSubAgents],
     ] as const
     for (const [channel, cache] of caches) {
       for (const [sessionId] of cache) {
@@ -875,6 +881,7 @@ export class RemoteServer extends EventEmitter {
     else if (channel === 'conditions') this.lastConditions.set(sessionId, payload)
     else if (channel === 'process-state') this.lastProcessState.set(sessionId, payload)
     else if (channel === 'input-readiness') this.lastInputReadiness.set(sessionId, payload)
+    else if (channel === 'sub-agents') this.lastSubAgents.set(sessionId, payload)
     else if (channel === 'exit' || channel === 'removed') {
       // A dead session's stale screen must not greet the next connection as
       // if it were live; the event itself still broadcast normally.
@@ -884,6 +891,7 @@ export class RemoteServer extends EventEmitter {
       this.lastConditions.delete(sessionId)
       this.lastProcessState.delete(sessionId)
       this.lastInputReadiness.delete(sessionId)
+      this.lastSubAgents.delete(sessionId)
     }
   }
 
@@ -907,6 +915,7 @@ export class RemoteServer extends EventEmitter {
     return this.deps.feedSource.listSessions().map(summary => {
       const identity = identities?.get(summary.sessionId)
       const runtime = this.deps.manager.getSpawnProviderRuntime?.(summary.sessionId) ?? null
+      const subAgentCount = this.subAgentCountFor(summary.sessionId)
       return {
         ...summary,
         ...(identity
@@ -922,8 +931,20 @@ export class RemoteServer extends EventEmitter {
         // would conflate OpenCode's discriminator with the plain-shell
         // session kind and confuse future readers of the wire.
         ...(summary.kind === 'opencode' ? { providerRuntime: runtime } : {}),
+        ...(subAgentCount !== null ? { subAgentCount } : {}),
       }
     })
+  }
+
+  /** Live sub-agent count for a summary row, from the late-joiner cache.
+   *  Null when no fleet has ever been observed for the session (the field
+   *  then stays absent rather than asserting a misleading zero). */
+  private subAgentCountFor(sessionId: string): number | null {
+    const cached = this.lastSubAgents.get(sessionId) as
+      | { subAgents?: Record<string, unknown> }
+      | undefined
+    if (!cached?.subAgents) return null
+    return Object.keys(cached.subAgents).length
   }
 
   /** Resend the session list to every connected phone. Used by projection
