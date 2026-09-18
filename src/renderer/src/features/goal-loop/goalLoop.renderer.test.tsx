@@ -1,0 +1,76 @@
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { GoalLoopState } from '@shared/types/goalLoop'
+import { GoalLoopPane } from './GoalLoopPane'
+import { dismissGoalLoop, toggleGoalLoop } from './viewState'
+
+const loop = (overrides: Partial<GoalLoopState> = {}): GoalLoopState => ({
+  sessionId: 's1', goal: 'Migrate tests.', loopPrompt: 'Keep migrating.', phase: 'active',
+  pauseReason: null, endReason: null, completionSummary: null, maxContinuations: 25,
+  continuationsDelivered: 3, consecutiveDeliveryFailures: 0,
+  startedAt: '2026-09-18T00:00:00.000Z', updatedAt: '2026-09-18T00:00:00.000Z', ...overrides,
+})
+const api = {
+  readGoalLoops: vi.fn(async (ids: string[]) => Object.fromEntries(ids.map(id => [id, loop()]))),
+  controlGoalLoop: vi.fn(async () => loop()),
+  onGoalLoopChanged: vi.fn((_listener: () => void) => () => {}),
+}
+beforeEach(() => {
+  vi.clearAllMocks()
+  dismissGoalLoop()
+  Object.assign(window, { api })
+})
+afterEach(() => { cleanup(); dismissGoalLoop() })
+
+describe('GoalLoopPane', () => {
+  it('renders the always-on strip with budget and controls for an active loop', async () => {
+    render(<GoalLoopPane sessionId="s1" />)
+    expect(await screen.findAllByText(/iteration 3\/25/)).not.toHaveLength(0)
+    screen.getByText('Pause')
+    screen.getByText('Stop')
+  })
+  it('renders nothing without a loop', async () => {
+    api.readGoalLoops.mockResolvedValueOnce({})
+    const { container } = render(<GoalLoopPane sessionId="s1" />)
+    await waitFor(() => expect(api.readGoalLoops).toHaveBeenCalled())
+    expect(container.textContent).toBe('')
+  })
+  it('pause calls controlGoalLoop and the latch reveals the overlay', async () => {
+    render(<GoalLoopPane sessionId="s1" />)
+    // The strip appears after the async IPC read resolves.
+    ;(await screen.findByText('Pause')).click()
+    expect(api.controlGoalLoop).toHaveBeenCalledWith({ sessionId: 's1', action: 'pause', value: undefined })
+    toggleGoalLoop()
+    expect(await screen.findByRole('dialog')).toBeTruthy()
+  })
+  it('offers Dismiss, and only Dismiss, on an ended loop', async () => {
+    // An ended loop is persisted and its strip covers the pane's top line;
+    // without Dismiss it had no controls at all and could never be cleared.
+    api.readGoalLoops.mockResolvedValueOnce({ s1: loop({ phase: 'ended', endReason: 'done', completionSummary: 'All migrated.' }) })
+    render(<GoalLoopPane sessionId="s1" />)
+    ;(await screen.findByText('Dismiss')).click()
+    expect(api.controlGoalLoop).toHaveBeenCalledWith({ sessionId: 's1', action: 'dismiss', value: undefined })
+    expect(screen.queryByText('Stop')).toBeNull()
+    expect(screen.queryByText('Pause')).toBeNull()
+  })
+  it('clamps Raise cap to the ceiling main accepts and hides it once there', async () => {
+    // 190 + 25 exceeded the IPC schema maximum, so main rejected the request
+    // and the button did nothing.
+    api.readGoalLoops.mockResolvedValueOnce({ s1: loop({ phase: 'paused', pauseReason: 'cap', maxContinuations: 190, continuationsDelivered: 190 }) })
+    const first = render(<GoalLoopPane sessionId="s1" />)
+    ;(await screen.findByText('Raise cap')).click()
+    expect(api.controlGoalLoop).toHaveBeenCalledWith({ sessionId: 's1', action: 'raise-cap', value: 200 })
+    first.unmount()
+    api.readGoalLoops.mockResolvedValueOnce({ s1: loop({ phase: 'paused', pauseReason: 'cap', maxContinuations: 200, continuationsDelivered: 200 }) })
+    render(<GoalLoopPane sessionId="s1" />)
+    await screen.findByText('Resume')
+    expect(screen.queryByText('Raise cap')).toBeNull()
+  })
+  it('closes the latched overlay from inside it', async () => {
+    toggleGoalLoop()
+    render(<GoalLoopPane sessionId="s1" />)
+    await screen.findByRole('dialog')
+    screen.getByText('Close').click()
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  })
+})

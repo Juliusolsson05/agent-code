@@ -34,6 +34,7 @@ import { controlReference as reference33 } from '@renderer/features/conversation
 // surfaces are gone; its page keeps the historical "performance" id.
 import { controlReference as performanceReference } from '@renderer/features/performance-monitor/controlReference'
 import { controlReference as tldrReference } from '@renderer/features/tldr/controlReference'
+import { controlReference as goalLoopReference } from '@renderer/features/goal-loop/controlReference'
 import { controlReference as agentAnalyticsReference } from '@renderer/features/agent-analytics/controlReference'
 
 export const featureReferences = [
@@ -71,6 +72,7 @@ export const featureReferences = [
   ...reference33,
   ...performanceReference,
   ...tldrReference,
+  ...goalLoopReference,
   ...agentAnalyticsReference,
 ]
 
@@ -81,6 +83,7 @@ export const referenceOwnership = {
   "settings": "settings",
   "spotlight": "spotlight",
   "tldr": "tldr",
+  "goal-loop": "goal-loop",
   "caffeinate": "caffeinate",
   "session-preview": "session-preview",
   "voice-dictation": "dictation",
