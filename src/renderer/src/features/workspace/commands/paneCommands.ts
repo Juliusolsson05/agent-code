@@ -69,7 +69,7 @@ export const paneCommands: CommandDef[] = [
     // `dispatch`, not `app`: in the grid a project is a tab one keystroke away,
     // and a detached agent spawned from the grid lands nowhere visible — the
     // grid has no lanes to fill and Dispatch rows are not on screen.
-    surface: 'dispatch',
+    surface: 'workspace',
     // Title per docs/command-style.md: "New X" for creation, and the ellipsis
     // because the command asks for more input (agent, then project).
     title: 'New Agent In…',
@@ -184,7 +184,7 @@ export const paneCommands: CommandDef[] = [
     // `if (!workspace.dispatchMode) return false`. That mode check now
     // lives in the registry's surface gate, so `when` only carries the
     // data condition (the focused row is a detached session).
-    surface: 'dispatch',
+    surface: 'workspace',
     title: 'Attach Detached Session to Grid…',
     description: '**What it does:** Moves one **detached Dispatch session** into the grid.\n\n**Use when:** You want to pin background work into the normal layout.\n\n**Notes:** Uses the placement picker so you can choose where it lands.',
     keywords: ['attach', 'detached', 'dispatch', 'grid', 'pin', 'place'],
@@ -221,7 +221,7 @@ export const paneCommands: CommandDef[] = [
     // `dispatch` surface replaces the old `when: Boolean(dispatchMode)`
     // guard — pins are a Dispatch-list concept and the registry gate
     // now hides this in the grid.
-    surface: 'dispatch',
+    surface: 'workspace',
     title: 'Pin Sessions…',
     description: '**What it does:** Opens the multi-select Pin modal to choose which **Dispatch** agents and terminals stay pinned at the top of the agent list.\n\n**Use when:** You want a few favorite agents or terminals to always be one keystroke away regardless of project or scope.\n\n**Notes:** Space toggles, Enter commits, Esc cancels. The order you Space through the rows is the order pins render in. Pins survive project↔global scope toggles.',
     keywords: ['pin', 'pins', 'pinned', 'favorite', 'star', 'top', 'dispatch', 'terminal'],
@@ -251,7 +251,7 @@ export const paneCommands: CommandDef[] = [
     category: 'layout-dispatch',
     // `dispatch` surface carries the mode gate; `when` keeps only the
     // data condition (the focused row is currently pinned).
-    surface: 'dispatch',
+    surface: 'workspace',
     title: 'Unpin Session',
     description: '**What it does:** Removes the currently-focused **Dispatch** row from the Pinned section.\n\n**Use when:** You want to quickly drop a single pin without opening the Pin modal.\n\n**Notes:** Only appears when the focused dispatch row is currently pinned.',
     keywords: ['unpin', 'remove', 'pin', 'pinned', 'star'],
@@ -409,50 +409,10 @@ export const paneCommands: CommandDef[] = [
       },
     ]
   }),
-  {
-    // `grid` surface — applies to nav-left/right/up/down below.
-    //
-    // WHY this is a real fix and not just a label tidy-up: in Dispatch
-    // `workspace.navigate()` walks `tab.root` grid focus, which Dispatch
-    // does not drive. When the Dispatch selection is a detached session
-    // it diverges from grid focus entirely and these commands were a
-    // SILENT NO-OP (issue #228). Dispatch row navigation is ⌥↑/⌥↓ (and,
-    // after this change, ⌥J/⌥K) — handled directly in useKeybinds.
-    id: 'nav-left',
-    category: 'navigate',
-    commandGroup: 'navigation',
-    surface: 'grid',
-    title: 'Focus Pane Left',
-    description: '**What it does:** Focuses the pane to the **left**.\n\n**Use when:** You want keyboard pane navigation.\n\n**Notes:** Uses the current grid layout.',
-    run: ({ workspace }) => workspace.navigate('left'),
-  },
-  {
-    id: 'nav-right',
-    category: 'navigate',
-    commandGroup: 'navigation',
-    surface: 'grid',
-    title: 'Focus Pane Right',
-    description: '**What it does:** Focuses the pane to the **right**.\n\n**Use when:** You want keyboard pane navigation.\n\n**Notes:** Uses the current grid layout.',
-    run: ({ workspace }) => workspace.navigate('right'),
-  },
-  {
-    id: 'nav-up',
-    category: 'navigate',
-    commandGroup: 'navigation',
-    surface: 'grid',
-    title: 'Focus Pane Up',
-    description: '**What it does:** Focuses the pane **above**.\n\n**Use when:** You want keyboard pane navigation.\n\n**Notes:** Uses the current grid layout.',
-    run: ({ workspace }) => workspace.navigate('up'),
-  },
-  {
-    id: 'nav-down',
-    category: 'navigate',
-    commandGroup: 'navigation',
-    surface: 'grid',
-    title: 'Focus Pane Down',
-    description: '**What it does:** Focuses the pane **below**.\n\n**Use when:** You want keyboard pane navigation.\n\n**Notes:** Uses the current grid layout.',
-    run: ({ workspace }) => workspace.navigate('down'),
-  },
+  // DELETED with the tile tree (#992): nav-left/right/up/down walked
+  // `tab.root` grid focus, and the tree no longer renders. Lane movement
+  // is ⌥←/⌥→ (focus within the row) and ⌥↑/⌥↓ (index walk), handled in
+  // useKeybinds and migrated into the command registry in stage 5.
   {
     id: 'undo-close',
     category: 'session',

@@ -121,41 +121,43 @@ export type CommandRisk =
  *
  * WHY this exists: the command registry used to be one flat list where
  * every command decided its own availability through ad-hoc `when`
- * guards (or didn't guard at all). That worked while Agent Code was
- * essentially a pane grid, but it broke down once Dispatch Mode became
- * a first-class layout. Grid-spatial commands — `Split Pane Right`,
- * `New Terminal Below`, `Focus Pane Left` — kept showing in the palette
- * while Dispatch was active, where "right"/"below"/"left" point at a
- * grid the user can't see. Worse, `Focus Pane *` and the layout
- * commands (`Normalize Layout`, `Rotate Layout`) were *silent no-ops*
- * in Dispatch: they mutate `tab.root` grid focus, which Dispatch does
- * not use. See issue #228.
+ * guards (or didn't guard at all) — grid-spatial commands showed in the
+ * palette as silent no-ops where their gestures pointed at nothing the
+ * user could see (issue #228). `surface` makes the classification
+ * explicit and machine-readable so the palette can hide commands that
+ * don't apply, and so a future native menu (#148) can build itself from
+ * the same model instead of re-deriving intent from title text.
  *
- * `surface` makes that classification explicit and machine-readable so
- * the palette can hide commands that don't apply to the current mode,
- * and so a future native menu (#148) can build itself from the same
- * model instead of re-deriving intent from title text.
- *
- *  - `app`      — always meaningful, mode-independent. New Tab,
- *                 Settings, Resume Session, Dispatch Mode toggle.
- *  - `grid`     — operates on the tile grid; hidden while Dispatch
- *                 Mode is active. Pane splits, directional pane
- *                 focus, layout normalize/rotate.
- *  - `dispatch` — only meaningful inside Dispatch Mode; hidden in the
- *                 grid. Pin/unpin agents, attach detached session,
- *                 Global Dispatch scope.
- *  - `session`  — acts on the current command-target session and
- *                 works in BOTH modes (the target resolver is already
- *                 Dispatch-aware — see commandTargetSessionId). Reload
- *                 Agent, Tail, Copy Last Response, Reader Mode.
- *  - `editor`   — Global Editor overlay. Orthogonal to grid/Dispatch
- *                 (the overlay wraps either), so NOT mode-gated; the
- *                 surface is a category, and editor commands keep
- *                 their own `when` for overlay-open checks.
- *  - `debug`    — developer/diagnostic tooling. Mode-independent;
- *                 grouped separately so it can be demoted or hidden.
+ * History (#992): this union used to be mode-split — `grid` hidden in
+ * Dispatch, `dispatch` hidden in the grid — because there were two
+ * layouts. The unified layout deleted the modes and merged both into
+ * `workspace`; see the union below for what each member means now.
  */
-export type CommandSurface = 'app' | 'grid' | 'dispatch' | 'session' | 'editor' | 'debug'
+/**
+ * Which part of the app a command acts on.
+ *
+ * Unified layout (#992): the mode-split surfaces `grid` and `dispatch` are
+ * GONE — there is one workspace, so a command is either workspace-shaped or
+ * it isn't. A command's visibility now comes from its own `when` (does a
+ * target exist? is the overlay open?), never from "which mode am I in".
+ * That was the whole point of killing the modes: onboarding no longer has
+ * to explain a toggle before a command can be found.
+ *
+ *  - `app`       — whole-application actions: settings, palette, resume,
+ *                  project rail, stage shape.
+ *  - `workspace` — acts on the lane stage / the pool: lane and row
+ *                  structure, project bindings, pins, placement.
+ *  - `session`   — acts on the current command-target session (the
+ *                  focused lane's occupant): Reload Agent, Tail, Copy
+ *                  Last Response, Reader Mode.
+ *  - `editor`    — Global Editor overlay. Orthogonal to the stage (the
+ *                  overlay wraps it), so NOT workspace-gated; the surface
+ *                  is a category, and editor commands keep their own
+ *                  `when` for overlay-open checks.
+ *  - `debug`     — developer/diagnostic tooling. Workspace-independent;
+ *                  grouped separately so it can be demoted or hidden.
+ */
+export type CommandSurface = 'app' | 'workspace' | 'session' | 'editor' | 'debug'
 
 /**
  * How visible a command should be in the command PICKER specifically.

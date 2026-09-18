@@ -53,10 +53,15 @@ describe('shipped defaults', () => {
     // These ran before this change but were never advertised. Dropping them
     // would be a silent regression for anyone with the muscle memory; declaring
     // them is what lets Settings finally show and unbind them.
+    //
+    // The nav-* aliases (Alt+H/J/K/L + Alt+Arrows) are deliberately ABSENT
+    // since #992: the commands died with the tile tree, and the gestures now
+    // belong to the lane stage — handled inline in useKeybinds until stage 5
+    // registers them as rebindable commands.
     const byId = new Map(defaults.map(d => [d.commandId, d]))
     expect(byId.get('close-pane')?.bindings).toContain('Alt+W')
-    expect(byId.get('nav-left')?.bindings).toContain('Alt+Left')
-    expect(byId.get('nav-up')?.bindings).toContain('Alt+Up')
+    expect(byId.get('nav-left')).toBeUndefined()
+    expect(byId.get('nav-up')).toBeUndefined()
   })
 
   it('fills the Global Editor metadata gap', () => {

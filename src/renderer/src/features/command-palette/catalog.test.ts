@@ -68,10 +68,6 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
   'codex-horizontal',
   'opencode-vertical',
   'opencode-horizontal',
-  'nav-left',
-  'nav-right',
-  'nav-up',
-  'nav-down',
   'undo-close',
   'revive-pane',
   'kill-buried-pane',
@@ -84,8 +80,6 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
   'undo-clear-composer',
   'send-composer',
   // layoutCommands (performance report/trace are ordinary app commands)
-  'dispatch-mode',
-  'global-dispatch',
   'tiled-dispatch',
   'new-tiled-lane',
   'remove-tiled-lane',
@@ -96,9 +90,6 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
   'dispatch-row-child-cap',
   'dispatch-focus-row-up',
   'dispatch-focus-row-down',
-  'normalize-layout',
-  'hard-normalize-layout',
-  'rotate-layout',
   'toggle-performance-panel',
   'save-performance-report',
   'record-performance-trace',
@@ -194,6 +185,18 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
  *  canonical settings fields are untouched, so no value migration is needed —
  *  only the now-meaningless per-command preference entries are pruned. */
 const RETIRED_COMMAND_IDS: readonly string[] = [
+  // Unified layout retirements (#992): the mode toggle, mode scope, and the
+  // tree-only layout/navigation commands. Their bindings (⌘⇧M, ⌘⇧G, ⌥H/J/K/L
+  // + ⌥Arrows) are released; release notes must say so.
+  'dispatch-mode',
+  'global-dispatch',
+  'normalize-layout',
+  'hard-normalize-layout',
+  'rotate-layout',
+  'nav-left',
+  'nav-right',
+  'nav-up',
+  'nav-down',
   'toggle-status-mode',
   'toggle-worktree-badges',
   'usage.toggle-header',
@@ -208,21 +211,17 @@ const RETIRED_COMMAND_IDS: readonly string[] = [
 const NAVIGATION_COMMAND_GROUP: readonly string[] = [
   'next-tab',
   'prev-tab',
-  'nav-left',
-  'nav-right',
-  'nav-up',
-  'nav-down',
 ]
 
 const ids = (): string[] => builtInCommandCatalog.map(c => c.id)
 
 describe('built-in command catalog — baseline characterization', () => {
-  it('contains exactly the 130 governed commands in registration order', () => {
+  it('contains exactly the 121 governed commands in registration order', () => {
     // Order matters: this is the palette's empty-query browse order.
     expect(ids()).toEqual([...BASELINE_COMMAND_IDS])
   })
 
-  it('has exactly 130 commands', () => {
+  it('has exactly 121 commands', () => {
     // Stated separately from the order assertion because this number is the
     // thing that moves, and a bare count failure is a clearer signal than a
     // 99-line array diff.
@@ -239,11 +238,13 @@ describe('built-in command catalog — baseline characterization', () => {
     // TLDR History (#917) → 125 with Goal preview and Goal MCP (#936) → 126
     // with Auto-follow All Working Agents (#938) → 128 with the two ordinary
     // performance report/trace commands (#944) → 129 with Close Idle
-    // Orchestration Agents (#960) → 130 with Open Agent Analytics (#964).
+    // Orchestration Agents (#960) → 130 with Open Agent Analytics (#964) → 121 with
+    // the unified layout (#992): −dispatch-mode, −global-dispatch, −nav×4,
+    // −normalize×3.
     // Each step of that arithmetic was a deliberate edit to this line, which is the entire point of pinning it. (The two test
     // titles above had drifted to "115" while this line said 116; they now
     // track it again.)
-    expect(builtInCommandCatalog).toHaveLength(130)
+    expect(builtInCommandCatalog).toHaveLength(121)
   })
 
   it('reports no structural defects', () => {
@@ -277,12 +278,12 @@ describe('generated per-provider split commands', () => {
   })
 
   it('accounts for the difference between literal and total command count', () => {
-    // 130 total - 4 generated = 126 literal `id:` fields across the command
+    // 121 total - 4 generated = 117 literal `id:` fields across the command
     // modules. At the original baseline this read 102 - 4 = 98; it moved down by
     // the five retirements, then back up by the nine additions, Grid Dispatch's
     // six row commands, New Window, and the later additions recorded in the
     // count test above (through Open Agent Analytics, #964).
-    expect(builtInCommandCatalog.length - nonDefaultProviders.length * 2).toBe(126)
+    expect(builtInCommandCatalog.length - nonDefaultProviders.length * 2).toBe(117)
   })
 
   it('emits both directions for every non-default provider', () => {
@@ -381,8 +382,9 @@ describe('governance targets', () => {
   })
 
   it('lands on the arithmetic the plan predicted', () => {
-    // 102 baseline - 5 retirements + 33 additions = 130, checked against the
-    // real catalog rather than trusted as prose.
+    // 102 baseline - 14 retirements + 33 additions = 121, checked against the
+    // real catalog rather than trusted as prose. (5 governance retirements +
+    // 9 unified-layout retirements, all recorded in RETIRED_COMMAND_IDS.)
     //
     // The subtracted term is the count of APPROVED ADDITIONS and the expected
     // value is the pre-governance baseline — so growing the catalog means
@@ -409,7 +411,7 @@ describe('governance targets', () => {
     // `record-performance-trace` (#944), `close-idle-orchestration-agents` (#960),
     // and `agent-analytics.open` (#964).
     expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 33).toBe(102)
-    expect(builtInCommandCatalog).toHaveLength(130)
+    expect(builtInCommandCatalog).toHaveLength(121)
   })
 })
 

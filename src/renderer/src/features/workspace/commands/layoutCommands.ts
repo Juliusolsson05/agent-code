@@ -14,59 +14,22 @@ import type { WorkspaceState } from '@renderer/workspace/types'
 import { useAppStore } from '@renderer/app-state/hooks'
 
 export const layoutCommands: CommandDef[] = [
-  {
-    id: 'dispatch-mode',
-    category: 'layout-dispatch',
-    // `app`, not `dispatch`: this is the toggle that ENTERS and EXITS
-    // Dispatch, so it must be visible in both modes — surface-gating it
-    // to `dispatch` would make it impossible to turn Dispatch on.
-    surface: 'app',
-    title: 'Dispatch Mode',
-    description: '**What it does:** Toggles the **Dispatch** command-center layout.\n\n**Use when:** You want to scan and command agents from a compact list.\n\n**Notes:** Shows the selected agent alongside the agent list. Run again to return to the normal grid.',
-    keywords: ['agent list', 'focused agent', 'command center', 'exit dispatch', 'grid mode', 'normal layout'],
-    // An ENUM, not a boolean: Dispatch is off, project-scoped, or global. The
-    // old shape rendered "Global"/"Project"/"Off" through the same chip as
-    // every on/off toggle, so a scope read as an enabled state.
-    getState: ({ flags }) =>
-      flags.dispatchModeEnabled
-        ? value(flags.globalDispatchEnabled ? 'Global' : 'Project')
-        : toggle(false),
-    run: async ({ ui, flags }) => {
-      if (flags.dispatchModeEnabled) {
-        ui.exitDispatchMode()
-        return
-      }
-      await ui.enterDispatchMode()
-    },
-  },
-  {
-    id: 'global-dispatch',
-    category: 'layout-dispatch',
-    // `dispatch` surface replaces the old `when: dispatchModeEnabled`
-    // guard — the registry's surface gate already hides this whenever
-    // Dispatch is off, so the explicit `when` was redundant.
-    surface: 'dispatch',
-    title: 'Dispatch Scope',
-    description: '**What it does:** Switches **Dispatch** between project scope and all-tabs scope.\n\n**Use when:** You want one command center for agents across every tab.\n\n**Notes:** Only appears while **Dispatch Mode** is enabled.',
-    keywords: ['dispatch all tabs', 'agent list', 'global dispatch'],
-    // A SCOPE, not a boolean. "Global Dispatch: On" told the user nothing
-    // about what Off meant — the alternative is Project scope, not "no
-    // dispatch". Naming both ends is the whole correction.
-    getState: ({ flags }) => value(flags.globalDispatchEnabled ? 'Global' : 'Project'),
-    run: async ({ ui }) => {
-      await ui.enterGlobalDispatch()
-    },
-  },
+  // DELETED with the two-mode layout (#992): `dispatch-mode` (the mode
+  // toggle — there is no second mode to toggle into) and `global-dispatch`
+  // (Dispatch scope — per-row project binding is the only scoping
+  // mechanism now). Their ids are recorded in the plan so release notes
+  // can tell users their bindings moved.
+
   {
     id: 'tiled-dispatch',
     category: 'layout-dispatch',
-    // `app`, like the Dispatch toggle: Tiled Dispatch enters (and is the
-    // adjust-count path for) the multi-lane Dispatch layout, so it should be
-    // reachable from the grid as well as from Dispatch.
+    // The shape editor is the workspace's reshape surface — it opens on the
+    // CURRENT stage shape. Id kept from the Grid Dispatch era so existing
+    // ⌘D bindings and visibility overrides are not orphaned (#992 §5.4).
     surface: 'app',
-    title: 'Grid Dispatch',
-    description: '**What it does:** Opens a multi-row, multi-lane **Dispatch** layout. Each row is a complete dispatch view with its own agent index, project, and lanes.\n\n**Use when:** You want to watch and drive many agents at once, or several projects side by side.\n\n**Notes:** Opens a shape editor — set a lane count per row. Rows are independent, so 4 lanes on top and 2 below is a normal shape. Re-run to reshape; existing lane selections are preserved. Return to the normal grid with **Dispatch Mode**.',
-    keywords: ['grid dispatch', 'tiled dispatch', 'multi agent', 'lanes', 'rows', 'split dispatch', 'cockpit', 'parallel agents', 'grid of agents'],
+    title: 'Stage Shape…',
+    description: '**What it does:** Opens the stage shape editor — rows of lanes, one stepper per row.\n\n**Use when:** You want to reshape many lanes at once, or see the ragged-by-design shape before committing it.\n\n**Notes:** Rows are independent, so 4 lanes on top and 2 below is a normal shape. Day-to-day, **New Lane** / **New Row** / **Remove Lane** / **Remove Row** edit the shape in place.',
+    keywords: ['stage shape', 'grid dispatch', 'tiled dispatch', 'lanes', 'rows', 'reshape', 'multi agent', 'parallel agents'],
     run: ({ ui }) => ui.openTiledDispatchPrompt(),
   },
   {
@@ -153,7 +116,7 @@ export const layoutCommands: CommandDef[] = [
     // session, so the destructive one leads with it.
     id: 'remove-tiled-lane',
     category: 'layout-dispatch',
-    surface: 'dispatch',
+    surface: 'workspace',
     title: 'Remove Lane',
     description: '**What it does:** Removes the **focused lane** from Tiled Dispatch, shrinking the layout by one lane. The agent keeps running and stays in the index.\n\n**Use when:** You are done watching one agent but want the others to stay exactly where they are.\n\n**Notes:** Removing a row\'s last lane removes the row. Every lane has its own selector strip, so the lanes that shift left keep the selector they already had.',
     keywords: ['remove', 'lane', 'tile', 'tiled dispatch', 'shrink', 'slot'],
@@ -170,7 +133,7 @@ export const layoutCommands: CommandDef[] = [
   {
     id: 'close-agent-remove-lane',
     category: 'layout-dispatch',
-    surface: 'dispatch',
+    surface: 'workspace',
     title: 'Close Agent and Remove Lane',
     description: '**What it does:** Closes the agent in the **focused lane**, then removes that lane, shrinking the layout by one.\n\n**Use when:** An agent has finished and you want it gone along with its slot.\n\n**Notes:** This ends the session. Use **Remove Lane** to reclaim the slot while leaving the agent running. Irreversible closes still confirm first, and declining leaves the layout untouched.',
     keywords: ['close', 'agent', 'remove agent', 'lane', 'tile', 'tiled dispatch', 'shrink', 'finished', 'done'],
@@ -219,7 +182,7 @@ export const layoutCommands: CommandDef[] = [
     // else — the row case is just the most visible version of it.
     id: 'new-dispatch-row',
     category: 'layout-dispatch',
-    surface: 'dispatch',
+    surface: 'workspace',
     title: 'New Row',
     description: '**What it does:** Adds a new row of lanes below the focused row, with its own agent index and project.\n\n**Use when:** You have run out of usable width — a second row shows the same agents at double the lane width.\n\n**Notes:** The new row inherits the focused row\'s lane count and arrives empty. Rows are independent afterwards: adding a lane to one never widens another.',
     keywords: ['new row', 'add row', 'grid dispatch', 'second row', 'stack', 'below', 'more agents'],
@@ -250,7 +213,7 @@ export const layoutCommands: CommandDef[] = [
   {
     id: 'remove-dispatch-row',
     category: 'layout-dispatch',
-    surface: 'dispatch',
+    surface: 'workspace',
     title: 'Remove Row',
     description: '**What it does:** Removes the focused row and its lanes. The agents keep running and stay in the index.\n\n**Use when:** You are done with a row of agents but want the other rows exactly where they are.\n\n**Notes:** Refused on the last row — emptying the layout is **Dispatch Mode**\'s job.',
     keywords: ['remove row', 'delete row', 'grid dispatch', 'shrink', 'fewer rows'],
@@ -273,7 +236,7 @@ export const layoutCommands: CommandDef[] = [
     // Dispatch Scope name both of its ends.
     id: 'dispatch-row-project',
     category: 'layout-dispatch',
-    surface: 'dispatch',
+    surface: 'workspace',
     title: 'Row Projects…',
     description: '**What it does:** Restricts the focused row\'s agent index and lane selectors to one or more projects.\n\n**Use when:** A row is a working context that spans more than one repo — an app and the service it calls, a package and its consumer.\n\n**Notes:** The row\'s index shows one section per bound project. Binding filters, it never fills — no lane is populated, moved, or cleared. Dispatch scope is promoted to global, because a project-scoped row set is built from the active tab alone.',
     keywords: ['row project', 'row projects', 'bind row', 'restrict row', 'per project', 'grid dispatch', 'scope row', 'multiple projects'],
@@ -301,7 +264,7 @@ export const layoutCommands: CommandDef[] = [
   {
     id: 'dispatch-row-child-cap',
     category: 'layout-dispatch',
-    surface: 'dispatch',
+    surface: 'workspace',
     title: 'Nested Agents',
     description: '**What it does:** Switches the focused row\'s index between capping a parent\'s nested children and showing all of them.\n\n**Use when:** A parent has spawned enough workers to bury every other agent in the list.\n\n**Notes:** Applies to both orchestration children and manually linked agents — Dispatch nests them identically, so the cap cannot tell them apart. Only nested children are ever hidden; top-level agents always show, because the parent is what reports. Hiding a child never renumbers anything: labels and ⌘N stay on the full canonical list.',
     keywords: ['nested', 'orchestrated', 'orchestration', 'linked', 'children', 'collapse', 'expand', 'sub agents', 'workers', 'cap'],
@@ -338,7 +301,7 @@ export const layoutCommands: CommandDef[] = [
     // issue — a rebindable-keys migration does not belong inside a layout PR.
     id: 'dispatch-focus-row-up',
     category: 'layout-dispatch',
-    surface: 'dispatch',
+    surface: 'workspace',
     title: 'Focus Row Above',
     description: '**What it does:** Moves lane focus to the row above, keeping the same column where the row is wide enough.\n\n**Use when:** You are driving a grid from the keyboard.\n\n**Notes:** Moving focus never changes any lane\'s agent.',
     keywords: ['focus row', 'row above', 'up', 'grid dispatch', 'navigate rows'],
@@ -348,7 +311,7 @@ export const layoutCommands: CommandDef[] = [
   {
     id: 'dispatch-focus-row-down',
     category: 'layout-dispatch',
-    surface: 'dispatch',
+    surface: 'workspace',
     title: 'Focus Row Below',
     description: '**What it does:** Moves lane focus to the row below, keeping the same column where the row is wide enough.\n\n**Use when:** You are driving a grid from the keyboard.\n\n**Notes:** Moving focus never changes any lane\'s agent.',
     keywords: ['focus row', 'row below', 'down', 'grid dispatch', 'navigate rows'],
@@ -359,36 +322,10 @@ export const layoutCommands: CommandDef[] = [
   // `settings.dispatchProjectTerminal`, and now the feature itself. The
   // opt-in auto-created companion terminal and its dedicated Dispatch side
   // column are gone; user-created terminals still work exactly as before.
-  {
-    id: 'normalize-layout',
-    category: 'layout-dispatch',
-    pickerVisibility: 'advanced',
-    // `grid`: this rebalances `tab.root` split ratios. Dispatch does not
-    // render the grid, so in Dispatch this was a silent no-op (issue
-    // #228). Surface-gating hides it there instead of running invisibly.
-    surface: 'grid',
-    title: 'Normalize Layout',
-    description: '**What it does:** Rebalances pane sizes in the current layout.\n\n**Use when:** Panes feel uneven but the layout shape is still useful.\n\n**Notes:** Keeps the same split structure.',
-    run: ({ workspace }) => workspace.normalizeLayout(),
-  },
-  {
-    id: 'hard-normalize-layout',
-    category: 'layout-dispatch',
-    pickerVisibility: 'advanced',
-    surface: 'grid',
-    title: 'Hard Normalize Layout',
-    description: '**What it does:** Rebuilds pane sizing into a cleaner even layout.\n\n**Use when:** The layout is messy and needs a stronger reset.\n\n**Notes:** More aggressive than **Normalize Layout**.',
-    run: ({ workspace }) => workspace.hardNormalizeLayout(),
-  },
-  {
-    id: 'rotate-layout',
-    category: 'layout-dispatch',
-    pickerVisibility: 'advanced',
-    surface: 'grid',
-    title: 'Rotate Layout',
-    description: '**What it does:** Rotates split directions in the current layout.\n\n**Use when:** The same panes would work better in a different orientation.\n\n**Notes:** Keeps the sessions, changes the arrangement.',
-    run: ({ workspace }) => workspace.rotateLayout(),
-  },
+  // DELETED with the tile tree (#992): normalize-layout,
+  // hard-normalize-layout, rotate-layout rebalanced `tab.root` split
+  // ratios, and split ratios no longer render anywhere. The stage's
+  // equivalents are the lane/row weight drags and the shape editor.
   // RETIRED: `toggle-status-mode`. Status Mode is a persisted app preference
   // with no meaningful momentary scope — there is no "just for this session"
   // version of it — so it has one product home, and that home is Settings

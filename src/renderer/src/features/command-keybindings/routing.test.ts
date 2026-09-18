@@ -48,8 +48,6 @@ describe('routed command bindings', () => {
     const effective = resolveEffectiveKeybindings({})
     expect(effective.find(e => e.commandId === 'close-pane')?.bindings)
       .toEqual(['Cmd+W', 'Alt+W'])
-    expect(effective.find(e => e.commandId === 'nav-left')?.bindings)
-      .toEqual(['Alt+H', 'Alt+Left'])
   })
 
   it('gives the command palette its own rebindable chord', () => {

@@ -161,35 +161,11 @@ const BINDING_BASELINE: readonly BindingBaseline[] = [
     note: 'Same provider loop, shift branch.',
   },
 
-  // --- Navigation: FOUR UNDECLARED ARROW ALIASES. -------------------------
-  {
-    commandId: 'nav-left',
-    declared: '⌥H',
-    effective: ['⌥H', '⌥←'],
-    owner: 'useKeybinds',
-    note: 'DRIFT (undeclared alias): `code === "KeyH" || k === "ArrowLeft"`.',
-  },
-  {
-    commandId: 'nav-right',
-    declared: '⌥L',
-    effective: ['⌥L', '⌥→'],
-    owner: 'useKeybinds',
-    note: 'DRIFT (undeclared alias): `code === "KeyL" || k === "ArrowRight"`.',
-  },
-  {
-    commandId: 'nav-up',
-    declared: '⌥K',
-    effective: ['⌥K', '⌥↑'],
-    owner: 'useKeybinds',
-    note: 'DRIFT (undeclared alias): `code === "KeyK" || k === "ArrowUp"`.',
-  },
-  {
-    commandId: 'nav-down',
-    declared: '⌥J',
-    effective: ['⌥J', '⌥↓'],
-    owner: 'useKeybinds',
-    note: 'DRIFT (undeclared alias): `code === "KeyJ" || k === "ArrowDown"`.',
-  },
+  // --- Navigation: DELETED with the tile tree (#992). ---------------------
+  // nav-left/right/up/down entries removed. Their ⌥H/J/K/L + ⌥Arrow gestures
+  // still run inline in useKeybinds (lane focus / index walk) and are
+  // recorded as unregistered reservations until stage 5 migrates them into
+  // the registry; this baseline then regains declared entries for them.
 
   // --- Feed ---------------------------------------------------------------
   {
@@ -338,17 +314,13 @@ const DISPLAY_TO_CANONICAL: Record<string, string> = {
 // kept because it is the evidence for what the defaults had to preserve, and
 // the assertions still hold over the table itself.
 describe('recorded authority drift (pre-migration history)', () => {
-  it('lists exactly the six commands whose real chords exceed their metadata', () => {
+  it('lists exactly the commands whose real chords exceed their metadata', () => {
     // Undeclared aliases: the palette under-reports what the keyboard does.
     const underReported = BINDING_BASELINE.filter(
       e => e.declared !== null && e.effective.length > 1,
     )
     expect(underReported.map(e => e.commandId).sort()).toEqual([
       'close-pane',
-      'nav-down',
-      'nav-left',
-      'nav-right',
-      'nav-up',
     ])
   })
 
@@ -382,11 +354,13 @@ describe('recorded authority drift (pre-migration history)', () => {
     const effectiveChords = new Set(BINDING_BASELINE.flatMap(e => e.effective))
     for (const chord of UNOWNED_COMMAND_CHORDS) effectiveChords.add(chord.chord)
 
-    // Seven chords do real work that no palette row advertises: the Global
+    // Three chords do real work that no palette row advertises: the Global
     // Editor toggle (declared nowhere), the palette itself (owned by no
-    // command), the undisclosed ⌥W close, and the four arrow aliases.
+    // command), and the undisclosed ⌥W close. (The four ⌥arrow aliases left
+    // this list with the nav commands in #992; their gestures remain live in
+    // useKeybinds as lane navigation, unregistered until stage 5.)
     const undisclosed = [...effectiveChords].filter(c => !declaredChords.has(c)).sort()
-    expect(undisclosed).toEqual(['⌘⇧E', '⌘⇧P', '⌥W', '⌥←', '⌥↑', '⌥→', '⌥↓'])
+    expect(undisclosed).toEqual(['⌘⇧E', '⌘⇧P', '⌥W'])
   })
 })
 

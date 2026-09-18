@@ -154,14 +154,13 @@ export function buildDefaultKeybindings(): CommandBindingDefault[] {
     { commandId: 'terminal-vertical', bindings: ['Alt+Shift+T'], context: 'global' },
 
     // --- Navigation ---------------------------------------------------------
-    // The four ⌥Arrow aliases were live and undeclared. Note these are `grid`
-    // context: the same physical gestures move the Dispatch selection, which is
-    // a separate reserved interaction, and the overlap matrix proves the two
-    // can never both be live.
-    { commandId: 'nav-left', bindings: ['Alt+H', 'Alt+Left'], context: 'grid' },
-    { commandId: 'nav-right', bindings: ['Alt+L', 'Alt+Right'], context: 'grid' },
-    { commandId: 'nav-up', bindings: ['Alt+K', 'Alt+Up'], context: 'grid' },
-    { commandId: 'nav-down', bindings: ['Alt+J', 'Alt+Down'], context: 'grid' },
+    // DELETED with the tile tree (#992): the nav-left/right/up/down bindings
+    // (⌥H/J/K/L + ⌥Arrows, grid context) walked `tab.root` focus. The same
+    // physical gestures now belong to the lane stage — ⌥←/→ focus a lane,
+    // ⌥↑/↓ walk the index — handled in useKeybinds and migrated into
+    // registered, rebindable commands in stage 5. Until then they are
+    // deliberately NOT declared here: a binding row for a command that no
+    // longer exists would show a dead row in the shortcuts surface.
 
     // --- Editor -------------------------------------------------------------
     // ⌘⇧E ran with no declared metadata at all — the palette showed this row
@@ -238,15 +237,13 @@ export function buildDefaultKeybindings(): CommandBindingDefault[] {
     // `npm run check:keybindings`; do not trust a bespoke probe.
     //
     // Given the constraint, the higher-usage command takes the better chord:
-    // Tiled Dispatch (164) gets bare ⌘D, Dispatch Mode (52) gets ⌘⇧M for Mode.
-    // The pair is less elegant than ⌘D/⌘⇧D would have been, and that is the
-    // correct trade — an elegant scheme that shadows dictation is not elegant.
+    // The shape editor (né Tiled Dispatch, 164 uses) keeps bare ⌘D. Its old
+    // companion ⌘⇧M (Dispatch Mode, 52) died with the mode toggle (#992) and
+    // is free again; nothing claims it yet by design — a successor gets a
+    // clean chord choice, not an inherited one.
     { commandId: 'tiled-dispatch', bindings: ['Cmd+D'], context: 'global' },
-    { commandId: 'dispatch-mode', bindings: ['Cmd+Shift+M'], context: 'global' },
-    // `dispatch` context, not global: Dispatch Scope only means anything while
-    // Dispatch owns the layout, and scoping it here leaves ⌘⇧G free for a grid
-    // command later. The overlap matrix proves grid and dispatch are disjoint.
-    { commandId: 'global-dispatch', bindings: ['Cmd+Shift+G'], context: 'dispatch' },
+    // DELETED with the modes (#992): dispatch-mode (⌘⇧M) and global-dispatch
+    // (⌘⇧G, dispatch context). Scope is per-row binding now.
     // Grid Dispatch row focus (#681) ships with NO default binding.
     //
     // ⌥⇧↑/↓ was the obvious pair — it reads as "same axis, bigger unit" beside

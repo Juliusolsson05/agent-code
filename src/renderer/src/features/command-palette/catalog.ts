@@ -156,5 +156,8 @@ export function findCatalogDefects(commands: readonly CommandDef[]): string[] {
 // the catalog is the boundary a future extension-contributed or
 // provider-generated command crosses, and those are built from strings that
 // TypeScript cannot check at the point of construction.
-const VALID_SURFACES = new Set(['app', 'grid', 'dispatch', 'session', 'editor', 'debug'])
+// Unified layout (#992): grid/dispatch merged into 'workspace'. Kept in
+// sync with CommandSurface by hand — this runtime set exists precisely
+// because generated provider commands escape the compile-time union check.
+const VALID_SURFACES = new Set(['app', 'workspace', 'session', 'editor', 'debug'])
 const VALID_TIERS = new Set(['default', 'advanced', 'experimental', 'debug'])

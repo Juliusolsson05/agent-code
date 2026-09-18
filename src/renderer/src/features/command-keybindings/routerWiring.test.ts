@@ -45,11 +45,9 @@ describe('context filtering', () => {
 
   const contextOf = (id: string) => defaults.find(e => e.commandId === id)?.context
 
-  it('keeps navigation commands in the grid context', () => {
-    for (const id of ['nav-left', 'nav-right', 'nav-up', 'nav-down']) {
-      expect(contextOf(id)).toBe('grid')
-    }
-  })
+  // DELETED (#992): 'keeps navigation commands in the grid context' — the
+  // nav-* commands died with the tile tree; the grid context has no members
+  // until stage 5 re-homes the lane-stage gestures.
 
   it('does not let a grid binding match while Dispatch is live', () => {
     // 'grid' and 'dispatch' are the one disjoint pair, which is exactly what
