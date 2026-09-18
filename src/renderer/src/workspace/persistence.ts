@@ -2,9 +2,11 @@ import type {
   BuriedPaneRecord,
   DetachedSessionRecord,
   DispatchModeState,
+  ProjectRef,
   SessionId,
   SessionMeta,
   TabId,
+  TiledDispatchState,
   TileNode,
 } from '@renderer/workspace/types'
 import type { TileTabsState } from '@renderer/workspace/types'
@@ -47,7 +49,24 @@ export type PersistedWorkspace = {
   pinnedSessionIds?: SessionId[]
   tileTabs?: TileTabsState | null
   /** Draft input text per session, keyed by sessionId. Persisted so
-   *  in-progress prompts survive app crashes and restarts. Only
-   *  non-empty drafts are saved to keep the file small. */
+   * in-progress prompts survive app crashes and restarts. Only
+   * non-empty drafts are saved to keep the file small. */
   drafts?: Record<SessionId, string>
+  // -------------------------------------------------------------------------
+  // Unified-layout v3 fields (#992, plan 2026-09-17-unified-stage-layout.md).
+  //
+  // WHY these sit beside the v2 fields instead of replacing them: the merge
+  // is staged so every stage ships green. Stage 1 ships the shape migration
+  // (workspaceShape.ts) that PRODUCES this triple; the read/write paths flip
+  // to it in stage 2; the v2 fields above are deleted in stage 3. Presence
+  // of `stage` is the v3 discriminant (same detect-by-shape discipline as
+  // normalizeGridShape — no schema-version bump for an unambiguous shape).
+  // Until stage 2, autosave does NOT write these fields.
+  // -------------------------------------------------------------------------
+  /** Projects (former tabs, tree-less). Migration mints them from `tabs`. */
+  projects?: ProjectRef[]
+  /** Former `activeTabId`. Spawn defaults + index highlight; owns nothing. */
+  activeProjectId?: TabId
+  /** The workspace stage — ragged rows of lanes. Former `dispatchMode.tiled`. */
+  stage?: TiledDispatchState
 }

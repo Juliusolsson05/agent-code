@@ -57,6 +57,26 @@ export type Tab = {
 }
 
 /**
+ * A project, post unified-layout merge (#992, plan
+ * docs/superpowers/plans/2026-09-17-unified-stage-layout.md).
+ *
+ * WHY this exists beside `Tab` during the transition: `Tab` still owns a
+ * tile tree the renderer renders from; `ProjectRef` is the tree-less end
+ * state where a project is grouping only — a title, a spawn-cwd default,
+ * and a stable letter for A1/B7 index labels. The v2→v3 workspace
+ * migration (workspaceShape.ts) mints these from tabs and keeps the old
+ * TabId as `id` so lane bindings, row project bindings, and labels survive
+ * the merge unchanged.
+ */
+export type ProjectRef = {
+  /** Old TabId — deliberately reused; see the comment above. */
+  id: TabId
+  title: string
+  /** Spawn cwd default. Absent => inherit from the spawning context. */
+  cwd?: string
+}
+
+/**
  * Which kind of backend a session drives.
  *
  *   'claude'   — a Claude Code child process. The pane renders the
@@ -260,6 +280,17 @@ export type SessionMeta = {
   /** Durable per-domain choices. {} inherits every global preference; missing
    * maps belong to legacy snapshots and migrate via sessionMcpOverrides. */
   builtInMcpOverrides?: BuiltInMcpOverrides
+  /**
+   * Project membership in the unified layout (#992). Replaces BOTH ways a
+   * session used to know its project — "I am a leaf of tabs[i].root" and
+   * DetachedSessionRecord.projectTabId — with one direct field.
+   *
+   * Optional ONLY during the staged merge: v2 workspaces gain it at the
+   * read-time migration (workspaceShape.ts) and stage-2 writers mint it at
+   * spawn. Once the tree/detached buckets are deleted (stage 3) this becomes
+   * required-by-construction everywhere the pool is consumed.
+   */
+  projectId?: TabId
 }
 
 export type BuriedPaneRecord = {
