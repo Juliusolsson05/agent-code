@@ -50,4 +50,38 @@ describe('agent usage attribution', () => {
     expect(usage.sessions[0]!.history).toEqual([[16 * 60_000, 300, 1]])
     expect(usage.composition.map(sample => sample.at)).toEqual([16 * 60_000])
   })
+
+  it('caps tracked sessions at 256, evicting the oldest-seen, and re-admits an evicted live session with fresh history', () => {
+    const history = new AgentUsageHistory()
+    // 257 sole-owner sessions in one page: the 257th admission must evict the
+    // oldest seenAt. All rows share a timestamp, so "oldest" falls to the
+    // first-inserted entry — deterministic even under Map iteration order.
+    const rows = Array.from({ length: 257 }, (_, index) =>
+      row({ pid: index + 1, identity: `${index + 1}:1`, sessionIds: [`s${index}`], sharedSessionCount: 1, memoryBytes: 100 }))
+    history.record(page(0, rows))
+    let usage = history.read(1)
+    expect(usage.sessions).toHaveLength(256)
+    expect(usage.sessions.some(session => session.sessionId === 's0')).toBe(false)
+
+    // The evicted session is still running: its next page re-admits it, with
+    // history that starts over rather than pretending the gap was observed.
+    history.record(page(5000, [row({ pid: 1, identity: '1:1', sessionIds: ['s0'], sharedSessionCount: 1, memoryBytes: 100 })]))
+    usage = history.read(1)
+    expect(usage.sessions.map(session => session.sessionId)).toEqual(['s0'])
+    expect(usage.sessions[0]!.history).toEqual([[5000, 100, 1]])
+  })
+
+  // WHY this is pinned: the overview's "heaviest agent" tile and the ranking
+  // table both treat sessions[0] as the biggest consumer. The sort order is
+  // part of the IPC contract, not an accident of Map iteration.
+  it('ranks concurrently-live sessions by memory, descending', () => {
+    const history = new AgentUsageHistory()
+    const rows = [
+      row({ pid: 1, sessionIds: ['small'], sharedSessionCount: 1, memoryBytes: 100 * 1024 ** 2 }),
+      row({ pid: 2, sessionIds: ['large'], sharedSessionCount: 1, memoryBytes: 900 * 1024 ** 2 }),
+      row({ pid: 3, sessionIds: ['unread'], sharedSessionCount: 1, memoryBytes: null, cpuPercent: null }),
+    ]
+    history.record(page(0, rows))
+    expect(history.read(1).sessions.map(session => session.sessionId)).toEqual(['large', 'small', 'unread'])
+  })
 })
