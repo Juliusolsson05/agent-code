@@ -74,6 +74,16 @@ export type SessionTranscript = {
   exited: boolean
   hasOlderHistory: boolean
   loadingOlderHistory: boolean
+  /** True while the INITIAL history backfill burst is being applied —
+   *  the phone-side mirror of the desktop's bootstrapping concept. Feed
+   *  accepts a `bootstrapping` prop that suspends per-append auto-scroll
+   *  and the lazy-mount cascade during bulk replay; without it, the
+   *  initial 120-entry burst paints per-append and the IntersectionObserver
+   *  cascade fires for rows about to be superseded — visible jank exactly
+   *  when the user first opens a session. Older-page pagination (user-
+   *  initiated, scroll-position-preserved) deliberately does NOT set it:
+   *  bootstrapping is for replay bursts, not interactive paging. */
+  bootstrapping: boolean
   totalEntries: number
 }
 
@@ -134,6 +144,7 @@ function emptyTranscript(): SessionTranscript {
     exited: false,
     hasOlderHistory: false,
     loadingOlderHistory: false,
+    bootstrapping: false,
     totalEntries: 0,
   }
 }
@@ -308,7 +319,7 @@ export class TranscriptStore {
     const state = this.state(sessionId)
     if (state.historyLoaded || state.historyLoading || state.transcript.historyError === REMOTE_HISTORY_TOO_LARGE) return
     state.historyLoading = true
-    this.mutate(sessionId, t => ({ ...t, loadingOlderHistory: true }))
+    this.mutate(sessionId, t => ({ ...t, loadingOlderHistory: true, bootstrapping: true }))
     const result = await this.feed.getHistory(sessionId, { limit: 120 })
     // Disconnect, transcript roll, removal or disposal may replace this state
     // while the network request is pending. Its reply has no authority over
@@ -324,6 +335,7 @@ export class TranscriptStore {
       this.mutate(sessionId, t => ({
         ...t,
         loadingOlderHistory: false,
+        bootstrapping: false,
         historyError: benign ? null : result.error,
       }))
       return
@@ -332,7 +344,7 @@ export class TranscriptStore {
       // The server's transcript-file cache was stale (post-/clear window):
       // the chunk is the PREVIOUS conversation. Discard it; live frames own
       // the file identity and a later retry will read the right file.
-      this.mutate(sessionId, t => ({ ...t, loadingOlderHistory: false }))
+      this.mutate(sessionId, t => ({ ...t, loadingOlderHistory: false, bootstrapping: false }))
       return
     }
     state.historyLoaded = true
@@ -352,6 +364,7 @@ export class TranscriptStore {
     this.mutate(sessionId, t => ({
       ...t,
       loadingOlderHistory: false,
+      bootstrapping: false,
       historyError: null,
       // Desktop guard (history.ts): a chunk with more history but NO usable
       // marker cannot be paged — advertising the affordance would render a

@@ -356,6 +356,13 @@ export function SessionView({
               </div>
             )}
             <pre className="terminal">{transcript.screenText}</pre>
+            {/* Working state lives HERE only in the fallback branch: the
+                rendered Feed draws its own WorkIndicator row (phase-driven,
+                fixed-height). Showing the shell strip too painted the same
+                phase information twice in a row — the doubled working
+                indicator review finding. In the fallback branch there is no
+                Feed mounted, so the strip is the only signal. */}
+            {working && <div className="working">● {working}</div>}
           </div>
         ) : (
         <div className="feed-host">
@@ -378,6 +385,12 @@ export function SessionView({
             hasOlderHistory={transcript.hasOlderHistory}
             loadingOlderHistory={transcript.loadingOlderHistory}
             onLoadOlderHistory={() => store.loadOlderHistory(sessionId)}
+            // Suspend per-append auto-scroll and the lazy-mount cascade
+            // while the initial backfill burst applies — the same contract
+            // the desktop's resume path uses. Without it the first 120
+            // entries paint per-append and jank exactly when the user
+            // opens a session.
+            bootstrapping={transcript.bootstrapping}
           />
         </div>
         )}
@@ -385,7 +398,6 @@ export function SessionView({
         {transcript.historyError && transcript.entries.length > 0 && (
           <div className="working" role="status">{transcript.historyError}</div>
         )}
-        {working && <div className="working">● {working}</div>}
 
         {/* The REAL desktop condition rendering. The generic core outlet routes
             the live snapshot through the provider's own conditionViews registry
