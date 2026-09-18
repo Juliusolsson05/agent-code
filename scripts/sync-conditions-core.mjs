@@ -119,6 +119,24 @@ const TARGETS = [
     ),
     sync: true,
   },
+  {
+    name: 'grok-code-headless',
+    // Grok's permission, question and plan-approval conditions use the same
+    // engine, driven by native's outstanding reverse requests instead of painted
+    // screen cards, so its snapshots dedupe and order exactly like the other
+    // providers'. The package's controlled-runtime contract
+    // (testing/fixtures/controlled-runtime/contract.md) is why the core is
+    // vendored here rather than reimplemented.
+    dest: path.join(
+      REPO_ROOT,
+      'packages',
+      'grok-code-headless',
+      'src',
+      'conditions',
+      'core',
+    ),
+    sync: true,
+  },
 ]
 
 // Compute the exact bytes a vendored copy of `file` should contain.

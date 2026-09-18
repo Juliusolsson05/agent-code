@@ -7,12 +7,19 @@ import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it, vi } from 'vitest'
 import { decodeGrokConversation, projectGrokNativeResume } from 'agent-transcript-parser'
-import { GrokHeadless } from 'grok-code-headless'
+import { GrokHeadless, GrokNativeControl, GrokTuiSocketGuard, prepareGrokTerminalLaunch } from 'grok-code-headless'
 import { readGrokTranscript, writeProjectedGrokSession } from './grokTranscript.js'
 
 // This launches the installed CLI, not Electron or the Agent Code app. Unlike
 // the parser's native probe, the production APP publisher creates the files.
 // The backend is loopback fixture replay; no production auth/home is inherited.
+//
+// Migrated to the Stage 3 runtime shape: this side of the package owns every
+// process now (leader over control, terminal socket guard, terminal PTY), and
+// GrokHeadless only observes. The order below is exactly the app session order
+// the recordings pin (leader → session over control → guard → prepared launch
+// → PTY → attach → re-seed on terminal-loaded), which is what makes this an
+// integration gate for the app's file-set publisher, not just the package.
 it('native Grok resumes the app-published file set and sends imported context before appending a reply', async context => {
   if (process.env.GROK_APP_FILES_LIVE !== '1') context.skip('Set GROK_APP_FILES_LIVE=1 for the native app file-set integration gate')
   const binary = process.env.GROK_BINARY ?? join(homedir(), '.local', 'bin', 'grok')
@@ -54,6 +61,11 @@ it('native Grok resumes the app-published file set and sends imported context be
       } catch { reply.writeHead(400); reply.end() }
     } else { reply.writeHead(200, { 'content-type': 'application/json' }); reply.end('{}') }
   })
+  // The app-owned helpers, torn down in reverse order in the finally block.
+  let control: GrokNativeControl | undefined
+  let guard: GrokTuiSocketGuard | undefined
+  let pty: import('node-pty').IPty | undefined
+  let ptyExit = Promise.resolve()
   try {
     const path = await writeProjectedGrokSession(root, projected)
     await writeFile(join(home, 'config.toml'), '[cli]\nauto_update = false\n')
@@ -62,26 +74,62 @@ it('native Grok resumes the app-published file set and sends imported context be
     const address = server.address()
     if (!address || typeof address === 'string') throw new Error('Missing loopback address')
     const base = `http://127.0.0.1:${address.port}/v1`
-    const env: Record<string, string | undefined> = Object.fromEntries(Object.keys(process.env).map(key => [key, undefined]))
-    Object.assign(env, { PATH: process.env.PATH, HOME: root, XDG_CONFIG_HOME: join(root, '.config'), XAI_API_KEY: 'fixture-only-not-a-real-key', GROK_MODELS_BASE_URL: base, GROK_XAI_API_BASE_URL: base, GROK_CLI_CHAT_PROXY_BASE_URL: base, OTEL_TRACES_EXPORTER: 'none' })
-    runtime = new GrokHeadless({ cwd: root, grokHome: home, grokBinary: binary, resumeSessionId: sessionId, env })
+    // WHY an allowlist rather than the inherited environment: this gate must not
+    // touch production auth or caches. The leader env is passed the same way the
+    // app session will pass it (inheritEnv: false + explicit values).
+    const env: Record<string, string> = {
+      PATH: process.env.PATH ?? '',
+      HOME: root,
+      XDG_CONFIG_HOME: join(root, '.config'),
+      XAI_API_KEY: 'fixture-only-not-a-real-key',
+      GROK_MODELS_BASE_URL: base,
+      GROK_XAI_API_BASE_URL: base,
+      GROK_CLI_CHAT_PROXY_BASE_URL: base,
+      OTEL_TRACES_EXPORTER: 'none',
+      GROK_HOME: home,
+    }
+    control = await GrokNativeControl.start({ binary, cwd: root, env, inheritEnv: false })
+    // The conversation already exists on disk (the app publisher wrote it), so
+    // this is the resume path: load over control, terminal attaches with
+    // --resume, and the headless reader marks first-generation rows as rewrite
+    // snapshot content.
+    await control.loadSession(sessionId, [])
+    guard = await GrokTuiSocketGuard.create({ upstreamPath: control.socketPath, expectedPid: control.pid!, onFault: () => {} })
+    const launch = prepareGrokTerminalLaunch({ binary, env, sessionId, guardSocketPath: guard.socketPath })
+    const requirePty = await import('node-pty')
+    pty = requirePty.spawn(launch.binary, launch.args, { cwd: root, env: launch.env, name: 'xterm-256color', cols: 120, rows: 40 })
+    ptyExit = new Promise(resolve => { pty!.onExit(() => resolve()) })
+    runtime = new GrokHeadless({ pty, cwd: root, launch, control: { isClosed: control.isClosed, rpc: control, observe: observer => control!.observe(observer) }, guard, resume: true, grokHome: home })
     runtime.on('exit', () => { exited = true })
     let painted = false
     let appended = false
-    runtime.on('screen', () => { painted = true })
-    runtime.on('grok-entry', event => { if (!event.replay && event.item.type === 'assistant' && event.item.content === 'PAPAYA') appended = true })
+    // First PTY output replaces the legacy screen-paint signal: it proves the
+    // terminal reached its UI without resurrecting the screen channel.
+    pty.onData(() => { painted = true })
+    runtime.on('entry', event => { if (!event.inRewriteSnapshot && event.item.type === 'assistant' && event.item.content === 'PAPAYA') appended = true })
+    // The terminal's attach load clears the MCP set; the app re-seeds here. This
+    // gate seeds an empty set (no MCP in this probe), but the order is pinned.
+    const reseeded = new Promise<void>(resolve => { runtime!.once('terminal-loaded', () => resolve()) })
+    await runtime.start()
     await vi.waitFor(() => expect(painted && !exited).toBe(true), { timeout: 15000 })
+    await reseeded
     // Controlled input in this specific native-load probe is not a general
     // composer-readiness contract. That requires separate modal/draft evidence.
-    runtime.sendPrompt('What command did we previously run? Reply PAPAYA without using tools.')
+    // Acceptance-based delivery: submitPrompt resolves when native admits the
+    // prompt to its queue, not when bytes are pasted.
+    const submitted = await runtime.submitPrompt('What command did we previously run? Reply PAPAYA without using tools.')
+    expect(submitted.ok).toBe(true)
     await vi.waitFor(() => expect(importedContext && nativeSystem && appended).toBe(true), { timeout: 45000 })
-    await runtime.dispose()
     expect((await readGrokTranscript(root, sessionId)).entries.some(entry => entry.kind === 'message' && entry.role === 'assistant' && entry.content.some(part => part.kind === 'text' && part.text === 'PAPAYA'))).toBe(true)
     expect(await readFile(path, 'utf8')).toContain('PAPAYA')
     expect(existsSync(join(root, 'PERMISSION_PROBE.txt')), 'importing historical tool calls must not execute them').toBe(false)
   } finally {
-    try { await runtime?.dispose() }
-    finally {
+    try {
+      await runtime?.stop()
+      try { pty?.kill() } catch { /* the process may have won the exit race */ }
+      try { if (guard) await guard.dispose(() => ptyExit) } catch { /* best-effort socket release */ }
+      await control?.dispose()
+    } finally {
       server.closeAllConnections()
       await new Promise<void>(resolve => server.close(() => resolve()))
       vi.unstubAllEnvs()
