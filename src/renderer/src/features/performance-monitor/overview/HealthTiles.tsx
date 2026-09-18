@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import type { MonitorAgentUsage } from '@shared/performance/agentUsage.js'
+import type { MonitorAgentUsage, MonitorSessionUsage } from '@shared/performance/agentUsage.js'
 import type { MonitorSnapshot } from '@shared/performance/monitorSnapshot.js'
 import type { AgentIdentity } from '../agentIdentity'
 import { formatByteDelta, formatBytes, formatCpu, formatMs } from '../format'
@@ -7,6 +7,11 @@ import { formatByteDelta, formatBytes, formatCpu, formatMs } from '../format'
 export type Tone = 'ok' | 'warning' | 'danger' | 'neutral'
 const TONE_BAR: Record<Tone, string> = { ok: 'bg-success', warning: 'bg-warning', danger: 'bg-danger', neutral: 'bg-border-hi' }
 const TONE_TEXT: Record<Tone, string> = { ok: 'text-ink', warning: 'text-warning-fg', danger: 'text-danger-fg', neutral: 'text-ink' }
+
+/** Largest measured memory among live sessions, independent of array order. */
+function heaviestSession(sessions: readonly MonitorSessionUsage[] | undefined): MonitorSessionUsage | null {
+  return (sessions ?? []).reduce<MonitorSessionUsage | null>((max, session) => (session.memoryBytes ?? -1) > (max?.memoryBytes ?? -1) ? session : max, null)
+}
 
 function Tile({ label, value, detail, tone = 'neutral', children }: { label: string; value: string; detail: ReactNode; tone?: Tone; children?: ReactNode }) {
   return (
@@ -42,7 +47,10 @@ export function HealthTiles({ snapshot, usage, identities }: { snapshot: Monitor
   const cpu = latest?.total.cpuPercent ?? snapshot.processes?.cpuPercent ?? null
   const cores = typeof navigator !== 'undefined' ? navigator.hardwareConcurrency || null : null
 
-  const heaviest = usage?.sessions.find(session => session.memoryBytes !== null) ?? null
+  // WHY reduce instead of `find` on a sorted array: the sort order is a
+  // main-side presentation choice. Depending on it here made "heaviest"
+  // silently become "first" the day anyone changed that sort.
+  const heaviest = heaviestSession(usage?.sessions)
   const heaviestIdentity = heaviest ? identities.get(heaviest.sessionId) : undefined
   const agents = usage?.sessions.filter(session => session.kind === 'agent').length ?? 0
   const terminals = usage?.sessions.filter(session => session.kind === 'terminal').length ?? 0

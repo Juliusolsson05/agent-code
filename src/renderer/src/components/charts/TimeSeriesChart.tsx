@@ -176,6 +176,10 @@ export function TimeSeriesChart({
             </g>
           )
         })}
+        {/* Markers are a POINTER shortcut onto their incident. The chart is
+            aria-hidden by design (its readings live in the keyboard readout),
+            so the accessible path to an incident is the caller's incident
+            list — native buttons — not these click targets. */}
         {markers.filter(marker => marker.at >= from && marker.at <= to).map(marker => (
           <g key={marker.key} className={`${TONE_FILL[marker.tone]} ${marker.onSelect ? 'cursor-pointer' : ''}`} onClick={marker.onSelect}>
             <line x1={x(marker.at)} x2={x(marker.at)} y1={MARGIN.top} y2={MARGIN.top + plotHeight} className={TONE_STROKE[marker.tone]} opacity={0.35} />

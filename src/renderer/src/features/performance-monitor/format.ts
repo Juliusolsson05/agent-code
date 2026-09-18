@@ -1,6 +1,10 @@
 // One set of formatters for every monitor surface, so a tile, a tooltip and a
 // table row never print the same quantity two ways.
 
+// WHY decimal labels (GB) on binary divisions (1024^n): this matches what
+// macOS Activity Monitor and Windows Task Manager print for RSS — users
+// cross-check our numbers against those tools, and a GiB figure that differs
+// from Activity Monitor's GB by 7% reads as a bug to them.
 export function formatBytes(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return '—'
   const abs = Math.abs(value)

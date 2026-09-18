@@ -37,6 +37,12 @@ export function TopConsumers({ usage, identities, onOpenAgent }: {
   const to = usage?.sampledAt ?? 0
   const total = latest?.total.memoryBytes ?? 0
 
+  // The history window starts at launch, so right after start the delta
+  // covers less than 15 minutes. Label what was actually measured rather
+  // than promising a window the data does not have yet.
+  const firstReadingAt = usage?.composition[0]?.at
+  const windowMinutes = firstReadingAt && latest ? Math.max(1, Math.round((latest.at - firstReadingAt) / 60_000)) : null
+
   const rows = useMemo(() => {
     const sessions = [...(usage?.sessions ?? [])]
     const key = (session: MonitorSessionUsage) => sort === 'memory' ? session.memoryBytes ?? -1 : sort === 'cpu' ? session.cpuPercent ?? -1 : growth(session) ?? -Infinity
@@ -69,7 +75,7 @@ export function TopConsumers({ usage, identities, onOpenAgent }: {
                 <tr>
                   <th className="px-3 py-1.5 font-normal">Agent</th>
                   <th className="px-2 py-1.5 font-normal">Memory</th>
-                  <th className="px-2 py-1.5 text-right font-normal">15 min</th>
+                  <th className="px-2 py-1.5 text-right font-normal">{windowMinutes === null ? 'Δ' : `${windowMinutes} min`}</th>
                   <th className="px-2 py-1.5 text-right font-normal">CPU</th>
                   <th className="px-2 py-1.5 text-right font-normal">Procs</th>
                   <th className="px-2 py-1.5 font-normal">Trend</th>
@@ -102,7 +108,8 @@ export function TopConsumers({ usage, identities, onOpenAgent }: {
                           {/* Share of the whole app, not of the top row: the
                               bar should say "this agent is 40% of Agent Code". */}
                           <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-surface-hi" aria-hidden="true">
-                            <span className={`block h-full rounded-full ${shareOfApp >= 0.5 ? 'bg-warning' : 'bg-accent'}`} style={{ width: `${Math.max(1, shareOfApp * 100)}%` }} />
+                            {/* A 0-measured row keeps an empty track: Math.max(1, …) painted a 1% sliver that read as almost-none instead of nothing. */}
+                            <span className={`block h-full rounded-full ${shareOfApp >= 0.5 ? 'bg-warning' : 'bg-accent'}`} style={{ width: `${shareOfApp > 0 ? Math.max(1, shareOfApp * 100) : 0}%` }} />
                           </span>
                           <span className="w-[30px] flex-shrink-0 text-right text-[10px] text-muted">{(shareOfApp * 100).toFixed(0)}%</span>
                         </div>

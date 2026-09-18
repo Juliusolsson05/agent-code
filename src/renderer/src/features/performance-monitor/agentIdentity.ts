@@ -34,6 +34,12 @@ export function buildAgentIdentityIndex(state: WorkspaceState, tileTabs: TileTab
     index.set(sessionId, { sessionId, label, title: sessionDisplayTitle(meta), tabTitle })
   }
   if (state.dispatchMode && !tileTabs) {
+    // CAVEAT: pinned dispatch rows carry labels like '★1', which the
+    // workspace's label-to-session resolver deliberately cannot parse — pins
+    // have no pane coordinate to resolve to. That is why every navigation
+    // from the monitor goes by sessionId (focusAgentBySessionId), never by
+    // re-resolving the displayed label. If label-based navigation is ever
+    // added, pins must be special-cased there.
     for (const row of buildVisibleDispatchRows(state)) place(row.sessionId, row.label, row.tabTitle)
   }
   state.tabs.forEach((tab, tabIndex) => {
