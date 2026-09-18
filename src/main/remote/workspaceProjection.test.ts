@@ -41,12 +41,9 @@ function asStore(store: FakeStore): WorkspaceFileStore {
   return store as unknown as WorkspaceFileStore
 }
 
-function fakeNames(resolve: (ids: string[]) => Record<string, string> | Promise<Record<string, string>>) {
-  // Always a Promise, exactly like the real registry's resolve contract.
-  return {
-    resolve: vi.fn((ids: string[]) => Promise.resolve(resolve(ids))),
-  } as unknown as ConstructorParameters<typeof RemoteWorkspaceProjection>[1]
-}
+// Name reader seam: pass-through — call sites hand the projection a
+// readAssignments function directly, exactly as index.ts hands it
+// readAgentNameAssignments(AGENT_NAMES_FILE).
 
 function doc(sessions: Record<string, unknown>, extra: Record<string, unknown> = {}): PersistedWindow {
   return {
@@ -85,7 +82,7 @@ describe('RemoteWorkspaceProjection', () => {
   it('joins title, tab, pin and TLDR identity from the persisted document', () => {
     const projection = new RemoteWorkspaceProjection(
       asStore(fakeStore({ saves: [[doc(SESSIONS)]] })),
-      fakeNames(() => ({})),
+      () => Promise.resolve({}),
     )
     try {
       const s1 = projection.snapshot().get('s1')
@@ -110,7 +107,7 @@ describe('RemoteWorkspaceProjection', () => {
     const onChange = vi.fn()
     const projection = new RemoteWorkspaceProjection(
       asStore(fakeStore({ saves: [[doc(SESSIONS)]] })),
-      fakeNames(async () => ({ 'name-1': 'Apollo' })),
+      async () => ({ 'name-1': 'Apollo' }),
     )
     try {
       projection.onChange(onChange)
@@ -136,9 +133,7 @@ describe('RemoteWorkspaceProjection', () => {
       ],
     })
     let release!: (value: Record<string, string>) => void
-    const projection = new RemoteWorkspaceProjection(asStore(store), fakeNames(
-      () => new Promise(resolve => (release = resolve)),
-    ))
+    const projection = new RemoteWorkspaceProjection(asStore(store), () => new Promise<Record<string, string>>(resolve => (release = resolve)))
     try {
       store.commitNext() // rename lands while resolution is pending
       release({ 'name-1': 'Apollo' })
@@ -154,7 +149,7 @@ describe('RemoteWorkspaceProjection', () => {
   it('stays silent on saves that change nothing', () => {
     const onChange = vi.fn()
     const store = fakeStore({ saves: [[doc(SESSIONS)], [doc(SESSIONS)]] })
-    const projection = new RemoteWorkspaceProjection(asStore(store), fakeNames(() => ({})))
+    const projection = new RemoteWorkspaceProjection(asStore(store), () => Promise.resolve({}))
     try {
       projection.onChange(onChange)
       onChange.mockClear()

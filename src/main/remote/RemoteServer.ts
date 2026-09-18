@@ -14,15 +14,16 @@ import type { WebSocket } from 'ws'
 import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import type { ResolveConditionResult } from '@shared/sessionFeed/types.js'
 import type { ConditionCustomAction } from '@shared/conditions-core/contract.js'
-import type { SessionKind } from '@shared/types/providerKind.js'
+import type { SessionKind, AgentProviderRuntime } from '@shared/types/providerKind.js'
 import { isAgentProviderKind } from '@shared/types/providerKind.js'
 import type { PromptDeliveryResult } from '@shared/types/providerConfig.js'
 import type { SessionBackendSnapshot } from '@shared/types/session.js'
+import type { RemoteSessionIdentity } from './workspaceProjection.js'
 
 import { DevicePairing } from '@main/remote/auth/DevicePairing.js'
 import type { DeviceRegistry } from '@main/remote/auth/deviceRegistry.js'
 import { parseInboundFrame } from '@main/remote/protocol/scope.js'
-import type { InboundFrame, OutboundFrame } from '@main/remote/protocol/messages.js'
+import type { InboundFrame, OutboundFrame, OutboundSessionSummary } from '@main/remote/protocol/messages.js'
 import type { FeedChannel, SessionFeedSource } from '@main/remote/SessionFeedSource.js'
 import {
   loadInitialHistoryChunk,
@@ -90,6 +91,21 @@ export type RemoteSessionControl = {
     prompt: string,
   ): Promise<PromptDeliveryResult>
   getSessionKind(sessionId: string): SessionKind | null
+  // v2 overlay source: OpenCode execution runtime at spawn. OPTIONAL so the
+  // structural fakes in tests stay valid; absent = no runtime field on the
+  // summary, which reads as the structured runtime on the phone.
+  getSpawnProviderRuntime?(sessionId: string): AgentProviderRuntime | null
+}
+
+/**
+ * v2 identity read model (see workspaceProjection.ts). Stated structurally
+ * for the same reason as RemoteSessionControl: the server's true blast
+ * radius stays inspectable and tests inject a bare map + emitter. OPTIONAL
+ * on deps — absent degrades every summary to the v1 shape.
+ */
+export type RemoteWorkspaceReadModel = {
+  snapshot(): ReadonlyMap<string, RemoteSessionIdentity>
+  onChange(listener: () => void): () => void
 }
 
 export type RemoteServerDeps = {
@@ -129,6 +145,9 @@ export type RemoteServerDeps = {
    * is then the only gate).
    */
   isSttAvailable?: () => boolean
+  /** v2 identity projection (titles, agent names, tabs, pins). See
+   *  RemoteWorkspaceReadModel above; absent = v1 summaries. */
+  workspace?: RemoteWorkspaceReadModel | null
 }
 
 const INTERRUPT_BYTES = '\x1b'
@@ -162,6 +181,7 @@ export class RemoteServer extends EventEmitter {
   private url: string | null = null
   private readonly sockets = new Set<ClientSocket>()
   private feedUnsub: (() => void) | null = null
+  private workspaceUnsub: (() => void) | null = null
 
   // Late-joiner bootstrap caches. A phone that connects while every agent is
   // idle would otherwise stare at blank panes until the next event happens
@@ -194,6 +214,15 @@ export class RemoteServer extends EventEmitter {
       this.cacheForLateJoiners(channel, payload)
       this.broadcast({ type: 'session-event', channel, payload })
     })
+
+    // v2: a committed workspace save can rename, retitle, re-pin, or move a
+    // session between projects without any manager event firing — the
+    // session-list summaries would go stale until the next connect. One
+    // resend per projection change keeps every connected phone honest, and
+    // the projection itself stays silent on no-op saves.
+    this.workspaceUnsub = this.deps.workspace?.onChange(() => {
+      this.broadcastSessionList()
+    }) ?? null
 
     // Prime the late-joiner caches from the manager's own snapshot caches.
     // The feed tap only observes events AFTER enable; without this, an agent
@@ -248,6 +277,8 @@ export class RemoteServer extends EventEmitter {
   async stop(): Promise<void> {
     this.feedUnsub?.()
     this.feedUnsub = null
+    this.workspaceUnsub?.()
+    this.workspaceUnsub = null
     for (const client of this.sockets) {
       client.ws.close(1001, 'server stopping')
     }
@@ -548,7 +579,7 @@ export class RemoteServer extends EventEmitter {
       // recording (see the sttAvailable WHY in protocol/messages.ts).
       sttAvailable: Boolean(this.deps.transcribeAudio) && (this.deps.isSttAvailable?.() ?? true),
     })
-    this.send(ws, { type: 'session-list', sessions: this.deps.feedSource.listSessions() })
+    this.send(ws, { type: 'session-list', sessions: this.summarizeSessions() })
     ws.on('error', () => ws.terminate())
     ws.on('message', data => {
       void this.onMessage(ws, String(data))
@@ -807,6 +838,43 @@ export class RemoteServer extends EventEmitter {
     for (const client of this.sockets) {
       sendBoundedRemoteOutput(client.ws, encoded)
     }
+  }
+
+  /** Session summaries with the v2 identity overlays: projection-provided
+   *  title/agentName/tabTitle/pinned, plus the OpenCode runtime so the phone
+   *  can label the TUI runtime honestly. Every overlay is additive — a
+   *  missing projection or an old manager interface degrades field-by-field
+   *  to the v1 summary, never to an error. */
+  private summarizeSessions(): OutboundSessionSummary[] {
+    const identities = this.deps.workspace?.snapshot()
+    return this.deps.feedSource.listSessions().map(summary => {
+      const identity = identities?.get(summary.sessionId)
+      const runtime = this.deps.manager.getSpawnProviderRuntime?.(summary.sessionId) ?? null
+      return {
+        ...summary,
+        ...(identity
+          ? {
+              title: identity.title,
+              agentName: identity.agentName,
+              tabTitle: identity.tabTitle,
+              pinned: identity.pinned,
+            }
+          : {}),
+        // Runtime only means something for the provider that HAS two
+        // runtimes; stamping 'terminal'-vs-null onto claude/codex rows
+        // would conflate OpenCode's discriminator with the plain-shell
+        // session kind and confuse future readers of the wire.
+        ...(summary.kind === 'opencode' ? { providerRuntime: runtime } : {}),
+      }
+    })
+  }
+
+  /** Resend the session list to every connected phone. Used by projection
+   *  changes (rename/retitle/re-pin/tab move) which produce no manager
+   *  events of their own. */
+  private broadcastSessionList(): void {
+    if (!this.server) return
+    this.broadcast({ type: 'session-list', sessions: this.summarizeSessions() })
   }
 
   private send(ws: WebSocket, frame: OutboundFrame): void {

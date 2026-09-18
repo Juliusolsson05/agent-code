@@ -1,4 +1,3 @@
-import { AgentNameRegistry } from '@main/agentNames/registry.js'
 import {
   EMPTY_WORKSPACE_PROJECTION,
   projectWorkspace,
@@ -27,11 +26,17 @@ import type { WorkspaceFileStore } from '@main/storage/workspaceFileStore.js'
 // renderer's live state — the accepted lag for everything main-side that
 // reads renderer metadata (analytics accepts the same).
 //
-// Agent names resolve asynchronously (the registry serializes allocation).
-// The synchronous re-project publishes placements with whatever names are
-// already cached; the name resolution lands as a second update. Consumers
-// see a session appear unnamed for one tick rather than blocked on a
-// registry round-trip — the name is display polish, not identity.
+// WHY name resolution reads the assignments FILE instead of sharing the
+// IPC path's AgentNameRegistry instance: resolve() ALLOCATES missing names
+// and serializes per-instance, so a second instance would race the first
+// on the same file and could hand the same spoken name to two identities.
+// The conversation ledger already established the read-only seam
+// (readAgentNameAssignments) for exactly this display-only need; names are
+// allocated by the renderer before it can label a pane, so by the time a
+// session carries an agentNameId the assignment is on disk. The read lands
+// asynchronously and re-projects — a session appears unnamed for one tick
+// rather than blocked on file I/O, because the name is display polish,
+// not identity.
 
 /** Everything the remote needs to know about one session's identity. */
 export type RemoteSessionIdentity = {
@@ -49,13 +54,14 @@ export class RemoteWorkspaceProjection {
   /** sessionId → identity, rebuilt on every committed workspace save. */
   private sessions = new Map<string, RemoteSessionIdentity>()
   private readonly nameById = new Map<string, string>()
+  private namesGeneration = 0
   private readonly changeListeners = new Set<() => void>()
   private readonly unobserve: () => void
   private disposed = false
 
   constructor(
     private readonly store: WorkspaceFileStore,
-    private readonly names: AgentNameRegistry,
+    private readonly readAssignments: () => Promise<Record<string, string>>,
   ) {
     // Prime from the document the store already holds — a phone that pairs
     // before the first autosave must still see titles from the previous
@@ -89,14 +95,10 @@ export class RemoteWorkspaceProjection {
     if (this.disposed) return
     const projection = projectWorkspace(windows)
     const next = new Map<string, RemoteSessionIdentity>()
-    const missingNames: string[] = []
     for (const placement of projection.sessions.values()) {
       const agentName = placement.agentNameId
         ? (this.nameById.get(placement.agentNameId) ?? null)
         : null
-      if (placement.agentNameId && !this.nameById.has(placement.agentNameId)) {
-        missingNames.push(placement.agentNameId)
-      }
       next.set(placement.sessionId, {
         sessionId: placement.sessionId,
         title: placement.title,
@@ -113,30 +115,30 @@ export class RemoteWorkspaceProjection {
     this.sessions = next
     if (changed) this.notify()
 
-    if (missingNames.length > 0) {
-      // Fire-and-forget by design: the registry resolves off the save tail;
-      // when it lands, a second notify publishes the names. A failure keeps
-      // the unnamed display (the registry's own logging covers diagnosis) —
-      // a projection must never turn a name lookup into an error path.
-      void this.names
-        .resolve(missingNames)
-        .then(resolved => {
-          if (this.disposed) return
-          let namesChanged = false
-          for (const [id, name] of Object.entries(resolved)) {
-            if (!this.nameById.has(id) || this.nameById.get(id) !== name) {
-              this.nameById.set(id, name)
-              namesChanged = true
-            }
+    // Read-only name join, fire-and-forget by design. A failure keeps the
+    // unnamed display (the reader's own logging covers diagnosis) — a
+    // projection must never turn a display lookup into an error path. A
+    // generation token makes a late read apply only if no newer cycle has
+    // started, so an in-flight read can't overwrite names learned by a
+    // later one.
+    const generation = ++this.namesGeneration
+    void this.readAssignments()
+      .then(assignments => {
+        if (this.disposed || generation !== this.namesGeneration) return
+        let namesChanged = false
+        for (const [id, name] of Object.entries(assignments)) {
+          if (this.nameById.get(id) !== name) {
+            this.nameById.set(id, name)
+            namesChanged = true
           }
-          if (namesChanged) {
-            // Re-project from the CURRENT document — the world may have
-            // saved again while the resolution was in flight.
-            this.reproject(this.store.windows())
-          }
-        })
-        .catch(() => {})
-    }
+        }
+        if (namesChanged) {
+          // Re-project from the CURRENT document — the world may have
+          // saved again while the read was in flight.
+          this.reproject(this.store.windows())
+        }
+      })
+      .catch(() => {})
   }
 
   private notify(): void {

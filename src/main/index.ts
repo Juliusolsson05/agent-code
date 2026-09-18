@@ -106,6 +106,7 @@ import { ConversationLedger, readAgentNameAssignments } from '@main/conversation
 import { createConversationService } from '@main/conversations/service.js'
 import { listWorktreesForCwd } from '@main/ipc/git.js'
 import { AGENT_NAMES_FILE } from '@main/agentNames/ipc.js'
+import { RemoteWorkspaceProjection } from '@main/remote/workspaceProjection.js'
 import { CONVERSATIONS_LEDGER_FILE } from '@main/storage/paths.js'
 import { isSessionRecordingEnabled, isSessionRecordingAutoStart } from '@main/ipc/devDebug.js'
 import { registerAllIpc } from '@main/ipc/index.js'
@@ -265,6 +266,7 @@ const vaultService = new VaultService({
 // callbacks that fire after the assignment.
 let manager: SessionManager | null = null
 let remoteController: RemoteController | null = null
+let remoteWorkspaceProjection: RemoteWorkspaceProjection | null = null
 let tmuxRegistry: TmuxRegistry | null = null
 let stateProcessLock: Extract<StateProcessLock, { acquired: true }> | null = null
 let appRunJournal: AppRunJournal | null = null
@@ -930,6 +932,13 @@ async function startApp(): Promise<void> {
   remoteController = new RemoteController({
     manager,
     journal: appRunJournal,
+    // v2 identity projection: one read model over the persisted workspace
+    // (titles, spoken names, tabs, pins) for the remote server's session
+    // summaries. Handed over as a GETTER because the store opens later in
+    // startup than this construction (same pattern as getThemeSettings);
+    // the projection itself observes the store, so remote disabled costs
+    // it nothing and enable picks up whatever has opened by then.
+    getWorkspace: () => remoteWorkspaceProjection,
     clientDistDir: join(app.getAppPath(), 'out', 'remote-client'),
     // Tunnel binary resolution — bundled artifact first (packaged app),
     // then the third_party dev cache (populated by `npm run
@@ -1090,6 +1099,13 @@ async function startApp(): Promise<void> {
   }
   workspaceFileStore.observe(projectActivity)
   projectActivity(workspaceFileStore.windows())
+  // v2 remote identity projection — constructed beside its only input, once
+  // the store has opened. Observed forever (remote disabled costs nothing);
+  // RemoteController reads it through getWorkspace at enable time.
+  remoteWorkspaceProjection = new RemoteWorkspaceProjection(
+    workspaceFileStore,
+    () => readAgentNameAssignments(AGENT_NAMES_FILE),
+  )
   systemSuspension.on('suspension', (suspension: import('@shared/types/systemSuspension.js').SystemSuspension) => {
     agentActivityRecorder.noteSuspension(suspension)
   })

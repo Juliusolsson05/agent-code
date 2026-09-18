@@ -9,6 +9,7 @@ import { DeviceRegistry } from '@main/remote/auth/deviceRegistry.js'
 import type { PairedDevice } from '@main/remote/auth/deviceRegistry.js'
 import { loadOrCreateRemoteSecret, REMOTE_STATE_DIR } from '@main/remote/auth/secret.js'
 import { RemoteServer } from '@main/remote/RemoteServer.js'
+import type { RemoteWorkspaceReadModel } from '@main/remote/RemoteServer.js'
 import { SessionFeedSource } from '@main/remote/SessionFeedSource.js'
 import { LanTransport } from '@main/remote/transport/LanTransport.js'
 import { CloudflaredTunnel } from '@main/remote/transport/CloudflaredTunnel.js'
@@ -109,6 +110,12 @@ export type RemoteControllerDeps = {
   resolveTunnelBinary?: () => Promise<string | null>
   /** Transport factory override for tests. When set it wins over mode. */
   createTransport?: () => RemoteTransport
+  /** v2 identity projection (titles, agent names, tabs, pins), as a GETTER
+   *  for the same reason as getThemeSettings: main opens the
+   *  WorkspaceFileStore asynchronously AFTER the controller is constructed,
+   *  and remote is only ever enabled by a later user action. Called at
+   *  enable-time; a null return degrades summaries to the v1 shape. */
+  getWorkspace?: () => RemoteWorkspaceReadModel | null
 }
 
 export class RemoteController extends EventEmitter {
@@ -192,6 +199,7 @@ export class RemoteController extends EventEmitter {
         clientDistDir: this.deps.clientDistDir ?? null,
         getThemeSettings: () => this.themeSettings,
         journal: this.deps.journal ?? null,
+        workspace: this.deps.getWorkspace?.() ?? null,
         transcribeAudio: async (audio, mimeType) => {
           // The Deepgram key stays here in the main process — the phone never
           // receives it. Mirrors ipc/dictation's env-only key resolution and

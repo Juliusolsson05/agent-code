@@ -149,6 +149,26 @@ export type OutboundSessionSummary = {
    *  "active 2m ago" label for the phone's picker. Read fresh from the
    *  manager at list time; the client bumps it locally from live events. */
   lastActivityAt: number | null
+  // ── v2 identity overlays (remote-v2 rebuild). Every field is OPTIONAL
+  // and server-authored, so the v1 tolerant-reader discipline covers both
+  // skew directions: an old bundle ignores unknown fields structurally, and
+  // a server with no workspace projection simply omits them. None of these
+  // widen the inbound union — the security scope is untouched.
+  /** User-assigned session title (renderer metadata via workspace.json). */
+  title?: string | null
+  /** Spoken agent name (Apollo/Boreas…), joined from the assignments file. */
+  agentName?: string | null
+  /** Project tab title for grouping the fleet list. */
+  tabTitle?: string | null
+  /** Pinned to the top of its dispatch list. */
+  pinned?: boolean
+  /** OpenCode execution runtime ('terminal' = the TUI runtime; absent =
+   *  the structured runtime, and always absent for other providers). The
+   *  phone uses this to label expectations honestly — the TUI runtime has
+   *  no streaming text and its Stop goes to a PTY, not an HTTP abort. */
+  providerRuntime?: 'terminal' | null
+  /** Live in-provider sub-agents working under this session. */
+  subAgentCount?: number
 }
 
 export type OutboundFrame =

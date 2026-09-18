@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { WebSocket } from 'ws'
-import { manager, registry, pairing, baseUrl, restartServer, pairDevice, connect, waitFor, framesOfType } from './RemoteServer.testSupport.js'
+import { manager, registry, pairing, baseUrl, restartServer, pairDevice, connect, waitFor, framesOfType, openAuthed } from './RemoteServer.testSupport.js'
 
 describe('pairing endpoint', () => {
   it('redeems a live code and rejects a bogus one', async () => {
@@ -271,6 +271,100 @@ describe('inbound scope enforcement on a live socket', () => {
     await waitFor(frames, f => framesOfType(f, 'reply').length > 0)
     expect(framesOfType(frames, 'reply')[0]?.ok).toBe(false)
     expect(manager.write).not.toHaveBeenCalled()
+    ws.close()
+  })
+})
+
+// ── v2 identity overlays on session summaries ─────────────────────────────
+//
+// The projection join (titles, spoken names, tabs, pins, OpenCode runtime)
+// is a pure read overlay — these tests pin that it reaches real sockets,
+// degrades to the v1 shape without a projection, and that a projection
+// change (a workspace save renaming/re-pinning/moving a session) resends
+// the list without any manager event firing.
+describe('v2 session summary overlays', () => {
+  type FakeIdentity = Omit<import('./workspaceProjection.js').RemoteSessionIdentity, 'sessionId'>
+  function fakeWorkspace(initial: Array<[string, FakeIdentity]>) {
+    const sessions = new Map(
+      initial.map(([sessionId, identity]) => [
+        sessionId,
+        { sessionId, ...identity },
+      ] as const),
+    ) as Map<string, import('./workspaceProjection.js').RemoteSessionIdentity>
+    const listeners = new Set<() => void>()
+    const model = {
+      snapshot: () => sessions,
+      onChange: (cb: () => void) => {
+        listeners.add(cb)
+        return () => {
+          listeners.delete(cb)
+        }
+      },
+    }
+    return {
+      model,
+      sessions,
+      /** Simulate a committed workspace save: mutate identity + notify. */
+      save(sessionId: string, patch: Partial<FakeIdentity>) {
+        const current = sessions.get(sessionId)
+        if (current) sessions.set(sessionId, { ...current, ...patch })
+        for (const listener of listeners) listener()
+      },
+    }
+  }
+
+  it('overlays title, agent name, tab, pin and the OpenCode runtime onto summaries', async () => {
+    const workspace = fakeWorkspace([
+      ['s-oc', { title: 'Shell rewrite', agentName: 'Apollo', tabTitle: 'agent-code', pinned: true, tldrIdentity: 't1', cwd: '/dev/agent-code', kind: 'opencode' }],
+      ['s-cl', { title: null, agentName: null, tabTitle: null, pinned: false, tldrIdentity: null, cwd: null, kind: 'claude' }],
+    ])
+    ;(manager.getSpawnProviderRuntime as ReturnType<typeof vi.fn>).mockImplementation(
+      (sessionId: string) => (sessionId === 's-oc' ? 'terminal' : null),
+    )
+    await restartServer({ workspace: workspace.model })
+    try {
+      manager.emit('started', { sessionId: 's-oc', kind: 'opencode', projectDir: '/dev/agent-code' })
+      manager.emit('started', { sessionId: 's-cl', kind: 'claude', projectDir: '/dev/x' })
+      const { ws, frames } = await openAuthed()
+      await waitFor(frames, f => framesOfType(f, 'session-list').length > 0)
+      const list = framesOfType(frames, 'session-list')[0]
+      const sessions = (list?.sessions ?? []) as Array<Record<string, unknown>>
+      const oc = sessions.find(s => s.sessionId === 's-oc')
+      const cl = sessions.find(s => s.sessionId === 's-cl')
+      expect(oc).toMatchObject({
+        title: 'Shell rewrite',
+        agentName: 'Apollo',
+        tabTitle: 'agent-code',
+        pinned: true,
+        providerRuntime: 'terminal',
+      })
+      // Runtime is stamped ONLY on the provider that has two runtimes.
+      expect(cl).toMatchObject({ title: null, agentName: null, pinned: false })
+      expect('providerRuntime' in (cl ?? {})).toBe(false)
+      ws.close()
+    } finally {
+      ;(manager.getSpawnProviderRuntime as ReturnType<typeof vi.fn>).mockImplementation(() => null)
+    }
+  })
+
+  it('resends the session list when the projection changes, with no manager event', async () => {
+    const workspace = fakeWorkspace([
+      ['s1', { title: 'Before rename', agentName: null, tabTitle: 'agent-code', pinned: false, tldrIdentity: null, cwd: '/dev/agent-code', kind: 'claude' }],
+    ])
+    await restartServer({ workspace: workspace.model })
+    manager.emit('started', { sessionId: 's1', kind: 'claude', projectDir: '/dev/agent-code' })
+    const { ws, frames } = await openAuthed()
+    const countBefore = framesOfType(frames, 'session-list').length
+
+    // A workspace save renames the session; the manager emits NOTHING.
+    workspace.save('s1', { title: 'After rename' })
+
+    await waitFor(frames, f => {
+      const lists = framesOfType(frames, 'session-list')
+      if (lists.length <= countBefore) return false
+      const sessions = (lists[lists.length - 1]?.sessions ?? []) as Array<Record<string, unknown>>
+      return sessions.some(s => s.sessionId === 's1' && s.title === 'After rename')
+    })
     ws.close()
   })
 })
