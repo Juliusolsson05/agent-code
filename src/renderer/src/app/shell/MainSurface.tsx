@@ -4,9 +4,7 @@ import { SettingsPage } from '@renderer/features/settings/ui/SettingsPage'
 import { ReaderView } from '@renderer/features/reader/ui/ReaderView'
 import { SpotlightView } from '@renderer/features/spotlight/ui/SpotlightView'
 import { GlobalEditorShell } from '@renderer/features/global-editor/ui/GlobalEditorShell'
-import { TileTabsView } from '@renderer/features/tile-tabs/ui/TileTabsView'
 import { DispatchLayout } from '@renderer/workspace/dispatch/DispatchLayout'
-import { TileTree } from '@renderer/workspace/tile-tree/TileTree'
 import { NewAgentPlacementOverlay } from '@renderer/features/workspace/ui/NewAgentPlacementOverlay'
 import { usePlacementOverlay } from '@renderer/features/workspace/surfaces/usePlacementOverlay'
 import { RetainedWorkspaceSurface } from './RetainedWorkspaceSurface'
@@ -112,36 +110,18 @@ export function MainSurface({ onNewTabRequest }: { onNewTabRequest: () => void }
       ) : null}
       <RetainedWorkspaceSurface hidden={takeover !== null}>
         <GlobalEditorShell workspace={workspace}>
-          {workspace.tileTabs ? (
-            <TileTabsView
-              workspace={workspace}
-              agentViewMode={settings.agentViewMode}
-              showStatusMode={settings.showStatusMode}
-              showWorktreeBadges={settings.showWorktreeBadges}
-            />
-          ) : activeTab && workspace.dispatchMode ? (
+          {/*
+            The workspace stage (#992): one layout, always rendered. The old
+            fork — TileTabs over here, Dispatch Mode over there, the tile
+            tree otherwise — is deleted rather than reconciled: three
+            placement authorities became one. activeTab still names the
+            ACTIVE PROJECT (spawn defaults, index highlight) and WelcomeEmpty
+            remains the escape hatch for a boot that produced no project at
+            all, exactly as it was for a boot that produced no tab.
+          */}
+          {activeTab ? (
             <div className="relative h-full min-h-0 min-w-0">
               <DispatchLayout
-                workspace={workspace}
-                agentViewMode={settings.agentViewMode}
-                showStatusMode={settings.showStatusMode}
-                showWorktreeBadges={settings.showWorktreeBadges}
-              />
-              <NewAgentPlacementOverlay
-                open={placement.open}
-                workspace={workspace}
-                onClose={placement.close}
-                attachIntent={placement.attachIntent}
-                linkedAgentParentId={placement.linkedAgentParentId}
-                projectIntent={placement.projectIntent}
-              />
-            </div>
-          ) : activeTab ? (
-            <div className="relative h-full min-h-0 min-w-0">
-              <TileTree
-                tabId={activeTab.id}
-                node={activeTab.root}
-                focusedSessionId={activeTab.focusedSessionId}
                 workspace={workspace}
                 agentViewMode={settings.agentViewMode}
                 showStatusMode={settings.showStatusMode}

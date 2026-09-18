@@ -914,6 +914,7 @@ export function useWorkspace(
     setRestoreStatus,
     defaultWorkspaceMode,
     dispatchActions.enterDispatchMode,
+    dispatchActions.enterTiledDispatch,
   )
   // The persist effect reads current refs on its own timer, so it needs no
   // render-time snapshot — passing `runtimes` here would suggest a reactivity

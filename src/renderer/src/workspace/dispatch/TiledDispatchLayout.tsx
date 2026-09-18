@@ -26,6 +26,7 @@ import {
 } from '@renderer/workspace/dispatch/DispatchAgentList'
 import { DispatchMiniList } from '@renderer/workspace/dispatch/DispatchMiniList'
 import { rowScopedRows } from '@renderer/workspace/dispatch/rowScopedRows'
+import { stageOfWorkspace } from '@renderer/workspace/workspaceStage'
 import type { DispatchGridRow, SessionId, TabId } from '@renderer/workspace/types'
 
 type Props = {
@@ -78,7 +79,12 @@ export function TiledDispatchLayout({
   showWorktreeBadges,
 }: Props) {
   const state = workspace.state
-  const tiled = state.dispatchMode!.tiled!
+  // The stage is THE workspace (#992): read through the selector so a
+  // not-yet-seeded state (pre-bootstrap paint) derives the seeded default
+  // instead of crashing on a null tiled grid. Post-bootstrap the stored grid
+  // passes through unchanged, so every action below writes and reads the
+  // same stored shape it always did.
+  const tiled = stageOfWorkspace(state)
   // Normalized once per state change, so every child renders against a shape
   // whose row lengths are guaranteed to sum to the lane count. Nothing below
   // this line may splice lanes — that belongs in gridShape, behind the reducers.

@@ -49,13 +49,53 @@ vi.mock('@renderer/features/global-editor/ui/GlobalEditorShell', () => ({
   GlobalEditorShell: ({ children }: { children: ReactNode }) => <>{children}</>,
 }))
 
-vi.mock('@renderer/features/tile-tabs/ui/TileTabsView', () => ({
-  TileTabsView: () => null,
-}))
-
-vi.mock('@renderer/workspace/dispatch/DispatchLayout', () => ({
-  DispatchLayout: () => null,
-}))
+// Unified layout (#992): MainSurface renders the lane stage — there is no
+// tile-tree branch to mount panes anymore. The retention contracts this
+// suite protects (takeovers HIDE the workspace, never unmount it; dimension
+// ownership follows the actually-mounted terminal) are unchanged; what
+// changed is the harness: sessions must be PLACED IN LANES for their panes
+// to mount, exactly like the real app now works.
+vi.mock('@renderer/workspace/dispatch/TiledDispatchLayout', async () => {
+  const { useEffect } = await import('react')
+  // The REAL ownership wrapper, not a fake: this suite's entire subject is
+  // the dimension-claim handshake (register on visible, release on hidden),
+  // so the stand-in lane must register exactly like a real pane terminal.
+  const { MountedAgentTerminalOwner } = await import(
+    '@renderer/workspace/terminal/AgentTerminalOwnership'
+  )
+  return {
+    // A lane-shaped stand-in that mounts each lane's pane through the same
+    // ownership wrapper the real layout uses. The real TiledDispatchLayout's
+    // own behavior is covered by gridDispatchLayout.renderer.test.tsx; this
+    // suite is about RetainedWorkspaceSurface + ownership across takeovers,
+    // so the lane grid itself stays a thin mount point here.
+    TiledDispatchLayout: ({ workspace }: { workspace: { state: { dispatchMode?: { tiled?: { lanes: Array<{ selectedSessionId?: string }> } } } } }) => {
+      const lanes = workspace.state.dispatchMode?.tiled?.lanes ?? []
+      return (
+        <>
+          {lanes.map((lane, index) =>
+            lane.selectedSessionId ? (
+            <LanePane key={index} sessionId={lane.selectedSessionId} />
+            ) : null,
+          )}
+        </>
+      )
+    },
+  }
+  function LanePane({ sessionId }: { sessionId: string }) {
+    useEffect(() => {
+      harness.paneMounts[sessionId] = (harness.paneMounts[sessionId] ?? 0) + 1
+      return () => {
+        harness.paneUnmounts[sessionId] = (harness.paneUnmounts[sessionId] ?? 0) + 1
+      }
+    }, [sessionId])
+    return (
+      <MountedAgentTerminalOwner sessionId={sessionId}>
+        <div data-testid={`pane-agent-terminal-${sessionId}`} />
+      </MountedAgentTerminalOwner>
+    )
+  }
+})
 
 vi.mock('@renderer/features/workspace/ui/NewAgentPlacementOverlay', () => ({
   NewAgentPlacementOverlay: () => null,
@@ -128,7 +168,17 @@ describe('terminal dimension ownership across main-surface takeovers', () => {
         },
         detachedSessions: {},
         gridRelatedSelections: {},
-        dispatchMode: null,
+        pinnedSessionIds: [],
+        // The stage placing session-1 — the unified workspace's one mount
+        // path. One row, one occupied lane, focused.
+        dispatchMode: {
+          scope: 'global',
+          tiled: {
+            lanes: [{ selectedSessionId: 'session-1' }],
+            rows: [{ length: 1 }],
+            focusedLane: 0,
+          },
+        },
       },
       activeTab,
       dispatchMode: null,
@@ -215,24 +265,25 @@ describe('terminal dimension ownership across main-surface takeovers', () => {
   })
 
   it('guards the debug target by the terminal Spotlight actually mounted', async () => {
-    const splitTab = {
-      ...(harness.workspace.activeTab as Record<string, unknown>),
-      root: {
-        type: 'split',
-        direction: 'vertical',
-        ratio: 0.5,
-        a: { type: 'leaf', sessionId: 'session-1' },
-        b: { type: 'leaf', sessionId: 'session-2' },
-      },
+    // Unified layout: BOTH panes are lane occupants. session-2 is a pooled
+    // (detached) member of tab-1 — the v2-consistent way to be on the stage
+    // without being a tree leaf — and the top-level dispatchMode field is
+    // set so SpotlightView resolves sessions through the dispatch path, as
+    // the real Workspace object exposes. Spotlight mounts its own leaf for
+    // session-2 on top of the retained (hidden) stage, which still holds
+    // both lanes.
+    const tiled = {
+      lanes: [{ selectedSessionId: 'session-1' }, { selectedSessionId: 'session-2' }],
+      rows: [{ length: 2 }],
+      focusedLane: 0,
     }
     harness.workspace = {
       ...harness.workspace,
-      activeTab: splitTab,
       spotlight: { tabId: 'tab-1', focusedSessionId: 'session-2' },
       setSpotlightSession: vi.fn(),
+      dispatchMode: { scope: 'global', tiled },
       state: {
         ...(harness.workspace.state as Record<string, unknown>),
-        tabs: [splitTab],
         sessions: {
           ...((harness.workspace.state as { sessions: Record<string, unknown> }).sessions),
           'session-2': {
@@ -240,6 +291,17 @@ describe('terminal dimension ownership across main-surface takeovers', () => {
             agentViewModeOverride: 'terminal',
           },
         },
+        detachedSessions: {
+          'session-2': {
+            sessionId: 'session-2',
+            surface: 'dispatch',
+            projectTabId: 'tab-1',
+            projectTabTitle: 'Project',
+            projectTabIndex: 0,
+            detachedAt: 1,
+          },
+        },
+        dispatchMode: { scope: 'global', tiled },
       },
     }
 

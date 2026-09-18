@@ -62,20 +62,39 @@ export function useBootstrap(
   // render the partial/fallback states without each call site needing
   // to recompute "is autosave actually running right now".
   setRestoreStatus: (status: WorkspaceRestoreStatus) => void,
-  // WHY these two extra params: the "Default Workspace Mode" setting
-  // only matters on a brand-new install (no workspace.json). Rather
-  // than have useBootstrap reach into the app store directly — which
-  // would couple persistence to settings and add a re-render dep we
-  // don't want — the composer (`useWorkspace`) reads the setting once
-  // and threads it in alongside the dispatch entry point. We capture
-  // both in the once-only useEffect closure, so later setting changes
-  // don't retroactively rerun bootstrap.
+  // WHY these params: the "Default Workspace Mode" setting only mattered on
+  // a brand-new install (no workspace.json), choosing between grid and
+  // Dispatch. With the unified layout (#992) there is nothing to choose:
+  // every workspace boots onto the stage. The setting param stays (removing
+  // it drags the Settings UI into this stage) but is deliberately unread
+  // now; stage-8 cleanup deletes setting and param together.
   defaultWorkspaceMode: WorkspaceModeId,
-  enterDispatchMode: (scope?: DispatchModeState['scope']) => Promise<void>,
+  _enterDispatchMode: (scope?: DispatchModeState['scope']) => Promise<void>,
+  // Stage guarantee (#992): bootstrap seeds a STORED tiled grid when the
+  // workspace has none, so every lane action (select/insert/remove/weights)
+  // finds a grid to write into on its very first keystroke. The derived
+  // default (workspaceStage.ts) covers rendering pre-seed; this makes the
+  // stored state catch up so writes never race the derivation.
+  enterTiledDispatch: (rowLengths: number[]) => Promise<void>,
 ): void {
   useEffect(() => {
     if (refs.bootRef.current) return
     refs.bootRef.current = true
+    const ensureStage = async (rowLengths: number[]): Promise<void> => {
+      if (refs.latestStateRef.current.dispatchMode?.tiled != null) return
+      try {
+        // enterTiledDispatch applies the #977 entry seed — lane 0 seeded
+        // with the focused session, including wake-before-place for a
+        // hibernated detached seed.
+        await enterTiledDispatch(rowLengths)
+      } catch (error) {
+        // Non-fatal: rendering already works against the derived default;
+        // the first lane write will surface any real failure where the
+        // user can see it. Same philosophy as the old fresh-install
+        // dispatch entry: no error toast before the user has seen the app.
+        console.warn('[workspace] stage seeding failed:', error)
+      }
+    }
     void (async () => {
       const bootstrapSpan = perf.span('workspace.bootstrap')
       let canAutosaveBootState = false
@@ -93,26 +112,10 @@ export function useBootstrap(
             await perf.measure('workspace.bootstrap.initialNewTab', () => newTab(cwd))
             canAutosaveBootState = refs.latestStateRef.current.tabs.length > 0
             finalStatus = 'fresh'
-            // WHY apply the default mode here, after newTab resolves:
-            //
-            // `enterDispatchMode` no longer spawns anything: the auto-created
-            // project terminal was retired, so entering Dispatch is now purely
-            // a layout change.
-            if (defaultWorkspaceMode === 'dispatch') {
-              try {
-                // Global, not project (#973): a fresh install has exactly one
-                // tab, so project scope would show the same agents while
-                // hiding the scope switch's purpose; global is also the scope
-                // the owner runs in and the one every later tab benefits from.
-                await enterDispatchMode('global')
-              } catch (dispatchErr) {
-                // Non-fatal: user lands in grid mode, can flip later.
-                // We don't surface a toast because a fresh-install user
-                // hasn't even seen the workspace yet — a stray error
-                // toast on an empty app is more confusing than helpful.
-                console.warn('[workspace] default dispatch entry failed:', dispatchErr)
-              }
-            }
+            // The stage is the workspace (#992): a fresh install lands on
+            // ONE row × ONE lane (plan §4.5 — nothing to explain before the
+            // first agent exists; growth is user-paced).
+            await ensureStage([1])
             bootstrapSpan.end({ mode: 'fresh' })
           } catch (err) {
             bootstrapSpan.fail(err, { mode: 'fresh' })
@@ -174,6 +177,11 @@ export function useBootstrap(
             // restart after fixing the underlying spawn/proxy problem.
             console.warn('[workspace] rehydrate incomplete; autosave remains disabled:', restoreResult)
           }
+          // Imported v2 workspaces without a stored grid get the migration
+          // default [2] (seeded) — NOT the fresh [1]: an importing user
+          // demonstrably has agents; the second lane is what shows a lane
+          // is a slot (plan §6.4).
+          await ensureStage([2])
           bootstrapSpan.end({ mode: 'rehydrate' })
         } catch (err) {
           bootstrapSpan.fail(err, { mode: 'rehydrate' })
@@ -185,6 +193,10 @@ export function useBootstrap(
           try {
             await perf.measure('workspace.bootstrap.fallbackNewTab', () => newTab(cwd))
             finalStatus = 'persisted-fallback'
+            // Recovery shell gets the minimal [1] stage — same reasoning as
+            // the fresh path: this is not the user's real workspace, just
+            // enough surface to work in while the real file stays protected.
+            await ensureStage([1])
             // WHY this intentionally does NOT unlock autosave:
             //
             // We only reach this path after a persisted workspace existed but

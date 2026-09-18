@@ -811,7 +811,12 @@ export function useKeybinds(
       // binding while Dispatch owns the layout, so ⌥J falls through to the
       // Dispatch handler instead of being swallowed and refused.
       const activeContexts = activeBindingContexts({
-        dispatchMode: Boolean(workspace.dispatchMode),
+        // The stage is the workspace (#992): the dispatch context is always
+        // live. Pre-merge this was Boolean(workspace.dispatchMode), gating
+        // grid-context bindings against dispatch ones; with one layout there
+        // is no grid context to fall back to and the 'grid' context dies
+        // with the tree (stage 3).
+        dispatchMode: true,
         editorOwnsTarget,
         // 'feed' is live only when a rendered feed is focused AND the user is
         // not typing — which is what keeps bare End as a caret key in every
@@ -866,24 +871,22 @@ export function useKeybinds(
             }
           }
         }
-        // In Dispatch Mode, the numbered command grammar moves from
-        // "tab N" to "session row N" because the left list is the primary
-        // control surface. Tab switching remains available via cmd-[ / ].
-        // The row labels keep their tab letter (A/B/C) for orientation,
-        // but the numeric suffix is global in the visible dispatch list.
-        if (workspace.dispatchMode) {
+        // In the unified layout the numbered command grammar is always
+        // "session row N" — the lane grid is the only workspace. Tab
+        // switching remains available via cmd-[ / ]. The row labels keep
+        // their project letter (A/B/C) for orientation, but the numeric
+        // suffix is global in the visible index.
+        {
           const digit = digitFromKeyboardEvent(e, {
             includeZero: pendingDispatchDigit !== null,
           })
           if (digit !== null) {
             e.preventDefault()
             if (!e.repeat) {
-              // In a tiled layout cmd-N fills the FOCUSED LANE; in classic
-              // Dispatch it moves the single dispatch focus. Same row index
-              // semantics (buildVisibleDispatchRows) either way.
-              const selectRow = workspace.dispatchMode?.tiled
-                ? (index: number) => focusTiledRowByIndex(workspace, index)
-                : (index: number) => focusDispatchRowByIndex(workspace, index)
+              // cmd-N fills the FOCUSED LANE. Row index semantics come from
+              // buildVisibleDispatchRows via tiledRowScopedRows, exactly as
+              // the visible chips do.
+              const selectRow = (index: number) => focusTiledRowByIndex(workspace, index)
               const combined =
                 pendingDispatchDigit !== null ? pendingDispatchDigit * 10 + digit : null
               if (combined !== null && combined >= 10 && combined <= 99) {
@@ -922,49 +925,37 @@ export function useKeybinds(
       if (alt && !cmd) {
         const code = e.code
 
-        if (workspace.dispatchMode) {
-          // WHY Dispatch steals these before normal pane navigation:
-          // Dispatch focus is `dispatchMode.focusedSessionId`, while grid
-          // navigation below walks `activeTab.focusedSessionId` through
-          // `tab.root`. Those are deliberately different invariants. Once a
-          // Dispatch row points at a detached session, falling through to
-          // `workspace.navigate()` asks the grid to find a neighbor for a
-          // session that is not in the grid and silently does nothing. The
-          // command-palette side of this fix hides `Focus Pane *` in Dispatch;
-          // the keybind side must also stop grid navigation from running
-          // underneath Dispatch.
-          //
-          // Dispatch is a vertical list, so only up/down and vim k/j have
-          // movement semantics. Left/right/h/l are consumed because letting
-          // them fall through would mutate or probe the hidden grid and make
-          // keyboard behavior depend on stale grid focus instead of the row
-          // the user actually sees highlighted.
-          // In a tiled layout the same up/down keys move the FOCUSED LANE's
-          // selection, and left/right — which are swallowed in classic
-          // Dispatch (a vertical list) — gain meaning: they switch which
-          // lane has keyboard focus. Switching lanes never changes any
-          // lane's selection, keeping lanes independent.
-          const tiled = workspace.dispatchMode?.tiled
+        // The lane grid is the workspace (#992): these arrows are always
+        // live. Up/down move the FOCUSED LANE's selection through the row's
+        // own scoped list; left/right switch which lane holds focus without
+        // ever touching another lane's selection.
+        //
+        // WHY these are consumed before any pane navigation could run:
+        // lane selection writes `focusedLane`-addressed state, while the
+        // legacy grid navigation below walks `activeTab.focusedSessionId`
+        // through `tab.root`. Those are deliberately different invariants;
+        // letting grid handlers run underneath the stage would make keyboard
+        // behavior depend on a hidden tree the user cannot see. The grid
+        // handlers themselves die with the tree in stage 3.
+        {
           if (k === 'ArrowUp' || code === 'KeyK') {
             e.preventDefault()
-            if (tiled) moveTiledLaneSelection(workspace, -1)
-            else moveDispatchSelection(workspace, -1)
+            moveTiledLaneSelection(workspace, -1)
             return
           }
           if (k === 'ArrowDown' || code === 'KeyJ') {
             e.preventDefault()
-            if (tiled) moveTiledLaneSelection(workspace, 1)
-            else moveDispatchSelection(workspace, 1)
+            moveTiledLaneSelection(workspace, 1)
             return
           }
           if (k === 'ArrowLeft' || code === 'KeyH') {
             e.preventDefault()
-            if (tiled) moveTiledFocusWithinRow(workspace, -1)
+            moveTiledFocusWithinRow(workspace, -1)
             return
           }
           if (k === 'ArrowRight' || code === 'KeyL') {
             e.preventDefault()
-            if (tiled) moveTiledFocusWithinRow(workspace, 1)
+            moveTiledFocusWithinRow(workspace, 1)
             return
           }
         }
@@ -1100,27 +1091,25 @@ function digitFromKeyboardEvent(
 
 function dispatchRows(workspace: Workspace) {
   // WHY use the visible-row helper instead of flattening groups here:
-  // keyboard selection is the user's row-number contract. Once Dispatch rows
+  // keyboard selection is the user's row-number contract. Once index rows
   // include pinned agents and terminal sessions, "cmd-3" must resolve against
   // the exact same list the user sees, not a convenient subset of project
-  // groups. The helper keeps this in lockstep with DispatchLayout and command
+  // groups. The helper keeps this in lockstep with the lane grid and command
   // targeting.
   return buildVisibleDispatchRows(workspace.state)
 }
 
-function focusDispatchRowByIndex(workspace: Workspace, index: number) {
-  const row = dispatchRows(workspace)[index]
-  if (!row) return
-  workspace.focusDispatchSession(row.tabId, row.sessionId)
-}
-
-// ---- Tiled Dispatch keybind helpers (issue #248) ----
+// ---- Lane-grid keybind helpers ----
 //
-// When a tiled layout is active, dispatch selection targets the FOCUSED
-// LANE rather than the single dispatch focus. These mirror the classic
-// helpers above but write through selectTiledLaneSession, so cmd-N / arrows
-// fill the focused lane (duplicates across lanes are allowed) — and wake a
-// hibernated agent first, which the raw lane writer never did (#690).
+// Dispatch selection targets the FOCUSED LANE and writes through
+// selectTiledLaneSession, so cmd-N / arrows fill the focused lane
+// (duplicates across lanes are allowed) — and wake a hibernated agent
+// first, which the raw lane writer never did (#690).
+//
+// The classic-Dispatch companions (focusDispatchRowByIndex,
+// moveDispatchSelection — single-focus, no lanes) were deleted with the
+// classic layout: with the lane grid as the only workspace there is no
+// surface left for single-focus selection to act on.
 
 function focusedTiledLane(workspace: Workspace): number {
   return workspace.dispatchMode?.tiled?.focusedLane ?? 0
@@ -1197,32 +1186,4 @@ function moveTiledFocusWithinRow(workspace: Workspace, delta: number) {
   const next = grid.focusedLane + delta
   if (next < start || next > end) return
   workspace.setTiledFocusedLane(next)
-}
-
-function moveDispatchSelection(workspace: Workspace, delta: number) {
-  const rows = dispatchRows(workspace)
-  if (rows.length === 0) return
-  // Resolve the current row through the same row-derived selector that the
-  // visible UI uses. Reading raw dispatchMode.focusedSessionId here (the
-  // previous shape) yields ids that aren't always in the visible list:
-  // stale persisted focus right after rehydrate, scope toggles, or the
-  // tiny gap right after a close. findIndex would then return -1 and the
-  // wrap-around math `(currentIndex + delta + len) % len` produces a
-  // deterministic-but-confusing jump — Down lands on row 0, Up lands on
-  // the second-to-last row — neither matches the row the user sees
-  // highlighted. selectVisibleDispatchRow always returns a row when the
-  // list is non-empty (rows[0] fallback), so currentIndex is always in
-  // range and the visible cursor is the cursor we move from.
-  const currentRow = selectVisibleDispatchRow(
-    rows,
-    workspace.dispatchMode?.focusedSessionId,
-    workspace.activeTab?.focusedSessionId,
-  )
-  const currentIndex = currentRow
-    ? rows.findIndex(row => row.sessionId === currentRow.sessionId)
-    : 0
-  const nextIndex = (currentIndex + delta + rows.length) % rows.length
-  const row = rows[nextIndex]
-  if (!row) return
-  workspace.focusDispatchSession(row.tabId, row.sessionId)
 }
