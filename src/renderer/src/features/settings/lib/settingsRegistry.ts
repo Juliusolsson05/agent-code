@@ -775,6 +775,20 @@ export function getSettingsRegistry(
       },
     },
     {
+      id: 'default-goal-loop-mcp',
+      category: 'agents',
+      title: 'Goal Loop MCP',
+      description:
+        'Let agents run harness-owned goal loops that keep re-prompting until the goal is complete, with a control strip and Cmd+Shift+Y overlay. Off by default. Applies to new agents and existing agents on their next reload. Per-agent overrides take precedence; Use Global MCP Settings clears them.',
+      keywords: ['mcp', 'goal', 'loop', 'persistence', 'autonomous', 'default', 'reload', 'existing agents'],
+      metadata: { scope: 'app', apply: 'new-session', storage: 'settings' },
+      control: {
+        type: 'toggle',
+        getValue: settings => settings.defaultBuiltInMcpDomains.includes('goal_loop'),
+        onToggle: (ctx, value) => updateDefaultBuiltInMcpDomain(ctx, 'goal_loop', value),
+      },
+    },
+    {
       id: 'default-orchestration-mcp',
       category: 'agents',
       title: 'Orchestration MCP',
