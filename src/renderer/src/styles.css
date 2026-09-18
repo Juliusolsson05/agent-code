@@ -975,6 +975,21 @@ body,
   padding: 0;
 }
 
+/* Feed column gutter tracker — the single source of truth UserBand's
+ * edge-to-edge bleed follows (see primitives.tsx). The px values mirror
+ * Feed.tsx's container-query steps (px-3 / px-5 / px-8) EXACTLY; if a step
+ * changes there, change it here in the same diff or user-turn bands will
+ * drift off the scroller edges again — the exact bug this replaced (the
+ * old hardcoded -mx-8 px-8 mirror overflowed phone viewports by 20px/side).
+ * Raw @container rules rather than Tailwind utilities because the var VALUE
+ * differs per step, which utility classes cannot express. The nearest
+ * ancestor container is the Feed scroller itself (`@container` class in
+ * Feed.tsx), so a narrow desktop tile tracks its own gutter identically to
+ * the phone — this is deliberately NOT a media query. */
+.feed-column { --feed-gutter: 12px; }
+@container (min-width: 480px) { .feed-column { --feed-gutter: 20px; } }
+@container (min-width: 768px) { .feed-column { --feed-gutter: 32px; } }
+
 /* Fenced code blocks: dark inset plate, no border. The plate is a `slab` —
  * it sits INSIDE the feed's scroll column and shares an edge with nothing, so
  * hard rule 1 lets it round. The existing `overflow-x: auto` is what makes the

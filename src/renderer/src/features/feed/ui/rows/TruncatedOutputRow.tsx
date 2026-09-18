@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import { collapsedTextPreview } from '@renderer/lib/text/boundedText'
 import { PagedTextViewer } from '@renderer/lib/text/PagedTextViewer'
+import { feedDisclosureClass } from '@renderer/features/feed/ui/rows/primitives'
 
 // Collapsed output view for tool_result content that isn't worth a
 // dense so a long `find .` or noisy test run doesn't push the
@@ -42,7 +43,7 @@ export function TruncatedOutputRow({
         <button
           type="button"
           onClick={() => setExpanded(e => !e)}
-          className="mt-1 text-[11px] text-muted hover:text-ink cursor-pointer"
+          className={`mt-1 ${feedDisclosureClass}`}
         >
           {expanded
             ? 'collapse'

@@ -4828,6 +4828,14 @@ export class SessionManager extends EventEmitter {
     return this.spawnInfo.get(sessionId)?.kind ?? null
   }
 
+  /** Provider execution runtime captured at spawn (OpenCode TUI vs
+   *  structured). Same spawnInfo freshness story as getSpawnKind; absent
+   *  means the provider's normal structured runtime, which is the type's
+   *  own semantics for a missing value. */
+  getSpawnProviderRuntime(sessionId: string): AgentProviderRuntime | null {
+    return this.spawnInfo.get(sessionId)?.providerRuntime ?? null
+  }
+
   /** Epoch ms of the last observed activity (any relayed session event). */
   getLastActivityAt(sessionId: string): number | null {
     return this.lastActivityAt.get(sessionId) ?? null

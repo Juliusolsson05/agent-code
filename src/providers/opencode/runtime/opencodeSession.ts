@@ -47,6 +47,7 @@ import type {
 } from '@shared/types/providerConditions.js'
 import { asRecord } from '@shared/lib/asRecord.js'
 import { addOpencodeBuiltInMcpLaunchConfig } from '@providers/shared/runtime/builtInMcpLaunch.js'
+import { mapOpenCodeSemanticEvent, OpenCodeBlockIndexTracker } from './semanticMapping.js'
 
 // Custom-action names OpencodeSession both BUILDS (when folding a
 // permission/question into the snapshot) and DISPATCHES (in
@@ -210,10 +211,16 @@ export class OpencodeSession extends EventEmitter implements AgentSession {
       this.emit('jsonl-error', err)
     })
 
-    // semantic → semantic-event, forwarded verbatim. The renderer
-    // narrows by ev.type; main must not couple to opencode's vocabulary.
+    // semantic → semantic-event, translated onto the shared fold's
+    // vocabulary (blockIndex + the field names the fold reads). The package
+    // keys block events by blockId only; the fold DROPS events without a
+    // numeric blockIndex, so without this mapping live tool blocks,
+    // thinking, and tool input never fold (see semanticMapping.ts for the
+    // full WHY). Main still couples to nothing — the mapper is a pure
+    // shape translation inside the opencode boundary.
+    const blockIndexes = new OpenCodeBlockIndexTracker()
     headless.semantic.on('event', (ev: SemanticEvent) => {
-      this.emit('semantic-event', ev)
+      this.emit('semantic-event', mapOpenCodeSemanticEvent(ev, blockIndexes) as SemanticEvent)
     })
 
     // Transport-level SSE failures also degrade to a soft feed error.
@@ -466,7 +473,23 @@ export class OpencodeSession extends EventEmitter implements AgentSession {
    *  write. Permanent no-op by design; input flows through sendPrompt (HTTP)
    *  and condition custom actions (#406 §B). The separate terminal runtime
    *  implements real write/resize methods. */
-  write(_data: string): void {}
+  write(data: string): void {
+    // The structured runtime has no PTY to write bytes into — EXCEPT that
+    // the app's universal interrupt is the Esc byte, and this runtime DOES
+    // have a real abort: the HTTP abort endpoint. Routing '\x1b' there (and
+    // ONLY there — every other byte would be a PTY-ism this runtime cannot
+    // honor) makes the phone's Stop button and the desktop's Esc actually
+    // stop a running turn instead of silently succeeding at nothing, which
+    // was the "interrupt is a no-op that reports true" finding.
+    //
+    // Fire-and-forget: write is synchronous by contract, and an abort that
+    // fails over HTTP still surfaces through the SSE api_error channel, so
+    // the user is not left without a signal. Any other input is dropped —
+    // prompt delivery owns the input path for this runtime.
+    if (data === '\x1b' && this.headless) {
+      void this.headless.abort().catch(() => {})
+    }
+  }
 
   /** No PTY on this structured runtime → no terminal geometry. */
   resize(_cols: number, _rows: number): void {}
