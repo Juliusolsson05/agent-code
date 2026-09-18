@@ -47,6 +47,7 @@ import type {
 } from '@shared/types/providerConditions.js'
 import { asRecord } from '@shared/lib/asRecord.js'
 import { addOpencodeBuiltInMcpLaunchConfig } from '@providers/shared/runtime/builtInMcpLaunch.js'
+import { mapOpenCodeSemanticEvent, OpenCodeBlockIndexTracker } from './semanticMapping.js'
 
 // Custom-action names OpencodeSession both BUILDS (when folding a
 // permission/question into the snapshot) and DISPATCHES (in
@@ -210,10 +211,16 @@ export class OpencodeSession extends EventEmitter implements AgentSession {
       this.emit('jsonl-error', err)
     })
 
-    // semantic → semantic-event, forwarded verbatim. The renderer
-    // narrows by ev.type; main must not couple to opencode's vocabulary.
+    // semantic → semantic-event, translated onto the shared fold's
+    // vocabulary (blockIndex + the field names the fold reads). The package
+    // keys block events by blockId only; the fold DROPS events without a
+    // numeric blockIndex, so without this mapping live tool blocks,
+    // thinking, and tool input never fold (see semanticMapping.ts for the
+    // full WHY). Main still couples to nothing — the mapper is a pure
+    // shape translation inside the opencode boundary.
+    const blockIndexes = new OpenCodeBlockIndexTracker()
     headless.semantic.on('event', (ev: SemanticEvent) => {
-      this.emit('semantic-event', ev)
+      this.emit('semantic-event', mapOpenCodeSemanticEvent(ev, blockIndexes) as SemanticEvent)
     })
 
     // Transport-level SSE failures also degrade to a soft feed error.
