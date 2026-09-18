@@ -10,6 +10,6 @@ describe('buildGoalLoopContinuationPrompt', () => {
     expect(prompt).toContain('continuation 3 of 25')
     expect(prompt).toContain('Goal: Migrate tests to Vitest.')
     expect(prompt).toContain('goal_loop_complete')
-    expect(prompt).toContain('<loop-instruction>\nKeep migrating test files.</loop-instruction>')
+    expect(prompt).toContain('<loop-instruction>\nKeep migrating test files.\n</loop-instruction>')
   })
 })
