@@ -229,14 +229,14 @@ In `Feed.tsx:1155` add `feed-column` to the column div's className (keep every e
 - Create: `src/remote-client/src/ui/v2/` — `nav.ts` (History-API back stack: `pushScreen`/`back`/`useScreen`), ` FleetRow.tsx`, `FleetHome.tsx`, `SessionScreen.tsx`, `PeekOverlay.tsx`, `ReaderScreen.tsx`, `StatusSurface.tsx`, `SheetHost.tsx`
 - Modify: `src/remote-client/src/App.tsx` (re-route Pairing → FleetHome → SessionScreen → Reader through the nav), `styles.css` (new shell sections; delete dead v1 selectors)
 
-- [ ] **Step 1: nav + Scaffold integration** with tests (back stack behavior, deep-link-safe).
-- [ ] **Step 2: FleetHome** — project-grouped sections (tabTitle, pinned first), `FleetRow` (agent name/title, provider badge glyph + shortLabel via provider identity map, working pulse animation reusing `cc-pulse`, TLDR one-line clamp from the Task 10 store, recency). Long-press handler (pointerdown + 350ms timer, movement-cancel) → PeekOverlay.
-- [ ] **Step 3: PeekOverlay** — the TldrOverlay contract on phone: opaque `bg-canvas` overlay, centered `whitespace-pre-wrap` text, `TldrFreshness`-equivalent footer (`Last active <relative>` / `Note written <relative>` | `Goal set <relative>`), TLDR↔Goal toggle chip, release-to-dismiss + latch on chip.
-- [ ] **Step 4: SessionScreen** — header (back icon, provider badge, agent name/title, status-lit strip, peek button), real Feed, `SheetHost` bottom sheet for modal condition views (scrollable, `rounded-float`, scrim, 44px action rows) with the inline band kept for inline-shaped conditions, composer action row using Task 7 icons, `StatusSurface` (historyError + statusError + delivery errors, one component).
-- [ ] **Step 5: ReaderScreen** — reuse `readerMessagesFromFeedItems` + `readerMessages`/`readerSelection` pure modules over the phone's existing ledger plan; Older/Newer buttons + swipe (pointer events), page indicator.
-- [ ] **Step 6: Pairing restyle** to contract (no behavior change).
-- [ ] **Step 7:** Full phone suite + client build; manual smoke via `npm run client:dev`.
-- [ ] **Step 8: Commit(s)** — `feat(remote): v2 shell — fleet home, peek overlay, session screen, reader` (+ follow-ups split as needed). `Refs #996`
+- [x] **Step 1: nav + Scaffold integration** with tests (back stack behavior, deep-link-safe).
+- [x] **Step 2: FleetHome** — project-grouped sections (tabTitle, pinned first), `FleetRow` (agent name/title, provider badge glyph + shortLabel via provider identity map, working pulse animation reusing `cc-pulse`, TLDR one-line clamp from the Task 10 store, recency). Long-press handler (pointerdown + 350ms timer, movement-cancel) → PeekOverlay.
+- [x] **Step 3: PeekOverlay** — the TldrOverlay contract on phone: opaque `bg-canvas` overlay, centered `whitespace-pre-wrap` text, `TldrFreshness`-equivalent footer (`Last active <relative>` / `Note written <relative>` | `Goal set <relative>`), TLDR↔Goal toggle chip, release-to-dismiss + latch on chip.
+- [x] **Step 4: SessionScreen** — header (back icon, provider badge, agent name/title, status-lit strip, peek button), real Feed, `SheetHost` bottom sheet for modal condition views (scrollable, `rounded-float`, scrim, 44px action rows) with the inline band kept for inline-shaped conditions, composer action row using Task 7 icons, `StatusSurface` (historyError + statusError + delivery errors, one component).
+- [x] **Step 5: ReaderScreen** — reuse `readerMessagesFromFeedItems` + `readerMessages`/`readerSelection` pure modules over the phone's existing ledger plan; Older/Newer buttons + swipe (pointer events), page indicator.
+- [x] **Step 6: Pairing restyle** to contract (no behavior change).
+- [x] **Step 7:** Full phone suite + client build; manual smoke via `npm run client:dev`.
+- [x] **Step 8: Commit(s)** — `feat(remote): v2 shell — fleet home, peek overlay, session screen, reader` (+ follow-ups split as needed). `Refs #996`
 
 Renderer tests per screen: FleetRow renders projection fields; PeekOverlay shows footers with both records; SheetHost clamps height and scrolls; ReaderScreen pages through a fixture projection. No emoji scan passes (Task 7 test extended to v2 chrome).
 
@@ -250,8 +250,8 @@ Renderer tests per screen: FleetRow renders projection fields; PeekOverlay shows
 - Modify: `src/providers/opencode/runtime/opencodeSession.ts` (map semantic events before emit: stable per-block index from an insertion-ordered `blockId` map, reset per turn; field renames `inputDelta`→`partialJson`, `fullInput`→`inputJsonSoFar`, `input` object→`inputJson` string)
 - Test: `src/providers/opencode/runtime/opencodeSemanticMapping.test.ts` (fixtures from recorded opencode SSE shapes)
 
-- [ ] **Step 1: Failing fold test** — a fixture turn with tool blocks folds to live tool rows via `foldSemanticEvent`.
-- [ ] **Step 2: Implement mapping.** **Step 3:** unit + renderer suites. **Step 4: Commit** — `fix(opencode): map block events onto the fold's index/input vocabulary so live blocks render. Refs #996`
+- [x] **Step 1: Failing fold test** — a fixture turn with tool blocks folds to live tool rows via `foldSemanticEvent`.
+- [x] **Step 2: Implement mapping.** **Step 3:** unit + renderer suites. **Step 4: Commit** — `fix(opencode): map block events onto the fold's index/input vocabulary so live blocks render. Refs #996`
 
 ### Task 14: Honest interrupt + runtime honesty
 
@@ -260,8 +260,8 @@ Renderer tests per screen: FleetRow renders projection fields; PeekOverlay shows
 - Modify: `src/main/sessionManager.ts` (interrupt routing per provider capability — only where needed)
 - Modify: `src/remote-client/src/ui/SessionScreen.tsx` (Stop disabled with visible reason when the runtime can't interrupt; terminal-runtime label)
 
-- [ ] **Step 1:** unit test: interrupt on structured opencode calls abort and surfaces failure honestly.
-- [ ] **Step 2:** Implement; label cosmetics (`shortLabel`/glyph). **Step 3:** suites. **Step 4: Commit** — `fix(opencode): honest abort-backed interrupt and runtime labeling. Refs #996`
+- [x] **Step 1:** unit test: interrupt on structured opencode calls abort and surfaces failure honestly.
+- [x] **Step 2:** Implement; label cosmetics (`shortLabel`/glyph). **Step 3:** suites. **Step 4: Commit** — `fix(opencode): honest abort-backed interrupt and runtime labeling. Refs #996`
 
 ### Task 15: Pre-transcript status surface + upstream watch
 
@@ -269,8 +269,8 @@ Renderer tests per screen: FleetRow renders projection fields; PeekOverlay shows
 - Modify: `SessionScreen.tsx`/`StatusSurface.tsx` (no-screen providers: input-readiness + diagnostics instead of impossible screenText; failed backfill never blank)
 - Modify: `support/upstream-versions.json` (opencode entry pinned to the package's accepted 1.18.30)
 
-- [ ] **Step 1:** renderer test: opencode session with failed backfill renders the status surface, not blank.
-- [ ] **Step 2:** Implement. **Step 3:** suites + `npm run upstream:check`. **Step 4: Commit** — `fix(remote): status surface replaces the impossible screenText fallback. Refs #996`
+- [x] **Step 1:** renderer test: opencode session with failed backfill renders the status surface, not blank.
+- [x] **Step 2:** Implement. **Step 3:** suites + `npm run upstream:check`. **Step 4: Commit** — `fix(remote): status surface replaces the impossible screenText fallback. Refs #996`
 
 ---
 
