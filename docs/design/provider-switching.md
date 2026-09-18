@@ -84,7 +84,7 @@ common case, not the exotic one: 211 of 230 single-compaction Codex rollouts
 
 Lossy suffix truncation still exists as an explicit parser operation
 (`fitConversationToCharacterBudget`) for diagnostics and emergency tooling, and
-the ladder's fourth rung reuses its boundary rules. Neither is ever implicit. A
+the ladder's fifth rung reuses its boundary rules. Neither is ever implicit. A
 switch that loses anything reports what it lost.
 
 Character estimates intentionally exclude `source.raw`, because raw provenance
@@ -118,20 +118,35 @@ over budget loses a few old tool outputs, not a third of its history.
    the report is the host's only evidence of what the switch cost. Tool-call
    inputs are never touched here; edit diffs live in them. Report:
    `clearedResults`, `clearedChars` (net).
-3. **Trim long tool-call inputs,** oldest first, above `maxInputChars`. Objects
+3. **Clear message attachments, oldest first,** replacing every `image`,
+   `document` and `opaque` content item inside a message with
+   `[<image|document|attachment> omitted during provider switch]`. Text items
+   are never touched: they are the user's or the model's own words, and the
+   line this rung draws is the same one rung 2 draws — consumed input before
+   authored content. The rung exists because of a recorded 2026-09-18 switch
+   (#998, agent-transcript-parser#28): the newest turn was a 15-character
+   prompt with a 549,526-character base64 screenshot, two turns after a prompt
+   carrying a 713,997-character `opaque` OpenCode `file` part, and no rung read
+   message content, so after dropping every earlier turn the ladder threw. An
+   `opaque` item counts as payload because every cross-provider projector drops
+   it on arrival; leaving it in place charges budget for bytes the target never
+   sees. The placeholder carries no character count, unlike rung 2's, because a
+   base64 length tells the model nothing; the numbers are in the report.
+   Report: `clearedAttachments` (per item), `clearedAttachmentChars` (net).
+4. **Trim long tool-call inputs,** oldest first, above `maxInputChars`. Objects
    are trimmed member by member rather than stringified, because a Claude
    historical `tool_use.input` must be an object: replacing
    `{ file_path, content }` with a string forces the projector's
    `input-object-repaired` path and the target then sees a `Write` whose
    `file_path` has vanished. Only the record's own top-level string members are
-   trimmed — strings nested inside a member object or array are left to rung 4,
+   trimmed — strings nested inside a member object or array are left to rung 5,
    because recursing would mean deciding which nested key is safe to gut without
    knowing any tool's schema, which is exactly the provider knowledge this
    module does not have. The cap applies to the *serialized* result including
    the truncation marker and is found by binary search, so this arithmetic and
    the budget arithmetic cannot disagree. Report: `trimmedInputs`,
    `trimmedChars` (net).
-4. **Drop the oldest complete turns,** cutting only at a safe resume boundary
+5. **Drop the oldest complete turns,** cutting only at a safe resume boundary
    and explaining the loss in a synthetic compaction marker that indexes the
    dropped user prompts. The marker is budget-aware: its prompt index is trimmed
    oldest-first to fit the room left, and a carried-over plaintext summary is
@@ -140,7 +155,25 @@ over budget loses a few old tool outputs, not a third of its history.
    `droppedEntries`, `droppedTurns`, `retainedDeveloperMessages`,
    `promptIndexLength`.
 
-Recent-turn protection on rungs 2 and 3 is narrower than "never inside the most
+The rungs run in **two passes**. The first honours the recent-turn protection
+below on rungs 2–4 and then drops. If the drop rung cannot fit *any* complete
+turn — the protected suffix alone exceeds the budget — the clearing rungs run
+again with the protection lifted, on the conversation as it stood before the
+drop attempt, and the drop rung runs again. Only if that still leaves the
+newest turn over budget does the ladder throw. Re-running on the pre-drop
+conversation rather than on the failed cut matters: once recent payload is on
+the table, clearing it may make room for older turns the first attempt would
+have discarded, so the drop rung removes only what is still necessary. The
+protection is a preference for keeping "what I was just doing" intact; it was
+never meant to be the reason a switch is refused, and the design had already
+relaxed it for single-turn conversations on exactly that argument. Report:
+`liftedRecentTurnProtection`, true only when the second pass removed something —
+a newest turn that is 300k characters of the user's own prose still throws,
+with the flag false, because there was nothing the lift could legitimately take.
+The host puts "recent turns trimmed too" in the toast when it is set, because
+the protection is a promise this feature has made to users.
+
+Recent-turn protection on rungs 2 to 4 is narrower than "never inside the most
 recent `keepRecentTurns` user turns":
 
 - more than `keepRecentTurns` user turns — the original rule;
@@ -156,7 +189,7 @@ recent `keepRecentTurns` user turns":
   tenths of it is stale tool output would be a worse answer than the evidence
   supports.
 
-`keepDeveloperMessages` decides whether rung 4 lifts developer-role messages out
+`keepDeveloperMessages` decides whether rung 5 lifts developer-role messages out
 of the dropped range and keeps them after the marker. It defaults to `true`,
 which is what the census supports about a source thread: Codex developer
 messages are 36.9 % of the repeatedly-compacted fixture's characters and are the
@@ -168,7 +201,7 @@ many developer messages existed, so a deletion is never silent.
 Thresholds are `keepRecentTurns: 3`, `maxInputChars: 8,000`,
 `maxIndexedPrompts: 40`, `promptIndexChars: 200`. The first two are
 **placeholders chosen by argument, not by measurement** — the census reports no
-per-turn size distribution and no tool-call input-size percentiles, and rung 3
+per-turn size distribution and no tool-call input-size percentiles, and rung 4
 did not fire at all in the committed ladder runs. The Stage 7 live probe is what
 replaces them with observed numbers; until it reports, treat both as
 unvalidated. The last two only bound a courtesy list (8,208 characters worst

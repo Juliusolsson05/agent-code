@@ -44,7 +44,8 @@ vi.mock('@main/providerSwitch/transcriptEngine.js', () => ({
 // answer". A stubbed planner would let this file agree with a planner that does
 // not exist, which is exactly the failure the Stage 0 fixtures were recorded to
 // prevent. Real decode, real plan, mocked disk.
-import { switchProvider } from './switchProvider.js'
+import { describeShrink, switchProvider } from './switchProvider.js'
+import type { ShrinkReport } from 'agent-transcript-parser'
 import { loadFixtureConversation } from './testing/fixtureConversations.js'
 
 const conversation = {
@@ -508,5 +509,50 @@ describe('switchProvider neutral hub integration', () => {
       expect(compactSource).toHaveBeenCalledOnce()
       expect(result).toMatchObject({ kind: 'switched', strategy: 'native' })
     })
+  })
+})
+
+describe('describeShrink', () => {
+  const report: ShrinkReport = {
+    strippedCompactions: 0,
+    clearedResults: 0,
+    clearedChars: 0,
+    clearedAttachments: 0,
+    clearedAttachmentChars: 0,
+    trimmedInputs: 0,
+    trimmedChars: 0,
+    droppedEntries: 0,
+    droppedTurns: 0,
+    retainedDeveloperMessages: 0,
+    promptIndexLength: 0,
+    liftedRecentTurnProtection: false,
+    estimatedCharactersBefore: 2_458_176,
+    estimatedCharactersAfter: 6_975,
+    budgetCharacters: 288_000,
+  }
+
+  it('names omitted attachments and a lifted protection, in ladder order', () => {
+    // The numbers are the recorded #998 switch after the fix: the toast must
+    // tell the user that the screenshot is gone AND that the newest turns were
+    // trimmed, because both are things this feature otherwise promises not to
+    // do and the target will ask about the screenshot first.
+    const summary = describeShrink({
+      ...report,
+      clearedResults: 262,
+      clearedAttachments: 2,
+      trimmedInputs: 3,
+      droppedEntries: 1055,
+      droppedTurns: 13,
+      liftedRecentTurnProtection: true,
+    })
+
+    expect(summary).toBe(
+      '262 tool outputs cleared, 2 attachments omitted, 3 tool inputs trimmed, 13 oldest turns dropped, recent turns trimmed too (2458k → 7k chars)',
+    )
+  })
+
+  it('singularises one attachment and stays silent about a protection that held', () => {
+    expect(describeShrink({ ...report, clearedAttachments: 1, estimatedCharactersAfter: 1_900_000 }))
+      .toBe('1 attachment omitted (2458k → 1900k chars)')
   })
 })
