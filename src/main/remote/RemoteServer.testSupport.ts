@@ -137,6 +137,8 @@ async function restartServer(options?: {
   workspace?: RemoteWorkspaceReadModel
   /** v2 TLDR/Goal note stores; absent disables note frames. */
   notes?: { tldr: RemoteNoteStore; goal: RemoteNoteStore }
+  /** v2 usage snapshot source; absent disables usage frames. */
+  getUsageSnapshot?: () => Promise<import('@shared/types/usage.js').UsageSnapshot | null>
 }): Promise<void> {
   await server?.stop()
   feedSource?.dispose()
@@ -149,6 +151,7 @@ async function restartServer(options?: {
     transport: new LanTransport({ port: 0 }),
     ...(options?.workspace ? { workspace: options.workspace } : {}),
     ...(options?.notes ? { notes: options.notes } : {}),
+    ...(options?.getUsageSnapshot ? { getUsageSnapshot: options.getUsageSnapshot } : {}),
   })
   const { url } = await server.start()
   // The LAN URL uses the machine's LAN IP; loopback is fine for tests.

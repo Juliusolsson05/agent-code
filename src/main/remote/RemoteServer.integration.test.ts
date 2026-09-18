@@ -531,11 +531,11 @@ describe('v2 usage snapshot frame', () => {
       notes: undefined,
       getUsageSnapshot: async () => ({
         fetchedAt: '2026-09-17T10:00:00Z',
-        cache: { hit: true, ttlMs: 30_000 },
+        cache: { hit: true as const, ttlMs: 30_000 },
         providers: [
           {
-            provider: 'claude',
-            ok: true,
+            provider: 'claude' as const,
+            ok: true as const,
             limits: [],
             spend: { cost: null, tasks: null, requests: null },
           },
