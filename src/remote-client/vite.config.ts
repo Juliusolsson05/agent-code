@@ -64,6 +64,16 @@ export default defineConfig({
         find: '@renderer/features/rendered-content/SafeInlineCode',
         replacement: resolve(__dirname, 'src', 'stubs', 'SafeInlineCode'),
       },
+      {
+        // Toast context. The desktop provider reads the zustand app store
+        // and window.api extension notifications; neither exists in a phone
+        // browser. Substituting the phone host (same showToast API, bottom-
+        // anchored presentation) means shared rows like AskUserQuestionRow
+        // surface delivery failures on the phone instead of calling the
+        // desktop module's no-op default context in silence.
+        find: '@renderer/ui/GlobalToast',
+        replacement: resolve(__dirname, 'src', 'ui', 'ToastHost'),
+      },
       // --- real desktop source (everything else) ---
       // The shared workflow row reduces clean events. This exact alias keeps
       // the phone on the pure reducer entry instead of importing Node/Electron

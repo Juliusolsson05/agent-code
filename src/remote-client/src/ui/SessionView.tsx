@@ -18,6 +18,7 @@ import { getRendererProviderCapabilities } from '@providers/registry.renderer.ca
 import type { WebSocketSessionFeed, ConnectionState } from '../WebSocketSessionFeed'
 import type { TranscriptStore } from '../transcript/store'
 import { useMobileDictation } from '../dictation/mobileDictation'
+import { ToastHostProvider } from './ToastHost'
 
 // The phone has no optimistic-echo plane: it renders committed + semantic
 // state streamed from the desktop, never a locally-minted ghost (see the
@@ -307,8 +308,9 @@ export function SessionView({
   const working = transcript.workingStatus
 
   return (
-    <SessionFeedProvider value={feed}>
-      <div className="app">
+    <ToastHostProvider>
+      <SessionFeedProvider value={feed}>
+        <div className="app">
         <div className="topbar">
           <button onClick={onBack}>‹ Back</button>
           <span className={`conn-dot ${connection}`} />
@@ -523,6 +525,7 @@ export function SessionView({
           </div>
         </div>
       </div>
-    </SessionFeedProvider>
+      </SessionFeedProvider>
+    </ToastHostProvider>
   )
 }
