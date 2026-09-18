@@ -2,6 +2,7 @@ import type { MonitorIncident } from '@shared/performance/monitorIncidents.js'
 import type { MonitorClearHistoryResult, MonitorHistoryPage, MonitorReportPreview, MonitorReportResult, MonitorTraceStatus } from '@shared/performance/monitorHistory.js'
 import { beginMonitorResponse, cancelMonitorResponse, completeMonitorResponse, settleMonitorResponse } from '../monitorOperations.js'
 import type { MonitorProcessPage } from '@shared/performance/processSnapshot.js'
+import type { MonitorAgentUsage } from '@shared/performance/agentUsage.js'
 import type { MonitorSnapshot } from '@shared/performance/monitorSnapshot.js'
 import { parseMonitorRendererBatch } from '@shared/performance/monitorContracts.js'
 import type { MonitorRendererRecord } from '@shared/performance/monitorContracts.js'
@@ -9,16 +10,15 @@ import { ipcRenderer } from 'electron'
 
 import type {
   PerformanceConfig,
-  PanePerformanceSnapshot,
   PerformanceRecord,
   PerformanceSnapshot,
-  SystemPerformanceStats,
 } from '@shared/performance/types.js'
 
 let incidentRead: Promise<MonitorIncident | null> | null = null
 let monitorBatchInFlight = false
 let monitorSnapshotRead: Promise<MonitorSnapshot | null> | null = null
 let processReadInFlight = false
+let agentUsageRead: Promise<MonitorAgentUsage | null> | null = null
 export const performanceApi = {
   beginMonitorResponse,
   settleMonitorResponse,
@@ -51,6 +51,13 @@ export const performanceApi = {
     try { return await ipcRenderer.invoke('performance:monitor-processes', offset, sort) }
     finally { processReadInFlight = false }
   },
+  getMonitorAgentUsage: (): Promise<MonitorAgentUsage | null> => {
+    // One shared in-flight read, like the snapshot: a frozen main must not let
+    // a polling overview pile up promises across remounts.
+    if (!agentUsageRead) agentUsageRead = ipcRenderer.invoke('performance:monitor-agents')
+      .finally(() => { agentUsageRead = null })
+    return agentUsageRead!
+  },
   getMonitorSnapshot: (): Promise<MonitorSnapshot | null> => {
     // Closing/reopening a dialog while main is frozen must not bypass the
     // per-mount request bound. One shared promise also handles StrictMode.
@@ -80,11 +87,7 @@ export const performanceApi = {
   getPerformanceSnapshot: (): Promise<PerformanceSnapshot> =>
     ipcRenderer.invoke('performance:snapshot'),
 
-  getPanePerformanceStats: (sessionIds: string[]): Promise<PanePerformanceSnapshot> =>
-    ipcRenderer.invoke('performance:pane-stats', sessionIds),
 
-  getSystemPerformanceStats: (): Promise<SystemPerformanceStats> =>
-    ipcRenderer.invoke('performance:system-stats'),
 
   writeHeapSnapshot: (): Promise<
     { ok: true; path: string } | { ok: false; error: string }

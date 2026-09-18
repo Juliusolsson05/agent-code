@@ -14,7 +14,6 @@ import { controlReference as reference12 } from '@renderer/features/feed/control
 import { controlReference as reference13 } from '@renderer/features/git/controlReference'
 import { controlReference as reference14 } from '@renderer/features/global-editor/controlReference'
 import { controlReference as reference15 } from '@renderer/features/path-picker/controlReference'
-import { controlReference as reference16 } from '@renderer/features/performance/controlReference'
 import { controlReference as reference17 } from '@renderer/features/prompt-templates/controlReference'
 import { controlReference as reference32 } from '@renderer/features/key-vault/controlReference'
 import { controlReference as reference18 } from '@renderer/features/reader/controlReference'
@@ -25,13 +24,15 @@ import { controlReference as reference22 } from '@renderer/features/session-prev
 import { controlReference as reference23 } from '@renderer/features/settings/controlReference'
 import { controlReference as reference24 } from '@renderer/features/setup/controlReference'
 import { controlReference as reference25 } from '@renderer/features/spotlight/controlReference'
-import { controlReference as reference26 } from '@renderer/features/system-perf/controlReference'
 import { controlReference as reference27 } from '@renderer/features/tile-tabs/controlReference'
 import { controlReference as reference28 } from '@renderer/features/usage/controlReference'
 import { controlReference as reference29 } from '@renderer/features/voice-dictation/controlReference'
 import { controlReference as reference30 } from '@renderer/features/workflows/controlReference'
 import { controlReference as reference31 } from '@renderer/features/worktrees/controlReference'
 import { controlReference as reference33 } from '@renderer/features/conversations/controlReference'
+// The monitor owns the whole performance feature now that the two debug
+// surfaces are gone; its page keeps the historical "performance" id.
+import { controlReference as performanceReference } from '@renderer/features/performance-monitor/controlReference'
 import { controlReference as tldrReference } from '@renderer/features/tldr/controlReference'
 import { controlReference as agentAnalyticsReference } from '@renderer/features/agent-analytics/controlReference'
 
@@ -52,7 +53,6 @@ export const featureReferences = [
   ...reference13,
   ...reference14,
   ...reference15,
-  ...reference16,
   ...reference17,
   ...reference18,
   ...reference19,
@@ -62,7 +62,6 @@ export const featureReferences = [
   ...reference23,
   ...reference24,
   ...reference25,
-  ...reference26,
   ...reference27,
   ...reference28,
   ...reference29,
@@ -70,6 +69,7 @@ export const featureReferences = [
   ...reference31,
   ...reference32,
   ...reference33,
+  ...performanceReference,
   ...tldrReference,
   ...agentAnalyticsReference,
 ]
@@ -100,14 +100,12 @@ export const referenceOwnership = {
   "command-palette": "command-palette",
   "feed": "conversation",
   "worktrees": "worktrees",
-  "system-perf": "system-performance",
   "cli-updates": "cli-updates",
   "copy-assistant": "copy-assistant",
   "copy-code-block": "copy-code-block",
-  "performance": "performance",
-  // The monitor is the product surface for the existing performance feature.
-  // Keeping one reference page avoids presenting the old verbose diagnostics
-  // and the always-on monitor as unrelated user capabilities.
+  // The monitor is the product surface for the performance feature; the two
+  // superseded debug panels (features/performance, features/system-perf) are
+  // gone, so this directory owns the page directly.
   "performance-monitor": "performance",
   "prompt-templates": "prompt-templates",
   "key-vault": "key-vault",

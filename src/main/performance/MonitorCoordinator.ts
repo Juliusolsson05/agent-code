@@ -7,6 +7,8 @@ import { parseMonitorSnapshot } from '@shared/performance/parseMonitorSnapshot.j
 import { ElectronProcessSource } from './ElectronProcessSource.js'
 import type { MonitorProcessTarget, MonitorProcessPage, MonitorProcessRow } from '@shared/performance/processSnapshot.js'
 import { EMPTY_PROCESS_SUMMARY } from './NativeProcessSampler.js'
+import { AgentUsageHistory } from './AgentUsageHistory.js'
+import type { MonitorAgentUsage } from '@shared/performance/agentUsage.js'
 import { utilityProcess } from 'electron'
 import type { UtilityProcess } from 'electron'
 import { fileURLToPath } from 'node:url'
@@ -57,6 +59,9 @@ export class MonitorCoordinator {
   private processTransfer: { generation: number; rows: MonitorProcessRow[] } | null = null
   private moreProcesses = false
   private processReceivedAt = 0
+  // Derived from each complete process page; see AgentUsageHistory for why it
+  // lives here rather than in the renderer or the helper.
+  private agentUsage = new AgentUsageHistory()
   private visibleWindows = new Set<number>()
   // WHY a small FIFO instead of one waiter slot: the Timeline, report preview
   // and incident drawer can legitimately ask at the same moment. A single slot
@@ -160,6 +165,11 @@ export class MonitorCoordinator {
 
   readAllProcesses(): MonitorProcessPage { return this.processPage }
 
+  readAgentUsage(systemMemoryBytes: number): MonitorAgentUsage {
+    const usage = this.agentUsage.read(systemMemoryBytes)
+    return { ...usage, quality: this.processSummary().quality }
+  }
+
   readProcesses(offset = 0, sort: 'cpu' | 'memory' = 'cpu'): MonitorProcessPage {
     const start = Number.isSafeInteger(offset) && offset >= 0 ? Math.min(offset, MONITOR_POLICY.processLimit) : 0
     const rows = sort === 'memory' ? [...this.processPage.rows].sort((a, b) => (b.memoryBytes ?? -1) - (a.memoryBytes ?? -1)) : this.processPage.rows
@@ -251,6 +261,7 @@ export class MonitorCoordinator {
     this.priorityQueue.clear()
     this.processQueue.clear()
     this.sourceDrops.clear()
+    this.agentUsage.clear()
   }
 
   async shutdown(deadlineMs = 2000): Promise<void> {
@@ -352,6 +363,7 @@ export class MonitorCoordinator {
             this.moreProcesses = !chunk.complete
             if (chunk.complete && chunk.summary.sampledAt > 0) {
               this.processPage = { summary: chunk.summary, rows: transfer.rows, total: transfer.rows.length }
+              this.agentUsage.record(this.processPage)
               this.processSource?.captureBirths(transfer.rows, chunk.summary.contextGeneration)
               this.processReceivedAt = this.monotonicNow()
               this.processTransfer = null
