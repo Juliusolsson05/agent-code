@@ -124,7 +124,10 @@ export function useDispatchActions(
   toggleDispatchRowExpandedParent: (rowIndex: number, sessionId: SessionId) => void
 } {
   const enterDispatchMode = useCallback(
-    async (scope: DispatchModeState['scope'] = state.dispatchMode?.scope ?? 'project') => {
+    // Global is the default scope (#973): entering Dispatch from a workspace
+    // that never used it should show the whole fleet, matching what a fresh
+    // install boots into. A persisted scope always wins over this fallback.
+    async (scope: DispatchModeState['scope'] = state.dispatchMode?.scope ?? 'global') => {
       closeNewAgentPlacement()
       setState(prev => ({
         ...prev,
@@ -243,7 +246,9 @@ export function useDispatchActions(
         }
       }
       setState(prev => {
-        const scope = prev.dispatchMode?.scope ?? 'project'
+        // Same default-scope rationale as enterDispatchMode above (#973):
+        // whole fleet, matching a fresh install, unless a persisted scope wins.
+        const scope = prev.dispatchMode?.scope ?? 'global'
         // Takes a length PER ROW rather than a single count, because the grid
         // is ragged by design and entering it should be able to express that
         // in one step. A count would force the user into a rectangle and then

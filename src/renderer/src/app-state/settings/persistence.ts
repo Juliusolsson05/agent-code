@@ -49,6 +49,8 @@ export function coerceSettings(value: unknown): Settings {
   // silently reset itself.
   const savedThemes = migrateLegacyCustomAppearance(parsed, coerceSavedThemes(parsed.savedThemes))
   const savedPromptTemplates = coerceSavedPromptTemplates(parsed.savedPromptTemplates)
+  // Must run before mode/accent are resolved below — see migrateLegacyDefaultAppearance.
+  const legacyAppearance = migrateLegacyDefaultAppearance(parsed)
 
   return {
     ...DEFAULT_SETTINGS,
@@ -62,16 +64,21 @@ export function coerceSettings(value: unknown): Settings {
     savedThemes,
     savedPromptTemplates,
     dispatchColorFlags: coerceDispatchColorFlags(parsed.dispatchColorFlags),
-    mode: resolvePersistedMode(parsed, savedThemes),
+    mode: legacyAppearance?.mode ?? resolvePersistedMode(parsed, savedThemes),
     contrast: parsed.contrast === true,
     agentNamesEnabled: parsed.agentNamesEnabled === true,
-    accent: ACCENTS.some(a => a.id === parsed.accent)
-      ? (parsed.accent as AccentId)
-      : DEFAULT_SETTINGS.accent,
+    // A retired accent id ('lime', 'sage') fails the membership test and lands
+    // on Frost — that is the intended landing for the green accents (#973).
+    accent: legacyAppearance?.accent
+      ?? (ACCENTS.some(a => a.id === parsed.accent)
+        ? (parsed.accent as AccentId)
+        : DEFAULT_SETTINGS.accent),
     customAppearanceJson: coerceCustomAppearanceJson(parsed.customAppearanceJson),
     showStatusMode: parsed.showStatusMode !== false,
     showWorktreeBadges: parsed.showWorktreeBadges !== false,
-    dangerousAgentsEnabled: parsed.dangerousAgentsEnabled === true,
+    // `!== false`: absent → on (the #973 default); only an explicit persisted
+    // `false` keeps dangerous mode off. Same idiom as useProxyStreaming.
+    dangerousAgentsEnabled: parsed.dangerousAgentsEnabled !== false,
     // `!== false` and not `=== true`, and this line is load-bearing: the
     // DEFAULT_SETTINGS spread above already seeds `true`, but an `=== true`
     // coercion overwrites it with `false` for every blob that has no such
@@ -109,24 +116,26 @@ export function coerceSettings(value: unknown): Settings {
     // fixed-choice values from the first integration draft and fall back for
     // non-strings so a corrupt localStorage blob cannot break settings boot.
     dictationShortcut: coerceHotkeyBinding(parsed.dictationShortcut),
-    // WHY a closed-enum coercion here where dictationShortcut gets an open
-    // one: keyboard bindings are arbitrary captured physical keys, but the
-    // bindable mouse buttons are a fixed three. A persisted value outside
-    // that set must fall back to off rather than arm a listener that
-    // preventDefaults a button we have no contract for.
-    dictationMouseButton: coerceMouseButtonBinding(parsed.dictationMouseButton),
+    // Absent → the shipped binding; present → the closed-enum coercion. The
+    // split matters because '' is a VALID persisted value meaning "off", and
+    // an install that turned the button off must not get it back on upgrade.
+    dictationMouseButton: parsed.dictationMouseButton === undefined
+      ? DEFAULT_SETTINGS.dictationMouseButton
+      : coerceMouseButtonBinding(parsed.dictationMouseButton),
     // Closed enum, same reasoning as the button binding above: an unknown
     // chord would arm a listener that suppresses buttons we have no contract
-    // for, so anything outside the set falls back to off.
-    paletteMouseChord: coerceMouseChordBinding(parsed.paletteMouseChord),
+    // for, so anything outside the set falls back to off. Absent → the
+    // shipped 'Middle+Right' (#973); '' stays a real "off" choice.
+    paletteMouseChord: parsed.paletteMouseChord === undefined
+      ? DEFAULT_SETTINGS.paletteMouseChord
+      : coerceMouseChordBinding(parsed.paletteMouseChord),
     aggressiveDebugPersistence: parsed.aggressiveDebugPersistence === true,
-    // `!== false` so the default is ON — only an explicit persisted `false`
-    // turns autosend off. Fresh installs / older workspace.json blobs (no
-    // such key) get the on-by-default behavior.
-    autoSendPromptSuggestion: parsed.autoSendPromptSuggestion !== false,
-    // `!== false` → on by default; only an explicit persisted `false`
-    // disables the header widget (same pattern as showWorktreeBadges).
-    usageHeaderEnabled: parsed.usageHeaderEnabled !== false,
+    // `=== true`: absent → off (the #973 default); an explicit `true` from an
+    // older blob keeps autosend on for the user who had it.
+    autoSendPromptSuggestion: parsed.autoSendPromptSuggestion === true,
+    // `=== true`: absent → off (the #973 default) — the header quota widget
+    // is opt-in for the public build, same explicit-choice rule as autosend.
+    usageHeaderEnabled: parsed.usageHeaderEnabled === true,
     // Membership check, same philosophy as accent/fontFamily: a typo or
     // a level removed by a future release must fall back to 'all', not
     // crash the header or persist garbage forward.
@@ -161,9 +170,17 @@ export function coerceSettings(value: unknown): Settings {
     // broader session normalizer: persisted Settings must never promote the
     // diagnostic `ping` domain into every future agent. Provider filtering is
     // intentionally later, when the concrete new session kind is known.
-    defaultBuiltInMcpDomains: normalizeConfigurableBuiltInMcpDomains(
-      parsed.defaultBuiltInMcpDomains,
-    ),
+    //
+    // Absent → the shipped domain set; present (even `[]`) → normalized as
+    // before. An explicit empty list is a real choice ("no MCP by default"),
+    // which is why the absent branch cannot go through the normalizer —
+    // normalize treats an empty array as "no preference" and would flatten
+    // the shipped default to nothing.
+    defaultBuiltInMcpDomains: parsed.defaultBuiltInMcpDomains === undefined
+      ? [...DEFAULT_SETTINGS.defaultBuiltInMcpDomains]
+      : normalizeConfigurableBuiltInMcpDomains(
+        parsed.defaultBuiltInMcpDomains,
+      ),
     // Same membership-check pattern as accent/mode: garbage / typo / a
     // removed font id from a future migration falls back to the default
     // rather than crashing applyTheme with an undefined family string.
@@ -185,7 +202,9 @@ export function coerceSettings(value: unknown): Settings {
     // must not silently expand the command search surface.
     promptTemplatesInCommandSearchEnabled:
       parsed.promptTemplatesInCommandSearchEnabled === true,
-    mouseModeEnabled: parsed.mouseModeEnabled === true,
+    // `!== false`: absent → on (the #973 default); an explicit `false` from a
+    // keyboard user who reclaimed the pane height stays honored.
+    mouseModeEnabled: parsed.mouseModeEnabled !== false,
     commandVisibilityOverrides: coerceCommandVisibilityOverrides(
       parsed.commandVisibilityOverrides,
     ),
@@ -240,6 +259,32 @@ function migrateLegacyCustomAppearance(
     createSavedTheme(LEGACY_CUSTOM_THEME_NAME, raw, V4_CUSTOM_MIGRATION_MARKER),
     ...savedThemes,
   ]
+}
+
+// The pre-Nord default appearance. A blob sitting on EXACTLY this pair never
+// had its appearance touched — Dark was the only mode that shipped selected
+// and Lime the only accent — so following the default to Nord + Frost is what
+// "the default changed" means for an existing install (#973). Any other mode
+// or accent is a choice the user made and is left alone.
+//
+// WHY this is safe to run on every hydration rather than only in `migrate`:
+// after it runs the accent is 'frost', and 'lime' no longer exists as a
+// selectable accent, so the condition can never be true twice. A user who
+// later picks Dark again keeps Dark. Same reasoning as
+// migrateLegacyCustomAppearance for living in coerceSettings: `migrate` only
+// fires for older versions, `merge` coerces every launch.
+// Deliberately typed `string`, not `AccentId`: 'lime' was REMOVED from the
+// union, but the whole point of this check is to catch blobs persisted while
+// it was still selectable. A literal-typed constant would make TS reject the
+// comparison as a no-overlap error and hide the migration.
+const LEGACY_DEFAULT_MODE = 'dark'
+const LEGACY_DEFAULT_ACCENT: string = 'lime'
+
+function migrateLegacyDefaultAppearance(
+  parsed: Partial<Settings>,
+): Pick<Settings, 'mode' | 'accent'> | null {
+  if (parsed.mode !== LEGACY_DEFAULT_MODE || parsed.accent !== LEGACY_DEFAULT_ACCENT) return null
+  return { mode: DEFAULT_SETTINGS.mode, accent: DEFAULT_SETTINGS.accent }
 }
 
 const LEGACY_CUSTOM_THEME_NAME = 'Custom'
@@ -310,7 +355,20 @@ const RETIRED_BUILT_IN_COMMAND_IDS: ReadonlySet<string> = new Set([
  * ensureDispatchTerminal action — so the preference has nothing left to
  * control.
  */
-const RETIRED_SETTINGS_KEYS: readonly string[] = ['dispatchProjectTerminal']
+const RETIRED_SETTINGS_KEYS: readonly string[] = [
+  'dispatchProjectTerminal',
+  // Found still riding in a long-lived install's blob during the #973 audit:
+  // each was a real Settings field once, and because `...parsed` copies
+  // whatever it finds, every one survived every save since its field was
+  // deleted. Nothing reads them; listing them here is what finally lets them
+  // go. Add to this list whenever a Settings field is removed.
+  'customRendering',
+  'codeLineWrap',
+  'showTerminalPreview',
+  'showSystemEvents',
+  'highContrast',
+  'eventDrivenPasteSubmit',
+]
 
 function omitRetiredSettingsKeys(parsed: Partial<Settings>): Partial<Settings> {
   const result: Record<string, unknown> = {}

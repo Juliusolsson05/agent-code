@@ -82,7 +82,7 @@ export function resolveThemePayload(settings: Settings, extensions: readonly Ext
   // 'custom'. coerceSettings converts those into a real saved theme, so this
   // branch should be unreachable in practice — it exists so a partially
   // migrated state still renders the user's colors instead of silently
-  // reverting them to Dark.
+  // reverting them to the default theme.
   if (settings.mode === 'custom') {
     try {
       return parseCustomAppearanceJson(settings.customAppearanceJson)

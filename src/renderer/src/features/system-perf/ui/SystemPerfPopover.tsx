@@ -288,13 +288,16 @@ export function SystemPerfPopover({ open, current, buffer }: Props) {
           >
             {/* heap-cap reference line — sits at 100% of the heap
                 axis (or below if RSS is the y-axis ceiling). Dashed
-                so it visually separates from the live series. */}
+                so it visually separates from the live series.
+                Strokes are theme variables applied via style — see
+                the legend swatches above, which already use the same
+                semantic tokens (#973). */}
             <line
               x1={0}
               x2={CHART_WIDTH}
               y1={chart.heapCapY}
               y2={chart.heapCapY}
-              stroke="#f87171"
+              style={{ stroke: 'var(--theme-danger)' }}
               strokeWidth={1}
               strokeDasharray="2 3"
             />
@@ -302,7 +305,7 @@ export function SystemPerfPopover({ open, current, buffer }: Props) {
               <polyline
                 points={chart.rssPoints}
                 fill="none"
-                stroke="#38bdf8"
+                style={{ stroke: 'var(--theme-info)' }}
                 strokeWidth={1.25}
                 strokeLinecap="round"
                 strokeLinejoin="round"
@@ -312,7 +315,7 @@ export function SystemPerfPopover({ open, current, buffer }: Props) {
               <polyline
                 points={chart.heapPoints}
                 fill="none"
-                stroke="#34d399"
+                style={{ stroke: 'var(--theme-success)' }}
                 strokeWidth={1.25}
                 strokeLinecap="round"
                 strokeLinejoin="round"

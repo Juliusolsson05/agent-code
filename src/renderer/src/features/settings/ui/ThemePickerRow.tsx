@@ -126,7 +126,7 @@ export function ThemePickerRow({ settings, onSelect, onCreate, onEdit, onDelete 
       ))}
       {isExtensionThemeMode(settings.mode) && !themes.some(theme => theme.mode === settings.mode) ? (
         <p className="col-span-2 bg-panel-bg px-3 py-2 text-[12px] text-muted" role="status">
-          Selected extension theme is unavailable. Using Dark until it returns.
+          Selected extension theme is unavailable. Using Nord until it returns.
         </p>
       ) : null}
 

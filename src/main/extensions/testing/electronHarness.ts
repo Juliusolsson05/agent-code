@@ -431,7 +431,12 @@ void (async () => {
       await win.webContents.executeJavaScript('window.fixtureHarness.refreshThemes()')
       const absent = await win.webContents.executeJavaScript('window.fixtureHarness.themeSnapshot()')
       assert.equal(absent.mode, 'extension-theme:managed.night')
-      assert.equal(absent.appliedMode, 'dark')
+      // The uninstalled theme degrades to the SHIPPED default built-in, which
+      // is 'dark-nord' since #973. A literal rather than an imported constant
+      // on purpose: this harness bundles under tsconfig.node.json with a
+      // single storage alias, so it must not import renderer settings modules
+      // — update this alongside DEFAULT_SETTINGS.mode when the default moves.
+      assert.equal(absent.appliedMode, 'dark-nord')
       sourceManifest.contributes.themes[0].colors.canvas = '#304050'
       await writeFile(sourceManifestPath, JSON.stringify(sourceManifest))
       const startsBeforeReinstall = runtimeStarts.length

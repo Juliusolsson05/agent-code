@@ -52,18 +52,22 @@ function textClassFor(zone: Zone): string {
   }
 }
 
-// Raw stroke color for the SVG polyline. SVG doesn't pick up
-// Tailwind text utilities through currentColor unless we set
-// `color` on the parent — easier to just emit hex values matching
-// Tailwind's color-400 stops.
+// Stroke colour for the SVG polyline, as a theme variable.
+//
+// WHY `style={{ stroke }}` rather than the `stroke` attribute: presentation
+// attributes are not guaranteed to resolve var(), the style property is. And
+// WHY variables at all: the previous hex literals were Tailwind's -400 stops,
+// which made the sparkline the only green left on screen after the Nord
+// default landed (#973) and ignored light themes entirely. These are the
+// same semantic tokens the text utilities above already use.
 function strokeFor(zone: Zone): string {
   switch (zone) {
     case 'red':
-      return '#f87171'
+      return 'var(--theme-danger)'
     case 'yellow':
-      return '#fbbf24'
+      return 'var(--theme-warning)'
     case 'green':
-      return '#34d399'
+      return 'var(--theme-success)'
   }
 }
 
@@ -131,7 +135,8 @@ export function SystemPerfBadge({ current, buffer, onClick, open }: Props) {
           <polyline
             points={points}
             fill="none"
-            stroke={stroke}
+            // See strokeFor: var() resolves through style, not the attribute.
+            style={{ stroke }}
             strokeWidth={1}
             strokeLinecap="round"
             strokeLinejoin="round"
