@@ -1,7 +1,6 @@
 import type {
   BuriedPaneRecord,
   DetachedSessionRecord,
-  DispatchModeState,
   ProjectRef,
   SessionId,
   SessionMeta,
@@ -13,6 +12,19 @@ import type {
 // ---------------------------------------------------------------------------
 // Persisted state shape (serialized to ~/.config/agent-code/workspace.json)
 // ---------------------------------------------------------------------------
+
+/**
+ * The v2 "Dispatch Mode" wrapper as old files carry it. Live state has no such
+ * thing since #992 — the lane grid is the required `stage` — so this type
+ * exists only so the migration (workspaceShape.ts) can read an old file
+ * without `any`. `scope` and the classic `focusedSessionId` are read for the
+ * entry seed and otherwise discarded; `tiled` becomes the stage.
+ */
+export type LegacyDispatchMode = {
+  scope?: 'project' | 'global'
+  focusedSessionId?: SessionId
+  tiled?: TiledDispatchState
+}
 
 /**
  * Persisted workspace shape. Live runtime state is NOT here: main reconciles
@@ -31,7 +43,8 @@ export type PersistedWorkspace = {
     root: TileNode
   }>
   activeTabId: TabId
-  dispatchMode?: DispatchModeState | null
+  /** v2 ONLY — read once by the migration, never written. See LegacyDispatchMode. */
+  dispatchMode?: LegacyDispatchMode | null
   sessions: Record<SessionId, SessionMeta>
   detachedSessions?: Record<SessionId, DetachedSessionRecord>
   buried?: BuriedPaneRecord[]

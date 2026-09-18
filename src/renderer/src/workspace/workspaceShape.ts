@@ -1,6 +1,5 @@
-import type { PersistedWorkspace } from '@renderer/workspace/persistence'
+import type { LegacyDispatchMode, PersistedWorkspace } from '@renderer/workspace/persistence'
 import type {
-  DispatchModeState,
   ProjectRef,
   SessionId,
   SessionMeta,
@@ -12,7 +11,7 @@ import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 import { collectOwnedSessionIds, type SessionOwnershipInput } from '@renderer/workspace/sessionOwnership'
 import {
   keepTiledLaneSessions,
-  normalizeDispatchModeGrid,
+  normalizeStage,
   scrubGridRowMetadata,
 } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import { normalizeGridShape } from '@renderer/workspace/dispatch/gridShape'
@@ -80,7 +79,8 @@ export function isStageWorkspace(persisted: PersistedWorkspace): boolean {
 export type WorkspaceAffinityInput = Omit<SessionOwnershipInput, 'tabs'> & {
   tabs: Tab[]
   activeTabId: TabId
-  dispatchMode?: DispatchModeState | null | undefined
+  /** v2 files only; live state has no wrapper (it has `stage`). */
+  dispatchMode?: LegacyDispatchMode | null | undefined
 }
 
 /**
@@ -88,14 +88,14 @@ export type WorkspaceAffinityInput = Omit<SessionOwnershipInput, 'tabs'> & {
  * (classic Dispatch or pure-grid state): the session the user was
  * commanding when they last looked at this workspace.
  *
- * WHY this precedence and no other: it mirrors `dispatchEntrySeedSessionId`
- * (tiledDispatchSelectors.ts) exactly — dispatch focus first, then the
- * active tab's grid focus, validated against sessions and buried. The two
- * must not drift: entering Grid Dispatch over a live state and deriving
- * the same state's default stage must pick the same agent, or what the
- * user sees changes depending on which code path ran. The live selector
- * family (workspaceStage.ts) and this migration share this function so the
- * precedence exists in exactly one place.
+ * WHY this precedence and no other: dispatch focus first, then the active
+ * tab's grid focus, validated against sessions and buried. It is #977's
+ * entry seed. Through stage 2 of #992 the same rule also lived in
+ * `dispatchEntrySeedSessionId`, applied every time the user ENTERED Grid
+ * Dispatch over a live state, and the two had to be kept from drifting.
+ * That action and that helper are deleted: a workspace is migrated once,
+ * here, and never entered — so this is now the only copy of the rule and
+ * the only moment it runs.
  *
  * WHY seeding does not violate #681: the seed is continuity with the pane
  * the user was just commanding, never a prediction from the index. All
@@ -303,35 +303,34 @@ export function migrateWorkspaceToStage(persisted: PersistedWorkspace): StageWor
   }
   const poolIds = new Set<SessionId>(Object.keys(sessions))
 
-  // --- Rules 4 + 6: the stage.
+  // --- Rules 4 + 6: the stage. A file that already carries a v3 `stage` wins
+  // over a stale v2 wrapper sitting beside it (autosave wrote both for one
+  // release of this branch); otherwise the v2 lane grid becomes the stage, and
+  // a workspace that never had one gets the seeded default.
+  const sourceStage = persisted.stage ?? persisted.dispatchMode?.tiled
   let stage: TiledDispatchState
-  const normalizedDispatch = normalizeDispatchModeGrid(persisted.dispatchMode ?? null)
-  if (normalizedDispatch?.tiled) {
+  if (sourceStage) {
     // Compose the same durability chain rehydrate uses, so a lane pointing
     // at a session the pool dropped cannot survive the migration (the
     // "selected-but-unresolvable lane" bug class), and row metadata naming
     // dead projects/sessions is scrubbed with the exact autosave rule.
-    const dispatchMode: DispatchModeState = normalizedDispatch
     const durable = keepTiledLaneSessions(
-      scrubGridRowMetadata(dispatchMode, projectIds, poolIds),
+      scrubGridRowMetadata(normalizeStage(sourceStage), projectIds, poolIds),
       poolIds,
     )
-    const tiled = durable?.tiled
-    stage = tiled
-      ? {
-          // Explicit field projection: drops legacy `userEmptied` and the
-          // reserved-but-unused `scrollAnchorKey` from v2 lanes by simply
-          // never copying them.
-          lanes: tiled.lanes.map(lane =>
-            lane.selectedSessionId !== undefined
-              ? { selectedSessionId: lane.selectedSessionId }
-              : {},
-          ),
-          rows: tiled.rows,
-          focusedLane: tiled.focusedLane,
-          ...(tiled.laneWeights ? { laneWeights: tiled.laneWeights } : {}),
-        }
-      : defaultSeededStage(resolveEntrySeed(persisted))
+    stage = {
+      // Explicit field projection: drops legacy `userEmptied` and the
+      // reserved-but-unused `scrollAnchorKey` from v2 lanes by simply
+      // never copying them.
+      lanes: durable.lanes.map(lane =>
+        lane.selectedSessionId !== undefined
+          ? { selectedSessionId: lane.selectedSessionId }
+          : {},
+      ),
+      rows: durable.rows,
+      focusedLane: durable.focusedLane,
+      ...(durable.laneWeights ? { laneWeights: durable.laneWeights } : {}),
+    }
   } else {
     stage = defaultSeededStage(resolveEntrySeed(persisted))
   }

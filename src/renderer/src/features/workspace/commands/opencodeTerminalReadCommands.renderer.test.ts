@@ -6,6 +6,7 @@ import { paneCommands } from '@renderer/features/workspace/commands/paneCommands
 import type { CommandContext, CommandDef } from '@renderer/features/command-palette/types'
 import type { SessionKind } from '@shared/types/providerKind'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 // #971: the transcript READ commands must be offered on an OpenCode Terminal
 // pane, because #882's Stage 6 loads its committed history into
@@ -24,7 +25,7 @@ function contextWithSession(kind: SessionKind, providerRuntime?: 'terminal'): Co
     workspace: {
       state: {
         activeTabId: 'tab',
-        dispatchMode: null,
+        stage: oneLaneStage('agent'), detachedSessions: {}, buried: [], pinnedSessionIds: [],
         sessions: { agent: meta },
         tabs: [{
           id: 'tab',

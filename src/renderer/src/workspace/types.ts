@@ -398,8 +398,9 @@ export type DispatchGridRow = {
   /** This row's index-list fraction of the row width. Absent => default. */
   indexFraction?: number
   /**
-   * Restrict this row to these projects. Absent (or empty) => the row follows
-   * `DispatchModeState.scope` like the whole layout used to.
+   * Restrict this row to these projects. Absent (or empty) => the row lists
+   * every project. (Until #992 an unbound row followed a layout-wide
+   * project/global scope; that scope is gone and unbound simply means all.)
    *
    * WHY a set rather than the single `projectTabId` this replaced: a row is a
    * working context, and a working context routinely spans two repos — an app
@@ -414,10 +415,7 @@ export type DispatchGridRow = {
    * representation, or every reader needs to test for both.
    *
    * A binding FILTERS, it never fills: the user named a constraint, not an
-   * occupant. Binding also promotes scope to 'global', because a project-scoped
-   * row set is built from activeTabId alone and would leave any other project's
-   * row with an empty index (the same promotion, for the same reason, that
-   * agentIndexNavigation applies to a cross-project label).
+   * occupant.
    */
   projectTabIds?: TabId[]
   /**
@@ -493,29 +491,18 @@ export type TiledDispatchState = {
   ratios?: number[]
 }
 
-export type DispatchModeState = {
-  scope: 'project' | 'global'
-  /**
-   * Dispatch Mode selection is separate from grid focus. Reusing
-   * Tab.focusedSessionId for detached rows would violate the tile-tree
-   * invariant above and make every normal grid command capable of targeting a
-   * non-leaf session. Keep this mode-local so exiting Dispatch never leaves the
-   * grid in an impossible focus state.
-   */
-  focusedSessionId?: SessionId
-  /**
-   * Present => render the multi-lane TiledDispatchLayout instead of the
-   * classic single-agent layout. Lives inside dispatchMode (which is
-   * already persisted to workspace.json) so lanes / focusedLane / ratios
-   * survive reloads for free. Absent => classic Dispatch (unchanged).
-   */
-  tiled?: TiledDispatchState
-  // HISTORICAL: a `terminalVisible: boolean` flag used to live here, then a
-  // global `settings.dispatchProjectTerminal` toggle replaced it. Both are
-  // gone — the auto-created Dispatch project terminal was retired entirely.
-  // Ordinary user-created terminals are unaffected: they are normal sessions
-  // and normal Dispatch rows.
-}
+// `DispatchModeState` lived here until the unified layout (#992). It wrapped
+// the lane grid in an optional MODE: `scope: 'project' | 'global'`, a classic
+// single-selection `focusedSessionId`, and an optional `tiled` block whose
+// presence chose between two layouts. All three are gone:
+//   - the mode: the lane grid is the workspace, so it is a required field
+//     (`WorkspaceState.stage`), never null and never "entered";
+//   - the scope: every index lists every project, and a ROW's `projectTabIds`
+//     binding is the only filter. The command that switched scope was deleted
+//     with the mode, which would have stranded anyone whose saved scope was
+//     'project' — another reason the field could not stay;
+//   - the classic focus: `stage.focusedLane` is the one focus truth.
+// Old files still carry the wrapper; workspaceShape.ts reads it once.
 
 export type WorkspaceState = {
   tabs: Tab[]
@@ -535,12 +522,17 @@ export type WorkspaceState = {
    */
   gridRelatedSelections?: Record<SessionId, SessionId>
   /**
-   * Dispatch Mode is part of the workspace layout, not a global user
-   * preference. Persisting it here means a reload preserves the user's
-   * command-center view for this project while other workspaces can keep
-   * using the grid.
+   * The stage: ragged rows of lanes. THE workspace — always present, never a
+   * mode. A lane names a pool session or is empty; nothing fills a lane except
+   * the user (#681) and the two continuity writes (entry seed on migration,
+   * spawn into an empty focused lane).
+   *
+   * The type keeps its historical name (`TiledDispatchState`) and so do the
+   * helpers in dispatch/gridShape.ts and dispatch/tiledDispatchSelectors.ts:
+   * every shape rule and lane-coherence helper carries over byte for byte,
+   * and renaming them is cleanup, not behavior.
    */
-  dispatchMode: DispatchModeState | null
+  stage: TiledDispatchState
   /**
    * Per-session metadata. Every live session MUST exist here. Grid-placed
    * sessions are referenced from tab roots; detached sessions are referenced

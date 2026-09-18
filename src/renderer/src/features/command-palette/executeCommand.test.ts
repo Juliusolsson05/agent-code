@@ -322,17 +322,14 @@ describe('create commands in Dispatch Mode', () => {
     'codex-horizontal',
   ]
 
-  it('admits every create command while Dispatch owns the layout', () => {
-    const ctx = makeContext({ flags: { dispatchModeEnabled: true } })
+  // Two cases lived here ("while Dispatch owns the layout" / "in the grid"),
+  // toggling a `dispatchModeEnabled` flag. There is one layout (#992) and the
+  // flag is gone, so there is one case. The property it pins is unchanged and
+  // still worth pinning: no create command is ever surface-gated away.
+  it('admits every create command on the stage', () => {
+    const ctx = makeContext()
     for (const id of CREATE_IDS) {
-      expect(canDispatchCommand(id, ctx), `${id} refused in Dispatch`).toBe(true)
-    }
-  })
-
-  it('still admits them in the grid', () => {
-    const ctx = makeContext({ flags: { dispatchModeEnabled: false } })
-    for (const id of CREATE_IDS) {
-      expect(canDispatchCommand(id, ctx), `${id} refused in the grid`).toBe(true)
+      expect(canDispatchCommand(id, ctx), `${id} refused`).toBe(true)
     }
   })
 })

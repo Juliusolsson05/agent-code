@@ -160,7 +160,47 @@ describe('migrateWorkspaceToStage — pure-grid workspace (no dispatchMode)', ()
   })
 })
 
+// The entry seed (#977) has exactly one home now. It used to be applied by the
+// `enterTiledDispatch` action every time the user turned Grid Dispatch on, and
+// dispatch/entryContinuity.renderer.test.tsx pinned it there — including four
+// wake-ordering cases (#690 parity), because that action placed a possibly
+// hibernated agent into a lane and had to wake it first. #992 deleted the
+// action: a workspace is never "entered", it is MIGRATED once, here. The wake
+// cases have no successor on purpose — migration runs at boot, where a lane's
+// own leaf wakes its occupant on mount, so nothing is placed by a reducer that
+// would need to order a wake before a write. unifiedStage.integration.test.ts
+// covers the boot half (a seeded hibernated session is named, never spawned).
 describe('migrateWorkspaceToStage — seed precedence', () => {
+  it('seeds ONLY lane 0 — continuity, never #681 auto-fill', () => {
+    const migrated = migrateWorkspaceToStage(gridHeavyV2Workspace())
+    expect(migrated.stage.lanes[0]).toEqual({ selectedSessionId: S('a1') })
+    // Three other live sessions exist and none of them is handed a lane.
+    expect(migrated.stage.lanes.slice(1)).toEqual([{}])
+    // The seeded lane is the focused lane, so the user keeps commanding the
+    // agent they were commanding.
+    expect(migrated.stage.focusedLane).toBe(0)
+  })
+
+  it('names a hibernated (detached) seed instead of dropping it', () => {
+    // The classic-Dispatch focus usually WAS a detached agent. It has no
+    // backend at boot; the lane must still name it, because the lane's leaf
+    // is what wakes it. Dropping it would land the user on an empty stage
+    // with their agent one index-click away for no reason.
+    const base = gridHeavyV2Workspace()
+    const migrated = migrateWorkspaceToStage({
+      ...base,
+      sessions: { ...base.sessions, [S('parked')]: { cwd: '/x/app/.worktrees/t', kind: 'codex' } },
+      detachedSessions: {
+        [S('parked')]: {
+          sessionId: S('parked'), surface: 'dispatch', projectTabId: TAB_A,
+          projectTabTitle: 'app', projectTabIndex: 0, detachedAt: 5,
+        },
+      },
+      dispatchMode: { scope: 'global', focusedSessionId: S('parked') },
+    })
+    expect(migrated.stage.lanes).toEqual([{ selectedSessionId: S('parked') }, {}])
+  })
+
   it('prefers dispatch focus over the active tab focus', () => {
     const base = gridHeavyV2Workspace()
     const migrated = migrateWorkspaceToStage({

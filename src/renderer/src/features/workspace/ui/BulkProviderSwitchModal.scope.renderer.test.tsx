@@ -6,6 +6,7 @@ import type { UsageSnapshot } from '@shared/types/usage'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 
 import { BulkProviderSwitchModal } from './BulkProviderSwitchModal'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 // The selected-scope path is where #908 lived: the checkbox list was built
 // from working directories, so a worktree agent had its own checkbox and the
@@ -42,7 +43,7 @@ function workspaceFixture(): Workspace {
   return {
     state: {
       activeTabId: 'tab-agent-code',
-      dispatchMode: null,
+      stage: oneLaneStage('audit'),
       gridRelatedSelections: {},
       tabs: [
         { id: 'tab-agent-code', title: 'agent-code', focusedSessionId: 'audit', root: { type: 'leaf', sessionId: 'audit' } },

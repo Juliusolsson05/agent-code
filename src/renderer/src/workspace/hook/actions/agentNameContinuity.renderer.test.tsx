@@ -11,6 +11,7 @@ import { withoutProvisionalProviderSession } from '@renderer/workspace/providerS
 import type { SessionId, SessionMeta, WorkspaceState } from '@renderer/workspace/types'
 
 import { useSessionActions } from './session'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 vi.mock('@renderer/workspace/hook/actions/initialHistory', () => ({
   loadInitialHistoryForSession: vi.fn(async () => undefined),
@@ -39,7 +40,7 @@ function initialState(meta: Record<string, unknown>): WorkspaceState {
     detachedSessions: {},
     buried: [],
     pinnedSessionIds: [],
-    dispatchMode: null,
+    stage: oneLaneStage(predecessorId),
   } as unknown as WorkspaceState
 }
 
@@ -190,7 +191,7 @@ describe('spoken name identity through Undo Close', () => {
     detachedSessions: {},
     buried: [],
     pinnedSessionIds: [],
-    dispatchMode: null,
+    stage: oneLaneStage('survivor'),
   } as unknown as WorkspaceState)
 
   it('restores a grid pane under its own identity and title', async () => {

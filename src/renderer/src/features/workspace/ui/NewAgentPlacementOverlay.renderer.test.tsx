@@ -24,7 +24,7 @@ describe('NewAgentPlacementOverlay OpenCode runtime choices', () => {
         focusedSessionId: 'parent',
         root: { type: 'leaf', sessionId: 'parent' },
       },
-      dispatchMode: { focusedSessionId: 'parent' },
+      stage: { lanes: [{ selectedSessionId: 'parent' }], rows: [{ length: 1 }], focusedLane: 0 },
       state: {
         activeTabId: 'tab-1',
         tabs: [{
@@ -72,7 +72,7 @@ describe('NewAgentPlacementOverlay OpenCode runtime choices', () => {
     const createDetachedDispatchAgent = vi.fn(async () => undefined)
     const workspace = {
       activeTab: { id: 'tab-1', title: 'Project', focusedSessionId: 'parent', root: { type: 'leaf', sessionId: 'parent' } },
-      dispatchMode: { focusedSessionId: 'parent' },
+      stage: { lanes: [{ selectedSessionId: 'parent' }], rows: [{ length: 1 }], focusedLane: 0 },
       state: {
         activeTabId: 'tab-1',
         tabs: [{ id: 'tab-1', title: 'Project', focusedSessionId: 'parent', root: { type: 'leaf', sessionId: 'parent' } }],

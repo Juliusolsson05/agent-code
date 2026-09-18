@@ -8,6 +8,7 @@ import {
 } from '@renderer/workspace/agentTitle'
 import { buildVisibleDispatchRows } from '@renderer/workspace/dispatch/dispatchSelectors'
 import type { WorkspaceState } from '@renderer/workspace/types'
+import { freshStage } from '@renderer/workspace/dispatch/gridShape'
 
 function stateWithSessions(
   sessions: WorkspaceState['sessions'],
@@ -19,7 +20,7 @@ function stateWithSessions(
       : [],
     activeTabId: sessionId ? 'tab' : '',
     gridRelatedSelections: {},
-    dispatchMode: null,
+    stage: freshStage(),
     sessions,
     detachedSessions: {},
     buried: [],

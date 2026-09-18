@@ -27,7 +27,6 @@ it('renders the transcript diagnostic instead of a healthy activity subtitle', (
     groups={[{ tab: { id: 'project', title: 'Project', root: { type: 'leaf', sessionId: 'pane' }, focusedSessionId: 'pane' }, tabIndex: 0, rows: [row] }]}
     pinnedRows={[]}
     activeSessionId="pane"
-    dispatchScope="project"
     focusSessionInTab={vi.fn()}
     showWorktreeBadges={false}
   />)

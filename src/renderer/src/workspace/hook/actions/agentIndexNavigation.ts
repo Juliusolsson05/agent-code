@@ -39,7 +39,7 @@ export function useAgentIndexNavigationActions(
       // pane and the Tile Tabs slot; both died with #992.)
       const destination = (state: WorkspaceState) => JSON.stringify([
         state.activeTabId,
-        state.dispatchMode?.tiled?.focusedLane,
+        state.stage.focusedLane,
       ])
       const initialDestination = destination(refs.stateRef.current)
 

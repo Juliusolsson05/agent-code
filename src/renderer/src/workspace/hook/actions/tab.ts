@@ -1,4 +1,5 @@
 import { useCallback } from 'react'
+import { withLaneSession } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 
 import type { DetachedSessionRecord, SessionId, SessionKind, SessionMeta, Tab, TabId } from '@renderer/workspace/types'
 import { titleFromCwd } from '@renderer/workspace/layout/helpers'
@@ -64,10 +65,35 @@ export function useTabActions(
           root: { type: 'leaf', sessionId },
           focusedSessionId: sessionId,
         }
+        // Context-places (#992, U2's second continuity write): the agent the
+        // user just asked for appears where they are looking — but ONLY when
+        // that lane is empty. An occupied lane is never displaced; the new
+        // agent is then in the pool, at the top of its project's index, one
+        // keystroke away. (Opening a lane beside an occupied one is stage 4's
+        // job, together with the other spawn paths.)
+        //
+        // WHY this lives in newTab rather than in bootstrap: a fresh install,
+        // the persisted-fallback recovery shell and an ordinary ⌘T are the
+        // same event — "first agent of a new project" — and bootstrap used to
+        // special-case the first two by entering Tiled Dispatch afterwards.
+        // One rule here means a fresh install's single lane shows its single
+        // agent without boot knowing anything about lanes.
+        //
+        // No wake is needed (#690): this session was spawned a few lines up.
+        const focusedLane = prev.stage.lanes[prev.stage.focusedLane]
+        const stage = focusedLane && focusedLane.selectedSessionId === undefined
+          ? {
+              ...prev.stage,
+              lanes: prev.stage.lanes.map((lane, index) =>
+                index === prev.stage.focusedLane ? withLaneSession(lane, sessionId) : lane,
+              ),
+            }
+          : prev.stage
         return {
           ...prev,
           tabs: [...prev.tabs, tab],
           activeTabId: tabId,
+          stage,
         }
       })
       return { tabId, sessionId }

@@ -857,9 +857,7 @@ export function useWorkspace(
   )
 
   const dispatchActions = useDispatchActions(
-    state,
     setState,
-    closeNewAgentPlacement,
     refs,
     sessionActions.ensureSessionLive,
     showToast,
@@ -883,8 +881,6 @@ export function useWorkspace(
     setBootstrapComplete,
     setRestoreStatus,
     defaultWorkspaceMode,
-    dispatchActions.enterDispatchMode,
-    dispatchActions.enterTiledDispatch,
   )
   // The persist effect reads current refs on its own timer, so it needs no
   // render-time snapshot — passing `runtimes` here would suggest a reactivity
@@ -921,7 +917,10 @@ export function useWorkspace(
     activeTab,
     spotlight,
     readerMode,
-    dispatchMode: state.dispatchMode,
+    // The lane grid. Exposed as `stage`, replacing the nullable `dispatchMode`
+    // envelope (#992): consumers used to branch on "is Dispatch on?" and then
+    // on "is it tiled?"; both questions are gone, so the field is the grid.
+    stage: state.stage,
     restoreStatus,
     setReaderModeTarget,
     toggleReaderMode,
@@ -1010,15 +1009,9 @@ export function useWorkspace(
     pickerConfirm,
     pickerCancel,
     setCodeBlockPicker,
-    enterDispatchMode: dispatchActions.enterDispatchMode,
-    exitDispatchMode: dispatchActions.exitDispatchMode,
-    setDispatchScope: dispatchActions.setDispatchScope,
-    focusDispatchSession: dispatchActions.focusDispatchSession,
     pinSession: dispatchActions.pinSession,
     unpinSession: dispatchActions.unpinSession,
     setPinnedSessionIds: dispatchActions.setPinnedSessionIds,
-    enterTiledDispatch: dispatchActions.enterTiledDispatch,
-    exitTiledDispatch: dispatchActions.exitTiledDispatch,
     selectTiledLaneSession: dispatchActions.selectTiledLaneSession,
     insertTiledLaneRight: dispatchActions.insertTiledLaneRight,
     removeTiledLane: dispatchActions.removeTiledLane,

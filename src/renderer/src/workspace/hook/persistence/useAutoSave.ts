@@ -121,7 +121,14 @@ export function useAutoSave(
         root: t.root,
       })),
       activeTabId: repairedTabs.activeTabId,
-      dispatchMode: pruned.dispatchMode,
+      // The lane grid, scrubbed against the same live ids as the owners
+      // above. `dispatchMode` is deliberately NOT written any more (#992): it
+      // carried a scope and a classic focus that no longer exist, and the
+      // migration prefers `stage` whenever both are present, so writing the
+      // old envelope would only be a second, lossy copy of this field. An
+      // older build opening this file sees no `dispatchMode` and boots its
+      // tree layout, which the v2 half below still describes.
+      stage: pruned.stage,
       // WHY normalize MCP domains at the persistence boundary:
       //
       // The provider process only receives short-lived MCP URLs/tokens, but

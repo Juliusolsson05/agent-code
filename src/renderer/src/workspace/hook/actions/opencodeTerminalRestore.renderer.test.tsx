@@ -15,6 +15,7 @@ import type { SessionId, SessionMeta, WorkspaceState } from '@renderer/workspace
 
 import { useSessionActions } from './session'
 import { makeRefs, stateWriter } from './testing/paneActionsHarness'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 // The two restore paths that bring an OpenCode Terminal pane back without a
 // rehydrate: adopting a closed window's workspace, and "restart every agent"
@@ -86,7 +87,7 @@ describe('an OpenCode Terminal pane restored without a rehydrate', () => {
     const survivor: WorkspaceState = {
       tabs: [{ id: 'own-tab', title: 'own', root: { type: 'leaf', sessionId: 'own-agent' }, focusedSessionId: 'own-agent' }],
       activeTabId: 'own-tab',
-      dispatchMode: null,
+      stage: oneLaneStage('own-agent'),
       sessions: { 'own-agent': { cwd: '/own', kind: 'claude' } },
       detachedSessions: {},
       buried: [],
@@ -100,7 +101,7 @@ describe('an OpenCode Terminal pane restored without a rehydrate', () => {
     const closedWindow = {
       tabs: [{ id: 'closed-tab', title: 'closed', root: { type: 'leaf', sessionId: SESSION_ID }, focusedSessionId: SESSION_ID }],
       activeTabId: 'closed-tab',
-      dispatchMode: null,
+      stage: oneLaneStage(SESSION_ID),
       sessions: { [SESSION_ID]: terminalMeta(fixture.meta.sessionID) },
       detachedSessions: {},
       buried: [],
@@ -132,7 +133,7 @@ describe('an OpenCode Terminal pane restored without a rehydrate', () => {
     scope.extendApi({ spawnSession, killOwnedSession, ghostRead })
     const state: WorkspaceState = {
       tabs: [{ id: 'project', title: 'project', root: { type: 'leaf', sessionId: SESSION_ID }, focusedSessionId: SESSION_ID }],
-      activeTabId: 'project', dispatchMode: null,
+      activeTabId: 'project', stage: oneLaneStage(SESSION_ID),
       sessions: { [SESSION_ID]: terminalMeta('ses_previous') },
       detachedSessions: {}, buried: [], pinnedSessionIds: [],
     }
@@ -162,7 +163,7 @@ describe('an OpenCode Terminal pane restored without a rehydrate', () => {
     const { fixture } = recordedSession()
     const state: WorkspaceState = {
       tabs: [{ id: 'project', title: 'project', root: { type: 'leaf', sessionId: SESSION_ID }, focusedSessionId: SESSION_ID }],
-      activeTabId: 'project', dispatchMode: null,
+      activeTabId: 'project', stage: oneLaneStage(SESSION_ID),
       sessions: { [SESSION_ID]: terminalMeta(fixture.meta.sessionID) },
       detachedSessions: {}, buried: [], pinnedSessionIds: [],
     }
@@ -190,7 +191,7 @@ describe('an OpenCode Terminal pane restored without a rehydrate', () => {
     const state: WorkspaceState = {
       tabs: [{ id: 'project', title: 'project', root: { type: 'leaf', sessionId: SESSION_ID }, focusedSessionId: SESSION_ID }],
       activeTabId: 'project',
-      dispatchMode: null,
+      stage: oneLaneStage(SESSION_ID),
       sessions: { [SESSION_ID]: meta },
       detachedSessions: {},
       buried: [],

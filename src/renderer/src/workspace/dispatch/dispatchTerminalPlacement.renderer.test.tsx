@@ -8,7 +8,8 @@ import {
   mountPaneActions,
   mountUndoCloseAction,
 } from '@renderer/workspace/hook/actions/testing/paneActionsHarness'
-import type { DispatchModeState, SessionId, WorkspaceState } from '@renderer/workspace/types'
+import type { SessionId, WorkspaceState, TiledDispatchState } from '@renderer/workspace/types'
+import { freshStage } from '@renderer/workspace/dispatch/gridShape'
 
 // End-to-end placement contract for sessions created from Dispatch (#671).
 //
@@ -23,7 +24,7 @@ import type { DispatchModeState, SessionId, WorkspaceState } from '@renderer/wor
 // coming back. The spawn action is the unit under test, so the spawn action is
 // what these mount.
 
-function makeDispatchState(dispatchMode: DispatchModeState): WorkspaceState {
+function makeDispatchState(stage: TiledDispatchState = freshStage()): WorkspaceState {
   // One grid leaf (a1) plus two detached Dispatch agents, oldest first. This is
   // the ordinary shape of a project in Dispatch: the original pane stayed in
   // the grid and everything created since is a detached row.
@@ -35,7 +36,7 @@ function makeDispatchState(dispatchMode: DispatchModeState): WorkspaceState {
       focusedSessionId: 'a1',
     }],
     activeTabId: 'tabA',
-    dispatchMode,
+    stage,
     sessions: {
       a1: { cwd: '/work/project-a', kind: 'claude' },
       a2: { cwd: '/work/project-a', kind: 'claude' },
@@ -70,7 +71,7 @@ function makeDispatchState(dispatchMode: DispatchModeState): WorkspaceState {
 describe('Dispatch terminal placement (#671)', () => {
   it('files a Dispatch-created terminal as a detached row after the agents, not into the grid', async () => {
     const harness = mountPaneActions(
-      makeDispatchState({ scope: 'project', focusedSessionId: 'a3' }),
+      makeDispatchState({ lanes: [{ selectedSessionId: 'a3' }], rows: [{ length: 1 }], focusedLane: 0 }),
       { spawnSessionId: 'aTerm' },
     )
 
@@ -112,12 +113,8 @@ describe('Dispatch terminal placement (#671)', () => {
   it('places the new terminal in the FOCUSED tiled lane, not lane 0', async () => {
     const harness = mountPaneActions(
       makeDispatchState({
-        scope: 'project',
-        focusedSessionId: 'a1',
-        tiled: {
-          focusedLane: 1,
-          lanes: [{ selectedSessionId: 'a1' }, { selectedSessionId: 'a3' }],
-        },
+        focusedLane: 1,
+        lanes: [{ selectedSessionId: 'a1' }, { selectedSessionId: 'a3' }],
       }),
       { spawnSessionId: 'aTerm' },
     )
@@ -126,7 +123,7 @@ describe('Dispatch terminal placement (#671)', () => {
       await harness.actions.splitFocused('vertical', 'terminal')
     })
 
-    const tiled = harness.getState().dispatchMode!.tiled!
+    const tiled = harness.getState().stage
     // Lane 1 is where the user was looking. Lane 0 must be untouched — the
     // "everything jumps to tile 1" failure mode this layout has hit before.
     expect(tiled.lanes[1]!.selectedSessionId).toBe('aTerm')
@@ -149,7 +146,7 @@ describe('closing a detached Dispatch session is undoable (#671)', () => {
   // unrecoverable.
 
   function detachedTerminalState(): WorkspaceState {
-    const state = makeDispatchState({ scope: 'project', focusedSessionId: 'aTerm' })
+    const state = makeDispatchState({ lanes: [{ selectedSessionId: 'aTerm' }], rows: [{ length: 1 }], focusedLane: 0 })
     state.sessions['aTerm' as SessionId] = {
       cwd: '/work/project-a',
       kind: 'terminal',

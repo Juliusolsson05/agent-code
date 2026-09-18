@@ -478,8 +478,69 @@ Decisions made in 3a that were not in the original plan:
   mini-tabs or the field is deleted; §2.1's "survives, lane-local" is a
   proposal until then.
 
-**3b — invert the stored authority.** `Tab` loses `root` and
-`focusedSessionId`; `dispatchMode` becomes a required `stage`;
+**3b — invert the stored authority.** Split once more during execution, for
+the same reason stage 3 was: the two halves touch different things and each
+leaves the branch green.
+
+**3b-i — the lane grid becomes a required `WorkspaceState.stage`.** The
+`dispatchMode` envelope is deleted from live state, and with it everything it
+carried besides the grid: the layout-wide `scope: 'project' | 'global'`, the
+classic single-selection `focusedSessionId`, and the null state that meant
+"Dispatch is off". Deleted with them: `enterDispatchMode`, `exitDispatchMode`,
+`setDispatchScope`, `focusDispatchSession`, `enterTiledDispatch`,
+`exitTiledDispatch`; the `enter` / `exit` / `scope` actions of
+`dispatch.configure`; the `dispatchModeEnabled` / `globalDispatchEnabled`
+palette flags; the New Lane entry path (#978); the close-successor picker for
+classic focus (#261). `dispatchMode` survives only as `LegacyDispatchMode` on
+`PersistedWorkspace`, read by the migration and never written.
+
+Decisions made in 3b-i that were not in the original plan:
+
+- **Scope had to die here, not in stage 4.** Stage 2c deleted the command that
+  switched scope. A user whose file said `scope: 'project'` would have been
+  left with every other project's agents alive, owned and unlisted, with no
+  command to bring them back. An integration test had this pinned as
+  TRANSITIONAL; it now asserts the fleet is visible.
+- **Boot no longer knows lanes exist.** Bootstrap used to call
+  `enterTiledDispatch([1] | [2])` after each boot path. Now the store starts on
+  `freshStage()` (one empty lane), `rehydrate` publishes
+  `migrateWorkspaceToStage(persisted).stage` in its FIRST commit, and
+  `useBootstrap` lost two parameters. No state without a stage can be rendered
+  or autosaved.
+- **`newTab` places a new project's first agent in the focused lane, only if
+  that lane is empty.** This is the first piece of context-places spawn
+  (§4.3), pulled forward because a fresh install's single lane would
+  otherwise show nothing. It never displaces. The other spawn paths still
+  overwrite an occupied focused lane (`applyDispatchSpawnFocus`); that is the
+  known gap stage 4 closes, and it is commented at the function.
+- **The entry seed (#977) now runs exactly once, in the migration.** Its
+  wake-ordering cases (#690 parity) were deleted with the action rather than
+  re-homed: at boot a lane's own leaf wakes its occupant on mount, so no
+  reducer places a hibernated agent.
+- **Autosave writes the in-memory stage verbatim.** Through stage 2 the v3
+  half was derived at save time from the v2 half. Derivation at the durability
+  boundary would now overwrite the user's lanes with a guess on every save.
+- **Takeovers do not write lanes.** Switching the agent inside Spotlight or
+  Reader used to mirror into the classic focus (and, with Dispatch off, the
+  tree focus). Both fields are gone and nothing replaces them: browsing inside
+  a takeover is not the user naming a lane occupant (U2). Only the active
+  project follows.
+- **Published control shapes were kept, not renamed.** `layout.read` still
+  returns `dispatch: { focusedSessionId, tiled }` and `app.observe` still
+  reports `mode: 'tiled-dispatch'`. Both are constants or derived now; the
+  rename belongs with the SDK schema change in stage 7.
+- **A lane that names a session it cannot resolve reads "Agent no longer
+  available"**, not "Not in this scope". With no scope, a dead id is the only
+  way to get there.
+- **Test fixtures.** "The user is commanding X" used to be expressed by a
+  tab's tree focus with `dispatchMode: null`. Its translation is a one-lane
+  stage showing X (`workspace/testing/stageFixtures.ts`). The recorded v2
+  workspace `dispatch-global-d23.json` is lifted in code by
+  `workspace/testing/recordedDispatchWorkspace.ts` and is NOT re-recorded or
+  edited: the lift is a field move, never the migration, so
+  `gridPersistence.test.ts` still sees the legacy `ratios` array.
+
+**3b-ii — delete the v2 owners.** `Tab` loses `root` and `focusedSessionId`;
 `detachedSessions` and `buried` are deleted. Two consequences to settle there:
 
 - `detachedAt` is the ONLY key ordering rows inside a project group. Deleting

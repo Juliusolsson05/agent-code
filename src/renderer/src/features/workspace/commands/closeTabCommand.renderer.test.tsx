@@ -10,6 +10,7 @@ import { mountPaneActions, mountUndoCloseAction } from '@renderer/workspace/hook
 import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 import type { WorkspaceState } from '@renderer/workspace/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 // The Close Tab COMMAND (⌘⇧W, tab bar ×, palette), driven end to end: palette
 // entry, the pane close executor, the confirmation dialog and Undo Close. Only
@@ -94,7 +95,7 @@ describe('Close Tab command runs the approved close operation (#886 review round
       detachedSessions: {
         worker: { sessionId: 'worker', surface: 'dispatch', projectTabId: 'a', projectTabTitle: 'A', projectTabIndex: 0, detachedAt: 1 },
       },
-      dispatchMode: null, gridRelatedSelections: {}, buried: [], pinnedSessionIds: [],
+      stage: oneLaneStage('parent'), gridRelatedSelections: {}, buried: [], pinnedSessionIds: [],
     }
     const { harness, context } = mountCommand(state)
     await runAndConfirm(context, 'Close 3')
@@ -158,7 +159,7 @@ describe('Close Tab command runs the approved close operation (#886 review round
       detachedSessions: {
         row: { sessionId: 'row', surface: 'dispatch', projectTabId: 'a', projectTabTitle: 'A', projectTabIndex: 0, detachedAt: 4 },
       },
-      dispatchMode: { scope: 'project' }, gridRelatedSelections: {}, buried: [], pinnedSessionIds: [],
+      stage: { lanes: [{}], rows: [{ length: 1 }], focusedLane: 0 }, gridRelatedSelections: {}, buried: [], pinnedSessionIds: [],
     }
     const { harness, context } = mountCommand(state)
     await runAndConfirm(context, 'Close 3')

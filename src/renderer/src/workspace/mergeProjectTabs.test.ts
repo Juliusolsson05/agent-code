@@ -25,16 +25,16 @@ function fixture(): WorkspaceState {
       { id: 'tab-g', title: 'agent-code', focusedSessionId: 'g-review', root: { type: 'leaf', sessionId: 'g-review' } },
     ],
     activeTabId: 'tab-g',
-    dispatchMode: {
-      tiled: {
-        lanes: [{ selectedSessionId: 'g-review' }, { selectedSessionId: 'e-tldr' }],
-        rows: [
-          { length: 1, projectTabIds: ['tab-g', 'tab-e'] },
-          { length: 1, projectTabId: 'tab-b' },
-        ],
-        focusedLane: 0,
-      },
-    } as unknown as WorkspaceState['dispatchMode'],
+    stage: {
+      lanes: [{ selectedSessionId: 'g-review' }, { selectedSessionId: 'e-tldr' }],
+      rows: [
+        { length: 1, projectTabIds: ['tab-g', 'tab-e'] },
+        // The legacy single binding, deliberately: a row written before
+        // bindings became a set must be folded into one by the merge.
+        { length: 1, projectTabId: 'tab-b' },
+      ],
+      focusedLane: 0,
+    },
     sessions: {
       'b-audit': meta('/dev/agent-code'),
       'b-verify': meta('/dev/agent-code/.worktrees/opencode-terminal-headless'),
@@ -92,9 +92,8 @@ describe('mergeProjectTabs', () => {
     expect(state.pinnedSessionIds).toEqual(['e-grok'])
     // Row filters that named a removed tab name the target once; the legacy
     // single binding is folded into the array; lanes are untouched.
-    const rows = (state.dispatchMode as { tiled: { rows: unknown[]; lanes: unknown[] } }).tiled
-    expect(rows.rows).toEqual([{ length: 1, projectTabIds: ['tab-e'] }, { length: 1, projectTabIds: ['tab-e'] }])
-    expect(rows.lanes).toEqual([{ selectedSessionId: 'g-review' }, { selectedSessionId: 'e-tldr' }])
+    expect(state.stage.rows).toEqual([{ length: 1, projectTabIds: ['tab-e'] }, { length: 1, projectTabIds: ['tab-e'] }])
+    expect(state.stage.lanes).toEqual([{ selectedSessionId: 'g-review' }, { selectedSessionId: 'e-tldr' }])
 
     expect(summary).toEqual({
       targetTabId: 'tab-e', targetTitle: 'agent-code', targetIndex: 1, removedTabIds: ['tab-b', 'tab-g'],

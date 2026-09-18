@@ -10,6 +10,7 @@ import {
   managedTranscriptUnavailableReason,
   readManagedAgentOutputs,
 } from '@renderer/workspace/agentManagementMcp'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 function stateFixture(): WorkspaceState {
   return {
@@ -40,7 +41,7 @@ function stateFixture(): WorkspaceState {
       },
     ],
     activeTabId: 'project-a',
-    dispatchMode: null,
+    stage: oneLaneStage('caller'),
     sessions: {
       caller: { cwd: '/same/cwd', kind: 'claude', providerSessionId: 'provider-caller' },
       'grid-agent': { cwd: '/worktree/a', kind: 'codex', title: 'Grid reviewer' },

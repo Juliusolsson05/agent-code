@@ -8,7 +8,6 @@ import type {
   WorkspaceSetState,
 } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
-import type { DispatchModeState } from '@renderer/workspace/types'
 
 import { rehydrateWorkspace } from '@renderer/workspace/hook/persistence/rehydrate'
 import { reconcileStuckTranscriptLoads } from '@renderer/workspace/hook/actions/initialHistory'
@@ -67,32 +66,18 @@ export function useBootstrap(
   // it drags the Settings UI into this stage) but is deliberately unread
   // now; stage-8 cleanup deletes setting and param together.
   defaultWorkspaceMode: WorkspaceModeId,
-  _enterDispatchMode: (scope?: DispatchModeState['scope']) => Promise<void>,
-  // Stage guarantee (#992): bootstrap seeds a STORED tiled grid when the
-  // workspace has none, so every lane action (select/insert/remove/weights)
-  // finds a grid to write into on its very first keystroke. The derived
-  // default (workspaceStage.ts) covers rendering pre-seed; this makes the
-  // stored state catch up so writes never race the derivation.
-  enterTiledDispatch: (rowLengths: number[]) => Promise<void>,
+  // Two more params lived here until the stage became a required field:
+  // `enterDispatchMode` (fresh installs could boot into classic Dispatch) and
+  // `enterTiledDispatch`, which an `ensureStage` helper called after every
+  // boot path to give a workspace a lane grid if it lacked one. Neither is
+  // needed: the store's initial state already holds a one-lane stage, newTab
+  // fills its empty focused lane with the first agent, and rehydrate
+  // publishes the migrated stage in its very first commit. Boot no longer
+  // knows that lanes exist.
 ): void {
   useEffect(() => {
     if (refs.bootRef.current) return
     refs.bootRef.current = true
-    const ensureStage = async (rowLengths: number[]): Promise<void> => {
-      if (refs.latestStateRef.current.dispatchMode?.tiled != null) return
-      try {
-        // enterTiledDispatch applies the #977 entry seed — lane 0 seeded
-        // with the focused session, including wake-before-place for a
-        // hibernated detached seed.
-        await enterTiledDispatch(rowLengths)
-      } catch (error) {
-        // Non-fatal: rendering already works against the derived default;
-        // the first lane write will surface any real failure where the
-        // user can see it. Same philosophy as the old fresh-install
-        // dispatch entry: no error toast before the user has seen the app.
-        console.warn('[workspace] stage seeding failed:', error)
-      }
-    }
     void (async () => {
       const bootstrapSpan = perf.span('workspace.bootstrap')
       let canAutosaveBootState = false
@@ -110,10 +95,11 @@ export function useBootstrap(
             await perf.measure('workspace.bootstrap.initialNewTab', () => newTab(cwd))
             canAutosaveBootState = refs.latestStateRef.current.tabs.length > 0
             finalStatus = 'fresh'
-            // The stage is the workspace (#992): a fresh install lands on
-            // ONE row × ONE lane (plan §4.5 — nothing to explain before the
-            // first agent exists; growth is user-paced).
-            await ensureStage([1])
+            // A fresh install lands on ONE row × ONE lane showing its one
+            // agent (plan §4.5 — nothing to explain before the first agent
+            // exists; growth is user-paced). That shape is the store's
+            // initial `freshStage()` plus newTab's empty-lane placement; no
+            // step here creates it.
             bootstrapSpan.end({ mode: 'fresh' })
           } catch (err) {
             bootstrapSpan.fail(err, { mode: 'fresh' })
@@ -174,11 +160,11 @@ export function useBootstrap(
             // restart after fixing the underlying spawn/proxy problem.
             console.warn('[workspace] rehydrate incomplete; autosave remains disabled:', restoreResult)
           }
-          // Imported v2 workspaces without a stored grid get the migration
-          // default [2] (seeded) — NOT the fresh [1]: an importing user
-          // demonstrably has agents; the second lane is what shows a lane
-          // is a slot (plan §6.4).
-          await ensureStage([2])
+          // An imported v2 workspace without a stored lane grid arrives here
+          // already on the migration default [2] (seeded) — NOT the fresh
+          // [1]: an importing user demonstrably has agents; the second lane
+          // is what shows a lane is a slot (plan §6.4). rehydrate published
+          // it through migrateWorkspaceToStage.
           bootstrapSpan.end({ mode: 'rehydrate' })
         } catch (err) {
           bootstrapSpan.fail(err, { mode: 'rehydrate' })
@@ -190,10 +176,9 @@ export function useBootstrap(
           try {
             await perf.measure('workspace.bootstrap.fallbackNewTab', () => newTab(cwd))
             finalStatus = 'persisted-fallback'
-            // Recovery shell gets the minimal [1] stage — same reasoning as
-            // the fresh path: this is not the user's real workspace, just
+            // The recovery shell gets the minimal [1] stage by the same route
+            // as the fresh path: this is not the user's real workspace, just
             // enough surface to work in while the real file stays protected.
-            await ensureStage([1])
             // WHY this intentionally does NOT unlock autosave:
             //
             // We only reach this path after a persisted workspace existed but

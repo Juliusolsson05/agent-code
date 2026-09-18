@@ -164,22 +164,24 @@ export function mergeProjectTabs(
 
   // Row project filters name tabs; a filter that named a source now names the
   // target once. Lanes are session-keyed and need nothing.
-  const tiledRows = state.dispatchMode?.tiled?.rows
-  const dispatchMode = state.dispatchMode?.tiled && tiledRows
+  //
+  // `rows` is optional on a stage that predates the grid (a flat lane list);
+  // such a stage has no row metadata to re-point, so it is passed through
+  // untouched rather than normalized here — normalizing is the reducers' job
+  // and doing it as a side effect of a merge would hide the write.
+  const stageRows = state.stage.rows
+  const stage = stageRows
     ? {
-        ...state.dispatchMode,
-        tiled: {
-          ...state.dispatchMode.tiled,
-          rows: tiledRows.map(row => {
-            const bound = row.projectTabIds ?? (row.projectTabId ? [row.projectTabId] : undefined)
-            if (!bound || !bound.some(id => sourceSet.has(id))) return row
-            const { projectTabId: _legacy, ...rest } = row
-            const projectTabIds = [...new Set(bound.map(id => (sourceSet.has(id) ? target.id : id)))]
-            return { ...rest, projectTabIds }
-          }),
-        },
+        ...state.stage,
+        rows: stageRows.map(row => {
+          const bound = row.projectTabIds ?? (row.projectTabId ? [row.projectTabId] : undefined)
+          if (!bound || !bound.some(id => sourceSet.has(id))) return row
+          const { projectTabId: _legacy, ...rest } = row
+          const projectTabIds = [...new Set(bound.map(id => (sourceSet.has(id) ? target.id : id)))]
+          return { ...rest, projectTabIds }
+        }),
       }
-    : state.dispatchMode
+    : state.stage
 
   return {
     ok: true,
@@ -189,7 +191,7 @@ export function mergeProjectTabs(
       activeTabId: sourceSet.has(state.activeTabId) ? target.id : state.activeTabId,
       detachedSessions,
       buried,
-      dispatchMode,
+      stage,
     },
     summary: {
       targetTabId: target.id,

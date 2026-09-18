@@ -11,20 +11,16 @@ function commandContext(options: {
   laneIds?: Array<string | undefined>
   focusedLane?: number
   liveIds?: string[]
-  scope?: 'project' | 'global'
   inserted?: boolean
-  noTiled?: boolean
 } = {}): {
   context: CommandContext
   insertTiledLaneRight: ReturnType<typeof vi.fn>
-  enterTiledDispatch: ReturnType<typeof vi.fn>
   showPaneToast: ReturnType<typeof vi.fn>
 } {
   const laneIds = options.laneIds ?? ['a', 'b', 'c']
   const focusedLane = options.focusedLane ?? 1
   const liveIds = options.liveIds ?? laneIds.filter((id): id is string => Boolean(id))
   const insertTiledLaneRight = vi.fn().mockReturnValue(options.inserted ?? true)
-  const enterTiledDispatch = vi.fn().mockResolvedValue(undefined)
   const showPaneToast = vi.fn()
   const tabs = liveIds.map(id => ({
     id: `tab-${id}`,
@@ -36,16 +32,9 @@ function commandContext(options: {
     state: {
       tabs,
       activeTabId: tabs[0]?.id ?? '',
-      dispatchMode: {
-        scope: options.scope ?? 'global',
-        // The New Lane entry path (#978): Grid Dispatch not on yet, so there
-        // is no `tiled` block to address a lane in.
-        ...(options.noTiled ? {} : {
-          tiled: {
-            lanes: laneIds.map(selectedSessionId => selectedSessionId ? { selectedSessionId } : {}),
-            focusedLane,
-          },
-        }),
+      stage: {
+        lanes: laneIds.map(selectedSessionId => selectedSessionId ? { selectedSessionId } : {}),
+        focusedLane,
       },
       sessions: Object.fromEntries(
         liveIds.map(id => [id, { cwd: `/work/${id}`, kind: 'claude' }]),
@@ -55,20 +44,18 @@ function commandContext(options: {
       pinnedSessionIds: [],
     },
     insertTiledLaneRight,
-    enterTiledDispatch,
     showPaneToast,
   } as unknown as Workspace
 
   return {
     context: { workspace, ui: {}, flags: {} } as unknown as CommandContext,
     insertTiledLaneRight,
-    enterTiledDispatch,
     showPaneToast,
   }
 }
 
 describe('New Lane command', () => {
-  it('is admitted for a live tiled coordinate below the lane ceiling, and always when Grid Dispatch is off', () => {
+  it('is admitted for a live lane coordinate below the lane ceiling', () => {
     expect(newLaneCommand.when?.(commandContext().context)).toBe(true)
 
     const atCeiling = commandContext({
@@ -80,33 +67,18 @@ describe('New Lane command', () => {
     const invalidFocus = commandContext({ laneIds: ['a', 'b'], focusedLane: 2 })
     expect(newLaneCommand.when?.(invalidFocus.context)).toBe(false)
 
-    // #978: without a `tiled` block the command is still admitted — its run
-    // enters Grid Dispatch directly instead of being inert. The shape [2] it
-    // applies is always legal, so there is no cap to check on this path.
-    const classic = commandContext({ noTiled: true })
-    classic.context.workspace.state.dispatchMode = { scope: 'global' }
-    expect(newLaneCommand.when?.(classic.context)).toBe(true)
-
-    const grid = commandContext({ noTiled: true })
-    grid.context.workspace.state.dispatchMode = null
-    expect(newLaneCommand.when?.(grid.context)).toBe(true)
+    // The smallest stage there is — a fresh install's single empty lane — must
+    // admit the command: growing from one lane is its most common use.
+    const fresh = commandContext({ laneIds: [undefined], focusedLane: 0 })
+    expect(newLaneCommand.when?.(fresh.context)).toBe(true)
   })
 
-  it('enters Grid Dispatch directly when it is not already on', async () => {
-    // #978: the user asks for a lane from the normal grid or classic
-    // Dispatch. The response is the smallest grid that honors the request —
-    // lane 0 seeded with the focused agent (by enterTiledDispatch, #977),
-    // lane 1 the new empty lane — not the shape-editor modal.
-    const harness = commandContext({ noTiled: true })
-
-    await newLaneCommand.run?.(harness.context)
-
-    expect(harness.enterTiledDispatch).toHaveBeenCalledWith([2])
-    // The shape already contains the new lane; inserting again would give the
-    // user three lanes for one command.
-    expect(harness.insertTiledLaneRight).not.toHaveBeenCalled()
-    expect(harness.showPaneToast).not.toHaveBeenCalled()
-  })
+  // Two #978 cases lived here until #992: "always admitted when Grid Dispatch
+  // is off" and "enters Grid Dispatch directly when it is not already on"
+  // (asserting enterTiledDispatch([2]) and no insert). New Lane had an ENTRY
+  // path because a workspace could exist without lanes. The stage is a
+  // required field now, so the command only ever inserts and the harness no
+  // longer has a lane-less mode to build.
 
   it('inserts beside the captured focus and confirms in the originating pane', () => {
     const harness = commandContext({ laneIds: ['a', 'b', 'c'], focusedLane: 1 })
@@ -126,15 +98,21 @@ describe('New Lane command', () => {
     expect(harness.showPaneToast).not.toHaveBeenCalled()
   })
 
-  it('does not send pane feedback to a live session outside project scope', () => {
-    // A lane can retain B for one render after project scope moves to A. The
-    // session still exists globally, but the layout cannot render it and its
-    // healer will replace it; a session-existence check alone would toast a
-    // hidden pane that did not originate this visible command.
+  it('does not send pane feedback for a lane whose agent is gone', () => {
+    // The focused lane still NAMES 'b', but 'b' is not a live session: the
+    // window between a kill from Agent Activity and the clear path blanking
+    // the lane. The lane renders empty, so there is no pane this visible
+    // command originated from and nothing may be toasted.
+    //
+    // This case was about PROJECT SCOPE until #992 — a live session the
+    // project-scoped index did not list. With no scope, "gone" is the one
+    // remaining way a named lane fails to resolve; the property under test
+    // (feedback follows the strict visual resolver, not mere presence of an
+    // id) is the same.
     const harness = commandContext({
       laneIds: ['a', 'b'],
       focusedLane: 1,
-      scope: 'project',
+      liveIds: ['a'],
     })
 
     newLaneCommand.run(harness.context)

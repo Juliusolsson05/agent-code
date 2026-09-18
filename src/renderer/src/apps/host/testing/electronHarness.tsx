@@ -7,6 +7,7 @@ import { useAppStore } from '@renderer/app-state/hooks'
 import { createAppHostApi } from '@renderer/apps/api/createAppHostApi'
 import { viewComponentFor } from '@renderer/apps/host/viewBridge'
 import { ThemePickerRow } from '@renderer/features/settings/ui/ThemePickerRow'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 let root: Root | undefined
 const messages: Array<Record<string, unknown>> = []
@@ -30,8 +31,8 @@ function KeyboardFixture({ render }: { render: (focus: () => void, focused: bool
   // test-only command handler that skips focus/context/override behavior.
   const workspace = { state: { activeTabId: tab.id, tabs: [tab],
     sessions: { previous: { kind: 'terminal' }, extension: { kind: 'extension-view' } },
-    detachedSessions: {}, buried: [], pinnedSessionIds: [], gridRelatedSelections: {}, dispatchMode: null },
-    activeTab: tab, dispatchMode: null, readerMode: null, spotlight: null, tileTabs: null, runtimes: {},
+    detachedSessions: {}, buried: [], pinnedSessionIds: [], gridRelatedSelections: {}, stage: oneLaneStage(selected) },
+    activeTab: tab, stage: oneLaneStage(selected), readerMode: null, spotlight: null, runtimes: {},
   } as unknown as Workspace
   useKeybinds(workspace)
   return render(() => setSelected('extension'), selected === 'extension')

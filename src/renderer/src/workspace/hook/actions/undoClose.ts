@@ -441,7 +441,7 @@ export function useUndoCloseAction(
           // Restored sessions get fresh ids (idMap); remap any tiled lane that
           // pointed at the closed tab's sessions so the lane follows the
           // restored agent instead of dangling at a dead id.
-          dispatchMode: remapTiledLanes(prev.dispatchMode, idMap),
+          stage: remapTiledLanes(prev.stage, idMap),
         }
       })
       // The closed tab is back as a NEW tab id with NEW session ids. An older
@@ -590,18 +590,14 @@ export function useUndoCloseAction(
           tabs: restoreRoot ? prev.tabs.map(current => current.id === tab.id
             ? { ...current, root: { type: 'leaf' as const, sessionId: newSessionId }, focusedSessionId: newSessionId }
             : current) : prev.tabs,
-          // Focus the restored row when Dispatch is up. NOTE this is the
-          // classic focus only: in Tiled Dispatch `dispatchFocusedSessionId`
-          // reads the focused LANE first, and the close already cleared that
-          // lane (dispatchModeAfterSessionRemoval) and the heal effect refilled
-          // it with another agent. So the visible result there is the row
-          // reappearing at its old position in the index, not a lane takeover.
+          // The stage is deliberately NOT written. The close cleared the lane
+          // that showed this session, so the visible result of an undo is the
+          // row reappearing at its old position in the index — back in the
+          // pool, one keystroke from any lane — not a lane takeover.
           // Restoring the lane would need the lane index captured on the entry
           // at close time; deliberately not done, because a lane the user has
-          // since re-aimed should not be yanked back by an undo.
-          dispatchMode: prev.dispatchMode
-            ? { ...prev.dispatchMode, focusedSessionId: newSessionId }
-            : prev.dispatchMode,
+          // since re-aimed should not be yanked back by an undo (U2).
+          // (A classic-Dispatch focus was set here until #992 removed it.)
         }
       })
 

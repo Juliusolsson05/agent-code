@@ -9,6 +9,7 @@ import {
 } from '@renderer/workspace/idleOrchestrationAgents'
 import type { SessionMeta, WorkspaceState } from '@renderer/workspace/types'
 import type { Entry } from '@shared/types/transcript'
+import { freshStage } from '@renderer/workspace/dispatch/gridShape'
 
 // Which orchestration workers Close Idle Orchestration Agents may close (#960).
 //
@@ -74,7 +75,7 @@ function workspace(workers: WorkerSpec[]): { state: WorkspaceState; runtimes: Re
   const state: WorkspaceState = {
     tabs: [{ id: 'tab', title: 'repo', root: { type: 'leaf', sessionId: LEAD }, focusedSessionId: LEAD }],
     activeTabId: 'tab',
-    dispatchMode: null,
+    stage: freshStage(),
     sessions,
     detachedSessions,
     gridRelatedSelections: {},

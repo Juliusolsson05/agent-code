@@ -5,6 +5,7 @@ import {
   promptTemplateTargetSessionIdForState,
 } from '@renderer/features/prompt-templates/targetSession'
 import type { WorkspaceState } from '@renderer/workspace/types'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 function stateWithFocusedSession(kind: 'claude' | 'terminal' | 'extension-view'): WorkspaceState {
   return {
@@ -15,7 +16,7 @@ function stateWithFocusedSession(kind: 'claude' | 'terminal' | 'extension-view')
       focusedSessionId: 'session-1',
     }],
     activeTabId: 'tab-1',
-    dispatchMode: null,
+    stage: oneLaneStage('session-1'),
     sessions: { 'session-1': { cwd: '/project', kind } },
     detachedSessions: {},
     buried: [],
@@ -46,13 +47,9 @@ describe('promptTemplateTargetSessionIdForState', () => {
       .toBeNull()
   })
 
-  it('rejects an empty Tiled Dispatch lane instead of falling back to hidden focus', () => {
+  it('rejects an empty focused lane instead of falling back to another lane s agent', () => {
     const state = stateWithFocusedSession('claude')
-    state.dispatchMode = {
-      scope: 'project',
-      focusedSessionId: 'session-1',
-      tiled: { focusedLane: 1, lanes: [{ selectedSessionId: 'session-1' }, {}] },
-    }
+    state.stage = { focusedLane: 1, lanes: [{ selectedSessionId: 'session-1' }, {}] }
 
     expect(promptTemplateTargetSessionIdForState(state)).toBeNull()
   })

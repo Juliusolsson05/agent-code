@@ -3,9 +3,10 @@ import { expect, it } from 'vitest'
 import { mountPaneActions } from './testing/paneActionsHarness'
 import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 import type { WorkspaceState } from '@renderer/workspace/types'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 function state(): WorkspaceState {
-  return { activeTabId: 'project', dispatchMode: null, pinnedSessionIds: [], detachedSessions: {}, buried: [],
+  return { activeTabId: 'project', stage: oneLaneStage('anchor'), pinnedSessionIds: [], detachedSessions: {}, buried: [],
     tabs: [{ id: 'project', title: 'Project', root: { type: 'leaf', sessionId: 'anchor' }, focusedSessionId: 'anchor' }],
     sessions: { anchor: { kind: 'claude', cwd: '/project' } } }
 }
@@ -45,9 +46,9 @@ it.each([true, false])('creation selectCreated=%s preserves or replaces the capt
   initial.sessions.hermes = { kind: 'codex', cwd: '/other' }
   initial.tabs.push({ id: 'other', title: 'Other', root: { type: 'leaf', sessionId: 'hermes' }, focusedSessionId: 'hermes' })
   initial.activeTabId = 'other'
-  initial.dispatchMode = { scope: 'global', focusedSessionId: 'anchor', tiled: {
+  initial.stage = {
     focusedLane: 1, lanes: [{ selectedSessionId: 'anchor' }, { selectedSessionId: 'hermes' }],
-  } }
+  }
   const harness = mountPaneActions(initial, { spawnSessionId: 'new-agent' })
   await act(async () => {
     await harness.actions.createDetachedSession({ kind: 'codex' },
@@ -55,7 +56,7 @@ it.each([true, false])('creation selectCreated=%s preserves or replaces the capt
   })
   const next = harness.getState()
   expect(next.activeTabId).toBe(selectCreated ? 'project' : 'other')
-  expect(next.dispatchMode?.tiled?.lanes.map(lane => lane.selectedSessionId))
+  expect(next.stage.lanes.map(lane => lane.selectedSessionId))
     .toEqual(['anchor', selectCreated ? 'new-agent' : 'hermes'])
   expect(next.sessions.hermes).toEqual(initial.sessions.hermes)
   expect(next.detachedSessions['new-agent'].projectTabId).toBe('project')

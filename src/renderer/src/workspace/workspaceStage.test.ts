@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
+import { freshStage } from '@renderer/workspace/dispatch/gridShape'
 import type { WorkspaceState } from '@renderer/workspace/types'
 import {
   activeProjectIdOfWorkspace,
@@ -8,11 +9,11 @@ import {
   stageOfWorkspace,
 } from '@renderer/workspace/workspaceStage'
 
-// The live-derivation contract (stage 2): the v3 views are derived over the
-// still-stored v2 state with the SAME precedence the persisted migration
-// asserts (workspaceShape.test.ts). These tests pin the derivation seams —
-// seeded default, reference stability, affinity — not the precedence table
-// itself.
+// The live-selector contract. Projects and session affinity are still DERIVED
+// over the v2 owners (tabs, detached records) with the same precedence the
+// persisted migration asserts (workspaceShape.test.ts), until stage 3b-ii of
+// #992 stores them. The stage is no longer derived at all: it is a required
+// field, and `stageOfWorkspace` only normalizes it.
 
 const TAB_A = 'tab-a'
 const TAB_B = 'tab-b'
@@ -34,7 +35,10 @@ function liveState(overrides: Partial<WorkspaceState> = {}): WorkspaceState {
       },
     ],
     activeTabId: TAB_A,
-    dispatchMode: null,
+    // Deliberately EMPTY although tab-a's tree focus names s-a1: the third
+    // stageOfWorkspace case below asserts that nothing derives an occupant
+    // from that focus any more.
+    stage: freshStage(),
     sessions: {
       's-a1': { cwd: '/x/app', kind: 'claude' },
       's-b1': { cwd: '/x/service', kind: 'claude' },
@@ -57,52 +61,40 @@ function liveState(overrides: Partial<WorkspaceState> = {}): WorkspaceState {
 }
 
 describe('stageOfWorkspace', () => {
-  it('returns the stored grid unchanged when one exists', () => {
+  it('returns the stored grid unchanged when it is already shape-complete', () => {
     // A shape-complete grid (rows present) is already current, so the
-    // normalizer returns the SAME tiled reference — the identity contract
-    // downstream memos rely on.
+    // normalizer returns the SAME reference — the identity contract
+    // downstream lane memos rely on.
     const stored = {
       lanes: [{ selectedSessionId: 's-a1' }],
       rows: [{ length: 1 }],
       focusedLane: 0,
     }
-    const state = liveState({ dispatchMode: { scope: 'global', tiled: stored } })
+    const state = liveState({ stage: stored })
     expect(stageOfWorkspace(state)).toBe(stored)
   })
 
-  it('derives the seeded default for a workspace with no grid', () => {
-    const state = liveState()
-    const stage = stageOfWorkspace(state)
-    expect(stage.lanes).toEqual([{ selectedSessionId: 's-a1' }, {}])
+  it('normalizes a stage written before the row grid into one row', () => {
+    // The one job left to this selector: a stage restored from an older file
+    // has no `rows`, and every reader is entitled to assume a coherent grid.
+    const legacy = { lanes: [{ selectedSessionId: 's-a1' }, {}], focusedLane: 1 }
+    const stage = stageOfWorkspace(liveState({ stage: legacy }))
     expect(stage.rows).toEqual([{ length: 2 }])
-    expect(stage.focusedLane).toBe(0)
+    expect(stage.lanes).toEqual(legacy.lanes)
+    expect(stage.focusedLane).toBe(1)
   })
 
-  it('prefers dispatch focus over the active tab focus in the seed', () => {
-    const state = liveState({ dispatchMode: { scope: 'project', focusedSessionId: 's-det' } })
-    expect(stageOfWorkspace(state).lanes[0]).toEqual({ selectedSessionId: 's-det' })
-  })
-
-  it('keeps a stable reference for the derived default across unrelated state changes', () => {
-    const first = liveState()
-    const stage1 = stageOfWorkspace(first)
-    // New state object, same dispatchMode reference and same effective seed
-    // (sessions map grew, unrelated). Reference stability is the contract
-    // that keeps downstream lane memos from churning.
-    const second = liveState({
-      sessions: { ...first.sessions, 's-new': { cwd: '/x', kind: 'terminal' } },
-    })
-    const stage2 = stageOfWorkspace(second)
-    expect(stage2).toBe(stage1)
-  })
-
-  it('mints a new default when the seed changes', () => {
-    const state = liveState()
-    const seededOnA = stageOfWorkspace(state)
-    const switched = liveState({ activeTabId: TAB_B })
-    const seededOnB = stageOfWorkspace(switched)
-    expect(seededOnB).not.toBe(seededOnA)
-    expect(seededOnB.lanes[0]).toEqual({ selectedSessionId: 's-b1' })
+  it('never invents an occupant for a fresh stage', () => {
+    // Until the stage became a required field this selector DERIVED a seeded
+    // default for a workspace with no grid — lane 0 holding the focused pane —
+    // and cached it so lane memos did not churn ("keeps a stable reference
+    // for the derived default", "mints a new default when the seed changes",
+    // "prefers dispatch focus in the seed"). That derivation is gone: the
+    // seed is applied ONCE, by the persisted migration, and a live selector
+    // that kept re-deriving one would be #681's auto-fill by another name.
+    const stage = stageOfWorkspace(liveState())
+    expect(stage.lanes).toEqual([{}])
+    expect(stage.rows).toEqual([{ length: 1 }])
   })
 })
 

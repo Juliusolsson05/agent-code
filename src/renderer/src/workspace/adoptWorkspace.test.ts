@@ -4,6 +4,8 @@ import { adoptWorkspace } from '@renderer/workspace/adoptWorkspace'
 import { collectOwnedSessionIds } from '@renderer/workspace/sessionOwnership'
 import type { PersistedWorkspace } from '@renderer/workspace/persistence'
 import type { SessionMeta, WorkspaceState } from '@renderer/workspace/types'
+import { freshStage } from '@renderer/workspace/dispatch/gridShape'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 // Closing a window must not kill its agents. They stay alive in SessionManager
 // and the surviving window takes over their workspace.
@@ -26,7 +28,7 @@ function survivorState(): WorkspaceState {
       focusedSessionId: 'own-agent',
     }],
     activeTabId: 'tab-own',
-    dispatchMode: null,
+    stage: oneLaneStage('own-agent'),
     sessions: { 'own-agent': meta('/own') },
     detachedSessions: {},
     buried: [],
@@ -49,7 +51,7 @@ function closedWindowWorkspace(): PersistedWorkspace {
       focusedSessionId: 'grid-a',
     }],
     activeTabId: 'tab-closed',
-    dispatchMode: null,
+    stage: oneLaneStage('grid-a'),
     sessions: {
       'grid-a': meta('/closed'),
       'grid-b': meta('/closed'),
@@ -170,7 +172,7 @@ describe('adopting a closed window', () => {
     const adoption = adoptWorkspace(survivorState(), {
       tabs: [],
       activeTabId: 'gone',
-      dispatchMode: null,
+      stage: freshStage(),
       sessions: {},
     })
     if (!adoption.ok) throw new Error('expected adoption')

@@ -28,6 +28,7 @@ import {
   stageOfWorkspace,
 } from '@renderer/workspace/workspaceStage'
 import { ownerV2Workspace } from '@renderer/workspace/workspaceShape.ownerV2Fixture'
+import { freshStage } from '@renderer/workspace/dispatch/gridShape'
 
 // Tier: integration. One fake, at the preload-bridge seam — every layer
 // above it (ownership projection, rehydrate's commit chain, dispatch row
@@ -84,7 +85,8 @@ function makeHarness() {
     detachedSessions: {},
     buried: [],
     pinnedSessionIds: [],
-    dispatchMode: null,
+    // What the store holds before bootstrap runs: the one-lane fresh stage.
+    stage: freshStage(),
   } as unknown as WorkspaceState
   let runtimes: Record<SessionId, SessionRuntime> = {}
   const refs = {
@@ -178,15 +180,17 @@ describe('unified layout boot — recorded owner workspace', () => {
     // The stored grid is the workspace: same lanes, same ragged rows, same
     // focused lane the file had — byte-faithful continuity for the user's
     // actual working shape.
-    expect(state.dispatchMode?.tiled?.lanes).toHaveLength(12)
-    expect(state.dispatchMode?.tiled?.rows).toEqual([
+    expect(state.stage.lanes).toHaveLength(12)
+    expect(state.stage.rows).toEqual([
       { length: 6, capChildren: false, indexFraction: 0.1, height: 0.5869481693862371 },
       { length: 6, height: 0.41305183061376294, indexFraction: 0.1 },
     ])
-    expect(state.dispatchMode?.tiled?.focusedLane).toBe(10)
-    // The selector returns the STORED grid by reference when one exists —
-    // the identity contract lane memos depend on.
-    expect(stageOfWorkspace(state)).toBe(state.dispatchMode?.tiled)
+    expect(state.stage.focusedLane).toBe(10)
+    // The selector returns the STORED stage by reference when it is already
+    // shape-complete — the identity contract lane memos depend on.
+    expect(stageOfWorkspace(state)).toBe(state.stage)
+    // The v2 envelope did not survive the boot: no scope, no classic focus.
+    expect(state).not.toHaveProperty('dispatchMode')
 
     // Projects and pool affinity through the live selectors.
     expect(projectsOfWorkspace(state)).toHaveLength(3)
@@ -219,7 +223,7 @@ describe('unified layout boot — recorded owner workspace', () => {
     )
     const state = harness.state()
     const rowIds = new Set(buildVisibleDispatchRows(state).map(row => row.sessionId))
-    const laneIds = (state.dispatchMode?.tiled?.lanes ?? [])
+    const laneIds = state.stage.lanes
       .map(lane => lane.selectedSessionId)
       .filter((id): id is SessionId => id !== undefined)
     // Every lane's occupant must be selectable from the index after a real
@@ -233,7 +237,7 @@ describe('unified layout boot — recorded owner workspace', () => {
 })
 
 describe('unified layout boot — pure-grid v2 workspace', () => {
-  it('boots onto the derived seeded default stage with tab leaves pooled', async () => {
+  it('boots onto the MIGRATED seeded default stage with tab leaves pooled', async () => {
     const harness = makeHarness()
     const calls: SessionRecoverOptions[] = []
     const result = await rehydrateWorkspace(
@@ -248,12 +252,15 @@ describe('unified layout boot — pure-grid v2 workspace', () => {
     expect(calls).toHaveLength(4) // every leaf of the multi-pane tab + tab-b
 
     const state = harness.state()
-    // No stored grid: the derived stage is the workspace — [2], lane 0
-    // seeded with the session the user was commanding (their active tab's
-    // focus), everything else pooled. This is the accepted-loss boot: the
-    // multi-pane arrangement is NOT reconstructed, and this test pins that
-    // the pooled leaves are still reachable rather than vanished.
-    expect(state.dispatchMode).toBeNull()
+    // The file had no lane grid, so rehydrate published the migration's
+    // default — [2], lane 0 seeded with the session the user was commanding
+    // (their active tab's focus), everything else pooled. It is STORED, in
+    // the first state rehydrate commits: through stage 2 of #992 this was a
+    // value a selector derived on every read and bootstrap wrote later. This
+    // is the accepted-loss boot: the multi-pane arrangement is NOT
+    // reconstructed, and this test pins that the pooled leaves are still
+    // reachable rather than vanished.
+    expect(state.stage.lanes).toEqual([{ selectedSessionId: 's-a1' }, {}])
     const stage = stageOfWorkspace(state)
     expect(stage.rows).toEqual([{ length: 2 }])
     expect(stage.lanes).toEqual([{ selectedSessionId: 's-a1' }, {}])
@@ -263,13 +270,14 @@ describe('unified layout boot — pure-grid v2 workspace', () => {
     // Same-tab leaves pool into the visible index.
     expect(rowIds.has('s-a2')).toBe(true)
     expect(rowIds.has('s-a3')).toBe(true)
-    // TRANSITIONAL (until scope dies in the stage-4 fleet work): with no
-    // dispatchMode the index defaults to PROJECT scope, so the other
-    // project's leaf is pooled-and-alive but not listed until the project
-    // chip makes it active. The assertion pins both halves — not vanished
-    // (sessions map owns it, affinity intact), not yet fleet-visible — so
-    // the stage-4 flip to global has a test to update, not a surprise.
-    expect(rowIds.has('s-b1')).toBe(false)
+    // The OTHER project's leaf is listed too. This assertion was pinned as
+    // `false` and marked TRANSITIONAL while a layout-wide scope still
+    // existed: with no dispatchMode the index defaulted to PROJECT scope, so
+    // tab-b's agent was alive but unlisted until its project became active —
+    // and the command that switched scope had already been deleted, which
+    // would have stranded it. Scope died with the envelope; the whole fleet
+    // is in every index.
+    expect(rowIds.has('s-b1')).toBe(true)
     expect(state.sessions['s-b1']).toBeDefined()
     expect(projectIdOfSession(state, 's-b1')).toBe('tab-b')
 
@@ -283,10 +291,11 @@ describe('unified layout boot — pure-grid v2 workspace', () => {
 
   it('keeps the seed honest when the active focus names a detached (parked) session', async () => {
     // The owner fixture's real quirk, isolated: tab.focus pointing at a
-    // detached session. Here the workspace HAS a grid, so the seed path is
-    // not taken — the assertion pins that a dangling-ish focus cannot leak
-    // into a derived default lane on boot when a grid exists (it must
-    // return the stored grid untouched, not "improve" it).
+    // session outside that tab. Here the file HAS a lane grid, so the seed
+    // path is not taken — the assertion pins that a dangling-ish focus cannot
+    // leak into a lane on boot when a grid exists. Two EMPTY lanes must stay
+    // two empty lanes: the migration carries the user's shape over, it does
+    // not "improve" it.
     const persisted = gridHeavyV2Workspace()
     persisted.tabs[0]!.focusedSessionId = 's-b1'
     const harness = makeHarness()
@@ -299,8 +308,12 @@ describe('unified layout boot — pure-grid v2 workspace', () => {
       makeLiveRecoveryApi(),
     )
     const state = harness.state()
-    expect(stageOfWorkspace(state)).toBe(state.dispatchMode?.tiled)
-    expect(state.dispatchMode?.tiled?.focusedLane).toBe(1)
+    expect(state.stage.lanes).toEqual([{}, {}])
+    expect(state.stage.focusedLane).toBe(1)
+    // Normalized once at boot (rows synthesized for a pre-row-grid file), so
+    // the selector has nothing left to do and hands back the same reference.
+    expect(state.stage.rows).toEqual([{ length: 2 }])
+    expect(stageOfWorkspace(state)).toBe(state.stage)
   })
 })
 

@@ -35,17 +35,14 @@ function harness(options: {
   const order: string[] = []
   const state = {
     activeTabId: 'tab-a',
-    dispatchMode: {
-      scope: 'global' as const,
-      tiled: {
-        // Default [1, 2] — a first row of one lane, then the row races target.
-        lanes: [
-          { selectedSessionId: LIVE },
-          ...Array.from({ length: (options.lanes ?? 3) - 1 }, () => ({})),
-        ],
-        rows: options.rows ?? [{ length: 1 }, { length: 2 }],
-        focusedLane: 0,
-      },
+    stage: {
+      // Default [1, 2] — a first row of one lane, then the row races target.
+      lanes: [
+        { selectedSessionId: LIVE },
+        ...Array.from({ length: (options.lanes ?? 3) - 1 }, () => ({})),
+      ],
+      rows: options.rows ?? [{ length: 1 }, { length: 2 }],
+      focusedLane: 0,
     },
     sessions: {
       [LIVE]: { cwd: '/work/a', kind: 'claude' as const },
@@ -69,9 +66,9 @@ function harness(options: {
     // Run the reducer against current state so the lane index it targets is
     // observable — the whole point of the reshape case below.
     if (typeof updater === 'function') {
-      const before = JSON.stringify(stateRef.current.dispatchMode?.tiled?.lanes)
+      const before = JSON.stringify(stateRef.current.stage.lanes)
       const next = (updater as (p: WorkspaceState) => WorkspaceState)(stateRef.current)
-      const after = next.dispatchMode?.tiled?.lanes ?? []
+      const after = next.stage.lanes ?? []
       if (JSON.stringify(after) !== before) {
         written.push(after.findIndex(lane => lane.selectedSessionId === HIBERNATED))
       }
@@ -92,9 +89,7 @@ function harness(options: {
 
   const hook = renderHook(() =>
     useDispatchActions(
-      state,
       setState as never,
-      vi.fn(),
       { stateRef } as unknown as WorkspaceRefs,
       ensureSessionLive as never,
       showToast,
@@ -161,16 +156,16 @@ describe('selecting an agent into a lane', () => {
  * reason that never happens in the product.
  */
 function reshapeWith(
-  mutate: (tiled: NonNullable<NonNullable<WorkspaceState['dispatchMode']>['tiled']>) =>
+  mutate: (tiled: WorkspaceState['stage']) =>
     ReturnType<typeof insertLaneRightIntoGrid>,
 ) {
   return (ref: { current: WorkspaceState }) => {
-    const tiled = ref.current.dispatchMode!.tiled!
+    const tiled = ref.current.stage
     const next = mutate(tiled)
     if (!next) throw new Error('reshape refused; the fixture is wrong')
     ref.current = {
       ...ref.current,
-      dispatchMode: { ...ref.current.dispatchMode!, tiled: next },
+      stage: next,
     } as WorkspaceState
   }
 }

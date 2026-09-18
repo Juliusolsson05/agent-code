@@ -10,7 +10,10 @@ function harness() {
   const workspace = {
     state: {
       activeTabId: 'other-tab',
-      dispatchMode: { focusedSessionId: 'other-agent', scope: 'global' },
+      // The user is commanding `other-agent` — deliberately NOT the captured
+      // one, which is the point of this suite.
+      stage: { lanes: [{ selectedSessionId: 'other-agent' }], rows: [{ length: 1 }], focusedLane: 0 },
+      detachedSessions: {}, buried: [], pinnedSessionIds: [],
       sessions: {
         'captured-agent': { cwd: '/projects/captured', kind: 'claude' },
         'other-agent': { cwd: '/projects/other', kind: 'codex' },

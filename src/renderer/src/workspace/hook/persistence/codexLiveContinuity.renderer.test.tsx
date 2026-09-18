@@ -34,6 +34,8 @@ import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
 import { forwardCodexRolloutEntries } from '@providers/codex/runtime/codexHeadlessForwarding'
 
 import { useAutoSave } from './useAutoSave'
+import { freshStage } from '@renderer/workspace/dispatch/gridShape'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 const { createSession, loadInitialHistoryForSession } = vi.hoisted(() => ({
   createSession: vi.fn(),
@@ -256,7 +258,7 @@ function makeReloadHarness() {
     detachedSessions: {},
     buried: [],
     pinnedSessionIds: [],
-    dispatchMode: null,
+    stage: freshStage(),
   } as unknown as WorkspaceState
   let runtimes: Record<SessionId, SessionRuntime> = {}
   const refs = makeRefs(state, runtimes)
@@ -318,7 +320,7 @@ describe('recorded Codex 0.151 live continuity across app layers', () => {
       detachedSessions: {},
       buried: [],
       pinnedSessionIds: [],
-      dispatchMode: null,
+      stage: oneLaneStage(localSessionId),
     } as WorkspaceState
     const initialRuntimes = {
       [localSessionId]: {

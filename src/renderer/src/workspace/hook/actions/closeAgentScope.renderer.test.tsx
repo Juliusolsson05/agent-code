@@ -12,6 +12,7 @@ import {
 } from '@renderer/workspace/closeConfirmationBroker'
 import { makeRefs, mountPaneActions, mountUndoCloseAction } from './testing/paneActionsHarness'
 import type { DetachedSessionRecord, WorkspaceState } from '@renderer/workspace/types'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 function project(): WorkspaceState {
   return {
@@ -24,7 +25,7 @@ function project(): WorkspaceState {
     detachedSessions: {
       worker: { sessionId: 'worker', surface: 'dispatch', projectTabId: 'project', projectTabTitle: 'Project', projectTabIndex: 0, detachedAt: 1 },
     },
-    dispatchMode: { scope: 'project', focusedSessionId: 'root' },
+    stage: { lanes: [{ selectedSessionId: 'root' }], rows: [{ length: 1 }], focusedLane: 0 },
     gridRelatedSelections: {}, buried: [], pinnedSessionIds: [],
   }
 }
@@ -314,8 +315,7 @@ describe('Close Focused Session without a Dispatch target (#886 review finding 1
         'other-root': { cwd: '/other', kind: 'claude' },
       },
       detachedSessions: {},
-      // Project scope, so the other project's session is outside the visible rows.
-      dispatchMode: { scope: 'project', tiled: { lanes: [lane], focusedLane: 0 } },
+      stage: { lanes: [lane], focusedLane: 0 },
       gridRelatedSelections: {}, buried: [], pinnedSessionIds: [],
     }
   }
@@ -323,7 +323,10 @@ describe('Close Focused Session without a Dispatch target (#886 review finding 1
   it.each([
     ['an empty lane', {}],
     ['a lane holding a dead session id', { selectedSessionId: 'closed-long-ago' }],
-    ['a lane holding a session outside the visible scope', { selectedSessionId: 'other-root' }],
+    // A third row lived here until #992: "a lane holding a session outside the
+    // visible scope" (another project's agent under project scope). There is
+    // no scope now — that lane SHOWS the agent, so closing it is correct and
+    // is covered by the case below instead of being refused here.
   ])('closes nothing for %s, never the hidden grid session', async (_label, lane) => {
     const state = tiledProject(lane)
     const harness = mountPaneActions(state)
@@ -333,6 +336,21 @@ describe('Close Focused Session without a Dispatch target (#886 review finding 1
     expect(harness.refs.undoStackRef.current.length).toBe(0)
     // Not merely equal: no write happened at all, so ownership is untouched.
     expect(harness.getState()).toBe(state)
+    harness.mounted.unmount()
+  })
+
+  it('closes another project s agent when that is what the focused lane shows', async () => {
+    // The stage has no project scope (#992): a lane may show any project's
+    // agent, and the destructive target is what is highlighted. The active
+    // project is still `project`; the lane shows `other-root`; the lane wins.
+    const harness = mountPaneActions(tiledProject({ selectedSessionId: 'other-root' }))
+    await act(async () => { await harness.actions.closeFocused() })
+    // The target is captured from the lane — never the active project's own
+    // agent, whatever happens after (a sole idle leaf may confirm or close).
+    const targeted = currentCloseConfirmation()?.request.targets.map(target => target.sessionId)
+      ?? killOwnedSession.mock.calls.map(call => (call[0] as { sessionId: string }).sessionId)
+    expect(targeted).toContain('other-root')
+    expect(targeted).not.toContain('root')
     harness.mounted.unmount()
   })
 })
@@ -354,7 +372,7 @@ describe('linked cascade revalidates each approved session at its own kill (#886
         second: { cwd: '/project', kind: 'codex', linkedParentId: 'parent' },
       },
       detachedSessions: { first: dispatchRow('first', 'project', 1), second: dispatchRow('second', 'project', 2) },
-      dispatchMode: null, gridRelatedSelections: {}, buried: [], pinnedSessionIds: [],
+      stage: oneLaneStage('parent'), gridRelatedSelections: {}, buried: [], pinnedSessionIds: [],
     }
   }
 
@@ -457,7 +475,7 @@ describe('a cascade never promotes a session it is about to close (#886 review f
         parent: dispatchRow('parent', 'project', 1),
         ...(withUnrelatedRow ? { other: dispatchRow('other', 'project', 2) } : {}),
       },
-      dispatchMode: { scope: 'project', focusedSessionId: 'parent' },
+      stage: { lanes: [{ selectedSessionId: 'parent' }], rows: [{ length: 1 }], focusedLane: 0 },
       gridRelatedSelections: {}, buried: [], pinnedSessionIds: [],
     }
   }
@@ -530,7 +548,7 @@ describe('a member kept after an earlier commit stays placed (#886 review round 
         child: { cwd: '/project', kind: 'codex', linkedParentId: 'parent' },
       },
       detachedSessions: { parent: dispatchRow('parent', 'project', 1) },
-      dispatchMode: { scope: 'project', focusedSessionId: 'parent' },
+      stage: { lanes: [{ selectedSessionId: 'parent' }], rows: [{ length: 1 }], focusedLane: 0 },
       gridRelatedSelections: {}, buried: [], pinnedSessionIds: [],
     }
     const { harness, result } = await closeParentWithRootKillHeld(state, ['parent', 'child'], 'parent')
@@ -564,7 +582,7 @@ describe('a member kept after an earlier commit stays placed (#886 review round 
         second: { cwd: '/project', kind: 'codex', linkedParentId: 'parent' },
       },
       detachedSessions: { parent: dispatchRow('parent', 'project', 1), second: dispatchRow('second', 'project', 2) },
-      dispatchMode: { scope: 'project', focusedSessionId: 'parent' },
+      stage: { lanes: [{ selectedSessionId: 'parent' }], rows: [{ length: 1 }], focusedLane: 0 },
       gridRelatedSelections: {}, buried: [], pinnedSessionIds: [],
     }
     const { harness, result } = await closeParentWithRootKillHeld(state, ['parent', 'child', 'second'], 'second')
@@ -672,7 +690,7 @@ describe('Close Tab executes the plan the dialog listed (#886 review finding 5)'
         anchor: { cwd: '/b', kind: 'claude' },
       },
       detachedSessions: { worker: dispatchRow('worker', 'a', 1) },
-      dispatchMode: null, gridRelatedSelections: {}, buried: [], pinnedSessionIds: [],
+      stage: oneLaneStage('parent'), gridRelatedSelections: {}, buried: [], pinnedSessionIds: [],
     }
     const harness = mountPaneActions(state)
     let closing!: Promise<boolean>

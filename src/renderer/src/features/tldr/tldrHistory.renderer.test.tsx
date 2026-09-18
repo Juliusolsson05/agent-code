@@ -8,6 +8,7 @@ import { tldrCommands } from './commands'
 import { mergeHistory, TldrHistoryModal } from './TldrHistoryModal'
 import { TldrPane } from './TldrOverlay'
 import { dismissTldr, toggleTldr } from './viewState'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 const originalApi = window.api
 afterEach(() => { cleanup(); dismissTldr(); window.api = originalApi })
@@ -124,7 +125,7 @@ describe('TLDR history', () => {
     const command = tldrCommands.find(candidate => candidate.id === 'view-tldr-history')!
     const ui = { closePalette: vi.fn(), openTldrHistory: vi.fn() }
     const workspace = (kind: string) => ({
-      state: { activeTabId: 'tab', tabs: [{ id: 'tab', focusedSessionId: 'pane', root: { type: 'leaf', sessionId: 'pane' } }], sessions: { pane: { cwd: '/project', kind } }, dispatchMode: null, detachedSessions: {} },
+      state: { activeTabId: 'tab', tabs: [{ id: 'tab', focusedSessionId: 'pane', root: { type: 'leaf', sessionId: 'pane' } }], sessions: { pane: { cwd: '/project', kind } }, stage: oneLaneStage('pane'), buried: [], pinnedSessionIds: [], detachedSessions: {} },
     }) as unknown as Workspace
     expect(command.when?.({ workspace: workspace('terminal'), ui } as unknown as CommandContext)).toBe(false)
     const context = { workspace: workspace('codex'), ui } as unknown as CommandContext

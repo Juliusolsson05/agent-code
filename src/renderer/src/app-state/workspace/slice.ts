@@ -2,6 +2,7 @@ import type { StateCreator } from 'zustand'
 
 import type { AppStore, WorkspaceSlice } from '@renderer/app-state/types'
 import type { WorkspaceState } from '@renderer/workspace/types'
+import { freshStage } from '@renderer/workspace/dispatch/gridShape'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type {
   ReaderModeState,
@@ -18,7 +19,7 @@ const initialWorkspaceState: WorkspaceState = {
   tabs: [],
   activeTabId: '',
   gridRelatedSelections: {},
-  dispatchMode: null,
+  stage: freshStage(),
   sessions: {},
   detachedSessions: {},
   buried: [],

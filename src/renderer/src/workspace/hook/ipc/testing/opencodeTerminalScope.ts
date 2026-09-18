@@ -9,6 +9,7 @@ import { ensureAbortSignalTimeout } from 'opencode-terminal-headless/testing'
 
 import { createOpencodeDatabase } from '@providers/opencode/runtime/opencodeDatabase'
 import { createOpencodeHistorySource } from '@providers/opencode/runtime/opencodeHistory'
+import { freshStage } from '@renderer/workspace/dispatch/gridShape'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type { WorkspaceSetRuntimes } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
@@ -79,7 +80,7 @@ export function paneWorkspace(meta: SessionMeta): WorkspaceState {
       },
     }],
     activeTabId: 'project',
-    dispatchMode: null,
+    stage: freshStage(),
     sessions: { [PARENT_ID]: { cwd: PANE_CWD, kind: 'claude' }, [SESSION_ID]: meta },
     detachedSessions: {},
     buried: [],

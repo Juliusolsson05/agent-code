@@ -38,12 +38,16 @@ function KeyboardHarness({ workspace }: { workspace: Workspace }): ReactElement 
   return <div data-testid="visible-focus-surface" tabIndex={-1} />
 }
 
+// The harness took a `layout` argument ('grid' | 'dispatch' | 'tiled-dispatch')
+// until #992, and every ownership claim was asserted once per layout: a
+// takeover must not move the hidden grid's focus, the hidden classic Dispatch
+// selection, or a hidden tiled lane. There is one layout — the stage — so
+// there is one hidden surface a takeover could leak keys into, and one set of
+// cases.
 function makeWorkspace(
   focusMode: 'reader' | 'spotlight',
-  layout: 'grid' | 'dispatch' | 'tiled-dispatch',
 ): {
   workspace: Workspace
-  focusDispatchSession: ReturnType<typeof vi.fn>
   selectTiledLaneSession: ReturnType<typeof vi.fn>
 } {
   const runtime = emptyRuntime()
@@ -59,24 +63,14 @@ function makeWorkspace(
       b: { type: 'leaf' as const, sessionId: 'session-2' },
     },
   }
-  const dispatchMode = layout === 'grid'
-    ? null
-    : {
-        scope: 'global' as const,
-        focusedSessionId: 'session-1',
-        ...(layout === 'tiled-dispatch'
-          ? {
-              tiled: {
-                lanes: [
-                  { selectedSessionId: 'session-1' },
-                  { selectedSessionId: 'session-2' },
-                ],
-                focusedLane: 0,
-              },
-            }
-          : {}),
-      }
-  const focusDispatchSession = vi.fn()
+  const stage = {
+    lanes: [
+      { selectedSessionId: 'session-1' },
+      { selectedSessionId: 'session-2' },
+    ],
+    rows: [{ length: 2 }],
+    focusedLane: 0,
+  }
   const selectTiledLaneSession = vi.fn()
   const state = {
     activeTabId: activeTab.id,
@@ -89,14 +83,13 @@ function makeWorkspace(
     buried: [],
     pinnedSessionIds: [],
     gridRelatedSelections: {},
-    dispatchMode,
+    stage,
   }
 
   const workspace = {
     state,
     activeTab,
-    dispatchMode,
-    tileTabs: null,
+    stage,
     readerMode: focusMode === 'reader'
       ? { tabId: activeTab.id, focusedSessionId: 'session-1' }
       : null,
@@ -108,14 +101,13 @@ function makeWorkspace(
       'session-2': runtime,
     },
     getRuntime: () => runtime,
-    focusDispatchSession,
     selectTiledLaneSession,
     navigate: vi.fn(),
     toggleReaderMode: vi.fn(),
     toggleSpotlight: vi.fn(),
   } as unknown as Workspace
 
-  return { workspace, focusDispatchSession, selectTiledLaneSession }
+  return { workspace, selectTiledLaneSession }
 }
 
 function pressOptionArrow(key: 'ArrowUp' | 'ArrowDown'): void {
@@ -149,26 +141,8 @@ describe('focus-mode keyboard ownership', () => {
     }
   })
 
-  it('does not move the hidden classic Dispatch selection while Reader navigates history', () => {
-    const { workspace, focusDispatchSession } = makeWorkspace('reader', 'dispatch')
-    render(<KeyboardHarness workspace={workspace} />)
-
-    pressOptionArrow('ArrowDown')
-
-    expect(focusDispatchSession).not.toHaveBeenCalled()
-  })
-
-  it('does not route Reader navigation into the hidden Grid command context', () => {
-    const { workspace } = makeWorkspace('reader', 'grid')
-    render(<KeyboardHarness workspace={workspace} />)
-
-    pressOptionArrow('ArrowUp')
-
-    expect(harness.appState.requestCommandInvocation).not.toHaveBeenCalled()
-  })
-
-  it('does not change a hidden Tiled Dispatch lane while Reader navigates history', () => {
-    const { workspace, selectTiledLaneSession } = makeWorkspace('reader', 'tiled-dispatch')
+  it('does not change a hidden lane while Reader navigates history', () => {
+    const { workspace, selectTiledLaneSession } = makeWorkspace('reader')
     render(<KeyboardHarness workspace={workspace} />)
 
     pressOptionArrow('ArrowDown')
@@ -176,21 +150,30 @@ describe('focus-mode keyboard ownership', () => {
     expect(selectTiledLaneSession).not.toHaveBeenCalled()
   })
 
-  it('does not move hidden Grid or Dispatch focus while Spotlight owns the screen', () => {
-    const dispatch = makeWorkspace('spotlight', 'dispatch')
-    const view = render(<KeyboardHarness workspace={dispatch.workspace} />)
+  it('does not route Reader navigation into a hidden workspace command', () => {
+    // ⌥↑ is Focus Row Above on the stage. Reader owns the screen, so the chord
+    // must not reach the command router at all.
+    const { workspace } = makeWorkspace('reader')
+    render(<KeyboardHarness workspace={workspace} />)
+
+    pressOptionArrow('ArrowUp')
+
+    expect(harness.appState.requestCommandInvocation).not.toHaveBeenCalled()
+  })
+
+  it('does not move hidden lane selection or focus while Spotlight owns the screen', () => {
+    const { workspace, selectTiledLaneSession } = makeWorkspace('spotlight')
+    render(<KeyboardHarness workspace={workspace} />)
 
     pressOptionArrow('ArrowDown')
-    expect(dispatch.focusDispatchSession).not.toHaveBeenCalled()
+    expect(selectTiledLaneSession).not.toHaveBeenCalled()
 
-    const grid = makeWorkspace('spotlight', 'grid')
-    view.rerender(<KeyboardHarness workspace={grid.workspace} />)
     pressOptionArrow('ArrowUp')
     expect(harness.appState.requestCommandInvocation).not.toHaveBeenCalled()
   })
 
   it('keeps the Command Palette reachable from Reader, including through an override', () => {
-    const reader = makeWorkspace('reader', 'dispatch')
+    const reader = makeWorkspace('reader')
     const view = render(<KeyboardHarness workspace={reader.workspace} />)
 
     fireEvent.keyDown(document, {
@@ -231,7 +214,7 @@ describe('focus-mode keyboard ownership', () => {
   })
 
   it('keeps commands owned by the visible Spotlight session and feed available', () => {
-    const spotlight = makeWorkspace('spotlight', 'dispatch')
+    const spotlight = makeWorkspace('spotlight')
     const view = render(<KeyboardHarness workspace={spotlight.workspace} />)
 
     fireEvent.keyDown(document, {
@@ -260,11 +243,11 @@ describe('focus-mode keyboard ownership', () => {
       'open-command-palette',
       'keybinding',
     )
-    expect(spotlight.focusDispatchSession).not.toHaveBeenCalled()
+    expect(spotlight.selectTiledLaneSession).not.toHaveBeenCalled()
   })
 
   it('still admits Escape and the configured toggle owned by each active focus mode', () => {
-    const reader = makeWorkspace('reader', 'dispatch')
+    const reader = makeWorkspace('reader')
     const view = render(<KeyboardHarness workspace={reader.workspace} />)
 
     fireEvent.keyDown(document, { code: 'Escape', key: 'Escape' })
@@ -276,7 +259,7 @@ describe('focus-mode keyboard ownership', () => {
       'keybinding',
     )
 
-    const spotlight = makeWorkspace('spotlight', 'grid')
+    const spotlight = makeWorkspace('spotlight')
     view.rerender(<KeyboardHarness workspace={spotlight.workspace} />)
 
     fireEvent.keyDown(document, { code: 'Escape', key: 'Escape' })

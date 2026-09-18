@@ -258,11 +258,13 @@ export type CommandContext = {
      *  global-editor store (not uiShell) because it's editor-scoped
      *  state, not workspace chrome. */
     toggleFileTreeVisible: () => void
-    enterDispatchMode: () => Promise<void> | void
-    enterGlobalDispatch: () => Promise<void> | void
-    exitDispatchMode: () => void
-    /** Open the Tiled Dispatch tile-count prompt overlay. The overlay
-     *  applies the chosen count via workspace.enterTiledDispatch. */
+    // enterDispatchMode / enterGlobalDispatch / exitDispatchMode lived here
+    // until #992: they backed the `dispatch-mode` and `global-dispatch`
+    // commands, which turned the lane grid on and off and switched a
+    // layout-wide project/global scope. The stage always exists and has no
+    // scope, so there is nothing for a command to enter, leave or widen.
+    /** Open the stage shape editor. The overlay applies the chosen rows via
+     *  workspace.setDispatchGridShape. */
     openTiledDispatchPrompt: () => void
     /** Open the placement overlay in "attach detached session to grid"
      *  mode for the given sessionId. The session must exist in
@@ -400,8 +402,9 @@ export type CommandContext = {
     /** Whether the Global Editor is in fullscreen (workspace hidden).
      *  Same scoping as fileTreeVisible — global-editor store owns it. */
     editorFullscreen: boolean
-    dispatchModeEnabled: boolean
-    globalDispatchEnabled: boolean
+    // `dispatchModeEnabled` and `globalDispatchEnabled` were flags here until
+    // #992. No command read them once the mode commands were deleted; a flag
+    // that is always `true` invites a `when` that looks meaningful and is not.
     /** App-wide agent pane surface policy from Settings. The command registry
      *  uses it to decide whether render-dependent commands are applicable.
      *  Threading it through flags keeps command modules declarative: commands

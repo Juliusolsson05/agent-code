@@ -63,7 +63,6 @@ function renderIndex() {
       groups={[group()]}
       pinnedRows={[]}
       activeSessionId={AGENT}
-      dispatchScope="project"
       focusSessionInTab={vi.fn()}
       showWorktreeBadges={false}
     />,

@@ -23,11 +23,7 @@ function makeState(): WorkspaceState {
     // focused, so "navigate to A2" means "fill the focused lane with the parked
     // agent". Before the unified layout this fixture had no Dispatch state and
     // these cases exercised the tile-tree swap, which no longer exists.
-    dispatchMode: {
-      scope: 'global',
-      focusedSessionId: 'a1',
-      tiled: { focusedLane: 1, lanes: [{ selectedSessionId: 'a1' }, {}], rows: [{ length: 2 }] },
-    },
+    stage: { focusedLane: 1, lanes: [{ selectedSessionId: 'a1' }, {}], rows: [{ length: 2 }] },
     sessions: {
       a1: { cwd: '/work/alpha/foreground', kind: 'claude' },
       a2: { cwd: '/work/alpha/background', kind: 'codex' },
@@ -98,7 +94,7 @@ function mountNavigation(
 }
 
 const laneIds = (state: WorkspaceState) =>
-  state.dispatchMode?.tiled?.lanes.map(lane => lane.selectedSessionId ?? null)
+  state.stage.lanes.map(lane => lane.selectedSessionId ?? null)
 
 describe('useAgentIndexNavigationActions', () => {
   it('uses the same navigation result for a stable ID and its UI label', async () => {
@@ -122,11 +118,11 @@ describe('useAgentIndexNavigationActions', () => {
     const navigation = harness.actions.focusAgentBySessionId('a2')
     harness.setState(current => ({
       ...current,
-      dispatchMode: { ...current.dispatchMode!, tiled: { ...current.dispatchMode!.tiled!, focusedLane: 0 } },
+      stage: { ...current.stage, focusedLane: 0 },
     }))
     await act(async () => { finish(); expect(await navigation).toBe(false) })
     expect(laneIds(harness.getState())).toEqual(['a1', null])
-    expect(harness.getState().dispatchMode?.tiled?.focusedLane).toBe(0)
+    expect(harness.getState().stage.focusedLane).toBe(0)
     harness.mounted.unmount()
   })
 
@@ -149,16 +145,12 @@ describe('useAgentIndexNavigationActions', () => {
 
   it('threads the bang intent through wake and commit into the focused lane', async () => {
     const state = makeState()
-    state.dispatchMode = {
-      scope: 'global',
-      focusedSessionId: 'a1',
-      tiled: {
-        focusedLane: 0,
-        lanes: [
-          { selectedSessionId: 'a1' },
-          { selectedSessionId: 'a2' },
-        ],
-      },
+    state.stage = {
+      focusedLane: 0,
+      lanes: [
+        { selectedSessionId: 'a1' },
+        { selectedSessionId: 'a2' },
+      ],
     }
     const ensureSessionLive = vi.fn().mockResolvedValue('a2')
     const harness = mountNavigation(ensureSessionLive, state)
@@ -171,7 +163,7 @@ describe('useAgentIndexNavigationActions', () => {
     })
 
     expect(ensureSessionLive).toHaveBeenCalledWith('a2', 'agent-index.navigate')
-    expect(harness.getState().dispatchMode?.tiled).toMatchObject({
+    expect(harness.getState().stage).toMatchObject({
       focusedLane: 0,
       lanes: [
         { selectedSessionId: 'a2' },

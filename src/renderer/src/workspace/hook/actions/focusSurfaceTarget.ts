@@ -14,11 +14,12 @@ export function resolveFocusSurfaceTarget(state: WorkspaceState, explicitSession
   const sessionId = explicitSessionId ?? commandTargetSessionIdForState(state)
   if (!sessionId || !state.sessions[sessionId]) return null
 
-  if (state.dispatchMode) {
-    const row = buildVisibleDispatchRows(state).find(item => item.sessionId === sessionId)
-    if (row) {
-      return { tabId: row.tabId, sessionId }
-    }
+  // The index row is asked first because it is what the user sees: a row
+  // carries the project it is LISTED under. (Gated on "Dispatch is on" until
+  // the stage became a required field, #992.)
+  const row = buildVisibleDispatchRows(state).find(item => item.sessionId === sessionId)
+  if (row) {
+    return { tabId: row.tabId, sessionId }
   }
 
   // WHY this does an ownership lookup instead of assuming activeTabId:

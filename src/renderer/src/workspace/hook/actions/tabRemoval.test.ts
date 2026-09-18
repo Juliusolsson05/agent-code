@@ -35,11 +35,7 @@ function workspace(activeTabId: string): WorkspaceState {
     detachedSessions: {
       'b-row': { sessionId: 'b-row', surface: 'dispatch', projectTabId: 'b', projectTabTitle: 'B', projectTabIndex: 1, detachedAt: 1 },
     },
-    dispatchMode: {
-      scope: 'global',
-      focusedSessionId: 'b-row',
-      tiled: { lanes: [{ selectedSessionId: 'b-row' }, { selectedSessionId: 'a-root' }], focusedLane: 0 },
-    },
+    stage: { lanes: [{ selectedSessionId: 'b-row' }, { selectedSessionId: 'a-root' }], focusedLane: 0 },
     gridRelatedSelections: {}, buried: [], pinnedSessionIds: [],
   }
 }
@@ -63,12 +59,16 @@ describe('workspaceWithoutTab', () => {
     expect(workspaceWithoutTab(workspace('c'), 'b', ['b-root', 'b-row']).activeTabId).toBe('c')
   })
 
-  it('removes the sessions and rows it is given and clears their Dispatch lanes and focus', () => {
+  it('removes the sessions and rows it is given and empties the lanes that showed them', () => {
     const next = workspaceWithoutTab(workspace('b'), 'b', ['b-root', 'b-row'])
     expect(Object.keys(next.sessions).sort()).toEqual(['a-root', 'c-root', 'd-root'])
     expect(next.detachedSessions).toEqual({})
-    expect(next.dispatchMode?.focusedSessionId).toBeUndefined()
-    expect(next.dispatchMode?.tiled?.lanes.map(lane => lane.selectedSessionId)).toEqual([undefined, 'a-root'])
+    // The lane goes EMPTY — it is neither refilled with a neighbour (#681) nor
+    // removed, and the lane beside it is untouched. The user shaped the stage;
+    // closing a project must not reshape it. (A classic-Dispatch focus was
+    // cleared here too until #992 removed the field.)
+    expect(next.stage.lanes.map(lane => lane.selectedSessionId)).toEqual([undefined, 'a-root'])
+    expect(next.stage.focusedLane).toBe(0)
   })
 })
 

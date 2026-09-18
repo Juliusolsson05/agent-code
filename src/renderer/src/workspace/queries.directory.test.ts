@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { findTabsHoldingDirectory } from '@renderer/workspace/queries'
 import type { WorkspaceState } from '@renderer/workspace/types'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 // The rule ⌘T and the operator's projects.open now share (#913).
 const state: WorkspaceState = {
@@ -11,7 +12,7 @@ const state: WorkspaceState = {
     { id: 'tab-c', title: 'agent-code', focusedSessionId: 'c', root: { type: 'leaf', sessionId: 'c' } },
   ],
   activeTabId: 'tab-a',
-  dispatchMode: null,
+  stage: oneLaneStage('a'),
   sessions: {
     a: { cwd: '/dev/agent-code', kind: 'claude' },
     b: { cwd: '/dev/startup', kind: 'codex' },

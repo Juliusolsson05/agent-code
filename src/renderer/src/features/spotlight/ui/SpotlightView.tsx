@@ -1,6 +1,5 @@
 import { renderWorkspaceLeaf } from '@renderer/workspace/tile-tree/TileTree'
 import type { AgentViewMode } from '@renderer/app-state/settings/types'
-import { resolveTabSessions } from '@renderer/workspace/queries'
 import { dispatchSessionIdsForTab } from '@renderer/workspace/dispatch/dispatchSelectors'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 
@@ -25,9 +24,11 @@ export function SpotlightView({ workspace, agentViewMode, showStatusMode, showWo
   // targeting selected. The non-Dispatch path uses the canonical resolver so
   // Spotlight covers detached agents owned by this tab whenever Dispatch mode
   // is off.
-  const sessionIds = workspace.dispatchMode
-    ? dispatchSessionIdsForTab(workspace.state, tab.id)
-    : resolveTabSessions(workspace.state, tab.id)
+  //
+  // (A `resolveTabSessions` branch covered "Dispatch is off" until #992; the
+  // index is always the membership model now. usePaneFocusSanity's validator
+  // in hook/invalidation/effects.ts must list exactly this set.)
+  const sessionIds = dispatchSessionIdsForTab(workspace.state, tab.id)
   if (sessionIds.length === 0) return null
 
   const focusedSessionId = sessionIds.includes(spotlight.focusedSessionId)

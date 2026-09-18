@@ -9,6 +9,7 @@ import {
 } from '@renderer/workspace/hook/actions/testing/paneActionsHarness'
 import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 import type { SessionMeta, WorkspaceState } from '@renderer/workspace/types'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 const extensionMeta: SessionMeta = {
   kind: 'extension-view',
@@ -35,7 +36,7 @@ function workspace(): WorkspaceState {
         projectTabTitle: 'B', projectTabIndex: 1, detachedAt: 100,
       },
     },
-    dispatchMode: null,
+    stage: oneLaneStage('a'),
     pinnedSessionIds: [],
     buried: [],
   } as WorkspaceState
@@ -43,27 +44,25 @@ function workspace(): WorkspaceState {
 
 describe('extension view placement follows the visible command target', () => {
 
-  it.each([false, true])('opens from a detached global Dispatch target (tiled=%s)', tiled => {
+  // Ran twice until #992 (`it.each([false, true])`, tiled or classic Dispatch),
+  // reading the new view's id back from the classic focus. There is one layout,
+  // so there is one case, and the id is read from the lane it was placed in.
+  it('opens from a detached target in another project s lane', () => {
     const initial = workspace()
-    initial.dispatchMode = {
-      scope: 'global', focusedSessionId: 'detached',
-      ...(tiled ? { tiled: {
-        focusedLane: 1, lanes: [{ selectedSessionId: 'a' }, { selectedSessionId: 'detached' }],
-      } } : {}),
+    initial.stage = {
+      focusedLane: 1, lanes: [{ selectedSessionId: 'a' }, { selectedSessionId: 'detached' }],
     }
     const harness = mountPaneActions(initial)
     act(() => { harness.actions.openExtensionViewInPane('timer.main') })
     const state = harness.getState()
-    const id = state.dispatchMode!.focusedSessionId!
+    const id = state.stage.lanes[1]!.selectedSessionId!
     expect(id).not.toBe('detached')
     expect(state.activeTabId).toBe('tab-b')
     expect(state.detachedSessions[id]).toMatchObject({ projectTabId: 'tab-b', surface: 'dispatch' })
     expect(state.sessions[id]).toEqual({ kind: 'extension-view', cwd: '/projects/b/worktree', extensionViewId: 'timer.main' })
     expect(state.tabs).toEqual(initial.tabs)
     expect(buildVisibleDispatchRows(state).map(row => row.sessionId)).toContain(id)
-    if (tiled) {
-      expect(state.dispatchMode!.tiled!.lanes.map(lane => lane.selectedSessionId)).toEqual(['a', id])
-    }
+    expect(state.stage.lanes.map(lane => lane.selectedSessionId)).toEqual(['a', id])
     expect(harness.spawn).not.toHaveBeenCalled()
     harness.mounted.unmount()
   })
@@ -72,7 +71,7 @@ describe('extension view placement follows the visible command target', () => {
 describe('extension undo restores UI identity without a provider process', () => {
   it('restores a detached view and consumes the undo entry', async () => {
     const initial = workspace()
-    initial.dispatchMode = { scope: 'project', focusedSessionId: 'a' }
+    initial.stage = { lanes: [{ selectedSessionId: 'a' }], rows: [{ length: 1 }], focusedLane: 0 }
     const refs = makeRefs(initial)
     refs.undoStackRef.current.push({
       type: 'detached', closedAt: Date.now(), sessionMeta: extensionMeta,
@@ -87,7 +86,14 @@ describe('extension undo restores UI identity without a provider process', () =>
     const harness = mountUndoCloseAction(initial, refs, spawn)
     await act(async () => { await harness.actions.undoClose() })
     const state = harness.getState()
-    const id = state.dispatchMode!.focusedSessionId!
+    // Found by ownership, not by focus: undo files the view back into the pool
+    // and deliberately does NOT re-aim a lane at it (undoClose.ts explains
+    // why), so there is no focus field that would name it. It used to be read
+    // from the classic-Dispatch focus, which #992 removed.
+    const id = Object.keys(state.detachedSessions).find(key => !(key in initial.detachedSessions))!
+    expect(id).toBeDefined()
+    // The user's lane is exactly as they left it.
+    expect(state.stage).toEqual(initial.stage)
     expect(spawn).not.toHaveBeenCalled()
     expect(refs.undoStackRef.current.length).toBe(0)
     expect(state.activeTabId).toBe('tab-b')

@@ -1,11 +1,11 @@
 import type {
   BuriedPaneRecord,
   DetachedSessionRecord,
-  DispatchModeState,
   SessionId,
   SessionMeta,
   TabId,
   TileNode,
+  TiledDispatchState,
 } from '@renderer/workspace/types'
 import { closeLeaf, collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 import {
@@ -29,7 +29,7 @@ export type PrunedSessionOwnership = {
   sessions: Record<SessionId, SessionMeta>
   detachedSessions: Record<SessionId, DetachedSessionRecord>
   buried: BuriedPaneRecord[]
-  dispatchMode: DispatchModeState | null | undefined
+  stage: TiledDispatchState
   droppedSessionIds: SessionId[]
 }
 
@@ -234,8 +234,15 @@ export function pickOwnedSessions(
 }
 
 export function pruneSessionOwnership(
+  // WHY `stage` is required here although the ownership sets never read it:
+  // the stage is a POINTER surface, not an owner (U2 — lanes are space, the
+  // pool is the home). It has to be scrubbed against the same `liveIds` the
+  // owners are, in the same pass, or the file can name a session in a lane
+  // that the same file no longer contains. Required rather than optional
+  // because the live state always has one (#992) and an optional field would
+  // let a caller silently skip the scrub.
   input: SessionOwnershipInput & {
-    dispatchMode?: DispatchModeState | null
+    stage: TiledDispatchState
   },
 ): PrunedSessionOwnership {
   const ownedIds = collectOwnedSessionIds(input)
@@ -267,36 +274,29 @@ export function pruneSessionOwnership(
 
   const buried = (input.buried ?? []).filter(entry => liveIds.has(entry.sessionId))
   const droppedSessionIds = Object.keys(input.sessions).filter(id => !liveIds.has(id))
-  const focusedSessionId = input.dispatchMode?.focusedSessionId
-  const dispatchMode = input.dispatchMode
-    ? scrubGridRowMetadata(
-      keepTiledLaneSessions({
-        // WHY tiled lanes are scrubbed at the same durability boundary as
-        // focusedSessionId: autosave must serialize a model closed under
-        // restore. Kill/close paths already clear lanes, but corrupt or
-        // hand-edited workspace state can reach this persistence guard directly.
-        // If we only scrub classic focus, a tiled lane can keep pointing at a
-        // pruned session and force rehydrate/auto-fill to repair stale state on
-        // every launch.
-        ...input.dispatchMode,
-        focusedSessionId: focusedSessionId && liveIds.has(focusedSessionId)
-          ? focusedSessionId
-          : undefined,
-      }, liveIds),
-      // Grid rows also name a PROJECT and a set of expanded parent sessions.
-      // A binding to a closed tab filters that row's index to nothing with no
-      // UI path back (the picker only lists tabs that exist), so it has to be
-      // scrubbed at the same durability boundary as every other pointer.
-      new Set(input.tabs.map(tab => tab.id)),
-      liveIds,
-    )
-    : input.dispatchMode
+  const stage = scrubGridRowMetadata(
+    // WHY lanes are scrubbed at this durability boundary: autosave must
+    // serialize a model closed under restore. Kill/close paths already clear
+    // lanes, but corrupt or hand-edited workspace state can reach this
+    // persistence guard directly. An unscrubbed lane keeps pointing at a
+    // pruned session and forces rehydrate to repair stale state on every
+    // launch. (A classic-Dispatch `focusedSessionId` was scrubbed beside the
+    // lanes until #992 removed it; the focused LANE is an index, not a
+    // session pointer, so it needs no liveness check.)
+    keepTiledLaneSessions(input.stage, liveIds),
+    // Rows also name a PROJECT and a set of expanded parent sessions. A
+    // binding to a closed project filters that row's index to nothing with no
+    // UI path back (the picker only lists projects that exist), so it has to
+    // be scrubbed at the same durability boundary as every other pointer.
+    new Set(input.tabs.map(tab => tab.id)),
+    liveIds,
+  )
 
   return {
     sessions,
     detachedSessions,
     buried,
-    dispatchMode,
+    stage,
     droppedSessionIds,
   }
 }

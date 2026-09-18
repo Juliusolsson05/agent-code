@@ -3,6 +3,7 @@ import { agentControlCapabilities } from './agents'
 import { useAppStore } from '@renderer/app-state/store'
 import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { Workspace } from '@renderer/workspace/hook'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 const original = useAppStore.getState()
 const originalApi = window.api
@@ -13,7 +14,7 @@ function setup(wake: () => Promise<unknown> = async () => undefined) {
   useAppStore.setState({ workspaceState: {
     tabs: [{ id: 'project', title: 'Project', root: { type: 'leaf', sessionId: 'agent' }, focusedSessionId: 'agent' }],
     activeTabId: 'project', sessions: { agent: { cwd: '/trial', kind: 'claude' } },
-    detachedSessions: {}, buried: [], pinnedSessionIds: [], dispatchMode: null,
+    detachedSessions: {}, buried: [], pinnedSessionIds: [], stage: oneLaneStage('agent'),
   }, workspaceRuntimes: { agent: { ...emptyRuntime(), draftInput: 'unfinished human draft' } } })
   const deliverPrompt = vi.fn().mockResolvedValue({ ok: true, acceptance: { kind: 'queue', acceptedAt: 1 } })
   window.api = { ...originalApi, deliverPrompt }

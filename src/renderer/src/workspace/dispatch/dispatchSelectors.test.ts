@@ -9,22 +9,29 @@ import {
 import { nextTiledRowIndex } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import { resolveFocusSurfaceTarget } from '@renderer/workspace/hook/actions/focusSurfaceTarget'
 import { commandTargetSessionIdForState } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
-import type { DispatchModeState, TileNode, WorkspaceState } from '@renderer/workspace/types'
+import type { TileNode, TiledDispatchState, WorkspaceState } from '@renderer/workspace/types'
 
 // Minimal two-project fixture: project A (tabA / a1) and project B (tabB / b1),
-// each a single grid agent. Global scope so both tabs show in the dispatch list.
+// each a single grid agent. Both projects show in every index: the layout-wide
+// project/global scope these fixtures used to set died with #992.
 function leaf(sessionId: string): TileNode {
   return { type: 'leaf', sessionId }
 }
 
-function makeState(dispatchMode: DispatchModeState | null): WorkspaceState {
+/** One row of one lane showing `sessionId` — the stage equivalent of "the user
+ *  is commanding this agent", which a classic-Dispatch focus used to express. */
+function oneLane(sessionId?: string): TiledDispatchState {
+  return { lanes: [sessionId ? { selectedSessionId: sessionId } : {}], rows: [{ length: 1 }], focusedLane: 0 }
+}
+
+function makeState(stage: TiledDispatchState): WorkspaceState {
   return {
     tabs: [
       { id: 'tabA', title: 'project-a', root: leaf('a1'), focusedSessionId: 'a1' },
       { id: 'tabB', title: 'project-b', root: leaf('b1'), focusedSessionId: 'b1' },
     ],
     activeTabId: 'tabA',
-    dispatchMode,
+    stage,
     sessions: {
       a1: { cwd: '/work/project-a', kind: 'claude' },
       b1: { cwd: '/work/project-b', kind: 'claude' },
@@ -36,45 +43,45 @@ function makeState(dispatchMode: DispatchModeState | null): WorkspaceState {
 }
 
 describe('resolveDispatchSpawnTarget', () => {
-  it('classic Dispatch: targets the focused session’s own project', () => {
-    const state = makeState({ scope: 'global', focusedSessionId: 'b1' })
+  it('a one-lane stage targets the project of the agent it shows', () => {
+    // Was "classic Dispatch: targets the focused session's own project", with
+    // `laneIndex: null` because classic Dispatch had no lanes. The same user
+    // intent on the stage is one lane showing b1 — and there is always a lane
+    // to place into, so the index is 0, never null.
+    const state = makeState(oneLane('b1'))
     const target = resolveDispatchSpawnTarget(state)
-    expect(target).toEqual({ tabId: 'tabB', cwdSessionId: 'b1', laneIndex: null })
+    expect(target).toEqual({ tabId: 'tabB', cwdSessionId: 'b1', laneIndex: 0 })
   })
 
-  it('Tiled Dispatch: follows the FOCUSED LANE, not the stale active tab (issue #266)', () => {
-    // The regression scenario: active tab is A and the classic focus still
-    // points at A's agent, but the user is commanding lane 1 which shows
+  it('follows the FOCUSED LANE, not the stale active tab (issue #266)', () => {
+    // The regression scenario: the active tab is still A, but the user is
+    // commanding lane 1 which shows
     // project B. A new agent must land in B, in lane 1 — NOT in active tab A.
     const state = makeState({
-      scope: 'global',
-      focusedSessionId: 'a1',
-      tiled: {
-        focusedLane: 1,
-        lanes: [{ selectedSessionId: 'a1' }, { selectedSessionId: 'b1' }],
-      },
+      focusedLane: 1,
+      lanes: [{ selectedSessionId: 'a1' }, { selectedSessionId: 'b1' }],
     })
     const target = resolveDispatchSpawnTarget(state)
     expect(target).toEqual({ tabId: 'tabB', cwdSessionId: 'b1', laneIndex: 1 })
   })
 
-  it('Tiled Dispatch: empty focused lane falls back to classic focus but keeps the lane index', () => {
+  it('an empty focused lane falls back to the ACTIVE project but keeps the lane index', () => {
+    // Until #992 the fallback was a classic-Dispatch focus (b1 => tabB), a
+    // second focus truth beside the focused lane. With one focus truth the
+    // honest fallback for "no agent here to take a project from" is the
+    // active project — and the new agent still lands in the lane the user is
+    // looking at.
     const state = makeState({
-      scope: 'global',
-      focusedSessionId: 'b1',
-      tiled: {
-        focusedLane: 1,
-        lanes: [{ selectedSessionId: 'a1' }, {}],
-      },
+      focusedLane: 1,
+      lanes: [{ selectedSessionId: 'a1' }, {}],
     })
+    state.activeTabId = 'tabB'
     const target = resolveDispatchSpawnTarget(state)
-    expect(target).toEqual({ tabId: 'tabB', cwdSessionId: 'b1', laneIndex: 1 })
+    expect(target).toEqual({ tabId: 'tabB', cwdSessionId: null, laneIndex: 1 })
   })
 
-  it('no Dispatch mode: targets the active tab', () => {
-    const target = resolveDispatchSpawnTarget(makeState(null))
-    expect(target).toEqual({ tabId: 'tabA', cwdSessionId: null, laneIndex: null })
-  })
+  // "no Dispatch mode: targets the active tab" (laneIndex: null) lived here
+  // until #992. A workspace without lanes can no longer be constructed.
 })
 
 describe('resolveDispatchSpawnTarget with a detached focused lane', () => {
@@ -89,12 +96,8 @@ describe('resolveDispatchSpawnTarget with a detached focused lane', () => {
   // `resolveDispatchTerminalSplitTarget` before the creation flows merged.
   it('keeps the detached lane session as the cwd source, not a grid leaf in the same tab', () => {
     const state = makeState({
-      scope: 'global',
-      focusedSessionId: 'a1',
-      tiled: {
-        focusedLane: 1,
-        lanes: [{ selectedSessionId: 'a1' }, { selectedSessionId: 'b2' }],
-      },
+      focusedLane: 1,
+      lanes: [{ selectedSessionId: 'a1' }, { selectedSessionId: 'b2' }],
     })
     state.sessions.b2 = { cwd: '/work/project-b/subtask', kind: 'codex' }
     state.detachedSessions.b2 = {
@@ -112,7 +115,6 @@ describe('resolveDispatchSpawnTarget with a detached focused lane', () => {
       laneIndex: 1,
     })
   })
-})
 
 // Grid Dispatch row bindings (#681). Two consumers must agree on "which
 // projects may this lane hold": the spawn resolver (where plain New Agent…
@@ -124,43 +126,37 @@ describe('resolveDispatchSpawnTarget with a detached focused lane', () => {
 describe('focusedLaneBoundProjectTabIds', () => {
   it('returns the binding of the row that owns the focused lane', () => {
     const state = makeState({
-      scope: 'global',
-      focusedSessionId: 'a1',
-      tiled: {
-        focusedLane: 1,
-        lanes: [{ selectedSessionId: 'a1' }, {}],
-        rows: [{ length: 1 }, { length: 1, projectTabIds: ['tabB'] }],
-      },
+      focusedLane: 1,
+      lanes: [{ selectedSessionId: 'a1' }, {}],
+      rows: [{ length: 1 }, { length: 1, projectTabIds: ['tabB'] }],
     })
     expect(focusedLaneBoundProjectTabIds(state)).toEqual(['tabB'])
   })
 
-  it('returns nothing for an unbound row, classic Dispatch, or no Dispatch at all', () => {
+  it('returns nothing for an unbound row', () => {
     const unbound = makeState({
-      scope: 'global',
-      focusedSessionId: 'a1',
-      tiled: {
-        focusedLane: 0,
-        lanes: [{ selectedSessionId: 'a1' }, {}],
-        rows: [{ length: 1 }, { length: 1, projectTabIds: ['tabB'] }],
-      },
+      focusedLane: 0,
+      lanes: [{ selectedSessionId: 'a1' }, {}],
+      rows: [{ length: 1 }, { length: 1, projectTabIds: ['tabB'] }],
     })
     expect(focusedLaneBoundProjectTabIds(unbound)).toEqual([])
-    expect(focusedLaneBoundProjectTabIds(makeState({ scope: 'global', focusedSessionId: 'a1' }))).toEqual([])
-    expect(focusedLaneBoundProjectTabIds(makeState(null))).toEqual([])
+    // A stage with no `rows` at all (written before the row grid) is one
+    // unbound row. (Classic Dispatch and "no Dispatch" were asserted here too
+    // until #992; neither can be built any more.)
+    expect(focusedLaneBoundProjectTabIds(makeState({ focusedLane: 0, lanes: [{ selectedSessionId: 'a1' }] }))).toEqual([])
   })
 })
 
 describe('dispatchSessionIdsForTab', () => {
   it('includes pinned rows owned by the tab even though project groups strip them', () => {
-    const state = makeState({ scope: 'global', focusedSessionId: 'b1' })
+    const state = makeState(oneLane('b1'))
     state.pinnedSessionIds = ['b1']
 
     expect(dispatchSessionIdsForTab(state, 'tabB')).toEqual(['b1'])
   })
 
   it('uses visible Dispatch row order, with pinned rows before grouped rows for the same tab', () => {
-    const state = makeState({ scope: 'global', focusedSessionId: 'b2' })
+    const state = makeState(oneLane('b2'))
     state.tabs[1] = {
       ...state.tabs[1]!,
       root: {
@@ -181,12 +177,8 @@ describe('dispatchSessionIdsForTab', () => {
 describe('resolveFocusSurfaceTarget', () => {
   it('returns the focused tiled lane session and its owner tab, not the stale active tab', () => {
     const state = makeState({
-      scope: 'global',
-      focusedSessionId: 'a1',
-      tiled: {
-        focusedLane: 1,
-        lanes: [{ selectedSessionId: 'a1' }, { selectedSessionId: 'b1' }],
-      },
+      focusedLane: 1,
+      lanes: [{ selectedSessionId: 'a1' }, { selectedSessionId: 'b1' }],
     })
 
     expect(resolveFocusSurfaceTarget(state)).toEqual({
@@ -197,12 +189,8 @@ describe('resolveFocusSurfaceTarget', () => {
 
   it('returns null when the focused tiled lane has no strict command target', () => {
     const state = makeState({
-      scope: 'global',
-      focusedSessionId: 'b1',
-      tiled: {
-        focusedLane: 1,
-        lanes: [{ selectedSessionId: 'a1' }, {}],
-      },
+      focusedLane: 1,
+      lanes: [{ selectedSessionId: 'a1' }, {}],
     })
 
     expect(resolveFocusSurfaceTarget(state)).toBeNull()
@@ -210,50 +198,42 @@ describe('resolveFocusSurfaceTarget', () => {
 })
 
 describe('strict Dispatch command target', () => {
-  it('Tiled Dispatch: follows the focused lane row', () => {
+  it('follows the focused lane row', () => {
     const state = makeState({
-      scope: 'global',
-      focusedSessionId: 'a1',
-      tiled: {
-        focusedLane: 1,
-        lanes: [{ selectedSessionId: 'a1' }, { selectedSessionId: 'b1' }],
-      },
+      focusedLane: 1,
+      lanes: [{ selectedSessionId: 'a1' }, { selectedSessionId: 'b1' }],
     })
 
     expect(commandTargetSessionIdForState(state)).toBe('b1')
   })
 
-  it('Tiled Dispatch: empty focused lane does not fall back to classic focus', () => {
+  it('an empty focused lane has no command target, whatever the other lanes show', () => {
     const state = makeState({
-      scope: 'global',
-      focusedSessionId: 'b1',
-      tiled: {
-        focusedLane: 1,
-        lanes: [{ selectedSessionId: 'a1' }, {}],
-      },
+      focusedLane: 1,
+      lanes: [{ selectedSessionId: 'a1' }, {}],
     })
 
     expect(commandTargetSessionIdForState(state)).toBeNull()
   })
 
-  it('Tiled Dispatch: stale focused lane does not fall back to the first visible row', () => {
+  it('a stale focused lane does not fall back to the first visible row', () => {
     const state = makeState({
-      scope: 'global',
-      focusedSessionId: 'b1',
-      tiled: {
-        focusedLane: 1,
-        lanes: [{ selectedSessionId: 'a1' }, { selectedSessionId: 'missing' }],
-      },
+      focusedLane: 1,
+      lanes: [{ selectedSessionId: 'a1' }, { selectedSessionId: 'missing' }],
     })
 
     expect(commandTargetSessionIdForState(state)).toBeNull()
   })
 
-  it('classic Dispatch keeps row fallback behavior for stale focus', () => {
-    const state = makeState({ scope: 'global', focusedSessionId: 'missing' })
-
-    expect(commandTargetSessionIdForState(state)).toBe('a1')
+  // "classic Dispatch keeps row fallback behavior for stale focus" lived here
+  // until #992: a stale classic focus fell back to the first visible row. The
+  // stage is strict everywhere — see the case above and
+  // resolveFocusedCloseTarget in pane.ts for why a destructive target must
+  // never be guessed.
+  it('a one-lane stage naming a missing session has no command target', () => {
+    expect(commandTargetSessionIdForState(makeState(oneLane('missing')))).toBeNull()
   })
+})
 })
 
 
@@ -296,7 +276,7 @@ describe('buildPinnedDispatchRows', () => {
     // Pins were agent-only since before terminals were Dispatch rows (#152
     // deferred them "for v1"). Since #671 a shell is a full row, and a pinned
     // dev-server shell is exactly the one-keystroke-away session pins exist for.
-    const state = makeState({ scope: 'global', focusedSessionId: 'a1' })
+    const state = makeState(oneLane('a1'))
     state.sessions.shell = { cwd: '/work/project-a', kind: 'terminal' }
     state.tabs[0] = { ...state.tabs[0], root: { type: 'split', direction: 'vertical', ratio: 0.5, a: leaf('a1'), b: leaf('shell') } }
     state.pinnedSessionIds = ['shell']

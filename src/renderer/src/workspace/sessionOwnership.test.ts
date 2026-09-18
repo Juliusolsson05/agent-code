@@ -23,16 +23,12 @@ function makeState(): WorkspaceState {
       { id: 'tabA', title: 'project-a', root: leaf('live'), focusedSessionId: 'live' },
     ],
     activeTabId: 'tabA',
-    dispatchMode: {
-      scope: 'project',
-      focusedSessionId: 'missing',
-      tiled: {
-        focusedLane: 1,
-        lanes: [
-          { selectedSessionId: 'live' },
-          { selectedSessionId: 'missing' },
-        ],
-      },
+    stage: {
+      focusedLane: 1,
+      lanes: [
+        { selectedSessionId: 'live' },
+        { selectedSessionId: 'missing' },
+      ],
     },
     sessions: {
       live: { cwd: '/work/project-a', kind: 'claude' },
@@ -51,9 +47,8 @@ describe('pruneSessionOwnership', () => {
     expect(result.sessions).toEqual({
       live: { cwd: '/work/project-a', kind: 'claude' },
     })
-    expect(result.dispatchMode?.focusedSessionId).toBeUndefined()
-    expect(result.dispatchMode?.tiled?.focusedLane).toBe(1)
-    expect(result.dispatchMode?.tiled?.lanes).toEqual([
+    expect(result.stage.focusedLane).toBe(1)
+    expect(result.stage.lanes).toEqual([
       { selectedSessionId: 'live' },
       { selectedSessionId: undefined },
     ])
@@ -81,16 +76,12 @@ describe('pruneSessionOwnership', () => {
         detachedAt: 10,
       },
     }
-    state.dispatchMode = {
-      scope: 'global',
-      focusedSessionId: 'ghost',
-      tiled: {
-        focusedLane: 1,
-        lanes: [
-          { selectedSessionId: 'parked' },
-          { selectedSessionId: 'ghost' },
-        ],
-      },
+    state.stage = {
+      focusedLane: 1,
+      lanes: [
+        { selectedSessionId: 'parked' },
+        { selectedSessionId: 'ghost' },
+      ],
     }
 
     const result = pruneSessionOwnership(state)
@@ -106,8 +97,7 @@ describe('pruneSessionOwnership', () => {
       }),
     })
     expect(result.droppedSessionIds).toEqual(expect.arrayContaining(['missing', 'ghost']))
-    expect(result.dispatchMode?.focusedSessionId).toBeUndefined()
-    expect(result.dispatchMode?.tiled?.lanes).toEqual([
+    expect(result.stage.lanes).toEqual([
       { selectedSessionId: 'parked' },
       { selectedSessionId: undefined },
     ])

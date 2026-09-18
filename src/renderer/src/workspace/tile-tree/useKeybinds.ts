@@ -1006,7 +1006,7 @@ function dispatchRows(workspace: Workspace) {
 // surface left for single-focus selection to act on.
 
 function focusedTiledLane(workspace: Workspace): number {
-  return workspace.dispatchMode?.tiled?.focusedLane ?? 0
+  return workspace.stage.focusedLane
 }
 
 /**
@@ -1024,9 +1024,7 @@ function focusedTiledLane(workspace: Workspace): number {
  */
 function tiledRowScopedRows(workspace: Workspace) {
   const all = dispatchRows(workspace)
-  const tiled = workspace.dispatchMode?.tiled
-  if (!tiled) return all
-  const grid = normalizeGridShape(tiled)
+  const grid = normalizeGridShape(workspace.stage)
   const rowIndex = rowIndexForLane(grid.rows, grid.focusedLane)
   const gridRow = rowIndex >= 0 ? grid.rows[rowIndex] : undefined
   if (!gridRow) return all
@@ -1046,8 +1044,7 @@ function focusTiledRowByIndex(workspace: Workspace, index: number) {
 }
 
 function moveTiledLaneSelection(workspace: Workspace, delta: number) {
-  const tiled = workspace.dispatchMode?.tiled
-  if (!tiled) return
+  const tiled = workspace.stage
   const rows = tiledRowScopedRows(workspace)
   if (rows.length === 0) return
   const laneIndex = tiled.focusedLane
@@ -1070,9 +1067,7 @@ function moveTiledLaneSelection(workspace: Workspace, delta: number) {
  * the deliberate job of Focus Row Above/Below.
  */
 function moveTiledFocusWithinRow(workspace: Workspace, delta: number) {
-  const tiled = workspace.dispatchMode?.tiled
-  if (!tiled) return
-  const grid = normalizeGridShape(tiled)
+  const grid = normalizeGridShape(workspace.stage)
   const rowIndex = rowIndexForLane(grid.rows, grid.focusedLane)
   if (rowIndex < 0) return
   const start = rowStartIndex(grid.rows, rowIndex)

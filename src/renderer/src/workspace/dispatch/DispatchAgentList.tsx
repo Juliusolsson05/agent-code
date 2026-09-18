@@ -38,7 +38,6 @@ export const DispatchAgentList = memo(function DispatchAgentList({
   groups,
   pinnedRows,
   activeSessionId,
-  dispatchScope,
   focusSessionInTab,
   showWorktreeBadges,
   disabledSessionIds,
@@ -52,7 +51,6 @@ export const DispatchAgentList = memo(function DispatchAgentList({
   groups: ReturnType<typeof buildDispatchGroups>
   pinnedRows: DispatchAgentRow[]
   activeSessionId: string | null
-  dispatchScope: 'global' | 'project'
   focusSessionInTab: Workspace['focusSessionInTab']
   showWorktreeBadges: boolean
   // Renders a "+" in each project header when supplied. Optional so the
@@ -199,7 +197,10 @@ export const DispatchAgentList = memo(function DispatchAgentList({
           )}
           {/* The row's project binding lives at the top of the list it
               constrains — the whole benefit of a per-row index over one shared
-              sidebar. Falls back to the scope label in classic Dispatch. */}
+              sidebar. With no picker wired (a bare list in a test or a future
+              read-only surface) it states the truth of an unbound row. It
+              used to fall back to a layout-wide 'project' / 'global' scope
+              label; that scope died with #992. */}
           {onPickRowProject ? (
             <button
               type="button"
@@ -211,7 +212,7 @@ export const DispatchAgentList = memo(function DispatchAgentList({
               {rowProjectLabel ?? 'Any project'}
             </button>
           ) : (
-            <span>{dispatchScope}</span>
+            <span className="uppercase">Any project</span>
           )}
         </span>
       </div>

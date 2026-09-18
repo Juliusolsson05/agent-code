@@ -6,6 +6,7 @@ import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import type { SessionId, SessionMeta, WorkspaceState } from '@renderer/workspace/types'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 // The renderer half of the workspace handoff.
 //
@@ -50,7 +51,7 @@ function survivorState(): WorkspaceState {
       focusedSessionId: 'own-agent',
     }],
     activeTabId: 'tab-own',
-    dispatchMode: null,
+    stage: oneLaneStage('own-agent'),
     sessions: { 'own-agent': meta('/own') },
     detachedSessions: {},
     buried: [],
@@ -68,7 +69,7 @@ function closedWindowPayload(): string {
         focusedSessionId: 'grid-a',
       }],
       activeTabId: 'tab-closed',
-      dispatchMode: null,
+      stage: oneLaneStage('grid-a'),
       sessions: { 'grid-a': meta('/closed'), parked: meta('/closed') },
       detachedSessions: {
         parked: {

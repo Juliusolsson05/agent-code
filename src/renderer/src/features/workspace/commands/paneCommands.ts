@@ -10,11 +10,6 @@ import { extractLastAssistantText } from '@renderer/lib/copyAssistant'
 import type { CommandContext, CommandDef } from '@renderer/features/command-palette/types'
 import { panel, toggle } from '@renderer/features/command-palette/commandState'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
-import {
-  buildVisibleDispatchRows,
-  selectVisibleDispatchRow,
-} from '@renderer/workspace/dispatch/dispatchSelectors'
-import { dispatchFocusedSessionId } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import { submitActiveComposer } from '@renderer/workspace/tile-tree/TileLeaf/composerEnterRegistry'
 import { sessionHasTranscript } from '@renderer/workspace/transcriptAvailability'
 import { isWorkingAgent } from '@renderer/workspace/agentFollow'
@@ -60,12 +55,11 @@ export const paneCommands: CommandDef[] = [
     // Title per docs/command-style.md: "New X" for creation, and the ellipsis
     // because the command asks for more input (agent, then project).
     title: 'New Agent In…',
-    // The scope sentence is there because it surprised the reviewer: in
-    // project-scope Dispatch, spawning into another project makes it the active
-    // project (createDetachedDispatchAgent selects what it creates), so the
-    // other lanes read "Not in this scope" until you switch back. That is the
-    // scope contract working — the new agent has to be visible — not a bug.
-    description: '**What it does:** Starts a **new agent in a project you choose** — in the focused lane in Grid Dispatch, or as a new Dispatch row.\n\n**Use when:** You want an agent for a different project than the one you last selected, e.g. to fill an empty lane.\n\n**Notes:** Pick the agent, then the project. A row limited to certain projects only offers those. In project-scoped Dispatch, choosing another project switches to it.',
+    // The Notes used to end with a scope sentence ("In project-scoped Dispatch,
+    // choosing another project switches to it"), because spawning into another
+    // project blanked every other lane until you switched back. With no
+    // layout-wide scope (#992) nothing blanks, so the warning went with it.
+    description: '**What it does:** Starts a **new agent in a project you choose**, in the focused lane.\n\n**Use when:** You want an agent for a different project than the one you last selected, e.g. to fill an empty lane.\n\n**Notes:** Pick the agent, then the project. A row limited to certain projects only offers those.',
     keywords: ['new', 'agent', 'project', 'lane', 'fill', 'empty', 'dispatch', 'claude', 'codex', 'opencode'],
     // Same data gate as New Agent…. Tiled Tabs covers Dispatch, so the lane the
     // agent would fill is not the thing on screen.
@@ -549,25 +543,8 @@ export const paneCommands: CommandDef[] = [
   },
 ]
 
-function dispatchCommandTabId(
-  workspace: CommandContext['workspace'],
-): string | null {
-  if (!workspace.dispatchMode) return null
-  if (workspace.dispatchMode.scope !== 'global') {
-    return workspace.state.activeTabId || null
-  }
-  const activeTab = workspace.activeTab
-  const row = selectVisibleDispatchRow(
-    buildVisibleDispatchRows(workspace.state),
-    // tiled-aware focus so the resolved tab follows the focused lane.
-    dispatchFocusedSessionId(workspace.dispatchMode),
-    activeTab?.focusedSessionId,
-  )
-  return row?.tabId ?? workspace.state.activeTabId ?? null
-}
-
-// Resolver for "attach all dispatch agents for tab" that works in BOTH
-// modes. In Dispatch we delegate to `dispatchCommandTabId` so global
-// Dispatch can target the focused row's tab (potentially != activeTabId).
-// Outside Dispatch we use the active tab — there is no dispatch focus
-// to consult and the user's only reasonable target is "this tab."
+// `dispatchCommandTabId` and an attach-all resolver lived below until #992.
+// They picked the project a Dispatch-only command should act on (the active
+// tab in project scope, the focused row's tab in global scope). Their last
+// caller — Attach All Dispatch Agents — died with the tile tree in stage 3a,
+// and the scope they branched on died in 3b, so the helpers went with them.

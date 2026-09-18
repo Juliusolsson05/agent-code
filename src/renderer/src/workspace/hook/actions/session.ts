@@ -1135,20 +1135,15 @@ export function useSessionActions(
         delete nextSessions[sessionId]
         const detachedSessions = { ...prev.detachedSessions }
         delete detachedSessions[sessionId]
-        // Clear the killed session out of any tiled lane FIRST (a lane can
-        // hold a session that isn't the classic dispatch focus), then clear
-        // the classic focus if it pointed here. Otherwise the lane dangles at
-        // a dead id and the layout's auto-fill effect bounces it to tile 0.
-        const clearedDispatch = clearTiledLaneSessions(prev.dispatchMode, sessionId)
-        const dispatchMode =
-          clearedDispatch?.focusedSessionId === sessionId
-            ? { ...clearedDispatch, focusedSessionId: undefined }
-            : clearedDispatch
         return {
           ...prev,
           sessions: nextSessions,
           detachedSessions,
-          dispatchMode,
+          // Clear the killed session out of every lane that showed it, or the
+          // lane dangles at a dead id. The lane goes EMPTY and stays empty
+          // (U2, #681). A classic-Dispatch focus was cleared beside the lanes
+          // until #992 removed the field.
+          stage: clearTiledLaneSessions(prev.stage, sessionId),
         }
       })
       delete refs.seenUuidsRef.current[sessionId]
@@ -1390,19 +1385,14 @@ export function useSessionActions(
             pinnedSessionIds: remapPinnedSessionIds(prev.pinnedSessionIds, idMap),
             gridRelatedSelections: remapGridRelatedSelections(prev.gridRelatedSelections, idMap),
             detachedSessions,
-            // Remap the swapped session id everywhere Dispatch holds it: the
-            // classic single-view focus AND every Tiled Dispatch lane selection
-            // (dispatchMode.tiled.lanes[].selectedSessionId). reload /
-            // provider-switch / resume / rewind all funnel through here; before
-            // this, the focused lane kept pointing at the now-dead oldId and the
-            // layout's auto-fill effect re-homed it to the first tile. Same
-            // tiled-vs-grid divergence as #266/#267/#271, fixed at the swap.
-            dispatchMode: remapTiledLanes(
-              prev.dispatchMode?.focusedSessionId === oldId
-                ? { ...prev.dispatchMode, focusedSessionId: newId }
-                : prev.dispatchMode,
-              idMap,
-            ),
+            // Remap the swapped session id in every lane that shows it
+            // (stage.lanes[].selectedSessionId). reload / provider-switch /
+            // resume / rewind all funnel through here; before this, the
+            // focused lane kept pointing at the now-dead oldId and went blank
+            // under the user mid-conversation. Same lane-vs-owner divergence
+            // as #266/#267/#271, fixed at the swap. (A classic-Dispatch focus
+            // was remapped beside the lanes until #992 removed the field.)
+            stage: remapTiledLanes(prev.stage, idMap),
           }
         })
         if (!committed) {
@@ -1634,24 +1624,15 @@ export function useSessionActions(
             }),
         )
 
-        const focusedDispatchSessionId = prev.dispatchMode?.focusedSessionId
-        // Remap tiled lanes through the same old->new idMap (every reloaded
-        // agent got a fresh sessionId), then clear any lane whose session
-        // failed to respawn. Without this, "reload all" would point every lane
-        // at a dead id and the auto-fill effect would collapse them to tile 0.
-        const remappedDispatch = clearTiledLaneSessions(
-          remapTiledLanes(prev.dispatchMode, idMap),
+        // Remap lanes through the same old->new idMap (every reloaded agent
+        // got a fresh sessionId), then clear any lane whose session failed to
+        // respawn. Without this, "reload all" would point every lane at a dead
+        // id. Order matters: remap first, because `failedIds` are OLD ids that
+        // have no entry in idMap and so survive the remap to be cleared.
+        const nextStage = clearTiledLaneSessions(
+          remapTiledLanes(prev.stage, idMap),
           failedIds,
         )
-        const nextDispatchMode = remappedDispatch
-          ? {
-              ...remappedDispatch,
-              focusedSessionId: focusedDispatchSessionId
-                ? idMap.get(focusedDispatchSessionId) ??
-                  (failedIds.has(focusedDispatchSessionId) ? undefined : focusedDispatchSessionId)
-                : undefined,
-            }
-          : null
 
         return {
           ...prev,
@@ -1665,7 +1646,7 @@ export function useSessionActions(
           gridRelatedSelections: remapGridRelatedSelections(prev.gridRelatedSelections, idMap),
           detachedSessions: nextDetachedSessions,
           buried: nextBuried,
-          dispatchMode: nextDispatchMode,
+          stage: nextStage,
         }
       })
       for (const [newId, meta] of Object.entries(freshSessions)) {

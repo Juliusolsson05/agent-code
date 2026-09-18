@@ -6,6 +6,7 @@ import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type { PersistedWorkspace } from '@renderer/workspace/persistence'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
+import { freshStage } from '@renderer/workspace/dispatch/gridShape'
 
 const { createSession, loadInitialHistoryForSession } = vi.hoisted(() => ({
   createSession: vi.fn(),
@@ -148,7 +149,7 @@ function makeRendererHarness() {
     detachedSessions: {},
     buried: [],
     pinnedSessionIds: [],
-    dispatchMode: null,
+    stage: freshStage(),
   } as unknown as WorkspaceState
   let runtimes: Record<SessionId, SessionRuntime> = {}
   const refs = {

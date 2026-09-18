@@ -1,12 +1,9 @@
 import type {
   DispatchLane,
-  DispatchModeState,
   SessionId,
   TabId,
   TiledDispatchState,
-  WorkspaceState,
 } from '@renderer/workspace/types'
-import { buildVisibleDispatchRows } from '@renderer/workspace/dispatch/dispatchSelectors'
 import {
   MAX_DISPATCH_TILES,
   MIN_DISPATCH_TILES,
@@ -16,9 +13,10 @@ import {
 // ============================================================================
 // Tiled-lane coherence helpers
 //
-// Tiled Dispatch keeps a per-lane session selection in
-// dispatchMode.tiled.lanes[].selectedSessionId, plus the focused lane in
-// dispatchMode.tiled.focusedLane. Two whole bug classes came from code that
+// The stage keeps a per-lane session selection in stage.lanes[].selectedSessionId,
+// plus the focused lane in stage.focusedLane. (These helpers took the
+// `dispatchMode` wrapper until #992 made the stage a required field; their
+// rules are unchanged, only the wrapper is gone.) Two whole bug classes came from code that
 // mutated *which session a pane shows* (id remap, session removal) or
 // *resolved the focused session* while only maintaining the grid tree,
 // detachedSessions, and the single dispatchMode.focusedSessionId — leaving the
@@ -37,12 +35,11 @@ import {
  * swapped (replaceSession, reloadAgentSessions, rehydrate, undo-close).
  */
 export function remapTiledLanes(
-  dispatchMode: DispatchModeState | null,
+  stage: TiledDispatchState,
   idMap: ReadonlyMap<SessionId, SessionId>,
-): DispatchModeState | null {
-  if (!dispatchMode?.tiled) return dispatchMode
+): TiledDispatchState {
   let changed = false
-  const lanes = dispatchMode.tiled.lanes.map(lane => {
+  const lanes = stage.lanes.map(lane => {
     const id = lane.selectedSessionId
     if (!id) return lane
     const next = idMap.get(id)
@@ -50,8 +47,8 @@ export function remapTiledLanes(
     changed = true
     return { ...lane, selectedSessionId: next }
   })
-  if (!changed) return dispatchMode
-  return { ...dispatchMode, tiled: { ...dispatchMode.tiled, lanes } }
+  if (!changed) return stage
+  return { ...stage, lanes }
 }
 
 /**
@@ -82,22 +79,21 @@ function withLaneCleared(lane: DispatchLane): DispatchLane {
  * Apply wherever a session is destroyed/hidden (killSession, close, bury).
  */
 export function clearTiledLaneSessions(
-  dispatchMode: DispatchModeState | null,
+  stage: TiledDispatchState,
   removed: ReadonlySet<SessionId> | SessionId,
-): DispatchModeState | null {
-  if (!dispatchMode?.tiled) return dispatchMode
+): TiledDispatchState {
   const isRemoved = (id: SessionId): boolean =>
     typeof removed === 'string' ? removed === id : removed.has(id)
   let changed = false
-  const lanes = dispatchMode.tiled.lanes.map(lane => {
+  const lanes = stage.lanes.map(lane => {
     if (lane.selectedSessionId && isRemoved(lane.selectedSessionId)) {
       changed = true
       return withLaneCleared(lane)
     }
     return lane
   })
-  if (!changed) return dispatchMode
-  return { ...dispatchMode, tiled: { ...dispatchMode.tiled, lanes } }
+  if (!changed) return stage
+  return { ...stage, lanes }
 }
 
 /**
@@ -111,64 +107,57 @@ export function clearTiledLaneSessions(
  * durable session pointer must close over the same surviving session set.
  */
 export function keepTiledLaneSessions(
-  dispatchMode: DispatchModeState | null | undefined,
+  stage: TiledDispatchState,
   keep: ReadonlySet<SessionId>,
-): DispatchModeState | null | undefined {
-  if (!dispatchMode?.tiled) return dispatchMode
+): TiledDispatchState {
   let changed = false
-  const lanes = dispatchMode.tiled.lanes.map(lane => {
+  const lanes = stage.lanes.map(lane => {
     if (lane.selectedSessionId && !keep.has(lane.selectedSessionId)) {
       changed = true
       return withLaneCleared(lane)
     }
     return lane
   })
-  if (!changed) return dispatchMode
-  return { ...dispatchMode, tiled: { ...dispatchMode.tiled, lanes } }
+  if (!changed) return stage
+  return { ...stage, lanes }
 }
 
 /**
- * Bring a persisted `tiled` block up to the current grid shape.
+ * Bring a persisted stage up to the current grid shape.
  *
- * WHY this belongs with the other dispatchMode helpers rather than inside
- * gridShape: this file's header says the lane helpers must be applied at every
- * id-remap, removal, and focus-read site, and rehydrate is one of them — the
- * normalization has to sit on the same DispatchModeState-shaped seam as
+ * WHY this belongs with the other lane helpers rather than inside gridShape:
+ * this file's header says the lane helpers must be applied at every id-remap,
+ * removal, and focus-read site, and rehydrate is one of them — the
+ * normalization has to take and return the same `TiledDispatchState` as
  * remapTiledLanes and keepTiledLaneSessions so it can be composed with them in
  * one expression instead of being a fourth thing a caller must remember.
+ * (All of them took the `dispatchMode` envelope until #992 made the stage a
+ * required field; this one was `normalizeDispatchModeGrid`.)
  *
  * The migration itself (legacy `ratios` -> per-row indexFraction + laneWeights,
  * and repair of the row-length invariant) lives in gridShape, which owns every
  * shape rule.
  *
  * Returns the SAME reference when nothing needed changing, so consumers that
- * memoize on dispatchMode identity do not churn on every restore.
+ * memoize on stage identity do not churn on every restore.
  */
-export function normalizeDispatchModeGrid(
-  dispatchMode: DispatchModeState | null | undefined,
-): DispatchModeState | null | undefined {
-  const tiled = dispatchMode?.tiled
-  if (!dispatchMode || !tiled) return dispatchMode
-
-  const grid = normalizeGridShape(tiled)
+export function normalizeStage(stage: TiledDispatchState): TiledDispatchState {
+  const grid = normalizeGridShape(stage)
   const alreadyCurrent =
-    tiled.ratios === undefined &&
-    tiled.rows === grid.rows &&
-    tiled.laneWeights === grid.laneWeights &&
-    tiled.focusedLane === grid.focusedLane
-  if (alreadyCurrent) return dispatchMode
+    stage.ratios === undefined &&
+    stage.rows === grid.rows &&
+    stage.laneWeights === grid.laneWeights &&
+    stage.focusedLane === grid.focusedLane
+  if (alreadyCurrent) return stage
 
   return {
-    ...dispatchMode,
-    tiled: {
-      lanes: grid.lanes,
-      rows: grid.rows,
-      focusedLane: grid.focusedLane,
-      // Dropped, never rewritten: keeping the legacy array beside the fields it
-      // was split into would leave two sources of truth for width, and the next
-      // reader would have to guess which one the user's last drag produced.
-      ...(grid.laneWeights ? { laneWeights: grid.laneWeights } : {}),
-    },
+    lanes: grid.lanes,
+    rows: grid.rows,
+    focusedLane: grid.focusedLane,
+    // Dropped, never rewritten: keeping the legacy array beside the fields it
+    // was split into would leave two sources of truth for width, and the next
+    // reader would have to guess which one the user's last drag produced.
+    ...(grid.laneWeights ? { laneWeights: grid.laneWeights } : {}),
   }
 }
 
@@ -187,12 +176,12 @@ export function normalizeDispatchModeGrid(
  * other helper in this family so a clean prune does not churn consumers.
  */
 export function scrubGridRowMetadata(
-  dispatchMode: DispatchModeState | null | undefined,
+  stage: TiledDispatchState,
   liveTabIds: ReadonlySet<TabId>,
   liveSessionIds: ReadonlySet<SessionId>,
-): DispatchModeState | null | undefined {
-  const tiled = dispatchMode?.tiled
-  if (!dispatchMode || !tiled?.rows) return dispatchMode
+): TiledDispatchState {
+  const tiled = stage
+  if (!tiled.rows) return stage
 
   let changed = false
   const rows = tiled.rows.map(row => {
@@ -226,62 +215,29 @@ export function scrubGridRowMetadata(
     }
     return next
   })
-  if (!changed) return dispatchMode
-  return { ...dispatchMode, tiled: { ...tiled, rows } }
+  if (!changed) return stage
+  return { ...tiled, rows }
 }
 
 /**
- * The session the user is currently focused on in Dispatch — the SINGLE
- * tiled-aware reader every "what am I commanding/focusing?" call site should
- * use. In Tiled Dispatch that's the focused lane's agent (falling back to the
- * classic focus when the lane is empty); in classic Dispatch it's
- * dispatchMode.focusedSessionId. Centralizing this is what stops new readers
- * from re-introducing the lane-0 divergence (#266/#267/#271/#272 were all the
- * same mistake made in different files).
+ * The session the user is currently focused on — the SINGLE reader every
+ * "what am I commanding/focusing?" call site should use: the focused lane's
+ * occupant, or null when that lane is empty. Centralizing this is what stops
+ * new readers from re-introducing the lane-0 divergence (#266/#267/#271/#272
+ * were all the same mistake made in different files).
+ *
+ * Until #992 this fell back to a classic single-selection focus when the lane
+ * was empty. That second focus truth is gone: an empty focused lane means no
+ * session is focused, which is exactly what the screen shows.
  */
-export function dispatchFocusedSessionId(
-  dispatchMode: DispatchModeState | null,
-): SessionId | null {
-  if (!dispatchMode) return null
-  if (dispatchMode.tiled) {
-    const lane = dispatchMode.tiled.lanes[dispatchMode.tiled.focusedLane]
-    return lane?.selectedSessionId ?? dispatchMode.focusedSessionId ?? null
-  }
-  return dispatchMode.focusedSessionId ?? null
+export function dispatchFocusedSessionId(stage: TiledDispatchState): SessionId | null {
+  return stage.lanes[stage.focusedLane]?.selectedSessionId ?? null
 }
 
-/**
- * The session Grid Dispatch entry should keep visible in lane 0 (#977).
- *
- * WHY this exists: `enterTiledDispatch` used to build every lane empty, so the
- * agent the user was commanding in classic Dispatch (or the pane they were
- * focused on in the grid) vanished the moment the grid layout appeared. The
- * fix is continuity, and continuity has a source: this resolver reads focus
- * through `dispatchFocusedSessionId` — the same single tiled-aware reader
- * every other "what am I commanding?" site uses — so re-entering over an
- * existing grid carries the focused LANE's agent, classic Dispatch carries its
- * focused session, and the normal grid falls back to the active tab's focused
- * pane. Precedence is deliberate: a Dispatch focus is the later, more
- * deliberate signal than the grid pane the user left behind when they entered
- * Dispatch.
- *
- * This is NOT #681's banned auto-fill. #681 removed guessing occupants from
- * the unclaimed-agent index; seeding the ONE session the user already has in
- * focus predicts nothing. Every other lane still arrives empty.
- *
- * Guards mirror the control plane's `lane-select` admission: a buried or
- * unrecorded id returns null rather than a phantom occupant, because a lane
- * that renders empty-but-set is reversible (#681's no-healer rule) while a
- * lane pointing at nothing the user can see is just a lie.
- */
-export function dispatchEntrySeedSessionId(state: WorkspaceState): SessionId | null {
-  const gridPane = state.tabs.find(tab => tab.id === state.activeTabId)?.focusedSessionId
-  const candidate = dispatchFocusedSessionId(state.dispatchMode) ?? gridPane ?? null
-  if (!candidate) return null
-  if (!state.sessions[candidate]) return null
-  if (state.buried.some(item => item.sessionId === candidate)) return null
-  return candidate
-}
+// `dispatchEntrySeedSessionId` lived here until #992. It chose the one session
+// to keep visible in lane 0 when a user ENTERED the lane grid (#977). Nothing
+// is entered any more: the only surviving seed is the v2→v3 migration's
+// (workspaceShape.ts resolveEntrySeed), which runs once per old file.
 
 /**
  * Step one row in `delta` direction, wrapping.

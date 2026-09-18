@@ -5,6 +5,7 @@ import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { buildAgentRows } from './CloseOldAgentsModal'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type { Entry } from '@shared/types/transcript'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 // Close Old Agents aged sessions by transcript timestamps, which shells do not
 // have, so terminals were excluded outright. The foreground monitor (#865) gives
@@ -12,7 +13,7 @@ import type { Entry } from '@shared/types/transcript'
 it('ages an idle terminal from its last foreground change', () => {
   const state: Workspace['state'] = {
     tabs: [{ id: 'tab', title: 'project', root: { type: 'leaf', sessionId: 'shell' }, focusedSessionId: 'shell' }],
-    activeTabId: 'tab', dispatchMode: null, gridRelatedSelections: {},
+    activeTabId: 'tab', stage: oneLaneStage('shell'), gridRelatedSelections: {},
     sessions: { shell: { cwd: '/work/api', kind: 'terminal' } },
     detachedSessions: {}, buried: [], pinnedSessionIds: [],
   }
@@ -30,7 +31,7 @@ describe('cleanup activity evidence (#886)', () => {
   const old = now - 8 * 60 * 60 * 1000
   const recent = now - 60_000
   const state: Workspace['state'] = {
-    activeTabId: 'tab', dispatchMode: null, buried: [], pinnedSessionIds: [],
+    activeTabId: 'tab', stage: oneLaneStage('agent'), buried: [], pinnedSessionIds: [],
     tabs: [{ id: 'tab', title: 'project', root: { type: 'leaf', sessionId: 'agent' }, focusedSessionId: 'agent' }],
     sessions: { agent: { cwd: '/project', kind: 'claude' } }, detachedSessions: {},
   }

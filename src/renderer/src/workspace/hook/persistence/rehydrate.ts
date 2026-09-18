@@ -24,12 +24,12 @@ import type {
 import { collectLeaves, remapTileTreeSessionIds } from '@renderer/workspace/tile-tree/treeOps'
 import {
   keepTiledLaneSessions,
-  normalizeDispatchModeGrid,
+  normalizeStage,
   remapTiledLanes,
 } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import { remapSessionMetaRelationships } from '@renderer/workspace/idRemap'
 import type { PersistedWorkspace } from '@renderer/workspace/persistence'
-import { foldBuriedIntoDetached } from '@renderer/workspace/workspaceShape'
+import { foldBuriedIntoDetached, migrateWorkspaceToStage } from '@renderer/workspace/workspaceShape'
 import {
   collectLiveProcessIds,
   collectOwnedSessionIds,
@@ -497,37 +497,48 @@ export async function rehydrateWorkspace(
           ? prev.activeTabId
           : newTabs.find(t => t.id === persisted.activeTabId)?.id
             ?? newTabs[0].id
-        // Grid shape is normalized OUTERMOST so the shape rules see the final
-        // lane array: a workspace written before Grid Dispatch has no `rows`
-        // (=> one row of every lane) and a legacy `ratios` array that has to be
-        // split into the row's index fraction and the per-lane weights. Doing
-        // it here rather than at every reader is what lets the rest of the
-        // renderer assume a coherent grid.
-        const remappedDispatchMode = normalizeDispatchModeGrid(keepTiledLaneSessions(
-          remapTiledLanes(
-            persisted.dispatchMode
-              ? {
-                  ...persisted.dispatchMode,
-                  focusedSessionId: persisted.dispatchMode.focusedSessionId
-                    ? idMap.get(persisted.dispatchMode.focusedSessionId)
-                    : undefined,
-                }
-              : null,
-            idMap,
-          ),
+        // The stage comes from the SAME migration autosave writes through
+        // (#992), not from a field read directly. That is what makes every
+        // file shape boot into a stage without a second code path:
+        //   - a v3 file: its `stage`;
+        //   - a v2 file with lanes: `dispatchMode.tiled`;
+        //   - a v2 file that never had lanes (grid-only, or classic
+        //     Dispatch): the seeded default, lane 0 holding the pane the user
+        //     was last commanding (#977's entry seed) beside one empty lane.
+        // Bootstrap used to do that last case by calling enterTiledDispatch
+        // after rehydrate returned; doing it here means the FIRST published
+        // state already has a stage, so nothing can render — or autosave —
+        // a workspace that lacks one.
+        //
+        // The chain after it is unchanged and its ORDER is load-bearing:
+        // remap (restored sessions may carry new ids), then keep-live, then
+        // normalize OUTERMOST so the shape rules see the final lane array — a
+        // file written before the row grid has no `rows` (=> one row of every
+        // lane) and a legacy `ratios` array that has to be split into the
+        // row's index fraction and the per-lane weights. Doing it here rather
+        // than at every reader is what lets the rest of the renderer assume a
+        // coherent grid.
+        //
+        // A seeded or restored lane may name a HIBERNATED session. That is
+        // fine and deliberate: the lane's leaf wakes its own backend on mount
+        // (ensureSessionLive), which is what keeps the #258 fork-bomb guard
+        // intact — a session spawns because a lane shows it, never because a
+        // file lists it.
+        const stage = normalizeStage(keepTiledLaneSessions(
+          remapTiledLanes(migrateWorkspaceToStage(persisted).stage, idMap),
           // WHY remapping alone cannot repair stale lane ownership:
           // remapTiledLanes intentionally leaves unknown ids untouched because
           // valid hibernated sessions keep their durable ids. After ownership
           // normalization, initialSessions is the authority that distinguishes
-          // those valid parked ids from deleted-tab ghosts. Closing every
-          // Dispatch pointer over this same set prevents the repaired owner
-          // record from lingering as a selected-but-unresolvable lane.
+          // those valid parked ids from deleted-tab ghosts. Closing every lane
+          // pointer over this same set prevents the repaired owner record from
+          // lingering as a selected-but-unresolvable lane.
           new Set(Object.keys(initialSessions)),
-        )) ?? null
+        ))
         return {
           tabs: newTabs,
           activeTabId,
-          dispatchMode: remappedDispatchMode,
+          stage,
           sessions: initialSessions,
           detachedSessions: buildRemappedDetachedSessions(),
           // Always empty: foldBuriedIntoDetached moved every buried record

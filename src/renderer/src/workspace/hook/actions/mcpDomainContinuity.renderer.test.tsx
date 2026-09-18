@@ -9,9 +9,10 @@ import {
   sessionActionsWithSpawn,
   stateWriter,
 } from '@renderer/workspace/hook/actions/testing/paneActionsHarness'
-import type { DispatchModeState, WorkspaceState } from '@renderer/workspace/types'
+import type { WorkspaceState, TiledDispatchState } from '@renderer/workspace/types'
+import { freshStage } from '@renderer/workspace/dispatch/gridShape'
 
-function makeState(dispatchMode: DispatchModeState | null): WorkspaceState {
+function makeState(stage: TiledDispatchState = freshStage()): WorkspaceState {
   return {
     tabs: [{
       id: 'tab-parent',
@@ -20,7 +21,7 @@ function makeState(dispatchMode: DispatchModeState | null): WorkspaceState {
       focusedSessionId: 'parent',
     }],
     activeTabId: 'tab-parent',
-    dispatchMode,
+    stage,
     sessions: {
       parent: { cwd: '/projects/parent', kind: 'codex' },
     },
@@ -33,10 +34,7 @@ function makeState(dispatchMode: DispatchModeState | null): WorkspaceState {
 describe('built-in MCP continuity at session resurrection boundaries', () => {
 
   it('keeps the explicit source cwd when Dispatch turns a split into a detached clone', async () => {
-    const harness = mountPaneActions(makeState({
-      scope: 'project',
-      focusedSessionId: 'parent',
-    }))
+    const harness = mountPaneActions(makeState({ lanes: [{ selectedSessionId: 'parent' }], rows: [{ length: 1 }], focusedLane: 0 }))
 
     await act(async () => {
       await harness.actions.splitFocused('vertical', 'codex', {
@@ -58,7 +56,7 @@ describe('built-in MCP continuity at session resurrection boundaries', () => {
     // Re-based onto the stage (#992): cloning outside Dispatch used to split
     // the tile tree, and that branch no longer exists. The contract under test
     // is the spawn boundary, which is identical on the surviving path.
-    const harness = mountPaneActions(makeState({ scope: 'project', focusedSessionId: 'parent' }))
+    const harness = mountPaneActions(makeState({ lanes: [{ selectedSessionId: 'parent' }], rows: [{ length: 1 }], focusedLane: 0 }))
 
     await act(async () => {
       await harness.actions.splitFocused('vertical', 'opencode', {
@@ -79,7 +77,7 @@ describe('built-in MCP continuity at session resurrection boundaries', () => {
   })
 
   it('restores a closed pane with fresh credentials derived from its captured domains', async () => {
-    const state = makeState(null)
+    const state = makeState()
     const refs = makeRefs(state)
     const writer = stateWriter(state, refs)
     const spawn = vi.fn().mockResolvedValue('restored-pane')
@@ -121,7 +119,7 @@ describe('built-in MCP continuity at session resurrection boundaries', () => {
   })
 
   it('restores an explicit all-off MCP selection instead of treating it as missing', async () => {
-    const state = makeState(null)
+    const state = makeState()
     const refs = makeRefs(state)
     refs.defaultBuiltInMcpDomainsRef.current = ['orchestration']
     const writer = stateWriter(state, refs)
@@ -165,7 +163,7 @@ describe('built-in MCP continuity at session resurrection boundaries', () => {
   })
 
   it('restores both grid and detached tab agents with their own domain metadata', async () => {
-    const state = { ...makeState(null), tabs: [], sessions: {} } as WorkspaceState
+    const state = { ...makeState(), tabs: [], sessions: {} } as WorkspaceState
     const refs = makeRefs(state)
     const writer = stateWriter(state, refs)
     const spawn = vi.fn()

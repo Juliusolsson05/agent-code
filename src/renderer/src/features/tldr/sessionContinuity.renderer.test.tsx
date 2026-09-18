@@ -10,6 +10,7 @@ import type { SessionSpawnOptions } from '@preload/api/types'
 import type { TldrRecord } from '@shared/types/tldr'
 import { TldrPane } from './TldrOverlay'
 import { dismissTldr, toggleTldr } from './viewState'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 vi.mock('@renderer/workspace/hook/actions/initialHistory', () => ({ loadInitialHistoryForSession: vi.fn(async () => undefined) }))
 const originalApi = window.api
@@ -22,7 +23,7 @@ describe('TLDR identity through real session actions', () => {
       tabs: [{ id: 'project', title: 'Project', root: { type: 'leaf', sessionId: 'source' }, focusedSessionId: 'source' }],
       activeTabId: 'project', sessions: {
         source: { cwd: '/project', kind: 'codex', providerSessionId: 'native-source', tldrIdentity: 'summary-source', builtInMcpDomains: ['tldr'] },
-      }, detachedSessions: {}, buried: [], pinnedSessionIds: [], dispatchMode: null,
+      }, detachedSessions: {}, buried: [], pinnedSessionIds: [], stage: oneLaneStage('source'),
     } as WorkspaceState
     const refs = makeRefs(state)
     const writer = stateWriter(state, refs)
@@ -85,7 +86,7 @@ describe('TLDR identity through real session actions', () => {
       tabs: [{ id: 'project', title: 'Project', root: { type: 'leaf', sessionId: 'source' }, focusedSessionId: 'source' }],
       activeTabId: 'project', sessions: {
         source: { cwd: '/project', kind: 'claude', providerSessionId: 'native-source', tldrIdentity: 'summary-source', builtInMcpDomains: domains },
-      }, detachedSessions: {}, buried: [], pinnedSessionIds: [], dispatchMode: null,
+      }, detachedSessions: {}, buried: [], pinnedSessionIds: [], stage: oneLaneStage('source'),
     } as WorkspaceState
     const refs = makeRefs(state)
     const writer = stateWriter(state, refs)

@@ -35,50 +35,25 @@ export const layoutCommands: CommandDef[] = [
   {
     id: 'new-tiled-lane',
     category: 'layout-dispatch',
-    // `app`, not `dispatch` (#978): New Lane is the primary incremental way
-    // to grow the grid, and gating it behind Grid Dispatch already being on
-    // forced every first lane through the shape-editor modal — bulk setup
-    // standing in for a one-lane gesture. From any surface the command now
-    // either inserts (grid on) or enters the grid directly (grid off).
+    // `app`, not `workspace` (#978): New Lane is the primary incremental way
+    // to grow the stage and must be reachable from every surface.
+    //
+    // History worth keeping: this command used to have an ENTRY path. With
+    // Grid Dispatch off there was no lane to insert beside, so it entered the
+    // grid at [2] — lane 0 seeded with the focused agent (#977), lane 1 the
+    // new empty lane. The stage is a required field now (#992), so there is
+    // always a focused lane and the command is one thing: insert to its right.
     surface: 'app',
     title: 'New Lane',
-    description: '**What it does:** Inserts a new lane immediately to the **right of the focused lane**, lengthening only that row. When Grid Dispatch is off, it turns Grid Dispatch on first — your focused agent, when one is focused, lands in the first lane and the new lane appears beside it.\n\n**Use when:** You want another live agent view without reshaping the grid or disturbing the lanes around it.\n\n**Notes:** Rows are independent — this never widens any other row. The current lane stays focused and the new lane arrives empty, because adding a lane asks for space, not for a particular agent. Focus it and press ⌥↓ to put the first agent in it, or pick one from its strip.',
-    keywords: ['new lane', 'add lane', 'insert lane', 'tiled dispatch', 'expand', 'right', 'grid dispatch'],
-    when: ({ workspace }) => {
-      // Entry path first (#978): with no `tiled` block there is no focused
-      // lane and no cap to consult — the [2] shape the run applies is always
-      // legal (it is one lane each under MAX_DISPATCH_TILES and half of
-      // MAX_DISPATCH_LANES). Refusing here is what made the command invisible
-      // from the grid in the first place.
-      if (!workspace.state.dispatchMode?.tiled) return true
-      return canInsertLaneInFocusedRow(workspace.state)
-    },
+    description: '**What it does:** Inserts a new lane immediately to the **right of the focused lane**, lengthening only that row.\n\n**Use when:** You want another live agent view without reshaping the stage or disturbing the lanes around it.\n\n**Notes:** Rows are independent — this never widens any other row. The current lane stays focused and the new lane arrives empty, because adding a lane asks for space, not for a particular agent. Focus it and press ⌥↓ to put the first agent in it, or pick one from its strip.',
+    keywords: ['new lane', 'add lane', 'insert lane', 'tiled dispatch', 'expand', 'right', 'grid dispatch', 'stage'],
+    when: ({ workspace }) => canInsertLaneInFocusedRow(workspace.state),
     run: async ({ workspace }) => {
-      // Entry path (#978): Grid Dispatch is off, so "a lane right of my
-      // focused one" becomes the smallest grid that honors it — lane 0 seeded
-      // with the focused agent by enterTiledDispatch (#977), lane 1 the new
-      // empty lane. No insertTiledLaneRight call: the shape already contains
-      // the new lane, and inserting again would hand the user three lanes for
-      // one command.
-      //
-      // This snapshot read of `tiled` is one render stale by design — every
-      // command here captures one coherent UI snapshot. The cost when a grid
-      // appears in that frame is that entry REPLACEs it wholesale, which is
-      // enterTiledDispatch's documented replace-on-entry semantics, not a
-      // silent partial merge.
-      //
-      // No pane toast here, deliberately: the whole surface swaps to the grid
-      // layout, which is feedback no toast could improve on, and the seeded
-      // pane's identity belongs to the reducer, not to this snapshot.
-      if (!workspace.state.dispatchMode?.tiled) {
-        await workspace.enterTiledDispatch([2])
-        return
-      }
       // Re-checked here, not only in `when`, so a programmatic invocation that
       // never went through the palette stays inert instead of relying on the
       // reducer's refusal to be silent.
       if (!canInsertLaneInFocusedRow(workspace.state)) return
-      const tiled = workspace.state.dispatchMode.tiled
+      const tiled = workspace.state.stage
       const laneIndex = tiled.focusedLane
       const sourceLane = tiled.lanes[laneIndex]
       if (!sourceLane) return
@@ -118,15 +93,11 @@ export const layoutCommands: CommandDef[] = [
     category: 'layout-dispatch',
     surface: 'workspace',
     title: 'Remove Lane',
-    description: '**What it does:** Removes the **focused lane** from Tiled Dispatch, shrinking the layout by one lane. The agent keeps running and stays in the index.\n\n**Use when:** You are done watching one agent but want the others to stay exactly where they are.\n\n**Notes:** Removing a row\'s last lane removes the row. Every lane has its own selector strip, so the lanes that shift left keep the selector they already had.',
+    description: '**What it does:** Removes the **focused lane**, shrinking its row by one lane. The agent keeps running and stays in the index.\n\n**Use when:** You are done watching one agent but want the others to stay exactly where they are.\n\n**Notes:** Removing a row\'s last lane removes the row. Every lane has its own selector strip, so the lanes that shift left keep the selector they already had.',
     keywords: ['remove', 'lane', 'tile', 'tiled dispatch', 'shrink', 'slot'],
-    when: ({ workspace }) => {
-      const tiled = workspace.state.dispatchMode?.tiled
-      return Boolean(tiled && tiled.lanes.length > MIN_DISPATCH_TILES)
-    },
+    when: ({ workspace }) => workspace.state.stage.lanes.length > MIN_DISPATCH_TILES,
     run: ({ workspace }) => {
-      const tiled = workspace.state.dispatchMode?.tiled
-      if (!tiled) return
+      const tiled = workspace.state.stage
       workspace.removeTiledLane(tiled.focusedLane)
     },
   },
@@ -138,8 +109,8 @@ export const layoutCommands: CommandDef[] = [
     description: '**What it does:** Closes the agent in the **focused lane**, then removes that lane, shrinking the layout by one.\n\n**Use when:** An agent has finished and you want it gone along with its slot.\n\n**Notes:** This ends the session. Use **Remove Lane** to reclaim the slot while leaving the agent running. Irreversible closes still confirm first, and declining leaves the layout untouched.',
     keywords: ['close', 'agent', 'remove agent', 'lane', 'tile', 'tiled dispatch', 'shrink', 'finished', 'done'],
     when: ({ workspace }) => {
-      const tiled = workspace.state.dispatchMode?.tiled
-      if (!tiled || tiled.lanes.length <= MIN_DISPATCH_TILES) return false
+      const tiled = workspace.state.stage
+      if (tiled.lanes.length <= MIN_DISPATCH_TILES) return false
       // An empty lane has no agent to close, so this collapses to Remove Lane —
       // admission has to agree with what the command will do.
       //
@@ -152,8 +123,7 @@ export const layoutCommands: CommandDef[] = [
       return Boolean(sessionId && workspace.state.sessions[sessionId])
     },
     run: async ({ workspace }) => {
-      const tiled = workspace.state.dispatchMode?.tiled
-      if (!tiled) return
+      const tiled = workspace.state.stage
       const laneIndex = tiled.focusedLane
       const sessionId = tiled.lanes[laneIndex]?.selectedSessionId
       if (!sessionId) return
@@ -187,17 +157,14 @@ export const layoutCommands: CommandDef[] = [
     description: '**What it does:** Adds a new row of lanes below the focused row, with its own agent index and project.\n\n**Use when:** You have run out of usable width — a second row shows the same agents at double the lane width.\n\n**Notes:** The new row inherits the focused row\'s lane count and arrives empty. Rows are independent afterwards: adding a lane to one never widens another.',
     keywords: ['new row', 'add row', 'grid dispatch', 'second row', 'stack', 'below', 'more agents'],
     when: ({ workspace }) => {
-      const tiled = workspace.state.dispatchMode?.tiled
-      if (!tiled) return false
-      const grid = normalizeGridShape(tiled)
+      const grid = normalizeGridShape(workspace.state.stage)
       return (
         grid.rows.length < MAX_DISPATCH_ROWS &&
         grid.lanes.length < MAX_DISPATCH_LANES
       )
     },
     run: ({ workspace }) => {
-      const tiled = workspace.state.dispatchMode?.tiled
-      if (!tiled) return
+      const tiled = workspace.state.stage
       const grid = normalizeGridShape(tiled)
       const rowIndex = rowIndexForLane(grid.rows, grid.focusedLane)
       if (rowIndex < 0) return
@@ -215,21 +182,21 @@ export const layoutCommands: CommandDef[] = [
     category: 'layout-dispatch',
     surface: 'workspace',
     title: 'Remove Row',
-    description: '**What it does:** Removes the focused row and its lanes. The agents keep running and stay in the index.\n\n**Use when:** You are done with a row of agents but want the other rows exactly where they are.\n\n**Notes:** Refused on the last row — emptying the layout is **Dispatch Mode**\'s job.',
+    description: '**What it does:** Removes the focused row and its lanes. The agents keep running and stay in the index.\n\n**Use when:** You are done with a row of agents but want the other rows exactly where they are.\n\n**Notes:** Refused on the last row — the stage always keeps at least one.',
     keywords: ['remove row', 'delete row', 'grid dispatch', 'shrink', 'fewer rows'],
-    when: ({ workspace }) => {
-      const tiled = workspace.state.dispatchMode?.tiled
-      return Boolean(tiled && normalizeGridShape(tiled).rows.length > 1)
-    },
+    when: ({ workspace }) => normalizeGridShape(workspace.state.stage).rows.length > 1,
     run: ({ workspace }) => {
-      const tiled = workspace.state.dispatchMode?.tiled
-      if (!tiled) return
+      const tiled = workspace.state.stage
       const grid = normalizeGridShape(tiled)
       const rowIndex = rowIndexForLane(grid.rows, grid.focusedLane)
       if (rowIndex >= 0) workspace.removeDispatchRow(rowIndex)
     },
   },
   {
+    // (This and the three commands after it carried `when: tiled grid is on`
+    // until #992. The stage always exists, so the gate was always true and was
+    // removed rather than left as a condition that reads like a real one.)
+    //
     // A noun with its state in a badge, per docs/command-style.md rule 3 —
     // never "Bind Row to Project". "Any project" is a VALUE in the picker
     // rather than a separate unbind command, the same correction that made
@@ -238,12 +205,10 @@ export const layoutCommands: CommandDef[] = [
     category: 'layout-dispatch',
     surface: 'workspace',
     title: 'Row Projects…',
-    description: '**What it does:** Restricts the focused row\'s agent index and lane selectors to one or more projects.\n\n**Use when:** A row is a working context that spans more than one repo — an app and the service it calls, a package and its consumer.\n\n**Notes:** The row\'s index shows one section per bound project. Binding filters, it never fills — no lane is populated, moved, or cleared. Dispatch scope is promoted to global, because a project-scoped row set is built from the active tab alone.',
+    description: '**What it does:** Restricts the focused row\'s agent index and lane selectors to one or more projects.\n\n**Use when:** A row is a working context that spans more than one repo — an app and the service it calls, a package and its consumer.\n\n**Notes:** The row\'s index shows one section per bound project. Binding filters, it never fills — no lane is populated, moved, or cleared. An unbound row lists every project.',
     keywords: ['row project', 'row projects', 'bind row', 'restrict row', 'per project', 'grid dispatch', 'scope row', 'multiple projects'],
-    when: ({ workspace }) => Boolean(workspace.state.dispatchMode?.tiled),
     getState: ({ workspace }) => {
-      const tiled = workspace.state.dispatchMode?.tiled
-      if (!tiled) return null
+      const tiled = workspace.state.stage
       const grid = normalizeGridShape(tiled)
       const rowIndex = rowIndexForLane(grid.rows, grid.focusedLane)
       const ids = rowIndex >= 0 ? grid.rows[rowIndex]?.projectTabIds : undefined
@@ -254,8 +219,7 @@ export const layoutCommands: CommandDef[] = [
       return value(`${ids.length} projects`)
     },
     run: ({ workspace }) => {
-      const tiled = workspace.state.dispatchMode?.tiled
-      if (!tiled) return
+      const tiled = workspace.state.stage
       const grid = normalizeGridShape(tiled)
       const rowIndex = rowIndexForLane(grid.rows, grid.focusedLane)
       if (rowIndex >= 0) useAppStore.getState().openDispatchRowProjectPicker(rowIndex)
@@ -268,18 +232,15 @@ export const layoutCommands: CommandDef[] = [
     title: 'Nested Agents',
     description: '**What it does:** Switches the focused row\'s index between capping a parent\'s nested children and showing all of them.\n\n**Use when:** A parent has spawned enough workers to bury every other agent in the list.\n\n**Notes:** Applies to both orchestration children and manually linked agents — Dispatch nests them identically, so the cap cannot tell them apart. Only nested children are ever hidden; top-level agents always show, because the parent is what reports. Hiding a child never renumbers anything: labels and ⌘N stay on the full canonical list.',
     keywords: ['nested', 'orchestrated', 'orchestration', 'linked', 'children', 'collapse', 'expand', 'sub agents', 'workers', 'cap'],
-    when: ({ workspace }) => Boolean(workspace.state.dispatchMode?.tiled),
     getState: ({ workspace }) => {
-      const tiled = workspace.state.dispatchMode?.tiled
-      if (!tiled) return null
+      const tiled = workspace.state.stage
       const grid = normalizeGridShape(tiled)
       const rowIndex = rowIndexForLane(grid.rows, grid.focusedLane)
       const capped = rowIndex >= 0 ? grid.rows[rowIndex]?.capChildren !== false : true
       return value(capped ? 'Capped' : 'All')
     },
     run: ({ workspace }) => {
-      const tiled = workspace.state.dispatchMode?.tiled
-      if (!tiled) return
+      const tiled = workspace.state.stage
       const grid = normalizeGridShape(tiled)
       const rowIndex = rowIndexForLane(grid.rows, grid.focusedLane)
       if (rowIndex < 0) return
@@ -305,7 +266,6 @@ export const layoutCommands: CommandDef[] = [
     title: 'Focus Row Above',
     description: '**What it does:** Moves lane focus to the row above, keeping the same column where the row is wide enough.\n\n**Use when:** You are driving a grid from the keyboard.\n\n**Notes:** Moving focus never changes any lane\'s agent.',
     keywords: ['focus row', 'row above', 'up', 'grid dispatch', 'navigate rows'],
-    when: ({ workspace }) => Boolean(workspace.state.dispatchMode?.tiled),
     run: ({ workspace }) => focusAdjacentRow(workspace, -1),
   },
   {
@@ -315,7 +275,6 @@ export const layoutCommands: CommandDef[] = [
     title: 'Focus Row Below',
     description: '**What it does:** Moves lane focus to the row below, keeping the same column where the row is wide enough.\n\n**Use when:** You are driving a grid from the keyboard.\n\n**Notes:** Moving focus never changes any lane\'s agent.',
     keywords: ['focus row', 'row below', 'down', 'grid dispatch', 'navigate rows'],
-    when: ({ workspace }) => Boolean(workspace.state.dispatchMode?.tiled),
     run: ({ workspace }) => focusAdjacentRow(workspace, 1),
   },
   // REMOVED: the 'toggle-dispatch-terminal' command, then its replacement
@@ -400,8 +359,7 @@ function focusAdjacentRow(
   workspace: Parameters<NonNullable<CommandDef['run']>>[0]['workspace'],
   delta: number,
 ): void {
-  const tiled = workspace.state.dispatchMode?.tiled
-  if (!tiled) return
+  const tiled = workspace.state.stage
   const grid = normalizeGridShape(tiled)
   const rowIndex = rowIndexForLane(grid.rows, grid.focusedLane)
   if (rowIndex < 0) return
@@ -432,8 +390,7 @@ function focusAdjacentRow(
  * just because a different row is full.
  */
 function canInsertLaneInFocusedRow(state: WorkspaceState): boolean {
-  const tiled = state.dispatchMode?.tiled
-  if (!tiled) return false
+  const tiled = state.stage
   if (!tiled.lanes[tiled.focusedLane]) return false
   const grid = normalizeGridShape(tiled)
   const rowIndex = rowIndexForLane(grid.rows, grid.focusedLane)

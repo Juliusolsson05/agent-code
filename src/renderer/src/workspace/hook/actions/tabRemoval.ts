@@ -1,5 +1,4 @@
 import type {
-  DispatchModeState,
   SessionId,
   TabId,
   WorkspaceState,
@@ -41,24 +40,11 @@ import type {
 // place doing it.
 // -----------------------------------------------------------------------------
 
-/**
- * Dispatch focus/lanes after a batch of sessions disappeared.
- *
- * Lanes are cleared first because a lane can hold a session that is not the
- * classic focus; a dangling lane id gets bounced to tile 0 by the auto-fill
- * effect. Classic focus is then cleared (not re-picked) so DispatchLayout's
- * fallback chooses a row in whatever scope remains.
- */
-export function dispatchModeAfterSessionRemovals(
-  dispatchMode: DispatchModeState | null,
-  removedSessionIds: ReadonlySet<SessionId>,
-): DispatchModeState | null {
-  const cleared = clearTiledLaneSessions(dispatchMode, removedSessionIds)
-  if (!cleared?.focusedSessionId || !removedSessionIds.has(cleared.focusedSessionId)) {
-    return cleared
-  }
-  return { ...cleared, focusedSessionId: undefined }
-}
+// `dispatchModeAfterSessionRemovals` lived here until #992. It cleared lanes
+// and THEN cleared a classic-Dispatch focus that pointed at a removed session.
+// With the classic focus gone the whole job is `clearTiledLaneSessions`, so
+// the wrapper was deleted rather than kept as a one-line alias — a second name
+// for the same operation is how the two close paths drifted apart before.
 
 /**
  * Remove `tabId` and the given sessions from workspace state.
@@ -97,7 +83,10 @@ export function workspaceWithoutTab(
       : prev.activeTabId,
     sessions,
     detachedSessions,
-    dispatchMode: dispatchModeAfterSessionRemovals(prev.dispatchMode, removed),
+    // A lane that showed a removed session goes EMPTY; it is never refilled
+    // with a neighbour (U2, #681) and never removed — the user shaped the
+    // stage, and closing agents must not reshape it.
+    stage: clearTiledLaneSessions(prev.stage, removed),
   }
 }
 

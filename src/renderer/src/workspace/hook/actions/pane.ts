@@ -11,7 +11,6 @@ import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type { CloseExpansionRuntimes, CloseTargetSnapshot } from '@renderer/workspace/closeConfirmation'
 import {
   clearRemovedTabTakeovers,
-  dispatchModeAfterSessionRemovals,
   workspaceWithoutTab,
 } from '@renderer/workspace/hook/actions/tabRemoval'
 import { requestCloseConfirmation, requestRootCloseConfirmation } from '@renderer/workspace/closeConfirmationBroker'
@@ -20,7 +19,6 @@ import { useCallback, useRef } from 'react'
 
 import type {
   DetachedSessionRecord,
-  DispatchModeState,
   SessionId,
   SessionKind,
   SessionMeta,
@@ -29,6 +27,7 @@ import type {
   Tab,
   TabId,
   TileNode,
+  TiledDispatchState,
   WorkspaceState,
 } from '@renderer/workspace/types'
 import type { AgentProviderRuntime } from '@shared/types/providerKind'
@@ -39,7 +38,6 @@ import {
 import { findParentSplitInfo } from '@renderer/lib/undoClose'
 import type { ClosedTab, ClosedTabDetachedEntry, SingleClosedEntry, UndoCloseStack } from '@renderer/lib/undoClose'
 import {
-  buildVisibleDispatchRows,
   detachedDispatchSessionIdsForTab,
   resolveDispatchSpawnTarget,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
@@ -698,31 +696,24 @@ function paneCloseTargets(
  * carries that id through any dialog rather than rereading whichever row
  * gains focus later.
  *
- * WHY Dispatch Mode never falls back to grid focus (#886 review finding 1,
- * a blocker): `Tab.focusedSessionId` is grid-only, and in Tiled Dispatch the
- * grid is hidden. `commandTargetSessionIdForState` deliberately returns null
- * for an empty lane, a lane holding a dead id, or a lane holding a session
- * outside the visible scope — visually "no agent is selected here". The first
- * version of this helper then fell through to the active tab's grid focus, so
- * pressing Close Focused Session on an empty lane killed the hidden grid agent
- * (silently when idle, taking the project with it when it was the sole leaf).
- * Main's old closeFocused had an `if (snapshot.dispatchMode) return` guard;
- * this is that guard, stated where the target is chosen.
+ * WHY this is strict and has NO fallback (#886 review finding 1, a blocker):
+ * `commandTargetSessionIdForState` deliberately returns null for an empty
+ * lane or a lane holding a dead id — visually "no agent is selected here".
+ * The first version of this helper then fell through to the active tab's
+ * tree focus, so pressing Close Focused Session on an empty lane killed an
+ * agent the user could not see (silently when idle, taking the project with
+ * it when it was the sole leaf). A destructive command must target what is
+ * highlighted or nothing.
  *
- * In CLASSIC Dispatch the strict resolver still yields a row when
- * `dispatchMode.focusedSessionId` is stale (after a scope switch, rehydrate
- * miss or rapid close): it applies the same fallback DispatchLayout uses to
- * highlight a row — classic focus, then grid focus, then the first visible
- * row — so the highlighted row and the destructive target cannot diverge. Only
- * Tiled Dispatch's lanes are strict, because an empty lane is a real visual
- * state there. Outside Dispatch the command target already includes a
- * visibly selected related child; the grid focus is its own fallback.
+ * Two fallbacks used to live below the strict read and are gone with #992:
+ * classic Dispatch's "classic focus, then grid focus, then first visible row"
+ * ladder, and the grid's own `Tab.focusedSessionId`. Neither surface exists.
+ * The function is kept, rather than inlined at its one call site, because
+ * this comment is the record of why "just fall back to something sensible"
+ * is the wrong instinct here.
  */
 function resolveFocusedCloseTarget(state: WorkspaceState): SessionId | undefined {
-  const commandTarget = commandTargetSessionIdForState(state)
-  if (commandTarget) return commandTarget
-  if (state.dispatchMode) return undefined
-  return state.tabs.find(tab => tab.id === state.activeTabId)?.focusedSessionId
+  return commandTargetSessionIdForState(state) ?? undefined
 }
 
 /**
@@ -734,31 +725,33 @@ function resolveFocusedCloseTarget(state: WorkspaceState): SessionId | undefined
 const CLOSE_CHANGED_TOAST =
   'Close cancelled — these sessions changed while the dialog was open. Try again.'
 
-// Update dispatchMode after a new dispatch agent is spawned. In Tiled
-// Dispatch the new agent takes over the lane the user is commanding
-// (target.laneIndex) so it appears where they were looking; in classic
-// Dispatch it becomes the single focus. Setting focusedSessionId in both
-// cases keeps classic focus coherent if the user later exits the tiled view.
-// The lane index is re-validated here (a stale resolution could outrun a
-// concurrent count change), falling back to a plain focus update.
+// Put a newly spawned session on the lane the user was commanding
+// (target.laneIndex) so it appears where they were looking. This is one of the
+// two continuity writes U2 allows besides the user naming an occupant.
+//
+// The lane index is re-validated here because it was resolved BEFORE an
+// awaited spawn: a concurrent shape change can outrun it. An index that no
+// longer exists leaves the stage untouched — the session is still in the pool
+// and reachable from every index — rather than being clamped onto whichever
+// lane now happens to sit at the edge.
+//
+// (This also set a classic-Dispatch `focusedSessionId` until #992, "to keep
+// classic focus coherent if the user later exits the tiled view". There is no
+// other view to exit to.)
+//
+// KNOWN GAP, fixed in stage 4 of the #992 plan: this overwrites an OCCUPIED
+// lane. Context-places spawn must never displace — it should take the focused
+// lane only when that lane is empty and otherwise open a lane beside it.
 function applyDispatchSpawnFocus(
-  dispatchMode: DispatchModeState | null,
+  stage: TiledDispatchState,
   sessionId: SessionId,
   laneIndex: number | null,
-): DispatchModeState | null {
-  if (!dispatchMode) return dispatchMode
-  const tiled = dispatchMode.tiled
-  if (laneIndex !== null && tiled && laneIndex >= 0 && laneIndex < tiled.lanes.length) {
-    const lanes = tiled.lanes.map((lane, i) =>
-      i === laneIndex ? withLaneSession(lane, sessionId) : lane,
-    )
-    return {
-      ...dispatchMode,
-      focusedSessionId: sessionId,
-      tiled: { ...tiled, lanes, focusedLane: laneIndex },
-    }
-  }
-  return { ...dispatchMode, focusedSessionId: sessionId }
+): TiledDispatchState {
+  if (laneIndex === null || laneIndex < 0 || laneIndex >= stage.lanes.length) return stage
+  const lanes = stage.lanes.map((lane, i) =>
+    i === laneIndex ? withLaneSession(lane, sessionId) : lane,
+  )
+  return { ...stage, lanes, focusedLane: laneIndex }
 }
 
 /**
@@ -810,7 +803,6 @@ export function usePaneActions(
   state: {
     activeTabId: string
     detachedSessions: Record<SessionId, DetachedSessionRecord>
-    dispatchMode: DispatchModeState | null
     sessions: Record<SessionId, SessionMeta>
     tabs: Tab[]
   },
@@ -939,156 +931,149 @@ export function usePaneActions(
       //
       // Terminals created OUTSIDE Dispatch still split the grid — see the
       // normal-mode path below. Only the Dispatch creation surface changed.
-      if (dispatchSnapshot.dispatchMode) {
-        // Same target resolution as createDetachedDispatchAgent: follow the
-        // focused lane in Tiled Dispatch so cwd and projectTab agree on the
-        // project the user is commanding (issue #266 / #248). Routing terminals
-        // through this same resolver is what preserves #366 — project tab and
-        // cwd come from the focused lane, never from a stale activeTabId —
-        // without needing a terminal-specific resolver to keep in sync.
-        const target = resolveDispatchSpawnTarget(dispatchSnapshot)
-        const tab = dispatchSnapshot.tabs.find(t => t.id === target.tabId)
-        if (!tab) return
+      // Same target resolution as createDetachedDispatchAgent: follow the
+      // focused lane in Tiled Dispatch so cwd and projectTab agree on the
+      // project the user is commanding (issue #266 / #248). Routing terminals
+      // through this same resolver is what preserves #366 — project tab and
+      // cwd come from the focused lane, never from a stale activeTabId —
+      // without needing a terminal-specific resolver to keep in sync.
+      const target = resolveDispatchSpawnTarget(dispatchSnapshot)
+      const tab = dispatchSnapshot.tabs.find(t => t.id === target.tabId)
+      if (!tab) return
 
-        const leafIds = collectLeaves(tab.root)
-        // WHY a caller may override the visually focused project cwd: lifecycle commands can
-        // target a selected related/orchestration child that is rendered inside a physical parent
-        // pane but intentionally runs in another worktree. Its transcript id, enabled MCP domains,
-        // and cwd are one continuation identity. Mixing the child's domains with the parent's cwd
-        // would mint a fresh token for the wrong project scope.
-        const cwd =
-          continuation?.cwd ??
-          (target.cwdSessionId ? dispatchSnapshot.sessions[target.cwdSessionId]?.cwd : null) ??
-          dispatchSnapshot.sessions[tab.focusedSessionId]?.cwd ??
-          leafIds.map(id => dispatchSnapshot.sessions[id]?.cwd).find(Boolean)
-        if (!cwd) {
-          showToast(
-            kind === 'terminal'
-              ? 'Could not create dispatch terminal: no project directory found'
-              : 'Could not create dispatch agent: no project directory found',
-          )
-          return
-        }
-
-        let sessionId: SessionId
-        try {
-          // Resume identity, runtime flavor, and built-in MCP domains are
-          // passed through unguarded, but they are NOT symmetric and it is
-          // worth being precise about which is which:
-          //
-          //  - `builtInMcpOverrides` really is dropped for a terminal —
-          //    `sessionActions.spawn` gates the resolved capability list it
-          //    produces behind `isAgentProviderKind`.
-          //  - `resumeSessionId` is NOT dropped. It is forwarded to
-          //    `window.api.spawnSession` for every kind; only the value written
-          //    back into the durable `SessionMeta` is kind-gated. It is inert
-          //    for a terminal because main re-gates on kind before resolving a
-          //    transcript, not because anything here filtered it.
-          //  - `providerRuntime` is validated by main against the chosen
-          //    provider factory. It is present when a transcript clone must
-          //    remain OpenCode Terminal instead of reverting to rendered
-          //    OpenCode.
-          //
-          // Neither can be reached today regardless: `continuation` is only
-          // supplied by agent-gated callers, so no terminal spawn carries one.
-          // Adding a local guard would state a rule this call site does not
-          // actually own, which is exactly the kind of comment that outlives
-          // the code it describes.
-          sessionId = await sessionActions.spawn(cwd, {
-            kind,
-            ...(providerRuntime ? { providerRuntime } : {}),
-            resumeSessionId,
-            builtInMcpOverrides,
-          })
-        } catch (err) {
-          showToast(
-            err instanceof Error && err.message.length > 0
-              ? err.message
-              : kind === 'terminal'
-                ? 'Failed to create dispatch terminal'
-                : 'Failed to create dispatch agent',
-          )
-          return
-        }
-
-        // Did the record actually get written? The resolved tab can be closed
-        // between the awaited spawn and this commit, in which case `spawn` has
-        // already registered a live backend that would then belong to no tile
-        // tree and no detached record — an unreachable session leaking in
-        // renderer and main state. The terminal branch used to guard this and
-        // the agent branch did not; merging keeps the guard and extends it to
-        // both kinds rather than preserving the leak in the shared path.
-        //
-        // Reading a flag set inside the updater is only sound because setState
-        // is the zustand store setter, which applies the updater synchronously.
-        // If this ever becomes a React useState setter the flag would still be
-        // false here and every spawn would be killed on the spot.
-        let filed = false
-        setState(prev => {
-          const latestTab = prev.tabs.find(t => t.id === tab.id)
-          if (!latestTab) return prev
-          const projectTabIndex = prev.tabs.findIndex(t => t.id === tab.id)
-          filed = true
-
-          // WHY splitFocused owns this Dispatch detour instead of making every
-          // keybinding and command-palette entry remember Dispatch Mode:
-          // `splitFocused` is the old "make me a new session" primitive. Before
-          // detached sessions, routing that through the tile tree was correct.
-          // In Dispatch Mode it is now wrong: the command-center surface can
-          // create many sessions, and those must not mutate the normal grid
-          // just because the user used the familiar Option-D/Option-C/Option-T
-          // grammar. Keeping the rule here makes all callers agree: normal mode
-          // splits the grid; Dispatch Mode creates a detached dispatch row and
-          // focuses it immediately.
-          return {
-            ...prev,
-            activeTabId: latestTab.id,
-            detachedSessions: {
-              ...prev.detachedSessions,
-              [sessionId]: detachedDispatchRecord(sessionId, latestTab, projectTabIndex),
-            },
-            dispatchMode: applyDispatchSpawnFocus(prev.dispatchMode, sessionId, target.laneIndex),
-          }
-        })
-
-        if (!filed) {
-          // Kill the backend with the kind/cwd THIS call already resolved
-          // rather than leaving it to killSession's ownership proof, which
-          // re-reads them from `refs.stateRef`.
-          //
-          // History: that ref used to be a RENDER-BODY mirror (assigned while
-          // the workspace hook rendered). Immediately after an awaited spawn
-          // React had not re-rendered, so the ref lacked the new session, the
-          // proof bailed on missing metadata, and the kill silently no-opped —
-          // this guard never actually reclaimed anything. #886 subscribed
-          // stateRef to the store synchronously, so the proof would now see the
-          // session; the explicit owner stays as defense in depth, because this
-          // reclaim must not depend on how the ref happens to be wired.
-          // killSession still runs for the renderer-side cleanup; its own
-          // ownership check may then find the backend already gone, harmlessly.
-          await window.api.killOwnedSession({
-            sessionId,
-            kind,
-            ...(providerRuntime ? { providerRuntime } : {}),
-            cwd,
-          })
-            .catch(() => undefined)
-          await sessionActions.killSession(sessionId)
-          return
-        }
-        closeNewAgentPlacement()
+      const leafIds = collectLeaves(tab.root)
+      // WHY a caller may override the visually focused project cwd: lifecycle commands can
+      // target a selected related/orchestration child that is rendered inside a physical parent
+      // pane but intentionally runs in another worktree. Its transcript id, enabled MCP domains,
+      // and cwd are one continuation identity. Mixing the child's domains with the parent's cwd
+      // would mint a fresh token for the wrong project scope.
+      const cwd =
+        continuation?.cwd ??
+        (target.cwdSessionId ? dispatchSnapshot.sessions[target.cwdSessionId]?.cwd : null) ??
+        dispatchSnapshot.sessions[tab.focusedSessionId]?.cwd ??
+        leafIds.map(id => dispatchSnapshot.sessions[id]?.cwd).find(Boolean)
+      if (!cwd) {
+        showToast(
+          kind === 'terminal'
+            ? 'Could not create dispatch terminal: no project directory found'
+            : 'Could not create dispatch agent: no project directory found',
+        )
         return
       }
 
-      // The tile-tree branch lived here until #992: outside Dispatch this
-      // spawned in the focused pane's cwd and split the tree beside it. The
-      // stage is the only workspace now, so the branch above is the whole
-      // creation flow. Reaching this line means the stage has not been seeded
-      // yet (the instant between a fresh install's first tab and bootstrap's
-      // ensureStage) — there is no lane or project focus to resolve a target
-      // from, so creating nothing is the honest outcome. `direction` is inert;
-      // stage 4 renames these commands to what they now are (New Agent / New
-      // Terminal) and drops the argument.
+      let sessionId: SessionId
+      try {
+        // Resume identity, runtime flavor, and built-in MCP domains are
+        // passed through unguarded, but they are NOT symmetric and it is
+        // worth being precise about which is which:
+        //
+        //  - `builtInMcpOverrides` really is dropped for a terminal —
+        //    `sessionActions.spawn` gates the resolved capability list it
+        //    produces behind `isAgentProviderKind`.
+        //  - `resumeSessionId` is NOT dropped. It is forwarded to
+        //    `window.api.spawnSession` for every kind; only the value written
+        //    back into the durable `SessionMeta` is kind-gated. It is inert
+        //    for a terminal because main re-gates on kind before resolving a
+        //    transcript, not because anything here filtered it.
+        //  - `providerRuntime` is validated by main against the chosen
+        //    provider factory. It is present when a transcript clone must
+        //    remain OpenCode Terminal instead of reverting to rendered
+        //    OpenCode.
+        //
+        // Neither can be reached today regardless: `continuation` is only
+        // supplied by agent-gated callers, so no terminal spawn carries one.
+        // Adding a local guard would state a rule this call site does not
+        // actually own, which is exactly the kind of comment that outlives
+        // the code it describes.
+        sessionId = await sessionActions.spawn(cwd, {
+          kind,
+          ...(providerRuntime ? { providerRuntime } : {}),
+          resumeSessionId,
+          builtInMcpOverrides,
+        })
+      } catch (err) {
+        showToast(
+          err instanceof Error && err.message.length > 0
+            ? err.message
+            : kind === 'terminal'
+              ? 'Failed to create dispatch terminal'
+              : 'Failed to create dispatch agent',
+        )
+        return
+      }
+
+      // Did the record actually get written? The resolved tab can be closed
+      // between the awaited spawn and this commit, in which case `spawn` has
+      // already registered a live backend that would then belong to no tile
+      // tree and no detached record — an unreachable session leaking in
+      // renderer and main state. The terminal branch used to guard this and
+      // the agent branch did not; merging keeps the guard and extends it to
+      // both kinds rather than preserving the leak in the shared path.
+      //
+      // Reading a flag set inside the updater is only sound because setState
+      // is the zustand store setter, which applies the updater synchronously.
+      // If this ever becomes a React useState setter the flag would still be
+      // false here and every spawn would be killed on the spot.
+      let filed = false
+      setState(prev => {
+        const latestTab = prev.tabs.find(t => t.id === tab.id)
+        if (!latestTab) return prev
+        const projectTabIndex = prev.tabs.findIndex(t => t.id === tab.id)
+        filed = true
+
+        // WHY splitFocused owns this Dispatch detour instead of making every
+        // keybinding and command-palette entry remember Dispatch Mode:
+        // `splitFocused` is the old "make me a new session" primitive. Before
+        // detached sessions, routing that through the tile tree was correct.
+        // In Dispatch Mode it is now wrong: the command-center surface can
+        // create many sessions, and those must not mutate the normal grid
+        // just because the user used the familiar Option-D/Option-C/Option-T
+        // grammar. Keeping the rule here makes all callers agree: normal mode
+        // splits the grid; Dispatch Mode creates a detached dispatch row and
+        // focuses it immediately.
+        return {
+          ...prev,
+          activeTabId: latestTab.id,
+          detachedSessions: {
+            ...prev.detachedSessions,
+            [sessionId]: detachedDispatchRecord(sessionId, latestTab, projectTabIndex),
+          },
+          stage: applyDispatchSpawnFocus(prev.stage, sessionId, target.laneIndex),
+        }
+      })
+
+      if (!filed) {
+        // Kill the backend with the kind/cwd THIS call already resolved
+        // rather than leaving it to killSession's ownership proof, which
+        // re-reads them from `refs.stateRef`.
+        //
+        // History: that ref used to be a RENDER-BODY mirror (assigned while
+        // the workspace hook rendered). Immediately after an awaited spawn
+        // React had not re-rendered, so the ref lacked the new session, the
+        // proof bailed on missing metadata, and the kill silently no-opped —
+        // this guard never actually reclaimed anything. #886 subscribed
+        // stateRef to the store synchronously, so the proof would now see the
+        // session; the explicit owner stays as defense in depth, because this
+        // reclaim must not depend on how the ref happens to be wired.
+        // killSession still runs for the renderer-side cleanup; its own
+        // ownership check may then find the backend already gone, harmlessly.
+        await window.api.killOwnedSession({
+          sessionId,
+          kind,
+          ...(providerRuntime ? { providerRuntime } : {}),
+          cwd,
+        })
+          .catch(() => undefined)
+        await sessionActions.killSession(sessionId)
+        return
+      }
+      closeNewAgentPlacement()
+      // A tile-tree branch followed this one until #992: outside Dispatch this
+      // spawned in the focused pane's cwd and split the tree beside it, and the
+      // whole flow above sat behind `if (dispatchMode)`. The stage is a
+      // required field now, so this is unconditionally the creation flow.
+      // `direction` is inert; stage 4 renames these commands to what they now
+      // are (New Agent / New Terminal) and drops the argument.
     },
     [
       closeNewAgentPlacement,
@@ -1188,7 +1173,7 @@ export function usePaneActions(
             ...prev.detachedSessions,
             [sessionId]: detachedDispatchRecord(sessionId, latestTab, projectTabIndex),
           },
-          dispatchMode: placement?.selectCreated === false ? prev.dispatchMode : applyDispatchSpawnFocus(prev.dispatchMode, sessionId, target.laneIndex),
+          stage: placement?.selectCreated === false ? prev.stage : applyDispatchSpawnFocus(prev.stage, sessionId, target.laneIndex),
         }
       })
       // A caller needs the exact spawned ID; comparing a before/after census
@@ -1236,11 +1221,9 @@ export function usePaneActions(
       // note on SessionMeta.linkedParentId).
       const rootParentId = parentMeta.linkedParentId ?? parentId
       const rootParentMeta = snapshot.sessions[rootParentId] ?? parentMeta
-      const tiled = snapshot.dispatchMode?.tiled
-      const focusedLane = tiled?.focusedLane ?? null
+      const focusedLane = snapshot.stage.focusedLane
       const targetLaneIndex =
-        focusedLane !== null &&
-        tiled?.lanes[focusedLane]?.selectedSessionId === parentId
+        snapshot.stage.lanes[focusedLane]?.selectedSessionId === parentId
           ? focusedLane
           : null
 
@@ -1305,7 +1288,7 @@ export function usePaneActions(
           // that lane is the one that should flip to the child. Using the
           // latest focusedLane here would make an unrelated lane change race
           // with the child spawn and steal the next prompt target.
-          dispatchMode: applyDispatchSpawnFocus(prev.dispatchMode, sessionId, targetLaneIndex),
+          stage: applyDispatchSpawnFocus(prev.stage, sessionId, targetLaneIndex),
         }
       })
     },
@@ -1538,7 +1521,7 @@ export function usePaneActions(
           const detachedSessions = { ...prev.detachedSessions }
           delete detachedSessions[targetId]
           const next = { ...prev, sessions, detachedSessions }
-          return { ...next, dispatchMode: dispatchModeAfterSessionRemoval(prev, next, targetId) }
+          return { ...next, stage: clearTiledLaneSessions(prev.stage, targetId) }
         }
         const { tab, tabIndex } = placement
         const tabs = [...prev.tabs]
@@ -1556,7 +1539,7 @@ export function usePaneActions(
             focusedSessionId: collectLeaves(nextRoot)[0],
           }
           const next = { ...prev, tabs, sessions }
-          return { ...next, dispatchMode: dispatchModeAfterSessionRemoval(prev, next, targetId) }
+          return { ...next, stage: clearTiledLaneSessions(prev.stage, targetId) }
         }
         // A nonempty project must keep its identity. Promote an existing
         // detached backend into the mandatory grid leaf; never spawn a shell or
@@ -1583,7 +1566,7 @@ export function usePaneActions(
           const detachedSessions = { ...prev.detachedSessions }
           delete detachedSessions[survivor.sessionId]
           const next = { ...prev, tabs, sessions, detachedSessions }
-          return { ...next, dispatchMode: dispatchModeAfterSessionRemoval(prev, next, targetId) }
+          return { ...next, stage: clearTiledLaneSessions(prev.stage, targetId) }
         }
         committed.value = { kind: 'tab-removed', tab, tabIndex }
         return workspaceWithoutTab(prev, tab.id, [targetId])
@@ -1946,37 +1929,33 @@ export function usePaneActions(
       // one change rather than leaving a session whose split silently failed.
       setState(prev => {
         const sessionId = crypto.randomUUID() as SessionId
-        if (prev.dispatchMode) {
-          // Dispatch may focus a detached row in a different project from the
-          // active grid tab. Such a row is not a split anchor. Follow the same
-          // placement contract as new terminals/agents: file a detached row under
-          // the visible target's project and select it in the focused lane.
-          const target = resolveDispatchSpawnTarget(prev)
-          const tabIndex = prev.tabs.findIndex(t => t.id === target.tabId)
-          const tab = prev.tabs[tabIndex]
-          if (!tab) return prev
-          const cwd = (target.cwdSessionId ? prev.sessions[target.cwdSessionId]?.cwd : undefined)
-            ?? prev.sessions[tab.focusedSessionId]?.cwd
-            ?? ''
-          return {
-            ...prev,
-            activeTabId: tab.id,
-            sessions: {
-              ...prev.sessions,
-              [sessionId]: { cwd, kind: 'extension-view', extensionViewId: viewId },
-            },
-            detachedSessions: {
-              ...prev.detachedSessions,
-              [sessionId]: detachedDispatchRecord(sessionId, tab, tabIndex),
-            },
-            dispatchMode: applyDispatchSpawnFocus(prev.dispatchMode, sessionId, target.laneIndex),
-          }
+        // (This block sat behind `if (dispatchMode)` until #992, with a
+        // tile-tree branch — split beside the focused leaf — after it.)
+        //
+        // Dispatch may focus a detached row in a different project from the
+        // active grid tab. Such a row is not a split anchor. Follow the same
+        // placement contract as new terminals/agents: file a detached row under
+        // the visible target's project and select it in the focused lane.
+        const target = resolveDispatchSpawnTarget(prev)
+        const tabIndex = prev.tabs.findIndex(t => t.id === target.tabId)
+        const tab = prev.tabs[tabIndex]
+        if (!tab) return prev
+        const cwd = (target.cwdSessionId ? prev.sessions[target.cwdSessionId]?.cwd : undefined)
+          ?? prev.sessions[tab.focusedSessionId]?.cwd
+          ?? ''
+        return {
+          ...prev,
+          activeTabId: tab.id,
+          sessions: {
+            ...prev.sessions,
+            [sessionId]: { cwd, kind: 'extension-view', extensionViewId: viewId },
+          },
+          detachedSessions: {
+            ...prev.detachedSessions,
+            [sessionId]: detachedDispatchRecord(sessionId, tab, tabIndex),
+          },
+          stage: applyDispatchSpawnFocus(prev.stage, sessionId, target.laneIndex),
         }
-
-        // A tile-tree branch lived here until #992 (split beside the focused
-        // leaf). The stage is the only workspace; before bootstrap has seeded
-        // it there is no lane to show the view in, so nothing is created.
-        return prev
       })
     },
     [setState],
@@ -2000,102 +1979,12 @@ export function usePaneActions(
   }
 }
 
-function dispatchModeAfterSessionRemoval(
-  before: WorkspaceState,
-  after: WorkspaceState,
-  removedSessionId: SessionId,
-): DispatchModeState | null {
-  // Always clear the removed session out of any TILED LANE first. A lane can
-  // hold a session that is NOT the classic dispatch focus, so the
-  // focusedSessionId short-circuit below must not skip lane cleanup — otherwise
-  // the lane dangles at a dead id and the layout's auto-fill effect bounces it
-  // to the first agent. clearTiledLaneSessions is a no-op (same ref) when there
-  // is no tiled layout or no lane held the removed session.
-  const cleared = clearTiledLaneSessions(after.dispatchMode, removedSessionId)
-  if (!cleared || cleared.focusedSessionId !== removedSessionId) {
-    // The user wasn't visibly commanding this row — leave Dispatch focus alone.
-    //
-    // This short-circuit matters because closeSession is also reached from
-    // the Agent Activity modal, which kills *background* panes by id. Without
-    // this branch, killing a stranger row would shuffle the user's visible
-    // Dispatch selection on every removal.
-    return cleared
-  }
-
-  // Row-by-index successor selection.
-  //
-  // The previous version of this helper picked "first row in the same project
-  // tab, else first row globally," which made closing row 6 of a project jump
-  // visibly to row 1 — there is no list-UI convention where a delete moves
-  // the cursor to the start of the list. Native list pickers (Finder, mail
-  // clients, IDE file lists) all keep the cursor at the same visual position
-  // after delete, falling back to the previous row when the deleted row was
-  // last. We mirror that here so close-and-keep-going feels predictable.
-  //
-  // Why diff against `before` instead of just picking afterRows[0]:
-  //   - The "same visual position" is only meaningful relative to where the
-  //     removed row USED to be. We need the index from the pre-removal list
-  //     to project it back into the post-removal list.
-  //   - When removedIndex is past the end of afterRows (closed the last
-  //     row), we fall back to afterRows[removedIndex - 1] so the cursor
-  //     trails behind the deletion instead of leaping to the top.
-  //
-  // When removedIndex is -1 (the closed session wasn't in the visible scope
-  // — e.g. project-scope close that collapsed the active tab and switched
-  // activeTabId to a different project) we deliberately clear focus instead
-  // of inventing a row. The DispatchLayout fallback effect will pick a sane
-  // first-row default on the next render in the new scope.
-  const beforeRows = buildVisibleDispatchRows(before)
-  const afterRows = buildVisibleDispatchRows(after)
-  const removedIndex = beforeRows.findIndex(row => row.sessionId === removedSessionId)
-
-  // Project-first successor selection (issue #261).
-  //
-  // In this codebase a "project" IS a tab — every Dispatch row carries a
-  // `tabId`, and that is the ONLY reliable project key (cwd is not: two tabs
-  // can share a directory, and a tab's cwd can change). The old logic picked
-  // the successor purely by flat-list position
-  // (`afterRows[removedIndex] ?? afterRows[removedIndex - 1]`). That is fine
-  // mid-project, but when the closed row was its project's LAST row,
-  // `afterRows[removedIndex]` is the FIRST row of the *next* project, so focus
-  // silently jumped across the project boundary and the user lost the context
-  // they were working in. We never want a single close to evict you from your
-  // project unless the project itself is now gone.
-  //
-  // So: as long as the closed row's project still has any rows, keep the
-  // cursor INSIDE that project — prefer the next pane down (first surviving
-  // same-project row at or after the removed index, preserving the "cursor
-  // trails the deletion" feel), and only when nothing survives below do we
-  // fall back to the last same-project pane above (the bottom-of-project
-  // close — the actual bug being fixed here).
-  //
-  // Only when the project is fully emptied (e.g. closing a single-pane
-  // project) do we defer to the legacy GLOBAL fallback and let focus leave the
-  // project — there is no in-project row left to land on, so the flat-list
-  // neighbour is the sane "same visual position" choice.
-  //
-  // removedIndex < 0 stays unchanged: the closed session wasn't in the visible
-  // scope, so we clear focus (undefined successor) and let DispatchLayout's
-  // fallback effect pick a first-row default in the new scope.
-  let successor: DispatchAgentRow | undefined
-  if (removedIndex >= 0) {
-    const removedTabId = beforeRows[removedIndex].tabId
-    const sameProjectAfter = afterRows.filter(row => row.tabId === removedTabId)
-    if (sameProjectAfter.length > 0) {
-      // Project survives: never cross the boundary. Next pane down in-project,
-      // else nearest pane up in-project.
-      successor =
-        sameProjectAfter.find(row => afterRows.indexOf(row) >= removedIndex) ??
-        sameProjectAfter[sameProjectAfter.length - 1]
-    } else {
-      // Project is now empty: only NOW may focus leave the project. Legacy
-      // global "same visual position, trailing on last-row close" rule.
-      successor = afterRows[removedIndex] ?? afterRows[removedIndex - 1]
-    }
-  }
-
-  return {
-    ...cleared,
-    focusedSessionId: successor?.sessionId,
-  }
-}
+// `dispatchModeAfterSessionRemoval` lived here until #992. It did two jobs:
+// clear the closed session out of any lane, then pick a SUCCESSOR for the
+// classic-Dispatch single focus (project-first, same visual position; #261).
+// The second job existed because classic Dispatch showed exactly one agent, so
+// closing it had to show another. The stage has no such field: a lane that
+// loses its occupant goes EMPTY and stays empty until the user names a new one
+// (U2, #681) — refilling it with a neighbour is precisely the displacement
+// #681 removed. So the whole helper reduced to `clearTiledLaneSessions`, which
+// the three close commits now call directly.

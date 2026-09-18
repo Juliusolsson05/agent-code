@@ -9,6 +9,7 @@ import type { Entry } from '@shared/types/transcript'
 import type { AgentProviderKind } from '@shared/types/providerKind'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { ReaderView } from './ReaderView'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 function assistantEntry(uuid: string, text: string): Entry {
   return {
@@ -169,10 +170,10 @@ function makeReaderWorkspace(runtime: SessionRuntime = {
       buried: [],
       pinnedSessionIds: [],
       gridRelatedSelections: {},
-      dispatchMode: null,
+      stage: oneLaneStage('session-1'),
     },
     activeTab: tab,
-    dispatchMode: null,
+    stage: oneLaneStage('session-1'),
     readerMode: { tabId: tab.id, focusedSessionId: 'session-1' },
     getRuntime: () => runtime,
     setReaderModeSession: vi.fn(),

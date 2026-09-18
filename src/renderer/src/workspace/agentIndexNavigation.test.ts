@@ -4,6 +4,7 @@ import { navigateToAgentIndexTarget } from '@renderer/workspace/agentIndexNaviga
 import { buildVisibleDispatchRows } from '@renderer/workspace/dispatch/dispatchSelectors'
 import { resolveAgentPaneLabel } from '@renderer/workspace/tile-tree/paneLabels'
 import type { TileNode, WorkspaceState } from '@renderer/workspace/types'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 function leaf(sessionId: string): TileNode {
   return { type: 'leaf', sessionId }
@@ -28,7 +29,7 @@ function makeState(): WorkspaceState {
     ],
     activeTabId: 'tab-a',
     gridRelatedSelections: {},
-    dispatchMode: null,
+    stage: oneLaneStage('a1'),
     sessions: {
       a1: { cwd: '/work/alpha/one', kind: 'claude' },
       a2: { cwd: '/work/alpha/two', kind: 'codex' },
@@ -60,26 +61,20 @@ function target(state: WorkspaceState, label: string) {
 describe('agent index navigation', () => {
   it('focuses an existing Tiled Dispatch lane without changing any lane selection', () => {
     const state = makeState()
-    state.dispatchMode = {
-      scope: 'global',
-      focusedSessionId: 'a1',
-      tiled: {
-        focusedLane: 0,
-        ratios: [0.2, 0.4, 0.4],
-        lanes: [
-          { selectedSessionId: 'a1' },
-          { selectedSessionId: 'b1' },
-        ],
-      },
+    state.stage = {
+      focusedLane: 0,
+      ratios: [0.2, 0.4, 0.4],
+      lanes: [
+        { selectedSessionId: 'a1' },
+        { selectedSessionId: 'b1' },
+      ],
     }
 
     const result = navigateToAgentIndexTarget(state, target(state, 'B1'))
     expect(result?.kind).toBe('focus-existing-tiled-dispatch-lane')
-    expect(result?.state.dispatchMode?.tiled?.focusedLane).toBe(1)
-    expect(result?.state.dispatchMode?.tiled?.lanes).toEqual(
-      state.dispatchMode.tiled?.lanes,
-    )
-    expect(result?.state.dispatchMode?.tiled?.ratios).toEqual([0.2, 0.4, 0.4])
+    expect(result?.state.stage.focusedLane).toBe(1)
+    expect(result?.state.stage.lanes).toEqual(state.stage.lanes)
+    expect(result?.state.stage.ratios).toEqual([0.2, 0.4, 0.4])
   })
 
   it('fills the focused empty lane when the bang intent names an agent', () => {
@@ -93,13 +88,9 @@ describe('agent index navigation', () => {
     // intent writes into the FOCUSED lane rather than discovering some other
     // lane already showing A2.
     const state = makeState()
-    state.dispatchMode = {
-      scope: 'global',
-      focusedSessionId: 'a1',
-      tiled: {
-        focusedLane: 1,
-        lanes: [{ selectedSessionId: 'a1' }, {}],
-      },
+    state.stage = {
+      focusedLane: 1,
+      lanes: [{ selectedSessionId: 'a1' }, {}],
     }
 
     const result = navigateToAgentIndexTarget(
@@ -108,25 +99,21 @@ describe('agent index navigation', () => {
       'open-in-focused-tiled-dispatch-lane',
     )
 
-    expect(result?.state.dispatchMode?.tiled?.focusedLane).toBe(1)
-    expect(result?.state.dispatchMode?.tiled?.lanes[1])
+    expect(result?.state.stage.focusedLane).toBe(1)
+    expect(result?.state.stage.lanes[1])
       .toEqual({ selectedSessionId: 'a2' })
   })
 
   it('opens an already-visible agent in the focused Tiled Dispatch lane for the bang intent', () => {
     const state = makeState()
-    state.dispatchMode = {
-      scope: 'global',
-      focusedSessionId: 'a1',
-      tiled: {
-        focusedLane: 0,
-        ratios: [0.2, 0.4, 0.4],
-        lanes: [
-          { selectedSessionId: 'a1' },
-          { selectedSessionId: 'a2' },
-          { selectedSessionId: 'b1' },
-        ],
-      },
+    state.stage = {
+      focusedLane: 0,
+      ratios: [0.2, 0.4, 0.4],
+      lanes: [
+        { selectedSessionId: 'a1' },
+        { selectedSessionId: 'a2' },
+        { selectedSessionId: 'b1' },
+      ],
     }
 
     const result = navigateToAgentIndexTarget(
@@ -136,7 +123,7 @@ describe('agent index navigation', () => {
     )
 
     expect(result?.kind).toBe('replace-focused-tiled-dispatch-lane')
-    expect(result?.state.dispatchMode?.tiled).toEqual({
+    expect(result?.state.stage).toEqual({
       focusedLane: 0,
       ratios: [0.2, 0.4, 0.4],
       lanes: [
@@ -153,113 +140,82 @@ describe('agent index navigation', () => {
 
   it('replaces only the focused Tiled Dispatch lane when the agent is absent', () => {
     const state = makeState()
-    state.dispatchMode = {
-      scope: 'global',
-      focusedSessionId: 'a1',
-      tiled: {
-        focusedLane: 1,
-        lanes: [
-          { selectedSessionId: 'a1' },
-          { selectedSessionId: 'b1' },
-        ],
-      },
+    state.stage = {
+      focusedLane: 1,
+      lanes: [
+        { selectedSessionId: 'a1' },
+        { selectedSessionId: 'b1' },
+      ],
     }
 
     const result = navigateToAgentIndexTarget(state, target(state, 'A3'))
     expect(result?.kind).toBe('replace-focused-tiled-dispatch-lane')
-    expect(result?.state.dispatchMode?.tiled?.lanes).toEqual([
+    expect(result?.state.stage.lanes).toEqual([
       { selectedSessionId: 'a1' },
       { selectedSessionId: 'a3' },
     ])
-    expect(result?.state.dispatchMode?.tiled?.focusedLane).toBe(1)
+    expect(result?.state.stage.focusedLane).toBe(1)
     expect(result?.requiresWake).toBe(true)
   })
 
   it('keeps the focused copy when a target appears in more than one Tiled Dispatch lane', () => {
     const state = makeState()
-    state.dispatchMode = {
-      scope: 'global',
-      focusedSessionId: 'b1',
-      tiled: {
-        focusedLane: 2,
-        lanes: [
-          { selectedSessionId: 'b1' },
-          { selectedSessionId: 'a1' },
-          { selectedSessionId: 'b1' },
-        ],
-      },
+    state.stage = {
+      focusedLane: 2,
+      lanes: [
+        { selectedSessionId: 'b1' },
+        { selectedSessionId: 'a1' },
+        { selectedSessionId: 'b1' },
+      ],
     }
 
     const result = navigateToAgentIndexTarget(state, target(state, 'B1'))
     expect(result?.kind).toBe('focus-existing-tiled-dispatch-lane')
-    expect(result?.state.dispatchMode?.tiled?.focusedLane).toBe(2)
+    expect(result?.state.stage.focusedLane).toBe(2)
   })
 
-  it('selects a target in classic Dispatch without changing grid focus', () => {
+  // Two classic-Dispatch cases lived here until #992: "selects a target in
+  // classic Dispatch without changing grid focus" and "degrades the bang
+  // intent to ordinary navigation outside Tiled Dispatch". Both exercised the
+  // 'focus-classic-dispatch' kind, which was the fallback for a Dispatch with
+  // no lanes. The stage is a required field, so that state — and the kind —
+  // can no longer be constructed.
+
+  it('moves the active project on a cross-project swap and keeps untouched lanes resolvable', () => {
     const state = makeState()
-    state.dispatchMode = { scope: 'global', focusedSessionId: 'a1' }
-
-    const result = navigateToAgentIndexTarget(state, target(state, 'B1'))
-    expect(result?.kind).toBe('focus-classic-dispatch')
-    expect(result?.state.activeTabId).toBe('tab-b')
-    expect(result?.state.dispatchMode?.focusedSessionId).toBe('b1')
-    expect(result?.state.tabs[0].focusedSessionId).toBe('a1')
-  })
-
-  it('degrades the bang intent to ordinary navigation outside Tiled Dispatch', () => {
-    const state = makeState()
-    state.dispatchMode = { scope: 'global', focusedSessionId: 'a1' }
-
-    const result = navigateToAgentIndexTarget(
-      state,
-      target(state, 'B1'),
-      'open-in-focused-tiled-dispatch-lane',
-    )
-
-    expect(result?.kind).toBe('focus-classic-dispatch')
-    expect(result?.state.activeTabId).toBe('tab-b')
-    expect(result?.state.dispatchMode?.focusedSessionId).toBe('b1')
-  })
-
-  it('promotes a cross-project Tiled Dispatch swap so untouched lanes stay in scope', () => {
-    const state = makeState()
-    state.dispatchMode = {
-      scope: 'project',
-      focusedSessionId: 'a2',
-      tiled: {
-        focusedLane: 1,
-        lanes: [
-          { selectedSessionId: 'a1' },
-          { selectedSessionId: 'a2' },
-        ],
-      },
+    state.stage = {
+      focusedLane: 1,
+      lanes: [
+        { selectedSessionId: 'a1' },
+        { selectedSessionId: 'a2' },
+      ],
     }
 
     const result = navigateToAgentIndexTarget(state, target(state, 'B1'))
 
-    expect(result?.state.dispatchMode?.scope).toBe('global')
-    expect(result?.state.dispatchMode?.tiled?.lanes).toEqual([
+    // This used to assert a promotion of the layout-wide scope to 'global':
+    // project-scoped rows derived from activeTabId, so moving it would have
+    // blanked lane 0. With no scope, the property that mattered is asserted
+    // directly — the active project moves AND the untouched lane's agent is
+    // still in the visible rows.
+    expect(result?.state.activeTabId).toBe('tab-b')
+    expect(result?.state.stage.lanes).toEqual([
       { selectedSessionId: 'a1' },
       { selectedSessionId: 'b1' },
     ])
     expect(buildVisibleDispatchRows(result!.state).map(row => row.sessionId)).toContain('a1')
   })
 
-  it('promotes a forced cross-project mirror while retaining the existing copy', () => {
+  it('mirrors a forced cross-project target while retaining the existing copy', () => {
     const state = makeState()
-    state.dispatchMode = {
-      scope: 'project',
-      focusedSessionId: 'a1',
-      tiled: {
-        focusedLane: 0,
-        lanes: [
-          { selectedSessionId: 'a1' },
-          // Restored layouts can temporarily retain an out-of-scope lane. The
-          // forced intent must ignore this existing copy, then promote scope
-          // before the layout healer evaluates either mirrored lane.
-          { selectedSessionId: 'b1' },
-        ],
-      },
+    state.stage = {
+      focusedLane: 0,
+      lanes: [
+        { selectedSessionId: 'a1' },
+        // The forced intent must ignore this existing copy rather than
+        // jump focus to it: `B1!` means "here", in the focused lane.
+        { selectedSessionId: 'b1' },
+      ],
     }
 
     const result = navigateToAgentIndexTarget(
@@ -269,8 +225,7 @@ describe('agent index navigation', () => {
     )
 
     expect(result?.state.activeTabId).toBe('tab-b')
-    expect(result?.state.dispatchMode?.scope).toBe('global')
-    expect(result?.state.dispatchMode?.tiled?.lanes).toEqual([
+    expect(result?.state.stage.lanes).toEqual([
       { selectedSessionId: 'b1' },
       { selectedSessionId: 'b1' },
     ])
@@ -292,25 +247,21 @@ describe('agent index navigation', () => {
       projectTabIndex: 0,
       detachedAt: 20,
     }
-    state.dispatchMode = {
-      scope: 'global',
-      focusedSessionId: 'a1',
-      tiled: {
-        focusedLane: 1,
-        lanes: [
-          { selectedSessionId: 'a1' },
-          { selectedSessionId: 'b1' },
-        ],
-      },
+    state.stage = {
+      focusedLane: 1,
+      lanes: [
+        { selectedSessionId: 'a1' },
+        { selectedSessionId: 'b1' },
+      ],
     }
 
     const result = navigateToAgentIndexTarget(state, target(state, 'A4'))
     expect(result?.kind).toBe('replace-focused-tiled-dispatch-lane')
-    expect(result?.state.dispatchMode?.tiled?.lanes).toEqual([
+    expect(result?.state.stage.lanes).toEqual([
       { selectedSessionId: 'a1' },
       { selectedSessionId: 'a4' },
     ])
-    expect(result?.state.dispatchMode?.tiled?.focusedLane).toBe(1)
+    expect(result?.state.stage.focusedLane).toBe(1)
     expect(result?.requiresWake).toBe(true)
   })
 

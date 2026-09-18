@@ -139,11 +139,12 @@ export type UiShellState = {
    * WHY the target is captured up front rather than resolved at commit time:
    * exactly the reason `dispatchAttachIntent` documents above. Tiled Dispatch
    * lane selection does not mutate `activeTabId`, and
-   * `resolveDispatchSpawnTarget`'s tiled branch reads the focused LANE, never
-   * `dispatchMode.focusedSessionId`. So the tempting cheap version — focus the
-   * project, then open the normal flow — works in classic Dispatch and
-   * silently spawns into whatever project lane 0 happens to show in Tiled
-   * Dispatch. The visible header already knows its own tab; capture it once.
+   * `resolveDispatchSpawnTarget` reads the focused LANE, never the active
+   * project. So the tempting cheap version — activate the project, then open
+   * the normal flow — silently spawns into whatever project the focused lane
+   * happens to show. (It did work in classic Dispatch, which had a single
+   * focus the header click could move; #992 removed that layout.) The visible
+   * header already knows its own tab; capture it once.
    *
    * NOTE this does NOT make clicking "+" selection-neutral: the spawn still
    * sets `activeTabId` to the target project unconditionally, so the active

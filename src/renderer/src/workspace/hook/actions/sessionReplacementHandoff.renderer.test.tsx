@@ -9,6 +9,7 @@ import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
 
 import { useSessionActions } from './session'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 vi.mock('@renderer/workspace/hook/actions/initialHistory', () => ({
   loadInitialHistoryForSession: vi.fn(async () => undefined),
@@ -54,7 +55,7 @@ describe('renderer session replacement handoff', () => {
       detachedSessions: {},
       buried: [],
       pinnedSessionIds: [],
-      dispatchMode: null,
+      stage: oneLaneStage(predecessorId),
     } as WorkspaceState
     let runtimes: Record<SessionId, SessionRuntime> = {
       [predecessorId]: {

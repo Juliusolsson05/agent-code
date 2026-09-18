@@ -1,86 +1,49 @@
 import type {
-  DispatchModeState,
   ProjectRef,
   SessionId,
   TabId,
   TiledDispatchState,
 } from '@renderer/workspace/types'
-import { normalizeDispatchModeGrid } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
+import { normalizeStage } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import {
-  defaultSeededStage,
   projectAffinityOf,
-  resolveEntrySeed,
   type WorkspaceAffinityInput,
 } from '@renderer/workspace/workspaceShape'
 
 // ---------------------------------------------------------------------------
-// Live v3 views over the current workspace state (#992, stage 2).
+// Live v3 views over the current workspace state (#992).
 //
-// WHY derivation instead of a second source of truth: during the staged
-// merge the v2 structures (tabs trees, detachedSessions, dispatchMode) are
-// still the STORED state that actions mutate. Rather than dual-writing a
-// parallel v3 state on every action, the stage/projects/pool-affinity views
-// are derived here with the SAME precedence the persisted migration uses
-// (workspaceShape.ts exports the shared helpers). Stage 3 inverts this:
-// v3 becomes stored, v2 is deleted, and these selectors collapse into
-// plain field reads.
+// New UI code consumes THESE functions rather than reaching into state, which
+// is what lets the remaining v2 structures (tab tile trees, the detached
+// bucket) be deleted underneath them without a rewrite of every reader.
 //
-// Every new UI code should consume THESE functions, never
-// `state.dispatchMode?.tiled` or tab trees directly — that is what makes
-// stage 3 a deletion instead of a rewrite.
+// History: through stage 2 of the merge the lane grid lived in an optional
+// `dispatchMode.tiled`, and `stageOfWorkspace` DERIVED a seeded default for a
+// workspace that had none, behind a one-slot reference cache. The stage is a
+// required field now (`WorkspaceState.stage`), so there is nothing to derive
+// and no cache to keep coherent.
 // ---------------------------------------------------------------------------
 
 /**
- * The stage: ragged rows of lanes. A stored tiled grid passes through
- * normalized (same repair chain rehydrate applies); a workspace with no
- * grid gets the seeded default — which is #977's entry continuity, derived
- * rather than written, so it can never go stale or desync from disk.
+ * The stage, shape-normalized. `normalizeStage` returns the SAME reference
+ * when the stored grid is already current, which is the identity contract the
+ * lane memos downstream rely on.
  */
-export function stageOfWorkspace(state: WorkspaceAffinityInput): TiledDispatchState {
-  const normalized = normalizeDispatchModeGrid(state.dispatchMode ?? null)
-  if (normalized?.tiled) return normalized.tiled
-  return derivedDefaultStage(state)
-}
-
-// One-slot reference cache for the derived default stage. WHY: components
-// memoize on the returned object; recomputing a fresh (deep-equal) stage on
-// every unrelated state change would defeat every downstream memo and
-// remount lanes for free. The cache key is the two inputs the derivation
-// actually reads — the dispatchMode reference and the resolved seed id —
-// so any change to either produces a new stage object while everything
-// else returns the cached one. A stored grid never enters this cache
-// (normalizeDispatchModeGrid already returns a stable reference).
-let derivedStageCache: {
-  dispatchMode: DispatchModeState | null | undefined
-  seed: SessionId | null
-  stage: TiledDispatchState
-} | null = null
-
-function derivedDefaultStage(state: WorkspaceAffinityInput): TiledDispatchState {
-  const seed = resolveEntrySeed(state)
-  if (
-    derivedStageCache &&
-    derivedStageCache.dispatchMode === state.dispatchMode &&
-    derivedStageCache.seed === seed
-  ) {
-    return derivedStageCache.stage
-  }
-  const stage = defaultSeededStage(seed)
-  derivedStageCache = { dispatchMode: state.dispatchMode, seed, stage }
-  return stage
+export function stageOfWorkspace(state: { stage: TiledDispatchState }): TiledDispatchState {
+  return normalizeStage(state.stage)
 }
 
 /**
- * Projects (former tabs) as grouping-only references: id + title. Live
- * derivation from tabs keeps ids identical to the persisted migration's,
- * so labels, row bindings, and `A1/B7` letters are stable across the merge.
+ * Projects (former tabs) as grouping-only references: id + title. Ids are the
+ * old TabIds, so labels, row bindings and `A1/B7` letters are stable across
+ * the merge.
  */
-export function projectsOfWorkspace(state: WorkspaceAffinityInput): ProjectRef[] {
+export function projectsOfWorkspace(state: Pick<WorkspaceAffinityInput, 'tabs'>): ProjectRef[] {
   return state.tabs.map(tab => ({ id: tab.id, title: tab.title }))
 }
 
 /** The active project: spawn defaults + index highlight. Owns nothing. */
-export function activeProjectIdOfWorkspace(state: WorkspaceAffinityInput): TabId {
+export function activeProjectIdOfWorkspace(state: Pick<WorkspaceAffinityInput, 'activeTabId'>): TabId {
   return state.activeTabId
 }
 

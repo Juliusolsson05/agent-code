@@ -7,6 +7,7 @@ import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import type { WorkspaceState } from '@renderer/workspace/types'
 
 import { useAutoSave } from './useAutoSave'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 vi.mock('@renderer/performance/client', () => ({
   span: () => ({ end: vi.fn(), fail: vi.fn() }),
@@ -40,7 +41,7 @@ describe('workspace autosave durability retry', () => {
         focusedSessionId: 'successor',
       }],
       activeTabId: 'tab-a',
-      dispatchMode: null,
+      stage: oneLaneStage('successor'),
       sessions: {
         successor: { cwd: '/recorded/worktree', kind: 'codex' },
       },
@@ -83,7 +84,7 @@ describe('workspace autosave durability retry', () => {
     unmount()
   })
 
-  it('writes the v3 stage triple beside the v2 fields, migration-consistent (#992)', async () => {
+  it('writes the live stage and the v3 project triple, and no v2 mode envelope (#992)', async () => {
     vi.useFakeTimers()
     vi.spyOn(console, 'warn').mockImplementation(() => undefined)
     const state: WorkspaceState = {
@@ -94,10 +95,20 @@ describe('workspace autosave durability retry', () => {
         focusedSessionId: 'successor',
       }],
       activeTabId: 'tab-a',
-      // No stored grid: the v3 half must be exactly what the read-time
-      // migration derives from the v2 half — the seeded [2] default with
-      // the focused session in lane 0.
-      dispatchMode: null,
+      // The user's actual shape: three lanes, the middle one empty by choice,
+      // focus on the last. Autosave must write THIS, verbatim.
+      //
+      // Through stage 2 of #992 this case had no stored grid and asserted the
+      // opposite kind of thing — that the v3 half was DERIVED at save time
+      // (the seeded [2] default, focused session in lane 0). A derived stage
+      // at the durability boundary would now overwrite the user's lanes with
+      // a guess on every save, so the contract is inverted: what is in memory
+      // is what is written.
+      stage: {
+        lanes: [{ selectedSessionId: 'successor' }, {}, { selectedSessionId: 'successor' }],
+        rows: [{ length: 3 }],
+        focusedLane: 2,
+      },
       sessions: {
         successor: { cwd: '/recorded/worktree', kind: 'codex' },
       },
@@ -125,11 +136,16 @@ describe('workspace autosave durability retry', () => {
     const saved = JSON.parse(saveWorkspace.mock.calls[0][0]).workspace
     expect(saved.projects).toEqual([{ id: 'tab-a', title: 'recorded' }])
     expect(saved.activeProjectId).toBe('tab-a')
-    expect(saved.stage).toMatchObject({
-      lanes: [{ selectedSessionId: 'successor' }, {}],
-      rows: [{ length: 2 }],
-      focusedLane: 0,
+    expect(saved.stage).toEqual({
+      lanes: [{ selectedSessionId: 'successor' }, {}, { selectedSessionId: 'successor' }],
+      rows: [{ length: 3 }],
+      focusedLane: 2,
     })
+    // The envelope that carried a scope and a classic focus is not written.
+    // (An older build opening this file boots its tree layout from the v2
+    // tabs, which are still written until stage 3b-ii.)
+    expect(saved).not.toHaveProperty('dispatchMode')
+    expect(saved.tabs).toHaveLength(1)
     // The session row carries its pool membership.
     expect(saved.sessions.successor).toMatchObject({ projectId: 'tab-a' })
 
@@ -147,7 +163,7 @@ describe('workspace autosave durability retry', () => {
         focusedSessionId: 'successor',
       }],
       activeTabId: 'tab-a',
-      dispatchMode: null,
+      stage: oneLaneStage('successor'),
       sessions: {
         successor: { cwd: '/recorded/worktree', kind: 'codex' },
       },
@@ -204,7 +220,7 @@ describe('workspace autosave durability retry', () => {
         focusedSessionId: 'successor',
       }],
       activeTabId: 'tab-a',
-      dispatchMode: null,
+      stage: oneLaneStage('successor'),
       sessions: {
         successor: { cwd: '/recorded/worktree', kind: 'codex' },
       },

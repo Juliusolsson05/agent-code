@@ -6,7 +6,6 @@ import type {
   SpotlightState,
 } from '@renderer/workspace/types'
 import type { SessionId, Tab, TabId, WorkspaceState } from '@renderer/workspace/types'
-import { resolveTabSessions } from '@renderer/workspace/queries'
 import {
   buildVisibleDispatchRows,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
@@ -106,11 +105,13 @@ function validFocusSessionIdsForMode(
   // user clicks a detached row in non-Dispatch Reader → validator
   // sees the id isn't a grid leaf → forces focus back to the first
   // grid pane → user's selection silently disappears.
-  const sessionIds = state.dispatchMode
-    ? buildVisibleDispatchRows(state)
-      .filter(row => row.tabId === tabId)
-      .map(row => row.sessionId)
-    : resolveTabSessions(state, tabId)
+  //
+  //   - Then the stage became the only layout (#992) and the views dropped
+  //     their non-Dispatch branch, so this did too. The rule is unchanged:
+  //     whatever ReaderView/SpotlightView list, this lists.
+  const sessionIds = buildVisibleDispatchRows(state)
+    .filter(row => row.tabId === tabId)
+    .map(row => row.sessionId)
 
   return options.agentOnly
     ? sessionIds.filter(sessionId => isAgentSessionKind(state.sessions[sessionId]?.kind))

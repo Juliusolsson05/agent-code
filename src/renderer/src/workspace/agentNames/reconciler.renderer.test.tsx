@@ -7,6 +7,7 @@ import { useAppStore } from '@renderer/app-state/store'
 import { resolveAgentName } from '@renderer/workspace/agentNames/selectors'
 import { useAgentNameReconciler } from '@renderer/workspace/agentNames/useAgentNameReconciler'
 import type { WorkspaceState } from '@renderer/workspace/types'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 const initialStore = useAppStore.getState()
 const originalApiDescriptor = Object.getOwnPropertyDescriptor(window, 'api')
@@ -36,7 +37,7 @@ function workspace(): WorkspaceState {
       sourceTabIndex: 0,
     }],
     pinnedSessionIds: [],
-    dispatchMode: null,
+    stage: oneLaneStage('agent-one'),
   } as unknown as WorkspaceState
 }
 

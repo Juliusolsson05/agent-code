@@ -48,7 +48,12 @@ it('routes real renderer observations across two windows and survives reload wit
       const id = location.hash.slice(1)
       useAppStore.setState({ workspaceState: {
         tabs: [{id, title: id, root: {type: 'leaf', sessionId: id + '-agent'}, focusedSessionId: id + '-agent'}],
-        activeTabId: id, dispatchMode: null, sessions: { [id + '-agent']: {cwd: '/control-trial/' + id, kind: 'codex'} },
+        // One lane showing this window's agent: the command target is the
+        // focused lane's occupant since #992 (it used to fall back to the
+        // tab's tree focus with Dispatch off). Inline rather than imported —
+        // this string is a generated renderer entry, not a test module.
+        stage: { lanes: [{ selectedSessionId: id + '-agent' }], rows: [{ length: 1 }], focusedLane: 0 },
+        activeTabId: id, sessions: { [id + '-agent']: {cwd: '/control-trial/' + id, kind: 'codex'} },
         detachedSessions: {}, buried: [], pinnedSessionIds: []
       }})
       window.addAmbiguousAgent = () => useAppStore.getState().setWorkspaceState(state => ({ ...state, sessions: { ...state.sessions, 'right-agent': {cwd: '/ambiguous', kind: 'codex'} } }))

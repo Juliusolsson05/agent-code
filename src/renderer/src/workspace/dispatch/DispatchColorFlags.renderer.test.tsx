@@ -83,7 +83,6 @@ describe('Dispatch color-flag layout', () => {
         groups={[group()]}
         pinnedRows={[]}
         activeSessionId={FLAGGED_SESSION_ID}
-        dispatchScope="project"
         focusSessionInTab={vi.fn()}
         showWorktreeBadges={false}
       />,

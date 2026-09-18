@@ -327,7 +327,6 @@ function GridRowView({
               ? grid.lanes[focusedLaneInRow]?.selectedSessionId ?? null
               : null
           }
-          dispatchScope={workspace.state.dispatchMode?.scope === 'global' ? 'global' : 'project'}
           focusSessionInTab={(_tabId, sessionId) => selectIntoRow(sessionId)}
           targetLaneIndex={focusedLaneInRow ?? start}
           showWorktreeBadges={showWorktreeBadges}
@@ -442,7 +441,14 @@ function GridRowView({
                   )
                 ) : (
                   <DispatchEmpty
-                    message={lane?.selectedSessionId ? 'Not in this scope' : 'Empty lane'}
+                    // A lane that NAMES a session but cannot resolve it is showing
+                    // a dead id: the window between a session disappearing (killed
+                    // from Agent Activity, its project closed) and the clear path
+                    // blanking the lane. It read 'Not in this scope' until #992,
+                    // when the common cause was a project-scoped index that did
+                    // not list another project's agent; with no scope, "gone" is
+                    // the only way to get here.
+                    message={lane?.selectedSessionId ? 'Agent no longer available' : 'Empty lane'}
                     // The hint names a key that acts on `focusedLane`, so it
                     // must only appear in the lane that keystroke would move.
                     // Advertising it in an unfocused lane would tell the user

@@ -36,10 +36,10 @@ export type DispatchTabGroup = {
 export function buildDispatchGroups(
   state: WorkspaceState,
 ): DispatchTabGroup[] {
-  const activeOnly = state.dispatchMode?.scope !== 'global'
-  const sourceTabs = activeOnly
-    ? state.tabs.filter(tab => tab.id === state.activeTabId)
-    : state.tabs
+  // Every project, always. A layout-wide 'project' scope filtered this to the
+  // active tab until #992; the command that switched scope died with the mode,
+  // and a ROW's projectTabIds binding (rowScopedRows) is the only filter now.
+  const sourceTabs = state.tabs
 
   // Pins live in their own section at the top of the list. A pinned
   // session is intentionally NOT also rendered in its project group —
@@ -319,23 +319,25 @@ export function isPinned(state: WorkspaceState, sessionId: SessionId): boolean {
  *  - `cwdSessionId` — the existing session whose cwd the new agent
  *                     inherits, or null to let the caller fall back to
  *                     the tab's leaves.
- *  - `laneIndex`    — in Tiled Dispatch, the lane the new agent should
- *                     occupy so it appears where the user is looking;
- *                     null in classic Dispatch.
+ *  - `laneIndex`    — the lane the new agent should occupy so it appears
+ *                     where the user is looking. This resolver always
+ *                     returns one now (the focused lane); the type stays
+ *                     nullable because callers may override it with "no
+ *                     lane" — a linked agent whose parent is not in the
+ *                     focused lane must not take that lane.
  *
  * WHY this is a selector instead of inline logic in the spawn actions:
  * `createDetachedDispatchAgent` and `splitFocused` both have to answer
- * "which project does a new agent belong to?" and they used to read
- * cwd from `dispatchMode.focusedSessionId` but the project tab from
- * `activeTabId`. Those two fields agree in classic Dispatch (focusing a
- * row syncs both via focusDispatchSession) but DIVERGE in Tiled
- * Dispatch: lane focus/selection (setTiledFocusedLane /
- * selectTiledLaneSession) writes only `tiled.focusedLane` and
- * `lanes[].selectedSessionId` — never the classic focus fields. The
- * result was new agents landing in the stale active tab instead of the
- * focused lane's project (issue #266 / #248 regression). Resolving the
- * target in one place keeps cwd and projectTab on the SAME project for
- * both surfaces.
+ * "which project does a new agent belong to?" and they used to read cwd
+ * from a classic-Dispatch focus field but the project tab from
+ * `activeTabId`. Those two agreed in classic Dispatch and DIVERGED once
+ * lanes existed: lane focus/selection writes only `focusedLane` and
+ * `lanes[].selectedSessionId`. The result was new agents landing in the
+ * stale active tab instead of the focused lane's project (issue #266 /
+ * #248 regression). #992 removed the classic focus outright, which
+ * removes the divergence at its source — but the rule that made this a
+ * selector still holds: cwd and project must come from the SAME place,
+ * resolved once.
  */
 export type DispatchSpawnTarget = {
   tabId: TabId
@@ -360,67 +362,47 @@ export type DispatchSpawnTarget = {
  * place that folds the legacy field and repairs lengths.
  */
 export function focusedLaneBoundProjectTabIds(state: WorkspaceState): readonly TabId[] {
-  const tiled = state.dispatchMode?.tiled
-  if (!tiled) return []
+  const tiled = state.stage
   const grid = normalizeGridShape(tiled)
   const rowIndex = rowIndexForLane(grid.rows, tiled.focusedLane)
   return (rowIndex >= 0 ? grid.rows[rowIndex]?.projectTabIds : undefined) ?? []
 }
 
 export function resolveDispatchSpawnTarget(state: WorkspaceState): DispatchSpawnTarget {
-  const dm = state.dispatchMode
-  if (!dm) {
-    return { tabId: state.activeTabId, cwdSessionId: null, laneIndex: null }
-  }
-
   // The visible rows are the scope-correct source of "which tab owns this
   // session?" — the same list the user sees and that lane resolution uses.
   const rows = buildVisibleDispatchRows(state)
   const tabForSession = (id: SessionId | undefined | null): TabId | null =>
     id ? rows.find(row => row.sessionId === id)?.tabId ?? null : null
 
-  // Tiled Dispatch: the focused lane is the command target.
-  if (dm.tiled) {
-    const laneIndex = dm.tiled.focusedLane
-    const laneSessionId = dm.tiled.lanes[laneIndex]?.selectedSessionId ?? null
-    const laneTab = tabForSession(laneSessionId)
-    if (laneTab) {
-      return { tabId: laneTab, cwdSessionId: laneSessionId, laneIndex }
-    }
-    // Focused lane is empty / its agent is gone. If its ROW is bound to a
-    // project, that binding is the answer and outranks every fallback below:
-    // the row's index offers only that project, so spawning into it from a
-    // stale classic focus would file the new agent under a project the row does
-    // not even list. Bindings constrain what may live in a row, and a spawn is
-    // something coming to live there.
-    //
-    // A row can be bound to SEVERAL projects, so "which project does a new
-    // agent belong to" needs a rule rather than a lookup. The active tab when
-    // it is one of them, otherwise the first: deterministic, and "the project
-    // you were last in" is the least surprising answer. The per-group `+` in
-    // the index is unaffected — it already carries an explicit tabId.
-    const bound = focusedLaneBoundProjectTabIds(state)
-    if (bound.length > 0) {
-      const tabId = bound.includes(state.activeTabId) ? state.activeTabId : bound[0]!
-      return { tabId, cwdSessionId: null, laneIndex }
-    }
-    // Unbound: fall back to the classic focus, then the active tab — but still
-    // place the new agent INTO the focused lane.
-    const focusTab = tabForSession(dm.focusedSessionId)
-    return {
-      tabId: focusTab ?? state.activeTabId,
-      cwdSessionId: focusTab ? dm.focusedSessionId ?? null : null,
-      laneIndex,
-    }
+  // The focused lane is the command target.
+  const laneIndex = state.stage.focusedLane
+  const laneSessionId = state.stage.lanes[laneIndex]?.selectedSessionId ?? null
+  const laneTab = tabForSession(laneSessionId)
+  if (laneTab) {
+    return { tabId: laneTab, cwdSessionId: laneSessionId, laneIndex }
   }
-
-  // Classic Dispatch: prefer the focused session's own tab so cwd and
-  // projectTab stay on the same project even if activeTabId ever drifts.
-  const focusTab = tabForSession(dm.focusedSessionId)
-  if (focusTab) {
-    return { tabId: focusTab, cwdSessionId: dm.focusedSessionId ?? null, laneIndex: null }
+  // Focused lane is empty / its agent is gone. If its ROW is bound to a
+  // project, that binding is the answer and outranks every fallback below:
+  // the row's index offers only that project, so spawning into it from the
+  // active project would file the new agent under a project the row does
+  // not even list. Bindings constrain what may live in a row, and a spawn is
+  // something coming to live there.
+  //
+  // A row can be bound to SEVERAL projects, so "which project does a new
+  // agent belong to" needs a rule rather than a lookup. The active tab when
+  // it is one of them, otherwise the first: deterministic, and "the project
+  // you were last in" is the least surprising answer. The per-group `+` in
+  // the index is unaffected — it already carries an explicit tabId.
+  const bound = focusedLaneBoundProjectTabIds(state)
+  if (bound.length > 0) {
+    const tabId = bound.includes(state.activeTabId) ? state.activeTabId : bound[0]!
+    return { tabId, cwdSessionId: null, laneIndex }
   }
-  return { tabId: state.activeTabId, cwdSessionId: null, laneIndex: null }
+  // Unbound and empty: the active project — but still place the new agent
+  // INTO the focused lane. (A classic single-selection focus was consulted
+  // first until #992; that second focus truth no longer exists.)
+  return { tabId: state.activeTabId, cwdSessionId: null, laneIndex }
 }
 
 function sessionTitle(

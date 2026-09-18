@@ -86,18 +86,19 @@ export function resolveAgentPaneLabel(
   // current Dispatch index.
   //
   // (A Tile Tabs precedence check lived here until #992 deleted Tile Tabs.)
-  if (state.dispatchMode) {
-    const dispatchRow = buildVisibleDispatchRows(state).find(
-      row => row.label === requestedLabel,
+  //
+  // (The index lookup was gated on "Dispatch is on" until the stage became a
+  // required field. The index is always on screen now, so it always wins.)
+  const dispatchRow = buildVisibleDispatchRows(state).find(
+    row => row.label === requestedLabel,
+  )
+  if (dispatchRow) {
+    return buildAgentPaneLabelTarget(
+      state,
+      requestedLabel,
+      dispatchRow.sessionId,
+      dispatchRow.tabId,
     )
-    if (dispatchRow) {
-      return buildAgentPaneLabelTarget(
-        state,
-        requestedLabel,
-        dispatchRow.sessionId,
-        dispatchRow.tabId,
-      )
-    }
   }
 
   for (let tabIndex = 0; tabIndex < state.tabs.length; tabIndex++) {

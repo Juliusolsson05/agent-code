@@ -22,14 +22,15 @@ function workspaceState(): WorkspaceState {
       { id: 'tabB', title: 'project-b', root: { type: 'leaf', sessionId: 'b1' }, focusedSessionId: 'b1' },
       { id: 'tabC', title: 'project-c', root: { type: 'leaf', sessionId: 'c1' }, focusedSessionId: 'c1' },
     ],
-    activeTabId: 'tabA',
-    dispatchMode: {
-      scope: 'global',
-      focusedSessionId: 'b1',
-      tiled: {
-        focusedLane: 2,
-        lanes: [{ selectedSessionId: 'a1' }, { selectedSessionId: 'b1' }, {}],
-      },
+    // Active project B, focused lane EMPTY: plain New Agent therefore targets
+    // B (an empty unbound lane falls back to the active project). B rather
+    // than A on purpose, so "the dialog opens on New Agent's project" cannot
+    // pass by merely picking the first project. Until #992 this was said with
+    // a classic-Dispatch focus on b1 while the active tab stayed A.
+    activeTabId: 'tabB',
+    stage: {
+      focusedLane: 2,
+      lanes: [{ selectedSessionId: 'a1' }, { selectedSessionId: 'b1' }, {}],
     },
     sessions: {
       a1: { cwd: '/work/project-a', kind: 'claude' },
@@ -234,7 +235,7 @@ describe('NewAgentInDialog', () => {
     // can be bound only to projects that no longer exist. "No projects are
     // open" would be false — other projects are — and gives no way forward.
     const state = workspaceState()
-    state.dispatchMode!.tiled!.rows = [{ length: 3, projectTabIds: ['tab-closed'] }]
+    state.stage.rows = [{ length: 3, projectTabIds: ['tab-closed'] }]
     const { press } = harness({ state })
 
     press('Enter')

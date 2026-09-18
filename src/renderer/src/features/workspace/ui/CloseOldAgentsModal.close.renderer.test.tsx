@@ -32,7 +32,7 @@ afterEach(() => {
 function mountCleanup(options: { working?: boolean; linked?: boolean } = {}) {
   const state: WorkspaceState = {
     tabs: [{ id: 'tab', title: 'Project', root: { type: 'leaf', sessionId: 'root' }, focusedSessionId: 'root' }],
-    activeTabId: 'tab', dispatchMode: { scope: 'project', focusedSessionId: 'root' },
+    activeTabId: 'tab', stage: { lanes: [{ selectedSessionId: 'root' }], rows: [{ length: 1 }], focusedLane: 0 },
     sessions: {
       root: { cwd: '/project', kind: 'claude' },
       worker: { cwd: '/project', kind: 'codex', ...(options.linked ? { linkedParentId: 'root' } : {}) },

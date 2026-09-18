@@ -4,6 +4,7 @@ import { useAppStore } from '@renderer/app-state/hooks'
 import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { OrchestrationRendererRequest, OrchestrationRendererResponse } from '@mcp/shared/orchestrationTypes'
 import { useWorkspace } from './index'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 // Mount the real renderer create handler, pane action, session spawn action,
 // and workspace store. Boot/history subscriptions are unrelated ingress;
@@ -28,7 +29,7 @@ beforeEach(() => {
   useAppStore.setState({
     workspaceState: {
       ...originalStore.workspaceState,
-      activeTabId: 'project', dispatchMode: null, pinnedSessionIds: [], buried: [],
+      activeTabId: 'project', stage: oneLaneStage('root'), pinnedSessionIds: [], buried: [],
       tabs: [{ id: 'project', title: 'Project', focusedSessionId: 'root', root: { type: 'leaf', sessionId: 'root' } }],
       sessions: {
         root: { kind: 'claude', cwd: '/repo' },

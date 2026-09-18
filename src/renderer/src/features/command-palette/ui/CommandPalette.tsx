@@ -315,13 +315,6 @@ function OpenCommandPalette({
   const toggleFileTreeVisible = useGlobalEditorStore(state => state.toggleFileTreeVisible)
   const editorFullscreen = useGlobalEditorStore(state => state.editorFullscreen)
 
-  const enterDispatchMode = workspace.enterDispatchMode
-  const exitDispatchMode = workspace.exitDispatchMode
-  const enterGlobalDispatch = useCallback(
-    () =>
-      workspace.setDispatchScope(workspace.dispatchMode?.scope === 'global' ? 'project' : 'global'),
-    [workspace],
-  )
   const setAggressiveDebugPersistence = useCallback(
     (enabled: boolean) => setSettings({ aggressiveDebugPersistence: enabled }),
     [setSettings],
@@ -368,8 +361,6 @@ function OpenCommandPalette({
   const globalEditorOpen = useAppStore(state => state.globalEditorOpen)
   const caffeinateActive = caffeinateStatus?.active === true
   const caffeinateSupported = caffeinateStatus?.supported !== false
-  const dispatchModeEnabled = workspace.dispatchMode !== null
-  const globalDispatchEnabled = workspace.dispatchMode?.scope === 'global'
 
   const [query, setQuery] = useState('')
   const [selectedIndex, setSelectedIndex] = useState(0)
@@ -574,9 +565,6 @@ function OpenCommandPalette({
         closeGlobalEditor: closeGlobalEditorAction,
         toggleGlobalEditor,
         toggleFileTreeVisible,
-        enterDispatchMode,
-        enterGlobalDispatch,
-        exitDispatchMode,
         openTiledDispatchPrompt,
         openLinkedAgent,
         openNewAgentIn,
@@ -637,8 +625,6 @@ function OpenCommandPalette({
         focusedCwd,
         fileTreeVisible,
         editorFullscreen,
-        dispatchModeEnabled,
-        globalDispatchEnabled,
         agentViewMode,
         commandVisibilityOverrides,
         navigationCommandsEnabled,
@@ -697,9 +683,6 @@ function OpenCommandPalette({
       closeGlobalEditorAction,
       toggleGlobalEditor,
       toggleFileTreeVisible,
-      enterDispatchMode,
-      enterGlobalDispatch,
-      exitDispatchMode,
       openTiledDispatchPrompt,
       openLinkedAgent,
       openNewAgentIn,
@@ -752,8 +735,6 @@ function OpenCommandPalette({
       focusedCwd,
       fileTreeVisible,
       editorFullscreen,
-      dispatchModeEnabled,
-      globalDispatchEnabled,
       agentViewMode,
       commandVisibilityOverrides,
       navigationCommandsEnabled,
@@ -923,17 +904,13 @@ function OpenCommandPalette({
       : null,
     [directAgentQuery, workspace.state],
   )
-  // WHY the syntax intent is normalized against the visible surface before we
-  // build the row: `A2!` can only mean "Here" when a Tiled Dispatch lane is on
-  // screen. Persisted state can contain a hidden Dispatch layout underneath
-  // Tiled Tabs, and grid/classic Dispatch deliberately retain ordinary
-  // coordinate navigation. Passing the raw bang there would make row zero
-  // promise "Open Here" while Enter actually switches to an existing pane.
-  const directAgentIntent =
-    directAgentQuery?.intent === 'open-in-focused-tiled-dispatch-lane' &&
-    workspace.state.dispatchMode?.tiled
-      ? directAgentQuery.intent
-      : 'reuse-existing-view'
+  // The bang intent (`A2!` = "open it HERE, in the focused lane") passes
+  // straight through. It used to be normalized to 'reuse-existing-view' unless
+  // a Tiled Dispatch lane was on screen, because the grid and classic Dispatch
+  // had no lane for "Here" to mean and row zero would have promised "Open
+  // Here" while Enter switched to an existing pane. A lane is always on screen
+  // now (#992), so "Here" always has a referent.
+  const directAgentIntent = directAgentQuery?.intent ?? 'reuse-existing-view'
   const directAgentCommand = useMemo(
     () =>
       directAgentTarget && directAgentQuery

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { workspaceControlCapabilities } from './control'
 import { useAppStore } from '@renderer/app-state/store'
 import type { WorkspaceState } from './types'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 const original = useAppStore.getState()
 afterEach(() => useAppStore.setState(original, true))
@@ -16,7 +17,7 @@ const context = {
 function workspace(): WorkspaceState {
   return {
     tabs: [{ id: 'alpha', title: 'Alpha', root: { type: 'leaf', sessionId: 'parent' }, focusedSessionId: 'parent' }],
-    activeTabId: 'alpha', dispatchMode: null,
+    activeTabId: 'alpha', stage: oneLaneStage('parent'),
     sessions: { parent: { cwd: '/trial', kind: 'claude' }, child: { cwd: '/trial', kind: 'codex', linkedParentId: 'parent' } },
     detachedSessions: { child: { sessionId: 'child', surface: 'dispatch', projectTabId: 'alpha', projectTabTitle: 'Alpha', projectTabIndex: 0, detachedAt: 1 } },
     buried: [{ id: 'hidden', sessionId: 'hidden', sessionMeta: { cwd: '/trial/hidden', kind: 'opencode' }, buriedAt: 1, sourceTabId: 'alpha', sourceTabTitle: 'Alpha', sourceTabIndex: 0 }],
@@ -33,7 +34,11 @@ describe('workspace control observation', () => {
     expect(result.ok).toBe(true)
     if (!result.ok) throw new Error(result.error.message)
     const child = result.value.sessions.find(session => session.sessionId === 'child')!
-    expect(child.placements).toContainEqual({ kind: 'related', tabId: 'alpha', gridOwnerSessionId: 'parent', visible: true })
+    // The related placement is still REPORTED (the tree is the v2 owner until
+    // stage 3b-ii) but is never visible: nothing renders the tile tree or its
+    // related-agent strip since #992. This asserted `visible: true` while a
+    // tab could be on screen with Dispatch off.
+    expect(child.placements).toContainEqual({ kind: 'related', tabId: 'alpha', gridOwnerSessionId: 'parent', visible: false })
     expect(result.value.sessions.find(session => session.sessionId === 'hidden')?.placements).toContainEqual({ kind: 'buried', tabId: 'alpha', visible: false })
     expect(useAppStore.getState().workspaceState).toBe(state)
     useAppStore.setState({ workspaceState: { ...state, sessions: { ...state.sessions, child: { ...state.sessions.child, title: 'Changed after registration' } } } })
@@ -43,7 +48,7 @@ describe('workspace control observation', () => {
 
   it('reports both mirrored lanes under one session', async () => {
     const state = workspace()
-    state.dispatchMode = { scope: 'global', tiled: { focusedLane: 1, lanes: [{ selectedSessionId: 'child' }, { selectedSessionId: 'child' }] } }
+    state.stage = { focusedLane: 1, lanes: [{ selectedSessionId: 'child' }, { selectedSessionId: 'child' }] }
     useAppStore.setState({ workspaceState: state })
     const capability = workspaceControlCapabilities(() => ({ restoreStatus: 'pending' }))[0]
     const result = await capability.execute({}, context)

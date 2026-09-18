@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { CommandContext } from '@renderer/features/command-palette/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { sessionCommands } from '@renderer/features/workspace/commands/sessionCommands'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 const originalApiDescriptor = Object.getOwnPropertyDescriptor(window, 'api')
 
@@ -28,7 +29,7 @@ describe('Duplicate Agent command', () => {
     const workspace = {
       state: {
         activeTabId: 'tab-klay',
-        dispatchMode: null,
+        stage: oneLaneStage('source'), detachedSessions: {}, buried: [], pinnedSessionIds: [],
         sessions: {
           source: {
             cwd: '/projects/klay',
@@ -83,7 +84,7 @@ describe('Duplicate Agent command', () => {
     const workspace = {
       state: {
         activeTabId: 'tab-klay',
-        dispatchMode: null,
+        stage: oneLaneStage('source'), detachedSessions: {}, buried: [], pinnedSessionIds: [],
         sessions: {
           source: {
             cwd: '/projects/klay',
@@ -129,7 +130,7 @@ describe('Duplicate Agent command', () => {
       workspace: {
         state: {
           activeTabId: 'tab-opencode',
-          dispatchMode: null,
+          stage: oneLaneStage('source'), detachedSessions: {}, buried: [], pinnedSessionIds: [],
           sessions: {
             source: {
               cwd: '/projects/opencode',
@@ -175,7 +176,7 @@ describe('Remove Cybersecurity Block command', () => {
       workspace: {
         state: {
           activeTabId: 'tab',
-          dispatchMode: null,
+          stage: oneLaneStage('agent'), detachedSessions: {}, buried: [], pinnedSessionIds: [],
           sessions: {
             agent: {
               cwd: '/project',
@@ -255,7 +256,7 @@ describe('Switch Provider command', () => {
       workspace: {
         state: {
           activeTabId: 'tab-1',
-          dispatchMode: null,
+          stage: oneLaneStage('source'), detachedSessions: {}, buried: [], pinnedSessionIds: [],
           sessions: {
             source: { cwd: '/projects/app', kind: 'claude' },
           },
@@ -318,7 +319,7 @@ function mcpCommandContext(kind: 'claude' | 'codex' | 'opencode'): {
   const workspace = {
     state: {
       activeTabId: 'tab-mcp',
-      dispatchMode: null,
+      stage: oneLaneStage('agent'), detachedSessions: {}, buried: [], pinnedSessionIds: [],
       sessions: {
         agent: {
           cwd: '/projects/mcp',
@@ -462,7 +463,7 @@ describe('capability gates', () => {
       workspace: {
         state: {
           activeTabId: 'tab',
-          dispatchMode: null,
+          stage: oneLaneStage('agent'), detachedSessions: {}, buried: [], pinnedSessionIds: [],
           sessions: {
             agent: {
               cwd: '/projects/app',
@@ -551,7 +552,7 @@ describe('Root Agent Code Management command (#906)', () => {
     const workspace = {
       state: {
         activeTabId: 'tab-app',
-        dispatchMode: null,
+        stage: oneLaneStage('agent'), detachedSessions: {}, buried: [], pinnedSessionIds: [],
         sessions: {
           agent: {
             cwd: '/projects/app',

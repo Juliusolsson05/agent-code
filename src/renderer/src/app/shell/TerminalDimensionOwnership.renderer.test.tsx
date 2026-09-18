@@ -69,8 +69,8 @@ vi.mock('@renderer/workspace/dispatch/TiledDispatchLayout', async () => {
     // own behavior is covered by gridDispatchLayout.renderer.test.tsx; this
     // suite is about RetainedWorkspaceSurface + ownership across takeovers,
     // so the lane grid itself stays a thin mount point here.
-    TiledDispatchLayout: ({ workspace }: { workspace: { state: { dispatchMode?: { tiled?: { lanes: Array<{ selectedSessionId?: string }> } } } } }) => {
-      const lanes = workspace.state.dispatchMode?.tiled?.lanes ?? []
+    TiledDispatchLayout: ({ workspace }: { workspace: { state: { stage: { lanes: Array<{ selectedSessionId?: string }> } } } }) => {
+      const lanes = workspace.state.stage.lanes
       return (
         <>
           {lanes.map((lane, index) =>
@@ -171,18 +171,13 @@ describe('terminal dimension ownership across main-surface takeovers', () => {
         pinnedSessionIds: [],
         // The stage placing session-1 — the unified workspace's one mount
         // path. One row, one occupied lane, focused.
-        dispatchMode: {
-          scope: 'global',
-          tiled: {
-            lanes: [{ selectedSessionId: 'session-1' }],
-            rows: [{ length: 1 }],
-            focusedLane: 0,
-          },
+        stage: {
+          lanes: [{ selectedSessionId: 'session-1' }],
+          rows: [{ length: 1 }],
+          focusedLane: 0,
         },
       },
       activeTab,
-      dispatchMode: null,
-      tileTabs: null,
       readerMode: null,
       spotlight: null,
       getRuntime: () => runtime,
@@ -267,9 +262,7 @@ describe('terminal dimension ownership across main-surface takeovers', () => {
   it('guards the debug target by the terminal Spotlight actually mounted', async () => {
     // Unified layout: BOTH panes are lane occupants. session-2 is a pooled
     // (detached) member of tab-1 — the v2-consistent way to be on the stage
-    // without being a tree leaf — and the top-level dispatchMode field is
-    // set so SpotlightView resolves sessions through the dispatch path, as
-    // the real Workspace object exposes. Spotlight mounts its own leaf for
+    // without being a tree leaf. Spotlight mounts its own leaf for
     // session-2 on top of the retained (hidden) stage, which still holds
     // both lanes.
     const tiled = {
@@ -281,7 +274,7 @@ describe('terminal dimension ownership across main-surface takeovers', () => {
       ...harness.workspace,
       spotlight: { tabId: 'tab-1', focusedSessionId: 'session-2' },
       setSpotlightSession: vi.fn(),
-      dispatchMode: { scope: 'global', tiled },
+      stage: tiled,
       state: {
         ...(harness.workspace.state as Record<string, unknown>),
         sessions: {
@@ -301,7 +294,7 @@ describe('terminal dimension ownership across main-surface takeovers', () => {
             detachedAt: 1,
           },
         },
-        dispatchMode: { scope: 'global', tiled },
+        stage: tiled,
       },
     }
 

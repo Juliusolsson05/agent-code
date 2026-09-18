@@ -15,6 +15,7 @@ import {
 } from '@renderer/workspace/closeConfirmationBroker'
 
 import { usePaneActions } from './pane'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 const originalApiDescriptor = Object.getOwnPropertyDescriptor(window, 'api')
 
@@ -108,7 +109,7 @@ describe('pane recovery ownership', () => {
       detachedSessions: {},
       buried: [],
       pinnedSessionIds: [],
-      dispatchMode: null,
+      stage: oneLaneStage(sessionId),
     } as WorkspaceState
     let runtimes: Record<SessionId, SessionRuntime> = {
       [sessionId]: {
@@ -206,7 +207,7 @@ describe('pane recovery ownership', () => {
       },
       buried: [],
       pinnedSessionIds: [],
-      dispatchMode: null,
+      stage: oneLaneStage(paneId),
     } as WorkspaceState
     const harness = renderPaneActionsHarness(state, {
       [paneId]: emptyRuntime(),

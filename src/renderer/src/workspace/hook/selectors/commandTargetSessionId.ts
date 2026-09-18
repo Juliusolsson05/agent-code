@@ -33,20 +33,9 @@ export function commandTargetSessionId(workspace: Workspace): string | null {
 }
 
 export function commandTargetSessionIdForState(state: WorkspaceState): SessionId | null {
-  if (!state.dispatchMode) {
-    const activeTab = state.tabs.find(tab => tab.id === state.activeTabId)
-    // WHY grid related selection participates in command targeting:
-    // the physical tile focus must remain the parent leaf, but once the pane is
-    // visibly rendering a related child, global commands like reload/close/copy
-    // need to act on the same session the composer is commanding. The selector
-    // validates the child against current relationship state and falls back to
-    // the parent if the child was closed or detached elsewhere.
-    return selectedGridRelatedSessionId(
-      state,
-      activeTab?.id ?? state.activeTabId,
-      activeTab?.focusedSessionId,
-    )
-  }
+  // A grid branch lived here until #992: with no Dispatch state it read the
+  // active tab's focused tile leaf (through the related-agent selection). The
+  // stage is the only workspace, so the focused lane is the only target.
 
   // WHY strict Dispatch targeting is used here:
   // commandTargetSessionIdForState is consumed by lifecycle and destructive

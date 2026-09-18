@@ -9,6 +9,7 @@ import { useSessionActions } from './session'
 import { useProviderActions } from './provider'
 import { makeRefs, stateWriter } from './testing/paneActionsHarness'
 import type { SessionMeta, WorkspaceState } from '@renderer/workspace/types'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 vi.mock('./initialHistory', () => ({ loadInitialHistoryForSession: vi.fn(async () => undefined) }))
 const originalApi = window.api
@@ -19,7 +20,7 @@ function setup(meta: Partial<SessionMeta> = { builtInMcpDomains: [], builtInMcpO
   const state = {
     tabs: [{ id: 'project', title: 'Project', root: { type: 'leaf', sessionId: 'original' }, focusedSessionId: 'original' }],
     activeTabId: 'project', sessions: { original: { cwd: '/project', kind: 'codex', providerSessionId: 'native-original', ...meta } },
-    detachedSessions: {}, buried: [], pinnedSessionIds: [], dispatchMode: null,
+    detachedSessions: {}, buried: [], pinnedSessionIds: [], stage: oneLaneStage('original'),
   } as WorkspaceState
   const refs = makeRefs(state), writer = stateWriter(state, refs)
   refs.latestRuntimesRef.current = { original: emptyRuntime() }

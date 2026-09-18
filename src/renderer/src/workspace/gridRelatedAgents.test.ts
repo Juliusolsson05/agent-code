@@ -6,6 +6,7 @@ import {
 } from '@renderer/workspace/gridRelatedAgents'
 import type { TileNode, WorkspaceState } from '@renderer/workspace/types'
 import { commandTargetSessionIdForState } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 function leaf(sessionId: string): TileNode {
   return { type: 'leaf', sessionId }
@@ -18,7 +19,7 @@ function makeState(): WorkspaceState {
     ],
     activeTabId: 'tabA',
     gridRelatedSelections: {},
-    dispatchMode: null,
+    stage: oneLaneStage('parent'),
     sessions: {
       parent: { cwd: '/work/project-a', kind: 'claude' },
       linked: {
@@ -101,16 +102,18 @@ describe('grid related agent tabs', () => {
     expect(tabs.map(tab => tab.sessionId)).toEqual(['parent', 'worker'])
   })
 
-  it('routes grid command targeting to the selected detached related child', () => {
+  // "routes grid command targeting to the selected detached related child"
+  // lived here until #992. In the tile grid a pane could show a related child
+  // in place of its owner (a mini-tab strip), and commands followed what was
+  // visible. Lanes never render that strip, so a related selection is not
+  // visible anywhere and must not redirect a command. The surviving case
+  // below is the rule for the one layout: the lane's occupant is the target.
+  // (`gridRelatedSelections` itself is re-based on pool membership, or
+  // deleted, in stage 3b-ii.)
+  it('never lets a related selection override the focused lane s occupant', () => {
     const state = makeState()
     state.gridRelatedSelections = { parent: 'linked' }
-    expect(commandTargetSessionIdForState(state)).toBe('linked')
-  })
-
-  it('does not let grid related selection override Dispatch command targeting', () => {
-    const state = makeState()
-    state.gridRelatedSelections = { parent: 'linked' }
-    state.dispatchMode = { scope: 'project', focusedSessionId: 'parent' }
+    state.stage = { lanes: [{ selectedSessionId: 'parent' }], rows: [{ length: 1 }], focusedLane: 0 }
     expect(commandTargetSessionIdForState(state)).toBe('parent')
   })
 })

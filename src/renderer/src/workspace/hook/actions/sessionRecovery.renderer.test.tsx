@@ -8,6 +8,8 @@ import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
 
 import { killSessionBackendIfOwned, useSessionActions } from './session'
+import { freshStage } from '@renderer/workspace/dispatch/gridShape'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 const originalApiDescriptor = Object.getOwnPropertyDescriptor(window, 'api')
 
@@ -42,7 +44,7 @@ describe('useSessionActions recovery retry', () => {
       detachedSessions: {},
       buried: [],
       pinnedSessionIds: [],
-      dispatchMode: null,
+      stage: freshStage(),
     } as unknown as WorkspaceState
     let runtimes: Record<SessionId, SessionRuntime> = {}
     const refs = {
@@ -156,7 +158,7 @@ describe('useSessionActions recovery retry', () => {
       detachedSessions: {},
       buried: [],
       pinnedSessionIds: [],
-      dispatchMode: null,
+      stage: oneLaneStage(sessionId),
     } as WorkspaceState
     let runtimes: Record<SessionId, SessionRuntime> = {
       [sessionId]: {
@@ -267,7 +269,7 @@ describe('useSessionActions recovery retry', () => {
       detachedSessions: {},
       buried: [],
       pinnedSessionIds: [],
-      dispatchMode: null,
+      stage: oneLaneStage(sessionId),
     } as WorkspaceState
     let runtimes: Record<SessionId, SessionRuntime> = {
       [sessionId]: { ...emptyRuntime(), processStatus: 'spawning', inputReady: false },
@@ -391,7 +393,7 @@ describe('useSessionActions recovery retry', () => {
       gridRelatedSelections: {},
       buried: [],
       pinnedSessionIds: [],
-      dispatchMode: null,
+      stage: oneLaneStage(sessionId),
     } as WorkspaceState
     let runtimes: Record<SessionId, SessionRuntime> = {
       [sessionId]: emptyRuntime(),

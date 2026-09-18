@@ -64,7 +64,7 @@ function mountRun(options: { busy?: string[] } = {}) {
   const state: WorkspaceState = {
     tabs: [{ id: 'tab', title: 'repo', root: { type: 'leaf', sessionId: 'lead' }, focusedSessionId: 'lead' }],
     activeTabId: 'tab',
-    dispatchMode: { scope: 'project', focusedSessionId: 'lead' },
+    stage: { lanes: [{ selectedSessionId: 'lead' }], rows: [{ length: 1 }], focusedLane: 0 },
     sessions: {
       lead: { cwd: '/repo', kind: 'claude', title: 'Lead' },
       coord: { cwd: '/repo', kind: 'claude', title: 'Coordinator', orchestrationParentId: 'lead', orchestrationRootId: 'lead' },

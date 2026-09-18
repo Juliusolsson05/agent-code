@@ -1,4 +1,5 @@
 import type { CommandContext } from '@renderer/features/command-palette/types'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 // ---------------------------------------------------------------------------
 // Narrow test harness for `CommandContext`.
@@ -40,7 +41,7 @@ export type CommandContextHarnessOptions = {
  * Build a context that behaves like an empty workspace unless told otherwise.
  *
  * Defaults are chosen so admission is DECIDED BY THE TEST rather than by
- * ambient fixture state: no tabs, no dispatch mode, agent view mode, no
+ * ambient fixture state: no tabs, a one-lane stage, agent view mode, no
  * visibility overrides. A test that wants a gate to fail must say so.
  */
 export function makeTestCommandContext(
@@ -63,11 +64,15 @@ export function makeTestCommandContext(
     ? { [options.focusedSessionId]: { kind: 'claude', cwd: '/repo' } }
     : {}
 
-  // A single tab owning the focused session is the minimum shape that makes
-  // `commandTargetSessionIdForState` return it: that selector reads the active
-  // tab's focusedSessionId when Dispatch is off. Anything less and every
-  // session-targeted test would silently resolve to "no target" and pass for
-  // the wrong reason.
+  // A single tab owning the focused session, shown in a one-lane stage, is the
+  // minimum shape that makes `commandTargetSessionIdForState` return it: the
+  // command target is the focused lane's occupant and nothing else (#992, U3),
+  // and a lane only resolves a session its project's index lists. Anything
+  // less and every session-targeted test would silently resolve to "no
+  // target" and pass for the wrong reason.
+  //
+  // (Until #992 the tab's `focusedSessionId` alone was enough, because the
+  // selector fell back to tree focus whenever Dispatch was off.)
   const tabs = options.focusedSessionId
     ? [{
         id: options.activeTabId ?? 'tab-1',
@@ -81,7 +86,7 @@ export function makeTestCommandContext(
       tabs,
       activeTabId: options.activeTabId ?? (tabs.length > 0 ? tabs[0].id : null),
       sessions,
-      dispatchMode: null,
+      stage: oneLaneStage(options.focusedSessionId),
       detachedSessions: {},
       buried: [],
       pinnedSessionIds: [],
@@ -122,8 +127,6 @@ export function makeTestCommandContext(
       focusedCwd: options.focusedCwd ?? null,
       fileTreeVisible: false,
       editorFullscreen: false,
-      dispatchModeEnabled: false,
-      globalDispatchEnabled: false,
       agentViewMode: 'agent',
       commandVisibilityOverrides: {},
       // ON by default here, opposite to the product default. The harness serves

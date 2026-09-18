@@ -47,10 +47,7 @@ function tiledProject(): WorkspaceState {
       worker: { sessionId: 'worker', surface: 'dispatch', projectTabId: 'project', projectTabTitle: 'Project', projectTabIndex: 0, detachedAt: 1 },
     },
     // The root in lane 1 (focused), the detached worker in lane 2.
-    dispatchMode: {
-      scope: 'project',
-      tiled: { lanes: [{ selectedSessionId: 'root' }, { selectedSessionId: 'worker' }], focusedLane: 0 },
-    },
+    stage: { lanes: [{ selectedSessionId: 'root' }, { selectedSessionId: 'worker' }], focusedLane: 0 },
     gridRelatedSelections: {}, buried: [], pinnedSessionIds: [],
   }
 }
@@ -58,7 +55,7 @@ function tiledProject(): WorkspaceState {
 function mount() {
   const harness = mountPaneActions(tiledProject())
   const dispatch = renderHook(() => useDispatchActions(
-    harness.getState(), harness.setState, vi.fn(), harness.refs, vi.fn(), vi.fn(),
+    harness.setState, harness.refs, vi.fn(), vi.fn(),
   ))
   render(<CloseConfirmationDialog />)
   const workspace = {
@@ -70,7 +67,7 @@ function mount() {
 }
 
 const laneSessions = (state: WorkspaceState) =>
-  state.dispatchMode?.tiled?.lanes.map(lane => lane.selectedSessionId)
+  state.stage.lanes.map(lane => lane.selectedSessionId)
 
 async function runAndAnswer(context: CommandContext, button: string) {
   let running!: void | Promise<void>

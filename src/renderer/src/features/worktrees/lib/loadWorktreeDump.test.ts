@@ -14,6 +14,7 @@ import {
 } from '@shared/work-context/tracker'
 import type { WorktreeActivityState } from '@shared/work-context/types'
 import type { GitWorktreeStatus } from '@shared/types/git'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 const MAIN_CHECKOUT = '/fixture/project-1'
 const LINKED_WORKTREE = `${MAIN_CHECKOUT}/.worktrees/worktree-1`
@@ -85,7 +86,7 @@ describe('collectLiveAgentsByWorktree recorded context', () => {
         focusedSessionId: SESSION_ID,
       }],
       activeTabId: 'tab-recorded',
-      dispatchMode: null,
+      stage: oneLaneStage(SESSION_ID),
       sessions: {
         [SESSION_ID]: { cwd: MAIN_CHECKOUT, kind: 'codex' },
       },
@@ -149,7 +150,7 @@ describe('collectLiveAgentsByWorktree recorded context', () => {
         focusedSessionId: SESSION_ID,
       }],
       activeTabId: 'tab-divergent',
-      dispatchMode: null,
+      stage: oneLaneStage(SESSION_ID),
       sessions: {
         [SESSION_ID]: { cwd: MAIN_CHECKOUT, kind: 'codex' },
       },
@@ -179,7 +180,7 @@ describe('collectLiveAgentsByWorktree recorded context', () => {
     ]
     const state = {
       tabs: [{ id: 'tab', title: 'Project', root: { type: 'leaf', sessionId: 'shell' }, focusedSessionId: 'shell' }],
-      activeTabId: 'tab', dispatchMode: null,
+      activeTabId: 'tab', stage: oneLaneStage('shell'),
       sessions: { shell: { cwd: LINKED_WORKTREE, kind: 'terminal' } },
       detachedSessions: {}, buried: [], pinnedSessionIds: [],
     } as WorkspaceState

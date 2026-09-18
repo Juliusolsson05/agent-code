@@ -13,6 +13,7 @@ import type {
 } from '@shared/types/session'
 
 import { rehydrateWorkspace } from './rehydrate'
+import { freshStage } from '@renderer/workspace/dispatch/gridShape'
 
 const originalApiDescriptor = Object.getOwnPropertyDescriptor(window, 'api')
 
@@ -67,7 +68,7 @@ function makeHarness() {
     detachedSessions: {},
     buried: [],
     pinnedSessionIds: [],
-    dispatchMode: null,
+    stage: freshStage(),
   } as unknown as WorkspaceState
   let runtimes: Record<SessionId, SessionRuntime> = {}
   const refs = {
@@ -700,6 +701,9 @@ describe('rehydrateWorkspace backend reconciliation', () => {
         detachedAt: 42,
       },
     }
+    // Deliberately the v2 ON-DISK shape: real users' files carry this envelope,
+    // and rehydrate is where it becomes a stage (#992). A classic-Dispatch focus
+    // on a parked agent is the #977 entry seed.
     persisted.dispatchMode = {
       scope: 'project',
       focusedSessionId: 'parked-session',
@@ -748,9 +752,13 @@ describe('rehydrateWorkspace backend reconciliation', () => {
       sessionId: 'parked-session',
       projectTabId: 'tab-1',
     })
-    expect(harness.state().dispatchMode).toMatchObject({
-      focusedSessionId: 'parked-session',
-    })
+    // The parked agent the user was commanding is what lane 0 shows after the
+    // upgrade, beside one empty lane (the imported-workspace default, plan
+    // §6.4). It is NAMED, not spawned: recoverSession ran once, for the grid
+    // leaf only. The lane's own leaf wakes it on mount, which keeps the #258
+    // fork-bomb guard intact.
+    expect(harness.state().stage.lanes).toEqual([{ selectedSessionId: 'parked-session' }, {}])
+    expect(harness.state().stage.focusedLane).toBe(0)
     expect(harness.runtimes()['parked-session']).toMatchObject({
       processStatus: 'idle',
       inputReady: false,
@@ -786,6 +794,7 @@ describe('rehydrateWorkspace backend reconciliation', () => {
         detachedAt: 21,
       },
     }
+    // v2 on-disk shape on purpose (see the parked-draft case above).
     persisted.dispatchMode = {
       scope: 'global',
       focusedSessionId: 'ghost-session',
@@ -839,8 +848,10 @@ describe('rehydrateWorkspace backend reconciliation', () => {
     expect(harness.state().detachedSessions).not.toHaveProperty('ghost-session')
     expect(harness.runtimes()).toHaveProperty('parked-session')
     expect(harness.runtimes()).not.toHaveProperty('ghost-session')
-    expect(harness.state().dispatchMode?.focusedSessionId).toBeUndefined()
-    expect(harness.state().dispatchMode?.tiled?.lanes).toEqual([
+    // The ghost's lane is emptied, never refilled; focus stays on the lane
+    // index the user left it on.
+    expect(harness.state().stage.focusedLane).toBe(1)
+    expect(harness.state().stage.lanes).toEqual([
       { selectedSessionId: 'parked-session' },
       { selectedSessionId: undefined },
     ])

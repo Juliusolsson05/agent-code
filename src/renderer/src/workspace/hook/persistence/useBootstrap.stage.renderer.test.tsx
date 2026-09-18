@@ -19,15 +19,24 @@ vi.mock('@renderer/performance/client', () => ({
 }))
 
 import { useBootstrap } from './useBootstrap'
+import { freshStage } from '@renderer/workspace/dispatch/gridShape'
 
-// The stage guarantee (#992): bootstrap seeds a STORED tiled grid exactly
-// once, with a shape that depends on where the workspace came from —
-// fresh installs get one row × one lane (nothing to explain, plan §4.5),
-// imported v2 workspaces without a grid get the migration default [2]
-// (plan §6.4), and a workspace that already HAS a grid is never reseeded
-// (re-entering would wipe its lanes — enterTiledDispatch is an "enter"
-// action, not an upsert). This suite pins all three at the bootstrap seam,
-// with rehydrate real and recovery faked at the preload bridge.
+// The stage guarantee (#992): every boot path lands on a STORED stage whose
+// shape depends on where the workspace came from — fresh installs get one row
+// × one lane (nothing to explain, plan §4.5), imported v2 workspaces without a
+// lane grid get the migration default [2] (plan §6.4), and a workspace that
+// already HAS a grid keeps it exactly. This suite pins all three at the
+// bootstrap seam, with rehydrate real and recovery faked at the preload
+// bridge.
+//
+// WHAT CHANGED, because the assertions changed kind: through stage 2 of the
+// merge bootstrap guaranteed this by CALLING enterTiledDispatch after each
+// path, and the suite counted those calls ([1], [2], never). The action is
+// deleted. Bootstrap now does nothing about the stage at all: the store starts
+// on a one-lane stage, newTab fills its empty focused lane, and rehydrate
+// publishes the migrated stage in its first commit. So the suite asserts the
+// STATE each path ends on — which is the thing the user sees, and is a
+// stronger claim than "a function was called with [2]".
 
 const originalApiDescriptor = Object.getOwnPropertyDescriptor(window, 'api')
 
@@ -51,7 +60,7 @@ function makeHarness(persisted: PersistedWorkspace | null) {
     detachedSessions: {},
     buried: [],
     pinnedSessionIds: [],
-    dispatchMode: null,
+    stage: freshStage(),
   } as unknown as WorkspaceState
   let runtimes: Record<SessionId, SessionRuntime> = {}
   const refs = {
@@ -66,10 +75,15 @@ function makeHarness(persisted: PersistedWorkspace | null) {
 
   const newTab = vi.fn(async () => {
     // Minimal stand-in for the real newTab action: mint one project with
-    // one live leaf, the shape bootstrap's autosave unlock checks for.
+    // one live leaf, the shape bootstrap's autosave unlock checks for — and
+    // place it in the empty focused lane, as the real action does. That rule
+    // is pinned against the REAL hook in actions/newTabPlacement.renderer
+    // .test.tsx; it is mirrored here only so this suite can observe that
+    // bootstrap leaves the result alone.
     const leaf: SessionId = 'fresh-session'
     state = {
       ...state,
+      stage: { ...state.stage, lanes: [{ selectedSessionId: leaf }] },
       tabs: [
         {
           id: 'tab-1',
@@ -80,22 +94,6 @@ function makeHarness(persisted: PersistedWorkspace | null) {
       ],
       activeTabId: 'tab-1',
       sessions: { ...state.sessions, [leaf]: { cwd: '/tmp/fresh', kind: 'claude' } },
-    }
-    refs.stateRef.current = state
-    refs.latestStateRef.current = state
-  })
-
-  const enterTiledDispatch = vi.fn(async (rowLengths: number[]) => {
-    // Mirrors the real action's stored-grid write closely enough for the
-    // guard to observe: the guarantee test cares THAT and WITH WHAT SHAPE
-    // bootstrap calls it, not that lanes materialize (the action's own
-    // behavior is covered where the action lives).
-    state = {
-      ...state,
-      dispatchMode: {
-        scope: 'global',
-        tiled: { lanes: [], rows: rowLengths.map(length => ({ length })), focusedLane: 0 },
-      },
     }
     refs.stateRef.current = state
     refs.latestStateRef.current = state
@@ -127,7 +125,6 @@ function makeHarness(persisted: PersistedWorkspace | null) {
     state: () => state,
     runtimes: () => runtimes,
     newTab,
-    enterTiledDispatch,
     setState(next: WorkspaceState | ((prev: WorkspaceState) => WorkspaceState)) {
       state = typeof next === 'function' ? next(state) : next
       refs.stateRef.current = state
@@ -156,26 +153,27 @@ function renderBootstrap(harness: ReturnType<typeof makeHarness>) {
       setBootstrapComplete,
       setRestoreStatus,
       'dispatch',
-      vi.fn(async () => {}),
-      harness.enterTiledDispatch,
     ),
   )
   return { unmount, setBootstrapComplete, setRestoreStatus }
 }
 
 describe('bootstrap stage guarantee', () => {
-  it('seeds a [1] stage exactly once on a fresh install', async () => {
+  it('lands a fresh install on one lane showing its one agent', async () => {
     const harness = makeHarness(null)
     const { unmount, setBootstrapComplete } = renderBootstrap(harness)
     await vi.waitFor(() => expect(harness.newTab).toHaveBeenCalled())
-    await vi.waitFor(() => expect(harness.enterTiledDispatch).toHaveBeenCalledTimes(1))
-    expect(harness.enterTiledDispatch).toHaveBeenCalledWith([1])
     // Autosave unlocked: the fresh workspace is real and savable.
     await vi.waitFor(() => expect(setBootstrapComplete).toHaveBeenCalledWith(true))
+    expect(harness.state().stage).toEqual({
+      lanes: [{ selectedSessionId: 'fresh-session' }],
+      rows: [{ length: 1 }],
+      focusedLane: 0,
+    })
     unmount()
   })
 
-  it('seeds the migration default [2] for an imported grid-only workspace', async () => {
+  it('lands an imported grid-only workspace on the seeded [2] default', async () => {
     const persisted: PersistedWorkspace = {
       tabs: [
         {
@@ -189,14 +187,25 @@ describe('bootstrap stage guarantee', () => {
       sessions: { 's-a1': { cwd: '/x/app', kind: 'claude' } },
     }
     const harness = makeHarness(persisted)
-    const { unmount } = renderBootstrap(harness)
-    await vi.waitFor(() => expect(harness.enterTiledDispatch).toHaveBeenCalledTimes(1))
-    expect(harness.enterTiledDispatch).toHaveBeenCalledWith([2])
+    const { unmount, setBootstrapComplete } = renderBootstrap(harness)
+    await vi.waitFor(() => expect(setBootstrapComplete).toHaveBeenCalledWith(true))
+    // NOT the fresh [1]: an importing user demonstrably has agents, and the
+    // second lane is what shows that a lane is a slot.
+    expect(harness.state().stage).toEqual({
+      lanes: [{ selectedSessionId: 's-a1' }, {}],
+      rows: [{ length: 2 }],
+      focusedLane: 0,
+    })
     expect(harness.newTab).not.toHaveBeenCalled()
     unmount()
   })
 
-  it('never reseeds a workspace that already has a stored grid', async () => {
+  it('keeps a stored stage exactly, including lanes the user left empty', async () => {
+    const stage = {
+      lanes: [{}, { selectedSessionId: 's-a1' }, {}],
+      rows: [{ length: 3 }],
+      focusedLane: 2,
+    }
     const persisted: PersistedWorkspace = {
       tabs: [
         {
@@ -207,25 +216,17 @@ describe('bootstrap stage guarantee', () => {
         },
       ],
       activeTabId: 'tab-a',
-      dispatchMode: {
-        scope: 'global',
-        tiled: {
-          lanes: [{ selectedSessionId: 's-a1' }, {}, {}],
-          rows: [{ length: 3 }],
-          focusedLane: 0,
-        },
-      },
+      stage,
       sessions: { 's-a1': { cwd: '/x/app', kind: 'claude' } },
     }
     const harness = makeHarness(persisted)
-    const { unmount } = renderBootstrap(harness)
-    // Give the whole boot pipeline (rehydrate of one leaf is one tick of
-    // recovery plus commits) ample time to wrongly reseed.
-    await vi.waitFor(() =>
-      expect(harness.state().sessions['s-a1']).toMatchObject({ cwd: '/x/app' }),
-    )
-    await new Promise(resolve => setTimeout(resolve, 50))
-    expect(harness.enterTiledDispatch).not.toHaveBeenCalled()
+    const { unmount, setBootstrapComplete } = renderBootstrap(harness)
+    await vi.waitFor(() => expect(setBootstrapComplete).toHaveBeenCalledWith(true))
+    // Lane 0 is empty and FOCUS is on an empty lane — both are the user's
+    // choices. A boot that "helpfully" seeded lane 0 with the focused pane
+    // (the entry seed) here would be #681's auto-fill on every launch; the
+    // seed applies only to a file that never had lanes.
+    expect(harness.state().stage).toEqual(stage)
     unmount()
   })
 })
