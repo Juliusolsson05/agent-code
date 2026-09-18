@@ -24,7 +24,7 @@
 - Modify: `src/renderer/src/styles.css` (gutter tracker rules)
 - Test: `src/renderer/src/features/feed/ui/rows/primitives.test.tsx` (create)
 
-- [ ] **Step 1: Write the failing test** — asserts UserBand no longer hardcodes `-mx-8 px-8` and the column carries the tracker class:
+- [x] **Step 1: Write the failing test** — asserts UserBand no longer hardcodes `-mx-8 px-8` and the column carries the tracker class:
 
 ```tsx
 import { render } from '@testing-library/react'
@@ -50,8 +50,8 @@ describe('UserBand', () => {
 })
 ```
 
-- [ ] **Step 2: Run it** — `NODE_ENV=test npx vitest run --project renderer src/renderer/src/features/feed/ui/rows/primitives.test.tsx` — expect FAIL (current classes are `-mx-8 px-8`).
-- [ ] **Step 3: Implement.** `primitives.tsx` UserBand becomes:
+- [x] **Step 2: Run it** — `NODE_ENV=test npx vitest run --project renderer src/renderer/src/features/feed/ui/rows/primitives.test.tsx` — expect FAIL (current classes are `-mx-8 px-8`).
+- [x] **Step 3: Implement.** `primitives.tsx` UserBand becomes:
 
 ```tsx
 export function UserBand({ children }: { children: ReactNode }) {
@@ -86,8 +86,8 @@ In `Feed.tsx:1155` add `feed-column` to the column div's className (keep every e
 @container (min-width: 768px) { .feed-column { --feed-gutter: 32px; } }
 ```
 
-- [ ] **Step 4: Test passes** — rerun Step 2 command; expect PASS. Also `npx tsc --noEmit -p tsconfig.web.json`.
-- [ ] **Step 5: Commit** — `fix(feed): track UserBand bleed to the container gutter (fixes phone viewport overflow). Refs #996`
+- [x] **Step 4: Test passes** — rerun Step 2 command; expect PASS. Also `npx tsc --noEmit -p tsconfig.web.json`.
+- [x] **Step 5: Commit** — `fix(feed): track UserBand bleed to the container gutter (fixes phone viewport overflow). Refs #996`
 
 ### Task 2: CodeBlock stub gains the desktop size discipline
 
@@ -95,11 +95,11 @@ In `Feed.tsx:1155` add `feed-column` to the column div's className (keep every e
 - Modify: `src/remote-client/src/stubs/CodeBlock.tsx`
 - Test: `src/remote-client/src/stubs/CodeBlock.test.tsx` (create)
 
-- [ ] **Step 1:** Read the desktop's budget contract in `src/renderer/src/lib/code/CodeBlock.tsx` (`exceedsInlineTextBudget`, page size 16KB, collapsed-preview path, static classes `m-0 px-3 py-2 text-code-ink`).
-- [ ] **Step 2: Write failing tests:** (a) content over budget renders collapsed with a "view paged content" disclosure, not the full mount; (b) paged view renders exactly the first 16KB page; (c) under-budget renders inline with `px-3 py-2 text-code-ink` classes present; (d) `highlight={false}` stays a raw text node.
-- [ ] **Step 3: Implement** — port `exceedsInlineTextBudget` + page slicing + collapsed disclosure (11px `text-muted` → becomes touch-sized in Task 4) into the stub; add the desktop static classes to the `<pre>`; keep autodetect's 20k guard.
-- [ ] **Step 4:** `NODE_ENV=test npx vitest run --project unit src/remote-client/src/stubs/CodeBlock.test.tsx` → PASS; `npm run client:build`.
-- [ ] **Step 5: Commit** — `fix(remote): port CodeBlock size budget and markup contract to the phone stub. Refs #996`
+- [x] **Step 1:** Read the desktop's budget contract in `src/renderer/src/lib/code/CodeBlock.tsx` (`exceedsInlineTextBudget`, page size 16KB, collapsed-preview path, static classes `m-0 px-3 py-2 text-code-ink`).
+- [x] **Step 2: Write failing tests:** (a) content over budget renders collapsed with a "view paged content" disclosure, not the full mount; (b) paged view renders exactly the first 16KB page; (c) under-budget renders inline with `px-3 py-2 text-code-ink` classes present; (d) `highlight={false}` stays a raw text node.
+- [x] **Step 3: Implement** — port `exceedsInlineTextBudget` + page slicing + collapsed disclosure (11px `text-muted` → becomes touch-sized in Task 4) into the stub; add the desktop static classes to the `<pre>`; keep autodetect's 20k guard.
+- [x] **Step 4:** `NODE_ENV=test npx vitest run --project unit src/remote-client/src/stubs/CodeBlock.test.tsx` → PASS; `npm run client:build`.
+- [x] **Step 5: Commit** — `fix(remote): port CodeBlock size budget and markup contract to the phone stub. Refs #996`
 
 ### Task 3: Phone toast provider (silent failures)
 
@@ -109,20 +109,20 @@ In `Feed.tsx:1155` add `feed-column` to the column div's className (keep every e
 - Modify: `src/remote-client/src/ui/SessionView.tsx` (mount `<ToastHostProvider>` inside SessionFeedProvider)
 - Test: `src/remote-client/src/ui/ToastHost.test.tsx`
 
-- [ ] **Step 1: Failing test** — a row calling `showToast` surfaces a visible toast node (`role="status"`).
-- [ ] **Step 2: Implement** the provider/host; wire the alias; mount in SessionView.
-- [ ] **Step 3:** Tests + `npm run client:build` → PASS.
-- [ ] **Step 4: Commit** — `fix(remote): mount a phone toast host so row-level failures are visible. Refs #996`
+- [x] **Step 1: Failing test** — a row calling `showToast` surfaces a visible toast node (`role="status"`).
+- [x] **Step 2: Implement** the provider/host; wire the alias; mount in SessionView.
+- [x] **Step 3:** Tests + `npm run client:build` → PASS.
+- [x] **Step 4: Commit** — `fix(remote): mount a phone toast host so row-level failures are visible. Refs #996`
 
 ### Task 4: Touch-sized affordances in shared rows
 
 **Files:**
 - Modify: `src/renderer/src/features/feed/ui/rows/TruncatedOutputRow.tsx`, `PagedTextViewer.tsx` (under `features/feed/ui/`), `src/renderer/src/lib/text/OutputWell.tsx`, `src/renderer/src/lib/code/CodeBlock.tsx` (disclosure controls only)
 
-- [ ] **Step 1:** Add a shared `feedDisclosureClass` (in `primitives.tsx`): `inline-flex items-center min-h-[44px] px-1 -mx-1 text-[11px] text-muted hover:text-ink cursor-pointer select-none active:text-ink` — hit area grows, typography unchanged; desktop visuals unchanged (padding is invisible on text).
-- [ ] **Step 2:** Apply to every "… more output" / "previous/next" / "view paged content" / "collapse" / "copy" control.
-- [ ] **Step 3:** `npx tsc --noEmit -p tsconfig.web.json` + renderer project tests for feed rows.
-- [ ] **Step 4: Commit** — `fix(feed): give inline disclosures 44px touch hit areas. Refs #996`
+- [x] **Step 1:** Add a shared `feedDisclosureClass` (in `primitives.tsx`): `inline-flex items-center min-h-[44px] px-1 -mx-1 text-[11px] text-muted hover:text-ink cursor-pointer select-none active:text-ink` — hit area grows, typography unchanged; desktop visuals unchanged (padding is invisible on text).
+- [x] **Step 2:** Apply to every "… more output" / "previous/next" / "view paged content" / "collapse" / "copy" control.
+- [x] **Step 3:** `npx tsc --noEmit -p tsconfig.web.json` + renderer project tests for feed rows.
+- [x] **Step 4: Commit** — `fix(feed): give inline disclosures 44px touch hit areas. Refs #996`
 
 ### Task 5: Keyboard/viewport-aware phone scaffold
 
@@ -132,10 +132,10 @@ In `Feed.tsx:1155` add `feed-column` to the column div's className (keep every e
 - Modify: `src/remote-client/src/styles.css` (`.app { height: 100dvh }` + `height: var(--app-visible-height, 100dvh)` fallback chain)
 - Test: `src/remote-client/src/ui/Scaffold.test.tsx`
 
-- [ ] **Step 1: Failing test** — Scaffold sets `--app-visible-height` from a mocked `visualViewport`.
-- [ ] **Step 2: Implement** (listener with rAF throttle, cleanup, `resize`+`scroll` events).
-- [ ] **Step 3:** Tests + client build → PASS.
-- [ ] **Step 4: Commit** — `fix(remote): keyboard- and safe-area-aware app scaffold. Refs #996`
+- [x] **Step 1: Failing test** — Scaffold sets `--app-visible-height` from a mocked `visualViewport`.
+- [x] **Step 2: Implement** (listener with rAF throttle, cleanup, `resize`+`scroll` events).
+- [x] **Step 3:** Tests + client build → PASS.
+- [x] **Step 4: Commit** — `fix(remote): keyboard- and safe-area-aware app scaffold. Refs #996`
 
 ### Task 6: `bootstrapping` + status unification in SessionView
 
@@ -143,9 +143,9 @@ In `Feed.tsx:1155` add `feed-column` to the column div's className (keep every e
 - Modify: `src/remote-client/src/transcript/store.ts` (expose `isBackfilling(sessionId)`)
 - Modify: `src/remote-client/src/ui/SessionView.tsx` (pass `bootstrapping`; remove the duplicated `.working` strip — in-feed `WorkIndicator` owns phase display; keep one error/status line)
 
-- [ ] **Step 1:** Wire `bootstrapping={transcript.bootstrapping}` from a new store flag set during `loadInitialHistory`/`loadOlderHistory`.
-- [ ] **Step 2:** Renderer test: view renders without the `.working` strip while `workingStatus` is set (in-feed indicator owns it).
-- [ ] **Step 3:** Tests → PASS. Commit — `fix(remote): suppress backfill jank and doubled working indicators. Refs #996`
+- [x] **Step 1:** Wire `bootstrapping={transcript.bootstrapping}` from a new store flag set during `loadInitialHistory`/`loadOlderHistory`.
+- [x] **Step 2:** Renderer test: view renders without the `.working` strip while `workingStatus` is set (in-feed indicator owns it).
+- [x] **Step 3:** Tests → PASS. Commit — `fix(remote): suppress backfill jank and doubled working indicators. Refs #996`
 
 ### Task 7: Canonical icon pipeline for phone chrome
 
@@ -153,9 +153,9 @@ In `Feed.tsx:1155` add `feed-column` to the column div's className (keep every e
 - Create: `src/remote-client/src/ui/icons.tsx` (bundled SVG bodies via `@iconify-json/vscode-icons` mirroring `features/editor/lib/fileIcon.tsx`'s CSP-safe pattern; mic, mic-recording, stop, send, back, chevron, dot glyph set — all 16px `aria-hidden`)
 - Modify: `SessionView.tsx`, `SessionList.tsx` (replace 🎤/⏺/…/‹)
 
-- [ ] **Step 1:** Implement icons module (build-time pinned bodies, `dangerouslySetInnerHTML`, no CDN).
-- [ ] **Step 2:** Replace glyph usages; add renderer test asserting no emoji codepoints in chrome (scan rendered strings for `[\u{1F300}-\u{1FAFF}\u2B00-\u2BFF]`).
-- [ ] **Step 3:** Client build + test → PASS. Commit — `feat(remote): bundled SVG icon pipeline replaces chrome emojis. Refs #996`
+- [x] **Step 1:** Implement icons module (build-time pinned bodies, `dangerouslySetInnerHTML`, no CDN).
+- [x] **Step 2:** Replace glyph usages; add renderer test asserting no emoji codepoints in chrome (scan rendered strings for `[\u{1F300}-\u{1FAFF}\u2B00-\u2BFF]`).
+- [x] **Step 3:** Client build + test → PASS. Commit — `feat(remote): bundled SVG icon pipeline replaces chrome emojis. Refs #996`
 
 ---
 
@@ -167,10 +167,10 @@ In `Feed.tsx:1155` add `feed-column` to the column div's className (keep every e
 - Create: `src/main/remote/workspaceProjection.ts` — `RemoteWorkspaceProjection` class: cached `sessionId → { title, agentName, tabId, tabTitle, pinned, tldrIdentity, cwd }`, rebuilt from `WorkspaceFileStore` reads + `AgentNameRegistry` name resolution, invalidated on the workspace-save event the store already emits; defensive parsing (missing/corrupt file → empty map, never throws).
 - Test: `src/main/remote/workspaceProjection.test.ts` (fixtures: titled sessions, agent-name resolution, pinned flag, tab grouping, corrupt file)
 
-- [ ] **Step 1: Failing tests** over fixture `workspace.json` payloads.
-- [ ] **Step 2: Implement** (reuse `src/main/storage/workspaceProjection.ts` parsing; add the registry join; eviction of dead sessionIds on rebuild).
-- [ ] **Step 3:** `NODE_ENV=test npx vitest run --project unit src/main/remote/workspaceProjection.test.ts` → PASS.
-- [ ] **Step 4: Commit** — `feat(remote): workspace projection read model for titles, names, tabs, pins. Refs #996`
+- [x] **Step 1: Failing tests** over fixture `workspace.json` payloads.
+- [x] **Step 2: Implement** (reuse `src/main/storage/workspaceProjection.ts` parsing; add the registry join; eviction of dead sessionIds on rebuild).
+- [x] **Step 3:** `NODE_ENV=test npx vitest run --project unit src/main/remote/workspaceProjection.test.ts` → PASS.
+- [x] **Step 4: Commit** — `feat(remote): workspace projection read model for titles, names, tabs, pins. Refs #996`
 
 ### Task 9: session-list summary growth
 
@@ -180,10 +180,10 @@ In `Feed.tsx:1155` add `feed-column` to the column div's className (keep every e
 - Modify: `src/main/remote/RemoteServer.ts` (resend session-list on projection invalidation)
 - Test: extend `src/main/remote/RemoteServer.integration.test.ts`
 
-- [ ] **Step 1: Failing integration test** — connect with a fixture workspace; assert summary carries title/agentName/tabTitle/pinned/providerRuntime.
-- [ ] **Step 2: Implement** all optional fields; old-client tolerance is structural (unknown fields ignored).
-- [ ] **Step 3:** `NODE_ENV=test npx vitest run --project system src/main/remote/RemoteServer.integration.test.ts` → PASS; `npm run test:contract`.
-- [ ] **Step 4: Commit** — `feat(remote): project title, agent name, tab, pin, runtime onto session summaries. Refs #996`
+- [x] **Step 1: Failing integration test** — connect with a fixture workspace; assert summary carries title/agentName/tabTitle/pinned/providerRuntime.
+- [x] **Step 2: Implement** all optional fields; old-client tolerance is structural (unknown fields ignored).
+- [x] **Step 3:** `NODE_ENV=test npx vitest run --project system src/main/remote/RemoteServer.integration.test.ts` → PASS; `npm run test:contract`.
+- [x] **Step 4: Commit** — `feat(remote): project title, agent name, tab, pin, runtime onto session summaries. Refs #996`
 
 ### Task 10: TLDR/Goal frames with server-side identity join
 
@@ -193,9 +193,9 @@ In `Feed.tsx:1155` add `feed-column` to the column div's className (keep every e
 - Modify: `src/remote-client/src/wire.ts` + `WebSocketSessionFeed.ts` (frame types, `onTldrUpdated`/`onGoalUpdated` listeners, initial-state getters)
 - Test: extend server integration test + `WebSocketSessionFeed.integration.test.ts`
 
-- [ ] **Step 1: Failing tests** both sides (server emits on store change with correct sessionId join; client parses).
-- [ ] **Step 2: Implement**; unknown-frame safety for old bundles confirmed by the existing tolerant-reader tests.
-- [ ] **Step 3:** System + unit suites → PASS. Commit — `feat(remote): TLDR and Goal records over the wire with server-side identity join. Refs #996`
+- [x] **Step 1: Failing tests** both sides (server emits on store change with correct sessionId join; client parses).
+- [x] **Step 2: Implement**; unknown-frame safety for old bundles confirmed by the existing tolerant-reader tests.
+- [x] **Step 3:** System + unit suites → PASS. Commit — `feat(remote): TLDR and Goal records over the wire with server-side identity join. Refs #996`
 
 ### Task 11: sub-agents channel activation
 
@@ -204,9 +204,9 @@ In `Feed.tsx:1155` add `feed-column` to the column div's className (keep every e
 - Modify: `src/remote-client/src/WebSocketSessionFeed.ts` (register the existing empty listener set)
 - Test: extend `SessionFeedSource.test.ts` + server integration
 
-- [ ] **Step 1: Failing test** — a spawned sub-agent state map reaches a connected client as `session-event { channel: 'sub-agents' }`.
-- [ ] **Step 2: Implement**; wire `relatedAgentTabs` in SessionView from the store (replaces the hardcoded `[]`).
-- [ ] **Step 3:** Tests → PASS. Commit — `feat(remote): activate the reserved sub-agents channel end to end. Refs #996`
+- [x] **Step 1: Failing test** — a spawned sub-agent state map reaches a connected client as `session-event { channel: 'sub-agents' }`.
+- [x] **Step 2: Implement**; wire `relatedAgentTabs` in SessionView from the store (replaces the hardcoded `[]`).
+- [x] **Step 3:** Tests → PASS. Commit — `feat(remote): activate the reserved sub-agents channel end to end. Refs #996`
 
 ### Task 12: usage snapshot + jsonl-error consumption
 
@@ -216,8 +216,8 @@ In `Feed.tsx:1155` add `feed-column` to the column div's className (keep every e
 - Modify: `src/remote-client/src/ui/SessionView.tsx` (render `statusError` banner; merge with historyError into one status surface)
 - Test: extend server integration + store tests
 
-- [ ] **Step 1: Failing tests** (snapshot frame on connect; store surfaces a `provider_session_switched` payload).
-- [ ] **Step 2: Implement.** Commit — `feat(remote): usage snapshot frame and visible jsonl-error status. Refs #996`
+- [x] **Step 1: Failing tests** (snapshot frame on connect; store surfaces a `provider_session_switched` payload).
+- [x] **Step 2: Implement.** Commit — `feat(remote): usage snapshot frame and visible jsonl-error status. Refs #996`
 
 ---
 
