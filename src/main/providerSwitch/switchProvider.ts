@@ -235,10 +235,10 @@ export async function switchProvider(
       // is a statement about WHERE the ladder cut, and every removal it made is
       // already counted by the other fields.
       //
-      // The sum is parenthesized because `a + b + c + d > 0` reads as if only
-      // the last term were compared; it is not, but a reader should not have to
-      // recall operator precedence to be sure of a flag that decides whether a
-      // user is told their history was cut.
+      // The sum gets a name of its own rather than being compared inline:
+      // `a + b + c > 0` reads as if only the last term were compared, and a
+      // reader should not have to recall operator precedence to be sure of a
+      // flag that decides whether a user is told their history was cut.
       const report = plan.report
       const removed = report.strippedCompactions
         + report.clearedResults
@@ -406,23 +406,39 @@ export async function switchProvider(
  * alone did not fit (agent-transcript-parser#28), the one line the user reads
  * must say so, or the first they hear of it is the target asking what the
  * screenshot showed.
+ *
+ * WHY those two clauses come FIRST instead of in ladder order: the pane toast
+ * clamps to three lines, and in a narrow pane a full summary is longer than
+ * that, so whatever is last is what the clamp removes. The first version put
+ * the new clauses at the end — exactly the part nobody could read (review of
+ * #998). What the user has to ACT on leads; the housekeeping counts follow in
+ * ladder order, and the sizes, which are the least actionable, stay last.
+ *
+ * WHY the noun is "attachment" and not "image": the parser counts `image`,
+ * `document` and unrecognised blocks in one field and never tells the host
+ * which kind went, because the ladder does not inspect provider payloads. A
+ * toast that said "image" would be a guess.
  */
 export function describeShrink(report: ShrinkReport): string {
+  // One place for the plural so a count of one never reads "1 tool outputs";
+  // the lift often clears exactly the one result or image in the newest turn,
+  // which made the singular the common case rather than the rare one.
+  const count = (n: number, singular: string, plural: string): string => `${n} ${n === 1 ? singular : plural}`
   const parts: string[] = []
-  if (report.strippedCompactions > 0) {
-    parts.push(`${report.strippedCompactions} encrypted compaction${report.strippedCompactions === 1 ? '' : 's'} dropped`)
-  }
-  if (report.clearedResults > 0) parts.push(`${report.clearedResults} tool outputs cleared`)
   if (report.clearedAttachments > 0) {
-    parts.push(`${report.clearedAttachments} attachment${report.clearedAttachments === 1 ? '' : 's'} omitted`)
+    parts.push(`${count(report.clearedAttachments, 'attachment', 'attachments')} omitted`)
   }
-  if (report.trimmedInputs > 0) parts.push(`${report.trimmedInputs} tool inputs trimmed`)
+  if (report.liftedRecentTurnProtection) parts.push('newest turns trimmed')
+  if (report.strippedCompactions > 0) {
+    parts.push(`${count(report.strippedCompactions, 'encrypted compaction', 'encrypted compactions')} dropped`)
+  }
+  if (report.clearedResults > 0) parts.push(`${count(report.clearedResults, 'tool output', 'tool outputs')} cleared`)
+  if (report.trimmedInputs > 0) parts.push(`${count(report.trimmedInputs, 'tool input', 'tool inputs')} trimmed`)
   if (report.droppedTurns > 0) {
-    parts.push(`${report.droppedTurns} oldest turns dropped`)
+    parts.push(`${count(report.droppedTurns, 'oldest turn', 'oldest turns')} dropped`)
   } else if (report.droppedEntries > 0) {
-    parts.push(`${report.droppedEntries} oldest entries dropped`)
+    parts.push(`${count(report.droppedEntries, 'oldest entry', 'oldest entries')} dropped`)
   }
-  if (report.liftedRecentTurnProtection) parts.push('recent turns trimmed too')
   const kb = (n: number): string => `${Math.round(n / 1000)}k`
   return `${parts.join(', ') || 'no changes'} (${kb(report.estimatedCharactersBefore)} → ${kb(report.estimatedCharactersAfter)} chars)`
 }

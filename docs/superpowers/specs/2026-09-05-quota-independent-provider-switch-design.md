@@ -61,6 +61,15 @@ rewritten to match its implementation records nothing.
     automatically" screen was captured, so `isLimitIdle` ships as a defensive
     predicate that can only widen the guard. The live probe was not run either,
     so the ladder's `keepRecentTurns` and `maxInputChars` remain placeholders.
+11. **2026-09-18: the ladder below is no longer the ladder in the code.** A
+    message-attachment rung was inserted as rung 3, so trimming inputs is now
+    rung 4 and dropping turns rung 5, and the ladder gained a second pass that
+    lifts the recent-turn protection when the newest turns alone exceed the
+    budget (#998, agent-transcript-parser#28). Every rung number from 3 upward
+    in this document, and step 5's "throw if a single final turn still exceeds
+    the budget", predates that. The text is left as written because it records
+    what was approved on 2026-09-05; `docs/design/provider-switching.md`
+    §"The shrink ladder" is the description of what runs.
 
 ## Problem
 
