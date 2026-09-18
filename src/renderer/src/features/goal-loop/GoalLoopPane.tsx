@@ -23,6 +23,10 @@ export function GoalLoopPane({ sessionId }: { sessionId: string }) {
   const [loop, setLoop] = useState<GoalLoopState | null>(null)
   const latched = useGoalLoopView(state => state.latched)
   useEffect(() => {
+    // Guard: pane tests stub window.api partially, and a loop surface that
+    // crashes a pane over a missing IPC method is worse than one that renders
+    // nothing. Production always has both; a missing surface means "no loop".
+    if (!window.api?.onGoalLoopChanged || !window.api?.readGoalLoops) return
     let current = true
     // Read on every changed ping rather than threading state through the
     // broadcast: panes may mount mid-loop and the ping is payload-free by
