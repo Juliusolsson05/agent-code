@@ -44,20 +44,15 @@ function workspaceFixture(): Workspace {
     state: {
       activeTabId: 'tab-agent-code',
       stage: oneLaneStage('audit'),
-      gridRelatedSelections: {},
       tabs: [
-        { id: 'tab-agent-code', title: 'agent-code', focusedSessionId: 'audit', root: { type: 'leaf', sessionId: 'audit' } },
-        { id: 'tab-startup', title: 'startup', focusedSessionId: 'pitch', root: { type: 'leaf', sessionId: 'pitch' } },
+        { id: 'tab-agent-code', title: 'agent-code' },
+        { id: 'tab-startup', title: 'startup' },
       ],
       sessions: {
-        audit: { cwd: '/dev/agent-code', kind: 'codex' },
-        grok: { cwd: '/dev/agent-code/.worktrees/grok-package-wiring', kind: 'codex' },
-        pitch: { cwd: '/dev/startup', kind: 'codex' },
+        audit: { cwd: '/dev/agent-code', kind: 'codex', projectId: 'tab-agent-code', joinedAt: 0 },
+        grok: { cwd: '/dev/agent-code/.worktrees/grok-package-wiring', kind: 'codex', projectId: 'tab-agent-code', joinedAt: 1 },
+        pitch: { cwd: '/dev/startup', kind: 'codex', projectId: 'tab-startup', joinedAt: 0 },
       },
-      detachedSessions: {
-        grok: { sessionId: 'grok', surface: 'dispatch', projectTabId: 'tab-agent-code', projectTabTitle: 'agent-code', projectTabIndex: 0, detachedAt: 1 },
-      },
-      buried: [],
       pinnedSessionIds: [],
       lastProviderSwitchBatch: null,
     },

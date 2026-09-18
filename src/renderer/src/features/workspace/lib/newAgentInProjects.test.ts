@@ -1,30 +1,24 @@
 import { describe, expect, it } from 'vitest'
 
 import { buildNewAgentInModel } from '@renderer/features/workspace/lib/newAgentInProjects'
-import type { TileNode, TiledDispatchState, WorkspaceState } from '@renderer/workspace/types'
+import type { TiledDispatchState, WorkspaceState } from '@renderer/workspace/types'
 
 // Three projects, each with one grid agent, so labels A/B/C are all in play and
 // a filtered list can prove it keeps the GLOBAL letter rather than re-lettering.
-function leaf(sessionId: string): TileNode {
-  return { type: 'leaf', sessionId }
-}
-
 function makeState(stage: TiledDispatchState): WorkspaceState {
   return {
     tabs: [
-      { id: 'tabA', title: 'project-a', root: leaf('a1'), focusedSessionId: 'a1' },
-      { id: 'tabB', title: 'project-b', root: leaf('b1'), focusedSessionId: 'b1' },
-      { id: 'tabC', title: 'project-c', root: leaf('c1'), focusedSessionId: 'c1' },
+      { id: 'tabA', title: 'project-a' },
+      { id: 'tabB', title: 'project-b' },
+      { id: 'tabC', title: 'project-c' },
     ],
     activeTabId: 'tabA',
     stage,
     sessions: {
-      a1: { cwd: '/work/project-a', kind: 'claude' },
-      b1: { cwd: '/work/project-b', kind: 'codex' },
-      c1: { cwd: '/work/project-c', kind: 'claude' },
+      a1: { cwd: '/work/project-a', kind: 'claude', projectId: 'tabA', joinedAt: 0 },
+      b1: { cwd: '/work/project-b', kind: 'codex', projectId: 'tabB', joinedAt: 0 },
+      c1: { cwd: '/work/project-c', kind: 'claude', projectId: 'tabC', joinedAt: 0 },
     },
-    detachedSessions: {},
-    buried: [],
     pinnedSessionIds: [],
   }
 }
@@ -65,15 +59,7 @@ describe('buildNewAgentInModel', () => {
 
   it('anchors a project on its first session with a directory, grid leaf before detached rows', () => {
     const state = makeState(gridWithFocusedEmptyLane())
-    state.sessions.b2 = { cwd: '/work/project-b/.worktrees/task', kind: 'codex' }
-    state.detachedSessions.b2 = {
-      sessionId: 'b2',
-      surface: 'dispatch',
-      projectTabId: 'tabB',
-      projectTabTitle: 'project-b',
-      projectTabIndex: 1,
-      detachedAt: 10,
-    }
+    state.sessions.b2 = { cwd: '/work/project-b/.worktrees/task', kind: 'codex', projectId: 'tabB', joinedAt: 10 }
 
     const projectB = buildNewAgentInModel(state).projects.find(p => p.tabId === 'tabB')
 
@@ -85,15 +71,7 @@ describe('buildNewAgentInModel', () => {
   it('falls back to a detached row when the grid leaf has no live session behind it', () => {
     const state = makeState(gridWithFocusedEmptyLane())
     delete state.sessions.b1
-    state.sessions.b2 = { cwd: '/work/project-b', kind: 'codex' }
-    state.detachedSessions.b2 = {
-      sessionId: 'b2',
-      surface: 'dispatch',
-      projectTabId: 'tabB',
-      projectTabTitle: 'project-b',
-      projectTabIndex: 1,
-      detachedAt: 10,
-    }
+    state.sessions.b2 = { cwd: '/work/project-b', kind: 'codex', projectId: 'tabB', joinedAt: 10 }
 
     const projectB = buildNewAgentInModel(state).projects.find(p => p.tabId === 'tabB')
 
@@ -142,7 +120,10 @@ describe('buildNewAgentInModel', () => {
     stage.lanes[2] = { selectedSessionId: 'b1' }
     const state = makeState(stage)
     state.activeTabId = 'tabC'
-    state.sessions.b1 = { cwd: '', kind: 'codex' }
+    // Spread: the row's `projectId` is what files it under tabB (#992). A bare
+    // replacement un-files it, tabB becomes EMPTY rather than un-anchorable,
+    // and the case stops testing the disabled-project rule at all.
+    state.sessions.b1 = { ...state.sessions.b1!, cwd: '' }
 
     expect(buildNewAgentInModel(state).initialTabId).toBe('tabA')
   })

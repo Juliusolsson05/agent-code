@@ -33,38 +33,42 @@ export type TabId = string
 
 export type SplitDirection = 'vertical' | 'horizontal'
 
-/**
- * Vertical split = divider runs top-to-bottom, `a` is left, `b` is right.
- * Horizontal split = divider runs left-to-right, `a` is top, `b` is bottom.
- * We deliberately use a/b instead of left/right so the direction flip
- * between vertical and horizontal doesn't mislead.
- */
-export type TileNode =
-  | { type: 'leaf'; sessionId: SessionId }
-  | {
-      type: 'split'
-      direction: SplitDirection
-      ratio: number
-      a: TileNode
-      b: TileNode
-    }
+// `TileNode` — the recursive binary split tree — lived here until #992. It is
+// now `LegacyTileNode` in legacyWorkspaceV2.ts, which is the only place that
+// still needs to understand one (to read an old file). Nothing at runtime
+// owns, renders or mutates a tree.
 
+/**
+ * A project: a title, and a stable position that gives its agents their index
+ * letter (A1, B7).
+ *
+ * It is called `Tab` and lives in `WorkspaceState.tabs` for one reason only:
+ * renaming the in-memory field touches ~200 call sites and is cleanup, not
+ * behavior (stage 8 of the #992 plan). What matters is what it no longer has:
+ *
+ *   - `root` — the tile tree that OWNED the tab's visible sessions. Ownership
+ *     is `SessionMeta.projectId` now: a session says which project it belongs
+ *     to, instead of a project holding a structure its sessions hang off.
+ *   - `focusedSessionId` — the tree's focus. The focused lane's occupant is
+ *     the one focus truth (U3); a second, per-project focus is exactly the
+ *     shape of #266/#267/#271.
+ *
+ * A project therefore owns NOTHING (U4). It exists while at least one session
+ * names it and is removed when its last session closes.
+ */
 export type Tab = {
   id: TabId
   title: string
-  root: TileNode
-  focusedSessionId: SessionId
 }
 
 /**
  * A project, post unified-layout merge (#992, plan
  * docs/superpowers/plans/2026-09-17-unified-stage-layout.md).
  *
- * WHY this exists beside `Tab` during the transition: `Tab` still owns a
- * tile tree the renderer renders from; `ProjectRef` is the tree-less end
- * state where a project is grouping only — a title, a spawn-cwd default,
- * and a stable letter for A1/B7 index labels. The v2→v3 workspace
- * migration (workspaceShape.ts) mints these from tabs and keeps the old
+ * This is the ON-DISK spelling of a project (`workspace.json`'s `projects`).
+ * It is structurally what `Tab` is in memory; the two names exist because the
+ * file was renamed in #992 and the in-memory field was not (see `Tab`). The
+ * migration (workspaceShape.ts) mints these from v2 tabs and keeps the old
  * TabId as `id` so lane bindings, row project bindings, and labels survive
  * the merge unchanged.
  */
@@ -281,64 +285,40 @@ export type SessionMeta = {
    * maps belong to legacy snapshots and migrate via sessionMcpOverrides. */
   builtInMcpOverrides?: BuiltInMcpOverrides
   /**
-   * Project membership in the unified layout (#992). Replaces BOTH ways a
-   * session used to know its project — "I am a leaf of tabs[i].root" and
-   * DetachedSessionRecord.projectTabId — with one direct field.
+   * Project membership (#992). THE ownership fact: a session belongs to the
+   * workspace because it names a live project. It replaces all three ways a
+   * v2 session could be owned — "I am a leaf of tabs[i].root", a
+   * `detachedSessions` record's `projectTabId`, and a `buried` record's
+   * `sourceTabId` — with one field on the session itself.
    *
-   * Optional ONLY during the staged merge: v2 workspaces gain it at the
-   * read-time migration (workspaceShape.ts) and stage-2 writers mint it at
-   * spawn. Once the tree/detached buckets are deleted (stage 3) this becomes
-   * required-by-construction everywhere the pool is consumed.
+   * Optional in the TYPE only because `SessionMeta` also describes v2 rows on
+   * disk, which predate it, and the transient row `spawn` writes a moment
+   * before its caller files it. It is set on every session a reducer has
+   * finished creating, carried across provider swaps and reloads, and a row
+   * without a live one is dropped at the autosave and rehydrate boundaries —
+   * metadata is never its own owner (sessionOwnership.ts).
    */
   projectId?: TabId
-}
-
-export type BuriedPaneRecord = {
-  /** Stable id for picker actions; same as sessionId for now. */
-  id: string
-  /** The live hidden session. Remains running while buried. */
-  sessionId: SessionId
-  /** Persisted session metadata so reload/revive can describe it. */
-  sessionMeta: SessionMeta
-  buriedAt: number
-  /** Where the pane came from before it was removed from the tree. */
-  sourceTabId: TabId
-  sourceTabTitle: string
-  sourceTabIndex: number
-  /** Placement hint captured from the parent split when available. */
-  direction?: SplitDirection
-  ratio?: number
-  side?: 'a' | 'b'
-  /** Anchor leaf from the surviving sibling subtree, if any. */
-  siblingLeafId?: SessionId
-  /** Optional user note captured when the pane was buried. */
-  note?: string
-}
-
-export type DetachedSessionSurface = 'dispatch'
-
-export type DetachedSessionRecord = {
-  /** The live session that is intentionally not placed in any tile tree. */
-  sessionId: SessionId
   /**
-   * Which non-grid surface owns the session right now.
+   * Position inside its project's index: ascending, ties broken by the
+   * `sessions` map's insertion order. The ONLY ordering key, replacing v2's
+   * two-part rule (tree leaves depth-first, then detached by `detachedAt`).
    *
-   * WHY this says "surface" instead of "backlog": the important model
-   * decision is that sessions can be live without grid placement. Dispatch is
-   * the first consumer, but the shape should still scale to future surfaces
-   * without pretending those sessions are children of Dispatch Mode itself.
+   * Stamped with `Date.now()` when a session is filed, so new agents list
+   * last; carried verbatim across a provider swap or reload so a row does not
+   * jump when its backend is replaced. Migrated v2 tree leaves hold small
+   * ordinals (0, 1, 2…), which is what keeps them ahead of every timestamped
+   * row exactly as "leaves first" used to.
    */
-  surface: DetachedSessionSurface
-  /**
-   * Project affinity, not hierarchy. The session is detached from the grid,
-   * but it still needs a project tab for grouping, cwd defaults, terminal
-   * selection, and project/global filtering in Dispatch Mode.
-   */
-  projectTabId: TabId
-  projectTabTitle: string
-  projectTabIndex: number
-  detachedAt: number
+  joinedAt?: number
 }
+
+// `BuriedPaneRecord`, `DetachedSessionSurface` and `DetachedSessionRecord` lived
+// here until #992. They were the two non-tree OWNERS of a session: a record in
+// `detachedSessions` ("live, but in no tile tree") and a record in `buried`
+// ("live, hidden"). Both statements are simply true of any pool session that
+// no lane shows, so they are no longer kinds of thing. The shapes survive as
+// `Legacy*` types in legacyWorkspaceV2.ts for reading old files.
 
 /**
  * One lane in a Tiled Dispatch layout. lanes[0] is always the full index
@@ -507,20 +487,9 @@ export type TiledDispatchState = {
 export type WorkspaceState = {
   tabs: Tab[]
   activeTabId: TabId
-  /**
-   * Grid panes can temporarily render a related detached child (linked agent or
-   * orchestration worker) inside the parent's physical tile. This map is keyed
-   * by the physical grid leaf id, not by the rendered child id.
-   *
-   * WHY this is view state instead of tile-tree state:
-   * linked/orchestration children are intentionally detached Dispatch sessions.
-   * Pretending they are tile leaves would violate the grid invariant that
-   * `tab.root` owns the mounted layout and would make a harmless "peek at
-   * worker" click mutate the user's splits. Keeping the selected child here
-   * lets input/commands target the visible child while the layout still says
-   * "this pane belongs to the parent."
-   */
-  gridRelatedSelections?: Record<SessionId, SessionId>
+  // `gridRelatedSelections` lived here until #992: which related child a grid
+  // pane was showing in place of its owner. See TileTree.tsx for why the stage
+  // has no equivalent.
   /**
    * The stage: ragged rows of lanes. THE workspace — always present, never a
    * mode. A lane names a pool session or is empty; nothing fills a lane except
@@ -534,15 +503,17 @@ export type WorkspaceState = {
    */
   stage: TiledDispatchState
   /**
-   * Per-session metadata. Every live session MUST exist here. Grid-placed
-   * sessions are referenced from tab roots; detached sessions are referenced
-   * from detachedSessions. A session should never be in both places.
+   * The pool: every session the workspace owns, keyed by its durable id. Each
+   * row names its project (`projectId`) and its place in that project's index
+   * (`joinedAt`). This map is the ONLY home a session has (U1): the stage
+   * merely points at some of it.
+   *
+   * `detachedSessions` and `buried` sat beside this until #992. They were
+   * owner records for sessions outside the tile tree; with no tree there is
+   * no "outside", and whether a session has a backend right now is a fact
+   * about its RUNTIME (`processStatus`), not about which bucket lists it.
    */
   sessions: Record<SessionId, SessionMeta>
-  /** Live sessions that intentionally have no tile-tree placement. */
-  detachedSessions: Record<SessionId, DetachedSessionRecord>
-  /** Hidden-but-live sessions removed from the visible layout. */
-  buried: BuriedPaneRecord[]
   /**
    * Ordered list of session IDs the user has explicitly pinned to the
    * top of the dispatch list. ORDER MATTERS — `pinnedSessionIds[0]`
@@ -633,9 +604,9 @@ export type ProviderSwitchBatch = {
   compactOnArrival: boolean
 }
 
-export const RATIO_MIN = 0.1
-export const RATIO_MAX = 0.9
-export const RATIO_DEFAULT = 0.5
+// RATIO_MIN / RATIO_MAX / RATIO_DEFAULT (tile-tree split ratios) lived here
+// until #992 deleted the tree. Lane and row sizing clamps live in
+// dispatch/gridShape.ts.
 
 // -----------------------------------------------------------------------------
 // Mode-surface layout states. These lived in workspaceState.ts until the #493

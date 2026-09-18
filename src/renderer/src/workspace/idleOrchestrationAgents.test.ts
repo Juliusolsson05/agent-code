@@ -41,15 +41,15 @@ type WorkerSpec = {
   kind?: SessionMeta['kind']
   /** `null` = no runtime observed yet. */
   runtime?: SessionRuntime | null
-  /** Not placed in any project (buried sessions have no tab placement). */
-  buried?: boolean
+  /** Not filed under any project: unowned metadata no index lists. (Until
+   *  #992 this was how the fixture spelled a BURIED session.) */
+  unfiled?: boolean
 }
 
-/** One project tab: the user's lead agent is the grid root and every worker is
- *  a Dispatch row, filed in list order. */
+/** One project: the user's lead agent first, then every worker filed in list
+ *  order. */
 function workspace(workers: WorkerSpec[]): { state: WorkspaceState; runtimes: Record<string, SessionRuntime> } {
-  const sessions: WorkspaceState['sessions'] = { [LEAD]: { cwd: '/repo', kind: 'claude', title: 'Lead' } }
-  const detachedSessions: WorkspaceState['detachedSessions'] = {}
+  const sessions: WorkspaceState['sessions'] = { [LEAD]: { cwd: '/repo', kind: 'claude', title: 'Lead', projectId: 'tab', joinedAt: 0 } }
   const runtimes: Record<string, SessionRuntime> = { [LEAD]: answered() }
   workers.forEach((worker, index) => {
     sessions[worker.id] = {
@@ -59,27 +59,15 @@ function workspace(workers: WorkerSpec[]): { state: WorkspaceState; runtimes: Re
       ...(worker.parent === null
         ? {}
         : { orchestrationParentId: worker.parent ?? LEAD, orchestrationRootId: LEAD }),
-    }
-    if (!worker.buried) {
-      detachedSessions[worker.id] = {
-        sessionId: worker.id,
-        surface: 'dispatch',
-        projectTabId: 'tab',
-        projectTabTitle: 'repo',
-        projectTabIndex: 0,
-        detachedAt: index + 1,
-      }
+      ...(worker.unfiled ? {} : { projectId: 'tab', joinedAt: index + 1 }),
     }
     if (worker.runtime !== null) runtimes[worker.id] = worker.runtime ?? answered()
   })
   const state: WorkspaceState = {
-    tabs: [{ id: 'tab', title: 'repo', root: { type: 'leaf', sessionId: LEAD }, focusedSessionId: LEAD }],
+    tabs: [{ id: 'tab', title: 'repo' }],
     activeTabId: 'tab',
     stage: freshStage(),
     sessions,
-    detachedSessions,
-    gridRelatedSelections: {},
-    buried: [],
     pinnedSessionIds: [],
   }
   return { state, runtimes }
@@ -128,9 +116,10 @@ describe('which orchestration workers count as idle', () => {
   })
 
   it('ignores a finished worker that is not placed in any project', () => {
-    // closeSession never ends buried sessions; listing one would promise a
-    // close that cannot happen.
-    const { state, runtimes } = workspace([{ id: 'worker', buried: true }])
+    // closeSession refuses a session whose project it cannot resolve; listing
+    // one would promise a close that cannot happen. (Until #992 this case was
+    // a BURIED worker, which closeSession likewise never ended.)
+    const { state, runtimes } = workspace([{ id: 'worker', unfiled: true }])
     expect(idleOrchestrationCloseTargets(state, runtimes)).toEqual([])
   })
 })

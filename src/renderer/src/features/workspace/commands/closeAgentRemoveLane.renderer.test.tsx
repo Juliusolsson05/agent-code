@@ -7,14 +7,23 @@ import { CloseConfirmationDialog } from '@renderer/features/workspace/ui/CloseCo
 import { __resetCloseConfirmationForTests } from '@renderer/workspace/closeConfirmationBroker'
 import { useDispatchActions } from '@renderer/workspace/hook/actions/dispatch'
 import { mountPaneActions } from '@renderer/workspace/hook/actions/testing/paneActionsHarness'
+import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { WorkspaceState } from '@renderer/workspace/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 
 // "Close Agent and Remove Lane" removes the focused lane only when closeSession
-// resolves true. Since #886, `true` for a project's root carries a second
-// meaning: the root closed AND a Dispatch row was promoted into the grid. These
-// pin that the promotion never leaks into the layout mutation — the survivor
-// keeps its own lane — and that declining leaves the layout untouched.
+// resolves true. These pin the two halves of that: a close that HAPPENS takes
+// exactly one lane and leaves the other lane's agent where it is, and a close
+// the user DECLINES leaves the layout untouched.
+//
+// Re-based with #992. The suite was written for a project's ROOT tile leaf,
+// whose close raised a three-way dialog (Close Agent / Close Tab) and, on
+// Close Agent, PROMOTED a Dispatch row into the emptied tree — the risk being
+// that the promotion leaked into the lane mutation. There is no root and no
+// promotion: closing the first session of a project is an ordinary
+// session-scoped close. An IDLE session therefore closes with no dialog at all
+// (the cheap case Undo Close covers), so the decline case models the one
+// remaining reason a single close asks — the agent is mid-turn.
 //
 // Real pieces throughout: the palette command, the pane close action, the
 // dispatch lane action and the confirmation dialog. Only the ownership-checked
@@ -37,23 +46,27 @@ afterEach(() => {
 
 function tiledProject(): WorkspaceState {
   return {
-    tabs: [{ id: 'project', title: 'Project', root: { type: 'leaf', sessionId: 'root' }, focusedSessionId: 'root' }],
+    tabs: [{ id: 'project', title: 'Project' }],
     activeTabId: 'project',
     sessions: {
-      root: { cwd: '/project', kind: 'claude', title: 'Root' },
-      worker: { cwd: '/project', kind: 'codex', title: 'Worker' },
+      root: { cwd: '/project', kind: 'claude', title: 'Root', projectId: 'project', joinedAt: 0 },
+      worker: { cwd: '/project', kind: 'codex', title: 'Worker', projectId: 'project', joinedAt: 1 },
     },
-    detachedSessions: {
-      worker: { sessionId: 'worker', surface: 'dispatch', projectTabId: 'project', projectTabTitle: 'Project', projectTabIndex: 0, detachedAt: 1 },
-    },
-    // The root in lane 1 (focused), the detached worker in lane 2.
+    // `root` in the focused lane, `worker` in the other.
     stage: { lanes: [{ selectedSessionId: 'root' }, { selectedSessionId: 'worker' }], focusedLane: 0 },
-    gridRelatedSelections: {}, buried: [], pinnedSessionIds: [],
+      pinnedSessionIds: [],
   }
 }
 
-function mount() {
+function mount(options: { rootWorking?: boolean } = {}) {
   const harness = mountPaneActions(tiledProject())
+  if (options.rootWorking) {
+    // `processActive` is one of the facts closeConfirmation's liveness rule
+    // reads; it is what turns a silent close into "Close a working session?".
+    harness.refs.latestRuntimesRef.current = {
+      root: { ...emptyRuntime(), processActive: true },
+    }
+  }
   const dispatch = renderHook(() => useDispatchActions(
     harness.setState, harness.refs, vi.fn(), vi.fn(),
   ))
@@ -78,19 +91,30 @@ async function runAndAnswer(context: CommandContext, button: string) {
   })
 }
 
-describe('Close Agent and Remove Lane on a project root (#886 review m8)', () => {
-  it('Close Agent removes the root lane and leaves the other lane on the promoted worker', async () => {
+describe('Close Agent and Remove Lane (#886 review m8)', () => {
+  it('closes an idle agent without asking, removes its lane, and leaves the other lane alone', async () => {
     const { harness, context } = mount()
     expect(command.when?.(context)).toBe(true)
-    await runAndAnswer(context, 'Close Agent')
+    await act(async () => { await command!.run(context) })
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     expect(killOwnedSession.mock.calls.map(([owner]) => owner.sessionId)).toEqual(['root'])
     expect(laneSessions(harness.getState())).toEqual(['worker'])
-    expect(harness.getState().tabs[0].root).toEqual({ type: 'leaf', sessionId: 'worker' })
+    // The project is untouched: it still holds the worker, which was always a
+    // full member of it. (Tree era: the worker was PROMOTED into the emptied
+    // tile tree here, and this asserted the promotion did not move its lane.)
+    expect(harness.getState().tabs.map(tab => tab.id)).toEqual(['project'])
     expect(harness.getState().sessions.worker).toBeDefined()
   })
 
+  it('asks before closing a WORKING agent, and Close removes its lane', async () => {
+    const { harness, context } = mount({ rootWorking: true })
+    await runAndAnswer(context, 'Close')
+    expect(killOwnedSession.mock.calls.map(([owner]) => owner.sessionId)).toEqual(['root'])
+    expect(laneSessions(harness.getState())).toEqual(['worker'])
+  })
+
   it('Cancel leaves both lanes and both sessions', async () => {
-    const { harness, context } = mount()
+    const { harness, context } = mount({ rootWorking: true })
     await runAndAnswer(context, 'Cancel')
     expect(killOwnedSession).not.toHaveBeenCalled()
     expect(laneSessions(harness.getState())).toEqual(['root', 'worker'])

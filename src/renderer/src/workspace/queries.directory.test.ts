@@ -7,22 +7,18 @@ import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 // The rule ⌘T and the operator's projects.open now share (#913).
 const state: WorkspaceState = {
   tabs: [
-    { id: 'tab-a', title: 'agent-code', focusedSessionId: 'a', root: { type: 'leaf', sessionId: 'a' } },
-    { id: 'tab-b', title: 'startup', focusedSessionId: 'b', root: { type: 'leaf', sessionId: 'b' } },
-    { id: 'tab-c', title: 'agent-code', focusedSessionId: 'c', root: { type: 'leaf', sessionId: 'c' } },
+    { id: 'tab-a', title: 'agent-code' },
+    { id: 'tab-b', title: 'startup' },
+    { id: 'tab-c', title: 'agent-code' },
   ],
   activeTabId: 'tab-a',
   stage: oneLaneStage('a'),
   sessions: {
-    a: { cwd: '/dev/agent-code', kind: 'claude' },
-    b: { cwd: '/dev/startup', kind: 'codex' },
-    c: { cwd: '/dev/agent-code/.worktrees/grok', kind: 'claude' },
-    parked: { cwd: '/dev/agent-code', kind: 'codex' },
+    a: { cwd: '/dev/agent-code', kind: 'claude', projectId: 'tab-a', joinedAt: 0 },
+    b: { cwd: '/dev/startup', kind: 'codex', projectId: 'tab-b', joinedAt: 0 },
+    c: { cwd: '/dev/agent-code/.worktrees/grok', kind: 'claude', projectId: 'tab-c', joinedAt: 0 },
+    parked: { cwd: '/dev/agent-code', kind: 'codex', projectId: 'tab-c', joinedAt: 1 },
   },
-  detachedSessions: {
-    parked: { sessionId: 'parked', surface: 'dispatch', projectTabId: 'tab-c', projectTabTitle: 'agent-code', projectTabIndex: 2, detachedAt: 1 },
-  },
-  buried: [],
   pinnedSessionIds: [],
 }
 

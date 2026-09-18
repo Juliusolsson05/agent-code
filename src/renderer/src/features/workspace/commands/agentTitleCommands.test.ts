@@ -23,20 +23,17 @@ function context(state: WorkspaceState) {
 function baseState(): WorkspaceState {
   return {
     tabs: [
-      { id: 'tab-a', title: 'A', root: { type: 'leaf', sessionId: 'a' }, focusedSessionId: 'a' },
-      { id: 'tab-b', title: 'B', root: { type: 'leaf', sessionId: 'b' }, focusedSessionId: 'b' },
+      { id: 'tab-a', title: 'A' },
+      { id: 'tab-b', title: 'B' },
     ],
     activeTabId: 'tab-a',
-    gridRelatedSelections: {},
     // The user is commanding `a`: one lane showing it. (This used to be said
     // by tab-a's tree focus alone, with Dispatch off; #992.)
     stage: oneLaneStage('a'),
     sessions: {
-      a: { cwd: '/work/a', kind: 'claude' },
-      b: { cwd: '/work/b', kind: 'codex' },
+      a: { cwd: '/work/a', kind: 'claude', projectId: 'tab-a', joinedAt: 0 },
+      b: { cwd: '/work/b', kind: 'codex', projectId: 'tab-b', joinedAt: 0 },
     },
-    detachedSessions: {},
-    buried: [],
     pinnedSessionIds: [],
   }
 }
@@ -74,7 +71,10 @@ describe('Set Title command targeting', () => {
 
   it('offers titles for a plain terminal target too (#865)', () => {
     const state = baseState()
-    state.sessions.a = { cwd: '/work/a', kind: 'terminal' }
+    // Spread, not replaced: the row carries its own membership (#992), so a
+    // bare `{ cwd, kind }` here would un-file it from its project and the lane
+    // would resolve no target — failing for a reason unrelated to terminals.
+    state.sessions.a = { ...state.sessions.a!, kind: 'terminal' }
     const harness = context(state)
 
     expect(command.when?.(harness.value)).toBe(true)

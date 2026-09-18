@@ -20,12 +20,12 @@ import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 function host(kind: 'claude' | 'codex' = 'codex') {
   let runtime = { ...emptyRuntime(), sessionRunId: 'run-a' }
   const pane = 'notice-pane'
-  const tab = { id: 't', focusedSessionId: 'different-pane', root: { type: 'leaf', sessionId: pane } }
+  const tab = { id: 't', title: 'Project' }
   const workspace = {
     // The pool fields and stage are here because Reader lists sessions
     // through the index now (#992): the index is always on, so a Workspace
     // mock must be a whole workspace, not just the fields the grid path read.
-    state: { activeTabId: 't', detachedSessions: {}, buried: [], pinnedSessionIds: [], stage: oneLaneStage(pane), sessions: { [pane]: { id: pane, kind, cwd: '/synthetic', providerSessionId: fixture.claude.sessionId } }, tabs: [tab] },
+    state: { activeTabId: 't',   pinnedSessionIds: [], stage: oneLaneStage(pane), sessions: { [pane]: { id: pane, kind, cwd: '/synthetic', providerSessionId: fixture.claude.sessionId, projectId: 't', joinedAt: 0 } }, tabs: [tab] },
     readerMode: { tabId: 't', focusedSessionId: pane },
     getRuntime: () => runtime,
     get runtimes() { return { [pane]: runtime } },

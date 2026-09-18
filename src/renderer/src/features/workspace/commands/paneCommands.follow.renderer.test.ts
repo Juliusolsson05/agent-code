@@ -23,11 +23,11 @@ function contextWithKind(kind: string): CommandContext {
     workspace: {
       state: {
         activeTabId: 'tab',
-        stage: oneLaneStage('agent'), detachedSessions: {}, buried: [], pinnedSessionIds: [],
+        stage: oneLaneStage('agent'),   pinnedSessionIds: [],
         sessions: {
-          agent: { cwd: '/projects/app', kind, providerSessionId: 'provider-abc' },
+          agent: { cwd: '/projects/app', kind, providerSessionId: 'provider-abc', projectId: 'tab', joinedAt: 0 },
         },
-        tabs: [{ id: 'tab', focusedSessionId: 'agent', root: { type: 'leaf', sessionId: 'agent' } }],
+        tabs: [{ id: 'tab' }],
       },
     },
     ui: {},

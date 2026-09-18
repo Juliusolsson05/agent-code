@@ -436,7 +436,6 @@ function GridRowView({
                     showStatusMode,
                     showWorktreeBadges,
                     () => workspace.setTiledFocusedLane(laneIndex),
-                    false,
                     resolved.paneLabel,
                   )
                 ) : (

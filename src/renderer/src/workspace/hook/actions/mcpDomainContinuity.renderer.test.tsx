@@ -17,16 +17,12 @@ function makeState(stage: TiledDispatchState = freshStage()): WorkspaceState {
     tabs: [{
       id: 'tab-parent',
       title: 'parent',
-      root: { type: 'leaf', sessionId: 'parent' },
-      focusedSessionId: 'parent',
     }],
     activeTabId: 'tab-parent',
     stage,
     sessions: {
-      parent: { cwd: '/projects/parent', kind: 'codex' },
+      parent: { cwd: '/projects/parent', kind: 'codex', projectId: 'tab-parent', joinedAt: 0 },
     },
-    detachedSessions: {},
-    buried: [],
     pinnedSessionIds: [],
   } as WorkspaceState
 }
@@ -76,25 +72,23 @@ describe('built-in MCP continuity at session resurrection boundaries', () => {
     harness.mounted.unmount()
   })
 
-  it('restores a closed pane with fresh credentials derived from its captured domains', async () => {
+  it('restores a closed session with fresh credentials derived from its captured domains', async () => {
     const state = makeState()
     const refs = makeRefs(state)
     const writer = stateWriter(state, refs)
     const spawn = vi.fn().mockResolvedValue('restored-pane')
     refs.undoStackRef.current.push({
-      type: 'pane',
+      type: 'session',
       closedAt: Date.now(),
-      tabId: 'tab-parent',
+      sessionId: 'closed-pane',
       sessionMeta: {
         cwd: '/projects/related-child',
         kind: 'codex',
         providerSessionId: 'provider-old',
         builtInMcpDomains: ['workflows'],
+        projectId: 'tab-parent',
+        joinedAt: 1,
       },
-      direction: 'vertical',
-      ratio: 0.5,
-      side: 'a',
-      siblingLeafId: 'parent',
     })
     let actions!: ReturnType<typeof useUndoCloseAction>
 
@@ -125,20 +119,18 @@ describe('built-in MCP continuity at session resurrection boundaries', () => {
     const writer = stateWriter(state, refs)
     const spawn = vi.fn().mockResolvedValue('restored-pane')
     refs.undoStackRef.current.push({
-      type: 'pane',
+      type: 'session',
       closedAt: Date.now(),
-      tabId: 'tab-parent',
+      sessionId: 'closed-pane',
       sessionMeta: {
         cwd: '/projects/related-child',
         kind: 'codex',
         providerSessionId: 'provider-old',
         builtInMcpDomains: [],
         builtInMcpOverrides: { orchestration: false },
+        projectId: 'tab-parent',
+        joinedAt: 1,
       },
-      direction: 'vertical',
-      ratio: 0.5,
-      side: 'a',
-      siblingLeafId: 'parent',
     })
     let actions!: ReturnType<typeof useUndoCloseAction>
 
@@ -162,7 +154,7 @@ describe('built-in MCP continuity at session resurrection boundaries', () => {
     mounted.unmount()
   })
 
-  it('restores both grid and detached tab agents with their own domain metadata', async () => {
+  it('restores every agent of a closed project with its own domain metadata', async () => {
     const state = { ...makeState(), tabs: [], sessions: {} } as WorkspaceState
     const refs = makeRefs(state)
     const writer = stateWriter(state, refs)
@@ -172,30 +164,32 @@ describe('built-in MCP continuity at session resurrection boundaries', () => {
     refs.undoStackRef.current.push({
       type: 'tab',
       closedAt: Date.now(),
-      tab: {
-        id: 'closed-tab',
-        title: 'closed',
-        root: { type: 'leaf', sessionId: 'old-grid' },
-        focusedSessionId: 'old-grid',
-      },
+      tab: { id: 'closed-tab', title: 'closed' },
       tabIndex: 0,
-      sessionMetas: {
-        'old-grid': {
-          cwd: '/projects/grid',
-          kind: 'codex',
-          providerSessionId: 'provider-grid',
-          builtInMcpDomains: ['workflows'],
+      sessions: [
+        {
+          sessionId: 'old-grid',
+          meta: {
+            cwd: '/projects/grid',
+            kind: 'codex',
+            providerSessionId: 'provider-grid',
+            builtInMcpDomains: ['workflows'],
+            projectId: 'closed-tab',
+            joinedAt: 0,
+          },
         },
-      },
-      detachedEntries: [{
-        meta: {
-          cwd: '/projects/detached',
-          kind: 'claude',
-          providerSessionId: 'provider-detached',
-          builtInMcpDomains: ['workflows'],
+        {
+          sessionId: 'old-detached',
+          meta: {
+            cwd: '/projects/detached',
+            kind: 'claude',
+            providerSessionId: 'provider-detached',
+            builtInMcpDomains: ['workflows'],
+            projectId: 'closed-tab',
+            joinedAt: 10,
+          },
         },
-        detachedAt: 10,
-      }],
+      ],
     })
     let actions!: ReturnType<typeof useUndoCloseAction>
 

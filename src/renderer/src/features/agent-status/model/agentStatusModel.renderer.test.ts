@@ -7,10 +7,10 @@ import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 it('describes a terminal with the session facts that apply to it (#865)', () => {
   const state = {
-    tabs: [{ id: 'tab', title: 'project', root: { type: 'leaf', sessionId: 'shell' }, focusedSessionId: 'shell' }],
-    activeTabId: 'tab', stage: oneLaneStage('shell'), gridRelatedSelections: {},
-    sessions: { shell: { cwd: '/work/api', kind: 'terminal', title: 'dev server' } },
-    detachedSessions: {}, buried: [], pinnedSessionIds: ['shell'],
+    tabs: [{ id: 'tab', title: 'project' }],
+    activeTabId: 'tab', stage: oneLaneStage('shell'), 
+    sessions: { shell: { cwd: '/work/api', kind: 'terminal', title: 'dev server', projectId: 'tab', joinedAt: 0 } },
+      pinnedSessionIds: ['shell'],
   } as unknown as WorkspaceState
   const runtime = { ...emptyRuntime(), sessionStatus: 'running' as const, activityStatus: 'npm' }
   expect(buildAgentStatusModel(state, runtime, 'shell')).toMatchObject({

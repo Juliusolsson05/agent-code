@@ -26,9 +26,12 @@ export type AgentIndexNavigationIntent =
 export type AgentIndexNavigationResult = {
   kind: AgentIndexNavigationKind
   state: WorkspaceState
-  /** Parked sessions may be hibernated after app restart. The caller must
-   *  wake the target under the same SessionId before committing this result. */
-  requiresWake: boolean
+  // `requiresWake` was a field here until #992, computed as "the target has a
+  // detachedSessions record". That was a STRUCTURAL guess at a runtime fact —
+  // wrong both ways: a parked agent already woken from a lane was re-woken,
+  // and a tree leaf whose respawn had failed was not. Whether a backend exists
+  // is a question for the runtime, which a pure state reducer does not have,
+  // so the caller decides (hook/actions/agentIndexNavigation.ts).
 }
 
 /**
@@ -52,7 +55,6 @@ export function navigateToAgentIndexTarget(
   const meta = state.sessions[target.sessionId]
   if (!meta) return null
 
-  const requiresWake = state.detachedSessions[target.sessionId] !== undefined
   const tiled = state.stage
   const forceFocusedLane = intent === 'open-in-focused-tiled-dispatch-lane'
   // Duplicated lanes are legal. If the currently focused lane already shows
@@ -104,6 +106,5 @@ export function navigateToAgentIndexTarget(
       activeTabId: target.tabId,
       stage: { ...tiled, lanes, focusedLane },
     },
-    requiresWake,
   }
 }

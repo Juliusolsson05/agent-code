@@ -125,7 +125,8 @@ export function useBootstrap(
                 newTab,
               ),
             {
-              tabs: parsed.workspace.tabs.length,
+              // v3 files list `projects`; v2 files list `tabs`.
+              tabs: (parsed.workspace.projects ?? parsed.workspace.tabs ?? []).length,
               sessions: Object.keys(parsed.workspace.sessions).length,
             },
           )

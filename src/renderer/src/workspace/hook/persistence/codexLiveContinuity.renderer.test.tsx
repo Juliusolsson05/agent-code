@@ -255,8 +255,6 @@ function makeReloadHarness() {
     tabs: [],
     activeTabId: 'tab-1',
     sessions: {},
-    detachedSessions: {},
-    buried: [],
     pinnedSessionIds: [],
     stage: freshStage(),
   } as unknown as WorkspaceState
@@ -310,15 +308,11 @@ describe('recorded Codex 0.151 live continuity across app layers', () => {
       tabs: [{
         id: 'tab-1',
         title: 'Recorded Codex',
-        focusedSessionId: localSessionId,
-        root: { type: 'leaf', sessionId: localSessionId },
       }],
       activeTabId: 'tab-1',
       sessions: {
-        [localSessionId]: { cwd: '/fixture/project-1', kind: 'codex' },
+        [localSessionId]: { cwd: '/fixture/project-1', kind: 'codex', projectId: 'tab-1', joinedAt: 0 },
       },
-      detachedSessions: {},
-      buried: [],
       pinnedSessionIds: [],
       stage: oneLaneStage(localSessionId),
     } as WorkspaceState

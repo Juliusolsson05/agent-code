@@ -130,11 +130,7 @@ describe('terminal dimension ownership across main-surface takeovers', () => {
     harness.paneMounts = {}
     harness.paneUnmounts = {}
     const runtime = emptyRuntime()
-    const activeTab = {
-      id: 'tab-1',
-      focusedSessionId: 'session-1',
-      root: { type: 'leaf', sessionId: 'session-1' },
-    }
+    const activeTab = { id: 'tab-1', title: 'Project' }
     harness.appState = {
       workspaceRuntimes: {},
       debugPanelOpen: true,
@@ -164,10 +160,10 @@ describe('terminal dimension ownership across main-surface takeovers', () => {
           'session-1': {
             kind: 'claude',
             agentViewModeOverride: 'terminal',
+            projectId: 'tab-1',
+            joinedAt: 0,
           },
         },
-        detachedSessions: {},
-        gridRelatedSelections: {},
         pinnedSessionIds: [],
         // The stage placing session-1 — the unified workspace's one mount
         // path. One row, one occupied lane, focused.
@@ -260,11 +256,9 @@ describe('terminal dimension ownership across main-surface takeovers', () => {
   })
 
   it('guards the debug target by the terminal Spotlight actually mounted', async () => {
-    // Unified layout: BOTH panes are lane occupants. session-2 is a pooled
-    // (detached) member of tab-1 — the v2-consistent way to be on the stage
-    // without being a tree leaf. Spotlight mounts its own leaf for
-    // session-2 on top of the retained (hidden) stage, which still holds
-    // both lanes.
+    // Unified layout: BOTH panes are lane occupants, and both are ordinary
+    // pool rows of tab-1. Spotlight mounts its own leaf for session-2 on top
+    // of the retained (hidden) stage, which still holds both lanes.
     const tiled = {
       lanes: [{ selectedSessionId: 'session-1' }, { selectedSessionId: 'session-2' }],
       rows: [{ length: 2 }],
@@ -282,16 +276,8 @@ describe('terminal dimension ownership across main-surface takeovers', () => {
           'session-2': {
             kind: 'codex',
             agentViewModeOverride: 'terminal',
-          },
-        },
-        detachedSessions: {
-          'session-2': {
-            sessionId: 'session-2',
-            surface: 'dispatch',
-            projectTabId: 'tab-1',
-            projectTabTitle: 'Project',
-            projectTabIndex: 0,
-            detachedAt: 1,
+            projectId: 'tab-1',
+            joinedAt: 1,
           },
         },
         stage: tiled,

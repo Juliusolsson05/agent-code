@@ -15,6 +15,7 @@ import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { Entry } from '@shared/types/transcript'
 import { relativeTime } from '@renderer/lib/relativeTime'
 import { cwdBasename, providerGlyph } from '@renderer/features/workspace/lib/sessionDisplay'
+import { commandTargetSessionIdForState } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 
 // AgentActivityModal — overview of every visible pane grouped by tab
 // with a last-activity indicator per row.
@@ -125,6 +126,7 @@ export function AgentActivityModal({ open, workspace, onClose }: Props) {
     void nowTick
 
     const built: Row[] = []
+    const focusedSessionId = commandTargetSessionIdForState(workspace.state)
     workspace.state.tabs.forEach((tab: Tab, tabIndex: number) => {
       const leaves = resolveTabSessions(workspace.state, tab.id)
       for (const sessionId of leaves) {
@@ -194,7 +196,9 @@ export function AgentActivityModal({ open, workspace, onClose }: Props) {
           kind,
           cwd: meta.cwd,
           cwdBase: cwdBasename(meta.cwd),
-          isFocused: tab.focusedSessionId === sessionId,
+          // The agent the user is commanding: the focused lane's occupant.
+          // (Each tab's tile-tree focus until #992.)
+          isFocused: focusedSessionId === sessionId,
           isLive,
           lastActiveAt,
           statusLabel,
@@ -279,7 +283,11 @@ export function AgentActivityModal({ open, workspace, onClose }: Props) {
 
   const focusRow = useCallback(
     (row: Row) => {
-      workspace.focusSessionInTab(row.tabId, row.sessionId)
+      // Show the agent: its existing lane if it has one, else the focused
+      // lane, waking it first. Until #992 this called focusSessionInTab, which
+      // moved the tile tree's focus — a no-op on the stage, so for a lane user
+      // "Focus" closed the modal and changed nothing.
+      void workspace.focusAgentBySessionId(row.sessionId)
       onClose()
     },
     [onClose, workspace],

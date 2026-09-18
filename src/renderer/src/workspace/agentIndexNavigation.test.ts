@@ -3,51 +3,25 @@ import { describe, expect, it } from 'vitest'
 import { navigateToAgentIndexTarget } from '@renderer/workspace/agentIndexNavigation'
 import { buildVisibleDispatchRows } from '@renderer/workspace/dispatch/dispatchSelectors'
 import { resolveAgentPaneLabel } from '@renderer/workspace/tile-tree/paneLabels'
-import type { TileNode, WorkspaceState } from '@renderer/workspace/types'
+import type { WorkspaceState } from '@renderer/workspace/types'
 import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
-
-function leaf(sessionId: string): TileNode {
-  return { type: 'leaf', sessionId }
-}
-
-function split(a: string, b: string): TileNode {
-  return {
-    type: 'split',
-    direction: 'vertical',
-    ratio: 0.37,
-    a: leaf(a),
-    b: leaf(b),
-  }
-}
 
 function makeState(): WorkspaceState {
   return {
     tabs: [
-      { id: 'tab-a', title: 'alpha', root: split('a1', 'a2'), focusedSessionId: 'a1' },
-      { id: 'tab-b', title: 'beta', root: leaf('b1'), focusedSessionId: 'b1' },
-      { id: 'tab-c', title: 'gamma', root: leaf('c1'), focusedSessionId: 'c1' },
+      { id: 'tab-a', title: 'alpha' },
+      { id: 'tab-b', title: 'beta' },
+      { id: 'tab-c', title: 'gamma' },
     ],
     activeTabId: 'tab-a',
-    gridRelatedSelections: {},
     stage: oneLaneStage('a1'),
     sessions: {
-      a1: { cwd: '/work/alpha/one', kind: 'claude' },
-      a2: { cwd: '/work/alpha/two', kind: 'codex' },
-      a3: { cwd: '/work/alpha/three', kind: 'claude' },
-      b1: { cwd: '/work/beta/one', kind: 'codex' },
-      c1: { cwd: '/work/gamma/one', kind: 'opencode' },
+      a1: { cwd: '/work/alpha/one', kind: 'claude', projectId: 'tab-a', joinedAt: 0 },
+      a2: { cwd: '/work/alpha/two', kind: 'codex', projectId: 'tab-a', joinedAt: 1 },
+      a3: { cwd: '/work/alpha/three', kind: 'claude', projectId: 'tab-a', joinedAt: 10 },
+      b1: { cwd: '/work/beta/one', kind: 'codex', projectId: 'tab-b', joinedAt: 0 },
+      c1: { cwd: '/work/gamma/one', kind: 'opencode', projectId: 'tab-c', joinedAt: 0 },
     },
-    detachedSessions: {
-      a3: {
-        sessionId: 'a3',
-        surface: 'dispatch',
-        projectTabId: 'tab-a',
-        projectTabTitle: 'alpha',
-        projectTabIndex: 0,
-        detachedAt: 10,
-      },
-    },
-    buried: [],
     pinnedSessionIds: [],
   }
 }
@@ -135,7 +109,6 @@ describe('agent index navigation', () => {
     // Both lanes mirror one durable session. Forced placement is a view
     // operation, so it must never rewrite provider ownership metadata.
     expect(result?.state.sessions.a2).toBe(state.sessions.a2)
-    expect(result?.requiresWake).toBe(false)
   })
 
   it('replaces only the focused Tiled Dispatch lane when the agent is absent', () => {
@@ -155,7 +128,6 @@ describe('agent index navigation', () => {
       { selectedSessionId: 'a3' },
     ])
     expect(result?.state.stage.focusedLane).toBe(1)
-    expect(result?.requiresWake).toBe(true)
   })
 
   it('keeps the focused copy when a target appears in more than one Tiled Dispatch lane', () => {
@@ -238,15 +210,7 @@ describe('agent index navigation', () => {
     // must accept a terminal exactly like an agent — there is nothing in the
     // lane-selection path that is agent-specific.
     const state = makeState()
-    state.sessions.a4 = { cwd: '/work/alpha/term', kind: 'terminal' }
-    state.detachedSessions.a4 = {
-      sessionId: 'a4',
-      surface: 'dispatch',
-      projectTabId: 'tab-a',
-      projectTabTitle: 'alpha',
-      projectTabIndex: 0,
-      detachedAt: 20,
-    }
+    state.sessions.a4 = { cwd: '/work/alpha/term', kind: 'terminal', projectId: 'tab-a', joinedAt: 20 }
     state.stage = {
       focusedLane: 1,
       lanes: [
@@ -262,7 +226,6 @@ describe('agent index navigation', () => {
       { selectedSessionId: 'a4' },
     ])
     expect(result?.state.stage.focusedLane).toBe(1)
-    expect(result?.requiresWake).toBe(true)
   })
 
 })

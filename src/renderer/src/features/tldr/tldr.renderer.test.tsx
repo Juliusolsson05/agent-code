@@ -33,9 +33,9 @@ const api = {
 
 function workspace(): Workspace {
   const runtime = emptyRuntime()
-  const tab = { id: 'tab', title: 'Project', focusedSessionId: 'a', root: { type: 'leaf', sessionId: 'a' } }
+  const tab = { id: 'tab', title: 'Project' }
   return {
-    state: { activeTabId: 'tab', tabs: [tab], sessions: { a: { kind: 'claude', cwd: '/project' } }, detachedSessions: {}, buried: [], pinnedSessionIds: [], stage: oneLaneStage('a') },
+    state: { activeTabId: 'tab', tabs: [tab], sessions: { a: { kind: 'claude', cwd: '/project', projectId: 'tab', joinedAt: 0 } },   pinnedSessionIds: [], stage: oneLaneStage('a') },
     activeTab: tab, stage: oneLaneStage('a'), spotlight: null, readerMode: null,
     runtimes: { a: runtime }, getRuntime: () => runtime,
   } as unknown as Workspace

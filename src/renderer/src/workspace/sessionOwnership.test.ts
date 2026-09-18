@@ -4,335 +4,190 @@ import {
   collectLiveProcessIds,
   collectOwnedSessionIds,
   pruneSessionOwnership,
-  repairPersistedTabs,
 } from '@renderer/workspace/sessionOwnership'
-import type {
-  SessionId,
-  SessionMeta,
-  TileNode,
-  WorkspaceState,
-} from '@renderer/workspace/types'
+import type { SessionMeta, WorkspaceState } from '@renderer/workspace/types'
 
-function leaf(sessionId: string): TileNode {
-  return { type: 'leaf', sessionId }
-}
+// (extensionPaneOwnership.test.ts was folded into this file with #992. It pinned
+// that an extension view sits BETWEEN the two sets — owned, never spawned — by
+// asserting the gap between them was exactly that pane. With the boot-spawn
+// set narrowed to the focused lane the gap is "almost everything", so the two
+// halves are asserted directly below instead.)
+//
+// Ownership over the pool (#992): a session is owned because its own row names
+// a project that exists. The v2 rules this module used to enforce — tile
+// leaves, detached records, buried panes, and the production ghost pool that
+// taught them — are tested where they now live, in legacyWorkspaceV2.test.ts.
+
+const agent = (projectId?: string, joinedAt = 0): SessionMeta => ({
+  cwd: '/work/project-a',
+  kind: 'claude',
+  ...(projectId ? { projectId, joinedAt } : {}),
+})
 
 function makeState(): WorkspaceState {
   return {
-    tabs: [
-      { id: 'tabA', title: 'project-a', root: leaf('live'), focusedSessionId: 'live' },
-    ],
+    tabs: [{ id: 'tabA', title: 'project-a' }],
     activeTabId: 'tabA',
     stage: {
       focusedLane: 1,
-      lanes: [
-        { selectedSessionId: 'live' },
-        { selectedSessionId: 'missing' },
-      ],
+      lanes: [{ selectedSessionId: 'live' }, { selectedSessionId: 'unfiled' }],
     },
     sessions: {
-      live: { cwd: '/work/project-a', kind: 'claude' },
-      missing: { cwd: '/work/project-a', kind: 'claude' },
+      live: agent('tabA'),
+      // Written by `spawn`, never filed by its caller: no project at all.
+      unfiled: agent(),
     },
-    detachedSessions: {},
-    buried: [],
     pinnedSessionIds: [],
   }
 }
 
-describe('pruneSessionOwnership', () => {
-  it('clears stale tiled lane ids while preserving lane shape', () => {
-    const result = pruneSessionOwnership(makeState())
-
-    expect(result.sessions).toEqual({
-      live: { cwd: '/work/project-a', kind: 'claude' },
-    })
-    expect(result.stage.focusedLane).toBe(1)
-    expect(result.stage.lanes).toEqual([
-      { selectedSessionId: 'live' },
-      { selectedSessionId: undefined },
-    ])
-  })
-
-  it('drops detached sessions whose project tab no longer exists', () => {
+describe('collectOwnedSessionIds', () => {
+  it('owns a session whose project exists, and nothing else', () => {
     const state = makeState()
-    state.sessions.parked = { cwd: '/work/project-a', kind: 'codex' }
-    state.sessions.ghost = { cwd: '/work/deleted-project', kind: 'claude' }
-    state.detachedSessions = {
-      parked: {
-        sessionId: 'parked',
-        surface: 'dispatch',
-        projectTabId: 'tabA',
-        projectTabTitle: 'project-a',
-        projectTabIndex: 0,
-        detachedAt: 20,
-      },
-      ghost: {
-        sessionId: 'ghost',
-        surface: 'dispatch',
-        projectTabId: 'deleted-tab',
-        projectTabTitle: 'deleted-project',
-        projectTabIndex: 1,
-        detachedAt: 10,
-      },
-    }
-    state.stage = {
-      focusedLane: 1,
-      lanes: [
-        { selectedSessionId: 'parked' },
-        { selectedSessionId: 'ghost' },
-      ],
-    }
+    state.sessions.parked = agent('tabA', 5)
+    state.sessions.ghost = agent('closed-project')
 
-    const result = pruneSessionOwnership(state)
-
-    expect(result.sessions).toEqual({
-      live: { cwd: '/work/project-a', kind: 'claude' },
-      parked: { cwd: '/work/project-a', kind: 'codex' },
-    })
-    expect(result.detachedSessions).toEqual({
-      parked: expect.objectContaining({
-        sessionId: 'parked',
-        projectTabId: 'tabA',
-      }),
-    })
-    expect(result.droppedSessionIds).toEqual(expect.arrayContaining(['missing', 'ghost']))
-    expect(result.stage.lanes).toEqual([
-      { selectedSessionId: 'parked' },
-      { selectedSessionId: undefined },
-    ])
+    expect([...collectOwnedSessionIds(state)].sort()).toEqual(['live', 'parked'])
   })
 
-  it('collapses a production-shaped ghost pool without touching valid hidden ownership', () => {
+  it('does not treat a lane, a pin or the active project as ownership', () => {
+    // Pointers are not owners. A stale pointer must never keep a session
+    // alive or bring one back — this is the rule that stopped dispatch focus
+    // from resurrecting work the user could no longer see.
     const state = makeState()
-    for (let index = 0; index < 8; index += 1) {
-      const sessionId = `parked-${index}`
-      state.sessions[sessionId] = { cwd: '/work/project-a', kind: 'codex' }
-      state.detachedSessions[sessionId] = {
-        sessionId,
-        surface: 'dispatch',
-        projectTabId: 'tabA',
-        projectTabTitle: 'project-a',
-        projectTabIndex: 0,
-        detachedAt: index,
-      }
-    }
-    for (let index = 0; index < 82; index += 1) {
-      const sessionId = `ghost-${index}`
-      state.sessions[sessionId] = { cwd: `/work/deleted-${index}`, kind: 'claude' }
-      state.detachedSessions[sessionId] = {
-        sessionId,
-        surface: 'dispatch',
-        projectTabId: `deleted-tab-${index}`,
-        projectTabTitle: `deleted-${index}`,
-        projectTabIndex: index + 1,
-        detachedAt: index,
-      }
-    }
-    state.sessions.buried = { cwd: '/work/archive', kind: 'claude' }
-    state.buried = [{
-      id: 'buried',
-      sessionId: 'buried',
-      sessionMeta: state.sessions.buried,
-      buriedAt: 1,
-      sourceTabId: 'already-closed-source-tab',
-      sourceTabTitle: 'archive',
-      sourceTabIndex: 2,
-    }]
+    state.sessions.ghost = agent('closed-project')
+    state.stage = { focusedLane: 0, lanes: [{ selectedSessionId: 'ghost' }] }
+    state.pinnedSessionIds = ['ghost']
+    state.activeTabId = 'closed-project'
 
-    const result = pruneSessionOwnership(state)
-
-    // WHY use the observed production cardinalities instead of only another
-    // one-record example: the bug was initially mistaken for legitimate lazy
-    // recovery because the invalid records looked individually well-formed.
-    // This fixture locks in the actual distinction—five/eight/etc. is not the
-    // algorithm, parent-tab reachability is—while proving an 82-record ghost
-    // pool collapses to the real owned workspace in one save cycle.
-    expect(Object.keys(result.sessions)).toHaveLength(10)
-    expect(Object.keys(result.detachedSessions)).toHaveLength(8)
-    expect(result.buried).toHaveLength(1)
-    expect(result.sessions).toHaveProperty('live')
-    expect(result.sessions).toHaveProperty('buried')
-    expect(result.sessions).not.toHaveProperty('ghost-0')
-    expect(result.sessions).not.toHaveProperty('ghost-81')
-    expect(result.droppedSessionIds).toHaveLength(83)
-  })
-})
-
-
-// Regression fixture for the "Autosave off" freeze.
-//
-// Recorded from a real ~/.config/agent-code/workspace.json: tab "agent-code"
-// held a vertical split whose `b` leaf pointed at a session id that had no row
-// in `sessions`, and the tab's focusedSessionId pointed at that same dead id.
-// Every launch afterwards journalled `expectedCount 4, resolvedCount 3, ok
-// false` and refused to autosave, which meant the file could never be
-// repaired. The exact shape matters, so it is reproduced rather than
-// paraphrased.
-function makeOrphanLeafState(): WorkspaceState {
-  const state = makeState()
-  state.tabs = [
-    {
-      id: 'tabA',
-      title: 'agent-code',
-      root: {
-        type: 'split',
-        direction: 'vertical',
-        ratio: 0.5,
-        a: leaf('live'),
-        b: leaf('orphan'),
-      },
-      focusedSessionId: 'orphan',
-    },
-  ]
-  return state
-}
-
-describe('collectLiveProcessIds', () => {
-  it('excludes tile leaves that have no session metadata', () => {
-    // The gate denominator must only count panes that CAN be restored.
-    // Counting the orphan is what made restore completion unsatisfiable.
-    expect([...collectLiveProcessIds(makeOrphanLeafState())]).toEqual(['live'])
-  })
-
-  it('still counts every leaf that does have metadata', () => {
-    const state = makeOrphanLeafState()
-    state.sessions.orphan = { cwd: '/work/project-a', kind: 'claude' }
-
-    expect([...collectLiveProcessIds(state)].sort()).toEqual(['live', 'orphan'])
-  })
-
-  it('restores the gate invariant: every live id is a key of sessions', () => {
-    // This is the property whose absence froze the workspace — the gate
-    // compares |resolvedIds| to |liveProcessIds| while resolvedIds can only
-    // ever contain keys of `sessions`, so the comparison is satisfiable only
-    // when liveProcessIds is a subset of those keys. Asserted directly rather
-    // than restating a fixture's expected size, so it holds for any input.
-    const state = makeOrphanLeafState()
-    const live = collectLiveProcessIds(state)
-
-    expect([...live].every(id =>
-      Object.prototype.hasOwnProperty.call(state.sessions, id))).toBe(true)
-    expect(live.has('orphan')).toBe(false)
+    expect(collectOwnedSessionIds(state).has('ghost')).toBe(false)
   })
 
   it('does not read metadata through the prototype chain', () => {
-    // A leaf id like `toString` resolves to an inherited function under a bare
-    // index read, which would classify a genuine orphan as healthy and
-    // reproduce the freeze on a hand-edited workspace.json.
-    const state = makeOrphanLeafState()
-    state.tabs[0].root = { type: 'leaf', sessionId: 'toString' }
-    state.tabs[0].focusedSessionId = 'toString'
+    // A session id like `toString` resolves to an inherited function under a
+    // bare index read. Reaching this needs a hand-edited file, which is an
+    // explicit threat model for everything that reads workspace.json.
+    const state = makeState()
+    expect(collectOwnedSessionIds({ ...state, sessions: Object.create({ toString: agent('tabA') }) }).size).toBe(0)
+  })
 
-    expect([...collectLiveProcessIds(state)]).toEqual([])
+  it('keeps a process-less extension view owned', () => {
+    // Ownership and "needs a process" are different questions. If ownership
+    // were derived from the live set, autosave would drop the view's metadata
+    // on the next save.
+    const state = makeState()
+    state.sessions.view = { cwd: '', kind: 'extension-view', extensionViewId: 'timer.main', projectId: 'tabA', joinedAt: 1 }
+
+    expect(collectOwnedSessionIds(state).has('view')).toBe(true)
   })
 })
 
-describe('collectOwnedSessionIds', () => {
-  it('keeps tile leaves owned independently of the live-process set', () => {
-    // Ownership and "needs a process" are different questions. A pane kind
-    // that deliberately spawns nothing (extension views) narrows the live set;
-    // if ownership were derived from that narrowed set, autosave would drop the
-    // pane's SessionMeta and manufacture the very orphan leaf this module
-    // repairs. Pinning them as separate sources keeps that impossible.
-    const state = makeOrphanLeafState()
-    state.sessions.orphan = { cwd: '/work/project-a', kind: 'claude' }
-
-    expect([...collectOwnedSessionIds(state)].sort()).toEqual(['live', 'orphan'])
-  })
-})
-
-describe('repairPersistedTabs', () => {
-  function repair(
-    state: WorkspaceState,
-    sessions: Record<SessionId, SessionMeta> = { live: state.sessions.live },
-  ) {
-    return repairPersistedTabs({
-      tabs: state.tabs,
-      sessions,
-      activeTabId: state.activeTabId,
-    })
-  }
-
-  it('collapses an orphaned split into its survivor and repoints tab focus', () => {
-    const result = repair(makeOrphanLeafState())
-
-    expect(result.droppedLeafSessionIds).toEqual(['orphan'])
-    expect(result.droppedTabIds).toEqual([])
-    expect(result.tabs).toHaveLength(1)
-    // The split is gone entirely — the survivor is promoted to root, exactly
-    // as a normal pane close would have left it.
-    expect(result.tabs[0].root).toEqual({ type: 'leaf', sessionId: 'live' })
-    expect(result.tabs[0].focusedSessionId).toBe('live')
-    expect(result.tabs[0].title).toBe('agent-code')
-  })
-
-  it('repoints focus that names a session outside this tab', () => {
-    // The invariant a tab owes is "focus names a leaf I contain". Testing
-    // against the sessions map instead would leave this dangling, and rehydrate
-    // does not repair it either because the id resolves fine.
-    const state = makeOrphanLeafState()
-    state.tabs[0].focusedSessionId = 'elsewhere'
-
-    const result = repair(state, { live: state.sessions.live, elsewhere: state.sessions.live })
-
-    expect(result.tabs[0].focusedSessionId).toBe('live')
-  })
-
-  it('leaves healthy trees untouched', () => {
-    const state = makeOrphanLeafState()
-    state.sessions.orphan = { cwd: '/work/project-a', kind: 'claude' }
-
-    const result = repair(state, state.sessions)
-
-    expect(result.droppedLeafSessionIds).toEqual([])
-    // Identity, not just equality: a healthy save must not churn the tree.
-    expect(result.tabs[0]).toBe(state.tabs[0])
-    expect(result.activeTabId).toBe(state.activeTabId)
-  })
-
-  it('reports one id when the same orphan occupies several leaves', () => {
-    const state = makeOrphanLeafState()
-    state.tabs[0].root = {
-      type: 'split',
-      direction: 'vertical',
-      ratio: 0.5,
-      a: leaf('orphan'),
-      b: { type: 'split', direction: 'horizontal', ratio: 0.5, a: leaf('orphan'), b: leaf('live') },
+describe('collectLiveProcessIds — the boot-spawn set', () => {
+  it('is the focused lane s occupant and nothing else', () => {
+    const state = makeState()
+    state.sessions.other = agent('tabA', 1)
+    state.stage = {
+      focusedLane: 1,
+      lanes: [{ selectedSessionId: 'live' }, { selectedSessionId: 'other' }, {}],
     }
 
-    const result = repair(state)
-
-    expect(result.droppedLeafSessionIds).toEqual(['orphan'])
-    expect(result.tabs[0].root).toEqual({ type: 'leaf', sessionId: 'live' })
+    // `live` is on a lane too — and is NOT spawned at boot. It renders its
+    // committed transcript and wakes on its first send, exactly as every
+    // restored lane always has. See the function's comment for why this is
+    // not 16 processes in one Promise.all.
+    expect([...collectLiveProcessIds(state)]).toEqual(['other'])
   })
 
-  it('drops a tab whose every leaf is orphaned and repoints activeTabId', () => {
-    // The one destructive branch in the whole change.
-    const state = makeOrphanLeafState()
-    state.tabs = [
-      { id: 'tabA', title: 'agent-code', root: leaf('orphan'), focusedSessionId: 'orphan' },
-      { id: 'tabB', title: 'other', root: leaf('live'), focusedSessionId: 'live' },
-    ]
-    state.activeTabId = 'tabA'
+  it('is empty when the focused lane is empty', () => {
+    const state = makeState()
+    state.stage = { focusedLane: 1, lanes: [{ selectedSessionId: 'live' }, {}] }
 
-    const result = repair(state)
-
-    expect(result.droppedTabIds).toEqual(['tabA'])
-    expect(result.tabs.map(t => t.id)).toEqual(['tabB'])
-    expect(result.activeTabId).toBe('tabB')
+    expect(collectLiveProcessIds(state).size).toBe(0)
   })
 
+  it('never spawns a session nothing owns, however it is pointed at', () => {
+    // The #258 shape, restated: a lane naming unowned metadata must not turn
+    // that metadata into a backend process.
+    const state = makeState() // the focused lane names `unfiled`
+    expect(collectLiveProcessIds(state).size).toBe(0)
 
-  it('keeps every tab when nothing was dropped', () => {
-    const state = makeOrphanLeafState()
-    const result = repairPersistedTabs({
-      tabs: state.tabs,
-      sessions: { live: state.sessions.live },
-      activeTabId: state.activeTabId,
-    })
-    // A collapsed split never drops its tab; only an emptied root can.
-    expect(result.droppedTabIds).toEqual([])
-    expect(result.tabs.map(t => t.id)).toEqual(state.tabs.map(t => t.id))
+    state.sessions.ghost = agent('closed-project')
+    state.stage = { focusedLane: 0, lanes: [{ selectedSessionId: 'ghost' }] }
+    expect(collectLiveProcessIds(state).size).toBe(0)
+  })
+
+  it('restores the gate invariant: every live id is a key of sessions', () => {
+    // Rehydrate compares |resolved| to |live| while `resolved` can only ever
+    // contain keys of `sessions`, so the comparison is satisfiable only when
+    // the live set is a subset of those keys. A lane naming a session with no
+    // metadata once froze a real workspace for three weeks: restore never
+    // completed, so autosave — the file's only writer — stayed locked.
+    const state = makeState()
+    state.stage = { focusedLane: 0, lanes: [{ selectedSessionId: 'closed-long-ago' }] }
+
+    expect(collectLiveProcessIds(state).size).toBe(0)
+  })
+
+  it('never spawns for an extension view', () => {
+    // It has no process. Recovering one would fall through SessionManager's
+    // provider switch into the terminal branch and start a stray shell.
+    const state = makeState()
+    state.sessions.view = { cwd: '', kind: 'extension-view', extensionViewId: 'timer.main', projectId: 'tabA', joinedAt: 1 }
+    state.stage = { focusedLane: 0, lanes: [{ selectedSessionId: 'view' }] }
+
+    expect(collectLiveProcessIds(state).size).toBe(0)
+  })
+})
+
+describe('pruneSessionOwnership — what autosave may make durable', () => {
+  it('drops unowned rows and empties the lanes that named them, keeping the shape', () => {
+    const result = pruneSessionOwnership(makeState())
+
+    expect(result.sessions).toEqual({ live: agent('tabA') })
+    expect(result.droppedSessionIds).toEqual(['unfiled'])
+    // The lane goes empty; it is not removed and focus does not move.
+    expect(result.stage.focusedLane).toBe(1)
+    expect(result.stage.lanes).toEqual([{ selectedSessionId: 'live' }, { selectedSessionId: undefined }])
+  })
+
+  it('collapses a ghost pool in one save cycle without touching parked agents', () => {
+    // The production cardinalities that made the original bug hard to see —
+    // 8 legitimately parked agents beside 82 records whose project had been
+    // closed — restated for the pool. The distinction is project
+    // reachability, not any count.
+    const state = makeState()
+    delete state.sessions.unfiled
+    for (let index = 0; index < 8; index += 1) state.sessions[`parked-${index}`] = agent('tabA', index + 1)
+    for (let index = 0; index < 82; index += 1) state.sessions[`ghost-${index}`] = agent(`deleted-tab-${index}`)
+
+    const result = pruneSessionOwnership(state)
+
+    expect(Object.keys(result.sessions)).toHaveLength(9)
+    expect(result.sessions).toHaveProperty('parked-7')
+    expect(result.sessions).not.toHaveProperty('ghost-0')
+    expect(result.droppedSessionIds).toHaveLength(82)
+  })
+
+  it('scrubs row bindings to projects that no longer exist', () => {
+    // A binding to a closed project filters that row's index to nothing, with
+    // no UI path back: the picker only lists projects that exist.
+    const state = makeState()
+    state.stage = {
+      focusedLane: 0,
+      lanes: [{ selectedSessionId: 'live' }],
+      rows: [{ length: 1, projectTabIds: ['tabA', 'closed-project'] }],
+    }
+
+    expect(pruneSessionOwnership(state).stage.rows).toEqual([{ length: 1, projectTabIds: ['tabA'] }])
+  })
+
+  it('returns the stage by reference when nothing needed scrubbing', () => {
+    // Autosave runs on a debounce for the life of the app; a prune that
+    // rebuilt a healthy stage every time would churn every lane memo.
+    const state = makeState()
+    delete state.sessions.unfiled
+    state.stage = { focusedLane: 0, lanes: [{ selectedSessionId: 'live' }], rows: [{ length: 1 }] }
+
+    expect(pruneSessionOwnership(state).stage).toBe(state.stage)
   })
 })

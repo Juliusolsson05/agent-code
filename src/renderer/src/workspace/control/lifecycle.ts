@@ -24,8 +24,8 @@ export function lifecycleControlCapabilities(getWorkspace: () => Workspace) {
   const inspect = (sessionId: string) => {
     const state = useAppStore.getState()
     const meta = state.workspaceState.sessions[sessionId]
-    if (!meta || !isAgentProviderKind(meta.kind ?? 'claude') || state.workspaceState.buried.some(row => row.sessionId === sessionId)) {
-      throw new ControlError('unavailable', 'Agent is absent, buried or not an agent; inspect or restore it first')
+    if (!meta || !isAgentProviderKind(meta.kind ?? 'claude')) {
+      throw new ControlError('unavailable', 'Agent is absent or not an agent')
     }
     const provider = meta.kind ?? 'claude'
     if (!isAgentProviderKind(provider)) throw new ControlError('unavailable', 'Not an agent')

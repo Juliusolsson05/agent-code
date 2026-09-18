@@ -37,16 +37,12 @@ describe('workspace autosave durability retry', () => {
       tabs: [{
         id: 'tab-a',
         title: 'recorded',
-        root: { type: 'leaf', sessionId: 'successor' },
-        focusedSessionId: 'successor',
       }],
       activeTabId: 'tab-a',
       stage: oneLaneStage('successor'),
       sessions: {
-        successor: { cwd: '/recorded/worktree', kind: 'codex' },
+        successor: { cwd: '/recorded/worktree', kind: 'codex', projectId: 'tab-a', joinedAt: 0 },
       },
-      detachedSessions: {},
-      buried: [],
       pinnedSessionIds: [],
     }
     const refs = {
@@ -91,8 +87,6 @@ describe('workspace autosave durability retry', () => {
       tabs: [{
         id: 'tab-a',
         title: 'recorded',
-        root: { type: 'leaf', sessionId: 'successor' },
-        focusedSessionId: 'successor',
       }],
       activeTabId: 'tab-a',
       // The user's actual shape: three lanes, the middle one empty by choice,
@@ -110,10 +104,8 @@ describe('workspace autosave durability retry', () => {
         focusedLane: 2,
       },
       sessions: {
-        successor: { cwd: '/recorded/worktree', kind: 'codex' },
+        successor: { cwd: '/recorded/worktree', kind: 'codex', projectId: 'tab-a', joinedAt: 0 },
       },
-      detachedSessions: {},
-      buried: [],
       pinnedSessionIds: [],
     }
     const refs = {
@@ -141,13 +133,21 @@ describe('workspace autosave durability retry', () => {
       rows: [{ length: 3 }],
       focusedLane: 2,
     })
-    // The envelope that carried a scope and a classic focus is not written.
-    // (An older build opening this file boots its tree layout from the v2
-    // tabs, which are still written until stage 3b-ii.)
+    // v3 ONLY. Not one v2 field is written: no mode envelope, and — since the
+    // tile tree and the detached/buried buckets were deleted in 3b-ii — no
+    // `tabs`, which was the last of them. Writing an empty or synthesized
+    // `tabs` "for compatibility" would be worse than omitting it: an older
+    // build would read it as a real, EMPTY workspace, boot a fresh tab over it
+    // and autosave that, erasing the pool. With the key absent the older build
+    // fails its shape check and lands in persisted-fallback with autosave
+    // LOCKED, so a downgrade cannot destroy a file it does not understand.
     expect(saved).not.toHaveProperty('dispatchMode')
-    expect(saved.tabs).toHaveLength(1)
-    // The session row carries its pool membership.
-    expect(saved.sessions.successor).toMatchObject({ projectId: 'tab-a' })
+    expect(saved).not.toHaveProperty('tabs')
+    expect(saved).not.toHaveProperty('activeTabId')
+    expect(saved).not.toHaveProperty('detachedSessions')
+    expect(saved).not.toHaveProperty('buried')
+    // Ownership travels ON the row, which is why none of the above is needed.
+    expect(saved.sessions.successor).toMatchObject({ projectId: 'tab-a', joinedAt: 0 })
 
     unmount()
   })
@@ -159,16 +159,12 @@ describe('workspace autosave durability retry', () => {
       tabs: [{
         id: 'tab-a',
         title: 'recorded',
-        root: { type: 'leaf', sessionId: 'successor' },
-        focusedSessionId: 'successor',
       }],
       activeTabId: 'tab-a',
       stage: oneLaneStage('successor'),
       sessions: {
-        successor: { cwd: '/recorded/worktree', kind: 'codex' },
+        successor: { cwd: '/recorded/worktree', kind: 'codex', projectId: 'tab-a', joinedAt: 0 },
       },
-      detachedSessions: {},
-      buried: [],
       pinnedSessionIds: [],
     }
     const refs = {
@@ -216,16 +212,12 @@ describe('workspace autosave durability retry', () => {
       tabs: [{
         id: 'tab-a',
         title: 'recorded',
-        root: { type: 'leaf', sessionId: 'successor' },
-        focusedSessionId: 'successor',
       }],
       activeTabId: 'tab-a',
       stage: oneLaneStage('successor'),
       sessions: {
-        successor: { cwd: '/recorded/worktree', kind: 'codex' },
+        successor: { cwd: '/recorded/worktree', kind: 'codex', projectId: 'tab-a', joinedAt: 0 },
       },
-      detachedSessions: {},
-      buried: [],
       pinnedSessionIds: [],
     }
     const refs = {

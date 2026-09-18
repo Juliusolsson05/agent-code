@@ -57,11 +57,9 @@ function makeHarness(persisted: PersistedWorkspace | null) {
     tabs: [],
     activeTabId: 'tab-1',
     sessions: {},
-    detachedSessions: {},
-    buried: [],
     pinnedSessionIds: [],
     stage: freshStage(),
-  } as unknown as WorkspaceState
+  } satisfies WorkspaceState as WorkspaceState
   let runtimes: Record<SessionId, SessionRuntime> = {}
   const refs = {
     bootRef: ref(false),
@@ -88,12 +86,10 @@ function makeHarness(persisted: PersistedWorkspace | null) {
         {
           id: 'tab-1',
           title: 'Project',
-          root: { type: 'leaf', sessionId: leaf },
-          focusedSessionId: leaf,
         },
       ],
       activeTabId: 'tab-1',
-      sessions: { ...state.sessions, [leaf]: { cwd: '/tmp/fresh', kind: 'claude' } },
+      sessions: { ...state.sessions, [leaf]: { cwd: '/tmp/fresh', kind: 'claude', projectId: 'tab-1', joinedAt: 0 } },
     }
     refs.stateRef.current = state
     refs.latestStateRef.current = state

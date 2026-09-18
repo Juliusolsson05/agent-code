@@ -44,14 +44,13 @@ function row(sessionId: string, label: string, kind: 'claude' | 'terminal'): Dis
     sessionId,
     kind,
     title: `${label} workflow`,
-    placement: 'grid',
     depth: 0,
   }
 }
 
 function group(): DispatchTabGroup {
   return {
-    tab: { id: 'tab-a', title: 'Agent Code', root: { type: 'leaf', sessionId: AGENT }, focusedSessionId: AGENT },
+    tab: { id: 'tab-a', title: 'Agent Code' },
     tabIndex: 0,
     rows: [row(AGENT, 'A1', 'claude'), row(SHELL, 'A2', 'terminal')],
   }

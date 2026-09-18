@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { MutableRefObject } from 'react'
 
-import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type { PersistedWorkspace } from '@renderer/workspace/persistence'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
@@ -82,12 +81,10 @@ function makeHarness() {
     tabs: [],
     activeTabId: 'tab-1',
     sessions: {},
-    detachedSessions: {},
-    buried: [],
     pinnedSessionIds: [],
     // What the store holds before bootstrap runs: the one-lane fresh stage.
     stage: freshStage(),
-  } as unknown as WorkspaceState
+  } satisfies WorkspaceState as WorkspaceState
   let runtimes: Record<SessionId, SessionRuntime> = {}
   const refs = {
     dangerousAgentsRef: ref(false),
@@ -169,12 +166,22 @@ describe('unified layout boot — recorded owner workspace', () => {
       makeLiveRecoveryApi(calls),
     )
 
-    // Only the three tab leaves are live-spawned (hibernated dispatch pool
-    // members stay parked) — the #258 fork-bomb guard, observed end-to-end.
+    // Exactly ONE backend is spawned at boot: the occupant of the focused lane
+    // (lane 10 in the recording). The #258 fork-bomb guard, observed
+    // end-to-end, and tighter than it has ever been.
+    //
+    // WHY this assertion changed and is not a regression. Through 3b-i it
+    // named three OTHER sessions — the three tab leaves — because the boot
+    // spawn set was "every tile leaf". In this recording those are three
+    // one-pane tabs the user never looked at (they work entirely in lanes), so
+    // boot spent three agent spawns on panes nothing rendered while the lane
+    // under the cursor came up parked. With the tile tree gone the set is the
+    // focused lane's occupant: the one session the user can type into the
+    // instant the window paints. Every other lane wakes on first use — agents
+    // on first send (#691), terminals when their leaf mounts — which is the
+    // path all twelve of this user's lanes already took on every launch.
     expect(result.complete).toBe(true)
-    expect(calls.map(call => call.sessionId).sort()).toEqual(
-      ['575880c6-d447-49b8-aa9b-64705d70c287', '5cf66257-4284-40a7-868e-68ea84457063', '9bb36de4-39a0-434b-b4b1-00f017d759bd'].sort(),
-    )
+    expect(calls.map(call => call.sessionId)).toEqual(['1d0db3d8-b277-4a8d-81b1-5269d76ed48a'])
 
     const state = harness.state()
     // The stored grid is the workspace: same lanes, same ragged rows, same
@@ -249,7 +256,11 @@ describe('unified layout boot — pure-grid v2 workspace', () => {
       makeLiveRecoveryApi(calls),
     )
     expect(result.complete).toBe(true)
-    expect(calls).toHaveLength(4) // every leaf of the multi-pane tab + tab-b
+    // Only the seeded lane's occupant. v2 spawned all four leaves here (three
+    // panes of tab-a plus tab-b's one); three of them are now parked pool rows
+    // that wake when first placed or prompted. Cheaper boot, same reachability
+    // — the row assertions below are what pin "reachable".
+    expect(calls.map(call => call.sessionId)).toEqual(['s-a1'])
 
     const state = harness.state()
     // The file had no lane grid, so rehydrate published the migration's
@@ -297,7 +308,7 @@ describe('unified layout boot — pure-grid v2 workspace', () => {
     // two empty lanes: the migration carries the user's shape over, it does
     // not "improve" it.
     const persisted = gridHeavyV2Workspace()
-    persisted.tabs[0]!.focusedSessionId = 's-b1'
+    persisted.tabs![0]!.focusedSessionId = 's-b1'
     const harness = makeHarness()
     await rehydrateWorkspace(
       { ...persisted, dispatchMode: { scope: 'global', tiled: { lanes: [{}, {}], focusedLane: 1 } } },
@@ -329,16 +340,21 @@ describe('unified layout boot — runtime seeds survive a first interaction', ()
       makeLiveRecoveryApi(),
     )
     const runtimes = harness.refs.latestRuntimesRef.current
-    // Live leaves got real recovered runtimes.
-    expect(runtimes['575880c6-d447-49b8-aa9b-64705d70c287']).toMatchObject({
+    // The focused lane's occupant got a real recovered runtime.
+    expect(runtimes['1d0db3d8-b277-4a8d-81b1-5269d76ed48a']).toMatchObject({
       processStatus: 'started',
     })
-    // Parked pool members exist in the runtime map in the hibernated idle
-    // shape — placing one into a lane later must find runtime state to
-    // wake, not a hole.
-    const parked = runtimes['6d6cac8c-fe3d-4f5e-82e3-740036b4aebd']
-    expect(parked).toBeDefined()
-    expect(parked?.processStatus ?? emptyRuntime().processStatus).toBeTruthy()
+    // Everything else exists in the runtime map in the hibernated idle shape.
+    // Two different kinds of "everything else" are pinned, because they fail
+    // differently: a session SHOWN in an unfocused lane (its leaf renders on
+    // the first frame and must find a runtime to read, not a hole), and a
+    // former tile leaf that no lane shows (placing it later must find runtime
+    // state to wake). `idle` is also the value the wake decision reads: a
+    // selection gesture asks "is this runtime started?" now, not "is this row
+    // in the detached bucket?", so a parked session seeded as anything but
+    // idle would be placed without a wake and reject its first prompt (#690).
+    expect(runtimes['6d6cac8c-fe3d-4f5e-82e3-740036b4aebd']?.processStatus).toBe('idle')
+    expect(runtimes['575880c6-d447-49b8-aa9b-64705d70c287']?.processStatus).toBe('idle')
   })
 })
 
@@ -372,9 +388,10 @@ describe('unified layout boot — buried sessions', () => {
     expect(calls.map(call => call.sessionId)).not.toContain('s-hidden')
 
     const state = harness.state()
-    expect(state.buried).toEqual([])
-    expect(state.sessions['s-hidden']).toEqual({ cwd: '/x/app', kind: 'codex' })
-    expect(state.detachedSessions['s-hidden']).toMatchObject({ projectTabId: 'tab-a', detachedAt: 5 })
+    // An ordinary pool row: its metadata restored from the record, filed under
+    // its source project, positioned by when it left the screen.
+    expect(state).not.toHaveProperty('buried')
+    expect(state.sessions['s-hidden']).toEqual({ cwd: '/x/app', kind: 'codex', projectId: 'tab-a', joinedAt: 5 })
     expect(buildVisibleDispatchRows(state).map(row => row.sessionId)).toContain('s-hidden')
     expect(harness.refs.latestRuntimesRef.current['s-hidden']?.processStatus).toBe('idle')
   })

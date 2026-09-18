@@ -3,19 +3,17 @@ import type {
   SessionId,
   TabId,
   TiledDispatchState,
+  WorkspaceState,
 } from '@renderer/workspace/types'
 import { normalizeStage } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
-import {
-  projectAffinityOf,
-  type WorkspaceAffinityInput,
-} from '@renderer/workspace/workspaceShape'
 
 // ---------------------------------------------------------------------------
 // Live v3 views over the current workspace state (#992).
 //
-// New UI code consumes THESE functions rather than reaching into state, which
-// is what lets the remaining v2 structures (tab tile trees, the detached
-// bucket) be deleted underneath them without a rewrite of every reader.
+// New UI code consumes THESE functions rather than reaching into state. That
+// indirection is what let the v2 structures (tab tile trees, the detached and
+// buried buckets) be deleted underneath their readers in #992, and it is what
+// will let the in-memory `tabs`/`activeTabId` names be changed later.
 //
 // History: through stage 2 of the merge the lane grid lived in an optional
 // `dispatchMode.tiled`, and `stageOfWorkspace` DERIVED a seeded default for a
@@ -38,31 +36,35 @@ export function stageOfWorkspace(state: { stage: TiledDispatchState }): TiledDis
  * old TabIds, so labels, row bindings and `A1/B7` letters are stable across
  * the merge.
  */
-export function projectsOfWorkspace(state: Pick<WorkspaceAffinityInput, 'tabs'>): ProjectRef[] {
+export function projectsOfWorkspace(state: Pick<WorkspaceState, 'tabs'>): ProjectRef[] {
   return state.tabs.map(tab => ({ id: tab.id, title: tab.title }))
 }
 
 /** The active project: spawn defaults + index highlight. Owns nothing. */
-export function activeProjectIdOfWorkspace(state: Pick<WorkspaceAffinityInput, 'activeTabId'>): TabId {
+export function activeProjectIdOfWorkspace(state: Pick<WorkspaceState, 'activeTabId'>): TabId {
   return state.activeTabId
 }
 
 /**
- * A session's project, live view. Delegates to the shared precedence
- * (leaf → detached → buried → active) with NO ghost-project guard:
+ * A session's project, falling back to the active project.
  *
- * WHY unguarded when the migration guards: persisted v3 must never store a
- * dangling projectId (it would filter the session out of every index
- * forever), but live state legitimately holds a transient dangling value
- * between "tab closed" and the same-boundary prune that clears its
- * detached records. Index rendering groups by projects that exist, so the
- * transient value is invisible rather than corrupting. Guarding here would
- * silently re-parent sessions mid-interaction — the layout rearranging
- * itself for reasons the user did not ask for (#681's whole bug class).
+ * The row's own `projectId` is the answer. The fallback covers exactly one
+ * case: the instant between `spawn` writing a session's row and its caller
+ * filing it (pool.ts), when a reader that needs SOME project — a spawn-cwd
+ * default, a label — is better served by "where the user is" than by nothing.
+ *
+ * It is deliberately NOT validated against the projects that exist. A value
+ * naming a project that is gone is a ghost the ownership prune will drop; the
+ * index groups by projects that exist, so it is invisible rather than
+ * corrupting, and re-parenting it here would be the layout rearranging itself
+ * for reasons the user did not ask for (#681's whole bug class).
+ *
+ * (Until #992 this delegated to a shared precedence over three owner
+ * structures: tile leaf, then detached record, then buried record.)
  */
 export function projectIdOfSession(
-  state: WorkspaceAffinityInput,
+  state: Pick<WorkspaceState, 'sessions' | 'activeTabId'>,
   sessionId: SessionId,
 ): TabId {
-  return projectAffinityOf(state, sessionId) ?? state.activeTabId
+  return state.sessions[sessionId]?.projectId ?? state.activeTabId
 }

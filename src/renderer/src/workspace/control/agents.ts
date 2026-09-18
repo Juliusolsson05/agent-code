@@ -23,12 +23,13 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
   // pinSet act on metadata and placement, which a shell has exactly like an
   // agent. The single capability that must refuse a shell, agents.prompt,
   // checks provider itself because its refusal has to name the right route.
-  const requireSession = (sessionId: string, allowBuried = false) => {
+  // (An `allowBuried` flag and a "restore it explicitly first" refusal lived
+  // here until #992. A buried session was one the user had hidden on purpose,
+  // so acting on it needed an explicit restore. There is no hidden state now:
+  // a parked session is an ordinary row in its project's index.)
+  const requireSession = (sessionId: string) => {
     const current = observe().sessions.find(session => session.sessionId === sessionId)
     if (!current) throw new ControlError('unavailable', 'Agent does not exist in this window')
-    if (!allowBuried && current.placements.some(placement => placement.kind === 'buried')) {
-      throw new ControlError('unavailable', 'Agent is buried; restore it explicitly before acting')
-    }
     return current
   }
   const requireReady = () => {
@@ -93,7 +94,7 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
     defineCapability({
       id: 'agents.locate', target: { kind: 'session', field: 'sessionId' }, title: 'Locate an agent', execution: 'window', effect: 'read', input: sessionInput,
       description: 'Get every placement of one stable agent, including mirrored lanes and hidden records, without focusing or waking it.',
-      output: sessionReference, handler: ({ sessionId }) => requireSession(sessionId, true),
+      output: sessionReference, handler: ({ sessionId }) => requireSession(sessionId),
     }),
     defineCapability({
       id: 'agents.show', target: { kind: 'session', field: 'sessionId' }, title: 'Show an existing agent', execution: 'window', effect: 'ui',
@@ -199,7 +200,9 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
         if (!createDuplicate && matches.length === 1) {
           const tab = matches[0]
           getWorkspace().activateTab(tab.id)
-          return { tabId: tab.id, sessionId: tab.focusedSessionId, created: false }
+          // The project's first session in index order. (Was the tab's
+          // tile-tree focus until #992.)
+          return { tabId: tab.id, sessionId: resolveTabSessions(state, tab.id)[0] ?? '', created: false }
         }
         return { ...await getWorkspace().newTab(cwd, undefined, kind), created: true }
       },

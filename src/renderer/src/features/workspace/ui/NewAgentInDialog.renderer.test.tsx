@@ -18,9 +18,9 @@ afterEach(() => {
 function workspaceState(): WorkspaceState {
   return {
     tabs: [
-      { id: 'tabA', title: 'project-a', root: { type: 'leaf', sessionId: 'a1' }, focusedSessionId: 'a1' },
-      { id: 'tabB', title: 'project-b', root: { type: 'leaf', sessionId: 'b1' }, focusedSessionId: 'b1' },
-      { id: 'tabC', title: 'project-c', root: { type: 'leaf', sessionId: 'c1' }, focusedSessionId: 'c1' },
+      { id: 'tabA', title: 'project-a' },
+      { id: 'tabB', title: 'project-b' },
+      { id: 'tabC', title: 'project-c' },
     ],
     // Active project B, focused lane EMPTY: plain New Agent therefore targets
     // B (an empty unbound lane falls back to the active project). B rather
@@ -33,12 +33,10 @@ function workspaceState(): WorkspaceState {
       lanes: [{ selectedSessionId: 'a1' }, { selectedSessionId: 'b1' }, {}],
     },
     sessions: {
-      a1: { cwd: '/work/project-a', kind: 'claude' },
-      b1: { cwd: '/work/project-b', kind: 'codex' },
-      c1: { cwd: '/work/project-c', kind: 'claude' },
+      a1: { cwd: '/work/project-a', kind: 'claude', projectId: 'tabA', joinedAt: 0 },
+      b1: { cwd: '/work/project-b', kind: 'codex', projectId: 'tabB', joinedAt: 0 },
+      c1: { cwd: '/work/project-c', kind: 'claude', projectId: 'tabC', joinedAt: 0 },
     },
-    detachedSessions: {},
-    buried: [],
     pinnedSessionIds: [],
   }
 }

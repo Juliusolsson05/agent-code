@@ -21,10 +21,10 @@ it('renders the transcript diagnostic instead of a healthy activity subtitle', (
   const row: DispatchAgentRow = {
     key: 'project:grid:pane', label: 'A1', globalIndex: 1,
     tabId: 'project', tabTitle: 'Project', tabIndex: 0, sessionId: 'pane',
-    kind: 'opencode', title: 'Task', placement: 'grid', depth: 0,
+    kind: 'opencode', title: 'Task', depth: 0,
   }
   render(<DispatchAgentList
-    groups={[{ tab: { id: 'project', title: 'Project', root: { type: 'leaf', sessionId: 'pane' }, focusedSessionId: 'pane' }, tabIndex: 0, rows: [row] }]}
+    groups={[{ tab: { id: 'project', title: 'Project' }, tabIndex: 0, rows: [row] }]}
     pinnedRows={[]}
     activeSessionId="pane"
     focusSessionInTab={vi.fn()}

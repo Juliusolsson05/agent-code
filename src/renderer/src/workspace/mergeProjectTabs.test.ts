@@ -15,14 +15,10 @@ function meta(cwd: string): SessionMeta {
 function fixture(): WorkspaceState {
   return {
     tabs: [
-      { id: 'tab-b', title: 'agent-code', focusedSessionId: 'b-audit', root: { type: 'leaf', sessionId: 'b-audit' } },
-      { id: 'tab-startup', title: 'startup', focusedSessionId: 'pitch', root: { type: 'leaf', sessionId: 'pitch' } },
-      { id: 'tab-e', title: 'agent-code', focusedSessionId: 'e-root', root: {
-        type: 'split', direction: 'vertical', ratio: 0.5,
-        a: { type: 'leaf', sessionId: 'e-root' },
-        b: { type: 'leaf', sessionId: 'e-grok' },
-      } },
-      { id: 'tab-g', title: 'agent-code', focusedSessionId: 'g-review', root: { type: 'leaf', sessionId: 'g-review' } },
+      { id: 'tab-b', title: 'agent-code' },
+      { id: 'tab-startup', title: 'startup' },
+      { id: 'tab-e', title: 'agent-code' },
+      { id: 'tab-g', title: 'agent-code' },
     ],
     activeTabId: 'tab-g',
     stage: {
@@ -36,27 +32,18 @@ function fixture(): WorkspaceState {
       focusedLane: 0,
     },
     sessions: {
-      'b-audit': meta('/dev/agent-code'),
-      'b-verify': meta('/dev/agent-code/.worktrees/opencode-terminal-headless'),
-      pitch: meta('/dev/startup'),
-      'e-root': meta('/dev/agent-code'),
-      'e-grok': meta('/dev/agent-code/.worktrees/grok-package-wiring'),
-      'e-tldr': meta('/dev/agent-code'),
-      'g-review': meta('/dev/agent-code'),
-      'g-buried': meta('/dev/agent-code'),
-      'e-buried': meta('/dev/agent-code'),
+      'b-audit': { ...meta('/dev/agent-code'), projectId: 'tab-b', joinedAt: 0 },
+      'b-verify': { ...meta('/dev/agent-code/.worktrees/opencode-terminal-headless'), projectId: 'tab-b', joinedAt: 10 },
+      pitch: { ...meta('/dev/startup'), projectId: 'tab-startup', joinedAt: 0 },
+      'e-root': { ...meta('/dev/agent-code'), projectId: 'tab-e', joinedAt: 0 },
+      'e-grok': { ...meta('/dev/agent-code/.worktrees/grok-package-wiring'), projectId: 'tab-e', joinedAt: 1 },
+      'e-tldr': { ...meta('/dev/agent-code'), projectId: 'tab-e', joinedAt: 20 },
+      'g-review': { ...meta('/dev/agent-code'), projectId: 'tab-g', joinedAt: 0 },
+      // Parked agents no lane shows. (In v2 these two were `buried` records;
+      // burial folded into the pool with #992, so they are ordinary rows.)
+      'g-parked': { ...meta('/dev/agent-code'), projectId: 'tab-g', joinedAt: 30 },
+      'e-parked': { ...meta('/dev/agent-code'), projectId: 'tab-e', joinedAt: 35 },
     },
-    detachedSessions: {
-      'b-verify': { sessionId: 'b-verify', surface: 'dispatch', projectTabId: 'tab-b', projectTabTitle: 'agent-code', projectTabIndex: 0, detachedAt: 10 },
-      'e-tldr': { sessionId: 'e-tldr', surface: 'dispatch', projectTabId: 'tab-e', projectTabTitle: 'agent-code', projectTabIndex: 2, detachedAt: 20 },
-    },
-    buried: [{
-      id: 'g-buried', sessionId: 'g-buried', sessionMeta: meta('/dev/agent-code'), buriedAt: 30,
-      sourceTabId: 'tab-g', sourceTabTitle: 'agent-code', sourceTabIndex: 3,
-    }, {
-      id: 'e-buried', sessionId: 'e-buried', sessionMeta: meta('/dev/agent-code'), buriedAt: 35,
-      sourceTabId: 'tab-e', sourceTabTitle: 'agent-code', sourceTabIndex: 2,
-    }],
     pinnedSessionIds: ['e-grok'],
   }
 }
@@ -72,57 +59,54 @@ describe('mergeProjectTabs', () => {
     // deleted by the next autosave (see collectOwnedSessionIds).
     expect(collectOwnedSessionIds(state)).toEqual(collectOwnedSessionIds(before))
     expect(state.tabs.map(tab => tab.id)).toEqual(['tab-startup', 'tab-e'])
-    expect(state.tabs[1]).toBe(before.tabs[2]) // the target's tree is untouched
+    expect(state.tabs[1]).toBe(before.tabs[2]) // the target itself is untouched
     expect(state.activeTabId).toBe('tab-e')
 
-    // Grid panes of the removed tabs are now Dispatch agents of the target;
-    // detached records that pointed at a removed tab follow it with the
-    // target's title and NEW index.
-    expect(resolveTabSessions(state, 'tab-e')).toEqual(['e-root', 'e-grok', 'b-verify', 'e-tldr', 'b-audit', 'g-review'])
-    expect(state.detachedSessions['b-audit']).toEqual({
-      sessionId: 'b-audit', surface: 'dispatch', projectTabId: 'tab-e', projectTabTitle: 'agent-code', projectTabIndex: 1, detachedAt: 1000,
+    // The target's own sessions keep their order and come first; the moved
+    // ones are APPENDED, source projects in project order (B before G, though
+    // the caller named them the same way here), each in its own index order.
+    expect(resolveTabSessions(state, 'tab-e')).toEqual([
+      'e-root', 'e-grok', 'e-tldr', 'e-parked',
+      'b-audit', 'b-verify', 'g-review', 'g-parked',
+    ])
+    // Appended STRICTLY after the target's last row, whatever clock stamped it.
+    expect(state.sessions['b-audit']).toMatchObject({ projectId: 'tab-e', joinedAt: 1000 })
+    expect(state.sessions['g-parked']).toMatchObject({ projectId: 'tab-e', joinedAt: 1003 })
+    // Nothing else about a moved session changes — no process is touched.
+    expect(state.sessions['b-verify']).toEqual({
+      ...before.sessions['b-verify'], projectId: 'tab-e', joinedAt: 1001,
     })
-    expect(state.detachedSessions['b-verify']).toMatchObject({ projectTabId: 'tab-e', projectTabIndex: 1, detachedAt: 10 })
-    // The target's OWN records moved from letter C to B when tab B left, and
-    // must not keep the old letter next to the ones they were just joined by.
-    expect(state.detachedSessions['e-tldr']).toMatchObject({ projectTabId: 'tab-e', projectTabIndex: 1, detachedAt: 20 })
-    expect(state.buried[0]).toMatchObject({ sourceTabId: 'tab-e', sourceTabTitle: 'agent-code', sourceTabIndex: 1 })
-    // A buried record of the surviving target moves letter with it too.
-    expect(state.buried[1]).toMatchObject({ id: 'e-buried', sourceTabId: 'tab-e', sourceTabIndex: 1, buriedAt: 35 })
+    // The target's own rows are the same objects.
+    expect(state.sessions['e-tldr']).toBe(before.sessions['e-tldr'])
     expect(state.pinnedSessionIds).toEqual(['e-grok'])
-    // Row filters that named a removed tab name the target once; the legacy
-    // single binding is folded into the array; lanes are untouched.
+    // Row filters that named a removed project name the target once; the
+    // legacy single binding is folded into the array; lanes are untouched.
     expect(state.stage.rows).toEqual([{ length: 1, projectTabIds: ['tab-e'] }, { length: 1, projectTabIds: ['tab-e'] }])
     expect(state.stage.lanes).toEqual([{ selectedSessionId: 'g-review' }, { selectedSessionId: 'e-tldr' }])
 
     expect(summary).toEqual({
       targetTabId: 'tab-e', targetTitle: 'agent-code', targetIndex: 1, removedTabIds: ['tab-b', 'tab-g'],
-      detachedFromGrid: ['b-audit', 'g-review'], repointedDetached: ['b-verify'], repointedBuried: ['g-buried'],
+      movedSessionIds: ['b-audit', 'b-verify', 'g-review', 'g-parked'],
     })
     expect(resolveTabSessions(state, 'tab-startup')).toEqual(['pitch'])
   })
 
-  it('skips a source pane with no metadata and counts a pane that already had a detached record once', () => {
+  it('appends after the target s last row even when that row was stamped later than `now`', () => {
+    // A clock that went backwards, or a target holding a session created a
+    // moment ago: the moved sessions must still land at the END.
     const before = fixture()
-    // `phantom` is a leaf the ownership rules already treat as absent;
-    // `g-review` is both a grid pane of G and, by a broken earlier save, a
-    // detached record of G.
-    before.tabs[3]!.root = {
-      type: 'split', direction: 'horizontal', ratio: 0.5,
-      a: { type: 'leaf', sessionId: 'g-review' },
-      b: { type: 'leaf', sessionId: 'phantom' },
-    }
-    before.detachedSessions['g-review'] = {
-      sessionId: 'g-review', surface: 'dispatch', projectTabId: 'tab-g', projectTabTitle: 'agent-code', projectTabIndex: 3, detachedAt: 40,
-    }
+    before.sessions['e-tldr'] = { ...before.sessions['e-tldr']!, joinedAt: 5_000 }
     const result = mergeProjectTabs(before, { targetTabId: 'tab-e', sourceTabIds: ['tab-g'], now: 1000 })
     if (!result.ok) throw new Error(result.reason)
-    expect(collectOwnedSessionIds(result.state)).toEqual(collectOwnedSessionIds(before))
-    expect(result.state.detachedSessions['phantom']).toBeUndefined()
-    expect(result.state.detachedSessions['g-review']).toMatchObject({ projectTabId: 'tab-e', projectTabIndex: 2, detachedAt: 40 })
-    expect(result.summary.detachedFromGrid).toEqual([])
-    expect(result.summary.repointedDetached).toEqual(['g-review'])
+    expect(resolveTabSessions(result.state, 'tab-e').slice(-2)).toEqual(['g-review', 'g-parked'])
+    expect(result.state.sessions['g-review']!.joinedAt).toBeGreaterThan(5_000)
   })
+
+  // "skips a source pane with no metadata and counts a pane that already had a
+  // detached record once" lived here until #992. Both halves were about v2's
+  // owner structures disagreeing — a tile leaf with no metadata, and a session
+  // that was a leaf AND a detached record at once. Neither can be represented:
+  // a session is a row, and a row names one project.
 
   it('refuses a target among the sources, an unknown tab, and an empty selection', () => {
     const state = fixture()

@@ -51,18 +51,11 @@ function makeWorkspace(
   selectTiledLaneSession: ReturnType<typeof vi.fn>
 } {
   const runtime = emptyRuntime()
-  const activeTab = {
-    id: 'tab-1',
-    title: 'Project',
-    focusedSessionId: 'session-1',
-    root: {
-      type: 'split' as const,
-      direction: 'horizontal' as const,
-      ratio: 0.5,
-      a: { type: 'leaf' as const, sessionId: 'session-1' },
-      b: { type: 'leaf' as const, sessionId: 'session-2' },
-    },
-  }
+  // A project is `{ id, title }` (#992). This fixture carried a two-leaf tile
+  // tree and a tree focus until the tree was deleted; the `as unknown as
+  // Workspace` below is why it kept compiling with them. Nothing here ever
+  // read them — the two sessions reach the keyboard through the LANES.
+  const activeTab = { id: 'tab-1', title: 'Project' }
   const stage = {
     lanes: [
       { selectedSessionId: 'session-1' },
@@ -76,13 +69,10 @@ function makeWorkspace(
     activeTabId: activeTab.id,
     tabs: [activeTab],
     sessions: {
-      'session-1': { cwd: '/project', kind: 'claude' as const },
-      'session-2': { cwd: '/project', kind: 'codex' as const },
+      'session-1': { cwd: '/project', kind: 'claude' as const, projectId: 'tab-1', joinedAt: 0 },
+      'session-2': { cwd: '/project', kind: 'codex' as const, projectId: 'tab-1', joinedAt: 1 },
     },
-    detachedSessions: {},
-    buried: [],
     pinnedSessionIds: [],
-    gridRelatedSelections: {},
     stage,
   }
 

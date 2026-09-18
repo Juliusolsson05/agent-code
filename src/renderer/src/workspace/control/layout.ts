@@ -4,6 +4,7 @@ import { useAppStore } from '@renderer/app-state/store'
 import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
 import { normalizeGridShape, MAX_DISPATCH_ROWS, MAX_DISPATCH_TILES, MAX_DISPATCH_LANES, INDEX_FRACTION_MIN, INDEX_FRACTION_MAX } from '@renderer/workspace/dispatch/gridShape'
 import { observeWorkspace } from '@renderer/workspace/control'
+import { resolveTabSessions } from '@renderer/workspace/queries'
 import type { Workspace } from '@renderer/workspace/hook'
 
 const tabId = z.string().describe('Stable project tab ID from app.observe in this window.')
@@ -14,7 +15,7 @@ const rows = z.array(z.object({ length: z.number().int().min(1).max(MAX_DISPATCH
   .describe('Complete desired rows in output order. Each names its prior row or null; at most 16 total lanes.')
 const rowIndex = z.number().int().min(0).describe('Zero-based row index from layout.read; protected by the layout revision.')
 const laneIndex = z.number().int().min(0).describe('Zero-based flat lane index from layout.read; rows are laid out in row-major order.')
-const layoutOutput = z.object({ revision: z.string(), activeTabId: z.string(), tabs: z.array(z.object({ id: z.string(), root: z.json() })),
+const layoutOutput = z.object({ revision: z.string(), activeTabId: z.string(), tabs: z.array(z.object({ id: z.string(), title: z.string(), sessionIds: z.array(z.string()) })),
   dispatch: z.json(), effectiveFocusedSessionId: z.string().nullable() })
 
 export function layoutControlCapabilities(getWorkspace: () => Workspace) {
@@ -33,7 +34,7 @@ export function layoutControlCapabilities(getWorkspace: () => Workspace) {
       focusedSessionId: observeWorkspace(getWorkspace).focusedSessionId,
       tiled: normalizeGridShape(state.stage),
     }
-    const value = { effectiveFocusedSessionId: observeWorkspace(getWorkspace).focusedSessionId, activeTabId: state.activeTabId, tabs: state.tabs.map(({ id, root }) => ({ id, root })), dispatch }
+    const value = { effectiveFocusedSessionId: observeWorkspace(getWorkspace).focusedSessionId, activeTabId: state.activeTabId, tabs: state.tabs.map(({ id, title }) => ({ id, title, sessionIds: resolveTabSessions(state, id) })), dispatch }
     return { ...JSON.parse(JSON.stringify(value)), revision: paginate([value], { limit: 1 }, 'workspace-layout').revision }
   }
   const admit = (expected: string) => {
@@ -48,8 +49,8 @@ export function layoutControlCapabilities(getWorkspace: () => Workspace) {
   }
   return [
     defineCapability({
-      id: 'layout.read', title: 'Read project trees and Dispatch layout', execution: 'window', effect: 'read', input: z.object({}).strict(), output: layoutOutput,
-      description: 'Read exact project tile trees, active tab and normalized Dispatch rows/lanes with a revision for edits. Tree split direction vertical means left/right; horizontal means top/bottom; ratio is the a-child share. Dispatch lanes are flat row-major indices, rows specify their lengths. The lane grid always exists; there is no mode to enter. effectiveFocusedSessionId is the current command target: the agent in the focused lane. Reading does not focus or wake agents.',
+      id: 'layout.read', title: 'Read projects and the lane layout', execution: 'window', effect: 'read', input: z.object({}).strict(), output: layoutOutput,
+      description: 'Read the projects (each with its agents in index order), the active project and the normalized rows/lanes with a revision for edits. A project owns no layout: it is a group of agents, and lanes show agents from any project. Lanes are flat row-major indices, rows specify their lengths. The lane grid always exists; there is no mode to enter. effectiveFocusedSessionId is the current command target: the agent in the focused lane. Reading does not focus or wake agents.',
       handler: read,
     }),
     // layout.adjust (equalize / balance / rotate / divider) died with the tile
@@ -99,7 +100,7 @@ export function layoutControlCapabilities(getWorkspace: () => Workspace) {
             if (!workspace.setDispatchGridShape(change.rows)) throw new ControlError('unavailable', 'Grid shape was refused')
             break
           case 'lane-select':
-            if (!state.sessions[change.sessionId] || state.buried.some(item => item.sessionId === change.sessionId)) throw new ControlError('unavailable', 'Agent is absent or buried')
+            if (!state.sessions[change.sessionId]) throw new ControlError('unavailable', 'Agent is absent')
             await workspace.selectTiledLaneSession(change.laneIndex, change.sessionId)
             if (useAppStore.getState().workspaceState.stage.lanes[change.laneIndex]?.selectedSessionId !== change.sessionId) throw new ControlError('failed', 'Requested lane selection was not observed; read the layout', 'unknown')
             break

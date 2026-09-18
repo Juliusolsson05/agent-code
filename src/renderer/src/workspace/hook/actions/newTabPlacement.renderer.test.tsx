@@ -26,13 +26,11 @@ import type { TiledDispatchState, WorkspaceState } from '@renderer/workspace/typ
 function workspace(stage: TiledDispatchState): WorkspaceState {
   return {
     tabs: [{
-      id: 'tab-a', title: 'app', root: { type: 'leaf', sessionId: 'a1' }, focusedSessionId: 'a1',
+      id: 'tab-a', title: 'app',  
     }],
     activeTabId: 'tab-a',
     stage,
-    sessions: { a1: { cwd: '/work/app', kind: 'claude' } },
-    detachedSessions: {},
-    buried: [],
+    sessions: { a1: { cwd: '/work/app', kind: 'claude', projectId: 'tab-a', joinedAt: 0 } },
     pinnedSessionIds: [],
   }
 }

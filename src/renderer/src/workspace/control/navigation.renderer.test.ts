@@ -8,8 +8,8 @@ afterEach(() => { useAppStore.setState(original, true); vi.unstubAllGlobals() })
 it('refuses acknowledgment when effective focus moves during workspace navigation', async () => {
   useAppStore.setState({ workspaceReaderMode: null, workspaceSpotlight: null,
     workspaceState: { ...original.workspaceState, activeTabId: 'project', stage: oneLaneStage('target'),
-      tabs: [{ id: 'project', title: 'Project', root: { type: 'leaf', sessionId: 'target' }, focusedSessionId: 'target' }, { id: 'other-project', title: 'Other', root: { type: 'leaf', sessionId: 'other' }, focusedSessionId: 'other' }],
-      sessions: { target: { kind: 'claude', cwd: '/trial' }, other: { kind: 'claude', cwd: '/trial' } }, buried: [], detachedSessions: {},
+      tabs: [{ id: 'project', title: 'Project' }, { id: 'other-project', title: 'Other' }],
+      sessions: { target: { kind: 'claude', cwd: '/trial', projectId: 'project', joinedAt: 0 }, other: { kind: 'claude', cwd: '/trial', projectId: 'other-project', joinedAt: 0 } },  
     } })
   // The review's production-handler probe changed focus at the animation-frame
   // boundary. Preserve that exact interleaving rather than mocking observation.

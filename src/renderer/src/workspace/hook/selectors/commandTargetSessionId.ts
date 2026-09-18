@@ -24,7 +24,6 @@
 //   the explicit import is the documentation.
 
 import { resolveStrictDispatchCommandTarget } from '@renderer/workspace/dispatch/dispatchTarget'
-import { selectedGridRelatedSessionId } from '@renderer/workspace/gridRelatedAgents'
 import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 

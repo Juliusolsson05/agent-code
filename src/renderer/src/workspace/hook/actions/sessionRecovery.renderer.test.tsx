@@ -41,8 +41,6 @@ describe('useSessionActions recovery retry', () => {
       tabs: [],
       activeTabId: '',
       sessions: {},
-      detachedSessions: {},
-      buried: [],
       pinnedSessionIds: [],
       stage: freshStage(),
     } as unknown as WorkspaceState
@@ -148,15 +146,11 @@ describe('useSessionActions recovery retry', () => {
       tabs: [{
         id: 'tab-1',
         title: 'Project',
-        focusedSessionId: sessionId,
-        root: { type: 'leaf' as const, sessionId },
       }],
       activeTabId: 'tab-1',
       sessions: {
         [sessionId]: { cwd: '/tmp/project', kind: 'claude' as const },
       },
-      detachedSessions: {},
-      buried: [],
       pinnedSessionIds: [],
       stage: oneLaneStage(sessionId),
     } as WorkspaceState
@@ -255,8 +249,6 @@ describe('useSessionActions recovery retry', () => {
       tabs: [{
         id: 'tab-1',
         title: 'Project',
-        focusedSessionId: sessionId,
-        root: { type: 'leaf' as const, sessionId },
       }],
       activeTabId: 'tab-1',
       sessions: {
@@ -266,8 +258,6 @@ describe('useSessionActions recovery retry', () => {
           ...(providerRuntime ? { providerRuntime } : {}),
         },
       },
-      detachedSessions: {},
-      buried: [],
       pinnedSessionIds: [],
       stage: oneLaneStage(sessionId),
     } as WorkspaceState
@@ -378,8 +368,6 @@ describe('useSessionActions recovery retry', () => {
       tabs: [{
         id: 'tab-1',
         title: 'Project',
-        focusedSessionId: sessionId,
-        root: { type: 'leaf' as const, sessionId },
       }],
       activeTabId: 'tab-1',
       sessions: {
@@ -387,11 +375,10 @@ describe('useSessionActions recovery retry', () => {
           cwd: '/tmp/project',
           kind: 'claude' as const,
           title: 'Initial title',
+          projectId: 'tab-1',
+          joinedAt: 0,
         },
       },
-      detachedSessions: {},
-      gridRelatedSelections: {},
-      buried: [],
       pinnedSessionIds: [],
       stage: oneLaneStage(sessionId),
     } as WorkspaceState

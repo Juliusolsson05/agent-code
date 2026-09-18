@@ -3,10 +3,11 @@ import { describe, expect, it } from 'vitest'
 import type { PersistedWorkspace } from '@renderer/workspace/persistence'
 import type { SessionId, TabId } from '@renderer/workspace/types'
 import {
-  foldBuriedIntoDetached,
   isStageWorkspace,
+  liveWorkspaceFromPersisted,
   migrateWorkspaceToStage,
 } from '@renderer/workspace/workspaceShape'
+import { resolveTabSessions } from '@renderer/workspace/queries'
 import { collectOwnedSessionIds } from '@renderer/workspace/sessionOwnership'
 import { ownerV2Workspace } from '@renderer/workspace/workspaceShape.ownerV2Fixture'
 
@@ -166,9 +167,10 @@ describe('migrateWorkspaceToStage — pure-grid workspace (no dispatchMode)', ()
 // wake-ordering cases (#690 parity), because that action placed a possibly
 // hibernated agent into a lane and had to wake it first. #992 deleted the
 // action: a workspace is never "entered", it is MIGRATED once, here. The wake
-// cases have no successor on purpose — migration runs at boot, where a lane's
-// own leaf wakes its occupant on mount, so nothing is placed by a reducer that
-// would need to order a wake before a write. unifiedStage.integration.test.ts
+// cases have no successor on purpose — migration runs at boot and writes no
+// live placement: the lane's leaf owns the wake (a terminal on mount, an agent
+// on its first send, #691), so there is no reducer here that would need to
+// order a wake before a write. unifiedStage.integration.test.ts
 // covers the boot half (a seeded hibernated session is named, never spawned).
 describe('migrateWorkspaceToStage — seed precedence', () => {
   it('seeds ONLY lane 0 — continuity, never #681 auto-fill', () => {
@@ -246,7 +248,7 @@ describe('migrateWorkspaceToStage — burial folds into the pool', () => {
       // become simply pooled-and-unplaced in v3.
       tabs: [
         {
-          ...base.tabs[0]!,
+          ...base.tabs![0]!,
           root: {
             type: 'split',
             direction: 'vertical',
@@ -255,7 +257,7 @@ describe('migrateWorkspaceToStage — burial folds into the pool', () => {
             b: { type: 'leaf', sessionId: S('a2') },
           },
         },
-        base.tabs[1]!,
+        base.tabs![1]!,
       ],
       buried: [
         {
@@ -369,7 +371,7 @@ describe('migrateWorkspaceToStage — degenerate and affinity guards', () => {
       // Remove a2 from the tree so the corrupt record is its only owner.
       tabs: [
         {
-          ...base.tabs[0]!,
+          ...base.tabs![0]!,
           root: {
             type: 'split',
             direction: 'vertical',
@@ -378,7 +380,7 @@ describe('migrateWorkspaceToStage — degenerate and affinity guards', () => {
             b: { type: 'leaf', sessionId: S('a3') },
           },
         },
-        base.tabs[1]!,
+        base.tabs![1]!,
       ],
     })
     expect(migrated.sessions[S('a2')]).toBeUndefined()
@@ -395,7 +397,7 @@ describe('migrateWorkspaceToStage — degenerate and affinity guards', () => {
       ...base,
       tabs: [
         {
-          ...base.tabs[0]!,
+          ...base.tabs![0]!,
           root: {
             type: 'split',
             direction: 'vertical',
@@ -404,7 +406,7 @@ describe('migrateWorkspaceToStage — degenerate and affinity guards', () => {
             b: { type: 'leaf', sessionId: S('a2') },
           },
         },
-        base.tabs[1]!,
+        base.tabs![1]!,
       ],
       buried: [
         {
@@ -422,9 +424,11 @@ describe('migrateWorkspaceToStage — degenerate and affinity guards', () => {
   })
 })
 
-describe('foldBuriedIntoDetached — buried sessions become parked pool rows', () => {
+describe('migrateWorkspaceToStage — buried sessions become parked pool rows', () => {
   // Bury / Revive were deleted (#992 stage 3a). These pin the read-boundary
   // rule that keeps an old file's buried sessions reachable without them.
+  // (Until stage 3b-ii a separate `foldBuriedIntoDetached` pass did this by
+  // minting detached records; the migration now files them directly.)
   const buriedRecord = (sessionId: SessionId, sourceTabId: TabId, buriedAt = 7) => ({
     id: sessionId,
     sessionId,
@@ -435,35 +439,111 @@ describe('foldBuriedIntoDetached — buried sessions become parked pool rows', (
     sourceTabIndex: 0,
   })
 
-  it('returns the same object when nothing is buried', () => {
-    const base = gridHeavyV2Workspace()
-    expect(foldBuriedIntoDetached(base)).toBe(base)
-  })
-
   it('files a buried session under its source project, ordered by when it left the screen', () => {
     const base = gridHeavyV2Workspace()
-    const folded = foldBuriedIntoDetached({ ...base, buried: [buriedRecord(S('hidden'), TAB_B, 42)] })
-    expect(folded.buried).toEqual([])
-    expect(folded.detachedSessions?.[S('hidden')]).toMatchObject({
-      surface: 'dispatch', projectTabId: TAB_B, projectTabTitle: 'service', projectTabIndex: 1, detachedAt: 42,
-    })
+    const migrated = migrateWorkspaceToStage({ ...base, buried: [buriedRecord(S('hidden'), TAB_B, 42)] })
     // A buried record can carry the ONLY copy of its metadata.
-    expect(folded.sessions[S('hidden')]).toEqual({ cwd: '/x/hidden', kind: 'codex' })
+    expect(migrated.sessions[S('hidden')]).toEqual({
+      cwd: '/x/hidden', kind: 'codex', projectId: TAB_B, joinedAt: 42,
+    })
   })
 
   it('re-parents a buried session whose source project is gone instead of orphaning it', () => {
-    // v2 kept buried sessions unconditionally; a detached record naming a dead
-    // project would be dropped by ownership, i.e. silent data loss.
+    // v2 kept buried sessions unconditionally; treating a dead source project
+    // like a dead detached project would be silent data loss on upgrade.
     const base = gridHeavyV2Workspace()
-    const folded = foldBuriedIntoDetached({ ...base, buried: [buriedRecord(S('hidden'), 'tab-ghost')] })
-    expect(folded.detachedSessions?.[S('hidden')]?.projectTabId).toBe(TAB_A)
-    expect(collectOwnedSessionIds(folded).has(S('hidden'))).toBe(true)
+    const migrated = migrateWorkspaceToStage({ ...base, buried: [buriedRecord(S('hidden'), 'tab-ghost')] })
+    expect(migrated.sessions[S('hidden')]?.projectId).toBe(TAB_A)
+    expect(collectOwnedSessionIds(liveWorkspaceFromPersisted({ ...base, buried: [buriedRecord(S('hidden'), 'tab-ghost')] }))
+      .has(S('hidden'))).toBe(true)
   })
 
   it('never gives a session a second owner', () => {
+    // Also a tile leaf: the leaf wins, and its own metadata is kept.
     const base = gridHeavyV2Workspace()
-    const folded = foldBuriedIntoDetached({ ...base, buried: [buriedRecord(S('a1'), TAB_A)] })
-    expect(folded.detachedSessions?.[S('a1')]).toBeUndefined()
-    expect(folded.sessions[S('a1')]).toEqual(base.sessions[S('a1')])
+    const migrated = migrateWorkspaceToStage({ ...base, buried: [buriedRecord(S('a1'), TAB_B)] })
+    expect(migrated.sessions[S('a1')]).toEqual({ ...base.sessions[S('a1')], projectId: TAB_A, joinedAt: 0 })
+  })
+})
+
+describe('migrateWorkspaceToStage — index order survives the merge', () => {
+  it('lists a project as v2 did: tree leaves depth-first, then parked agents oldest-first', () => {
+    const base = gridHeavyV2Workspace()
+    const persisted: PersistedWorkspace = {
+      ...base,
+      sessions: {
+        ...base.sessions,
+        [S('late')]: { cwd: '/x/app', kind: 'codex' },
+        [S('early')]: { cwd: '/x/app', kind: 'codex' },
+      },
+      detachedSessions: {
+        [S('late')]: { sessionId: S('late'), surface: 'dispatch', projectTabId: TAB_A, projectTabTitle: 'app', projectTabIndex: 0, detachedAt: 900 },
+        [S('early')]: { sessionId: S('early'), surface: 'dispatch', projectTabId: TAB_A, projectTabTitle: 'app', projectTabIndex: 0, detachedAt: 400 },
+      },
+    }
+    expect(resolveTabSessions(liveWorkspaceFromPersisted(persisted), TAB_A))
+      .toEqual([S('a1'), S('a2'), S('a3'), S('early'), S('late')])
+  })
+})
+
+describe('migrateWorkspaceToStage — v3 and hybrid files', () => {
+  const v3 = (): PersistedWorkspace => ({
+    projects: [{ id: TAB_A, title: 'app' }, { id: TAB_B, title: 'service' }],
+    activeProjectId: TAB_B,
+    stage: { lanes: [{ selectedSessionId: S('b1') }, {}], rows: [{ length: 2 }], focusedLane: 1 },
+    sessions: {
+      [S('a1')]: { cwd: '/x/app', kind: 'claude', projectId: TAB_A, joinedAt: 10 },
+      [S('b1')]: { cwd: '/x/service', kind: 'claude', projectId: TAB_B, joinedAt: 20 },
+    },
+    pinnedSessionIds: [S('b1')],
+  })
+
+  it('is the identity on a healthy v3 file', () => {
+    const file = v3()
+    const migrated = migrateWorkspaceToStage(file)
+    expect(migrated.projects).toEqual(file.projects)
+    expect(migrated.activeProjectId).toBe(TAB_B)
+    expect(migrated.sessions).toEqual(file.sessions)
+    expect(migrated.stage).toEqual(file.stage)
+    expect(migrated.pinnedSessionIds).toEqual([S('b1')])
+    // Running it again changes nothing: rehydrate and adoption both call it,
+    // and a file is read many more times than it is upgraded.
+    expect(migrateWorkspaceToStage({ ...migrated })).toEqual(migrated)
+  })
+
+  it('drops a v3 row whose project is gone, and its lane and pin with it', () => {
+    // The pool's form of the v2 ghost rule. It must NOT fall back to the
+    // active project: that is how 82 dead records would become 82 rows in
+    // someone's index, one click from being spawned.
+    const file = v3()
+    file.sessions[S('ghost')] = { cwd: '/x/gone', kind: 'claude', projectId: 'tab-closed', joinedAt: 5 }
+    file.stage = { lanes: [{ selectedSessionId: S('ghost') }], rows: [{ length: 1 }], focusedLane: 0 }
+    file.pinnedSessionIds = [S('ghost'), S('b1')]
+    const migrated = migrateWorkspaceToStage(file)
+
+    expect(migrated.sessions).not.toHaveProperty(S('ghost'))
+    expect(migrated.stage.lanes).toEqual([{}])
+    expect(migrated.pinnedSessionIds).toEqual([S('b1')])
+  })
+
+  it('drops a v3 row that was never filed', () => {
+    const file = v3()
+    file.sessions[S('unfiled')] = { cwd: '/x/app', kind: 'claude' }
+    expect(migrateWorkspaceToStage(file).sessions).not.toHaveProperty(S('unfiled'))
+  })
+
+  it('prefers the row s own stamp over the v2 owners in a hybrid file', () => {
+    // The intermediate #992 builds wrote both halves. The stamp is the newer
+    // fact: here a1 was re-filed under the second project after the v2 half
+    // was last meaningful.
+    const base = gridHeavyV2Workspace()
+    const hybrid: PersistedWorkspace = {
+      ...base,
+      sessions: { ...base.sessions, [S('a1')]: { ...base.sessions[S('a1')]!, projectId: TAB_B } },
+    }
+    const migrated = migrateWorkspaceToStage(hybrid)
+    expect(migrated.sessions[S('a1')]?.projectId).toBe(TAB_B)
+    // No `joinedAt` was stamped, so its v2 position (first tile leaf) is kept.
+    expect(migrated.sessions[S('a1')]?.joinedAt).toBe(0)
   })
 })

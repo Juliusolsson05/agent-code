@@ -1,5 +1,5 @@
 import type { SessionId, SessionKind, Tab, TabId, WorkspaceState } from '@renderer/workspace/types'
-import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
+import { resolveTabSessions } from '@renderer/workspace/queries'
 import { tabIndexLabel } from '@renderer/workspace/tile-tree/paneLabelFormat'
 import { isProcessSessionKind } from '@shared/types/providerKind'
 import {
@@ -20,7 +20,9 @@ export type DispatchAgentRow = {
   /** Explicit durable SessionMeta title, before fallback derivation. */
   agentTitle?: string
   title: string
-  placement: 'grid' | 'detached'
+  // `placement: 'grid' | 'detached'` was a field here until #992. It said which
+  // v2 OWNER held the session (a tile leaf or a detachedSessions record). With
+  // one pool there is one kind of row.
   /** Nesting depth in the dispatch list. 0 = ordinary row; 1 = a
    *  linked agent rendered indented directly under its parent row.
    *  Linked agents never chain, so this is only ever 0 or 1. */
@@ -61,24 +63,23 @@ export function buildDispatchGroups(
   return sourceTabs
     .map(tab => {
       const tabIndex = state.tabs.findIndex(item => item.id === tab.id)
-      const gridSessionIds = collectLeaves(tab.root)
-        // WHY terminals belong in the primary Dispatch row stream now:
-        // Dispatch focus is session-based, not transcript-based. TerminalLeaf
-        // already renders through renderWorkspaceLeaf and uses the same
-        // sessionId-scoped IPC lifecycle as agents, so filtering terminals here
-        // made the list lie about which live sessions the user could command.
-        // Agent-only affordances stay guarded at their command/action sites;
-        // row construction should answer the broader placement question:
-        // "which sessions are in this Dispatch scope?"
-        .filter(sessionId => state.sessions[sessionId] !== undefined)
+      // The project's sessions in index order, straight from the pool.
+      //
+      // Until #992 this was `[...treeLeaves, ...detachedByDetachedAt]`, and
+      // that concatenation was load-bearing in a bad way: everything created
+      // in the grid sorted above everything created in Dispatch no matter when
+      // (#671 — a Dispatch terminal was structurally guaranteed to list above
+      // every agent). One `joinedAt` key has no such cliff.
+      //
+      // WHY terminals belong in the primary row stream: focus is session-based,
+      // not transcript-based. TerminalLeaf renders through renderWorkspaceLeaf
+      // and uses the same sessionId-scoped IPC lifecycle as agents, so
+      // filtering terminals here would make the list lie about which live
+      // sessions the user can command. Agent-only affordances stay guarded at
+      // their command/action sites.
+      const entries = resolveTabSessions(state, tab.id)
         .filter(sessionId => !pinnedSet.has(sessionId))
-      const detachedSessionIds = detachedDispatchSessionIdsForTab(state, tab.id)
-        .filter(sessionId => !pinnedSet.has(sessionId))
-
-      const entries = [
-        ...gridSessionIds.map(sessionId => ({ sessionId, placement: 'grid' as const })),
-        ...detachedSessionIds.map(sessionId => ({ sessionId, placement: 'detached' as const })),
-      ]
+        .map(sessionId => ({ sessionId }))
 
       // Nesting pass: manual linked agents and MCP-created orchestration
       // agents render indented immediately under their parent row rather than
@@ -109,11 +110,7 @@ export function buildDispatchGroups(
           childrenByParent.set(parentId, arr)
         }
       }
-      const ordered: Array<{
-        sessionId: SessionId
-        placement: 'grid' | 'detached'
-        depth: number
-      }> = []
+      const ordered: Array<{ sessionId: SessionId; depth: number }> = []
       for (const e of entries) {
         const meta = state.sessions[e.sessionId]
         const parentId = meta?.linkedParentId ?? meta?.orchestrationParentId
@@ -128,11 +125,11 @@ export function buildDispatchGroups(
       // globalIndex is assigned in the FINAL (post-nesting) order so
       // the A1/A2/A3 labels run top-to-bottom exactly as the rows
       // render — a linked child takes the number of its visual slot.
-      const rows = ordered.map(({ sessionId, placement, depth }) => {
+      const rows = ordered.map(({ sessionId, depth }) => {
         const meta = state.sessions[sessionId]
         const rowIndex = globalIndex++
         return {
-          key: `${tab.id}:${placement}:${sessionId}`,
+          key: `${tab.id}:${sessionId}`,
           label: `${tabIndexLabel(tabIndex)}${rowIndex}`,
           globalIndex: rowIndex,
           tabId: tab.id,
@@ -142,7 +139,6 @@ export function buildDispatchGroups(
           kind: meta?.kind,
           agentTitle: explicitAgentTitle(meta),
           title: sessionTitle(meta),
-          placement,
           depth,
         } satisfies DispatchAgentRow
       })
@@ -188,24 +184,9 @@ export function dispatchSessionIdsForTab(
     .map(row => row.sessionId)
 }
 
-export function detachedDispatchSessionIdsForTab(
-  state: WorkspaceState,
-  tabId: TabId,
-): SessionId[] {
-  // Keep this ordering in one place so the list UI and bulk attach agree on
-  // what "all detached Dispatch sessions for this tab" means. Detached rows
-  // are displayed oldest-first in buildDispatchGroups; bulk attach should
-  // preserve that same user-visible sequence inside the normalized incoming
-  // subtree.
-  return Object.values(state.detachedSessions)
-    .filter(entry => (
-      entry.surface === 'dispatch' &&
-      entry.projectTabId === tabId &&
-      state.sessions[entry.sessionId] !== undefined
-    ))
-    .sort((a, b) => a.detachedAt - b.detachedAt)
-    .map(entry => entry.sessionId)
-}
+// `detachedDispatchSessionIdsForTab` lived here until #992: the project's
+// parked sessions, oldest `detachedAt` first. It is `resolveTabSessions` now —
+// one membership query, one order key.
 
 export function selectVisibleDispatchRow(
   rows: DispatchAgentRow[],
@@ -254,32 +235,17 @@ export function buildPinnedDispatchRows(
   for (const sessionId of state.pinnedSessionIds) {
     const meta = state.sessions[sessionId]
     if (!meta || !isProcessSessionKind(meta.kind)) continue
-    // Locate the owning tab. A pinned agent that's detached has its
-    // tab id on `detachedSessions[sessionId].projectTabId`; a
-    // grid-placed pinned agent is a leaf in some tab's tree. We do
-    // the lookup detached-first because detachedSessions is O(1) and
-    // catches the "background pinned agent" case the user is likely
-    // pinning in the first place (an agent they don't want crowding
-    // the visible grid but want one keystroke away).
-    const detached = state.detachedSessions[sessionId]
-    let tabId: TabId | null = null
-    let placement: 'grid' | 'detached' = 'grid'
-    if (detached) {
-      tabId = detached.projectTabId
-      placement = 'detached'
-    } else {
-      const owner = state.tabs.find(tab =>
-        collectLeaves(tab.root).includes(sessionId),
-      )
-      tabId = owner?.id ?? null
-    }
+    // The owning project is on the row itself. (Until #992 this was a
+    // two-step lookup: the detachedSessions record first, then a walk of
+    // every tab's tile tree.)
+    const tabId: TabId | null = meta.projectId ?? null
     if (!tabId) continue
     const tabIndex = state.tabs.findIndex(tab => tab.id === tabId)
     const tab = state.tabs[tabIndex]
     if (!tab) continue
     rows.push({
       // ★ prefix keeps the row key unique against project-group rows
-      // (whose keys are `${tabId}:${placement}:${sessionId}`) so any
+      // (whose keys are `${tabId}:${sessionId}`) so any
       // caller that flat-concats both arrays — see the spread in
       // DispatchLayout — won't collide on React keys.
       key: `pinned:${sessionId}`,
@@ -292,7 +258,6 @@ export function buildPinnedDispatchRows(
       kind: meta.kind,
       agentTitle: explicitAgentTitle(meta),
       title: sessionTitle(meta),
-      placement,
       // Pinned rows live in their own flat section — never nested.
       depth: 0,
     })

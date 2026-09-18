@@ -34,7 +34,7 @@ export {
   extractEmbeddedClaudeProgressEntry,
 } from '@providers/claude/renderer/transcript/history'
 
-export { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
+// `collectLeaves` was re-exported here until #992 deleted the tile tree.
 
 // Split across the two post-#493 homes: runtime types live in the ingest
 // layer (session-runtime/state), the mode-surface layout states in

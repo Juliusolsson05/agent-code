@@ -5,48 +5,23 @@ import {
   resolveAgentPaneLabel,
   tabIndexLabel,
 } from '@renderer/workspace/tile-tree/paneLabels'
-import type { TileNode, WorkspaceState } from '@renderer/workspace/types'
+import type { WorkspaceState } from '@renderer/workspace/types'
 import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
-
-function leaf(sessionId: string): TileNode {
-  return { type: 'leaf', sessionId }
-}
-
-function split(a: string, b: string): TileNode {
-  return {
-    type: 'split',
-    direction: 'vertical',
-    ratio: 0.5,
-    a: leaf(a),
-    b: leaf(b),
-  }
-}
 
 function makeState(): WorkspaceState {
   return {
     tabs: [
-      { id: 'tab-a', title: 'alpha', root: split('terminal', 'agent-a'), focusedSessionId: 'agent-a' },
-      { id: 'tab-b', title: 'beta', root: leaf('agent-b'), focusedSessionId: 'agent-b' },
+      { id: 'tab-a', title: 'alpha' },
+      { id: 'tab-b', title: 'beta' },
     ],
     activeTabId: 'tab-a',
     stage: oneLaneStage('agent-a'),
     sessions: {
-      terminal: { cwd: '/work/alpha', kind: 'terminal' },
-      'agent-a': { cwd: '/work/alpha', kind: 'codex', title: 'Review UI' },
-      'agent-b': { cwd: '/work/beta', kind: 'claude' },
-      detached: { cwd: '/work/alpha/background', kind: 'opencode' },
+      terminal: { cwd: '/work/alpha', kind: 'terminal', projectId: 'tab-a', joinedAt: 0 },
+      'agent-a': { cwd: '/work/alpha', kind: 'codex', title: 'Review UI', projectId: 'tab-a', joinedAt: 1 },
+      'agent-b': { cwd: '/work/beta', kind: 'claude', projectId: 'tab-b', joinedAt: 0 },
+      detached: { cwd: '/work/alpha/background', kind: 'opencode', projectId: 'tab-a', joinedAt: 10 },
     },
-    detachedSessions: {
-      detached: {
-        sessionId: 'detached',
-        surface: 'dispatch',
-        projectTabId: 'tab-a',
-        projectTabTitle: 'alpha',
-        projectTabIndex: 0,
-        detachedAt: 10,
-      },
-    },
-    buried: [],
     pinnedSessionIds: [],
   }
 }
@@ -103,29 +78,17 @@ describe('resolveAgentPaneLabel', () => {
 
   it('lets Dispatch row order override a conflicting pane-local coordinate', () => {
     const state = makeState()
-    state.tabs[0] = {
-      ...state.tabs[0],
-      root: {
-        type: 'split',
-        direction: 'vertical',
-        ratio: 0.5,
-        a: leaf('agent-a'),
-        b: leaf('agent-late'),
-      },
-    }
-    state.sessions['agent-late'] = { cwd: '/work/alpha/late', kind: 'claude' }
+    // Project alpha holds agent-a, agent-late and a child linked to agent-a.
+    // (The tree-era fixture got here by REPLACING the tab's tile tree, which
+    // dropped the shell; the pool says it directly.)
+    delete state.sessions.terminal
+    state.sessions['agent-late'] = { cwd: '/work/alpha/late', kind: 'claude', projectId: 'tab-a', joinedAt: 1 }
     state.sessions.child = {
       cwd: '/work/alpha/child',
       kind: 'codex',
       linkedParentId: 'agent-a',
-    }
-    state.detachedSessions.child = {
-      sessionId: 'child',
-      surface: 'dispatch',
-      projectTabId: 'tab-a',
-      projectTabTitle: 'alpha',
-      projectTabIndex: 0,
-      detachedAt: 5,
+      projectId: 'tab-a',
+      joinedAt: 5,
     }
     state.stage = { lanes: [{ selectedSessionId: 'agent-a' }], rows: [{ length: 1 }], focusedLane: 0 }
 

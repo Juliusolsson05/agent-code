@@ -70,20 +70,10 @@ export function paneWorkspace(meta: SessionMeta): WorkspaceState {
     tabs: [{
       id: 'project',
       title: 'project',
-      focusedSessionId: PARENT_ID,
-      root: {
-        type: 'split',
-        direction: 'vertical',
-        ratio: 0.5,
-        a: { type: 'leaf', sessionId: PARENT_ID },
-        b: { type: 'leaf', sessionId: SESSION_ID },
-      },
     }],
     activeTabId: 'project',
     stage: freshStage(),
-    sessions: { [PARENT_ID]: { cwd: PANE_CWD, kind: 'claude' }, [SESSION_ID]: meta },
-    detachedSessions: {},
-    buried: [],
+    sessions: { [PARENT_ID]: { cwd: PANE_CWD, kind: 'claude', projectId: 'project', joinedAt: 0 }, [SESSION_ID]: { ...meta, projectId: 'project', joinedAt: 1 }},
     pinnedSessionIds: [],
   }
 }

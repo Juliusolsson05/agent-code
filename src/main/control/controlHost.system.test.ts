@@ -47,16 +47,19 @@ it('routes real renderer observations across two windows and survives reload wit
       import { useAppStore } from '${resolve(root, 'src/renderer/src/app-state/store.ts')}'
       const id = location.hash.slice(1)
       useAppStore.setState({ workspaceState: {
-        tabs: [{id, title: id, root: {type: 'leaf', sessionId: id + '-agent'}, focusedSessionId: id + '-agent'}],
+        tabs: [{id, title: id}],
         // One lane showing this window's agent: the command target is the
         // focused lane's occupant since #992 (it used to fall back to the
         // tab's tree focus with Dispatch off). Inline rather than imported —
         // this string is a generated renderer entry, not a test module.
         stage: { lanes: [{ selectedSessionId: id + '-agent' }], rows: [{ length: 1 }], focusedLane: 0 },
-        activeTabId: id, sessions: { [id + '-agent']: {cwd: '/control-trial/' + id, kind: 'codex'} },
-        detachedSessions: {}, buried: [], pinnedSessionIds: []
+        // Filed under this window's one project. Ownership is the row's own
+        // \`projectId\` since #992; a row naming no project is unowned, so no
+        // index lists it and the control reads below would not see it.
+        activeTabId: id, sessions: { [id + '-agent']: {cwd: '/control-trial/' + id, kind: 'codex', projectId: id, joinedAt: 0} },
+        pinnedSessionIds: []
       }})
-      window.addAmbiguousAgent = () => useAppStore.getState().setWorkspaceState(state => ({ ...state, sessions: { ...state.sessions, 'right-agent': {cwd: '/ambiguous', kind: 'codex'} } }))
+      window.addAmbiguousAgent = () => useAppStore.getState().setWorkspaceState(state => ({ ...state, sessions: { ...state.sessions, 'right-agent': {cwd: '/ambiguous', kind: 'codex', projectId: id, joinedAt: 1} } }))
       window.changeTrialBinding = () => useAppStore.getState().setSettings({ commandKeybindingOverrides: {'new-tab': ['Cmd+Alt+T']} })
       registerRendererHost([
         ...workspaceControlCapabilities(() => ({restoreStatus: 'fresh'})),

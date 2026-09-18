@@ -24,14 +24,10 @@ function liveState(overrides: Partial<WorkspaceState> = {}): WorkspaceState {
       {
         id: TAB_A,
         title: 'app',
-        root: { type: 'leaf', sessionId: 's-a1' },
-        focusedSessionId: 's-a1',
       },
       {
         id: TAB_B,
         title: 'service',
-        root: { type: 'leaf', sessionId: 's-b1' },
-        focusedSessionId: 's-b1',
       },
     ],
     activeTabId: TAB_A,
@@ -40,21 +36,10 @@ function liveState(overrides: Partial<WorkspaceState> = {}): WorkspaceState {
     // from that focus any more.
     stage: freshStage(),
     sessions: {
-      's-a1': { cwd: '/x/app', kind: 'claude' },
-      's-b1': { cwd: '/x/service', kind: 'claude' },
-      's-det': { cwd: '/x/service', kind: 'claude' },
+      's-a1': { cwd: '/x/app', kind: 'claude', projectId: TAB_A, joinedAt: 0 },
+      's-b1': { cwd: '/x/service', kind: 'claude', projectId: TAB_B, joinedAt: 0 },
+      's-det': { cwd: '/x/service', kind: 'claude', projectId: TAB_B, joinedAt: 1 },
     },
-    detachedSessions: {
-      's-det': {
-        sessionId: 's-det',
-        surface: 'dispatch',
-        projectTabId: TAB_B,
-        projectTabTitle: 'service',
-        projectTabIndex: 1,
-        detachedAt: 1,
-      },
-    },
-    buried: [],
     pinnedSessionIds: [],
     ...overrides,
   } as WorkspaceState

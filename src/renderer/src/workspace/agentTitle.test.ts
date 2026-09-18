@@ -14,16 +14,21 @@ function stateWithSessions(
   sessions: WorkspaceState['sessions'],
 ): WorkspaceState {
   const sessionId = Object.keys(sessions)[0] ?? ''
+  // Every row is filed under the one project, in the order given. The cases
+  // pass bare `{ cwd, kind }` rows because they are about TITLES; without this
+  // stamp the rows would be unowned (#992: ownership is the row's own
+  // `projectId`), no index would list them, and every row-level assertion
+  // below would be reading `undefined`.
+  const filed = Object.fromEntries(
+    Object.entries(sessions).map(([id, meta], index) => [id, { projectId: 'tab', joinedAt: index, ...meta }]),
+  )
   return {
     tabs: sessionId
-      ? [{ id: 'tab', title: 'project', root: { type: 'leaf', sessionId }, focusedSessionId: sessionId }]
+      ? [{ id: 'tab', title: 'project' }]
       : [],
     activeTabId: sessionId ? 'tab' : '',
-    gridRelatedSelections: {},
     stage: freshStage(),
-    sessions,
-    detachedSessions: {},
-    buried: [],
+    sessions: filed,
     pinnedSessionIds: [],
   }
 }

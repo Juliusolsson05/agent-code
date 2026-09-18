@@ -17,29 +17,32 @@ const originalApi = window.api
 afterEach(() => { cleanup(); dismissTldr(); window.api = originalApi })
 
 describe('TLDR placement in the actual workspace leaf', () => {
-  it.each(['agent', 'terminal'] as const)('uses the selected child’s identity and enablement in %s view', async mode => {
-    const node = { type: 'split', direction: 'vertical', ratio: 0.5, a: { type: 'leaf', sessionId: 'parent' }, b: { type: 'leaf', sessionId: 'shell' } } as const
+  it.each(['agent', 'terminal'] as const)('uses the rendered session’s own identity and enablement in %s view', async mode => {
     const workspace = {
       state: {
-        activeTabId: 'project', tabs: [{ id: 'project', title: 'Project', root: node, focusedSessionId: 'parent' }],
+        activeTabId: 'project', tabs: [{ id: 'project', title: 'Project' }],
         sessions: {
-          parent: { cwd: '/project', kind: 'claude', tldrIdentity: 'parent-summary', builtInMcpDomains: [] },
-          child: { cwd: '/project/child', kind: 'codex', linkedParentId: 'parent', tldrIdentity: 'child-summary', builtInMcpDomains: ['tldr'] },
-          shell: { cwd: '/project', kind: 'terminal' },
+          parent: { cwd: '/project', kind: 'claude', tldrIdentity: 'parent-summary', builtInMcpDomains: [], projectId: 'project', joinedAt: 0 },
+          child: { cwd: '/project/child', kind: 'codex', linkedParentId: 'parent', tldrIdentity: 'child-summary', builtInMcpDomains: ['tldr'], projectId: 'project', joinedAt: 1 },
+          shell: { cwd: '/project', kind: 'terminal', projectId: 'project', joinedAt: 2 },
         },
-        detachedSessions: { child: { sessionId: 'child', surface: 'dispatch', projectTabId: 'project', detachedAt: 1 } },
-        gridRelatedSelections: { parent: 'child' }, buried: [], pinnedSessionIds: [],
+        pinnedSessionIds: [],
       },
       getRuntime: (id: string) => ({ ...emptyRuntime(), lastJsonlEntryAt: Date.parse(id === 'child' ? '2026-09-10T01:00:00.000Z' : '2026-09-09T01:00:00.000Z') }),
     } as unknown as Workspace
     const readTldrs = vi.fn(async (ids: string[]) => Object.fromEntries(ids.map(id => [id, { text: `Saved ${id}.`, revision: 1, updatedAt: '2026-09-11T00:00:00.000Z' }])))
     window.api = { ...originalApi, readTldrs, onTldrChanged: () => () => {} }
-    // The recursive TileTree component died with the tile tree (#992). What it
-    // did for this contract was call renderWorkspaceLeaf once per leaf with
-    // related-agent tabs ON; calling it directly keeps the same wiring under test.
+    // A lane shows the session it is asked to show — here the linked child,
+    // selected into a lane beside a shell — and the TLDR pane must take ITS
+    // identity and enablement, never its parent's.
+    //
+    // Until #992 this rendered the PARENT with related-agent tabs on and a
+    // stored selection pointing at the child, so the leaf swapped the child
+    // into the parent's tile. That swap is gone (see TileTree.tsx); the wiring
+    // it exercised — leaf -> TldrPane(identity, enabled) — is the same.
     const view = render(<AgentTerminalOwnershipProvider>
-      {renderWorkspaceLeaf('parent', 'parent', workspace, 'project', mode, true, true, undefined, true)}
-      {renderWorkspaceLeaf('shell', 'parent', workspace, 'project', mode, true, true, undefined, true)}
+      {renderWorkspaceLeaf('child', 'child', workspace, 'project', mode, true, true)}
+      {renderWorkspaceLeaf('shell', 'child', workspace, 'project', mode, true, true)}
     </AgentTerminalOwnershipProvider>)
     act(toggleTldr)
     await screen.findByText('Saved child-summary.')
@@ -50,8 +53,7 @@ describe('TLDR placement in the actual workspace leaf', () => {
     expect(screen.getByText(mode === 'agent' ? 'Feed child' : 'Agent terminal child')).toBeTruthy()
     expect(screen.getByText('Shell terminal')).toBeTruthy()
 
-    // Dispatch and Spotlight call this shared entry directly. They must use
-    // their explicit session, without following a grid parent's selection.
+    // The parent, rendered as itself, shows its own (disabled) TLDR state.
     view.rerender(<AgentTerminalOwnershipProvider>{renderWorkspaceLeaf('parent', 'parent', workspace, 'project', mode, true, true)}</AgentTerminalOwnershipProvider>)
     expect(screen.getByText('TLDR is off')).toBeTruthy()
     expect(screen.getByLabelText(/^Last active /).getAttribute('datetime')).toBe('2026-09-09T01:00:00.000Z')

@@ -125,7 +125,7 @@ describe('TLDR history', () => {
     const command = tldrCommands.find(candidate => candidate.id === 'view-tldr-history')!
     const ui = { closePalette: vi.fn(), openTldrHistory: vi.fn() }
     const workspace = (kind: string) => ({
-      state: { activeTabId: 'tab', tabs: [{ id: 'tab', focusedSessionId: 'pane', root: { type: 'leaf', sessionId: 'pane' } }], sessions: { pane: { cwd: '/project', kind } }, stage: oneLaneStage('pane'), buried: [], pinnedSessionIds: [], detachedSessions: {} },
+      state: { activeTabId: 'tab', tabs: [{ id: 'tab' }], sessions: { pane: { cwd: '/project', kind, projectId: 'tab', joinedAt: 0 } }, stage: oneLaneStage('pane'),  pinnedSessionIds: [], },
     }) as unknown as Workspace
     expect(command.when?.({ workspace: workspace('terminal'), ui } as unknown as CommandContext)).toBe(false)
     const context = { workspace: workspace('codex'), ui } as unknown as CommandContext

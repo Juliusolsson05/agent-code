@@ -153,23 +153,15 @@ function makeReaderWorkspace(runtime: SessionRuntime = {
     assistantEntry('newer-message', 'Newer answer'),
   ],
 }, kind: AgentProviderKind = 'claude'): Workspace {
-  const tab = {
-    id: 'tab-1',
-    title: 'Project',
-    focusedSessionId: 'session-1',
-    root: { type: 'leaf' as const, sessionId: 'session-1' },
-  }
+  const tab = { id: 'tab-1', title: 'Project' }
   return {
     state: {
       activeTabId: tab.id,
       tabs: [tab],
       sessions: {
-        'session-1': { cwd: '/project', title: 'Agent', kind },
+        'session-1': { cwd: '/project', title: 'Agent', kind, projectId: 'tab-1', joinedAt: 0 },
       },
-      detachedSessions: {},
-      buried: [],
       pinnedSessionIds: [],
-      gridRelatedSelections: {},
       stage: oneLaneStage('session-1'),
     },
     activeTab: tab,

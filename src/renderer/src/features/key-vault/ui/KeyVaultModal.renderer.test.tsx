@@ -30,7 +30,7 @@ beforeEach(() => {
 })
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 function open() {
-  render(<WorkspaceProvider workspace={{ state: { sessions: {}, tabs: [], activeTabId: '', detachedSessions: {}, buried: [], pinnedSessionIds: [], stage: oneLaneStage() } } as unknown as Workspace}>
+  render(<WorkspaceProvider workspace={{ state: { sessions: {}, tabs: [], activeTabId: '',   pinnedSessionIds: [], stage: oneLaneStage() } } as unknown as Workspace}>
     <KeyVaultModal />
   </WorkspaceProvider>)
 }

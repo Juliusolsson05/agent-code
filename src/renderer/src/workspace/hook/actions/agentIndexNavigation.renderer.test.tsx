@@ -15,8 +15,6 @@ function makeState(): WorkspaceState {
     tabs: [{
       id: 'tab-a',
       title: 'alpha',
-      root: { type: 'leaf', sessionId: 'a1' },
-      focusedSessionId: 'a1',
     }],
     activeTabId: 'tab-a',
     // The stage is the workspace (#992): a1 sits in lane 0, lane 1 is empty and
@@ -25,20 +23,9 @@ function makeState(): WorkspaceState {
     // these cases exercised the tile-tree swap, which no longer exists.
     stage: { focusedLane: 1, lanes: [{ selectedSessionId: 'a1' }, {}], rows: [{ length: 2 }] },
     sessions: {
-      a1: { cwd: '/work/alpha/foreground', kind: 'claude' },
-      a2: { cwd: '/work/alpha/background', kind: 'codex' },
+      a1: { cwd: '/work/alpha/foreground', kind: 'claude', projectId: 'tab-a', joinedAt: 0 },
+      a2: { cwd: '/work/alpha/background', kind: 'codex', projectId: 'tab-a', joinedAt: 10 },
     },
-    detachedSessions: {
-      a2: {
-        sessionId: 'a2',
-        surface: 'dispatch',
-        projectTabId: 'tab-a',
-        projectTabTitle: 'alpha',
-        projectTabIndex: 0,
-        detachedAt: 10,
-      },
-    },
-    buried: [],
     pinnedSessionIds: [],
   }
 }
@@ -136,9 +123,9 @@ describe('useAgentIndexNavigationActions', () => {
 
     expect(ensureSessionLive).toHaveBeenCalledWith('a2', 'agent-index.navigate')
     expect(laneIds(harness.getState())).toEqual(['a1', 'a2'])
-    // Placement never changes pool membership: a2 is still the same parked
-    // record, now shown in a lane.
-    expect(harness.getState().detachedSessions.a2?.sessionId).toBe('a2')
+    // Placement never changes pool membership: a2 is the same row, in the
+    // same project at the same place in its index, now shown in a lane.
+    expect(harness.getState().sessions.a2).toMatchObject({ projectId: 'tab-a', joinedAt: 10 })
     expect(harness.showToast).not.toHaveBeenCalled()
     harness.mounted.unmount()
   })
@@ -182,7 +169,7 @@ describe('useAgentIndexNavigationActions', () => {
     })
 
     expect(laneIds(harness.getState())).toEqual(['a1', null])
-    expect(harness.getState().detachedSessions.a2?.sessionId).toBe('a2')
+    expect(harness.getState().sessions.a2).toMatchObject({ projectId: 'tab-a', joinedAt: 10 })
     expect(harness.showToast).toHaveBeenCalledWith('provider unavailable')
     harness.mounted.unmount()
   })

@@ -23,7 +23,7 @@ import type { WorkspaceState } from '@renderer/workspace/types'
 afterEach(resetIdentityCarryForTests)
 
 function workspace(sessions: Record<string, unknown>): WorkspaceState {
-  return { sessions, buried: [] } as unknown as WorkspaceState
+  return { sessions } as unknown as WorkspaceState
 }
 
 describe('identity carry reservation', () => {

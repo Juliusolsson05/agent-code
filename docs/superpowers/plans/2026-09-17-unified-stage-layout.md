@@ -137,6 +137,28 @@ Deleted from `WorkspaceState`: `tabs` (with `root` and `focusedSessionId`),
 only scoping mechanism), `tileTabs`. `SpotlightState` / `ReaderModeState`
 lose `tabId` and keep `focusedSessionId` only.
 
+**As built (through stage 3b-ii) — where the code differs from the sketch
+above, the code is right and §9.1 says why:**
+
+- `SessionMeta` also carries **`joinedAt: number`**, the order key inside a
+  project. The sketch had no order key at all; `detachedAt` was the only thing
+  ordering rows in v2 and it lived on the record being deleted.
+- `projectId` and `joinedAt` are **optional on the type** and required in
+  practice: a row without a `projectId` naming a live project is UNOWNED and is
+  dropped at the next autosave. Optional is what lets the migration and the
+  ownership prune see, and refuse, a half-filed row instead of the compiler
+  pretending one cannot exist.
+- **`gridRelatedSelections` is deleted**, not kept. It had no writer on screen
+  after stage 3a. Whether lanes get a related-agent strip at all is a stage 4
+  decision, and if they do it is fed from the pool, not from this field.
+- **In memory the fields are still named `tabs` / `activeTabId`** and the type
+  is still `Tab = { id, title }`. ON DISK they are `projects` /
+  `activeProjectId` — autosave writes v3 only. The in-memory rename touches
+  ~150 files for no behavior change and is stage 8's, so that it lands as one
+  mechanical commit instead of smearing through the semantic ones.
+- `ProjectRef.cwd` does not exist yet. Spawn cwd still comes from the spawning
+  context (`projectCwd` reads the project's first session with a directory).
+
 ### 2.2 Why `stage` is `TiledDispatchState` verbatim
 
 Every byte of the hard-won lane machinery — flat row-major lanes, the
@@ -179,8 +201,8 @@ tests, and its normalization. The rename is cosmetic; do not fork it.
 | Auto-created project terminal concepts (already retired) | — |
 | `buildAutoLanes`-style anything | Stays dead (#681) |
 
-`gridRelatedSelections` survives (peek is lane-local). `pinnedSessionIds`
-survives. `Close Old Agents`, `Close Idle Orchestration Agents`, bulk close,
+`gridRelatedSelections` was planned to survive and did NOT (deleted in 3b-ii,
+see §2.1 "As built"). `pinnedSessionIds` survives. `Close Old Agents`, `Close Idle Orchestration Agents`, bulk close,
 provider switch — all fleet operations, unchanged.
 
 ---
@@ -468,6 +490,11 @@ Decisions made in 3a that were not in the original plan:
   unreachable. A buried session whose source project is gone re-parents to the
   active project rather than being dropped, because v2 kept buried sessions
   unconditionally. The `buried` field itself survives until 3b, always empty.
+  *(Superseded in 3b-ii: the fold is no longer a separate pass. One function,
+  `legacyMemberships` in `legacyWorkspaceV2.ts`, reads leaves, detached
+  records and buried records and returns each session's membership; the
+  re-parenting rule for a buried session with no surviving project is
+  unchanged, and it is the ONLY case that may land in the active project.)*
 - **Three keyboard reservations were released** (split resize, directional
   split resize, Tile Tabs resize continuation). A reservation with no owner
   only fences off free chords. The macOS Option+Shift+Arrow record was kept in
@@ -515,8 +542,9 @@ Decisions made in 3b-i that were not in the original plan:
   known gap stage 4 closes, and it is commented at the function.
 - **The entry seed (#977) now runs exactly once, in the migration.** Its
   wake-ordering cases (#690 parity) were deleted with the action rather than
-  re-homed: at boot a lane's own leaf wakes its occupant on mount, so no
-  reducer places a hibernated agent.
+  re-homed: the migration runs at boot and places nothing live. The lane's
+  leaf owns the wake (a terminal on mount, an agent on its first send, #691),
+  so no reducer there has to order a wake before a write.
 - **Autosave writes the in-memory stage verbatim.** Through stage 2 the v3
   half was derived at save time from the v2 half. Derivation at the durability
   boundary would now overwrite the user's lanes with a guess on every save.
@@ -540,18 +568,161 @@ Decisions made in 3b-i that were not in the original plan:
   edited: the lift is a field move, never the migration, so
   `gridPersistence.test.ts` still sees the legacy `ratios` array.
 
-**3b-ii — delete the v2 owners.** `Tab` loses `root` and `focusedSessionId`;
-`detachedSessions` and `buried` are deleted. Two consequences to settle there:
+**3b-ii — delete the v2 owners.** Done as ONE compiler-driven change, not a
+dual-write step followed by a delete: a period in which a session's owner was
+written in two places is exactly the kind of state a hybrid-file bug lives in,
+and `tsc -b` is a better checklist of tree readers than any survey. `Tab` is
+`{ id, title }`. `TileNode`, `tile-tree/treeOps.ts`, `detachedSessions`,
+`buried`, `gridRelatedSelections` and the `RATIO_*` constants are deleted from
+live state. The v2 shapes exist in exactly one module,
+`workspace/legacyWorkspaceV2.ts`, imported by the migration and by nothing that
+runs after boot.
 
-- `detachedAt` is the ONLY key ordering rows inside a project group. Deleting
-  the record needs a replacement order key on `SessionMeta`, seeded by the
-  migration from `detachedAt`, tree order for former leaves.
-- Boot spawns tile leaves today. With no leaves, the honest rule is **lane
-  occupants spawn, everything else stays parked**. That is bounded by the
-  16-lane cap, unlike the invisible 40-record herd of #258, and it closes the
-  restored-lane shape of #690 where a hibernated lane occupant rejects its
-  first prompt. It is a behavior change for a workspace like the owner's
-  (3 leaves spawn today, 12 lane occupants would) and is called out in the PR.
+Ownership moved ONTO THE ROW:
+
+- `SessionMeta.projectId` — the project the session is filed under.
+- `SessionMeta.joinedAt` — the order key inside that project. The migration
+  seeds it so every old list keeps its order: tile leaves get ordinals
+  `0, 1, 2…` in depth-first tree order, detached rows keep `detachedAt`, buried
+  panes keep `buriedAt`. Ordinals sort ahead of any real timestamp, which
+  reproduces v2's "grid leaves first, then rows by age". New sessions are
+  stamped `Date.now()`.
+
+**The ownership rule (v3):** a session is OWNED iff its `projectId` names a
+project that exists. Unowned rows are dropped at autosave and at rehydrate.
+Lane selections, pins and the active project are POINTERS and never ownership:
+a stale pointer must not keep a session alive or bring one back. A ghost row
+never falls back to the active project — that would hand a stranger's agent to
+whichever project happened to be open.
+
+Decisions made in 3b-ii that were not in the original plan, or that REVERSE it:
+
+- **Boot spawns the FOCUSED lane's occupant only — not every lane occupant.**
+  This reverses the rule this section proposed before execution ("lane
+  occupants spawn"). The recorded owner workspace decided it: in v2 its 3 tile
+  leaves spawned while all 12 of the lanes the user actually worked in booted
+  parked and woke on first use. "Wake on first use" is therefore not a new
+  risk; it is the path the product's only heavy user already took for every
+  agent they touched. Spawning all lane occupants would have turned a 3-spawn
+  boot into a 12-spawn boot (each with its own mitmdump and MCP host) to save
+  one wake per lane. The focused lane is the one place a parked agent costs
+  the user something — it is where the first keystroke goes. Consequences
+  pinned in tests: a parked agent the user was commanding (the #977 entry seed)
+  now comes up LIVE and the tile leaf they had left behind waits, exactly
+  swapping the v2 roles; and a focused lane that is empty, or names a ghost,
+  spawns NOTHING — `{ restored: 0, expected: 0, complete: true }` is a complete
+  boot that unlocks autosave.
+- **How a parked session wakes depends on its kind, and neither is "on
+  mount".** A terminal leaf wakes its shell when it mounts. An agent leaf
+  renders its committed transcript with no backend and wakes on its first SEND
+  (`TileLeaf.send → ensureSessionLive`, #691; `deliverWithWake`, #706). Four
+  comments written during this stage claimed lanes wake their occupant on
+  mount; all four were corrected.
+- **Wake decisions read the RUNTIME, not a structure.** "Is it detached?" was
+  the v2 test for "needs a wake". With one kind of session the test is
+  `processStatus === 'started'` ⇒ synchronous lane write, anything else ⇒
+  `ensureSessionLive` first. This closes a documented gap (a tile leaf whose
+  respawn failed, or whose process died, was placed un-woken and needed the
+  pane's Retry) and removes its mirror image (every lane agent was "detached",
+  so every selection paid a recover round-trip even when the agent was up).
+  `requiresWake` left the pure navigation reducer. Reload-all uses the same
+  idea in the other direction: it restarts sessions whose runtime is not
+  `idle`, so a parked agent stays parked (the #258 guard) and an agent woken
+  from a lane — which v2 skipped for not being a leaf — is restarted.
+- **A project exists while at least one session names it (U4).** It is removed
+  by the commit that takes its last session (`workspaceWithoutSessions` in
+  `workspace/pool.ts`, which also empties lanes, drops pins and moves the active
+  project to the nearest surviving neighbour) and is never force-removed while
+  it holds a session, because that would orphan a running backend.
+- **Every close is session-scoped.** The tab's root tile leaf was special in
+  v2 — closing it emptied the tree and therefore removed the project — so it
+  raised a three-way "Close the agent or the tab?" dialog and, on Close Agent,
+  PROMOTED a Dispatch row into the emptied tree. No session is special now.
+  Deleted: row promotion, the `agentOnly` request field, the dialog's scoped
+  branch, `requestRootCloseConfirmation`, and the `'agent'` answer.
+  `CommittedClose` is `gone | session | tab-removed`. "Everything in this
+  project" is the Close Tab command with its own list; it closes
+  deepest-linked-first (nothing has to go LAST any more to keep a tree valid),
+  and a partial close leaves the project holding its survivors.
+- **Undo entries carry rows, not records.** `ClosedSession { sessionId,
+  sessionMeta }`, `ClosedTab { tab, tabIndex, sessions: [{ sessionId, meta }] }`,
+  `ClosedGroup`. The row is stored verbatim, so `joinedAt` rides through and a
+  restored session returns to its old POSITION instead of the bottom of the
+  list; `carryDurableMeta` carries `projectId` / `joinedAt` for the same
+  reason. Lineage remaps `projectId` through the restored-tabs map and
+  relationship pointers through the sessions map. Tab restore is best-effort
+  per session. Undo files a session back and deliberately does not re-aim a
+  lane at it.
+- **Merge Project Tabs appends.** Moved sessions are re-filed under the target
+  with `joinedAt = max(now, lastTarget + 1) + i`, so the target's own order is
+  untouched and the moved block keeps its internal order. Takeovers follow the
+  merge into the target.
+- **Window adoption takes the closed window's POOL, not its stage.** A lane
+  grid is one window's screen; merging two would be inventing a layout. The
+  payload is migrated first (`migrateWorkspaceToStage` is total over v2, v3 and
+  hybrid files), then its projects, rows and pins are merged. History loads
+  eagerly only for adopted sessions main still holds a LIVE backend snapshot
+  for — the honest form of what "tile leaves load, detached rows do not" had
+  been standing in for.
+- **Autosave writes v3 ONLY**: `projects`, `activeProjectId`, `stage`,
+  `sessions`, pins, drafts. No `tabs` at all. Writing an empty or synthesized
+  `tabs` "for compatibility" would be worse than omitting it: an older build
+  would read a real, EMPTY workspace, boot a fresh tab over it and autosave
+  that, erasing the pool. With the key absent, the older build fails its shape
+  check and lands in `persisted-fallback` with autosave LOCKED, so a downgrade
+  cannot destroy a file it does not understand. This is called out in the PR.
+- **The related-agent strip's STATE is deleted; its components are not.**
+  `gridRelatedSelections` had no writer on screen since 3a. `PaneHeader`,
+  `TileLeaf` and `AgentTerminalLeaf` still accept the strip props and are fed
+  nothing. Stage 4 decides between feeding them from the pool and deleting
+  them.
+- **Published contracts: kept, with the smallest honest change.**
+  `layout.read` tabs are `{ id, title, sessionIds }`; placement kinds gain
+  `'project'` (one ownership placement, never `visible`) and the v2 kinds stay
+  in the enum, unproduced; `tabs[].focusedSessionId` is optional and absent;
+  the extension API's `panes.observe.leafSessionIds` is the project's sessions;
+  `ManagedAgent.placement` is always `'dispatch'` ("a row in the project's
+  index", which every session is). Narrowing the enums is stage 7.
+- **Main's analytics projection reads both generations.**
+  `src/main/agentActivity/workspaceProjection.ts` re-states the migration's
+  precedence (row wins when it names a live project, else the v2 structures)
+  rather than importing it, because main treats the document as opaque. Its
+  new test found a real defect in the code it was written to cover: the
+  tile-tree walker's "cycle guard" was a depth cap only, and a split walks two
+  children, so a self-referencing node was a 2^64-call tree, not a 64-step
+  loop. A document read from disk is JSON and cannot hold a cycle, so
+  production never met it; the guard now tracks visited nodes and keeps the
+  depth cap for the call stack.
+
+What the test conversion taught, recorded because it will recur in stage 4:
+
+- **`as unknown as WorkspaceState` hid most of the breakage.** After the source
+  compiled, the first full sweep still had 48 runtime failures in 21 files, all
+  behind casts: fixtures with no `pinnedSessionIds`, no `stage`, or rows with
+  no `projectId`. Fixtures touched here use `satisfies WorkspaceState` where
+  they can.
+- **Replacing a whole row un-files it.** `state.sessions.a = { cwd, kind }`
+  used to be a harmless way to change a kind. Membership is on the row now, so
+  it silently makes the session unowned, and the test then fails (or passes)
+  for a reason unrelated to its subject. Spread the row.
+- **A test whose premise was the tile tree was RE-BASED, not deleted**, and
+  says so in a comment naming what it used to pin. Deleted outright:
+  `gridRelatedAgents.test.ts` and `extensionPaneOwnership.test.ts`, whose
+  subjects no longer exist.
+
+Still open after 3b-ii, deliberately:
+
+- `applyDispatchSpawnFocus` overwrites an occupied focused lane on every spawn
+  path except `newTab`. `controlPlacement.renderer.test.tsx` pins today's
+  behavior with a comment saying it is not endorsed. Stage 4 (§4.3).
+- The `'grid'` binding context and `activeBindingContexts({ dispatchMode:
+  true })` survive. Stage 5.
+- The dead setting `defaultWorkspaceMode`. Stage 8.
+- `collectLegacyLeaves` (renderer) is recursive with no depth cap. Its input is
+  always `JSON.parse` output, so it terminates; a hand-edited file nesting
+  thousands of splits could still overflow the stack at boot. Not fixed here —
+  it needs an iterative walk and a decision about what a truncated tree means
+  for the migration — but noted so it is not rediscovered as a surprise.
 
 ## 10. Testing strategy
 

@@ -51,7 +51,7 @@ export function createAgentReadControl() {
   }
   const current = (sessionId: string) => {
     const { workspaceState: state, workspaceRuntimes } = useAppStore.getState()
-    const meta = state.sessions[sessionId] ?? state.buried.find(record => record.sessionId === sessionId)?.sessionMeta
+    const meta = state.sessions[sessionId]
     if (!meta || !isAgentProviderKind(meta.kind ?? DEFAULT_PROVIDER)) throw new ControlError('unavailable', 'Agent no longer exists in this window')
     const provider = (meta.kind ?? DEFAULT_PROVIDER) as AgentProviderKind
     return { meta, provider, runtime: workspaceRuntimes[sessionId] ?? emptyRuntime() }

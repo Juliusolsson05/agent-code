@@ -147,21 +147,6 @@ export function useWorkspace(
   // says "are we past the once-only effect", not "is the on-disk state
   // intact". See useBootstrap for the four possible terminal values.
   const [restoreStatus, setRestoreStatus] = useState<WorkspaceRestoreStatus>('pending')
-  const selectGridRelatedSession = useCallback((ownerSessionId: string, selectedSessionId: string) => {
-    setState(prev => {
-      const nextSelections = { ...(prev.gridRelatedSelections ?? {}) }
-      if (ownerSessionId === selectedSessionId) {
-        delete nextSelections[ownerSessionId]
-      } else {
-        nextSelections[ownerSessionId] = selectedSessionId
-      }
-      return {
-        ...prev,
-        gridRelatedSelections: nextSelections,
-      }
-    })
-  }, [setState])
-
   const setSessionAgentViewModeOverride = useCallback((
     sessionId: SessionId,
     override: AgentViewModeOverride | null,
@@ -758,8 +743,9 @@ export function useWorkspace(
           sessionId: request.sessionId,
         })
         // A 'buried' placement used to branch to Kill Buried here. Buried
-        // sessions fold into the pool at every read boundary now (#992, see
-        // foldBuriedIntoDetached), so live state never reports one and every
+        // records become ordinary pool rows when an old file is migrated
+        // (#992, legacyWorkspaceV2.ts legacyMemberships) and live state has no
+        // `buried` field at all, so nothing can report one and every
         // managed close takes the one authorized path below. `placement` is
         // still resolved for its side effect: assertManagedTarget throws when
         // the caller does not manage this target.
@@ -953,13 +939,11 @@ export function useWorkspace(
     closeFocused: paneActions.closeFocused,
     closeSession: paneActions.closeSession,
     closeIdleOrchestrationAgents,
-    focusSession: paneActions.focusSession,
     focusSessionInTab: paneActions.focusSessionInTab,
     focusAgentByPaneLabel,
     focusAgentBySessionId,
     setAgentTitle,
     setSessionAgentViewModeOverride,
-    selectGridRelatedSession,
     activateTab: tabActions.activateTab,
     activateTabByIndex: tabActions.activateTabByIndex,
     reorderTabs: tabActions.reorderTabs,

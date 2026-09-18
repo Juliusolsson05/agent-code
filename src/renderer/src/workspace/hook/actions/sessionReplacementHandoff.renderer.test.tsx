@@ -39,8 +39,6 @@ describe('renderer session replacement handoff', () => {
       tabs: [{
         id: 'tab-a',
         title: 'recorded',
-        root: { type: 'leaf' as const, sessionId: predecessorId },
-        focusedSessionId: predecessorId,
       }],
       activeTabId: 'tab-a',
       sessions: {
@@ -50,10 +48,10 @@ describe('renderer session replacement handoff', () => {
           providerSessionId: 'recorded-provider-session',
           providerSessionIdSource: 'resume-request' as const,
           builtInMcpDomains: [],
+          projectId: 'tab-a',
+          joinedAt: 0,
         },
       },
-      detachedSessions: {},
-      buried: [],
       pinnedSessionIds: [],
       stage: oneLaneStage(predecessorId),
     } as WorkspaceState
@@ -146,10 +144,15 @@ describe('renderer session replacement handoff', () => {
     // the legacy cleanup here is indistinguishable from an explicit close and
     // would correctly cancel the hidden successor before the remap can persist.
     expect(killOwnedSession).not.toHaveBeenCalled()
-    expect(state.tabs[0]).toMatchObject({
-      root: { type: 'leaf', sessionId: 'local-successor' },
-      focusedSessionId: 'local-successor',
-    })
+    // The successor stands exactly where the predecessor stood: same project,
+    // same position in its index (`joinedAt` is INHERITED, not re-stamped — a
+    // provider switch must not send the agent to the bottom of the list), and
+    // the lane that showed the predecessor now shows it. Until #992 this was
+    // one fact, "the tile leaf was swapped in place"; membership and the lane
+    // are separate writes now, so each is asserted.
+    expect(state.sessions[predecessorId]).toBeUndefined()
+    expect(state.sessions['local-successor']).toMatchObject({ projectId: 'tab-a', joinedAt: 0 })
+    expect(state.stage.lanes).toEqual([{ selectedSessionId: 'local-successor' }])
     expect(runtimes['local-successor']?.draftInput).toBe('edited while spawning')
     expect(runtimes['local-successor']?.draftImages).toEqual(destination === 'claude' ? [image] : [])
 

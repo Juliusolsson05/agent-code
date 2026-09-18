@@ -9,7 +9,7 @@ export function terminalControlCapabilities(getWorkspace: () => Workspace) {
   const invoke = async (capabilityId: string, input: { sessionId: string }) => {
     const state = useAppStore.getState().workspaceState
     const meta = state.sessions[input.sessionId]
-    if (!meta || state.buried.some(item => item.sessionId === input.sessionId)) throw new ControlError('unavailable', 'Session is absent or buried')
+    if (!meta) throw new ControlError('unavailable', 'Session is absent')
     const result = await window.api.controlInvoke({ capabilityId, input: { ...input, cwd: meta.cwd, provider: meta.kind ?? 'claude' } })
     if (!result.ok) throw new ControlError(result.error.code, result.error.message, result.error.outcome)
     return result.value

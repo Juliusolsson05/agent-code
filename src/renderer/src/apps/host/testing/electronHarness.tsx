@@ -23,15 +23,13 @@ function KeyboardFixture({ render }: { render: (focus: () => void, focused: bool
   const [selected, setSelected] = useState('previous')
   selectedPane = selected
   resetSelection = () => setSelected('previous')
-  const tab = { id: 'fixture-tab', title: 'Fixture', focusedSessionId: selected,
-    root: { type: 'split', direction: 'horizontal', ratio: 0.5,
-      a: { type: 'leaf', sessionId: 'previous' }, b: { type: 'leaf', sessionId: 'extension' } } }
+  const tab = { id: 'fixture-tab', title: 'Fixture' }
   // Only workspace data is fixture-owned. Use the real global keyboard router
   // and store invocation queue, so native forwarding cannot pass by calling a
   // test-only command handler that skips focus/context/override behavior.
   const workspace = { state: { activeTabId: tab.id, tabs: [tab],
-    sessions: { previous: { kind: 'terminal' }, extension: { kind: 'extension-view' } },
-    detachedSessions: {}, buried: [], pinnedSessionIds: [], gridRelatedSelections: {}, stage: oneLaneStage(selected) },
+    sessions: { previous: { kind: 'terminal', projectId: tab.id, joinedAt: 0 }, extension: { kind: 'extension-view', projectId: tab.id, joinedAt: 1 } },
+      pinnedSessionIds: [],  stage: oneLaneStage(selected) },
     activeTab: tab, stage: oneLaneStage(selected), readerMode: null, spotlight: null, runtimes: {},
   } as unknown as Workspace
   useKeybinds(workspace)

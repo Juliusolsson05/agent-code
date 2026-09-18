@@ -12,14 +12,10 @@ function stateWithFocusedSession(kind: 'claude' | 'terminal' | 'extension-view')
     tabs: [{
       id: 'tab-1',
       title: 'Project',
-      root: { type: 'leaf', sessionId: 'session-1' },
-      focusedSessionId: 'session-1',
     }],
     activeTabId: 'tab-1',
     stage: oneLaneStage('session-1'),
-    sessions: { 'session-1': { cwd: '/project', kind } },
-    detachedSessions: {},
-    buried: [],
+    sessions: { 'session-1': { cwd: '/project', kind, projectId: 'tab-1', joinedAt: 0 } },
     pinnedSessionIds: [],
   }
 }

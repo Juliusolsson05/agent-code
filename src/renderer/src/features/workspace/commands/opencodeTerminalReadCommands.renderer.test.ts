@@ -25,12 +25,10 @@ function contextWithSession(kind: SessionKind, providerRuntime?: 'terminal'): Co
     workspace: {
       state: {
         activeTabId: 'tab',
-        stage: oneLaneStage('agent'), detachedSessions: {}, buried: [], pinnedSessionIds: [],
-        sessions: { agent: meta },
+        stage: oneLaneStage('agent'),   pinnedSessionIds: [],
+        sessions: { agent: { ...meta, projectId: 'tab', joinedAt: 0 }},
         tabs: [{
           id: 'tab',
-          focusedSessionId: 'agent',
-          root: { type: 'leaf', sessionId: 'agent' },
         }],
       },
     } as unknown as Workspace,

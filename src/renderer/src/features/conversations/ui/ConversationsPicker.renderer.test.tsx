@@ -41,7 +41,7 @@ type WorkspaceMock = Workspace & { replaceSession: Mock; newTab: Mock }
 function workspace(over: Record<string, unknown> = {}): WorkspaceMock {
   return {
     activeTab: { id: 't', focusedSessionId: 's' },
-    state: { tabs: [{ id: 't', title: 'fixture', focusedSessionId: 's', root: { type: 'leaf', sessionId: 's' } }], activeTabId: 't', stage: oneLaneStage('s'), detachedSessions: {}, buried: [], pinnedSessionIds: [], sessions: { s: { cwd: '/fixture/repo', kind: 'claude' } } },
+    state: { tabs: [{ id: 't', title: 'fixture' }], activeTabId: 't', stage: oneLaneStage('s'),   pinnedSessionIds: [], sessions: { s: { cwd: '/fixture/repo', kind: 'claude', projectId: 't', joinedAt: 0 } } },
     replaceSession: vi.fn(async () => 's2'),
     newTab: vi.fn(async () => undefined),
     ...over,
@@ -115,7 +115,7 @@ describe('ConversationsPicker', () => {
 
   it('asks for a pane when none is commanded, and lists everywhere without one', async () => {
     const list = install()
-    const ws = workspace({ state: { tabs: [{ id: 't', title: 'fixture', focusedSessionId: 's', root: { type: 'leaf', sessionId: 's' } }], activeTabId: 't', stage: oneLaneStage('s'), detachedSessions: {}, buried: [], pinnedSessionIds: [], sessions: {} } })
+    const ws = workspace({ state: { tabs: [{ id: 't', title: 'fixture' }], activeTabId: 't', stage: oneLaneStage('s'),   pinnedSessionIds: [], sessions: {} } })
     render(<ConversationsPicker open focusSearch={false} workspace={ws} onClose={vi.fn()} />)
     expect(await screen.findByText(/focus a pane to list its repository/i)).toBeInTheDocument()
     expect(list).not.toHaveBeenCalled()
@@ -126,7 +126,7 @@ describe('ConversationsPicker', () => {
 
   it('opens a new tab when no pane can be replaced', async () => {
     install()
-    const ws = workspace({ activeTab: null, state: { tabs: [{ id: 't', title: 'fixture', focusedSessionId: 's', root: { type: 'leaf', sessionId: 's' } }], activeTabId: 't', stage: oneLaneStage('s'), detachedSessions: {}, buried: [], pinnedSessionIds: [], sessions: { s: { cwd: '/fixture/repo', kind: 'claude' } } } })
+    const ws = workspace({ activeTab: null, state: { tabs: [{ id: 't', title: 'fixture' }], activeTabId: 't', stage: oneLaneStage('s'),   pinnedSessionIds: [], sessions: { s: { cwd: '/fixture/repo', kind: 'claude', projectId: 't', joinedAt: 0 } } } })
     render(<ConversationsPicker open focusSearch={false} workspace={ws} onClose={vi.fn()} />)
     fireEvent.click(await screen.findByText('Project context bootstrapping'))
     await waitFor(() => expect(ws.newTab).toHaveBeenCalledWith('/fixture/repo', 'ededdea8-06bf-4474-b945-b3a8f8ce0fe1', 'claude'))

@@ -43,7 +43,15 @@ export function useAgentIndexNavigationActions(
       ])
       const initialDestination = destination(refs.stateRef.current)
 
-      if (initialResult.requiresWake) {
+      // Wake unless the runtime says a backend is already up. A parked session
+      // survives a restart as metadata with no provider process, and exposing
+      // one in a lane un-woken means the first keystroke lands on a dead
+      // backend (#690). 'started' is the only status that proves otherwise;
+      // 'idle', 'failed' and 'exited' all need the wake path, which is also
+      // the retry path. (Until #992 the test was "has a detachedSessions
+      // record", a structural stand-in for this.)
+      const processStatus = refs.latestRuntimesRef.current[initialTarget.sessionId]?.processStatus
+      if (processStatus !== 'started') {
         try {
           // Detached agents survive reload as metadata without a provider
           // process. Wake under the SAME SessionId before exposing one in a

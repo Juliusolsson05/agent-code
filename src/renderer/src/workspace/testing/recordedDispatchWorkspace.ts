@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs'
 
-import type { LegacyDispatchMode } from '@renderer/workspace/persistence'
+import type { LegacyDispatchMode, PersistedWorkspace } from '@renderer/workspace/persistence'
 import type { TiledDispatchState, WorkspaceState } from '@renderer/workspace/types'
+import { liveWorkspaceFromPersisted } from '@renderer/workspace/workspaceShape'
 
 // One loader for `dispatch-global-d23.json`, the recorded real workspace that
 // eight suites build on (lane resolution, grid layout, row scoping, pane
@@ -9,14 +10,15 @@ import type { TiledDispatchState, WorkspaceState } from '@renderer/workspace/typ
 //
 // WHY this file exists (#992):
 //
-// The recording is a v2 workspace. Its lane grid lives at
-// `state.dispatchMode.tiled`, inside the envelope that also carried a
-// layout-wide scope and a classic single-selection focus. The live
-// `WorkspaceState` no longer has that envelope — the grid is a required
-// top-level `stage`. Every suite used to `JSON.parse` the file and cast it
-// straight to `{ state: WorkspaceState }`, which was honest while the shapes
-// matched and would now be a lie the type system cannot see: `state.stage`
-// would type-check and be `undefined` at runtime.
+// The recording is a v2 workspace: tabs owning tile trees, a detachedSessions
+// bucket, and its lane grid at `state.dispatchMode.tiled`, inside the envelope
+// that also carried a layout-wide scope and a classic single-selection focus.
+// Live `WorkspaceState` has none of that — sessions carry their own
+// membership and the grid is a required top-level `stage`. Every suite used to
+// `JSON.parse` the file and cast it straight to `{ state: WorkspaceState }`,
+// which was honest while the shapes matched and would now be a lie the type
+// system cannot see: `state.stage` would type-check and be `undefined` at
+// runtime, and no index would list a single agent.
 //
 // WHY the recording is LIFTED here instead of being re-recorded or edited:
 //
@@ -26,15 +28,20 @@ import type { TiledDispatchState, WorkspaceState } from '@renderer/workspace/typ
 // header of gridPersistence.test.ts). Lifting in code keeps the bytes on disk
 // untouched and makes the one transformation reviewable in one place.
 //
-// WHY the lift is a plain field move and NOT `migrateWorkspaceToStage`:
+// HOW it is lifted: through the app's own read path
+// (`liveWorkspaceFromPersisted`), so the pool these suites see — which
+// sessions are owned, under which project, in what order — is exactly what a
+// user upgrading with this file would get. Hand-assembling it here would be a
+// second implementation of the v2 ownership rules.
 //
-// The migration normalizes — it splits the legacy `ratios` array, synthesizes
-// `rows`, scrubs row metadata and projects lanes field by field. Those are the
-// behaviors gridPersistence.test.ts exists to check against this recording, so
-// a loader that ran them first would hand that suite an already-migrated stage
-// and let it pass while covering nothing. `stage` is therefore the recorded
-// `tiled` block verbatim: legacy `ratios` present, `rows` absent. Suites that
-// want the normalized grid call `normalizeStage` themselves, as the app does.
+// WITH ONE EXCEPTION, on purpose: `state.stage` is the recorded `tiled` block
+// VERBATIM, not the migration's normalized one. The migration splits the
+// legacy `ratios` array, synthesizes `rows`, scrubs row metadata and projects
+// lanes field by field — and those are the behaviors gridPersistence.test.ts
+// exists to check against this recording. A loader that ran them first would
+// hand that suite an already-migrated stage and let it pass while covering
+// nothing. Suites that want the normalized grid call `normalizeStage`
+// themselves, as the app does (every reader of a stage already must).
 
 const FIXTURE_PATH = 'testing/fixtures/worktree-context/dispatch-global-d23.json'
 
@@ -52,7 +59,8 @@ export type RecordedDispatchObservation = {
 }
 
 export type RecordedDispatchWorkspace = {
-  /** The recording on the live shape: v2 state with `stage` = recorded `tiled`. */
+  /** The recording as live state: the migrated pool, with `stage` = the
+   *  recorded `tiled` block verbatim (see the header). */
   state: WorkspaceState
   /**
    * The v2 envelope exactly as recorded, for the suites whose subject IS the
@@ -64,9 +72,8 @@ export type RecordedDispatchWorkspace = {
 
 type RecordedFile = {
   $fixture: { observed: RecordedDispatchObservation }
-  state: Omit<WorkspaceState, 'stage'> & {
-    dispatchMode: LegacyDispatchMode | null
-  }
+  /** A v2 persisted workspace, exactly as the app wrote it. */
+  state: PersistedWorkspace
 }
 
 /**
@@ -79,7 +86,7 @@ type RecordedFile = {
  */
 export function loadRecordedDispatchWorkspace(): RecordedDispatchWorkspace {
   const file = JSON.parse(readFileSync(FIXTURE_PATH, 'utf8')) as RecordedFile
-  const { dispatchMode, ...rest } = file.state
+  const dispatchMode = file.state.dispatchMode
   const tiled = dispatchMode?.tiled
   if (!tiled || tiled.lanes.length === 0) {
     // Guard on the fixture itself. Every consumer's claims are about a
@@ -92,7 +99,7 @@ export function loadRecordedDispatchWorkspace(): RecordedDispatchWorkspace {
     )
   }
   return {
-    state: { ...rest, stage: tiled },
+    state: { ...liveWorkspaceFromPersisted(file.state), stage: tiled },
     recordedDispatchMode: { ...dispatchMode, tiled },
     observed: file.$fixture.observed,
   }

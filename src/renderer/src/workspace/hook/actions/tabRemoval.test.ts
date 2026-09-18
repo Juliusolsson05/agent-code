@@ -18,7 +18,7 @@ import type {
 // per caller.
 
 const tab = (id: string): Tab => ({
-  id, title: id.toUpperCase(), root: { type: 'leaf', sessionId: `${id}-root` }, focusedSessionId: `${id}-root`,
+  id, title: id.toUpperCase(),
 })
 
 function workspace(activeTabId: string): WorkspaceState {
@@ -28,15 +28,12 @@ function workspace(activeTabId: string): WorkspaceState {
     sessions: {
       'a-root': { cwd: '/a', kind: 'claude' },
       'b-root': { cwd: '/b', kind: 'claude' },
-      'b-row': { cwd: '/b', kind: 'codex' },
+      'b-row': { cwd: '/b', kind: 'codex', projectId: 'b', joinedAt: 1 },
       'c-root': { cwd: '/c', kind: 'claude' },
       'd-root': { cwd: '/d', kind: 'claude' },
     },
-    detachedSessions: {
-      'b-row': { sessionId: 'b-row', surface: 'dispatch', projectTabId: 'b', projectTabTitle: 'B', projectTabIndex: 1, detachedAt: 1 },
-    },
     stage: { lanes: [{ selectedSessionId: 'b-row' }, { selectedSessionId: 'a-root' }], focusedLane: 0 },
-    gridRelatedSelections: {}, buried: [], pinnedSessionIds: [],
+      pinnedSessionIds: [],
   }
 }
 
@@ -62,7 +59,6 @@ describe('workspaceWithoutTab', () => {
   it('removes the sessions and rows it is given and empties the lanes that showed them', () => {
     const next = workspaceWithoutTab(workspace('b'), 'b', ['b-root', 'b-row'])
     expect(Object.keys(next.sessions).sort()).toEqual(['a-root', 'c-root', 'd-root'])
-    expect(next.detachedSessions).toEqual({})
     // The lane goes EMPTY — it is neither refilled with a neighbour (#681) nor
     // removed, and the lane beside it is untouched. The user shaped the stage;
     // closing a project must not reshape it. (A classic-Dispatch focus was

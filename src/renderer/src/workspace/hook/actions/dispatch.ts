@@ -127,9 +127,9 @@ export function useDispatchActions(
   )
 
   /**
-   * Put a session into a lane, WAKING it first when it is detached.
+   * Put a session into a lane, WAKING it first when it has no backend.
    *
-   * Rehydrate deliberately does not respawn detached sessions — they survive a
+   * Rehydrate deliberately does not respawn parked sessions — they survive a
    * restart as metadata with no provider process (see rehydrate.ts). Something
    * has to wake them before they are used, and agent-index navigation already
    * says exactly why:
@@ -149,23 +149,26 @@ export function useDispatchActions(
    * dead pane the user can type into during the gap, which is the very state
    * this is fixing.
    *
-   * Be honest about the cost. `DetachedSessionRecord` means "live but not
-   * grid-placed", so in an ordinary session EVERY dispatch agent is detached —
-   * this is the common path, not the exception. `ensureSessionLive` joins an
-   * in-flight wake and adopts rather than restarts a running agent, but it is
-   * not free: one `session:recover` round-trip and a transient `spawning` flip
-   * per gesture. Sub-frame in practice; not "nothing".
+   * The cost is paid once per session per app run: after the first wake its
+   * runtime reads 'started' and every later selection is the synchronous path.
+   * (Until #992 the fork was "is it a detached record", which EVERY lane agent
+   * was, so every gesture paid a `session:recover` round-trip and a transient
+   * `spawning` flip even for an agent that was already running.)
    */
   const selectTiledLaneSession = useCallback(
     async (laneIndex: number, sessionId: SessionId) => {
-      const detached = refs.stateRef.current.detachedSessions[sessionId] !== undefined
-      if (!detached) {
-        // Grid-placed: stays synchronous, so no coordinate can shift underneath
-        // it. NOT a guarantee that it is live — a tile leaf whose respawn failed
-        // at rehydrate, or whose process died since, is still selectable here
-        // and still needs the pane's own Retry. That gap is shared verbatim with
-        // agent-index navigation, which uses the identical predicate; widening
-        // both is its own change, not this one.
+      // Already has a backend: stays synchronous, so no coordinate can shift
+      // underneath it.
+      //
+      // The test is the RUNTIME. Until #992 it was "has no detachedSessions
+      // record" (i.e. is a tile leaf), which was a structural guess with a
+      // documented gap: a leaf whose respawn failed at rehydrate, or whose
+      // process died since, was written into the lane un-woken and needed the
+      // pane's own Retry. `processStatus` closes that gap — 'failed' and
+      // 'exited' now take the wake path below, which is also the retry path —
+      // and removes its mirror image, re-waking an agent that was already up.
+      // Agent-index navigation uses the identical predicate.
+      if (refs.latestRuntimesRef.current[sessionId]?.processStatus === 'started') {
         setTiledLaneSession(laneIndex, sessionId)
         return
       }

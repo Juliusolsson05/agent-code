@@ -60,8 +60,11 @@ export function makeTestCommandContext(
     },
   })
 
+  const projectId = options.activeTabId ?? 'tab-1'
+  // Filed under the one project: a row naming no project is UNOWNED (#992), so
+  // no index lists it and the lane below would point at nothing.
   const sessions = options.focusedSessionId
-    ? { [options.focusedSessionId]: { kind: 'claude', cwd: '/repo' } }
+    ? { [options.focusedSessionId]: { kind: 'claude', cwd: '/repo', projectId, joinedAt: 0 } }
     : {}
 
   // A single tab owning the focused session, shown in a one-lane stage, is the
@@ -73,13 +76,7 @@ export function makeTestCommandContext(
   //
   // (Until #992 the tab's `focusedSessionId` alone was enough, because the
   // selector fell back to tree focus whenever Dispatch was off.)
-  const tabs = options.focusedSessionId
-    ? [{
-        id: options.activeTabId ?? 'tab-1',
-        focusedSessionId: options.focusedSessionId,
-        root: { type: 'leaf', sessionId: options.focusedSessionId },
-      }]
-    : []
+  const tabs = options.focusedSessionId ? [{ id: projectId, title: 'Project' }] : []
 
   const workspace = {
     state: {
@@ -87,8 +84,6 @@ export function makeTestCommandContext(
       activeTabId: options.activeTabId ?? (tabs.length > 0 ? tabs[0].id : null),
       sessions,
       stage: oneLaneStage(options.focusedSessionId),
-      detachedSessions: {},
-      buried: [],
       pinnedSessionIds: [],
       relatedAgents: {},
     },

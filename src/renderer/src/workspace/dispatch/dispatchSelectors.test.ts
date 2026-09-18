@@ -9,15 +9,11 @@ import {
 import { nextTiledRowIndex } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import { resolveFocusSurfaceTarget } from '@renderer/workspace/hook/actions/focusSurfaceTarget'
 import { commandTargetSessionIdForState } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
-import type { TileNode, TiledDispatchState, WorkspaceState } from '@renderer/workspace/types'
+import type { TiledDispatchState, WorkspaceState } from '@renderer/workspace/types'
 
 // Minimal two-project fixture: project A (tabA / a1) and project B (tabB / b1),
 // each a single grid agent. Both projects show in every index: the layout-wide
 // project/global scope these fixtures used to set died with #992.
-function leaf(sessionId: string): TileNode {
-  return { type: 'leaf', sessionId }
-}
-
 /** One row of one lane showing `sessionId` — the stage equivalent of "the user
  *  is commanding this agent", which a classic-Dispatch focus used to express. */
 function oneLane(sessionId?: string): TiledDispatchState {
@@ -27,17 +23,15 @@ function oneLane(sessionId?: string): TiledDispatchState {
 function makeState(stage: TiledDispatchState): WorkspaceState {
   return {
     tabs: [
-      { id: 'tabA', title: 'project-a', root: leaf('a1'), focusedSessionId: 'a1' },
-      { id: 'tabB', title: 'project-b', root: leaf('b1'), focusedSessionId: 'b1' },
+      { id: 'tabA', title: 'project-a' },
+      { id: 'tabB', title: 'project-b' },
     ],
     activeTabId: 'tabA',
     stage,
     sessions: {
-      a1: { cwd: '/work/project-a', kind: 'claude' },
-      b1: { cwd: '/work/project-b', kind: 'claude' },
+      a1: { cwd: '/work/project-a', kind: 'claude', projectId: 'tabA', joinedAt: 0 },
+      b1: { cwd: '/work/project-b', kind: 'claude', projectId: 'tabB', joinedAt: 0 },
     },
-    detachedSessions: {},
-    buried: [],
     pinnedSessionIds: [],
   }
 }
@@ -99,15 +93,7 @@ describe('resolveDispatchSpawnTarget with a detached focused lane', () => {
       focusedLane: 1,
       lanes: [{ selectedSessionId: 'a1' }, { selectedSessionId: 'b2' }],
     })
-    state.sessions.b2 = { cwd: '/work/project-b/subtask', kind: 'codex' }
-    state.detachedSessions.b2 = {
-      sessionId: 'b2',
-      surface: 'dispatch',
-      projectTabId: 'tabB',
-      projectTabTitle: 'project-b',
-      projectTabIndex: 1,
-      detachedAt: 10,
-    }
+    state.sessions.b2 = { cwd: '/work/project-b/subtask', kind: 'codex', projectId: 'tabB', joinedAt: 10 }
 
     expect(resolveDispatchSpawnTarget(state)).toEqual({
       tabId: 'tabB',
@@ -157,17 +143,7 @@ describe('dispatchSessionIdsForTab', () => {
 
   it('uses visible Dispatch row order, with pinned rows before grouped rows for the same tab', () => {
     const state = makeState(oneLane('b2'))
-    state.tabs[1] = {
-      ...state.tabs[1]!,
-      root: {
-        type: 'split',
-        direction: 'vertical',
-        ratio: 0.5,
-        a: leaf('b1'),
-        b: leaf('b2'),
-      },
-    }
-    state.sessions.b2 = { cwd: '/work/project-b', kind: 'codex' }
+    state.sessions.b2 = { cwd: '/work/project-b', kind: 'codex', projectId: 'tabB', joinedAt: 1 }
     state.pinnedSessionIds = ['b2']
 
     expect(dispatchSessionIdsForTab(state, 'tabB')).toEqual(['b2', 'b1'])
@@ -277,8 +253,7 @@ describe('buildPinnedDispatchRows', () => {
     // deferred them "for v1"). Since #671 a shell is a full row, and a pinned
     // dev-server shell is exactly the one-keystroke-away session pins exist for.
     const state = makeState(oneLane('a1'))
-    state.sessions.shell = { cwd: '/work/project-a', kind: 'terminal' }
-    state.tabs[0] = { ...state.tabs[0], root: { type: 'split', direction: 'vertical', ratio: 0.5, a: leaf('a1'), b: leaf('shell') } }
+    state.sessions.shell = { cwd: '/work/project-a', kind: 'terminal', projectId: 'tabA', joinedAt: 1 }
     state.pinnedSessionIds = ['shell']
     expect(buildPinnedDispatchRows(state).map(row => [row.sessionId, row.kind])).toEqual([['shell', 'terminal']])
   })

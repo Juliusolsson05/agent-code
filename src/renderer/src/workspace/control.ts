@@ -1,9 +1,7 @@
 import { z } from 'zod'
 import { defineCapability, placementSchema, workspaceObservationSchema } from '@control-sdk'
 import { useAppStore } from '@renderer/app-state/store'
-import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 import { resolveTabSessions } from '@renderer/workspace/queries'
-import { buildGridRelatedAgentTabs } from '@renderer/workspace/gridRelatedAgents'
 import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
 import { commandTargetSessionIdForState } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import { buildVisibleDispatchRows } from '@renderer/workspace/dispatch/dispatchSelectors'
@@ -20,7 +18,7 @@ export { workspaceObservationSchema } from '@control-sdk'
 export function workspaceControlCapabilities(getWorkspace: () => Pick<Workspace, 'restoreStatus'>) {
   return [defineCapability({
     id: 'workspace.observe', title: 'Observe workspace',
-    description: 'Read current project, session and placement identities without waking agents. Includes hidden, detached and buried sessions; multiple placements refer to one session.',
+    description: 'Read current project, session and placement identities without waking agents. Includes every parked session, whether or not a lane shows it; multiple placements refer to one session.',
     execution: 'window', effect: 'read', input: z.object({}).strict(),
     output: workspaceObservationSchema,
     handler: () => observeWorkspace(getWorkspace),
@@ -36,21 +34,17 @@ export function observeWorkspace(getWorkspace: () => Pick<Workspace, 'restoreSta
   const takeover = reader ?? spotlight
   const placements = new Map<string, Placement[]>()
   const add = (id: string, placement: Placement) => placements.set(id, [...(placements.get(id) ?? []), placement])
-  for (const tab of state.tabs) {
-    // A tree leaf is never on screen: nothing renders the tile tree since the
-    // stage became the only layout (#992). The 'grid' and 'related' placements
-    // are still REPORTED — the tree is still the v2 owner of these sessions
-    // until stage 3b-ii deletes it, and a caller asking "where does this
-    // session live" deserves the true answer — but only a lane is `visible`.
-    // (They used to be visible when Dispatch was off and the tab was active.)
-    for (const id of collectLeaves(tab.root)) {
-      add(id, { kind: 'grid', tabId: tab.id, visible: false })
-      for (const child of buildGridRelatedAgentTabs(state, tab.id, id)) {
-        if (child.sessionId !== id) add(child.sessionId, { kind: 'related', tabId: tab.id, gridOwnerSessionId: id, visible: false })
-      }
-    }
+  // Ownership: one placement per session — the project it is filed under. It
+  // is never `visible` by itself; being in the pool puts nothing on screen.
+  //
+  // Until #992 there were four ownership placements, one per v2 owner
+  // structure: 'grid' (a tile leaf), 'related' (a child shown inside its
+  // parent's tile), 'detached' (a Dispatch row) and 'buried' (a hidden pane,
+  // whose metadata could outlive its `sessions` row). All four meant "this
+  // session belongs to that project", which is what 'project' now says.
+  for (const [id, meta] of Object.entries(state.sessions)) {
+    if (meta.projectId !== undefined) add(id, { kind: 'project', tabId: meta.projectId, visible: false })
   }
-  for (const [id, detached] of Object.entries(state.detachedSessions)) add(id, { kind: 'detached', tabId: detached.projectTabId, visible: false })
   state.stage.lanes.forEach((lane, index) => {
     if (lane.selectedSessionId) add(lane.selectedSessionId, { kind: 'dispatch', lane: index, visible: true })
   })
@@ -59,10 +53,7 @@ export function observeWorkspace(getWorkspace: () => Pick<Workspace, 'restoreSta
     add(takeover.focusedSessionId, { kind: reader ? 'reader' : 'spotlight', tabId: takeover.tabId, visible: true })
   }
   const focusedSessionId = takeover?.focusedSessionId ?? commandTargetSessionIdForState(state)
-  for (const buried of state.buried) add(buried.sessionId, { kind: 'buried', tabId: buried.sourceTabId, visible: false })
-  // Buried metadata can outlive its sessions entry. Preserve that real
-  // identity rather than dropping it or inventing a second agent.
-  const sessions = { ...Object.fromEntries(state.buried.map(record => [record.sessionId, record.sessionMeta])), ...state.sessions }
+  const sessions = state.sessions
   const dispatchRows = buildVisibleDispatchRows(state)
   const identity = (sessionId: string, meta: (typeof sessions)[string]) => {
     const row = dispatchRows.find(row => row.sessionId === sessionId)
@@ -94,7 +85,7 @@ export function observeWorkspace(getWorkspace: () => Pick<Workspace, 'restoreSta
     // removal of the 'grid' and 'dispatch' enum members nothing can produce —
     // belongs to the SDK schema change in stage 7, not to a renderer commit.
     mode: 'tiled-dispatch' as const,
-    tabs: state.tabs.map(tab => ({ id: tab.id, title: tab.title, focusedSessionId: tab.focusedSessionId, sessionIds: resolveTabSessions(state, tab.id) })),
+    tabs: state.tabs.map(tab => ({ id: tab.id, title: tab.title, sessionIds: resolveTabSessions(state, tab.id) })),
     sessions: Object.entries(sessions).map(([sessionId, meta]) => ({
       sessionId, ...identity(sessionId, meta), title: meta.title ?? '', cwd: meta.cwd, provider: meta.kind ?? DEFAULT_PROVIDER,
       providerRuntime: meta.providerRuntime ?? null, providerSessionId: meta.providerSessionId ?? null,

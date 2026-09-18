@@ -237,7 +237,7 @@ export function dispatchFocusedSessionId(stage: TiledDispatchState): SessionId |
 // `dispatchEntrySeedSessionId` lived here until #992. It chose the one session
 // to keep visible in lane 0 when a user ENTERED the lane grid (#977). Nothing
 // is entered any more: the only surviving seed is the v2→v3 migration's
-// (workspaceShape.ts resolveEntrySeed), which runs once per old file.
+// (legacyWorkspaceV2.ts legacyEntrySeed), which runs once per old file.
 
 /**
  * Step one row in `delta` direction, wrapping.

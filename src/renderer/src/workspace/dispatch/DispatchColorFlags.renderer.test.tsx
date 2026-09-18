@@ -42,7 +42,6 @@ function dispatchRow(sessionId: string, label: string): DispatchAgentRow {
     sessionId,
     kind: 'claude',
     title: `${label} workflow`,
-    placement: 'grid',
     depth: 0,
   }
 }
@@ -57,8 +56,6 @@ function group(): DispatchTabGroup {
     tab: {
       id: 'tab-a',
       title: 'Agent Code',
-      root: { type: 'leaf', sessionId: FLAGGED_SESSION_ID },
-      focusedSessionId: FLAGGED_SESSION_ID,
     },
     tabIndex: 0,
     rows,

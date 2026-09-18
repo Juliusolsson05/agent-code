@@ -18,11 +18,10 @@ function applyUpdater<T>(prev: T, next: T | ((prev: T) => T)): T {
 const initialWorkspaceState: WorkspaceState = {
   tabs: [],
   activeTabId: '',
-  gridRelatedSelections: {},
   stage: freshStage(),
+  // The pool. `detachedSessions`, `buried` and `gridRelatedSelections` sat
+  // beside it until #992; see WorkspaceState for where each went.
   sessions: {},
-  detachedSessions: {},
-  buried: [],
   // Fresh workspace has no pins. The array is the source of truth
   // for order: index 0 is the topmost pin in the Pinned section.
   pinnedSessionIds: [],

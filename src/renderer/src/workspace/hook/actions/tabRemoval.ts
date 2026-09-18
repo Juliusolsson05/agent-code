@@ -3,7 +3,7 @@ import type {
   TabId,
   WorkspaceState,
 } from '@renderer/workspace/types'
-import { clearTiledLaneSessions } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
+import { workspaceWithoutSessions } from '@renderer/workspace/pool'
 import type {
   WorkspaceSetReaderMode,
   WorkspaceSetSpotlight,
@@ -13,9 +13,8 @@ import type {
 // The ONE tab-removal tail (#153 acceptance: "root-pane close and tab close have
 // consistent, documented semantics").
 //
-// WHY this exists: a project tab disappears in exactly one place — when a close
-// operation commits the removal of the tab's last grid leaf and no Dispatch row
-// is left to promote (`closeApprovedTarget` in pane.ts). Both "Close Tab" entry
+// WHY this exists: a project disappears in exactly one way — a close operation
+// commits the removal of its last session (`closeApprovedTarget` in pane.ts). Both "Close Tab" entry
 // points reach that commit through the SAME executor since #886 review round 2:
 // the Close Tab command (⌘⇧W, the tab bar ×) and the root dialog's "Close Tab"
 // button. Before that the command had a hand-written copy, and its removal
@@ -63,31 +62,19 @@ export function workspaceWithoutTab(
   tabId: TabId,
   removedSessionIds: Iterable<SessionId>,
 ): WorkspaceState {
-  const tabIdx = prev.tabs.findIndex(tab => tab.id === tabId)
-  // A tab already gone (a concurrent close won the race) still has its killed
-  // sessions' metadata removed: those backends are dead either way, and leaving
-  // their SessionMeta behind would describe agents nothing can show or close.
-  const tabs = tabIdx < 0 ? prev.tabs : prev.tabs.filter((_, index) => index !== tabIdx)
-  const removed = new Set(removedSessionIds)
-  const sessions = { ...prev.sessions }
-  const detachedSessions = { ...prev.detachedSessions }
-  for (const id of removed) {
-    delete sessions[id]
-    delete detachedSessions[id]
-  }
-  return {
-    ...prev,
-    tabs,
-    activeTabId: prev.activeTabId === tabId
-      ? (tabs[Math.max(0, tabIdx - 1)]?.id ?? '')
-      : prev.activeTabId,
-    sessions,
-    detachedSessions,
-    // A lane that showed a removed session goes EMPTY; it is never refilled
-    // with a neighbour (U2, #681) and never removed — the user shaped the
-    // stage, and closing agents must not reshape it.
-    stage: clearTiledLaneSessions(prev.stage, removed),
-  }
+  // The pool's one removal (pool.ts) does all of it: rows, lanes, pins, and
+  // the project — which goes because it is EMPTY, not because it was named.
+  // `tabId` is passed as "also remove if empty" so a project whose last
+  // session was already gone (a concurrent close won the race) still leaves.
+  //
+  // Until #992 this function filtered the tab out unconditionally and deleted
+  // the given rows from `sessions` and `detachedSessions` by hand. The
+  // unconditional half was safe only because its one caller had already proved
+  // the tab's tree was empty and no Dispatch row was left to promote. With
+  // ownership on the row that proof is a property of the data, so the helper
+  // checks it instead of trusting the caller: a project that still holds a
+  // session survives, because deleting it would orphan that session's backend.
+  return workspaceWithoutSessions(prev, removedSessionIds, [tabId])
 }
 
 /** Drop view takeovers that framed the removed tab. Called after the state

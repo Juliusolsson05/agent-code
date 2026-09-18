@@ -22,12 +22,7 @@ function commandContext(options: {
   const liveIds = options.liveIds ?? laneIds.filter((id): id is string => Boolean(id))
   const insertTiledLaneRight = vi.fn().mockReturnValue(options.inserted ?? true)
   const showPaneToast = vi.fn()
-  const tabs = liveIds.map(id => ({
-    id: `tab-${id}`,
-    title: `project-${id}`,
-    root: { type: 'leaf' as const, sessionId: id },
-    focusedSessionId: id,
-  }))
+  const tabs = liveIds.map(id => ({ id: `tab-${id}`, title: `project-${id}` }))
   const workspace = {
     state: {
       tabs,
@@ -37,10 +32,8 @@ function commandContext(options: {
         focusedLane,
       },
       sessions: Object.fromEntries(
-        liveIds.map(id => [id, { cwd: `/work/${id}`, kind: 'claude' }]),
+        liveIds.map(id => [id, { cwd: `/work/${id}`, kind: 'claude', projectId: `tab-${id}`, joinedAt: 0 }]),
       ),
-      detachedSessions: {},
-      buried: [],
       pinnedSessionIds: [],
     },
     insertTiledLaneRight,

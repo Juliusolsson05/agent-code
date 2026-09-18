@@ -82,16 +82,12 @@ describe('collectLiveAgentsByWorktree recorded context', () => {
       tabs: [{
         id: 'tab-recorded',
         title: 'Recorded project',
-        root: { type: 'leaf', sessionId: SESSION_ID },
-        focusedSessionId: SESSION_ID,
       }],
       activeTabId: 'tab-recorded',
       stage: oneLaneStage(SESSION_ID),
       sessions: {
-        [SESSION_ID]: { cwd: MAIN_CHECKOUT, kind: 'codex' },
+        [SESSION_ID]: { cwd: MAIN_CHECKOUT, kind: 'codex', projectId: 'tab-recorded', joinedAt: 0 },
       },
-      detachedSessions: {},
-      buried: [],
       pinnedSessionIds: [],
     } as WorkspaceState
     const workspace = {
@@ -146,16 +142,12 @@ describe('collectLiveAgentsByWorktree recorded context', () => {
       tabs: [{
         id: 'tab-divergent',
         title: 'Divergent project',
-        root: { type: 'leaf', sessionId: SESSION_ID },
-        focusedSessionId: SESSION_ID,
       }],
       activeTabId: 'tab-divergent',
       stage: oneLaneStage(SESSION_ID),
       sessions: {
-        [SESSION_ID]: { cwd: MAIN_CHECKOUT, kind: 'codex' },
+        [SESSION_ID]: { cwd: MAIN_CHECKOUT, kind: 'codex', projectId: 'tab-divergent', joinedAt: 0 },
       },
-      detachedSessions: {},
-      buried: [],
       pinnedSessionIds: [],
     } as WorkspaceState
     const workspace = {
@@ -179,10 +171,10 @@ describe('collectLiveAgentsByWorktree recorded context', () => {
       status(LINKED_WORKTREE, 'fixture/worktree-branch', 'active-unmerged'),
     ]
     const state = {
-      tabs: [{ id: 'tab', title: 'Project', root: { type: 'leaf', sessionId: 'shell' }, focusedSessionId: 'shell' }],
+      tabs: [{ id: 'tab', title: 'Project' }],
       activeTabId: 'tab', stage: oneLaneStage('shell'),
-      sessions: { shell: { cwd: LINKED_WORKTREE, kind: 'terminal' } },
-      detachedSessions: {}, buried: [], pinnedSessionIds: [],
+      sessions: { shell: { cwd: LINKED_WORKTREE, kind: 'terminal', projectId: 'tab', joinedAt: 0 } },
+        pinnedSessionIds: [],
     } as WorkspaceState
     const workspace = {
       state,

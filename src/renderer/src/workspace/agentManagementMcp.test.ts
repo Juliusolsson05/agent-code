@@ -18,64 +18,34 @@ function stateFixture(): WorkspaceState {
       {
         id: 'project-a',
         title: 'Project A',
-        focusedSessionId: 'caller',
-        root: {
-          type: 'split',
-          direction: 'vertical',
-          ratio: 0.5,
-          a: { type: 'leaf', sessionId: 'caller' },
-          b: {
-            type: 'split',
-            direction: 'horizontal',
-            ratio: 0.5,
-            a: { type: 'leaf', sessionId: 'grid-agent' },
-            b: { type: 'leaf', sessionId: 'terminal' },
-          },
-        },
       },
       {
         id: 'project-b',
         title: 'Project B',
-        focusedSessionId: 'foreign',
-        root: { type: 'leaf', sessionId: 'foreign' },
       },
     ],
     activeTabId: 'project-a',
     stage: oneLaneStage('caller'),
     sessions: {
-      caller: { cwd: '/same/cwd', kind: 'claude', providerSessionId: 'provider-caller' },
-      'grid-agent': { cwd: '/worktree/a', kind: 'codex', title: 'Grid reviewer' },
-      terminal: { cwd: '/same/cwd', kind: 'terminal' },
-      dispatch: { cwd: '/worktree/dispatch', kind: 'opencode' },
-      buried: { cwd: '/worktree/buried', kind: 'claude', linkedParentId: 'grid-agent' },
-      foreign: { cwd: '/same/cwd', kind: 'claude' },
+      caller: { cwd: '/same/cwd', kind: 'claude', providerSessionId: 'provider-caller', projectId: 'project-a', joinedAt: 0 },
+      'grid-agent': { cwd: '/worktree/a', kind: 'codex', title: 'Grid reviewer', projectId: 'project-a', joinedAt: 1 },
+      terminal: { cwd: '/same/cwd', kind: 'terminal', projectId: 'project-a', joinedAt: 2 },
+      dispatch: { cwd: '/worktree/dispatch', kind: 'opencode', projectId: 'project-a', joinedAt: 10 },
+      // The ids keep their v2 names (`grid-agent`, `dispatch`, `buried`) because
+      // they were chosen to cover the three OWNER STRUCTURES a session could
+      // live in. All three are the same thing now — a pool row of project-a —
+      // which is exactly what the listing case below asserts.
+      buried: { cwd: '/worktree/buried', kind: 'claude', linkedParentId: 'grid-agent', projectId: 'project-a', joinedAt: 20 },
+      foreign: { cwd: '/same/cwd', kind: 'claude', projectId: 'project-b', joinedAt: 0 },
+      // Deliberately UNFILED: a row that names no project has no project scope.
       stale: { cwd: '/same/cwd', kind: 'claude' },
     },
-    detachedSessions: {
-      dispatch: {
-        sessionId: 'dispatch',
-        surface: 'dispatch',
-        projectTabId: 'project-a',
-        projectTabTitle: 'Project A',
-        projectTabIndex: 0,
-        detachedAt: 10,
-      },
-    },
-    buried: [{
-      id: 'buried-record',
-      sessionId: 'buried',
-      sessionMeta: { cwd: '/worktree/buried', kind: 'claude' },
-      buriedAt: 20,
-      sourceTabId: 'project-a',
-      sourceTabTitle: 'Project A',
-      sourceTabIndex: 0,
-    }],
     pinnedSessionIds: [],
   }
 }
 
 describe('Agent Management project authority', () => {
-  it('lists grid, Dispatch, and buried agents by exact tab ownership', () => {
+  it('lists every agent filed under the caller\'s project, in index order, and nothing else', () => {
     const listed = listManagedAgentDescriptors({
       state: stateFixture(),
       runtimes: {},
@@ -88,10 +58,16 @@ describe('Agent Management project authority', () => {
       item.agent.placement,
       item.agent.isCaller,
     ])).toEqual([
-      ['caller', 'grid', true],
-      ['grid-agent', 'grid', false],
+      // `placement` is 'dispatch' for all of them: in this published contract
+      // the value has always meant "a row in the project's agent index", which
+      // every pool session is. 'grid' and 'buried' named v2 owner structures
+      // that no longer exist (the enum is narrowed in stage 7 of #992).
+      // The terminal is not an agent; `foreign` is another project's; `stale`
+      // names no project at all.
+      ['caller', 'dispatch', true],
+      ['grid-agent', 'dispatch', false],
       ['dispatch', 'dispatch', false],
-      ['buried', 'buried', false],
+      ['buried', 'dispatch', false],
     ])
   })
 
@@ -109,22 +85,32 @@ describe('Agent Management project authority', () => {
     })).toThrow('self_target_forbidden')
   })
 
-  it('fails closed when corrupt workspace state assigns two placements', () => {
+  it('fails closed for a row whose project is missing or gone', () => {
+    // Re-based with #992. This was "fails closed when corrupt workspace state
+    // assigns two placements": v2 searched three owner structures, so a corrupt
+    // save could list one session in two of them and make project scope depend
+    // on iteration order. One field cannot be ambiguous, so that corruption is
+    // unrepresentable. The failure that IS still representable is a row whose
+    // `projectId` points nowhere — and scope is what authorizes a cross-agent
+    // read, so it must be refused rather than guessed (never "the active
+    // project", never "the caller's").
     const state = stateFixture()
-    state.detachedSessions['grid-agent'] = {
-      sessionId: 'grid-agent',
-      surface: 'dispatch',
-      projectTabId: 'project-a',
-      projectTabTitle: 'Project A',
-      projectTabIndex: 0,
-      detachedAt: 30,
-    }
+    state.sessions['grid-agent'] = { ...state.sessions['grid-agent']!, projectId: 'project-deleted' }
     const listed = listManagedAgentDescriptors({
       state,
       runtimes: {},
       callerSessionId: 'caller',
     })
     expect(listed.agents.map(item => item.agent.sessionId)).not.toContain('grid-agent')
+    expect(listed.agents.map(item => item.agent.sessionId)).not.toContain('stale')
+    // `agent_not_found`, not `agent_not_in_project`: the second code means "it
+    // belongs to a DIFFERENT project", which would leak that the session exists
+    // and is owned. A row with no resolvable project is, to this caller, not an
+    // agent at all.
+    expect(() => assertManagedTarget({ state, callerSessionId: 'caller', sessionId: 'grid-agent' }))
+      .toThrow('agent_not_found')
+    expect(() => assertManagedTarget({ state, callerSessionId: 'caller', sessionId: 'stale' }))
+      .toThrow('agent_not_found')
   })
 
   it('treats a trailing unresolved user turn as waiting after restart', () => {
@@ -174,26 +160,18 @@ describe('Agent Management project authority', () => {
     })).toEqual(['buried'])
   })
 
-  it('closing the last grid leaf promotes a survivor and affects no siblings', () => {
-    // #886 review M1. This used to assert every project sibling was affected,
-    // because closing a tab's last leaf removed the tab. The tool's close runs
-    // with requireConfirmation, which is session-scoped (never the human Close
-    // Tab choice) and promotes the next Dispatch row; the promotion itself is
-    // pinned by closeAgentScope's renderer tests. Only the linked descendant
-    // ('buried' names 'grid-agent' as its parent) is still affected — the
-    // caller and the unrelated 'dispatch' row must NOT be reported, because the
-    // calling model acts on this list.
+  it('reports only linked descendants, wherever the target sits in the project', () => {
+    // #886 review M1. This once asserted every project sibling was affected,
+    // because closing a tab's last TILE LEAF removed the tab. A close is
+    // session-scoped always now (#992): no position in a project makes a
+    // session's close take a sibling with it. Only the linked descendant
+    // ('buried' names 'grid-agent' as its parent) is affected — the caller and
+    // the unrelated 'dispatch' row must NOT be reported, because the calling
+    // model acts on this list. The caller is re-ordered AFTER the target so
+    // the target is the project's FIRST row, the position that used to be the
+    // special one.
     const state = stateFixture()
-    state.tabs[0]!.root = { type: 'leaf', sessionId: 'grid-agent' }
-    state.tabs[0]!.focusedSessionId = 'grid-agent'
-    state.detachedSessions.caller = {
-      sessionId: 'caller',
-      surface: 'dispatch',
-      projectTabId: 'project-a',
-      projectTabTitle: 'Project A',
-      projectTabIndex: 0,
-      detachedAt: 5,
-    }
+    state.sessions.caller = { ...state.sessions.caller!, joinedAt: 5 }
 
     expect(additionalCloseImpact({
       state,

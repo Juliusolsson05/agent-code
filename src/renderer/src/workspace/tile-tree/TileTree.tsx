@@ -6,10 +6,6 @@ import { useSessionRuntime } from '@renderer/workspace/useSessionRuntime'
 import { getRendererProvider } from '@providers/registry.renderer'
 import type { AgentViewMode } from '@renderer/app-state/settings/types'
 import { getEffectiveAgentSurfaceForSession } from '@renderer/workspace/agentDisplayMode'
-import {
-  buildGridRelatedAgentTabs,
-  selectedGridRelatedSessionId,
-} from '@renderer/workspace/gridRelatedAgents'
 import { AgentTerminalLeaf } from '@renderer/workspace/tile-tree/AgentTerminalLeaf'
 import { MountedAgentTerminalOwner } from '@renderer/workspace/terminal/AgentTerminalOwnership'
 import { TerminalLeaf } from '@renderer/workspace/tile-tree/TerminalLeaf'
@@ -42,7 +38,6 @@ export function renderWorkspaceLeaf(
   showStatusMode: boolean,
   showWorktreeBadges: boolean,
   onFocusRequest?: () => void,
-  showRelatedAgentTabs = false,
   surfacePaneLabel?: string,
 ) {
   return <WorkspaceLeaf
@@ -54,7 +49,6 @@ export function renderWorkspaceLeaf(
     showStatusMode={showStatusMode}
     showWorktreeBadges={showWorktreeBadges}
     onFocusRequest={onFocusRequest}
-    showRelatedAgentTabs={showRelatedAgentTabs}
     surfacePaneLabel={surfacePaneLabel}
   />
 }
@@ -64,7 +58,7 @@ export function renderWorkspaceLeaf(
 // output must not traverse this pane or recreate any terminal callbacks.
 const WorkspaceLeaf = memo(function WorkspaceLeaf({
   sessionId, focusedSessionId, workspace, tabId, agentViewMode,
-  showStatusMode, showWorktreeBadges, onFocusRequest, showRelatedAgentTabs,
+  showStatusMode, showWorktreeBadges, onFocusRequest,
   surfacePaneLabel,
 }: {
   sessionId: SessionId
@@ -75,20 +69,26 @@ const WorkspaceLeaf = memo(function WorkspaceLeaf({
   showStatusMode: boolean
   showWorktreeBadges: boolean
   onFocusRequest?: () => void
-  showRelatedAgentTabs: boolean
   surfacePaneLabel?: string
 }) {
   const requestFocus = useCallback(() => {
     if (onFocusRequest) onFocusRequest()
     else workspace.focusSessionInTab(tabId, sessionId)
   }, [onFocusRequest, workspace, tabId, sessionId])
-  const relatedTabs = showRelatedAgentTabs
-    ? buildGridRelatedAgentTabs(workspace.state, tabId, sessionId)
-    : []
-  const selectedSessionId = showRelatedAgentTabs
-    ? selectedGridRelatedSessionId(workspace.state, tabId, sessionId) ?? sessionId
-    : sessionId
-  const renderedSessionId = workspace.state.sessions[selectedSessionId] ? selectedSessionId : sessionId
+  // A pane renders the session it was asked to render.
+  //
+  // Until #992 it could render a DIFFERENT one: in the tile grid a pane had a
+  // strip of "related agent" mini-tabs (its linked agents and orchestration
+  // workers), and picking one swapped that child into the parent's physical
+  // tile, remembered in `WorkspaceState.gridRelatedSelections`. The grid had
+  // no index, so that strip was the only way to reach a parked child. The
+  // stage has an index and a per-lane strip that both list children nested
+  // under their parent, and selecting one simply puts it in the lane — so
+  // lanes never enabled the mini-tabs, the selection map lost its only
+  // writer, and both were deleted. The strip's presentational half still
+  // exists in PaneHeader/TileLeaf/AgentTerminalLeaf (prop-driven, fed nothing
+  // here); stage 4 of the plan either feeds it from the pool or removes it.
+  const renderedSessionId = sessionId
   const meta = workspace.state.sessions[renderedSessionId]
   const kind = meta?.kind ?? DEFAULT_PROVIDER
   const runtime = useSessionRuntime(workspace, renderedSessionId)
@@ -155,16 +155,6 @@ const WorkspaceLeaf = memo(function WorkspaceLeaf({
             // branch didn't, which is why terminal-view panes never lit their
             // header while working (#851).
             showStatusMode={showStatusMode}
-            // #858: same related-agent identity the rendered branch below
-            // passes to LeafComponent, so a persisted related selection that
-            // lands here (raw-terminal surface) is named in the status row
-            // instead of silently swapping which agent's TUI this pane shows.
-            ownerSessionId={sessionId}
-            relatedAgentTabs={relatedTabs}
-            onSelectRelatedSession={(nextSessionId: SessionId) => {
-              workspace.selectGridRelatedSession(sessionId, nextSessionId)
-              workspace.focusSessionInTab(tabId, sessionId)
-            }}
           />
         </MountedAgentTerminalOwner>
       </TldrPane>
@@ -183,13 +173,6 @@ const WorkspaceLeaf = memo(function WorkspaceLeaf({
         workspace={workspace}
         showStatusMode={showStatusMode}
         showWorktreeBadges={showWorktreeBadges}
-        ownerSessionId={sessionId}
-        relatedAgentTabs={relatedTabs}
-        selectedRelatedSessionId={renderedSessionId}
-        onSelectRelatedSession={(nextSessionId: SessionId) => {
-          workspace.selectGridRelatedSession(sessionId, nextSessionId)
-          workspace.focusSessionInTab(tabId, sessionId)
-        }}
       />
     </TldrPane>
   )

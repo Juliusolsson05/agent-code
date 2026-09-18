@@ -1,9 +1,10 @@
 import { useCallback } from 'react'
 import { withLaneSession } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 
-import type { DetachedSessionRecord, SessionId, SessionKind, SessionMeta, Tab, TabId } from '@renderer/workspace/types'
+import type { SessionId, SessionKind, SessionMeta, Tab, TabId } from '@renderer/workspace/types'
 import { titleFromCwd } from '@renderer/workspace/layout/helpers'
 import { mergeProjectTabs } from '@renderer/workspace/mergeProjectTabs'
+import { fileSessionInProject } from '@renderer/workspace/pool'
 import type { MergeProjectTabsResult } from '@renderer/workspace/mergeProjectTabs'
 import { tabIndexLabel } from '@renderer/workspace/tile-tree/paneLabelFormat'
 
@@ -20,7 +21,6 @@ import type { SessionActions } from '@renderer/workspace/hook/actions/session'
 export function useTabActions(
   state: {
     activeTabId: string
-    detachedSessions: Record<SessionId, DetachedSessionRecord>
     sessions: Record<SessionId, SessionMeta>
     tabs: Tab[]
   },
@@ -59,12 +59,10 @@ export function useTabActions(
       const tabId = crypto.randomUUID()
       const title = titleFromCwd(cwd)
       setState(prev => {
-        const tab: Tab = {
-          id: tabId,
-          title,
-          root: { type: 'leaf', sessionId },
-          focusedSessionId: sessionId,
-        }
+        // A project is a title and a position. Its first session belongs to
+        // it because the session SAYS so (fileSessionInProject below) — until
+        // #992 the tab was created holding a one-leaf tile tree instead.
+        const tab: Tab = { id: tabId, title }
         // Context-places (#992, U2's second continuity write): the agent the
         // user just asked for appears where they are looking — but ONLY when
         // that lane is empty. An occupied lane is never displaced; the new
@@ -93,6 +91,7 @@ export function useTabActions(
           ...prev,
           tabs: [...prev.tabs, tab],
           activeTabId: tabId,
+          sessions: fileSessionInProject(prev.sessions, sessionId, tabId),
           stage,
         }
       })
@@ -163,18 +162,21 @@ export function useTabActions(
         )
         return result
       }
-      // Spotlight and Reader zoom a GRID pane of a tab; the pane they named
-      // is now a Dispatch agent of another tab, so the takeover has nothing
-      // to frame.
+      // A takeover framing a merged-away project FOLLOWS its session into the
+      // target: the session it shows is exactly as alive as before, only its
+      // project label changed, and a takeover's `tabId` is just which
+      // project's sessions its switcher lists. (Until #992 the takeover was
+      // dismissed here, because it framed a GRID PANE of the removed tab and
+      // that pane had stopped being one.)
       const removed = new Set(sourceTabIds)
-      setSpotlight(prev => (prev && removed.has(prev.tabId) ? null : prev))
-      setReaderMode(prev => (prev && removed.has(prev.tabId) ? null : prev))
+      setSpotlight(prev => (prev && removed.has(prev.tabId) ? { ...prev, tabId: targetTabId } : prev))
+      setReaderMode(prev => (prev && removed.has(prev.tabId) ? { ...prev, tabId: targetTabId } : prev))
       const { summary } = result
-      const moved = summary.detachedFromGrid.length + summary.repointedDetached.length
+      const moved = summary.movedSessionIds.length
       showToast(
         `Merged ${summary.removedTabIds.length} tab${summary.removedTabIds.length === 1 ? '' : 's'} into `
         + `${tabIndexLabel(summary.targetIndex)} · ${summary.targetTitle} — `
-        + `${moved} agent${moved === 1 ? '' : 's'} now in its Dispatch list`,
+        + `${moved} agent${moved === 1 ? '' : 's'} now listed under it`,
       )
       return result
     },

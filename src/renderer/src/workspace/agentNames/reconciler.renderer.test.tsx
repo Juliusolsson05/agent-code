@@ -20,22 +20,17 @@ afterEach(() => {
 
 function workspace(): WorkspaceState {
   return {
-    tabs: [{ id: 'tab-a', title: 'recorded', root: { type: 'leaf', sessionId: 'agent-one' }, focusedSessionId: 'agent-one' }],
+    tabs: [{ id: 'tab-a', title: 'recorded' }],
     activeTabId: 'tab-a',
     sessions: {
-      'agent-one': { cwd: '/recorded', kind: 'claude' },
-      'shell-one': { cwd: '/recorded', kind: 'terminal' },
+      'agent-one': { cwd: '/recorded', kind: 'claude', projectId: 'tab-a', joinedAt: 0 },
+      'shell-one': { cwd: '/recorded', kind: 'terminal', projectId: 'tab-a', joinedAt: 1 },
+      // A PARKED agent that already has an identity: on no lane, with no
+      // backend. Until #992 this was a `buried` record carrying its own
+      // metadata outside `sessions`; the identity string is kept so the
+      // history of these assertions stays readable.
+      'parked-one': { cwd: '/recorded', kind: 'codex', agentNameId: 'identity-buried', projectId: 'tab-a', joinedAt: 2 },
     },
-    detachedSessions: {},
-    buried: [{
-      id: 'buried-one',
-      sessionId: 'buried-one',
-      sessionMeta: { cwd: '/recorded', kind: 'codex', agentNameId: 'identity-buried' },
-      buriedAt: 0,
-      sourceTabId: 'tab-a',
-      sourceTabTitle: 'recorded',
-      sourceTabIndex: 0,
-    }],
     pinnedSessionIds: [],
     stage: oneLaneStage('agent-one'),
   } as unknown as WorkspaceState
@@ -48,13 +43,12 @@ function hostileWorkspace(): WorkspaceState {
   return {
     ...workspace(),
     sessions: { 'agent-one': { cwd: '/recorded', kind: 'claude', agentNameId: '__proto__' } },
-    buried: [],
   } as unknown as WorkspaceState
 }
 
 // A workspace whose identities are the WRONG TYPE rather than a hostile string:
-// a number on a live session and an object on a buried record, both reachable
-// from a hand-edited or migration-damaged workspace.json.
+// a number on one session and an object on a parked one, both reachable from a
+// hand-edited or migration-damaged workspace.json.
 function malformedWorkspace(): WorkspaceState {
   const base = workspace()
   return {
@@ -62,8 +56,8 @@ function malformedWorkspace(): WorkspaceState {
     sessions: {
       'agent-one': { cwd: '/recorded', kind: 'claude', agentNameId: 42 },
       'shell-one': base.sessions['shell-one'],
+      'parked-one': { cwd: '/recorded', kind: 'codex', agentNameId: { id: 'nope' } },
     },
-    buried: [{ ...base.buried[0], sessionMeta: { cwd: '/recorded', kind: 'codex', agentNameId: { id: 'nope' } } }],
   } as unknown as WorkspaceState
 }
 
@@ -106,13 +100,13 @@ describe('agent name reconciliation', () => {
     expect(mounted.seen.current.sessions['agent-one'].agentNameId).toBe('agent-one')
     // Shells are named too (#865): the claim covers every session kind.
     expect(mounted.seen.current.sessions['shell-one'].agentNameId).toBe('shell-one')
-    // Buried agents keep their own metadata copy and must still resolve, or a
-    // buried Apollo would come back unnamed and get a second address.
+    // A parked agent that already has an identity must still resolve, or a
+    // parked Apollo would come back unnamed and get a second address.
     //
     // WHY the FIRST call must already contain both: the hook derives its
     // identity list through `claimMissingIdentities(state)` rather than from
     // `state`, so on the very first render it sees `agent-one`'s
-    // about-to-be-claimed identity alongside the buried agent's existing one.
+    // about-to-be-claimed identity alongside the parked agent's existing one.
     // Deriving from `state` would split this into two requests — and the
     // re-run triggered by the claim would then discard the first reply.
     // Asserting on call[0] rather than on the union is what pins that.
@@ -176,10 +170,11 @@ describe('agent name reconciliation', () => {
     // A truthiness-only skip treats `agentNameId: 42` as "already identified",
     // while resolveAgentName — which needs an own STRING key of the name map —
     // reports null forever. The agent then has no name and no route to one.
-    // The buried record is the other half: it never passes through the claim
-    // at all, so a non-string there would reach the IPC allocator, whose
-    // z.array(z.string().min(1)) rejects the WHOLE batch and blocks naming for
-    // every agent in the window.
+    // The parked session is the other half. Until #992 it was a buried record
+    // that never passed through the claim at all, so a non-string there would
+    // reach the IPC allocator, whose z.array(z.string().min(1)) rejects the
+    // WHOLE batch and blocks naming for every agent in the window. It is an
+    // ordinary row now and is re-claimed like the first.
     const resolveAgentNames = vi.fn(async (identities: string[]) =>
       Object.fromEntries(identities.map(identity => [identity, 'Apollo'])))
     const mounted = mount({ enabled: true, resolveAgentNames, initial: malformedWorkspace() })
@@ -191,7 +186,8 @@ describe('agent name reconciliation', () => {
     // The fixture's shell also has no identity yet, so the same reclaim pass
     // picks it up alongside the malformed agent (#865): the claim no longer
     // distinguishes provider kind, only "already identified or not".
-    expect(resolveAgentNames.mock.calls[0][0]).toEqual(['agent-one', 'shell-one'])
+    expect(resolveAgentNames.mock.calls[0][0]).toEqual(['agent-one', 'shell-one', 'parked-one'])
+    expect(mounted.seen.current.sessions['parked-one'].agentNameId).toBe('parked-one')
     expect(resolveAgentName({
       enabled: true,
       meta: mounted.seen.current.sessions['agent-one'],
@@ -229,7 +225,7 @@ describe('agent name reconciliation', () => {
     const requested = [...resolveAgentNames.mock.calls[0][0]] as string[]
 
     // While the allocation is in flight: the live agent is replaced by a new
-    // local session id CARRYING the same identity, and the buried agent is
+    // local session id CARRYING the same identity, and the parked agent is
     // closed outright.
     act(() => {
       mounted.control.current!(previous => ({
@@ -238,7 +234,6 @@ describe('agent name reconciliation', () => {
           'agent-two': { ...previous.sessions['agent-one'], agentNameId: 'agent-one' },
           'shell-one': previous.sessions['shell-one'],
         },
-        buried: [],
       } as WorkspaceState))
     })
 
@@ -262,7 +257,7 @@ describe('agent name reconciliation', () => {
     // session back into the workspace.
     expect(stored['identity-buried']).toBe('Jasper')
     expect(settled.sessions['agent-one']).toBeUndefined()
-    expect(settled.buried).toEqual([])
+    expect(settled.sessions['parked-one']).toBeUndefined()
 
     // And the late reply did not trigger a second allocation for either.
     expect(resolveAgentNames).toHaveBeenCalledTimes(1)

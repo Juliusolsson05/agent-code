@@ -12,10 +12,10 @@ import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 // them an age: the last time a command started, finished or the shell cd'd.
 it('ages an idle terminal from its last foreground change', () => {
   const state: Workspace['state'] = {
-    tabs: [{ id: 'tab', title: 'project', root: { type: 'leaf', sessionId: 'shell' }, focusedSessionId: 'shell' }],
-    activeTabId: 'tab', stage: oneLaneStage('shell'), gridRelatedSelections: {},
-    sessions: { shell: { cwd: '/work/api', kind: 'terminal' } },
-    detachedSessions: {}, buried: [], pinnedSessionIds: [],
+    tabs: [{ id: 'tab', title: 'project' }],
+    activeTabId: 'tab', stage: oneLaneStage('shell'), 
+    sessions: { shell: { cwd: '/work/api', kind: 'terminal', projectId: 'tab', joinedAt: 0 } },
+      pinnedSessionIds: [],
   }
   const runtimes = {
     shell: { ...emptyRuntime(), terminalForeground: { busy: false, command: 'zsh', cwd: '/work/api', changedAt: 1_000 } },
@@ -31,9 +31,9 @@ describe('cleanup activity evidence (#886)', () => {
   const old = now - 8 * 60 * 60 * 1000
   const recent = now - 60_000
   const state: Workspace['state'] = {
-    activeTabId: 'tab', stage: oneLaneStage('agent'), buried: [], pinnedSessionIds: [],
-    tabs: [{ id: 'tab', title: 'project', root: { type: 'leaf', sessionId: 'agent' }, focusedSessionId: 'agent' }],
-    sessions: { agent: { cwd: '/project', kind: 'claude' } }, detachedSessions: {},
+    activeTabId: 'tab', stage: oneLaneStage('agent'),  pinnedSessionIds: [],
+    tabs: [{ id: 'tab', title: 'project' }],
+    sessions: { agent: { cwd: '/project', kind: 'claude', projectId: 'tab', joinedAt: 0 } }, 
   }
   // Timestamps are the public transcript fields cleanup reads. The provider's
   // content is deliberately irrelevant to whether the session is old.

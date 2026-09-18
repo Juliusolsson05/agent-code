@@ -99,15 +99,15 @@ describe('pane recovery ownership', () => {
       tabs: [{
         id: 'tab-1',
         title: 'Project',
-        focusedSessionId: sessionId,
-        root: { type: 'leaf' as const, sessionId },
       }],
       activeTabId: 'tab-1',
       sessions: {
-        [sessionId]: { cwd: '/tmp/project', kind: 'claude' as const },
+        // Filed under the project: a close addresses a session through its
+        // own `projectId` (#992), so a row naming no project is unowned and
+        // closeSession has nothing to act on — the fixture would pass the type
+        // check and then silently test a no-op.
+        [sessionId]: { cwd: '/tmp/project', kind: 'claude' as const, projectId: 'tab-1', joinedAt: 0 },
       },
-      detachedSessions: {},
-      buried: [],
       pinnedSessionIds: [],
       stage: oneLaneStage(sessionId),
     } as WorkspaceState
@@ -180,32 +180,19 @@ describe('pane recovery ownership', () => {
     expect(runtimes[sessionId]).toBeUndefined()
   })
 
-  it('atomically closes detached children when their last owning pane closes', async () => {
+  it('closes every session of a project, parked ones included, as one transaction with one undo entry', async () => {
     const paneId = 'visible-pane'
     const detachedId = 'detached-child'
     const state = {
       tabs: [{
         id: 'tab-1',
         title: 'Project',
-        focusedSessionId: paneId,
-        root: { type: 'leaf' as const, sessionId: paneId },
       }],
       activeTabId: 'tab-1',
       sessions: {
-        [paneId]: { cwd: '/tmp/project', kind: 'claude' as const },
-        [detachedId]: { cwd: '/tmp/project', kind: 'codex' as const },
+        [paneId]: { cwd: '/tmp/project', kind: 'claude' as const, projectId: 'tab-1', joinedAt: 0 },
+        [detachedId]: { cwd: '/tmp/project', kind: 'codex' as const, projectId: 'tab-1', joinedAt: 123 },
       },
-      detachedSessions: {
-        [detachedId]: {
-          sessionId: detachedId,
-          surface: 'dispatch' as const,
-          projectTabId: 'tab-1',
-          projectTabTitle: 'Project',
-          projectTabIndex: 0,
-          detachedAt: 123,
-        },
-      },
-      buried: [],
       pinnedSessionIds: [],
       stage: oneLaneStage(paneId),
     } as WorkspaceState
@@ -214,14 +201,20 @@ describe('pane recovery ownership', () => {
       [detachedId]: emptyRuntime(),
     })
 
-    // Closing the tab's last pane also kills its detached child, so this is a
-    // two-session close and the gate must ask. Answering it here is not test
-    // ceremony — it is the assertion that the dialog names BOTH sessions.
-    // Before the gate counted detached children, this close reported one target
-    // and silently took two.
-    let closing: Promise<boolean> | undefined
+    // Close Tab takes the parked agent no lane shows along with the one on
+    // screen, so this is a two-session close and the gate must ask. Answering
+    // it here is not test ceremony — it is the assertion that the dialog names
+    // BOTH sessions. Before the gate counted parked sessions, a tab close
+    // reported one target and silently took two.
+    //
+    // Re-based with #992. This used to be reached by closing the tab's LAST
+    // TILE LEAF, which took the tab's detached rows with it because the tile
+    // tree could not be left empty. A session close is session-scoped now —
+    // closing `visible-pane` alone would leave the project holding its parked
+    // agent — so the whole-project transaction is Close Tab's, and only its.
+    let closing: Promise<void> | undefined
     await act(async () => {
-      closing = harness.result.current.closeSession(paneId)
+      closing = harness.result.current.closeTab('tab-1')
       await Promise.resolve()
     })
     expect(currentCloseConfirmation()?.request.targets.map(t => t.sessionId).sort())
@@ -231,10 +224,10 @@ describe('pane recovery ownership', () => {
       await closing
     })
 
-    // WHY this assertion covers more than renderer cleanup: once the final tab
-    // disappears, a detached child has no valid projectTabId. The save-time
-    // sanitizer is right to reject it, so the close action must first make the
-    // child part of the same destructive transaction and Undo Close snapshot.
+    // WHY this assertion covers more than renderer cleanup: once the project
+    // disappears, a session still naming it is unowned. The save-time prune is
+    // right to drop it, so the close must first make it part of the same
+    // destructive transaction and Undo Close snapshot.
     expect(harness.killOwnedSession).toHaveBeenCalledTimes(2)
     expect(harness.killOwnedSession).toHaveBeenCalledWith({
       sessionId: detachedId,
@@ -243,19 +236,18 @@ describe('pane recovery ownership', () => {
     })
     expect(harness.getState().tabs).toEqual([])
     expect(harness.getState().sessions).toEqual({})
-    expect(harness.getState().detachedSessions).toEqual({})
     expect(harness.getRuntimes()).toEqual({})
 
     const undoEntry = harness.refs.undoStackRef.current.pop()
     expect(undoEntry?.type).toBe('tab')
     if (undoEntry?.type === 'tab') {
-      // sessionId is the lineage anchor undo publishes when this row is
+      // sessionId is the lineage anchor undo publishes when a session is
       // restored, so older entries naming it keep resolving (#886 finding 4).
-      expect(undoEntry.detachedEntries).toEqual([{
-        sessionId: detachedId,
-        meta: state.sessions[detachedId],
-        detachedAt: 123,
-      }])
+      // The row carries its own place (`joinedAt: 123`), so it returns to it.
+      expect(undoEntry.sessions).toEqual([
+        { sessionId: paneId, meta: state.sessions[paneId] },
+        { sessionId: detachedId, meta: state.sessions[detachedId] },
+      ])
     }
   })
 
