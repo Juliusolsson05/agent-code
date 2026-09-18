@@ -4,11 +4,12 @@ import type {
   ProjectRef,
   SessionId,
   SessionMeta,
+  Tab,
   TabId,
   TiledDispatchState,
 } from '@renderer/workspace/types'
 import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
-import { collectOwnedSessionIds } from '@renderer/workspace/sessionOwnership'
+import { collectOwnedSessionIds, type SessionOwnershipInput } from '@renderer/workspace/sessionOwnership'
 import {
   keepTiledLaneSessions,
   normalizeDispatchModeGrid,
@@ -68,45 +69,116 @@ export function isStageWorkspace(persisted: PersistedWorkspace): boolean {
 }
 
 /**
- * Resolve the session that owns lane 0 when a v2 workspace had NO tiled
- * stage (classic Dispatch or pure-grid user): the session the user was
+ * What the shared affinity/seed helpers need from a workspace: the v2
+ * ownership fields (with full tabs — the narrow SessionOwnershipTab drops
+ * `title`/`focusedSessionId`, which the seed precedence and the projects
+ * mint both read) plus the two focus-ish fields. `PersistedWorkspace`
+ * (migration input) and the live `WorkspaceState` (runtime derivation,
+ * workspaceStage.ts) both satisfy this structurally — one precedence, two
+ * callers, zero drift.
+ */
+export type WorkspaceAffinityInput = Omit<SessionOwnershipInput, 'tabs'> & {
+  tabs: Tab[]
+  activeTabId: TabId
+  dispatchMode?: DispatchModeState | null | undefined
+}
+
+/**
+ * Resolve the session that owns lane 0 when a workspace has NO tiled stage
+ * (classic Dispatch or pure-grid state): the session the user was
  * commanding when they last looked at this workspace.
  *
  * WHY this precedence and no other: it mirrors `dispatchEntrySeedSessionId`
  * (tiledDispatchSelectors.ts) exactly — dispatch focus first, then the
  * active tab's grid focus, validated against sessions and buried. The two
- * must not drift: entering Grid Dispatch over a live state and migrating
- * the same state off disk must pick the same agent, or a reload changes
- * what the user sees relative to their last session. Stage 2 should
- * collapse the pair by making the live selector delegate here.
+ * must not drift: entering Grid Dispatch over a live state and deriving
+ * the same state's default stage must pick the same agent, or what the
+ * user sees changes depending on which code path ran. The live selector
+ * family (workspaceStage.ts) and this migration share this function so the
+ * precedence exists in exactly one place.
  *
  * WHY seeding does not violate #681: the seed is continuity with the pane
  * the user was just commanding, never a prediction from the index. All
  * other lanes arrive empty and stay empty.
  */
-function resolveEntrySeed(persisted: PersistedWorkspace): SessionId | null {
-  const dispatchFocused = persisted.dispatchMode?.focusedSessionId ?? null
+export function resolveEntrySeed(input: WorkspaceAffinityInput): SessionId | null {
+  const dispatchFocused = input.dispatchMode?.focusedSessionId ?? null
   const gridFocused =
-    persisted.tabs.find(tab => tab.id === persisted.activeTabId)?.focusedSessionId ?? null
+    input.tabs.find(tab => tab.id === input.activeTabId)?.focusedSessionId ?? null
   const candidate = dispatchFocused ?? gridFocused
   if (!candidate) return null
-  if (persisted.sessions[candidate] === undefined) return null
-  if ((persisted.buried ?? []).some(entry => entry.sessionId === candidate)) return null
+  if (input.sessions[candidate] === undefined) return null
+  if ((input.buried ?? []).some(entry => entry.sessionId === candidate)) return null
   return candidate
 }
 
 /**
- * The default stage minted for a workspace that never had one:
+ * The three v2 ways a session could know its project, as one map lookup
+ * with the migration's precedence: leaf membership (the placement the user
+ * last arranged), then the detached record's affinity, then the buried
+ * record's source, then the active tab. Shared by the persisted migration
+ * and the live pool selectors so the precedence cannot fork.
+ *
+ * WHY this does NOT validate against live project ids: the persisted
+ * migration must never emit a dangling projectId (it guards separately
+ * against `projects`), while the live view can tolerate a transient
+ * dangling value between a tab close and the next reconcile — closing a
+ * tab already clears detached records at the same boundary. Validation
+ * belongs to the caller with the stronger invariant.
+ */
+export function projectAffinityOf(
+  input: WorkspaceAffinityInput,
+  sessionId: SessionId,
+): TabId | undefined {
+  return (
+    leafProjectOf(input).get(sessionId) ??
+    detachedProjectOf(input).get(sessionId) ??
+    buriedProjectOf(input).get(sessionId) ??
+    input.activeTabId
+  )
+}
+
+function leafProjectOf(input: SessionOwnershipInput): Map<SessionId, TabId> {  const map = new Map<SessionId, TabId>()
+  for (const tab of input.tabs) {
+    for (const sessionId of collectLeaves(tab.root)) {
+      map.set(sessionId, tab.id)
+    }
+  }
+  return map
+}
+
+function detachedProjectOf(input: SessionOwnershipInput): Map<SessionId, TabId> {
+  const map = new Map<SessionId, TabId>()
+  for (const record of Object.values(input.detachedSessions ?? {})) {
+    map.set(record.sessionId, record.projectTabId)
+  }
+  return map
+}
+
+function buriedProjectOf(input: SessionOwnershipInput): Map<SessionId, TabId> {
+  const map = new Map<SessionId, TabId>()
+  for (const record of input.buried ?? []) {
+    map.set(record.sessionId, record.sourceTabId)
+  }
+  return map
+}
+
+/**
+ * The default stage minted for a workspace that has no stored one:
  * `[{ length: 2 }]`, lane 0 seeded, focused.
+ *
+ * Shared by the persisted migration and the live derivation
+ * (workspaceStage.ts) so "what a workspace without a stage looks like" has
+ * exactly one answer.
  *
  * WHY two lanes and not one: one-lane-first-run is the FRESH-install shape
  * (§4.5 — nothing to explain, the user hasn't asked for space). A migrating
- * user demonstrably works with agents already; the second lane is the
- * smallest honest stage that shows what a lane IS without adding a row.
- * The seed write is the same continuity gesture enterTiledDispatch performs
- * (#977), applied once at migration.
+ * or dispatch-less workspace demonstrably works with agents already; the
+ * second lane is the smallest honest stage that shows what a lane IS
+ * without adding a row. The seed write is the same continuity gesture
+ * enterTiledDispatch performs (#977), applied once.
  */
-function defaultSeededStage(seed: SessionId | null): TiledDispatchState {
+export function defaultSeededStage(seed: SessionId | null): TiledDispatchState {
   const grid = normalizeGridShape({
     lanes: [seed ? { selectedSessionId: seed } : {}, {}],
     rows: [{ length: 2 }],
@@ -152,35 +224,16 @@ export function migrateWorkspaceToStage(persisted: PersistedWorkspace): StageWor
     ? persisted.activeTabId
     : (projects[0]?.id ?? '')
 
-  // --- Rule 2 inputs: the three v2 ways a session could know its project.
-  // Leaf membership wins because it is the placement the user last arranged;
-  // detached/buried carry their own affinity; the fallback keeps a corrupt
-  // orphan at least inside the workspace's active group.
-  const leafProject = new Map<SessionId, TabId>()
-  for (const tab of persisted.tabs) {
-    for (const sessionId of collectLeaves(tab.root)) {
-      leafProject.set(sessionId, tab.id)
-    }
-  }
-  const detachedProject = new Map<SessionId, TabId>()
-  for (const record of Object.values(persisted.detachedSessions ?? {})) {
-    detachedProject.set(record.sessionId, record.projectTabId)
-  }
-  const buriedProject = new Map<SessionId, TabId>()
-  for (const record of persisted.buried ?? []) {
-    buriedProject.set(record.sessionId, record.sourceTabId)
-  }
-
+  // --- Rule 2 via the shared precedence (projectAffinityOf): leaf
+  // membership first, then detached record, then buried source, then the
+  // active tab. One precedence shared with the live selectors so persisted
+  // and runtime views can never disagree.
   // --- Rule 7: the pool is the OWNED set, not the raw sessions map.
   const owned = collectOwnedSessionIds(persisted)
   const sessions: Record<SessionId, PoolSession> = {}
   for (const [sessionId, meta] of Object.entries(persisted.sessions)) {
     if (!owned.has(sessionId)) continue
-    const named =
-      leafProject.get(sessionId) ??
-      detachedProject.get(sessionId) ??
-      buriedProject.get(sessionId) ??
-      activeProjectId
+    const named = projectAffinityOf(persisted, sessionId) ?? activeProjectId
     // A recorded affinity naming a project that no longer exists (possible
     // only in corrupt files — v2 ownership rejects those records) must not
     // leak a dangling TabId into v3, where it would filter the session out
