@@ -49,7 +49,13 @@ export function AppsSettingsRow() {
       setError(null)
       setNotice(null)
       try {
-        const result = await window.api.extensionsInstall(repoTarget)
+        // The gh-credential setting rides the call explicitly (default-on) so
+        // main never needs a second settings authority; see the setting's
+        // registry entry for why it exists.
+        const result = await window.api.extensionsInstall(
+          repoTarget,
+          useAppStore.getState().settings.extensionsGithubCliAuth,
+        )
         if (result.ok) {
           if (target === undefined) setRepo('')
           setNotice(`Installed ${result.entry.manifest.name} ${result.entry.manifest.version}`)

@@ -290,9 +290,90 @@
   --theme-radius-float: 14px;
 }
 
-/* ---------- Mode: Dark (default) ---------- */
+/* ---------- Mode: Nord (default) ----------
+ * `:root` shares this block on purpose: it is the palette painted before the
+ * first applyTheme run and the palette any unknown data-mode value degrades
+ * to, and both of those must be the DEFAULT theme or a fresh install flashes
+ * a different look for one frame. The previous default (Dark) used to sit
+ * here for the same reason; it moved to its own block below when Nord took
+ * over (#973). Accent-derived tokens keep using var(--theme-accent) so the
+ * accent picker works on Nord exactly as on every other built-in. */
 
 :root,
+[data-mode="dark-nord"] {
+  --theme-canvas: #171b21;
+  --theme-surface: #20242d;
+  --theme-surface-hi: #262b35;
+  --theme-ink: #d8dee9;
+  --theme-ink-dim: rgba(216, 222, 233, 0.68);
+  --theme-muted: rgba(216, 222, 233, 0.42);
+  --theme-border: #262b35;
+  --theme-border-hi: #3b4252;
+
+  /* Default accent — overridden at runtime via applyTheme() from ACCENTS. */
+  --theme-accent: #88c0d0;
+  --theme-accent-fg: #171b21;
+  --theme-accent-soft: color-mix(in srgb, var(--theme-accent) 14%, transparent);
+
+  /* Nord keeps the code slab on the canvas colour and lets the border carry
+     the edge; the old palette sank the slab below the canvas instead. */
+  --theme-code-bg: #171b21;
+  --theme-code-border: #2e3440;
+  --theme-danger: #bf616a;
+  --theme-danger-fg: #171b21;
+  --theme-danger-soft: color-mix(in srgb, var(--theme-danger) 15%, transparent);
+  --theme-danger-border: color-mix(in srgb, var(--theme-danger) 45%, transparent);
+  --theme-success: #a3be8c;
+  --theme-success-fg: #171b21;
+  --theme-success-soft: color-mix(in srgb, var(--theme-success) 15%, transparent);
+  --theme-success-border: color-mix(in srgb, var(--theme-success) 45%, transparent);
+  --theme-warning: #ebcb8b;
+  --theme-warning-fg: #171b21;
+  --theme-warning-soft: color-mix(in srgb, var(--theme-warning) 15%, transparent);
+  --theme-warning-border: color-mix(in srgb, var(--theme-warning) 45%, transparent);
+  --theme-info: #81a1c1;
+  --theme-info-fg: #171b21;
+  --theme-info-soft: color-mix(in srgb, var(--theme-info) 15%, transparent);
+  --theme-info-border: color-mix(in srgb, var(--theme-info) 45%, transparent);
+
+  /* Light text for things rendered on the dark code slab. In dark
+     mode these happen to match the normal ink tokens, but we keep
+     them as distinct tokens so the light-mode override block below
+     doesn't have to re-derive them. */
+  --theme-code-ink: #d8dee9;
+  --theme-code-ink-dim: rgba(216, 222, 233, 0.42);
+
+  /* User turns take a frost-blue wash, tool output a polar-night wash, so the
+     two read as different layers without either becoming a card. */
+  --theme-user-bg: rgba(94, 129, 172, 0.12);
+  --theme-tool-bg: rgba(46, 52, 64, 0.55);
+
+  /* Nord diffs are translucent tints of the semantic colours rather than the
+     opaque dedicated slabs the old palette used — on the canvas-colour code
+     slab a tint keeps the change readable without a second hard edge. */
+  --theme-diff-add-bg: rgba(163, 190, 140, 0.13);
+  --theme-diff-remove-bg: rgba(191, 97, 106, 0.13);
+  --theme-diff-add-fg: #a3be8c;
+  --theme-diff-remove-fg: #bf616a;
+
+  /* --theme-app-font is set at runtime by `applyTheme` in
+     app-state/settings/theme.ts, sourced from the user's global
+     `fontFamily` setting. It is deliberately NOT declared statically here:
+       - The inline style applied to <html> by applyTheme always wins
+         specificity-wise, so a static declaration would only be visible
+         during the brief window between first paint and applyTheme
+         running, which is closed by slice.ts calling applyTheme
+         synchronously on store creation.
+       - Carrying a static value would invite future-me to "update" it
+         when adding fonts and forget that the source of truth is the
+         FONT_FAMILIES array.
+     The `:root` fallback for safety lives at the top of the rules
+     block — see APP_FONT_CSS_VAR / FALLBACK_APP_FONT_FAMILY in
+     theme.ts for the value used if everything else fails. */
+}
+
+/* ---------- Mode: Dark (legacy default) ---------- */
+
 [data-mode="dark"] {
   --theme-canvas: #0a0a0a;
   --theme-surface: #111113;
@@ -303,9 +384,11 @@
   --theme-border: #1a1a1c;
   --theme-border-hi: #272729;
 
-  /* Default accent — overridden at runtime via applyAccent(). */
-  --theme-accent: #7dd3a0;
-  --theme-accent-fg: #0a0a0a;
+  /* Frost, not the retired Lime: the static value only matters as the no-JS
+     fallback because applyTheme overwrites it on the first store creation,
+     and the fallback must not be green any more (#973). */
+  --theme-accent: #88c0d0;
+  --theme-accent-fg: #171b21;
   --theme-accent-soft: color-mix(in srgb, var(--theme-accent) 12%, transparent);
 
   --theme-code-bg: #050507;
@@ -327,46 +410,17 @@
   --theme-info-soft: color-mix(in srgb, var(--theme-info) 14%, transparent);
   --theme-info-border: color-mix(in srgb, var(--theme-info) 42%, transparent);
 
-  /* Light text for things rendered on the dark code slab. In dark
-     mode these happen to match the normal ink tokens, but we keep
-     them as distinct tokens so the light-mode override block below
-     doesn't have to re-derive them. */
   --theme-code-ink: #e8e8e6;
   --theme-code-ink-dim: #a8a8a4;
 
-  /* Dark mode: a "light gray" step UP from the near-black canvas.
-     Calibrated to be obvious when scanning a scrollback but quiet
-     enough that it doesn't feel like a chat bubble. Slightly warmer
-     than surface-hi so it reads as its own layer, not elevated chrome. */
   --theme-user-bg: #1f1f23;
   --theme-tool-bg: #151518;
 
-  /* Dark-mode diff colors. These sit on top of --theme-code-bg
-     (#050507), so even though they look dim in isolation the
-     contrast against the slab is legible. Went with muted desaturated
-     tints rather than full GitHub red/green — the rest of the app
-     uses a single accent color and a loud diff would fight that. */
   --theme-diff-add-bg: #0d2416;
   --theme-diff-remove-bg: #2a1015;
   --theme-diff-add-fg: #4ade80;
   --theme-diff-remove-fg: #f87171;
-
-  /* --theme-app-font is set at runtime by `applyTheme` in
-     app-state/settings/theme.ts, sourced from the user's global
-     `fontFamily` setting. It is deliberately NOT declared statically here:
-       - The inline style applied to <html> by applyTheme always wins
-         specificity-wise, so a static declaration would only be visible
-         during the brief window between first paint and applyTheme
-         running, which is closed by slice.ts calling applyTheme
-         synchronously on store creation.
-       - Carrying a static value would invite future-me to "update" it
-         when adding fonts and forget that the source of truth is the
-         FONT_FAMILIES array.
-     The `:root` fallback for safety lives at the top of the rules
-     block — see APP_FONT_CSS_VAR / FALLBACK_APP_FONT_FAMILY in
-     theme.ts for the value used if everything else fails. */
 }
-
 [data-mode="dark-dim"] {
   --theme-canvas: #141516;
   --theme-surface: #1a1c1e;
@@ -443,6 +497,7 @@
   --theme-diff-remove-fg: #f7768e;
 }
 
+[data-contrast="high"][data-mode="dark-nord"],
 [data-contrast="high"][data-mode="dark"],
 [data-contrast="high"][data-mode="dark-dim"],
 [data-contrast="high"][data-mode="dark-tokyonight"] {
@@ -495,7 +550,7 @@
   --theme-border: #e2ddd1;
   --theme-border-hi: #c8c3b5;
 
-  --theme-accent: #3f7656;
+  --theme-accent: #5e81ac;
   --theme-accent-fg: #faf9f6;
   --theme-accent-soft: color-mix(in srgb, var(--theme-accent) 14%, transparent);
 
@@ -699,6 +754,62 @@
   --theme-editor-scrollbar-bg: color-mix(in srgb, var(--theme-muted) 34%, transparent);
   --theme-editor-scrollbar-hover-bg: color-mix(in srgb, var(--theme-muted) 54%, transparent);
   --theme-editor-scrollbar-active-bg: color-mix(in srgb, var(--theme-accent) 66%, transparent);
+}
+
+/* ---------- Nord semantic overrides ----------
+ * WHY a second Nord block, and why the compound selector: the other built-in
+ * modes restate only the primitive tokens and let the alias block above
+ * derive every interaction state from them. Nord ships opaque controls, a
+ * visible input border, its own scrim and shadow tints and its own scrollbar
+ * blues, so it has to override aliases. A plain `[data-mode="dark-nord"]`
+ * would tie with `:root` on specificity and lose to it on source order;
+ * `:root[data-mode="dark-nord"]` wins on specificity wherever it sits, the
+ * same trick the `[data-contrast][data-mode]` blocks rely on. Anything whose
+ * Nord value equals the alias derivation (panel-bg = surface, focus ring =
+ * accent, control-active = accent, editor-bg = canvas …) is deliberately not
+ * restated. Accent-derived values keep var(--theme-accent) so the accent
+ * picker still works on Nord. */
+:root[data-mode="dark-nord"] {
+  --theme-panel-border: #2e3440;
+
+  --theme-row-hover-bg: rgba(46, 52, 64, 0.75);
+  --theme-row-selected-bg: color-mix(in srgb, var(--theme-accent) 16%, transparent);
+  --theme-row-selected-solid-bg: color-mix(in srgb, var(--theme-accent) 16%, var(--theme-surface));
+  --theme-row-selected-fg: #eceff4;
+  --theme-row-danger-selected-bg: color-mix(in srgb, var(--theme-danger) 20%, transparent);
+
+  --theme-control-bg: #262b35;
+  --theme-control-hover-bg: #2e3440;
+  --theme-control-border: #3b4252;
+  --theme-control-border-hover: #4c566a;
+  --theme-control-fg: #d8dee9;
+
+  --theme-input-bg: #171b21;
+  --theme-input-border: #3b4252;
+  --theme-input-placeholder: rgba(216, 222, 233, 0.35);
+
+  --theme-tab-bg: #171b21;
+  --theme-tab-active-bg: #20242d;
+  --theme-tab-hover-bg: #262b35;
+
+  --theme-popover-bg: #20242d;
+  --theme-popover-border: #3b4252;
+  --theme-overlay-scrim: rgba(13, 14, 18, 0.65);
+  --theme-overlay-scrim-strong: rgba(13, 14, 18, 0.85);
+  --theme-shadow-color: rgba(13, 14, 18, 0.75);
+
+  --theme-code-current-line-bg: rgba(46, 52, 64, 0.70);
+  --theme-code-selection-bg: color-mix(in srgb, var(--theme-accent) 22%, transparent);
+  --theme-code-selection-inactive-bg: rgba(59, 66, 82, 0.55);
+  --theme-code-scrollbar-bg: rgba(76, 86, 106, 0.45);
+  --theme-code-scrollbar-hover-bg: rgba(94, 129, 172, 0.60);
+  --theme-code-scrollbar-active-bg: #5e81ac;
+
+  --theme-editor-current-line-bg: rgba(46, 52, 64, 0.60);
+  --theme-editor-selection-inactive-bg: rgba(59, 66, 82, 0.55);
+  --theme-editor-scrollbar-bg: rgba(76, 86, 106, 0.45);
+  --theme-editor-scrollbar-hover-bg: rgba(94, 129, 172, 0.60);
+  --theme-editor-scrollbar-active-bg: #5e81ac;
 }
 
 /* ---------- Globals ---------- */

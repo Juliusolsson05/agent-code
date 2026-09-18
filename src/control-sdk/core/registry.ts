@@ -59,8 +59,15 @@ export function createControlRegistry() {
         return controlFailure('stale_owner', 'The owner reloaded; observe its current generation')
       }
       const capability = registration.capabilities.get(request.capabilityId)!
+      // operationId is the durable outer call a bridge is executing on behalf
+      // of. The renderer bridge correlates its reply with a fresh requestId,
+      // so lifecycle tasks admitted by handlers must fall back to operationId
+      // — dropping it here made every window-executed task admit under the
+      // throwaway bridge id and fail journal lookup (#974).
       const result = await capability.execute(request.input, Object.freeze({
-        requestId: context.requestId, caller: Object.freeze({ ...context.caller }), owner: registration.owner,
+        requestId: context.requestId,
+        ...(context.operationId ? { operationId: context.operationId } : {}),
+        caller: Object.freeze({ ...context.caller }), owner: registration.owner,
       }))
       if (registrations.get(ownerKey(registration.owner)) !== registration) {
         // The handler might have finished just before its window closed. Do not

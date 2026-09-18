@@ -31,7 +31,10 @@ it('restores selection after hydration and reconciles install/update/remove/rein
   useAppStore.getState().setInstalledExtensions([])
   useAppStore.getState().setSettings(coerceSettings(JSON.parse(JSON.stringify({ ...DEFAULT_SETTINGS, mode }))))
   expect(useAppStore.getState().settings.mode).toBe(mode)
-  expect(document.documentElement.dataset.mode).toBe('dark')
+  // Unresolvable extension ids degrade to the DEFAULT built-in, whatever it is
+  // this release — asserting the constant (not a literal id) keeps this true
+  // the next time the shipped default changes.
+  expect(document.documentElement.dataset.mode).toBe(DEFAULT_SETTINGS.mode)
   const events: string[] = []
   const changed = () => events.push(canvas())
   window.addEventListener(THEME_CHANGED_EVENT, changed)
@@ -44,7 +47,7 @@ it('restores selection after hydration and reconciles install/update/remove/rein
     expect(canvas()).toBe('#654321')
     useAppStore.getState().setInstalledExtensions([{ ...entry(), present: false }])
     expect(canvas()).toBe('')
-    expect(document.documentElement.dataset.mode).toBe('dark')
+    expect(document.documentElement.dataset.mode).toBe(DEFAULT_SETTINGS.mode)
     expect(document.documentElement.dataset.contrast).toBe('high')
     useAppStore.getState().setInstalledExtensions([])
     expect(useAppStore.getState().settings.mode).toBe(mode)
@@ -61,7 +64,7 @@ it('keeps built-in and user-owned palettes independent of installed contribution
   const settings = { ...DEFAULT_SETTINGS, savedThemes: [saved], mode: saved.id }
   expect(resolveThemePayload(settings, [entry()])?.canvas).toBe('#abcdef')
   expect(resolveThemePayload({ ...settings, mode: 'dark' }, [entry()])).toBeNull()
-  expect(coerceSettings({ ...settings, mode: 'extension-theme:../escape' }).mode).toBe('dark')
+  expect(coerceSettings({ ...settings, mode: 'extension-theme:../escape' }).mode).toBe(DEFAULT_SETTINGS.mode)
 })
 
 it('sends resolved appearance to the phone without changing the persisted desktop selection', () => {
@@ -72,7 +75,7 @@ it('sends resolved appearance to the phone without changing the persisted deskto
   expect(settings.mode).toBe(mode)
   expect(remote.savedThemes).toEqual(settings.savedThemes)
   applyTheme(themeSettingsForRemote(settings, []))
-  expect(document.documentElement.dataset.mode).toBe('dark')
+  expect(document.documentElement.dataset.mode).toBe(DEFAULT_SETTINGS.mode)
   expect(canvas()).toBe('')
 })
 

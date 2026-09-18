@@ -20,6 +20,7 @@ import { join, relative, resolve as resolvePath, sep } from 'path'
 import { EXTENSIONS_DIR } from '@main/storage/paths.js'
 import { computeBundleHash } from '@main/extensions/bundleHash.js'
 import { BUNDLE_MAX_BYTES, BUNDLE_MAX_DEPTH, BUNDLE_MAX_ENTRIES } from './bundleLimits.js'
+import { githubApiHeaders, resolveGitHubCliToken } from './githubCli.js'
 import { ManifestError, parseExtensionManifest } from '@main/extensions/manifest.js'
 import { discardExtensionBundle, extensionBundleDirectory, readLedger, withLedgerLock, writeLedger } from '@main/extensions/ledger.js'
 import type { ExtensionManifest, InstalledExtension } from '@shared/types/extensions.js'
@@ -99,7 +100,70 @@ export function normalizeRepo(input: string): string {
   return `${owner}/${repo}`
 }
 
+/**
+ * True when a 403 from api.github.com means the anonymous per-IP quota is
+ * spent, not "forbidden". GitHub signals this with `x-ratelimit-remaining: 0`;
+ * the comparison is a string equality on purpose — the header is absent from
+ * non-throttled responses, and treating absence or a parse failure as
+ * "rate limited" would replace one lie with another (#980).
+ */
+function isRateLimited(res: Response): boolean {
+  return res.status === 403 && res.headers.get('x-ratelimit-remaining') === '0'
+}
+
+/**
+ * Turn a non-OK api.github.com response into the most actionable InstallError
+ * we can render. Pure on an already-received Response so the diagnosis is unit
+ * testable without a network — the sibling of normalizeRepo's testability
+ * stance in install.test.ts.
+ */
+export function githubApiFailure(res: Response, repo: string): InstallError {
+  if (isRateLimited(res)) {
+    // `x-ratelimit-reset` is epoch SECONDS. Anything unparseable means we
+    // simply omit the time; rendering "Invalid Date" would be worse than
+    // saying nothing, and a zero/negative reset is not a time anyone can wait
+    // for.
+    const resetSeconds = Number(res.headers.get('x-ratelimit-reset'))
+    const resetAt = Number.isFinite(resetSeconds) && resetSeconds > 0
+      ? new Date(resetSeconds * 1000)
+      : null
+    const resetPhrase = resetAt ? ` (resets at ${resetAt.toLocaleTimeString()})` : ''
+    return new InstallError(
+      `GitHub's API rate limit for this network is exhausted${resetPhrase}. ` +
+        `Waiting is the only automatic recovery — or install ${repo} through ` +
+        `"Load extension from folder".`,
+    )
+  }
+  if (res.status === 403) {
+    // A 403 WITH remaining quota is genuinely forbidden territory (a blocked
+    // repo, a credential-requiring action). Keep it distinct from throttling so
+    // the message never claims a limit that is not the cause.
+    return new InstallError(
+      `GitHub returned 403 for ${repo} without throttling — the repository may be ` +
+        `blocked, or this request needs credentials Agent Code does not have.`,
+    )
+  }
+  return new InstallError(`GitHub returned ${res.status} for ${repo}.`)
+}
+
 type ResolvedSource = { ref: string; tarballUrl: string }
+
+/**
+ * Ask the user's GitHub CLI for a credential and raise the two api.github.com
+ * requests from the 60/hour anonymous bucket to the 5000/hour authenticated
+ * one. WHY resolved once per install and threaded as data: the token must not
+ * outlive the attempt (rotation/revocation mid-session would otherwise keep a
+ * stale credential in play), and keeping it a parameter — never module state —
+ * is what guarantees the "memory only, this request only" hygiene rule.
+ */
+export type InstallOptions = {
+  githubCliAuth?: boolean
+  /** DI seam in the ConsentPrompt tradition: production leaves it unset and
+   *  gets the real `gh auth token` spawn; tests inject a deterministic
+   *  resolver so the wire-level integration (headers, 401 fallback, disabled
+   *  ⇒ no spawn) is observable without module-mock games. */
+  resolveCredential?: () => Promise<string | null>
+}
 
 /**
  * Pick which ref to install.
@@ -110,33 +174,47 @@ type ResolvedSource = { ref: string; tarballUrl: string }
  * releases is still installable, which matters a lot early on when the author and
  * the user are the same person.
  */
-async function resolveSource(repo: string): Promise<ResolvedSource> {
-  const headers = {
-    accept: 'application/vnd.github+json',
-    // GitHub rejects API requests without a User-Agent.
-    'user-agent': 'agent-code',
+async function resolveSource(repo: string, token: string | null): Promise<ResolvedSource> {
+  // Every api.github.com call goes through apiGet so the credential and its
+  // fallback live in exactly one place. The 401 retry is the fail-safe half of
+  // the feature: a rotated or revoked gh token must degrade to anonymous
+  // instead of failing an install that would have worked without it.
+  const apiGet = async (url: string): Promise<Response> => {
+    let res = await fetchWithDeadline(url, githubApiHeaders(token))
+    if (res.status === 401 && token != null) {
+      res = await fetchWithDeadline(url, githubApiHeaders(null))
+    }
+    return res
   }
 
   try {
-    const res = await fetchWithDeadline(`https://api.github.com/repos/${repo}/releases/latest`, headers)
+    const res = await apiGet(`https://api.github.com/repos/${repo}/releases/latest`)
     if (res.ok) {
       const body = (await res.json()) as { tag_name?: string; tarball_url?: string }
       if (body.tag_name && body.tarball_url) {
         return { ref: body.tag_name, tarballUrl: body.tarball_url }
       }
     }
-  } catch {
+    // A throttled 403 here means the repo-metadata call below is equally doomed
+    // — diagnose now instead of spending a second request of a quota we already
+    // know is empty. Every other non-OK status (404 on a repo with no releases
+    // is the common one) still falls through to the default-branch path.
+    if (isRateLimited(res)) throw githubApiFailure(res, repo)
+  } catch (error) {
     // Network failure here is not fatal — fall through to the default branch, which
     // uses a different host (codeload) and may still succeed. A hard failure will
-    // surface there with a better message.
+    // surface there with a better message. The rate-limit diagnosis above is an
+    // InstallError, not a network failure, and must propagate rather than be
+    // swallowed into a second doomed request.
+    if (error instanceof InstallError) throw error
   }
 
-  const res = await fetchWithDeadline(`https://api.github.com/repos/${repo}`, headers)
+  const res = await apiGet(`https://api.github.com/repos/${repo}`)
   if (res.status === 404) {
     throw new InstallError(`Repository ${repo} not found, or it is private.`)
   }
   if (!res.ok) {
-    throw new InstallError(`GitHub returned ${res.status} for ${repo}.`)
+    throw githubApiFailure(res, repo)
   }
   const body = (await res.json()) as { default_branch?: string }
   const branch = body.default_branch
@@ -654,9 +732,17 @@ export async function sweepAbandonedInstallDirectories(): Promise<void> {
 export async function installExtension(
   repoInput: string,
   promptConsent?: ConsentPrompt,
+  options?: InstallOptions,
 ): Promise<InstalledExtension> {
   const repo = normalizeRepo(repoInput)
-  const source = await resolveSource(repo)
+  // Credential first, before any network: the disabled path must call NOTHING
+  // (turning the toggle off also revokes the subprocess, not just the header),
+  // and resolution itself is fail-safe — null means the anonymous path, never
+  // a failed install.
+  const token = options?.githubCliAuth === false
+    ? null
+    : await (options?.resolveCredential ?? resolveGitHubCliToken)()
+  const source = await resolveSource(repo, token)
   const { bytes, sha256 } = await downloadTarball(source.tarballUrl)
 
   const work = await makeStagingDir()

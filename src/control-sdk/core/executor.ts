@@ -33,8 +33,12 @@ export function createControlExecutor(ports: {
   return {
     async invoke(request: ControlRequest, caller: ControlCaller): Promise<ControlResult> {
       const callId = ports.id()
+      // A missing request key must stay absent, never an explicit undefined:
+      // zod preserves explicit-undefined optional keys, so an unconditional
+      // spread would poison the in-memory journal cache with values that
+      // JSON.stringify silently drops on disk (#975).
       const base = { callId, instanceId: ports.instanceId, capabilityId: request.capabilityId,
-        caller: `${caller.kind}:${caller.id}`, requestKey: request.requestKey }
+        caller: `${caller.kind}:${caller.id}`, ...(request.requestKey ? { requestKey: request.requestKey } : {}) }
       const write = (kind: HistoryWrite['kind'], payload?: unknown, extra: Partial<HistoryWrite> = {}) =>
         ports.history.append({ ...base, at: ports.now(), kind, ...extra }, payload)
       let finish!: (result: ControlResult) => void

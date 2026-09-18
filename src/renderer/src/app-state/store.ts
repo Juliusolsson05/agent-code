@@ -59,7 +59,7 @@ export const useAppStore = create<AppStore>()(
         // v5 adds `settings.savedThemes` and widens `settings.mode` to hold a
         // `theme:<uuid>` id. Without a bump, an existing v4 user sitting on
         // `mode: 'custom'` would skip migration, keep a mode value that no
-        // longer resolves to anything, and boot to Dark with their custom
+        // longer resolves to anything, and boot to the default theme with their custom
         // palette silently orphaned inside customAppearanceJson.
         //
         // v6 adds `settings.savedPromptTemplates`. v7 adds
@@ -70,7 +70,12 @@ export const useAppStore = create<AppStore>()(
         // real product default and downstream session initialization reads it
         // synchronously, so older blobs must be backfilled before workspace
         // bootstrap can create or recover an agent.
-        version: 10,
+        //
+        // v11 reinterprets the old default appearance: a blob on Dark + Lime
+        // becomes Nord + Frost, and the Lime/Sage accent ids are retired
+        // (#973). coerceSettings does the work on every hydration; the bump is
+        // the record that a persisted VALUE changed meaning, per the rule above.
+        version: 11,
         storage: createSettingsStorage(),
         partialize: state => ({ settings: state.settings }),
         merge: (persisted, current) => {

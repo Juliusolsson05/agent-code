@@ -31,18 +31,18 @@
  *      taking effect, the token mapping has drifted and THAT is the bug. */
 
 :root {
-  --bg: var(--theme-canvas, #0a0a0a);
-  --surface: var(--theme-surface, #111113);
-  --surface-hi: var(--theme-surface-hi, #17171a);
-  --border: var(--theme-border, #1a1a1c);
-  --border-hi: var(--theme-border-hi, #272729);
-  --ink: var(--theme-ink, #e8e8e6);
-  --ink-dim: var(--theme-ink-dim, #a8a8a4);
-  --muted: var(--theme-muted, #5a5a56);
-  --accent: var(--theme-accent, #7dd3a0);
-  --accent-fg: var(--theme-accent-fg, #0a0a0a);
+  --bg: var(--theme-canvas, #171b21);
+  --surface: var(--theme-surface, #20242d);
+  --surface-hi: var(--theme-surface-hi, #262b35);
+  --border: var(--theme-border, #262b35);
+  --border-hi: var(--theme-border-hi, #3b4252);
+  --ink: var(--theme-ink, #d8dee9);
+  --ink-dim: var(--theme-ink-dim, #9aa0a9);
+  --muted: var(--theme-muted, #686d75);
+  --accent: var(--theme-accent, #88c0d0);
+  --accent-fg: var(--theme-accent-fg, #171b21);
   --danger: var(--theme-danger, #e06c75);
-  --ok: var(--theme-accent, #7dd3a0);
+  --ok: var(--theme-accent, #88c0d0);
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }

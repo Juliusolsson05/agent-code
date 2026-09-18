@@ -106,10 +106,10 @@ export const sessionCommands: CommandDef[] = [
       // the moment a switch edge was added for a provider whose prompts we
       // cannot parse, or an adapter for one with no switch edge.
       //
-      // sessionHasTranscript additionally excludes OpenCode Terminal (kind
-      // 'opencode', providerRuntime 'terminal'): its history loaders never
-      // populate `runtime.entries`, so prompt extraction had nothing to read
-      // even though promptHistoryExtraction is true for plain OpenCode.
+      // sessionHasTranscript keeps plain terminals out (no entries to extract
+      // from). OpenCode Terminal passes it since #971: #882's Stage 6 loads
+      // its history into `runtime.entries`, so prompt extraction reads real
+      // prompts — the modal opens over the TUI pane and mounts nothing on it.
       return getProviderFeatures(kind).promptHistoryExtraction && sessionHasTranscript(meta)
     },
     run: ({ workspace, ui }) => {
@@ -134,7 +134,9 @@ export const sessionCommands: CommandDef[] = [
     // mid-stream.
     id: 'rewind-to-prompt',
     category: 'session',
-    pickerVisibility: 'advanced',
+    // Default tier since the public-release audit (#973): un-hidden by hand
+    // on the owner's install, i.e. a daily action, not a niche one.
+
     surface: 'session',
     title: 'Rewind to Prompt…',
     description: '**What it does:** Rewinds the focused **agent session** to an earlier prompt.\n\n**Use when:** You want to branch from a previous point.\n\n**Notes:** The original transcript file is not edited.',
@@ -335,7 +337,9 @@ export const sessionCommands: CommandDef[] = [
     // handles the empty workspace case with a preview empty state.
     id: 'close-old-agents',
     category: 'workspace-tools',
-    pickerVisibility: 'advanced',
+    // Default tier since the public-release audit (#973): un-hidden by hand
+    // on the owner's install, i.e. a daily action, not a niche one.
+
     surface: 'app',
     title: 'Close Old Agents…',
     description: '**What it does:** Opens a batch cleanup modal for **agents and terminals** inactive longer than a chosen time.\n\n**Use when:** You want to close stale agents and terminals across all projects or selected projects.\n\n**Notes:** Defaults to 4 hours and excludes currently-running sessions unless you opt in.',
@@ -457,7 +461,9 @@ export const sessionCommands: CommandDef[] = [
     // pane to focus first.
     id: 'search-conversation-prompts',
     category: 'workspace-tools',
-    pickerVisibility: 'advanced',
+    // Default tier since the public-release audit (#973): un-hidden by hand
+    // on the owner's install, i.e. a daily action, not a niche one.
+
     surface: 'app',
     title: 'Search Conversations…',
     description: '**What it does:** Finds a past conversation by **title, name or prompt text** across every worktree of this repository and all providers.\n\n**Use when:** You remember what you asked or what it was called, but not where it was.\n\n**Notes:** Same picker as Resume Session…, opened with the search field focused.',
@@ -916,7 +922,9 @@ export const sessionCommands: CommandDef[] = [
   {
     id: 'copy-resume-command',
     category: 'session',
-    pickerVisibility: 'advanced',
+    // Default tier since the public-release audit (#973): un-hidden by hand
+    // on the owner's install, i.e. a daily action, not a niche one.
+
     surface: 'session',
     title: 'Copy Resume Command',
     description: '**What it does:** Copies a shell command to **resume this session**.\n\n**Use when:** You want to continue the agent outside the app.\n\n**Notes:** Produces the current provider’s verified CLI command.',
@@ -971,7 +979,9 @@ export const sessionCommands: CommandDef[] = [
   {
     id: 'duplicate-agent',
     category: 'create',
-    pickerVisibility: 'advanced',
+    // Default tier since the public-release audit (#973): un-hidden by hand
+    // on the owner's install, i.e. a daily action, not a niche one.
+
     surface: 'session',
     title: 'Duplicate Agent',
     description: '**What it does:** Clones the focused **agent session** into a new pane.\n\n**Use when:** You want a parallel branch of the same conversation.\n\n**Notes:** In **Dispatch**, the clone is created as a detached agent.',
@@ -1057,7 +1067,9 @@ export const sessionCommands: CommandDef[] = [
   {
     id: 'switch-provider',
     category: 'session',
-    pickerVisibility: 'advanced',
+    // Default tier since the public-release audit (#973): un-hidden by hand
+    // on the owner's install, i.e. a daily action, not a niche one.
+
     surface: 'session',
     title: 'Switch Provider',
     description: '**What it does:** Opens a destination picker for continuing the focused agent with Claude, Codex, OpenCode, or OpenCode Terminal.\n\n**Use when:** You want to continue the same work with a different provider.\n\n**Notes:** Saved sessions are translated; empty panes are replaced with a fresh pane.',

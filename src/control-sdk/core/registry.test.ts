@@ -29,6 +29,23 @@ describe('control registration lifetime and dispatch contracts', () => {
     expect(handler).toHaveBeenCalledWith({ sessionId: 'a' }, { ...context, owner })
   })
 
+  it('forwards the original durable operation id to the executing handler', async () => {
+    // The renderer bridge correlates replies with its own fresh requestId but
+    // passes the outer durable call through as operationId. Lifecycle tasks
+    // admit under that original id; dropping it made every window-executed
+    // task fail journal lookup (#974).
+    const handler = vi.fn(async ({ sessionId }: { sessionId: string }) => ({ shown: sessionId }))
+    const registry = createControlRegistry()
+    registry.register(owner, [navigation(handler)])
+    const bridged = { requestId: 'bridge-correlation-1', caller: context.caller, operationId: 'original-durable-call' }
+    expect(await registry.invoke({ capabilityId: 'agents.show', input: { sessionId: 'a' } }, bridged))
+      .toMatchObject({ ok: true })
+    expect(handler).toHaveBeenCalledWith({ sessionId: 'a' }, expect.objectContaining({
+      requestId: 'bridge-correlation-1',
+      operationId: 'original-durable-call',
+    }))
+  })
+
   it('never chooses the first window when several expose the same capability', async () => {
     const handler = vi.fn(async ({ sessionId }: { sessionId: string }) => ({ shown: sessionId }))
     const registry = createControlRegistry()

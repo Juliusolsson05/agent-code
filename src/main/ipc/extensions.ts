@@ -157,9 +157,14 @@ export function registerExtensionsIpc(): void {
   // the Settings UI's job a render, not a parse.
   ipcMain.handle(
     'extensions:install',
-    async (evt, repo: string): Promise<ExtensionInstallResult> => {
+    // `useGithubCliAuth` defaults to true via `!== false` so older renderers
+    // (and the remote companion) that call with one argument keep the
+    // credential upgrade without knowing it exists.
+    async (evt, repo: string, useGithubCliAuth?: boolean): Promise<ExtensionInstallResult> => {
       try {
-        const record = await installExtension(repo, consentPromptFor(evt, repo.trim()))
+        const record = await installExtension(repo, consentPromptFor(evt, repo.trim()), {
+          githubCliAuth: useGithubCliAuth !== false,
+        })
         return { ok: true, entry: { ...record, present: true } }
       } catch (error) {
         return { ok: false, error: error instanceof Error ? error.message : String(error) }
