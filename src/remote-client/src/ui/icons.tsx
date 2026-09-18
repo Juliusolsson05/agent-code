@@ -1,14 +1,14 @@
 // Phone chrome icon pipeline.
 //
-// WHY this module exists: the v1 chrome reached for emoji glyphs (🎤 ⏺ …)
-// for the mic states — the one place the phone visibly broke the app's
-// visual language. The desktop's canonical icon pipeline
-// (features/editor/lib/fileIcon.tsx) bundles @iconify-json/vscode-icons
-// bodies — but that set is FILE artwork: it has no mic, stop, send, or
-// chevron glyphs at all (verified against the package's icons.json). So
-// the phone authors the few chrome glyphs it needs as inline SVG and
-// adopts the app's own marker vocabulary (❯ ⎿ ●) everywhere a marker can
-// do the job:
+// WHY this module exists: the v1 chrome reached for emoji glyphs (the
+// microphone and record-bullet emoji) for the mic states — the one place
+// the phone visibly broke the app's visual language. The desktop's
+// canonical icon pipeline (features/editor/lib/fileIcon.tsx) bundles
+// @iconify-json/vscode-icons bodies — but that set is FILE artwork: it
+// has no mic, stop, send, or chevron glyphs at all (verified against the
+// package's icons.json). So the phone authors the few chrome glyphs it
+// needs as inline SVG and adopts the app's own marker vocabulary
+// (❯ ⎿ ●) everywhere a marker can do the job:
 //
 //   - Send keeps its text label; the composer's ❯ identity already says
 //     "send" in this app's language — a paper-plane icon would be the
