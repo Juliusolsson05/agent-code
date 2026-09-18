@@ -15,6 +15,13 @@ export type GoalLoopPhase = 'active' | 'paused' | 'ended'
 export type GoalLoopPauseReason = 'cap' | 'error' | 'user' | 'interrupted'
 export type GoalLoopEndReason = 'done' | 'blocked' | 'cancelled'
 
+// One list for the three places that must agree on it (main's zod schema,
+// the preload request type, the service): it was spelled out separately in
+// each, and the renderer could send an action main would reject.
+// `dismiss` removes an ENDED loop — the only way to clear its pane strip.
+export const GOAL_LOOP_CONTROL_ACTIONS = ['pause', 'resume', 'stop', 'raise-cap', 'dismiss'] as const
+export type GoalLoopControlAction = typeof GOAL_LOOP_CONTROL_ACTIONS[number]
+
 export type GoalLoopState = {
   sessionId: string
   goal: string

@@ -33,11 +33,16 @@ describe('GoalLoopStore', () => {
     const { store } = await makeStore()
     expect(await store.read()).toEqual({})
   })
-  it('preserves malformed storage instead of resetting it', async () => {
+  it('moves malformed storage aside instead of leaving it to be overwritten', async () => {
+    // The bytes must survive the WRITE that follows a failed read: the
+    // service starts empty and rewrites the whole document straight away, so
+    // "still at the original path after read()" protected nothing.
     const { store, file } = await makeStore()
     await writeFile(file, '{broken')
     await expect(store.read()).rejects.toThrow()
-    expect(await readFile(file, 'utf8')).toBe('{broken')
+    await store.write({ s1: loop() })
+    expect(await readFile(store.quarantineFile, 'utf8')).toBe('{broken')
+    expect((await store.read())['s1']).toEqual(loop())
   })
   it('rejects structurally invalid entries', async () => {
     const { store, file } = await makeStore()

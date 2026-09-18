@@ -20,12 +20,20 @@ afterEach(async () => {
   await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })))
 })
 
-async function setup(sessionId: string) {
+async function makeService() {
   const directory = await mkdtemp(join(tmpdir(), 'agent-code-goal-loop-'))
   directories.push(directory)
   const manager = Object.assign(new EventEmitter(), { deliverPromptToAgent: vi.fn(async () => ({ ok: true } as PromptDeliveryResult)) })
   const service = new GoalLoopService({ manager, store: new GoalLoopStore(join(directory, 'goal-loop.json')) })
   await service.start()
+  return { service, manager }
+}
+
+// `shared` lets two sessions talk to ONE service, which is production's shape
+// (one GoalLoopService behind every session's MCP server) and the only shape
+// in which session isolation can be observed at all.
+async function setup(sessionId: string, shared?: Awaited<ReturnType<typeof makeService>>) {
+  const { service, manager } = shared ?? await makeService()
   const server = createBuiltInMcpServer({ sessionId, cwd: '/project', domains: ['goal_loop'] }, { goalLoopService: service })
   const client = new Client({ name: 'goal-loop-test', version: '1' })
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
@@ -50,6 +58,20 @@ describe('Goal Loop MCP', () => {
     manager.emit('semantic-event', { sessionId: 's1', event: { type: 'turn_completed' } })
     await new Promise(resolve => setTimeout(resolve, 50))
     expect(manager.deliverPromptToAgent).toHaveBeenCalledTimes(1)
+  })
+  it('cannot end or replace another session\'s loop through the tool surface', async () => {
+    // The tools take no session id, so the only way to reach a loop is the
+    // authenticated scope. s2 must be unable to touch s1's loop even though
+    // both servers share the service that holds it.
+    const shared = await makeService()
+    const owner = await setup('s1', shared)
+    const intruder = await setup('s2', shared)
+    await owner.client.callTool({ name: 'goal_loop_start', arguments: { goal: 'Owner goal.', loopPrompt: 'Keep going.' } })
+    const completed = await intruder.client.callTool({ name: 'goal_loop_complete', arguments: { outcome: 'done', summary: 'Not mine to end.' } })
+    expect(completed.isError).toBe(true)
+    await intruder.client.callTool({ name: 'goal_loop_start', arguments: { goal: 'Intruder goal.', loopPrompt: 'Mine.' } })
+    expect(shared.service.snapshot()['s1']).toMatchObject({ phase: 'active', goal: 'Owner goal.' })
+    expect(shared.service.snapshot()['s2']).toMatchObject({ phase: 'active', goal: 'Intruder goal.' })
   })
   it('rejects complete from a session with no loop and validates input', async () => {
     const { client } = await setup('s2')

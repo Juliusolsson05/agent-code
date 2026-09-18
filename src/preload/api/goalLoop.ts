@@ -1,9 +1,9 @@
 import { ipcRenderer } from 'electron'
-import type { GoalLoopState } from '@shared/types/goalLoop.js'
+import type { GoalLoopControlAction, GoalLoopState } from '@shared/types/goalLoop.js'
 
 export type GoalLoopControlRequest = {
   sessionId: string
-  action: 'pause' | 'resume' | 'stop' | 'raise-cap'
+  action: GoalLoopControlAction
   value?: number
 }
 

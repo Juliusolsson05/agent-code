@@ -33,7 +33,8 @@ function validLoop(raw: unknown): raw is GoalLoopState {
  * change, so the document stays tiny; per-identity files would add eviction
  * machinery for a map the service already bounds (ended loops beyond
  * GOAL_LOOP_STORE_LIMIT are dropped before writing). Corrupt storage is
- * preserved on disk, mirroring TldrStore's never-silently-reset contract.
+ * never silently reset — read() moves it aside (see there for why that, and
+ * not TldrStore's refuse-to-write, is how this store keeps that promise).
  *
  * WHY no EventEmitter here: the service owns eventing and validation; the
  * store stays a dumb durable map so there is exactly one place that decides
@@ -48,24 +49,37 @@ export class GoalLoopStore {
     return result
   }
 
+  /** Where unreadable storage is moved. One fixed name, newest wins: the
+   * point is that the bytes survive for a human to look at, not an archive,
+   * and a timestamped name would be an unbounded directory of its own. */
+  get quarantineFile(): string { return `${this.file}.corrupt` }
+
   read(): Promise<Record<string, GoalLoopState>> {
     return this.serialize(async () => {
-      let source: string
       try {
         if ((await stat(this.file)).size > MAX_FILE_BYTES) throw new Error('Goal Loop storage exceeds its size limit.')
-        source = await readFile(this.file, 'utf8')
+        const document = JSON.parse(await readFile(this.file, 'utf8'))
+        const loops: unknown = document?.loops
+        if (document?.version !== 1 || !loops || typeof loops !== 'object' || Array.isArray(loops)
+          || Object.keys(loops).length > GOAL_LOOP_STORE_LIMIT
+          || !Object.values(loops).every(validLoop)) {
+          throw new Error(`Goal Loop storage is invalid; the original file has been moved to ${this.quarantineFile}.`)
+        }
+        return loops as Record<string, GoalLoopState>
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-        return {}
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {}
+        // WHY move it aside instead of just throwing, as TldrStore does:
+        // TldrStore keeps its promise because a failed load fails every later
+        // write too, so nothing ever replaces the bad file. This store cannot
+        // work that way — the service must start (it catches this error and
+        // runs empty) and then rewrites the whole document on its very next
+        // state change. The first version threw "the original file has been
+        // preserved" and start() overwrote that file a few lines later.
+        // Best-effort: if the rename itself fails there is nothing better to
+        // do, and the caller still learns the read failed.
+        await rename(this.file, this.quarantineFile).catch(() => {})
+        throw error
       }
-      const document = JSON.parse(source)
-      const loops: unknown = document?.loops
-      if (document?.version !== 1 || !loops || typeof loops !== 'object' || Array.isArray(loops)
-        || Object.keys(loops).length > GOAL_LOOP_STORE_LIMIT
-        || !Object.values(loops).every(validLoop)) {
-        throw new Error('Goal Loop storage is invalid; the original file has been preserved.')
-      }
-      return loops as Record<string, GoalLoopState>
     })
   }
 
