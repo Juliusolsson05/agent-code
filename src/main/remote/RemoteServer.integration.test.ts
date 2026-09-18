@@ -535,9 +535,13 @@ describe('v2 usage snapshot frame', () => {
         providers: [
           {
             provider: 'claude' as const,
-            ok: true as const,
-            limits: [],
-            spend: { cost: null, tasks: null, requests: null },
+            status: 'ok' as const,
+            sourceLabel: 'Claude',
+            plan: null,
+            rows: [],
+            spend: null,
+            extraUsage: null,
+            credits: null,
           },
         ],
       }),
