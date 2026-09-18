@@ -99,6 +99,23 @@ export function isLimitIdle(
 // imperative cross-process transaction and should become visible to a second
 // command invocation synchronously, without waiting for a render. Main holds a
 // matching lock as the authority; this one provides immediate pane feedback.
+/**
+ * How long a switch toast stays up when the switch LOST something.
+ *
+ * WHY lossy switches get their own duration: the toast is the only place the
+ * host reports what a switch cost (design principle 3: no lossy step is
+ * silent), and both toast surfaces default to about two seconds — 2,000 ms for
+ * a pane toast, 2,500 ms for the global one. That is fine for "Switched to
+ * Codex" and useless for a 150-character sentence telling the user their
+ * screenshot was dropped and they will need to paste it again; the first they
+ * would hear of it is the target asking what the image showed. Found in review
+ * of the pasted-image fix (#998): the disclosure existed and nobody could read
+ * it. Ten seconds is long enough to read three clamped lines and short enough
+ * not to sit on the pane; it is a judgement, not a measurement. Lossless
+ * switches keep the default so the common case stays quiet.
+ */
+export const LOSSY_SWITCH_TOAST_MS = 10_000
+
 const providerSwitchesInFlight = new Set<SessionId>()
 
 export async function switchAgentProvider(params: {

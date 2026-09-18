@@ -8,7 +8,15 @@ import type { ProviderSwitchBatch } from '@renderer/workspace/types'
 import { useBulkProviderSwitchActions } from '@renderer/workspace/hook/actions/bulkProviderSwitch'
 
 const { switchAgentProvider } = vi.hoisted(() => ({ switchAgentProvider: vi.fn() }))
-vi.mock('@renderer/workspace/hook/actions/providerSwitchCore', () => ({ switchAgentProvider }))
+// WHY the constant is restated here instead of pulled through `importOriginal`:
+// the real module drags in the whole switch transaction (IPC, session store),
+// which is exactly what this mock exists to keep out. The value is asserted
+// below, so a drift between this literal and the real one fails a test rather
+// than hiding.
+vi.mock('@renderer/workspace/hook/actions/providerSwitchCore', () => ({
+  switchAgentProvider,
+  LOSSY_SWITCH_TOAST_MS: 10_000,
+}))
 
 // This module had NO test file, which is how a two-click data-loss bug shipped
 // in it. These cases pin the return path's batch bookkeeping specifically:
@@ -41,14 +49,18 @@ function harness(batch: ProviderSwitchBatch | null) {
     ).lastProviderSwitchBatch
   }) as unknown as WorkspaceSetState
   const toasts: string[] = []
+  const toastDurations: Array<number | undefined> = []
   const { result } = renderHook(() => useBulkProviderSwitchActions(
     refs,
     setState,
     vi.fn() as unknown as WorkspaceSetRuntimes,
-    (message: string) => { toasts.push(message) },
+    (message: string, durationMs?: number) => {
+      toasts.push(message)
+      toastDurations.push(durationMs)
+    },
     {} as SessionActions,
   ))
-  return { result, state, toasts }
+  return { result, state, toasts, toastDurations }
 }
 
 function batchOf(...ids: string[]): ProviderSwitchBatch {
@@ -236,10 +248,24 @@ describe('bulk switch reporting', () => {
       status: 'switched',
       shrinkSummary: 'dropped 12 tool results',
     })
-    const { result, toasts } = harness(batchOf('a'))
+    const { result, toasts, toastDurations } = harness(batchOf('a'))
 
     await result.current.returnLastProviderSwitchBatch()
 
     expect(toasts[0]).toContain('dropped 12 tool results')
+    // ...and long enough to read. The global toast defaults to 2.5 s, which is
+    // fine for "Returned 1 agent" and useless for a sentence telling the user
+    // what their switch cost (review of #998: the disclosure existed and nobody
+    // could read it).
+    expect(toastDurations[0]).toBe(10_000)
+  })
+
+  it('keeps the default duration when nothing was lost', async () => {
+    switchAgentProvider.mockResolvedValue({ status: 'switched', shrinkSummary: null })
+    const { result, toastDurations } = harness(batchOf('a'))
+
+    await result.current.returnLastProviderSwitchBatch()
+
+    expect(toastDurations[0]).toBeUndefined()
   })
 })
