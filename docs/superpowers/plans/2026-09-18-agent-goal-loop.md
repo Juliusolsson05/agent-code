@@ -1106,3 +1106,12 @@ gh pr create --title "feat(goal-loop): harness-owned persistence loop that works
 - Spec coverage: MCP surface (T1/T5), continuation prompt (T2), durable store + interrupted recovery (T3/T4), state machine incl. cap/error/steering via reducer guards (T4), IPC + modal controls (T6/T7), palette/keybinding/settings (T7), tests incl. system test (T5), issue/PR sync (T8).
 - Deliberate spec refinements (record in PR body): loops keyed by sessionId (actuator constraint); latch+strip instead of extending tldr's PreviewKind (different data model); instructions-only domain teaching (no managed product skill — matches the workflows domain pattern).
 - Type consistency: `GoalLoopState` fields and `control` action names are identical across T1/T4/T6/T7.
+
+## Review notes (PR #1003)
+
+Two departures from the spec were found in review that the list above does not cover. Neither was changed; both are recorded here so they are decisions rather than accidents.
+
+- **Off by default, where the spec says default-on.** `goal_loop` is not in `DEFAULT_SETTINGS.defaultBuiltInMcpDomains`, and the Settings row says "Off by default". The spec's "Chosen defaults" says default-on. Left off: a loop spends model calls autonomously, so opt-in is the conservative reading — but this is an UNCONFIRMED product call, not an approved one.
+- **Parked agents are not woken.** The spec routes continuations for parked agents through `ensure-agent-live`. That request authorizes by `parentSessionId` (orchestration ownership) and a loop has no parent, so it cannot be reused as-is. A parked session fails delivery as retry-safe `not-ready` and the loop lands in paused(error): visible and resumable, never a prompt into a dead process. A loop-scoped wake is follow-up work.
+
+Fixed in review, each with a regression test (see the WHY comments at each site): the backoff retry ignored `retrySafe` and could re-send a delivered continuation; working state was only tracked while a loop was active, which let Claude's per-message `turn_completed` for the `goal_loop_start` call itself trigger continuation #1 mid-turn and left a loop paused mid-turn unable to resume; pause→resume during an in-flight delivery delivered twice; `persist()` evicted the newest entries instead of the oldest and never bounded paused loops; `start()` overwrote the corrupt file the store claimed to preserve; an ended loop's strip could not be dismissed; Raise cap past 175 was rejected by the IPC schema.
