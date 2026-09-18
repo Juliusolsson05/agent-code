@@ -57,7 +57,9 @@ New built-in domain `goal_loop`, registered exactly like the existing `goal` dom
 | `goal_loop_complete` | `outcome: 'done' \| 'blocked'`, `summary: string` | Call **only** when the goal is completely and utterly satisfied and verified — never to exit early. `blocked` is the honest exit when you need the user (missing input, impossible constraint). |
 
 - One active loop per session.
-- Domain default-on, user-configurable off (Settings registry row, same as Goal).
+- Domain off by default, user-configurable on (Settings registry row, same as Goal and every
+  sibling capability — the earlier "default-on" wording here contradicted the Settings
+  convention every other domain follows; corrected during PR review).
 - Domain unions to touch: `src/mcp/shared/types.ts` (`BuiltInMcpDomain`,
   `BUILT_IN_MCP_DOMAINS`, `CONFIGURABLE_BUILT_IN_MCP_DOMAINS`,
   `BUILT_IN_MCP_DOMAINS_BY_PROVIDER`).
@@ -139,7 +141,7 @@ A first-class **control** surface, not just a peek:
 - Command palette: `goal-loop-preview`, `goal-loop-stop`.
 - Keybinding: `Cmd+Shift+G` (subject to `npm run check:keybindings` conflict
   validation).
-- Settings row for the domain in `settingsRegistry.ts`, default-on.
+- Settings row for the domain in `settingsRegistry.ts`, off by default like its siblings.
 
 ## Testing
 
@@ -155,6 +157,6 @@ A first-class **control** surface, not just a peek:
 ## Chosen defaults (revisable)
 
 Cap 25 pause-at-cap; one loop per session; `blocked` outcome on complete; loops
-pause on provider switch; domain default-on; continuation prompt written once at
+pause on provider switch; domain off by default like its siblings; continuation prompt written once at
 `goal_loop_start` and reused verbatim every iteration (with only the harness header
 changing).
