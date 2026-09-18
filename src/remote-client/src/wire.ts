@@ -20,6 +20,27 @@ export type RemoteSessionSummary = {
   /** Epoch ms of last observed activity — picker sort key. Server-stamped
    *  at list time; the client bumps it locally from live session events. */
   lastActivityAt: number | null
+  // ── v2 identity overlays (remote-v2 rebuild). Optional mirrors of the
+  //  server's OutboundSessionSummary growth; absent on rows synthesized
+  //  locally from 'started' events until the next server-stamped list.
+  title?: string | null
+  agentName?: string | null
+  tabTitle?: string | null
+  pinned?: boolean
+  /** OpenCode execution runtime ('terminal' = the TUI runtime). Absent =
+   *  the structured runtime, and always absent for other providers. */
+  providerRuntime?: 'terminal' | null
+  subAgentCount?: number
+}
+
+/** One TLDR/Goal record, session-scoped on the wire. Field shapes mirror
+ *  the desktop's TldrRecord exactly so the peek surface can reuse the
+ *  desktop's freshness logic (relative times off updatedAt) unchanged. */
+export type RemoteNoteRecord = {
+  text: string
+  /** ISO timestamp. */
+  updatedAt: string
+  revision: number
 }
 
 export type FeedChannel =
@@ -50,6 +71,11 @@ export type OutboundFrame =
     }
   | { type: 'theme-settings'; themeSettings: Record<string, unknown> | null }
   | { type: 'session-list'; sessions: RemoteSessionSummary[] }
+  // v2 note frames — server-joined by sessionId (see wire notes in
+  // protocol/messages.ts). Unknown to old servers; we simply never receive
+  // them there, and the peek surfaces show their "unavailable" state.
+  | { type: 'tldr-updated'; sessionId: string } & RemoteNoteRecord
+  | { type: 'goal-updated'; sessionId: string } & RemoteNoteRecord
   | { type: 'session-event'; channel: FeedChannel; payload: unknown }
   | {
       type: 'reply'

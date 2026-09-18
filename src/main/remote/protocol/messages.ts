@@ -190,6 +190,26 @@ export type OutboundFrame =
     }
   | { type: 'theme-settings'; themeSettings: Record<string, unknown> | null }
   | { type: 'session-list'; sessions: OutboundSessionSummary[] }
+  // ── v2 note frames (remote-v2 rebuild). TLDR and Goal records, keyed by
+  // SESSION id — the server owns the identity join (workspace projection →
+  // TldrStore identity), so the phone never learns the identity scheme and
+  // these frames drop safely on old bundles (unknown frame type, ignored).
+  // Read-only pushes: nothing on the phone can write these back.
+  | {
+      type: 'tldr-updated'
+      sessionId: string
+      text: string
+      /** ISO timestamp, matching TldrRecord.updatedAt exactly. */
+      updatedAt: string
+      revision: number
+    }
+  | {
+      type: 'goal-updated'
+      sessionId: string
+      text: string
+      updatedAt: string
+      revision: number
+    }
   | {
       type: 'session-event'
       channel:

@@ -10,7 +10,7 @@ import { DeviceRegistry } from './auth/deviceRegistry.js'
 import { SessionFeedSource } from './SessionFeedSource.js'
 import { LanTransport } from './transport/LanTransport.js'
 import { RemoteServer } from './RemoteServer.js'
-import type { RemoteSessionControl, RemoteWorkspaceReadModel } from './RemoteServer.js'
+import type { RemoteSessionControl, RemoteWorkspaceReadModel, RemoteNoteStore } from './RemoteServer.js'
 
 // End-to-end over real sockets: pairing over HTTP, authenticated WS,
 // feed fan-out, and the scope gate applied to a live connection. The
@@ -135,6 +135,8 @@ async function restartServer(options?: {
   /** v2 identity read model; absent keeps v1 summaries (and every
    *  pre-existing test on this fixture runs exactly as before). */
   workspace?: RemoteWorkspaceReadModel
+  /** v2 TLDR/Goal note stores; absent disables note frames. */
+  notes?: { tldr: RemoteNoteStore; goal: RemoteNoteStore }
 }): Promise<void> {
   await server?.stop()
   feedSource?.dispose()
@@ -146,6 +148,7 @@ async function restartServer(options?: {
     registry,
     transport: new LanTransport({ port: 0 }),
     ...(options?.workspace ? { workspace: options.workspace } : {}),
+    ...(options?.notes ? { notes: options.notes } : {}),
   })
   const { url } = await server.start()
   // The LAN URL uses the machine's LAN IP; loopback is fine for tests.

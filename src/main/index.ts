@@ -939,6 +939,10 @@ async function startApp(): Promise<void> {
     // the projection itself observes the store, so remote disabled costs
     // it nothing and enable picks up whatever has opened by then.
     getWorkspace: () => remoteWorkspaceProjection,
+    // TLDR/Goal note stores — constructed later in startup (shared with the
+    // desktop's IPC surface); remote only reads and subscribes, the MCP
+    // tools remain the only writers.
+    getNotes: () => ({ tldr: tldrStore, goal: goalStore }),
     clientDistDir: join(app.getAppPath(), 'out', 'remote-client'),
     // Tunnel binary resolution — bundled artifact first (packaged app),
     // then the third_party dev cache (populated by `npm run

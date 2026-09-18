@@ -9,7 +9,7 @@ import { DeviceRegistry } from '@main/remote/auth/deviceRegistry.js'
 import type { PairedDevice } from '@main/remote/auth/deviceRegistry.js'
 import { loadOrCreateRemoteSecret, REMOTE_STATE_DIR } from '@main/remote/auth/secret.js'
 import { RemoteServer } from '@main/remote/RemoteServer.js'
-import type { RemoteWorkspaceReadModel } from '@main/remote/RemoteServer.js'
+import type { RemoteWorkspaceReadModel, RemoteNoteStore } from '@main/remote/RemoteServer.js'
 import { SessionFeedSource } from '@main/remote/SessionFeedSource.js'
 import { LanTransport } from '@main/remote/transport/LanTransport.js'
 import { CloudflaredTunnel } from '@main/remote/transport/CloudflaredTunnel.js'
@@ -116,6 +116,9 @@ export type RemoteControllerDeps = {
    *  and remote is only ever enabled by a later user action. Called at
    *  enable-time; a null return degrades summaries to the v1 shape. */
   getWorkspace?: () => RemoteWorkspaceReadModel | null
+  /** v2 TLDR/Goal stores for the note frames; getter for the same
+   *  construction-order reason as getWorkspace. */
+  getNotes?: () => { tldr: RemoteNoteStore; goal: RemoteNoteStore } | null
 }
 
 export class RemoteController extends EventEmitter {
@@ -200,6 +203,7 @@ export class RemoteController extends EventEmitter {
         getThemeSettings: () => this.themeSettings,
         journal: this.deps.journal ?? null,
         workspace: this.deps.getWorkspace?.() ?? null,
+        notes: this.deps.getNotes?.() ?? null,
         transcribeAudio: async (audio, mimeType) => {
           // The Deepgram key stays here in the main process — the phone never
           // receives it. Mirrors ipc/dictation's env-only key resolution and

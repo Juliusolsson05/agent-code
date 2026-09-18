@@ -368,3 +368,99 @@ describe('v2 session summary overlays', () => {
     ws.close()
   })
 })
+
+// ── v2 TLDR/Goal note frames ──────────────────────────────────────────────
+//
+// The phone's peek surfaces need three guarantees pinned here: a freshly
+// connected socket receives CURRENT records (bootstrap), a live store
+// update reaches connected phones with the identity→session join applied,
+// and an update for an identity no session carries produces no frame.
+describe('v2 TLDR/Goal note frames', () => {
+  type FakeStore = ReturnType<typeof fakeNoteStore>
+  function fakeNoteStore() {
+    const listeners = new Set<(u: { identity: string; record: { text: string; updatedAt: string; revision: number } }) => void>()
+    const records: Record<string, { text: string; updatedAt: string; revision: number }> = {}
+    return {
+      on: (_event: 'changed', listener: (u: never) => void) => {
+        listeners.add(listener as never)
+      },
+      off: (_event: 'changed', listener: (u: never) => void) => {
+        listeners.delete(listener as never)
+      },
+      read: async (identities: string[]) =>
+        Object.fromEntries(identities.filter(id => records[id]).map(id => [id, records[id]])),
+      /** Seed/emit exactly what TldrStore emits on update(). */
+      publish(identity: string, record: { text: string; updatedAt: string; revision: number }) {
+        records[identity] = record
+        for (const listener of listeners) listener({ identity, record })
+      },
+    }
+  }
+
+  function frameIs(frames: unknown[], type: string, pred: (f: Record<string, unknown>) => boolean) {
+    return framesOfType(frames, type).some(pred)
+  }
+
+  it('bootstraps current records with the identity→session join on connect', async () => {
+    const workspace = {
+      snapshot: () =>
+        new Map([['s1', { sessionId: 's1', title: null, agentName: null, tabTitle: null, pinned: false, tldrIdentity: 't-1', cwd: null, kind: 'claude' }]]),
+      onChange: () => () => {},
+    }
+    const tldr = fakeNoteStore()
+    const goal = fakeNoteStore()
+    tldr.publish('t-1', { text: 'Fixing the feed gutter', updatedAt: '2026-09-17T10:00:00Z', revision: 3 })
+    goal.publish('t-1', { text: 'Ship remote v2', updatedAt: '2026-09-17T09:00:00Z', revision: 1 })
+    await restartServer({ workspace, notes: { tldr, goal } })
+    manager.emit('started', { sessionId: 's1', kind: 'claude', projectDir: '/dev/x' })
+
+    const { ws, frames } = await openAuthed()
+    await waitFor(frames, f => frameIs(f, 'goal-updated', () => true))
+    expect(frameIs(frames, 'tldr-updated', f => f.sessionId === 's1' && f.text === 'Fixing the feed gutter' && f.revision === 3)).toBe(true)
+    expect(frameIs(frames, 'goal-updated', f => f.sessionId === 's1' && f.text === 'Ship remote v2')).toBe(true)
+    ws.close()
+  })
+
+  it('forwards live updates to connected phones, joined by session', async () => {
+    const listeners = new Set<() => void>()
+    const workspace = {
+      snapshot: () =>
+        new Map([
+          ['s1', { sessionId: 's1', title: null, agentName: null, tabTitle: null, pinned: false, tldrIdentity: 't-1', cwd: null, kind: 'claude' }],
+          ['s2', { sessionId: 's2', title: null, agentName: null, tabTitle: null, pinned: false, tldrIdentity: 't-2', cwd: null, kind: 'codex' }],
+        ]),
+      onChange: (cb: () => void) => {
+        listeners.add(cb)
+        return () => listeners.delete(cb)
+      },
+    }
+    const tldr = fakeNoteStore()
+    const goal = fakeNoteStore()
+    await restartServer({ workspace, notes: { tldr, goal } })
+    manager.emit('started', { sessionId: 's1', kind: 'claude', projectDir: '/dev/x' })
+    manager.emit('started', { sessionId: 's2', kind: 'codex', projectDir: '/dev/y' })
+    const { ws, frames } = await openAuthed()
+
+    tldr.publish('t-1', { text: 'Updated live', updatedAt: '2026-09-17T11:00:00Z', revision: 4 })
+    await waitFor(frames, f => frameIs(f, 'tldr-updated', fr => fr.sessionId === 's1' && fr.text === 'Updated live'))
+    // Joined to the OWNING session only — s2 carries a different identity.
+    expect(frameIs(frames, 'tldr-updated', fr => fr.sessionId === 's2')).toBe(false)
+    ws.close()
+  })
+
+  it('is silent for identities no session carries', async () => {
+    const workspace = {
+      snapshot: () => new Map(),
+      onChange: () => () => {},
+    }
+    const tldr = fakeNoteStore()
+    const goal = fakeNoteStore()
+    await restartServer({ workspace, notes: { tldr, goal } })
+    const { ws, frames } = await openAuthed()
+    tldr.publish('nobody', { text: 'orphan', updatedAt: '2026-09-17T11:00:00Z', revision: 1 })
+    // Give the (wrong) frame a chance to arrive before asserting absence.
+    await new Promise(resolve => setImmediate(resolve))
+    expect(framesOfType(frames, 'tldr-updated')).toHaveLength(0)
+    ws.close()
+  })
+})

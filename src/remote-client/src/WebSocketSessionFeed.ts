@@ -24,6 +24,7 @@ import type {
   InboundFrame,
   InboundMessage,
   OutboundFrame,
+  RemoteNoteRecord,
   RemoteSessionSummary,
 } from './wire'
 
@@ -111,6 +112,15 @@ export class WebSocketSessionFeed implements SessionFeed {
   private readonly sessionListListeners = new Set<(s: RemoteSessionSummary[]) => void>()
   private readonly connectionListeners = new Set<(s: ConnectionState) => void>()
   private readonly sttListeners = new Set<(available: boolean | null) => void>()
+  // v2 note state: latest TLDR/Goal record per session. Kept here (not in
+  // TranscriptStore) because notes are glance metadata, not transcript —
+  // they outlive session views and belong to the connection, exactly like
+  // the session list itself. Bootstrap frames from the server seed these
+  // at (re)connect; live updates replace per session.
+  private readonly tldrBySession = new Map<string, RemoteNoteRecord>()
+  private readonly goalBySession = new Map<string, RemoteNoteRecord>()
+  private readonly tldrListeners = new Set<(e: { sessionId: string; record: RemoteNoteRecord }) => void>()
+  private readonly goalListeners = new Set<(e: { sessionId: string; record: RemoteNoteRecord }) => void>()
   private readonly pending = new Map<string, Pending>()
   private socket: WebSocketLike | null = null
   private disposed = false
@@ -157,6 +167,26 @@ export class WebSocketSessionFeed implements SessionFeed {
   onSttAvailability(cb: (available: boolean | null) => void): Unsub {
     this.sttListeners.add(cb)
     return () => this.sttListeners.delete(cb)
+  }
+
+  // --- v2 note surface (TLDR / Goal peeks) ---
+
+  getTldrRecord(sessionId: string): RemoteNoteRecord | null {
+    return this.tldrBySession.get(sessionId) ?? null
+  }
+
+  getGoalRecord(sessionId: string): RemoteNoteRecord | null {
+    return this.goalBySession.get(sessionId) ?? null
+  }
+
+  onTldrChanged(cb: (e: { sessionId: string; record: RemoteNoteRecord }) => void): Unsub {
+    this.tldrListeners.add(cb)
+    return () => this.tldrListeners.delete(cb)
+  }
+
+  onGoalChanged(cb: (e: { sessionId: string; record: RemoteNoteRecord }) => void): Unsub {
+    this.goalListeners.add(cb)
+    return () => this.goalListeners.delete(cb)
   }
 
   dispose(): void {
@@ -484,6 +514,26 @@ export class WebSocketSessionFeed implements SessionFeed {
       case 'theme-settings':
         applyRemoteThemeSettings(frame.themeSettings)
         return
+      case 'tldr-updated': {
+        const record: RemoteNoteRecord = {
+          text: frame.text,
+          updatedAt: frame.updatedAt,
+          revision: frame.revision,
+        }
+        this.tldrBySession.set(frame.sessionId, record)
+        for (const cb of [...this.tldrListeners]) cb({ sessionId: frame.sessionId, record })
+        return
+      }
+      case 'goal-updated': {
+        const record: RemoteNoteRecord = {
+          text: frame.text,
+          updatedAt: frame.updatedAt,
+          revision: frame.revision,
+        }
+        this.goalBySession.set(frame.sessionId, record)
+        for (const cb of [...this.goalListeners]) cb({ sessionId: frame.sessionId, record })
+        return
+      }
       case 'error':
         return
     }

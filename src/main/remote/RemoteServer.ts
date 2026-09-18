@@ -19,6 +19,7 @@ import { isAgentProviderKind } from '@shared/types/providerKind.js'
 import type { PromptDeliveryResult } from '@shared/types/providerConfig.js'
 import type { SessionBackendSnapshot } from '@shared/types/session.js'
 import type { RemoteSessionIdentity } from './workspaceProjection.js'
+import type { TldrRecord, TldrUpdate } from '@shared/types/tldr.js'
 
 import { DevicePairing } from '@main/remote/auth/DevicePairing.js'
 import type { DeviceRegistry } from '@main/remote/auth/deviceRegistry.js'
@@ -108,6 +109,20 @@ export type RemoteWorkspaceReadModel = {
   onChange(listener: () => void): () => void
 }
 
+/**
+ * The slice of a TldrStore (or the Goal store, which is a second instance
+ * of the same class) the remote subsystem consumes. Structural for the same
+ * reason as every other dep here: tests inject an EventEmitter + read spy,
+ * and the server's blast radius stays inspectable. The stores themselves
+ * are main-resident and shared with the desktop's IPC — remote only READS
+ * and subscribes; the MCP tools remain the only writers.
+ */
+export type RemoteNoteStore = {
+  read(identities: string[]): Promise<Record<string, TldrRecord>>
+  on(event: 'changed', listener: (update: TldrUpdate) => void): unknown
+  off(event: 'changed', listener: (update: TldrUpdate) => void): unknown
+}
+
 export type RemoteServerDeps = {
   manager: RemoteSessionControl
   feedSource: SessionFeedSource
@@ -148,6 +163,9 @@ export type RemoteServerDeps = {
   /** v2 identity projection (titles, agent names, tabs, pins). See
    *  RemoteWorkspaceReadModel above; absent = v1 summaries. */
   workspace?: RemoteWorkspaceReadModel | null
+  /** v2 TLDR/Goal stores for the note frames. Absent = no note frames at
+   *  all (the phone's peek surfaces show their "unavailable" state). */
+  notes?: { tldr: RemoteNoteStore; goal: RemoteNoteStore } | null
 }
 
 const INTERRUPT_BYTES = '\x1b'
@@ -182,6 +200,7 @@ export class RemoteServer extends EventEmitter {
   private readonly sockets = new Set<ClientSocket>()
   private feedUnsub: (() => void) | null = null
   private workspaceUnsub: (() => void) | null = null
+  private readonly noteUnsubs: Array<() => void> = []
 
   // Late-joiner bootstrap caches. A phone that connects while every agent is
   // idle would otherwise stare at blank panes until the next event happens
@@ -223,6 +242,36 @@ export class RemoteServer extends EventEmitter {
     this.workspaceUnsub = this.deps.workspace?.onChange(() => {
       this.broadcastSessionList()
     }) ?? null
+
+    // v2: TLDR/Goal notes. The stores emit identity-keyed updates; the
+    // workspace projection owns identity→sessionId, so the JOIN lives here
+    // — the phone only ever hears session-scoped frames. One update can map
+    // to several sessions (a provider switch briefly keeps both panes), so
+    // fan out per matched session rather than picking one.
+    const notes = this.deps.notes
+    if (notes) {
+      const forward =
+        (kind: 'tldr-updated' | 'goal-updated', store: RemoteNoteStore) =>
+        (update: TldrUpdate) => {
+          for (const sessionId of this.sessionIdsForIdentity(update.identity)) {
+            this.broadcast({
+              type: kind,
+              sessionId,
+              text: update.record.text,
+              updatedAt: update.record.updatedAt,
+              revision: update.record.revision,
+            })
+          }
+        }
+      const onTldr = forward('tldr-updated', notes.tldr)
+      const onGoal = forward('goal-updated', notes.goal)
+      notes.tldr.on('changed', onTldr)
+      notes.goal.on('changed', onGoal)
+      this.noteUnsubs.push(
+        () => notes.tldr.off('changed', onTldr),
+        () => notes.goal.off('changed', onGoal),
+      )
+    }
 
     // Prime the late-joiner caches from the manager's own snapshot caches.
     // The feed tap only observes events AFTER enable; without this, an agent
@@ -279,6 +328,7 @@ export class RemoteServer extends EventEmitter {
     this.feedUnsub = null
     this.workspaceUnsub?.()
     this.workspaceUnsub = null
+    for (const unsub of this.noteUnsubs.splice(0)) unsub()
     for (const client of this.sockets) {
       client.ws.close(1001, 'server stopping')
     }
@@ -580,6 +630,13 @@ export class RemoteServer extends EventEmitter {
       sttAvailable: Boolean(this.deps.transcribeAudio) && (this.deps.isSttAvailable?.() ?? true),
     })
     this.send(ws, { type: 'session-list', sessions: this.summarizeSessions() })
+    // v2: current TLDR/Goal records for the listed sessions, so a freshly
+    // connected phone's peek surfaces are instantly correct instead of
+    // blank until an agent happens to update. Per-socket (bootstrap, not
+    // broadcast) and fire-and-forget: a slow store read must not delay the
+    // socket's hello path, and a failed read degrades to the peek's
+    // "unavailable" state — never an error frame.
+    void this.sendNoteBootstrap(ws)
     ws.on('error', () => ws.terminate())
     ws.on('message', data => {
       void this.onMessage(ws, String(data))
@@ -875,6 +932,55 @@ export class RemoteServer extends EventEmitter {
   private broadcastSessionList(): void {
     if (!this.server) return
     this.broadcast({ type: 'session-list', sessions: this.summarizeSessions() })
+  }
+
+  /** Reverse join: which live sessions carry this TLDR/Goal identity. */
+  private sessionIdsForIdentity(identity: string): string[] {
+    const identities = this.deps.workspace?.snapshot()
+    if (!identities) return []
+    const out: string[] = []
+    for (const [sessionId, record] of identities) {
+      if (record.tldrIdentity === identity) out.push(sessionId)
+    }
+    return out
+  }
+
+  /** Send the CURRENT tldr/goal records for every listed session that has
+   *  an identity, to one socket. Batched store reads (one per store, not
+   *  per session) keep this one file read's worth of work at connect. */
+  private async sendNoteBootstrap(ws: WebSocket): Promise<void> {
+    const notes = this.deps.notes
+    const identitiesBySession = new Map<string, string>()
+    for (const [sessionId, record] of this.deps.workspace?.snapshot() ?? []) {
+      if (record.tldrIdentity) identitiesBySession.set(sessionId, record.tldrIdentity)
+    }
+    if (!notes || identitiesBySession.size === 0) return
+    const identities = [...new Set(identitiesBySession.values())]
+    const [tldr, goal] = await Promise.all([
+      notes.tldr.read(identities).catch(() => ({})),
+      notes.goal.read(identities).catch(() => ({})),
+    ])
+    if (ws.readyState !== 1 /* WebSocket.OPEN */) {
+      // Socket died while the store read was in flight; nothing to send.
+      return
+    }
+    for (const [sessionId, identity] of identitiesBySession) {
+      for (const [kind, records] of [
+        ['tldr-updated', tldr],
+        ['goal-updated', goal],
+      ] as const) {
+        const record = (records as Record<string, TldrRecord>)[identity]
+        if (record) {
+          this.send(ws, {
+            type: kind,
+            sessionId,
+            text: record.text,
+            updatedAt: record.updatedAt,
+            revision: record.revision,
+          })
+        }
+      }
+    }
   }
 
   private send(ws: WebSocket, frame: OutboundFrame): void {
