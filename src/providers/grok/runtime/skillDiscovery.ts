@@ -20,5 +20,7 @@
 import type { AgentSkillDiscovery, AgentSkillDiscoveryContext } from '@shared/types/agentSkills.js'
 
 export async function discoverGrokSkillRoots(_context: AgentSkillDiscoveryContext): Promise<AgentSkillDiscovery> {
-  return { roots: [] }
+  // A visible notice rather than silence: the Skills UI can explain why a
+  // native Grok root list is empty instead of looking broken.
+  return { roots: [], notices: ['Native Grok skill locations are not yet recorded; personal agent skills still appear from the shared locations.'] }
 }

@@ -264,8 +264,24 @@ export class GrokSession extends EventEmitter implements AgentSession {
     })
     headless.on('semantic', event => this.emit('semantic-event', event))
     headless.on('entry', record => this.emit('jsonl-entry', record, headless.getTranscriptFile()))
-    headless.on('history', boundary => this.emit('history-boundary', { boundary, file: headless.getTranscriptFile() }))
-    headless.on('conditions', snapshot => this.emit('conditions', snapshot))
+    headless.on('history', boundary => {
+      // Flat payload per ProviderHistoryBoundaryEvent; the package's sessionId
+      // field is dropped because the session identity is this pane's own state.
+      this.emit('history-boundary', {
+        type: boundary.type, generation: boundary.generation, snapshotByteLength: boundary.snapshotByteLength,
+        ...('byteOffset' in boundary ? { byteOffset: boundary.byteOffset } : {}),
+        ...('complete' in boundary ? { complete: boundary.complete } : {}),
+        file: headless.getTranscriptFile(),
+      })
+    })
+    headless.on('conditions', snapshot => {
+      // WHY the cast: the shared snapshot's provider union is AgentProviderKind,
+      // and adding 'grok' to that kind is Stage 6 registration (it trips the
+      // five-registry compile checklist on purpose). The snapshot's shape is the
+      // shared conditions core's, which this package builds its modules on, so
+      // the cast is a kind-label widening, not a structural one.
+      this.emit('conditions', snapshot as unknown as AgentSessionEvents['conditions'][0])
+    })
     headless.on('session-switched', ({ to }) => {
       // The fence the contract requires (decision terminal-conversation-change):
       // this pane stops forwarding input and reports not ready. The user
@@ -462,14 +478,13 @@ export class GrokSession extends EventEmitter implements AgentSession {
   /** SessionOptions.builtInMcpServers (app domains) → the package's http server shape. */
   private toGrokMcpServers(servers: NonNullable<SessionOptions['builtInMcpServers']>): GrokMcpServer[] {
     const grok: GrokMcpServer[] = []
+    // The app's built-in configs are all http servers with an optional bearer
+    // (kept OUT of headers so launchers never publish it); Grok's native server
+    // shape takes headers as a list, bearer included.
     for (const server of servers) {
-      if (server.transport !== 'http' || !server.url) continue
-      grok.push({
-        type: 'http',
-        name: server.name,
-        url: server.url,
-        headers: Object.entries(server.headers ?? {}).map(([name, value]) => ({ name, value })),
-      })
+      const headers = Object.entries(server.headers ?? {}).map(([name, value]) => ({ name, value }))
+      if (server.bearerToken) headers.push({ name: 'Authorization', value: `Bearer ${server.bearerToken}` })
+      grok.push({ type: 'http', name: server.name, url: server.url, headers })
     }
     return grok
   }

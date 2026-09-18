@@ -140,6 +140,10 @@ export type CodexPromptEvidenceDiagnostic = {
 }
 
 export type CodexSessionEvents = {
+  // Declared for AgentSession contract parity (grok Stage 4): a durable-history
+  // generation boundary. This provider never emits it today; it exists so the
+  // shared event map can carry providers whose transcripts rewrite in place.
+  'history-boundary': [{ type: 'reset' | 'caught-up'; generation: number; snapshotByteLength: number; byteOffset?: number; complete?: boolean; file: string }]
   started: [{ projectDir: string; proxyUrl?: string }]
   'input-readiness': [AgentInputReadiness]
   // Declared, never emitted. This provider latches a coarse ready boolean and
