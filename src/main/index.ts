@@ -10,6 +10,9 @@ import { performanceTraceController } from '@main/performance/PerformanceTraceCo
 import { TldrStore } from '@main/tldr/TldrStore.js'
 import { registerGoalIpc, registerTldrIpc } from '@main/tldr/ipc.js'
 import { TldrEnforcement } from '@main/tldr/enforcement.js'
+import { GoalLoopStore } from '@main/goalLoop/GoalLoopStore.js'
+import { GoalLoopService } from '@main/goalLoop/GoalLoopService.js'
+import { registerGoalLoopIpc } from '@main/goalLoop/ipc.js'
 import { sweepStaleTldrHookFiles } from '@providers/shared/runtime/tldrHooks.js'
 import { ExternalControlMcpHost } from './externalControlMcp/host'
 import { registerOperatorControlTools } from './externalControlMcp/tools'
@@ -1005,10 +1008,19 @@ async function startApp(): Promise<void> {
   })
   registerTldrIpc(tldrStore, tldrEnforcement)
   registerGoalIpc(goalStore)
+  // Goal Loop (#1001): constructed before setDependencies for the same
+  // one-shot reason as every other built-in dependency — the MCP handlers
+  // close over the service object. start() itself warns-and-continues on
+  // unreadable persisted state, matching the sweep pattern above.
+  const goalLoopStore = new GoalLoopStore(join(STATE_DIR, 'goal-loop.json'))
+  const goalLoopService = new GoalLoopService({ manager, store: goalLoopStore })
+  await goalLoopService.start()
+  registerGoalLoopIpc(goalLoopService)
   builtInMcpHost.setDependencies({
     tldrStore,
     goalStore,
     tldrEnforcement,
+    goalLoopService,
     orchestrationBridge,
     agentManagementBridge,
     aiWorkspaceRegistry,

@@ -7,6 +7,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { createBuiltInMcpServer } from '@mcp/runtime/createBuiltInMcpServer.js'
 import { GOAL_LOOP_INSTRUCTIONS } from '@shared/types/goalLoop.js'
+import type { PromptDeliveryResult } from '@shared/types/providerConfig.js'
 import { GoalLoopService } from './GoalLoopService.js'
 import { GoalLoopStore } from './GoalLoopStore.js'
 
@@ -16,13 +17,13 @@ const directories: string[] = []
 const clients: Array<{ close(): Promise<void> }> = []
 afterEach(async () => {
   await Promise.all(clients.splice(0).map(client => client.close()))
-  await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true })))
+  await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })))
 })
 
 async function setup(sessionId: string) {
   const directory = await mkdtemp(join(tmpdir(), 'agent-code-goal-loop-'))
   directories.push(directory)
-  const manager = Object.assign(new EventEmitter(), { deliverPromptToAgent: vi.fn(async () => ({ ok: true })) })
+  const manager = Object.assign(new EventEmitter(), { deliverPromptToAgent: vi.fn(async () => ({ ok: true } as PromptDeliveryResult)) })
   const service = new GoalLoopService({ manager, store: new GoalLoopStore(join(directory, 'goal-loop.json')) })
   await service.start()
   const server = createBuiltInMcpServer({ sessionId, cwd: '/project', domains: ['goal_loop'] }, { goalLoopService: service })

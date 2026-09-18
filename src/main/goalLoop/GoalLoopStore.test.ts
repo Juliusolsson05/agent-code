@@ -6,7 +6,7 @@ import type { GoalLoopState } from '@shared/types/goalLoop.js'
 import { GoalLoopStore } from './GoalLoopStore.js'
 
 const directories: string[] = []
-afterEach(async () => { await Promise.all(directories.splice(0).map(d => rm(d, { recursive: true, force: true }))) })
+afterEach(async () => { await Promise.all(directories.splice(0).map(d => rm(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }))) })
 async function makeStore(): Promise<{ store: GoalLoopStore; file: string }> {
   const directory = await mkdtemp(join(tmpdir(), 'agent-code-goal-loop-'))
   directories.push(directory)

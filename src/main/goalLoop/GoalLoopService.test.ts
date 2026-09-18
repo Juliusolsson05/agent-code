@@ -3,15 +3,18 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { SessionManager } from '@main/sessionManager.js'
+import type { PromptDeliveryResult } from '@shared/types/providerConfig.js'
 import { buildGoalLoopContinuationPrompt } from '@mcp/shared/goalLoopPrompt.js'
 import { GoalLoopService } from './GoalLoopService.js'
 import { GoalLoopStore } from './GoalLoopStore.js'
 
 const directories: string[] = []
-afterEach(async () => { await Promise.all(directories.splice(0).map(d => rm(d, { recursive: true, force: true }))) })
+afterEach(async () => { await Promise.all(directories.splice(0).map(d => rm(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }))) })
 
-type FakeManager = EventEmitter & { deliverPromptToAgent: ReturnType<typeof vi.fn> }
-async function service(deliver: FakeManager['deliverPromptToAgent'] = vi.fn(async () => ({ ok: true }))) {
+type Deliver = SessionManager['deliverPromptToAgent']
+type FakeManager = EventEmitter & { deliverPromptToAgent: Deliver }
+async function service(deliver: Deliver = vi.fn(async () => ({ ok: true } as PromptDeliveryResult))) {
   const directory = await mkdtemp(join(tmpdir(), 'agent-code-goal-loop-'))
   directories.push(directory)
   const manager = Object.assign(new EventEmitter(), { deliverPromptToAgent: deliver }) as FakeManager
@@ -64,7 +67,7 @@ describe('GoalLoopService', () => {
     await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(2))
   })
   it('pauses after repeated delivery failures', async () => {
-    const deliver = vi.fn(async () => ({ ok: false, retrySafe: true }))
+    const deliver = vi.fn(async () => ({ ok: false, retrySafe: true } as PromptDeliveryResult))
     const { svc, manager } = await service(deliver)
     await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
     idleTurn(manager); await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(2))

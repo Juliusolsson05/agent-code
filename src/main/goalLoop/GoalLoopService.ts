@@ -10,7 +10,14 @@ import { GOAL_LOOP_STORE_LIMIT, GoalLoopStore } from './GoalLoopStore.js'
 const MAX_DELIVERY_FAILURES = 3
 const DELIVERY_RETRY_DELAY_MS = 250
 
-type GoalLoopManagerPort = Pick<SessionManager, 'on'> & {
+// WHY structural instead of Pick<SessionManager, 'on'>: SessionManager's
+// typed event map is not satisfied by a plain EventEmitter test double, and
+// the service only needs these three subscriptions plus delivery. The real
+// manager satisfies every signature (method bivariance); fakes stay trivial.
+type GoalLoopManagerPort = {
+  on(event: 'semantic-event', listener: (payload: { sessionId: string; event: unknown }) => void): unknown
+  on(event: 'removed', listener: (payload: { sessionId: string }) => void): unknown
+  on(event: 'exit', listener: (payload: { sessionId: string }) => void): unknown
   deliverPromptToAgent: SessionManager['deliverPromptToAgent']
 }
 
