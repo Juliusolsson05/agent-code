@@ -54,7 +54,25 @@ export type WorkspaceFile = {
   windows: PersistedWindow[]
 }
 
-export const WORKSPACE_FILE_VERSION = 2
+/**
+ * The version this build WRITES.
+ *
+ * WHY 3 (#992 review, blocker): the unified stage (v3 document) stores a
+ * different workspace payload, while the envelope around it is unchanged.
+ * Leaving this at 2 told every older build, including the released
+ * v0.0.2-beta.1, that a v3 file was an ordinary writable v2 file. A
+ * downgrade plus a two-window close then let the old build's window handoff
+ * adopt the stage document, drop every session it could not read, and save
+ * over the pool. Older builds refuse any version but 2 as `unreadable` and
+ * run read-only (see ParsedWorkspaceFile), so writing 3 turns that data loss
+ * into the designed "newer file, do not touch" outcome.
+ */
+export const WORKSPACE_FILE_VERSION = 3
+
+/** Versions this build READS. 2 is every file written before the unified
+ * stage. Its payload migrates in the renderer (migrateWorkspaceToStage), and
+ * the envelope itself is unchanged. */
+const READABLE_WORKSPACE_FILE_VERSIONS: readonly unknown[] = [2, 3]
 
 /**
  * Restoring usable windows and proving a complete resource inventory are
@@ -71,7 +89,16 @@ export type WorkspaceDecodeCompleteness =
   | { kind: 'partial'; invalidWindowsContainer: boolean; discardedWindows: number }
 
 export type ParsedWorkspaceFile =
-  | { kind: 'ok'; file: WorkspaceFile; migratedFromV1: boolean; completeness: WorkspaceDecodeCompleteness }
+  | {
+    kind: 'ok'
+    file: WorkspaceFile
+    migratedFromV1: boolean
+    completeness: WorkspaceDecodeCompleteness
+    /** The version found on disk (1 for the unversioned single-window file).
+     * WorkspaceFileStore backs the original bytes up once before the first
+     * write that upgrades an older file. */
+    sourceVersion: number
+  }
   /**
    * The file exists but this build cannot represent it — a NEWER version
    * written by a future build.
@@ -161,6 +188,7 @@ export function parseWorkspaceFile(
     return {
       kind: 'ok',
       migratedFromV1: true,
+      sourceVersion: 1,
       completeness: { kind: 'complete' },
       file: {
         version: WORKSPACE_FILE_VERSION,
@@ -175,10 +203,10 @@ export function parseWorkspaceFile(
     }
   }
 
-  if (parsed.version !== WORKSPACE_FILE_VERSION) {
+  if (!READABLE_WORKSPACE_FILE_VERSIONS.includes(parsed.version)) {
     return {
       kind: 'unreadable',
-      reason: `workspace.json is version ${String(parsed.version)}; this build understands ${WORKSPACE_FILE_VERSION}`,
+      reason: `workspace.json is version ${String(parsed.version)}; this build understands ${READABLE_WORKSPACE_FILE_VERSIONS.join(' and ')}`,
     }
   }
 
@@ -207,6 +235,7 @@ export function parseWorkspaceFile(
   return {
     kind: 'ok',
     migratedFromV1: false,
+    sourceVersion: parsed.version as number,
     file: { version: WORKSPACE_FILE_VERSION, windows },
     completeness: invalidWindowsContainer || discardedWindows > 0
       ? { kind: 'partial', invalidWindowsContainer, discardedWindows }

@@ -11,6 +11,7 @@ import {
   serializeWorkspaceFile,
   withoutWindow,
   withWindowSlice,
+  WORKSPACE_FILE_VERSION,
 } from '@main/storage/workspaceFile.js'
 import type {
   PersistedWindow,
@@ -52,6 +53,18 @@ export class WorkspaceFileStore {
    * path, so the user is not silently working in a workspace that cannot save.
    */
   private readOnlyReason: string | null = null
+
+  /**
+   * The exact bytes of an older-version file this store loaded, held until
+   * the first write upgrades it.
+   *
+   * WHY a one-time backup (#992 review): writing version 3 is one-way. Older
+   * builds refuse the result by design, and the renderer's v2→v3 migration
+   * drops v2-only layout (tile trees, ghost records). The only way back to a
+   * pre-stage build's workspace is the untouched original, so it is written
+   * once, beside the file, before it is replaced, and never again.
+   */
+  private preUpgradeOriginal: { text: string, fromVersion: number } | null = null
 
   // WHY the whole save transaction is queued, not just writeFile: unique temp
   // names prevent scratch-path ENOENT races, but they do not order the final
@@ -117,6 +130,7 @@ export class WorkspaceFileStore {
       return
     }
     this.file = parsed.file
+    if (parsed.sourceVersion < WORKSPACE_FILE_VERSION) this.preUpgradeOriginal = { text, fromVersion: parsed.sourceVersion }
     if (parsed.migratedFromV1) {
       // eslint-disable-next-line no-console
       console.info('[workspace] migrated single-window workspace.json to the window format')
@@ -258,6 +272,22 @@ export class WorkspaceFileStore {
       const serializeStartedAt = performance.now()
       const json = serializeWorkspaceFile(next)
       mainOperations.observe('persistence.serialize', performance.now() - serializeStartedAt)
+      if (this.preUpgradeOriginal) {
+        const backup = `${STATE_FILE}.pre-v${WORKSPACE_FILE_VERSION}-${Date.now()}.bak`
+        try {
+          // `wx`: never overwrite an existing backup, even a same-millisecond one.
+          await writeFile(backup, this.preUpgradeOriginal.text, { encoding: 'utf8', flag: 'wx' })
+          // eslint-disable-next-line no-console
+          console.info(`[workspace] kept the v${this.preUpgradeOriginal.fromVersion} original at ${backup} before upgrading`)
+          this.preUpgradeOriginal = null
+        } catch (error) {
+          // A failed backup must not block saving. That would cost the
+          // user's current session to protect a copy. It retries on the next
+          // save and is warned about here, so it is not silently skipped.
+          // eslint-disable-next-line no-console
+          console.warn('[workspace] could not write the pre-upgrade backup; will retry on next save', error)
+        }
+      }
       const finishWrite = mainOperations.begin('persistence.write')
       try {
         await writeFile(tmp, json, 'utf8')
