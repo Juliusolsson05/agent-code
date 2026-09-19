@@ -7,7 +7,7 @@
 `main` produces a rolling, signed, notarized **`nightly`** GitHub Release with
 **fixed-name assets** whenever it has commits the previous nightly did not
 build — with zero manual dispatch — while the versioned `release.yml` path
-stays byte-for-byte untouched.
+changes by one comment only (a drift pointer).
 
 ## Design decisions (the WHY, settled before the YAML)
 
@@ -78,6 +78,12 @@ stays byte-for-byte untouched.
    one is the desired behaviour. `cancel-in-progress: false` still protects a
    running, notarizing job.
 
+7. **Secrets validated before anything expensive.** The nightly always
+   publishes, so the five signing/notarization secrets are mandatory; the
+   check runs in the first job, before the change-check even, so a
+   secret-less fork fails in seconds, not after a 9-minute build.
+
+
 8. **The logic lives in a tested script, not inline YAML** (added after the
    PR review). The review found three real bugs in the inline bash: the CRLF
    marker, an unreachable previous SHA crashing `git log` after a full build,
@@ -101,11 +107,6 @@ stays byte-for-byte untouched.
    - Nightlies report the same app version as the last release. Version
      stamping is a follow-up.
 
-7. **Secrets validated before anything expensive.** The nightly always
-   publishes, so the five signing/notarization secrets are mandatory; the
-   check runs in the first job, before the change-check even, so a
-   secret-less fork fails in seconds, not after a 9-minute build.
-
 ## Files
 
 | File | Role |
@@ -128,6 +129,18 @@ stays byte-for-byte untouched.
   is `gh workflow run nightly.yml` on main: the first run publishes the
   `nightly` prerelease with the four fixed-name assets.
 - A second dispatch with no new `main` commits must skip visibly.
+- A THIRD run exercises the rolling update path, which the first two never
+  touch (verification review): `gh workflow run nightly.yml -f force=true`,
+  or a run after a new commit on main. Check that:
+  - all four asset IDs changed and every asset is `uploaded`;
+  - the marker shows the new SHA;
+  - the release is still a prerelease;
+  - `releases/latest` is unchanged.
+  Watch for softprops#411: `target_commitish` against an older commit can 403
+  with `github.token`. That fails loudly, and a retry is safe.
+- "latest" is owned by nobody until `release.yml` can publish a NON-prerelease
+  (it hardcodes `prerelease: true`). That is release-readiness Stage 8, and
+  until then the landing page stays on its Releases-page fallback, by design.
 - `release.yml` changes by one comment only: a drift pointer to the
   reusable mirror.
 

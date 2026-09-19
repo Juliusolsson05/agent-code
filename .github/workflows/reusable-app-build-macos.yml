@@ -3,7 +3,8 @@ name: Reusable app build (macOS)
 # WHY this file exists: the nightly workflow (`.github/workflows/nightly.yml`,
 # #1011) needs the exact build+package pipeline that `release.yml` has proven
 # end to end. This is a VERBATIM extraction of `release.yml`'s `build-app` and
-# `package-macos` jobs with exactly three deliberate deltas, each marked below:
+# `package-macos` jobs with three deliberate behavioural deltas, each marked below
+# (plus one reworded comment on the upload step):
 #
 #   1. `on: workflow_call` instead of `workflow_dispatch` — callers are the
 #      versioned release (not yet; see 3) and the nightly.
