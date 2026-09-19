@@ -1,6 +1,7 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { GoalLoopState } from '@shared/types/goalLoop'
+import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
 import { GoalLoopPane } from './GoalLoopPane'
 import { dismissGoalLoop, toggleGoalLoop } from './viewState'
 
@@ -72,5 +73,26 @@ describe('GoalLoopPane', () => {
     await screen.findByRole('dialog')
     screen.getByText('Close').click()
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  })
+})
+
+describe('GoalLoopPane interaction ownership (#1004)', () => {
+  // The strip is passive status chrome, not a blocking surface. The keyboard
+  // router bails on every chord while ANY element claims app interaction
+  // ownership (hasAppInteractionOwner is a document-wide existence query), so
+  // a strip carrying the marker kills reader mode, Spotlight, the palette,
+  // type-to-focus and dictation for the whole app — and ended loops persist,
+  // so it stayed dead across restarts. Only the latched overlay, a genuine
+  // full-screen takeover like TldrOverlay, may claim ownership.
+  it('a mounted strip does not claim app interaction ownership', async () => {
+    render(<GoalLoopPane sessionId="s1" />)
+    expect(await screen.findAllByText(/iteration 3\/25/)).not.toHaveLength(0)
+    expect(hasAppInteractionOwner()).toBe(false)
+  })
+  it('the latched overlay still claims ownership while visible', async () => {
+    toggleGoalLoop()
+    render(<GoalLoopPane sessionId="s1" />)
+    expect(await screen.findByRole('dialog')).toBeTruthy()
+    expect(hasAppInteractionOwner()).toBe(true)
   })
 })

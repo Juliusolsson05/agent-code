@@ -57,8 +57,15 @@ export function GoalLoopPane({ sessionId }: { sessionId: string }) {
       value: action === 'raise-cap' ? raisedCap : undefined,
     }).catch(() => {})
   }
+  // NO interaction-ownership marker here, deliberately: the strip is passive
+  // status chrome that stays mounted for the loop's whole life (and ended
+  // loops persist), while hasAppInteractionOwner() is a document-wide
+  // existence query that makes the keyboard router treat ANY mounted marker
+  // as a modal owning the interaction — killing every app shortcut (#1004).
+  // TldrOverlay may stamp the marker because it mounts it only while a
+  // full-screen overlay is visible; only this pane's latched overlay below,
+  // also a genuine blocking surface, may do the same.
   const strip = <div
-    data-agent-code-interaction-owner="app"
     data-goal-loop-strip=""
     className="pointer-events-auto absolute inset-x-0 top-0 z-40 flex items-center justify-between gap-2 bg-canvas/90 px-3 py-1 text-xs text-ink"
     onMouseDown={event => event.stopPropagation()}
