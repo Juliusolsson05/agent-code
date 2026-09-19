@@ -91,7 +91,13 @@ function payload(candidate: StagedInstalledSkillCandidate): GitHubSkillDiscovery
   }
 }
 
-async function harness(options: { now?: () => Date; snapshotMaxBytes?: number } = {}) {
+async function harness(
+  options: {
+    now?: () => Date
+    snapshotMaxBytes?: number
+    unsupportedProviders?: ResolvedAgentCodeConventionsTargets['unsupportedProviders']
+  } = {},
+) {
   const root = await temporaryDirectory()
   const currentTarget = target(root)
   const discoveries: GitHubSkillDiscoveryPayload[] = []
@@ -104,7 +110,7 @@ async function harness(options: { now?: () => Date; snapshotMaxBytes?: number } 
   }
   const resolved: ResolvedAgentCodeConventionsTargets = {
     targets: [currentTarget],
-    unsupportedProviders: [],
+    unsupportedProviders: options.unsupportedProviders ?? [],
   }
   const pathSafety = new SkillPathSafety(root)
   const service = new AgentCodeConventionsService({
@@ -140,6 +146,32 @@ async function discoverOne(
 }
 
 describe('AgentCode installed skills service', () => {
+  // Regression for #1014: an unsupported registered provider (grok) must not
+  // block installing GitHub skills for the providers that do support them.
+  it('installs and reports active with an unsupported provider present', async () => {
+    const { service, discoveries } = await harness({ unsupportedProviders: ['grok'] })
+    const staged = stagedPackage({
+      commit: 'a'.repeat(40),
+      files: [{ path: 'SKILL.md', content: '# Review code' }],
+    })
+    const discovery = await discoverOne(service, discoveries, staged)
+    const installed = await service.installGitHubSkills({
+      expectedRevision: 0,
+      discoveryId: discovery.discoveryId,
+      candidateIds: [staged.candidate.candidateId],
+    })
+    expect(installed).toMatchObject({
+      ok: true,
+      snapshot: { skills: [{ name: 'review-code', health: 'active' }] },
+    })
+    const snapshot = await service.getInstalledSkillsSnapshot()
+    const skill = snapshot.skills.find(item => item.name === 'review-code')
+    expect(skill?.targets).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'unsupported:grok', state: 'unsupported' }),
+    ]))
+    expect(snapshot.unsupportedProviders).toEqual(['grok'])
+  })
+
   it('installs a reviewed package and requires a second review before updating it', async () => {
     const { root, service, discoveries, skillDirectory } = await harness()
     const first = stagedPackage({
