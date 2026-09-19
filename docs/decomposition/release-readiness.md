@@ -103,7 +103,7 @@ Each stage: **Produces / Verified by / Why separate / Reality check.**
 - [x] **#1010 icon.** MERGED `20f48130` (2026-09-19); both reviewers' findings resolved. Doc fix pushed (`b0754260`). Still to do: correct the PR body
   ("A×" → Nord dragon + `</>` mark), merge `origin/main`, CI green, merge.
   Follow-up #1020 (no margin on macOS 12–15; an owner visual call).
-- [ ] **#1012 nightly.** Apply the review fixes:
+- [x] **#1012 nightly.** MERGED `1195487d`; first nightly run 35428680412 (verify the result, and run the forced update test). Apply the review fixes:
   - (1) write the `built-from` marker LAST (a `gh release edit` after the uploads)
     and treat missing assets as changed;
   - (2) parse the marker robustly (`tr -d '\r'`, 40-hex, `head -n1`) and guard
@@ -139,10 +139,10 @@ Each stage: **Produces / Verified by / Why separate / Reality check.**
   the goal loop command; loops started via MCP work"), the MaxListeners warnings in
   the dev log, and the root-cause research.
 - [x] Root cause recorded in the ledger
-- [ ] Fix PR merged: **#1022**. Round 1 got CHANGES REQUESTED (the hidden-workspace trap, stale-latch re-arm); fixed in `5d959c77` with 3 more fail-first regressions. Next: CI, then merge.
+- [x] Fix PR merged: **#1022** MERGED `52af3dfd`. Round 1 got CHANGES REQUESTED (the hidden-workspace trap, stale-latch re-arm); fixed in `5d959c77` with 3 more fail-first regressions. Next: CI, then merge.
 
 ### Stage 4: Release-blocker issues (from the Stage 1 ledger)
-- [ ] #898 tmux restart data loss: PR #933, refreshed onto main (`93f60755`). A REAL sanitized v2 workspace.json fixture test was added (`b3961fba`). Independent review running; then CI and merge.
+- [x] #898 tmux restart data loss: MERGED #933 `40218b03`. PR #933, refreshed onto main (`93f60755`). A REAL sanitized v2 workspace.json fixture test was added (`b3961fba`). Independent review running; then CI and merge.
 - [ ] #878 OpenCode modal subject: package PR **opencode-headless#14**, a shared parser with 4 replays of RECORDED 1.18.30 streams (3 fail first). Review running. Then: bump the agent-code submodule, resync the lockfile, and open a PR.
 - [ ] #995 first-run (T1)
 - Known now: **#995**, first-run lockout. SetupGate demands claude+codex with no
@@ -513,6 +513,7 @@ claude 2.1.143 / codex 0.130.0 are stale versus the 2.1.278 / 0.155.1 in daily u
   (one per composer). Optional follow-up: a single app-level subscription.
 
 ### Progress log
+- 2026-09-19 07:13Z: MERGED #1022 (`52af3dfd`, goal-loop freeze, closes #1021), #933 (`40218b03`, tmux data loss, closes #898) and #1012 (`1195487d`, nightly). First nightly dispatched: run 35428680412. #1024 root-caused from recordings and fixed in PR #1028 (Stop-hook boundary). #1026 review findings fixed (`48bce88a`). Filed #1027 (TLDR latch trap), #1029 (bidi spoofing).
 - 2026-09-19 07:55Z: #1023 MERGED (phone gutter). #933 reviewed GREEN; docs fixed (`7da7a255`), CI rerunning. #878 package half merged (opencode-headless#14 `62440add`); app PR #1026 in review. #1013 CI fixes pushed (lockfile, projection shape). #1024 decomposed.
 - 2026-09-19 07:20Z: **#1013** merged with main (`e52b0352`).
   - 5 conflicts resolved, plus 1 semantic port (performance-monitor agentIdentity to the stage model).
