@@ -99,7 +99,7 @@ it('native Grok resumes the app-published file set and sends imported context be
     const requirePty = await import('node-pty')
     pty = requirePty.spawn(launch.binary, launch.args, { cwd: root, env: launch.env, name: 'xterm-256color', cols: 120, rows: 40 })
     ptyExit = new Promise(resolve => { pty!.onExit(() => resolve()) })
-    runtime = new GrokHeadless({ pty, cwd: root, launch, control: { isClosed: control.isClosed, rpc: control, observe: observer => control!.observe(observer) }, guard, resume: true, grokHome: home })
+    runtime = new GrokHeadless({ pty, cwd: root, launch, control: { get isClosed() { return control!.isClosed }, rpc: control!, observe: observer => control!.observe(observer) }, guard, resume: true, grokHome: home })
     runtime.on('exit', () => { exited = true })
     let painted = false
     let appended = false

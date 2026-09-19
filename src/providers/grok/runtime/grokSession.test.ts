@@ -142,10 +142,13 @@ describe('GrokSession', () => {
 
     await session.start()
 
-    // The one order the recordings pin: leader, session over control, guard,
-    // then the PTY (the terminal connect-or-spawns its leader, so an earlier
-    // PTY would escape the app's process tree).
-    expect(control.calls).toEqual(['loadSession:11111111-1111-4111-8111-111111111111'])
+    // The one order the recordings pin: leader, guard, then the PTY (the
+    // terminal connect-or-spawns its leader, so an earlier PTY would escape
+    // the app's process tree). A RESUME sends nothing over control — the
+    // recorded restart-resume epoch has only the terminal loading and control
+    // re-seeding MCP on the load answer; a control session/load in a resumed
+    // epoch is an open catalog gap.
+    expect(control.calls).toEqual([])
     expect(ptyState.spawn).toHaveBeenCalledTimes(1)
     const [binary, args] = ptyState.spawn.mock.calls[0]
     expect(binary).toBe('grok')
@@ -188,9 +191,6 @@ describe('GrokSession', () => {
 
   it('rolls back a failed guard start without spawning a terminal', async () => {
     const control = fakeControl()
-    const failingGuard = { ...fakeGuard(), dispose: vi.fn(async () => {}) }
-    const { session } = create({}, { control, guard: undefined as never })
-    // Replace createGuard for this instance through a custom deps binding.
     const pty = fakePty()
     ptyState.spawn.mockReturnValue(pty)
     const custom = new GrokSession({ cwd: home } as never, {
@@ -278,6 +278,70 @@ await expect(delivered).resolves.toBeUndefined()
     control.close()
     await expect(pending).rejects.toThrow(/uncertain|outcome/i)
   }, 10_000)
+
+  it('releases the owned leader and guard when the terminal exits naturally', async () => {
+    const pty = fakePty()
+    ptyState.spawn.mockReturnValue(pty)
+    const { session, control, guard } = create()
+    const exit = vi.fn()
+    session.on('exit', exit)
+    await session.start()
+    expect(control.dispose).not.toHaveBeenCalled()
+    pty.emitExit({ exitCode: 0, signal: 0 })
+    await vi.waitFor(() => expect(exit).toHaveBeenCalledOnce())
+    // The terminal was the guard's only dependent: keeping the helpers would
+    // leak two processes until a stop() that never comes for a dead pane.
+    await vi.waitFor(() => expect(control.dispose).toHaveBeenCalledOnce())
+    expect(guard.dispose).toHaveBeenCalledOnce()
+    // A later stop() must not dispose them a second time.
+    await session.stop()
+    expect(control.dispose).toHaveBeenCalledOnce()
+  })
+
+  it('disposes the leader when stop wins the race during start', async () => {
+    let resolveStart!: (control: ReturnType<typeof fakeControl>) => void
+    const control = fakeControl()
+    const starting = new Promise<ReturnType<typeof fakeControl>>(resolve => { resolveStart = resolve })
+    const guard = fakeGuard()
+    const pty = fakePty()
+    ptyState.spawn.mockReturnValue(pty)
+    const session = new GrokSession({ cwd: home } as never, {
+      spawnPty: ptyState.spawn,
+      startControl: vi.fn(() => starting as unknown as Promise<GrokNativeControl>),
+      createGuard: vi.fn(async () => guard as unknown as GrokTuiSocketGuard),
+      headlessOptions: { heartbeatMs: 0 },
+    })
+    sessions.push(session)
+    const pending = session.start()
+    await session.stop()
+    resolveStart(control)
+    await pending
+    // The helper this attempt created is disposed, not leaked on a field the
+    // already-finished teardown could never see.
+    expect(control.dispose).toHaveBeenCalledOnce()
+    expect(ptyState.spawn).not.toHaveBeenCalled()
+  })
+
+  it('maps the unconfirmed outcome to a possibly-performed failure, never retry-safe', async () => {
+    vi.useRealTimers()
+    const pty = fakePty()
+    ptyState.spawn.mockReturnValue(pty)
+    const control = fakeControl()
+    const session = new GrokSession({ cwd: home, resumeSessionId: '11111111-1111-4111-8111-111111111111' } as never, {
+      spawnPty: ptyState.spawn,
+      startControl: vi.fn(async () => control as unknown as GrokNativeControl),
+      createGuard: vi.fn(async () => fakeGuard() as unknown as GrokTuiSocketGuard),
+      // A short bound so the test does not wait the default 30 s: acceptance
+      // never arrives, and the written-but-unaccepted prompt must surface as
+      // a generic (possibly performed) failure, never a retry-safe not-ready.
+      headlessOptions: { heartbeatMs: 0, acceptanceTimeoutMs: 50 },
+    })
+    sessions.push(session)
+    await session.start()
+    await expect(session.deliverPromptText('slow')).rejects.toThrow(/unconfirmed/)
+    // Exactly one request was written and nothing was resent after the bound.
+    expect(control.requests).toHaveLength(1)
+  })
 
   it('delegates condition answers with generation fencing and stop kills in teardown order', async () => {
     const pty = fakePty()

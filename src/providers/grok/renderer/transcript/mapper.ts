@@ -161,7 +161,17 @@ function parseArguments(call: GrokToolCall): unknown {
   }
 }
 
-/** Stable across rewrite re-delivery: same generation, same byte offsets. */
+/**
+ * Stable across rewrite re-delivery WITHIN a generation: same generation, same
+ * byte offsets, same uuid — so a re-delivered row dedups against itself.
+ *
+ * WHY deliberately NOT stable ACROSS generations: a rewrite re-delivers rows
+ * under a new generation at shifted offsets, and pretending they are the same
+ * rows would dedup the snapshot against a seen-set full of superseded content.
+ * The reset boundary wipes that seen-set first (renderer/session-runtime/
+ * historyBoundary.ts), so generation-scoped uuids are exactly right: identical
+ * while the window lives, distinct across the reset that replaces it.
+ */
 function uuidOf(raw: Record<string, unknown>): string {
   return `grok:${raw.generation}:${raw.lineStartOffset}`
 }

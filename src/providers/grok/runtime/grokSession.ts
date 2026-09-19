@@ -55,6 +55,17 @@ import type { AgentSession, AgentSessionEvents, SessionOptions } from '@shared/t
 // mount, and it gates nothing programmatic — prompts wait for control
 // acceptance, never for paint.
 const TUI_READY_GRACE_MS = 250
+// Upper bound on waiting for a killed terminal's exit acknowledgement inside
+// guard disposal. See releaseHelpers for why this exists at all.
+const GUARD_EXIT_ACK_MS = 2_000
+
+function waitFor(ms: number): Promise<void> {
+  return new Promise(resolve => {
+    const timer = setTimeout(resolve, ms)
+    // A teardown path must never keep the host process alive on its own.
+    if (typeof timer === 'object' && 'unref' in timer) (timer as { unref(): void }).unref()
+  })
+}
 
 class GrokTerminalNotReadyError extends Error {
   readonly code = 'grok-terminal-not-ready'
@@ -164,24 +175,38 @@ export class GrokSession extends EventEmitter implements AgentSession {
     let control: GrokNativeControl | null = null
     let guard: GrokTuiSocketGuard | null = null
     let pty: IPty | null = null
+    // WHY a local disposer: teardown() can only release helpers it can see on
+    // fields, and a stop() that wins WHILE an await here is pending bumps the
+    // generation before the assignment below runs. Every stale-generation exit
+    // in this try block must dispose exactly what THIS attempt already created
+    // (the codex start-attempt shape, reduced to Grok's three resources).
+    const disposeStaleAttempt = async (): Promise<void> => {
+      try { pty?.kill() } catch { /* the process may have won the exit race */ }
+      try {
+        if (guard) await Promise.race([guard.dispose(() => this.ptyExit), waitFor(GUARD_EXIT_ACK_MS)])
+      } catch { /* cleanup must not mask the abandon */ }
+      try { await control?.dispose() } catch { /* single-flight; a close may have won */ }
+    }
     try {
       control = await this.deps.startControl({ binary: this.binary, cwd: this.cwd, env })
-      if (generation !== this.startGeneration) return
+      if (generation !== this.startGeneration) { await disposeStaleAttempt(); return }
       this.control = control
       // The session must exist before the terminal attaches with `--resume`.
-      // A resume re-loads the stored conversation; a fresh pane creates it with
-      // the MCP seed over control, where it is authoritative until the
-      // terminal's own load clears it (catalog tool.mcp).
-      if (this.resumeSessionId) await control.loadSession(sessionId, this.mcpSeed)
-      else await control.createSession(sessionId, this.mcpSeed)
-      if (generation !== this.startGeneration) return
+      // A FRESH pane creates it over control with the MCP seed (recorded:
+      // session/new before the terminal spawns). A RESUME deliberately sends
+      // nothing over control: the recorded restart-resume epoch shows only the
+      // terminal loading (the terminal's --resume attach) and control
+      // re-seeding MCP on the load answer — a control session/load in a
+      // resumed epoch is an open gap in the catalog and must not be guessed.
+      if (!this.resumeSessionId) await control.createSession(sessionId, this.mcpSeed)
+      if (generation !== this.startGeneration) { await disposeStaleAttempt(); return }
 
       guard = await this.deps.createGuard({
         upstreamPath: control.socketPath,
         expectedPid: control.pid!,
         onFault: reason => this.handleGuardFault(reason),
       })
-      if (generation !== this.startGeneration) return
+      if (generation !== this.startGeneration) { await disposeStaleAttempt(); return }
       this.guard = guard
 
       const launch = this.deps.prepareLaunch({
@@ -190,7 +215,7 @@ export class GrokSession extends EventEmitter implements AgentSession {
         sessionId,
         guardSocketPath: guard.socketPath,
       })
-      if (generation !== this.startGeneration) return
+      if (generation !== this.startGeneration) { await disposeStaleAttempt(); return }
 
       pty = this.deps.spawnPty(launch.binary, launch.args, {
         name: 'xterm-256color',
@@ -213,7 +238,9 @@ export class GrokSession extends EventEmitter implements AgentSession {
         if (!this.readinessTimer) {
           this.readinessTimer = setTimeout(() => {
             this.readinessTimer = null
-            if (generation !== this.startGeneration || this.pty !== pty || this.exited) return
+            // `fenced` too: the grace can fire after the terminal switched to
+            // another conversation, and reporting ready would undo the fence.
+            if (generation !== this.startGeneration || this.pty !== pty || this.exited || this.fenced) return
             this.emit('input-readiness', { ready: true, reason: 'ready' })
           }, TUI_READY_GRACE_MS)
         }
@@ -320,7 +347,26 @@ export class GrokSession extends EventEmitter implements AgentSession {
       // message so renderer/phone can retain the actual diagnosis.
       this.emit('jsonl-error', Object.assign(new Error(`Grok ${error.channel} channel (${error.code}): ${error.message}`), { code: error.code }))
     })
-    headless.on('live-state', state => this.emit('transcript-diagnostic', { kind: 'grok-live-state', ...state }))
+    headless.on('live-state', state => {
+      this.emit('transcript-diagnostic', { kind: 'grok-live-state', ...state })
+      // WHY an error and not just a diagnostic: a closed control connection is
+      // the pane losing its agent (leader loss) — open turns ended uncertain
+      // and no prompt can be delivered until the pane is restarted. A
+      // diagnostic alone renders nowhere the user will see it.
+      if (!state.connected) {
+        this.emit('jsonl-error', Object.assign(new Error(
+          `Grok control connection lost${state.reason ? ` (${state.reason})` : ''}. Running work ended uncertain; restart the pane to continue. (grok_live_disconnected)`,
+        ), { code: 'grok_live_disconnected' }))
+      }
+    })
+    headless.on('terminal-load-refused', ({ sessionId }) => {
+      // The resume path's only load was refused (session.load-failure): the
+      // terminal is attached to a conversation it cannot show and the MCP
+      // re-seed will never fire. This is a failed resume, surfaced as such.
+      this.emit('jsonl-error', Object.assign(new Error(
+        `Grok refused to resume session ${sessionId}. The stored conversation may be unreadable; start a fresh pane instead. (grok_resume_failed)`,
+      ), { code: 'grok_resume_failed' }))
+    })
     headless.on('exit', ({ exitCode, signal }) => {
       if (this.pty !== pty) return
       this.pty = null
@@ -332,6 +378,13 @@ export class GrokSession extends EventEmitter implements AgentSession {
       this.emit('input-readiness', { ready: false, reason: 'provider-not-ready' })
       this.emit('process-state', { active: false })
       this.emit('exit', { exitCode, signal })
+      // WHY ownership ends here: the terminal was the guard's only dependent
+      // and nothing can attach to the leader anymore, so keeping them only
+      // leaks two processes until an explicit stop() that may never come (the
+      // pane is gone). The headless already drained the durable channel; this
+      // releases the helpers without touching the dead PTY. Idempotent by
+      // field-nilling, so a later stop() is a no-op for them.
+      void this.releaseHelpers()
     })
   }
 
@@ -465,13 +518,27 @@ export class GrokSession extends EventEmitter implements AgentSession {
     this.headless = null
     const pty = this.pty
     this.pty = null
+    try { await headless?.stop() } catch { /* detach-only; nothing to preserve */ }
+    try { pty?.kill() } catch { /* node-pty throws if the process won the race */ }
+    await this.releaseHelpers()
+  }
+
+  /**
+   * Release the guard and the leader exactly once. WHY the bounded wait: the
+   * guard's dispose waits for the terminal's exit acknowledgement, and a
+   * terminal that ignores SIGKILL's exit callback would otherwise hang pane
+   * teardown forever. Two seconds is far beyond a normal kill round-trip; past
+   * it the socket directory is left to the OS temp cleaner and teardown moves
+   * on — a leaked directory beats a leaked session lifecycle.
+   */
+  private async releaseHelpers(): Promise<void> {
     const guard = this.guard
     this.guard = null
     const control = this.control
     this.control = null
-    try { await headless?.stop() } catch { /* detach-only; nothing to preserve */ }
-    try { pty?.kill() } catch { /* node-pty throws if the process won the race */ }
-    try { if (guard) await guard.dispose(() => this.ptyExit) } catch { /* socket release is best-effort at teardown */ }
+    try {
+      if (guard) await Promise.race([guard.dispose(() => this.ptyExit), waitFor(GUARD_EXIT_ACK_MS)])
+    } catch { /* socket release is best-effort at teardown */ }
     try { await control?.dispose() } catch { /* dispose is single-flight; a concurrent close already won */ }
   }
 

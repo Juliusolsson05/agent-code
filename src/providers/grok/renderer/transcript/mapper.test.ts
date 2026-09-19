@@ -81,6 +81,18 @@ describe('mapGrokEntryToFeedEntries', () => {
     expect(mapGrokEntryToFeedEntries(entry({ type: 'backend_tool_call', kind: { tool_type: 'web_search' } })).entries).toEqual([])
   })
 
+  it('scopes uuids to a generation: the same row re-delivered after a rewrite is a NEW uuid (the reset wipes the window first)', () => {
+    const row = { type: 'user', content: [{ type: 'text', text: 'hello' }] }
+    const before = mapGrokEntryToFeedEntries(entry(row, { generation: 1, lineStartOffset: 10 }))
+    const after = mapGrokEntryToFeedEntries(entry(row, { generation: 2, lineStartOffset: 12 }))
+    expect(before.entries[0]!.uuid).toBe('grok:1:10')
+    expect(after.entries[0]!.uuid).toBe('grok:2:12')
+    expect(before.entries[0]!.uuid).not.toBe(after.entries[0]!.uuid)
+    // Within one generation, re-delivery at the same offset IS the same row.
+    const redelivered = mapGrokEntryToFeedEntries(entry(row, { generation: 1, lineStartOffset: 10 }))
+    expect(redelivered.entries[0]!.uuid).toBe(before.entries[0]!.uuid)
+  })
+
   it('renders no row for the identity envelope but extracts its id, with stable markers', () => {
     expect(mapGrokEntryToFeedEntries({ sessionID: 'session-1' })).toEqual({ entries: [], historyMarker: null })
     expect(extractGrokProviderSessionId({ sessionID: 'session-1' })).toBe('session-1')
