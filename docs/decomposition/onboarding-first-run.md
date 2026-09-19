@@ -124,3 +124,47 @@ All behavioral fixtures come from Stage 1's recorder: two environments × three 
 (prerequisites check, default-cwd, bootstrap transitions), stored as JSON under
 `testing/first-run/fixtures/` with the harness committed beside them. No hand-typed
 plausible-looking inputs anywhere in this feature's tests.
+
+## Status (2026-09-19, branch `fix/onboarding-first-run`)
+
+All six stages are built in one PR. They are coupled: the policy's output shape
+is what the gate, the bootstrap and the pickers read.
+
+| Stage | Artifact | Verified by |
+|---|---|---|
+| 1 Recorder | `testing/system/first-run/prerequisites.firstRun.test.ts` and `testing/fixtures/first-run/` (3 environments, plus `baseline-main-82babd21.json`) | The live drift check re-runs both clean simulations on every push and compares provider rows. The baseline shows the wall: `ready:false, blocking:[claude,codex]` on both clean machines. |
+| 2 Policy | `src/shared/setup/readiness.ts`; `required` removed from providers; `SetupCheckResult` = `usableProviders` + `firstSessionKind`; per-provider install command and docs URL in `registry.setup.ts` | `readiness.test.ts` over the recordings; the live verdict in the system test |
+| 3 Reopenable | `open-setup` command, File › Setup…, and the new spawn error text | `firstRun.renderer.test.tsx` (reopen and re-probe), catalog native-menu contract |
+| 4 Bootstrap | `awaitFirstRunDecision` plus `openFirstProject` (terminal fallback) in `useBootstrap.ts` | `firstRun.renderer.test.tsx`: 5 of 6 fail against main's bootstrap |
+| 5 cwd and pickers | `defaultWorkspaceCwd` (home for a launchd `/`); `useMissingProviders` hint and `preferredPickerProvider` | `workspace.test.ts`, `PathPickerModal.renderer.test.tsx` |
+| 6 Sweep | `firstRun.renderer.test.tsx`: the real `useWorkspace` plus the real SetupGate fed the recorded checks | Fail-first as above |
+
+### Deviations from the plan, and why
+
+- **`readiness.ts` lives in `src/shared/setup`, not `src/main/setup`.** Main still
+  runs it, inside checkPrerequisites. It is in `shared` so renderer tests can run
+  the same policy over the recordings. The isolation rule is kept: production
+  consumers read the stamped fields and never import it.
+- **No toast action.** The global toast is text-only, and adding actions to it
+  is its own change. The spawn error now names a place that exists: "Open Setup
+  (File › Setup…)", which is also a palette command.
+- **Pickers hint and never disable.** A probe can be wrong (#495 A1), and the
+  spawn re-resolves the CLI itself. A disabled row would turn a false negative
+  back into a lockout.
+- **No Settings → Setup rows for tool paths.** The reopenable Setup panel
+  already hosts the manual path override, available at any time. A second copy
+  in Settings would be a second owner for the same state.
+- **Unknown 3 (the terminal-only default project)** took the ledger's
+  recommended default: a single terminal project, opened only after the user
+  presses "Continue with a terminal". Pressing Retry after installing a CLI
+  opens an agent instead.
+- **Unknown 1 (#994)** had already merged as #1002: a bundled OpenCode is
+  `found` with `source:'bundled'` and counts as a usable provider.
+
+### Still open
+
+- Login detection (#995 finding 7) is out of scope here, as planned.
+- App self-update (finding 5) is a separate issue.
+- Nothing tells a packaged-clean user whose first project opened in the bundled
+  OpenCode that Claude Code and Codex exist, other than File › Setup…. A
+  first-run notice would need an owner decision.

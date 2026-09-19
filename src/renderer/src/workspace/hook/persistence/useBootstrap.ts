@@ -8,6 +8,9 @@ import type {
 } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 
+import type { SessionKind } from '@renderer/workspace/types'
+import type { SetupCheckResult } from '@shared/types/setup'
+import { awaitFirstRunDecision, ensureSetupCheck } from '@renderer/features/setup/store'
 import { rehydrateWorkspace } from '@renderer/workspace/hook/persistence/rehydrate'
 import { reconcileStuckTranscriptLoads } from '@renderer/workspace/hook/actions/initialHistory'
 import * as perf from '@renderer/performance/client'
@@ -50,7 +53,7 @@ export function useBootstrap(
   refs: WorkspaceRefs,
   setState: WorkspaceSetState,
   setRuntimes: WorkspaceSetRuntimes,
-  newTab: (cwd: string) => Promise<unknown>,
+  newTab: (cwd: string, resumeSessionId?: string, kind?: SessionKind) => Promise<unknown>,
   setBootstrapComplete: (complete: boolean) => void,
   // Mirrors setBootstrapComplete in lifetime — set once at the end of
   // bootstrap to one of the WorkspaceRestoreStatus values. The composer
@@ -86,8 +89,15 @@ export function useBootstrap(
           const cwd = await perf.measure('workspace.bootstrap.defaultCwd', () =>
             window.api.defaultCwd(),
           )
+          // #995: wait for the setup verdict before choosing what to spawn.
+          // This returns at once when any provider is usable; with none, it
+          // waits for the user to answer the setup panel (see
+          // awaitFirstRunDecision for why spawning underneath it was wrong).
+          const setup = await perf.measure('workspace.bootstrap.firstRunDecision', () =>
+            awaitFirstRunDecision(),
+          )
           try {
-            await perf.measure('workspace.bootstrap.initialNewTab', () => newTab(cwd))
+            await perf.measure('workspace.bootstrap.initialNewTab', () => openFirstProject(newTab, cwd, setup))
             canAutosaveBootState = refs.latestStateRef.current.tabs.length > 0
             finalStatus = 'fresh'
             // A fresh install lands on ONE row × ONE lane showing its one
@@ -170,7 +180,12 @@ export function useBootstrap(
             window.api.defaultCwd(),
           )
           try {
-            await perf.measure('workspace.bootstrap.fallbackNewTab', () => newTab(cwd))
+            // The recovery shell must come up on a machine without the
+            // default provider too, so it follows the same readiness verdict.
+            // It does not WAIT for the setup panel: a returning user with a
+            // broken file needs a surface now, not a first-run question.
+            const setup = await ensureSetupCheck()
+            await perf.measure('workspace.bootstrap.fallbackNewTab', () => openFirstProject(newTab, cwd, setup))
             finalStatus = 'persisted-fallback'
             // The recovery shell gets the minimal [1] stage by the same route
             // as the fresh path: this is not the user's real workspace, just
@@ -222,4 +237,33 @@ export function useBootstrap(
     })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+}
+
+/**
+ * Opens the first project of a run that has nothing to restore (#995).
+ *
+ * WHY a terminal is the last resort, after the chosen kind fails: a run with
+ * no tabs is the worst outcome bootstrap can produce. It keeps autosave off
+ * for the whole run (the no-tabs guard above), and the user faces an empty
+ * window with nothing to type into. That is what a clean Mac got before
+ * #995: Claude was spawned unconditionally, failed because it was not
+ * installed, and left nothing. A terminal needs no provider, and it is where
+ * the user runs the install commands the setup panel shows.
+ *
+ * `setup` null (the check itself failed) keeps the pre-#995 choice, the
+ * default provider: an unknown machine is not an empty one.
+ */
+async function openFirstProject(
+  newTab: (cwd: string, resumeSessionId?: string, kind?: SessionKind) => Promise<unknown>,
+  cwd: string,
+  setup: SetupCheckResult | null,
+): Promise<void> {
+  const kind = setup?.firstSessionKind
+  try {
+    await newTab(cwd, undefined, kind)
+  } catch (err) {
+    if (kind === 'terminal') throw err
+    console.warn('[workspace] first project spawn failed; opening a terminal instead:', err)
+    await newTab(cwd, undefined, 'terminal')
+  }
 }
