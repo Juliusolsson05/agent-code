@@ -36,18 +36,30 @@ if (typeof version !== 'string' || version.length === 0) fail('package.json has 
 // - a stable release of a prerelease version would make a beta `latest`;
 // - a prerelease of a stable version would take the stable tag (v0.1.0), and
 //   the real stable release could then never be created under it.
-const isPrereleaseVersion = version.includes('-')
+// Build metadata (`+…`) is not part of precedence and may itself contain a
+// hyphen (0.1.0+build-5), so only the part before '+' decides.
+const isPrereleaseVersion = version.split('+')[0].includes('-')
 if (channel === 'stable' && isPrereleaseVersion) {
   fail(`A stable release needs a stable version, but package.json is ${version}. Bump it (for example to ${version.split('-')[0]}) first.`)
 }
 if (channel === 'prerelease' && !isPrereleaseVersion) {
-  fail(`A prerelease needs a prerelease version, but package.json is ${version}. Use the stable channel, or bump to ${version}-beta.1.`)
+  // Suggest a prerelease of the NEXT patch: ${version}-beta.1 would sort
+  // BEFORE ${version} and read as older than the stable it follows.
+  const [major, minor, patch] = version.split('+')[0].split('.').map(Number)
+  const next = [major, minor, Number.isFinite(patch) ? patch + 1 : 0].join('.')
+  fail(`A prerelease needs a prerelease version, but package.json is ${version}. Use the stable channel, or bump to a prerelease of the next version (for example ${next}-beta.1).`)
 }
 
 const expectedTag = `v${version}`
 const tag = process.env.RELEASE_TAG || expectedTag
 if (tag !== expectedTag) fail(`Release tag must match package.json exactly: expected ${expectedTag}, got ${tag}.`)
 const name = process.env.RELEASE_NAME || `Agent Code ${version}`
+// GITHUB_OUTPUT is `key=value` lines, and a repeated key keeps its LAST
+// value, so a newline in a free-text input could append `tag=…` and replace
+// the validated tag (#1035 review). Refuse line breaks outright.
+for (const [label, value] of [['release_tag', tag], ['release_name', name]]) {
+  if (/[\r\n]/u.test(value)) fail(`${label} must be a single line.`)
+}
 
 const stable = channel === 'stable'
 const outputs = {
@@ -57,6 +69,10 @@ const outputs = {
   // Strings, because softprops/action-gh-release takes "true", "false" or
   // "legacy". GitHub refuses to make a prerelease latest anyway; saying
   // "false" keeps a beta from ever being the fallback latest.
+  // KNOWN LIMIT (#1035 review): re-dispatching an OLDER stable (say v0.1.0
+  // after v0.2.0 shipped) also sends true and takes `latest` back. Nothing
+  // here can see the published releases without a token; do not re-publish an
+  // old stable, or set it back from the Releases page afterwards.
   make_latest: stable ? 'true' : 'false',
 }
 const target = process.env.GITHUB_OUTPUT

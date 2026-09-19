@@ -84,6 +84,20 @@ describe('release identity', () => {
     expect(result.outputs).toMatchObject({ tag: 'v0.1.0', name: 'Agent Code 0.1' })
   })
 
+  it('reads only the version core: build metadata with a hyphen is still stable', () => {
+    expect(run('0.1.0+build-5', { CHANNEL: 'stable' }).outputs).toMatchObject({ prerelease: 'false', make_latest: 'true' })
+  })
+
+  it('refuses a name or tag with a line break, which could override the validated tag in GITHUB_OUTPUT', () => {
+    const result = run('0.0.2-beta.1', { CHANNEL: 'prerelease', RELEASE_NAME: 'Agent Code\ntag=v9.9.9' })
+    expect(result.status).toBe(1)
+    expect(result.outputs).toEqual({})
+  })
+
+  it('suggests a prerelease of the NEXT version, which sorts after the stable', () => {
+    expect(run('0.1.0', { CHANNEL: 'prerelease' }).stderr).toMatch(/0\.1\.1-beta\.1/)
+  })
+
   it('refuses an unknown channel instead of guessing', () => {
     expect(run('0.1.0', { CHANNEL: 'latest' }).status).toBe(1)
   })

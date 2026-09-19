@@ -375,6 +375,13 @@ jobs:
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
         with:
           tag_name: ${{ needs.validate-release.outputs.tag }}
+          # The tag must name the commit that was BUILT (#1035 review). A
+          # stable release is created as a draft and published after the
+          # uploads, and GitHub creates the tag only then. Without this it tags
+          # the default branch's head at that moment, which can be a commit
+          # merged during the ~26-minute build, or main when the release was
+          # dispatched from another ref.
+          target_commitish: ${{ github.sha }}
           name: ${{ needs.validate-release.outputs.name }}
           # Hardcoded `true` until Stage 8, so no stable release could be
           # made and releases/latest 404'd. make_latest is explicit either
