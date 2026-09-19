@@ -109,7 +109,7 @@ const FEATURES_BY_KIND: Record<AgentProviderKind, ProviderFeatureCapabilities> =
     transcriptDuplicate: true,
     promptHistoryExtraction: true,
     inAppResume: true,
-    switchTargets: ['codex', 'opencode'],
+    switchTargets: ['codex', 'opencode', 'grok'],
     verifiedExternalResumeCommand: true,
   },
   // Mirrors Claude, with explicit edges to both other adapters.
@@ -118,23 +118,22 @@ const FEATURES_BY_KIND: Record<AgentProviderKind, ProviderFeatureCapabilities> =
     transcriptDuplicate: true,
     promptHistoryExtraction: true,
     inAppResume: true,
-    switchTargets: ['claude', 'opencode'],
+    switchTargets: ['claude', 'opencode', 'grok'],
     verifiedExternalResumeCommand: true,
   },
   // OpenCode's supported CLI export/import boundary backs prompt extraction,
   // rewind, duplicate, and pairwise switching; its sessions are listed from
   // its database by the conversation catalog.
-  // Grok Stage 6 v1: resume is recorded and verified (`grok --resume <id>`,
-  // the terminal attach the corpus pins). Rewind, duplicate and prompt
-  // extraction need a transcript-engine adapter that does not exist yet, and
-  // switch targets stay empty until pairwise edges are proven — a capability
-  // that depends on unbuilt plumbing stays off rather than guessed.
+  // Grok: the transcript-engine adapter (grokTranscript's read/publish plus
+  // the parser's recorded native-resume projection) backs rewind, duplicate,
+  // prompt extraction and pairwise switching, and `grok --resume <id>` is the
+  // corpus-recorded resume form.
   grok: {
-    transcriptRewind: false,
-    transcriptDuplicate: false,
-    promptHistoryExtraction: false,
+    transcriptRewind: true,
+    transcriptDuplicate: true,
+    promptHistoryExtraction: true,
     inAppResume: true,
-    switchTargets: [],
+    switchTargets: ['claude', 'codex', 'opencode'],
     verifiedExternalResumeCommand: true,
   },
   opencode: {
@@ -146,7 +145,7 @@ const FEATURES_BY_KIND: Record<AgentProviderKind, ProviderFeatureCapabilities> =
     // works — it was only hidden because the guard read the flag for the
     // unrelated shell-command feature.
     inAppResume: true,
-    switchTargets: ['claude', 'codex'],
+    switchTargets: ['claude', 'codex', 'grok'],
     verifiedExternalResumeCommand: true,
   },
 }

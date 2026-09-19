@@ -27,6 +27,7 @@ import {
   opencodeNativeResumeProjector,
   resolveCodexTargetProfileFromSources,
   resolveUserPrompt,
+  projectGrokNativeResume,
 } from 'agent-transcript-parser'
 import type {
   ConversationContent,
@@ -54,6 +55,12 @@ import {
   writeProjectedClaudeSessionFile,
   writeProjectedCodexRolloutFile,
 } from '@main/providerSwitch/shared.js'
+import {
+  loadGrokSnapshot,
+  loadGrokSnapshotAt,
+  writeProjectedGrokSession,
+} from './grokTranscript.js'
+import { parseGrokSummary, resolveGrokTranscriptPath } from 'grok-code-headless'
 
 export interface TranscriptProjectionContext {
   cwd: string
@@ -305,10 +312,65 @@ async function resolveOpencodeTargetProfile(cwd = process.cwd()): Promise<Transc
 // any installed source and target adapters through ConversationDocument, so a
 // third provider adds one entry here instead of two translators for every
 // provider already shipped.
+// Grok's target profile: every corpus-recorded session ran grok-4.6
+// (current_model_id in the recorded summary.json files) and grok's config
+// model key is not part of any recording — env override first, then the
+// recorded default. The conservative 128k budget mirrors OpenCode's rule: an
+// unknown window must fail BEFORE the source pane is retired, not after.
+async function resolveGrokTargetProfile(): Promise<TranscriptTargetProfile> {
+  const model = process.env.GROK_MODEL ?? 'grok-4.6'
+  return {
+    modelProvider: 'xai',
+    model,
+    budgetCharacters: budgetCharactersForContextTokens(128_000),
+  }
+}
+
+const grokAdapter: HostTranscriptAdapter = {
+  provider: 'grok',
+  async read(cwd, providerSessionId) {
+    return (await loadGrokSnapshot(cwd, providerSessionId)).conversation
+  },
+  async locate(cwd, providerSessionId) {
+    return resolveGrokTranscriptPath(cwd, providerSessionId)
+  },
+  async readAt(path) {
+    return (await loadGrokSnapshotAt(path)).conversation
+  },
+  async listPrompts(cwd, providerSessionId) {
+    return promptsFromSnapshot(
+      await loadGrokSnapshot(cwd, providerSessionId),
+      plainDraft,
+    )
+  },
+  // Grok genuine-user rows carry text (and optional images) only; the plain
+  // draft shape is exactly their content.
+  draft: plainDraft,
+  targetProfile: resolveGrokTargetProfile,
+  async projectNativeResume(conversation, context) {
+    const targetProfile = context.targetProfile ?? await resolveGrokTargetProfile()
+    // The parser's projector owns the whole native projection (rows plus the
+    // summary.json sidecar with its counters); the host adapter publishes it
+    // intact — grok keeps its identity in summary.json, not a JSONL row.
+    return projectGrokNativeResume(conversation, {
+      cwd: context.cwd,
+      targetSessionId: context.targetSessionId,
+      now: context.now,
+      model: targetProfile.model,
+    })
+  },
+  write: (cwd, publication) => writeProjectedGrokSession(cwd, publication),
+  sessionId({ summary }) {
+    // writeProjectedGrokSession enforces the same identity on the way in.
+    return parseGrokSummary(JSON.stringify(summary ?? null)).info.id
+  },
+}
+
 const transcriptAdapters = new Map<string, HostTranscriptAdapter>([
   [claudeAdapter.provider, claudeAdapter],
   [codexAdapter.provider, codexAdapter],
   [opencodeAdapter.provider, opencodeAdapter],
+  [grokAdapter.provider, grokAdapter],
 ])
 
 export function getHostTranscriptAdapter(provider: AgentProviderKind): HostTranscriptAdapter {

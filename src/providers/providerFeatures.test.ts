@@ -33,7 +33,7 @@ describe('provider feature matrix', () => {
         transcriptDuplicate: true,
         promptHistoryExtraction: true,
         inAppResume: true,
-        switchTargets: ['codex', 'opencode'],
+        switchTargets: ['codex', 'opencode', 'grok'],
         verifiedExternalResumeCommand: true,
       },
       codex: {
@@ -41,15 +41,15 @@ describe('provider feature matrix', () => {
         transcriptDuplicate: true,
         promptHistoryExtraction: true,
         inAppResume: true,
-        switchTargets: ['claude', 'opencode'],
+        switchTargets: ['claude', 'opencode', 'grok'],
         verifiedExternalResumeCommand: true,
       },
       grok: {
-        transcriptRewind: false,
-        transcriptDuplicate: false,
-        promptHistoryExtraction: false,
+        transcriptRewind: true,
+        transcriptDuplicate: true,
+        promptHistoryExtraction: true,
         inAppResume: true,
-        switchTargets: [],
+        switchTargets: ['claude', 'codex', 'opencode'],
         verifiedExternalResumeCommand: true,
       },
       opencode: {
@@ -61,7 +61,7 @@ describe('provider feature matrix', () => {
         // shell-command flag, and this row is what makes that regression
         // visible if anyone re-conflates the two.
         inAppResume: true,
-        switchTargets: ['claude', 'codex'],
+        switchTargets: ['claude', 'codex', 'grok'],
         verifiedExternalResumeCommand: true,
       },
     })
@@ -95,16 +95,10 @@ describe('provider feature matrix', () => {
   })
 
   it('declares a complete directed switch graph for all transcript adapters', () => {
-    // Complete only for the kinds whose transcript-engine adapters exist.
-    // Grok Stage 6 ships without one (switching into Grok is unbuilt), so its
-    // edge set is empty by evidence rather than by omission; when its adapter
-    // lands, this guard goes back to covering every kind unchanged.
-    const kindsWithAdapters = AGENT_PROVIDER_KINDS.filter(kind => kind !== 'grok')
-    for (const kind of kindsWithAdapters) {
+    for (const kind of AGENT_PROVIDER_KINDS) {
       expect(getProviderFeatures(kind).switchTargets)
-        .toEqual(kindsWithAdapters.filter(candidate => candidate !== kind))
+        .toEqual(AGENT_PROVIDER_KINDS.filter(candidate => candidate !== kind))
     }
-    expect(getProviderFeatures('grok').switchTargets).toEqual([])
   })
 
   it('requires every agent provider to declare every capability', () => {

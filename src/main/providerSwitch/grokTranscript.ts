@@ -1,8 +1,9 @@
 import { constants } from 'node:fs'
 import { mkdir, open, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { decodeGrokConversation, type ConversationDocument } from 'agent-transcript-parser'
-import { decodeGrokConversationItem, parseGrokSummary, resolveGrokTranscriptPath, writeGrokChatHistory } from 'grok-code-headless'
+import { decodeGrokConversation } from 'agent-transcript-parser'
+import { decodeGrokConversationItem, isGenuineUserItem, parseGrokSummary, resolveGrokTranscriptPath, writeGrokChatHistory } from 'grok-code-headless'
+import type { ConversationDocument, PromptReference } from 'agent-transcript-parser'
 import type { TranscriptPublication } from './transcriptEngine.js'
 
 export async function writeProjectedGrokSession(cwd: string, publication: TranscriptPublication): Promise<string> {
@@ -46,13 +47,44 @@ export async function readGrokTranscript(cwd: string, sessionId: string): Promis
   const summary = parseGrokSummary(await readStableGrokFile(join(dirname(path), 'summary.json')))
   if (summary.info.id !== sessionId || await realpath(summary.info.cwd) !== await realpath(cwd)) throw new Error('Grok summary identity does not match the requested session')
   if (summary.chat_format_version !== 1) throw new Error('Unsupported Grok chat format')
+  // One read path: the snapshot loader applies the unterminated-record guard
+  // (a destructive switch must not accept a half-written tail) and the same
+  // filtering decode uses.
+  return (await loadGrokSnapshotAt(path, sessionId)).conversation
+}
+
+export interface GrokTranscriptSnapshot {
+  conversation: ConversationDocument
+  prompts: PromptReference[]
+}
+
+/**
+ * A rewind/switch-ready snapshot: the conversation document plus one prompt
+ * reference per GENUINE user row (synthetic rows are native insertions, never
+ * rewind boundaries). Line numbers are indices into the same filtered row
+ * array decodeGrokConversation numbers by, so resolveUserPrompt addresses
+ * match exactly.
+ */
+export async function loadGrokSnapshot(cwd: string, sessionId: string): Promise<GrokTranscriptSnapshot> {
+  const path = resolveGrokTranscriptPath(cwd, sessionId)
+  return loadGrokSnapshotAt(path, sessionId)
+}
+
+/** The locate()-paired variant for the compaction wait: read at a path the
+ *  caller already resolved, identity taken from the session's summary. */
+export async function loadGrokSnapshotAt(path: string, sessionId?: string): Promise<GrokTranscriptSnapshot> {
+  const summary = parseGrokSummary(await readStableGrokFile(join(dirname(path), 'summary.json')))
+  const id = sessionId ?? summary.info.id
   const text = await readStableGrokFile(path)
-  // The headless tail reader intentionally buffers/drops an active tail. A
-  // destructive switch/rewind snapshot cannot silently accept that prefix:
-  // doing so could retire the source while its final record is still writing.
   if (text && !text.endsWith('\n')) throw new Error('Grok transcript has an unterminated record; wait for the native writer')
-  const records = text.split('\n').filter(line => line.trim()).map(line => decodeGrokConversationItem(line).item)
-  return decodeGrokConversation(records, { sessionId })
+  const items = text.split('\n').filter(line => line.trim()).map(line => decodeGrokConversationItem(line).item)
+  const prompts: PromptReference[] = []
+  for (const [line, item] of items.entries()) {
+    if (item.type === 'user' && isGenuineUserItem(item)) {
+      prompts.push({ address: { provider: 'grok', line, sessionId: id }, raw: item as unknown as Record<string, unknown> })
+    }
+  }
+  return { conversation: decodeGrokConversation(items, { sessionId: id }), prompts }
 }
 
 async function readStableGrokFile(path: string): Promise<string> {
