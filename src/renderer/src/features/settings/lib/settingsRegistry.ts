@@ -16,6 +16,7 @@ import type {
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { SETTING_CATEGORIES } from '@renderer/features/settings/lib/settingsCategories'
 import type { SettingCategoryId } from '@renderer/features/settings/lib/settingsCategories'
+import type { ExtensionListEntry } from '@shared/types/extensions'
 import type { ConfigurableBuiltInMcpDomain } from '@mcp/shared/types'
 import type { MouseButtonBinding } from '@renderer/lib/mouseBinding'
 import { coerceMouseChordBinding } from '@renderer/lib/mouseBinding'
@@ -92,6 +93,7 @@ export type SettingDefinition =
   // so it cannot be represented by the static generic select's options.
   | { id: string; category: SettingCategoryId; title: string; description: string; keywords: string[]; metadata?: SettingMetadata; control: { type: 'dictation-audio-input' } }
   | { id: string; category: SettingCategoryId; title: string; description: string; keywords: string[]; metadata?: SettingMetadata; control: { type: 'external-control' } }
+  | { id: string; category: SettingCategoryId; title: string; description: string; keywords: string[]; metadata?: SettingMetadata; control: { type: 'performance-monitor' } }
   | {
       id: string
       category: SettingCategoryId
@@ -207,6 +209,46 @@ export type SettingDefinition =
       // See features/voice-dictation/DictationApiKeyRow.tsx.
       control: {
         type: 'dictation-api-key'
+      }
+    }
+  | {
+      id: string
+      category: SettingCategoryId
+      title: string
+      description: string
+      keywords: string[]
+      metadata?: SettingMetadata
+      // Marker for the extension installer. Same escape hatch as
+      // cli-update-behavior: the truth lives in main (extensions.json plus the
+      // bundle directories on disk), not in Settings, so the row owns its own
+      // IPC round-trip. It is also the only row that is a whole interactive
+      // surface — a text input, an install action, and a list with per-row
+      // update/remove — which no generic control type can express.
+      // See apps/ui/AppsSettingsRow.tsx.
+      control: {
+        type: 'apps'
+      }
+    }
+  | {
+      id: string
+      category: SettingCategoryId
+      title: string
+      description: string
+      keywords: string[]
+      metadata?: SettingMetadata
+      // Marker for one extension-contributed setting. Self-subscribing like the
+      // other markers, because the VALUE lives in the extension's main-owned
+      // storage (EXTENSION_STATE_DIR), never the zustand-persist blob (#249). The
+      // payload is everything the row needs to read/write that store; the row owns
+      // its own IPC round-trip. See apps/ui/ExtensionSettingRow.tsx.
+      control: {
+        type: 'extension'
+        /** Storage namespace (appId) — the owning extension's id. */
+        extensionId: string
+        /** Storage key — the setting's `<extensionId>.<name>` contribution id. */
+        settingId: string
+        valueType: 'boolean' | 'number' | 'string'
+        default: boolean | number | string
       }
     }
   | {
@@ -351,15 +393,78 @@ function updateDefaultBuiltInMcpDomain(
   ctx.onChange({ defaultBuiltInMcpDomains: next })
 }
 
-export function getSettingsRegistry(): SettingDefinition[] {
+/**
+ * `SettingDefinition`s for every contributed extension setting. Reads manifests
+ * only (no bundle import), the settings sibling of deriveExtensionCommands. Rows
+ * are the self-subscribing 'extension' marker; the value lives in per-extension
+ * storage, never the Settings blob. First-wins on a cross-extension id collision,
+ * matching the command/keybinding derivations.
+ */
+function deriveExtensionSettings(
+  installed: readonly ExtensionListEntry[],
+): SettingDefinition[] {
+  const seen = new Set<string>()
+  const rows: SettingDefinition[] = []
+
+  for (const entry of installed) {
+    if (!entry.present) continue
+    for (const setting of entry.manifest.contributes?.settings ?? []) {
+      if (seen.has(setting.id)) continue
+      seen.add(setting.id)
+      rows.push({
+        id: setting.id,
+        category: 'apps',
+        // Prefix with the extension name so a flat Extensions category still reads
+        // as grouped by owner, and two extensions' identically-titled settings stay
+        // distinguishable.
+        title: `${entry.manifest.name}: ${setting.title}`,
+        description: setting.description ?? '',
+        keywords: [entry.manifest.name, setting.title, entry.manifest.id],
+        control: {
+          type: 'extension',
+          extensionId: entry.manifest.id,
+          settingId: setting.id,
+          valueType: setting.type,
+          default: setting.default,
+        },
+      })
+    }
+  }
+
+  return rows
+}
+
+export function getSettingsRegistry(
+  // Installed extensions, so contributed settings render as rows. An empty default keeps
+  // every non-extension caller (the tests, mainly) unchanged. The extension set changes
+  // on install/remove, so this is not a per-lifetime constant and must be recomputed
+  // when the caller's list changes.
+  //
+  // NOTE: this used to also take `extensionCommands` for the Commands settings category.
+  // That category was replaced upstream by the unified command list in
+  // CommandKeybindingsRow, which derives extension commands itself — so the parameter
+  // was removed rather than left dangling.
+  installedExtensions: readonly ExtensionListEntry[] = [],
+): SettingDefinition[] {
   return [
+    // Extension-contributed settings, one row each, under the Extensions category.
+    // Derived from manifests (no bundle import); an uninstall drops the manifest
+    // from installedExtensions and the rows vanish with it, leaving a clean block.
+    ...deriveExtensionSettings(installedExtensions),
+    {
+      id: 'performance-monitor', category: 'performance', title: 'Performance Monitor',
+      description: 'Always-on local CPU, memory, responsiveness and agent process monitoring. No automatic uploads.',
+      keywords: ['performance', 'monitor', 'cpu', 'memory', 'slow', 'freeze', 'diagnostics'],
+      metadata: { scope: 'app', apply: 'immediate', storage: 'external-files' },
+      control: { type: 'performance-monitor' },
+    },
     {
       id: 'theme-mode',
       category: 'appearance',
       title: 'Theme',
       description: 'Switch between built-in themes and your saved color schemes.',
       keywords: [
-        'theme', 'mode', 'dark', 'light', 'tokyonight', 'dim',
+        'theme', 'mode', 'nord', 'dark', 'light', 'tokyonight', 'dim',
         'custom', 'color', 'colour', 'scheme', 'saved', 'palette',
       ],
       control: { type: 'theme-picker' },
@@ -406,6 +511,27 @@ export function getSettingsRegistry(): SettingDefinition[] {
         type: 'toggle',
         getValue: settings => settings.contrast,
         onToggle: (ctx, value) => ctx.onChange({ contrast: value }),
+      },
+    },
+    {
+      // WHY this lives under Extensions and defaults to ON: the anonymous
+      // api.github.com bucket is 60/hour per IP and an install spends two
+      // requests, so iterating on installs exhausts it and every further
+      // attempt 403s (#980, #982). Reading `gh auth token` raises the limit to
+      // 5000/hour. The credential is used only for those two requests, held
+      // only in main-process memory, never logged or persisted — and turning
+      // this off stops the gh subprocess entirely, restoring fully anonymous
+      // behavior.
+      id: 'extensions-github-cli-auth',
+      category: 'apps',
+      title: 'GitHub CLI Authentication',
+      description:
+        'Use your GitHub CLI login for extension installs and updates (5000 instead of 60 API requests per hour). The token is read per install, kept in memory only, and never stored. Turning this off makes installs fully anonymous again.',
+      keywords: ['github', 'cli', 'gh', 'authentication', 'token', 'rate limit', 'extensions', 'install'],
+      control: {
+        type: 'toggle',
+        getValue: settings => settings.extensionsGithubCliAuth,
+        onToggle: (ctx, value) => ctx.onChange({ extensionsGithubCliAuth: value }),
       },
     },
     {
@@ -632,6 +758,34 @@ export function getSettingsRegistry(): SettingDefinition[] {
         type: 'toggle',
         getValue: settings => settings.defaultBuiltInMcpDomains.includes('tldr'),
         onToggle: (ctx, value) => updateDefaultBuiltInMcpDomain(ctx, 'tldr', value),
+      },
+    },
+    {
+      id: 'default-goal-mcp',
+      category: 'agents',
+      title: 'Goal MCP',
+      description:
+        'Let agents record their goal — what their work is for — with the managed goal skill, and hold Cmd+G to see it. Off by default. Applies to new agents and existing agents on their next reload. Per-agent overrides take precedence; Use Global MCP Settings clears them.',
+      keywords: ['mcp', 'goal', 'purpose', 'objective', 'default', 'reload', 'existing agents', 'claude', 'codex'],
+      metadata: { scope: 'app', apply: 'new-session', storage: 'settings' },
+      control: {
+        type: 'toggle',
+        getValue: settings => settings.defaultBuiltInMcpDomains.includes('goal'),
+        onToggle: (ctx, value) => updateDefaultBuiltInMcpDomain(ctx, 'goal', value),
+      },
+    },
+    {
+      id: 'default-goal-loop-mcp',
+      category: 'agents',
+      title: 'Goal Loop MCP',
+      description:
+        'Let agents run harness-owned goal loops that keep re-prompting until the goal is complete, with a control strip and Cmd+Shift+Y overlay. Off by default. Applies to new agents and existing agents on their next reload. Per-agent overrides take precedence; Use Global MCP Settings clears them.',
+      keywords: ['mcp', 'goal', 'loop', 'persistence', 'autonomous', 'default', 'reload', 'existing agents'],
+      metadata: { scope: 'app', apply: 'new-session', storage: 'settings' },
+      control: {
+        type: 'toggle',
+        getValue: settings => settings.defaultBuiltInMcpDomains.includes('goal_loop'),
+        onToggle: (ctx, value) => updateDefaultBuiltInMcpDomain(ctx, 'goal_loop', value),
       },
     },
     {
@@ -1055,6 +1209,20 @@ export function getSettingsRegistry(): SettingDefinition[] {
       // Owned by main's setup.json, not renderer Settings.
       metadata: { scope: 'app', apply: 'immediate', storage: 'setup' },
       control: { type: 'cli-update-behavior' },
+    },
+    {
+      // Built-in apps listing. A marker row with no value — the content is
+      // apps/registry.ts, which is compile-time data. Deliberately NOT mirrored
+      // into Settings: extension-adjacent state must stay out of the
+      // zustand-persist blob (a forgotten version bump there black-screened
+      // launch twice, #249), and here there is nothing to persist anyway.
+      // See apps/ui/AppsSettingsRow.tsx.
+      id: 'apps-installed',
+      category: 'apps',
+      title: 'Extensions',
+      description: 'Install, update, and remove extensions from GitHub repositories.',
+      keywords: ['apps', 'extensions', 'plugins', 'install', 'github', 'tools'],
+      control: { type: 'apps' },
     },
     {
       id: 'reset-settings',

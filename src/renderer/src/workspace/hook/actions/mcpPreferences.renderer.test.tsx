@@ -65,16 +65,19 @@ describe('global MCP preferences at actual provider replacement', () => {
     expect(h.writer.getState().sessions[h.focused()]!.tldrIdentity).toBe(first.tldrIdentity)
   })
 
-  it('preserves a per-agent off override and lets the reset command restore inheritance', async () => {
-    const h = setup({ builtInMcpDomains: ['tldr'], builtInMcpOverrides: {} })
-    h.refs.defaultBuiltInMcpDomainsRef.current = ['tldr']
-    await perform(() => h.command('enable-tldr-mcp'))
-    expect(h.writer.getState().sessions[h.focused()]!.builtInMcpOverrides).toEqual({ tldr: false })
-    h.refs.defaultBuiltInMcpDomainsRef.current = ['tldr', 'orchestration']
+  it.each([
+    { domain: 'tldr', commandId: 'enable-tldr-mcp' },
+    { domain: 'goal', commandId: 'enable-goal-mcp' },
+  ] as const)('preserves a per-agent $domain off override and lets the reset command restore inheritance', async ({ domain, commandId }) => {
+    const h = setup({ builtInMcpDomains: [domain], builtInMcpOverrides: {} })
+    h.refs.defaultBuiltInMcpDomainsRef.current = [domain]
+    await perform(() => h.command(commandId))
+    expect(h.writer.getState().sessions[h.focused()]!.builtInMcpOverrides).toEqual({ [domain]: false })
+    h.refs.defaultBuiltInMcpDomainsRef.current = [domain, 'orchestration']
     await perform(() => h.hook.result.current.provider.reloadSessionAgent(h.focused()))
     expect(h.spawnSession.mock.calls.at(-1)![0].builtInMcpDomains).toEqual(['orchestration'])
     await perform(() => h.command('use-global-mcp-settings'))
-    expect(h.spawnSession.mock.calls.at(-1)![0].builtInMcpDomains).toEqual(['tldr', 'orchestration'])
+    expect(h.spawnSession.mock.calls.at(-1)![0].builtInMcpDomains).toEqual([domain, 'orchestration'])
     expect(h.writer.getState().sessions[h.focused()]!.builtInMcpOverrides).toEqual({})
   })
 

@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { useAppStore } from '@renderer/app-state/hooks'
-import { applyTheme } from '@renderer/app-state/settings/theme'
+import { applyTheme, themeSettingsForRemote } from '@renderer/app-state/settings/theme'
 
 // Root effect extracted from App.tsx (#494). Theme is applied twice by
 // design: once at settings-slice module load (pre-hydration default, no
@@ -10,8 +10,9 @@ import { applyTheme } from '@renderer/app-state/settings/theme'
 // feed subtree the phone bundle re-uses.
 export function useThemeSync(): void {
   const settings = useAppStore(state => state.settings)
+  const extensions = useAppStore(state => state.installedExtensions)
   useEffect(() => {
-    applyTheme(settings)
-    void window.api.remoteSetThemeSettings(settings)
-  }, [settings])
+    applyTheme(settings, extensions)
+    void window.api.remoteSetThemeSettings(themeSettingsForRemote(settings, extensions))
+  }, [settings, extensions])
 }

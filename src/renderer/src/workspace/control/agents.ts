@@ -13,7 +13,7 @@ import { sessionHasTranscript } from '@renderer/workspace/transcriptAvailability
 
 const sessionInput = z.object({ sessionId: z.string().min(1).describe('Stable agent sessionId from agents.search/list; not a provider-native transcript ID or numbered tile.') }).strict()
 const sessionReference = workspaceObservationSchema.shape.sessions.element
-const provider = z.enum(['claude', 'codex', 'opencode']).describe('Provider for the new agent; its CLI must already be configured in Agent Code.')
+const provider = z.enum(['claude', 'codex', 'opencode', 'grok']).describe('Provider for the new agent; its CLI must already be configured in Agent Code.')
 
 export function agentControlCapabilities(getWorkspace: () => Workspace) {
   const observe = () => observeWorkspace(getWorkspace)
@@ -47,7 +47,14 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
   return [
     defineCapability({
       id: 'agents.close', target: { kind: 'session', field: 'sessionId' }, title: 'Close an agent', execution: 'window', effect: 'mutation', completion: 'accepted',
-      description: 'Request the normal close of an exact agent, including the app’s existing child-cascade confirmation. Returns an accepted callId immediately; finish any confirmation with computer use and read operations.read for the eventual closed result. Does not bypass confirmation or force-kill a process.',
+      // WHY the root-dialog sentence (#886 review m5): this capability calls
+      // closeSession with no options, i.e. the HUMAN path. For a project's root
+      // with other sessions that path asks Close Agent (Close Terminal for a
+      // terminal root) vs Close Tab, and operations.read reports `closed: true`
+      // either way — so an operator that picks the prominent destructive button
+      // silently ends the whole project. The description is the only place an
+      // operator learns which button matches "close agent X".
+      description: 'Request the normal close of an exact agent, including the app’s existing child-cascade confirmation. Closing a project’s root agent while other sessions exist asks whether to close only that agent (Close Agent, or Close Terminal for a terminal) or the whole tab (Close Tab); choose Close Agent unless the user asked to close the whole project. Returns an accepted callId immediately; finish any confirmation with computer use and read operations.read for the eventual closed result. Does not bypass confirmation or force-kill a process.',
       input: sessionInput, output: z.object({ callId: z.string(), accepted: z.literal(true) }),
       handler: ({ sessionId }, context) => {
         requireUi(); requireSession(sessionId)
@@ -143,14 +150,15 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
         // independent layer in case some other caller reaches it directly.
         //
         // WHY sessionHasTranscript instead of `session.provider === 'terminal'`
-        // (M5): a plain terminal is not the only kind Reader can't render.
-        // OpenCode Terminal (provider 'opencode', providerRuntime 'terminal')
-        // is agent-provider-kind but also never loads a transcript — see
-        // transcriptAvailability.ts. readerCommands.ts and reader.ts's own
-        // setReaderModeSession guard already use sessionHasTranscript; this
-        // refusal has to agree with them or an OpenCode Terminal could slip
-        // past this check and hit the exact same "can't render" failure one
-        // layer down. Read from raw workspace state (not the sessionReference
+        // (M5): a plain terminal is the only kind Reader can't render — it has
+        // no assistant-message model at all. OpenCode Terminal (provider
+        // 'opencode', providerRuntime 'terminal') DOES carry entries since #882
+        // and Reader pages them as an overlay (see transcriptAvailability.ts's
+        // WHY, revised for #971), so it must pass here. readerCommands.ts and
+        // reader.ts's own setReaderModeSession guard use sessionHasTranscript;
+        // this refusal has to agree with them or a session could slip past
+        // this check and hit the exact same "can't render" failure one layer
+        // down. Read from raw workspace state (not the sessionReference
         // `session` above) because sessionHasTranscript's shape is keyed on
         // SessionMeta's `kind`/`providerRuntime` fields, not the observation
         // schema's renamed `provider` field.
@@ -273,6 +281,12 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
         // Point at the route that exists instead of a bare "unavailable".
         if (session.provider === 'terminal') {
           throw new ControlError('unavailable', 'This session is a terminal. Send text with terminals.input; agents.prompt only drives provider agents')
+        }
+        // Extension panes are processless sessions with no provider at all. Main
+        // has no delivery entry for them and logs that miss as registry
+        // split-brain, which misled both the calling agent and diagnostics.
+        if (session.provider === 'extension-view') {
+          throw new ControlError('unavailable', 'This session is an extension view, not an agent; agents.prompt only drives provider agents')
         }
         // Codex's text-only delivery currently ignores imagePaths. Refuse
         // unsupported attachments BEFORE wake/write instead of silently sending

@@ -11,7 +11,7 @@ import type {
 } from '@renderer/workspace/types'
 import {
   clampTileCount,
-  dispatchFocusedSessionId,
+  dispatchEntrySeedSessionId,
   withLaneSession,
 } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import type { GridShapeRow } from '@renderer/workspace/dispatch/gridShape'
@@ -35,6 +35,7 @@ import type {
 } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import type { SessionActions } from '@renderer/workspace/hook/actions/session'
+import { isProcessSessionKind } from '@shared/types/providerKind'
 
 /**
  * Write row METADATA without touching any row length.
@@ -123,7 +124,10 @@ export function useDispatchActions(
   toggleDispatchRowExpandedParent: (rowIndex: number, sessionId: SessionId) => void
 } {
   const enterDispatchMode = useCallback(
-    async (scope: DispatchModeState['scope'] = state.dispatchMode?.scope ?? 'project') => {
+    // Global is the default scope (#973): entering Dispatch from a workspace
+    // that never used it should show the whole fleet, matching what a fresh
+    // install boots into. A persisted scope always wins over this fallback.
+    async (scope: DispatchModeState['scope'] = state.dispatchMode?.scope ?? 'global') => {
       closeNewAgentPlacement()
       setState(prev => ({
         ...prev,
@@ -198,18 +202,53 @@ export function useDispatchActions(
   // Enter (or freshly build) a Tiled Dispatch layout. Enters Dispatch if it
   // wasn't already on and clears tiled-tabs (mutually exclusive top-level mode).
   //
-  // The lanes arrive EMPTY (#681). This used to auto-fill from unclaimed visible
-  // agents on the theory that asking for N tiles means wanting to see N agents.
-  // The cost of that convenience was a layout that rearranges itself: the same
-  // helper ran on growth, and the render-time healer ran on every unresolved
-  // lane, so killing an agent replaced it with an unrelated one. Making entry
-  // the single exception would have left the user unable to predict which of
-  // their slots the app feels entitled to fill.
+  // The lanes other than lane 0 arrive EMPTY (#681). This used to auto-fill
+  // from unclaimed visible agents on the theory that asking for N tiles means
+  // wanting to see N agents. The cost of that convenience was a layout that
+  // rearranges itself: the same helper ran on growth, and the render-time
+  // healer ran on every unresolved lane, so killing an agent replaced it with
+  // an unrelated one. Making entry the single exception would have left the
+  // user unable to predict which of their slots the app feels entitled to
+  // fill.
+  //
+  // Lane 0 is the one deliberate exception (#977): it is seeded with the
+  // session the user was ALREADY focused on — classic Dispatch's focus, an
+  // existing grid's focused lane, or the grid pane they left behind. That is
+  // continuity with what they were commanding, not a prediction from the
+  // index, so it does not reopen #681. A missing or buried focus id resolves
+  // to null and lane 0 stays empty exactly like every other lane.
+  //
+  // A DETACHED seed is woken BEFORE the write (#690 parity): the seed is a
+  // lane placement like any other, and a hibernated agent written into a lane
+  // unwoken renders a pane that rejects the first prompt with "not a live
+  // agent session". In an ordinary session every dispatch agent is detached,
+  // so the wake is the COMMON path here, not an exception. Grid-placed seeds
+  // skip it — same predicate selectTiledLaneSession uses — because rehydrate
+  // already respawned those. A failed wake costs the seed, never the entry:
+  // the user asked for a grid, and the toast reports what was declined.
   const enterTiledDispatch = useCallback(
     async (rowLengths: number[]) => {
       closeNewAgentPlacement()
+      // Resolved from the live ref, not the hook's render snapshot: focus may
+      // have moved since the command was admitted, and seeding an agent the
+      // user is no longer commanding would be a guess.
+      let candidate = dispatchEntrySeedSessionId(refs.stateRef.current)
+      if (candidate && refs.stateRef.current.detachedSessions[candidate] !== undefined) {
+        try {
+          await ensureSessionLive(candidate, 'grid-dispatch.entry-seed')
+        } catch (error) {
+          showToast(
+            error instanceof Error && error.message.length > 0
+              ? error.message
+              : 'Could not wake agent',
+          )
+          candidate = null
+        }
+      }
       setState(prev => {
-        const scope = prev.dispatchMode?.scope ?? 'project'
+        // Same default-scope rationale as enterDispatchMode above (#973):
+        // whole fleet, matching a fresh install, unless a persisted scope wins.
+        const scope = prev.dispatchMode?.scope ?? 'global'
         // Takes a length PER ROW rather than a single count, because the grid
         // is ragged by design and entering it should be able to express that
         // in one step. A count would force the user into a rectangle and then
@@ -226,14 +265,29 @@ export function useDispatchActions(
           total += length
         }
         const shape = capped.length > 0 ? capped : [{ length: clampTileCount(1) }]
+        const lanes = emptyLanes(shape.reduce((sum, row) => sum + row.length, 0))
+        // Re-resolved and IDENTITY-MATCHED against the validated candidate.
+        // The wake window is up to 30s cold; if focus moved underneath it,
+        // the new focus has been neither validated nor woken on this path,
+        // and raw-writing it from inside this sync updater would reopen the
+        // exact #690 gap the wake above closes. Dropping the seed mirrors
+        // selectTiledLaneSession's membership-change drop: predictable over
+        // clever.
+        const resolved = dispatchEntrySeedSessionId(prev)
+        if (candidate !== null && resolved === candidate) {
+          lanes[0] = withLaneSession(lanes[0]!, candidate)
+        }
         return {
           ...prev,
           dispatchMode: {
             scope,
             focusedSessionId: prev.dispatchMode?.focusedSessionId,
             tiled: {
-              lanes: emptyLanes(shape.reduce((sum, row) => sum + row.length, 0)),
+              lanes,
               rows: shape,
+              // Focus on the seeded lane: the agent the user was commanding
+              // stays the agent every keyboard command targets. With no seed
+              // this is simply the left edge of the grid, as before.
               focusedLane: 0,
             },
           },
@@ -241,7 +295,7 @@ export function useDispatchActions(
       })
       setTileTabs(null)
     },
-    [closeNewAgentPlacement, setState, setTileTabs],
+    [closeNewAgentPlacement, ensureSessionLive, refs, setState, setTileTabs, showToast],
   )
 
   // Return to classic single-view Dispatch. Agents keep running — we only
@@ -634,7 +688,8 @@ export function useDispatchActions(
     (sessionId: SessionId) => {
       setState(prev => {
         if (prev.pinnedSessionIds.includes(sessionId)) return prev
-        if (!prev.sessions[sessionId]) return prev
+        const meta = prev.sessions[sessionId]
+        if (!meta || !isProcessSessionKind(meta.kind)) return prev
         return {
           ...prev,
           pinnedSessionIds: [...prev.pinnedSessionIds, sessionId],
@@ -665,7 +720,10 @@ export function useDispatchActions(
         // before they hit Enter) can never reintroduce an orphan into
         // the array. Same defensive shape as buildPinnedDispatchRows
         // at render time.
-        const filtered = ids.filter(id => prev.sessions[id] !== undefined)
+        const filtered = ids.filter(id => {
+          const meta = prev.sessions[id]
+          return meta !== undefined && isProcessSessionKind(meta.kind)
+        })
         // Deduplicate while preserving caller order (first occurrence wins).
         // The modal already enforces this client-side, but a programmatic
         // caller could pass duplicates; keeping the dedupe here means the

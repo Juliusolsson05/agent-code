@@ -207,3 +207,27 @@ The success condition is intentionally boring: contributors and agents reach
 for familiar names, compose a small local primitive, and keep feature logic in
 the feature. If this directory starts requiring an architectural diagram to
 add a button, it has violated its purpose.
+
+## Why the built-in apps host is not a "surface factory"
+
+`apps/surfaces/AppHostSurface` renders one of N app components inside a standard
+`DialogContent`. It is worth recording why that does not violate the "no generic
+modal schema, JSON-driven form renderer, or surface factory" rule above, because
+it superficially resembles one.
+
+It generates nothing. It is a single ordinary entry in the surface registry that
+switches on one store field (`openAppId`) and resolves it through a compile-time
+array (`apps/registry.ts`). There is no schema, no synthesized shell, and no
+second modal mechanism — apps get the same `DialogContent` every other surface
+gets, which is the point: that is where the interaction-ownership marker and
+Radix's focus trap live, and an app must not be able to opt out of either.
+
+The guardrail targets first-party component proliferation, where a factory hides
+which surfaces exist. Here the surfaces are a single greppable array sitting
+beside the registry it mirrors.
+
+Worth knowing for whoever revisits this: the two alternative hosting designs —
+loading app bundles at runtime, or rendering them in an iframe — both *would*
+require a genuine factory, since a loader must synthesize mount points from
+manifests. This guardrail is therefore an argument in favour of the compiled-in
+staging, not against it.

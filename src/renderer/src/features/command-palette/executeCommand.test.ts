@@ -20,7 +20,7 @@ import {
 import { buildCommandRegistry } from '@renderer/features/command-palette/registry'
 import { recordCommandUse } from '@renderer/features/command-palette/lib/recentCommandHistory'
 import { makeTestCommandContext } from '@renderer/features/command-palette/testing/commandContextHarness'
-import type { CommandContext } from '@renderer/features/command-palette/types'
+import type { CommandContext, CommandDef } from '@renderer/features/command-palette/types'
 
 // ---------------------------------------------------------------------------
 // Phase 1: the command execution gateway.
@@ -349,5 +349,62 @@ describe('create commands in Dispatch Mode', () => {
     for (const id of CREATE_IDS) {
       expect(canDispatchCommand(id, ctx), `${id} refused in the grid`).toBe(true)
     }
+  })
+})
+
+describe('resolving commands that are not in the compile-time catalog', () => {
+  // ── THE REGRESSION THIS PINS ──
+  // Extension commands are derived per render from the installed manifests, so they
+  // cannot live in the frozen `builtInCommandCatalog`. The gateway resolved only
+  // against that catalog, so every contributed id answered `status: 'unknown'` — and
+  // the keybinding path does not inspect the outcome. The effect was that every
+  // manifest-declared shortcut silently did nothing AND swallowed whatever the chord
+  // would otherwise have done, while the same command clicked in the palette worked,
+  // because that path runs an already-resolved row.
+  function contributedCommand(run: () => void): CommandDef {
+    return {
+      id: 'timer.start',
+      title: 'Start Timer',
+      description: 'Starts the timer.',
+      surface: 'app',
+      category: 'extensions',
+      run,
+    }
+  }
+
+  it('does not resolve a contributed id without extraCommands', async () => {
+    const ctx = makeContext()
+    const outcome = await dispatchCommand({ id: 'timer.start', source: 'keybinding', ctx })
+    expect(outcome.status).toBe('unknown')
+  })
+
+  it('resolves and RUNS a contributed id when extraCommands is supplied', async () => {
+    const ctx = makeContext()
+    let ran = false
+    const outcome = await dispatchCommand({
+      id: 'timer.start',
+      source: 'keybinding',
+      ctx,
+      extraCommands: [contributedCommand(() => { ran = true })],
+    })
+    expect(outcome.status).toBe('ran')
+    expect(ran).toBe(true)
+  })
+
+  it('never lets a contributed command shadow a first-party id', async () => {
+    // Contributed ids are namespaced at install, so a collision should be
+    // impossible — but the lookup must not DEPEND on that validator being correct.
+    const ctx = makeContext()
+    let contributedRan = false
+    const outcome = await dispatchCommand({
+      id: 'new-tab',
+      source: 'keybinding',
+      ctx,
+      extraCommands: [
+        { ...contributedCommand(() => { contributedRan = true }), id: 'new-tab' },
+      ],
+    })
+    expect(contributedRan).toBe(false)
+    expect(outcome.status).not.toBe('unknown')
   })
 })

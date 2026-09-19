@@ -19,6 +19,7 @@ describe('command naming corrections', () => {
   it.each([
     ['toggle-tail', 'Auto-follow Focused Agent'],
     ['toggle-tail-all', 'Auto-follow All Visible Agents'],
+    ['toggle-tail-working', 'Auto-follow All Working Agents'],
     ['close-pane', 'Close Focused Session'],
     ['bury-pane', 'Bury Session'],
     ['revive-pane', 'Revive Buried Session…'],

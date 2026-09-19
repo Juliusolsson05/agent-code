@@ -44,13 +44,19 @@ export function excludeExternalControlFromCodex(args: string[], codexHome?: stri
   args.push('--config', `skills.config=[{path=${JSON.stringify(skill.path)},enabled=false}]`)
 }
 
-export function excludeExternalControlFromClaude(args: string[]): void {
+export function excludeExternalControlFromClaude(args: string[], settings: Record<string, unknown> = {}): void {
   // Claude merges deniedMcpServers from all settings scopes, including this
   // launch-only --settings source. Unlike --strict-mcp-config, a named deny
   // retains unrelated user/project MCP integrations. Source: Claude's
   // services/mcp/config.ts getMcpDenylistSettings + isMcpServerDenied and
   // https://code.claude.com/docs/en/managed-mcp#policy-based-control-with-allowlists-and-denylists
-  args.push('--settings', JSON.stringify({ deniedMcpServers: [{ serverName: EXTERNAL_OPERATOR_SERVER_NAME }] }))
+  //
+  // WHY other launch settings are merged in here rather than pushed as their
+  // own flag: the CLI takes one `--settings` value. A second flag carrying, say,
+  // TLDR hooks would displace this denylist and quietly hand the external
+  // operator MCP back to every agent. The deny is spread last so a caller's
+  // fragment can never overwrite it.
+  args.push('--settings', JSON.stringify({ ...settings, deniedMcpServers: [{ serverName: EXTERNAL_OPERATOR_SERVER_NAME }] }))
 }
 
 export function excludeExternalControlFromOpencode(env: Record<string, string>): void {

@@ -74,7 +74,12 @@ describe('useAppStore prompt template migration', () => {
     const { useAppStore } = await import('@renderer/app-state/store')
     await useAppStore.persist.rehydrate()
 
-    expect(useAppStore.getState().settings.defaultBuiltInMcpDomains).toEqual([])
+    // A v7 blob predates the field entirely, so coercion resolves it to the
+    // SHIPPED default set — the owner's five domains since #973, not an empty
+    // list. An install that explicitly cleared the domains persists `[]`,
+    // which coerceSettings honours as a real choice.
+    expect(useAppStore.getState().settings.defaultBuiltInMcpDomains)
+      .toEqual(['tldr', 'goal', 'orchestration', 'agent_transcripts', 'workflows'])
   })
 })
 

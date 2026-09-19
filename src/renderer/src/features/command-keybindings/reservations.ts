@@ -243,6 +243,7 @@ export const RESERVED_INTERACTIONS: readonly ReservedInteraction[] = [
     owner: 'Editor file-tab navigation',
   },
   { bindings: ['Cmd+L'], context: 'editor', owner: 'Editor Select Line' },
+  { bindings: ['Cmd+G'], context: 'editor', owner: 'Editor Find Next' },
 ]
 
 export type BindingOwnerRef = {
@@ -272,6 +273,7 @@ const APPROVED_OVERLAPS: ReadonlyArray<{
   reason: string
 }> = [
   { binding: 'Cmd+L', owners: ['tldr-preview', 'Editor Select Line'], reason: 'The TLDR hold handler explicitly yields while editor chrome owns the input target; Monaco keeps its native Select Line command and TLDR operates only in the agent workspace.' },
+  { binding: 'Cmd+G', owners: ['goal-preview', 'Editor Find Next'], reason: 'Goal shares the TLDR hold handler, which yields while editor chrome owns the input target; Monaco keeps its native Find Next and Goal operates only in the agent workspace.' },
   {
     binding: 'Cmd+W',
     owners: ['close-pane', 'Editor-native close file and indentation', 'Native application menu'],

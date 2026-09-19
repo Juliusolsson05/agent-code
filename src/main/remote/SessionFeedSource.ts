@@ -1,5 +1,7 @@
 import type { SessionManager } from '@main/sessionManager.js'
 import type { OutboundSessionSummary } from '@main/remote/protocol/messages.js'
+import { SubAgentWatcherManager } from '@main/subagents/index.js'
+import type { JsonlEntry } from '@preload/api/types.js'
 
 // SessionFeedSource — the remote subsystem's read tap on SessionManager.
 //
@@ -27,6 +29,7 @@ export type FeedChannel =
   | 'screen'
   | 'jsonl-entries'
   | 'jsonl-error'
+  | 'history-boundary'
   | 'semantic-event'
   | 'conditions'
   | 'process-state'
@@ -36,6 +39,13 @@ export type FeedChannel =
   // detach, spawn-failure rollback); a client that only watched 'exit'
   // would keep a dead session in its list forever.
   | 'removed'
+  // v2: the parent session's live sub-agent fleet (Claude sidecars, Codex
+  // child rollouts), same payload the desktop window receives. A SECOND
+  // SubAgentWatcherManager instance fed from the same transcript stream —
+  // the desktop forwarder owns its own and the isolation boundary forbids
+  // sharing it, so remote builds an identical one; the duplicate dir poll
+  // only exists while remote is enabled.
+  | 'sub-agents'
 
 export type FeedEventListener = (channel: FeedChannel, payload: unknown) => void
 
@@ -65,11 +75,18 @@ export class SessionFeedSource {
    *  the price of the one-way wall, and per-socket batching may diverge
    *  from the renderer's needs later anyway. */
   private readonly pendingJsonl = new Map<string, PendingBurst>()
+  private readonly subAgents: SubAgentWatcherManager
   private readonly unsubscribes: Unsubscribe[] = []
   private readonly manager: SessionManager
   private disposed = false
 
   constructor(manager: SessionManager) {
+    // See the 'sub-agents' channel note above: an independent watcher
+    // instance, identical to the desktop forwarder's, fed from the same
+    // main transcript stream below.
+    this.subAgents = new SubAgentWatcherManager((sessionId, map) => {
+      this.emit('sub-agents', { sessionId, subAgents: map })
+    })
     // Seed from sessions that are ALREADY live: the remote server is
     // typically enabled long after agents started, and 'started' events for
     // those fired before this tap existed. Without seeding, the feature's
@@ -133,6 +150,12 @@ export class SessionFeedSource {
         message: String(payload.error?.message ?? payload.error),
       })
     })
+    sub('history-boundary', (payload: { sessionId: string }) => {
+      // Mirror the forwarder's ordering: superseded-generation entries flush
+      // first; the boundary is transient and never cached for late joiners.
+      this.flushJsonl(payload.sessionId)
+      this.emit('history-boundary', payload)
+    })
     sub('semantic-event', (payload: { sessionId: string }) =>
       this.emit('semantic-event', payload),
     )
@@ -142,6 +165,15 @@ export class SessionFeedSource {
     )
 
     sub('jsonl-entry', (payload: { sessionId: string; entry: unknown; file: string }) => {
+      // Same feeding order the desktop forwarder uses: the sub-agent fleet
+      // derives from the committed transcript stream (sidecar dir from the
+      // file path, done/error flips from Agent tool_results), so it must see
+      // every entry BEFORE the coalescer batches them.
+      this.subAgents.observeParentEntry(
+        payload.sessionId,
+        payload.entry as JsonlEntry,
+        payload.file,
+      )
       let pending = this.pendingJsonl.get(payload.sessionId)
       if (!pending) {
         pending = { entries: [], flushScheduled: false }
@@ -175,6 +207,7 @@ export class SessionFeedSource {
       this.flushJsonl(payload.sessionId)
       this.pendingJsonl.delete(payload.sessionId)
       this.sessions.delete(payload.sessionId)
+      this.subAgents.stop(payload.sessionId)
       if (tracked) this.emit('removed', payload)
     })
   }
@@ -200,6 +233,7 @@ export class SessionFeedSource {
     this.disposed = true
     for (const unsub of this.unsubscribes) unsub()
     this.unsubscribes.length = 0
+    this.subAgents.stopAll()
     this.listeners.clear()
     this.pendingJsonl.clear()
     this.sessions.clear()

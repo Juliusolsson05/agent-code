@@ -1,4 +1,5 @@
 import type { SessionFeed } from '@shared/sessionFeed/SessionFeed'
+import type { SessionHistoryBoundaryEvent } from '@shared/sessionFeed/types'
 
 // The desktop implementation of SessionFeed: a pure pass-through to the flat
 // `window.api` preload bridge (see src/preload/api/index.ts for why the
@@ -29,6 +30,7 @@ export const ipcSessionFeed: SessionFeed = {
   onSessionScreen: cb => window.api.onSessionScreen(cb),
   onSessionJsonlEntries: cb => window.api.onSessionJsonlEntries(cb),
   onSessionJsonlError: cb => window.api.onSessionJsonlError(cb),
+  onSessionHistoryBoundary: cb => window.api.onSessionHistoryBoundary(cb),
   onSessionSemanticEvent: cb => window.api.onSessionSemanticEvent(cb),
   onSessionConditions: cb => window.api.onSessionConditions(cb),
   onSessionProcessState: cb => window.api.onSessionProcessState(cb),

@@ -34,6 +34,22 @@
 import { spawnSync } from 'node:child_process'
 
 const env = { ...process.env }
+
+// WHY empty signing vars are deleted, not just treated as falsy: GitHub
+// Actions materialises `${{ secrets.CSC_LINK }}` as an EMPTY STRING when the
+// secret does not exist, and release.yml passes every signing secret that way.
+// electron-builder deliberately treats "" as a set value
+// (platformPackager.getCscLink: chooseNotNull + "allow to specify as empty
+// string"), so an empty CSC_LINK is resolved as a certificate PATH relative to
+// the project root and packaging dies with "<repo> not a file" (#965, release
+// run 34739476044). The `!env.CSC_LINK` test below already chose the unsigned
+// branch correctly; the empty variable simply survived into the child env.
+// Normalising first makes "secret missing" and "variable unset" identical for
+// everything downstream, including the notarization vars.
+for (const name of ['CSC_LINK', 'CSC_NAME', 'CSC_KEY_PASSWORD']) {
+  if (env[name] !== undefined && env[name].trim() === '') delete env[name]
+}
+
 if (!env.CSC_LINK && !env.CSC_NAME) {
   env.CSC_IDENTITY_AUTO_DISCOVERY = 'false'
   delete env.CSC_KEY_PASSWORD

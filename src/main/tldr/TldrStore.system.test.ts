@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -8,6 +8,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { createBuiltInMcpServer } from '@mcp/runtime/createBuiltInMcpServer.js'
 import { BuiltInMcpHttpHost } from '@mcp/runtime/BuiltInMcpHttpHost.js'
 import type { BuiltInMcpDomain } from '@mcp/shared/types.js'
+import { GOAL_INSTRUCTIONS, TLDR_INSTRUCTIONS } from '@shared/types/tldr.js'
 import { TldrStore } from './TldrStore.js'
 
 vi.mock('@main/performance/PerformanceService.js', () => ({ performanceService: { record: vi.fn() } }))
@@ -137,5 +138,67 @@ describe('TLDR MCP and durable summaries', () => {
     await writeFile(file, '{broken')
     await expect(new TldrStore(file).update('agent-1', 'Done.', () => true)).rejects.toThrow()
     expect(await readFile(file, 'utf8')).toBe('{broken')
+  })
+})
+
+describe('Goal MCP', () => {
+  async function goalSetup(domains: BuiltInMcpDomain[]) {
+    const directory = await mkdtemp(join(tmpdir(), 'agent-code-goal-'))
+    directories.push(directory)
+    const tldr = new TldrStore(join(directory, 'tldr.json'))
+    const goal = new TldrStore(join(directory, 'goal.json'), undefined, { historyDirectoryName: 'goal-history', label: 'Goal' })
+    let active = true
+    const server = createBuiltInMcpServer({ sessionId: 'routing-1', tldrIdentity: 'agent-1', cwd: '/project', domains }, {
+      tldrStore: tldr, goalStore: goal, isTldrWriteAuthorized: () => active,
+    })
+    const client = new Client({ name: 'goal-test', version: '1' })
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+    await server.connect(serverTransport)
+    await client.connect(clientTransport)
+    clients.push(client, server)
+    return { client, tldr, goal, directory, revoke: () => { active = false } }
+  }
+
+  it('writes only the authenticated agent’s goal, kept apart from its TLDR and TLDR history', async () => {
+    const { client, tldr, goal, directory } = await goalSetup(['tldr', 'goal'])
+    const tools = (await client.listTools()).tools
+    expect(tools.map(tool => tool.name).sort()).toEqual(['goal_set', 'tldr_update'])
+    expect(tools.find(tool => tool.name === 'goal_set')!.inputSchema.properties).toEqual({ text: expect.any(Object) })
+    await client.callTool({ name: 'goal_set', arguments: { text: 'Make reloads lossless.', identity: 'victim' } })
+    await client.callTool({ name: 'tldr_update', arguments: { text: 'Reading the reload path.' } })
+
+    expect(await goal.read(['agent-1', 'victim'])).toEqual({ 'agent-1': expect.objectContaining({ text: 'Make reloads lossless.', revision: 1 }) })
+    expect(await tldr.read(['agent-1'])).toEqual({ 'agent-1': expect.objectContaining({ text: 'Reading the reload path.', revision: 1 }) })
+    expect((await goal.history('agent-1')).map(entry => entry.text)).toEqual(['Make reloads lossless.'])
+    expect((await tldr.history('agent-1')).map(entry => entry.text)).toEqual(['Reading the reload path.'])
+    expect((await readdir(directory)).sort()).toEqual(['goal-history', 'goal.json', 'tldr-history', 'tldr.json'])
+  })
+
+  it('names Goal in the errors an agent reads and refuses a revoked caller', async () => {
+    const { client, goal, revoke } = await goalSetup(['goal'])
+    const empty = await client.callTool({ name: 'goal_set', arguments: { text: '   ' } })
+    expect(empty.isError).toBe(true)
+    expect(JSON.stringify(empty.content)).toContain('Goal must contain')
+    await client.callTool({ name: 'goal_set', arguments: { text: 'Ship Goal.' } })
+    revoke()
+    const stale = await client.callTool({ name: 'goal_set', arguments: { text: 'A stale goal.' } })
+    expect(stale.isError).toBe(true)
+    expect(JSON.stringify(stale.content)).toContain('This Goal session is no longer active.')
+    expect((await goal.read(['agent-1']))['agent-1']).toMatchObject({ text: 'Ship Goal.', revision: 1 })
+  })
+
+  it('offers and teaches only the capabilities the scope carries', async () => {
+    const goalOnly = await goalSetup(['goal'])
+    expect((await goalOnly.client.listTools()).tools.map(tool => tool.name)).toEqual(['goal_set'])
+    expect(goalOnly.client.getInstructions()).toContain(GOAL_INSTRUCTIONS)
+    expect(goalOnly.client.getInstructions()).not.toContain(TLDR_INSTRUCTIONS)
+
+    const tldrOnly = await goalSetup(['tldr'])
+    expect((await tldrOnly.client.listTools()).tools.map(tool => tool.name)).toEqual(['tldr_update'])
+    // With another tool registered the SDK answers an unknown tool with an
+    // error result rather than a protocol rejection; either way nothing saves.
+    expect((await tldrOnly.client.callTool({ name: 'goal_set', arguments: { text: 'Must not be saved.' } })).isError).toBe(true)
+    expect(tldrOnly.client.getInstructions()).not.toContain(GOAL_INSTRUCTIONS)
+    expect(await tldrOnly.goal.read(['agent-1'])).toEqual({})
   })
 })

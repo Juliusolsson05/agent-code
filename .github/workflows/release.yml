@@ -92,7 +92,7 @@ jobs:
           fi
 
           # WHY no hard-fail when both secrets are absent: every submodule
-          # repo (the five Juliusolsson05 packages/* repos and openai/codex)
+          # repo (every Juliusolsson05 packages/* repo and openai/codex)
           # is PUBLIC, so the plain HTTPS URLs in .gitmodules clone fine
           # anonymously. The exit-1 here predated the repos going public and
           # contradicted README.md's "no special access needed" (#506
@@ -161,11 +161,24 @@ jobs:
       - name: Build app
         run: npm run build
 
+      - name: Archive app build
+        # WHY a tar instead of uploading `out/` directly: upload-artifact zips its
+        # input without file modes, so every file comes back 644 (its README,
+        # "Permission Loss"). `out/` carries executables that must stay
+        # executable inside the packaged app: the universal dictation hotkey
+        # helper from scripts/build-hotkey-helper.mjs and the bundled tmux,
+        # cloudflared and mitmproxy binaries under out/main/runtime. The
+        # package-macos job packages the downloaded tree verbatim, so release run
+        # 34739982565 shipped a non-executable helper and
+        # scripts/verify-packaged-mac.mjs rejected it (#965). tar records modes
+        # and symlinks, so the zip wrapped around the tar no longer matters.
+        run: tar -cf app-build.tar out
+
       - name: Upload app build
         uses: actions/upload-artifact@v7
         with:
           name: app-build
-          path: out
+          path: app-build.tar
           if-no-files-found: error
 
   package-macos:
@@ -198,7 +211,7 @@ jobs:
           fi
 
           # WHY no hard-fail when both secrets are absent: every submodule
-          # repo (the five Juliusolsson05 packages/* repos and openai/codex)
+          # repo (every Juliusolsson05 packages/* repo and openai/codex)
           # is PUBLIC, so the plain HTTPS URLs in .gitmodules clone fine
           # anonymously. The exit-1 here predated the repos going public and
           # contradicted README.md's "no special access needed" (#506
@@ -255,7 +268,11 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: app-build
-          path: out
+
+      - name: Unpack app build
+        # Restores `out/` with the file modes recorded in build-app; see
+        # "Archive app build" there for why the tree travels as a tar.
+        run: tar -xf app-build.tar && rm app-build.tar
 
       - name: Package macOS artifacts
         env:
@@ -325,7 +342,7 @@ jobs:
 
       - name: Create GitHub Release
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.publish_release == 'true' }}
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
         with:
           tag_name: ${{ github.event.inputs.release_tag }}
           name: ${{ github.event.inputs.release_name }}

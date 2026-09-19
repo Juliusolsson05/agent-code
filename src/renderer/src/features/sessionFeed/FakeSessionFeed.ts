@@ -13,6 +13,7 @@ import type {
   SessionStartedEvent,
   SessionSubAgentsEvent,
   Unsub,
+  SessionHistoryBoundaryEvent,
 } from '@shared/sessionFeed/types'
 import type { PromptDeliveryResult } from '@shared/types/providerConfig'
 
@@ -42,6 +43,7 @@ export interface FakeSessionFeed extends SessionFeed {
   emitScreen(e: SessionScreenEvent): void
   emitJsonlEntries(e: SessionJsonlEntriesEvent): void
   emitJsonlError(e: SessionJsonlErrorEvent): void
+  emitHistoryBoundary(e: SessionHistoryBoundaryEvent): void
   emitSemantic(e: SessionSemanticEvent): void
   emitConditions(e: SessionConditionsEvent): void
   emitProcessState(e: SessionProcessStateEvent): void
@@ -60,6 +62,7 @@ export function createFakeSessionFeed(): FakeSessionFeed {
     screen: new Set<(e: SessionScreenEvent) => void>(),
     jsonlEntries: new Set<(e: SessionJsonlEntriesEvent) => void>(),
     jsonlError: new Set<(e: SessionJsonlErrorEvent) => void>(),
+    historyBoundary: new Set<(e: SessionHistoryBoundaryEvent) => void>(),
     semantic: new Set<(e: SessionSemanticEvent) => void>(),
     conditions: new Set<(e: SessionConditionsEvent) => void>(),
     processState: new Set<(e: SessionProcessStateEvent) => void>(),
@@ -92,6 +95,7 @@ export function createFakeSessionFeed(): FakeSessionFeed {
     onSessionScreen: cb => subscribe(listeners.screen, cb),
     onSessionJsonlEntries: cb => subscribe(listeners.jsonlEntries, cb),
     onSessionJsonlError: cb => subscribe(listeners.jsonlError, cb),
+    onSessionHistoryBoundary: cb => subscribe(listeners.historyBoundary, cb),
     onSessionSemanticEvent: cb => subscribe(listeners.semantic, cb),
     onSessionConditions: cb => subscribe(listeners.conditions, cb),
     onSessionProcessState: cb => subscribe(listeners.processState, cb),
@@ -116,6 +120,7 @@ export function createFakeSessionFeed(): FakeSessionFeed {
     emitScreen: e => emit(listeners.screen, e),
     emitJsonlEntries: e => emit(listeners.jsonlEntries, e),
     emitJsonlError: e => emit(listeners.jsonlError, e),
+    emitHistoryBoundary: e => emit(listeners.historyBoundary, e),
     emitSemantic: e => emit(listeners.semantic, e),
     emitConditions: e => emit(listeners.conditions, e),
     emitProcessState: e => emit(listeners.processState, e),

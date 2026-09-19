@@ -1005,6 +1005,9 @@ export function foldSemanticEvent(
         blocks: stoppedBlocks,
         stopReason,
         endedAt: now,
+        // #963: carried onto the turn (and into history when it archives) so the
+        // feed can say the turn was cut off by sleep rather than finishing.
+        ...(ev.interruption === 'system-suspended' ? { interruption: 'system-suspended' as const } : {}),
       }
       break
     }

@@ -10,7 +10,7 @@ import { CodeRenderContext } from '@renderer/features/feed/context'
 import { SafeInlineCode } from '@renderer/features/rendered-content/SafeInlineCode'
 import { SafeMarkdownLink } from '@renderer/features/rendered-content/SafeMarkdownLink'
 import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
-import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
+import { DEFAULT_PROVIDER, isAgentProviderKind, isAgentSessionKind } from '@shared/types/providerKind'
 import { useLedgerFeedItems } from '@renderer/features/feed/ledger/useLedgerFeedItems'
 import {
   readerMessagesFromFeedItems,
@@ -113,7 +113,7 @@ export function ReaderView({ workspace }: Props) {
     // scrollback through xterm.js and do not have assistant messages to
     // extract. Keeping the filter here protects restored/stale reader state in
     // addition to the command-palette guard that prevents new terminal entry.
-    .filter(sessionId => workspace.state.sessions[sessionId]?.kind !== 'terminal')
+    .filter(sessionId => isAgentSessionKind(workspace.state.sessions[sessionId]?.kind))
   if (sessionIds.length === 0) return null
 
   const focusedSessionId = sessionIds.includes(reader.focusedSessionId)

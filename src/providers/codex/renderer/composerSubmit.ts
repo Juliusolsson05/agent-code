@@ -12,12 +12,18 @@
 // accumulating drafts for codex panes in the first place).
 
 import type { ComposerSubmitIo } from '@providers/registry.renderer.capabilities'
+import type { PromptAcceptance } from '@shared/types/providerConfig'
 import { sendBracketedPasteThenSubmit } from '@renderer/workspace/tile-tree/TileLeaf/claudePaste'
 
-export async function codexComposerSubmit(io: ComposerSubmitIo): Promise<void> {
+export async function codexComposerSubmit(io: ComposerSubmitIo): Promise<PromptAcceptance | null> {
   window.api.recordPasteDebugEvent(io.pasteId, {
     layer: 'RENDER',
     event: 'route:codex-bracketed-paste',
   })
   await sendBracketedPasteThenSubmit(io.send, io.input, 0, { pasteId: io.pasteId })
+  // Codex has no delivery result: the submit is raw PTY writes and the
+  // rollout's committed user row is the only acceptance signal, which arrives
+  // later through the JSONL channel. `null` tells the composer it has no
+  // acceptance kind to act on (#889 settles only on an explicit `queue`).
+  return null
 }

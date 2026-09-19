@@ -7,7 +7,7 @@ import type { AgentProviderKind } from '@shared/types/providerKind'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import type { WorkspaceSetRuntimes, WorkspaceSetState } from '@renderer/workspace/hook/context'
 import type { SessionActions } from '@renderer/workspace/hook/actions/session'
-import { switchAgentProvider } from '@renderer/workspace/hook/actions/providerSwitchCore'
+import { LOSSY_SWITCH_TOAST_MS, switchAgentProvider } from '@renderer/workspace/hook/actions/providerSwitchCore'
 import type { SwitchStrategy } from '@renderer/workspace/hook/actions/providerSwitchCore'
 import { pluralAgents } from '@renderer/features/workspace/lib/sessionDisplay'
 
@@ -237,7 +237,9 @@ export function useBulkProviderSwitchActions(
         counts.shrunk > 0 ? `${counts.shrunk} shrunk` : null,
       ].filter(Boolean).join(', ')
       const base = `Switched ${pluralAgents(switched.length)} to ${providerLabel(targetKind)}${tally ? `: ${tally}` : ''}`
-      showToast(summarize(base, { skipped, failed }, notes))
+      // Notes exist only when some agent's switch lost something; those are the
+      // summaries worth reading, so they get the lossy duration.
+      showToast(summarize(base, { skipped, failed }, notes), notes.size > 0 ? LOSSY_SWITCH_TOAST_MS : undefined)
     },
     [refs, sessionActions, setRuntimes, setState, showToast],
   )
@@ -333,7 +335,7 @@ export function useBulkProviderSwitchActions(
     })
 
     const base = `Returned ${pluralAgents(returned)} to ${providerLabel(batch.sourceKind)}`
-    showToast(summarize(base, { skipped, failed }, notes))
+    showToast(summarize(base, { skipped, failed }, notes), notes.size > 0 ? LOSSY_SWITCH_TOAST_MS : undefined)
   }, [refs, sessionActions, setRuntimes, setState, showToast])
 
   return { switchAgentsToProvider, returnLastProviderSwitchBatch }

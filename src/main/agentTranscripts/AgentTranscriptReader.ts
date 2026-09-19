@@ -311,6 +311,10 @@ function recordTimestamp(provider: AgentTranscriptProvider, raw: JsonRecord): nu
       return extractTimestamp(raw)
     case 'opencode':
       return finiteNumber(asRecord(asRecord(raw.info)?.time)?.created)
+    // Grok's durable rows carry no wall-clock timestamp field (the catalog's
+    // rows are type/content/ids only), so there is nothing honest to extract.
+    case 'grok':
+      return undefined
   }
 }
 
@@ -326,6 +330,11 @@ function extractItems(
       return extractCodexItems(raw, timestamp)
     case 'opencode':
       return extractOpencodeItems(raw, timestamp)
+    // Unreachable today (prepare rejects 'grok' and auto-detect returns null
+    // for grok rows); the branch exists so the exhaustive switch cannot
+    // silently regress when the MCP transcript surface grows a Grok reader.
+    case 'grok':
+      return []
   }
 }
 

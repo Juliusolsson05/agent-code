@@ -1,4 +1,5 @@
 import { excludeExternalControlFromClaude } from '@providers/shared/runtime/externalControlExclusion.js'
+import { CLAUDE_TLDR_HOOK_TOKEN_ENV, claudeTldrHookSettings, tldrHookServer } from '@providers/shared/runtime/tldrHooks.js'
 import { EventEmitter } from 'events'
 import { randomUUID } from 'crypto'
 import { spawn as ptySpawn } from 'node-pty'
@@ -73,6 +74,10 @@ export type ScreenSnapshot = {
 }
 
 export type ClaudeSessionEvents = {
+  // Declared for AgentSession contract parity (grok Stage 4): a durable-history
+  // generation boundary. This provider never emits it today; it exists so the
+  // shared event map can carry providers whose transcripts rewrite in place.
+  'history-boundary': [{ type: 'reset' | 'caught-up'; generation: number; snapshotByteLength: number; byteOffset?: number; complete?: boolean; file: string }]
   started: [{ projectDir: string; proxyUrl?: string }]
   'input-readiness': [AgentInputReadiness]
   'pty-data': [string]
@@ -140,6 +145,11 @@ export interface ClaudeSession {
   ): Promise<PromptReadinessOutcome>
 }
 
+
+/** How long a stream severed by sleep may wait for Claude Code to retry before
+ *  it is sealed as interrupted (#963). See ClaudeSession.noteSystemSuspension. */
+const CLAUDE_SLEEP_SEAL_GRACE_MS = 60_000
+
 export class ClaudeSession extends EventEmitter {
   private headless: ClaudeCodeHeadless | null = null
   private pty: ReturnType<typeof ptySpawn> | null = null
@@ -161,6 +171,8 @@ export class ClaudeSession extends EventEmitter {
   private transcriptReplayQuiesced = false
   private transcriptTailAttached = false
   private transcriptReplayTimer: NodeJS.Timeout | null = null
+  /** Pending seal of streams the last machine suspension severed (#963). */
+  private sleepSealTimer: NodeJS.Timeout | null = null
   private promptGateState: PromptGateState = { kind: 'terminal', reason: 'no-headless' }
   private promptGateRefreshQueued = false
   private readonly promptAcceptanceWaiters = new Set<{
@@ -376,7 +388,7 @@ export class ClaudeSession extends EventEmitter {
       // Wrap the spawn so a failure rolls the proxy back (#495 A9; same
       // shape as codexSession's guarded spawn).
       try {
-        await this.appendPrivateMcpConfig(args)
+        await this.appendPrivateMcpConfig(args, proxyEnv)
         this.pty = ptySpawn(this.binary, args, {
           name: 'xterm-256color',
           cols: this.cols,
@@ -393,7 +405,7 @@ export class ClaudeSession extends EventEmitter {
       // kept anyway so both spawn paths share one failure contract and a
       // future resource acquired before this point is covered by default.
       try {
-        await this.appendPrivateMcpConfig(args)
+        await this.appendPrivateMcpConfig(args, cleanEnv)
         this.pty = ptySpawn(this.binary, args, {
           name: 'xterm-256color',
           cols: this.cols,
@@ -1062,10 +1074,36 @@ export class ClaudeSession extends EventEmitter {
     for (const waiter of [...this.promptAcceptanceWaiters]) waiter.finish(outcome)
   }
 
+  /**
+   * The machine was suspended (#963). Claude's proxy adapter only reaps a dead
+   * stream when the NEXT request streams, so a stream the sleep severed stays
+   * `Thinking` forever if Claude Code does not retry after wake.
+   *
+   * WHY a grace period before sealing: after wake the network comes back within
+   * seconds and Claude Code may retry the request; that retry reaps the dead
+   * flow through the normal path and the turn simply continues. Sealing at once
+   * would stop a turn that was about to resume. One minute is far longer than a
+   * reconnect and far shorter than anyone leaving a pane on a false `Thinking`.
+   * Only flows with no chunk since the suspension began are sealed, so a stream
+   * that did survive is never cut.
+   */
+  noteSystemSuspension(suspension: import('@shared/types/systemSuspension.js').SystemSuspension): void {
+    if (this.sleepSealTimer) clearTimeout(this.sleepSealTimer)
+    this.sleepSealTimer = setTimeout(() => {
+      this.sleepSealTimer = null
+      this.headless?.proxy?.sealFlowsSilentSince(suspension.suspendedAt, 'system-suspended')
+    }, CLAUDE_SLEEP_SEAL_GRACE_MS)
+    this.sleepSealTimer.unref?.()
+  }
+
   async stop(): Promise<void> {
     if (this.transcriptReplayTimer) {
       clearTimeout(this.transcriptReplayTimer)
       this.transcriptReplayTimer = null
+    }
+    if (this.sleepSealTimer) {
+      clearTimeout(this.sleepSealTimer)
+      this.sleepSealTimer = null
     }
     this.finishPromptAcceptanceWaiters({ kind: 'session-exited' })
     this.transcriptTailAttached = false
@@ -1130,11 +1168,17 @@ export class ClaudeSession extends EventEmitter {
     this.proxyServer = null
   }
 
-  private async appendPrivateMcpConfig(args: string[]): Promise<void> {
+  private async appendPrivateMcpConfig(args: string[], env: Record<string, string>): Promise<void> {
     // WHY materialization happens immediately before spawn inside the rollback-protected region:
     // proxy setup contains several awaited operations. Creating the credential file at the top of
     // start() left it behind when any of those operations failed before the old catch boundary.
-    excludeExternalControlFromClaude(args)
+    //
+    // TLDR turn hooks (#917) authenticate with this session's MCP bearer. The value goes into the
+    // child's environment, which dies with the process; the settings JSON on argv names only the
+    // variable. Sessions without the TLDR domain receive no hooks at all.
+    const tldrHooks = tldrHookServer(this.builtInMcpServers)
+    if (tldrHooks) env[CLAUDE_TLDR_HOOK_TOKEN_ENV] = tldrHooks.bearerToken
+    excludeExternalControlFromClaude(args, tldrHooks ? claudeTldrHookSettings(tldrHooks.tldrHooks.baseUrl) : {})
     this.privateMcpConfig = await createPrivateClaudeMcpConfig(this.builtInMcpServers)
     if (this.privateMcpConfig) args.push('--mcp-config', this.privateMcpConfig.path)
   }

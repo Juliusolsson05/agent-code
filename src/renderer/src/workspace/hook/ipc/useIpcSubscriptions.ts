@@ -1,3 +1,5 @@
+import { isResponseOutput } from '@shared/performance/responseTracker.js'
+import { noteMonitorOutput } from '@renderer/performance/useMonitorCommit'
 import {
   AGENT_PROVIDER_KINDS,
   DEFAULT_PROVIDER,
@@ -12,6 +14,7 @@ import type { SessionSemanticEvent } from '@shared/sessionFeed/types'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import type { TranscriptEntryMapper } from '@shared/types/providerConfig'
 import { emptyRuntime } from '@renderer/session-runtime/state'
+import { applyDecisionToWindow, decideHistoryBoundary, emptyHistoryWindow } from '@renderer/session-runtime/historyBoundary.js'
 import type { QueuedMessage, SessionRuntime } from '@renderer/session-runtime/state'
 import { withUnread } from '@renderer/session-runtime/unread'
 import { appendFeedDebugLog } from '@renderer/session-runtime/feedDebug'
@@ -891,6 +894,42 @@ export function useIpcSubscriptions(
       })
     })
 
+    const offHistoryBoundary = feed.onSessionHistoryBoundary(({ sessionId, ...boundary }) => {
+      if (quarantinesSessionFeed(sessionId)) return
+      // Same ordering discipline as the jsonl bulk and exit boundaries: a
+      // queued delta crossing the reset would repaint the wiped window after
+      // the reset applied, so flush the compact semantic queue first.
+      flushSemanticEventQueue()
+      // The shared pure owner decides; this hook only applies. See
+      // session-runtime/historyBoundary.ts for every rule.
+      const windows = refs.historyWindowsRef.current
+      const window = (windows[sessionId] ??= emptyHistoryWindow())
+      const decision = decideHistoryBoundary(window, boundary)
+      windows[sessionId] = applyDecisionToWindow(window, decision)
+      if (decision.kind !== 'apply-reset') return
+      // Apply the reset: the superseded generation's committed rows, dedup
+      // set, history cursor and live turn state all go; conditions, busy
+      // state and exit state survive (the shared preserve list — a transcript
+      // rewrite is not a process death). Semantic suffixes wait for a fresh
+      // turn_started via the gate in handleSemanticEvent.
+      refs.seenUuidsRef.current[sessionId] = new Set()
+      refs.historyAwaitingTurnStartRef.current.add(sessionId)
+      codexCurrentTurnIdBySession.delete(sessionId)
+      jsonlProviderStreamBySession.delete(sessionId)
+      setRuntimes(prev => {
+        const current = prev[sessionId] ?? emptyRuntime()
+        const next = withDerivedSessionStatus({
+          ...current,
+          entries: [],
+          totalEntries: 0,
+          historyOldestMarker: null,
+          queuedMessages: [],
+          semantic: { ...current.semantic, currentTurn: null },
+        })
+        return { ...prev, [sessionId]: next }
+      })
+    })
+
     const offExit = feed.onSessionExit(({ sessionId, exitCode }) => {
       if (quarantinesSessionFeed(sessionId)) return
       flushSemanticEventQueue()
@@ -1055,6 +1094,18 @@ export function useIpcSubscriptions(
       // immediately before recovery discovers an ownership conflict; letting
       // that queued payload through afterward would punch a hole in the fence.
       if (quarantinesSessionFeed(sessionId)) return
+      // The shared history-boundary gate (grok Stage 5): after an applied
+      // reset the window was wiped, and a stale semantic suffix from the
+      // superseded generation must not repaint it. A fresh turn_started
+      // reopens the fold; api_error passes because it is diagnostic.
+      {
+        const awaiting = refs.historyAwaitingTurnStartRef.current
+        if (awaiting.has(sessionId)) {
+          const type = (event as { type?: unknown })?.type
+          if (type === 'turn_started') awaiting.delete(sessionId)
+          else if (type !== 'api_error') return
+        }
+      }
       const span = perf.span('workspace.ipc.semantic.fold', { sessionId })
       let spanClosed = false
       const closeSpan = (data: Record<string, unknown>) => {
@@ -1062,6 +1113,7 @@ export function useIpcSubscriptions(
         spanClosed = true
         span.end({ ...data, rawEventCount })
       }
+      if (isResponseOutput(event)) noteMonitorOutput(sessionId)
       const semanticEvent = asRecord(event) ?? {}
       const observedProvider = providerSessionObservedEvent(event)
       if (observedProvider) {
@@ -2671,6 +2723,7 @@ export function useIpcSubscriptions(
       // No singular offEntry() — see the deleted-handler comment
       // above. The bulk path is the only one.
       offEntries()
+      offHistoryBoundary()
       offErr()
       offProcessState()
       offSemantic()

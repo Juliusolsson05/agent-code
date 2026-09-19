@@ -46,7 +46,7 @@ export function createConversationProjection() {
     const messages: ProjectedMessage[] = []
     const details = depth === 'activity' || depth === 'full'
     for (const item of items) {
-      if (item.type === 'absorbed-entry' || item.type === 'empty' || item.type === 'work') continue
+      if (item.type === 'absorbed-entry' || item.type === 'empty' || item.type === 'work' || item.type === 'sleep-interruption') continue
       if (item.type === 'entry') {
         const entry = item.entry
         const candidate = candidates.get(entry.uuid ?? '')

@@ -1,4 +1,12 @@
-import { TLDR_INSTRUCTIONS, TLDR_MAX_CHARACTERS } from '@shared/types/tldr.js'
+import { GOAL_INSTRUCTIONS, TLDR_INSTRUCTIONS, TLDR_MAX_CHARACTERS } from '@shared/types/tldr.js'
+import {
+  GOAL_LOOP_DEFAULT_MAX_CONTINUATIONS,
+  GOAL_LOOP_INSTRUCTIONS,
+  GOAL_LOOP_MAX_CONTINUATIONS_CEILING,
+  GOAL_LOOP_MAX_GOAL_CHARACTERS,
+  GOAL_LOOP_MAX_PROMPT_CHARACTERS,
+  GOAL_LOOP_MAX_SUMMARY_CHARACTERS,
+} from '@shared/types/goalLoop.js'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 
@@ -87,6 +95,34 @@ export function createBuiltInMcpServer(
         return { ...toolText({ ok: false, message: error instanceof Error ? error.message : 'TLDR update failed.' }), isError: true }
       }
     })
+  }
+
+  if (scope.domains.includes('goal')) {
+    // Same authority model as tldr_update: the target is the authenticated
+    // scope's identity, never a model-supplied id, and a revoked process's
+    // queued write fails after the store's I/O instead of overwriting its
+    // successor's goal.
+    server.registerTool('goal_set', {
+      title: 'Set goal',
+      description: 'Record what your work is trying to achieve, in one plain sentence. Set it once you understand a new task; update it only when the user changes direction, never to report progress.',
+      inputSchema: { text: z.string().min(1).max(TLDR_MAX_CHARACTERS * 2) },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    }, async ({ text }) => {
+      try {
+        if (!dependencies.goalStore) throw new Error('Goal is unavailable.')
+        const record = await dependencies.goalStore.update(
+          scope.tldrIdentity ?? scope.sessionId, text,
+          dependencies.isTldrWriteAuthorized ?? (() => false),
+        )
+        return toolText({ ok: true, ...record })
+      } catch (error) {
+        return { ...toolText({ ok: false, message: error instanceof Error ? error.message : 'Goal update failed.' }), isError: true }
+      }
+    })
+  }
+
+  if (scope.domains.includes('goal_loop')) {
+    registerGoalLoopTools(server, scope, dependencies)
   }
 
   if (scope.domains.includes('ping')) {
@@ -186,6 +222,8 @@ function builtInInstructions(
   dependencies: BuiltInMcpDependencies,
 ): string {
   return [
+    ...(scope.domains.includes('goal') ? [GOAL_INSTRUCTIONS] : []),
+    ...(scope.domains.includes('goal_loop') ? [GOAL_LOOP_INSTRUCTIONS] : []),
     ...(scope.domains.includes('tldr') ? [TLDR_INSTRUCTIONS] : []),
     ...(scope.domains.includes('workflows') ? [WORKFLOW_MCP_INSTRUCTIONS] : []),
     ...(scope.domains.includes('agent_management') ? [AGENT_MANAGEMENT_MCP_INSTRUCTIONS] : []),
@@ -193,6 +231,54 @@ function builtInInstructions(
       ? [rootManagementInstructions(scope.sessionId)]
       : []),
   ].join('\n\n')
+}
+
+function registerGoalLoopTools(
+  server: McpServer,
+  scope: McpSessionScope,
+  dependencies: BuiltInMcpDependencies,
+): void {
+  const service = dependencies.goalLoopService
+  // Same authority model as goal_set: the loop targeted is always the
+  // authenticated scope's own session, never a model-supplied id, so one
+  // agent can neither start nor break another agent's loop.
+  const failure = (error: unknown) => ({
+    ...toolText({ ok: false, message: error instanceof Error ? error.message : 'Goal Loop call failed.' }),
+    isError: true,
+  })
+  server.registerTool('goal_loop_start', {
+    title: 'Start goal loop',
+    description: `Start a harness-owned loop that keeps re-prompting this session until the goal is completely done. Write loopPrompt yourself as a self-contained continuation instruction; it is re-sent every time you stop. Call goal_loop_complete only when utterly done, or with outcome "blocked" when you need the user. Budget defaults to ${GOAL_LOOP_DEFAULT_MAX_CONTINUATIONS} continuations.`,
+    inputSchema: {
+      goal: z.string().min(1).max(GOAL_LOOP_MAX_GOAL_CHARACTERS),
+      loopPrompt: z.string().min(1).max(GOAL_LOOP_MAX_PROMPT_CHARACTERS),
+      maxContinuations: z.number().int().min(1).max(GOAL_LOOP_MAX_CONTINUATIONS_CEILING).optional(),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  }, async ({ goal, loopPrompt, maxContinuations }) => {
+    try {
+      if (!service) throw new Error('Goal Loop is unavailable.')
+      return toolText({ ok: true, loop: await service.startLoop(scope.sessionId, { goal, loopPrompt, maxContinuations }) })
+    } catch (error) {
+      return failure(error)
+    }
+  })
+  server.registerTool('goal_loop_complete', {
+    title: 'Complete goal loop',
+    description: 'End this session\'s goal loop. Call with outcome "done" ONLY when the goal is completely and utterly satisfied and verified — never to exit early. Call with outcome "blocked" when you genuinely need the user, and say exactly what you need in the summary.',
+    inputSchema: {
+      outcome: z.enum(['done', 'blocked']),
+      summary: z.string().min(1).max(GOAL_LOOP_MAX_SUMMARY_CHARACTERS),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  }, async ({ outcome, summary }) => {
+    try {
+      if (!service) throw new Error('Goal Loop is unavailable.')
+      return toolText({ ok: true, loop: await service.complete(scope.sessionId, outcome, summary) })
+    } catch (error) {
+      return failure(error)
+    }
+  })
 }
 
 function registerAgentManagementTools(

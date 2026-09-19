@@ -15,8 +15,16 @@ import type { CommandDef } from '@renderer/features/command-palette/types'
 // Agent Composer (#683), 115 with API Key Vault (#831), 116 with
 // Remove Cybersecurity Block (#848), 117 with New Agent In… (#852),
 // 119 with TLDR preview and TLDR MCP (#888), 120 with Root Agent Code
-// Management (#906), 121 with Use Global MCP Settings (#904), and 122 with
-// Merge Project Tabs (#913).
+// Management (#906), 121 with Use Global MCP Settings (#904), 122 with
+// Merge Project Tabs (#913), 123 with View TLDR History (#917), 125 with
+// Goal preview and Goal MCP (#936), 126 with Auto-follow All Working Agents (#938), 128 with
+// the performance report/trace commands (#944), 129 with Close Idle Orchestration
+// Agents (#960), 130 with Open Agent Analytics (#964), 132 with Goal Loop (#1001), and
+// 134 with the two generated Grok split commands (#844). That last step is the
+// one that reached main unpinned: #844 never touched this file because the
+// commands are GENERATED from AGENT_PROVIDER_KINDS, not written as literal ids,
+// so its author had no diff here to review and main went red on merge. The
+// generated-splits invariant further down is what names the cause.
 // Keeping ONE snapshot that moved — rather
 // than a "baseline" file and an "after" file — is what makes the plan's
 // headline count an assertion anyone can check against running code instead of
@@ -44,7 +52,7 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
   'resume-session',
   // windowCommands (1)
   'new-window',
-  // paneCommands (32: 28 literal + 4 generated provider splits)
+  // paneCommands (34: 28 literal + 6 generated provider splits)
   'new-agent',
   // Registered directly after New Agent… so the two creation entry points sit
   // together in the empty-query browse order (#852).
@@ -65,6 +73,8 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
   'codex-horizontal',
   'opencode-vertical',
   'opencode-horizontal',
+  'grok-vertical',
+  'grok-horizontal',
   'nav-left',
   'nav-right',
   'nav-up',
@@ -74,12 +84,13 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
   'kill-buried-pane',
   'toggle-tail',
   'toggle-tail-all',
+  'toggle-tail-working',
   'jump-latest-message',
   'copy-last-assistant',
   'clear-composer',
   'undo-clear-composer',
   'send-composer',
-  // layoutCommands (11: New Lane joins the two lane-removal commands)
+  // layoutCommands (performance report/trace are ordinary app commands)
   'dispatch-mode',
   'global-dispatch',
   'tiled-dispatch',
@@ -96,6 +107,8 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
   'hard-normalize-layout',
   'rotate-layout',
   'toggle-performance-panel',
+  'save-performance-report',
+  'record-performance-trace',
   'toggle-caffeinate',
   // globalEditorCommands (10)
   'toggle-global-editor',
@@ -108,7 +121,7 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
   'create-ai-workspace',
   'clear-ai-workspace',
   'toggle-file-tree',
-  // sessionCommands (31)
+  // sessionCommands (33)
   'use-global-mcp-settings',
   'view-prompts',
   'rewind-to-prompt',
@@ -116,6 +129,9 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
   'undo-rewind',
   'open-agent-activity',
   'close-old-agents',
+  // Registered directly after Close Old Agents so the two cleanup commands sit
+  // together in the empty-query browse order (#960).
+  'close-idle-orchestration-agents',
   'switch-agents-provider',
   'search-conversation-prompts',
   'enable-built-in-mcp-ping',
@@ -125,6 +141,7 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
   'enable-agent-management-mcp',
   'enable-root-agent-code-management',
   'enable-tldr-mcp',
+  'enable-goal-mcp',
   'enable-workflow-mcp',
   'reload-agent',
   'soft-reload-agent',
@@ -147,9 +164,13 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
   'agent.title.set',
   // dispatchColorFlagCommands (1)
   'dispatch.color-flag.set',
-  // spotlight / TLDR / reader / tile-tabs (4)
+  // spotlight / TLDR / reader / tile-tabs (6) + goal loop (2)
   'toggle-spotlight',
   'tldr-preview',
+  'goal-preview',
+  'view-tldr-history',
+  'goal-loop-preview',
+  'goal-loop-stop',
   'toggle-reader-mode',
   'tiled-tabs',
   // settingsCommands (4, was 5: worktree-badges + dangerous-agents retired,
@@ -172,6 +193,8 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
   'toggle-remote-panel',
   // usage (1, was 3: both header preferences retired)
   'usage.open',
+  // agentAnalyticsCommands (1) — beside Usage, the other app-wide report (#964)
+  'agent-analytics.open',
   // paletteCommands (1) — the single approved addition
   'open-command-palette',
 ]
@@ -203,12 +226,12 @@ const NAVIGATION_COMMAND_GROUP: readonly string[] = [
 const ids = (): string[] => builtInCommandCatalog.map(c => c.id)
 
 describe('built-in command catalog — baseline characterization', () => {
-  it('contains exactly the 122 governed commands in registration order', () => {
+  it('contains exactly the 134 governed commands in registration order', () => {
     // Order matters: this is the palette's empty-query browse order.
     expect(ids()).toEqual([...BASELINE_COMMAND_IDS])
   })
 
-  it('has exactly 122 commands', () => {
+  it('has exactly 134 commands', () => {
     // Stated separately from the order assertion because this number is the
     // thing that moves, and a bare count failure is a clearer signal than a
     // 99-line array diff.
@@ -221,11 +244,17 @@ describe('built-in command catalog — baseline characterization', () => {
     // Vault (#831) → 116 with Remove Cybersecurity Block (#848) → 117 with
     // New Agent In… (#852) → 119 with TLDR preview and TLDR MCP (#888) → 120
     // with Root Agent Code Management (#906) → 121 with Use Global MCP
-    // Settings (#904) → 122 with Merge Project Tabs (#913).
+    // Settings (#904) → 122 with Merge Project Tabs (#913) → 123 with View
+    // TLDR History (#917) → 125 with Goal preview and Goal MCP (#936) → 126
+    // with Auto-follow All Working Agents (#938) → 128 with the two ordinary
+    // performance report/trace commands (#944) → 129 with Close Idle
+    // Orchestration Agents (#960) → 130 with Open Agent Analytics (#964) →
+    // 132 with Goal Loop preview and stop (#1001) → 134 with the two generated
+    // Grok split commands (#844).
     // Each step of that arithmetic was a deliberate edit to this line, which is the entire point of pinning it. (The two test
     // titles above had drifted to "115" while this line said 116; they now
     // track it again.)
-    expect(builtInCommandCatalog).toHaveLength(122)
+    expect(builtInCommandCatalog).toHaveLength(134)
   })
 
   it('reports no structural defects', () => {
@@ -259,12 +288,12 @@ describe('generated per-provider split commands', () => {
   })
 
   it('accounts for the difference between literal and total command count', () => {
-    // 122 total - 4 generated = 118 literal `id:` fields across the command
+    // 134 total - 6 generated = 128 literal `id:` fields across the command
     // modules. At the original baseline this read 102 - 4 = 98; it moved down by
     // the five retirements, then back up by the nine additions, Grid Dispatch's
-    // six row commands, New Window, and the later single additions recorded in
-    // the count test above (through Merge Project Tabs, #913).
-    expect(builtInCommandCatalog.length - nonDefaultProviders.length * 2).toBe(118)
+    // six row commands, New Window, and the later additions recorded in the
+    // count test above (through Open Agent Analytics, #964).
+    expect(builtInCommandCatalog.length - nonDefaultProviders.length * 2).toBe(128)
   })
 
   it('emits both directions for every non-default provider', () => {
@@ -363,7 +392,7 @@ describe('governance targets', () => {
   })
 
   it('lands on the arithmetic the plan predicted', () => {
-    // 102 baseline - 5 retirements + 25 additions = 122, checked against the
+    // 102 baseline - 5 retirements + 37 additions = 134, checked against the
     // real catalog rather than trusted as prose.
     //
     // The subtracted term is the count of APPROVED ADDITIONS and the expected
@@ -385,9 +414,17 @@ describe('governance targets', () => {
     // `remove-cybersecurity-block` (#848), `new-agent-in` (#852),
     // `tldr-preview` and `enable-tldr-mcp` (#888),
     // `enable-root-agent-code-management` (#906), and
-    // `use-global-mcp-settings` (#904), `merge-project-tabs` (#913).
-    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 25).toBe(102)
-    expect(builtInCommandCatalog).toHaveLength(122)
+    // `use-global-mcp-settings` (#904), `merge-project-tabs` (#913), and
+    // `view-tldr-history` (#917), `goal-preview` and `enable-goal-mcp` (#936),
+    // `toggle-tail-working` (#938), `save-performance-report` and
+    // `record-performance-trace` (#944), `close-idle-orchestration-agents` (#960),
+    // `agent-analytics.open` (#964), `goal-loop-preview` and
+    // `goal-loop-stop` (#1001), and `grok-vertical` and `grok-horizontal`
+    // (#844 — generated, not literal: they appeared the moment grok joined
+    // AGENT_PROVIDER_KINDS, which is why they count as additions here exactly
+    // like the codex/opencode splits already inside the 102 baseline).
+    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 37).toBe(102)
+    expect(builtInCommandCatalog).toHaveLength(134)
   })
 })
 

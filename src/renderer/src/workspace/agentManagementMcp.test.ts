@@ -173,7 +173,15 @@ describe('Agent Management project authority', () => {
     })).toEqual(['buried'])
   })
 
-  it('reports all project-owned siblings when closing the last grid leaf would remove its tab', () => {
+  it('closing the last grid leaf promotes a survivor and affects no siblings', () => {
+    // #886 review M1. This used to assert every project sibling was affected,
+    // because closing a tab's last leaf removed the tab. The tool's close runs
+    // with requireConfirmation, which is session-scoped (never the human Close
+    // Tab choice) and promotes the next Dispatch row; the promotion itself is
+    // pinned by closeAgentScope's renderer tests. Only the linked descendant
+    // ('buried' names 'grid-agent' as its parent) is still affected — the
+    // caller and the unrelated 'dispatch' row must NOT be reported, because the
+    // calling model acts on this list.
     const state = stateFixture()
     state.tabs[0]!.root = { type: 'leaf', sessionId: 'grid-agent' }
     state.tabs[0]!.focusedSessionId = 'grid-agent'
@@ -190,7 +198,7 @@ describe('Agent Management project authority', () => {
       state,
       callerSessionId: 'caller',
       sessionId: 'grid-agent',
-    })).toEqual(expect.arrayContaining(['caller', 'dispatch', 'buried']))
+    })).toEqual(['buried'])
   })
 })
 

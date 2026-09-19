@@ -1,6 +1,7 @@
 import type { SessionId, SessionKind, Tab, TabId, WorkspaceState } from '@renderer/workspace/types'
 import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 import { tabIndexLabel } from '@renderer/workspace/tile-tree/paneLabelFormat'
+import { isProcessSessionKind } from '@shared/types/providerKind'
 import {
   normalizeGridShape,
   rowIndexForLane,
@@ -46,7 +47,10 @@ export function buildDispatchGroups(
   // to the same sessionId) and would lie about the visual hierarchy
   // ("this is in two places at once"). Same exclusivity invariant as
   // detached-vs-grid: each row belongs to exactly one bucket.
-  const pinnedSet = new Set(state.pinnedSessionIds.filter(id => state.sessions[id] !== undefined))
+  const pinnedSet = new Set(state.pinnedSessionIds.filter(id => {
+    const meta = state.sessions[id]
+    return meta !== undefined && isProcessSessionKind(meta.kind)
+  }))
 
   // The tab letter answers "which project group owns this row"; the
   // number answers "which visible dispatch item will cmd+N select".
@@ -249,7 +253,7 @@ export function buildPinnedDispatchRows(
   let pinnedIndex = 1
   for (const sessionId of state.pinnedSessionIds) {
     const meta = state.sessions[sessionId]
-    if (!meta) continue
+    if (!meta || !isProcessSessionKind(meta.kind)) continue
     // Locate the owning tab. A pinned agent that's detached has its
     // tab id on `detachedSessions[sessionId].projectTabId`; a
     // grid-placed pinned agent is a leaf in some tab's tree. We do

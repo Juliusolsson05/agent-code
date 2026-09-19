@@ -34,6 +34,7 @@ function makeManager(): FakeManager {
   emitter.resolveTranscriptFile = vi.fn(async () => null)
   emitter.getSpawnCwd = vi.fn(() => null)
   emitter.getLastActivityAt = vi.fn(() => null)
+  emitter.getSpawnProviderRuntime = vi.fn(() => null)
   emitter.write = vi.fn(() => true)
   emitter.submitStagedPrompt = vi.fn(sessionId => emitter.write(sessionId, '\r'))
   emitter.resolveCondition = vi.fn(async () => ({ ok: true as const, state: { done: true } }))
@@ -52,6 +53,10 @@ let server: RemoteServer
 let token: string
 let wsUrl: string
 let feed: WebSocketSessionFeed | null = null
+// Hoisted for restartWithDeps: v2 tests rebuild the server with extra deps
+// against the SAME pairing/registry, so the already-minted token stays valid.
+let activeRegistry: DeviceRegistry
+let activePairing: DevicePairing
 
 function makeFeed(overrides: Partial<{ token: string }> = {}): WebSocketSessionFeed {
   feed = new WebSocketSessionFeed({
@@ -84,6 +89,8 @@ beforeEach(async () => {
   const registry = new DeviceRegistry(join(dir, 'devices.json'))
   await registry.load()
   const pairing = new DevicePairing({ secret: randomBytes(32), registry })
+  activeRegistry = registry
+  activePairing = pairing
   feedSource = new SessionFeedSource(manager as never)
   server = new RemoteServer({
     manager,
@@ -424,4 +431,100 @@ describe('remote reconnect after bounded output overflow', () => {
     }, { timeout: 6000 })
     expect(manager.deliverPromptToAgent).toHaveBeenCalledTimes(1)
   }, 10000)
+})
+
+// ── v2 wire mirror drift-catchers ─────────────────────────────────────────
+//
+// wire.ts re-declares the protocol types by hand; these tests prove the
+// v2 fields actually FLOW through the real client against the real server:
+// summary overlays reach getSessionList() listeners, and TLDR/Goal frames
+// reach the note records with the freshness fields intact.
+
+async function restartWithDeps(extra: {
+  workspace?: import('@main/remote/RemoteServer.js').RemoteWorkspaceReadModel
+  notes?: { tldr: import('@main/remote/RemoteServer.js').RemoteNoteStore; goal: import('@main/remote/RemoteServer.js').RemoteNoteStore }
+}): Promise<void> {
+  await server.stop()
+  feedSource.dispose()
+  feedSource = new SessionFeedSource(manager as never)
+  server = new RemoteServer({
+    manager,
+    feedSource,
+    pairing: activePairing,
+    registry: activeRegistry,
+    transport: new LanTransport({ port: 0 }),
+    ...extra,
+  })
+  const { url } = await server.start()
+  const base = url.replace(/\/\/[\d.]+:/, '//127.0.0.1:')
+  wsUrl = `${base.replace(/^http/, 'ws')}/ws`
+}
+
+describe('v2 summary overlays and note frames through the real client', () => {
+  it('delivers title/agentName/tabTitle/pinned/providerRuntime onto the session list', async () => {
+    await restartWithDeps({
+      workspace: {
+        snapshot: () =>
+          new Map([
+            ['s-oc', { sessionId: 's-oc', title: 'Shell rewrite', agentName: 'Apollo', tabTitle: 'agent-code', pinned: true, tldrIdentity: null, cwd: '/dev/agent-code', kind: 'opencode' }],
+          ]),
+        onChange: () => () => {},
+      },
+    })
+    ;(manager.getSpawnProviderRuntime as ReturnType<typeof vi.fn> | undefined)?.mockImplementation(
+      (sessionId: string) => (sessionId === 's-oc' ? 'terminal' : null),
+    )
+    manager.emit('started', { sessionId: 's-oc', kind: 'opencode', projectDir: '/dev/agent-code' })
+    const f = makeFeed()
+    await waitForOpen(f)
+    await vi.waitFor(() => {
+      const row = f.getSessionList().find(s => s.sessionId === 's-oc')
+      expect(row).toMatchObject({
+        title: 'Shell rewrite',
+        agentName: 'Apollo',
+        tabTitle: 'agent-code',
+        pinned: true,
+        providerRuntime: 'terminal',
+      })
+    })
+  })
+
+  it('seeds and live-updates TLDR/Goal records with freshness fields', async () => {
+    const tldrListeners = new Set<(u: { identity: string; record: { text: string; updatedAt: string; revision: number } }) => void>()
+    const goalListeners = new Set<(u: { identity: string; record: { text: string; updatedAt: string; revision: number } }) => void>()
+    const tldr = {
+      on: (_e: 'changed', l: never) => { tldrListeners.add(l as never) },
+      off: (_e: 'changed', l: never) => { tldrListeners.delete(l as never) },
+      read: async (ids: string[]) =>
+        Object.fromEntries([['t-1', { text: 'Bootstrap status', updatedAt: '2026-09-17T10:00:00Z', revision: 2 }]].filter(([id]) => ids.includes(id as string))),
+    }
+    const goal = {
+      on: (_e: 'changed', l: never) => { goalListeners.add(l as never) },
+      off: (_e: 'changed', l: never) => { goalListeners.delete(l as never) },
+      read: async () => ({}),
+    }
+    await restartWithDeps({
+      workspace: {
+        snapshot: () => new Map([['s1', { sessionId: 's1', title: null, agentName: null, tabTitle: null, pinned: false, tldrIdentity: 't-1', cwd: null, kind: 'claude' }]]),
+        onChange: () => () => {},
+      },
+      notes: { tldr: tldr as never, goal: goal as never },
+    })
+    manager.emit('started', { sessionId: 's1', kind: 'claude', projectDir: '/dev/x' })
+    const f = makeFeed()
+    await waitForOpen(f)
+
+    // Bootstrap: current record arrives without any store event.
+    await vi.waitFor(() => expect(f.getTldrRecord('s1')?.text).toBe('Bootstrap status'))
+    expect(f.getTldrRecord('s1')).toMatchObject({ updatedAt: '2026-09-17T10:00:00Z', revision: 2 })
+
+    // Live update through the store listener chain.
+    const seen: Array<{ sessionId: string; text: string }> = []
+    f.onTldrChanged(e => seen.push({ sessionId: e.sessionId, text: e.record.text }))
+    for (const l of tldrListeners) l({ identity: 't-1', record: { text: 'Live status', updatedAt: '2026-09-17T11:00:00Z', revision: 3 } })
+    await vi.waitFor(() => expect(f.getTldrRecord('s1')?.text).toBe('Live status'))
+    expect(seen).toContainEqual({ sessionId: 's1', text: 'Live status' })
+    // Goal stays untouched by a TLDR update.
+    expect(f.getGoalRecord('s1')).toBeNull()
+  })
 })

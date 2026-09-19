@@ -103,16 +103,24 @@ describe('host transcript adapter registry', () => {
 
     await expect(getHostTranscriptAdapter('opencode').read('/project', 'ses_source'))
       .rejects.toThrow('has an unfinished turn')
+    // Transform exports are the large ones #845 fixed; the startup 30 s bound
+    // must not apply to them.
+    expect(mocks.exportOpencodeSession).toHaveBeenCalledWith(
+      { binary: '/tool', cwd: '/project', timeoutMs: 300_000 },
+      'ses_source',
+    )
   })
 
   it('imports one projected OpenCode envelope instead of treating it as JSONL', async () => {
     mocks.importOpencodeSession.mockResolvedValue('ses_target')
     const value = { info: { id: 'ses_target' }, messages: [] }
 
-    await expect(getHostTranscriptAdapter('opencode').write('/project', [value]))
+    await expect(getHostTranscriptAdapter('opencode').write('/project', { values: [value] }))
       .resolves.toBe('opencode://session/ses_target')
+    // A projected import carries a whole conversation, so it must not inherit
+    // the 30 s bound meant for the terminal's empty-session startup import.
     expect(mocks.importOpencodeSession).toHaveBeenCalledWith(
-      { binary: '/tool', cwd: '/project' },
+      { binary: '/tool', cwd: '/project', timeoutMs: 300_000 },
       value,
     )
   })

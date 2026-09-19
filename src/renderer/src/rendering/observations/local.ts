@@ -72,6 +72,9 @@ export function collectLifecycleCandidates(params: {
   provider: AgentProviderKind
   sessionId: string
   streamPhaseIdle: boolean
+  /** The newest semantic turn, when it was sealed because the machine slept
+   *  (#963) and no turn is live. Null or absent otherwise. */
+  sleepInterruptedTurnId?: string | null
 }): RenderCandidate[] {
   const out: RenderCandidate[] = []
   if (!params.streamPhaseIdle) {
@@ -82,6 +85,23 @@ export function collectLifecycleCandidates(params: {
       sourcePlane: 'process',
       sessionId: params.sessionId,
       contentKind: 'work',
+      timestampMs: null,
+      sequence: 1,
+    })
+  } else if (params.sleepInterruptedTurnId) {
+    // "Interrupted while asleep" (decomposition §6 Q1a). A lifecycle fact in the
+    // work slot, for the same reasons as the work chip above: it has no text of
+    // its own, it must survive every content candidate being suppressed, and it
+    // disappears the moment the pane works again (a new submit makes the phase
+    // non-idle, which yields the work chip instead). Keyed by turn so a second
+    // sleep-sealed turn is a new row, not a stale one reused.
+    out.push({
+      id: `sleep-interruption:${params.sleepInterruptedTurnId}`,
+      owner: 'work',
+      provider: params.provider,
+      sourcePlane: 'process',
+      sessionId: params.sessionId,
+      contentKind: 'sleep-interruption',
       timestampMs: null,
       sequence: 1,
     })

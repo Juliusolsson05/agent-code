@@ -284,6 +284,12 @@ export type SemanticLiveTurn = {
    *  same turn don't carry it (it's a turn-scope attribute, not an
    *  event attribute). */
   isCompactionSynthesis?: boolean
+  /** Set when the proxy adapter, not upstream, stopped this turn because the
+   *  machine slept and its stream died with the connection (#963; the adapter's
+   *  `turn_stopped.interruption`). The feed shows "Interrupted while asleep"
+   *  while this is the newest turn and the pane is idle. Absent for every
+   *  upstream-terminated turn. */
+  interruption?: 'system-suspended'
 }
 
 export type SemanticFlow = {

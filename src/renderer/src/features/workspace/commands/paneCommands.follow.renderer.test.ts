@@ -1,4 +1,6 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import { emptyRuntime } from '@renderer/session-runtime/state'
+import { describeCommandState } from '@renderer/features/command-palette/commandState'
 
 import type { CommandContext } from '@renderer/features/command-palette/types'
 import { paneCommands } from '@renderer/features/workspace/commands/paneCommands'
@@ -51,5 +53,46 @@ describe('follow command availability', () => {
         expect(command.when?.(contextWithKind(kind))).toBe(true)
       }
     }
+  })
+})
+
+
+describe('working-agent follow command', () => {
+  it('is a window-wide toggle available without a running target or rendered view', () => {
+    const command = paneCommands.find(row => row.id === 'toggle-tail-working')!
+    const context = contextWithKind('claude')
+    const toggle = vi.fn()
+    context.ui.toggleTailWorkingMode = toggle
+    context.flags.tailWorkingMode = false
+    expect(command.surface).toBe('app')
+    expect(command.when).toBeUndefined()
+    expect(command.renderedViewPolicy).toBeUndefined()
+    expect(command.getState?.(context)).toEqual({ kind: 'toggle', value: 'off' })
+    command.run(context)
+    expect(toggle).toHaveBeenCalledTimes(1)
+    context.flags.tailWorkingMode = true
+    expect(command.getState?.(context)).toEqual({ kind: 'toggle', value: 'on' })
+  })
+
+  it('reports effective focused follow only for eligible agents and identifies the owning mode', () => {
+    const command = paneCommands.find(row => row.id === 'toggle-tail')!
+    const context = contextWithKind('claude')
+    context.flags.tailWorkingMode = true
+    const runtime = emptyRuntime()
+    context.workspace.getRuntime = () => runtime
+    expect(command.getState?.(context)).toEqual({ kind: 'toggle', value: 'off' })
+    runtime.sessionStatus = 'running'
+    const workingState = command.getState!(context)
+    if (!workingState) throw new Error('Working follow must expose a command state')
+    expect(describeCommandState(workingState).detail).toBe('On via Auto-follow All Working Agents')
+    runtime.conditions = { provider: 'claude', ts: 1, conditions: {
+      'claude.permission-prompt': { kind: 'claude.permission-prompt', state: { visible: true }, actions: [] },
+    } }
+    expect(command.getState?.(context)).toEqual({ kind: 'toggle', value: 'off' })
+    runtime.conditions = null
+    context.workspace.state.sessions.agent.kind = 'terminal'
+    expect(command.getState?.(context)).toEqual({ kind: 'toggle', value: 'off' })
+    runtime.tailMode = true
+    expect(command.getState?.(context)).toEqual({ kind: 'toggle', value: 'on' })
   })
 })

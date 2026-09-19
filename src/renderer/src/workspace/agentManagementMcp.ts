@@ -398,7 +398,7 @@ export function additionalCloseImpact(params: {
   callerSessionId: string
   sessionId: string
 }): SessionId[] {
-  const membership = assertManagedTarget(params)
+  assertManagedTarget(params)
   const affected = new Set<SessionId>()
   const visitLinked = (parentId: SessionId): void => {
     for (const [sessionId, meta] of Object.entries(params.state.sessions)) {
@@ -408,14 +408,14 @@ export function additionalCloseImpact(params: {
     }
   }
   visitLinked(params.sessionId)
-  if (membership.placement === 'grid') {
-    const leaves = collectLeaves(membership.tab.root)
-    if (leaves.length === 1) {
-      for (const sessionId of orderedProjectSessionIds(params.state, membership.tab.id)) {
-        if (sessionId !== params.sessionId) affected.add(sessionId)
-      }
-    }
-  }
+  // WHY a project's last grid leaf no longer reports its siblings (#886 review
+  // M1): it used to, because closing that leaf removed the tab and killed every
+  // detached session in it. This tool closes with `requireConfirmation`, which
+  // never offers the human-only Close Tab choice, so the close is session-scoped
+  // and promotes the next Dispatch row into the grid instead. Reporting the
+  // siblings would refuse a close that affects exactly one agent AND tell the
+  // calling model that sessions would die which would not — data it acts on.
+  // Linked descendants still count: the session-scoped close still ends them.
   return [...affected]
 }
 

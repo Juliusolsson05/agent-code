@@ -82,6 +82,7 @@ type BooleanUiShellFlag = {
  */
 export const SURFACE_OWNER_FLAGS = {
   'usage.open': 'usageModalOpen',
+  'agent-analytics.open': 'agentAnalyticsOpen',
   'open-keyboard-shortcuts': 'keyboardShortcutsOpen',
   'open-agent-activity': 'agentActivityOpen',
   'close-old-agents': 'closeOldAgentsOpen',

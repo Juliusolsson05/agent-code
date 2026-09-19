@@ -1,7 +1,15 @@
 import type { UsageLimitNotice } from '@shared/types/usageLimitNotice'
+import { GROK_IDENTITY } from '@providers/grok/renderer/identity'
+import { GROK_VIEWS } from '@providers/grok/renderer/conditions/views'
+import { renderGrokOperation } from '@providers/grok/renderer/rows/dispatch'
+import { createGrokTranscriptEntryMapper, extractGrokProviderSessionId, isGrokTypedUserPrompt } from '@providers/grok/renderer/transcript/mapper'
+import { grokComposerSubmit } from '@providers/grok/renderer/composerSubmit'
+import { GROK_CONDITION_POLICY } from '@providers/grok/renderer/conditions/policy'
+import { GROK_SEMANTIC_FOLD_POLICY } from '@providers/grok/renderer/semanticFoldPolicy'
 import { claudeUsageLimitNotice } from '@providers/claude/renderer/adapters/usageLimitNotice'
 import { codexUsageLimitNotice } from '@providers/codex/renderer/adapters/usageLimitNotice'
 import type { ConditionView } from '@shared/conditions-core/view'
+import type { PromptAcceptance } from '@shared/types/providerConfig'
 import type { Entry, ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 import type { ProviderConditionSnapshot } from '@shared/types/providerConditions'
 import type { SemanticLiveBlock, SemanticLiveTurn } from '@renderer/session-runtime/state'
@@ -177,8 +185,18 @@ export type RendererProviderCapabilities = {
    * providers/claude/renderer/composerSubmit.ts). The call site keeps
    * the kind-agnostic machinery: pasteId minting, streaming-baseline
    * capture, composer clearing, draft preservation on throw.
+   *
+   * Resolves with main's acceptance when the protocol has a structured
+   * delivery result (Claude, OpenCode) and `null` when it does not (Codex
+   * submits are raw PTY writes). WHY the kind is surfaced at all (#889): a
+   * `queue` acceptance means the provider held the prompt behind a running
+   * turn and no turn will start for it, so the optimistic `submitting` phase
+   * the call site stamped before delivery is a claim nothing downstream can
+   * ever correct — the call site has to settle it, and this is its only
+   * evidence. Swallowing the result here painted `Sending · 46s` over a turn
+   * that was busy thinking in the 2026-09-11 recording.
    */
-  composerSubmit: (io: ComposerSubmitIo) => Promise<void>
+  composerSubmit: (io: ComposerSubmitIo) => Promise<PromptAcceptance | null>
   /**
    * Whether this provider's composer accepts inline image
    * attachments. Gates draft-image accumulation (paste handler), the
@@ -348,10 +366,36 @@ const opencodeCapabilities: RendererProviderCapabilities = {
   semanticFoldPolicy: OPENCODE_SEMANTIC_FOLD_POLICY,
 }
 
+const grokCapabilities: RendererProviderCapabilities = {
+  id: 'grok',
+  name: 'Grok',
+  ...GROK_IDENTITY,
+  conditionViews: GROK_VIEWS,
+  // Fallback-only by evidence (see rows/dispatch.tsx): no grok tool-row
+  // capture exists yet, so every tool renders through the generic rows.
+  renderOperation: renderGrokOperation,
+  classifyDurableEntry: () => null,
+  // Native subagent fan-out is recorded (content.subagent) but no spawn TOOL
+  // signature is; false until one is captured.
+  isSpawnTool: () => false,
+  createTranscriptEntryMapper: () => createGrokTranscriptEntryMapper(),
+  extractProviderSessionId: extractGrokProviderSessionId,
+  isTypedUserPrompt: isGrokTypedUserPrompt,
+  composerSubmit: grokComposerSubmit,
+  // Grok's own terminal can attach clipboard images on paste, but the
+  // composer→prompt path is control-only; image attachments via the app are
+  // unrecorded.
+  supportsImageAttachments: false,
+  usesOptimisticUserEcho: true,
+  conditionPolicy: GROK_CONDITION_POLICY,
+  semanticFoldPolicy: GROK_SEMANTIC_FOLD_POLICY,
+}
+
 const rendererProviderCapabilities: Record<AgentProviderKind, RendererProviderCapabilities> = {
   claude: claudeCapabilities,
   codex: codexCapabilities,
   opencode: opencodeCapabilities,
+  grok: grokCapabilities,
 }
 
 export function getRendererProviderCapabilities(id: string): RendererProviderCapabilities {

@@ -18,6 +18,7 @@ vi.mock('@renderer/features/global-editor/store', () => ({
 
 const releaseListeners = new Set<(token: string) => void>()
 const listeners = new Set<(update: TldrUpdate) => void>()
+const goalListeners = new Set<(update: TldrUpdate) => void>()
 const report = (text: string, revision = 1): TldrRecord => ({ text, revision, updatedAt: '2026-09-11T00:00:00.000Z' })
 const api = {
   startTldrHold: vi.fn((_code: string, _token: string) => {}),
@@ -25,6 +26,8 @@ const api = {
   onTldrHoldReleased: vi.fn((listener: (token: string) => void) => { releaseListeners.add(listener); return () => { releaseListeners.delete(listener) } }),
   readTldrs: vi.fn(async (ids: string[]) => Object.fromEntries(ids.map(id => [id, report(`Summary for ${id}.`)]))),
   onTldrChanged: vi.fn((listener: (update: TldrUpdate) => void) => { listeners.add(listener); return () => { listeners.delete(listener) } }),
+  readGoals: vi.fn(async (ids: string[]) => Object.fromEntries(ids.map(id => [id, report(`Goal for ${id}.`)]))),
+  onGoalChanged: vi.fn((listener: (update: TldrUpdate) => void) => { goalListeners.add(listener); return () => { goalListeners.delete(listener) } }),
 }
 
 function workspace(): Workspace {
@@ -46,11 +49,14 @@ function keyDown(target: Document | Element = document, options: Record<string, 
 beforeEach(() => {
   dismissTldr()
   listeners.clear()
+  goalListeners.clear()
   releaseListeners.clear()
   api.startTldrHold.mockClear()
   api.stopTldrHold.mockClear()
   api.readTldrs.mockClear()
   api.onTldrChanged.mockClear()
+  api.readGoals.mockClear()
+  api.onGoalChanged.mockClear()
   Object.assign(window, { api })
   harness.appState = {
     requestCommandInvocation: vi.fn(), settings: { agentViewMode: 'agent', commandKeybindingOverrides: {} },
@@ -145,6 +151,92 @@ describe('TLDR hold input', () => {
     expect(fireEvent.keyDown(screen.getByLabelText('Composer'), { key: 'x', code: 'KeyX' })).toBe(false)
     fireEvent.keyDown(document, { key: 'Escape', code: 'Escape' })
     expect(useTldrView.getState()).toMatchObject({ held: false, latched: false })
+  })
+})
+
+describe('Goal peek', () => {
+  const goalKey = (target: Document | Element = document) => keyDown(target, { key: 'g', code: 'KeyG' })
+
+  it('holds Cmd+G through the real router to show goals instead of TLDRs and releases on G', async () => {
+    render(<><Harness /><TldrPane identity="agent" enabled goalEnabled><div>Feed</div></TldrPane></>)
+    goalKey()
+    expect(await screen.findByText('Goal for agent.')).toBeTruthy()
+    // The Goal overlay listens to goal changes, not TLDR changes.
+    act(() => { for (const listener of goalListeners) listener({ identity: 'agent', record: report('Goal changed direction.', 2) }) })
+    expect(screen.getByText('Goal changed direction.')).toBeTruthy()
+    expect(listeners.size).toBe(0)
+    const note = screen.getByRole('note', { name: 'Agent goal' })
+    expect(note.textContent).toContain('Goal set')
+    expect(note.textContent).not.toContain('Note written')
+    expect(screen.queryByRole('note', { name: 'Agent TLDR' })).toBeNull()
+    expect(api.readTldrs).not.toHaveBeenCalled()
+    // The native release watcher is asked about G, not the TLDR key.
+    expect(api.startTldrHold).toHaveBeenLastCalledWith('KeyG', expect.any(String))
+    expect(harness.appState.requestCommandInvocation).not.toHaveBeenCalled()
+    fireEvent.keyUp(document, { code: 'KeyG', key: 'g', metaKey: true })
+    expect(screen.queryByRole('note')).toBeNull()
+    expect(screen.getByText('Feed')).toBeTruthy()
+    expect(goalListeners.size).toBe(0)
+  })
+
+  it('switches a latched TLDR to goals instead of closing it and leaves Cmd+G to the editor', async () => {
+    render(<><Harness /><TldrPane identity="agent" enabled goalEnabled={false}><div /></TldrPane><div data-global-editor-input-owner=""><textarea aria-label="Editor" /></div></>)
+    act(() => toggleTldr('tldr'))
+    await screen.findByText('Summary for agent.')
+    act(() => toggleTldr('goal'))
+    // An agent without Goal says so rather than showing its TLDR under the Goal label.
+    expect(await screen.findByText('Goal is off')).toBeTruthy()
+    expect(screen.queryByText('Summary for agent.')).toBeNull()
+    expect(useTldrView.getState()).toMatchObject({ latched: true, preview: 'goal' })
+    act(() => toggleTldr('goal'))
+    expect(useTldrView.getState().latched).toBe(false)
+
+    expect(goalKey(screen.getByLabelText('Editor'))).toBe(true)
+    expect(useTldrView.getState().held).toBe(false)
+  })
+
+  it('peeks goals in Spotlight, swallows Cmd+L while held, and releases on the native G token', async () => {
+    const model = workspace()
+    model.spotlight = { tabId: 'tab', focusedSessionId: 'a' }
+    render(<><Harness model={model} /><TldrPane identity="spotlight-agent" enabled goalEnabled><div>Visible Spotlight feed</div></TldrPane></>)
+    goalKey()
+    await screen.findByText('Goal for spotlight-agent.')
+    // The input gate owns every keydown while a peek is up: Cmd+L must neither
+    // switch to TLDR nor start a second gesture.
+    expect(keyDown()).toBe(false)
+    expect(useTldrView.getState()).toMatchObject({ held: true, preview: 'goal' })
+    expect(api.startTldrHold).toHaveBeenCalledTimes(1)
+    expect(api.readTldrs).not.toHaveBeenCalled()
+    const token = api.startTldrHold.mock.calls.at(-1)![1]
+    act(() => { for (const listener of releaseListeners) listener(token) })
+    expect(screen.queryByRole('note')).toBeNull()
+    expect(harness.appState.requestCommandInvocation).not.toHaveBeenCalled()
+  })
+
+  it('follows a custom Goal binding for press and release and respects app modals', () => {
+    harness.appState.settings = { agentViewMode: 'agent', commandKeybindingOverrides: { 'goal-preview': ['Alt+G'] } }
+    render(<Harness />)
+    goalKey()
+    expect(useTldrView.getState().held).toBe(false)
+    keyDown(document, { code: 'KeyG', key: '©', metaKey: false, altKey: true })
+    expect(useTldrView.getState()).toMatchObject({ held: true, preview: 'goal' })
+    fireEvent.keyUp(document, { code: 'AltLeft', key: 'Alt', altKey: false })
+    expect(useTldrView.getState().held).toBe(false)
+    const modal = document.createElement('div')
+    modal.setAttribute('data-agent-code-interaction-owner', 'app')
+    document.body.append(modal)
+    keyDown(document, { code: 'KeyG', key: '©', metaKey: false, altKey: true })
+    expect(useTldrView.getState().held).toBe(false)
+    modal.remove()
+  })
+
+  it('keeps a user binding that claimed Cmd+G before Goal shipped', () => {
+    harness.appState.settings = { agentViewMode: 'agent', commandKeybindingOverrides: { 'view-tldr-history': ['Cmd+G'] } }
+    render(<Harness />)
+    goalKey()
+    expect(useTldrView.getState().held).toBe(false)
+    expect(api.startTldrHold).not.toHaveBeenCalled()
+    expect(harness.appState.requestCommandInvocation).toHaveBeenCalledWith('view-tldr-history', 'keybinding')
   })
 })
 

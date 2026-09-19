@@ -1,4 +1,5 @@
 import { useMemo } from 'react'
+import { AgentSkillsSection } from './AgentSkillsSection'
 
 import { buildAgentStatusModel } from '@renderer/features/agent-status/model/agentStatusModel'
 import type { AgentStatusModel } from '@renderer/features/agent-status/model/agentStatusModel'
@@ -91,6 +92,11 @@ function AgentStatusContent({ model }: { model: AgentStatusModel }) {
       <Section title="Placement" fields={placementFields(model)} />
       <Section title="Relationships" fields={relationshipFields(model)} />
       <Section title="MCP" fields={mcpFields(model)} />
+      <AgentSkillsSection
+        sessionId={model.sessionId}
+        kind={model.kind}
+        cwd={model.cwd}
+      />
     </div>
   )
 }

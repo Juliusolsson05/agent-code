@@ -3,6 +3,7 @@ import type { MutableRefObject } from 'react'
 
 import { UndoCloseStack } from '@renderer/lib/undoClose'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
+import type { HistoryWindow } from '@renderer/session-runtime/historyBoundary.js'
 import type {
   ReaderModeState,
   SpotlightState,
@@ -19,8 +20,8 @@ import type { ConfigurableBuiltInMcpDomain } from '@mcp/shared/types'
 // need 15 separate useRef lines. Ref identity is stable across renders
 // (useRef contract), so putting them together doesn't cost anything.
 //
-// Layout/settings mirrors are refreshed in the caller's render body. Runtime
-// state additionally has a synchronous store subscription there: runtime-only
+// Settings mirrors are refreshed in the caller's render body. Workspace and
+// runtime state additionally have synchronous store subscriptions: runtime-only
 // updates no longer render the controller, but IPC/actions must see them before
 // React commits any subscribed pane. Keep that subscription and its cleanup
 // coupled to this identity-stable ref bundle.
@@ -35,6 +36,14 @@ export type WorkspaceRefs = {
   useProxyStreamingRef: MutableRefObject<boolean>
   defaultBuiltInMcpDomainsRef: MutableRefObject<ConfigurableBuiltInMcpDomain[]>
   seenUuidsRef: MutableRefObject<Record<SessionId, Set<string>>>
+  /** History-boundary window identity per session (grok Stage 5). Decisions
+   *  come from session-runtime/historyBoundary.ts — the phone and replay apply
+   *  the same ones — so the desktop must not re-derive them here. */
+  historyWindowsRef: MutableRefObject<Record<SessionId, HistoryWindow>>
+  /** Sessions whose transcript window was reset by a boundary and whose
+   *  semantic suffixes must be dropped until a fresh turn_started (the pure
+   *  owner's awaiting gate; api_error passes because it is diagnostic). */
+  historyAwaitingTurnStartRef: MutableRefObject<Set<SessionId>>
   latestScreenRef: MutableRefObject<Record<SessionId, string>>
   undoStackRef: MutableRefObject<UndoCloseStack>
   bootstrapTimersRef: MutableRefObject<Map<SessionId, ReturnType<typeof setTimeout>>>
@@ -98,6 +107,8 @@ export function useWorkspaceRefs(
   const useProxyStreamingRef = useRef(useProxyStreaming)
   const defaultBuiltInMcpDomainsRef = useRef(defaultBuiltInMcpDomains)
   const seenUuidsRef = useRef<Record<SessionId, Set<string>>>({})
+  const historyWindowsRef = useRef<Record<SessionId, HistoryWindow>>({})
+  const historyAwaitingTurnStartRef = useRef<Set<SessionId>>(new Set())
   const latestScreenRef = useRef<Record<SessionId, string>>({})
   const undoStackRef = useRef(new UndoCloseStack())
   const bootstrapTimersRef = useRef<Map<SessionId, ReturnType<typeof setTimeout>>>(new Map())
@@ -135,6 +146,8 @@ export function useWorkspaceRefs(
     // Seen uuids per session, for JSONL dedup. Refs because we never
     // render against them — they're bookkeeping.
     seenUuidsRef,
+    historyWindowsRef,
+    historyAwaitingTurnStartRef,
 
     // Latest screen per session — mirrored from state into a ref so
     // the Enter handler in TileLeaf can capture a baseline

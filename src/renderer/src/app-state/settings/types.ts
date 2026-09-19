@@ -6,6 +6,11 @@ import type { DictationProvider } from '@shared/types/dictation'
 import type { MouseButtonBinding, MouseChordBinding } from '@renderer/lib/mouseBinding'
 import type { ConfigurableBuiltInMcpDomain } from '@mcp/shared/types'
 import type { CommandSortMode } from '@renderer/features/command-palette/lib/sortCommands'
+// Value import (not type-only): DEFAULT_SETTINGS.dictationShortcut shares ONE
+// source of truth with the HotkeyInput reset button and coerceHotkeyBinding's
+// corrupted-value fallback. hotkeyBinding.ts imports nothing from this file,
+// so the cycle check that governs this folder's import direction is safe.
+import { DEFAULT_DICTATION_HOTKEY } from '@renderer/lib/hotkeyBinding'
 
 // Built-in theme ids only. 'custom' used to live here as a sentinel that
 // rendered as a picker cell but acted as a button (it opened the JSON editor
@@ -14,6 +19,7 @@ import type { CommandSortMode } from '@renderer/features/command-palette/lib/sor
 // that it sat at index 5 to make the Appearance grid an even 3x2 — are gone.
 // The grid is now variable-length and always ends with a "+ New theme…" cell.
 export type ThemeMode =
+  | 'dark-nord'
   | 'dark'
   | 'dark-dim'
   | 'dark-tokyonight'
@@ -21,7 +27,7 @@ export type ThemeMode =
   | 'light-soft'
 
 // What `Settings.mode` may actually hold: a built-in id, or a `theme:<uuid>`
-// saved-theme id. Kept as a distinct alias so the many call sites that only
+// saved-theme id or `extension-theme:<contribution-id>`. Kept as a distinct alias so the many call sites that only
 // ever deal with built-ins can keep using the narrower ThemeMode.
 export type ThemeModeValue = ThemeMode | string
 
@@ -32,6 +38,10 @@ export type ThemeModeMeta = {
 }
 
 export const THEME_MODES: ThemeModeMeta[] = [
+  // Nord is first because it is the default: the picker grid reads top-left
+  // as "what the app ships with", and the previous first entry was also the
+  // previous default. Its palette lives in styles.css like every built-in.
+  { id: 'dark-nord', label: 'Nord', family: 'dark' },
   { id: 'dark', label: 'Dark', family: 'dark' },
   { id: 'dark-dim', label: 'Gray Dark', family: 'dark' },
   { id: 'dark-tokyonight', label: 'Tokyonight', family: 'dark' },
@@ -65,13 +75,12 @@ export function isDarkThemeMode(mode: ThemeModeValue): boolean {
 }
 
 export type AccentId =
-  | 'lime'
+  | 'frost'
   | 'amber'
   | 'sky'
   | 'magenta'
   | 'gold'
   | 'coral'
-  | 'sage'
   | 'lavender'
 
 export type AccentMeta = {
@@ -83,14 +92,23 @@ export type AccentMeta = {
   fgLight: string
 }
 
+// WHY Lime and Sage are gone rather than merely demoted: the public-release
+// audit (#973) asked for no green in any default, and the green accents WERE
+// the old identity — every marker, dot and focus ring wore Lime. Leaving them
+// selectable would keep two entries whose only purpose was the look we are
+// replacing. coerceSettings maps a persisted 'lime'/'sage' to Frost, so an
+// existing install lands on the new default rather than on garbage.
+//
+// Frost is Nord's `nord8` (#88c0d0) on dark canvases and `nord10` (#5e81ac)
+// on the cream light canvases, where nord8 has too little contrast to carry
+// focus rings.
 export const ACCENTS: AccentMeta[] = [
-  { id: 'lime', name: 'Lime', dark: '#7dd3a0', light: '#2f6f46', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
+  { id: 'frost', name: 'Frost', dark: '#88c0d0', light: '#5e81ac', fgDark: '#171b21', fgLight: '#faf9f6' },
   { id: 'amber', name: 'Amber', dark: '#ff9f4a', light: '#8a470b', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
   { id: 'sky', name: 'Sky', dark: '#6bb6ff', light: '#1f5eaa', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
   { id: 'magenta', name: 'Magenta', dark: '#e66ed9', light: '#8b247f', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
   { id: 'gold', name: 'Gold', dark: '#f5d64a', light: '#735905', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
   { id: 'coral', name: 'Coral', dark: '#ff6b6b', light: '#9f2929', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
-  { id: 'sage', name: 'Sage', dark: '#a8c49a', light: '#4d6a3f', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
   { id: 'lavender', name: 'Lavender', dark: '#b5a3ff', light: '#5a43b4', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
 ]
 
@@ -155,7 +173,7 @@ export const AGENT_VIEW_MODES: AgentViewModeMeta[] = [
  * approximation is not.
  *
  * WHY this is a top-level setting and not part of customAppearance: that
- * contract is CUSTOM_APPEARANCE_COLOR_KEYS — 80 keys, all colours, validated
+ * contract is CUSTOM_APPEARANCE_COLOR_KEYS — 81 keys, all colours, validated
  * as colours and surfaced in the theme editor as colour fields. Threading
  * three lengths through a colour pipeline means either weakening that
  * validation or special-casing three keys in every consumer, to buy an axis
@@ -327,7 +345,7 @@ export const USAGE_HEADER_LEVELS = ['minimal', 'providers', 'all', 'detailed'] a
 export type UsageHeaderLevel = (typeof USAGE_HEADER_LEVELS)[number]
 
 export type Settings = {
-  /** Built-in theme id, or the id of an entry in `savedThemes`. One field
+  /** Built-in theme id, saved theme id, or namespaced extension theme id. One field
    *  answers "what am I looking at" for applyTheme, useThemeSync, and the
    *  paired phone client alike — see savedThemes.ts for why this is not a
    *  separate `activeSavedThemeId`. */
@@ -443,6 +461,14 @@ export type Settings = {
    *  Toggle is read per-session at spawn time — flipping it mid-session
    *  has no effect; the next new session picks up the new value. */
   useProxyStreaming: boolean
+  /** Use the GitHub CLI's login for extension-install API requests. ON by
+   *  default: the anonymous api.github.com bucket is 60/hour per IP — two
+   *  requests per install attempt — which normal iteration exhausts (#980,
+   *  #982). The credential raises that to 5000/hour, is read from `gh auth
+   *  token` per install attempt, lives only in main-process memory for that
+   *  request, and is never persisted or logged. Turning this off also stops
+   *  the subprocess entirely. */
+  extensionsGithubCliAuth: boolean
   /** Inline voice dictation for the active composer. This is intentionally
    *  an Agent Code setting instead of an agent-voice-dictation setting:
    *  package code provides STT primitives, while Agent Code decides whether
@@ -637,53 +663,60 @@ export type Settings = {
 }
 
 export const DEFAULT_SETTINGS: Settings = {
-  mode: 'dark',
+  // Nord + Frost are the public-release look (#973). The old Dark + Lime pair
+  // is still selectable; installs sitting on exactly that pair are migrated
+  // by coerceSettings so "the default changed" reaches existing users too.
+  mode: 'dark-nord',
   savedThemes: [],
   savedPromptTemplates: [],
   dispatchColorFlags: {},
   contrast: false,
-  accent: 'lime',
+  accent: 'frost',
   customAppearanceJson: DEFAULT_CUSTOM_APPEARANCE_JSON,
   showStatusMode: true,
   showWorktreeBadges: true,
-  dangerousAgentsEnabled: false,
+  // On by default for the public build — the owner's explicit call (#973):
+  // Agent Code is a workspace for people who run many agents at once, and the
+  // permission prompts were the first thing every user turned off. The
+  // Settings row stays marked dangerous and reloads live sessions on change.
+  dangerousAgentsEnabled: true,
   useProxyStreaming: true,
+  extensionsGithubCliAuth: true,
   dictationEnabled: false,
   dictationProvider: 'deepgram',
   dictationAudioInput: null,
-  // WHY the default binding is Cmd+Shift+D and not Fn (packaged-mode fix):
-  // the Fn key can only be captured on macOS via a CGEventTap, which
-  // requires the app to hold the Accessibility permission — an OS-level
-  // prompt every user gets on first launch. Wispr Flow's own docs confirm
-  // the same constraint and use Ctrl+Opt as their fallback for exactly
-  // this reason. Shipping Fn as the default meant every packaged Agent
-  // Code launch nagged for Accessibility before the user had chosen to
-  // enable dictation at all. Cmd+Shift+D is a plain keyboard accelerator
-  // that main can register via Electron globalShortcut with NO OS prompt
-  // at all; power users can still switch to Fn from Settings, which
-  // re-arms the Accessibility-gated CGEventTap helper. The literal string
-  // matches the hotkeyBinding.ts vocabulary (see modifierParts + the
-  // `mod-shift-d -> Cmd+Shift+D` alias in coerceHotkeyBinding) so it
-  // round-trips through the settings persistence layer without any
-  // special-casing.
-  dictationShortcut: 'Cmd+Shift+D',
-  // Off by default. Every bindable button already has a job — middle click
-  // is paste/new-tab and the side buttons are history navigation — so
-  // claiming one without the user asking would silently break a gesture they
-  // rely on. Opt-in only.
-  dictationMouseButton: '',
-  // Off by default for the same reason as dictationMouseButton: the chord
-  // suppresses both of its buttons while held, and claiming a gesture the
-  // user never asked for is how you break something they relied on.
-  paletteMouseChord: '',
+  // WHY Fn, after this file spent a long comment explaining why Cmd+Shift+D
+  // replaced it: the objection was a first-launch Accessibility prompt, and
+  // that no longer applies — useDictationHotkeySync sends an EMPTY binding
+  // to main while dictation is off, so the CGEventTap helper is never armed
+  // until the user enables dictation. With that gate in place the binding
+  // can be the one the owner actually uses (#973). Same source of truth as
+  // DEFAULT_DICTATION_HOTKEY in hotkeyBinding.ts, which the "reset" button
+  // and corrupted-value coercion also read.
+  dictationShortcut: DEFAULT_DICTATION_HOTKEY,
+  // Middle click for hold-to-talk, and Middle+Right for the command palette:
+  // the owner's bindings, shipped as the public defaults (#973). The mouse
+  // dictation trigger is gated on dictationEnabled just like the key, so the
+  // button claims nothing until dictation is on; the palette chord is live
+  // immediately, which is the point of shipping it.
+  dictationMouseButton: 'Middle',
+  paletteMouseChord: 'Middle+Right',
   aggressiveDebugPersistence: false,
-  defaultWorkspaceMode: 'grid',
+  // Dispatch is the product's command-center view and the way the owner runs
+  // the app all day; a public fresh install should open there (#973). The
+  // setting still only seeds a workspace that has no workspace.json yet —
+  // existing workspaces keep their last-used mode.
+  defaultWorkspaceMode: 'dispatch',
   agentNamesEnabled: false,
   agentViewMode: 'agent',
-  // Preserve today's opt-in behavior. Users choose which capabilities become
-  // defaults; session commands remain available regardless of this empty seed.
-  defaultBuiltInMcpDomains: [],
-  autoSendPromptSuggestion: true,
+  // The owner's day-to-day set, shipped as the default (#973). TLDR and Goal
+  // are the Cmd+L / Cmd+G peeks — with no domains on, a new user never sees
+  // them do anything. AI Workspace and Agent Management stay opt-in. An
+  // explicitly persisted list (including `[]`) always wins in coerceSettings.
+  defaultBuiltInMcpDomains: ['tldr', 'goal', 'orchestration', 'agent_transcripts', 'workflows'],
+  // Off (#973): a click that immediately sends a prompt to an agent surprised
+  // the owner enough to turn it off; fill-then-edit is the safer public default.
+  autoSendPromptSuggestion: false,
   fontFamily: 'jetbrains-mono',
   // WHY `round` and not the historical `sharp`: this axis exists because the
   // blanket square look was retired deliberately, and defaulting to the tier
@@ -699,15 +732,16 @@ export const DEFAULT_SETTINGS: Settings = {
   // Nothing starred until the user stars something. The palette's resting
   // order is otherwise exactly the catalog order it has always been.
   commandStarred: {},
-  // Catalog order is what the palette has always shown, so it stays the
-  // default and the sort control is a pure opt-in.
-  commandSortMode: 'catalog',
+  // Recent (#973): with no history it IS catalog order, so a new user loses
+  // nothing, and it improves the moment they run a command.
+  commandSortMode: 'recent',
   // Off by default so upgrading users keep the exact command-search surface
   // they already know. Enabling it still leaves the empty browse menu alone.
   promptTemplatesInCommandSearchEnabled: false,
-  // Off by default. The composer buttons cost ~28px of pane height per pane
-  // and a keyboard user gets nothing from them, so this is opt-in.
-  mouseModeEnabled: false,
+  // On (#973): the Send/Stop buttons are the only discoverable way to drive a
+  // pane for someone who has not learned the keys yet; the ~28px per pane is
+  // worth it for the public build, and keyboard users can still turn it off.
+  mouseModeEnabled: true,
   // Off on a fresh install: the six members duplicate shortcuts users already
   // have, so the default that costs nothing is the one that keeps them out of
   // the picker. Their keyboard behavior is unaffected either way.
@@ -716,6 +750,8 @@ export const DEFAULT_SETTINGS: Settings = {
   // Seeding this with today's defaults would pin every command to this
   // release's chords and make future default improvements invisible.
   commandKeybindingOverrides: {},
-  usageHeaderEnabled: true,
+  // Off (#973): the header quota indicator is opt-in for the public build;
+  // the Usage command and modal are unaffected.
+  usageHeaderEnabled: false,
   usageHeaderLevel: 'all',
 }

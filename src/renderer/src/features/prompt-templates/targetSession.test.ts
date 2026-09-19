@@ -6,7 +6,7 @@ import {
 } from '@renderer/features/prompt-templates/targetSession'
 import type { WorkspaceState } from '@renderer/workspace/types'
 
-function stateWithFocusedSession(kind: 'claude' | 'terminal'): WorkspaceState {
+function stateWithFocusedSession(kind: 'claude' | 'terminal' | 'extension-view'): WorkspaceState {
   return {
     tabs: [{
       id: 'tab-1',
@@ -24,6 +24,12 @@ function stateWithFocusedSession(kind: 'claude' | 'terminal'): WorkspaceState {
 }
 
 describe('promptTemplateTargetSessionIdForState', () => {
+  it('never offers delivery or composer operations to a processless extension', () => {
+    const state = stateWithFocusedSession('extension-view')
+    expect(promptTemplateTargetSessionIdForState(state)).toBeNull()
+    expect(promptTemplateComposerSessionIdForState(state)).toBeNull()
+  })
+
   it('accepts agent panes and terminal panes (bracket-paste insertion, #830)', () => {
     expect(promptTemplateTargetSessionIdForState(stateWithFocusedSession('claude')))
       .toBe('session-1')

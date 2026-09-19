@@ -1,5 +1,30 @@
-import { TLDR_INSTRUCTIONS, TLDR_SKILL_NAME, TLDR_SKILL_DESCRIPTION } from '@shared/types/tldr.js'
+import {
+  GOAL_INSTRUCTIONS, GOAL_SKILL_DESCRIPTION, GOAL_SKILL_NAME,
+  TLDR_INSTRUCTIONS, TLDR_SKILL_DESCRIPTION, TLDR_SKILL_NAME,
+} from '@shared/types/tldr.js'
+
+// Product-owned skills (TLDR #888, Goal #936). They ride the same write-ahead
+// ownership journal as personal skills but belong to an MCP capability, so
+// users cannot create, edit, disable, or delete them, and their names are
+// reserved. One table keeps the two capabilities' guarantees identical: a rule
+// fixed for one can never be forgotten for the other.
+type ProductSkill = {
+  id: string
+  name: string
+  description: string
+  markdown: string
+  label: string
+  managedBy: 'tldr' | 'goal'
+}
+const PRODUCT_SKILLS: readonly ProductSkill[] = [
+  { id: 'builtin:agent-code-tldr', name: TLDR_SKILL_NAME, description: TLDR_SKILL_DESCRIPTION, markdown: TLDR_INSTRUCTIONS, label: 'TLDR', managedBy: 'tldr' },
+  { id: 'builtin:agent-code-goal', name: GOAL_SKILL_NAME, description: GOAL_SKILL_DESCRIPTION, markdown: GOAL_INSTRUCTIONS, label: 'Goal', managedBy: 'goal' },
+]
+const productSkillById = (id: string) => PRODUCT_SKILLS.find(skill => skill.id === id)
+const productSkillByName = (name: string) => PRODUCT_SKILLS.find(skill => skill.name === name)
 import { randomUUID } from 'crypto'
+import type { AgentProviderKind } from '@shared/types/providerKind.js'
+import type { ManagedAgentSkillLocations } from '@shared/types/agentSkills.js'
 import { homedir } from 'os'
 import { isAbsolute, relative, resolve, sep } from 'path'
 
@@ -258,6 +283,57 @@ export class AgentCodeManagedSkillsService {
     })
   }
 
+  getInstalledSkillLocations(provider: AgentProviderKind): Promise<ManagedAgentSkillLocations> {
+    return this.serialize(async () => {
+      // Status is strictly observational. Unlike Settings' audit, it must not
+      // initialize/reconcile or repair provider files. Main initializes this
+      // service before registering IPC; callers arriving earlier get an honest
+      // unavailable result. The mutation queue still gives us coherent state.
+      if (!this.initialized || this.recovery) {
+        return { paths: [], notices: ['Agent Code skill deployment status is unavailable.'] }
+      }
+      // WHY paths come from the resolved target registry and the document, not
+      // from a status's `displayPath`: displayPath is a UI string. It is
+      // `~`-abbreviated with the platform separator (`~\…` on win32, which a
+      // `'~/'` parse silently resolved against the process cwd), and it is not
+      // the value materialization writes to. `this.targets` is. A status whose
+      // id no longer names a current target (retired, unsupported, the
+      // initialization-error placeholder) resolves to nothing, so it can never
+      // grant an Agent Code label.
+      const targetsById = new Map(this.targets.targets.map(target => [target.id, target]))
+      const paths: string[] = []
+      let needsAttention = false
+      const collect = (
+        statuses: readonly AgentCodeConventionsTargetStatus[],
+        skillFile: (target: AgentCodeConventionsTarget) => string,
+      ) => {
+        for (const status of statuses) {
+          const target = targetsById.get(status.id)
+          if (!target?.providers.includes(provider)) continue
+          if (status.state === 'installed') paths.push(skillFile(target))
+          else if (status.state === 'missing' || status.state === 'conflict' || status.state === 'error') {
+            needsAttention = true
+          }
+        }
+      }
+      collect(this.targetStatuses, target => target.skillFile)
+      for (const [skillId, statuses] of this.customTargetStatuses) {
+        const skill = this.document.customSkills[skillId]
+        if (skill) collect(statuses, target => resolve(target.skillsDirectory, skill.name, 'SKILL.md'))
+      }
+      for (const [skillId, statuses] of this.installedTargetStatuses) {
+        const skill = this.document.installedSkills[skillId]
+        if (skill) collect(statuses, target => resolve(target.skillsDirectory, skill.name, 'SKILL.md'))
+      }
+      return {
+        paths: [...new Set(paths)],
+        notices: needsAttention
+          ? ['Some Agent Code skills need attention in Settings; only files found on disk are listed here.']
+          : [],
+      }
+    })
+  }
+
   audit(): Promise<AgentCodeConventionsSnapshot> {
     return this.serialize(async () => {
       await this.ensureInitializedLocked()
@@ -343,7 +419,7 @@ export class AgentCodeManagedSkillsService {
         return { ok: false, code: 'validation', message: 'The review contains duplicate skill names.' }
       }
       const managedNames = this.managedSkillNames()
-      const collision = selectedNames.find(name => name === TLDR_SKILL_NAME || managedNames.has(name))
+      const collision = selectedNames.find(name => Boolean(productSkillByName(name)) || managedNames.has(name))
       if (collision) {
         return {
           ok: false,
@@ -722,31 +798,40 @@ export class AgentCodeManagedSkillsService {
    * inactive without the current session's TLDR tool. Disabling one session
    * must not delete a file another running session still depends on. */
   ensureTldrSkill(): Promise<void> {
+    return this.ensureProductSkill(PRODUCT_SKILLS[0]!)
+  }
+
+  /** Goal (#936) carries TLDR's contract exactly: same journal, same collision
+   * checks, same "inactive without this session's tool" instructions. */
+  ensureGoalSkill(): Promise<void> {
+    return this.ensureProductSkill(PRODUCT_SKILLS[1]!)
+  }
+
+  private ensureProductSkill(product: ProductSkill): Promise<void> {
     return this.serialize(async () => {
       await this.ensureInitializedLocked()
-      if (this.recovery) throw new Error('Managed skills require recovery in Settings before TLDR can start.')
-      const id = 'builtin:agent-code-tldr'
-      const existing = this.document.customSkills[id]
-      if (existing && existing.name !== TLDR_SKILL_NAME) throw new Error('TLDR skill identity conflicts with existing managed state.')
-      if (Object.values(this.document.customSkills).some(skill => skill.name === TLDR_SKILL_NAME && skill.id !== id)
-        || Object.values(this.document.installedSkills).some(skill => skill.name === TLDR_SKILL_NAME)) {
-        throw new Error('A managed skill already uses the reserved TLDR name.')
+      if (this.recovery) throw new Error(`Managed skills require recovery in Settings before ${product.label} can start.`)
+      const existing = this.document.customSkills[product.id]
+      if (existing && existing.name !== product.name) throw new Error(`${product.label} skill identity conflicts with existing managed state.`)
+      if (Object.values(this.document.customSkills).some(skill => skill.name === product.name && skill.id !== product.id)
+        || Object.values(this.document.installedSkills).some(skill => skill.name === product.name)) {
+        throw new Error(`A managed skill already uses the reserved ${product.label} name.`)
       }
       const timestamp = this.now().toISOString()
       const desired: AgentCodeCustomSkillRecord = {
-        id, name: TLDR_SKILL_NAME, description: TLDR_SKILL_DESCRIPTION,
-        markdown: TLDR_INSTRUCTIONS, enabled: true,
+        id: product.id, name: product.name, description: product.description,
+        markdown: product.markdown, enabled: true,
         createdAt: existing?.createdAt ?? timestamp, updatedAt: timestamp,
       }
       if (existing?.enabled && existing.description === desired.description && existing.markdown === desired.markdown) {
         await this.reconcileCustomEnabledLocked(existing)
       } else {
         const result = await this.enableCustomLocked(desired, this.document.revision + 1)
-        if (!result.ok) throw new Error('TLDR skill deployment failed. Review managed skill health in Settings.')
+        if (!result.ok) throw new Error(`${product.label} skill deployment failed. Review managed skill health in Settings.`)
       }
-      const skill = this.document.customSkills[id]
-      if (!skill || this.customHealth(skill, this.customTargetStatuses.get(id) ?? []) !== 'active') {
-        throw new Error('TLDR skill is unavailable or conflicts with an existing file. Review managed skill health in Settings.')
+      const skill = this.document.customSkills[product.id]
+      if (!skill || this.customHealth(skill, this.customTargetStatuses.get(product.id) ?? []) !== 'active') {
+        throw new Error(`${product.label} skill is unavailable or conflicts with an existing file. Review managed skill health in Settings.`)
       }
     })
   }
@@ -765,8 +850,9 @@ export class AgentCodeManagedSkillsService {
           message: `Agent Code manages at most ${AGENT_CODE_CUSTOM_SKILL_MAX_COUNT} custom skills.`,
         }
       }
-      if (request.name.trim() === TLDR_SKILL_NAME) {
-        return { ok: false, code: 'validation', message: 'That name is reserved for TLDR MCP.' }
+      const reserved = productSkillByName(request.name.trim())
+      if (reserved) {
+        return { ok: false, code: 'validation', message: `That name is reserved for ${reserved.label} MCP.` }
       }
       const normalized = normalizeAgentCodeCustomSkill(request, {
         requireContent: request.enabled,
@@ -838,8 +924,9 @@ export class AgentCodeManagedSkillsService {
   ): Promise<AgentCodeCustomSkillsMutationResult> {
     return this.serialize(async () => {
       await this.ensureInitializedLocked()
-      if (request.skillId === 'builtin:agent-code-tldr') {
-        return { ok: false, code: 'validation', message: 'This skill is managed by TLDR MCP. Enable or disable TLDR for the agent instead.' }
+      const product = productSkillById(request.skillId)
+      if (product) {
+        return { ok: false, code: 'validation', message: `This skill is managed by ${product.label} MCP. Enable or disable ${product.label} for the agent instead.` }
       }
       const unavailable = this.customMutationUnavailable(request.expectedRevision)
       if (unavailable) return unavailable
@@ -916,8 +1003,9 @@ export class AgentCodeManagedSkillsService {
   ): Promise<AgentCodeCustomSkillsMutationResult> {
     return this.serialize(async () => {
       await this.ensureInitializedLocked()
-      if (request.skillId === 'builtin:agent-code-tldr') {
-        return { ok: false, code: 'validation', message: 'This skill is managed by TLDR MCP. Enable or disable TLDR for the agent instead.' }
+      const product = productSkillById(request.skillId)
+      if (product) {
+        return { ok: false, code: 'validation', message: `This skill is managed by ${product.label} MCP. Enable or disable ${product.label} for the agent instead.` }
       }
       const unavailable = this.customMutationUnavailable(request.expectedRevision)
       if (unavailable) return unavailable
@@ -940,8 +1028,9 @@ export class AgentCodeManagedSkillsService {
   ): Promise<AgentCodeCustomSkillsMutationResult> {
     return this.serialize(async () => {
       await this.ensureInitializedLocked()
-      if (request.skillId === 'builtin:agent-code-tldr') {
-        return { ok: false, code: 'validation', message: 'This skill is managed by TLDR MCP. Enable or disable TLDR for the agent instead.' }
+      const product = productSkillById(request.skillId)
+      if (product) {
+        return { ok: false, code: 'validation', message: `This skill is managed by ${product.label} MCP. Enable or disable ${product.label} for the agent instead.` }
       }
       const unavailable = this.customMutationUnavailable(request.expectedRevision)
       if (unavailable) return unavailable
@@ -1053,7 +1142,11 @@ export class AgentCodeManagedSkillsService {
           return { ok: false, code: 'recovery-required', snapshot: this.snapshot() }
         }
       }
-      if (request.enabled && this.targets.unsupportedProviders.length > 0) {
+      // Degenerate-only gate (#1014): an unsupported provider is informational —
+      // skills deploy to the supported targets — but enabling with ZERO supported
+      // targets would be a silent no-op write, so refuse it with the contract
+      // the Settings UI already renders.
+      if (request.enabled && this.targets.targets.length === 0) {
         this.targetStatuses = this.unsupportedStatuses()
         return { ok: false, code: 'unsupported', snapshot: this.snapshot() }
       }
@@ -1104,6 +1197,10 @@ export class AgentCodeManagedSkillsService {
         }
         statuses.push(await this.publishTarget(item, rendered, desiredHash))
       }
+      // Same informational rows the startup reconcile appends (#1014): the
+      // post-save snapshot must already show which providers cannot receive
+      // the skill, not only after a restart.
+      statuses.push(...this.unsupportedStatuses())
       this.targetStatuses = statuses
       await this.persistBestEffort(statuses)
       return { ok: true, snapshot: this.snapshot() }
@@ -1308,7 +1405,9 @@ export class AgentCodeManagedSkillsService {
         }
       }
     }
-    if (enabled && this.targets.unsupportedProviders.length > 0) {
+    // Degenerate-only gate (#1014): unsupported providers are informational;
+    // enabling with ZERO supported targets would be a silent no-op install.
+    if (enabled && this.targets.targets.length === 0) {
       return {
         ok: false,
         result: { ok: false, code: 'unsupported', snapshot: this.installedSnapshot() },
@@ -1425,11 +1524,10 @@ export class AgentCodeManagedSkillsService {
   }
 
   private async reconcileInstalledSkillLocked(skill: AgentCodeInstalledSkillRecord): Promise<void> {
+    // Unsupported providers no longer short-circuit (#1014); the informational
+    // rows are appended by applyInstalledOperationsLocked, the single funnel
+    // every enabled-skill status rebuild passes through.
     const targets = this.installedTargets(skill)
-    if (skill.enabled && targets.unsupportedProviders.length > 0) {
-      this.installedTargetStatuses.set(skill.id, this.installedUnsupportedStatuses())
-      return
-    }
     if (skill.enabled) {
       try {
         await this.installedSkillPackageStore.verify(skill.snapshotDigest, skill.files)
@@ -1553,6 +1651,11 @@ export class AgentCodeManagedSkillsService {
         conflictFingerprint: this.installedOwnershipPolicy.retiredFingerprint(key, record),
       })
     }
+    // Informational rows for providers without personal-skill support (#1014);
+    // installedHealth skips them when computing deployment health.
+    if (this.targets.unsupportedProviders.length > 0) {
+      statuses.push(...this.installedUnsupportedStatuses())
+    }
     this.installedTargetStatuses.set(skill.id, statuses)
   }
 
@@ -1628,11 +1731,15 @@ export class AgentCodeManagedSkillsService {
       if (statuses.some(status => status.state === 'error')) return 'degraded'
       return 'disabled'
     }
-    if (this.targets.unsupportedProviders.length > 0) return 'unsupported'
-    if (statuses.some(status => status.state === 'conflict' || status.state === 'retired')) {
+    // 'unsupported' rows are informational (#1014); health is computed over the
+    // deployable rows, with the degenerate zero-supported-targets case kept as
+    // 'unsupported' AFTER the conflict check so real conflicts win.
+    const deployable = statuses.filter(status => status.state !== 'unsupported')
+    if (deployable.some(status => status.state === 'conflict' || status.state === 'retired')) {
       return 'conflict'
     }
-    if (statuses.length === 0 || statuses.some(status => status.state !== 'installed')) {
+    if (this.targets.targets.length === 0) return 'unsupported'
+    if (deployable.length === 0 || deployable.some(status => status.state !== 'installed')) {
       return 'degraded'
     }
     return 'active'
@@ -1715,7 +1822,9 @@ export class AgentCodeManagedSkillsService {
         }
       }
     }
-    if (enabled && this.targets.unsupportedProviders.length > 0) {
+    // Degenerate-only gate (#1014): unsupported providers are informational;
+    // enabling with ZERO supported targets would be a silent no-op write.
+    if (enabled && this.targets.targets.length === 0) {
       return {
         ok: false,
         result: { ok: false, code: 'unsupported', snapshot: this.customSnapshot() },
@@ -1774,6 +1883,10 @@ export class AgentCodeManagedSkillsService {
       if (!next.pendingOperations[item.key]) statuses.push(this.customStatus(item.target, 'installed'))
       else statuses.push(await this.publishCustomTarget(updated, item, rendered, desiredHash))
     }
+    // Same informational rows the startup reconcile appends (#1014): the
+    // post-enable snapshot must already show providers that cannot receive
+    // the skill, not only after a restart.
+    statuses.push(...this.customUnsupportedStatuses())
     this.customTargetStatuses.set(skill.id, statuses)
     await this.persistBestEffort(statuses)
     return { ok: true, snapshot: this.customSnapshot() }
@@ -1938,10 +2051,8 @@ export class AgentCodeManagedSkillsService {
   }
 
   private async reconcileEnabledLocked(): Promise<void> {
-    if (this.targets.unsupportedProviders.length > 0) {
-      this.targetStatuses = this.unsupportedStatuses()
-      return
-    }
+    // Unsupported providers no longer short-circuit (#1014): they contribute
+    // informational rows at the end instead of replacing deployment rows.
     const normalized = normalizeAgentCodeConventionsMarkdown(this.document.markdown, {
       requireContent: true,
     })
@@ -2034,6 +2145,9 @@ export class AgentCodeManagedSkillsService {
       // made an otherwise complete enabled reconciliation look degraded.
       if (removed.state !== 'not-installed') statuses.push(removed)
     }
+    // WHY appended, not replacing (#1014): unsupported providers are informational
+    // per-target rows; real deployment rows must survive so health stays truthful.
+    statuses.push(...this.unsupportedStatuses())
     this.targetStatuses = statuses
     await this.persistBestEffort(statuses)
   }
@@ -2066,16 +2180,15 @@ export class AgentCodeManagedSkillsService {
   }
 
   private async reconcileCustomEnabledLocked(skill: AgentCodeCustomSkillRecord): Promise<void> {
+    // Unsupported providers no longer short-circuit (#1014): they contribute
+    // informational rows at the exits instead of replacing deployment rows.
     const targets = this.customTargets(skill)
-    if (targets.unsupportedProviders.length > 0) {
-      this.customTargetStatuses.set(skill.id, this.customUnsupportedStatuses())
-      return
-    }
     const normalized = normalizeAgentCodeCustomSkill(skill, { requireContent: true })
     if (!normalized.ok) {
       this.customTargetStatuses.set(
         skill.id,
-        targets.targets.map(target => this.customStatus(target, 'error', normalized.message)),
+        [...targets.targets.map(target => this.customStatus(target, 'error', normalized.message)),
+          ...this.customUnsupportedStatuses()],
       )
       return
     }
@@ -2171,6 +2284,9 @@ export class AgentCodeManagedSkillsService {
       const removed = await this.removeCustomMaterialization(skill, key, record)
       if (removed.state !== 'not-installed') statuses.push(removed)
     }
+    // Informational rows for providers that cannot receive skills (#1014);
+    // deployment rows above remain the health input.
+    statuses.push(...this.customUnsupportedStatuses())
     this.customTargetStatuses.set(skill.id, statuses)
     await this.persistBestEffort(statuses)
   }
@@ -2931,7 +3047,7 @@ export class AgentCodeManagedSkillsService {
             .sort((left, right) => left.id.localeCompare(right.id))
           return {
             ...skill,
-            ...(skill.id === 'builtin:agent-code-tldr' ? { managedBy: 'tldr' as const } : {}),
+            ...(productSkillById(skill.id) ? { managedBy: productSkillById(skill.id)!.managedBy } : {}),
             health: this.customHealth(skill, targets),
             targets,
           } satisfies AgentCodeCustomSkill
@@ -2944,31 +3060,41 @@ export class AgentCodeManagedSkillsService {
     targets: AgentCodeConventionsTargetStatus[],
   ): AgentCodeCustomSkill['health'] {
     if (this.recovery) return 'recovery-required'
-    if (skill.enabled && this.targets.unsupportedProviders.length > 0) return 'unsupported'
-    if (targets.some(status => status.state === 'conflict' || status.state === 'retired')) {
+    // 'unsupported' rows are informational (#1014): health is computed over the
+    // deployable rows only. Degenerate zero-supported-targets keeps 'unsupported'
+    // AFTER the error check so target-resolution failures stay 'degraded'.
+    const deployable = targets.filter(status => status.state !== 'unsupported')
+    if (deployable.some(status => status.state === 'conflict' || status.state === 'retired')) {
       return 'conflict'
     }
-    if (targets.some(status => status.state === 'error' || status.state === 'missing')) {
+    if (deployable.some(status => status.state === 'error' || status.state === 'missing')) {
       return 'degraded'
     }
+    if (this.targets.targets.length === 0) return 'unsupported'
     if (!skill.enabled) return 'disabled'
-    return targets.length > 0 && targets.every(status => status.state === 'installed')
+    return deployable.length > 0 && deployable.every(status => status.state === 'installed')
       ? 'active'
       : 'degraded'
   }
 
   private health(): AgentCodeConventionsSnapshot['health'] {
     if (this.recovery) return 'recovery-required'
-    if (this.targets.unsupportedProviders.length > 0) return 'unsupported'
-    if (this.targetStatuses.some(status => status.state === 'conflict' || status.state === 'retired')) {
+    // 'unsupported' rows are informational (#1014): health is computed over the
+    // deployable rows only. The degenerate zero-supported-targets case keeps the
+    // 'unsupported' state so Settings can still refuse a no-op enable — but it
+    // must be checked AFTER the error row so a target-resolution failure (which
+    // also empties this.targets) still reports 'degraded', never 'unsupported'.
+    const deployable = this.targetStatuses.filter(status => status.state !== 'unsupported')
+    if (deployable.some(status => status.state === 'conflict' || status.state === 'retired')) {
       return 'conflict'
     }
-    if (this.targetStatuses.some(status => status.state === 'error' || status.state === 'missing')) {
+    if (deployable.some(status => status.state === 'error' || status.state === 'missing')) {
       return 'degraded'
     }
+    if (this.targets.targets.length === 0) return 'unsupported'
     if (this.document.enabled) {
-      return this.targetStatuses.length > 0
-        && this.targetStatuses.every(status => status.state === 'installed')
+      return deployable.length > 0
+        && deployable.every(status => status.state === 'installed')
         ? 'active'
         : 'degraded'
     }

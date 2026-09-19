@@ -1,5 +1,5 @@
 import { sessionMcpOverrides } from '@renderer/workspace/mcpDomains'
-import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
+import { DEFAULT_PROVIDER, isAgentSessionKind } from '@shared/types/providerKind'
 import { useCallback, useState } from 'react'
 
 import type {
@@ -12,8 +12,21 @@ import type {
 } from '@renderer/workspace/types'
 import { collectLeaves, remapTileTreeSessionIds } from '@renderer/workspace/tile-tree/treeOps'
 import { remapTiledLanes } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
-import { missingClosedTabLeafMetaIds, reinsertPane } from '@renderer/lib/undoClose'
-import type { ClosedDetached, ClosedPane, ClosedTab } from '@renderer/lib/undoClose'
+import {
+  missingClosedTabLeafMetaIds,
+  reinsertPane,
+  remapMetaLineage,
+  remapSingleEntryLineage,
+} from '@renderer/lib/undoClose'
+import type {
+  ClosedDetached,
+  ClosedEntry,
+  ClosedGroup,
+  ClosedPane,
+  ClosedTab,
+  SingleClosedEntry,
+  UndoLineage,
+} from '@renderer/lib/undoClose'
 
 import type { WorkspaceSetState } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
@@ -21,6 +34,11 @@ import type { SessionActions } from '@renderer/workspace/hook/actions/session'
 import { resumableProviderSessionId } from '@renderer/workspace/providerSessionIdentity'
 
 type RestoreResult = 'restored' | 'stale' | 'retryable-failure'
+
+/** Where a successful restore sends its old -> new ids. A top-level entry
+ *  publishes to the stack; a group member publishes to the stack AND to the
+ *  group's members that have not been replayed yet (restoreGroupEntry). */
+type PublishLineage = (lineage: UndoLineage) => void
 
 /**
  * The durable metadata a respawn cannot rebuild, carried onto the new session ID.
@@ -57,6 +75,10 @@ type RestoreResult = 'restored' | 'stale' | 'retryable-failure'
  * workspace state itself, so in the app it is normally present.
  */
 function carryDurableMeta(spawned: SessionMeta | undefined, closed: SessionMeta): SessionMeta {
+  // Extension panes skip spawn entirely: all of their metadata is durable UI
+  // identity, including the view ID. The process-specific allowlist below is
+  // for real backends whose new connection identity must win after respawn.
+  if (closed.kind === 'extension-view') return { ...closed }
   return {
     ...(spawned ?? { cwd: closed.cwd, kind: closed.kind ?? DEFAULT_PROVIDER }),
     ...(closed.title ? { title: closed.title } : {}),
@@ -105,7 +127,7 @@ export function useUndoCloseAction(
   const [, bumpUndoCloseVersion] = useState(0)
 
   const restorePaneEntry = useCallback(
-    async (entry: ClosedPane): Promise<RestoreResult> => {
+    async (entry: ClosedPane, publish: PublishLineage): Promise<RestoreResult> => {
       // Find which tab the sibling leaf is in now.
       const targetTab = refs.stateRef.current.tabs.find(t =>
         collectLeaves(t.root).includes(entry.siblingLeafId),
@@ -139,22 +161,38 @@ export function useUndoCloseAction(
       //     point of having a tmux backing.
       const meta = entry.sessionMeta
       let newSessionId: SessionId
-      try {
-        newSessionId = await sessionActions.spawn(meta.cwd, {
-          kind: meta.kind ?? DEFAULT_PROVIDER,
-          ...(meta.providerRuntime ? { providerRuntime: meta.providerRuntime } : {}),
-          resumeSessionId: resumableProviderSessionId(meta),
-          recoverTmuxName: meta.kind === 'terminal' ? meta.tmuxName : undefined,
-          // WHY capability intent is restored but credentials are not: closing a pane revokes its
-          // session token. Undo must ask main to mint a fresh token from the pane's durable
-          // choices; dropping them makes an undo-restored transcript silently lose tools. The
-          // effective list is deliberately not restored — the restored pane is a NEW provider
-          // process, so it resolves those choices against current Settings like any other launch.
-          tldrIdentity: meta.tldrIdentity,
-          builtInMcpOverrides: sessionMcpOverrides(meta),
-        })
-      } catch {
-        return 'retryable-failure'
+      if (meta.kind === 'extension-view') {
+        // ── A PROCESS-LESS LEAF IS RESTORED, NOT SPAWNED ──
+        // Undo previously called spawn() for every kind. Main rejects an
+        // extension-view spawn outright, the catch below turned that into
+        // 'retryable-failure', and undoClose PUSHES A FAILED ENTRY BACK — so the
+        // stack head became permanently poisoned. Every later Cmd+Shift+T popped the
+        // same entry, failed, re-pushed, and returned: all older undo history became
+        // unreachable for the rest of the session.
+        //
+        // Minting the id mirrors openExtensionViewInPane; there is nothing to
+        // recover because there was never a process. The METADATA is written in the
+        // setState below — see the note there, because getting that half wrong is
+        // worse than the bug this branch was added to fix.
+        newSessionId = crypto.randomUUID() as SessionId
+      } else {
+        try {
+          newSessionId = await sessionActions.spawn(meta.cwd, {
+            kind: meta.kind ?? DEFAULT_PROVIDER,
+            ...(meta.providerRuntime ? { providerRuntime: meta.providerRuntime } : {}),
+            resumeSessionId: resumableProviderSessionId(meta),
+            recoverTmuxName: meta.kind === 'terminal' ? meta.tmuxName : undefined,
+            // WHY capability intent is restored but credentials are not: closing a pane revokes its
+            // session token. Undo must ask main to mint a fresh token from the pane's durable
+            // choices; dropping them makes an undo-restored transcript silently lose tools. The
+            // effective list is deliberately not restored — the restored pane is a NEW provider
+            // process, so it resolves those choices against current Settings like any other launch.
+            tldrIdentity: meta.tldrIdentity,
+            builtInMcpOverrides: sessionMcpOverrides(meta),
+          })
+        } catch {
+          return 'retryable-failure'
+        }
       }
 
       let inserted = false
@@ -206,17 +244,27 @@ export function useUndoCloseAction(
         // alive would produce a hidden process that cannot be focused or
         // closed from the UI, so failed insertion must undo the spawn before
         // the undo loop walks to older entries.
-        await sessionActions.killSession(newSessionId).catch(() => undefined)
+        if (meta.kind !== 'extension-view') {
+          await sessionActions.killSession(newSessionId).catch(() => undefined)
+        }
         return 'stale'
       }
 
+      // Older entries may anchor on this pane (a sibling split's
+      // siblingLeafId, a linked child's parent). Publish old -> new so they
+      // keep resolving; see UndoLineage.
+      if (entry.sessionId) {
+        publish({
+          sessions: new Map([[entry.sessionId, newSessionId]]),
+        })
+      }
       return 'restored'
     },
-    [refs.stateRef, sessionActions, setState],
+    [refs.stateRef, refs.undoStackRef, sessionActions, setState],
   )
 
   const restoreTabEntry = useCallback(
-    async (entry: ClosedTab): Promise<RestoreResult> => {
+    async (entry: ClosedTab, publish: PublishLineage): Promise<RestoreResult> => {
       // Tab undo: respawn every session and remap the tree.
       const idMap = new Map<SessionId, SessionId>()
       // New session ID → the meta the closed session actually had, for both
@@ -239,6 +287,20 @@ export function useUndoCloseAction(
         if (!meta) {
           return 'stale'
         }
+        // Same process-less restore as the pane branch, and it matters MORE here:
+        // this loop spawns leaves in order, so hitting an extension-view leaf used to
+        // throw partway through, and the catch below then killed every sibling it had
+        // just spawned. Undoing a tab that contained one extension pane started N real
+        // claude/codex processes and their proxies, killed them all, restored nothing,
+        // and poisoned the undo stack.
+        if (meta.kind === 'extension-view') {
+          const newId = crypto.randomUUID() as SessionId
+          idMap.set(oldId, newId)
+          carried.set(newId, meta)
+          // Deliberately NOT pushed to spawnedIds: there is no process to kill on
+          // rollback, and adding it would make the failure path try to terminate one.
+          continue
+        }
         try {
           const kind: SessionKind = meta.kind ?? DEFAULT_PROVIDER
           // Same per-kind recover hint as the pane-undo branch
@@ -247,7 +309,7 @@ export function useUndoCloseAction(
           const newId = await sessionActions.spawn(meta.cwd, {
             kind,
             ...(meta.providerRuntime ? { providerRuntime: meta.providerRuntime } : {}),
-            resumeSessionId: kind !== 'terminal' ? resumableProviderSessionId(meta) : undefined,
+            resumeSessionId: isAgentSessionKind(kind) ? resumableProviderSessionId(meta) : undefined,
             recoverTmuxName: kind === 'terminal' ? meta.tmuxName : undefined,
             tldrIdentity: meta.tldrIdentity,
             builtInMcpOverrides: sessionMcpOverrides(meta),
@@ -299,6 +361,13 @@ export function useUndoCloseAction(
       // rebuild is tracked in `carried` and re-applied over the top — see
       // carryDurableMeta.
       const restoredDetached: Record<SessionId, DetachedSessionRecord> = {}
+      // Old -> new for EVERY session this restore brings back, grid and
+      // detached. It does two jobs: (1) a linked child restored beside its
+      // parent must point at the parent's NEW id — carryDurableMeta copies the
+      // closed `linkedParentId` verbatim, which used to leave restored children
+      // un-nested and no longer cascading; (2) it is published to the stack so
+      // older entries anchored on this tab or its sessions still resolve.
+      const lineageSessions = new Map(idMap)
       for (const detached of entry.detachedEntries ?? []) {
         try {
           const kind: SessionKind = detached.meta.kind ?? DEFAULT_PROVIDER
@@ -308,23 +377,29 @@ export function useUndoCloseAction(
           // parked in Dispatch. Gating the recover hint on kind is what lets a
           // restored terminal re-attach its tmux session instead of coming back
           // as a fresh shell with the user's scrollback gone.
-          const newId = await sessionActions.spawn(detached.meta.cwd, {
-            kind,
-            ...(detached.meta.providerRuntime
-              ? { providerRuntime: detached.meta.providerRuntime }
-              : {}),
-            resumeSessionId: kind !== 'terminal'
-              ? resumableProviderSessionId(detached.meta)
-              : undefined,
-            recoverTmuxName: kind === 'terminal' ? detached.meta.tmuxName : undefined,
-            tldrIdentity: detached.meta.tldrIdentity,
-            builtInMcpOverrides: sessionMcpOverrides(detached.meta),
-          })
+          // A detached extension has the same processless identity as a grid
+          // extension. The two loops must agree: otherwise undo restores the
+          // tab but silently drops every extension parked in Dispatch.
+          const newId = kind === 'extension-view'
+            ? crypto.randomUUID() as SessionId
+            : await sessionActions.spawn(detached.meta.cwd, {
+                kind,
+                ...(detached.meta.providerRuntime
+                  ? { providerRuntime: detached.meta.providerRuntime }
+                  : {}),
+                resumeSessionId: isAgentSessionKind(kind)
+                  ? resumableProviderSessionId(detached.meta)
+                  : undefined,
+                recoverTmuxName: kind === 'terminal' ? detached.meta.tmuxName : undefined,
+                tldrIdentity: detached.meta.tldrIdentity,
+                builtInMcpOverrides: sessionMcpOverrides(detached.meta),
+              })
           // A detached child restored with its tab is the same population
           // restoreDetachedEntry covers on its own, so it gets the same
           // durable metadata; the two routes back to one row must not
           // disagree about whether the agent keeps its name.
           carried.set(newId, detached.meta)
+          if (detached.sessionId) lineageSessions.set(detached.sessionId, newId)
           restoredDetached[newId] = {
             sessionId: newId,
             surface: 'dispatch',
@@ -352,7 +427,10 @@ export function useUndoCloseAction(
         tabs.splice(insertIdx, 0, restoredTab)
         const sessions = { ...prev.sessions }
         for (const [newId, closed] of carried) {
-          sessions[newId] = carryDurableMeta(sessions[newId], closed)
+          // Relationship pointers follow the restore: a linked child restored
+          // with this tab points at its parent's NEW id, so it renders nested
+          // and cascades again (see lineageSessions above).
+          sessions[newId] = remapMetaLineage(carryDurableMeta(sessions[newId], closed), lineageSessions)
         }
         return {
           ...prev,
@@ -366,13 +444,21 @@ export function useUndoCloseAction(
           dispatchMode: remapTiledLanes(prev.dispatchMode, idMap),
         }
       })
+      // The closed tab is back as a NEW tab id with NEW session ids. An older
+      // entry anchored on it — typically the Close Agent entry of the root this
+      // tab's root had replaced — must now name the restored ids, or the next
+      // undo judges it stale and the original root is lost (#886 finding 4).
+      publish({
+        sessions: lineageSessions,
+        tabs: new Map([[entry.tab.id, restoredTab.id]]),
+      })
       return 'restored'
     },
-    [sessionActions, setState],
+    [refs.undoStackRef, sessionActions, setState],
   )
 
   const restoreDetachedEntry = useCallback(
-    async (entry: ClosedDetached): Promise<RestoreResult> => {
+    async (entry: ClosedDetached, publish: PublishLineage): Promise<RestoreResult> => {
       // The project tab is a detached row's only anchor. `buildDispatchGroups`
       // walks `state.tabs` and files each detached record under its
       // `projectTabId`, so a record whose tab is gone renders in no group at
@@ -392,31 +478,43 @@ export function useUndoCloseAction(
       const meta = entry.sessionMeta
       const kind: SessionKind = meta.kind ?? DEFAULT_PROVIDER
       let newSessionId: SessionId
-      try {
-        // Same respawn contract as restorePaneEntry: --resume for an agent with
-        // a durable transcript, `recoverTmuxName` for a terminal so the still
-        // alive tmux session is re-attached rather than replaced by an empty
-        // shell. The latter is the whole reason this entry type exists.
-        newSessionId = await sessionActions.spawn(meta.cwd, {
-          kind,
-          ...(meta.providerRuntime ? { providerRuntime: meta.providerRuntime } : {}),
-          resumeSessionId: kind !== 'terminal'
-            ? resumableProviderSessionId(meta)
-            : undefined,
-          recoverTmuxName: kind === 'terminal' ? meta.tmuxName : undefined,
-          tldrIdentity: meta.tldrIdentity,
-          builtInMcpOverrides: sessionMcpOverrides(meta),
-        })
-      } catch {
-        return 'retryable-failure'
+      if (kind === 'extension-view') {
+        // Main correctly rejects spawning an extension. Treating that as a
+        // retryable provider failure puts this entry back forever, hiding all
+        // older undo history. Restoring its saved metadata is the whole wake.
+        newSessionId = crypto.randomUUID() as SessionId
+      } else {
+        try {
+          // Same respawn contract as restorePaneEntry: --resume for an agent with
+          // a durable transcript, `recoverTmuxName` for a terminal so the still
+          // alive tmux session is re-attached rather than replaced by an empty
+          // shell. The latter is the whole reason this entry type exists.
+          newSessionId = await sessionActions.spawn(meta.cwd, {
+            kind,
+            ...(meta.providerRuntime ? { providerRuntime: meta.providerRuntime } : {}),
+            resumeSessionId: isAgentSessionKind(kind)
+              ? resumableProviderSessionId(meta)
+              : undefined,
+            recoverTmuxName: kind === 'terminal' ? meta.tmuxName : undefined,
+            tldrIdentity: meta.tldrIdentity,
+            builtInMcpOverrides: sessionMcpOverrides(meta),
+          })
+        } catch {
+          return 'retryable-failure'
+        }
       }
 
       // Set inside the updater and read after. Sound because setState is the
       // zustand store setter, which applies updaters synchronously — NOT a
       // React useState setter, whose updater would still be pending here.
-      // Deliberately not a `refs.stateRef` read: that ref only refreshes on a
-      // React render, so it can lag an awaited continuation and would report a
-      // successful restore as a failure, killing the session we just revived.
+      //
+      // History worth keeping: this was deliberately not a `refs.stateRef`
+      // read because that ref used to be a render-body mirror that lagged an
+      // awaited continuation, so it reported a successful restore as a failure
+      // and killed the session just revived. #886 subscribed stateRef to the
+      // store synchronously, so it no longer lags; the updater-local flag stays
+      // because it is correct by construction however the ref is wired (the
+      // test harnesses drive refs by hand).
       let refiled = false
       setState(prev => {
         // Re-check inside the updater: the tab can be closed between the
@@ -425,6 +523,41 @@ export function useUndoCloseAction(
         const tabIndex = prev.tabs.findIndex(tab => tab.id === entry.record.projectTabId)
         if (tabIndex < 0) return prev
         refiled = true
+        const tab = prev.tabs[tabIndex]
+        const promoted = entry.replacedRoot
+        const restoreRoot = promoted && tab.root.type === 'leaf' &&
+          tab.root.sessionId === promoted.sessionId && prev.sessions[promoted.sessionId]
+        // Undo changes the root role back only if nobody has rearranged it.
+        // The survivor stays the same live backend and regains its old
+        // Dispatch record. A later split wins; then restore just the row.
+        const detachedSessions = { ...prev.detachedSessions }
+        if (restoreRoot) {
+          detachedSessions[promoted.sessionId] = {
+            // Verbatim for `detachedAt`: it alone orders rows inside a project
+            // group, so the survivor returns to its old position rather than
+            // the bottom of the list.
+            ...promoted,
+            // projectTabTitle/Index are display copies recomputed on render.
+            // Refresh them exactly like the branch below: the tab may have been
+            // renamed or moved while this entry waited on the stack, and a
+            // record read before the next render must not carry close-time
+            // values (#886 review m10).
+            projectTabTitle: tab.title,
+            projectTabIndex: tabIndex,
+          }
+        } else {
+          detachedSessions[newSessionId] = {
+            // The spawn minted a new local id; everything else about the
+            // record — project affinity and, critically, `detachedAt` — is
+            // restored verbatim so the row returns to its old position in the
+            // Dispatch list rather than jumping to the bottom.
+            ...entry.record,
+            sessionId: newSessionId,
+            // Display copies, refreshed for the reason given above.
+            projectTabTitle: tab.title,
+            projectTabIndex: tabIndex,
+          }
+        }
         return {
           ...prev,
           // Every other path that files a detached row makes its tab active in
@@ -453,21 +586,10 @@ export function useUndoCloseAction(
             ...prev.sessions,
             [newSessionId]: carryDurableMeta(prev.sessions[newSessionId], meta),
           },
-          detachedSessions: {
-            ...prev.detachedSessions,
-            [newSessionId]: {
-              ...entry.record,
-              // The spawn minted a new local id; everything else about the
-              // record — project affinity and, critically, `detachedAt` —
-              // is restored verbatim so the row returns to its old position
-              // in the Dispatch list rather than jumping to the bottom.
-              sessionId: newSessionId,
-              // projectTabIndex is a display ordinal recomputed on render;
-              // refresh it so a record read before the next render is not
-              // stale if tabs moved while the entry sat on the stack.
-              projectTabIndex: tabIndex,
-            },
-          },
+          detachedSessions,
+          tabs: restoreRoot ? prev.tabs.map(current => current.id === tab.id
+            ? { ...current, root: { type: 'leaf' as const, sessionId: newSessionId }, focusedSessionId: newSessionId }
+            : current) : prev.tabs,
           // Focus the restored row when Dispatch is up. NOTE this is the
           // classic focus only: in Tiled Dispatch `dispatchFocusedSessionId`
           // reads the focused LANE first, and the close already cleared that
@@ -484,17 +606,24 @@ export function useUndoCloseAction(
       })
 
       if (!refiled) {
+        // No backend or renderer metadata was created for an unfiled view.
+        if (kind === 'extension-view') return 'stale'
         // Mirror restorePaneEntry's bail: the spawn already registered a live
         // backend, so a placement that did not happen must not leave it
         // running with no row pointing at it.
         //
         // Kill with the kind/cwd resolved above rather than leaving it to
         // killSession's ownership proof, which re-reads them from
-        // `refs.stateRef`. That ref is a RENDER-BODY mirror, so immediately
-        // after an awaited spawn it does not yet contain the new session and
-        // the proof fails — meaning the kill would silently no-op and strand
-        // exactly the backend this bail exists to reclaim. killSession still
-        // runs for the renderer-side cleanup.
+        // `refs.stateRef`.
+        //
+        // History: that ref used to be a render-body mirror, so immediately
+        // after an awaited spawn it did not contain the new session, the proof
+        // failed, and the kill silently no-opped — stranding exactly the
+        // backend this bail exists to reclaim. #886 made stateRef a synchronous
+        // store subscription, so the proof would now succeed; the explicit
+        // owner stays as defense in depth, because this bail must reclaim the
+        // process however the ref happens to be wired. killSession still runs
+        // for the renderer-side cleanup.
         await window.api
           .killOwnedSession({ sessionId: newSessionId, kind, cwd: meta.cwd })
           .catch(() => undefined)
@@ -506,9 +635,69 @@ export function useUndoCloseAction(
         await sessionActions.killSession(newSessionId).catch(() => undefined)
         return 'stale'
       }
+      // The closed session is back under a new id. An older entry may anchor
+      // on it: the three-agent case is "close A (B promoted), close B (C
+      // promoted), undo, undo" — B's restore must tell A's entry that its
+      // promoted survivor is now B′, or A comes back as a trailing row instead
+      // of the original root (#886 review finding 4).
+      publish({
+        sessions: new Map([[entry.record.sessionId, newSessionId]]),
+      })
       return 'restored'
     },
-    [refs.stateRef, sessionActions, setState],
+    [refs.stateRef, refs.undoStackRef, sessionActions, setState],
+  )
+
+  const restoreSingleEntry = useCallback(
+    (entry: SingleClosedEntry, publish: PublishLineage): Promise<RestoreResult> =>
+      entry.type === 'pane'
+        ? restorePaneEntry(entry, publish)
+        : entry.type === 'detached'
+          ? restoreDetachedEntry(entry, publish)
+          : restoreTabEntry(entry, publish),
+    [restoreDetachedEntry, restorePaneEntry, restoreTabEntry],
+  )
+
+  // Replay one close OPERATION's units last-first (see ClosedGroup).
+  //
+  // WHY last-first with lineage threaded through the members not yet replayed:
+  // the last commit is the outermost change — the parent, the tab removal — and
+  // older units anchor on what it restores: a child's linkedParentId, a pane's
+  // siblingLeafId, a row's projectTabId. Every restore mints new ids and
+  // publishes them, so each older member is re-anchored before it runs, and the
+  // rest of the stack is re-anchored as for any other restore.
+  //
+  // Failure policy mirrors the single-entry loop, per member. A stale member is
+  // skipped: the rest of the operation may still be restorable. A retryable
+  // failure stops the replay: if nothing had come back yet the whole group is
+  // reported retryable and undoClose pushes it back untouched; if some members
+  // already came back, the members left (already re-anchored) go back on the
+  // stack as a smaller group so the next ⌘⇧T continues where this one stopped
+  // instead of respawning the ones that are already live.
+  const restoreGroupEntry = useCallback(
+    async (entry: ClosedGroup): Promise<RestoreResult> => {
+      let remaining: SingleClosedEntry[] = [...entry.entries]
+      let restoredAny = false
+      while (remaining.length > 0) {
+        const member = remaining[remaining.length - 1]
+        remaining = remaining.slice(0, -1)
+        const result = await restoreSingleEntry(member, lineage => {
+          remaining = remaining.map(older => remapSingleEntryLineage(older, lineage))
+          refs.undoStackRef.current.remapLineage(lineage)
+        })
+        if (result === 'restored') {
+          restoredAny = true
+        } else if (result === 'retryable-failure') {
+          if (!restoredAny) return 'retryable-failure'
+          const rest = [...remaining, member]
+          const leftover: ClosedEntry = rest.length === 1 ? rest[0] : { ...entry, entries: rest }
+          refs.undoStackRef.current.push(leftover)
+          return 'restored'
+        }
+      }
+      return restoredAny ? 'restored' : 'stale'
+    },
+    [refs.undoStackRef, restoreSingleEntry],
   )
 
   const undoClose = useCallback(async () => {
@@ -532,11 +721,9 @@ export function useUndoCloseAction(
         }
         return
       }
-      const result = entry.type === 'pane'
-        ? await restorePaneEntry(entry)
-        : entry.type === 'detached'
-          ? await restoreDetachedEntry(entry)
-          : await restoreTabEntry(entry)
+      const result = entry.type === 'group'
+        ? await restoreGroupEntry(entry)
+        : await restoreSingleEntry(entry, lineage => refs.undoStackRef.current.remapLineage(lineage))
       if (result === 'restored') return
       if (result === 'retryable-failure') {
         refs.undoStackRef.current.push(entry)
@@ -547,7 +734,7 @@ export function useUndoCloseAction(
       }
       staleEntryConsumed = true
     }
-  }, [bumpUndoCloseVersion, refs.undoStackRef, restoreDetachedEntry, restorePaneEntry, restoreTabEntry])
+  }, [bumpUndoCloseVersion, refs.undoStackRef, restoreGroupEntry, restoreSingleEntry])
 
   // Peek at the undo stack length — used by the command palette to
   // show/hide the "Undo Close" command.

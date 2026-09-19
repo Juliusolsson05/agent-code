@@ -16,6 +16,8 @@ import {
 } from '@renderer/lib/copyAssistant'
 import { ratiosEqual, sanitizeTileTabsState } from '@renderer/workspace/layout/helpers'
 
+import { isAgentSessionKind, isProcessSessionKind } from '@shared/types/providerKind'
+
 import type {
   WorkspaceSetReaderMode,
   WorkspaceSetSpotlight,
@@ -114,7 +116,7 @@ function validFocusSessionIdsForMode(
     : resolveTabSessions(state, tabId)
 
   return options.agentOnly
-    ? sessionIds.filter(sessionId => state.sessions[sessionId]?.kind !== 'terminal')
+    ? sessionIds.filter(sessionId => isAgentSessionKind(state.sessions[sessionId]?.kind))
     : sessionIds
 }
 
@@ -172,7 +174,8 @@ export function usePinnedSessionIdsSanity(
     if (pinnedSessionIds.length === 0) return
     const valid = pinnedSessionIds.filter(id => {
       const meta = sessions[id]
-      return meta !== undefined
+      // Pins can own shells and agents, but never a processless extension view.
+      return meta !== undefined && isProcessSessionKind(meta.kind)
     })
     if (valid.length === pinnedSessionIds.length) return
     setState(prev => {
@@ -182,7 +185,7 @@ export function usePinnedSessionIdsSanity(
       // in this file.
       const next = prev.pinnedSessionIds.filter(id => {
         const meta = prev.sessions[id]
-        return meta !== undefined
+        return meta !== undefined && isProcessSessionKind(meta.kind)
       })
       if (next.length === prev.pinnedSessionIds.length) return prev
       return { ...prev, pinnedSessionIds: next }

@@ -53,7 +53,13 @@ import { registerWorkflowIpc } from '@main/ipc/workflows.js'
 import { registerAgentCodeConventionsIpc } from '@main/ipc/agentCodeConventions.js'
 import { registerAgentCodeCustomSkillsIpc } from '@main/ipc/agentCodeCustomSkills.js'
 import { registerAgentCodeInstalledSkillsIpc } from '@main/ipc/agentCodeInstalledSkills.js'
+import { registerAgentSkillsIpc } from '@main/ipc/agentSkills.js'
 import type { WorkflowBridge } from '@main/workflows/WorkflowBridge.js'
+import { registerExtensionsIpc } from '@main/ipc/extensions.js'
+import { registerSystemSuspensionIpc } from '@main/ipc/systemSuspension.js'
+import { registerAgentActivityIpc } from '@main/ipc/agentActivity.js'
+import type { AgentActivityRecorder } from '@main/agentActivity/AgentActivityRecorder.js'
+import type { SystemSuspensionTracker } from '@main/systemSuspension/SystemSuspensionTracker.js'
 
 // IPC registration aggregator.
 //
@@ -87,6 +93,8 @@ export type IpcDeps = {
   agentCodeConventionsService: AgentCodeConventionsService
   workspaceFileStore: WorkspaceFileStore
   conversationService: ConversationService
+  systemSuspension: SystemSuspensionTracker
+  agentActivityRecorder: AgentActivityRecorder
 }
 
 export function registerAllIpc(deps: IpcDeps): void {
@@ -133,7 +141,14 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerUsageIpc()
   registerCliUpdatesIpc(deps.cliUpdateOrchestrator)
   registerWorkflowIpc(deps.workflowBridge)
+  // Takes no deps on purpose: extension storage is a pure filesystem namespace
+  // under STATE_DIR with no app service behind it. The moment this needs a dep,
+  // it has stopped being storage and the Stage-2 sender-identity question applies.
+  registerExtensionsIpc()
   registerAgentCodeConventionsIpc(deps.agentCodeConventionsService)
   registerAgentCodeCustomSkillsIpc(deps.agentCodeConventionsService)
   registerAgentCodeInstalledSkillsIpc(deps.agentCodeConventionsService)
+  registerAgentSkillsIpc(deps.agentCodeConventionsService)
+  registerSystemSuspensionIpc(deps.systemSuspension)
+  registerAgentActivityIpc(deps.agentActivityRecorder)
 }

@@ -2,7 +2,7 @@
 // that projection model metadata must match capacity planning metadata.
 import { readFile } from 'fs/promises'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { join , dirname } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 
 import { opencodeTranscriptFile } from 'opencode-terminal-headless'
@@ -27,6 +27,7 @@ import {
   opencodeNativeResumeProjector,
   resolveCodexTargetProfileFromSources,
   resolveUserPrompt,
+  projectGrokNativeResume,
 } from 'agent-transcript-parser'
 import type {
   ConversationContent,
@@ -54,6 +55,12 @@ import {
   writeProjectedClaudeSessionFile,
   writeProjectedCodexRolloutFile,
 } from '@main/providerSwitch/shared.js'
+import {
+  loadGrokSnapshot,
+  loadGrokSnapshotAt,
+  writeProjectedGrokSession,
+} from './grokTranscript.js'
+import { listAllGrokSessions, parseGrokSummary, resolveGrokTranscriptPath } from 'grok-code-headless'
 
 export interface TranscriptProjectionContext {
   cwd: string
@@ -79,6 +86,14 @@ interface TranscriptSnapshot {
   prompts: PromptReference[]
 }
 
+export interface TranscriptPublication {
+  values: readonly Record<string, unknown>[]
+  // Grok owns its identity/model/counters in summary.json, not a JSONL row.
+  // Pass the projection object intact through every transformation so a host
+  // adapter can publish native sidecars without manufacturing history records.
+  summary?: Record<string, unknown>
+}
+
 export interface HostTranscriptAdapter {
   provider: string
   read(cwd: string, providerSessionId: string): Promise<ConversationDocument>
@@ -101,8 +116,8 @@ export interface HostTranscriptAdapter {
     conversation: ConversationDocument,
     context: TranscriptProjectionContext,
   ): Promise<NativeResumeProjectionResult>
-  write(cwd: string, values: readonly Record<string, unknown>[]): Promise<string>
-  sessionId(values: readonly Record<string, unknown>[]): string
+  write(cwd: string, publication: TranscriptPublication): Promise<string>
+  sessionId(publication: TranscriptPublication): string
 }
 
 const claudeAdapter: HostTranscriptAdapter = {
@@ -130,8 +145,8 @@ const claudeAdapter: HostTranscriptAdapter = {
       model: targetProfile.model,
     })
   },
-  write: writeProjectedClaudeSessionFile,
-  sessionId: projectedClaudeSessionId,
+  write: (cwd, { values }) => writeProjectedClaudeSessionFile(cwd, values),
+  sessionId: ({ values }) => projectedClaudeSessionId(values),
 }
 
 const codexAdapter: HostTranscriptAdapter = {
@@ -162,13 +177,31 @@ const codexAdapter: HostTranscriptAdapter = {
       model: targetProfile.model,
     })
   },
-  async write(_cwd, values) {
+  async write(_cwd, { values }) {
     return writeProjectedCodexRolloutFile(values)
   },
-  sessionId(values) {
+  sessionId({ values }) {
     return projectedCodexSessionMeta(values).id
   },
 }
+
+// WHY transcript transforms get their own, much larger OpenCode deadline:
+// runOpencode's 30 s default came from e9ac8bdf (Refs #864), where it bounds a
+// hung *empty-session* import that would otherwise hold OpenCode Terminal
+// startup. A transform exports or imports a whole conversation instead. The
+// session that exposed #845 was a 14.6 MB / 804-message export, and its export
+// duration was never measured (the live probe ran before any deadline existed).
+// Applying the startup bound here could turn the fixed truncation into a
+// timeout on exactly the large sessions #845 made switchable, duplicable and
+// rewindable. Five minutes still ends a genuinely wedged CLI, and runOpencode
+// SIGKILLs its whole process group when it does.
+//
+// These transform calls carry no AbortSignal (nothing between the IPC handlers
+// and this adapter threads one), so the deadline is their only bound; stop()
+// cancellation exists for the terminal startup import alone. The target-profile
+// probes (`debug config`, `models`) keep the 30 s default because their cost
+// does not grow with conversation size.
+const OPENCODE_TRANSFORM_TIMEOUT_MS = 5 * 60_000
 
 const opencodeAdapter: HostTranscriptAdapter = {
   provider: 'opencode',
@@ -192,15 +225,15 @@ const opencodeAdapter: HostTranscriptAdapter = {
       model: targetProfile.model,
     })
   },
-  async write(cwd, values) {
+  async write(cwd, { values }) {
     if (values.length !== 1 || !isRecord(values[0])) {
       throw new Error('Projected OpenCode resume must contain exactly one export object.')
     }
     const binary = getToolPath('opencode', 'opencode')
-    const sessionId = await importOpencodeSession({ binary, cwd }, values[0])
+    const sessionId = await importOpencodeSession({ binary, cwd, timeoutMs: OPENCODE_TRANSFORM_TIMEOUT_MS }, values[0])
     return opencodeTranscriptFile(sessionId)
   },
-  sessionId(values) {
+  sessionId({ values }) {
     if (values.length !== 1 || !isRecord(values[0])) {
       throw new Error('Projected OpenCode resume must contain exactly one export object.')
     }
@@ -274,6 +307,83 @@ async function resolveOpencodeTargetProfile(cwd = process.cwd()): Promise<Transc
   }
 }
 
+// Grok's target profile: the SOURCE session's model when the source is grok
+// (projectNativeResume reads the summary directly), otherwise the newest
+// native session's modelId, otherwise the corpus-recorded grok-4.6 default
+// (every recorded summary ran it). No env override — none was ever recorded.
+// The conservative 128k budget mirrors OpenCode's rule: an unknown window must
+// fail BEFORE the source pane is retired, not after.
+async function resolveGrokTargetProfile(): Promise<TranscriptTargetProfile> {
+  const newest = listAllGrokSessions({ limit: 1 })[0]
+  return {
+    modelProvider: 'xai',
+    model: newest?.modelId ?? 'grok-4.6',
+    budgetCharacters: budgetCharactersForContextTokens(128_000),
+  }
+}
+
+/** The model a specific grok session ran with (its summary's
+ *  current_model_id), when the summary is readable; null otherwise. */
+async function grokSessionModel(cwd: string, sessionId: string): Promise<string | null> {
+  try {
+    const summary = parseGrokSummary(await readFile(join(dirname(resolveGrokTranscriptPath(cwd, sessionId)), 'summary.json'), 'utf8'))
+    return typeof summary.current_model_id === 'string' && summary.current_model_id.length > 0 ? summary.current_model_id : null
+  } catch {
+    return null
+  }
+}
+
+const grokAdapter: HostTranscriptAdapter = {
+  provider: 'grok',
+  async read(cwd, providerSessionId) {
+    return (await loadGrokSnapshot(cwd, providerSessionId)).conversation
+  },
+  async locate(cwd, providerSessionId) {
+    return resolveGrokTranscriptPath(cwd, providerSessionId)
+  },
+  async readAt(path) {
+    return (await loadGrokSnapshotAt(path)).conversation
+  },
+  async listPrompts(cwd, providerSessionId) {
+    return promptsFromSnapshot(
+      await loadGrokSnapshot(cwd, providerSessionId),
+      plainDraft,
+    )
+  },
+  // Grok genuine-user rows carry text (and optional images) only; the plain
+  // draft shape is exactly their content.
+  draft: plainDraft,
+  targetProfile: resolveGrokTargetProfile,
+  async projectNativeResume(conversation, context) {
+    // WHY the source model wins: rewind and duplicate pass no target profile,
+    // and taking the NEWEST grok session's model could import a conversation
+    // under some OTHER session's model. For a grok source the document names
+    // its session, and that session's summary carries the model it ran with.
+    const sourceModel = conversation.sourceProvider === 'grok' && conversation.sourceSessionIds[0]
+      ? await grokSessionModel(context.cwd, conversation.sourceSessionIds[0])
+      : null
+    const targetProfile = context.targetProfile ?? {
+      modelProvider: 'xai',
+      model: sourceModel ?? (listAllGrokSessions({ limit: 1 })[0]?.modelId ?? 'grok-4.6'),
+      budgetCharacters: budgetCharactersForContextTokens(128_000),
+    }
+    // The parser's projector owns the whole native projection (rows plus the
+    // summary.json sidecar with its counters); the host adapter publishes it
+    // intact — grok keeps its identity in summary.json, not a JSONL row.
+    return projectGrokNativeResume(conversation, {
+      cwd: context.cwd,
+      targetSessionId: context.targetSessionId,
+      now: context.now,
+      model: targetProfile.model,
+    })
+  },
+  write: (cwd, publication) => writeProjectedGrokSession(cwd, publication),
+  sessionId({ summary }) {
+    // writeProjectedGrokSession enforces the same identity on the way in.
+    return parseGrokSummary(JSON.stringify(summary ?? null)).info.id
+  },
+}
+
 // WHY a registry rather than source/target pair branches: each provider owns
 // one decoder, one native projector, and its storage policy. Switching composes
 // any installed source and target adapters through ConversationDocument, so a
@@ -283,6 +393,7 @@ const transcriptAdapters = new Map<string, HostTranscriptAdapter>([
   [claudeAdapter.provider, claudeAdapter],
   [codexAdapter.provider, codexAdapter],
   [opencodeAdapter.provider, opencodeAdapter],
+  [grokAdapter.provider, grokAdapter],
 ])
 
 export function getHostTranscriptAdapter(provider: AgentProviderKind): HostTranscriptAdapter {
@@ -346,7 +457,7 @@ async function loadOpencodeSnapshot(
   providerSessionId: string,
 ): Promise<TranscriptSnapshot> {
   const binary = getToolPath('opencode', 'opencode')
-  const exported = await exportOpencodeSession({ binary, cwd }, providerSessionId)
+  const exported = await exportOpencodeSession({ binary, cwd, timeoutMs: OPENCODE_TRANSFORM_TIMEOUT_MS }, providerSessionId)
   assertStableOpencodeExport(exported, providerSessionId)
   const conversation = decodeOpencodeConversation(exported)
   // OpenCode exports one complete native message per array position. That
@@ -457,7 +568,9 @@ function promptsFromSnapshot(
 }
 
 function ipcPromptAddress(address: PromptAddress): RewindPromptAddress {
-  if (address.provider !== 'claude' && address.provider !== 'codex' && address.provider !== 'opencode') {
+  // Grok joins the rewind boundary in Stage 6: its addresses are the plain
+  // (provider, line, sessionId) shape the boundary already serializes.
+  if (address.provider !== 'claude' && address.provider !== 'codex' && address.provider !== 'opencode' && address.provider !== 'grok') {
     throw new Error(`Provider "${address.provider}" cannot cross the Agent Code rewind IPC boundary.`)
   }
   return {

@@ -251,6 +251,39 @@ export function dispatchFocusedSessionId(
 }
 
 /**
+ * The session Grid Dispatch entry should keep visible in lane 0 (#977).
+ *
+ * WHY this exists: `enterTiledDispatch` used to build every lane empty, so the
+ * agent the user was commanding in classic Dispatch (or the pane they were
+ * focused on in the grid) vanished the moment the grid layout appeared. The
+ * fix is continuity, and continuity has a source: this resolver reads focus
+ * through `dispatchFocusedSessionId` — the same single tiled-aware reader
+ * every other "what am I commanding?" site uses — so re-entering over an
+ * existing grid carries the focused LANE's agent, classic Dispatch carries its
+ * focused session, and the normal grid falls back to the active tab's focused
+ * pane. Precedence is deliberate: a Dispatch focus is the later, more
+ * deliberate signal than the grid pane the user left behind when they entered
+ * Dispatch.
+ *
+ * This is NOT #681's banned auto-fill. #681 removed guessing occupants from
+ * the unclaimed-agent index; seeding the ONE session the user already has in
+ * focus predicts nothing. Every other lane still arrives empty.
+ *
+ * Guards mirror the control plane's `lane-select` admission: a buried or
+ * unrecorded id returns null rather than a phantom occupant, because a lane
+ * that renders empty-but-set is reversible (#681's no-healer rule) while a
+ * lane pointing at nothing the user can see is just a lie.
+ */
+export function dispatchEntrySeedSessionId(state: WorkspaceState): SessionId | null {
+  const gridPane = state.tabs.find(tab => tab.id === state.activeTabId)?.focusedSessionId
+  const candidate = dispatchFocusedSessionId(state.dispatchMode) ?? gridPane ?? null
+  if (!candidate) return null
+  if (!state.sessions[candidate]) return null
+  if (state.buried.some(item => item.sessionId === candidate)) return null
+  return candidate
+}
+
+/**
  * Step one row in `delta` direction, wrapping.
  *
  * WHY an empty lane resolves to row 0 in BOTH directions (#673): an empty lane

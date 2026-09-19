@@ -41,7 +41,9 @@ import type { ReplayResult, ReplayTick } from '@renderer/rendering/replay/record
  *  empty↔work↔content toggle is expected, never a "vanish" or a dual-render. */
 function isLifecycleRow(row: RenderRow): boolean {
   const kind = row.candidate.contentKind
-  return kind === 'work' || kind === 'empty'
+  // The sleep-interruption marker (#963) is the work slot's idle-side twin: it
+  // toggles with the same phase edge, so it is lifecycle, not content.
+  return kind === 'work' || kind === 'empty' || kind === 'sleep-interruption'
 }
 
 export type InvariantKind =
