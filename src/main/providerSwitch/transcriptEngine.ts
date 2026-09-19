@@ -2,7 +2,7 @@
 // that projection model metadata must match capacity planning metadata.
 import { readFile } from 'fs/promises'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { join , dirname } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 
 import { opencodeTranscriptFile } from 'opencode-terminal-headless'
@@ -324,8 +324,17 @@ async function resolveGrokTargetProfile(): Promise<TranscriptTargetProfile> {
   }
 }
 
-// (The adapter-registry comment above the map stays with its map; this Grok
-// block intentionally sits between the sibling adapters and the registry.)
+/** The model a specific grok session ran with (its summary's
+ *  current_model_id), when the summary is readable; null otherwise. */
+async function grokSessionModel(cwd: string, sessionId: string): Promise<string | null> {
+  try {
+    const summary = parseGrokSummary(await readFile(join(dirname(resolveGrokTranscriptPath(cwd, sessionId)), 'summary.json'), 'utf8'))
+    return typeof summary.current_model_id === 'string' && summary.current_model_id.length > 0 ? summary.current_model_id : null
+  } catch {
+    return null
+  }
+}
+
 const grokAdapter: HostTranscriptAdapter = {
   provider: 'grok',
   async read(cwd, providerSessionId) {
@@ -348,7 +357,18 @@ const grokAdapter: HostTranscriptAdapter = {
   draft: plainDraft,
   targetProfile: resolveGrokTargetProfile,
   async projectNativeResume(conversation, context) {
-    const targetProfile = context.targetProfile ?? await resolveGrokTargetProfile()
+    // WHY the source model wins: rewind and duplicate pass no target profile,
+    // and taking the NEWEST grok session's model could import a conversation
+    // under some OTHER session's model. For a grok source the document names
+    // its session, and that session's summary carries the model it ran with.
+    const sourceModel = conversation.sourceProvider === 'grok' && conversation.sourceSessionIds[0]
+      ? await grokSessionModel(context.cwd, conversation.sourceSessionIds[0])
+      : null
+    const targetProfile = context.targetProfile ?? {
+      modelProvider: 'xai',
+      model: sourceModel ?? (listAllGrokSessions({ limit: 1 })[0]?.modelId ?? 'grok-4.6'),
+      budgetCharacters: budgetCharactersForContextTokens(128_000),
+    }
     // The parser's projector owns the whole native projection (rows plus the
     // summary.json sidecar with its counters); the host adapter publishes it
     // intact — grok keeps its identity in summary.json, not a JSONL row.

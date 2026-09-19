@@ -81,8 +81,8 @@ function rewriteScript(): ManagerEvent[] {
     // reset is stale against the window's generation; the caught-up is a
     // no-op observe for a window no longer awaiting one. Both still CROSS —
     // transports order, they do not interpret.
-    ["history-boundary", boundary("reset", 1)],
-    ["history-boundary", boundary("caught-up", 1)],
+    ['history-boundary', boundary('reset', 1)],
+    ['history-boundary', boundary('caught-up', 1)],
   ]
 }
 
