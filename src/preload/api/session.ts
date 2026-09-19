@@ -32,6 +32,7 @@ import type {
   TranscriptPathRequest,
   TranscriptPathResult,
   Unsub,
+  SessionHistoryBoundaryEvent,
 } from '@preload/api/types.js'
 
 type SessionScreenWireEvent = Omit<SessionScreenEvent, 'recent' | 'recentMarkdown'> & AgentScreenSnapshotWire
@@ -263,6 +264,13 @@ export const sessionApi = {
    *  rather than subscribing per-session. */
   onSessionSemanticEvent: (cb: (e: SessionSemanticEvent) => void): Unsub =>
     subscribe('session:semantic-event', cb),
+
+  /** Subscribe to durable-history generation boundaries (grok). Ordering:
+   *  superseded-generation entries are flushed before the boundary, and the
+   *  rewritten snapshot's rows arrive after it. Pure semantics live in
+   *  renderer/session-runtime/historyBoundary.ts. */
+  onSessionHistoryBoundary: (cb: (e: SessionHistoryBoundaryEvent) => void): Unsub =>
+    subscribe('session:history-boundary', cb),
 
   onSessionExit: (cb: (e: SessionExitEvent) => void): Unsub =>
     subscribe('session:exit', cb),

@@ -17,7 +17,7 @@ import {
 
 describe('provider kind source of truth', () => {
   it('lists exactly the wired agent providers', () => {
-    expect([...AGENT_PROVIDER_KINDS]).toEqual(['claude', 'codex', 'opencode'])
+    expect([...AGENT_PROVIDER_KINDS]).toEqual(['claude', 'codex', 'opencode', 'grok'])
   })
 
   it('SESSION_KINDS is the agent kinds plus the non-agent pane kinds, derived', () => {

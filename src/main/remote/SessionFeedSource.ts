@@ -29,6 +29,7 @@ export type FeedChannel =
   | 'screen'
   | 'jsonl-entries'
   | 'jsonl-error'
+  | 'history-boundary'
   | 'semantic-event'
   | 'conditions'
   | 'process-state'
@@ -148,6 +149,12 @@ export class SessionFeedSource {
         // structured clone/JSON, the message string does.
         message: String(payload.error?.message ?? payload.error),
       })
+    })
+    sub('history-boundary', (payload: { sessionId: string }) => {
+      // Mirror the forwarder's ordering: superseded-generation entries flush
+      // first; the boundary is transient and never cached for late joiners.
+      this.flushJsonl(payload.sessionId)
+      this.emit('history-boundary', payload)
     })
     sub('semantic-event', (payload: { sessionId: string }) =>
       this.emit('semantic-event', payload),
