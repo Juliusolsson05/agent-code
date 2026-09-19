@@ -1,0 +1,355 @@
+{
+  "fixture": "opencode-structured-usage-limit-terminal",
+  "provider": "opencode",
+  "providerRuntime": "structured (packages/opencode-headless, SSE dispatcher)",
+  "outcome": "TERMINAL: OpenCode retried 5x internally (session.status retry), then session.error + idle; no further activity; orchestration parent kept seeing prompt_sent/waiting",
+  "provenance": {
+    "feedDebug": "~/.config/agent-code/feed-debug/27402108-4c7e-4b88-b94b-a8b5b5f3199b.jsonl",
+    "opencodeDb": "~/.local/share/opencode/opencode.db (message msg_0b8035dbc…)",
+    "parentTranscript": "~/.claude/projects/<agent-code>/83a02301-2e9a-42a6-98cb-38cffc008e25.jsonl (orchestration tool results)",
+    "recordedAt": "2026-09-19T04:53:38.907Z",
+    "opencodeBinary": "1.18.31"
+  },
+  "feedDebug": {
+    "anchorEpochMs": 1789793618907,
+    "anchorIso": "2026-09-19T04:53:38.907Z",
+    "events": [
+      {
+        "tMs": 0,
+        "layer": "STATE",
+        "kind": "input_readiness",
+        "summary": "input blocked · rev 46",
+        "data": {
+          "revision": 46,
+          "reason": "starting"
+        }
+      },
+      {
+        "tMs": 146,
+        "layer": "STATE",
+        "kind": "input_readiness",
+        "summary": "input blocked · rev 47",
+        "data": {
+          "revision": 47,
+          "reason": "provider-not-ready"
+        }
+      },
+      {
+        "tMs": 4591,
+        "layer": "JSONL",
+        "kind": "jsonl_entries",
+        "summary": "entries +1",
+        "data": {
+          "appended": [
+            "user: <orchestration-handoff> You are now an orc…"
+          ],
+          "entryCountAfter": 1
+        }
+      },
+      {
+        "tMs": 4643,
+        "layer": "STATE",
+        "kind": "process_state",
+        "summary": "process active · busy",
+        "data": {
+          "active": true,
+          "status": "busy",
+          "clearedQueuedMessages": 0
+        }
+      },
+      {
+        "tMs": 4646,
+        "layer": "SEM",
+        "kind": "turn_started",
+        "summary": "turn_started src=opencode-sse turn=msg_0b8035",
+        "data": {
+          "eventType": "turn_started"
+        }
+      },
+      {
+        "tMs": 4743,
+        "layer": "STATE",
+        "kind": "bootstrap_complete",
+        "summary": "bootstrap replay quiet window elapsed"
+      },
+      {
+        "tMs": 4758,
+        "layer": "SEM",
+        "kind": "usage_updated",
+        "summary": "usage_updated src=opencode-sse turn=msg_0b8035",
+        "data": {
+          "eventType": "usage_updated"
+        }
+      },
+      {
+        "tMs": 13519,
+        "layer": "STATE",
+        "kind": "process_state",
+        "summary": "process active · busy",
+        "data": {
+          "active": true,
+          "status": "busy",
+          "clearedQueuedMessages": 0
+        }
+      },
+      {
+        "tMs": 14006,
+        "layer": "STATE",
+        "kind": "process_state",
+        "summary": "process active · retry",
+        "data": {
+          "active": true,
+          "status": "retry",
+          "clearedQueuedMessages": 0
+        }
+      },
+      {
+        "tMs": 16253,
+        "layer": "STATE",
+        "kind": "process_state",
+        "summary": "process active · busy",
+        "data": {
+          "active": true,
+          "status": "busy",
+          "clearedQueuedMessages": 0
+        }
+      },
+      {
+        "tMs": 16688,
+        "layer": "STATE",
+        "kind": "process_state",
+        "summary": "process active · retry",
+        "data": {
+          "active": true,
+          "status": "retry",
+          "clearedQueuedMessages": 0
+        }
+      },
+      {
+        "tMs": 21395,
+        "layer": "STATE",
+        "kind": "process_state",
+        "summary": "process active · busy",
+        "data": {
+          "active": true,
+          "status": "busy",
+          "clearedQueuedMessages": 0
+        }
+      },
+      {
+        "tMs": 21864,
+        "layer": "STATE",
+        "kind": "process_state",
+        "summary": "process active · retry",
+        "data": {
+          "active": true,
+          "status": "retry",
+          "clearedQueuedMessages": 0
+        }
+      },
+      {
+        "tMs": 31733,
+        "layer": "STATE",
+        "kind": "process_state",
+        "summary": "process active · busy",
+        "data": {
+          "active": true,
+          "status": "busy",
+          "clearedQueuedMessages": 0
+        }
+      },
+      {
+        "tMs": 32189,
+        "layer": "STATE",
+        "kind": "process_state",
+        "summary": "process active · retry",
+        "data": {
+          "active": true,
+          "status": "retry",
+          "clearedQueuedMessages": 0
+        }
+      },
+      {
+        "tMs": 51706,
+        "layer": "STATE",
+        "kind": "process_state",
+        "summary": "process active · busy",
+        "data": {
+          "active": true,
+          "status": "busy",
+          "clearedQueuedMessages": 0
+        }
+      },
+      {
+        "tMs": 52106,
+        "layer": "STATE",
+        "kind": "process_state",
+        "summary": "process active · retry",
+        "data": {
+          "active": true,
+          "status": "retry",
+          "clearedQueuedMessages": 0
+        }
+      },
+      {
+        "tMs": 84684,
+        "layer": "STATE",
+        "kind": "process_state",
+        "summary": "process active · busy",
+        "data": {
+          "active": true,
+          "status": "busy",
+          "clearedQueuedMessages": 0
+        }
+      },
+      {
+        "tMs": 85102,
+        "layer": "SEM",
+        "kind": "api_error",
+        "summary": "api_error src=opencode-sse turn=msg_0b8035",
+        "data": {
+          "eventType": "api_error"
+        }
+      },
+      {
+        "tMs": 85106,
+        "layer": "STATE",
+        "kind": "process_state",
+        "summary": "process idle",
+        "data": {
+          "active": false,
+          "status": "idle",
+          "clearedQueuedMessages": 0
+        }
+      },
+      {
+        "tMs": 85110,
+        "layer": "SEM",
+        "kind": "turn_completed",
+        "summary": "turn_completed src=opencode-sse turn=msg_0b8035",
+        "data": {
+          "eventType": "turn_completed"
+        }
+      },
+      {
+        "tMs": 85114,
+        "layer": "STATE",
+        "kind": "process_state",
+        "summary": "process idle",
+        "data": {
+          "active": false,
+          "status": "idle",
+          "clearedQueuedMessages": 0
+        },
+        "repeats": 3,
+        "lastTMs": 85330
+      }
+    ]
+  },
+  "opencodeDbAssistantRow": [
+    {
+      "table": "message",
+      "id": "msg_0b8035dbc001wtTr1GpM2kuwkB",
+      "session_id": "ses_f47fca718ffePibDCd10YM7Jc8",
+      "time_created": 1789793623485,
+      "time_updated": 1789793704223,
+      "data": {
+        "role": "assistant",
+        "parentID": "msg_0b8035d9c001i9fDGp7EW1R2Oo",
+        "providerID": "zai-coding-plan",
+        "modelID": "glm-5.3",
+        "time": {
+          "created": 1789793623485,
+          "completed": 1789793704217
+        },
+        "finish": null,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        },
+        "error": {
+          "name": "APIError",
+          "data": {
+            "message": "Usage limit reached for 5 hour. Your limit will reset at 2026-09-19 14:14:24",
+            "statusCode": 429,
+            "isRetryable": true,
+            "responseHeaders": {
+              "date": "Sat, 19 Sep 2026 04:55:03 GMT"
+            },
+            "responseBody": "{\"error\":{\"code\":\"1308\",\"message\":\"Usage limit reached for 5 hour. Your limit will reset at 2026-09-19 14:14:24\"}}",
+            "metadata": {
+              "url": "https://api.z.ai/api/coding/paas/v4/chat/completions"
+            },
+            "responseHeadersNote": "filtered to retry-relevant headers; trace ids / cookies removed"
+          }
+        }
+      }
+    }
+  ],
+  "derivedSemanticApiError": {
+    "note": "NOT recorded (feed-debug SEM rows carry only eventType unless AGENT_CODE_DEV_DEBUG raw capture is on). Derived from packages/opencode-headless/src/dispatcher/EventDispatcher.ts:289-296 applied to the session.error payload shape the 1.18.31 binary publishes ({sessionID, error: assistantMessage.error}, see SessionProcessor.halt). getString(payload,[\"message\",\"error.message\"]) finds nothing because the text lives at error.data.message.",
+    "event": {
+      "type": "api_error",
+      "turnId": "msg_0b8035d9c001…",
+      "message": "OpenCode session error",
+      "error": {
+        "sessionID": "<ses id>",
+        "error": {
+          "name": "APIError",
+          "data": {
+            "message": "Usage limit reached for 5 hour. Your limit will reset at 2026-09-19 14:14:24",
+            "statusCode": 429,
+            "isRetryable": true,
+            "responseHeaders": {
+              "date": "Sat, 19 Sep 2026 04:55:03 GMT"
+            },
+            "responseBody": "{\"error\":{\"code\":\"1308\",\"message\":\"Usage limit reached for 5 hour. Your limit will reset at 2026-09-19 14:14:24\"}}",
+            "metadata": {
+              "url": "https://api.z.ai/api/coding/paas/v4/chat/completions"
+            },
+            "responseHeadersNote": "filtered to retry-relevant headers; trace ids / cookies removed"
+          }
+        }
+      },
+      "source": "opencode-sse",
+      "ts": "<Date.now() at dispatch>"
+    },
+    "retainedSemanticErrorEntry": {
+      "kind": "api_error",
+      "message": "OpenCode session error",
+      "source": "opencode-sse",
+      "note": "retainProviderError keeps only string/number top-level fields; the nested error object (name, statusCode, isRetryable, data.message) is dropped"
+    }
+  },
+  "orchestrationObservedByParent": [
+    {
+      "at": "2026-09-19T04:53:42.330Z",
+      "tool": "orchestration_create_agent (with initial prompt)",
+      "agent": {
+        "lifecycleState": "prompt_sent",
+        "statusSummary": "waiting",
+        "promptSubmissionCount": 1
+      }
+    },
+    {
+      "at": "2026-09-19T04:56:34.874Z",
+      "tool": "orchestration_wait_agents {timeoutMs:100000}",
+      "done": false,
+      "note": "returned on timeout 22-90 s AFTER all six children had failed (their api_errors landed 04:55:04-04:56:12Z)",
+      "agent": {
+        "lifecycleState": "prompt_sent",
+        "statusSummary": "waiting",
+        "messageCount": 1,
+        "lastActivityAt": 1789793623452,
+        "lastPromptSubmittedAt": 1789793622312,
+        "errorSummary": "(absent)"
+      }
+    }
+  ],
+  "siblings": "Five more children of the same run failed identically: d5110ac0 (msg_0b8039), 1c4e3e0e (msg_0b803c), 8ea852b7 (msg_0b803f), c8dda0c8 (msg_0b8042), 8aa4fcc3 (msg_0b8045)."
+}
