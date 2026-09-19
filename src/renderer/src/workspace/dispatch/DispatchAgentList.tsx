@@ -265,21 +265,60 @@ export const DispatchAgentList = memo(function DispatchAgentList({
                   targetLaneIndex={targetLaneIndex}
                 />
               ) : (
-                <button
+                <ChildCollapseRow
                   key={`${item.kind}:${item.parentSessionId}`}
-                  type="button"
-                  onClick={() => onToggleExpandedParent?.(item.parentSessionId)}
-                  data-dispatch-row="true"
-                  className="flex w-full items-center gap-1 border-t border-border py-1 pl-7 text-left text-[10px] text-muted hover:text-fg hover:bg-surface-raised"
-                >
-                  {item.kind === 'more' ? `+ ${item.hidden} more` : '− Show fewer'}
-                </button>
+                  label={item.kind === 'more' ? `+ ${item.hidden} more` : '− Show fewer'}
+                  hiddenSessionIds={item.kind === 'more' ? item.hiddenSessionIds : EMPTY_SESSION_IDS}
+                  onToggle={() => onToggleExpandedParent?.(item.parentSessionId)}
+                />
               )
             ))}
           </div>
         </div>
       ))}
     </aside>
+  )
+})
+
+const EMPTY_SESSION_IDS: SessionId[] = []
+
+/**
+ * The "+N more" / "Show fewer" row under a capped orchestration parent.
+ *
+ * WHY it carries the "new" badge (#1013 review B): orchestration children
+ * always land in the pool, and the cap hides every child past the third. The
+ * badges of a 5-worker run were therefore 3 visible and 2 behind the collapse,
+ * and "where did my agent go?" had no answer for those two. The selector
+ * returns one boolean, so this row re-renders only when that answer changes.
+ */
+const ChildCollapseRow = memo(function ChildCollapseRow({
+  label,
+  hiddenSessionIds,
+  onToggle,
+}: {
+  label: string
+  hiddenSessionIds: SessionId[]
+  onToggle: () => void
+}) {
+  const hidesNew = useAppStore(state => hiddenSessionIds.some(id => state.workspaceRuntimes[id]?.pooledSpawnAt != null))
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      data-dispatch-row="true"
+      className="flex w-full items-center gap-1 border-t border-border py-1 pl-7 text-left text-[10px] text-muted hover:text-fg hover:bg-surface-raised"
+    >
+      {label}
+      {hidesNew && (
+        <span
+          data-dispatch-new-in-pool="true"
+          title="A new agent is among the hidden ones. Expand to see it"
+          className="ml-1 flex-shrink-0 rounded-chip border border-accent/70 bg-accent/10 px-1.5 py-[1px] text-[9px] font-semibold leading-none text-accent"
+        >
+          new
+        </span>
+      )}
+    </button>
   )
 })
 
@@ -485,7 +524,7 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
           {runtime.isNewInPool && (
             // The one-word answer to "my ⌘N did nothing" (#992): the spawn
             // landed in the pool without moving anything on screen. Retired
-            // by the placement itself (setTiledLaneSession), never by time —
+            // by the placement itself (pooledSpawnBadge.ts), never by time —
             // a badge that expires while still unplaced would train the user
             // to distrust it. Rendered BEFORE the unread badge because it is
             // the answer to an earlier question ("where is it") than "what
