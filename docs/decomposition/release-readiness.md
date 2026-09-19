@@ -513,6 +513,29 @@ claude 2.1.143 / codex 0.130.0 are stale versus the 2.1.278 / 0.155.1 in daily u
   (one per composer). Optional follow-up: a single app-level subscription.
 
 ### Progress log
+- 2026-09-19 08:00Z (entries below are newest first):
+  - **#1026 MERGED** (`1212d98e`, OpenCode permission subject; closes the app half of #878).
+  - **#1032 MERGED** (`7446aef3`): the first nightly (run 35428680412) failed in `nightly.test.ts` › "caps the commit list" (5 s timeout, macOS runner). The cause was 205 `git commit` spawns in setup, now one `git fast-import` (283 ms). The timeout is unchanged. Nightly re-dispatched as run 35430444567.
+  - **#1028** review (CHANGES REQUESTED) addressed in `2f151932`/`ac8d4376`:
+    - quiet-turn pause (60 s with no events and no pending tool → paused/interrupted);
+    - Resume closes a quiet turn;
+    - agent_id hooks are dropped at the host;
+    - StopFailure deliberately NOT registered: it shares `--settings` with the external-control exclusion and an older CLI rejects unknown hook keys;
+    - another Stop hook blocking is tracked in #1033.
+    
+    Main merged in (`6d7b6e65`); the only CI failure was the nightly test fixed by #1032. A delta re-review is running.
+  - **#1013** fixes (all fail-first):
+    - A blocker: file version 3 + `.pre-v3` backup (`e3ff9218`); migration pinned on real recordings (`8e398b1c`).
+    - Parity sweep B: the Spotlight target (`52d9f30d`) and the cold v1 extension command (`a409c859`).
+    - Review B:
+      - retired-id overrides pruned (`db7a2f9f`);
+      - grandchildren listed (`eb046585`);
+      - badge lifecycle (`60a39109`, `c8f0c5ab`);
+      - ⌥⌫ gaps (`0e0d69ac`);
+      - agent-facing text and docs (`33e62de7`);
+      - lane and ⌘-digit grammar tests (`af0c88d7`).
+    
+    The PR body now lists the owner decisions (never displace, the badge, ⌥⌫, strip deletion, Close Project = Close Tab). Follow-ups: #1030 (persistence edges), #1031 (phone list, pooled goal loop, dictation, v3 phone test). Parity sweep A (nav/close) is still running. CI is pending.
 - 2026-09-19 07:13Z: MERGED #1022 (`52af3dfd`, goal-loop freeze, closes #1021), #933 (`40218b03`, tmux data loss, closes #898) and #1012 (`1195487d`, nightly). First nightly dispatched: run 35428680412. #1024 root-caused from recordings and fixed in PR #1028 (Stop-hook boundary). #1026 review findings fixed (`48bce88a`). Filed #1027 (TLDR latch trap), #1029 (bidi spoofing).
 - 2026-09-19 07:55Z: #1023 MERGED (phone gutter). #933 reviewed GREEN; docs fixed (`7da7a255`), CI rerunning. #878 package half merged (opencode-headless#14 `62440add`); app PR #1026 in review. #1013 CI fixes pushed (lockfile, projection shape). #1024 decomposed.
 - 2026-09-19 07:20Z: **#1013** merged with main (`e52b0352`).
