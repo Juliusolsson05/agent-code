@@ -1,6 +1,6 @@
 # Safe tmux workspace recovery
 
-Status: implementation and local verification complete; PR/CI verification pending. First implementation-loop slice of B00/B01 in [program #918](https://github.com/Juliusolsson05/agent-code/issues/918), following [plan PR #931](https://github.com/Juliusolsson05/agent-code/pull/931). Resolves [#898](https://github.com/Juliusolsson05/agent-code/issues/898) through its implementation PR.
+Status: implementation complete, independently reviewed GREEN (2026-09-19), CI green; merging via PR #933. First implementation-loop slice of B00/B01 in [program #918](https://github.com/Juliusolsson05/agent-code/issues/918), following [plan PR #931](https://github.com/Juliusolsson05/agent-code/pull/931). Resolves [#898](https://github.com/Juliusolsson05/agent-code/issues/898) through its implementation PR.
 
 Baseline: `552914f5610518458f944fa1bdaf63f243685bd1`. Source still reads the legacy workspace envelope before tmux reconciliation; current persistence uses v2 windows. No other open tmux PR was found at intake. The original checkout's untracked plan and other worktrees remain outside this change.
 
@@ -38,3 +38,17 @@ After implementation, 58 tests pass across the recovery, registry, workspace dec
 Review retained the existing registry prefix boundary and store restoration policy. Preservation is scoped to the startup snapshot: this slice does not persist a quarantine across later saves that remove damaged metadata. Durable repair provenance belongs to the subsequent storage/recovery work in #918; it must not be inferred from these startup tests. Unknown-owner routing (#920) remains a separate B01 PR.
 
 Program-plan conformance review added a SHA-256 receipt of the exact workspace bytes inspected, including corrupt/future files; read failures carry no digest. The receipt is emitted with the cleanup decision so a later autosave cannot erase its snapshot identity. The original implementation passed both CI gates at `ff9724de`; the receipt follow-up passed the updated 58-test suite and type checking locally and receives a new CI run.
+
+**2026-09-19 update (release-readiness).**
+- The branch was refreshed onto main at `93f60755`. That was 340 commits, and the
+  only conflict was in the imports of `src/main/index.ts`; startup order is unchanged.
+- `b3961fba` adds a regression test on a REAL persisted v2 `workspace.json`, sanitized,
+  under `testing/fixtures/workspace-v2/`. Running the pre-PR startup read and `reconcile`
+  on that same file kills its detached terminal. The fixed path preserves it and still
+  cleans a proven orphan.
+- Suite: 37 recovery cases; 79/79 across `src/main/tmux` and `src/main/storage`.
+- An independent reviewer found a remaining, narrower gap: a complete but stale file
+  (after a partial restore, a crash inside the autosave debounce, or two apps
+  sharing state, #993). It is recorded in ARCHITECTURE.md §11 and on #918, with the fix
+  direction: never kill a session created after the inspected file's mtime.
+

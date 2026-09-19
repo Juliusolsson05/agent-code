@@ -3050,7 +3050,7 @@ Sources: [Vitest configuration](vitest.config.ts), [live configuration](vitest.l
 
 | Area | Current constraint | Consequence for changes |
 | --- | --- | --- |
-| tmux restart recovery | Startup reference extraction reads the legacy envelope | Fix v2 extraction before asserting multi-window terminal persistence; tracked in #898 |
+| tmux restart recovery | A structurally complete workspace file is treated as proof that unmatched managed sessions are abandoned, but a file can be complete and still STALE: terminals created during a partial-restore run (autosave off), inside the 400 ms autosave debounce before a crash, or by a second app sharing state (#993) are never saved and get cleaned on the next launch. #898's v2 extraction is fixed; this narrower gap remains | Never kill a session whose tmux `createdAt` is newer than the inspected file's mtime (margin for whole-second timestamps); durable quarantine/repair provenance in #918 |
 | OpenCode | Structured and terminal runtimes have different observation/input contracts; saved-session listing is unavailable | Avoid one generic capability flag that promises all surfaces |
 | Prompt acceptance | Claude durable evidence differs from Codex/OpenCode transport acceptance | Preserve acceptance kinds and retry dispositions end to end |
 | Codex ownership | Native rollout attachment/replacement requires leases and compensation | Do not select by newest filename or blindly start a second writer |
