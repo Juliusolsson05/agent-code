@@ -26,55 +26,29 @@ import { useGlobalEditorStore } from '@renderer/features/global-editor/store'
 // because all the keybinds fire while an input is focused — without
 // capture, the input would swallow them.
 //
-// Keybind scheme (user-approved in brainstorming, section 4):
-//   cmd-t           new tab (prompts for cwd)
-//   cmd-shift-r     resume: open the path modal with the focused tab's
-//                   cwd pre-filled, so the resume list for that cwd is
-//                   visible instantly. Same modal as cmd-t — one path
-//                   to both flows — just with a different default
-//                   value and intent.
-//   cmd-w           close focused pane (collapses tree; closes tab if last)
-//   cmd-shift-w     close active tab outright
-//   cmd-1..9        activate Nth tab
-//                   In Dispatch Mode this selects the Nth visible session row.
-//                   Press a second digit while cmd is still held to select
-//                   rows 10..99, preserving digit order (cmd-1 then 2 → 12).
-//   cmd-alt-1..9    activate Nth tab, including while Dispatch Mode owns cmd-N.
-//   cmd-[           previous tab
-//   cmd-]           next tab
-//   cmd-shift-p     command palette
-//   cmd-shift-e     Global Editor overlay toggle
-//   cmd-alt-e       Global Editor fullscreen (opens the editor first if
-//                   needed; Esc exits fullscreen)
-//   cmd-p           Quick Open file in the Global Editor (opens the
-//                   editor first if needed)
-//   cmd-shift-f     Search in files (Global Editor; opens it if needed)
-//   alt-d           split current pane vertically (new pane to the right)
-//   alt-shift-d     split current pane horizontally (new pane below)
-//   alt-t           split with a TERMINAL below (new row, horizontal split)
-//   alt-shift-t     split with a TERMINAL to the right (new column, vertical)
-//   alt-c           split with CODEX below (new row, horizontal split)
-//   alt-shift-c     split with CODEX to the right (new column, vertical)
-//   alt-h/j/k/l     navigate panes (vim: left/down/up/right)
-//   alt-ArrowLeft/Right/Up/Down  same, for non-vim users
-//   alt-w           close focused pane (same as cmd-w but alt-keyed)
-//   alt-=           grow focused split (direction-agnostic, nearest split)
-//   alt--           shrink focused split (direction-agnostic, nearest split)
-//   fn-alt-Arrow    directional resize — grow focused pane toward that
-//                   direction. tmux-style semantics: finds the nearest
-//                   split in the matching axis containing the focused
-//                   pane on the correct side and adjusts its ratio.
+// Keybind scheme. The DEFAULT chords live in
+// features/command-keybindings/defaults.ts, which is the source of truth; this
+// header records only what the table cannot say. Until #992 it listed the
+// tile-tree chords (pane navigation, split resize, fn-alt directional resize,
+// cmd-w collapsing the tree). Those commands are gone, and so is their list.
 //
-//                   Why fn-alt and not alt-shift: on macOS, Option+Shift
-//                   +Arrow is the system shortcut for word-by-word text
-//                   selection, which is load-bearing for every text
-//                   field in the app (including our composer). Fn+Arrow
-//                   is the OS-level translation to Home/End/PageUp/
-//                   PageDown, so "fn+option+arrow" arrives in JS as
-//                   altKey=true with e.key === 'Home' / 'End' /
-//                   'PageUp' / 'PageDown'. That combo has no conflicting
-//                   system meaning, and we never have to touch the
-//                   actual Fn modifier (which isn't exposed to JS).
+//   cmd-1..9        fill the focused lane from the index (row N). Press a
+//                   second digit while cmd is still held to reach rows
+//                   10..99, preserving digit order (cmd-1 then 2 → 12).
+//   alt-arrows, alt-h/j/k/l
+//                   the lane grammar: ⌥↑/↓ walk the index, ⌥←/→ move lane
+//                   focus. Registered, rebindable commands, not an inline
+//                   branch.
+//   alt-backspace   Clear Lane. Yields to any text field that owns the target,
+//                   so delete-word keeps working in the composer.
+//
+// RESERVED: Option+Shift+Arrow. On macOS it is the system shortcut for
+// word-by-word text selection, which every text field in the app relies on,
+// the composer included. No default may bind it, and the router must never
+// treat ⌥⇧-arrows as a lane arrow (the old inline Dispatch branch did, and
+// swallowed word selection). check:keybindings only knows this app's own
+// bindings, so a green run does NOT prove a chord is free of an OS meaning;
+// this note is the record.
 
 
 function isTextEditingTarget(target: EventTarget | null): boolean {
@@ -99,6 +73,12 @@ const BLOCKED_META_CODES = new Set([
 ])
 
 const BLOCKED_ALT_CODES = new Set([
+  // Clear Lane (⌥⌫, #992). Listed so a modal surface and the fullscreen
+  // Global Editor swallow it outside text fields, the same as every other
+  // Option chord this router owns. Without it, ⌥⌫ in fullscreen editor
+  // chrome fell through and emptied the HIDDEN focused lane (#1013 review B).
+  // A text field is exempt below, so delete-word keeps working in inputs.
+  'Backspace',
   'ArrowDown',
   'ArrowLeft',
   'ArrowRight',
@@ -396,8 +376,18 @@ export function useKeybinds(
     // inside extension documents. Mirror the existing resolver's grammar, while
     // command/context admission still runs through this hook after forwarding.
     // Feed/editor-only bindings are not meaningful in an extension document.
-    const bindings = [...bindingIndex].filter(([, entries]) => entries.some(entry =>
-      !SURFACE_OWNED_COMMAND_IDS.has(entry.commandId) && ['global', 'grid', 'dispatch'].includes(entry.context),
+    //
+    // OS text-editing chords (⌥⌫, the Shift-selection chords) are NEVER
+    // forwarded (#1013 review B). Main captures a forwarded chord natively,
+    // and the event re-dispatched to this document targets the <iframe>, so
+    // isTextEditingTarget cannot see that an input inside the extension had
+    // focus. ⌥⌫ in an extension's text field then cleared the lane instead of
+    // deleting a word. The host yields these chords to text fields
+    // (routedCommandForEvent), and an extension frame cannot say whether it
+    // has one, so it keeps them.
+    // ('grid' was a context here until the tile tree died with #992.)
+    const bindings = [...bindingIndex].filter(([binding, entries]) => !isMacosTextEditingChord(binding) && entries.some(entry =>
+      !SURFACE_OWNED_COMMAND_IDS.has(entry.commandId) && ['global', 'dispatch'].includes(entry.context),
     )).map(([binding]) => binding)
     // These are the fixed workspace interactions below, not palette commands.
     // The number-row continuation includes zero (two-digit index rows).

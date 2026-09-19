@@ -9,6 +9,7 @@ import { coerceSettings } from '@renderer/app-state/settings/persistence'
 
 const harness = vi.hoisted(() => ({
   appState: {} as Record<string, unknown>,
+  editorFullscreen: false,
 }))
 
 // useKeybinds reads the extension slice to fold contributed chords into the
@@ -30,7 +31,7 @@ vi.mock('@renderer/app-state/hooks', () => {
 vi.mock('@renderer/features/global-editor/store', () => ({
   useGlobalEditorStore: Object.assign(
     () => undefined,
-    { getState: () => ({ editorFullscreen: false }) },
+    { getState: () => ({ editorFullscreen: harness.editorFullscreen }) },
   ),
 }))
 
@@ -174,6 +175,44 @@ describe('focus-mode keyboard ownership', () => {
       .map(call => call[0])
     expect(invoked).toEqual(['dispatch-focus-lane-left', 'dispatch-focus-lane-left'])
     view.unmount()
+  })
+
+  it('never clears the hidden lane on ⌥⌫ while the fullscreen Global Editor owns the window', () => {
+    // #1013 review B. Fullscreen hides the stage, but the capture router stays
+    // mounted. ⌥⌫ was missing from the owned-chord list the fullscreen guard
+    // uses, so with focus in app chrome it fell through and emptied the
+    // focused lane the user could not see.
+    harness.editorFullscreen = true
+    harness.appState = { ...harness.appState, globalEditorOpen: true }
+    const { workspace } = makeWorkspace('reader' as const)
+    const plain = { ...workspace, readerMode: null, spotlight: null } as typeof workspace
+    const view = render(<KeyboardHarness workspace={plain} />)
+    const event = new KeyboardEvent('keydown', { altKey: true, code: 'Backspace', key: 'Backspace', bubbles: true, cancelable: true })
+    document.body.dispatchEvent(event)
+    expect(harness.appState.requestCommandInvocation).not.toHaveBeenCalled()
+    expect(event.defaultPrevented).toBe(true)
+    view.unmount()
+    harness.editorFullscreen = false
+  })
+
+  it('does not ask main to capture OS text-editing chords inside extension frames', async () => {
+    // #1013 review B. A forwarded chord is captured natively and re-dispatched
+    // with the <iframe> as its target, so the text-field yield cannot apply.
+    // ⌥⌫ in an extension's input cleared the lane instead of deleting a word.
+    const setInputBindings = vi.fn(async () => undefined)
+    const originalApi = Object.getOwnPropertyDescriptor(window, 'api')
+    Object.defineProperty(window, 'api', { configurable: true, value: { extensionsSetInputBindings: setInputBindings } })
+    harness.appState = { ...harness.appState, installedExtensions: [{ manifest: { id: 'timer' }, present: true }] }
+    const { workspace } = makeWorkspace('reader' as const)
+    const plain = { ...workspace, readerMode: null, spotlight: null } as typeof workspace
+    const view = render(<KeyboardHarness workspace={plain} />)
+    const [config] = setInputBindings.mock.calls[0] as unknown as [{ pane: string[] }]
+    // The lane arrows are still forwarded (they are not text chords).
+    expect(config.pane).toContain('Alt+Left')
+    expect(config.pane).not.toContain('Alt+Backspace')
+    view.unmount()
+    if (originalApi) Object.defineProperty(window, 'api', originalApi)
+    else Reflect.deleteProperty(window, 'api')
   })
 
   it('yields Alt+Shift+Arrow to the OS instead of treating it as a lane arrow', () => {
