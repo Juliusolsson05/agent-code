@@ -26,9 +26,9 @@
 // Only Node built-ins, so the Ubuntu jobs need no `npm ci`.
 
 import { execFileSync, spawnSync } from 'node:child_process'
-import { appendFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath } from 'node:url'
 
 export const NIGHTLY_TAG = 'nightly'
 export const NIGHTLY_ARCHES = ['arm64', 'x64']
@@ -42,6 +42,14 @@ export const NIGHTLY_ASSET_NAMES = NIGHTLY_ARCHES.flatMap(arch => [
 ])
 
 const SHA = /^[0-9a-f]{40}$/
+
+// Cap on the commit list in a release body. GitHub rejects bodies over
+// 125,000 characters, and this repo lands about 1,100 commits a month at
+// about 77 characters each, so a few weeks of failed nightlies would
+// overflow. softprops would silently truncate the publishing body, and the
+// final `gh release edit` would then be rejected after a full build. 200
+// lines is ~15 KB; the compare link carries the rest.
+export const NOTES_MAX_COMMITS = 200
 
 /** The SHA this nightly was built from. Returns the first `built-from:` line
  * that carries an exact 40-hex SHA, or '' when there is none.
@@ -162,12 +170,20 @@ function commandNotes(outDir) {
   // The previous SHA may not be in this clone: a force-pushed or deleted
   // branch, or a hand-edited body. That used to crash `git log` under set -e
   // after a full build. It is only notes, so fall back to recent history.
-  const commits = isReachableCommit(prevSha)
-    ? ['### Commits since the previous nightly', git(['log', '--oneline', `${prevSha}..${headSha}`]).trimEnd()]
-    : ['### Recent commits', '_No reachable previous nightly. The last 30 commits:_', git(['log', '--oneline', '-30', headSha]).trimEnd()]
+  let commits
+  if (isReachableCommit(prevSha)) {
+    const total = Number(git(['rev-list', '--count', `${prevSha}..${headSha}`]).trim())
+    const listed = git(['log', '--oneline', `--max-count=${NOTES_MAX_COMMITS}`, `${prevSha}..${headSha}`]).trimEnd()
+    commits = ['### Commits since the previous nightly', listed]
+    if (total > NOTES_MAX_COMMITS) {
+      commits.push('', `_Showing the newest ${NOTES_MAX_COMMITS} of ${total}. Full list: ${server}/${repo}/compare/${prevSha}...${headSha}_`)
+    }
+  } else {
+    commits = ['### Recent commits', '_No reachable previous nightly. The last 30 commits:_', git(['log', '--oneline', '-30', headSha]).trimEnd()]
+  }
 
   const notes = [
-    `Rolling nightly build of [\`${headSha.slice(0, 12)}\`](${server}/${repo}/tree/${headSha}), signed and notarized. Asset names are fixed, so links stay stable across builds. This is a prerelease; the latest stable release is the recommended download.`,
+    `Rolling nightly build of [\`${headSha.slice(0, 12)}\`](${server}/${repo}/tree/${headSha}), signed and notarized. Asset names are fixed, so links stay stable across builds. This is a prerelease build of \`main\`. Stable releases, when published, are listed on the Releases page.`,
     '',
     // Honest about the rolling tag. GitHub's "Source code" archives and
     // "commits since this release" follow the `nightly` TAG, which stays at
@@ -185,8 +201,20 @@ function commandNotes(outDir) {
 
 const commands = { decide: commandDecide, rename: commandRename, notes: commandNotes }
 
-// Run only when executed directly, so the pure helpers can be imported.
-if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
+// Run only when executed directly, so the helpers can be imported (the
+// system tests import NOTES_MAX_COMMITS). Both sides go through realpath:
+// import.meta.url resolves symlinks but process.argv[1] does not, so a
+// symlinked checkout made the plain comparison false. The script then did
+// NOTHING and exited 0, and a silent `decide` looks exactly like a green skip
+// (verification review).
+const invokedDirectly = (() => {
+  try {
+    return realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1] ?? '')
+  } catch {
+    return false
+  }
+})()
+if (invokedDirectly) {
   const [name, arg] = process.argv.slice(2)
   const command = commands[name]
   if (!command) {

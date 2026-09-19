@@ -4,6 +4,10 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 
+// Imported from the script so the test and the implementation cannot drift
+// on the cap. The value itself is asserted through the real process output.
+import { NOTES_MAX_COMMITS } from '../../../scripts/release/nightly.mjs'
+
 // System tests for scripts/release/nightly.mjs: the nightly workflow's decision,
 // rename and release-notes logic. It used to live inline in
 // .github/workflows/nightly.yml, where nothing could exercise it, and the PR
@@ -138,6 +142,16 @@ describe('nightly decide: should this run build?', () => {
     expect(result.outputs).toMatchObject({ changed: 'true', 'prev-sha': OTHER, 'head-sha': HEAD })
   })
 
+  it('treats anything but an exact 40-hex SHA as no marker (e.g. an abbreviated SHA pasted by hand)', () => {
+    // Verification review: loosening the parse to /^built-from: (\S+)/ kept
+    // every other case green. A short SHA can never equal GITHUB_SHA, so it
+    // must mean "no trustworthy marker", which rebuilds, rather than be
+    // reported as a previous SHA that the notes would then try to range from.
+    const release = asCompleteNightly(recordedBeta(), HEAD)
+    release.body = `built-from: ${HEAD.slice(0, 8)}\n\n${recordedBeta().body ?? ''}`
+    expect(decide({ stdout: JSON.stringify(release) }).outputs).toMatchObject({ changed: 'true', 'prev-sha': '' })
+  })
+
   it('force rebuilds even a complete nightly for this commit', () => {
     const result = decide({ stdout: JSON.stringify(asCompleteNightly(recordedBeta(), HEAD)) }, { FORCE: 'true' })
     expect(result.outputs.changed).toBe('true')
@@ -176,7 +190,10 @@ describe('nightly rename: versioned artifacts to fixed names', () => {
     const dir = seedFromRecordedBeta(name => name !== 'Agent Code-0.0.2-beta.1-x64.zip')
     const result = rename(dir)
     expect(result.status).not.toBe(0)
-    expect(result.stderr).toMatch(/x64/)
+    // Name the missing kind precisely. The error also lists every file, and
+    // that list contains x64 names, so a bare /x64/ would pass even if the
+    // wrong architecture were reported.
+    expect(result.stderr).toMatch(/Expected exactly one x64 \.zip, found 0/)
   })
 
   it('refuses when an architecture has two candidate dmgs rather than guessing', () => {
@@ -235,6 +252,21 @@ describe('nightly notes: release bodies from a real git history', () => {
     expect(result.status).toBe(0)
     expect(result.final).toContain('No reachable previous nightly')
     expect(result.final).toContain('feat: first')
+  })
+
+  it('caps the commit list and links the full comparison, so a long gap cannot overflow the release body', () => {
+    // GitHub rejects release bodies over 125,000 characters. This repo lands
+    // about 1,100 commits a month at about 77 characters each, so a few weeks
+    // of failed nightlies would overflow, and `gh release edit` would then
+    // fail after a full build (verification review).
+    const { dir, shas } = gitRepo()
+    for (let i = 0; i < NOTES_MAX_COMMITS + 5; i++) execFileSync('git', ['commit', '-q', '--allow-empty', '-m', `chore: filler ${i}`], { cwd: dir, env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } })
+    const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: dir, encoding: 'utf8' }).trim()
+    const result = notes(dir, head, shas[0])
+    expect(result.status).toBe(0)
+    const listed = result.final.split('\n').filter(line => /^[0-9a-f]{7,} /.test(line))
+    expect(listed).toHaveLength(NOTES_MAX_COMMITS)
+    expect(result.final).toContain(`https://github.com/Juliusolsson05/agent-code/compare/${shas[0]}...${head}`)
   })
 
   it('falls back to recent history on the first nightly (no previous SHA)', () => {
