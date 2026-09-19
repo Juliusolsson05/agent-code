@@ -71,6 +71,8 @@ describe('renderer session replacement handoff', () => {
       useProxyStreamingRef: ref(true),
       defaultBuiltInMcpDomainsRef: ref([]),
       seenUuidsRef: ref({}),
+    historyWindowsRef: {} as never,
+    historyAwaitingTurnStartRef: new Set() as never,
       latestScreenRef: ref({}),
       undoStackRef: ref(new UndoCloseStack()),
       bootstrapTimersRef: ref(new Map()),
