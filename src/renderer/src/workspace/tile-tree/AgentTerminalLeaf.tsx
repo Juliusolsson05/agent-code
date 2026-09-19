@@ -112,6 +112,12 @@ export function AgentTerminalLeaf({
     scrollToLatestRequest: runtime.scrollToLatestRequest,
     tailActive,
     termRef,
+    // Fire-and-forget: the xterm scroll above already ran, and a provider
+    // that cannot help answers 'unsupported'. Optional-called, because a jump
+    // must never throw inside the follow effect: a bridge without the method
+    // (a partial test stub, or an older preload during a dev reload) would
+    // otherwise break the pane's other follow behaviour.
+    onJumpToLatest: () => { void window.api.jumpToLatest?.(sessionId)?.catch(() => undefined) },
   })
   const dimensionActiveRef = useRef(false)
   const dimensionOwnershipEpochRef = useRef(0)

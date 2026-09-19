@@ -13,6 +13,10 @@ type FollowArgs = {
   scrollToLatestRequest: number
   tailActive: boolean
   termRef: RefObject<Terminal | null>
+  /** Also asks the provider to scroll its own transcript view, for TUIs that
+   *  page it on the alternate screen (#843). Called once per NEW jump
+   *  request, never for the baseline a mount or session switch takes. */
+  onJumpToLatest?: () => void
 }
 
 function isAtBottom(term: Terminal): boolean {
@@ -20,8 +24,10 @@ function isAtBottom(term: Terminal): boolean {
 }
 
 export function useTerminalFollow({
-  sessionId, scrollToLatestRequest, tailActive, termRef,
+  sessionId, scrollToLatestRequest, tailActive, termRef, onJumpToLatest,
 }: FollowArgs) {
+  const onJumpToLatestRef = useRef(onJumpToLatest)
+  onJumpToLatestRef.current = onJumpToLatest
   // The mount-owned PTY subscriber reads the latest verdict at callback time,
   // not when a chunk was queued: parsing can finish after Tail was disabled.
   const tailActiveRef = useRef(tailActive)
@@ -53,17 +59,18 @@ export function useTerminalFollow({
     }
     if (scrollToLatestRequest === jumpBaselineRef.current) return
     jumpBaselineRef.current = scrollToLatestRequest
-    // KNOWN LIMITATION, and not fixable from here: a provider whose TUI runs
-    // on the ALTERNATE SCREEN owns its transcript internally and never evicts
-    // a line into xterm scrollback, so viewportY === baseY always holds and
-    // this call does nothing. OpenCode Terminal is exactly that case. Sending
-    // the TUI's own scroll-to-bottom chord was tried and reverted: the binding
-    // is user-configurable, so a user who has moved a destructive action onto
-    // it would have Jump to Latest abort and revert their session. The
-    // rebinding-immune route is OpenCode's POST /tui/execute-command, which
-    // needs a served transport this runtime does not use yet. See the audit
-    // doc for the full evidence.
+    // A provider whose TUI runs on the ALTERNATE SCREEN owns its transcript
+    // internally and never evicts a line into xterm scrollback, so
+    // viewportY === baseY always holds and scrollToBottom does nothing.
+    // OpenCode Terminal is exactly that case, so the provider is asked to
+    // scroll itself (#843): the leaf passes onJumpToLatest, which reaches
+    // OpenCode's POST /tui/execute-command through its own server. Its chord
+    // was tried and reverted, because the binding is user-configurable and a
+    // destructive action can sit on it. Both run: scrollToBottom still does the
+    // job for inline TUIs (Claude, Codex) and shells, and the provider call
+    // answers 'unsupported' for them.
     termRef.current?.scrollToBottom()
+    onJumpToLatestRef.current?.()
   }, [scrollToLatestRequest, sessionId, termRef])
 
   useEffect(() => {
