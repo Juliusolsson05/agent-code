@@ -19,7 +19,7 @@ export function globalControlCapabilities(observe: ObserveWindows) {
     }),
     defineCapability({
       id: 'agents.search', title: 'Search agents across windows', execution: 'main', effect: 'read',
-      description: 'Find existing agents and terminals across every window/project, including related, detached and buried agents and terminals. Labels are window-local and may be ambiguous globally; all matching candidates are returned. Spoken agent names are application-wide and never recycled, but the same agent can still be observed by several windows. Results carry stable ownership for direct navigation. Incomplete windows are reported, never silently dropped.',
+      description: 'Find existing agents and terminals across every window/project, including the ones that are not in a lane. Labels are window-local and may be ambiguous globally; all matching candidates are returned. Spoken agent names are application-wide and never recycled, but the same agent can still be observed by several windows. Results carry stable ownership for direct navigation. Incomplete windows are reported, never silently dropped.',
       // WHY the two free-text fields carry a length bound and `label` does not:
       // `label` is already pinned by a regex, but `name` and `query` are compared
       // — normalized, lowercased, substring-scanned — against every session of

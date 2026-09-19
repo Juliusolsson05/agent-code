@@ -15,10 +15,6 @@ afterEach(() => { cleanup(); useAppStore.setState(original, true) })
 // card lying. Hardcoded chord strings would be a plan failure — and this
 // suite is the tripwire.
 
-function chordLabels(): string[] {
-  return screen.getAllByRole('generic').flatMap(node => node.textContent ? [] : [])
-}
-
 describe('StarterHintCard', () => {
   it('shows the eight fresh-agent slots with live default chords', () => {
     render(<StarterHintCard variant="fresh-agent" />)
@@ -76,6 +72,10 @@ describe('StarterHintCard', () => {
     expect(card.textContent).toContain('New Lane')
     expect(card.textContent).toContain('Command Palette')
     expect(card.textContent).toContain('⌥↑ / ⌥↓')
+    // The pair is named for the gesture, not for one half of it (#1013
+    // review B: this row read "Select Previous Agent ⌥↑ / ⌥↓").
+    expect(card.textContent).toContain('Select Agent')
+    expect(card.textContent).not.toContain('Select Previous Agent')
     // The fresh-agent-only slots stay out: an empty lane has no agent yet,
     // so Clear Lane and Spotlight answer questions this lane cannot ask.
     expect(card.textContent).not.toContain('Clear Lane')

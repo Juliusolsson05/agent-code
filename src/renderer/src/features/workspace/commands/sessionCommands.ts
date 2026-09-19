@@ -633,7 +633,7 @@ export const sessionCommands: CommandDef[] = [
     pickerVisibility: 'advanced',
     surface: 'session',
     title: 'Agent Management MCP',
-    description: '**What it does:** Reloads the focused **agent** with project-wide Agent Code management tools on or off.\n\n**Use when:** You want this agent to inventory, inspect, prompt, or close other agents in its project.\n\n**Notes:** Read operations include visible, detached, and buried agents without waking them. Every close it attempts asks **you** to confirm first, and cascades are refused outright.',
+    description: '**What it does:** Reloads the focused **agent** with project-wide Agent Code management tools on or off.\n\n**Use when:** You want this agent to inventory, inspect, prompt, or close other agents in its project.\n\n**Notes:** Read operations include agents that are not in a lane, without waking them. Every close it attempts asks **you** to confirm first, and cascades are refused outright.',
     keywords: ['mcp', 'agent management', 'agents', 'project', 'transcripts', 'cleanup', 'prompt', 'close', 'enable', 'disable', 'reload', 'claude', 'codex', 'opencode'],
     when: ({ workspace }) => {
       return targetSupportsBuiltInMcpDomain(workspace, 'agent_management')

@@ -3079,12 +3079,11 @@ Sources: [Vitest configuration](vitest.config.ts), [live configuration](vitest.l
 | Application session | Stable Agent Code identity associated with workspace metadata and, when active, a managed backend |
 | Session run | One backend execution attempt, distinguished from the stable application session |
 | Native session identity | Provider-owned conversation identity used to locate/resume native history |
-| Pane / tile | A visible workspace placement; it is not itself a provider process |
-| Project tab | A workspace membership boundary that can differ from another tab using the same directory |
-| Dispatch Mode | Workspace presentation using explicitly ordered agent lanes and independent scope/focus |
+| Stage | The one workspace layout: rows of lanes beside the agent index. Each lane shows at most one session |
+| Lane | A visible slot on the stage; selecting a session into it shows that session. It is not itself a provider process |
+| Pool | Every session a project owns. A session not in any lane is still in the pool, alive or hibernated |
+| Project | A workspace membership boundary (`projectId` on each session) that can differ from another project using the same directory |
 | Hibernated session | Retained session metadata whose backend is intentionally absent until wake |
-| Buried session | Hidden retained session placement; a live backend can continue running |
-| Detached session | Session associated with the workspace/project but not placed in the ordinary grid |
 | Provider runtime flavor | The execution mechanism for a provider, such as structured OpenCode versus OpenCode terminal |
 | PTY | Pseudoterminal connecting the application to a native interactive process |
 | tmux attachment | A PTY connection to a separately managed persistent shell session |

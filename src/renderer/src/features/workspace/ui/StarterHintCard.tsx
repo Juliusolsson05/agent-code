@@ -102,7 +102,7 @@ function buildRow(slot: Slot, titles: Map<string, string>, bindings: Map<string,
     const rightChord = bindings.get(rightId)?.[0]
     // Pair label names the gesture, not the two commands: "Focus Lane", with
     // both chords, reads as one idea — the slot table's whole intent.
-    const gesture = left.replace(/ (Left|Right|Previous|Next)$/, '')
+    const gesture = pairGesture(left, right)
     const chord = leftChord && rightChord
       ? `${displayKeybinding(leftChord)} / ${displayKeybinding(rightChord)}`
       : leftChord ? displayKeybinding(leftChord) : null
@@ -114,6 +114,25 @@ function buildRow(slot: Slot, titles: Map<string, string>, bindings: Map<string,
   // collision checker sees them.
   const chord = reserved.length > 0 ? '⌘1–9' : null
   return { key: slot.reservationOwner, label: slot.label, chord }
+}
+
+/**
+ * The words two paired titles share: "Focus Lane Left" + "Focus Lane Right"
+ * gives "Focus Lane", and "Select Previous Agent" + "Select Next Agent" gives
+ * "Select Agent".
+ *
+ * WHY word-by-word, not a trailing-direction regex: the regex only stripped a
+ * LAST word, and the index-walk titles put the direction in the middle, so the
+ * empty-lane card read "Select Previous Agent ⌥↑ / ⌥↓" (#1013 review B).
+ * Titles of different lengths share no positional words to compare, so they
+ * fall back to the left title as written.
+ */
+function pairGesture(left: string, right: string): string {
+  const a = left.split(' ')
+  const b = right.split(' ')
+  if (a.length !== b.length) return left
+  const shared = a.filter((word, index) => word === b[index])
+  return shared.length > 0 ? shared.join(' ') : left
 }
 
 export function StarterHintCard({ variant }: { variant: 'fresh-agent' | 'empty-lane' }) {
