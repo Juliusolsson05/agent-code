@@ -114,6 +114,15 @@ function ConditionShell({
   )
 }
 
+/** The patterns "Allow always" would grant, read from the raw
+ * permission.asked payload. Anything that is not a list of non-empty strings
+ * yields no scope line; the modal then says nothing about scope rather than
+ * guessing. */
+function alwaysScope(metadata: unknown): string[] {
+  const always = metadata && typeof metadata === 'object' ? (metadata as Record<string, unknown>).always : undefined
+  return Array.isArray(always) ? always.filter((pattern): pattern is string => typeof pattern === 'string' && pattern.length > 0) : []
+}
+
 export const opencodePermissionView = defineView<
   'opencode.permission',
   OpencodePermissionState
@@ -130,15 +139,52 @@ export const opencodePermissionView = defineView<
         actions={actions}
         dispatch={dispatch}
       >
-        <p className="mb-2">
-          OpenCode is requesting permission
-          {state.title ? (
-            <>
-              {' '}for <span className="text-accent">{state.title}</span>
-            </>
-          ) : null}
-          .
-        </p>
+        {state.title ? (
+          <>
+            <p className="mb-1">OpenCode is requesting permission for:</p>
+            {/* WHY a bounded, scrolling <pre> (#878, opencode-headless#14
+                review): the subject is the command the user is approving,
+                shown in full because this modal is the ONLY place they see
+                it, so it must never be truncated. It can be a 100-line
+                heredoc, and DialogContent has no max height, so inline
+                prose pushed the buttons off-screen while the auto-focused
+                "Allow once" answered Enter. Wrapping keeps a long single-line
+                `python3 -c` legible; the height cap keeps the buttons on
+                screen. */}
+            <pre
+              data-permission-subject=""
+              className="bg-code-bg rounded-slab text-code-ink px-3 py-2 mb-2 max-h-[40vh] overflow-auto whitespace-pre-wrap break-words text-[11.5px]"
+            >
+              {state.title}
+            </pre>
+          </>
+        ) : (
+          <p className="mb-2">OpenCode is requesting permission.</p>
+        )}
+        {(() => {
+          // WHY the scope is spelled out: "Allow always" beside
+          // `edit: src/a.ts` looks scoped to that file, but OpenCode asks
+          // edit/write/MCP with `always: ["*"]`, meaning every such request for
+          // the rest of the session. OpenCode's own UI confirms the scope
+          // before granting it. Ours showed nothing, so the most permissive
+          // button read as the narrowest. The scope is the payload's own
+          // `always` list (state.metadata is the raw permission.asked
+          // payload).
+          const always = alwaysScope(state.metadata)
+          if (always.length === 0) return null
+          return (
+            <p className="mb-2 text-[11px]">
+              Allow always covers{' '}
+              {always.map((pattern, index) => (
+                <span key={pattern}>
+                  {index > 0 ? ', ' : ''}
+                  <code className="text-accent">{pattern}</code>
+                </span>
+              ))}
+              {always.includes('*') ? ': every request of this kind for the rest of the session.' : '.'}
+            </p>
+          )
+        })()}
       </ConditionShell>
     )
   },
