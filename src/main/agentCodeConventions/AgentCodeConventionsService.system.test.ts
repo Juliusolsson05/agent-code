@@ -425,7 +425,10 @@ describe('AgentCodeConventionsService', () => {
     expect((await stat(currentTarget.skillDirectory)).isDirectory()).toBe(true)
   })
 
-  it('blocks an all-provider enable when a registered provider is unsupported', async () => {
+  // Regression for #1014: grok (registered, personalAgentSkills.supported:false)
+  // must not stop the conventions skill from deploying — a provider that cannot
+  // receive personal skills is informational, not a fleet-wide blocker.
+  it('deploys to supported providers when a registered provider is unsupported', async () => {
     const root = await temporaryDirectory()
     const currentTarget = target(
       'agents-standard-personal-skills',
@@ -444,12 +447,30 @@ describe('AgentCodeConventionsService', () => {
 
     const result = await service.save({ expectedRevision: 0, enabled: true, markdown: '# Rules' })
 
+    expect(result).toMatchObject({ ok: true, snapshot: { enabled: true, health: 'active' } })
+    expect((await stat(currentTarget.skillFile)).isFile()).toBe(true)
+    expect(result.ok && result.snapshot.unsupportedProviders).toEqual(['opencode'])
+    expect(result.ok && result.snapshot.targets).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'unsupported:opencode', state: 'unsupported' }),
+    ]))
+  })
+
+  it('still blocks enable when no registered provider supports personal skills', async () => {
+    const root = await temporaryDirectory()
+    const service = new AgentCodeConventionsService({
+      stateFilePath: join(root, 'state', 'conventions.json'),
+      homeDirectory: root,
+      resolveTargets: async () => ({ targets: [], unsupportedProviders: ['grok'] }),
+    })
+    await service.initialize()
+
+    const result = await service.save({ expectedRevision: 0, enabled: true, markdown: '# Rules' })
+
     expect(result).toMatchObject({
       ok: false,
       code: 'unsupported',
       snapshot: { enabled: false, health: 'unsupported' },
     })
-    await expect(stat(currentTarget.skillFile)).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
   it.runIf(process.platform !== 'win32')('rejects symlinked provider roots', async () => {

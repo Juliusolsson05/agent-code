@@ -8,7 +8,7 @@ vi.mock('@main/window/windowRegistry.js', () => ({
   sendToSessionWindow: (_id: string, channel: string, payload: unknown) => wire.receive(channel, payload),
   broadcastToWindows: vi.fn(), releaseSession: vi.fn(),
 }))
-vi.mock('@main/subagents/index.js', () => ({ SubAgentWatcherManager: class { observeParentEntry() {} stop() {} } }))
+vi.mock('@main/subagents/index.js', () => ({ SubAgentWatcherManager: class { observeParentEntry() {} stop() {} stopAll() {} } }))
 
 import { wireSessionForwarder } from './forwarder.js'
 import { SessionFeedSource } from '@main/remote/SessionFeedSource.js'

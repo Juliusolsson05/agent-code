@@ -3,7 +3,6 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { Feed } from '@renderer/features/feed/ui/Feed'
 import { SessionFeedProvider } from '@renderer/features/sessionFeed/SessionFeedContext'
 import { useLedgerFeedItems } from '@renderer/features/feed/ledger/useLedgerFeedItems'
-import { PaneHeader } from '@renderer/workspace/tile-tree/TileLeaf/PaneHeader'
 import { ComposerInput } from '@renderer/workspace/tile-tree/TileLeaf/ComposerInput'
 import { useComposerAutoGrow } from '@renderer/workspace/tile-tree/TileLeaf/useComposerAutoGrow'
 import type { RuntimeRenderInput } from '@renderer/session-runtime/state'
@@ -18,6 +17,12 @@ import { getRendererProviderCapabilities } from '@providers/registry.renderer.ca
 import type { WebSocketSessionFeed, ConnectionState } from '../WebSocketSessionFeed'
 import type { TranscriptStore } from '../transcript/store'
 import { useMobileDictation } from '../dictation/mobileDictation'
+import { ToastHostProvider } from './ToastHost'
+import { IconMic } from './icons'
+import { PeekOverlay } from './v2/PeekOverlay'
+import { providerBadge } from './v2/providerIdentity'
+import { readerMessagesFromFeedItems } from '@renderer/features/reader/model/readerMessages'
+import type { RemoteSessionSummary } from '../wire'
 
 // The phone has no optimistic-echo plane: it renders committed + semantic
 // state streamed from the desktop, never a locally-minted ghost (see the
@@ -109,12 +114,13 @@ export function SessionView({
   const setError = useCallback((next: string | null) => {
     updateComposerState(current => ({ ...current, error: next }))
   }, [updateComposerState])
-  // The session's cwd for the real PaneHeader title strip. Self-subscribed
-  // here rather than threaded App→SessionList so the header stays
-  // self-contained; cwd is effectively static per session, but onSessionList
-  // also covers the race where the list arrives after this view mounts.
-  const [cwd, setCwd] = useState<string | null>(
-    () => feed.getSessionList().find(s => s.sessionId === sessionId)?.cwd ?? null,
+  // The session's summary for the v2 header identity strip (title, agent
+  // name, runtime honesty). Self-subscribed here rather than threaded
+  // App→FleetHome so the header stays self-contained; onSessionList also
+  // covers the race where the list arrives after this view mounts AND the
+  // projection-driven resends that rename/retitle a live session.
+  const [summary, setSummary] = useState<RemoteSessionSummary | null>(
+    () => feed.getSessionList().find(s => s.sessionId === sessionId) ?? null,
   )
 
   // The composer's textarea ref, auto-grown by the desktop hook (pure DOM,
@@ -131,11 +137,25 @@ export function SessionView({
 
   useEffect(() => {
     const off = feed.onSessionList(list => {
-      const summary = list.find(s => s.sessionId === sessionId)
-      if (summary) setCwd(summary.cwd ?? null)
+      const next = list.find(s => s.sessionId === sessionId)
+      if (next) setSummary(next)
     })
     return off
   }, [feed, sessionId])
+
+  // v2 peek state: the TLDR/Goal overlay for THIS session, with change
+  // subscriptions so an agent updating its status mid-glance repaints the
+  // overlay without a reopen.
+  const [peek, setPeek] = useState<'tldr' | 'goal' | null>(null)
+  const [, forcePeekRepaint] = useState(0)
+  useEffect(() => {
+    if (!peek) return undefined
+    const repaint = () => forcePeekRepaint(t => t + 1)
+    const offs = [feed.onTldrChanged(repaint), feed.onGoalChanged(repaint)]
+    return () => {
+      for (const off of offs) off()
+    }
+  }, [feed, peek])
 
   const provider = store.getKind(sessionId)
 
@@ -306,53 +326,135 @@ export function SessionView({
 
   const working = transcript.workingStatus
 
+  // v2 reader mode: the SAME ledger items the Feed paints, projected onto
+  // one-message pages by the desktop's pure readerMessages module — reader
+  // is a view mode of this screen, not a second ingest path.
+  const [reader, setReader] = useState(false)
+  const readerMessages = useMemo(
+    () => (reader ? readerMessagesFromFeedItems(ledgerFeedPlan.items) : []),
+    [reader, ledgerFeedPlan.items],
+  )
+  const [readerPage, setReaderPage] = useState(0)
+  useEffect(() => {
+    // New content while reading snaps to the newest page — reader is a
+    // review surface, but a growing live turn should still follow.
+    if (reader && readerPage > readerMessages.length - 1) {
+      setReaderPage(Math.max(0, readerMessages.length - 1))
+    }
+  }, [reader, readerMessages.length, readerPage])
+
+  const badge = providerBadge(provider)
+  const headerName = summary?.agentName ?? summary?.title ?? null
+
   return (
-    <SessionFeedProvider value={feed}>
-      <div className="app">
-        <div className="topbar">
-          <button onClick={onBack}>‹ Back</button>
+    <ToastHostProvider>
+      <SessionFeedProvider value={feed}>
+        <div className="app">
+        {/* v2 session header: one bar replacing the old nav+PaneHeader pair.
+            Identity comes from the projection (spoken name, then title, then
+            cwd basename via the badge line), the provider glyph + shortLabel
+            from the provider's own identity descriptor — never the raw wire
+            kind. The status strip follows PaneHeader's rule: accent fill ONLY
+            while the session is live and working; absence of color is the
+            idle signal. The peek button opens the same TLDR/Goal overlay the
+            fleet's long-press shows; the reader button switches this screen
+            into one-message paging over the same ledger. */}
+        <div className={`session-header${working ? ' lit' : ''}`}>
+          <button className="back" onClick={onBack} aria-label="Back to fleet">‹</button>
+          <span className="identity">
+            <span className="badge">
+              <span className="glyph">{badge.glyph}</span>
+              <span className="short">{badge.shortLabel}</span>
+            </span>
+            <span className="name-column">
+              <span className="name">{headerName ?? shortCwd(summary?.cwd ?? null, sessionId)}</span>
+              <span className="sub">
+                {summary?.providerRuntime === 'terminal' ? 'TUI runtime — committed turns here' : summary?.tabTitle ?? ''}
+              </span>
+            </span>
+          </span>
           <span className={`conn-dot ${connection}`} />
+          <button className="header-action" onClick={() => setPeek(peek ? null : 'tldr')} aria-label="TLDR and goal peek">
+            ⌘
+          </button>
+          <button className="header-action" onClick={() => { setReader(r => !r); setReaderPage(0) }} aria-label="Reader mode">
+            {reader ? 'feed' : 'read'}
+          </button>
         </div>
-        {/* The REAL desktop pane header (provider badge + shortened cwd) in
-            place of the old 8-char session id. Kept as its own bar below the
-            phone's Back/conn nav — on desktop this IS the pane's top bar.
-            statusMode off (a multi-pane-grid glance affordance, meaningless on
-            a single phone screen) and related-agent chips empty (the v1 wire
-            emits no sub-agent data).
 
-            sessionId feeds the header's color-flag chunk. On the phone that
-            always resolves to "no flag": the store is the frozen
-            DEFAULT_SETTINGS snapshot from src/stubs/appStateHooks, whose
-            dispatchColorFlags is `{}`, and the v1 wire carries no settings.
-            It is still passed honestly rather than stubbed out, so that if the
-            phone ever syncs real settings the flag appears with no edit here —
-            and so a reader does not have to wonder which sessionId the header
-            would have used. */}
-        <PaneHeader
-          sessionId={sessionId}
-          paneLabel={provider}
-          projectDir={cwd}
-          statusMode={false}
-          isSessionLive={Boolean(working) || !transcript.exited}
-        />
+        {reader ? (
+          /* Reader: one message per page over the same ledger. Plain
+             pre-wrap text — reader is a reading surface for what the agent
+             SAID (assistant prose + provider notices), and the phone pager
+             is Older/Newer buttons plus swipe; the ledger below keeps
+             streaming, so pages grow live exactly as the desktop's does. */
+          <div className="reader-host">
+            {readerMessages.length === 0 ? (
+              <div className="empty">Nothing to read yet.</div>
+            ) : (
+              <>
+                <p className="reader-text">{readerMessages[readerPage]?.text}</p>
+                <div className="reader-pager">
+                  <button
+                    type="button"
+                    disabled={readerPage === 0}
+                    onClick={() => setReaderPage(p => Math.max(0, p - 1))}
+                  >
+                    Older
+                  </button>
+                  <span className="reader-count">
+                    {readerPage + 1}/{readerMessages.length}
+                  </span>
+                  <button
+                    type="button"
+                    disabled={readerPage >= readerMessages.length - 1}
+                    onClick={() => setReaderPage(p => Math.min(readerMessages.length - 1, p + 1))}
+                  >
+                    Newer
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        ) : (
+        /* Pre-transcript fallback: states that never reach the jsonl/
+           semantic channels (trust dialog body, login prompts, provider
+           crash output) exist ONLY as TUI text. Render it until the feed
+           has real content — dropping this entirely made a fresh session's
+           trust dialog a blank page (review finding).
 
-        {/* Pre-transcript fallback: states that never reach the jsonl/
-            semantic channels (trust dialog body, login prompts, provider
-            crash output) exist ONLY as TUI text. Render it until the feed
-            has real content — dropping this entirely made a fresh session's
-            trust dialog a blank page (review finding). */}
-        {transcript.entries.length === 0 &&
+           The SAME branch is the no-screen status surface: providers
+           without a PTY screen (BOTH OpenCode runtimes) can never produce
+           screenText, so before their first committed entry — and
+           especially when the backfill FAILED — the old condition rendered
+           a completely blank page with no explanation. screenText OR a
+           status condition (working/bootstrapping/error) now holds the
+           branch; the <pre> renders only when there is terminal text. */
+        transcript.entries.length === 0 &&
         !transcript.semanticTurn &&
         !ledgerFeedPlan.items.some(item => item.type === 'provider-notice') &&
-        transcript.screenText ? (
+        (transcript.screenText || transcript.statusError || transcript.historyError || transcript.bootstrapping) ? (
           <div className="screen">
-            {transcript.historyError && (
+            {transcript.statusError ?? transcript.historyError ? (
               <div className="working" style={{ color: 'var(--danger)' }}>
-                Rich transcript unavailable ({transcript.historyError}) — showing
-                raw terminal. The desktop app may need an update/restart.
+                Live transcript unavailable ({transcript.statusError ?? transcript.historyError})
+                {transcript.screenText
+                  ? ' — showing raw terminal. The desktop app may need an update/restart.'
+                  : ''}
               </div>
-            )}
-            <pre className="terminal">{transcript.screenText}</pre>
+            ) : null}
+            {transcript.screenText ? (
+              <pre className="terminal">{transcript.screenText}</pre>
+            ) : transcript.bootstrapping ? (
+              <div className="working">Loading transcript…</div>
+            ) : null}
+            {/* Working state lives HERE only in the fallback branch: the
+                rendered Feed draws its own WorkIndicator row (phase-driven,
+                fixed-height). Showing the shell strip too painted the same
+                phase information twice in a row — the doubled working
+                indicator review finding. In the fallback branch there is no
+                Feed mounted, so the strip is the only signal. */}
+            {working && <div className="working">● {working}</div>}
           </div>
         ) : (
         <div className="feed-host">
@@ -372,17 +474,31 @@ export function SessionView({
             toolResultIndex={transcript.toolResultIndex}
             toolIndexVersion={transcript.toolIndexVersion}
             askUserQuestionState={askUserQuestionState}
+            // v2: the parent's live sub-agent fleet renders in-feed through
+            // the same SubAgentsContext the desktop uses — the channel was
+            // reserved on the wire since v1; the server now emits it.
+            subAgents={transcript.subAgents ?? undefined}
             hasOlderHistory={transcript.hasOlderHistory}
             loadingOlderHistory={transcript.loadingOlderHistory}
             onLoadOlderHistory={() => store.loadOlderHistory(sessionId)}
+            // Suspend per-append auto-scroll and the lazy-mount cascade
+            // while the initial backfill burst applies — the same contract
+            // the desktop's resume path uses. Without it the first 120
+            // entries paint per-append and jank exactly when the user
+            // opens a session.
+            bootstrapping={transcript.bootstrapping}
           />
         </div>
-        )}
+        ))}
 
-        {transcript.historyError && transcript.entries.length > 0 && (
-          <div className="working" role="status">{transcript.historyError}</div>
+        {/* ONE status surface: live-channel failure (statusError) takes
+            precedence over backfill failure (historyError) — a dead live
+            channel is the more actionable "why is nothing happening". The
+            doubled `.working` strip class is just affordance, not a second
+            indicator. */}
+        {(transcript.statusError ?? transcript.historyError) && transcript.entries.length > 0 && (
+          <div className="working" role="status">{transcript.statusError ?? transcript.historyError}</div>
         )}
-        {working && <div className="working">● {working}</div>}
 
         {/* The REAL desktop condition rendering. The generic core outlet routes
             the live snapshot through the provider's own conditionViews registry
@@ -505,11 +621,13 @@ export function SessionView({
               }
               title={dictation.label}
             >
-              {dictation.status === 'recording'
-                ? '⏺'
-                : dictation.status === 'starting' || dictation.status === 'stopping'
-                  ? '…'
-                  : '🎤'}
+              {dictation.status === 'recording' ? (
+                <IconMic active />
+              ) : dictation.status === 'starting' || dictation.status === 'stopping' ? (
+                '…'
+              ) : (
+                <IconMic />
+              )}
             </button>
             {working ? (
               <button className="stop" onClick={interrupt}>
@@ -521,7 +639,31 @@ export function SessionView({
             </button>
           </div>
         </div>
+
+        {/* v2 peek overlay — same surface the fleet's long-press opens,
+            scoped to THIS session's records and live activity. */}
+        {peek && (
+          <PeekOverlay
+            kind={peek}
+            record={peek === 'tldr' ? feed.getTldrRecord(sessionId) : feed.getGoalRecord(sessionId)}
+            lastActiveAt={summary?.lastActivityAt ?? null}
+            onDismiss={() => setPeek(null)}
+            onToggleKind={() => setPeek(current => (current === 'tldr' ? 'goal' : 'tldr'))}
+          />
+        )}
       </div>
-    </SessionFeedProvider>
+      </SessionFeedProvider>
+    </ToastHostProvider>
   )
+}
+
+/** Fallback header name when neither the projection title nor a spoken
+ *  agent name exists: the cwd basename, shortened from the START when too
+ *  long (the path's discriminating half is the tail — same rule as the
+ *  desktop's truncate-start). */
+function shortCwd(cwd: string | null, sessionId: string): string {
+  if (!cwd) return sessionId.slice(0, 8)
+  const parts = cwd.split('/').filter(Boolean)
+  const base = parts[parts.length - 1] ?? cwd
+  return base.length > 18 ? `…${base.slice(-17)}` : base
 }

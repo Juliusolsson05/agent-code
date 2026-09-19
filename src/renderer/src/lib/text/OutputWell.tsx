@@ -1,6 +1,7 @@
 import { memo, useMemo, useState } from 'react'
 
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
+import { feedDisclosureClass } from '@renderer/features/feed/ui/rows/primitives'
 import { CodeBlock } from '@renderer/lib/code/CodeBlock'
 
 import { AnsiText } from '@renderer/lib/text/AnsiText'
@@ -94,7 +95,7 @@ export const OutputWell = memo(function OutputWell({
           <button
             type="button"
             onClick={() => setExpanded(true)}
-            className="my-0.5 text-[11px] text-muted hover:text-ink cursor-pointer block"
+            className={`my-0.5 block ${feedDisclosureClass}`}
           >
             … +{hiddenCount} {hiddenCount === 1 ? 'line' : 'lines'} (click to expand)
           </button>
@@ -112,7 +113,7 @@ export const OutputWell = memo(function OutputWell({
         <button
           type="button"
           onClick={() => setExpanded(false)}
-          className="mt-1 text-[11px] text-muted hover:text-ink cursor-pointer"
+          className={`mt-1 ${feedDisclosureClass}`}
         >
           collapse
         </button>

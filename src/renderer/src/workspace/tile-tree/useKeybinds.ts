@@ -1,4 +1,5 @@
 import { createTldrHoldController, dismissTldr, observeTldrHoldRelease, useTldrView } from '@renderer/features/tldr/viewState'
+import { dismissGoalLoop, useGoalLoopView } from '@renderer/features/goal-loop/viewState'
 import { useEffect, useMemo, useRef } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
@@ -452,6 +453,20 @@ export function useKeybinds(
         if (e.key === 'Escape') {
           tldrHold.release()
           dismissTldr()
+        }
+        return
+      }
+      // The goal loop overlay is a latched blocking surface that stamps the
+      // interaction-owner marker, so the router's ownership branch below would
+      // swallow every chord — including goal-loop-preview itself, which is not
+      // in SURFACE_OWNER_FLAGS (its latch lives in a feature store, not
+      // uiShell). Dismiss here instead, before that gate, exactly like the
+      // TLDR latch above: Escape and the toggle chord are the exits.
+      if (useGoalLoopView.getState().latched) {
+        e.preventDefault()
+        e.stopPropagation()
+        if (e.key === 'Escape' || (e.metaKey && e.shiftKey && e.code === 'KeyY')) {
+          dismissGoalLoop()
         }
         return
       }

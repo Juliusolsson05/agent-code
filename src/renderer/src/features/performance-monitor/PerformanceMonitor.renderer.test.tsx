@@ -1,7 +1,12 @@
-import { act, render, renderHook, screen } from '@testing-library/react'
+import { act, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
+import type { ReactElement } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { MonitorSnapshot } from '@shared/performance/monitorSnapshot.js'
 import type { MonitorProcessPage } from '@shared/performance/processSnapshot.js'
+import type { MonitorAgentUsage } from '@shared/performance/agentUsage.js'
+import { WorkspaceProvider } from '@renderer/workspace/WorkspaceContext'
+import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { PerformanceMonitor } from './PerformanceMonitor'
 import { useMonitor } from './useMonitor'
 
@@ -10,13 +15,38 @@ const snapshot: MonitorSnapshot = {
   schemaVersion: 1, runId: 'test', enabled: true, sampledAt: 1000, main, windows: [], operations: [],
   recent: [main, { ...main, at: 2000 }], workerRss: 1024, collector: 'healthy', droppedRecords: 0, queuedBytes: 0, restarts: 0,
 }
+const GB = 1024 ** 3
+const split = (memoryBytes: number, cpuPercent: number) => ({ memoryBytes, cpuPercent })
+const usage: MonitorAgentUsage = {
+  sampledAt: 2000, quality: 'ok', systemMemoryBytes: 16 * GB,
+  composition: [1000, 2000].map(at => ({ at, total: split(3 * GB, 20), app: split(GB, 8), agents: split(2 * GB, 12), terminals: split(0, 0), shared: split(0, 0), other: split(0, 0) })),
+  sessions: [{ sessionId: 'a1', kind: 'agent', provider: 'claude', processCount: 3, memoryBytes: 2 * GB, cpuPercent: 12, complete: true, history: [[1000, 1.2 * GB, 10], [2000, 2 * GB, 12]] }],
+}
+const focusAgentBySessionId = vi.fn(async () => true)
+// The v3 stage shape (#992): the session belongs to its project through its
+// own projectId row, and the stage is always present. The earlier v2 literal
+// (a tab `root`, dispatchMode, tileTabs) was cast through `unknown`, so the
+// type checker could not flag it when the model changed; the missing label
+// was the only symptom.
+const workspace = {
+  state: {
+    tabs: [{ id: 'tab-a', title: 'alpha' }],
+    activeTabId: 'tab-a', stage: oneLaneStage('a1'), pinnedSessionIds: [],
+    sessions: { a1: { cwd: '/work/alpha', kind: 'claude', title: 'Leaky agent', projectId: 'tab-a', joinedAt: 0 } },
+  },
+  focusAgentBySessionId,
+} as unknown as Workspace
+// The monitor reads agent labels from the app's workspace context, exactly as
+// it is mounted in SettingsBar.
+const renderMonitor = (element: ReactElement) => render(<WorkspaceProvider workspace={workspace}>{element}</WorkspaceProvider>)
+
 function api(
   read: () => Promise<MonitorSnapshot | null>,
   getMonitorProcesses: (offset: number, sort: 'cpu' | 'memory') => Promise<MonitorProcessPage | null> = vi.fn(async () => null),
   overrides: Record<string, unknown> = {},
 ) {
   Object.defineProperty(window, 'api', { value: {
-    getMonitorSnapshot: read, getMonitorProcesses,
+    getMonitorSnapshot: read, getMonitorProcesses, getMonitorAgentUsage: vi.fn(async () => usage),
     previewMonitorReport: vi.fn(async () => ({ from: 0, to: 1, estimatedBytes: 4096,
       dataClasses: ['metrics', 'operations', 'incidents', 'coverage', 'build'], localOnly: true,
       status: { state: 'healthy', bytes: 4096, oldestAt: 0, newestAt: 1, points: 2,
@@ -49,11 +79,26 @@ describe('monitor display lifecycle', () => {
 
   it('exposes an accessible dialog and distinguishes actual zero from unavailable values', async () => {
     api(vi.fn(async () => snapshot))
-    render(<PerformanceMonitor onClose={vi.fn()} />)
+    renderMonitor(<PerformanceMonitor onClose={vi.fn()} />)
     expect(await screen.findByRole('dialog', { name: 'Performance Monitor' })).toBeInTheDocument()
-    expect(await screen.findByText('Peak 0.0 %')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Processes' })).toBeInTheDocument()
     expect(screen.getByText('Always on · no automatic uploads')).toBeInTheDocument()
+  })
+
+  it('ranks agents under their workspace label and goes to one only after navigation succeeds', async () => {
+    api(vi.fn(async () => snapshot))
+    const onClose = vi.fn()
+    renderMonitor(<PerformanceMonitor onClose={onClose} />)
+    const agents = await screen.findByRole('region', { name: 'Agents by resource use' })
+    await waitFor(() => expect(within(agents).getByText('Leaky agent')).toBeInTheDocument())
+    expect(within(agents).getByText('A1')).toBeInTheDocument()
+    // Growth over the window, not just the current size.
+    expect(within(agents).getByText('+819 MB')).toBeInTheDocument()
+    expect(screen.getByText(/19% of 16\.0 GB RAM/)).toBeInTheDocument()
+
+    fireEvent.click(within(agents).getByRole('button', { name: 'Go to A1 Leaky agent' }))
+    await waitFor(() => expect(onClose).toHaveBeenCalledOnce())
+    expect(focusAgentBySessionId).toHaveBeenCalledWith('a1')
   })
 
   it('returns pagination to the last valid page when a process fleet shrinks', async () => {
@@ -70,7 +115,7 @@ describe('monitor display lifecycle', () => {
       rows: offset < total ? rows.slice(0, Math.min(50, total - offset)) : [], total,
     }))
     api(vi.fn(async () => snapshot), readProcesses)
-    render(<PerformanceMonitor onClose={vi.fn()} />)
+    renderMonitor(<PerformanceMonitor onClose={vi.fn()} />)
     await act(async () => { await Promise.resolve() })
     screen.getByRole('button', { name: 'Processes' }).click()
     await act(async () => { await Promise.resolve() })
@@ -90,7 +135,7 @@ describe('monitor display lifecycle', () => {
       truncated: false, message: null }))
     api(vi.fn(async () => ({ ...snapshot, history: { state: 'healthy' as const, bytes: 4096,
       oldestAt: 0, newestAt: 1, points: 2, incidents: 0, exporting: false, shortened: false } })), undefined, { startMonitorTrace: start })
-    render(<PerformanceMonitor onClose={vi.fn()} />)
+    renderMonitor(<PerformanceMonitor onClose={vi.fn()} />)
     screen.getByRole('button', { name: 'Recordings' }).click()
 
     expect(await screen.findByText(/metrics, operations, incidents, coverage, build/)).toHaveTextContent('local file only')

@@ -12,6 +12,7 @@ import type {
   SessionSemanticEvent,
   SessionStartedEvent,
   SessionSubAgentsEvent,
+  SessionHistoryBoundaryEvent,
 } from '@shared/sessionFeed/types'
 import { applyTheme } from '@renderer/app-state/settings/theme'
 import { DEFAULT_SETTINGS } from '@renderer/app-state/settings/types'
@@ -24,8 +25,10 @@ import type {
   InboundFrame,
   InboundMessage,
   OutboundFrame,
+  RemoteNoteRecord,
   RemoteSessionSummary,
 } from './wire'
+import type { UsageSnapshot } from '@shared/types/usage'
 
 function applyRemoteThemeSettings(settings: Record<string, unknown> | null | undefined): void {
   if (!settings) return
@@ -95,6 +98,7 @@ export class WebSocketSessionFeed implements SessionFeed {
     screen: new Set(),
     'jsonl-entries': new Set(),
     'jsonl-error': new Set(),
+    'history-boundary': new Set(),
     'semantic-event': new Set(),
     conditions: new Set(),
     'process-state': new Set(),
@@ -111,6 +115,20 @@ export class WebSocketSessionFeed implements SessionFeed {
   private readonly sessionListListeners = new Set<(s: RemoteSessionSummary[]) => void>()
   private readonly connectionListeners = new Set<(s: ConnectionState) => void>()
   private readonly sttListeners = new Set<(available: boolean | null) => void>()
+  // v2 note state: latest TLDR/Goal record per session. Kept here (not in
+  // TranscriptStore) because notes are glance metadata, not transcript —
+  // they outlive session views and belong to the connection, exactly like
+  // the session list itself. Bootstrap frames from the server seed these
+  // at (re)connect; live updates replace per session.
+  private readonly tldrBySession = new Map<string, RemoteNoteRecord>()
+  private readonly goalBySession = new Map<string, RemoteNoteRecord>()
+  private readonly tldrListeners = new Set<(e: { sessionId: string; record: RemoteNoteRecord }) => void>()
+  private readonly goalListeners = new Set<(e: { sessionId: string; record: RemoteNoteRecord }) => void>()
+  // v2: last account usage snapshot (global, not per-session). null until
+  // the server pushes one — the UI keeps the indicator hidden rather than
+  // guessing "normal".
+  private usageSnapshot: UsageSnapshot | null = null
+  private readonly usageListeners = new Set<(snapshot: UsageSnapshot | null) => void>()
   private readonly pending = new Map<string, Pending>()
   private socket: WebSocketLike | null = null
   private disposed = false
@@ -159,6 +177,35 @@ export class WebSocketSessionFeed implements SessionFeed {
     return () => this.sttListeners.delete(cb)
   }
 
+  // --- v2 note surface (TLDR / Goal peeks) ---
+
+  getTldrRecord(sessionId: string): RemoteNoteRecord | null {
+    return this.tldrBySession.get(sessionId) ?? null
+  }
+
+  getGoalRecord(sessionId: string): RemoteNoteRecord | null {
+    return this.goalBySession.get(sessionId) ?? null
+  }
+
+  onTldrChanged(cb: (e: { sessionId: string; record: RemoteNoteRecord }) => void): Unsub {
+    this.tldrListeners.add(cb)
+    return () => this.tldrListeners.delete(cb)
+  }
+
+  onGoalChanged(cb: (e: { sessionId: string; record: RemoteNoteRecord }) => void): Unsub {
+    this.goalListeners.add(cb)
+    return () => this.goalListeners.delete(cb)
+  }
+
+  getUsage(): UsageSnapshot | null {
+    return this.usageSnapshot
+  }
+
+  onUsage(cb: (snapshot: UsageSnapshot | null) => void): Unsub {
+    this.usageListeners.add(cb)
+    return () => this.usageListeners.delete(cb)
+  }
+
   dispose(): void {
     this.disposed = true
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer)
@@ -188,6 +235,9 @@ export class WebSocketSessionFeed implements SessionFeed {
   }
   onSessionJsonlError(cb: (e: SessionJsonlErrorEvent) => void): Unsub {
     return this.sub('jsonl-error', cb)
+  }
+  onSessionHistoryBoundary(cb: (e: SessionHistoryBoundaryEvent) => void): Unsub {
+    return this.sub('history-boundary', cb)
   }
   onSessionSemanticEvent(cb: (e: SessionSemanticEvent) => void): Unsub {
     return this.sub('semantic-event', cb)
@@ -483,6 +533,30 @@ export class WebSocketSessionFeed implements SessionFeed {
       }
       case 'theme-settings':
         applyRemoteThemeSettings(frame.themeSettings)
+        return
+      case 'tldr-updated': {
+        const record: RemoteNoteRecord = {
+          text: frame.text,
+          updatedAt: frame.updatedAt,
+          revision: frame.revision,
+        }
+        this.tldrBySession.set(frame.sessionId, record)
+        for (const cb of [...this.tldrListeners]) cb({ sessionId: frame.sessionId, record })
+        return
+      }
+      case 'goal-updated': {
+        const record: RemoteNoteRecord = {
+          text: frame.text,
+          updatedAt: frame.updatedAt,
+          revision: frame.revision,
+        }
+        this.goalBySession.set(frame.sessionId, record)
+        for (const cb of [...this.goalListeners]) cb({ sessionId: frame.sessionId, record })
+        return
+      }
+      case 'usage-snapshot':
+        this.usageSnapshot = frame.snapshot
+        for (const cb of [...this.usageListeners]) cb(frame.snapshot)
         return
       case 'error':
         return

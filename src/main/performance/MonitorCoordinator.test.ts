@@ -166,6 +166,36 @@ describe('monitor worker isolation', () => {
     coordinator.stop()
   })
 
+  it('feeds agent usage only from complete process pages and clears it on stop', () => {
+    vi.useFakeTimers()
+    const child = new FakeChild()
+    harness.launch.mockReturnValue(child)
+    const coordinator = new MonitorCoordinator(() => Date.now())
+    coordinator.start()
+    coordinator.operation(operation)
+    // Local fixtures: the neighboring tests declare theirs inside their own
+    // bodies, so there is no shared `row`/`summary` to reuse here.
+    const row = { identity: '1:100', pid: 1, parentPid: 0, creationTime: 100, type: 'agent',
+      sessionIds: ['a'], sharedSessionCount: 1, cpuPercent: 1, memoryBytes: 1024, quality: 'ok' }
+    const summary = { sampledAt: 100, count: 1, cpuPercent: 1, memoryBytes: 1024, quality: 'ok', sessionCount: 1, missingRoots: 0, truncated: false }
+    vi.advanceTimersByTime(250)
+    // A partial generation proves nothing yet: the history must stay empty
+    // until the page's chunks have been validated as one atomic transfer.
+    child.emit('message', { sequence: 1, processChunk: { generation: 1, offset: 0, complete: false, rows: [row], summary } })
+    expect(coordinator.readAgentUsage(16 * 1024 ** 3).sessions).toHaveLength(0)
+    vi.advanceTimersByTime(250)
+    // The completing chunk carries a SECOND process owned by the same
+    // session (a child it spawned) — the history must sum both, which is the
+    // "children included" half of the attribution contract.
+    child.emit('message', { sequence: 2, processChunk: { generation: 1, offset: 1, complete: true, rows: [{ ...row, identity: '2:100', pid: 2 }], summary } })
+    const usage = coordinator.readAgentUsage(16 * 1024 ** 3)
+    expect(usage.sessions.map(session => session.sessionId)).toEqual(['a'])
+    expect(usage.sessions[0]!.memoryBytes).toBe(2048)
+    expect(usage.systemMemoryBytes).toBe(16 * 1024 ** 3)
+    coordinator.stop()
+    expect(coordinator.readAgentUsage(1).sessions).toHaveLength(0)
+  })
+
   it('reserves transport capacity for the declared maximum process fleet', () => {
     vi.useFakeTimers()
     const child = new FakeChild()

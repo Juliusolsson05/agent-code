@@ -1,8 +1,12 @@
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
 
+// `goal_loop` is harness-driven (main observes turn boundaries and re-prompts
+// through its own send interface), so unlike `workflows` it duplicates no
+// provider-native control plane and is safe on every provider (#1001).
 export type BuiltInMcpDomain =
   | 'tldr'
   | 'goal'
+  | 'goal_loop'
   | 'ping'
   | 'orchestration'
   | 'ai_workspace'
@@ -14,6 +18,7 @@ export type BuiltInMcpDomain =
 export const BUILT_IN_MCP_DOMAINS = [
   'tldr',
   'goal',
+  'goal_loop',
   'ping',
   'orchestration',
   'ai_workspace',
@@ -44,6 +49,7 @@ export const BUILT_IN_MCP_DOMAINS = [
 export const CONFIGURABLE_BUILT_IN_MCP_DOMAINS = [
   'tldr',
   'goal',
+  'goal_loop',
   'orchestration',
   'ai_workspace',
   'agent_transcripts',
@@ -101,6 +107,7 @@ const BUILT_IN_MCP_DOMAINS_BY_PROVIDER = {
   claude: [
     'tldr',
     'goal',
+    'goal_loop',
     'ping',
     'orchestration',
     'ai_workspace',
@@ -110,6 +117,10 @@ const BUILT_IN_MCP_DOMAINS_BY_PROVIDER = {
   ],
   codex: [...BUILT_IN_MCP_DOMAINS],
   opencode: [...BUILT_IN_MCP_DOMAINS],
+  // Seeded over the owned control connection at session creation and re-seeded
+  // on the terminal's load answer (the recorded tool.mcp path); the app offers
+  // Grok the same built-in domain set as the other terminal providers.
+  grok: [...BUILT_IN_MCP_DOMAINS],
 } as const satisfies Record<AgentProviderKind, readonly BuiltInMcpDomain[]>
 
 const BUILT_IN_MCP_DOMAIN_SET = new Set<string>(BUILT_IN_MCP_DOMAINS)

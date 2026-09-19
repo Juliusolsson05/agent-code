@@ -19,8 +19,11 @@ import type { CommandDef } from '@renderer/features/command-palette/types'
 // Merge Project Tabs (#913), 123 with View TLDR History (#917), 125 with
 // Goal preview and Goal MCP (#936), 126 with Auto-follow All Working Agents (#938), 128 with
 // the performance report/trace commands (#944), 129 with Close Idle Orchestration
-// Agents (#960), 130 with Open Agent Analytics (#964), 115 with Clear
-// Lane (#992 stage 4), and 119 with the lane keyboard grammar (#992 stage 5).
+// Agents (#960), 130 with Open Agent Analytics (#964), 132 with Goal Loop (#1001), 134
+// with the two generated Grok split commands (#844), then the unified layout (#992):
+// 16 retirements took it to 118, Clear Lane (stage 4) to 119 and the lane keyboard
+// grammar (stage 5) to 123. (#992 was written against 130 and read 119 at the end;
+// merging main added Goal Loop's two commands and the two generated Grok splits.)
 // Keeping ONE snapshot that moved — rather
 // than a "baseline" file and an "after" file — is what makes the plan's
 // headline count an assertion anyone can check against running code instead of
@@ -48,7 +51,7 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
   'resume-session',
   // windowCommands (1)
   'new-window',
-  // paneCommands (32: 28 literal + 4 generated provider splits)
+  // paneCommands (34: 28 literal + 6 generated provider splits)
   'new-agent',
   // Registered directly after New Agent… so the two creation entry points sit
   // together in the empty-query browse order (#852).
@@ -65,6 +68,8 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
   'codex-horizontal',
   'opencode-vertical',
   'opencode-horizontal',
+  'grok-vertical',
+  'grok-horizontal',
   'undo-close',
   'toggle-tail',
   'toggle-tail-all',
@@ -148,11 +153,13 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
   'agent.title.set',
   // dispatchColorFlagCommands (1)
   'dispatch.color-flag.set',
-  // spotlight / TLDR / reader / tile-tabs (6)
+  // spotlight / TLDR / reader / tile-tabs (6) + goal loop (2)
   'toggle-spotlight',
   'tldr-preview',
   'goal-preview',
   'view-tldr-history',
+  'goal-loop-preview',
+  'goal-loop-stop',
   'toggle-reader-mode',
   // settingsCommands (4, was 5: worktree-badges + dangerous-agents retired,
   // open-keyboard-shortcuts added)
@@ -225,12 +232,12 @@ const NAVIGATION_COMMAND_GROUP: readonly string[] = [
 const ids = (): string[] => builtInCommandCatalog.map(c => c.id)
 
 describe('built-in command catalog — baseline characterization', () => {
-  it('contains exactly the 119 governed commands in registration order', () => {
+  it('contains exactly the 123 governed commands in registration order', () => {
     // Order matters: this is the palette's empty-query browse order.
     expect(ids()).toEqual([...BASELINE_COMMAND_IDS])
   })
 
-  it('has exactly 119 commands', () => {
+  it('has exactly 123 commands', () => {
     // Stated separately from the order assertion because this number is the
     // thing that moves, and a bare count failure is a clearer signal than a
     // 99-line array diff.
@@ -251,11 +258,12 @@ describe('built-in command catalog — baseline characterization', () => {
     // the unified layout (#992): −dispatch-mode, −global-dispatch, −nav×4,
     // −normalize×3 → 114 with stage 3a: −tiled-tabs, −bury/revive/kill-buried,
     // −attach×2, −detach → 115 with Clear Lane (#992 stage 4) → 119 with the
-    // lane keyboard grammar (#992 stage 5).
+    // lane keyboard grammar (#992 stage 5) → 123 once main's Goal Loop preview
+    // and stop (#1001) and the two generated Grok splits (#844) merged in.
     // Each step of that arithmetic was a deliberate edit to this line, which is the entire point of pinning it. (The two test
     // titles above had drifted to "115" while this line said 116; they now
     // track it again.)
-    expect(builtInCommandCatalog).toHaveLength(119)
+    expect(builtInCommandCatalog).toHaveLength(123)
   })
 
   it('reports no structural defects', () => {
@@ -289,12 +297,13 @@ describe('generated per-provider split commands', () => {
   })
 
   it('accounts for the difference between literal and total command count', () => {
-    // 119 total - 4 generated = 115 literal `id:` fields across the command
+    // 123 total - 6 generated = 117 literal `id:` fields across the command
     // modules. At the original baseline this read 102 - 4 = 98; it moved down by
     // the five retirements, then back up by the nine additions, Grid Dispatch's
     // six row commands, New Window, and the later additions recorded in the
-    // count test above (through the lane keyboard grammar, #992 stage 5).
-    expect(builtInCommandCatalog.length - nonDefaultProviders.length * 2).toBe(115)
+    // count test above (through the lane keyboard grammar, #992 stage 5, and
+    // Goal Loop, #1001). Grok (#844) grew only the GENERATED term, 4 → 6.
+    expect(builtInCommandCatalog.length - nonDefaultProviders.length * 2).toBe(117)
   })
 
   it('emits both directions for every non-default provider', () => {
@@ -393,7 +402,7 @@ describe('governance targets', () => {
   })
 
   it('lands on the arithmetic the plan predicted', () => {
-    // 102 baseline - 21 retirements + 33 additions = 114, checked against the
+    // 102 baseline - 21 retirements + 42 additions = 123, checked against the
     // real catalog rather than trusted as prose. (5 governance retirements +
     // 16 unified-layout retirements, all recorded in RETIRED_COMMAND_IDS.)
     //
@@ -420,10 +429,12 @@ describe('governance targets', () => {
     // `view-tldr-history` (#917), `goal-preview` and `enable-goal-mcp` (#936),
     // `toggle-tail-working` (#938), `save-performance-report` and
     // `record-performance-trace` (#944), `close-idle-orchestration-agents` (#960),
-    // `agent-analytics.open` (#964), `clear-focused-lane` (#992 stage 4), and the
-    // four lane-grammar commands (#992 stage 5).
-    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 38).toBe(102)
-    expect(builtInCommandCatalog).toHaveLength(119)
+    // `agent-analytics.open` (#964), `goal-loop-preview` and `goal-loop-stop`
+    // (#1001), `grok-vertical` and `grok-horizontal` (#844, generated from
+    // AGENT_PROVIDER_KINDS), `clear-focused-lane` (#992 stage 4), and the four
+    // lane-grammar commands (#992 stage 5).
+    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 42).toBe(102)
+    expect(builtInCommandCatalog).toHaveLength(123)
   })
 })
 

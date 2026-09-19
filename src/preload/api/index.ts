@@ -1,4 +1,5 @@
 import { tldrApi } from '@preload/api/tldr.js'
+import { goalLoopApi } from '@preload/api/goalLoop.js'
 import { sessionApi } from '@preload/api/session.js'
 import { controlApi } from '@preload/api/control.js'
 import { providerApi } from '@preload/api/provider.js'
@@ -64,6 +65,7 @@ import { agentActivityApi } from '@preload/api/agentActivity.js'
 
 export const api = {
   ...tldrApi,
+  ...goalLoopApi,
   ...controlApi,
   ...sessionApi,
   ...providerApi,

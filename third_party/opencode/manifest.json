@@ -1,0 +1,21 @@
+{
+  "tool": "opencode",
+  "version": "1.18.31",
+  "urlBase": "https://github.com/anomalyco/opencode/releases/download/v{version}",
+  "archiveFormat": "zip",
+  "executableInsideArchive": "opencode",
+  "platforms": {
+    "darwin-arm64": {
+      "filename": "opencode-darwin-arm64.zip",
+      "sha256": "caf7f31fa1aec2353ea859d4ef9ab824c6273d941b016e88d51193fa3028d34e",
+      "bytes": 46273106,
+      "binarySha256": "16c960ba77421da11b53e785f359b73f328a86118b48feb4af143db5d9afb198"
+    },
+    "darwin-x86_64": {
+      "filename": "opencode-darwin-x64-baseline.zip",
+      "sha256": "ef4dcd35aa2dda0068680140922cb502c4d160bf305b54d7c620153a71f244bb",
+      "bytes": 48467280,
+      "binarySha256": "9cd3d83bc230830846ef4b20088e5521364540cd681fdeeda1bab4119f9c37a8"
+    }
+  }
+}

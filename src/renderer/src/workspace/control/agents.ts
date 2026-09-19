@@ -12,7 +12,7 @@ import { sessionHasTranscript } from '@renderer/workspace/transcriptAvailability
 
 const sessionInput = z.object({ sessionId: z.string().min(1).describe('Stable agent sessionId from agents.search/list; not a provider-native transcript ID or numbered tile.') }).strict()
 const sessionReference = workspaceObservationSchema.shape.sessions.element
-const provider = z.enum(['claude', 'codex', 'opencode']).describe('Provider for the new agent; its CLI must already be configured in Agent Code.')
+const provider = z.enum(['claude', 'codex', 'opencode', 'grok']).describe('Provider for the new agent; its CLI must already be configured in Agent Code.')
 
 export function agentControlCapabilities(getWorkspace: () => Workspace) {
   const observe = () => observeWorkspace(getWorkspace)

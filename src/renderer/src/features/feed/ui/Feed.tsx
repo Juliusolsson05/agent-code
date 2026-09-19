@@ -1152,7 +1152,7 @@ function FeedImpl({
                              *  screen. The scroller above carries `@container` so these variants
                              *  respond to the FEED's own width, not the viewport — which is why a
                              *  narrow desktop tile benefits identically to a phone. */}
-                            <div className="min-h-full flex flex-col gap-4 mx-auto px-3 pt-3 pb-6 @min-[480px]:px-5 @min-[480px]:pt-5 @min-[768px]:max-w-[880px] @min-[768px]:px-8 @min-[768px]:pt-6 @min-[768px]:pb-8">
+                            <div className="feed-column min-h-full flex flex-col gap-4 mx-auto px-3 pt-3 pb-6 @min-[480px]:px-5 @min-[480px]:pt-5 @min-[768px]:max-w-[880px] @min-[768px]:px-8 @min-[768px]:pt-6 @min-[768px]:pb-8">
                               {/* ONE owner rule for every visible feed surface.
                                *
                                * The old JSX rendered separate buckets in a fixed order:

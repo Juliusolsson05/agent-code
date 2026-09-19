@@ -228,6 +228,71 @@ export type OpencodeConditionSnapshot = {
   ts: number
 }
 
+// Grok conditions: a tool permission, an ask-user question and a plan
+// approval, each outstanding only while native's reverse request for it is
+// outstanding (the grok catalog's interaction.* facts). Every action is a
+// `custom` action answered over the owned control connection
+// (GrokSession.resolveCondition → GrokHeadless.resolveConditionAction, which
+// refuses a token native already resolved), never a `pty` keystroke — which is
+// why GROK_CONDITION_POLICY's actionKinds set is permanently empty. The state
+// shapes mirror the headless package's condition module states
+// (grok-code-headless src/conditions/modules.ts), including the option list
+// native offered, which the views render as-is.
+
+export type GrokPermissionConditionState = {
+  visible: boolean
+  token?: string
+  toolCallId?: string | null
+  title?: string
+  options?: Array<{ optionId: string; name: string; kind: string | null }>
+  metadata?: unknown
+}
+
+export type GrokQuestionConditionState = {
+  visible: boolean
+  token?: string
+  toolCallId?: string | null
+  text?: string
+  metadata?: unknown
+}
+
+export type GrokPlanApprovalConditionState = {
+  visible: boolean
+  token?: string
+  toolCallId?: string | null
+  planContent?: string
+  metadata?: unknown
+}
+
+export type GrokCondition =
+  | {
+      kind: 'grok.permission'
+      state: GrokPermissionConditionState
+      actions: ConditionAction[]
+    }
+  | {
+      kind: 'grok.question'
+      state: GrokQuestionConditionState
+      actions: ConditionAction[]
+    }
+  | {
+      kind: 'grok.plan-approval'
+      state: GrokPlanApprovalConditionState
+      actions: ConditionAction[]
+    }
+
+export type GrokConditionKind = GrokCondition['kind']
+
+export type GrokConditionMap = Partial<{
+  [K in GrokConditionKind]: Extract<GrokCondition, { kind: K }>
+}>
+
+export type GrokConditionSnapshot = {
+  provider: 'grok'
+  conditions: GrokConditionMap
+  ts: number
+}
+
 export type CodexConditionKind = CodexCondition['kind']
 
 export type CodexConditionMap = Partial<{

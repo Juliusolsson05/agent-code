@@ -23,7 +23,7 @@ export async function parseTranscriptForActivity(
   // users carrying 5+ MB transcripts, the whole-file pattern allocated
   // 3-4x the file size transiently (Buffer + string + split array +
   // parsed objects), producing the 100-200 MB spike pattern visible in
-  // the system-perf popover every ~60 seconds. Streaming line-by-line
+  // the Performance Monitor every ~60 seconds. Streaming line-by-line
   // drops the transient peak to one line at a time (~tens of KB even
   // for large tool_use entries) at no semantic cost.
   const events: IndexedWorktreeActivityEvent[] = []
