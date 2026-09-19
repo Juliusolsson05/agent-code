@@ -244,6 +244,13 @@ export function registerSessionIpc(
     },
   )
 
+  // Jump to Latest for a provider whose TUI owns its transcript scrollback
+  // (#843). A fixed request, never a command string from the renderer: the
+  // route beneath it can run any TUI command, including destructive ones.
+  ipcMain.handle('session:jumpToLatest', async (_evt, sessionId: string) => {
+    return await manager.jumpToLatest(sessionId)
+  })
+
   ipcMain.handle(
     'session:resolveCondition',
     async (_evt, sessionId: string, action: ConditionCustomAction) => {

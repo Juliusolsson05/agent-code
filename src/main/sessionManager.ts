@@ -4004,6 +4004,20 @@ export class SessionManager extends EventEmitter {
     return session.awaitPastePlaceholder(opts)
   }
 
+  /**
+   * Ask the provider to scroll its own transcript view to the newest message
+   * (#843). Only providers whose TUI pages its transcript on the alternate
+   * screen need this; for every other session the renderer's xterm
+   * scrollToBottom already does the job, so 'unsupported' is a normal answer,
+   * not an error.
+   */
+  async jumpToLatest(sessionId: string): Promise<{ ok: true } | { ok: false; reason: string }> {
+    const entry = this.sessions.get(sessionId)
+    if (!entry || entry.kind === 'terminal') return { ok: false, reason: 'no-session' }
+    if (typeof entry.session.jumpToLatest !== 'function') return { ok: false, reason: 'unsupported' }
+    return entry.session.jumpToLatest()
+  }
+
   async resolveCondition(
     sessionId: string,
     action: ConditionCustomAction,

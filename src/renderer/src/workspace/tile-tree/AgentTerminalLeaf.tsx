@@ -129,6 +129,9 @@ export function AgentTerminalLeaf({
     scrollToLatestRequest: runtime.scrollToLatestRequest,
     tailActive,
     termRef,
+    // Fire-and-forget: the xterm scroll above already ran, and a provider
+    // that cannot help answers 'unsupported'.
+    onJumpToLatest: () => { void window.api.jumpToLatest(sessionId).catch(() => undefined) },
   })
   const dimensionActiveRef = useRef(false)
   const dimensionOwnershipEpochRef = useRef(0)
