@@ -450,7 +450,22 @@ export function useKeybinds(
 
     const tldrHold = tldrHoldRef.current!
     const handler = (e: KeyboardEvent) => {
-      if (useTldrView.getState().held || useTldrView.getState().latched) {
+      const tldrView = useTldrView.getState()
+      // WHY a latch needs a MOUNTED overlay to own input (#1027), exactly like
+      // the goal-loop latch below (#1021): the latch is one app-wide flag, but
+      // an overlay exists only inside a visible TldrPane. There is none in a
+      // terminal-only tab or in Spotlight on a shell, and TldrOverlay renders
+      // nothing in a pane hidden by Reader, Settings or the fullscreen editor.
+      // Running TLDR or Goal from the palette there showed nothing and froze
+      // all typing until Escape. Input ownership follows the mounted DOM
+      // (lib/interaction-ownership.ts). A latch with nothing mounted is
+      // stale: drop it and route this key normally.
+      //
+      // A HELD peek is exempt: it lasts only while the key is physically
+      // down, and the keyup listener ends it however the gate behaves.
+      if (tldrView.latched && !tldrView.held && document.querySelector('[data-tldr-overlay],[data-goal-overlay]') == null) {
+        dismissTldr()
+      } else if (tldrView.held || tldrView.latched) {
         // The dimmed composer must never receive typing, including repeated
         // Option-letter chords after a user rebinds this command. Release is
         // handled by the independent keyup listener, even while this gate owns
