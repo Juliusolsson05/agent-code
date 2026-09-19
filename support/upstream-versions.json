@@ -19,10 +19,11 @@
       "label": "OpenCode",
       "pkg": "opencode-ai",
       "changelog": "https://github.com/sst/opencode/releases",
-      "accepted": "1.18.30",
-      "checkedAt": "2026-09-17",
+      "accepted": "1.18.31",
+      "checkedAt": "2026-09-19",
       "notes": [
-        "Added at the app level (remote-v2 rebuild, Refs #996): both OpenCode runtimes wrap this one CLI, and the app-level watch previously had no entry — the packages carry their own files (packages/opencode-terminal-headless and packages/opencode-headless), but nothing compared the npm latest against an APP-accepted version. Acceptance rides the terminal package's review (1.18.30, live-recorded); the structured runtime's SSE vocabulary is stringly-parsed with an unknown_event catch-all, so the same compatibility-pass discipline applies per package before this number moves."
+        "Added at the app level (remote-v2 rebuild, Refs #996): both OpenCode runtimes wrap this one CLI, and the app-level watch previously had no entry — the packages carry their own files (packages/opencode-terminal-headless and packages/opencode-headless), but nothing compared the npm latest against an APP-accepted version. Acceptance rides the terminal package's review (1.18.30, live-recorded); the structured runtime's SSE vocabulary is stringly-parsed with an unknown_event catch-all, so the same compatibility-pass discipline applies per package before this number moves.",
+        "1.18.31 — accepted as the bundled-runtime pin (Refs #994). Basis: the official release asset verified by archive+binary sha256, the full deterministic suites green (terminal package, app setup/provider-switch, typecheck), and production evidence — the app has been driving 1.18.31 TUI panes, conditions included, in daily use since 2026-09-14. The recorded live compatibility pass could NOT discriminate 1.18.31 from 1.18.30 on 2026-09-19: it times out waiting for the permission condition identically on both versions, including the same 1.18.30 the Stage 0 recordings passed against, so that failure is environmental rather than a pin regression (tracked in #1009). npm latest is 1.18.31, so this acceptance also clears the upstream-watch drift. Re-run #1009's scenario once fixed before treating the live suite as acceptance evidence again."
       ]
     }
   }

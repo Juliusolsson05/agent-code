@@ -3,7 +3,9 @@
 // Code. Currently wired for:
 //
 //   - 'mitmdump' (from mitmproxy) — Claude proxy streaming, issue #119
-//   - 'tmux'                       — terminal pane persistence,   issue #120 (stub)
+//   - 'tmux'                       — terminal pane persistence,   issue #120
+//   - 'cloudflared'                — remote companion tunnel
+//   - 'opencode'                   — OpenCode provider CLI,       issue #994
 //
 // WHY this module exists:
 //   We need exactly one source of truth for "where does the bundled
@@ -58,7 +60,7 @@ import { join, sep } from 'node:path'
 
 import { app } from 'electron'
 
-export type BundledToolId = 'mitmdump' | 'tmux' | 'cloudflared'
+export type BundledToolId = 'mitmdump' | 'tmux' | 'cloudflared' | 'opencode'
 
 type MitmproxyManifest = {
   tool: 'mitmproxy'
@@ -233,6 +235,13 @@ export async function isBundledArchiveAvailable(
     if (!manifest?.platforms[platformKey]) return false
     return fileExists(cloudflaredBinaryPath(manifest, platformKey))
   }
+  if (tool === 'opencode') {
+    const platformKey = getPlatformKey()
+    if (!platformKey) return false
+    const manifest = await loadOpencodeManifest()
+    if (!manifest?.platforms[platformKey]) return false
+    return fileExists(opencodeBinaryPath(manifest, platformKey))
+  }
   return false
 }
 
@@ -250,6 +259,7 @@ export async function resolveBundledTool(
   if (tool === 'mitmdump') return resolveMitmdump()
   if (tool === 'tmux') return resolveTmux()
   if (tool === 'cloudflared') return resolveCloudflared()
+  if (tool === 'opencode') return resolveOpencode()
   return null
 }
 
@@ -566,6 +576,94 @@ function cloudflaredBinaryPath(
       'main',
       'runtime',
       'cloudflared',
+      platformKey,
+      manifest.executableInsideArchive,
+    ),
+  )
+}
+
+// ---------------------------------------------------------------------------
+// opencode resolver
+//
+// Same artifact shape as tmux/cloudflared — upstream ships a single
+// self-contained Mach-O per platform (inside a zip rather than a tar.gz;
+// the fetch script does that extraction at build time, so the cache and
+// the staged out/main/runtime tree hold the bare binary). Same resolver
+// shape too: find + chmod + real-exec probe, no userData install.
+//
+// WHY this one is a PROVIDER CLI rather than an internal helper like the
+// other three: opencode panes need the CLI on fresh installs where no
+// shell ever put ~/.opencode/bin on the app's PATH (#994; Finder-launched
+// apps inherit a minimal PATH). toolchain.ts layers this resolver in front
+// of cached/PATH lookups for every getToolPath('opencode') consumer, and
+// prerequisites.ts surfaces it as the setup gate's 'bundled' state — the
+// version we ship is the version we tested, and it moves with app updates
+// rather than npm (see the note in cliUpdate.ts).
+//
+// The probe runs `--version` (opencode prints the bare semver; it has no
+// `-V`). A 144 MB binary failing its probe degrades to null exactly like
+// tmux: callers fall back to cached/PATH, and the log carries the noexec
+// diagnosis from probeExecutable's WHY.
+
+type OpencodeManifest = {
+  tool: 'opencode'
+  version: string
+  urlBase: string
+  archiveFormat: 'zip'
+  executableInsideArchive: string
+  platforms: Record<
+    string,
+    { filename: string; sha256: string; bytes?: number }
+  >
+}
+
+async function resolveOpencode(): Promise<string | null> {
+  const platformKey = getPlatformKey()
+  if (!platformKey) return null
+  const manifest = await loadOpencodeManifest()
+  if (!manifest?.platforms[platformKey]) return null
+
+  const binary = opencodeBinaryPath(manifest, platformKey)
+  if (!(await fileExists(binary))) return null
+  try {
+    await chmod(binary, 0o755)
+  } catch {
+    // Same defensive chmod as tmux/cloudflared; the access check below is
+    // the gate.
+  }
+  if (!(await isExecutable(binary))) return null
+  try {
+    await probeExecutable('opencode', binary, ['--version'])
+  } catch (err) {
+    console.error('[runtimeTools] bundled opencode failed its exec probe:', err)
+    return null
+  }
+  return binary
+}
+
+async function loadOpencodeManifest(): Promise<OpencodeManifest | null> {
+  const manifestPath = unpackAsarPath(
+    join(app.getAppPath(), 'out', 'main', 'runtime', 'opencode', 'manifest.json'),
+  )
+  try {
+    const text = await readFile(manifestPath, 'utf8')
+    return JSON.parse(text) as OpencodeManifest
+  } catch {
+    return null
+  }
+}
+
+function opencodeBinaryPath(
+  manifest: OpencodeManifest,
+  platformKey: string,
+): string {
+  return unpackAsarPath(
+    join(
+      app.getAppPath(),
+      'out',
+      'main',
+      'runtime',
+      'opencode',
       platformKey,
       manifest.executableInsideArchive,
     ),

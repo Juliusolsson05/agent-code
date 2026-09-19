@@ -67,11 +67,13 @@
     "runtime:verify:tmux": "node scripts/runtime-tools/verify-tmux.mjs",
     "runtime:fetch:cloudflared": "node scripts/runtime-tools/fetch-cloudflared.mjs",
     "runtime:verify:cloudflared": "node scripts/runtime-tools/verify-cloudflared.mjs",
-    "runtime:verify": "npm run runtime:verify:mitmproxy && npm run runtime:verify:tmux && npm run runtime:verify:cloudflared",
+    "runtime:fetch:opencode": "node scripts/runtime-tools/fetch-opencode.mjs",
+    "runtime:verify:opencode": "node scripts/runtime-tools/verify-opencode.mjs",
+    "runtime:verify": "npm run runtime:verify:mitmproxy && npm run runtime:verify:tmux && npm run runtime:verify:cloudflared && npm run runtime:verify:opencode",
     "upstream:check": "node scripts/check-upstream.mjs",
     "conditions-core:sync": "node scripts/sync-conditions-core.mjs",
     "conditions-core:check": "node scripts/sync-conditions-core.mjs --check",
-    "runtime:prepare:mac": "npm run runtime:fetch:mitmproxy -- --all && npm run runtime:fetch:tmux -- --all && node scripts/runtime-tools/verify-mitmproxy.mjs --strict && node scripts/runtime-tools/verify-tmux.mjs --strict && npm run runtime:fetch:cloudflared -- --all && node scripts/runtime-tools/verify-cloudflared.mjs --strict",
+    "runtime:prepare:mac": "npm run runtime:fetch:mitmproxy -- --all && npm run runtime:fetch:tmux -- --all && node scripts/runtime-tools/verify-mitmproxy.mjs --strict && node scripts/runtime-tools/verify-tmux.mjs --strict && npm run runtime:fetch:cloudflared -- --all && node scripts/runtime-tools/verify-cloudflared.mjs --strict && npm run runtime:fetch:opencode -- --all && node scripts/runtime-tools/verify-opencode.mjs --strict",
     "postinstall": "node scripts/patch-xterm.mjs && electron-rebuild -f -w node-pty"
   },
   "dependencies": {
