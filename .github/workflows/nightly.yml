@@ -1,0 +1,194 @@
+name: Nightly release
+
+# Rolling nightly of `main` with FIXED-NAME assets (#1011). The design
+# decisions live in docs/superpowers/plans/2026-09-19-nightly-release.md;
+# the load-bearing ones:
+#
+#   - The release identity (tag `nightly`) and asset names are constants;
+#     the CONTENTS roll, so external links never break. Auto-updater
+#     metadata (blockmaps, latest-mac.yml) is dropped on purpose — the app
+#     has no update channel and those names carry the version.
+#   - The nightly is a PRERELEASE with make_latest=false. The stable
+#     versioned release (release.yml) owns "latest", which is what the
+#     landing page resolves through `releases/latest`. softprops sends
+#     make_latest on EVERY update, so an explicit `true` here would take
+#     "latest" back from a stable release on each nightly; creation-date
+#     ordering does NOT protect it (PR #1012 review).
+#   - The skip state is a `built-from: <sha>` marker in the release body,
+#     written LAST — after every asset uploaded — so a failed or partial
+#     publish leaves no marker for that SHA and the next run rebuilds
+#     instead of skipping over a broken release (PR #1012 review). The
+#     skip check also requires all four assets to be present.
+#   - Own concurrency group (`release-nightly`), NOT release.yml's
+#     `release-macos`: GitHub keeps one pending run per group and a newer
+#     pending run CANCELS the older pending one, so sharing the group let a
+#     scheduled nightly cancel a queued manual release. The two publish to
+#     different releases, so running side by side is safe. Within this group
+#     the newest pending nightly replacing an older pending one is exactly
+#     right; an in-progress run is never cancelled (a 26-minute notarizing
+#     run killed midway is wasted and leaves no evidence).
+
+on:
+  schedule:
+    # 05:00 UTC daily. GitHub's scheduler delays under load; a late nightly
+    # is fine, a missing one is not — the skip-check keeps it idempotent.
+    - cron: "0 5 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        # Rebuild even when the dispatched SHA already has a complete
+        # nightly — the escape hatch for a release someone edited or
+        # damaged by hand. Scheduled runs never force.
+        description: "Rebuild and republish even if this commit already has a nightly"
+        type: boolean
+        default: false
+
+concurrency:
+  group: release-nightly
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  validate-nightly-secrets:
+    # The nightly always publishes, so signing is mandatory — fail in
+    # seconds, not after a 9-minute build. Same shape as release.yml's
+    # validate-release step (deliberate mirror; see the drift warning in
+    # reusable-app-build-macos.yml).
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate signing secrets
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          missing=()
+          [ -z "${CSC_LINK:-}" ] && missing+=(CSC_LINK)
+          [ -z "${CSC_KEY_PASSWORD:-}" ] && missing+=(CSC_KEY_PASSWORD)
+          [ -z "${APPLE_ID:-}" ] && missing+=(APPLE_ID)
+          [ -z "${APPLE_APP_SPECIFIC_PASSWORD:-}" ] && missing+=(APPLE_APP_SPECIFIC_PASSWORD)
+          [ -z "${APPLE_TEAM_ID:-}" ] && missing+=(APPLE_TEAM_ID)
+          if [ "${#missing[@]}" -gt 0 ]; then
+            printf 'The nightly always publishes a signed release; missing secrets: %s\n' "${missing[*]}"
+            exit 1
+          fi
+
+  check-for-changes:
+    needs: validate-nightly-secrets
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.compare.outputs.changed }}
+      head-sha: ${{ steps.compare.outputs.head-sha }}
+      prev-sha: ${{ steps.compare.outputs.prev-sha }}
+    steps:
+      - name: Checkout the release scripts
+        # Only scripts/release is needed. It uses Node built-ins alone (the
+        # runner's Node, no npm ci), and the decision reads the GitHub API,
+        # not the tree.
+        uses: actions/checkout@v7
+        with:
+          sparse-checkout: scripts/release
+          fetch-depth: 1
+
+      - name: Compare the triggering commit with the last complete nightly
+        id: compare
+        # All the logic lives in scripts/release/nightly.mjs, tested against
+        # recorded GitHub payloads in testing/system/release/nightly.test.ts.
+        # It treats only a 404 as "no nightly yet", parses the built-from
+        # marker CRLF-safe, and requires all four fixed assets uploaded before
+        # it skips. GITHUB_SHA, GITHUB_REPOSITORY, GITHUB_REF_NAME and
+        # GITHUB_OUTPUT are the runner's defaults. Scheduled runs build main's
+        # HEAD. workflow_dispatch only runs a workflow file that exists on the
+        # default branch, and builds the ref it names.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCE: ${{ github.event.inputs.force || 'false' }}
+        run: node scripts/release/nightly.mjs decide
+
+  build:
+    needs: check-for-changes
+    if: needs.check-for-changes.outputs.changed == 'true'
+    # Verbatim extraction of release.yml's build+package jobs; see that
+    # file's header for the drift warning. secrets: inherit is required —
+    # the packaging step reads the signing secrets directly.
+    uses: ./.github/workflows/reusable-app-build-macos.yml
+    secrets: inherit
+
+  publish-nightly:
+    # Needs BOTH: `build` for ordering, `check-for-changes` for its outputs —
+    # the `needs.<id>` context only contains direct dependencies.
+    needs: [check-for-changes, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout full history
+        # For the commit list in the release body.
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Download packaged artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: macos-release
+          # Defense in depth: if signing was somehow absent the reusable
+          # workflow uploaded `macos-unsigned-dev` instead, and asking for
+          # `macos-release` fails here rather than publishing unsigned bits.
+          path: release
+
+      - name: Rename artifacts to fixed nightly names
+        # Exactly one dmg and one zip per architecture, or the run fails
+        # naming what it found. Publishing the wrong binary under a permanent
+        # URL is worse than a red run. Blockmaps and latest-mac.yml are dropped
+        # because they reference versioned names and no update channel reads a
+        # rolling nightly. Tested on the real v0.0.2-beta.1 artifact names.
+        run: node scripts/release/nightly.mjs rename release
+
+      - name: Compose release bodies
+        # Writes nightly-body-publishing.md (NO built-from marker; posted with
+        # the uploads) and nightly-body.md (marker first; written by the final
+        # step only after every upload succeeded). If the previous SHA is not
+        # in this clone (force-pushed, deleted, hand-edited), it falls back to
+        # recent history instead of failing `git log` after a full build.
+        env:
+          HEAD_SHA: ${{ needs.check-for-changes.outputs.head-sha }}
+          PREV_SHA: ${{ needs.check-for-changes.outputs.prev-sha }}
+        run: node scripts/release/nightly.mjs notes .
+
+      - name: Publish the rolling nightly release
+        # softprops updates the existing release when the tag already
+        # exists, deleting and re-uploading each same-named asset
+        # (overwrite_files defaults to true at this pinned v3.0.3) — that
+        # replacement IS the rolling mechanism. ACCEPTED TRADE-OFF: each asset
+        # is briefly missing between its delete and its re-upload, so a page
+        # loaded just before a publish can 404 once; a fresh page load falls
+        # back to the Releases page. Upload-then-rename would close that window
+        # at the cost of a hand-rolled asset API client.
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
+        with:
+          tag_name: nightly
+          # Used only when the tag is first created: without it GitHub tags
+          # the default branch HEAD at publish time, not the commit built.
+          target_commitish: ${{ needs.check-for-changes.outputs.head-sha }}
+          name: Agent Code Nightly
+          prerelease: true
+          make_latest: false
+          body_path: nightly-body-publishing.md
+          files: |
+            release/Agent.Code-nightly-arm64.dmg
+            release/Agent.Code-nightly-arm64.zip
+            release/Agent.Code-nightly-x64.dmg
+            release/Agent.Code-nightly-x64.zip
+
+      - name: Record the built-from marker
+        # Last on purpose: the marker is the skip check's proof that THIS SHA
+        # has a complete nightly, so it is written only after softprops
+        # returned successfully with every asset uploaded.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit nightly --repo "${GITHUB_REPOSITORY}" --notes-file nightly-body.md

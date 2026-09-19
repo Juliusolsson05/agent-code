@@ -462,13 +462,46 @@ export function useKeybinds(
       // in SURFACE_OWNER_FLAGS (its latch lives in a feature store, not
       // uiShell). Dismiss here instead, before that gate, exactly like the
       // TLDR latch above: Escape and the toggle chord are the exits.
+      //
+      // WHY the gate requires the overlay to be MOUNTED, not just the latch
+      // (#1021): the latch is one app-wide store flag, but an overlay exists
+      // only where a GoalLoopPane is mounted, and none is mounted in a
+      // terminal-only or empty tab. Gating on the flag alone swallowed every
+      // key with nothing on screen, including the palette chord, the composer
+      // and the terminal. The owner hit exactly that: "I cannot type anything,
+      // I can basically do nothing." lib/interaction-ownership.ts is the
+      // contract: input ownership follows the mounted DOM, never store state.
+      // A latch with no mounted overlay is stale by definition, so drop it and
+      // route this key normally rather than leave it armed for the next
+      // surface to trip over.
       if (useGoalLoopView.getState().latched) {
-        e.preventDefault()
-        e.stopPropagation()
-        if (e.key === 'Escape' || (e.metaKey && e.shiftKey && e.code === 'KeyY')) {
+        if (document.querySelector('[data-goal-loop-overlay]') == null) {
           dismissGoalLoop()
+          // The toggle chord on a stale latch means "turn it off". Letting it
+          // fall through would run goal-loop-preview again and RE-arm the
+          // latch with nothing to show, so every press in a terminal-only tab
+          // flipped an invisible flag that a later mouse tab switch then
+          // turned into an overlay out of nowhere (#1021 review).
+          if (routedCommandForEvent(e, bindingIndex, GLOBAL_CONTEXT_ONLY) === 'goal-loop-preview') {
+            e.preventDefault()
+            e.stopPropagation()
+            return
+          }
+        } else {
+          e.preventDefault()
+          e.stopPropagation()
+          // The toggle chord comes from the binding index rather than a
+          // hardcoded Meta+Shift+KeyY. Otherwise rebinding goal-loop-preview
+          // (#1007 plans to move it off a macOS-reserved chord) would silently
+          // remove the chord exit and leave Escape as the only way out.
+          // GLOBAL_CONTEXT_ONLY for the same reason as the ownership branch
+          // below: an overlay owns the screen, so only an app-wide chord can
+          // mean "dismiss the thing in front of me".
+          if (e.key === 'Escape' || routedCommandForEvent(e, bindingIndex, GLOBAL_CONTEXT_ONLY) === 'goal-loop-preview') {
+            dismissGoalLoop()
+          }
+          return
         }
-        return
       }
       const cmd = e.metaKey
       const alt = e.altKey
@@ -916,6 +949,10 @@ export function useKeybinds(
     const onBlur = () => {
       tldrHold.release()
       dismissTldr()
+      // Same as the TLDR latch: a blocking overlay must not survive the
+      // user leaving the window. Switching apps and coming back is a common
+      // way to try to "unstick" an app, and before #1021 it did nothing here.
+      dismissGoalLoop()
       clearPendingDispatchDigit()
     }
 

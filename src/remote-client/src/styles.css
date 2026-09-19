@@ -2,6 +2,14 @@
  * composer, condition tap bar). The feed itself renders with the desktop's
  * own components + @renderer/styles.css, imported before this file.
  *
+ * THE GUTTER CONTRACT: every chrome band uses ONE horizontal gutter — 12px,
+ * matching the mounted desktop feed column (px-3 base tier; --feed-gutter
+ * is 12px at the same tier in @renderer/styles.css). The v1 chrome below
+ * was born at 14px while the feed was born at 12px, and that 2px shear
+ * between adjacent bands was the long-standing "mobile padding is broken"
+ * complaint — pinned by gutterContract.test.ts. Any new band joins the
+ * 12px scale; a second gutter value is the bug, not a styling choice.
+ *
  * THE AESTHETIC CONTRACT (same hard rules as @renderer/styles.css, which
  * this file must never fight):
  *   1. Radius marks detachment, and the phone SHELL has nothing detached:
@@ -82,7 +90,7 @@ html, body, #root {
 
 .topbar {
   display: flex; align-items: center; gap: 10px;
-  padding: calc(env(safe-area-inset-top, 0px) + 10px) 14px 10px;
+  padding: calc(env(safe-area-inset-top, 0px) + 10px) 12px 10px;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
   flex-shrink: 0;
@@ -134,13 +142,13 @@ html, body, #root {
 /* --- session picker --- */
 .session-list { display: flex; flex-direction: column; }
 .section-label {
-  padding: 10px 14px 4px;
+  padding: 10px 12px 4px;
   font-size: 10px; text-transform: uppercase; letter-spacing: 0.16em;
   color: var(--muted);
 }
 .session-row {
   display: flex; align-items: center; gap: 10px;
-  padding: 12px 14px; border: none; border-bottom: 1px solid var(--border);
+  padding: 12px 12px; border: none; border-bottom: 1px solid var(--border);
   background: none; color: var(--ink); text-align: left; width: 100%; font-size: 13px;
 }
 .session-row:active { background: var(--surface-hi); }
@@ -169,7 +177,7 @@ html, body, #root {
 
 /* --- session view --- */
 .terminal {
-  padding: 12px 14px; white-space: pre-wrap; word-break: break-word;
+  padding: 12px 12px; white-space: pre-wrap; word-break: break-word;
   font-size: 11px; line-height: 1.45; color: var(--ink);
 }
 /* Live conditions now render via the real desktop ConditionOutlet (Tailwind-
@@ -231,7 +239,7 @@ html, body, #root {
 }
 
 .working {
-  padding: 6px 14px; font-size: 11px; color: var(--accent);
+  padding: 6px 12px; font-size: 11px; color: var(--accent);
   border-top: 1px solid var(--border); flex-shrink: 0;
 }
 
