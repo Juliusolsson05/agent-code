@@ -260,8 +260,30 @@ describe('nightly notes: release bodies from a real git history', () => {
     // of failed nightlies would overflow, and `gh release edit` would then
     // fail after a full build (verification review).
     const { dir, shas } = gitRepo()
-    for (let i = 0; i < NOTES_MAX_COMMITS + 5; i++) execFileSync('git', ['commit', '-q', '--allow-empty', '-m', `chore: filler ${i}`], { cwd: dir, env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } })
+    // The filler history is written by ONE `git fast-import`, not by
+    // NOTES_MAX_COMMITS + 5 separate `git commit` processes. Spawning 205 git
+    // processes took over 5 s on the macOS runner and timed this test out in
+    // the nightly's integration step (run 35428680412), while the notes step
+    // under test ran in milliseconds. The history is the same kind of history
+    // a real clone has (a linear chain of commits on main), just built in one
+    // process. Raising the timeout would have hidden the next slow setup.
+    const tip = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: dir, encoding: 'utf8' }).trim()
+    const stream = Array.from({ length: NOTES_MAX_COMMITS + 5 }, (_, i) => {
+      const message = `chore: filler ${i}`
+      // Increasing committer dates keep `git log` order identical to the
+      // chain order, as consecutive real commits have.
+      return [
+        'commit refs/heads/main',
+        `committer t <t@t> ${1_700_000_000 + i} +0000`,
+        `data ${Buffer.byteLength(message)}`,
+        message,
+        ...(i === 0 ? [`from ${tip}`] : []),
+        '',
+      ].join('\n')
+    }).join('\n')
+    execFileSync('git', ['fast-import', '--quiet'], { cwd: dir, input: stream })
     const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: dir, encoding: 'utf8' }).trim()
+    expect(execFileSync('git', ['rev-list', '--count', `${shas[0]}..${head}`], { cwd: dir, encoding: 'utf8' }).trim()).toBe(String(NOTES_MAX_COMMITS + 7))
     const result = notes(dir, head, shas[0])
     expect(result.status).toBe(0)
     const listed = result.final.split('\n').filter(line => /^[0-9a-f]{7,} /.test(line))
