@@ -67,6 +67,13 @@ jobs:
             exit 1
           fi
 
+  # DRIFT WARNING: build-app and package-macos below are mirrored verbatim in
+  # .github/workflows/reusable-app-build-macos.yml, which the nightly
+  # (nightly.yml, #1011) builds through. Until this file adopts that reusable
+  # workflow (a follow-up once nightlies run green), a fix to either copy
+  # MUST be mirrored in the other. The #965 executable-bit fix is the kind of
+  # hotfix that would otherwise land here only and silently leave nightlies
+  # shipping a broken build.
   build-app:
     needs: validate-release
     runs-on: macos-latest
