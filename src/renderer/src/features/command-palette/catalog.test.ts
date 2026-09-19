@@ -19,7 +19,12 @@ import type { CommandDef } from '@renderer/features/command-palette/types'
 // Merge Project Tabs (#913), 123 with View TLDR History (#917), 125 with
 // Goal preview and Goal MCP (#936), 126 with Auto-follow All Working Agents (#938), 128 with
 // the performance report/trace commands (#944), 129 with Close Idle Orchestration
-// Agents (#960), 130 with Open Agent Analytics (#964), and 132 with Goal Loop (#1001).
+// Agents (#960), 130 with Open Agent Analytics (#964), 132 with Goal Loop (#1001), and
+// 134 with the two generated Grok split commands (#844). That last step is the
+// one that reached main unpinned: #844 never touched this file because the
+// commands are GENERATED from AGENT_PROVIDER_KINDS, not written as literal ids,
+// so its author had no diff here to review and main went red on merge. The
+// generated-splits invariant further down is what names the cause.
 // Keeping ONE snapshot that moved — rather
 // than a "baseline" file and an "after" file — is what makes the plan's
 // headline count an assertion anyone can check against running code instead of
@@ -47,7 +52,7 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
   'resume-session',
   // windowCommands (1)
   'new-window',
-  // paneCommands (32: 28 literal + 4 generated provider splits)
+  // paneCommands (34: 28 literal + 6 generated provider splits)
   'new-agent',
   // Registered directly after New Agent… so the two creation entry points sit
   // together in the empty-query browse order (#852).
@@ -68,6 +73,8 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
   'codex-horizontal',
   'opencode-vertical',
   'opencode-horizontal',
+  'grok-vertical',
+  'grok-horizontal',
   'nav-left',
   'nav-right',
   'nav-up',
@@ -219,12 +226,12 @@ const NAVIGATION_COMMAND_GROUP: readonly string[] = [
 const ids = (): string[] => builtInCommandCatalog.map(c => c.id)
 
 describe('built-in command catalog — baseline characterization', () => {
-  it('contains exactly the 132 governed commands in registration order', () => {
+  it('contains exactly the 134 governed commands in registration order', () => {
     // Order matters: this is the palette's empty-query browse order.
     expect(ids()).toEqual([...BASELINE_COMMAND_IDS])
   })
 
-  it('has exactly 132 commands', () => {
+  it('has exactly 134 commands', () => {
     // Stated separately from the order assertion because this number is the
     // thing that moves, and a bare count failure is a clearer signal than a
     // 99-line array diff.
@@ -242,11 +249,12 @@ describe('built-in command catalog — baseline characterization', () => {
     // with Auto-follow All Working Agents (#938) → 128 with the two ordinary
     // performance report/trace commands (#944) → 129 with Close Idle
     // Orchestration Agents (#960) → 130 with Open Agent Analytics (#964) →
-    // 132 with Goal Loop preview and stop (#1001).
+    // 132 with Goal Loop preview and stop (#1001) → 134 with the two generated
+    // Grok split commands (#844).
     // Each step of that arithmetic was a deliberate edit to this line, which is the entire point of pinning it. (The two test
     // titles above had drifted to "115" while this line said 116; they now
     // track it again.)
-    expect(builtInCommandCatalog).toHaveLength(132)
+    expect(builtInCommandCatalog).toHaveLength(134)
   })
 
   it('reports no structural defects', () => {
@@ -280,7 +288,7 @@ describe('generated per-provider split commands', () => {
   })
 
   it('accounts for the difference between literal and total command count', () => {
-    // 132 total - 4 generated = 128 literal `id:` fields across the command
+    // 134 total - 6 generated = 128 literal `id:` fields across the command
     // modules. At the original baseline this read 102 - 4 = 98; it moved down by
     // the five retirements, then back up by the nine additions, Grid Dispatch's
     // six row commands, New Window, and the later additions recorded in the
@@ -384,7 +392,7 @@ describe('governance targets', () => {
   })
 
   it('lands on the arithmetic the plan predicted', () => {
-    // 102 baseline - 5 retirements + 35 additions = 132, checked against the
+    // 102 baseline - 5 retirements + 37 additions = 134, checked against the
     // real catalog rather than trusted as prose.
     //
     // The subtracted term is the count of APPROVED ADDITIONS and the expected
@@ -410,10 +418,13 @@ describe('governance targets', () => {
     // `view-tldr-history` (#917), `goal-preview` and `enable-goal-mcp` (#936),
     // `toggle-tail-working` (#938), `save-performance-report` and
     // `record-performance-trace` (#944), `close-idle-orchestration-agents` (#960),
-    // `agent-analytics.open` (#964), and `goal-loop-preview` and
-    // `goal-loop-stop` (#1001).
-    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 35).toBe(102)
-    expect(builtInCommandCatalog).toHaveLength(132)
+    // `agent-analytics.open` (#964), `goal-loop-preview` and
+    // `goal-loop-stop` (#1001), and `grok-vertical` and `grok-horizontal`
+    // (#844 — generated, not literal: they appeared the moment grok joined
+    // AGENT_PROVIDER_KINDS, which is why they count as additions here exactly
+    // like the codex/opencode splits already inside the 102 baseline).
+    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 37).toBe(102)
+    expect(builtInCommandCatalog).toHaveLength(134)
   })
 })
 
