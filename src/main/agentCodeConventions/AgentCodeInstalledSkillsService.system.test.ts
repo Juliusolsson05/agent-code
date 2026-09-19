@@ -195,6 +195,25 @@ describe('AgentCode installed skills service', () => {
     expect(skill?.targets).toEqual([expect.objectContaining({ id: 'provider-target-resolution', state: 'error' })])
   })
 
+  it('a disabled skill can still be deleted while target discovery is failing', async () => {
+    // #1037 review: the discovery-error row has no fingerprint, so as a
+    // delete blocker it could never be approved, and delete dead-ended with
+    // "External changes must be reviewed".
+    const discovery = { fail: false }
+    const { service, discoveries } = await harness({ discovery })
+    const staged = stagedPackage({ commit: 'a'.repeat(40), files: [{ path: 'SKILL.md', content: '# Review code' }] })
+    const found = await discoverOne(service, discoveries, staged)
+    const installed = await service.installGitHubSkills({ expectedRevision: 0, discoveryId: found.discoveryId, candidateIds: [staged.candidate.candidateId] })
+    if (!installed.ok) throw new Error(JSON.stringify(installed))
+    const skill = installed.snapshot.skills.find(item => item.name === 'review-code')!
+    const disabled = await service.setInstalledSkillEnabled({ expectedRevision: installed.snapshot.revision, skillId: skill.id, enabled: false })
+    if (!disabled.ok) throw new Error(JSON.stringify(disabled))
+    discovery.fail = true
+    await service.audit()
+    const deleted = await service.deleteInstalledSkill({ expectedRevision: disabled.snapshot.revision, skillId: skill.id })
+    expect(deleted).toMatchObject({ ok: true })
+  })
+
   it('installs a reviewed package and requires a second review before updating it', async () => {
     const { root, service, discoveries, skillDirectory } = await harness()
     const first = stagedPackage({

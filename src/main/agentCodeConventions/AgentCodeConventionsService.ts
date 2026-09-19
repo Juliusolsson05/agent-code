@@ -172,6 +172,10 @@ type StagedInstalledDiscovery = {
   expiresAtMs: number
 }
 
+/** The status row a failed provider target discovery puts on every surface.
+ *  It is a statement about discovery, not about any file on disk. */
+const TARGET_RESOLUTION_STATUS_ID = 'provider-target-resolution'
+
 export class AgentCodeManagedSkillsService {
   private document = createEmptyAgentCodeConventionsDocument()
   private recovery: AgentCodeConventionsSnapshot['recovery']
@@ -686,9 +690,14 @@ export class AgentCodeManagedSkillsService {
         skill = this.document.installedSkills[request.skillId]!
       }
       const statuses = this.installedTargetStatuses.get(skill.id) ?? []
-      const blockers = statuses.filter(status => status.state === 'conflict'
+      // The discovery-failure row is not a blocker (#1037 review): it names no
+      // file anyone could review, and it has no fingerprint, so it could never
+      // be approved. Deleting a disabled skill was then impossible until
+      // discovery recovered. What delete must never do, forget a skill whose
+      // files are still on disk, is the stillOwnedKeys journal check below.
+      const blockers = statuses.filter(status => status.id !== TARGET_RESOLUTION_STATUS_ID && (status.state === 'conflict'
         || status.state === 'retired'
-        || status.state === 'error')
+        || status.state === 'error'))
       const approvals = new Map((request.abandonTargets ?? []).map(value => [value.targetId, value]))
       const unresolved = blockers.filter(status => {
         const approval = approvals.get(status.id)
@@ -1521,9 +1530,9 @@ export class AgentCodeManagedSkillsService {
   }
 
   private async reconcileInstalledSkillLocked(skill: AgentCodeInstalledSkillRecord): Promise<void> {
-    // Unsupported providers no longer short-circuit (#1014); the informational
-    // rows are appended by applyInstalledOperationsLocked, the single funnel
-    // every enabled-skill status rebuild passes through.
+    // Unsupported providers no longer short-circuit (#1014). Their
+    // informational rows are added when a snapshot is built
+    // (withUnsupportedRows), not stored here.
     const targets = this.installedTargets(skill)
     if (skill.enabled) {
       try {
@@ -2034,8 +2043,8 @@ export class AgentCodeManagedSkillsService {
   }
 
   private async reconcileEnabledLocked(): Promise<void> {
-    // Unsupported providers no longer short-circuit (#1014): they contribute
-    // informational rows at the end instead of replacing deployment rows.
+    // Unsupported providers no longer short-circuit (#1014). Their
+    // informational rows are added at snapshot time (withUnsupportedRows).
     const normalized = normalizeAgentCodeConventionsMarkdown(this.document.markdown, {
       requireContent: true,
     })
@@ -2160,8 +2169,8 @@ export class AgentCodeManagedSkillsService {
   }
 
   private async reconcileCustomEnabledLocked(skill: AgentCodeCustomSkillRecord): Promise<void> {
-    // Unsupported providers no longer short-circuit (#1014): they contribute
-    // informational rows at the exits instead of replacing deployment rows.
+    // Unsupported providers no longer short-circuit (#1014). Their
+    // informational rows are added at snapshot time (withUnsupportedRows).
     const targets = this.customTargets(skill)
     const normalized = normalizeAgentCodeCustomSkill(skill, { requireContent: true })
     if (!normalized.ok) {
@@ -2946,7 +2955,7 @@ export class AgentCodeManagedSkillsService {
       // review: they kept their stale rows, and with zero resolved targets
       // their health read 'unsupported'.)
       const resolutionError: AgentCodeConventionsTargetStatus = {
-        id: 'provider-target-resolution',
+        id: TARGET_RESOLUTION_STATUS_ID,
         providers: [],
         displayPath: '',
         state: 'error',
