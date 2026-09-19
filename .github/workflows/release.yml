@@ -11,14 +11,28 @@ on:
         options:
           - "false"
           - "true"
+      channel:
+        description: "prerelease (a beta; never latest) or stable (becomes releases/latest). Must match package.json: stable needs a version without -beta etc."
+        required: true
+        default: "prerelease"
+        type: choice
+        options:
+          - "prerelease"
+          - "stable"
+      # WHY these are optional and default to empty (Stage 8 of
+      # docs/decomposition/release-readiness.md): they used to default to
+      # v0.0.2-beta.1, the release that already exists, so every later
+      # dispatch had to override both or fail. Empty now means "derived from
+      # package.json" (scripts/release/identity.mjs), which is the only tag
+      # the check accepts anyway.
       release_tag:
-        description: "Beta release tag to create when publish_release is true"
-        required: true
-        default: "v0.0.2-beta.1"
+        description: "Release tag; empty = v<package.json version>"
+        required: false
+        default: ""
       release_name:
-        description: "Release name to create when publish_release is true"
-        required: true
-        default: "Agent Code 0.0.2 Beta 1"
+        description: "Release name; empty = Agent Code <version>"
+        required: false
+        default: ""
 
 concurrency:
   group: release-macos
@@ -27,6 +41,13 @@ concurrency:
 jobs:
   validate-release:
     runs-on: ubuntu-latest
+    # The release identity, decided once before any build and handed to the
+    # job that publishes (package-macos).
+    outputs:
+      tag: ${{ steps.identity.outputs.tag }}
+      name: ${{ steps.identity.outputs.name }}
+      prerelease: ${{ steps.identity.outputs.prerelease }}
+      make_latest: ${{ steps.identity.outputs.make_latest }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -55,17 +76,17 @@ jobs:
             exit 1
           fi
 
+      # The rules (tag = v<version>; the stable channel needs a stable
+      # version and the prerelease channel a prerelease one) live in a script
+      # with system tests: testing/system/release/identity.test.ts.
       - name: Validate release identity
+        id: identity
         if: ${{ github.event.inputs.publish_release == 'true' }}
         env:
+          CHANNEL: ${{ github.event.inputs.channel }}
           RELEASE_TAG: ${{ github.event.inputs.release_tag }}
-        run: |
-          version="$(node -p "require('./package.json').version")"
-          expected="v${version}"
-          if [ "$RELEASE_TAG" != "$expected" ]; then
-            printf 'Release tag must match package.json exactly: expected %s, got %s\n' "$expected" "$RELEASE_TAG"
-            exit 1
-          fi
+          RELEASE_NAME: ${{ github.event.inputs.release_name }}
+        run: node scripts/release/identity.mjs
 
   # DRIFT WARNING: build-app and package-macos below are mirrored verbatim in
   # .github/workflows/reusable-app-build-macos.yml, which the nightly
@@ -189,7 +210,9 @@ jobs:
           if-no-files-found: error
 
   package-macos:
-    needs: build-app
+    # validate-release is listed so its identity outputs are in `needs` here;
+    # build-app already waits for it.
+    needs: [validate-release, build-app]
     runs-on: macos-latest
     permissions:
       contents: write
@@ -351,9 +374,13 @@ jobs:
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.publish_release == 'true' }}
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
         with:
-          tag_name: ${{ github.event.inputs.release_tag }}
-          name: ${{ github.event.inputs.release_name }}
-          prerelease: true
+          tag_name: ${{ needs.validate-release.outputs.tag }}
+          name: ${{ needs.validate-release.outputs.name }}
+          # Hardcoded `true` until Stage 8, so no stable release could be
+          # made and releases/latest 404'd. make_latest is explicit either
+          # way: a beta must never become the fallback latest.
+          prerelease: ${{ needs.validate-release.outputs.prerelease == 'true' }}
+          make_latest: ${{ needs.validate-release.outputs.make_latest }}
           files: |
             release/*.dmg
             release/*.zip
