@@ -1,0 +1,44 @@
+{
+  "evidence": "Synthetic from the 2026-07-19 OpenCode SSE/reducer shape. The family has both a plain finalized invocation and a provider-owned finalized row once the tagged read result is attached.",
+  "cases": [
+    {
+      "expectedRoute": "generic",
+      "semanticBlock": {
+        "blockIndex": 0,
+        "kind": "tool_use",
+        "toolName": "read",
+        "toolUseId": "read-live-generic",
+        "inputJson": "{\"filePath\":\"/workspace/project/src/example.ts\",\"offset\":1,\"limit\":2}",
+        "inputJsonValid": true,
+        "parsedInput": {
+          "filePath": "/workspace/project/src/example.ts",
+          "offset": 1,
+          "limit": 2
+        },
+        "finalized": true
+      }
+    },
+    {
+      "expectedRoute": "specialized",
+      "expectedReceipt": {
+        "rendererId": "opencode.rows.dispatch"
+      },
+      "semanticBlock": {
+        "blockIndex": 1,
+        "kind": "tool_use",
+        "toolName": "read",
+        "toolUseId": "read-live-owned",
+        "inputJson": "{\"filePath\":\"/workspace/project/src/example.ts\",\"offset\":1,\"limit\":2}",
+        "inputJsonValid": true,
+        "parsedInput": {
+          "filePath": "/workspace/project/src/example.ts",
+          "offset": 1,
+          "limit": 2
+        },
+        "finalized": true,
+        "resultContent": "<path>/workspace/project/src/example.ts</path>\n<type>file</type>\n<content>\n1: export const answer = 42\n2: export type Answer = number\n</content>",
+        "resultAt": 1
+      }
+    }
+  ]
+}

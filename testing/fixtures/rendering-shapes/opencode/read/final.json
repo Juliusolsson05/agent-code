@@ -1,0 +1,19 @@
+{
+  "evidence": "Curated from the 2026-07-19 OpenCode committed read soak. The request stays generic, while the paired result proves the provider-owned read result renderer route.",
+  "toolUse": {
+    "type": "tool_use",
+    "id": "opencode-read-fixture-1",
+    "name": "read",
+    "input": {
+      "filePath": "/workspace/project/src/example.ts",
+      "offset": 41,
+      "limit": 2
+    }
+  },
+  "toolResult": {
+    "type": "tool_result",
+    "tool_use_id": "opencode-read-fixture-1",
+    "content": "<path>/workspace/project/src/example.ts</path>\n<type>file</type>\n<content>\n41: export const answer = 42\n42: export type Answer = number\n</content>",
+    "is_error": false
+  }
+}

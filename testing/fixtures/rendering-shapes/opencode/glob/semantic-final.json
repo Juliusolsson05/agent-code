@@ -1,0 +1,16 @@
+{
+  "evidence": "Synthetic from the 2026-07-19 OpenCode SSE/reducer shape; values are reduced while preserving fp2-f879ddcb.",
+  "semanticBlock": {
+    "blockIndex": 0,
+    "kind": "tool_use",
+    "toolName": "glob",
+    "toolUseId": "glob-live",
+    "inputJson": "{\"pattern\":\"src/**/*.ts\",\"path\":\"/workspace/project\"}",
+    "inputJsonValid": true,
+    "parsedInput": {
+      "pattern": "src/**/*.ts",
+      "path": "/workspace/project"
+    },
+    "finalized": true
+  }
+}

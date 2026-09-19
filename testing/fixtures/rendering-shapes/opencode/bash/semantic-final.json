@@ -1,0 +1,45 @@
+{
+  "evidence": "Synthetic from the 2026-07-19 OpenCode SSE/reducer shape. The structural keys are copied from fp2-41fff07e; one case proves the shared Git command route and one keeps an ordinary shell command generic.",
+  "cases": [
+    {
+      "expectedRoute": "specialized",
+      "expectedReceipt": {
+        "rendererId": "shared.command",
+        "protocolId": "command.git"
+      },
+      "semanticBlock": {
+        "blockIndex": 0,
+        "kind": "tool_use",
+        "toolName": "bash",
+        "toolUseId": "bash-live-git",
+        "inputJson": "{\"command\":\"git status --short\",\"description\":\"Shows repository changes\",\"timeout\":120000,\"workdir\":\"/workspace/project\"}",
+        "inputJsonValid": true,
+        "parsedInput": {
+          "command": "git status --short",
+          "description": "Shows repository changes",
+          "timeout": 120000,
+          "workdir": "/workspace/project"
+        },
+        "finalized": true
+      }
+    },
+    {
+      "expectedRoute": "generic",
+      "semanticBlock": {
+        "blockIndex": 1,
+        "kind": "tool_use",
+        "toolName": "bash",
+        "toolUseId": "bash-live-generic",
+        "inputJson": "{\"command\":\"npm run typecheck\",\"description\":\"Typechecks the project\",\"timeout\":120000,\"workdir\":\"/workspace/project\"}",
+        "inputJsonValid": true,
+        "parsedInput": {
+          "command": "npm run typecheck",
+          "description": "Typechecks the project",
+          "timeout": 120000,
+          "workdir": "/workspace/project"
+        },
+        "finalized": true
+      }
+    }
+  ]
+}

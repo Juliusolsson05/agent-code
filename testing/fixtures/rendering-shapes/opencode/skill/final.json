@@ -1,0 +1,11 @@
+{
+  "evidence": "Curated from the 2026-07-19 OpenCode committed tool-use soak; the current observed grammar is only a named skill lookup, so the shared structured row is the honest contract.",
+  "toolUse": {
+    "type": "tool_use",
+    "id": "opencode-skill-fixture-1",
+    "name": "skill",
+    "input": {
+      "name": "writing-plans"
+    }
+  }
+}

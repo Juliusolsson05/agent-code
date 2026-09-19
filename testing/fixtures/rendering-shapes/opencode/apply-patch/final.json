@@ -1,0 +1,30 @@
+{
+  "evidence": "Curated from the 2026-07-19 OpenCode committed tool-use soak. The direct patchText envelope now renders through the shared code-edit protocol when a real file header closes; malformed patch bodies still fall back generically.",
+  "cases": [
+    {
+      "expectedRoute": "specialized",
+      "expectedReceipt": {
+        "rendererId": "opencode.rows.dispatch"
+      },
+      "toolUse": {
+        "type": "tool_use",
+        "id": "opencode-apply-patch-fixture-1",
+        "name": "apply_patch",
+        "input": {
+          "patchText": "*** Begin Patch\n*** Update File: src/example.ts\n@@\n-old\n+new\n*** End Patch"
+        }
+      }
+    },
+    {
+      "expectedRoute": "generic",
+      "toolUse": {
+        "type": "tool_use",
+        "id": "opencode-apply-patch-fixture-2",
+        "name": "apply_patch",
+        "input": {
+          "patchText": "*** Begin Patch\nthis patch never reaches a file header"
+        }
+      }
+    }
+  ]
+}
