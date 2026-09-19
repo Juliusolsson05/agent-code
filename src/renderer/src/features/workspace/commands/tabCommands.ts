@@ -1,5 +1,6 @@
 import { panel } from '@renderer/features/command-palette/commandState'
 import type { CommandDef } from '@renderer/features/command-palette/types'
+import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 
 export const tabCommands: CommandDef[] = [
   {
@@ -18,9 +19,19 @@ export const tabCommands: CommandDef[] = [
     category: 'layout-dispatch',
     surface: 'app',
     title: 'Close Tab',
-    description: '**What it does:** Closes the **current tab** and its sessions.\n\n**Use when:** You are done with a whole project tab.\n\n**Notes:** Use **Undo Close** if you closed it by mistake.',
-    run: ({ workspace }) =>
-      workspace.activeTab ? workspace.closeTab(workspace.activeTab.id) : undefined,
+    description: '**What it does:** Closes the **project of the agent you are commanding** (the focused lane\'s agent, or the one in Spotlight or Reader) and all its sessions.\n\n**Use when:** You are done with a whole project.\n\n**Notes:** With no agent targeted it closes the highlighted project. Use **Undo Close** if you closed it by mistake.',
+    // WHY the command target's project and not `activeTab` (#1013 parity
+    // review): the active project is only a label now (U4). Lane focus and
+    // index selection never move it, so ⌘⇧W could close the project
+    // highlighted in the header while the user worked in another project's
+    // lane. A single idle session closes without a dialog, so the wrong
+    // project could go with no warning. The session being commanded names
+    // the project the user is actually in.
+    run: ({ workspace }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      const projectId = (sessionId ? workspace.state.sessions[sessionId]?.projectId : undefined) ?? workspace.activeTab?.id
+      return projectId ? workspace.closeTab(projectId) : undefined
+    },
   },
   {
     id: 'next-tab',

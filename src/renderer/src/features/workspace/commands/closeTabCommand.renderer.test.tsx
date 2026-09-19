@@ -157,6 +157,27 @@ describe('Close Tab command runs the approved close operation (#886 review round
     harness.mounted.unmount()
   })
 
+  it('closes the project of the agent in the focused lane, not the one highlighted in the header', async () => {
+    // #1013 parity review. The active project is only a label (U4): lane
+    // focus and index selection never move it. ⌘⇧W used to close the
+    // HIGHLIGHTED project while the user worked in another project's lane,
+    // and a single idle session closes with no dialog.
+    const state: WorkspaceState = {
+      tabs: [{ id: 'highlighted', title: 'Highlighted' }, { id: 'working', title: 'Working' }],
+      activeTabId: 'highlighted',
+      sessions: {
+        header: { cwd: '/h', kind: 'claude', projectId: 'highlighted', joinedAt: 0 },
+        lane: { cwd: '/w', kind: 'claude', projectId: 'working', joinedAt: 0 },
+      },
+      stage: oneLaneStage('lane'), pinnedSessionIds: [],
+    }
+    const { harness, context } = mountCommand(state)
+    await act(async () => { await command!.run(context) })
+    expect(killed()).toEqual(['lane'])
+    expect(harness.getState().tabs).toEqual([{ id: 'highlighted', title: 'Highlighted' }])
+    expectValidWorkspace(harness.getState())
+  })
+
   it('leaves no phantom tab or undo entry when one member\'s kill rejects, and the project keeps its survivor', async () => {
     killOwnedSession.mockImplementation(async owner => {
       if (owner.sessionId === 'row') throw new Error('backend refused')
