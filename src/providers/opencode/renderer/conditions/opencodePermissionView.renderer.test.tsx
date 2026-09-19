@@ -24,10 +24,10 @@ import { describe, expect, it } from 'vitest'
 
 import { CommittedChannel, EventDispatcher, ScreenChannel, SemanticChannel } from 'opencode-headless'
 import type { ScreenPermissionEvent } from 'opencode-headless'
-import { opencodePermissionView } from './views'
+import { opencodePermissionView, opencodeQuestionView } from './views'
 
 type Recorded = { sessionID: string, sse: { event: { type: string, properties?: Record<string, unknown> } }[] }
-const recording = (): Recorded => JSON.parse(readFileSync(resolve(__dirname, '../../../../../packages/opencode-terminal-headless/testing/fixtures/live/permission-once.json'), 'utf8'))
+const recording = (): Recorded => JSON.parse(readFileSync(resolve(__dirname, '../../../../../packages/opencode-headless/testing/fixtures/live-1.18.30/permission-once.json'), 'utf8'))
 
 /** Replay recorded bus events through the real dispatcher and return the
  * visible permission state the session would fold into the condition. */
@@ -79,5 +79,57 @@ describe('opencode permission modal on a recorded 1.18.30 ask', () => {
     mount(permissionStateFrom(rec))
     const subject = screen.getByText((_, element) => element?.tagName === 'PRE' && element.textContent === `bash: ${heredoc}`)
     expect(subject.className).toMatch(/max-h-/)
+  })
+
+  it('shows the command behind a default-permission external_directory ask, not just the directory', () => {
+    // #1026 review: OpenCode's DEFAULT rules allow bash and ask only for
+    // external_directory, so for most users this is THE shell-command
+    // prompt. OpenCode's ShellTool.ask sends it as
+    // { permission: 'external_directory', patterns: [dir/*], metadata: { command } }.
+    // The subject reads "external_directory: /work/old/*". Without the
+    // command, Enter on "Allow once" runs `rm -rf /work/old` unseen.
+    // DERIVED from the recording: permission, patterns, metadata and always
+    // are reshaped to that ask; the id, session and tool linkage are real.
+    const rec = recording()
+    for (const { event } of rec.sse) {
+      if (event.type === 'permission.asked') {
+        event.properties = { ...event.properties, permission: 'external_directory', patterns: ['/work/old/*'], always: ['/work/old/*'], metadata: { command: 'rm -rf /work/old', directories: ['/work/old'] } }
+      }
+    }
+    mount(permissionStateFrom(rec))
+    expect(screen.getByText('rm -rf /work/old').tagName).toBe('PRE')
+  })
+
+  it('warns plainly when Allow always is a wildcard grant (edit, write, MCP asks send ["*"])', () => {
+    const rec = recording()
+    // DERIVED: the recorded ask reshaped to an MCP tool ask, which sends always: ['*'].
+    for (const { event } of rec.sse) {
+      if (event.type === 'permission.asked') event.properties = { ...event.properties, permission: 'github_create_issue', patterns: ['*'], always: ['*'], metadata: {} }
+    }
+    mount(permissionStateFrom(rec))
+    const warning = screen.getByText(/Allow always covers/)
+    // The grant covers the whole OpenCode server this agent runs, including
+    // its subagents, until it restarts. That is how OpenCode's own TUI words
+    // the same confirmation.
+    expect(warning.textContent).toMatch(/every github_create_issue request/)
+    expect(warning.textContent).toMatch(/until this agent restarts/)
+  })
+})
+
+describe('opencode question modal on a recorded 1.18.30 ask', () => {
+  it('keeps a long question scroll-contained so Reject stays on screen', () => {
+    type RecordedQuestion = Recorded
+    const rec: RecordedQuestion = JSON.parse(readFileSync(resolve(__dirname, '../../../../../packages/opencode-headless/testing/fixtures/live-1.18.30/question-reject.json'), 'utf8'))
+    const screenChannel = new ScreenChannel()
+    let latest: { visible: boolean, questionID?: string, text?: string } | null = null
+    screenChannel.on('question', (event: { state: { visible: boolean, questionID?: string, text?: string } }) => { if (event.state.visible) latest = event.state })
+    const dispatcher = new EventDispatcher({ semantic: new SemanticChannel(), screen: screenChannel, committed: new CommittedChannel(), sessionID: rec.sessionID })
+    for (const { event } of rec.sse) dispatcher.dispatch(event)
+    const state = latest as unknown as { visible: true, questionID: string, text: string }
+    const Component = opencodeQuestionView.Component
+    render(<Component state={state} actions={[]} dispatch={async () => {}} interactionActive={false} />)
+    const text = screen.getByText('Do you prefer the color red or blue?')
+    expect(text.className).toMatch(/max-h-/)
+    expect(text.className).toMatch(/overflow-auto/)
   })
 })
