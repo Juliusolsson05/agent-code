@@ -390,8 +390,11 @@ function buildAgentRecord(params: {
     : (params.latestAssistantText ?? latestAssistant(messages))
   const lifecycleState = statusOnly
     ? orchestrationChildLifecycle(params.runtime, params.meta)
-    : lifecycleStateForRuntime(params.runtime, Boolean(latestAssistantText))
+    : lifecycleStateForRuntime(params.runtime, Boolean(latestAssistantText), params.meta)
   const activityAt = lastActivityAt(params.runtime, messages)
+  const providerFailure = lifecycleState === 'failed' && !params.runtime?.processError
+    ? terminalProviderFailure(params.runtime, params.meta)
+    : null
   return {
     sessionId: params.sessionId,
     kind: (params.meta.kind ?? DEFAULT_PROVIDER) as AgentProviderKind,
@@ -421,7 +424,11 @@ function buildAgentRecord(params: {
     ...(lifecycleState === 'completed' && activityAt
       ? { completedAt: activityAt }
       : {}),
-    ...(params.runtime?.processError ? { errorSummary: params.runtime.processError } : {}),
+    ...(params.runtime?.processError
+      ? { errorSummary: params.runtime.processError }
+      : providerFailure
+        ? { errorSummary: providerFailure.message, failedAt: providerFailure.at }
+        : {}),
     // Bounded excerpts on purpose (#373): the record-level mirrors exist as
     // at-a-glance hints in list/wait/agents[] payloads, so a full answer here
     // multiplied every child answer across responses (the 5x/7x duplication —
@@ -457,12 +464,87 @@ export function orchestrationChildLifecycle(
   runtime: SessionRuntime | null,
   meta: SessionMeta,
 ): OrchestrationLifecycleState {
-  return lifecycleStateForRuntime(runtime, hasAssistantOutput(runtime, meta))
+  return lifecycleStateForRuntime(runtime, hasAssistantOutput(runtime, meta), meta)
+}
+
+/**
+ * The child's provider turn ended in an error and the provider has gone idle
+ * (#1018). Returns the error and when it was produced, or null.
+ *
+ * WHY this exists: a child whose provider failed before any output (a usage
+ * limit, an auth rejection) looked exactly like one still thinking. The
+ * renderer kept the error as diagnostics only, the lifecycle read idle with no
+ * output as `waiting`, and main's prompt overlay turned that into
+ * `prompt_sent` forever. Six OpenCode children in one run did exactly that
+ * (testing/fixtures/orchestration-api-error/CATALOG.md).
+ *
+ * WHY each condition, from the recordings (same catalog):
+ * - The failure signal: a semantic api_error for OpenCode, Codex and Grok. For
+ *   Claude it is the committed assistant entry with isApiErrorMessage, NOT
+ *   its semantic api_error, because Claude retries transient errors on its
+ *   own and only the committed entry means it gave up.
+ * - Idle: OpenCode emits no api_error while it retries (processActive stayed
+ *   true in 10/10 retry episodes), and in 27/27 recorded errors the error
+ *   landed BEFORE idle. So a pure function of state is enough, with no timer:
+ *   it turns true in the same update that makes the child idle.
+ * - Newer than the latest real output, by PRODUCER time: a later answer, a
+ *   user re-prompt that produced output, or Claude's own "continuing
+ *   automatically" beats an old error. Arrival order is not enough: OpenCode
+ *   Terminal committed rows created before the error arrived after it.
+ */
+export function terminalProviderFailure(
+  runtime: SessionRuntime | null,
+  meta?: SessionMeta,
+): { message: string; at: number } | null {
+  if (!runtime) return null
+  const idle = !runtime.processActive
+    && (runtime.streamPhase ?? 'idle') === 'idle'
+    && !runtime.awaitingAssistant
+    && runtime.sessionStatus !== 'running'
+    && runtime.semantic.currentTurn === null
+  if (!idle) return null
+  const entries = orchestrationVisibleEntries(runtime, meta)
+  let signal: { message: string; at: number } | null = null
+  if (meta?.kind === 'claude') {
+    for (let index = entries.length - 1; index >= 0 && !signal; index -= 1) {
+      const entry = entries[index] as Record<string, unknown>
+      if (entry.type !== 'assistant' || entry.isApiErrorMessage !== true || entry.isSidechain === true) continue
+      const at = Date.parse(String(entry.timestamp ?? ''))
+      if (Number.isFinite(at)) signal = { message: claudeEntryText(entry) || 'Claude API error', at }
+    }
+  } else {
+    const errors = runtime.semantic.errors
+    for (let index = errors.length - 1; index >= 0 && !signal; index -= 1) {
+      const error = errors[index]!
+      if (error.kind === 'api_error') signal = { message: error.message, at: error.observedAtMs ?? error.ts }
+    }
+  }
+  if (!signal) return null
+  let lastOutputAt = 0
+  for (const entry of entries as Array<Record<string, unknown>>) {
+    if (entry.type !== 'assistant' || entry.isApiErrorMessage === true) continue
+    const at = Date.parse(String(entry.timestamp ?? ''))
+    if (Number.isFinite(at) && at > lastOutputAt) lastOutputAt = at
+  }
+  return signal.at > lastOutputAt ? signal : null
+}
+
+function claudeEntryText(entry: Record<string, unknown>): string {
+  const message = entry.message as { content?: unknown } | undefined
+  const content = message?.content
+  if (typeof content === 'string') return content.trim()
+  if (!Array.isArray(content)) return ''
+  return content
+    .map(block => (block && typeof block === 'object' && (block as { type?: unknown }).type === 'text' ? String((block as { text?: unknown }).text ?? '') : ''))
+    .filter(Boolean)
+    .join('\n')
+    .trim()
 }
 
 function lifecycleStateForRuntime(
   runtime: SessionRuntime | null,
   hasDurableOutput = false,
+  meta?: SessionMeta,
 ): OrchestrationLifecycleState {
   // STAGE 1 of 2: renderer-derived lifecycle. Main overlays prompt-delivery
   // timing to report `prompt_sent`; see OrchestrationBridge.lifecycleWithPromptDelivery.
@@ -483,6 +565,10 @@ function lifecycleStateForRuntime(
   ) {
     return 'running'
   }
+  // Before `completed` on purpose: a Claude limit is itself an assistant entry
+  // and used to read as the child's answer, and a failure after partial
+  // output is still a failure (see terminalProviderFailure).
+  if (terminalProviderFailure(runtime, meta)) return 'failed'
   if (hasDurableOutput) return 'completed'
   if (runtime.inputReady || runtime.processStatus === 'started') return 'waiting'
   return 'created'
