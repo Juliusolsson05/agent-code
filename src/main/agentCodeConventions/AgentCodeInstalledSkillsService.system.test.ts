@@ -96,6 +96,8 @@ async function harness(
     now?: () => Date
     snapshotMaxBytes?: number
     unsupportedProviders?: ResolvedAgentCodeConventionsTargets['unsupportedProviders']
+    /** Flip `.fail` to make provider target discovery throw from then on. */
+    discovery?: { fail: boolean }
   } = {},
 ) {
   const root = await temporaryDirectory()
@@ -118,7 +120,10 @@ async function harness(
     installedSkillSnapshotRoot: join(root, 'state', 'managed-skill-snapshots'),
     installedSkillSnapshotMaxBytes: options.snapshotMaxBytes,
     homeDirectory: root,
-    resolveTargets: async () => resolved,
+    resolveTargets: async () => {
+      if (options.discovery?.fail) throw new Error('Could not read provider configuration')
+      return resolved
+    },
     githubSkillSource,
     now: options.now ?? (() => new Date('2026-08-27T00:00:00.000Z')),
     operationId: (() => { let value = 0; return () => `installed-operation-${++value}` })(),
@@ -170,6 +175,24 @@ describe('AgentCode installed skills service', () => {
       expect.objectContaining({ id: 'unsupported:grok', state: 'unsupported' }),
     ]))
     expect(snapshot.unsupportedProviders).toEqual(['grok'])
+  })
+
+  // #1017 review: when provider target discovery fails, the conventions
+  // and custom skills report 'degraded' with the error row, but an installed
+  // skill kept its stale rows, and with zero resolved targets its health
+  // read 'unsupported', which says "no provider can take this" when the
+  // truth is "we could not look".
+  it('reports an installed skill as degraded, with the error, when target discovery fails', async () => {
+    const discovery = { fail: false }
+    const { service, discoveries } = await harness({ discovery })
+    const staged = stagedPackage({ commit: 'a'.repeat(40), files: [{ path: 'SKILL.md', content: '# Review code' }] })
+    const found = await discoverOne(service, discoveries, staged)
+    await service.installGitHubSkills({ expectedRevision: 0, discoveryId: found.discoveryId, candidateIds: [staged.candidate.candidateId] })
+    discovery.fail = true
+    await service.audit()
+    const skill = (await service.getInstalledSkillsSnapshot()).skills.find(item => item.name === 'review-code')
+    expect(skill?.health).toBe('degraded')
+    expect(skill?.targets).toEqual([expect.objectContaining({ id: 'provider-target-resolution', state: 'error' })])
   })
 
   it('installs a reviewed package and requires a second review before updating it', async () => {
