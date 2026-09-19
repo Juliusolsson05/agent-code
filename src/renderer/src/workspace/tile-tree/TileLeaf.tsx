@@ -12,6 +12,7 @@ import { agentFollowEnabled } from '@renderer/workspace/agentFollow'
 import { focusIsUnowned, useInteractiveOwnership } from '@renderer/workspace/tile-tree/TileLeaf/useInteractiveOwnership'
 import { useGlobalToast } from '@renderer/ui/GlobalToast'
 import { Feed } from '@renderer/features/feed/ui/Feed'
+import { StarterHintCard, starterCardVisibleForAgent } from '@renderer/features/workspace/ui/StarterHintCard'
 import type { ScrollInfo } from '@renderer/features/feed/ui/Feed'
 import { ProviderConditionOutlet } from '@providers/shared/renderer/conditions/ProviderConditionOutlet'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
@@ -811,6 +812,17 @@ export function TileLeaf({
         isSessionLive={isSessionLive}
       />
 
+      {/* The starter card (#992 §4.6, Context A): a fresh agent whose feed
+          shows only the provider welcome. Freshness is derived, never stored —
+          no user turn in the committed entries yet — so the card disappears on
+          its own the moment the first prompt lands, and a RESTORED session
+          (history replayed into entries) never shows one. Terminal views
+          (AgentTerminalLeaf) never mount this component at all: a raw PTY is
+          the provider's canvas and we do not paint over its welcome screen. */}
+      {starterCardVisibleForAgent(
+        workspace.state.sessions[sessionId],
+        runtime.entries,
+      ) && <StarterHintCard variant="fresh-agent" />}
       {/* Feed — overflow-auto lives inside Feed itself so it can
           own its own scroll listener for the sticky-bottom logic
           (see Feed.tsx FeedImpl). This wrapper just provides the

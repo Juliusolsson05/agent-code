@@ -139,6 +139,13 @@ export function buildDefaultKeybindings(): CommandBindingDefault[] {
     // so Settings can show it and a user can unbind it.
     { commandId: 'close-pane', bindings: ['Cmd+W', 'Alt+W'], context: 'global' },
 
+    // ⌘N for New Agent… — the platform convention for "new thing", unclaimed
+    // by any command, reservation, or Electron role (New Window is ⌘⇧N above).
+    // Added with the starter card (#992 §4.6), whose second slot points here:
+    // a card that says "New Agent" with no chord teaches nothing, and the
+    // chord the plan's ASCII sketch showed the operator was exactly this one.
+    { commandId: 'new-agent', bindings: ['Cmd+N'], context: 'global' },
+
     // --- Creation -----------------------------------------------------------
     // 'global', NOT 'grid'. These create commands work in BOTH modes —
     // splitFocused spawns a detached agent in Dispatch — and a 'grid' context

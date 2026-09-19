@@ -867,6 +867,50 @@ under "still open" after 3b-ii:
   contextual interaction with continuation state (a pending digit and a
   timer), not a command — exactly the class the reservation header describes.
 
+
+---
+
+### 9.4 Stage 6 execution record (starter card)
+
+Executed as designed in §4.6, with one honest divergence from the ASCII
+walkthrough recorded below:
+
+- **`StarterHintCard`** (`features/workspace/ui/StarterHintCard.tsx`) renders
+  both contexts from one registry-driven component. Every slot is a COMMAND
+  ID resolved through the catalog for its title and through
+  `resolveEffectiveKeybindings` — the same resolution the router performs —
+  for its chord, so a rebound command shows the USER's chord (pinned by
+  test). The one non-command slot (Fill Lane from Index) resolves through
+  `reservedInteractionBindings`, a new accessor over the reservation table:
+  the digit grammar owns chords without being a command, and the reservation
+  table is the registry of exactly that. Unbound commands render title-only.
+- **Context A** mounts in TileLeaf above the feed: visible when
+  `starterCardVisibleForAgent(meta, entries)` — an agent-kind session whose
+  committed entries hold no user turn. Derived, never stored: the first
+  prompt lands as an entry and the card vanishes by itself; a restored
+  session replays history and never sees one; there is no dismissal state to
+  persist. Terminal views never mount it (AgentTerminalLeaf has no card,
+  structurally), and the predicate itself refuses terminal/extension kinds
+  so a future caller cannot reintroduce it.
+- **Context B** extends the focused empty lane's hint in TiledDispatchLayout,
+  under the same three conditions the hint has (focused, empty, the row
+  offers agents) — the card advertises keys that act on `focusedLane`, and
+  an unfocused or agentless lane would promise gestures that do nothing
+  there. Four placement-flavored slots: Fill Lane, New Lane, Commands, and
+  the ⌥↑/⌥↓ index walk.
+- **⌘N now binds New Agent…** — the platform convention for "new thing",
+  unclaimed by any command, reservation, or Electron role (New Window is
+  ⌘⇧N). The card's second slot pointed at a command with no chord, and a
+  card that says "New Agent" with no key teaches nothing.
+- **Divergence from the ASCII walkthrough, recorded on purpose.** The
+  walkthrough's card showed ⌘K Commands, ⌥L New Lane, ⌥R New Row, ⇧⌘S
+  Spotlight. The shipped card shows the LIVE registry: ⌘⇧P Commands,
+  New Lane/New Row title-only (they ship no default), ⌥S Spotlight — and
+  ⌥L is Focus Lane Right, carrying years of inline-grammar muscle memory the
+  walkthrough sketch overwrote by accident. Registry truth beats the sketch;
+  that is what "registry-driven, always" means, and the sketch was
+  illustrative in a way the plan's own §4.6 table already was not.
+
 ## 10. Testing strategy
 
 Per `docs/testing/standard.md` — suffix picks the tier, each test protects

@@ -58,6 +58,17 @@ const MACOS_TEXT_EDITING_CHORDS: readonly Keybinding[] = [
   'Cmd+Shift+Up', 'Cmd+Shift+Down',
 ]
 
+/**
+ * The chords a named reserved interaction owns (its entry in
+ * RESERVED_INTERACTIONS, bindings only). Exists for surfaces that need to
+ * SHOW a reserved chord — the starter card's ⌘1–9 fill-grammar row (#992
+ * §4.6) — without hand-copying chords into a second table that would drift
+ * the first time the reservation changed.
+ */
+export function reservedInteractionBindings(owner: string): readonly Keybinding[] {
+  return RESERVED_INTERACTIONS.find(entry => entry.owner === owner)?.bindings ?? []
+}
+
 /** Runtime lookup companion of MACOS_TEXT_EDITING_CHORDS. */
 export function isMacosTextEditingChord(binding: Keybinding): boolean {
   return (MACOS_TEXT_EDITING_CHORDS as readonly string[]).includes(binding)

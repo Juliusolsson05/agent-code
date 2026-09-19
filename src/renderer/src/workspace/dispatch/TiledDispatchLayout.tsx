@@ -4,6 +4,7 @@ import { useAppStore } from '@renderer/app-state/hooks'
 import type { AgentViewMode } from '@renderer/app-state/settings/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { SplitHandle } from '@renderer/features/shared/SplitHandle'
+import { StarterHintCard } from '@renderer/features/workspace/ui/StarterHintCard'
 import { useResizableSplitter } from '@renderer/features/shared/useResizableSplitter'
 import { renderWorkspaceLeaf } from '@renderer/workspace/tile-tree/TileTree'
 import {
@@ -439,6 +440,7 @@ function GridRowView({
                     resolved.paneLabel,
                   )
                 ) : (
+                  <div className="flex h-full min-h-0 flex-col">
                   <DispatchEmpty
                     // A lane that NAMES a session but cannot resolve it is showing
                     // a dead id: the window between a session disappearing (killed
@@ -478,6 +480,17 @@ function GridRowView({
                         : undefined
                     }
                   />
+                  {/* The starter card, Context B (#992 §4.6): extends the
+                      focused empty lane's hint with the four placement-flavored
+                      slots. The same three conditions as the hint — focused,
+                      empty, row offers agents — for the same reason the hint
+                      has them: the card advertises keys that act on
+                      `focusedLane`, and an unfocused or agentless lane would
+                      be promising gestures that do nothing there. */}
+                  {focused && !lane?.selectedSessionId && rowOffersAgents && (
+                    <StarterHintCard variant="empty-lane" />
+                  )}
+                  </div>
                 )}
                 {!focused && (
                   <div className="absolute inset-0 pointer-events-none bg-canvas/34 ring-1 ring-inset ring-border" />
