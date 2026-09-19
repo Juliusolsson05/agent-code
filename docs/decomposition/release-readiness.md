@@ -348,7 +348,7 @@ claude 2.1.143 / codex 0.130.0 are stale versus the 2.1.278 / 0.155.1 in daily u
   - Test to update: `taxonomy.test.ts` ~:98-117.
   - **Depends on #1013**, which retires rotate/normalize/hard-normalize and the two
     attach commands. Do this AFTER deciding #1013 and promote only the survivors.
-- **T3 B17 phone gutter 14→12px, S.**
+- **T3 B17 phone gutter 14→12px, S.** DONE: PR #1023 MERGED `2af693d8`, with a fail-first contract test (4 bands failed on main).
   - The change is UNCOMMITTED in the MAIN checkout: `src/remote-client/src/styles.css`
     plus the new `src/remote-client/src/ui/gutterContract.test.ts` (8/8, and the
     remote suite 65/65).
@@ -496,6 +496,7 @@ claude 2.1.143 / codex 0.130.0 are stale versus the 2.1.278 / 0.155.1 in daily u
   (one per composer). Optional follow-up: a single app-level subscription.
 
 ### Progress log
+- 2026-09-19 07:55Z: #1023 MERGED (phone gutter). #933 reviewed GREEN; docs fixed (`7da7a255`), CI rerunning. #878 package half merged (opencode-headless#14 `62440add`); app PR #1026 in review. #1013 CI fixes pushed (lockfile, projection shape). #1024 decomposed.
 - 2026-09-19 07:20Z: **#1013** merged with main (`e52b0352`).
   - 5 conflicts resolved, plus 1 semantic port (performance-monitor agentIdentity to the stage model).
   - Catalog 123 re-derived; tsc clean; all 48 test files main touched pass.
