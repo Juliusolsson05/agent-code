@@ -36,7 +36,7 @@ export function globalControlCapabilities(observe: ObserveWindows) {
         // 'terminal' for a shell — filtering `provider: 'terminal'` before
         // this fix always matched zero rows because zod rejected the input
         // value outright, silently making "find just my shells" impossible.
-        provider: z.enum(['claude', 'codex', 'opencode', 'terminal']).optional().describe('Restrict to one provider, or `terminal` for shells.'), placement: z.enum(['grid', 'related', 'dispatch', 'detached', 'buried', 'reader', 'spotlight']).optional().describe('Restrict to agents with this placement; mirrored placements still identify the same agent.'), ...pageInput }).strict(),
+        provider: z.enum(['claude', 'codex', 'opencode', 'grok', 'terminal']).optional().describe('Restrict to one provider, or `terminal` for shells.'), placement: z.enum(['grid', 'related', 'dispatch', 'detached', 'buried', 'reader', 'spotlight']).optional().describe('Restrict to agents with this placement; mirrored placements still identify the same agent.'), ...pageInput }).strict(),
       output: pageSchema(match).extend({ unavailableWindows: z.array(z.object({ windowId: z.string(), error: z.string() })) }),
       handler: async (input, context) => {
         const windows = (await observe(context)).filter(window => !input.windowId || window.windowId === input.windowId)

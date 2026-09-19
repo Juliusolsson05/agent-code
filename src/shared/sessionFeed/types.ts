@@ -94,6 +94,23 @@ export type SessionJsonlEntriesEvent = {
   }>
 }
 
+/** A durable-history generation boundary (grok Stage 5): `reset` when the
+ * provider rewrote the transcript file and its snapshot starts re-delivering,
+ * `caught-up` when that snapshot is complete. Ordering is the point: entries of
+ * the superseded generation are flushed BEFORE the boundary on both transports,
+ * and the snapshot's re-delivered rows arrive after it. The single pure owner
+ * of what a boundary does to a transcript window is
+ * renderer/session-runtime/historyBoundary.ts; transports must not interpret. */
+export type SessionHistoryBoundaryEvent = {
+  sessionId: string
+  type: 'reset' | 'caught-up'
+  generation: number
+  snapshotByteLength: number
+  byteOffset?: number
+  complete?: boolean
+  file: string
+}
+
 export type SessionJsonlErrorEvent = { sessionId: string; message: string }
 
 export type SessionConditionsEvent = {

@@ -34,6 +34,8 @@ export const alias = [
   { find: 'claude-code-headless', replacement: resolve(root, 'packages/claude-code-headless/src/index.ts') },
   { find: /^codex-headless\/(.+)$/, replacement: `${resolve(root, 'packages/codex-headless/src')}/$1` },
   { find: 'codex-headless', replacement: resolve(root, 'packages/codex-headless/src/index.ts') },
+  { find: /^grok-code-headless\/(.+)$/, replacement: `${resolve(root, 'packages/grok-code-headless/src')}/$1` },
+  { find: 'grok-code-headless', replacement: resolve(root, 'packages/grok-code-headless/src/index.ts') },
   // Drift fix: electron.vite.config.ts gained opencode-headless when the
   // third provider landed; this map (deliberately duplicated — see the WHY
   // above) did not. Any test whose import graph reaches

@@ -24,6 +24,13 @@ type Emit = (
 function subagentsDirFromTranscript(file: string): string | null {
   if (!file.endsWith('.jsonl')) return null
   const providerSessionId = basename(file, '.jsonl')
+  // Claude's layout names each transcript after its session id
+  // (<projects>/<project>/<uuid>.jsonl → <uuid>/subagents beside it). Grok's
+  // layout names it chat_history.jsonl inside the session directory, so the
+  // derivation below would fabricate <id>/chat_history/subagents — a directory
+  // that never exists — and registration would turn a useless 600 ms poller on
+  // for every Grok pane. A fixed row name is not a session id; refuse it.
+  if (providerSessionId === 'chat_history') return null
   return join(dirname(file), providerSessionId, 'subagents')
 }
 

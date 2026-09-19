@@ -100,4 +100,34 @@ describe('AgentCodeConventionsRow', () => {
       expectedRevision: 1,
     })))
   })
+
+  // Locks in the #1014 UX: health is 'active' when only SOME providers are
+  // unsupported, and the banner must still say which ones — informational,
+  // not blocking.
+  it('shows an informational banner for unsupported providers while active', async () => {
+    const snapshot: AgentCodeConventionsSnapshot = {
+      ...disabledSnapshot(),
+      enabled: true,
+      health: 'active',
+      unsupportedProviders: ['grok'],
+      targets: [
+        ...disabledSnapshot().targets.map(target => ({ ...target, state: 'installed' as const })),
+        {
+          id: 'unsupported:grok',
+          providers: ['grok'],
+          displayPath: '',
+          state: 'unsupported',
+        },
+      ],
+    }
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: { auditAgentCodeConventions: vi.fn().mockResolvedValue(snapshot) },
+    })
+    render(<AgentCodeConventionsRow />)
+    expect(await screen.findByText('Status: Active')).toBeTruthy()
+    expect(screen.getByText('Personal Agent Skills are unavailable for: grok.')).toBeTruthy()
+    // The toggle stays enabled: unsupported providers are not a lockout.
+    expect(screen.getByRole('button', { name: /On/ })).not.toBeDisabled()
+  })
 })

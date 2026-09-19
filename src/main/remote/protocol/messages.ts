@@ -224,6 +224,7 @@ export type OutboundFrame =
         | 'screen'
         | 'jsonl-entries'
         | 'jsonl-error'
+        | 'history-boundary'
         | 'semantic-event'
         | 'conditions'
         | 'process-state'

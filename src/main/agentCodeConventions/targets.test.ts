@@ -12,7 +12,10 @@ describe('Agent Code conventions provider targets', () => {
       environment: { CLAUDE_CONFIG_DIR: claudeConfig },
     })
 
-    expect(result.unsupportedProviders).toEqual([])
+    // Contract since grok (#1014): a registered provider MAY declare personal
+    // agent skills unsupported; targets resolution must tolerate it — grok
+    // simply never contributes a target row.
+    expect(result.unsupportedProviders).toEqual(['grok'])
     expect(result.targets).toHaveLength(2)
     expect(result.targets.find(target => target.id === 'claude-personal-skills')).toMatchObject({
       providers: ['claude', 'opencode'],

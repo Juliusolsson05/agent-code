@@ -6,6 +6,13 @@ import type { StreamPhaseState } from '@renderer/session-runtime/semantic/stream
 import { historyMarkerOf, stampHistoryMarker, planLiveEntryTrim, OLDER_PREPEND_TRIM_GRACE_MS } from '@renderer/session-runtime/liveEntryWindow'
 import { indexEntryIntoMaps } from '@renderer/session-runtime/entries'
 import { emptySemanticRuntime } from '@renderer/session-runtime/state'
+import {
+  applyDecisionToWindow,
+  decideHistoryBoundary,
+  emptyHistoryWindow,
+  isStaleHistoryChunk,
+  type HistoryWindow,
+} from '@renderer/session-runtime/historyBoundary'
 import type { SemanticLiveTurn, SemanticRuntimeState } from '@renderer/session-runtime/state'
 import { isAgentProviderKind } from '@shared/types/providerKind'
 import type { AgentProviderKind } from '@shared/types/providerKind'
@@ -115,6 +122,10 @@ type SessionState = {
   /** Durable transcript file identity, from live frames / history chunks.
    *  Disagreement between the two = the provider rolled the transcript. */
   transcriptFile: string | null
+  /** History-boundary window identity (grok). Decisions come from the shared
+   *  pure owner (session-runtime/historyBoundary.ts); this store only applies
+   *  them — the desktop and replay apply the same ones. */
+  historyWindow: HistoryWindow
   historyOldestMarker: string | null
   historyOldestOffset: number | undefined
   historyLoaded: boolean
@@ -187,6 +198,9 @@ export class TranscriptStore {
       }),
       feed.onSessionJsonlEntries(e => {
         this.ingestLiveEntries(e.sessionId, e.entries as Array<{ entry: unknown; file: string }>)
+      }),
+      feed.onSessionHistoryBoundary(e => {
+        this.ingestHistoryBoundary(e.sessionId, e)
       }),
       feed.onSessionSemanticEvent(e => {
         this.ingestSemanticEvent(e.sessionId, e.event)
@@ -471,6 +485,7 @@ export class TranscriptStore {
         liveMapper: null,
         kind: null,
         transcriptFile: null,
+        historyWindow: emptyHistoryWindow(),
         historyOldestMarker: null,
         historyOldestOffset: undefined,
         historyLoaded: false,
@@ -521,11 +536,30 @@ export class TranscriptStore {
   }
 
   private chunkFileConflicts(state: SessionState, chunkFile: unknown): boolean {
-    return (
-      typeof chunkFile === 'string' &&
-      state.transcriptFile !== null &&
-      chunkFile !== state.transcriptFile
-    )
+    // The shared pure owner owns the decision (grok Stage 5): a stale chunk is
+    // one that names a different file than the window, or an older generation
+    // once a boundary established one. History chunks carry no generation
+    // today, so that branch stays dormant until they do — same decision
+    // either way, made once.
+    if (typeof chunkFile !== 'string') return false
+    return isStaleHistoryChunk(state.historyWindow, { file: chunkFile }) ||
+      (state.transcriptFile !== null && chunkFile !== state.transcriptFile)
+  }
+
+  private ingestHistoryBoundary(
+    sessionId: string,
+    boundary: { type: 'reset' | 'caught-up'; generation: number; snapshotByteLength: number; byteOffset?: number; complete?: boolean; file: string },
+  ): void {
+    const state = this.state(sessionId)
+    const decision = decideHistoryBoundary(state.historyWindow, boundary)
+    state.historyWindow = applyDecisionToWindow(state.historyWindow, decision)
+    if (decision.kind !== 'apply-reset') return
+    // The reset itself reuses the existing transcript reset (which preserves
+    // conditions, working status, screen and exit state — the shared preserve
+    // list) and re-arms the awaiting-turn-start gate so suffixes from the
+    // superseded generation cannot repaint the wiped window.
+    this.resetTranscript(sessionId)
+    this.state(sessionId).awaitingSemanticStart = true
   }
 
   private ingestLiveEntries(
@@ -604,6 +638,14 @@ export class TranscriptStore {
       liveMapper: null,
       kind: prev.kind,
       transcriptFile: null,
+      // The boundary window SURVIVES a transcript reset: the reset may be the
+      // application of a boundary decision itself (ingestHistoryBoundary), and
+      // wiping it would forget the generation we just armed against — a
+      // re-delivered duplicate boundary would then re-reset, and a stale one
+      // would pass. It also survives the heuristic file-roll reset for the
+      // same reason: whatever roll happened, the window only ever moves
+      // forward through the pure owner's decisions.
+      historyWindow: prev.historyWindow,
       historyOldestMarker: null,
       historyOldestOffset: undefined,
       historyLoaded: false,

@@ -14,6 +14,7 @@ const listenerNames = [
   'onSessionScreen',
   'onSessionJsonlEntries',
   'onSessionJsonlError',
+  'onSessionHistoryBoundary',
   'onSessionSemanticEvent',
   'onSessionConditions',
   'onSessionProcessState',
