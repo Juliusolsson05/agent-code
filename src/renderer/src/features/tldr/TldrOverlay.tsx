@@ -4,6 +4,7 @@ import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type { TldrRecord } from '@shared/types/tldr'
 import { TldrFreshness } from './TldrFreshness'
 import { isPreviewVisible, useTldrView } from './viewState'
+import { useAgentTerminalOwnerVisible } from '@renderer/workspace/terminal/AgentTerminalOwnership'
 import type { PreviewKind } from './viewState'
 
 // What differs between the TLDR and Goal peeks is only where the text comes
@@ -32,7 +33,13 @@ function newest(previous: TldrRecord | null, next: TldrRecord | undefined): Tldr
 
 export function TldrOverlay({ kind = 'tldr', identity, enabled, runtime, provider }: { kind?: PreviewKind; identity: string; enabled: boolean; runtime?: SessionRuntime; provider?: string }) {
   const source = SOURCES[kind]
-  const visible = useTldrView(state => isPreviewVisible(state, kind))
+  // WHY the pane's own visibility gates the overlay, not just the latch
+  // (#1027): Reader, Spotlight, Settings and the fullscreen Global Editor keep
+  // the workspace MOUNTED under display:none. An overlay rendered there is in
+  // the DOM, so the keyboard gate saw it and swallowed every key while nobody
+  // could see it. The same fix as GoalLoopPane (#1021).
+  const ownerVisible = useAgentTerminalOwnerVisible()
+  const visible = useTldrView(state => isPreviewVisible(state, kind)) && ownerVisible
   const [snapshot, setSnapshot] = useState<{ identity: string; record: TldrRecord | null; error: boolean }>({ identity, record: null, error: false })
   const [hookContact, setHookContact] = useState<{ identity: string; seen: boolean } | null>(null)
   const enforced = enabled && ENFORCED_PROVIDERS.has(provider ?? '')
