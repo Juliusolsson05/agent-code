@@ -173,7 +173,11 @@ export function AgentCodeConventionsRow() {
         </div>
       ) : null}
 
-      {snapshot.health === 'unsupported' ? (
+      {/* Health is 'active' when only SOME providers are unsupported (#1014),
+          so the banner keys on the provider list too — the user must still see
+          which providers cannot receive the skill. 'unsupported' health (zero
+          supported providers) shows the same non-blocking notice. */}
+      {snapshot.health === 'unsupported' || snapshot.unsupportedProviders.length > 0 ? (
         <div role="status" className="rounded-slab border border-warning px-2 py-1 text-[10px] text-warning">
           Personal Agent Skills are unavailable for: {snapshot.unsupportedProviders.join(', ')}.
         </div>
