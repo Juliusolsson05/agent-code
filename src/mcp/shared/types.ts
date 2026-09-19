@@ -110,6 +110,10 @@ const BUILT_IN_MCP_DOMAINS_BY_PROVIDER = {
   ],
   codex: [...BUILT_IN_MCP_DOMAINS],
   opencode: [...BUILT_IN_MCP_DOMAINS],
+  // Seeded over the owned control connection at session creation and re-seeded
+  // on the terminal's load answer (the recorded tool.mcp path); the app offers
+  // Grok the same built-in domain set as the other terminal providers.
+  grok: [...BUILT_IN_MCP_DOMAINS],
 } as const satisfies Record<AgentProviderKind, readonly BuiltInMcpDomain[]>
 
 const BUILT_IN_MCP_DOMAIN_SET = new Set<string>(BUILT_IN_MCP_DOMAINS)

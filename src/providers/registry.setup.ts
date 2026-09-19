@@ -62,10 +62,20 @@ const opencodeSetup: ProviderSetupDescriptor = {
   detail: 'Install the opencode CLI to use OpenCode panes. Optional.',
 }
 
+const grokSetup: ProviderSetupDescriptor = {
+  binaryName: 'grok',
+  label: 'Grok',
+  // Optional like OpenCode: most installs do not have the Grok CLI, and its
+  // absence must not block app launch.
+  required: false,
+  detail: 'Install the Grok CLI to use Grok panes. Optional.',
+}
+
 const providerSetupDescriptors: Record<AgentProviderKind, ProviderSetupDescriptor> = {
   claude: claudeSetup,
   codex: codexSetup,
   opencode: opencodeSetup,
+  grok: grokSetup,
 }
 
 export function getProviderSetupDescriptor(id: string): ProviderSetupDescriptor {

@@ -44,6 +44,14 @@ describe('provider feature matrix', () => {
         switchTargets: ['claude', 'opencode'],
         verifiedExternalResumeCommand: true,
       },
+      grok: {
+        transcriptRewind: false,
+        transcriptDuplicate: false,
+        promptHistoryExtraction: false,
+        inAppResume: true,
+        switchTargets: [],
+        verifiedExternalResumeCommand: true,
+      },
       opencode: {
         transcriptRewind: true,
         transcriptDuplicate: true,
@@ -87,10 +95,16 @@ describe('provider feature matrix', () => {
   })
 
   it('declares a complete directed switch graph for all transcript adapters', () => {
-    for (const kind of AGENT_PROVIDER_KINDS) {
+    // Complete only for the kinds whose transcript-engine adapters exist.
+    // Grok Stage 6 ships without one (switching into Grok is unbuilt), so its
+    // edge set is empty by evidence rather than by omission; when its adapter
+    // lands, this guard goes back to covering every kind unchanged.
+    const kindsWithAdapters = AGENT_PROVIDER_KINDS.filter(kind => kind !== 'grok')
+    for (const kind of kindsWithAdapters) {
       expect(getProviderFeatures(kind).switchTargets)
-        .toEqual(AGENT_PROVIDER_KINDS.filter(candidate => candidate !== kind))
+        .toEqual(kindsWithAdapters.filter(candidate => candidate !== kind))
     }
+    expect(getProviderFeatures('grok').switchTargets).toEqual([])
   })
 
   it('requires every agent provider to declare every capability', () => {

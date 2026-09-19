@@ -124,6 +124,19 @@ const FEATURES_BY_KIND: Record<AgentProviderKind, ProviderFeatureCapabilities> =
   // OpenCode's supported CLI export/import boundary backs prompt extraction,
   // rewind, duplicate, and pairwise switching; its sessions are listed from
   // its database by the conversation catalog.
+  // Grok Stage 6 v1: resume is recorded and verified (`grok --resume <id>`,
+  // the terminal attach the corpus pins). Rewind, duplicate and prompt
+  // extraction need a transcript-engine adapter that does not exist yet, and
+  // switch targets stay empty until pairwise edges are proven — a capability
+  // that depends on unbuilt plumbing stays off rather than guessed.
+  grok: {
+    transcriptRewind: false,
+    transcriptDuplicate: false,
+    promptHistoryExtraction: false,
+    inAppResume: true,
+    switchTargets: [],
+    verifiedExternalResumeCommand: true,
+  },
   opencode: {
     transcriptRewind: true,
     transcriptDuplicate: true,

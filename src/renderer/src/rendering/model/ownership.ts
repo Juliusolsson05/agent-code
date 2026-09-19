@@ -75,6 +75,11 @@ export const SUPPRESSION_POLICY: Record<AgentProviderKind, SuppressionPolicy> = 
   claude: { wholeTurnByMessageId: true, hideUnresolvedHistoryTools: true },
   codex: { wholeTurnByMessageId: false, hideUnresolvedHistoryTools: false },
   opencode: { wholeTurnByMessageId: false, hideUnresolvedHistoryTools: false },
+  // Grok durable rows are per-item with no whole-turn message id (the mapper
+  // derives uuids from generation+offset), and its MCP tool errors pair like
+  // Codex's — block-local evidence is legitimately absent, so the aggressive
+  // hide rule must not fire.
+  grok: { wholeTurnByMessageId: false, hideUnresolvedHistoryTools: false },
 }
 
 /** The legacy collapsed_activity churn set (helpers.ts
