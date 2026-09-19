@@ -307,14 +307,12 @@ async function resolveOpencodeTargetProfile(cwd = process.cwd()): Promise<Transc
   }
 }
 
-// WHY a registry rather than source/target pair branches: each provider owns
-// one decoder, one native projector, and its storage policy. Switching composes
-// Grok's target profile: the newest native session's modelId first (for a
-// rewind or duplicate that IS the source session's own model), then the
-// corpus-recorded grok-4.6 default (every recorded summary ran it). No env
-// override — none was ever recorded. The conservative 128k budget mirrors
-// OpenCode's rule: an unknown window must fail BEFORE the source pane is
-// retired, not after.
+// Grok's target profile: the SOURCE session's model when the source is grok
+// (projectNativeResume reads the summary directly), otherwise the newest
+// native session's modelId, otherwise the corpus-recorded grok-4.6 default
+// (every recorded summary ran it). No env override — none was ever recorded.
+// The conservative 128k budget mirrors OpenCode's rule: an unknown window must
+// fail BEFORE the source pane is retired, not after.
 async function resolveGrokTargetProfile(): Promise<TranscriptTargetProfile> {
   const newest = listAllGrokSessions({ limit: 1 })[0]
   return {
@@ -386,6 +384,8 @@ const grokAdapter: HostTranscriptAdapter = {
   },
 }
 
+// WHY a registry rather than source/target pair branches: each provider owns
+// one decoder, one native projector, and its storage policy. Switching composes
 // any installed source and target adapters through ConversationDocument, so a
 // third provider adds one entry here instead of two translators for every
 // provider already shipped.
