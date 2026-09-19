@@ -75,6 +75,8 @@ describe('global MCP preferences at actual provider replacement', () => {
   it.each([
     { domain: 'tldr', commandId: 'enable-tldr-mcp' },
     { domain: 'goal', commandId: 'enable-goal-mcp' },
+    // #1006: the sibling command goal_loop lacked.
+    { domain: 'goal_loop', commandId: 'enable-goal-loop-mcp' },
   ] as const)('preserves a per-agent $domain off override and lets the reset command restore inheritance', async ({ domain, commandId }) => {
     const h = setup({ builtInMcpDomains: [domain], builtInMcpOverrides: {} })
     h.refs.defaultBuiltInMcpDomainsRef.current = [domain]

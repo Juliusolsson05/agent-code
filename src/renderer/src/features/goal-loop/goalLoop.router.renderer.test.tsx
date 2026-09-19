@@ -78,11 +78,11 @@ describe('goal loop overlay keyboard dismissal', () => {
     keyDown({ key: 'Escape' })
     expect(screen.queryByRole('dialog')).toBeNull()
   })
-  it('the Cmd+Shift+Y toggle chord dismisses the latched overlay', async () => {
+  it('the Cmd+Shift+G toggle chord dismisses the latched overlay', async () => {
     toggleGoalLoop()
     render(<><Harness model={workspace()} /><GoalLoopPane sessionId="a" /></>)
     expect(await screen.findByRole('dialog')).toBeTruthy()
-    keyDown({ key: 'y', code: 'KeyY', metaKey: true, shiftKey: true })
+    keyDown({ key: 'g', code: 'KeyG', metaKey: true, shiftKey: true })
     expect(screen.queryByRole('dialog')).toBeNull()
   })
 })
@@ -158,7 +158,7 @@ describe('goal loop command with no loop on the session (#1021)', () => {
     // press re-ran the command and re-armed an invisible latch.
     render(<Harness model={workspace()} />)
     runGoalLoopCommand()
-    keyDown({ key: 'y', code: 'KeyY', metaKey: true, shiftKey: true })
+    keyDown({ key: 'g', code: 'KeyG', metaKey: true, shiftKey: true })
     expect(useGoalLoopView.getState().latched).toBe(false)
     expect(harness.appState.requestCommandInvocation).not.toHaveBeenCalled()
   })
@@ -180,8 +180,8 @@ describe('goal loop command with no loop on the session (#1021)', () => {
   })
 
   it('a rebound goal-loop-preview chord still dismisses the overlay', async () => {
-    // #1007 plans to move the default chord off Cmd+Shift+Y. Before this fix
-    // the dismissal was a hardcoded Meta+Shift+KeyY check, so any rebind would
+    // #1007 moved the default chord off Cmd+Shift+Y. Before #1021's fix the
+    // dismissal was a hardcoded Meta+Shift+KeyY check, so any rebind would
     // have left Escape as the only keyboard exit.
     harness.appState = { ...harness.appState, settings: { agentViewMode: 'agent', commandKeybindingOverrides: { 'goal-loop-preview': ['Cmd+Ctrl+J'] } } }
     render(<><Harness model={workspace()} /><GoalLoopPane sessionId="a" /></>)
@@ -189,5 +189,11 @@ describe('goal loop command with no loop on the session (#1021)', () => {
     expect(await screen.findByRole('dialog')).toBeTruthy()
     keyDown({ key: 'j', code: 'KeyJ', metaKey: true, ctrlKey: true })
     expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('the old Cmd+Shift+Y no longer opens the goal loop (#1007: macOS New Sticky Note)', () => {
+    render(<Harness model={workspace()} />)
+    keyDown({ key: 'y', code: 'KeyY', metaKey: true, shiftKey: true })
+    expect(harness.appState.requestCommandInvocation).not.toHaveBeenCalledWith('goal-loop-preview', expect.anything())
   })
 })

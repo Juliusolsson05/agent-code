@@ -776,6 +776,42 @@ export const sessionCommands: CommandDef[] = [
     },
   },
   {
+    // #1006: the per-agent toggle every sibling domain has (TLDR, Goal).
+    // goal_loop already had the Settings row and the per-session override
+    // plumbing, but no command, so "turn the loop on for just this agent"
+    // meant a trip through Settings and a reload by hand.
+    id: 'enable-goal-loop-mcp',
+    category: 'session',
+    surface: 'session',
+    title: 'Goal Loop MCP',
+    description: '**What it does:** Reloads the focused agent with goal-loop tools on or off.\n\n**Use when:** You want this agent to be able to run a harness-owned goal loop that keeps re-prompting it until the goal is done.\n\n**Notes:** The agent starts a loop itself when you ask it to (goal_loop_start). Every continuation is a model call, and the loop pauses at its budget. The Goal Loop command shows and controls a running loop.',
+    keywords: ['goal', 'loop', 'autonomous', 'persistence', 'keep going', 'mcp'],
+    when: ({ workspace }) => {
+      return targetSupportsBuiltInMcpDomain(workspace, 'goal_loop')
+    },
+    getState: ctx => builtInMcpDomainState(ctx, 'goal_loop'),
+    run: async ({ workspace, ui }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return
+      const meta = workspace.state.sessions[sessionId]
+      const kind = meta?.kind ?? DEFAULT_PROVIDER
+      // Provider policy is repeated at the mutation boundary: visibility is
+      // advisory and the command stays reachable from keybindings and control.
+      if (
+        !isAgentProviderKind(kind) ||
+        !providerSupportsBuiltInMcpDomain(kind, 'goal_loop') ||
+        !meta
+      ) return
+
+      ui.closePalette()
+      const enable = !meta.builtInMcpDomains?.includes('goal_loop')
+      await reloadSessionWithBuiltInMcpChoice(workspace, sessionId, 'goal_loop', enable, {
+        reloaded: enable ? 'Reloaded with Goal Loop MCP' : 'Reloaded without Goal Loop MCP',
+        failed: 'Goal Loop MCP reload failed',
+      })
+    },
+  },
+  {
     id: 'enable-workflow-mcp',
     category: 'session',
     pickerVisibility: 'advanced',
