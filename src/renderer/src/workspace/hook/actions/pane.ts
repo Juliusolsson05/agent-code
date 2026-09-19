@@ -683,6 +683,45 @@ function markPooledSpawn(
   })
 }
 
+export type OpenExtensionViewOptions = {
+  /** Put the view on screen even when the focused lane is occupied, reusing a
+   *  view of the same id that already exists. See revealExtensionView. */
+  reveal?: boolean
+}
+
+/**
+ * Bring an EXISTING session of `viewId` on screen, or return null when there
+ * is none. A view already in a lane just takes focus. A pooled one goes into
+ * the focused lane, whose occupant returns to the pool alive, exactly as an
+ * index click does (selectTiledLaneSession). An extension view has no process,
+ * so there is nothing to wake first.
+ *
+ * WHY reuse instead of opening another (#1013 parity review, MAJOR): a legacy
+ * action command opens the view only to get a frame to run in. Minting a
+ * fresh session per press piled up identical views, and under
+ * context-places every one of them landed in the pool, invisible.
+ */
+function revealExtensionView(state: WorkspaceState, viewId: string): WorkspaceState | null {
+  const stage = state.stage
+  const existing = Object.entries(state.sessions)
+    .filter(([, meta]) => meta.kind === 'extension-view' && meta.extensionViewId === viewId)
+    .map(([id]) => id as SessionId)
+  if (existing.length === 0) return null
+  const laneIndex = stage.lanes.findIndex(lane => lane.selectedSessionId !== undefined && existing.includes(lane.selectedSessionId))
+  if (laneIndex >= 0) {
+    return stage.focusedLane === laneIndex ? state : { ...state, stage: { ...stage, focusedLane: laneIndex } }
+  }
+  const sessionId = existing[0]!
+  const focusedLane = stage.focusedLane
+  if (!stage.lanes[focusedLane]) return null
+  const projectId = state.sessions[sessionId]?.projectId
+  return {
+    ...state,
+    activeTabId: projectId ?? state.activeTabId,
+    stage: { ...stage, lanes: stage.lanes.map((lane, i) => (i === focusedLane ? withLaneSession(lane, sessionId) : lane)) },
+  }
+}
+
 // `detachedDispatchRecord` lived here until #992: the one helper that built the
 // durable record filing a session under a project (`projectTabId`,
 // `detachedAt`, and two display copies of the tab's title and index). Its
@@ -796,7 +835,7 @@ export function usePaneActions(
    *  executor as closeSession (see its implementation's WHY). */
   closeTab: (tabId: TabId) => Promise<void>
   focusSessionInTab: (tabId: string, sessionId: SessionId) => void
-  openExtensionViewInPane: (viewId: string) => void
+  openExtensionViewInPane: (viewId: string, options?: OpenExtensionViewOptions) => void
 } {
   const closeSessionRef = useRef<
     ((targetId: SessionId, options?: CloseSessionOptions) => Promise<boolean>) | null
@@ -1724,13 +1763,17 @@ export function usePaneActions(
   // 'extension-view', so rehydrate reconstructs this leaf from metadata and never
   // tries to recover a process for it.
   const openExtensionViewInPane = useCallback(
-    (viewId: string) => {
+    (viewId: string, options?: OpenExtensionViewOptions) => {
       // Resolve placement INSIDE the synchronous workspace update. There is no
       // process await here, so metadata, ownership and visible focus can land as
       // one change rather than leaving a session whose split silently failed.
       let openedId: SessionId | null = null
       let pooled = false
       setState(prev => {
+        if (options?.reveal) {
+          const revealed = revealExtensionView(prev, viewId)
+          if (revealed) return revealed
+        }
         const sessionId = crypto.randomUUID() as SessionId
         // (This block sat behind `if (dispatchMode)` until #992, with a
         // tile-tree branch — split beside the focused leaf — after it.)
@@ -1746,7 +1789,18 @@ export function usePaneActions(
         const cwd = (target.cwdSessionId ? prev.sessions[target.cwdSessionId]?.cwd : undefined)
           ?? projectCwd(prev, tab.id)
           ?? ''
-        const stage = applyDispatchSpawnFocus(prev, sessionId, target.laneIndex)
+        // A plain "Open view" follows context-places: it fills an empty
+        // focused lane and otherwise waits in the pool with a "new" badge.
+        // A reveal is a caller that needs the view ON SCREEN (a legacy action
+        // command runs only inside a mounted frame), so it takes the focused
+        // lane. Its occupant returns to the pool alive, as with an index click.
+        const focusedLane = prev.stage.focusedLane
+        const stage = options?.reveal && prev.stage.lanes[focusedLane]
+          ? {
+              ...prev.stage,
+              lanes: prev.stage.lanes.map((lane, i) => (i === focusedLane ? withLaneSession(lane, sessionId) : lane)),
+            }
+          : applyDispatchSpawnFocus(prev, sessionId, target.laneIndex)
         pooled = stage === prev.stage
         return {
           ...prev,
