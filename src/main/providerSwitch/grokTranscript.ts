@@ -2,7 +2,7 @@ import { constants } from 'node:fs'
 import { mkdir, open, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { decodeGrokConversation } from 'agent-transcript-parser'
-import { decodeGrokConversationItem, isGenuineUserItem, parseGrokSummary, resolveGrokTranscriptPath, writeGrokChatHistory } from 'grok-code-headless'
+import { decodeGrokConversationItem, parseGrokSummary, resolveGrokTranscriptPath, writeGrokChatHistory } from 'grok-code-headless'
 import type { ConversationDocument, PromptReference } from 'agent-transcript-parser'
 import type { TranscriptPublication } from './transcriptEngine.js'
 
@@ -66,8 +66,14 @@ export interface GrokTranscriptSnapshot {
  * match exactly.
  */
 export async function loadGrokSnapshot(cwd: string, sessionId: string): Promise<GrokTranscriptSnapshot> {
-  const path = resolveGrokTranscriptPath(cwd, sessionId)
-  return loadGrokSnapshotAt(path, sessionId)
+  const summary = parseGrokSummary(await readStableGrokFile(join(dirname(resolveGrokTranscriptPath(cwd, sessionId)), 'summary.json')))
+  // The cwd identity guard lives HERE (it needs the caller's cwd, which the
+  // path-paired loader cannot see): a mismatched summary means the directory
+  // is not the session the caller asked for, and a destructive switch must
+  // not proceed on it.
+  if (summary.info.id !== sessionId) throw new Error('Grok summary identity does not match the requested session')
+  if (await realpath(summary.info.cwd) !== await realpath(cwd)) throw new Error('Grok summary cwd does not match the requested cwd')
+  return loadGrokSnapshotAt(resolveGrokTranscriptPath(cwd, sessionId), sessionId)
 }
 
 /** The locate()-paired variant for the compaction wait: read at a path the
@@ -75,16 +81,28 @@ export async function loadGrokSnapshot(cwd: string, sessionId: string): Promise<
 export async function loadGrokSnapshotAt(path: string, sessionId?: string): Promise<GrokTranscriptSnapshot> {
   const summary = parseGrokSummary(await readStableGrokFile(join(dirname(path), 'summary.json')))
   const id = sessionId ?? summary.info.id
+  // Every read path shares these guards (review finding): an unsupported
+  // format or a directory that is not the requested session must refuse here,
+  // not only in a helper tests happen to call.
+  if (summary.info.id !== id) throw new Error('Grok summary identity does not match the requested session')
+  if (summary.chat_format_version !== 1) throw new Error('Unsupported Grok chat format')
   const text = await readStableGrokFile(path)
   if (text && !text.endsWith('\n')) throw new Error('Grok transcript has an unterminated record; wait for the native writer')
   const items = text.split('\n').filter(line => line.trim()).map(line => decodeGrokConversationItem(line).item)
+  const conversation = decodeGrokConversation(items, { sessionId: id })
+  // WHY references come from the DECODED document, not row predicates: the
+  // rewind picker resolves each reference against this same document, so any
+  // row-level guess (the package's genuine-user classifier also admits the
+  // untagged <user_info> bootstrap row, which decode marks opaque) can name a
+  // line resolveUserPrompt will refuse. User MESSAGE entries are exactly the
+  // resolvable boundaries.
   const prompts: PromptReference[] = []
-  for (const [line, item] of items.entries()) {
-    if (item.type === 'user' && isGenuineUserItem(item)) {
-      prompts.push({ address: { provider: 'grok', line, sessionId: id }, raw: item as unknown as Record<string, unknown> })
+  for (const entry of conversation.entries) {
+    if (entry.kind === 'message' && entry.role === 'user') {
+      prompts.push({ address: { provider: 'grok', line: entry.source.line, sessionId: id }, raw: entry.source.raw })
     }
   }
-  return { conversation: decodeGrokConversation(items, { sessionId: id }), prompts }
+  return { conversation, prompts }
 }
 
 async function readStableGrokFile(path: string): Promise<string> {

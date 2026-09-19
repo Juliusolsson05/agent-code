@@ -7,7 +7,6 @@ import { GrokSession } from '@providers/grok/runtime/grokSession.js'
 import { discoverGrokSkillRoots } from '@providers/grok/runtime/skillDiscovery.js'
 import { deliverGrokPrompt } from '@providers/grok/runtime/promptDelivery.js'
 import { resolveGrokTranscriptPath } from 'grok-code-headless'
-import { stat as statFile } from 'node:fs/promises'
 import { discoverClaudeSkillRoots } from '@providers/claude/runtime/skillDiscovery'
 import { discoverCodexSkillRoots } from '@providers/codex/runtime/skillDiscovery'
 import { discoverOpencodeSkillRoots } from '@providers/opencode/runtime/skillDiscovery'
@@ -161,16 +160,10 @@ const grokMain: MainProviderConfig = {
   // Grok history is a file the package resolves from cwd + session id; the
   // generic file readers (reload, preview, switching) consume this path.
   resolveTranscriptPath: async (cwd, providerSessionId) => resolveGrokTranscriptPath(cwd, providerSessionId),
-  // File-backed transcripts carry no stable locator scheme; the path is the
-  // identity. mtime is the honest last-modified signal for the catalog.
-  transcriptLastModifiedAt: async (providerSessionId) => {
-    try {
-      const stat = await statFile(resolveGrokTranscriptPath(process.cwd(), providerSessionId))
-      return stat.mtimeMs
-    } catch {
-      return null
-    }
-  },
+  // No transcriptLocator: the file path is the identity, and the catalog's
+  // stat fallback covers last-modified (a hand-rolled mtime here was dead
+  // code — only locator providers get transcriptLastModifiedAt — and would
+  // have resolved against the wrong cwd).
   deliverPrompt: deliverGrokPrompt,
 }
 

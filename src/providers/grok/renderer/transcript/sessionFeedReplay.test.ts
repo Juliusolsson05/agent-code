@@ -2,8 +2,6 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 import { applyFeedEvent, createReplayFoldState } from '@renderer/rendering/replay/reconstructSlices.js'
-import { emptySemanticRuntime } from '@renderer/session-runtime/state.js'
-import { createGrokTranscriptEntryMapper } from './mapper.js'
 
 // Replay of the checked-in grok session-feed recording (produced by the
 // node-side capture test through the real forwarder). This is the Stage 5
@@ -13,10 +11,8 @@ import { createGrokTranscriptEntryMapper } from './mapper.js'
 // answer lands after caught-up, and the stale duplicate boundary (the
 // reconnect case recorded at the tail) changes nothing.
 //
-// WHY the fold state is built by hand: createReplayFoldState resolves the
-// provider mapper through the renderer registry, and 'grok' does not exist
-// there until Stage 6 registration. Every field matches what the factory
-// fills; Stage 6 may replace this construction with the factory call.
+// Stage 6 registered the kind, so the fold state is the real factory's —
+// the same construction the recorded-session harness uses for every provider.
 
 const fixture = new URL('../../../../../testing/fixtures/grok-session-feed/rewrite-reorder.events.jsonl', import.meta.url)
 
@@ -24,16 +20,7 @@ describe('grok session-feed recording replay', () => {
   it('applies the recorded rewrite: wipe, snapshot re-append, caught-up, stale duplicates', () => {
     const frames = readFileSync(fixture, 'utf8').trimEnd().split('\n').map(line => JSON.parse(line) as { channel: string; payload: unknown })
     expect(frames.length).toBeGreaterThan(0)
-    const state = {
-      ...createReplayFoldState('claude' as never, 'grok-feed-1'),
-      provider: 'grok' as never,
-      mapper: createGrokTranscriptEntryMapper(),
-      seenUuids: new Set<string>(),
-      entries: [] as unknown[],
-      semantic: emptySemanticRuntime(),
-      historyWindow: { generation: null as number | null, file: null as string | null, awaitingCaughtUp: false },
-      awaitingSemanticStart: false,
-    }
+    const state = createReplayFoldState('grok', 'grok-feed-1')
     for (const frame of frames) {
       if (frame.channel.startsWith('session:')) applyFeedEvent(state as never, frame.channel as never, frame.payload)
     }

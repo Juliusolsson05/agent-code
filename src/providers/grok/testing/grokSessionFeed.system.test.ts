@@ -42,36 +42,47 @@ type ManagerEvent = [event: string, payload: unknown]
 
 /** The session-level script of a recorded rewrite (see the file header). */
 function rewriteScript(): ManagerEvent[] {
-  const entry = (item: unknown, generation: number, offset: number) => ({
+  const entry = (item: unknown, generation: number, offset: number, inRewriteSnapshot = false) => ({
     sessionId,
     // The wire entry is the headless package's durable record; the renderer's
-    // grok mapper derives stable uuids from (generation, offset).
-    entry: { sessionId, item, raw: JSON.stringify(item), generation, lineStartOffset: offset, inRewriteSnapshot: false },
+    // grok mapper derives stable uuids from (generation, offset). Snapshot
+    // rows carry inRewriteSnapshot exactly as HistoryReader would mark them
+    // (inside the generation's rewrite snapshot), and genuine user rows carry
+    // the corpus's <user_query>-wrapped shape with prompt_index.
+    entry: { sessionId, item, raw: JSON.stringify(item), generation, lineStartOffset: offset, inRewriteSnapshot },
     file,
+  })
+  const userQuery = (text: string, promptIndex: number) => ({
+    type: 'user',
+    content: [{ type: 'text', text: `<user_query>\n${text}\n</user_query>` }],
+    prompt_index: promptIndex,
   })
   const boundary = (type: 'reset' | 'caught-up', generation: number) => ({
     sessionId, type, generation, snapshotByteLength: 400, ...(type === 'caught-up' ? { byteOffset: 400, complete: true } : {}), file,
   })
   return [
     // Pre-rewrite generation 0: the committed conversation...
-    ['jsonl-entry', entry({ type: 'user', content: [{ type: 'text', text: 'hello' }] }, 0, 10)],
+    ['jsonl-entry', entry(userQuery('hello', 0), 0, 10)],
     ['jsonl-entry', entry({ type: 'assistant', content: 'old answer' }, 0, 95)],
     // ...and the turn's own completion still sitting in the 100 ms semantic
     // window when the rewrite lands — the boundary must flush it FIRST.
     ['semantic-event', { sessionId, event: { type: 'turn_completed', turnId: 'prompt-1', fullText: 'old answer', stopReason: 'end_turn', source: 'grok-acp', confidence: 'high', ts: 1 } }],
-    // The rewrite: generation 1's snapshot re-delivers the same CONTENT at new
-    // offsets (the uuid-instability-across-generations case), then caught-up,
-    // then genuinely new appended content.
+    // The rewrite: generation 1's snapshot (400 bytes) re-delivers the same
+    // CONTENT inside the snapshot (inRewriteSnapshot: true — the mapper keeps
+    // the rows, the boundary wiped the window), then caught-up, then a
+    // genuinely new row APPENDED past the snapshot's declared end.
     ['history-boundary', boundary('reset', 1)],
-    ['jsonl-entry', entry({ type: 'user', content: [{ type: 'text', text: 'hello' }] }, 1, 10)],
-    ['jsonl-entry', entry({ type: 'assistant', content: 'old answer' }, 1, 95)],
+    ['jsonl-entry', entry(userQuery('hello', 0), 1, 10, true)],
+    ['jsonl-entry', entry({ type: 'assistant', content: 'old answer' }, 1, 95, true)],
     ['history-boundary', boundary('caught-up', 1)],
-    ['jsonl-entry', entry({ type: 'assistant', content: 'new answer' }, 1, 180)],
+    ['jsonl-entry', entry({ type: 'assistant', content: 'new answer' }, 1, 420)],
     ['process-state', { sessionId, active: false }],
-    // A late duplicate reset (reconnect re-delivery) and its caught-up: both
-    // stale against the window the recording already holds.
-    ['history-boundary', boundary('reset', 1)],
-    ['history-boundary', boundary('caught-up', 1)],
+    // A late duplicate reset (reconnect re-delivery) and its caught-up: the
+    // reset is stale against the window's generation; the caught-up is a
+    // no-op observe for a window no longer awaiting one. Both still CROSS —
+    // transports order, they do not interpret.
+    ["history-boundary", boundary("reset", 1)],
+    ["history-boundary", boundary("caught-up", 1)],
   ]
 }
 
@@ -119,7 +130,8 @@ describe('grok session-feed recordings (Stage 5)', () => {
   it('pins the ordering discipline: superseded entries and the semantic preview land BEFORE the boundary, which is never coalesced', async () => {
     const frames = await captureWireFrames(rewriteScript())
     const channels = frames.map(frame => frame.channel)
-    // The three pre-rewrite events arrive as one bulk batch, then the boundary.
+    // The two pre-rewrite entries arrive as one bulk frame (the semantic
+    // completion is its own flushed frame), then the boundary.
     const bulkIndex = channels.indexOf('session:jsonl-entries')
     const boundaryIndex = channels.indexOf('session:history-boundary')
     expect(bulkIndex).toBeGreaterThanOrEqual(0)

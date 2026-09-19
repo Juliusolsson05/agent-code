@@ -60,7 +60,7 @@ import {
   loadGrokSnapshotAt,
   writeProjectedGrokSession,
 } from './grokTranscript.js'
-import { parseGrokSummary, resolveGrokTranscriptPath } from 'grok-code-headless'
+import { listAllGrokSessions, parseGrokSummary, resolveGrokTranscriptPath } from 'grok-code-headless'
 
 export interface TranscriptProjectionContext {
   cwd: string
@@ -312,16 +312,17 @@ async function resolveOpencodeTargetProfile(cwd = process.cwd()): Promise<Transc
 // any installed source and target adapters through ConversationDocument, so a
 // third provider adds one entry here instead of two translators for every
 // provider already shipped.
-// Grok's target profile: every corpus-recorded session ran grok-4.6
-// (current_model_id in the recorded summary.json files) and grok's config
-// model key is not part of any recording — env override first, then the
-// recorded default. The conservative 128k budget mirrors OpenCode's rule: an
-// unknown window must fail BEFORE the source pane is retired, not after.
+// Grok's target profile: the newest native session's modelId first (for a
+// rewind or duplicate that IS the source session's own model), then the
+// corpus-recorded grok-4.6 default (every recorded summary ran it). No env
+// override — none was ever recorded. The conservative 128k budget mirrors
+// OpenCode's rule: an unknown window must fail BEFORE the source pane is
+// retired, not after.
 async function resolveGrokTargetProfile(): Promise<TranscriptTargetProfile> {
-  const model = process.env.GROK_MODEL ?? 'grok-4.6'
+  const newest = listAllGrokSessions({ limit: 1 })[0]
   return {
     modelProvider: 'xai',
-    model,
+    model: newest?.modelId ?? 'grok-4.6',
     budgetCharacters: budgetCharactersForContextTokens(128_000),
   }
 }
@@ -545,7 +546,9 @@ function promptsFromSnapshot(
 }
 
 function ipcPromptAddress(address: PromptAddress): RewindPromptAddress {
-  if (address.provider !== 'claude' && address.provider !== 'codex' && address.provider !== 'opencode') {
+  // Grok joins the rewind boundary in Stage 6: its addresses are the plain
+  // (provider, line, sessionId) shape the boundary already serializes.
+  if (address.provider !== 'claude' && address.provider !== 'codex' && address.provider !== 'opencode' && address.provider !== 'grok') {
     throw new Error(`Provider "${address.provider}" cannot cross the Agent Code rewind IPC boundary.`)
   }
   return {

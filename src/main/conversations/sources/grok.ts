@@ -1,10 +1,9 @@
 import {
-  isGenuineUserItem,
   listAllGrokSessions,
-  readGrokChatHistory,
   resolveGrokTranscriptPath,
   type GrokSessionListEntry,
 } from 'grok-code-headless'
+import { loadGrokSnapshotAt } from '@main/providerSwitch/grokTranscript.js'
 
 import type { ConversationPrompt } from '@shared/conversations/types.js'
 import { performanceService } from '@main/performance/PerformanceService.js'
@@ -23,10 +22,9 @@ import type { ConversationSource, SourceConversation, SourceScope } from './type
 // layer treats them like OpenCode's generated titles), and the fallback is the
 // session id — never "Grok".
 //
-// WHY no cwd filtering happens here beyond what the index gives: the source
-// returns every session with its cwd; repository-family scoping is the
-// catalog's job (it already lowercases and family-matches for the SQLite
-// sources — same treatment applies to a plain string field).
+// Scoping uses the shared family matcher (review finding): exact-cwd equality
+// silently dropped sessions started in a repository subdirectory and any
+// realpath alias — the same sessions the Codex and OpenCode sources keep.
 
 const USER_TEXTS = 4
 
@@ -40,12 +38,9 @@ export class GrokConversationSource implements ConversationSource {
     // The index is one directory walk in the package (newest-updated first);
     // scope filtering happens below so 'everywhere' costs the same one walk.
     const sessions = listAllGrokSessions({ grokHome: this.deps.grokHome })
-    const familyCwds = scope.scope === 'cwd'
-      ? [scope.family.cwd.toLowerCase()]
-      : scope.scope === 'repository' ? scope.family.roots.map(root => root.toLowerCase()) : null
     const rows: SourceConversation[] = []
     for (const session of sessions) {
-      if (familyCwds && !familyCwds.includes(session.cwd.toLowerCase())) continue
+      if (scope.scope !== 'everywhere' && !scope.family.matches(session.cwd)) continue
       rows.push(this.toRow(session))
     }
     span.end({ mode: 'index', rows: rows.length })
@@ -53,26 +48,29 @@ export class GrokConversationSource implements ConversationSource {
   }
 
   async prompts(nativeId: string, cwd: string): Promise<ConversationPrompt[]> {
-    const file = resolveGrokTranscriptPath(cwd, nativeId, this.deps.grokHome)
-    let history: Awaited<ReturnType<typeof readGrokChatHistory>>
+    // Decode through the SAME snapshot loader the transcript engine uses
+    // (review finding): the parser's decode drops the <user_info> bootstrap
+    // preamble and unwraps <user_query>, so searches match what the user
+    // actually typed — never workspace metadata, never raw tags. Newest first
+    // per the source contract (search reads the first 40). The resolve itself
+    // can throw on a deleted cwd, hence the whole body inside the try.
+    let snapshot: Awaited<ReturnType<typeof loadGrokSnapshotAt>>
     try {
-      history = await readGrokChatHistory(file)
+      snapshot = await loadGrokSnapshotAt(resolveGrokTranscriptPath(cwd, nativeId, this.deps.grokHome))
     } catch {
-      // An unreadable or missing history for a listed session yields no
-      // prompts rather than failing the whole search; the index row remains.
       return []
     }
-    const out: ConversationPrompt[] = []
-    for (const { item } of history) {
-      if (item.type !== 'user' || !isGenuineUserItem(item)) continue
-      const text = item.content
-        .filter((part): part is { type: 'text'; text: string } => part.type === 'text')
+    const texts: string[] = []
+    for (const entry of snapshot.conversation.entries) {
+      if (entry.kind !== 'message' || entry.role !== 'user') continue
+      const text = entry.content
+        .filter((part): part is { kind: 'text'; text: string } => part.kind === 'text')
         .map(part => part.text.trim())
         .filter(text => text.length > 0)
         .join('\n')
-      if (text.length > 0) out.push({ text, timestamp: null })
+      if (text.length > 0) texts.push(text)
     }
-    return out
+    return texts.reverse().map(text => ({ text, timestamp: null }))
   }
 
   private toRow(session: GrokSessionListEntry): SourceConversation {

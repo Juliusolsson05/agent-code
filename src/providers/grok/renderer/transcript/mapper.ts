@@ -78,15 +78,32 @@ export function mapGrokEntryToFeedEntries(
   }
 }
 
+// Mirrors the parser's decode predicates exactly (review finding): the
+// durable corpus wraps 46 of 50 genuine prompts in <user_query>, and the
+// first session row is an untagged <user_info> bootstrap preamble. Keeping
+// the wrapper would break optimistic-echo reconciliation (exact-text match)
+// and render raw tags; keeping the preamble would render workspace/OS text
+// as a user prompt.
+const USER_QUERY_WRAP = /^<user_query>\n([\s\S]*)\n<\/user_query>$/
+function isBootstrapPreamble(item: GrokUserItem): boolean {
+  const first = Array.isArray(item.content) && isRecord(item.content[0]) && typeof item.content[0].text === 'string' ? item.content[0].text : ''
+  return item.prompt_index == null && first.startsWith('<user_info>\n')
+}
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
 function userEntries(item: GrokUserItem, uuid: string): Entry[] {
   // Synthetic rows (reminders, interrupts, plan-mode instructions) are native's
   // own insertions, not words the user typed; dropping them here keeps View
   // Prompts and Dispatch titles honest (the codec's classifier is the owner).
   if (item.synthetic_reason != null) return []
+  if (isBootstrapPreamble(item)) return []
   const content: ContentBlock[] = []
   for (const part of Array.isArray(item.content) ? item.content : []) {
     if (part?.type === 'text' && typeof part.text === 'string' && part.text.length > 0) {
-      content.push({ type: 'text', text: part.text })
+      const query = USER_QUERY_WRAP.exec(part.text)
+      content.push({ type: 'text', text: query ? query[1]! : part.text })
     }
     // Images: the feed's durable rows carry text today; the live channel owns
     // attachment presentation. Adding durable image blocks is a deliberate

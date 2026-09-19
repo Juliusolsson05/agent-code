@@ -93,6 +93,20 @@ describe('mapGrokEntryToFeedEntries', () => {
     expect(redelivered.entries[0]!.uuid).toBe(before.entries[0]!.uuid)
   })
 
+  it('unwraps <user_query> rows and drops the untagged <user_info> bootstrap preamble (the corpus shapes)', () => {
+    // 46 of 50 genuine corpus prompts arrive wrapped; the first session row
+    // is the workspace preamble. Optimistic echoes reconcile by exact text,
+    // so the mapper must emit EXACTLY what the user typed (parser decode
+    // predicates, mirrored).
+    const wrapped = mapGrokEntryToFeedEntries(entry({ type: 'user', content: [{ type: 'text', text: '<user_query>\nhello\n</user_query>' }], prompt_index: 0 }))
+    expect(contentOf(wrapped.entries[0])).toEqual([{ type: 'text', text: 'hello' }])
+    const preamble = mapGrokEntryToFeedEntries(entry({ type: 'user', content: [{ type: 'text', text: '<user_info>\nworkspace details\n</user_info>' }] }))
+    expect(preamble.entries).toEqual([])
+    // A quoted tag INSIDE a real prompt stays ordinary text (decode's rule).
+    const inner = mapGrokEntryToFeedEntries(entry({ type: 'user', content: [{ type: 'text', text: 'use <user_query> literally' }], prompt_index: 3 }))
+    expect(contentOf(inner.entries[0])).toEqual([{ type: 'text', text: 'use <user_query> literally' }])
+  })
+
   it('renders no row for the identity envelope but extracts its id, with stable markers', () => {
     expect(mapGrokEntryToFeedEntries({ sessionID: 'session-1' })).toEqual({ entries: [], historyMarker: null })
     expect(extractGrokProviderSessionId({ sessionID: 'session-1' })).toBe('session-1')
