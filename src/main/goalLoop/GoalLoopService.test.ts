@@ -264,3 +264,81 @@ describe('GoalLoopService idle-blip retraction', () => {
     expect(deliver).not.toHaveBeenCalled()
   })
 })
+
+describe('GoalLoopService turn boundary from provider hooks (#1024)', () => {
+  const settle = () => new Promise(resolve => setTimeout(resolve, 20))
+  // The sequence the session's feed log recorded 4–60 ms before EVERY sampled
+  // mid-turn delivery: a Task subagent's API flow is selected on its first
+  // chunk while the main agent runs a local tool, then demoted as
+  // `cc_is_subagent`. The phase values are the ones the Claude proxy adapter
+  // publishes on that path: `requesting` on first-chunk promotion, `idle` on
+  // subagent demotion. Nothing retracts that idle, so the old phase trigger
+  // read it as a turn end.
+  const subagentFlowInToolGap = (manager: FakeManager) => {
+    manager.emit('semantic-event', { sessionId: 's1', event: { type: 'flow_selected', flowId: 'f-sub' } })
+    manager.emit('semantic-event', { sessionId: 's1', event: { type: 'stream_phase', phase: 'requesting' } })
+    manager.emit('semantic-event', { sessionId: 's1', event: { type: 'stream_phase', phase: 'idle' } })
+    manager.emit('semantic-event', { sessionId: 's1', event: { type: 'flow_ignored', flowId: 'f-sub', reason: 'subagent' } })
+  }
+
+  it('ignores the recorded subagent-flow idle edge once the session has hooks, and continues on the allowed Stop', async () => {
+    const { svc, manager, deliver } = await service()
+    await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+    // goal_loop_start is itself a tool call, so its PostToolUse hook arrives
+    // before the turn that started the loop can end. That proves the hooks work.
+    svc.observeProviderHook('s1', 'post-tool-use')
+    subagentFlowInToolGap(manager)
+    await settle()
+    expect(deliver).not.toHaveBeenCalled()
+    svc.observeProviderHook('s1', 'stop', { blocked: false })
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1))
+  })
+
+  it('control: a session without hooks keeps the phase fallback (unchanged for OpenCode and Grok)', async () => {
+    const { svc, manager, deliver } = await service()
+    await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+    manager.emit('semantic-event', { sessionId: 's1', event: { type: 'stream_phase', phase: 'requesting' } })
+    idleTurn(manager)
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1))
+  })
+
+  it('a Stop that TLDR enforcement blocked is not a boundary; the allowed Stop after it is', async () => {
+    const { svc, deliver } = await service()
+    await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+    svc.observeProviderHook('s1', 'post-tool-use')
+    svc.observeProviderHook('s1', 'stop', { blocked: true })
+    await settle()
+    expect(deliver).not.toHaveBeenCalled()
+    svc.observeProviderHook('s1', 'stop', { blocked: false })
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1))
+    await settle()
+    expect(deliver).toHaveBeenCalledTimes(1)
+  })
+
+  it('its own delivery opens a turn: later subagent traffic cannot re-deliver before the next Stop', async () => {
+    const { svc, manager, deliver } = await service()
+    await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+    svc.observeProviderHook('s1', 'post-tool-use')
+    svc.observeProviderHook('s1', 'stop', { blocked: false })
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1))
+    // The recorded doubles (#1/#2 0.4 s apart) came from exactly this.
+    subagentFlowInToolGap(manager)
+    subagentFlowInToolGap(manager)
+    await settle()
+    expect(deliver).toHaveBeenCalledTimes(1)
+    svc.observeProviderHook('s1', 'stop', { blocked: false })
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(2))
+  })
+
+  it('resume during an open hook turn waits for that turn to Stop', async () => {
+    const { svc, deliver } = await service()
+    await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+    svc.observeProviderHook('s1', 'post-tool-use')
+    svc.control('s1', { action: 'pause' })
+    svc.control('s1', { action: 'resume' })
+    await settle()
+    expect(deliver).not.toHaveBeenCalled()
+    svc.observeProviderHook('s1', 'stop', { blocked: false })
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1))
+  })
+})
