@@ -12,6 +12,7 @@ import type {
   SessionSemanticEvent,
   SessionStartedEvent,
   SessionSubAgentsEvent,
+  SessionHistoryBoundaryEvent,
 } from '@shared/sessionFeed/types'
 import { applyTheme } from '@renderer/app-state/settings/theme'
 import { DEFAULT_SETTINGS } from '@renderer/app-state/settings/types'
@@ -95,6 +96,7 @@ export class WebSocketSessionFeed implements SessionFeed {
     screen: new Set(),
     'jsonl-entries': new Set(),
     'jsonl-error': new Set(),
+    'history-boundary': new Set(),
     'semantic-event': new Set(),
     conditions: new Set(),
     'process-state': new Set(),
@@ -188,6 +190,9 @@ export class WebSocketSessionFeed implements SessionFeed {
   }
   onSessionJsonlError(cb: (e: SessionJsonlErrorEvent) => void): Unsub {
     return this.sub('jsonl-error', cb)
+  }
+  onSessionHistoryBoundary(cb: (e: SessionHistoryBoundaryEvent) => void): Unsub {
+    return this.sub('history-boundary', cb)
   }
   onSessionSemanticEvent(cb: (e: SessionSemanticEvent) => void): Unsub {
     return this.sub('semantic-event', cb)

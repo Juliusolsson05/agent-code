@@ -268,6 +268,21 @@ ownership or add a second native lifecycle/replay engine.
 
 ## Stage 5 — Reconcile desktop and phone from one app observation contract
 
+**Shared pure reconciliation owner (named before either client is edited):**
+`src/renderer/src/session-runtime/historyBoundary.ts`. It owns every DECISION a
+history boundary forces; desktop (`useIpcSubscriptions`), phone
+(`remote-client/transcript/store.ts`) and replay (`rendering/replay/reconstructSlices.ts`)
+apply those decisions to their own containers and may not re-derive them. WHY a
+new module beside the session-runtime primitives instead of reusing the phone's
+`resetTranscript`: no existing module both sees feed events and owns transcript
+window resets — the phone's reset is phone-local heuristic state (file-name
+rolls) that cannot see same-file rewrites, and the desktop has no roll concept
+at all. The phone's proven preserve-list and awaiting-turn-start gate move here
+as pure functions over primitives, following the established pattern of the
+phone importing session-runtime reducers. Main never consumes the owner; it only
+transports the event with the jsonl-error flush-first ordering discipline.
+
+
 **Produces:** explicit reset/caught-up delivery through preload and both SessionFeed
 implementations, Grok display interpretation, and app-owned recordings under
 `testing/fixtures/grok-session-feed/` of actual post-batch/transport/store behavior.

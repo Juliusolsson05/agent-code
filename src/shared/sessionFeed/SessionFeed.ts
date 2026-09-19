@@ -3,6 +3,7 @@ import type {
   ResolveConditionResult,
   SessionConditionsEvent,
   SessionExitEvent,
+  SessionHistoryBoundaryEvent,
   SessionJsonlEntriesEvent,
   SessionJsonlErrorEvent,
   SessionInputReadinessEvent,
@@ -61,6 +62,7 @@ export interface SessionFeed {
   onSessionScreen(cb: (e: SessionScreenEvent) => void): Unsub
   onSessionJsonlEntries(cb: (e: SessionJsonlEntriesEvent) => void): Unsub
   onSessionJsonlError(cb: (e: SessionJsonlErrorEvent) => void): Unsub
+  onSessionHistoryBoundary(cb: (e: SessionHistoryBoundaryEvent) => void): Unsub
   onSessionSemanticEvent(cb: (e: SessionSemanticEvent) => void): Unsub
   onSessionConditions(cb: (e: SessionConditionsEvent) => void): Unsub
   onSessionProcessState(cb: (e: SessionProcessStateEvent) => void): Unsub

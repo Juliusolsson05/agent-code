@@ -170,6 +170,9 @@ type ManagerEvents = {
     observation?: AgentTranscriptObservationMetadata
   }]
   'jsonl-error': [{ sessionId: string; error: Error }]
+  /** Durable-history generation boundary (grok). Never completion or idle;
+   *  consumers apply renderer/session-runtime/historyBoundary.ts decisions. */
+  'history-boundary': [{ sessionId: string; type: 'reset' | 'caught-up'; generation: number; snapshotByteLength: number; byteOffset?: number; complete?: boolean; file: string }]
   'transcript-diagnostic': [{ sessionId: string; diagnostic: unknown }]
   'process-state': [{ sessionId: string; active: boolean; status?: string }]
   'terminal-foreground': [TerminalForegroundEvent]
@@ -2781,6 +2784,11 @@ export class SessionManager extends EventEmitter {
           })
         }
         this.emit('screen', { sessionId, ...snap })
+      })
+      session.on('history-boundary', boundary => {
+        if (!ownsEntry()) return
+        this.markActivity(sessionId)
+        this.emit('history-boundary', { sessionId, ...boundary })
       })
       session.on('jsonl-entry', (
         entry: AgentTranscriptEntry,
