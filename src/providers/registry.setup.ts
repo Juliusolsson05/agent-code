@@ -27,48 +27,69 @@ export type ProviderSetupDescriptor = {
   binaryName: string
   /** Human label shown in the SetupGate row. */
   label: string
-  /** Whether a missing binary blocks app launch. Both shipped
-   *  providers are launch-blocking today; plug-and-play likely turns
-   *  this into a user-level "installed providers" concept later
-   *  (#394 §13.5) — the flag is here so that change is one edit per
-   *  provider. */
-  required: boolean
+  // `required: boolean` lived here until #995. Claude and Codex were
+  // launch-blocking, so a Mac without both CLIs met a gate it could not pass,
+  // even when another provider was installed or bundled. No provider is
+  // required now; readiness.ts decides what a first run opens with.
   /** SetupGate detail line. */
   detail: string
+  /**
+   * How a user installs this CLI on a Mac that has nothing, shown copyable in
+   * the SetupGate.
+   *
+   * WHY these commands and not `npm install -g`: a fresh Mac has no Node and
+   * no Homebrew, so an npm or brew command fails before it starts. Each
+   * command is the provider's own native installer, checked on 2026-09-19 by
+   * fetching the URL (every one resolves to a real script). Grok is the one
+   * exception: its only published distribution found is the npm package
+   * `@xai-official/grok` (registry.npmjs.org, and the recording machine's own
+   * install), so its hint says npm.
+   */
+  install: { command: string; docsUrl: string }
 }
 
 const claudeSetup: ProviderSetupDescriptor = {
   binaryName: 'claude',
   label: 'Claude Code',
-  required: true,
-  detail: 'Install and sign in to Claude Code before using Claude panes.',
+  detail: 'Install and sign in to Claude Code to use Claude panes.',
+  install: {
+    command: 'curl -fsSL https://claude.ai/install.sh | bash',
+    docsUrl: 'https://code.claude.com/docs/en/setup',
+  },
 }
 
 const codexSetup: ProviderSetupDescriptor = {
   binaryName: 'codex',
   label: 'Codex',
-  required: true,
-  detail: 'Install and sign in to Codex before using Codex panes.',
+  detail: 'Install and sign in to Codex to use Codex panes.',
+  install: {
+    // The same installer cliUpdateOrchestrator runs for native Codex updates.
+    command: 'curl -fsSL https://chatgpt.com/codex/install.sh | sh',
+    docsUrl: 'https://github.com/openai/codex',
+  },
 }
 
 const opencodeSetup: ProviderSetupDescriptor = {
   binaryName: 'opencode',
   label: 'OpenCode',
-  // FIRST required:false provider (#406 blocker 5): opencode must not
-  // block app launch for the vast majority of installs that don't
-  // have the binary. Verify the SetupGate soft-handles this before
-  // the branch merges.
-  required: false,
-  detail: 'Install the opencode CLI to use OpenCode panes. Optional.',
+  // The packaged app ships this CLI (#994), so on a release build this row
+  // reads "Bundled" and the install command is never needed. It matters in
+  // dev builds and if a user removed the bundled runtime.
+  detail: 'Install the opencode CLI to use OpenCode panes.',
+  install: {
+    command: 'curl -fsSL https://opencode.ai/install | bash',
+    docsUrl: 'https://opencode.ai/docs',
+  },
 }
 
 const grokSetup: ProviderSetupDescriptor = {
   binaryName: 'grok',
   label: 'Grok',
-  // Optional like OpenCode: most installs do not have the Grok CLI, and its
-  // absence must not block app launch.
-  required: false,
-  detail: 'Install the Grok CLI to use Grok panes. Optional.',
+  detail: 'Install the Grok CLI to use Grok panes.',
+  install: {
+    command: 'npm install -g @xai-official/grok',
+    docsUrl: 'https://www.npmjs.com/package/@xai-official/grok',
+  },
 }
 
 const providerSetupDescriptors: Record<AgentProviderKind, ProviderSetupDescriptor> = {

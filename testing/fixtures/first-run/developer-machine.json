@@ -47,8 +47,101 @@
       "source": "system"
     }
   },
-  "verdictAtRecording": {
-    "ready": true,
-    "blocking": []
+  "check": {
+    "checkedAt": 0,
+    "tools": {
+      "brew": {
+        "id": "brew",
+        "label": "Homebrew",
+        "provider": false,
+        "installable": false,
+        "detail": "Used in dev to install optional tools. Not required to launch.",
+        "found": true,
+        "path": "/opt/homebrew/bin/brew",
+        "source": "system",
+        "skipped": false
+      },
+      "claude": {
+        "id": "claude",
+        "label": "Claude Code",
+        "provider": true,
+        "installable": false,
+        "detail": "Install and sign in to Claude Code to use Claude panes.",
+        "installCommand": "curl -fsSL https://claude.ai/install.sh | bash",
+        "docsUrl": "https://code.claude.com/docs/en/setup",
+        "found": true,
+        "path": "~/.local/bin/claude",
+        "source": "system",
+        "skipped": false
+      },
+      "codex": {
+        "id": "codex",
+        "label": "Codex",
+        "provider": true,
+        "installable": false,
+        "detail": "Install and sign in to Codex to use Codex panes.",
+        "installCommand": "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
+        "docsUrl": "https://github.com/openai/codex",
+        "found": true,
+        "path": "~/.local/bin/codex",
+        "source": "system",
+        "skipped": false
+      },
+      "opencode": {
+        "id": "opencode",
+        "label": "OpenCode",
+        "provider": true,
+        "installable": false,
+        "detail": "Install the opencode CLI to use OpenCode panes.",
+        "installCommand": "curl -fsSL https://opencode.ai/install | bash",
+        "docsUrl": "https://opencode.ai/docs",
+        "found": true,
+        "path": "~/.opencode/bin/opencode",
+        "source": "system",
+        "skipped": false
+      },
+      "grok": {
+        "id": "grok",
+        "label": "Grok",
+        "provider": true,
+        "installable": false,
+        "detail": "Install the Grok CLI to use Grok panes.",
+        "installCommand": "npm install -g @xai-official/grok",
+        "docsUrl": "https://www.npmjs.com/package/@xai-official/grok",
+        "found": true,
+        "path": "~/.local/bin/grok",
+        "source": "system",
+        "skipped": false
+      },
+      "git": {
+        "id": "git",
+        "label": "Git",
+        "provider": false,
+        "installable": false,
+        "detail": "Used by Git Bar, worktree badges, and repository metadata.",
+        "found": true,
+        "path": "/opt/homebrew/bin/git",
+        "source": "system",
+        "skipped": false
+      },
+      "mitmdump": {
+        "id": "mitmdump",
+        "label": "Claude Proxy Helper",
+        "provider": false,
+        "installable": true,
+        "detail": "Installed by Homebrew package mitmproxy; enables Claude proxy streaming.",
+        "found": true,
+        "path": "/opt/homebrew/bin/mitmdump",
+        "source": "system",
+        "skipped": false
+      }
+    },
+    "usableProviders": [
+      "claude",
+      "codex",
+      "opencode",
+      "grok"
+    ],
+    "firstSessionKind": "claude"
   }
 }

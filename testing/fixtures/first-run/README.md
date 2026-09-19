@@ -23,8 +23,14 @@ RECORD_FIRST_RUN=1 npx vitest run --project system testing/system/first-run
   clean recordings report `ready: false, blocking: ["claude", "codex"]`. That
   includes the packaged one, where OpenCode is bundled and usable, and the Grok
   row, which is found. A machine with a working provider was locked out because
-  it lacked two particular ones. `verdictAtRecording` keeps that verdict
-  verbatim.
+  it lacked two particular ones. `baseline-main-82babd21.json` keeps those
+  verdicts verbatim.
+- **The current result.** Each recording's `check` is the whole
+  `SetupCheckResult`, with paths sanitized and `checkedAt` zeroed: exactly what
+  the renderer receives. Renderer tests load it through
+  `src/shared/setup/firstRunRecordings.testSupport.ts` instead of building a
+  check by hand. The probe rows (`tools`) were re-recorded for this field and
+  are identical to the baseline recording.
 - **Machine-wide residue.** System locations outside HOME stay visible to the
   probes: `/usr/bin/git`, and Homebrew in `/opt/homebrew`. On the recording
   machine that includes `/opt/homebrew/bin/grok`, an npm-global install of
@@ -34,6 +40,8 @@ RECORD_FIRST_RUN=1 npx vitest run --project system testing/system/first-run
   - The policy tests treat the clean recording as a "Grok is the only provider"
     machine. That is a real shape: before #995 it was also locked out.
   - The zero-provider case is covered by the macOS CI runner, which has no
-    provider CLI and runs the same simulation live on every push.
+    provider CLI and runs the same simulation live on every push. Tests that
+    need it here use `withoutMachineWideInstalls()`, the one stated edit: it
+    unsets those rows and re-derives readiness with the real policy.
 
 Paths under the recording HOME are written as `~`, so the files carry no username.

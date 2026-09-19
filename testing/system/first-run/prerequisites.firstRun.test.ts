@@ -68,10 +68,11 @@ export type FirstRunRecording = {
   platform: string
   arch: string
   tools: Record<SetupToolId, RecordedTool>
-  /** The verdict fields exactly as the code at recording time returned them.
-   *  Kept so the baseline (the pre-#995 wall) stays legible after the policy
-   *  changes; nothing asserts against them. */
-  verdictAtRecording: Record<string, unknown>
+  /** The whole result, paths sanitized and `checkedAt` zeroed: exactly what
+   *  the renderer receives over `setup:check`, so renderer tests feed the gate
+   *  and bootstrap main's real output instead of a hand-built object. The
+   *  pre-#995 verdicts are kept separately in baseline-main-82babd21.json. */
+  check: SetupCheckResult
 }
 
 const saved = { HOME: process.env.HOME, PATH: process.env.PATH, SHELL: process.env.SHELL }
@@ -128,7 +129,7 @@ function sanitize(path: string | null, home: string): string | null {
 }
 
 function record(environment: Environment, description: string, result: SetupCheckResult, home: string): FirstRunRecording {
-  const { tools, checkedAt: _checkedAt, ...verdict } = result
+  const { tools } = result
   return {
     environment,
     description,
@@ -140,7 +141,13 @@ function record(environment: Environment, description: string, result: SetupChec
         { id: tool.id, found: tool.found, path: sanitize(tool.path, home), source: tool.source },
       ]),
     ) as Record<SetupToolId, RecordedTool>,
-    verdictAtRecording: verdict,
+    check: {
+      ...result,
+      checkedAt: 0,
+      tools: Object.fromEntries(
+        Object.entries(tools).map(([id, tool]) => [id, { ...tool, path: sanitize(tool.path, home) }]),
+      ) as SetupCheckResult['tools'],
+    },
   }
 }
 
@@ -188,6 +195,17 @@ describe.skipIf(process.platform !== 'darwin')('first-run prerequisites on a sim
       for (const id of PROVIDER_ROWS.filter(id => !machineWide(id))) {
         expect({ id, found: live.tools[id].found, source: live.tools[id].source })
           .toEqual({ id, found: recording.tools[id].found, source: recording.tools[id].source })
+      }
+      // The #995 policy on the LIVE result. Nothing blocks launch: the first
+      // project is always something this machine can run. On the macOS CI
+      // runner, which has no provider CLI, the unbundled case is the genuine
+      // zero-provider Mac and must come out as a terminal.
+      const usable = live.usableProviders
+      expect(live.firstSessionKind).toBe(usable.includes('claude') ? 'claude' : usable[0] ?? 'terminal')
+      expect(live).not.toHaveProperty('blocking')
+      if (environment === 'clean-machine-packaged') {
+        expect(usable).toContain('opencode')
+        expect(live.firstSessionKind).not.toBe('terminal')
       }
     },
     60_000,

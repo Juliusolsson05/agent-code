@@ -26,6 +26,9 @@ export const NATIVE_MENU_COMMAND_IDS = [
   'save-all-editor-files',
   'reorder-tabs',
   'close-tab',
+  // #995: the spawn error says "open Setup"; the File menu is where a user
+  // who never opened the command palette looks for it.
+  'open-setup',
 ] as const
 
 export type NativeMenuCommandId = (typeof NATIVE_MENU_COMMAND_IDS)[number]
