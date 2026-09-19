@@ -100,4 +100,20 @@ describe('goal loop turn boundary through the real MCP host (#1024)', () => {
     expect(allowed.body).not.toMatchObject({ decision: 'block' })
     await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1))
   })
+
+  it('a subagent\'s hook (agent_id) never reopens the turn the main agent already stopped', async () => {
+    // #1028 review, Probe B. Both CLIs send a subagent's hooks with the
+    // parent's bearer, marked by `agent_id`. A background Task's tool call
+    // after the main agent's Stop used to reopen the turn, so Resume found
+    // it "open" and delivered nothing while the loop showed active.
+    const { host, loops, deliver, hook } = await setup()
+    const [config] = host.registerSession({ sessionId: 's3', cwd: '/project', providerKind: 'claude', domains: ['goal_loop'] })
+    await loops.startLoop('s3', { goal: 'G.', loopPrompt: 'P.' })
+    await hook(config!, 'post-tool-use', { session_id: 'claude-session' })
+    loops.control('s3', { action: 'pause' })
+    await hook(config!, 'stop', { session_id: 'claude-session', stop_hook_active: false })
+    await hook(config!, 'post-tool-use', { session_id: 'claude-session', agent_id: 'background-reviewer', tool_name: 'Read' })
+    loops.control('s3', { action: 'resume' })
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1))
+  })
 })
