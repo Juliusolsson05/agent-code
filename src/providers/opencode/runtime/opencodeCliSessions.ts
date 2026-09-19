@@ -1,8 +1,8 @@
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { fstatSync } from 'node:fs'
-import { mkdtemp, open, rm, rmdir, unlink, writeFile, type FileHandle } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { mkdtemp, open, readFile, rm, rmdir, unlink, writeFile, type FileHandle } from 'node:fs/promises'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const MAX_EXPORT_BYTES = 256 * 1024 * 1024
@@ -81,6 +81,37 @@ export async function readResolvedOpencodeConfig(
   const value = JSON.parse(stdout) as unknown
   if (!isRecord(value)) throw new Error('OpenCode resolved configuration was not an object.')
   return value
+}
+
+/**
+ * The user's recently used models, newest first, as `provider/model` ids, from
+ * OpenCode's own state file (`model.json`, key `recent`).
+ *
+ * WHY this file: with no `model` in config, OpenCode itself (the TUI, and the
+ * server's prompt path, see LiveServerClient) continues with the most recent
+ * model the user picked. The first entry of `opencode models` is just the
+ * provider catalog's first row (`opencode/big-pickle` on the owner's machine,
+ * B18), which the user never chose. Anything malformed yields no recents, so
+ * the caller falls through to its "select a model" error instead of guessing.
+ */
+export function opencodeRecentModelsFromState(value: unknown): string[] {
+  const recent = isRecord(value) && Array.isArray(value.recent) ? value.recent : []
+  return recent.flatMap(entry => (
+    isRecord(entry) && typeof entry.providerID === 'string' && entry.providerID.length > 0
+      && typeof entry.modelID === 'string' && entry.modelID.length > 0
+      ? [`${entry.providerID}/${entry.modelID}`]
+      : []
+  ))
+}
+
+/** Read the recents from `$XDG_STATE_HOME/opencode/model.json` (default
+ *  `~/.local/state`), the path OpenCode's Global.Path.state resolves to. A
+ *  missing or unreadable file means no recents. */
+export async function readOpencodeRecentModels(): Promise<string[]> {
+  const stateHome = process.env.XDG_STATE_HOME || join(homedir(), '.local', 'state')
+  return readFile(join(stateHome, 'opencode', 'model.json'), 'utf8')
+    .then(text => opencodeRecentModelsFromState(JSON.parse(text) as unknown))
+    .catch(() => [])
 }
 
 /** Return the model ids exposed by the installed OpenCode provider set. */

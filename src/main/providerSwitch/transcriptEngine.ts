@@ -44,6 +44,7 @@ import {
   exportOpencodeSession,
   importOpencodeSession,
   listOpencodeModels,
+  readOpencodeRecentModels,
   opencodeExportSessionId,
   readResolvedOpencodeConfig,
 } from '@providers/opencode/runtime/opencodeCliSessions.js'
@@ -282,8 +283,23 @@ async function resolveOpencodeTargetProfile(cwd = process.cwd()): Promise<Transc
   const configuredModel = await readResolvedOpencodeConfig(options)
     .then(config => typeof config.model === 'string' ? config.model : null)
     .catch(() => null)
-  const selectedModel = configuredModel ?? await listOpencodeModels(options)
-    .then(models => models[0] ?? null)
+  // OpenCode's own order (B18): the configured model, else the most recent
+  // model the user picked that this install still offers.
+  //
+  // WHY not `listOpencodeModels()[0]`, which this used to fall back to: that
+  // is the provider catalog's first row (`opencode/big-pickle` here), a model
+  // the user never chose. The projector stamps the model on EVERY imported
+  // message, and OpenCode's lastModel() then keeps it for the session's life,
+  // so the switched agent silently ran on a different model from the one the
+  // user works with. A recent that `opencode models` no longer lists is
+  // skipped: an import pinned to a vanished model fails only at the first
+  // prompt, after the source pane is gone. No usable recent is the existing
+  // "select a model" error, never a guess.
+  const selectedModel = configuredModel ?? await Promise.all([
+    readOpencodeRecentModels(),
+    listOpencodeModels(options),
+  ])
+    .then(([recent, available]) => recent.find(model => available.includes(model)) ?? null)
     .catch(() => null)
   if (!selectedModel) {
     throw new Error(
