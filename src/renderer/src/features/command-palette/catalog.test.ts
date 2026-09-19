@@ -4,6 +4,7 @@ import { builtInCommandCatalog, findCatalogDefects } from '@renderer/features/co
 import { NATIVE_MENU_COMMAND_IDS } from '@shared/commands/nativeMenuCommandIds'
 import { AGENT_PROVIDER_KINDS, DEFAULT_PROVIDER } from '@shared/types/providerKind'
 import type { CommandDef } from '@renderer/features/command-palette/types'
+import { RETIRED_BUILT_IN_COMMAND_IDS } from '@renderer/app-state/settings/persistence'
 
 // ---------------------------------------------------------------------------
 // Phase 0 of the command-governance plan (docs/superpowers/plans/
@@ -386,6 +387,14 @@ describe('governance targets', () => {
     for (const id of RETIRED_COMMAND_IDS) {
       expect(catalogIds.has(id)).toBe(false)
     }
+  })
+
+  it('prunes every retired id from persisted settings', () => {
+    // The #992 retirements were recorded here and nowhere else, so saved
+    // overrides for them were never pruned and kept swallowing the chords the
+    // lane commands now own (#1013 review B). Retiring an id means listing it
+    // in BOTH places; this keeps the two lists equal.
+    expect([...RETIRED_BUILT_IN_COMMAND_IDS].sort()).toEqual([...RETIRED_COMMAND_IDS].sort())
   })
 
   it('contains the one approved addition', () => {

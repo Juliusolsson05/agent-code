@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { useKeybinds } from './useKeybinds'
+import { coerceSettings } from '@renderer/app-state/settings/persistence'
 
 const harness = vi.hoisted(() => ({
   appState: {} as Record<string, unknown>,
@@ -147,6 +148,31 @@ describe('focus-mode keyboard ownership', () => {
     expect(invoked).toContain('dispatch-select-next-agent')
     expect(invoked).toContain('dispatch-focus-lane-left')
     expect(invoked).toContain('dispatch-select-previous-agent')
+    view.unmount()
+  })
+
+  it('a saved override for a retired grid command no longer swallows the lane chords', () => {
+    // #1013 review B, MAJOR. A user who once rebound grid navigation has
+    // `nav-left: ['Alt+H', 'Alt+Left']` in their saved settings. The binding
+    // index puts customized entries first and gives an unknown id the global
+    // context, so that stale override won ⌥H/⌥← over Focus Lane Left, and the
+    // gateway then answered `unknown`: the chord did nothing at all. The saved
+    // blob goes through the real settings decoder, as on every launch.
+    const saved = { commandKeybindingOverrides: { 'nav-left': ['Alt+H', 'Alt+Left'], 'dispatch-mode': ['Cmd+Shift+M'] } }
+    harness.appState = {
+      ...harness.appState,
+      settings: { agentViewMode: 'agent', commandKeybindingOverrides: coerceSettings(saved).commandKeybindingOverrides },
+    }
+    const { workspace } = makeWorkspace('reader' as const)
+    const plain = { ...workspace, readerMode: null, spotlight: null } as typeof workspace
+    const view = render(<KeyboardHarness workspace={plain} />)
+
+    fireEvent.keyDown(document, { altKey: true, code: 'ArrowLeft', key: 'ArrowLeft' })
+    fireEvent.keyDown(document, { altKey: true, code: 'KeyH', key: '˙' })
+
+    const invoked = (harness.appState.requestCommandInvocation as ReturnType<typeof vi.fn>).mock.calls
+      .map(call => call[0])
+    expect(invoked).toEqual(['dispatch-focus-lane-left', 'dispatch-focus-lane-left'])
     view.unmount()
   })
 

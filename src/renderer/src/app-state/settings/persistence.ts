@@ -328,12 +328,36 @@ function resolvePersistedMode(
  * canonical fields) are untouched, so no value migration is needed — only the
  * now-meaningless per-command preference entries go.
  */
-const RETIRED_BUILT_IN_COMMAND_IDS: ReadonlySet<string> = new Set([
+export const RETIRED_BUILT_IN_COMMAND_IDS: ReadonlySet<string> = new Set([
   'toggle-status-mode',
   'toggle-worktree-badges',
   'usage.toggle-header',
   'usage.cycle-header-level',
   'dangerous-agents',
+  // Retired by the unified stage (#992). WHY this matters more than tidiness
+  // (#1013 review B, MAJOR): useKeybinds' binding index puts a user's
+  // customized entries AHEAD of every default and gives an id it cannot
+  // resolve the `global` context. A saved `nav-left: ['Alt+H', 'Alt+Left']`
+  // override therefore won ⌥H/⌥← over the new lane commands. The router
+  // called preventDefault, the gateway answered `unknown`, and the chord did
+  // nothing. Settings has no row for a retired id, so the user had no way to
+  // find the override except "Reset all bindings".
+  'dispatch-mode',
+  'global-dispatch',
+  'normalize-layout',
+  'hard-normalize-layout',
+  'rotate-layout',
+  'nav-left',
+  'nav-right',
+  'nav-up',
+  'nav-down',
+  'tiled-tabs',
+  'bury-pane',
+  'revive-pane',
+  'kill-buried-pane',
+  'attach-detached-to-grid',
+  'attach-all-detached-for-tab',
+  'detach-to-dispatch',
 ])
 
 /**
