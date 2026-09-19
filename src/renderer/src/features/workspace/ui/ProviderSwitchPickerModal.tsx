@@ -18,6 +18,7 @@ import {
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { SessionId } from '@renderer/workspace/types'
 import { isAgentProviderKind } from '@shared/types/providerKind'
+import { MISSING_PROVIDER_HINT, useMissingProviders } from '@renderer/features/setup/store'
 
 type Props = {
   open: boolean
@@ -42,6 +43,7 @@ export function ProviderSwitchPickerModal({
     [sourceKind],
   )
   const [selectedIndex, setSelectedIndex] = useState(0)
+  const missingProviders = useMissingProviders()
 
   useEffect(() => {
     if (!open) return
@@ -157,7 +159,7 @@ export function ProviderSwitchPickerModal({
                 `}
               >
                 <div className="text-[12px] font-semibold text-ink">{choice.label}</div>
-                <div className="mt-0.5 text-[11px] text-muted">{choice.description}</div>
+                <div className="mt-0.5 text-[11px] text-muted">{missingProviders.has(choice.kind) ? MISSING_PROVIDER_HINT : choice.description}</div>
               </button>
             )
           })}

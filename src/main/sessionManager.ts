@@ -2586,7 +2586,9 @@ export class SessionManager extends EventEmitter {
         }
       }
       if (!binary) {
-        throw new Error(`${kind} CLI not found — open Setup to locate it`)
+        // Names a real place (#995): Setup opens from File › Setup… or the
+        // "Open Setup" command, and shows the install command for this CLI.
+        throw new Error(`${kind} CLI not found. Open Setup (File › Setup…) to install it or enter its path.`)
       }
       const initialSize = {
         cols: options.cols ?? 120,

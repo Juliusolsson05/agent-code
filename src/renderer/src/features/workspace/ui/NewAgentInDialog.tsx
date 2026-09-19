@@ -18,6 +18,7 @@ import {
 import { AGENT_PROVIDER_CHOICES } from '@renderer/workspace/providerChoices'
 import type { TabId } from '@renderer/workspace/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
+import { MISSING_PROVIDER_HINT, useMissingProviders } from '@renderer/features/setup/store'
 
 type Props = {
   open: boolean
@@ -56,6 +57,7 @@ export function NewAgentInDialog({ open, workspace, onClose }: Props) {
   // A ref, not state: it must gate the synchronous key handler, not re-render.
   const committingRef = useRef(false)
   const [step, setStep] = useState<Step>('agent')
+  const missingProviders = useMissingProviders()
   const [agentIndex, setAgentIndex] = useState(0)
   // The highlighted project is held by TAB ID, not list index: the model is
   // live while the dialog is open (an MCP operator can close an agent or a
@@ -239,7 +241,7 @@ export function NewAgentInDialog({ open, workspace, onClose }: Props) {
                   `}
                 >
                   <div className="text-[12px] font-semibold text-ink">{option.label}</div>
-                  <div className="mt-0.5 text-[11px] text-muted">{option.description}</div>
+                  <div className="mt-0.5 text-[11px] text-muted">{missingProviders.has(option.kind) ? MISSING_PROVIDER_HINT : option.description}</div>
                 </button>
               )
             })

@@ -116,6 +116,15 @@ export function buildAppMenu(): Menu {
         },
         { type: 'separator' },
         {
+          label: 'Setup…',
+          // → renderer command `open-setup` (#995). The spawn error for a
+          // missing CLI tells the user to "open Setup"; a user who has never
+          // opened the command palette looks in the menu bar, so it has to be
+          // here too.
+          click: () => dispatchCommand('open-setup'),
+        },
+        { type: 'separator' },
+        {
           label: 'Close Tab',
           // → renderer command `close-tab`. No accelerator (renderer binds ⌘⇧W).
           click: () => dispatchCommand('close-tab'),

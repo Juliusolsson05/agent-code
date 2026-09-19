@@ -7,6 +7,7 @@ import { sessionCommands } from '@renderer/features/workspace/commands/sessionCo
 import { tabCommands } from '@renderer/features/workspace/commands/tabCommands'
 import { windowCommands } from '@renderer/features/workspace/commands/windowCommands'
 import { settingsCommands } from '@renderer/features/settings/commands/settingsCommands'
+import { setupCommands } from '@renderer/features/setup/commands/setupCommands'
 import { spotlightCommands } from '@renderer/features/spotlight/commands/spotlightCommands'
 import { readerCommands } from '@renderer/features/reader/commands/readerCommands'
 import { copyAssistantCommands } from '@renderer/features/copy-assistant/commands/copyAssistantCommands'
@@ -79,6 +80,8 @@ export const builtInCommandCatalog: readonly CommandDef[] = Object.freeze([
   ...goalLoopCommands,
   ...readerCommands,
   ...settingsCommands,
+  // Beside Settings: Setup is the other configuration surface (#995).
+  ...setupCommands,
   ...copyAssistantCommands,
   ...copyCodeBlockCommands,
   ...promptTemplateCommands,
