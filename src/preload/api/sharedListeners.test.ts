@@ -19,14 +19,20 @@ vi.mock('electron', async () => {
 
 const { goalLoopApi } = await import('./goalLoop.js')
 const { dictationApi } = await import('./dictation.js')
+const { devDebugApi } = await import('./devDebug.js')
+const { tldrApi } = await import('./tldr.js')
 
 afterEach(() => { vi.restoreAllMocks() })
 
 describe.each([
   ['goal-loop:changed', (cb: (payload: unknown) => void) => goalLoopApi.onGoalLoopChanged(() => cb(undefined))],
   ['dictation:stream-transcript', (cb: (payload: unknown) => void) => dictationApi.onDictationStreamTranscript(cb as never)],
+  ['record-session:started', (cb: (payload: unknown) => void) => devDebugApi.onSessionRecordingStarted(cb as never)],
+  ['record-session:stopping', (cb: (payload: unknown) => void) => devDebugApi.onSessionRecordingStopping(cb as never)],
+  ['tldr:changed', (cb: (payload: unknown) => void) => tldrApi.onTldrChanged(cb as never)],
+  ['goal:changed', (cb: (payload: unknown) => void) => tldrApi.onGoalChanged(cb as never)],
 ])('%s', (channel, subscribe) => {
-  it('many panes share ONE ipcRenderer listener, every pane still hears every event, and the last unsubscribe removes it', () => {
+  it('many panes share ONE ipcRenderer listener, every pane still hears every event, and the last unsubscribe removes it', async () => {
     const warning = vi.fn()
     process.on('warning', warning)
     const received = Array.from({ length: 12 }, () => vi.fn())
@@ -40,6 +46,9 @@ describe.each([
     expect(ipc.renderer.listenerCount(channel)).toBe(1)
     unsubscribes[11]!()
     expect(ipc.renderer.listenerCount(channel)).toBe(0)
+    // Node emits MaxListenersExceededWarning on process.nextTick, so the spy
+    // must outlive a tick or this check can never fail (#1039 review).
+    await new Promise(resolve => setImmediate(resolve))
     process.off('warning', warning)
     expect(warning).not.toHaveBeenCalled()
   })

@@ -30,8 +30,10 @@ export function subscribe<T>(channel: string, cb: (payload: T) => void): Unsub {
  * app warned "Possible EventEmitter memory leak" at every startup. It was not
  * a leak (every pane unsubscribes), but a permanent false alarm hides the
  * next real one. Raising MaxListeners would silence exactly that alarm.
- * LSP diagnostics (./lsp.ts) solved the same problem with its own Set; this is
- * that pattern made reusable.
+ * LSP diagnostics (./lsp.ts) solved the same problem with its own Set and keeps
+ * it on purpose: its listener stays installed for the renderer's lifetime,
+ * because code blocks mount and unmount constantly while scrolling. This one
+ * removes the relay with its last subscriber.
  *
  * The relay is removed with the last subscriber, so no listener outlives its
  * users. Each subscriber is isolated: one pane that throws must not stop the
@@ -73,4 +75,3 @@ export function subscribeShared<T>(channel: string, cb: (payload: T) => void): U
     }
   }
 }
-
