@@ -100,6 +100,9 @@ async function captureWireFrames(script: ManagerEvent[]): Promise<Array<{ channe
     await new Promise(resolve => setImmediate(resolve))
   } finally {
     wire.receive = () => {}
+    // Emit removed so the forwarder's subagent watcher and buffers stop for
+    // this session — the capture must not leak intervals past the test.
+    manager.emit('removed', { sessionId })
     forwarder.flush()
   }
   return frames

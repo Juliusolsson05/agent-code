@@ -121,9 +121,6 @@ const FEATURES_BY_KIND: Record<AgentProviderKind, ProviderFeatureCapabilities> =
     switchTargets: ['claude', 'opencode', 'grok'],
     verifiedExternalResumeCommand: true,
   },
-  // OpenCode's supported CLI export/import boundary backs prompt extraction,
-  // rewind, duplicate, and pairwise switching; its sessions are listed from
-  // its database by the conversation catalog.
   // Grok: the transcript-engine adapter (grokTranscript's read/publish plus
   // the parser's recorded native-resume projection) backs rewind, duplicate,
   // prompt extraction and pairwise switching, and `grok --resume <id>` is the
@@ -136,6 +133,9 @@ const FEATURES_BY_KIND: Record<AgentProviderKind, ProviderFeatureCapabilities> =
     switchTargets: ['claude', 'codex', 'opencode'],
     verifiedExternalResumeCommand: true,
   },
+  // OpenCode's supported CLI export/import boundary backs prompt extraction,
+  // rewind, duplicate, and pairwise switching; its sessions are listed from
+  // its database by the conversation catalog.
   opencode: {
     transcriptRewind: true,
     transcriptDuplicate: true,

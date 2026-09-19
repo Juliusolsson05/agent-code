@@ -330,9 +330,9 @@ function extractItems(
       return extractCodexItems(raw, timestamp)
     case 'opencode':
       return extractOpencodeItems(raw, timestamp)
-    // Stage 6 v1: no Grok item extractor exists yet, and inventing one from
-    // the corpus's placeholder text would render shapes nobody observed.
-    // Rows are skipped (no items) until an evidence-backed extractor lands.
+    // Unreachable today (prepare rejects 'grok' and auto-detect returns null
+    // for grok rows); the branch exists so the exhaustive switch cannot
+    // silently regress when the MCP transcript surface grows a Grok reader.
     case 'grok':
       return []
   }

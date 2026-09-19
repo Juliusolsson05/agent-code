@@ -26,8 +26,6 @@ import type { ConversationSource, SourceConversation, SourceScope } from './type
 // silently dropped sessions started in a repository subdirectory and any
 // realpath alias — the same sessions the Codex and OpenCode sources keep.
 
-const USER_TEXTS = 4
-
 export class GrokConversationSource implements ConversationSource {
   readonly provider = 'grok' as const
 
