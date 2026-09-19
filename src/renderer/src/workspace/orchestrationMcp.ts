@@ -10,7 +10,7 @@ import type {
 import { entryTextContent } from '@renderer/session-runtime/entries'
 import { isSessionExited } from '@renderer/workspace/providerSessionIdentity'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
-import type { SessionId, SessionMeta, WorkspaceState } from '@renderer/workspace/types'
+import type { SessionId, SessionKind, SessionMeta, WorkspaceState } from '@renderer/workspace/types'
 
 type RuntimeMap = Record<SessionId, SessionRuntime>
 export type VisibleMessageSummary = {
@@ -479,10 +479,30 @@ export function orchestrationChildLifecycle(
  * (testing/fixtures/orchestration-api-error/CATALOG.md).
  *
  * WHY each condition, from the recordings (same catalog):
- * - The failure signal: a semantic api_error for OpenCode, Codex and Grok. For
- *   Claude it is the committed assistant entry with isApiErrorMessage, NOT
- *   its semantic api_error, because Claude retries transient errors on its
- *   own and only the committed entry means it gave up.
+ * - The failure signal, per provider, is the catalog's §3.1 rule and nothing
+ *   wider (SEMANTIC_FAILURE_SOURCE below). OpenCode: a semantic api_error from
+ *   `opencode-sse`. Codex: one from `proxy`. Claude: the committed assistant
+ *   entry with isApiErrorMessage, NOT its semantic api_error, because Claude
+ *   retries transient errors on its own and only the committed entry means it
+ *   gave up.
+ * - Grok has NO signal, so it can never read `failed`. The first version
+ *   accepted every provider's api_error, Grok included, and review reproduced
+ *   the damage. Grok's transcript rows carry no timestamp (its mapper leaves
+ *   it undefined), so "newer than the latest output" was always true. A child
+ *   whose turn 1 failed and whose turn 2 answered read `failed` forever, and
+ *   main then reported `prompt_sent` forever, which is #1018 again. There is
+ *   no Grok recording in the catalog to build a rule from; until there is,
+ *   Grok keeps the lifecycle it had before #1018.
+ * - Not every api_error is the provider giving up (NON_TERMINAL_ERROR_TYPES):
+ *   a user's Esc on OpenCode is MessageAbortedError; a broken skill or agent
+ *   file is an instance-wide error with no session; a delta-buffer overflow
+ *   leaves the turn running. The OpenCode packages name each one in
+ *   `errorType` (opencode-headless#16, opencode-terminal-headless#4). These
+ *   still show in the feed. They just never make a child `failed`.
+ * - A real assistant row with no parseable timestamp means the order cannot
+ *   be known, so the answer is "not failed". Being wrong in that direction
+ *   costs a parent one slow wait; being wrong in the other costs it a healthy
+ *   child it gives up on.
  * - Idle: OpenCode emits no api_error while it retries (processActive stayed
  *   true in 10/10 retry episodes), and in 27/27 recorded errors the error
  *   landed BEFORE idle. So a pure function of state is enough, with no timer:
@@ -505,6 +525,7 @@ export function terminalProviderFailure(
   if (!idle) return null
   const entries = orchestrationVisibleEntries(runtime, meta)
   let signal: { message: string; at: number } | null = null
+  const semanticSource = meta?.kind ? SEMANTIC_FAILURE_SOURCE[meta.kind] : undefined
   if (meta?.kind === 'claude') {
     for (let index = entries.length - 1; index >= 0 && !signal; index -= 1) {
       const entry = entries[index] as Record<string, unknown>
@@ -512,11 +533,13 @@ export function terminalProviderFailure(
       const at = Date.parse(String(entry.timestamp ?? ''))
       if (Number.isFinite(at)) signal = { message: claudeEntryText(entry) || 'Claude API error', at }
     }
-  } else {
+  } else if (semanticSource) {
     const errors = runtime.semantic.errors
     for (let index = errors.length - 1; index >= 0 && !signal; index -= 1) {
       const error = errors[index]!
-      if (error.kind === 'api_error') signal = { message: error.message, at: error.observedAtMs ?? error.ts }
+      if (error.kind !== 'api_error' || error.source !== semanticSource) continue
+      if (error.errorType && NON_TERMINAL_ERROR_TYPES.has(error.errorType)) continue
+      signal = { message: error.message, at: error.observedAtMs ?? error.ts }
     }
   }
   if (!signal) return null
@@ -524,10 +547,21 @@ export function terminalProviderFailure(
   for (const entry of entries as Array<Record<string, unknown>>) {
     if (entry.type !== 'assistant' || entry.isApiErrorMessage === true) continue
     const at = Date.parse(String(entry.timestamp ?? ''))
-    if (Number.isFinite(at) && at > lastOutputAt) lastOutputAt = at
+    if (!Number.isFinite(at)) return null
+    if (at > lastOutputAt) lastOutputAt = at
   }
   return signal.at > lastOutputAt ? signal : null
 }
+
+/** The catalog's §3.1 signal source per provider. Claude reads its committed
+ *  entry instead, and a provider absent here (Grok) has no failure signal. */
+const SEMANTIC_FAILURE_SOURCE: Partial<Record<SessionKind, string>> = {
+  opencode: 'opencode-sse',
+  codex: 'proxy',
+}
+
+/** errorType names that are not the provider giving up (see above). */
+const NON_TERMINAL_ERROR_TYPES = new Set(['MessageAbortedError', 'instance', 'part_overflow'])
 
 function claudeEntryText(entry: Record<string, unknown>): string {
   const message = entry.message as { content?: unknown } | undefined

@@ -7,6 +7,8 @@ import type { SessionRuntime } from '@renderer/session-runtime/state'
 import { foldSemanticEvent } from '@renderer/session-runtime/semantic/foldEvent'
 import { orchestrationChildLifecycle, terminalProviderFailure } from '@renderer/workspace/orchestrationMcp'
 import type { SessionMeta } from '@renderer/workspace/types'
+import { mapGrokEntryToFeedEntries } from '@providers/grok/renderer/transcript/mapper'
+import { mapOpencodeMessageToFeedEntries } from '@providers/opencode/renderer/transcript/mapper'
 
 // #1018: an orchestration child whose provider turn failed (a usage limit, an
 // auth rejection) reported `waiting` forever, which main turned into
@@ -64,6 +66,9 @@ describe('a child whose provider turn failed reports `failed` (#1018)', () => {
     expect(terminalProviderFailure(runtime, meta)?.message).toMatch(/usage limit/i)
   })
 
+  // A guard rather than a fail-first test: the recording has no api_error at
+  // all, so it passed before #1018 too. It pins that retries alone (5
+  // `retrying` statuses, processActive true) can never produce `failed`.
   it('OpenCode Terminal, a retry still in flight: never failed', () => {
     const { steps } = replay(load('opencode-terminal-retry-in-flight') as Fixture, 'opencode')
     expect(steps.map(step => step.lifecycle)).not.toContain('failed')
@@ -91,5 +96,74 @@ describe('a child whose provider turn failed reports `failed` (#1018)', () => {
     const errorAt = Date.parse(String(claude.a_committedEntries[0]!.timestamp))
     const answer = { type: 'assistant', timestamp: new Date(errorAt + 60_000).toISOString(), message: { role: 'assistant', content: [{ type: 'text', text: 'Done.' }] } }
     expect(orchestrationChildLifecycle({ ...runtime, entries: [...runtime.entries, answer] as never }, meta)).toBe('completed')
+  })
+})
+
+// Review of #1044 (2026-09-19): the cases where a healthy child must NOT read
+// `failed`. The first version failed each of them.
+describe('a child that did not fail never reports `failed` (#1044 review)', () => {
+  const T1 = Date.parse('2026-09-19T10:00:00Z')
+  const idle = (): SessionRuntime => ({ ...emptyRuntime(), processStatus: 'started', inputReady: true })
+  const withError = (runtime: SessionRuntime, event: Record<string, unknown>, kind: SessionMeta['kind']) =>
+    ({ ...runtime, semantic: foldSemanticEvent(runtime.semantic, { type: 'api_error', turnId: null, ...event }, kind!) })
+
+  it('Grok: an old error followed by a later answer reads completed, through the real Grok mapper', () => {
+    // Grok rows carry no timestamp, so "newer than the latest output" was
+    // always true. Turn 1 failed, turn 2 answered, and the child read
+    // `failed` (then `prompt_sent` from main) forever. Grok has no failure
+    // signal until a recording supports one.
+    const meta = { kind: 'grok', cwd: '/repo' } as SessionMeta
+    const user = mapGrokEntryToFeedEntries({ sessionId: 's', generation: 0, lineStartOffset: 100, item: { type: 'user', content: [{ type: 'text', text: 'try again' }] } }).entries
+    const answer = mapGrokEntryToFeedEntries({ sessionId: 's', generation: 0, lineStartOffset: 200, item: { type: 'assistant', content: 'Done, all tests pass.', tool_calls: [] } }).entries
+    expect(answer[0]!.timestamp).toBeUndefined()
+    const runtime = { ...withError(idle(), { message: 'rate limited', source: 'grok-acp', ts: T1 }, 'grok'), entries: [...user, ...answer] as never }
+    expect(terminalProviderFailure(runtime, meta)).toBeNull()
+    expect(orchestrationChildLifecycle(runtime, meta)).toBe('completed')
+  })
+
+  it('OpenCode: an instance-wide error (a broken skill file) never fails the turn, and still counts for nothing after the answer', () => {
+    // OpenCode stamps a step's time.created BEFORE it loads skills, so a
+    // skill parse error lands after the final answer's timestamp. The
+    // package now marks session-less errors 'instance' (opencode-headless#16).
+    const meta = { kind: 'opencode', cwd: '/repo' } as SessionMeta
+    const answer = mapOpencodeMessageToFeedEntries({ info: { id: 'msg_1', role: 'assistant', time: { created: T1, completed: T1 + 20_000 } }, parts: [{ type: 'text', text: 'Here is the full answer.' }] }).entries
+    const runtime = { ...withError(idle(), { message: 'Failed to parse skill /x/SKILL.md', errorType: 'instance', source: 'opencode-sse', ts: T1 + 40 }, 'opencode'), entries: answer as never }
+    expect(orchestrationChildLifecycle(runtime, meta)).toBe('completed')
+  })
+
+  it('Codex: an old error followed by a newer rollout answer reads completed', () => {
+    const meta = { kind: 'codex', cwd: '/repo' } as SessionMeta
+    const answer = { type: 'assistant', uuid: 'a', timestamp: new Date(T1 + 3000).toISOString(), message: { role: 'assistant', content: [{ type: 'text', text: 'ok' }] } }
+    const runtime = { ...withError(idle(), { requestId: 'req-1', message: 'boom', status: 500, source: 'proxy', ts: T1 }, 'codex'), entries: [answer] as never }
+    expect(orchestrationChildLifecycle(runtime, meta)).toBe('completed')
+  })
+
+  // Recorded OpenCode Terminal sequences with no retries before the error
+  // (opencode-terminal-nonretryable-and-abort.json). The api_error payload is
+  // the catalog's derived message plus the error name from the recorded
+  // database row, which is what opencode-terminal-headless#4 now forwards as
+  // errorType.
+  const nonRetryable = load('opencode-terminal-nonretryable-and-abort') as Record<string, { feedDebug: Fixture['feedDebug'] }>
+  const caseFixture = (key: string, event: Record<string, unknown>): Fixture => ({
+    feedDebug: nonRetryable[key]!.feedDebug,
+    derivedSemanticApiError: { event: { type: 'api_error', turnId: null, source: 'opencode-sse', ...event } },
+  })
+
+  it('OpenCode Terminal, the user pressed Esc (recorded case b): never failed', () => {
+    const { steps } = replay(caseFixture('b_userAbort', { message: 'Aborted', errorType: 'MessageAbortedError' }), 'opencode')
+    expect(steps.some(step => step.kind === 'SEM:api_error')).toBe(true)
+    expect(steps.map(step => step.lifecycle)).not.toContain('failed')
+  })
+
+  it('OpenCode Terminal, a 403 then the user re-prompted (recorded case c): failed while idle, running again once the new turn starts', () => {
+    // Case c has no database rows of its own; its 403 is the same free-tier
+    // rejection as case a, whose row supplies the text and name.
+    const { steps } = replay(caseFixture('c_nonRetryable403ThenUserRetry', {
+      message: "Error from provider (Console): OpenCode's free tier can only be used from within OpenCode",
+      errorType: 'APIError',
+    }), 'opencode')
+    const reprompt = steps.findIndex(step => step.tMs === 9693)
+    expect(steps.slice(0, reprompt).at(-1)!.lifecycle).toBe('failed')
+    expect(steps.at(-1)!.lifecycle).toBe('running')
   })
 })

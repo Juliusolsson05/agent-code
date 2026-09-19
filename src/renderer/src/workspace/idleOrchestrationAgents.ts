@@ -60,9 +60,13 @@ export function hasOrchestrationAgents(state: WorkspaceState): boolean {
  * so the user's cleanup and the parent's coordination cannot disagree about
  * whether a worker is done.
  *
- * WHY exited and failed workers are excluded: Dispatch paints them `exited` or
- * with an error, not `idle`, and a failure is something the user may want to
- * read before it disappears. Close Old Agents still reaches them.
+ * WHY exited and failed workers are excluded: a failure is something the user
+ * may want to read before it disappears. Since #1018, `failed` includes a
+ * provider turn that ended in an error (a usage limit, an auth rejection), and
+ * Dispatch paints RUNTIME state, not this lifecycle, so such a worker can look
+ * idle there. A Claude child that hit a usage limit used to read `completed`
+ * and was swept by this command with the limit text unread; it is now kept.
+ * Close Old Agents still reaches all of them.
  */
 export function isIdleOrchestrationAgent(
   sessionId: SessionId,
