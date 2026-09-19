@@ -409,6 +409,13 @@ claude 2.1.143 / codex 0.130.0 are stale versus the 2.1.278 / 0.155.1 in daily u
 - **T12 landing `feat/direct-beta-download`:** an uncommitted/unmerged fix in the
   landing worktree `.worktrees/landing-page-v1` ("commit/push/PR it?", unanswered).
   Evaluate it against the nightly/stable plan.
+- **T15 #1024: goal-loop continuations delivered mid-turn (owner, 2026-09-19).**
+  33 continuations in 66 minutes of one unbroken working turn. Stream `working→idle` phases
+  are not turn-scoped for Claude: background subagents and long tool calls produce them.
+  Fix: use Claude Code's `Stop` hook as the authoritative turn boundary, and never deliver
+  into a busy input.
+  Test: replay a recorded session that has a background subagent. HIGH priority, since it
+  is a shipped feature misbehaving. Schedule right after the Stage 4 blockers.
 - **T14 Redesign the Agent Activity command (owner, 2026-09-19): "that modal is ages and just shit across the board".**
   This is a full redesign or reimagining, not a patch. Approach:
   - Read the current command, its modal, and its data sources first.
