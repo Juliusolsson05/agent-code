@@ -34,7 +34,7 @@ export const paneCommands: CommandDef[] = [
     // are surface-gated out of Dispatch.
     surface: 'app',
     title: 'New Agent…',
-    description: '**What it does:** Starts a **new agent or terminal**.\n\n**Use when:** You want another Claude, Codex, OpenCode, or shell pane.\n\n**Notes:** OpenCode and OpenCode Terminal are separate choices. In **Dispatch**, agents become detached rows.',
+    description: '**What it does:** Starts a **new agent or terminal**.\n\n**Use when:** You want another Claude, Codex, OpenCode, or shell pane.\n\n**Notes:** OpenCode and OpenCode Terminal are separate choices. New agents land in the pool with a **new** badge in the index; the focused lane is filled only when it is empty.',
     keywords: ['new', 'agent', 'placement', 'claude', 'codex', 'opencode', 'terminal'],
     when: ({ workspace }) => Boolean(workspace.activeTab),
     run: ({ workspace }) => workspace.startNewAgentPlacement(),
@@ -110,7 +110,7 @@ export const paneCommands: CommandDef[] = [
     surface: 'session',
     title: 'Close Focused Session',
     keywords: ['pane', 'close pane'],
-    description: '**What it does:** Closes the **currently targeted pane or Dispatch row**.\n\n**Use when:** You are done with the current target.\n\n**Notes:** In **Dispatch**, the highlighted row is the close target.',
+    description: '**What it does:** Closes the **currently targeted session**.\n\n**Use when:** You are done with the current target.\n\n**Notes:** The focused lane\'s agent is the close target.',
     run: ({ workspace }) => workspace.closeFocused(),
   },
   {
@@ -119,7 +119,7 @@ export const paneCommands: CommandDef[] = [
     pickerVisibility: 'advanced',
     surface: 'session',
     title: 'Linked Agent…',
-    description: '**What it does:** Starts a new agent linked to the currently targeted agent.\n\n**Use when:** You want a one-off helper, like a review agent, visually nested under the parent.\n\n**Notes:** The linked agent is a normal Dispatch agent. It renders directly under the parent and closes automatically when the parent closes.',
+    description: '**What it does:** Starts a new agent linked to the currently targeted agent.\n\n**Use when:** You want a one-off helper, like a review agent, visually nested under the parent.\n\n**Notes:** The linked agent is an ordinary pool agent. It renders directly under the parent and closes automatically when the parent closes.',
     keywords: ['linked', 'agent', 'review', 'helper', 'child', 'dispatch', 'claude', 'codex', 'opencode'],
     when: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
@@ -157,7 +157,7 @@ export const paneCommands: CommandDef[] = [
     // now hides this in the grid.
     surface: 'workspace',
     title: 'Pin Sessions…',
-    description: '**What it does:** Opens the multi-select Pin modal to choose which **Dispatch** agents and terminals stay pinned at the top of the agent list.\n\n**Use when:** You want a few favorite agents or terminals to always be one keystroke away regardless of project or scope.\n\n**Notes:** Space toggles, Enter commits, Esc cancels. The order you Space through the rows is the order pins render in. Pins survive project↔global scope toggles.',
+    description: '**What it does:** Opens the multi-select Pin modal to choose which agents and terminals stay pinned at the top of the agent list.\n\n**Use when:** You want a few favorite agents or terminals to always be one keystroke away regardless of project or scope.\n\n**Notes:** Space toggles, Enter commits, Esc cancels. The order you Space through the rows is the order pins render in. Pins survive every project switch.',
     keywords: ['pin', 'pins', 'pinned', 'favorite', 'star', 'top', 'dispatch', 'terminal'],
     getState: ({ flags }) => panel(flags.pinAgentsOpen),
     run: ({ ui, flags }) => {
@@ -187,7 +187,7 @@ export const paneCommands: CommandDef[] = [
     // data condition (the focused row is currently pinned).
     surface: 'workspace',
     title: 'Unpin Session',
-    description: '**What it does:** Removes the currently-focused **Dispatch** row from the Pinned section.\n\n**Use when:** You want to quickly drop a single pin without opening the Pin modal.\n\n**Notes:** Only appears when the focused dispatch row is currently pinned.',
+    description: '**What it does:** Removes the currently focused row\'s agent from the Pinned section.\n\n**Use when:** You want to quickly drop a single pin without opening the Pin modal.\n\n**Notes:** Only appears when the focused lane\'s agent is currently pinned.',
     keywords: ['unpin', 'remove', 'pin', 'pinned', 'star'],
     when: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
@@ -267,7 +267,7 @@ export const paneCommands: CommandDef[] = [
     category: 'session',
     surface: 'app',
     title: 'Undo Close',
-    description: '**What it does:** Restores the most recent closed **pane, tab, or Dispatch row** from a small recent-close history.\n\n**Use when:** You closed something by mistake, or repeat it to walk back through earlier closes.\n\n**Notes:** A restored **Dispatch** terminal re-attaches its tmux session, so its scrollback comes back.',
+    description: '**What it does:** Restores the most recent closed **session, project, or pool row** from a small recent-close history.\n\n**Use when:** You closed something by mistake, or repeat it to walk back through earlier closes.\n\n**Notes:** A restored terminal re-attaches its tmux session, so its scrollback comes back.',
     run: ({ workspace }) => workspace.undoClose(),
   },
   {
@@ -276,7 +276,7 @@ export const paneCommands: CommandDef[] = [
     surface: 'session',
     title: 'Auto-follow Focused Agent',
     keywords: ['tail'],
-    description: '**What it does:** Toggles **auto-follow** for the focused target.\n\n**Use when:** You want output to stay pinned to the bottom.\n\n**Notes:** Applies to the visible command target, including **Dispatch** selection. Works in both the rendered feed and raw agent terminal views — in a terminal view the TUI output stays pinned to the bottom.',
+    description: '**What it does:** Toggles **auto-follow** for the focused target.\n\n**Use when:** You want output to stay pinned to the bottom.\n\n**Notes:** Applies to the visible command target, including the focused lane. Works in both the rendered feed and raw agent terminal views — in a terminal view the TUI output stays pinned to the bottom.',
     // NO `renderedViewPolicy` — deliberately: this command owns follow
     // behavior on BOTH agent surfaces now (Feed's tailMode on the rendered
     // surface, useTerminalFollow on the raw terminal — and, since #865, on

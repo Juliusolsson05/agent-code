@@ -2,7 +2,6 @@ import { createElement, useCallback, useEffect, useLayoutEffect, useMemo, useRef
 
 import { useAppStore } from '@renderer/app-state/hooks'
 import { useGlobalToast } from '@renderer/ui/GlobalToast'
-import type { WorkspaceModeId } from '@renderer/app-state/settings/types'
 import type { ConfigurableBuiltInMcpDomain } from '@mcp/shared/types'
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 import type { AgentViewModeOverride, SessionId } from '@renderer/workspace/types'
@@ -79,11 +78,6 @@ export type Workspace = ReturnType<typeof useWorkspace>
 export function useWorkspace(
   dangerousAgentsEnabled = false,
   useProxyStreaming = false,
-  // Read once at mount via useBootstrap's useEffect closure. Live
-  // changes to this preference do not retro-trigger bootstrap — that
-  // is intentional, the setting only seeds initial state on a fresh
-  // install (no workspace.json yet).
-  defaultWorkspaceMode: WorkspaceModeId = 'grid',
   defaultBuiltInMcpDomains: ConfigurableBuiltInMcpDomain[] = [],
 ) {
   // ---- Zustand subscriptions (these drive re-renders) ----
@@ -867,7 +861,6 @@ export function useWorkspace(
     tabActions.newTab,
     setBootstrapComplete,
     setRestoreStatus,
-    defaultWorkspaceMode,
   )
   // The persist effect reads current refs on its own timer, so it needs no
   // render-time snapshot — passing `runtimes` here would suggest a reactivity

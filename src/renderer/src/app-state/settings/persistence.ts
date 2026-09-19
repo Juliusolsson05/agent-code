@@ -6,7 +6,6 @@ import {
   FONT_FAMILIES,
   isBuiltInThemeMode,
   USAGE_HEADER_LEVELS,
-  WORKSPACE_MODES,
 } from '@renderer/app-state/settings/types'
 import {
   V4_CUSTOM_MIGRATION_MARKER,
@@ -144,12 +143,8 @@ export function coerceSettings(value: unknown): Settings {
     )
       ? (parsed.usageHeaderLevel as UsageHeaderLevel)
       : DEFAULT_SETTINGS.usageHeaderLevel,
-    // WHY membership check via WORKSPACE_MODES rather than a literal
-    // === 'dispatch': keeps the source of truth in one array so adding
-    // a new mode label later (if ever) only requires editing types.ts.
-    defaultWorkspaceMode: WORKSPACE_MODES.some(m => m.id === parsed.defaultWorkspaceMode)
-      ? (parsed.defaultWorkspaceMode as Settings['defaultWorkspaceMode'])
-      : DEFAULT_SETTINGS.defaultWorkspaceMode,
+    // `defaultWorkspaceMode` is dropped on read (#992): a stale persisted
+    // value names a mode that no longer exists and selects nothing.
     // Agent view mode is a product contract, not a loose string. A typo in
     // localStorage must fall back to the compatible custom-rendered Agent mode
     // rather than accidentally booting every pane into raw terminal mode.

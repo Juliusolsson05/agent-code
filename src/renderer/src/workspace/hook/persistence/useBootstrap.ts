@@ -1,7 +1,6 @@
 import { useEffect } from 'react'
 
 import type { PersistedWorkspace } from '@renderer/workspace/persistence'
-import type { WorkspaceModeId } from '@renderer/app-state/settings/types'
 
 import type {
   WorkspaceSetRuntimes,
@@ -59,13 +58,9 @@ export function useBootstrap(
   // render the partial/fallback states without each call site needing
   // to recompute "is autosave actually running right now".
   setRestoreStatus: (status: WorkspaceRestoreStatus) => void,
-  // WHY these params: the "Default Workspace Mode" setting only mattered on
-  // a brand-new install (no workspace.json), choosing between grid and
-  // Dispatch. With the unified layout (#992) there is nothing to choose:
-  // every workspace boots onto the stage. The setting param stays (removing
-  // it drags the Settings UI into this stage) but is deliberately unread
-  // now; stage-8 cleanup deletes setting and param together.
-  defaultWorkspaceMode: WorkspaceModeId,
+  // `defaultWorkspaceMode` was a param here until #992 stage 8: the
+  // "Default Workspace Mode" setting chose between grid and Dispatch on a
+  // fresh install, and there is one layout now. Deleted with the setting.
   // Two more params lived here until the stage became a required field:
   // `enterDispatchMode` (fresh installs could boot into classic Dispatch) and
   // `enterTiledDispatch`, which an `ensureStage` helper called after every

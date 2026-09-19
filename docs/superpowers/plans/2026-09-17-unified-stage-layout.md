@@ -947,6 +947,37 @@ walkthrough recorded below:
 - **README** no longer says "grid, Dispatch, and buried agent"; the
   orchestration screenshot alt says "agent index".
 
+
+---
+
+### 9.6 Stage 8 execution record (cleanup)
+
+- **`defaultWorkspaceMode` is deleted end to end**: the Settings row, the
+  Settings type + default, the persistence coercion (a stale persisted value
+  is now dropped on read rather than validated), the useBootstrap/useWorkspace
+  params that had been deliberately unread since 3b-i, and their tests. The
+  "fresh-install" metadata scope test went with its only subject.
+- **The user-facing "Dispatch" audit** swept command titles/descriptions:
+  "Dispatch row" → session, "the Dispatch list" → the index, mode-conditioned
+  sentences ("In **Dispatch**, …") replaced with the unconditional behavior
+  (pool + new badge), and Merge Project Tabs' notes no longer describe buried
+  panes becoming Dispatch agents. Command IDS still carry `dispatch-` prefixes
+  by design (§5.4: ids are not user-facing; renaming them orphans bindings).
+- **The retired-ids release note lives in the PR body**: the repo has no
+  CHANGELOG file, and the ledger in catalog.test.ts already says "release
+  notes must say so" — the PR description is this release's vehicle and
+  carries the full retired-id list with what happened to each chord.
+- **Internal renames were opportunistic only** (laneKeyboard.ts,
+  reservedInteractionBindings, the placement-schema comments); the bulk
+  `tabs`→projects / DispatchAgentList renames remain an optional follow-up
+  PR, as the plan allows.
+
+FINAL VERIFICATION (this sweep): `npx tsc -b` clean; full vitest sweep
+524 files / 3741 tests, zero failures; `check:keybindings` OK (44 binding
+sets, 13 reserved, 8 approved overlaps); `test:contract` satisfied; the
+worktree-live-fixture, conversation-fixture and live-resume-probe checks
+pass.
+
 ## 10. Testing strategy
 
 Per `docs/testing/standard.md` — suffix picks the tier, each test protects

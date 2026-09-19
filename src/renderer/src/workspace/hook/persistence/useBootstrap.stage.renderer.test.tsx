@@ -148,7 +148,6 @@ function renderBootstrap(harness: ReturnType<typeof makeHarness>) {
       harness.newTab,
       setBootstrapComplete,
       setRestoreStatus,
-      'dispatch',
     ),
   )
   return { unmount, setBootstrapComplete, setRestoreStatus }

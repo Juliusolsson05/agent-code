@@ -386,7 +386,7 @@ export const sessionCommands: CommandDef[] = [
     category: 'workspace-tools',
     surface: 'app',
     title: 'Close Idle Orchestration Agents',
-    description: '**What it does:** Closes every **orchestration agent** that has finished its work and is idle, after confirming the list.\n\n**Use when:** An orchestration run left finished workers behind in Dispatch.\n\n**Notes:** Working, starting, exited and failed agents stay open, and so do the agents that started them.',
+    description: '**What it does:** Closes every **orchestration agent** that has finished its work and is idle, after confirming the list.\n\n**Use when:** An orchestration run left finished workers parked in the pool.\n\n**Notes:** Working, starting, exited and failed agents stay open, and so do the agents that started them.',
     keywords: [
       'close',
       'idle',
@@ -984,7 +984,7 @@ export const sessionCommands: CommandDef[] = [
 
     surface: 'session',
     title: 'Duplicate Agent',
-    description: '**What it does:** Clones the focused **agent session** into a new pane.\n\n**Use when:** You want a parallel branch of the same conversation.\n\n**Notes:** In **Dispatch**, the clone is created as a detached agent.',
+    description: '**What it does:** Clones the focused **agent session** into a new pane.\n\n**Use when:** You want a parallel branch of the same conversation.\n\n**Notes:** The clone lands in the pool with a **new** badge; place it in any lane.',
     keywords: ['duplicate', 'clone', 'fork', 'copy', 'session', 'agent'],
     when: ({ workspace }) => {
       // Needs a providerSessionId (something on disk to duplicate) AND a

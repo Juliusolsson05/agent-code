@@ -102,10 +102,9 @@ describe('settings metadata', () => {
     expect(cli && settingMetadata(cli).storage).toBe('setup')
   })
 
-  it('marks the fresh-install-only scope', () => {
-    const row = getSettingsRegistry().find(r => r.id === 'default-workspace-mode')
-    expect(row && settingMetadata(row).scope).toBe('fresh-install')
-  })
+  // 'marks the fresh-install-only scope' pinned default-workspace-mode until
+  // #992 stage 8 deleted the setting (one layout, nothing to choose). No
+  // other setting claims the scope, so the case went with its subject.
 
   it('marks both managed personal-skill surfaces as app-wide and new-session', () => {
     const conventions = getSettingsRegistry().find(row => row.id === 'agent-code-conventions')

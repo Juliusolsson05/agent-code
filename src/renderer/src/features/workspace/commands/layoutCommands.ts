@@ -324,7 +324,7 @@ export const layoutCommands: CommandDef[] = [
     category: 'layout-dispatch',
     surface: 'workspace',
     title: 'Nested Agents',
-    description: '**What it does:** Switches the focused row\'s index between capping a parent\'s nested children and showing all of them.\n\n**Use when:** A parent has spawned enough workers to bury every other agent in the list.\n\n**Notes:** Applies to both orchestration children and manually linked agents — Dispatch nests them identically, so the cap cannot tell them apart. Only nested children are ever hidden; top-level agents always show, because the parent is what reports. Hiding a child never renumbers anything: labels and ⌘N stay on the full canonical list.',
+    description: '**What it does:** Switches the focused row\'s index between capping a parent\'s nested children and showing all of them.\n\n**Use when:** A parent has spawned enough workers to bury every other agent in the list.\n\n**Notes:** Applies to both orchestration children and manually linked agents — the index nests them identically, so the cap cannot tell them apart. Only nested children are ever hidden; top-level agents always show, because the parent is what reports. Hiding a child never renumbers anything: labels and ⌘N stay on the full canonical list.',
     keywords: ['nested', 'orchestrated', 'orchestration', 'linked', 'children', 'collapse', 'expand', 'sub agents', 'workers', 'cap'],
     getState: ({ workspace }) => {
       const tiled = workspace.state.stage
