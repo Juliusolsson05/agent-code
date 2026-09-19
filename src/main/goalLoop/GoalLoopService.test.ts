@@ -444,6 +444,43 @@ describe('GoalLoopService hook turns that end without a Stop (#1028 review)', ()
     await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1))
   })
 
+  it('a prompt the user types while the loop is paused starts a busy turn that Resume will not interrupt', async () => {
+    // #1028 re-review probe G: UserPromptSubmit publishes no semantic event,
+    // so the phase still read the previous turn's idle. A silent first
+    // request (a 529 retry backoff) then let Resume deliver into the turn.
+    // (Reached WITHOUT a prior delivery on purpose: a delivery's persist
+    // holds the re-entrancy guard and would park Resume's continuation,
+    // hiding a wrong delivery behind timing.)
+    const { svc, manager, deliver } = await hookTurn()
+    manager.emit('semantic-event', { sessionId: 's1', event: { type: 'stream_phase', phase: 'idle' } })
+    svc.control('s1', { action: 'pause' })
+    svc.observeProviderHook('s1', 'user-prompt-submit')
+    await vi.advanceTimersByTimeAsync(GOAL_LOOP_QUIET_TURN_MS + 1_000)
+    svc.control('s1', { action: 'resume' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(deliver).not.toHaveBeenCalled()
+    // That turn's own Stop continues the loop.
+    svc.observeProviderHook('s1', 'stop', { blocked: false })
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1))
+  })
+
+  it('KNOWN LIMIT (#1040): after an Esc mid-stream the phase stays busy, so only a typed prompt recovers', async () => {
+    // Pinned so the limit is visible, not assumed away. The Esc leaves the
+    // proxy phase at `thinking` (no response-end on a client disconnect).
+    const { svc, manager, deliver } = await hookTurn()
+    manager.emit('semantic-event', { sessionId: 's1', event: { type: 'stream_phase', phase: 'thinking' } })
+    await vi.advanceTimersByTimeAsync(2 * GOAL_LOOP_QUIET_TURN_MS)
+    svc.control('s1', { action: 'pause' })
+    svc.control('s1', { action: 'resume' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(deliver).not.toHaveBeenCalled()
+    svc.observeProviderHook('s1', 'user-prompt-submit')
+    svc.observeProviderHook('s1', 'stop', { blocked: false })
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1))
+  })
+
   it('any traffic restarts the silence, including events that change nothing', async () => {
     // A stream of identical events returns early from the reducer; the
     // activity stamp must happen before that return.

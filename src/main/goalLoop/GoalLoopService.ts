@@ -172,6 +172,14 @@ export class GoalLoopService extends EventEmitter {
     this.lastHookSessionActivity.set(sessionId, Date.now())
     if (hook !== 'stop') {
       this.hookTurnOpen.add(sessionId)
+      // A typed prompt STARTS a turn, and UserPromptSubmit publishes no
+      // semantic event, so the tracked phase would still read the previous
+      // turn's idle. Seed it busy, exactly as markOwedATurn does for our own
+      // delivery: only a real event can make it idle again. Otherwise a
+      // Resume during that turn's silent first request (a 529 retry backoff,
+      // a long time-to-first-token) found idle + nothing pending + 60 s of
+      // silence and delivered into the live turn (#1028 re-review, probe G).
+      if (hook === 'user-prompt-submit') this.seedBusy(sessionId)
       return
     }
     if (outcome?.blocked) return
@@ -249,8 +257,15 @@ export class GoalLoopService extends EventEmitter {
       // StopFailure, which Agent Code does not register, see below), and
       // prompt-too-long. Codex skips it on interrupt and on turn errors. The
       // turn then stays open here until the next turn boundary. Any user
-      // prompt is one (UserPromptSubmit, then that turn's Stop), and Resume
-      // is the other.
+      // prompt is one (UserPromptSubmit, then that turn's Stop). Resume is
+      // the other, but ONLY when the phase has gone idle.
+      //
+      // KNOWN LIMIT (#1040): after an Esc during a Claude stream the phase
+      // never goes idle. mitmproxy reports a client disconnect only through
+      // its `error` hook, which the proxy addon does not implement, so no
+      // response-end reaches the adapter. For that case only a typed prompt
+      // recovers the loop, and Resume delivers nothing. That is safe but
+      // unhelpful, and the fix belongs in claude-code-headless.
       //
       // Resume closes such a turn only when every signal agrees it is over:
       // - no tool pending;
@@ -379,6 +394,10 @@ export class GoalLoopService extends EventEmitter {
     // below leaves the tracked phase busy, and only an event (which stamps)
     // can make it idle again.
     if (this.hookSessions.has(sessionId)) this.hookTurnOpen.add(sessionId)
+    this.seedBusy(sessionId)
+  }
+
+  private seedBusy(sessionId: string): void {
     const tracked = this.working.get(sessionId) ?? INITIAL_WORKING_STATE
     if (!isWorking(tracked)) this.working.set(sessionId, { ...tracked, phase: 'responding' })
   }
