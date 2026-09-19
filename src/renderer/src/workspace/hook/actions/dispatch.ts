@@ -21,6 +21,7 @@ import {
   setGridShape,
 } from '@renderer/workspace/dispatch/gridShape'
 import type {
+  WorkspaceSetRuntimes,
   WorkspaceSetState,
 } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
@@ -66,6 +67,7 @@ function patchRow(
 
 export function useDispatchActions(
   setState: WorkspaceSetState,
+  setRuntimes: WorkspaceSetRuntimes,
   refs: WorkspaceRefs,
   ensureSessionLive: SessionActions['ensureSessionLive'],
   showToast: (message: string, durationMs?: number) => void,
@@ -75,6 +77,7 @@ export function useDispatchActions(
   setPinnedSessionIds: (ids: SessionId[]) => void
   // ---- Lanes (issue #248) ----
   selectTiledLaneSession: (laneIndex: number, sessionId: SessionId) => Promise<void>
+  clearTiledLane: (laneIndex: number) => void
   insertTiledLaneRight: (laneIndex: number) => boolean
   removeTiledLane: (laneIndex: number) => void
   setTiledFocusedLane: (laneIndex: number) => void
@@ -113,17 +116,31 @@ export function useDispatchActions(
   // harmless, and a no-op when the lane already shows this session.
   const setTiledLaneSession = useCallback(
     (laneIndex: number, sessionId: SessionId) => {
+      let wrote = false
       setState(prev => {
         const tiled = prev.stage
         if (laneIndex < 0 || laneIndex >= tiled.lanes.length) return prev
         if (tiled.lanes[laneIndex]?.selectedSessionId === sessionId) return prev
+        wrote = true
         const lanes = tiled.lanes.map((lane, i) =>
           i === laneIndex ? withLaneSession(lane, sessionId) : lane,
         )
         return { ...prev, stage: { ...tiled, lanes } }
       })
+      // Placing a session is the user ANSWERING the "new in the pool" badge
+      // (#992 §4.3): every placement gesture — index click, lane strip, ⌘N,
+      // the ⌥↑/↓ walk — funnels through here, so this is the one write point
+      // that retires it. Without this the chip would outlive its question and
+      // train the user to ignore it.
+      if (wrote) {
+        setRuntimes(prev => {
+          const runtime = prev[sessionId]
+          if (!runtime?.pooledSpawnAt) return prev
+          return { ...prev, [sessionId]: { ...runtime, pooledSpawnAt: null } }
+        })
+      }
     },
-    [setState],
+    [setRuntimes, setState],
   )
 
   /**
@@ -231,6 +248,37 @@ export function useDispatchActions(
       setTiledLaneSession(rowStartIndex(after.rows, rowIndex) + column, sessionId)
     },
     [refs, ensureSessionLive, showToast, setTiledLaneSession],
+  )
+
+  /**
+   * Empty ONE lane without ending anything: the occupant returns to the pool
+   * alive (#992 §4.4, "Clear Lane"). The lane is NOT removed — Remove Lane
+   * owns that — and nothing refills it (#681): the user asked for the space
+   * back, not for a different agent in it.
+   *
+   * WHY this is an action and not just a command-local state write: it is the
+   * non-destructive half of a pair whose destructive half (Close Agent and
+   * Remove Lane) is an action, and closeAgentRemoveLane's suite pins their
+   * shared lane-index semantics. A command-local write would drift from
+   * whatever lane validation the close path settles on.
+   *
+   * No undo entry, deliberately: the undo stack is for CLOSES (things whose
+   * sessions are gone). Undoing a lane clear is just selecting the session
+   * back into the lane — one click in the index it never left.
+   */
+  const clearTiledLane = useCallback(
+    (laneIndex: number) => {
+      setState(prev => {
+        const tiled = prev.stage
+        if (laneIndex < 0 || laneIndex >= tiled.lanes.length) return prev
+        if (tiled.lanes[laneIndex]?.selectedSessionId === undefined) return prev
+        const lanes = tiled.lanes.map((lane, i) =>
+          i === laneIndex ? { ...lane, selectedSessionId: undefined } : lane,
+        )
+        return { ...prev, stage: { ...tiled, lanes } }
+      })
+    },
+    [setState],
   )
 
   /**
@@ -512,6 +560,7 @@ export function useDispatchActions(
     unpinSession,
     setPinnedSessionIds,
     selectTiledLaneSession,
+    clearTiledLane,
     insertTiledLaneRight,
     removeTiledLane,
     setTiledFocusedLane,

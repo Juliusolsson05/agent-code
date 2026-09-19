@@ -68,7 +68,7 @@ function mount(options: { rootWorking?: boolean } = {}) {
     }
   }
   const dispatch = renderHook(() => useDispatchActions(
-    harness.setState, harness.refs, vi.fn(), vi.fn(),
+    harness.setState, vi.fn(), harness.refs, vi.fn(), vi.fn(),
   ))
   render(<CloseConfirmationDialog />)
   const workspace = {

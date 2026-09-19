@@ -66,7 +66,6 @@ describe('Duplicate Agent command', () => {
     // The regression was invisible at transcript-clone time: only the next app restart exposed
     // that the clone had no durable domain names from which main could mint a fresh scoped token.
     expect(splitFocused).toHaveBeenCalledWith(
-      'vertical',
       'codex',
       {
         resumeSessionId: 'provider-clone',
@@ -114,7 +113,7 @@ describe('Duplicate Agent command', () => {
     // The confirmation dialog names one agent, so a clone was never confirmed
     // by anyone — and the granting agent's own catalog can call this command,
     // so inheriting the grant would let one confirmation replicate itself.
-    expect(splitFocused).toHaveBeenCalledWith('vertical', 'codex', expect.objectContaining({
+    expect(splitFocused).toHaveBeenCalledWith('codex', expect.objectContaining({
       builtInMcpOverrides: { tldr: true },
     }))
   })
@@ -159,7 +158,7 @@ describe('Duplicate Agent command', () => {
 
     await command.run(context)
 
-    expect(splitFocused).toHaveBeenCalledWith('vertical', 'opencode', {
+    expect(splitFocused).toHaveBeenCalledWith('opencode', {
       resumeSessionId: 'ses_clone',
       builtInMcpOverrides: { orchestration: true },
       providerRuntime: 'terminal',

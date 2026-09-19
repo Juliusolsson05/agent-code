@@ -3,7 +3,6 @@ import { useEffect, useMemo, useRef } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
 import { deriveExtensionKeybindings } from '@renderer/apps/host/derive'
-import { buildDefaultKeybindings } from '@renderer/features/command-keybindings/defaults'
 import type { BindingContext, CommandBindingDefault } from '@renderer/features/command-keybindings/defaults'
 import { keybindingFromEvent } from '@renderer/features/command-keybindings/normalize'
 import { commandOwnsOpenSurface } from '@renderer/features/command-palette/surfaceOwnership'
@@ -25,6 +24,8 @@ import { rowScopedRows } from '@renderer/workspace/dispatch/rowScopedRows'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import { enumerateCodeBlockIds } from '@renderer/features/copy-code-block/lib/enumerateCodeBlocks'
 import { getCodeBlockCode } from '@renderer/features/copy-code-block/lib/codeBlockRegistry'
+import { isMacosTextEditingChord } from '@renderer/features/command-keybindings/reservations'
+import { buildDefaultKeybindings } from '@renderer/features/command-keybindings/defaults'
 import { useGlobalEditorStore } from '@renderer/features/global-editor/store'
 
 // Keybinds: global window-level listeners. The handler is attached to
@@ -254,9 +255,18 @@ function routedCommandForEvent(
   event: KeyboardEvent,
   bindingIndex: ReadonlyMap<string, { commandId: string; context: BindingContext }[]>,
   activeContexts: ReadonlySet<BindingContext>,
+  options: { textEditingTarget: boolean } = { textEditingTarget: false },
 ): string | null {
   const binding = keybindingFromEvent(event)
   if (!binding) return null
+  // The runtime half of the macOS text-editing reservation (#992): these
+  // chords belong to the OS wherever text is editable, so a binding — any
+  // binding, in any context — must not receive them while a text field owns
+  // the target. Clear Lane on ⌥⌫ is why this exists (delete-word is the most
+  // load-bearing Option chord in a composer); the static table alone claimed
+  // OS ownership without enforcing it, which is how Alt+Shift+Arrow broke
+  // composer selection for years while the checker stayed green.
+  if (options.textEditingTarget && isMacosTextEditingChord(binding)) return null
   for (const entry of bindingIndex.get(binding) ?? []) {
     if (SURFACE_OWNED_COMMAND_IDS.has(entry.commandId)) continue
     if (!activeContexts.has(entry.context)) continue
@@ -809,7 +819,9 @@ export function useKeybinds(
           && !isTextEditingTarget(e.target),
         ),
       })
-      const routedCommandId = routedCommandForEvent(e, bindingIndex, activeContexts)
+      const routedCommandId = routedCommandForEvent(e, bindingIndex, activeContexts, {
+        textEditingTarget: isTextEditingTarget(e.target),
+      })
       if (handleTldrHold(routedCommandId)) return
       if (routedCommandId) {
         e.preventDefault()

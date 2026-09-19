@@ -59,7 +59,7 @@ describe('Dispatch terminal placement (#671)', () => {
     )
 
     await act(async () => {
-      await harness.actions.splitFocused('vertical', 'terminal')
+      await harness.actions.splitFocused('terminal')
     })
 
     const state = harness.getState()
@@ -90,7 +90,38 @@ describe('Dispatch terminal placement (#671)', () => {
     harness.mounted.unmount()
   })
 
-  it('places the new terminal in the FOCUSED tiled lane, not lane 0', async () => {
+  it('fills the focused lane when it is EMPTY, not lane 0', async () => {
+    // Context-places (#992 §4.3): an empty focused lane is the one spawn a
+    // fill is allowed in. The focused lane is lane 1 here and EMPTY; lane 0 is
+    // occupied, which is what makes this case distinguish "the lane the user
+    // was looking at" from "lane 0" — the "everything jumps to tile 1" failure
+    // mode this layout has hit before.
+    const harness = mountPaneActions(
+      makeDispatchState({
+        focusedLane: 1,
+        lanes: [{ selectedSessionId: 'a1' }, {}],
+      }),
+      { spawnSessionId: 'aTerm' },
+    )
+
+    await act(async () => {
+      await harness.actions.splitFocused('terminal')
+    })
+
+    const tiled = harness.getState().stage
+    expect(tiled.lanes[1]!.selectedSessionId).toBe('aTerm')
+    expect(tiled.lanes[0]!.selectedSessionId).toBe('a1')
+    expect(tiled.focusedLane).toBe(1)
+    harness.mounted.unmount()
+  })
+
+  it('pools the terminal when the focused lane is OCCUPIED — no lane changes, no focus move', async () => {
+    // The other half of context-places: an occupied lane is never displaced.
+    // Until stage 4 of #992 this spawn REPLACED a3 in lane 1; now a3 stays
+    // where the user put it, the terminal is reachable from the index, and
+    // not even the focus cursor moves — "nothing on screen moves" is half
+    // the rule. (cwd still comes from the occupied lane's agent; see the
+    // first case for why that link is load-bearing.)
     const harness = mountPaneActions(
       makeDispatchState({
         focusedLane: 1,
@@ -98,17 +129,16 @@ describe('Dispatch terminal placement (#671)', () => {
       }),
       { spawnSessionId: 'aTerm' },
     )
+    const before = harness.getState().stage
 
     await act(async () => {
-      await harness.actions.splitFocused('vertical', 'terminal')
+      await harness.actions.splitFocused('terminal')
     })
 
-    const tiled = harness.getState().stage
-    // Lane 1 is where the user was looking. Lane 0 must be untouched — the
-    // "everything jumps to tile 1" failure mode this layout has hit before.
-    expect(tiled.lanes[1]!.selectedSessionId).toBe('aTerm')
-    expect(tiled.lanes[0]!.selectedSessionId).toBe('a1')
-    expect(tiled.focusedLane).toBe(1)
+    expect(harness.getState().stage).toBe(before)
+    expect(harness.spawn).toHaveBeenCalledWith('/work/project-a/worktree', expect.objectContaining({
+      kind: 'terminal',
+    }))
     harness.mounted.unmount()
   })
 

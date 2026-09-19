@@ -131,6 +131,45 @@ describe('focus-mode keyboard ownership', () => {
     }
   })
 
+  it('routes Alt+Backspace to Clear Lane when no text field owns the target', () => {
+    // Clear Lane ships on ⌥⌫ (#992 §4.4). Outside text editing the chord is
+    // the stage's to claim, and it must arrive as a COMMAND invocation —
+    // rebindable, visible in the shortcuts surface — not as an inline branch.
+    const { workspace } = makeWorkspace('reader' as const)
+    // Reader/Spotlight would swallow the chord into their own admission
+    // (above); Clear Lane is a workspace verb, so exercise the plain stage.
+    const plain = { ...workspace, readerMode: null, spotlight: null } as typeof workspace
+    const view = render(<KeyboardHarness workspace={plain} />)
+
+    fireEvent.keyDown(document, { altKey: true, code: 'Backspace', key: 'Backspace' })
+
+    expect(harness.appState.requestCommandInvocation).toHaveBeenCalledWith(
+      'clear-focused-lane',
+      'keybinding',
+    )
+    view.unmount()
+  })
+
+  it('yields Alt+Backspace to the text field instead of Clear Lane', () => {
+    // The other half of the pairing (reservations.ts APPROVED_OVERLAPS):
+    // ⌥⌫ is the OS's delete-word in every text field. A Clear Lane firing
+    // from inside a composer would empty the pane mid-sentence — the exact
+    // "command appears bound, breaks editing" failure the reservation table
+    // exists to prevent, enforced at runtime by isMacosTextEditingChord.
+    const { workspace } = makeWorkspace('reader' as const)
+    const plain = { ...workspace, readerMode: null, spotlight: null } as typeof workspace
+    const view = render(<KeyboardHarness workspace={plain} />)
+
+    const composer = document.createElement('textarea')
+    document.body.appendChild(composer)
+    composer.focus()
+    fireEvent.keyDown(composer, { altKey: true, code: 'Backspace', key: 'Backspace' })
+
+    expect(harness.appState.requestCommandInvocation).not.toHaveBeenCalled()
+    composer.remove()
+    view.unmount()
+  })
+
   it('does not change a hidden lane while Reader navigates history', () => {
     const { workspace, selectTiledLaneSession } = makeWorkspace('reader')
     render(<KeyboardHarness workspace={workspace} />)

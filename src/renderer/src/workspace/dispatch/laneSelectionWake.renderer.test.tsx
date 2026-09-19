@@ -100,9 +100,14 @@ function harness(options: {
   })
   const showToast = vi.fn()
 
+  // The runtime-setter stub records badge clears like the real store setter
+  // would apply them; selectTiledLaneSession's synchronous branch writes the
+  // lane through it, and the pooled-spawn badge clear rides the same call.
+  const setRuntimes = vi.fn(updater => { updater({}) })
   const hook = renderHook(() =>
     useDispatchActions(
       setState as never,
+      setRuntimes as never,
       { stateRef, latestRuntimesRef } as unknown as WorkspaceRefs,
       ensureSessionLive as never,
       showToast,

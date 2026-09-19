@@ -33,7 +33,7 @@ describe('built-in MCP continuity at session resurrection boundaries', () => {
     const harness = mountPaneActions(makeState({ lanes: [{ selectedSessionId: 'parent' }], rows: [{ length: 1 }], focusedLane: 0 }))
 
     await act(async () => {
-      await harness.actions.splitFocused('vertical', 'codex', {
+      await harness.actions.splitFocused('codex', {
         resumeSessionId: 'provider-clone',
         builtInMcpOverrides: { workflows: true },
         cwd: '/projects/related-child',
@@ -55,7 +55,7 @@ describe('built-in MCP continuity at session resurrection boundaries', () => {
     const harness = mountPaneActions(makeState({ lanes: [{ selectedSessionId: 'parent' }], rows: [{ length: 1 }], focusedLane: 0 }))
 
     await act(async () => {
-      await harness.actions.splitFocused('vertical', 'opencode', {
+      await harness.actions.splitFocused('opencode', {
         resumeSessionId: 'ses_clone',
         builtInMcpOverrides: { orchestration: true },
         providerRuntime: 'terminal',

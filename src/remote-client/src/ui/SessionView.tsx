@@ -334,7 +334,6 @@ export function SessionView({
           projectDir={cwd}
           statusMode={false}
           isSessionLive={Boolean(working) || !transcript.exited}
-          relatedAgentTabs={[]}
         />
 
         {/* Pre-transcript fallback: states that never reach the jsonl/

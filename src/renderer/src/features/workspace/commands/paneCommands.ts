@@ -66,48 +66,41 @@ export const paneCommands: CommandDef[] = [
     when: ({ workspace }) => Boolean(workspace.activeTab),
     run: ({ ui }) => ui.openNewAgentIn(),
   },
-  {
-    // `grid` surface — applies to split-vertical, split-horizontal,
-    // codex-vertical, codex-horizontal, terminal-horizontal and
-    // terminal-vertical below.
-    //
-    // WHY hide these in Dispatch even though `splitFocused` still
-    // *works* there: the title encodes a grid direction (Right / Down /
-    // Below) and Dispatch has no visible grid for that direction to
-    // mean anything. Worse, `splitFocused` ignores the direction in
-    // Dispatch entirely (pane.ts) — it just creates a detached agent —
-    // so `Split Pane Right` and `Split Pane Down` would be two palette
-    // rows doing the identical thing. Dispatch users create with
-    // `New Agent…` (surface `app`), which is direction-free by design.
-    // Power-user keybinds (⌥D etc.) still fire in Dispatch; only the
-    // misleading palette rows are gated.
-    id: 'split-vertical',
-    category: 'create',
-    // `app`, NOT `grid`. `splitFocused` has a full Dispatch branch that spawns a
-    // DETACHED agent (see the `dispatchSnapshot.dispatchMode` path), which is
-    // what this command's own description promises. `grid` made
-    // `surfaceAvailable` return false in Dispatch, so admission refused a mode
-    // the action implements.
-    //
-    // That was invisible until keybinds started routing through the gateway.
-    // Before, ⌥D was a hard-coded branch in useKeybinds that bypassed admission
-    // entirely and fired in both modes; the surface only hid the palette row.
-    // Routing the chord through admission fused "don't show this row here" with
-    // "refuse to run this here" — the exact split the governance plan exists to
-    // maintain — and ⌥D silently stopped working in Dispatch.
-    surface: 'app',
-    title: 'Split Pane Right',
-    description: '**What it does:** Creates a **new agent pane on the right**.\n\n**Use when:** You want side-by-side work in the grid.\n\n**Notes:** In **Dispatch**, this creates a detached agent instead.',
-    run: ({ workspace }) => workspace.splitFocused('vertical'),
-  },
-  {
-    id: 'split-horizontal',
-    category: 'create',
-    surface: 'app',
-    title: 'Split Pane Down',
-    description: '**What it does:** Creates a **new agent pane below**.\n\n**Use when:** You want a stacked grid layout.\n\n**Notes:** In **Dispatch**, this creates a detached agent instead.',
-    run: ({ workspace }) => workspace.splitFocused('horizontal'),
-  },
+  // The split-family commands (split-vertical/-horizontal, terminal-*, the
+  // per-provider pairs) were grid-spatial: "Split Pane Right", the direction
+  // parameterized a tile-tree split. The tree is gone (#992), the direction
+  // argument with it, and every member of the family is the same action now:
+  // spawn a session (fill the focused lane if it is empty, else pool it).
+  //
+  // IDs AND CHORDS ARE KEPT (plan §5.4): ⌥D, ⌥⇧D, ⌥T, ⌥⇧T, ⌥C, ⌥⇧C keep
+  // firing what they always fired — a user's muscle memory and any persisted
+  // keybinding overrides key on the ids. Only the TITLES changed, because the
+  // old ones described a direction that no longer exists; a palette row whose
+  // title lies is worse than one whose id is historical.
+  //
+  // The "-horizontal" twins are palette-hidden ('advanced'): identical
+  // behavior to their "-vertical" sibling means two visible rows would be two
+  // names for one action, the exact confusion the old comment below this table
+  // used to describe. They stay RUNNABLE and rebindable for the ⌥⇧ chords.
+  ...[
+    {
+      id: 'split-vertical',
+      category: 'create' as const,
+      surface: 'app' as const,
+      title: `New ${getRendererProviderCapabilities(DEFAULT_PROVIDER).shortLabel}`,
+      description: `**What it does:** Starts a **${getRendererProviderCapabilities(DEFAULT_PROVIDER).shortLabel} agent** now, without opening a picker.\n\n**Use when:** You know which provider you want.\n\n**Notes:** Fills the focused lane when it is empty; otherwise the agent lands in the pool with a **new** badge in the index.`,
+      run: ({ workspace }: CommandContext) => workspace.splitFocused(),
+    },
+    {
+      id: 'split-horizontal',
+      category: 'create' as const,
+      surface: 'app' as const,
+      pickerVisibility: 'advanced' as const,
+      title: `New ${getRendererProviderCapabilities(DEFAULT_PROVIDER).shortLabel} (legacy id)`,
+      description: '**What it does:** Same as the **-vertical** command it predates.\n\n**Notes:** Kept runnable for the ⌥⇧ chord and old bindings; hidden from the default palette because it is a duplicate.',
+      run: ({ workspace }: CommandContext) => workspace.splitFocused(),
+    },
+  ],
   {
     id: 'close-pane',
     category: 'session',
@@ -210,38 +203,23 @@ export const paneCommands: CommandDef[] = [
   {
     id: 'terminal-horizontal',
     category: 'create',
-    // `app`, and the two reasons for that have accumulated:
-    //
-    // 1. This was originally `grid` because a terminal split from Dispatch
-    //    landed in a grid the user could not see immediately, so the "Right"
-    //    label pointed at nothing visible. The intent was to hide the palette
-    //    ROW while, as the old comment put it, "power-user keybinds still work
-    //    because they route through splitFocused". They stopped working:
-    //    keybinds now go through the execution gateway, which applies
-    //    `surfaceAvailable`, so `grid` refused ⌥T in Dispatch as well as hiding
-    //    it. Between a slightly odd palette row and a dead chord the user has
-    //    muscle memory for, the row is the cheaper cost — and `surface` is an
-    //    APPLICABILITY declaration, which this command genuinely satisfies in
-    //    both modes. Mode-conditional row hiding, if it is still wanted, needs
-    //    its own mechanism rather than borrowing this one.
-    //
-    // 2. The "points at nothing visible" premise is gone anyway (#671): a
-    //    Dispatch terminal is now a detached Dispatch row that lands in the
-    //    focused lane, so the command has a visible result in both modes. Only
-    //    the direction argument is inert under Dispatch — same as every other
-    //    creation command there.
+    // `app`: a terminal applies everywhere the workspace runs. The id keeps
+    // its historical "-horizontal" suffix (and the ⌥T chord) even though the
+    // direction died with the tile tree (#992) — see the split-family note
+    // above for why ids are frozen while titles stopped lying.
     surface: 'app',
-    title: 'New Terminal Right',
-    description: '**What it does:** Opens a **terminal on the right**.\n\n**Use when:** You need a shell beside the current pane.\n\n**Notes:** From **Dispatch**, the terminal becomes a Dispatch row in the focused row or lane’s project.',
-    run: ({ workspace }) => workspace.splitFocused('vertical', 'terminal'),
+    title: 'New Terminal',
+    description: '**What it does:** Starts a **plain shell** in the focused lane\'s project.\n\n**Use when:** You need a scratch shell beside your agents.\n\n**Notes:** Fills the focused lane when it is empty; otherwise it lands in the pool with a **new** badge in the index.',
+    run: ({ workspace }) => workspace.splitFocused('terminal'),
   },
   {
     id: 'terminal-vertical',
     category: 'create',
     surface: 'app',
-    title: 'New Terminal Below',
-    description: '**What it does:** Opens a **terminal below**.\n\n**Use when:** You need a shell under the current pane.\n\n**Notes:** From **Dispatch**, the terminal becomes a Dispatch row in the focused row or lane’s project.',
-    run: ({ workspace }) => workspace.splitFocused('horizontal', 'terminal'),
+    pickerVisibility: 'advanced',
+    title: 'New Terminal (legacy id)',
+    description: '**What it does:** Same as **New Terminal**.\n\n**Notes:** Kept runnable for the ⌥⇧T chord and old bindings; hidden from the default palette because it is a duplicate.',
+    run: ({ workspace }) => workspace.splitFocused('terminal'),
   },
   // Per-provider split commands, generated for every registered agent
   // provider EXCEPT the default (#394 phase 4). The default provider
@@ -253,32 +231,30 @@ export const paneCommands: CommandDef[] = [
   // etc. so user keybinding overrides keyed on command ids survive).
   ...AGENT_PROVIDER_KINDS.filter(kind => kind !== DEFAULT_PROVIDER).flatMap(kind => {
     const caps = getRendererProviderCapabilities(kind)
-    const chord = caps.splitShortcutKey
     return [
       {
         id: `${kind}-vertical`,
-        // `app` for the same reason as split-vertical: splitFocused spawns a
-        // detached agent in Dispatch, so the command applies in both modes.
+        // `app` for the same reason as the generic create: one workspace, one
+        // spawn flow. Id keeps its historical "-vertical" suffix (plan §5.4).
         surface: 'app' as const,
-        // Same category/tier as the generic and terminal splits they sit
-        // beside: creating a named-provider pane is not a more advanced act
+        // Same category/tier as the generic and terminal creates they sit
+        // beside: creating a named-provider agent is not a more advanced act
         // than creating a default one, it just names the provider.
         category: 'create' as const,
-        title: `New ${caps.shortLabel} Right`,
-        description: `**What it does:** Opens a **${caps.shortLabel} agent on the right**.\n\n**Use when:** You want ${caps.shortLabel} beside the current agent.\n\n**Notes:** In **Dispatch**, this creates a detached ${caps.shortLabel} agent instead.`,
+        title: `New ${caps.shortLabel}`,
+        description: `**What it does:** Starts a **${caps.shortLabel} agent** now, without opening a picker.\n\n**Use when:** You know which provider you want.\n\n**Notes:** Fills the focused lane when it is empty; otherwise the agent lands in the pool with a **new** badge in the index.`,
         run: ({ workspace }: CommandContext) =>
-          workspace.splitFocused('vertical', kind),
+          workspace.splitFocused(kind),
       },
       {
         id: `${kind}-horizontal`,
-        // `app` for the same reason as split-vertical: splitFocused spawns a
-        // detached agent in Dispatch, so the command applies in both modes.
         surface: 'app' as const,
         category: 'create' as const,
-        title: `New ${caps.shortLabel} Below`,
-        description: `**What it does:** Opens a **${caps.shortLabel} agent below**.\n\n**Use when:** You want ${caps.shortLabel} in a stacked layout.\n\n**Notes:** In **Dispatch**, this creates a detached ${caps.shortLabel} agent instead.`,
+        pickerVisibility: 'advanced' as const,
+        title: `New ${caps.shortLabel} (legacy id)`,
+        description: `**What it does:** Same as **New ${caps.shortLabel}**.\n\n**Notes:** Kept runnable for the ⌥⇧ chord and old bindings; hidden from the default palette because it is a duplicate.`,
         run: ({ workspace }: CommandContext) =>
-          workspace.splitFocused('horizontal', kind),
+          workspace.splitFocused(kind),
       },
     ]
   }),

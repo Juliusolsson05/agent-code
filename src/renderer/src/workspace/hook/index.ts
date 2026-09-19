@@ -844,6 +844,7 @@ export function useWorkspace(
 
   const dispatchActions = useDispatchActions(
     setState,
+    setRuntimes,
     refs,
     sessionActions.ensureSessionLive,
     showToast,
@@ -997,6 +998,7 @@ export function useWorkspace(
     unpinSession: dispatchActions.unpinSession,
     setPinnedSessionIds: dispatchActions.setPinnedSessionIds,
     selectTiledLaneSession: dispatchActions.selectTiledLaneSession,
+    clearTiledLane: dispatchActions.clearTiledLane,
     insertTiledLaneRight: dispatchActions.insertTiledLaneRight,
     removeTiledLane: dispatchActions.removeTiledLane,
     setTiledFocusedLane: dispatchActions.setTiledFocusedLane,

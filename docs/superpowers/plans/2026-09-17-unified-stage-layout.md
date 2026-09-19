@@ -724,6 +724,106 @@ Still open after 3b-ii, deliberately:
   it needs an iterative walk and a decision about what a truncated tree means
   for the migration — but noted so it is not rediscovered as a surprise.
 
+
+---
+
+### 9.2 Stage 4 execution record (spawn/close semantics)
+
+Executed as designed in §4.3/§4.4, with the deviations and reasons:
+
+- **Never-displace is decided at COMMIT time, inside the updater.**
+  `applyDispatchSpawnFocus` takes the whole state (it needs `sessions` to know
+  occupancy) and fills the target lane only when that lane is EMPTY — where
+  "empty" includes a lane whose `selectedSessionId` names a gone session (the
+  stale pointer is dropped by the same write). Refused placement returns the
+  stage BY REFERENCE, and that identity is the fill/refuse signal the callers
+  read (`pooled = stage === prev.stage`) — decided against the same `prev` the
+  placement read, which is what makes a lane freed during the awaited spawn
+  fillable and one filled since not. A refused spawn also does not move the
+  FOCUS cursor: "nothing on screen moves" is half the rule.
+- **`createLinkedAgent` lost its lane capture entirely.** The capture aimed
+  the child at the focused lane WHEN it showed the parent; under never-displace
+  a lane showing the parent is occupied by definition, so both branches of the
+  capture were dead. Linked and orchestration children are pool-only, and
+  orchestration children — many from one prompt — are the purest case for the
+  badge below.
+- **The "index badges it" half is `SessionRuntime.pooledSpawnAt`.** A spawn
+  that pools marks the runtime (`markPooledSpawn`, one wrapper so the
+  "guard the row exists" dance is written once); the index row renders a
+  `new` chip from it; placing the session into ANY lane retires it inside
+  `setTiledLaneSession` — the one write every placement gesture (index click,
+  lane strip, ⌘N, the ⌥ walk) funnels through. WHY the runtime and not
+  workspace state: the badge is presentation, not truth — autosave must not
+  write it, undo must not restore it, and a per-row `useShallow` selector
+  re-renders one row instead of the whole index. In-memory only, so it never
+  survives a restart, which is the right lifetime for "you have not looked at
+  this yet". It is retired by placement, never by time — an expiring badge
+  teaches the user to distrust it. `selectCreated:false` callers badge too:
+  they asked for no view change, and until they place the returned ID the
+  badge is the honest state of that row.
+- **Clear Lane shipped as its own action + command (`clear-focused-lane`).**
+  The action (`clearTiledLane`) empties the lane without ending anything and
+  without an undo entry — the undo stack is for CLOSES; undoing a clear is
+  selecting the session back into the lane it never left. The command's
+  `getState` badges the occupant through the shared `sessionDisplayTitle`
+  resolver (a bare "Clear Lane" makes the user check which lane is focused;
+  the badge is that check). Admission requires a LIVE occupant: a lane naming
+  a gone session is as empty as the user is concerned.
+- **⌥⌫ forced the runtime half of the macOS text-editing reservation.**
+  Clear Lane ships on Option+Backspace (the plan's card) and macOS owns that
+  chord as delete-word in every text field. The static reservation table
+  already claimed OS ownership for that chord family without enforcing it —
+  its own header admitted the gap ("does not stop the inline dispatch grammar
+  from consuming Alt+Shift+Arrow in a composer"). `MACOS_TEXT_EDITING_CHORDS`
+  now exists once, feeds the reservation entry, and is enforced at routing:
+  `routedCommandForEvent` refuses ANY binding on those chords while a text
+  field owns the target, making the table true. The chord pairing is recorded
+  in APPROVED_OVERLAPS (owners: clear-focused-lane + macOS text selection)
+  with the yield as the precedence rule. Bare Option+Arrow stays unreserved
+  on purpose: dispatch navigation from a focused composer is the intended
+  workflow and is documented there.
+- **The split-command family stopped lying.** `splitFocused` lost its inert
+  direction argument; `openExtensionViewInPane` lost its `direction` too.
+  Titles dropped the grid directions ("Split Pane Right" → "New Claude",
+  "New Terminal Right" → "New Terminal", "New Codex Right" → "New Codex"),
+  and every description now states the context-places outcome (fills an empty
+  focused lane, else pools with a new badge). **Ids and chords are frozen**
+  (§5.4): ⌥D/⌥⇧D/⌥T/⌥⇧T/⌥C/⌥⇧C keep firing what they always fired. The
+  "-horizontal" twins are palette-hidden (`pickerVisibility: 'advanced'`,
+  honest "(legacy id)" titles) but stay runnable and rebindable — deleting
+  them would orphan bindings, which is stage 8's ledger, not this stage's.
+- **The related-agent strip is deleted, not fed.** Stage 3 left the
+  presentational half alive (PaneHeader chips, TileLeaf/AgentTerminalLeaf
+  props) fed by nothing. Feeding it from the pool would have built a second
+  session selector inside a lane — against U2, which says a lane shows one
+  occupant the user names — duplicating what every per-row index already does
+  with more space (children nest under their parents there). Deleted:
+  `gridRelatedAgents.ts` (types), the prop chain through TileLeaf /
+  AgentTerminalLeaf / PaneHeader, the phone's `relatedAgentTabs={[]}` call
+  shape, and the #858 identity chrome (`ownerSessionId`, the `parent`
+  button) whose input state no longer exists. What survives of its test
+  suites is the part that was never about chips: PaneHeader's phone-stub
+  safety case.
+- **Control API wording follows behavior.** `agents.create`'s
+  `selectCreated` description and the control guide's layout paragraph now
+  state context-places honestly (fills only an empty lane; pool + badge
+  otherwise; `selectCreated:false` preserves everything, place the returned
+  ID with lane-select). Full description rewrites remain stage 7.
+
+What the test conversion taught this time:
+
+- A badge test that crosses TWO hooks has no natural single-suite home;
+  `contextPlacesSpawn.renderer.test.tsx` holds the lifecycle (mark on pool,
+  not on fill; linked always pools) and says in comments which half lives in
+  which other suite.
+- The catalog baseline is the first test that moves when a command is ADDED
+  (115 now); its arithmetic comment is the ledger, and the "growing the
+  catalog means raising the subtrahend" rule kept the plan-count test honest.
+- `focusModeKeyboardOwnership.renderer.test.tsx` was the natural home for the
+  ⌥⌫ yield cases: it is the suite that already reasons about who owns a
+  keystroke, and both halves (routes on the bare stage; yields in a
+  composer) are ownership claims.
+
 ## 10. Testing strategy
 
 Per `docs/testing/standard.md` — suffix picks the tier, each test protects

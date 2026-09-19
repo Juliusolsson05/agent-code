@@ -36,6 +36,33 @@ export type ReservedInteraction = {
  * watch — a chord that is really taken but absent from this table would be
  * offered to the user as free, and the resulting conflict would be silent.
  */
+/**
+ * The macOS chords the OS owns in EVERY editable text field — the runtime half
+ * of the "macOS text selection" reservation below.
+ *
+ * WHY a second export when the reservation entry lists the same chords: the
+ * static table stops a chord being OFFERED as free; nothing enforced it at
+ * runtime, so a dispatch-context binding could still steal delete-word in the
+ * composer while the table claimed macOS owned it (the header of that entry
+ * admitted exactly this gap for Alt+Shift+Arrow). useKeybinds imports this set
+ * and refuses to route any of these chords to a command while a text field
+ * owns the target — making the table's claim true rather than aspirational.
+ *
+ * Alt+Backspace (delete word backwards) is the founding member that forced
+ * the runtime half to exist: Clear Lane ships on it (#992 §4.4), and it is
+ * the single most load-bearing editing chord Option owns in a composer.
+ */
+const MACOS_TEXT_EDITING_CHORDS: readonly Keybinding[] = [
+  'Alt+Backspace',
+  'Alt+Shift+Left', 'Alt+Shift+Right', 'Alt+Shift+Up', 'Alt+Shift+Down',
+  'Cmd+Shift+Up', 'Cmd+Shift+Down',
+]
+
+/** Runtime lookup companion of MACOS_TEXT_EDITING_CHORDS. */
+export function isMacosTextEditingChord(binding: Keybinding): boolean {
+  return (MACOS_TEXT_EDITING_CHORDS as readonly string[]).includes(binding)
+}
+
 export const RESERVED_INTERACTIONS: readonly ReservedInteraction[] = [
   {
     // Indexed tab activation, and Dispatch's two-digit row grammar which
@@ -66,6 +93,10 @@ export const RESERVED_INTERACTIONS: readonly ReservedInteraction[] = [
     // Context is `global` deliberately: the OS owns these wherever text is
     // editable, so they can never be safely claimed by a layout context either.
     //
+    // Alt+Backspace is in this set and yet Clear Lane binds it: see
+    // APPROVED_OVERLAPS below — the router yields the chord to the text field
+    // first, so exactly one owner is live for a given focus.
+    //
     // NOT listed here: bare Option+Arrow (word movement). Dispatch genuinely
     // claims Alt+Arrow for lane movement, and the router yields it back inside
     // the GLOBAL EDITOR specifically (`if (alt && !cmd) return`) — not in the
@@ -77,22 +108,13 @@ export const RESERVED_INTERACTIONS: readonly ReservedInteraction[] = [
     // from being OFFERED as free. It does not stop the inline dispatch grammar
     // in useKeybinds from consuming Alt+Shift+Arrow in a composer today, which
     // it does because that block tests `alt && !cmd` with no shift check.
-    bindings: [
-      'Alt+Shift+Left', 'Alt+Shift+Right', 'Alt+Shift+Up', 'Alt+Shift+Down',
-      // Select to document start/end. Monaco has its own cursorTopSelect /
-      // cursorBottomSelect for these, but that is Monaco COPYING the OS
-      // convention — macOS owns them in every text field, so they belong here
-      // and not in the Monaco entry.
-      //
-      // WHY that distinction became load-bearing: `editor` is now disjoint from
-      // `grid`/`dispatch` (#697). A chord filed only under `editor` is
-      // therefore reported FREE for a dispatch binding — correct for chords
-      // Monaco alone owns, wrong for chords the OS owns everywhere. Filed under
-      // `editor` these would have been offered as free the moment the
-      // disjointness landed, and select-to-document-start would have died in
-      // the composer whenever Dispatch was live.
-      'Cmd+Shift+Up', 'Cmd+Shift+Down',
-    ],
+    //
+    // WHY Cmd+Shift+Up/Down are in THIS entry and not Monaco's: they are the
+    // OS's select-to-document-start/end in every text field (#697 made
+    // `editor` disjoint from the layout contexts, so filing them under
+    // `editor` would have offered them as free to a dispatch binding and
+    // killed them in the composer the moment Dispatch went live).
+    bindings: [...MACOS_TEXT_EDITING_CHORDS],
     context: 'global',
     owner: 'macOS text selection',
   },
@@ -301,6 +323,22 @@ const APPROVED_OVERLAPS: ReadonlyArray<{
       'Jump to Latest Message requires a focused rendered feed and a target '
       + 'that is not text-editing, while editor tab navigation requires focus '
       + 'inside editor chrome. The two preconditions cannot hold at once.',
+  },
+  {
+    binding: 'Alt+Backspace',
+    owners: ['clear-focused-lane', 'macOS text selection'],
+    // Clear Lane ships on ⌥⌫ (#992 §4.4) and macOS owns ⌥⌫ as delete-word in
+    // every text field. Not a conflict for the same reason the editor pairs
+    // above are not: useKeybinds refuses to route ANY entry of
+    // MACOS_TEXT_EDITING_CHORDS while a text field owns the target, so the
+    // composer keeps delete-word and the lane keeps its clear — exactly one
+    // owner live per focus. (A user who rebinds Clear Lane off ⌥⌫ gets
+    // delete-word everywhere; a user who rebinds something ELSE onto ⌥⌫ gets
+    // the same yield, because the rule is about the chord, not the command.)
+    reason:
+      'useKeybinds yields OS-owned text-editing chords while a text field '
+      + 'owns the target (isMacosTextEditingChord), so the composer keeps '
+      + 'native delete-word and Clear Lane fires only outside text editing.',
   },
   {
     binding: 'Cmd+Shift+R',

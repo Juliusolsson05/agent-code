@@ -16,7 +16,6 @@ import type { ScrollInfo } from '@renderer/features/feed/ui/Feed'
 import { ProviderConditionOutlet } from '@providers/shared/renderer/conditions/ProviderConditionOutlet'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import type { SessionRuntime, Workspace } from '@renderer/workspace/workspaceStore'
-import type { GridRelatedAgentTab } from '@renderer/workspace/gridRelatedAgents'
 import {
   selectMergedEntries,
 } from '@renderer/session-runtime/mergedEntries'
@@ -108,10 +107,6 @@ type Props = {
   workspace: Workspace
   showStatusMode?: boolean
   showWorktreeBadges?: boolean
-  ownerSessionId?: SessionId
-  relatedAgentTabs?: GridRelatedAgentTab[]
-  selectedRelatedSessionId?: SessionId
-  onSelectRelatedSession?: (sessionId: SessionId) => void
 }
 
 export function TileLeaf({
@@ -123,10 +118,6 @@ export function TileLeaf({
   workspace,
   showStatusMode = true,
   showWorktreeBadges = true,
-  ownerSessionId,
-  relatedAgentTabs = [],
-  selectedRelatedSessionId,
-  onSelectRelatedSession,
 }: Props) {
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const paneRef = useRef<HTMLDivElement>(null)
@@ -818,10 +809,6 @@ export function TileLeaf({
         projectDir={runtime.projectDir}
         statusMode={showStatusMode}
         isSessionLive={isSessionLive}
-        relatedAgentTabs={relatedAgentTabs}
-        selectedRelatedSessionId={selectedRelatedSessionId ?? sessionId}
-        ownerSessionId={ownerSessionId ?? sessionId}
-        onSelectRelatedSession={onSelectRelatedSession}
       />
 
       {/* Feed — overflow-auto lives inside Feed itself so it can

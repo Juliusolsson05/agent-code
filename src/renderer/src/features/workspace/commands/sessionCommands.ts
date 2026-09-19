@@ -1031,8 +1031,11 @@ export const sessionCommands: CommandDef[] = [
         // restart, then rehydrate had no domain names from which to mint a fresh project-scoped
         // token. The clone inherits CHOICES, never the source session's bearer token, and resolves
         // them against current Settings the way every other new provider process does.
+        // The comment below still explains WHY this routes through the spawn
+        // flow rather than newTab; the 'vertical' direction argument it used
+        // to pass died with the tile tree (#992) — placement is context-places
+        // now (fills the focused lane when empty, else pools).
         await workspace.splitFocused(
-          'vertical',
           kind,
           {
             resumeSessionId: newProviderSessionId,

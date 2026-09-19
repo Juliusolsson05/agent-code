@@ -117,8 +117,9 @@ const WorkspaceLeaf = memo(function WorkspaceLeaf({
   // Extension-view pane. Short-circuited BEFORE getRendererProvider(kind), which
   // throws on any non-agent kind — the single edit that lights this up in grid,
   // both dispatch layouts, spotlight, and tile-tabs at once, because they all funnel
-  // here. Uses `sessionId` (the physical leaf) not `renderedSessionId`: an extension
-  // pane has no related-agent tab selection.
+  // here. Uses `sessionId` (the physical leaf) not `renderedSessionId`: the
+  // extension view is keyed to the leaf's own id, not whatever agent the lane
+  // resolves to.
   if (kind === 'extension-view') {
     return (
       <ExtensionViewLeaf

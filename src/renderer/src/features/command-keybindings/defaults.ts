@@ -153,6 +153,13 @@ export function buildDefaultKeybindings(): CommandBindingDefault[] {
     { commandId: 'terminal-horizontal', bindings: ['Alt+T'], context: 'global' },
     { commandId: 'terminal-vertical', bindings: ['Alt+Shift+T'], context: 'global' },
 
+    // Clear Lane (#992 §4.4): the gentle exit, ⌥⌫ to match the plan's card.
+    // 'dispatch', not 'global': it acts on the focused LANE, and the router
+    // additionally yields the chord while a text field owns the target (see
+    // isMacosTextEditingChord) because ⌥⌫ is the OS's delete-word — the one
+    // place a layout verb must not eat an editing chord.
+    { commandId: 'clear-focused-lane', bindings: ['Alt+Backspace'], context: 'dispatch' },
+
     // --- Navigation ---------------------------------------------------------
     // DELETED with the tile tree (#992): the nav-left/right/up/down bindings
     // (⌥H/J/K/L + ⌥Arrows, grid context) walked `tab.root` focus. The same

@@ -1,6 +1,7 @@
 import type { MutableRefObject } from 'react'
 import { render } from '@testing-library/react'
 import { vi } from 'vitest'
+import type { SessionRuntime } from '@renderer/session-runtime/state'
 
 import { UndoCloseStack } from '@renderer/lib/undoClose'
 import type { SessionActions } from '@renderer/workspace/hook/actions/session'
@@ -120,11 +121,21 @@ export function mountPaneActions(
   const sessionActions = sessionActionsWithSpawn(spawn)
   let actions!: ReturnType<typeof usePaneActions>
 
+  // A REAL runtime store, not a no-op: spawn paths write the pooled-spawn
+  // badge (#992 §4.3) through setRuntimes, and a harness that swallowed the
+  // updater would let a spec assert "no badge" for a reason that is the
+  // harness, not the action. Same synchronous-apply contract as the state
+  // writer.
+  let runtimes: Record<string, SessionRuntime> = {}
+  const setRuntimes: WorkspaceSetRuntimes = next => {
+    runtimes = typeof next === 'function' ? next(runtimes) : next
+  }
+
   function Harness(): React.JSX.Element {
     actions = usePaneActions(
       initialState,
       writer.setState,
-      (() => undefined) as WorkspaceSetRuntimes,
+      setRuntimes,
       (() => undefined) as WorkspaceSetSpotlight,
       (() => undefined) as WorkspaceSetReaderMode,
       refs,
@@ -149,6 +160,7 @@ export function mountPaneActions(
     sessionActions,
     getState: writer.getState,
     setState: writer.setState,
+    runtimes: () => runtimes,
   }
 }
 

@@ -43,8 +43,9 @@ describe('extension view placement follows the visible command target', () => {
 
   // Ran twice until #992 (`it.each([false, true])`, tiled or classic Dispatch),
   // reading the new view's id back from the classic focus. There is one layout,
-  // so there is one case, and the id is read from the lane it was placed in.
-  it('opens beside a target that belongs to another project, in that project', () => {
+  // so there is one case, and the id is read from the row it filed — the lane
+  // it lands in is context-places' to decide (#992 §4.3), not this test's.
+  it('opens from a target in another project, filed under that project, displacing nothing', () => {
     const initial = workspace()
     initial.stage = {
       focusedLane: 1, lanes: [{ selectedSessionId: 'a' }, { selectedSessionId: 'detached' }],
@@ -52,8 +53,10 @@ describe('extension view placement follows the visible command target', () => {
     const harness = mountPaneActions(initial)
     act(() => { harness.actions.openExtensionViewInPane('timer.main') })
     const state = harness.getState()
-    const id = state.stage.lanes[1]!.selectedSessionId!
-    expect(id).not.toBe('detached')
+    // The new row is found by WHAT it is, not where it shows: the focused lane
+    // is occupied by the target, and an occupied lane is never displaced.
+    const id = Object.keys(state.sessions)
+      .find(key => state.sessions[key]!.kind === 'extension-view')!
     expect(state.activeTabId).toBe('tab-b')
     // Filed under the TARGET's project, not the active one: the view opened
     // from an agent of project B, and U4 says projects are labels that follow
@@ -69,8 +72,24 @@ describe('extension view placement follows the visible command target', () => {
     expect(resolveTabSessions(state, 'tab-b')).toEqual(['b', 'detached', id])
     expect(state.tabs).toEqual(initial.tabs)
     expect(buildVisibleDispatchRows(state).map(row => row.sessionId)).toContain(id)
-    expect(state.stage.lanes.map(lane => lane.selectedSessionId)).toEqual(['a', id])
+    // Nothing on screen moved: the target keeps its lane, by reference.
+    expect(state.stage.lanes.map(lane => lane.selectedSessionId)).toEqual(['a', 'detached'])
     expect(harness.spawn).not.toHaveBeenCalled()
+    harness.mounted.unmount()
+  })
+
+  it('fills the focused lane when it is empty', () => {
+    const initial = workspace()
+    initial.stage = { focusedLane: 1, lanes: [{ selectedSessionId: 'a' }, {}], rows: [{ length: 2 }] }
+    const harness = mountPaneActions(initial)
+    act(() => { harness.actions.openExtensionViewInPane('timer.main') })
+    const state = harness.getState()
+    const id = state.stage.lanes[1]!.selectedSessionId!
+    // With no occupant to derive from, the project is the ACTIVE one (the
+    // resolver's documented fallback) — the case is about the LANE, so that is
+    // what is asserted.
+    expect(state.sessions[id]).toMatchObject({ kind: 'extension-view', projectId: 'tab-a' })
+    expect(state.stage.lanes[0]!.selectedSessionId).toBe('a')
     harness.mounted.unmount()
   })
 })

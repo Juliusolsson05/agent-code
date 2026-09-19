@@ -22,7 +22,7 @@ it('preserves recorded workspace identities through row edits and refuses a stal
     const refs = useRef(makeRefs(state)).current
     refs.stateRef.current = state; refs.latestStateRef.current = state
     const store = useAppStore.getState()
-    const dispatch = useDispatchActions(store.setWorkspaceState, refs, vi.fn(), () => {})
+    const dispatch = useDispatchActions(store.setWorkspaceState, store.setWorkspaceRuntimes, refs, vi.fn(), () => {})
     return { ...dispatch, restoreStatus: 'fresh' }
   })
   const capabilities = layoutControlCapabilities(() => mounted.result.current as unknown as Workspace)
@@ -59,7 +59,7 @@ it('reports the focused lane s agent as the one focus truth through lane replace
     const refs = useRef(makeRefs(state)).current
     refs.stateRef.current = state; refs.latestStateRef.current = state
     const store = useAppStore.getState()
-    return { ...useDispatchActions(store.setWorkspaceState, refs, vi.fn(), () => {}), restoreStatus: 'fresh' }
+    return { ...useDispatchActions(store.setWorkspaceState, store.setWorkspaceRuntimes, refs, vi.fn(), () => {}), restoreStatus: 'fresh' }
   })
   const caps = layoutControlCapabilities(() => mounted.result.current as unknown as Workspace)
   const invoke = (id: string, input: unknown) => caps.find(cap => cap.descriptor.id === id)!.execute(input, context)
@@ -97,7 +97,7 @@ it('refuses the retired enter / exit / scope actions instead of succeeding silen
     const refs = useRef(makeRefs(state)).current
     refs.stateRef.current = state; refs.latestStateRef.current = state
     const store = useAppStore.getState()
-    return { ...useDispatchActions(store.setWorkspaceState, refs, vi.fn(), () => {}), restoreStatus: 'fresh' }
+    return { ...useDispatchActions(store.setWorkspaceState, store.setWorkspaceRuntimes, refs, vi.fn(), () => {}), restoreStatus: 'fresh' }
   })
   const caps = layoutControlCapabilities(() => mounted.result.current as unknown as Workspace)
   const invoke = (id: string, input: unknown) => caps.find(cap => cap.descriptor.id === id)!.execute(input, context)

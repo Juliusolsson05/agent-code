@@ -134,14 +134,14 @@ const BINDING_BASELINE: readonly BindingBaseline[] = [
     declared: '⌥T',
     effective: ['⌥T'],
     owner: 'useKeybinds',
-    note: 'code === "KeyT" && !shift → splitFocused("vertical", "terminal").',
+    note: 'code === "KeyT" && !shift → the terminal-horizontal command (New Terminal).',
   },
   {
     commandId: 'terminal-vertical',
     declared: '⌥⇧T',
     effective: ['⌥⇧T'],
     owner: 'useKeybinds',
-    note: 'code === "KeyT" && shift → splitFocused("horizontal", "terminal").',
+    note: 'code === "KeyT" && shift → the terminal-vertical command (legacy duplicate id).',
   },
   {
     commandId: 'codex-vertical',

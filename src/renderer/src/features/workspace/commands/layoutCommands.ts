@@ -10,8 +10,49 @@ import {
   rowStartIndex,
 } from '@renderer/workspace/dispatch/gridShape'
 import { resolveStrictDispatchCommandTarget } from '@renderer/workspace/dispatch/dispatchTarget'
+import { sessionDisplayTitle } from '@renderer/workspace/sessionDisplayTitle'
 import type { WorkspaceState } from '@renderer/workspace/types'
 import { useAppStore } from '@renderer/app-state/hooks'
+
+// Exported by name because its admission and badge are pinned directly in
+// clearLane.renderer.test.tsx — looking the def up by id inside that suite
+// would pass vacuously if the id were ever renamed (find → undefined →
+// `when?.()` → undefined → "passes" the not-false assertions).
+//
+// Clear Lane (#992 §4.4): the gentle exit. The occupant returns to the pool
+// ALIVE and stays in this row's index; the lane is empty and nothing refills
+// it (#681). Paired with Remove Lane below — same slot, opposite blast
+// radius — and with Close Agent and Remove Lane for the destructive version
+// of each half.
+export const clearFocusedLaneCommand: CommandDef = {
+  id: 'clear-focused-lane',
+  category: 'layout-dispatch',
+  surface: 'workspace',
+  title: 'Clear Lane',
+  // `getState` badges the occupant's title, because "clear" needs an object:
+  // with several lanes on screen a bare "Clear Lane" sends the user to check
+  // which lane is focused first. The badge is that check. The shared title
+  // resolver (explicit title → cwd basename), not the raw meta.title: most
+  // agents have no explicit title, and a badge that reads "undefined" is
+  // worse than no badge.
+  getState: ({ workspace }) => {
+    const tiled = workspace.state.stage
+    const sessionId = tiled.lanes[tiled.focusedLane]?.selectedSessionId
+    const meta = sessionId ? workspace.state.sessions[sessionId] : undefined
+    return meta ? value(sessionDisplayTitle(meta)) : null
+  },
+  description: '**What it does:** Empties the **focused lane**. The agent in it keeps running and stays in the index.\n\n**Use when:** You want the space back without ending the agent — the inverse of picking one into the lane.\n\n**Notes:** Nothing refills the lane. Put the agent (or another) back with one click in the row index, or ⌘1–9.',
+  keywords: ['clear', 'empty', 'lane', 'unplace', 'park', 'release', 'tiled dispatch', 'stage'],
+  when: ({ workspace }) => {
+    const tiled = workspace.state.stage
+    const sessionId = tiled.lanes[tiled.focusedLane]?.selectedSessionId
+    return Boolean(sessionId && workspace.state.sessions[sessionId])
+  },
+  run: ({ workspace }) => {
+    const tiled = workspace.state.stage
+    workspace.clearTiledLane(tiled.focusedLane)
+  },
+}
 
 export const layoutCommands: CommandDef[] = [
   // DELETED with the two-mode layout (#992): `dispatch-mode` (the mode
@@ -101,6 +142,7 @@ export const layoutCommands: CommandDef[] = [
       workspace.removeTiledLane(tiled.focusedLane)
     },
   },
+  clearFocusedLaneCommand,
   {
     id: 'close-agent-remove-lane',
     category: 'layout-dispatch',

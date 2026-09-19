@@ -7,6 +7,7 @@ import {
   isSessionLiveForClose,
   runCloseConfirmationGate,
 } from '@renderer/workspace/closeConfirmation'
+import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type { CloseExpansionRuntimes, CloseTargetSnapshot } from '@renderer/workspace/closeConfirmation'
 import {
@@ -614,32 +615,72 @@ const CLOSE_CHANGED_TOAST =
   'Close cancelled — these sessions changed while the dialog was open. Try again.'
 
 // Put a newly spawned session on the lane the user was commanding
-// (target.laneIndex) so it appears where they were looking. This is one of the
-// two continuity writes U2 allows besides the user naming an occupant.
+// (target.laneIndex) — but ONLY if that lane is EMPTY. This is the
+// context-places rule (#992 §4.3, the option the operator chose by name):
+// spawning from an empty focused lane fills it, which is one of the two
+// continuity writes U2 allows besides the user naming an occupant. An
+// OCCUPIED lane is never displaced — that would be the #681 healer wearing a
+// spawn costume. The session is still in the pool and reachable from every
+// index; placement is one click.
 //
-// The lane index is re-validated here because it was resolved BEFORE an
-// awaited spawn: a concurrent shape change can outrun it. An index that no
-// longer exists leaves the stage untouched — the session is still in the pool
-// and reachable from every index — rather than being clamped onto whichever
-// lane now happens to sit at the edge.
+// The emptiness test happens HERE, at commit time, not in the spawn-target
+// resolver: the lane index was resolved BEFORE an awaited spawn, and a lane
+// that was empty when the chord was struck may have been filled by the time
+// the backend answers. Displacing that later occupant would be a surprise
+// ordered before it existed. (The reverse race — lane emptied while the
+// spawn was in flight — is fine: the fill was the intent all along.)
+//
+// The lane index is also re-validated for the same reason as before: an index
+// that no longer exists leaves the stage untouched rather than being clamped
+// onto whichever lane now sits at the edge. When the lane is refused, focus
+// does NOT move either — "nothing on screen moves" is half the rule; moving
+// the cursor to advertise the pool row would be the healer again, in a
+// cheaper costume.
 //
 // (This also set a classic-Dispatch `focusedSessionId` until #992, "to keep
 // classic focus coherent if the user later exits the tiled view". There is no
 // other view to exit to.)
-//
-// KNOWN GAP, fixed in stage 4 of the #992 plan: this overwrites an OCCUPIED
-// lane. Context-places spawn must never displace — it should take the focused
-// lane only when that lane is empty and otherwise open a lane beside it.
 function applyDispatchSpawnFocus(
-  stage: TiledDispatchState,
+  state: WorkspaceState,
   sessionId: SessionId,
   laneIndex: number | null,
 ): TiledDispatchState {
+  const stage = state.stage
   if (laneIndex === null || laneIndex < 0 || laneIndex >= stage.lanes.length) return stage
+  // Occupied means `selectedSessionId` is set and resolves. A lane pointing
+  // at a GONE session reads empty to the user and is treated as fillable:
+  // that is exactly the shape a mid-operation close leaves behind, and the
+  // stale pointer is dropped by the same write that fills the lane.
+  const occupant = stage.lanes[laneIndex]?.selectedSessionId
+  if (occupant !== undefined && state.sessions[occupant] !== undefined) return stage
   const lanes = stage.lanes.map((lane, i) =>
     i === laneIndex ? withLaneSession(lane, sessionId) : lane,
   )
   return { ...stage, lanes, focusedLane: laneIndex }
+}
+
+/**
+ * Badge a spawn that landed in the POOL (#992 §4.3). Under context-places a
+ * spawn from an occupied lane, the palette, ⌘N, MCP or orchestration moves
+ * nothing on screen — which makes a spawn that cost a real backend boot look
+ * exactly like a command that did nothing. The index row wears a small "new"
+ * chip (SessionRuntime.pooledSpawnAt) until the session is placed into any
+ * lane, so "where did my agent go?" is answered by the next thing the user
+ * was going to look at anyway.
+ *
+ * WHY a local wrapper instead of inlining setRuntimes at each spawn site: the
+ * "guard the row exists" dance (`prev[id] ?? emptyRuntime()`) is exactly the
+ * kind of thing one site gets subtly wrong, and a spawn whose badge write
+ * throws would report a creation failure after the backend already booted.
+ */
+function markPooledSpawn(
+  setRuntimes: WorkspaceSetRuntimes,
+  sessionId: SessionId,
+): void {
+  setRuntimes(prev => {
+    const runtime = prev[sessionId] ?? emptyRuntime()
+    return { ...prev, [sessionId]: { ...runtime, pooledSpawnAt: Date.now() } }
+  })
 }
 
 // `detachedDispatchRecord` lived here until #992: the one helper that built the
@@ -694,7 +735,6 @@ export function usePaneActions(
   sessionActions: SessionActions,
 ): {
   splitFocused: (
-    direction: SplitDirection,
     kind?: SessionKind,
     continuation?: SplitFocusedContinuation,
   ) => Promise<void>
@@ -756,7 +796,7 @@ export function usePaneActions(
    *  executor as closeSession (see its implementation's WHY). */
   closeTab: (tabId: TabId) => Promise<void>
   focusSessionInTab: (tabId: string, sessionId: SessionId) => void
-  openExtensionViewInPane: (viewId: string, direction?: SplitDirection) => void
+  openExtensionViewInPane: (viewId: string) => void
 } {
   const closeSessionRef = useRef<
     ((targetId: SessionId, options?: CloseSessionOptions) => Promise<boolean>) | null
@@ -766,7 +806,6 @@ export function usePaneActions(
   // leaf under a fresh split node, makes the new pane focused.
   const splitFocused = useCallback(
     async (
-      direction: SplitDirection,
       kind: SessionKind = 'claude',
       continuation?: SplitFocusedContinuation,
     ) => {
@@ -885,10 +924,20 @@ export function usePaneActions(
       // If this ever becomes a React useState setter the flag would still be
       // false here and every spawn would be killed on the spot.
       let filed = false
+      // Whether the spawn took a lane. Decided INSIDE the updater so it reads
+      // the same `prev` the placement read — a lane freed during the awaited
+      // spawn is fillable, one filled since is not — and readable outside
+      // because the zustand setter applies updaters synchronously (the same
+      // contract the `filed` flag relies on).
+      let pooled = false
       setState(prev => {
         const latestTab = prev.tabs.find(t => t.id === tab.id)
         if (!latestTab) return prev
         filed = true
+        const stage = applyDispatchSpawnFocus(prev, sessionId, target.laneIndex)
+        // Refused placement returns the stage by reference; that reference
+        // identity IS the fill/refuse answer (see applyDispatchSpawnFocus).
+        pooled = stage === prev.stage
 
         return {
           ...prev,
@@ -896,10 +945,11 @@ export function usePaneActions(
           // Filing IS ownership (pool.ts): the row `spawn` wrote becomes a
           // member of this project, last in its index.
           sessions: fileSessionInProject(prev.sessions, sessionId, latestTab.id),
-          stage: applyDispatchSpawnFocus(prev.stage, sessionId, target.laneIndex),
+          stage,
         }
       })
 
+      if (filed && pooled) markPooledSpawn(setRuntimes, sessionId)
       if (!filed) {
         // Kill the backend with the kind/cwd THIS call already resolved
         // rather than leaving it to killSession's ownership proof, which
@@ -926,12 +976,10 @@ export function usePaneActions(
         return
       }
       closeNewAgentPlacement()
-      // A tile-tree branch followed this one until #992: outside Dispatch this
-      // spawned in the focused pane's cwd and split the tree beside it, and the
-      // whole flow above sat behind `if (dispatchMode)`. The stage is a
-      // required field now, so this is unconditionally the creation flow.
-      // `direction` is inert; stage 4 renames these commands to what they now
-      // are (New Agent / New Terminal) and drops the argument.
+      // A tile-tree branch followed this one until #992, and `direction`
+      // parameterized it. The tree is gone, the stage is required, and the
+      // argument went with it (#992 stage 4): every spawn is one flow — fill
+      // the focused lane when it is empty, else pool.
     },
     [
       closeNewAgentPlacement,
@@ -1007,21 +1055,39 @@ export function usePaneActions(
       }
 
       let placed = false
+      // Pooled = the spawn took no lane (context-places). Same synchronous-
+      // updater trick as `placed`: readable after setState, decided against
+      // the exact `prev` the placement read. A selectCreated:false caller
+      // asked for no view change, so its spawn is pooled BY REQUEST and still
+      // badges — the caller places the returned ID itself, and until it does
+      // the badge is the honest state of that row.
+      let pooled = placement?.selectCreated === false
       setState(prev => {
         const latestTab = prev.tabs.find(t => t.id === tab.id)
         if (!latestTab) return prev
         placed = true
+        if (!pooled) {
+          const stage = applyDispatchSpawnFocus(prev, sessionId, target.laneIndex)
+          pooled = stage === prev.stage
+          return {
+            ...prev,
+            // Filing is membership, not focus. UI creation has always selected
+            // the captured lane; external operators can preserve the entire
+            // current view, then explicitly assign the returned ID to a chosen
+            // lane using a fresh layout revision.
+            activeTabId: latestTab.id,
+            sessions: fileSessionInProject(prev.sessions, sessionId, latestTab.id),
+            stage,
+          }
+        }
         return {
           ...prev,
-          // Filing is membership, not focus. UI creation has always selected
-          // the captured lane; external operators can preserve the entire
-          // current view, then explicitly assign the returned ID to a chosen
-          // lane using a fresh layout revision.
-          activeTabId: placement?.selectCreated === false ? prev.activeTabId : latestTab.id,
+          activeTabId: prev.activeTabId,
           sessions: fileSessionInProject(prev.sessions, sessionId, latestTab.id),
-          stage: placement?.selectCreated === false ? prev.stage : applyDispatchSpawnFocus(prev.stage, sessionId, target.laneIndex),
+          stage: prev.stage,
         }
       })
+      if (placed && pooled) markPooledSpawn(setRuntimes, sessionId)
       // A caller needs the exact spawned ID; comparing a before/after census
       // could accidentally claim an agent created concurrently by the UI.
       // If the owning project disappeared during spawn, retire only this new
@@ -1033,7 +1099,7 @@ export function usePaneActions(
       if (placement?.selectCreated !== false) closeNewAgentPlacement()
       return sessionId
     },
-    [closeNewAgentPlacement, refs.stateRef, sessionActions, setState, showToast],
+    [closeNewAgentPlacement, refs.stateRef, sessionActions, setState, setRuntimes, showToast],
   )
 
   // Spawn a "linked agent" — a normal detached dispatch agent that
@@ -1067,11 +1133,13 @@ export function usePaneActions(
       // note on SessionMeta.linkedParentId).
       const rootParentId = parentMeta.linkedParentId ?? parentId
       const rootParentMeta = snapshot.sessions[rootParentId] ?? parentMeta
-      const focusedLane = snapshot.stage.focusedLane
-      const targetLaneIndex =
-        snapshot.stage.lanes[focusedLane]?.selectedSessionId === parentId
-          ? focusedLane
-          : null
+      // No lane capture. This used to aim the child at the focused lane WHEN
+      // that lane showed the parent — "spawned to immediately hand it a
+      // prompt". Under context-places (#992 §4.3) a lane showing the parent is
+      // an OCCUPIED lane, and an occupied lane is never displaced; a lane not
+      // showing the parent was never a target. Both branches of the capture
+      // are dead, so it is gone. The child lands in the pool, nested under
+      // its parent in every index that lists it.
 
       // The child is filed in its parent's project.
       const parentTab = sessionPlacement(snapshot, rootParentId)?.tab
@@ -1092,9 +1160,11 @@ export function usePaneActions(
         return
       }
 
+      let filed = false
       setState(prev => {
         const latestTab = prev.tabs.find(t => t.id === parentTab.id)
         if (!latestTab) return prev
+        filed = true
         return {
           ...prev,
           activeTabId: latestTab.id,
@@ -1116,20 +1186,16 @@ export function usePaneActions(
               joinedAt: Date.now(),
             },
           },
-          // Focus the new agent in dispatch — the user spawned it to
-          // immediately hand it a prompt (typically a review prompt).
-          //
-          // WHY the lane index is captured before await:
-          // spawn() crosses IPC and may take long enough for the user to move
-          // focus. The command was initiated from a specific visual lane, so
-          // that lane is the one that should flip to the child. Using the
-          // latest focusedLane here would make an unrelated lane change race
-          // with the child spawn and steal the next prompt target.
-          stage: applyDispatchSpawnFocus(prev.stage, sessionId, targetLaneIndex),
+          // Pool-only placement (context-places): the child is filed under
+          // the parent's project and shown in NO lane. See the note above the
+          // spawn for why the old "focus the child in the parent's lane"
+          // behavior is gone; passing null keeps the stage byte-identical.
+          stage: applyDispatchSpawnFocus(prev, sessionId, null),
         }
       })
+      if (filed) markPooledSpawn(setRuntimes, sessionId)
     },
-    [refs.stateRef, sessionActions, setState, showToast],
+    [refs.stateRef, sessionActions, setState, setRuntimes, showToast],
   )
 
   const createOrchestrationAgent = useCallback(
@@ -1224,9 +1290,11 @@ export function usePaneActions(
         ...(params.role ? { orchestrationRole: params.role } : {}),
       }
 
+      let filed = false
       setState(prev => {
         const latestTab = prev.tabs.find(t => t.id === parentTab.id)
         if (!latestTab) return prev
+        filed = true
         return {
           ...prev,
           sessions: {
@@ -1256,10 +1324,15 @@ export function usePaneActions(
           // same project tree.
         }
       })
+      // Orchestrated children are the purest pooled spawn: many can arrive
+      // from one prompt, none of them takes a lane, and the parent's pane is
+      // the surface the user is reading (#992 §4.3 names orchestration
+      // explicitly). The badge is the only on-screen trace that they arrived.
+      if (filed) markPooledSpawn(setRuntimes, sessionId)
 
       return agent
     },
-    [refs.stateRef, sessionActions, setState],
+    [refs.stateRef, sessionActions, setState, setRuntimes],
   )
 
   // Execute ONE member of an approved CloseOperation: its approved linked
@@ -1651,25 +1724,30 @@ export function usePaneActions(
   // 'extension-view', so rehydrate reconstructs this leaf from metadata and never
   // tries to recover a process for it.
   const openExtensionViewInPane = useCallback(
-    (viewId: string, direction: SplitDirection = 'vertical') => {
+    (viewId: string) => {
       // Resolve placement INSIDE the synchronous workspace update. There is no
       // process await here, so metadata, ownership and visible focus can land as
       // one change rather than leaving a session whose split silently failed.
+      let openedId: SessionId | null = null
+      let pooled = false
       setState(prev => {
         const sessionId = crypto.randomUUID() as SessionId
         // (This block sat behind `if (dispatchMode)` until #992, with a
         // tile-tree branch — split beside the focused leaf — after it.)
         //
-        // Dispatch may focus a detached row in a different project from the
-        // active grid tab. Such a row is not a split anchor. Follow the same
-        // placement contract as new terminals/agents: file a detached row under
-        // the visible target's project and select it in the focused lane.
+        // The visible target may be a row of a different project from the
+        // active one. Follow the same placement contract as new
+        // terminals/agents: file the view under the visible target's project,
+        // and fill the focused lane only when it is empty (context-places).
         const target = resolveDispatchSpawnTarget(prev)
         const tab = prev.tabs.find(t => t.id === target.tabId)
         if (!tab) return prev
+        openedId = sessionId
         const cwd = (target.cwdSessionId ? prev.sessions[target.cwdSessionId]?.cwd : undefined)
           ?? projectCwd(prev, tab.id)
           ?? ''
+        const stage = applyDispatchSpawnFocus(prev, sessionId, target.laneIndex)
+        pooled = stage === prev.stage
         return {
           ...prev,
           activeTabId: tab.id,
@@ -1681,11 +1759,12 @@ export function usePaneActions(
               projectId: tab.id, joinedAt: Date.now(),
             },
           },
-          stage: applyDispatchSpawnFocus(prev.stage, sessionId, target.laneIndex),
+          stage,
         }
       })
+      if (openedId !== null && pooled) markPooledSpawn(setRuntimes, openedId)
     },
-    [setState],
+    [setRuntimes, setState],
   )
 
   return {

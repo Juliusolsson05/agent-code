@@ -396,6 +396,11 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
       // comparison stable across those per-second updates while still
       // giving terminal rows the live value they actually render.
       activityStatus: row.kind === 'terminal' ? current?.activityStatus : undefined,
+      // The pooled-spawn badge (#992 §4.3): a spawn that took no lane marks
+      // itself here until placed. Boolean, not the timestamp — the row only
+      // re-renders when membership of the badge changes, and the chip does
+      // not care when it was minted.
+      isNewInPool: current?.pooledSpawnAt != null,
     }
   }))
   const onSelect = useCallback(() => {
@@ -477,6 +482,25 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
               {title}
             </span>
           </span>
+          {runtime.isNewInPool && (
+            // The one-word answer to "my ⌘N did nothing" (#992): the spawn
+            // landed in the pool without moving anything on screen. Retired
+            // by the placement itself (setTiledLaneSession), never by time —
+            // a badge that expires while still unplaced would train the user
+            // to distrust it. Rendered BEFORE the unread badge because it is
+            // the answer to an earlier question ("where is it") than "what
+            // happened while I was away".
+            <span
+              data-dispatch-new-in-pool="true"
+              title="Spawned into the pool — click to place it in this row's focused lane"
+              className="
+                flex-shrink-0 rounded-chip border border-accent/70 bg-accent/10
+                px-1.5 py-[1px] text-[9px] font-semibold leading-none text-accent
+              "
+            >
+              new
+            </span>
+          )}
           {unreadBadge && (
             <DispatchUnreadBadge kind={unreadBadge.kind} text={unreadBadge.text} />
           )}
