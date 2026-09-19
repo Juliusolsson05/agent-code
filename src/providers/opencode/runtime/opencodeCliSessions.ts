@@ -83,35 +83,88 @@ export async function readResolvedOpencodeConfig(
   return value
 }
 
-/**
- * The user's recently used models, newest first, as `provider/model` ids, from
- * OpenCode's own state file (`model.json`, key `recent`).
- *
- * WHY this file: with no `model` in config, OpenCode itself (the TUI, and the
- * server's prompt path, see LiveServerClient) continues with the most recent
- * model the user picked. The first entry of `opencode models` is just the
- * provider catalog's first row (`opencode/big-pickle` on the owner's machine,
- * B18), which the user never chose. Anything malformed yields no recents, so
- * the caller falls through to its "select a model" error instead of guessing.
- */
-export function opencodeRecentModelsFromState(value: unknown): string[] {
-  const recent = isRecord(value) && Array.isArray(value.recent) ? value.recent : []
-  return recent.flatMap(entry => (
-    isRecord(entry) && typeof entry.providerID === 'string' && entry.providerID.length > 0
-      && typeof entry.modelID === 'string' && entry.modelID.length > 0
-      ? [`${entry.providerID}/${entry.modelID}`]
-      : []
-  ))
+/** What OpenCode's own state file (`model.json`) says about model choice. */
+export type OpencodeModelState = {
+  /** `provider/model` ids the user picked, newest first (OpenCode caps it at 10). */
+  recent: string[]
+  /** Saved reasoning variant per `provider/model` (for example "max"). */
+  variants: Record<string, string>
 }
 
-/** Read the recents from `$XDG_STATE_HOME/opencode/model.json` (default
- *  `~/.local/state`), the path OpenCode's Global.Path.state resolves to. A
- *  missing or unreadable file means no recents. */
-export async function readOpencodeRecentModels(): Promise<string[]> {
+/**
+ * Parse `model.json`. Anything malformed yields empty state, so the caller
+ * falls through to the next source rather than guessing from a bad file.
+ *
+ * WHY this file matters (B18): with no model configured, OpenCode itself (the
+ * TUI and the server's Provider.defaultModel, verified in the 1.18.31 binary)
+ * continues with the most recent model the user picked. The variant map is
+ * what OpenCode Terminal restores and SAVES when a session opens, so a
+ * switched session must carry the same variant or it resets the user's
+ * saved effort for that model.
+ */
+export function opencodeModelStateFrom(value: unknown): OpencodeModelState {
+  const record = isRecord(value) ? value : {}
+  const recent = Array.isArray(record.recent) ? record.recent : []
+  const variants = isRecord(record.variant) ? record.variant : {}
+  return {
+    recent: recent.flatMap(entry => (
+      isRecord(entry) && typeof entry.providerID === 'string' && entry.providerID.length > 0
+        && typeof entry.modelID === 'string' && entry.modelID.length > 0
+        ? [`${entry.providerID}/${entry.modelID}`]
+        : []
+    )),
+    variants: Object.fromEntries(Object.entries(variants).flatMap(([model, variant]) => (
+      typeof variant === 'string' && variant.length > 0 ? [[model, variant]] : []
+    ))),
+  }
+}
+
+/** Read `$XDG_STATE_HOME/opencode/model.json` (default `~/.local/state`, the
+ *  path `opencode debug paths` reports as state on macOS). A missing or
+ *  unreadable file is empty state. */
+export async function readOpencodeModelState(): Promise<OpencodeModelState> {
   const stateHome = process.env.XDG_STATE_HOME || join(homedir(), '.local', 'state')
   return readFile(join(stateHome, 'opencode', 'model.json'), 'utf8')
-    .then(text => opencodeRecentModelsFromState(JSON.parse(text) as unknown))
-    .catch(() => [])
+    .then(text => opencodeModelStateFrom(JSON.parse(text) as unknown))
+    .catch(() => opencodeModelStateFrom(undefined))
+}
+
+/**
+ * The model a new session on this install would run, in OpenCode's own order
+ * (TUI `local.tsx` and server `Provider.defaultModel`, 1.18.31 binary):
+ *   1. the default agent's own model;
+ *   2. the configured `model`;
+ *   3. the first recent pick;
+ *   4. the provider catalog's default.
+ * Each candidate must be offered by `opencode models`, as the TUI checks.
+ *
+ * WHY 4 is the catalog's first row: that is the closest this can get to
+ * OpenCode's own provider default without reimplementing its private model
+ * ranking, and it is only reached by a user who has never picked a model, for
+ * whom OpenCode would also use its default. It must not fail: Duplicate and
+ * Rewind of an OpenCode agent go through here too (#1034 review), and they
+ * worked for such users before.
+ *
+ * `available` is null when the catalog could not be read, and empty when it
+ * listed nothing. Only an explicit choice (agent or config) is then usable,
+ * unverified, and otherwise there is no answer.
+ */
+export function selectOpencodeTargetModel(input: {
+  agentModel: string | null
+  configuredModel: string | null
+  recent: readonly string[]
+  available: readonly string[] | null
+}): string | null {
+  const explicit = [input.agentModel, input.configuredModel].filter((model): model is string => Boolean(model))
+  // An EMPTY catalog verifies nothing either (no provider answered, or the
+  // listing needs a network the machine lacks), so it is treated like an
+  // unreadable one rather than rejecting the user's explicit choice.
+  if (input.available === null || input.available.length === 0) return explicit[0] ?? null
+  const offered = (model: string) => input.available!.includes(model)
+  return explicit.find(offered)
+    ?? input.recent.find(offered)
+    ?? input.available[0]
+    ?? null
 }
 
 /** Return the model ids exposed by the installed OpenCode provider set. */
