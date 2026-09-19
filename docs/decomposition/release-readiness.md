@@ -513,6 +513,18 @@ claude 2.1.143 / codex 0.130.0 are stale versus the 2.1.278 / 0.155.1 in daily u
   (one per composer). Optional follow-up: a single app-level subscription.
 
 ### Progress log
+- 2026-09-19 08:45Z:
+  - **Open PRs, with state:**
+    - **#1013 (unified stage):** parity sweep A's findings are all covered; its one new fix is Close Tab closing the commanded agent's project (`461ab40f`). A verification reviewer is running on all the fix commits.
+    - **#1028 (goal loop):** redesigned after the delta re-review (`e91624fe`: the quiet auto-pause is removed; Resume needs no pending tool, an idle phase and 60 s of silence; unattributable hooks are dropped). CI is green, and the same reviewer is re-verifying.
+    - **#1034 (T4 OpenCode model):** OpenCode's own order (agent → config → recent → catalog default), each checked against the catalog, and the saved variant is carried through parser #33 (MERGED `2d08ea3`). Follow-up #1038 (Duplicate/Rewind should keep the source model).
+    - **#1035 (Stage 8, stable release channel):** review APPROVE. `target_commitish`, the line-break guard and `+build` handling applied.
+    - **#1036 (#1027 TLDR latch trap):** needs review.
+    - **#1037 (T10 managed-skills minors + T6 nits):** needs review.
+    - **#1039 (T9 #1015 shared IPC listener):** needs review.
+  - **#1018 (orchestration hides API errors):** an evidence catalog from real feed-debug recordings is being built (research agent, worktree `.worktrees/fix-orchestration-api-error`). Implementation follows the catalog.
+  - **Waiting on #1013's merge:** T7 (#1006), T8 (#1007), T2 (command promotion) and T1 (#995), all of which touch the catalog, keybindings or bootstrap.
+  - **Nightly** run 35430444567: build-app is green, package-macos is running.
 - 2026-09-19 08:00Z (entries below are newest first):
   - **#1026 MERGED** (`1212d98e`, OpenCode permission subject; closes the app half of #878).
   - **#1032 MERGED** (`7446aef3`): the first nightly (run 35428680412) failed in `nightly.test.ts` › "caps the commit list" (5 s timeout, macOS runner). The cause was 205 `git commit` spawns in setup, now one `git fast-import` (283 ms). The timeout is unchanged. Nightly re-dispatched as run 35430444567.
