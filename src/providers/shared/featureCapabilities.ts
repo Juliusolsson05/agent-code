@@ -109,7 +109,7 @@ const FEATURES_BY_KIND: Record<AgentProviderKind, ProviderFeatureCapabilities> =
     transcriptDuplicate: true,
     promptHistoryExtraction: true,
     inAppResume: true,
-    switchTargets: ['codex', 'opencode'],
+    switchTargets: ['codex', 'opencode', 'grok'],
     verifiedExternalResumeCommand: true,
   },
   // Mirrors Claude, with explicit edges to both other adapters.
@@ -118,7 +118,19 @@ const FEATURES_BY_KIND: Record<AgentProviderKind, ProviderFeatureCapabilities> =
     transcriptDuplicate: true,
     promptHistoryExtraction: true,
     inAppResume: true,
-    switchTargets: ['claude', 'opencode'],
+    switchTargets: ['claude', 'opencode', 'grok'],
+    verifiedExternalResumeCommand: true,
+  },
+  // Grok: the transcript-engine adapter (grokTranscript's read/publish plus
+  // the parser's recorded native-resume projection) backs rewind, duplicate,
+  // prompt extraction and pairwise switching, and `grok --resume <id>` is the
+  // corpus-recorded resume form.
+  grok: {
+    transcriptRewind: true,
+    transcriptDuplicate: true,
+    promptHistoryExtraction: true,
+    inAppResume: true,
+    switchTargets: ['claude', 'codex', 'opencode'],
     verifiedExternalResumeCommand: true,
   },
   // OpenCode's supported CLI export/import boundary backs prompt extraction,
@@ -133,7 +145,7 @@ const FEATURES_BY_KIND: Record<AgentProviderKind, ProviderFeatureCapabilities> =
     // works — it was only hidden because the guard read the flag for the
     // unrelated shell-command feature.
     inAppResume: true,
-    switchTargets: ['claude', 'codex'],
+    switchTargets: ['claude', 'codex', 'grok'],
     verifiedExternalResumeCommand: true,
   },
 }

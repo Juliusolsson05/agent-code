@@ -25,7 +25,11 @@
  *  and opencode intentionally have no auto-update surface here — the shell
  *  isn't a versioned CLI in the same sense, and opencode is not in scope for
  *  this PR. Adding a third entry means teaching the orchestrator the latest-
- *  version endpoint AND the update command per channel. */
+ *  version endpoint AND the update command per channel. Note (#994): when
+ *  the bundled opencode binary ships (third_party/opencode), its version
+ *  moves with Agent Code app updates via the manifest pin — an auto-update
+ *  prompt would fight that pin, so opencode stays out of this union even
+ *  now that we manage its binary. */
 export type CliUpdateKind = 'claude' | 'codex'
 
 /** How the CLI was installed on disk, determined by matching the resolved

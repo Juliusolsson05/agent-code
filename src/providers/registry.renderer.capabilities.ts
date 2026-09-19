@@ -1,4 +1,11 @@
 import type { UsageLimitNotice } from '@shared/types/usageLimitNotice'
+import { GROK_IDENTITY } from '@providers/grok/renderer/identity'
+import { GROK_VIEWS } from '@providers/grok/renderer/conditions/views'
+import { renderGrokOperation } from '@providers/grok/renderer/rows/dispatch'
+import { createGrokTranscriptEntryMapper, extractGrokProviderSessionId, isGrokTypedUserPrompt } from '@providers/grok/renderer/transcript/mapper'
+import { grokComposerSubmit } from '@providers/grok/renderer/composerSubmit'
+import { GROK_CONDITION_POLICY } from '@providers/grok/renderer/conditions/policy'
+import { GROK_SEMANTIC_FOLD_POLICY } from '@providers/grok/renderer/semanticFoldPolicy'
 import { claudeUsageLimitNotice } from '@providers/claude/renderer/adapters/usageLimitNotice'
 import { codexUsageLimitNotice } from '@providers/codex/renderer/adapters/usageLimitNotice'
 import type { ConditionView } from '@shared/conditions-core/view'
@@ -359,10 +366,36 @@ const opencodeCapabilities: RendererProviderCapabilities = {
   semanticFoldPolicy: OPENCODE_SEMANTIC_FOLD_POLICY,
 }
 
+const grokCapabilities: RendererProviderCapabilities = {
+  id: 'grok',
+  name: 'Grok',
+  ...GROK_IDENTITY,
+  conditionViews: GROK_VIEWS,
+  // Fallback-only by evidence (see rows/dispatch.tsx): no grok tool-row
+  // capture exists yet, so every tool renders through the generic rows.
+  renderOperation: renderGrokOperation,
+  classifyDurableEntry: () => null,
+  // Native subagent fan-out is recorded (content.subagent) but no spawn TOOL
+  // signature is; false until one is captured.
+  isSpawnTool: () => false,
+  createTranscriptEntryMapper: () => createGrokTranscriptEntryMapper(),
+  extractProviderSessionId: extractGrokProviderSessionId,
+  isTypedUserPrompt: isGrokTypedUserPrompt,
+  composerSubmit: grokComposerSubmit,
+  // Grok's own terminal can attach clipboard images on paste, but the
+  // composer→prompt path is control-only; image attachments via the app are
+  // unrecorded.
+  supportsImageAttachments: false,
+  usesOptimisticUserEcho: true,
+  conditionPolicy: GROK_CONDITION_POLICY,
+  semanticFoldPolicy: GROK_SEMANTIC_FOLD_POLICY,
+}
+
 const rendererProviderCapabilities: Record<AgentProviderKind, RendererProviderCapabilities> = {
   claude: claudeCapabilities,
   codex: codexCapabilities,
   opencode: opencodeCapabilities,
+  grok: grokCapabilities,
 }
 
 export function getRendererProviderCapabilities(id: string): RendererProviderCapabilities {

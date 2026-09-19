@@ -18,6 +18,7 @@ import { ClaudeConversationSource } from './sources/claude.js'
 import { ClaudeHistoryIndex } from './sources/claudeHistory.js'
 import { CodexConversationSource } from './sources/codex.js'
 import { defaultOpencodeDataDir, OpencodeConversationSource } from './sources/opencode.js'
+import { GrokConversationSource } from './sources/grok.js'
 import type { ConversationSource, SourceConversation } from './sources/types.js'
 
 // The single consumer of the catalog and the single owner of caches.
@@ -199,6 +200,7 @@ export function createConversationService(deps: { ledger: ConversationLedger | n
       new ClaudeConversationSource({ projectsDir: getProjectsDir(), history: claudeHistory }),
       new CodexConversationSource({ codexHome: getCodexHome() }),
       new OpencodeConversationSource({ dataDir: defaultOpencodeDataDir() }),
+      new GrokConversationSource(),
     ],
     ledger: deps.ledger,
     listWorktrees: deps.listWorktrees,
