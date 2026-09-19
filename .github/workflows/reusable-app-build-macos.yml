@@ -1,81 +1,31 @@
-name: Release macOS App
+name: Reusable app build (macOS)
+
+# WHY this file exists: the nightly workflow (`.github/workflows/nightly.yml`,
+# #1011) needs the exact build+package pipeline that `release.yml` has proven
+# end to end. This is a VERBATIM extraction of `release.yml`'s `build-app` and
+# `package-macos` jobs with three deliberate behavioural deltas, each marked below
+# (plus one reworded comment on the upload step):
+#
+#   1. `on: workflow_call` instead of `workflow_dispatch` — callers are the
+#      versioned release (not yet; see 3) and the nightly.
+#   2. `build-app` no longer `needs: validate-release` — secret/tag validation
+#      is caller policy (the nightly validates secrets but has no tag).
+#   3. The "Create GitHub Release" step is GONE, and `package-macos` drops to
+#      `contents: read`: publishing is the caller's decision (versioned tag vs
+#      rolling nightly), and artifact upload needs no write permission. Called
+#      workflows cannot exceed the caller's permissions anyway, so keeping
+#      write here would force every caller to grant it for nothing.
+#
+# DRIFT WARNING: `release.yml` still carries its own copy of these jobs. Until
+# it adopts this reusable workflow (follow-up tracked in #1011, only after the
+# first green nightly), a change to one copy MUST be mirrored in the other.
+# When you edit this file, grep `release.yml` for the same step names.
 
 on:
-  workflow_dispatch:
-    inputs:
-      publish_release:
-        description: "Create a GitHub Release with the built artifacts"
-        required: true
-        default: "false"
-        type: choice
-        options:
-          - "false"
-          - "true"
-      release_tag:
-        description: "Beta release tag to create when publish_release is true"
-        required: true
-        default: "v0.0.2-beta.1"
-      release_name:
-        description: "Release name to create when publish_release is true"
-        required: true
-        default: "Agent Code 0.0.2 Beta 1"
-
-concurrency:
-  group: release-macos
-  cancel-in-progress: false
+  workflow_call:
 
 jobs:
-  validate-release:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Validate release secrets
-        env:
-          PUBLISH_RELEASE: ${{ github.event.inputs.publish_release }}
-          CSC_LINK: ${{ secrets.CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          if [ "$PUBLISH_RELEASE" != "true" ]; then
-            exit 0
-          fi
-
-          missing=()
-          [ -z "${CSC_LINK:-}" ] && missing+=(CSC_LINK)
-          [ -z "${CSC_KEY_PASSWORD:-}" ] && missing+=(CSC_KEY_PASSWORD)
-          [ -z "${APPLE_ID:-}" ] && missing+=(APPLE_ID)
-          [ -z "${APPLE_APP_SPECIFIC_PASSWORD:-}" ] && missing+=(APPLE_APP_SPECIFIC_PASSWORD)
-          [ -z "${APPLE_TEAM_ID:-}" ] && missing+=(APPLE_TEAM_ID)
-          if [ "${#missing[@]}" -gt 0 ]; then
-            printf 'Cannot publish a macOS release without signing/notarization secrets: %s\n' "${missing[*]}"
-            exit 1
-          fi
-
-      - name: Validate release identity
-        if: ${{ github.event.inputs.publish_release == 'true' }}
-        env:
-          RELEASE_TAG: ${{ github.event.inputs.release_tag }}
-        run: |
-          version="$(node -p "require('./package.json').version")"
-          expected="v${version}"
-          if [ "$RELEASE_TAG" != "$expected" ]; then
-            printf 'Release tag must match package.json exactly: expected %s, got %s\n' "$expected" "$RELEASE_TAG"
-            exit 1
-          fi
-
-  # DRIFT WARNING: build-app and package-macos below are mirrored verbatim in
-  # .github/workflows/reusable-app-build-macos.yml, which the nightly
-  # (nightly.yml, #1011) builds through. Until this file adopts that reusable
-  # workflow (a follow-up once nightlies run green), a fix to either copy
-  # MUST be mirrored in the other. The #965 executable-bit fix is the kind of
-  # hotfix that would otherwise land here only and silently leave nightlies
-  # shipping a broken build.
   build-app:
-    needs: validate-release
     runs-on: macos-latest
     permissions:
       contents: read
@@ -192,7 +142,10 @@ jobs:
     needs: build-app
     runs-on: macos-latest
     permissions:
-      contents: write
+      # Deliberate delta from release.yml (read, not write): the versioned
+      # release creation step lives in the CALLER here, and nothing in this
+      # job writes to the repository.
+      contents: read
     env:
       # GitHub intentionally disallows direct secrets.* reads in an `if:`
       # expression. Materialize only the boolean here; the certificate itself
@@ -335,10 +288,10 @@ jobs:
           # and an unsigned build parked under a name like "macos-release"
           # is exactly the artifact someone grabs and ships by mistake. The
           # artifact name tracks what the build actually IS (signed vs not),
-          # not what the run intended: publish_release=true already
-          # guarantees CSC_LINK via the validate-release job, so every
-          # published artifact is named macos-release, and everything
-          # unsigned is unmistakably macos-unsigned-dev.
+          # not what the run intended: callers that publish validate the
+          # signing secrets up front, so every published artifact came from
+          # "macos-release", and everything unsigned is unmistakably
+          # macos-unsigned-dev.
           name: ${{ env.HAS_SIGNING_IDENTITY == 'true' && 'macos-release' || 'macos-unsigned-dev' }}
           path: |
             release/*.dmg
@@ -346,16 +299,3 @@ jobs:
             release/*.blockmap
             release/*.yml
           if-no-files-found: error
-
-      - name: Create GitHub Release
-        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.publish_release == 'true' }}
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
-        with:
-          tag_name: ${{ github.event.inputs.release_tag }}
-          name: ${{ github.event.inputs.release_name }}
-          prerelease: true
-          files: |
-            release/*.dmg
-            release/*.zip
-            release/*.blockmap
-            release/*.yml

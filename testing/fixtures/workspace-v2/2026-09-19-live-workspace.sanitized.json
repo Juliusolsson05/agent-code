@@ -1,0 +1,759 @@
+{
+  "version": 2,
+  "windows": [
+    {
+      "windowId": "8ba30627-5c41-4986-a325-b4ada30aa5f0",
+      "bounds": {
+        "x": 35,
+        "y": 31,
+        "width": 1400,
+        "height": 861
+      },
+      "displayId": 1,
+      "fullScreen": true,
+      "workspace": {
+        "tabs": [
+          {
+            "id": "3bf27c7f-2e3a-4da1-a35a-e013ad86f937",
+            "title": "Title 1",
+            "focusedSessionId": "e5bf85b2-4c26-4b2a-a465-846289ec2e73",
+            "root": {
+              "type": "leaf",
+              "sessionId": "5cf66257-4284-40a7-868e-68ea84457063"
+            }
+          },
+          {
+            "id": "e0224b91-da18-4b20-9cc0-da491569a6b5",
+            "title": "Title 2",
+            "focusedSessionId": "5906040e-f07c-4699-a153-d79647e07edb",
+            "root": {
+              "type": "leaf",
+              "sessionId": "575880c6-d447-49b8-aa9b-64705d70c287"
+            }
+          },
+          {
+            "id": "d3a84a9d-2993-4423-9fa4-8c6a457b4e7b",
+            "title": "Title 3",
+            "focusedSessionId": "fc7d126c-08e6-41ae-bb1a-eeaba5482f93",
+            "root": {
+              "type": "leaf",
+              "sessionId": "9bb36de4-39a0-434a-b0b1-00f017d759bd"
+            }
+          }
+        ],
+        "activeTabId": "e0224b91-da18-4b20-9cc0-da491569a6b5",
+        "dispatchMode": {
+          "scope": "global",
+          "tiled": {
+            "lanes": [
+              {
+                "selectedSessionId": "46179162-02ed-491d-97dd-6e291392b280"
+              },
+              {
+                "selectedSessionId": "5906040e-f07c-4699-a153-d79647e07edb"
+              },
+              {
+                "selectedSessionId": "e1f2ba36-affe-41de-babf-cd18264b23f2"
+              },
+              {
+                "selectedSessionId": "1a8cf549-cb85-4e04-b00e-07bd81cb44a3"
+              },
+              {
+                "selectedSessionId": "7327ced2-fb07-4b63-a357-50d3f94f8fb6"
+              },
+              {
+                "selectedSessionId": "fc7d126c-08e6-41ae-bb1a-eeaba5482f93"
+              },
+              {
+                "selectedSessionId": "e8c32320-d286-4315-a9d0-775931ad998e"
+              },
+              {
+                "selectedSessionId": "4cf53ec5-c273-4b22-b4e6-d4b2cfd9cd86"
+              },
+              {
+                "selectedSessionId": "f52c6345-1340-4974-b265-7aa62adcb628"
+              },
+              {
+                "selectedSessionId": "e5bf85b2-4c26-4b2a-a465-846289ec2e73"
+              }
+            ],
+            "rows": [
+              {
+                "length": 4,
+                "capChildren": false,
+                "indexFraction": 0.1,
+                "height": 0.4928831303208002
+              },
+              {
+                "length": 6,
+                "height": 0.5071168696791998,
+                "indexFraction": 0.1
+              }
+            ],
+            "focusedLane": 1,
+            "laneWeights": [
+              0.1815063240813522,
+              0.19383544136045075,
+              0.19383544136045072,
+              0.2,
+              0.17082670442231684,
+              0.17751420174047552,
+              0.15464740575171249,
+              0.16666666666666666,
+              0.16666666666666666,
+              0.16726432904956762
+            ]
+          },
+          "focusedSessionId": "1a8cf549-cb85-4e04-b00e-07bd81cb44a3"
+        },
+        "sessions": {
+          "5cf66257-4284-40a7-868e-68ea84457063": {
+            "tldrIdentity": "ff07188d-ac46-4690-861b-175a42a4fdbb",
+            "cwd": "/fixture/project-1",
+            "kind": "claude",
+            "builtInMcpDomains": [
+              "tldr",
+              "goal",
+              "orchestration",
+              "agent_transcripts",
+              "goal_loop"
+            ],
+            "builtInMcpOverrides": {},
+            "agentNameId": "5cf66257-4284-40a7-868e-68ea84457063"
+          },
+          "575880c6-d447-49b8-aa9b-64705d70c287": {
+            "tldrIdentity": "6fb1cb83-be8e-4def-a697-0c1568bccdf7",
+            "cwd": "/fixture/project-2",
+            "kind": "claude",
+            "builtInMcpDomains": [
+              "tldr",
+              "goal",
+              "orchestration",
+              "agent_transcripts",
+              "goal_loop"
+            ],
+            "builtInMcpOverrides": {},
+            "agentNameId": "575880c6-d447-49b8-aa9b-64705d70c287"
+          },
+          "e6e19a29-f8b4-44da-bb9a-38fcfca2a314": {
+            "tldrIdentity": "8181bc5b-8eb8-4ee5-b2a0-85c8a9f17e39",
+            "cwd": "/fixture/project-1",
+            "kind": "opencode",
+            "providerRuntime": "terminal",
+            "providerSessionId": "ses_11e052c875fb4a9a85c25fe68823817c",
+            "providerSessionIdSource": "jsonl-entry",
+            "builtInMcpDomains": [
+              "agent_transcripts",
+              "workflows",
+              "orchestration",
+              "tldr",
+              "goal",
+              "root_management"
+            ],
+            "builtInMcpOverrides": {
+              "root_management": true
+            },
+            "agentNameId": "e6e19a29-f8b4-44da-bb9a-38fcfca2a314"
+          },
+          "7327ced2-fb07-4b63-a357-50d3f94f8fb6": {
+            "tldrIdentity": "6f020926-c0cf-4ae4-a34c-14c38e7d9140",
+            "cwd": "/fixture/project-2",
+            "kind": "opencode",
+            "providerRuntime": "terminal",
+            "providerSessionId": "ses_059fa105f83e4f198c9eef50297feb0d",
+            "providerSessionIdSource": "jsonl-entry",
+            "builtInMcpDomains": [
+              "tldr",
+              "goal",
+              "orchestration",
+              "agent_transcripts",
+              "workflows",
+              "goal_loop"
+            ],
+            "builtInMcpOverrides": {},
+            "agentNameId": "7327ced2-fb07-4b63-a357-50d3f94f8fb6"
+          },
+          "1d0db3d8-b277-4a8d-81b1-5269d76ed48a": {
+            "tldrIdentity": "1f45c69e-3ab7-4ba8-a236-2671dea748b3",
+            "cwd": "/fixture/project-2",
+            "kind": "opencode",
+            "providerRuntime": "terminal",
+            "providerSessionId": "ses_e174226937424a52aebfbc37341fb0ee",
+            "providerSessionIdSource": "jsonl-entry",
+            "builtInMcpDomains": [
+              "tldr",
+              "goal",
+              "orchestration",
+              "agent_transcripts",
+              "workflows"
+            ],
+            "builtInMcpOverrides": {},
+            "agentNameId": "1d0db3d8-b277-4a8d-81b1-5269d76ed48a"
+          },
+          "a9c17d51-2ba2-4712-aa87-7cf7b8d24a36": {
+            "tldrIdentity": "e16b849e-456e-4c35-ab46-afb0131e0c39",
+            "cwd": "/fixture/project-2",
+            "kind": "claude",
+            "providerSessionId": "73d6ea25-a589-4e4f-a94a-e42aabe5db62",
+            "providerSessionIdSource": "jsonl-entry",
+            "builtInMcpDomains": [
+              "tldr",
+              "goal",
+              "orchestration",
+              "agent_transcripts",
+              "goal_loop"
+            ],
+            "builtInMcpOverrides": {},
+            "agentNameId": "a9c17d51-2ba2-4712-aa87-7cf7b8d24a36"
+          },
+          "20c09242-4210-433b-b4cd-c0d31b47c507": {
+            "tldrIdentity": "a6761427-2f0a-45ef-8526-5b404db3cd32",
+            "cwd": "/fixture/project-2",
+            "kind": "opencode",
+            "providerRuntime": "terminal",
+            "providerSessionId": "ses_ceb81fe19a895e1c8dd4070fb508bffa",
+            "providerSessionIdSource": "jsonl-entry",
+            "builtInMcpDomains": [
+              "tldr",
+              "goal",
+              "orchestration",
+              "agent_transcripts",
+              "workflows",
+              "goal_loop"
+            ],
+            "builtInMcpOverrides": {},
+            "agentNameId": "20c09242-4210-433b-b4cd-c0d31b47c507"
+          },
+          "9bb36de4-39a0-434a-b0b1-00f017d759bd": {
+            "tldrIdentity": "c95d99b5-ce11-4567-ae13-a848117e59d0",
+            "cwd": "/fixture/project-3",
+            "kind": "claude",
+            "builtInMcpDomains": [
+              "tldr",
+              "goal",
+              "orchestration",
+              "agent_transcripts",
+              "goal_loop"
+            ],
+            "builtInMcpOverrides": {},
+            "agentNameId": "9bb36de4-39a0-434a-b0b1-00f017d759bd"
+          },
+          "1220cbcb-cabf-41b8-a37c-cebd8b506ce7": {
+            "tldrIdentity": "4a8a189b-d663-4190-a82c-d44f5893e86d",
+            "cwd": "/fixture/project-3",
+            "kind": "opencode",
+            "providerRuntime": "terminal",
+            "providerSessionId": "ses_a121d2d5434b4b6bb970ee5dfc170156",
+            "providerSessionIdSource": "jsonl-entry",
+            "builtInMcpDomains": [
+              "agent_transcripts",
+              "workflows",
+              "orchestration",
+              "tldr",
+              "goal"
+            ],
+            "builtInMcpOverrides": {},
+            "agentNameId": "1220cbcb-cabf-41b8-a37c-cebd8b506ce7"
+          },
+          "6d6cac8c-fe3d-4f5e-82e3-740036b4aebd": {
+            "tldrIdentity": "09444f28-ee09-4666-82e7-27fd8a4557b9",
+            "cwd": "/fixture/project-2",
+            "kind": "opencode",
+            "providerRuntime": "terminal",
+            "providerSessionId": "ses_7e76f12489224b43abc3984fe2e5bda2",
+            "providerSessionIdSource": "jsonl-entry",
+            "builtInMcpDomains": [
+              "tldr",
+              "goal",
+              "orchestration",
+              "agent_transcripts",
+              "workflows",
+              "root_management"
+            ],
+            "builtInMcpOverrides": {
+              "root_management": true
+            },
+            "agentNameId": "6d6cac8c-fe3d-4f5e-82e3-740036b4aebd"
+          },
+          "a15c8aa6-9d69-4907-ad51-71f7fbe5cc01": {
+            "cwd": "/fixture/project-2",
+            "kind": "terminal",
+            "tmuxName": "agentcode-b5f36ea3-4d90-4b32-866e-586bfd09b3c7",
+            "builtInMcpOverrides": {}
+          },
+          "6579b6f4-77eb-4813-93dd-2e66a9c46789": {
+            "tldrIdentity": "d4b81a48-1657-4038-8b92-e49107ee22c2",
+            "cwd": "/fixture/project-2",
+            "kind": "opencode",
+            "providerRuntime": "terminal",
+            "providerSessionId": "ses_6840aca1a7c64d5eaa557982bb32284f",
+            "providerSessionIdSource": "jsonl-entry",
+            "builtInMcpDomains": [
+              "tldr",
+              "goal",
+              "orchestration",
+              "agent_transcripts",
+              "workflows"
+            ],
+            "builtInMcpOverrides": {}
+          },
+          "4d757102-4a13-47c2-9fe0-8a9359cd8323": {
+            "tldrIdentity": "7c218c21-e550-41b6-805e-3399481313fc",
+            "cwd": "/fixture/project-2",
+            "kind": "codex",
+            "builtInMcpDomains": [
+              "tldr",
+              "goal",
+              "orchestration",
+              "agent_transcripts",
+              "workflows"
+            ],
+            "builtInMcpOverrides": {}
+          },
+          "f52c6345-1340-4974-b265-7aa62adcb628": {
+            "tldrIdentity": "93ee4ddf-a91f-43e8-9979-357f33b75f13",
+            "cwd": "/fixture/project-2",
+            "kind": "opencode",
+            "providerRuntime": "terminal",
+            "providerSessionId": "ses_2a062349fa314992a0ee22dedc785b39",
+            "providerSessionIdSource": "jsonl-entry",
+            "builtInMcpDomains": [
+              "tldr",
+              "goal",
+              "orchestration",
+              "agent_transcripts",
+              "workflows",
+              "goal_loop"
+            ],
+            "builtInMcpOverrides": {}
+          },
+          "46179162-02ed-491d-97dd-6e291392b280": {
+            "tldrIdentity": "73eb7c1e-4c4c-46e2-907a-18890b8bf9d8",
+            "cwd": "/fixture/project-2",
+            "kind": "opencode",
+            "providerRuntime": "terminal",
+            "providerSessionId": "ses_a23039e0d977552598e1929e8eb2ddb3",
+            "providerSessionIdSource": "jsonl-entry",
+            "builtInMcpDomains": [
+              "tldr",
+              "goal",
+              "orchestration",
+              "agent_transcripts",
+              "workflows",
+              "goal_loop"
+            ],
+            "builtInMcpOverrides": {},
+            "agentNameId": "1e4499d9-a803-40c0-ba4b-af4e77fbc488"
+          },
+          "4cf53ec5-c273-4b22-b4e6-d4b2cfd9cd86": {
+            "tldrIdentity": "466d7674-a592-4831-bf94-498bae8469bb",
+            "cwd": "/fixture/project-2",
+            "kind": "opencode",
+            "providerRuntime": "terminal",
+            "providerSessionId": "ses_df852486a67055db97fd3c581105814d",
+            "providerSessionIdSource": "jsonl-entry",
+            "builtInMcpDomains": [
+              "tldr",
+              "goal",
+              "orchestration",
+              "agent_transcripts",
+              "workflows",
+              "goal_loop"
+            ],
+            "builtInMcpOverrides": {}
+          },
+          "e8c32320-d286-4315-a9d0-775931ad998e": {
+            "tldrIdentity": "0409fa5d-fd48-4ed8-8d7a-2f981c932d91",
+            "cwd": "/fixture/project-2",
+            "kind": "opencode",
+            "providerRuntime": "terminal",
+            "providerSessionId": "ses_04f8f80e5ee35d879acc0b4850d56bc1",
+            "providerSessionIdSource": "jsonl-entry",
+            "builtInMcpDomains": [
+              "tldr",
+              "goal",
+              "orchestration",
+              "agent_transcripts",
+              "workflows",
+              "goal_loop"
+            ],
+            "builtInMcpOverrides": {}
+          },
+          "cddf53b0-0a1f-4677-bf24-0b90a17fb813": {
+            "tldrIdentity": "618cda65-5980-4915-92ca-43de3426761f",
+            "cwd": "/fixture/project-2",
+            "kind": "claude",
+            "builtInMcpDomains": [
+              "tldr",
+              "goal",
+              "orchestration",
+              "agent_transcripts",
+              "goal_loop"
+            ],
+            "builtInMcpOverrides": {},
+            "title": "Title 4",
+            "orchestrationRole": "reviewer",
+            "providerSessionId": "457a54df-4bc8-4e70-870e-c580216e3243",
+            "providerSessionIdSource": "jsonl-entry",
+            "orchestrationBootstrapPromptDelivered": true,
+            "orchestrationParentId": "46179162-02ed-491d-97dd-6e291392b280",
+            "orchestrationRootId": "46179162-02ed-491d-97dd-6e291392b280"
+          },
+          "e1f2ba36-affe-41de-babf-cd18264b23f2": {
+            "tldrIdentity": "718837e5-dfc9-4e90-bdff-f4f6ed338de0",
+            "cwd": "/fixture/project-2",
+            "kind": "opencode",
+            "providerRuntime": "terminal",
+            "providerSessionId": "ses_0ff1ddce360b4c8fa3dc3df4a52bf415",
+            "providerSessionIdSource": "jsonl-entry",
+            "builtInMcpDomains": [
+              "tldr",
+              "goal",
+              "orchestration",
+              "agent_transcripts",
+              "workflows",
+              "goal_loop"
+            ],
+            "builtInMcpOverrides": {}
+          },
+          "c06e1822-ffd5-4d3c-870a-c3c1c084dff7": {
+            "tldrIdentity": "8011357b-8507-4758-8b3b-d992996ed88b",
+            "cwd": "/fixture/project-2",
+            "kind": "claude",
+            "builtInMcpDomains": [
+              "tldr",
+              "goal",
+              "orchestration",
+              "agent_transcripts",
+              "goal_loop"
+            ],
+            "builtInMcpOverrides": {},
+            "title": "Title 5",
+            "orchestrationRole": "reviewer",
+            "providerSessionId": "31eb0f61-f240-4193-9836-19c10a51634e",
+            "providerSessionIdSource": "jsonl-entry",
+            "orchestrationBootstrapPromptDelivered": true,
+            "orchestrationParentId": "46179162-02ed-491d-97dd-6e291392b280",
+            "orchestrationRootId": "46179162-02ed-491d-97dd-6e291392b280"
+          },
+          "c214f5c1-3fe4-4139-9567-89ba5c657932": {
+            "tldrIdentity": "5e9a5372-4591-4018-ace0-c8ca7ca2ccef",
+            "cwd": "/fixture/project-2",
+            "kind": "codex",
+            "providerSessionId": "9a968484-2925-4d7b-9726-84ce8278b7d2",
+            "providerSessionIdSource": "resume-request",
+            "builtInMcpDomains": [
+              "tldr",
+              "goal",
+              "orchestration",
+              "agent_transcripts",
+              "workflows",
+              "goal_loop"
+            ],
+            "builtInMcpOverrides": {}
+          },
+          "e5bf85b2-4c26-4b2a-a465-846289ec2e73": {
+            "tldrIdentity": "87884004-8419-44c5-9c82-c437c793d66a",
+            "cwd": "/fixture/project-1",
+            "kind": "opencode",
+            "providerRuntime": "terminal",
+            "providerSessionId": "ses_670556623cb9422fbb5e75f2cae493d4",
+            "providerSessionIdSource": "jsonl-entry",
+            "builtInMcpDomains": [
+              "tldr",
+              "goal",
+              "orchestration",
+              "agent_transcripts",
+              "workflows",
+              "goal_loop"
+            ],
+            "builtInMcpOverrides": {}
+          },
+          "1ff7c63e-8238-4618-beeb-abf445b19e33": {
+            "tldrIdentity": "cb20661e-3fbf-4eff-9292-bd4729c2c379",
+            "cwd": "/fixture/project-2",
+            "kind": "claude",
+            "builtInMcpDomains": [
+              "tldr",
+              "goal",
+              "orchestration",
+              "agent_transcripts",
+              "goal_loop"
+            ],
+            "builtInMcpOverrides": {},
+            "title": "Title 6",
+            "orchestrationRole": "reviewer",
+            "providerSessionId": "79fd7bf5-3e71-4bb7-ad0a-0b81eda6bdb6",
+            "providerSessionIdSource": "jsonl-entry",
+            "orchestrationBootstrapPromptDelivered": true,
+            "orchestrationParentId": "46179162-02ed-491d-97dd-6e291392b280",
+            "orchestrationRootId": "46179162-02ed-491d-97dd-6e291392b280"
+          },
+          "fc7d126c-08e6-41ae-bb1a-eeaba5482f93": {
+            "tldrIdentity": "80b94b62-6acc-422e-afba-9a41189d4cce",
+            "cwd": "/fixture/project-3",
+            "kind": "claude",
+            "providerSessionId": "a6bdcee3-3c80-4ebc-bd59-a46c07db6028",
+            "providerSessionIdSource": "jsonl-entry",
+            "builtInMcpDomains": [
+              "tldr",
+              "goal",
+              "orchestration",
+              "agent_transcripts",
+              "goal_loop"
+            ],
+            "builtInMcpOverrides": {},
+            "agentNameId": "b311a9ed-62c0-4b8e-82be-b945cc46cae3"
+          },
+          "f6413f85-61a8-4aad-b146-caeaf304ba0e": {
+            "tldrIdentity": "9c1103eb-91e5-4455-ac72-a0e9e99e9109",
+            "cwd": "/fixture/project-2",
+            "kind": "claude",
+            "providerSessionId": "731fba37-3659-4e3b-844d-c0fd292e3cc0",
+            "providerSessionIdSource": "jsonl-entry",
+            "builtInMcpDomains": [
+              "tldr",
+              "goal",
+              "orchestration",
+              "agent_transcripts",
+              "goal_loop"
+            ],
+            "builtInMcpOverrides": {},
+            "agentNameId": "2c690b9e-d218-4543-984d-02c268a043ca"
+          },
+          "1a8cf549-cb85-4e04-b00e-07bd81cb44a3": {
+            "tldrIdentity": "d16ffc71-83b8-48ff-a42e-5a150ba11a4b",
+            "cwd": "/fixture/project-2",
+            "kind": "grok",
+            "providerSessionId": "3dd6af5a-8bee-4092-81ea-f3820438aaf5",
+            "providerSessionIdSource": "jsonl-entry",
+            "builtInMcpDomains": [
+              "tldr",
+              "goal",
+              "orchestration",
+              "agent_transcripts",
+              "workflows",
+              "goal_loop"
+            ],
+            "builtInMcpOverrides": {},
+            "agentViewModeOverride": "terminal"
+          },
+          "5906040e-f07c-4699-a153-d79647e07edb": {
+            "tldrIdentity": "2776c698-22a4-41ee-bed2-26cd0ac41e20",
+            "cwd": "/fixture/project-2",
+            "kind": "claude",
+            "providerSessionId": "83a02301-2e9a-42a6-98cb-38cffc008e25",
+            "providerSessionIdSource": "jsonl-entry",
+            "builtInMcpDomains": [
+              "tldr",
+              "goal",
+              "orchestration",
+              "agent_transcripts",
+              "goal_loop",
+              "root_management"
+            ],
+            "builtInMcpOverrides": {
+              "root_management": true
+            }
+          }
+        },
+        "detachedSessions": {
+          "e6e19a29-f8b4-44da-bb9a-38fcfca2a314": {
+            "sessionId": "e6e19a29-f8b4-44da-bb9a-38fcfca2a314",
+            "surface": "dispatch",
+            "projectTabId": "3bf27c7f-2e3a-4da1-a35a-e013ad86f937",
+            "projectTabTitle": "Project 1",
+            "projectTabIndex": 0,
+            "detachedAt": 1789450871302
+          },
+          "7327ced2-fb07-4b63-a357-50d3f94f8fb6": {
+            "sessionId": "7327ced2-fb07-4b63-a357-50d3f94f8fb6",
+            "surface": "dispatch",
+            "projectTabId": "e0224b91-da18-4b20-9cc0-da491569a6b5",
+            "projectTabTitle": "Project 2",
+            "projectTabIndex": 1,
+            "detachedAt": 1789605758748
+          },
+          "1d0db3d8-b277-4a8d-81b1-5269d76ed48a": {
+            "sessionId": "1d0db3d8-b277-4a8d-81b1-5269d76ed48a",
+            "surface": "dispatch",
+            "projectTabId": "e0224b91-da18-4b20-9cc0-da491569a6b5",
+            "projectTabTitle": "Project 2",
+            "projectTabIndex": 1,
+            "detachedAt": 1789606454470
+          },
+          "a9c17d51-2ba2-4712-aa87-7cf7b8d24a36": {
+            "sessionId": "a9c17d51-2ba2-4712-aa87-7cf7b8d24a36",
+            "surface": "dispatch",
+            "projectTabId": "e0224b91-da18-4b20-9cc0-da491569a6b5",
+            "projectTabTitle": "Project 2",
+            "projectTabIndex": 1,
+            "detachedAt": 1789676671282
+          },
+          "20c09242-4210-433b-b4cd-c0d31b47c507": {
+            "sessionId": "20c09242-4210-433b-b4cd-c0d31b47c507",
+            "surface": "dispatch",
+            "projectTabId": "e0224b91-da18-4b20-9cc0-da491569a6b5",
+            "projectTabTitle": "Project 2",
+            "projectTabIndex": 1,
+            "detachedAt": 1789677019212
+          },
+          "1220cbcb-cabf-41b8-a37c-cebd8b506ce7": {
+            "sessionId": "1220cbcb-cabf-41b8-a37c-cebd8b506ce7",
+            "surface": "dispatch",
+            "projectTabId": "d3a84a9d-2993-4423-9fa4-8c6a457b4e7b",
+            "projectTabTitle": "Project 3",
+            "projectTabIndex": 2,
+            "detachedAt": 1789679456635
+          },
+          "6d6cac8c-fe3d-4f5e-82e3-740036b4aebd": {
+            "sessionId": "6d6cac8c-fe3d-4f5e-82e3-740036b4aebd",
+            "surface": "dispatch",
+            "projectTabId": "e0224b91-da18-4b20-9cc0-da491569a6b5",
+            "projectTabTitle": "Project 2",
+            "projectTabIndex": 1,
+            "detachedAt": 1789600692720
+          },
+          "a15c8aa6-9d69-4907-ad51-71f7fbe5cc01": {
+            "sessionId": "a15c8aa6-9d69-4907-ad51-71f7fbe5cc01",
+            "surface": "dispatch",
+            "projectTabId": "e0224b91-da18-4b20-9cc0-da491569a6b5",
+            "projectTabTitle": "Project 2",
+            "projectTabIndex": 1,
+            "detachedAt": 1789693969704
+          },
+          "6579b6f4-77eb-4813-93dd-2e66a9c46789": {
+            "sessionId": "6579b6f4-77eb-4813-93dd-2e66a9c46789",
+            "surface": "dispatch",
+            "projectTabId": "e0224b91-da18-4b20-9cc0-da491569a6b5",
+            "projectTabTitle": "Project 2",
+            "projectTabIndex": 1,
+            "detachedAt": 1789695773526
+          },
+          "4d757102-4a13-47c2-9fe0-8a9359cd8323": {
+            "sessionId": "4d757102-4a13-47c2-9fe0-8a9359cd8323",
+            "surface": "dispatch",
+            "projectTabId": "e0224b91-da18-4b20-9cc0-da491569a6b5",
+            "projectTabTitle": "Project 2",
+            "projectTabIndex": 1,
+            "detachedAt": 1789763911968
+          },
+          "f52c6345-1340-4974-b265-7aa62adcb628": {
+            "sessionId": "f52c6345-1340-4974-b265-7aa62adcb628",
+            "surface": "dispatch",
+            "projectTabId": "e0224b91-da18-4b20-9cc0-da491569a6b5",
+            "projectTabTitle": "Project 2",
+            "projectTabIndex": 1,
+            "detachedAt": 1789767010622
+          },
+          "46179162-02ed-491d-97dd-6e291392b280": {
+            "sessionId": "46179162-02ed-491d-97dd-6e291392b280",
+            "surface": "dispatch",
+            "projectTabId": "e0224b91-da18-4b20-9cc0-da491569a6b5",
+            "projectTabTitle": "Project 2",
+            "projectTabIndex": 1,
+            "detachedAt": 1789677047173
+          },
+          "4cf53ec5-c273-4b22-b4e6-d4b2cfd9cd86": {
+            "sessionId": "4cf53ec5-c273-4b22-b4e6-d4b2cfd9cd86",
+            "surface": "dispatch",
+            "projectTabId": "e0224b91-da18-4b20-9cc0-da491569a6b5",
+            "projectTabTitle": "Project 2",
+            "projectTabIndex": 1,
+            "detachedAt": 1789695786492
+          },
+          "e8c32320-d286-4315-a9d0-775931ad998e": {
+            "sessionId": "e8c32320-d286-4315-a9d0-775931ad998e",
+            "surface": "dispatch",
+            "projectTabId": "e0224b91-da18-4b20-9cc0-da491569a6b5",
+            "projectTabTitle": "Project 2",
+            "projectTabIndex": 1,
+            "detachedAt": 1789763520414
+          },
+          "cddf53b0-0a1f-4677-bf24-0b90a17fb813": {
+            "sessionId": "cddf53b0-0a1f-4677-bf24-0b90a17fb813",
+            "surface": "dispatch",
+            "projectTabId": "e0224b91-da18-4b20-9cc0-da491569a6b5",
+            "projectTabTitle": "Project 2",
+            "projectTabIndex": 1,
+            "detachedAt": 1789781474390
+          },
+          "e1f2ba36-affe-41de-babf-cd18264b23f2": {
+            "sessionId": "e1f2ba36-affe-41de-babf-cd18264b23f2",
+            "surface": "dispatch",
+            "projectTabId": "e0224b91-da18-4b20-9cc0-da491569a6b5",
+            "projectTabTitle": "Project 2",
+            "projectTabIndex": 1,
+            "detachedAt": 1789782673868
+          },
+          "c06e1822-ffd5-4d3c-870a-c3c1c084dff7": {
+            "sessionId": "c06e1822-ffd5-4d3c-870a-c3c1c084dff7",
+            "surface": "dispatch",
+            "projectTabId": "e0224b91-da18-4b20-9cc0-da491569a6b5",
+            "projectTabTitle": "Project 2",
+            "projectTabIndex": 1,
+            "detachedAt": 1789782938786
+          },
+          "c214f5c1-3fe4-4139-9567-89ba5c657932": {
+            "sessionId": "c214f5c1-3fe4-4139-9567-89ba5c657932",
+            "surface": "dispatch",
+            "projectTabId": "e0224b91-da18-4b20-9cc0-da491569a6b5",
+            "projectTabTitle": "Project 2",
+            "projectTabIndex": 1,
+            "detachedAt": 1789783774180
+          },
+          "e5bf85b2-4c26-4b2a-a465-846289ec2e73": {
+            "sessionId": "e5bf85b2-4c26-4b2a-a465-846289ec2e73",
+            "surface": "dispatch",
+            "projectTabId": "3bf27c7f-2e3a-4da1-a35a-e013ad86f937",
+            "projectTabTitle": "Project 1",
+            "projectTabIndex": 0,
+            "detachedAt": 1789784330981
+          },
+          "1ff7c63e-8238-4618-beeb-abf445b19e33": {
+            "sessionId": "1ff7c63e-8238-4618-beeb-abf445b19e33",
+            "surface": "dispatch",
+            "projectTabId": "e0224b91-da18-4b20-9cc0-da491569a6b5",
+            "projectTabTitle": "Project 2",
+            "projectTabIndex": 1,
+            "detachedAt": 1789785703603
+          },
+          "fc7d126c-08e6-41ae-bb1a-eeaba5482f93": {
+            "sessionId": "fc7d126c-08e6-41ae-bb1a-eeaba5482f93",
+            "surface": "dispatch",
+            "projectTabId": "d3a84a9d-2993-4423-9fa4-8c6a457b4e7b",
+            "projectTabTitle": "Project 3",
+            "projectTabIndex": 2,
+            "detachedAt": 1789679477821
+          },
+          "f6413f85-61a8-4aad-b146-caeaf304ba0e": {
+            "sessionId": "f6413f85-61a8-4aad-b146-caeaf304ba0e",
+            "surface": "dispatch",
+            "projectTabId": "e0224b91-da18-4b20-9cc0-da491569a6b5",
+            "projectTabTitle": "Project 2",
+            "projectTabIndex": 1,
+            "detachedAt": 1789686086992
+          },
+          "1a8cf549-cb85-4e04-b00e-07bd81cb44a3": {
+            "sessionId": "1a8cf549-cb85-4e04-b00e-07bd81cb44a3",
+            "surface": "dispatch",
+            "projectTabId": "e0224b91-da18-4b20-9cc0-da491569a6b5",
+            "projectTabTitle": "Project 2",
+            "projectTabIndex": 1,
+            "detachedAt": 1789793748793
+          },
+          "5906040e-f07c-4699-a153-d79647e07edb": {
+            "sessionId": "5906040e-f07c-4699-a153-d79647e07edb",
+            "surface": "dispatch",
+            "projectTabId": "e0224b91-da18-4b20-9cc0-da491569a6b5",
+            "projectTabTitle": "Project 2",
+            "projectTabIndex": 1,
+            "detachedAt": 1789782517126
+          }
+        },
+        "buried": [],
+        "tileTabs": null
+      }
+    }
+  ]
+}
