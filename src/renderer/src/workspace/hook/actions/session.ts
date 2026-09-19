@@ -14,7 +14,7 @@ import { useCallback, useRef } from 'react'
 import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
 import { clearLiveEntryWindowSession } from '@renderer/session-runtime/liveEntryWindow'
-import type { SessionId, SessionKind, SessionMeta, TileNode, WorkspaceState } from '@renderer/workspace/types'
+import type { SessionId, SessionKind, SessionMeta, WorkspaceState } from '@renderer/workspace/types'
 import type { BuiltInMcpDomain, BuiltInMcpOverrides } from '@mcp/shared/types'
 import { resolveSessionBuiltInMcpDomains, sessionMcpOverrides, spawnMcpOverrides } from '@renderer/workspace/mcpDomains'
 import {
@@ -22,11 +22,10 @@ import {
   remapTiledLanes,
 } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import {
-  remapGridRelatedSelections,
   remapPinnedSessionIds,
   remapSessionsRelationships,
 } from '@renderer/workspace/idRemap'
-import { closeLeaf, collectLeaves, remapTileTreeSessionIds } from '@renderer/workspace/tile-tree/treeOps'
+import { inheritedMembership, workspaceWithoutSessions } from '@renderer/workspace/pool'
 import type { Tab } from '@renderer/workspace/types'
 import {
   releaseIdentityCarry,
@@ -53,7 +52,6 @@ import {
   withoutProvisionalProviderSession,
 } from '@renderer/workspace/providerSessionIdentity'
 import {
-  collectLiveProcessIds,
   collectOwnedSessionIds,
   collectUnownedSessionIds,
   pickOwnedSessions,
@@ -1130,27 +1128,13 @@ export function useSessionActions(
         delete next[sessionId]
         return next
       })
-      setState(prev => {
-        const nextSessions = { ...prev.sessions }
-        delete nextSessions[sessionId]
-        const detachedSessions = { ...prev.detachedSessions }
-        delete detachedSessions[sessionId]
-        // Clear the killed session out of any tiled lane FIRST (a lane can
-        // hold a session that isn't the classic dispatch focus), then clear
-        // the classic focus if it pointed here. Otherwise the lane dangles at
-        // a dead id and the layout's auto-fill effect bounces it to tile 0.
-        const clearedDispatch = clearTiledLaneSessions(prev.dispatchMode, sessionId)
-        const dispatchMode =
-          clearedDispatch?.focusedSessionId === sessionId
-            ? { ...clearedDispatch, focusedSessionId: undefined }
-            : clearedDispatch
-        return {
-          ...prev,
-          sessions: nextSessions,
-          detachedSessions,
-          dispatchMode,
-        }
-      })
+      // One removal for the whole workspace (pool.ts): the row leaves the pool,
+      // every lane that showed it goes EMPTY and stays empty (U2, #681), its
+      // pin is dropped, and a project it leaves with no sessions goes with it.
+      // Until #992 this site deleted the row and the detachedSessions record
+      // and left the tree to its callers, which is how a killed leaf could
+      // outlive its metadata.
+      setState(prev => workspaceWithoutSessions(prev, [sessionId]))
       delete refs.seenUuidsRef.current[sessionId]
       // Live-window bookkeeping follows the seen-uuid lifecycle (see
       // liveEntryWindow.ts: trimmed ⊆ ever-seen must hold).
@@ -1192,14 +1176,11 @@ export function useSessionActions(
     ): Promise<SessionId | undefined> => {
       const snapshot = refs.stateRef.current
       const { targetSessionId: _targetSessionId, preserveTldr, restoreTldrIdentity, ...spawnOpts } = opts ?? {}
-      // WHY this reads Dispatch focus before tab focus:
-      //
       // `replaceSession` powers resume, reload, provider-switch, and rewind.
-      // Those commands target the thing the user is visibly commanding. In
-      // Dispatch Mode that can be a detached row, or a grid row that did not
-      // mutate Tab.focusedSessionId. Remapping by the old grid-only focus would
-      // make the palette labels talk about one agent while the destructive
-      // replacement happened to another.
+      // Those commands target the thing the user is visibly commanding — the
+      // focused lane's occupant. Targeting anything else would make the
+      // palette labels talk about one agent while the destructive replacement
+      // happened to another.
       // WHY callers may pin the target:
       // Most command actions should follow the *current* command target at the
       // moment replacement begins. Rewind is different: main may spend time
@@ -1251,7 +1232,8 @@ export function useSessionActions(
         const current = state.sessions[oldId]
         return Boolean(current && current.cwd === oldMeta.cwd && current.kind === oldMeta.kind
           && current.providerRuntime === oldMeta.providerRuntime
-          && !state.buried.some(row => row.sessionId === oldId)
+          // Still owned: its project still exists. (A `buried` check sat here
+          // too until #992 folded burial into the pool.)
           && collectOwnedSessionIds(state).has(oldId))
       }
       if (!canCommit(snapshot)) return
@@ -1297,9 +1279,8 @@ export function useSessionActions(
         if (!mainHandledPredecessor) {
           await killSessionBackendIfOwned(refs, oldId, oldMeta)
         }
-        // Swap the sessionId wherever this live session is placed. Grid sessions
-        // live in one tile-tree leaf; detached Dispatch sessions live in
-        // detachedSessions with no leaf at all.
+        // Swap the sessionId everywhere it is referenced: the pool row, the
+        // lanes, the pins and other rows' relationship pointers.
         const idMap = new Map<SessionId, SessionId>([[oldId, newId]])
 
         let committed = false
@@ -1319,6 +1300,12 @@ export function useSessionActions(
           // `prev.sessions[oldId]` is still readable here: only the local
           // `sessions` copy has had oldId deleted.
           const carriedAgentNameId = prev.sessions[oldId]?.agentNameId
+          // The successor IS the same row in the same project at the same
+          // place in its index — only the backend changed. Until #992 this was
+          // implicit: the id was swapped inside the tile leaf or the detached
+          // record that owned it, so position came for free. Ownership lives
+          // on the row now, so it has to be carried like the title is.
+          const carriedMembership = inheritedMembership(prev.sessions[oldId])
           delete sessions[oldId]
           // Persist the replacement provider metadata immediately
           // instead of waiting for the first transcript line to
@@ -1360,24 +1347,12 @@ export function useSessionActions(
             // successor under its own id, which is the same outcome by the one
             // rule the feature has.
             ...(carriedAgentNameId !== undefined ? { agentNameId: carriedAgentNameId } : {}),
-          }
-          const detachedSessions = { ...prev.detachedSessions }
-          const detached = detachedSessions[oldId]
-          if (detached) {
-            delete detachedSessions[oldId]
-            detachedSessions[newId] = { ...detached, sessionId: newId }
+            // After the spread for the same reason: the successor's own row
+            // was written by `spawn` and is un-filed.
+            ...carriedMembership,
           }
           return {
             ...prev,
-            tabs: prev.tabs.map(t => {
-              if (!collectLeaves(t.root).includes(oldId)) return t
-              return {
-                ...t,
-                root: remapTileTreeSessionIds(t.root, idMap),
-                focusedSessionId:
-                  t.focusedSessionId === oldId ? newId : t.focusedSessionId,
-              }
-            }),
             // Remap relationship pointers across ALL sessions: a linked /
             // orchestration CHILD of the swapped session carries oldId in its
             // linkedParentId/orchestrationParentId/orchestrationRootId, so the
@@ -1388,21 +1363,14 @@ export function useSessionActions(
             // A pinned agent that gets a fresh id on reload/switch must follow
             // to the new id instead of silently dropping out of the Pinned list.
             pinnedSessionIds: remapPinnedSessionIds(prev.pinnedSessionIds, idMap),
-            gridRelatedSelections: remapGridRelatedSelections(prev.gridRelatedSelections, idMap),
-            detachedSessions,
-            // Remap the swapped session id everywhere Dispatch holds it: the
-            // classic single-view focus AND every Tiled Dispatch lane selection
-            // (dispatchMode.tiled.lanes[].selectedSessionId). reload /
-            // provider-switch / resume / rewind all funnel through here; before
-            // this, the focused lane kept pointing at the now-dead oldId and the
-            // layout's auto-fill effect re-homed it to the first tile. Same
-            // tiled-vs-grid divergence as #266/#267/#271, fixed at the swap.
-            dispatchMode: remapTiledLanes(
-              prev.dispatchMode?.focusedSessionId === oldId
-                ? { ...prev.dispatchMode, focusedSessionId: newId }
-                : prev.dispatchMode,
-              idMap,
-            ),
+            // Remap the swapped session id in every lane that shows it
+            // (stage.lanes[].selectedSessionId). reload / provider-switch /
+            // resume / rewind all funnel through here; before this, the
+            // focused lane kept pointing at the now-dead oldId and went blank
+            // under the user mid-conversation. Same lane-vs-owner divergence
+            // as #266/#267/#271, fixed at the swap. (A classic-Dispatch focus
+            // was remapped beside the lanes until #992 removed the field.)
+            stage: remapTiledLanes(prev.stage, idMap),
           }
         })
         if (!committed) {
@@ -1458,7 +1426,7 @@ export function useSessionActions(
   const reloadAgentSessions = useCallback(
     async (dangerousMode = refs.dangerousAgentsRef.current) => {
       const current = refs.stateRef.current
-      const liveProcessIds = collectLiveProcessIds(current)
+      const ownedIds = collectOwnedSessionIds(current)
       const staleIds = collectUnownedSessionIds(current)
       if (staleIds.length > 0) {
         // WHY reload prunes but does not kill unowned ids directly:
@@ -1473,20 +1441,26 @@ export function useSessionActions(
         // eslint-disable-next-line no-console
         console.warn('[workspace] dropping unowned sessions during agent reload:', staleIds)
       }
-      // WHY filter by liveProcessIds, not ownedIds (mirrors the rehydrate fix):
+      // WHY only sessions that HAVE a backend, not every owned agent:
       //
-      // After the rehydrate live-vs-owned split, hibernated dispatch agents
-      // (entries in `state.sessions` whose ids are NOT in any tile leaf) have
-      // no PTY, no mitmdump, and no provider process to reload. Toggling
-      // dangerous mode while parked agents exist used to call killSession +
-      // spawnSession on every one of them, which re-introduced the original
-      // fork-bomb in a different code path: a single mode toggle would
-      // resurrect N hibernated agents as live processes. liveProcessIds
-      // restricts the reload to tile-leaf sessions actually exposed to the
-      // user; hibernated agents pick up the new dangerous-mode setting when
-      // the wake-on-attach UI later spawns them.
+      // A parked agent has no PTY, no mitmdump, and no provider process to
+      // reload. Toggling dangerous mode while parked agents exist once called
+      // killSession + spawnSession on every one of them, which re-introduced
+      // the #258 fork bomb in a different code path: a single mode toggle
+      // resurrected N hibernated agents as live processes. A parked agent
+      // picks up the new setting when it is next woken.
+      //
+      // The test is the RUNTIME, not a structure. Until #992 it was "is a tile
+      // leaf" (collectLiveProcessIds), which was only ever a proxy for "was
+      // spawned at boot" — and a wrong one, since an agent woken from a lane
+      // had a backend and was skipped. `processStatus` is "does a writable
+      // backend exist for this session": everything but 'idle' has (or had,
+      // and visibly lost) one, which is exactly what a reload should restart.
+      const runtimesNow = refs.latestRuntimesRef.current
       const agentEntries = Object.entries(current.sessions).filter(([id, meta]) => {
-        if (!liveProcessIds.has(id)) return false
+        if (!ownedIds.has(id)) return false
+        const processStatus = runtimesNow[id]?.processStatus
+        if (processStatus === undefined || processStatus === 'idle') return false
         const kind = meta.kind ?? DEFAULT_PROVIDER
         return isAgentProviderKind(kind)
       })
@@ -1589,84 +1563,38 @@ export function useSessionActions(
           nextSessions[newId] = meta
         }
 
-        const nextTabs = prev.tabs
-          .map(tab => {
-            let root: TileNode | null = remapTileTreeSessionIds(tab.root, idMap)
-            for (const failedId of failedIds) {
-              root = closeLeaf(root!, failedId)
-              if (root === null) break
-            }
-            if (root === null) return null
-            const leaves = collectLeaves(root)
-            if (leaves.length === 0) return null
-            const focusedSessionId = idMap.get(tab.focusedSessionId)
-              ?? (failedIds.has(tab.focusedSessionId) ? leaves[0] : tab.focusedSessionId)
-            return {
-              ...tab,
-              root,
-              focusedSessionId,
-            } satisfies Tab
-          })
-          .filter((tab): tab is Tab => tab !== null)
-
-        const activeTabId = nextTabs.some(tab => tab.id === prev.activeTabId)
-          ? prev.activeTabId
-          : (nextTabs[0]?.id ?? '')
-
-        const nextBuried = prev.buried
-          .filter(entry => !failedIds.has(entry.sessionId))
-          .map(entry => ({
-            ...entry,
-            id: idMap.get(entry.id) ?? entry.id,
-            sessionId: idMap.get(entry.sessionId) ?? entry.sessionId,
-            siblingLeafId: entry.siblingLeafId
-              ? (idMap.get(entry.siblingLeafId) ?? entry.siblingLeafId)
-              : undefined,
-          }))
-
-        const nextDetachedSessions = Object.fromEntries(
-          Object.entries(prev.detachedSessions)
-            .filter(([sessionId]) => !failedIds.has(sessionId))
-            .map(([sessionId, entry]) => {
-              const mapped = idMap.get(sessionId)
-              if (!mapped) return [sessionId, entry]
-              return [mapped, { ...entry, sessionId: mapped }]
-            }),
-        )
-
-        const focusedDispatchSessionId = prev.dispatchMode?.focusedSessionId
-        // Remap tiled lanes through the same old->new idMap (every reloaded
-        // agent got a fresh sessionId), then clear any lane whose session
-        // failed to respawn. Without this, "reload all" would point every lane
-        // at a dead id and the auto-fill effect would collapse them to tile 0.
-        const remappedDispatch = clearTiledLaneSessions(
-          remapTiledLanes(prev.dispatchMode, idMap),
+        // A successor carries its predecessor's pool membership through
+        // `...restoredMeta` above, so it keeps its project and its place. An
+        // agent that FAILED to respawn was deleted a few lines up; the removal
+        // helper below then takes any project that leaves empty. (Until #992
+        // this rewrote every tile tree, the buried list and the detached
+        // bucket by hand to follow the new ids.)
+        // Remap lanes through the same old->new idMap (every reloaded agent
+        // got a fresh sessionId), then clear any lane whose session failed to
+        // respawn. Without this, "reload all" would point every lane at a dead
+        // id. Order matters: remap first, because `failedIds` are OLD ids that
+        // have no entry in idMap and so survive the remap to be cleared.
+        const nextStage = clearTiledLaneSessions(
+          remapTiledLanes(prev.stage, idMap),
           failedIds,
         )
-        const nextDispatchMode = remappedDispatch
-          ? {
-              ...remappedDispatch,
-              focusedSessionId: focusedDispatchSessionId
-                ? idMap.get(focusedDispatchSessionId) ??
-                  (failedIds.has(focusedDispatchSessionId) ? undefined : focusedDispatchSessionId)
-                : undefined,
-            }
-          : null
 
-        return {
+        // `workspaceWithoutSessions` is handed the FAILED ids against a state
+        // whose sessions map still holds them, so it can see which projects
+        // they belonged to and remove the ones left empty.
+        return workspaceWithoutSessions({
           ...prev,
-          tabs: nextTabs,
-          activeTabId,
           // Reload-all gives every agent a fresh id; remap relationship
           // pointers across all sessions (children keep pointing at the right
           // parent) and remap the pinned list (pins follow to the new ids).
-          sessions: remapSessionsRelationships(nextSessions, idMap),
+          sessions: {
+            ...remapSessionsRelationships(nextSessions, idMap),
+            ...Object.fromEntries([...failedIds].flatMap(id =>
+              prev.sessions[id] ? [[id, prev.sessions[id]!] as const] : [])),
+          },
           pinnedSessionIds: remapPinnedSessionIds(prev.pinnedSessionIds, idMap),
-          gridRelatedSelections: remapGridRelatedSelections(prev.gridRelatedSelections, idMap),
-          detachedSessions: nextDetachedSessions,
-          buried: nextBuried,
-          dispatchMode: nextDispatchMode,
-        }
+          stage: nextStage,
+        }, failedIds)
       })
       for (const [newId, meta] of Object.entries(freshSessions)) {
         if (!hasDurableProviderSession(meta)) continue

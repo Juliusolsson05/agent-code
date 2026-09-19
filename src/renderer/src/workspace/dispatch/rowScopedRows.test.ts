@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 import {
@@ -11,6 +10,7 @@ import {
 } from '@renderer/workspace/dispatch/rowScopedRows'
 import type { DispatchAgentRow } from '@renderer/workspace/dispatch/dispatchSelectors'
 import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
+import { loadRecordedDispatchWorkspace } from '@renderer/workspace/testing/recordedDispatchWorkspace'
 
 // What ONE grid row shows: the canonical dispatch rows, filtered to that row's
 // project and collapsed at that row's child density.
@@ -19,14 +19,15 @@ import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
 // wrong here are properties of real data, not of a hand-built list: the
 // canonical labels (which must survive filtering with GAPS, never renumber) and
 // the parent/child nesting produced by orchestration.
-const FIXTURE = JSON.parse(
-  readFileSync('testing/fixtures/worktree-context/dispatch-global-d23.json', 'utf8'),
-) as { state: WorkspaceState }
+// Loaded through the shared lift: the file on disk is a v2 workspace whose lane
+// grid sits at `dispatchMode.tiled`; the loader moves it to `state.stage`
+// verbatim (see recordedDispatchWorkspace.ts for why it is not re-recorded).
+const FIXTURE = loadRecordedDispatchWorkspace()
 
-const GLOBAL_ROWS = buildVisibleDispatchRows({
-  ...FIXTURE.state,
-  dispatchMode: { ...FIXTURE.state.dispatchMode!, scope: 'global' },
-})
+// Named GLOBAL_ROWS from when a layout-wide scope existed and this had to force
+// it to 'global' to see every project. Every index lists every project now
+// (#992); the name still says what the list is.
+const GLOBAL_ROWS = buildVisibleDispatchRows(FIXTURE.state)
 
 const labels = (items: ReturnType<typeof rowScopedRows>): string[] =>
   items.map(item => (item.kind === 'agent' ? item.row.label : `[${item.kind}:${item.hidden ?? 0}]`))
@@ -218,16 +219,10 @@ describe('spawning into a bound row', () => {
     const boundTab = GLOBAL_ROWS.find(row => row.tabId !== FIXTURE.state.activeTabId)!.tabId
     const state: WorkspaceState = {
       ...FIXTURE.state,
-      dispatchMode: {
-        ...FIXTURE.state.dispatchMode!,
-        scope: 'global',
-        // Empty focused lane, so there is no lane session to read the project
-        // from — exactly the case that used to fall through to activeTabId.
-        tiled: {
-          lanes: [{}],
-          rows: [{ length: 1, projectTabIds: [boundTab] }],
-          focusedLane: 0,
-        },
+      stage: {
+        lanes: [{}],
+        rows: [{ length: 1, projectTabIds: [boundTab] }],
+        focusedLane: 0,
       },
     }
 
@@ -238,12 +233,7 @@ describe('spawning into a bound row', () => {
   it('still falls back to the active tab for an unbound row', () => {
     const state: WorkspaceState = {
       ...FIXTURE.state,
-      dispatchMode: {
-        ...FIXTURE.state.dispatchMode!,
-        scope: 'global',
-        focusedSessionId: undefined,
-        tiled: { lanes: [{}], rows: [{ length: 1 }], focusedLane: 0 },
-      },
+      stage: { lanes: [{}], rows: [{ length: 1 }], focusedLane: 0 },
     }
 
     expect(resolveDispatchSpawnTarget(state).tabId).toBe(FIXTURE.state.activeTabId)
@@ -257,14 +247,10 @@ describe('spawning into a multi-project row', () => {
   // same gesture file agents in different projects on different days.
   const rowWithProjects = (ids: string[]): WorkspaceState => ({
     ...FIXTURE.state,
-    dispatchMode: {
-      ...FIXTURE.state.dispatchMode!,
-      scope: 'global',
-      tiled: {
-        lanes: [{}],
-        rows: [{ length: 1, projectTabIds: ids }],
-        focusedLane: 0,
-      },
+    stage: {
+      lanes: [{}],
+      rows: [{ length: 1, projectTabIds: ids }],
+      focusedLane: 0,
     },
   })
 

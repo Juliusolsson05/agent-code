@@ -1,15 +1,12 @@
 import { useEffect } from 'react'
 
 import type { PersistedWorkspace } from '@renderer/workspace/persistence'
-import type { WorkspaceModeId } from '@renderer/app-state/settings/types'
 
 import type {
   WorkspaceSetRuntimes,
   WorkspaceSetState,
-  WorkspaceSetTileTabs,
 } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
-import type { DispatchModeState } from '@renderer/workspace/types'
 
 import { rehydrateWorkspace } from '@renderer/workspace/hook/persistence/rehydrate'
 import { reconcileStuckTranscriptLoads } from '@renderer/workspace/hook/actions/initialHistory'
@@ -53,7 +50,6 @@ export function useBootstrap(
   refs: WorkspaceRefs,
   setState: WorkspaceSetState,
   setRuntimes: WorkspaceSetRuntimes,
-  setTileTabs: WorkspaceSetTileTabs,
   newTab: (cwd: string) => Promise<unknown>,
   setBootstrapComplete: (complete: boolean) => void,
   // Mirrors setBootstrapComplete in lifetime — set once at the end of
@@ -62,16 +58,17 @@ export function useBootstrap(
   // render the partial/fallback states without each call site needing
   // to recompute "is autosave actually running right now".
   setRestoreStatus: (status: WorkspaceRestoreStatus) => void,
-  // WHY these two extra params: the "Default Workspace Mode" setting
-  // only matters on a brand-new install (no workspace.json). Rather
-  // than have useBootstrap reach into the app store directly — which
-  // would couple persistence to settings and add a re-render dep we
-  // don't want — the composer (`useWorkspace`) reads the setting once
-  // and threads it in alongside the dispatch entry point. We capture
-  // both in the once-only useEffect closure, so later setting changes
-  // don't retroactively rerun bootstrap.
-  defaultWorkspaceMode: WorkspaceModeId,
-  enterDispatchMode: (scope?: DispatchModeState['scope']) => Promise<void>,
+  // `defaultWorkspaceMode` was a param here until #992 stage 8: the
+  // "Default Workspace Mode" setting chose between grid and Dispatch on a
+  // fresh install, and there is one layout now. Deleted with the setting.
+  // Two more params lived here until the stage became a required field:
+  // `enterDispatchMode` (fresh installs could boot into classic Dispatch) and
+  // `enterTiledDispatch`, which an `ensureStage` helper called after every
+  // boot path to give a workspace a lane grid if it lacked one. Neither is
+  // needed: the store's initial state already holds a one-lane stage, newTab
+  // fills its empty focused lane with the first agent, and rehydrate
+  // publishes the migrated stage in its very first commit. Boot no longer
+  // knows that lanes exist.
 ): void {
   useEffect(() => {
     if (refs.bootRef.current) return
@@ -93,26 +90,11 @@ export function useBootstrap(
             await perf.measure('workspace.bootstrap.initialNewTab', () => newTab(cwd))
             canAutosaveBootState = refs.latestStateRef.current.tabs.length > 0
             finalStatus = 'fresh'
-            // WHY apply the default mode here, after newTab resolves:
-            //
-            // `enterDispatchMode` no longer spawns anything: the auto-created
-            // project terminal was retired, so entering Dispatch is now purely
-            // a layout change.
-            if (defaultWorkspaceMode === 'dispatch') {
-              try {
-                // Global, not project (#973): a fresh install has exactly one
-                // tab, so project scope would show the same agents while
-                // hiding the scope switch's purpose; global is also the scope
-                // the owner runs in and the one every later tab benefits from.
-                await enterDispatchMode('global')
-              } catch (dispatchErr) {
-                // Non-fatal: user lands in grid mode, can flip later.
-                // We don't surface a toast because a fresh-install user
-                // hasn't even seen the workspace yet — a stray error
-                // toast on an empty app is more confusing than helpful.
-                console.warn('[workspace] default dispatch entry failed:', dispatchErr)
-              }
-            }
+            // A fresh install lands on ONE row × ONE lane showing its one
+            // agent (plan §4.5 — nothing to explain before the first agent
+            // exists; growth is user-paced). That shape is the store's
+            // initial `freshStage()` plus newTab's empty-lane placement; no
+            // step here creates it.
             bootstrapSpan.end({ mode: 'fresh' })
           } catch (err) {
             bootstrapSpan.fail(err, { mode: 'fresh' })
@@ -135,11 +117,11 @@ export function useBootstrap(
                 refs,
                 setState,
                 setRuntimes,
-                setTileTabs,
                 newTab,
               ),
             {
-              tabs: parsed.workspace.tabs.length,
+              // v3 files list `projects`; v2 files list `tabs`.
+              tabs: (parsed.workspace.projects ?? parsed.workspace.tabs ?? []).length,
               sessions: Object.keys(parsed.workspace.sessions).length,
             },
           )
@@ -174,6 +156,11 @@ export function useBootstrap(
             // restart after fixing the underlying spawn/proxy problem.
             console.warn('[workspace] rehydrate incomplete; autosave remains disabled:', restoreResult)
           }
+          // An imported v2 workspace without a stored lane grid arrives here
+          // already on the migration default [2] (seeded) — NOT the fresh
+          // [1]: an importing user demonstrably has agents; the second lane
+          // is what shows a lane is a slot (plan §6.4). rehydrate published
+          // it through migrateWorkspaceToStage.
           bootstrapSpan.end({ mode: 'rehydrate' })
         } catch (err) {
           bootstrapSpan.fail(err, { mode: 'rehydrate' })
@@ -185,6 +172,9 @@ export function useBootstrap(
           try {
             await perf.measure('workspace.bootstrap.fallbackNewTab', () => newTab(cwd))
             finalStatus = 'persisted-fallback'
+            // The recovery shell gets the minimal [1] stage by the same route
+            // as the fresh path: this is not the user's real workspace, just
+            // enough surface to work in while the real file stays protected.
             // WHY this intentionally does NOT unlock autosave:
             //
             // We only reach this path after a persisted workspace existed but

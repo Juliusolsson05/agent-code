@@ -6,6 +6,7 @@ import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import type { SessionId, SessionMeta, WorkspaceState } from '@renderer/workspace/types'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 // The renderer half of the workspace handoff.
 //
@@ -46,42 +47,32 @@ function survivorState(): WorkspaceState {
     tabs: [{
       id: 'tab-own',
       title: 'own',
-      root: { type: 'leaf', sessionId: 'own-agent' },
-      focusedSessionId: 'own-agent',
     }],
     activeTabId: 'tab-own',
-    dispatchMode: null,
-    sessions: { 'own-agent': meta('/own') },
-    detachedSessions: {},
-    buried: [],
+    stage: oneLaneStage('own-agent'),
+    sessions: { 'own-agent': { ...meta('/own'), projectId: 'tab-own', joinedAt: 0 }},
     pinnedSessionIds: [],
   }
 }
 
+/**
+ * What a closed window's autosave actually wrote: the v3 shape, and only it
+ * (useAutoSave.ts). `grid-a` is the agent its one lane showed; `parked` is a
+ * pool row no lane showed. The names are from when those were a tile leaf and
+ * a detached record — two owner structures that are one thing now.
+ *
+ * The payload was briefly a hybrid (v2 `tabs` with no tile `root`, v3 rows).
+ * No build ever wrote that, and adoption's input is a FILE, so it is exactly
+ * the place a fixture must not invent a shape.
+ */
 function closedWindowPayload(): string {
   return JSON.stringify({
     workspace: {
-      tabs: [{
-        id: 'tab-closed',
-        title: 'closed',
-        root: { type: 'leaf', sessionId: 'grid-a' },
-        focusedSessionId: 'grid-a',
-      }],
-      activeTabId: 'tab-closed',
-      dispatchMode: null,
-      sessions: { 'grid-a': meta('/closed'), parked: meta('/closed') },
-      detachedSessions: {
-        parked: {
-          sessionId: 'parked',
-          surface: 'dispatch',
-          projectTabId: 'tab-closed',
-          projectTabTitle: 'closed',
-          projectTabIndex: 0,
-          detachedAt: 1,
-        },
-      },
-      buried: [],
-      tileTabs: null,
+      projects: [{ id: 'tab-closed', title: 'closed' }],
+      activeProjectId: 'tab-closed',
+      stage: oneLaneStage('grid-a'),
+      sessions: { 'grid-a': { ...meta('/closed'), projectId: 'tab-closed', joinedAt: 0 }, parked: { ...meta('/closed'), projectId: 'tab-closed', joinedAt: 1 }},
+      pinnedSessionIds: [],
     },
   })
 }
@@ -214,7 +205,18 @@ describe('adopting a closed window', () => {
     expect(h.refs.latestRuntimesRef.current['grid-a']?.inputReadinessRevision).toBe(7)
   })
 
-  it('loads history for adopted leaves only', async () => {
+  it('loads history only for adopted sessions that have a live backend', async () => {
+    // Re-based with #992. The rule was "tile leaves load, detached rows do
+    // not" — a structural stand-in for "has a backend", because the closed
+    // window had spawned exactly its leaves. It asks main directly now: a
+    // session main still holds a live backend for is one the user can read and
+    // type into the moment it is adopted, so its transcript is loaded; every
+    // other row is parked and loads when it is woken.
+    getBackendSnapshot.mockImplementation(async (sessionId: string) => (
+      sessionId === 'grid-a'
+        ? { sessionId, kind: 'claude', cwd: '/closed', lifecycle: 'live', input: { ready: true, reason: null, revision: 1 } }
+        : null
+    ))
     const h = harness(true)
     h.fire({ windowId: 'closed-window', workspace: closedWindowPayload() })
 
@@ -223,6 +225,16 @@ describe('adopting a closed window', () => {
     // durable history for every adopted row would be a burst with no consumer.
     expect(loadInitialHistoryForSession.mock.calls.map(call => call[0].sessionId))
       .toEqual(['grid-a'])
+  })
+
+  it('loads no history when the closed window left no live backend behind', async () => {
+    // The default mock: main knows none of these sessions. Everything adopted
+    // is parked, so nothing is paged in — and the adoption still lands.
+    const h = harness(true)
+    h.fire({ windowId: 'closed-window', workspace: closedWindowPayload() })
+
+    await waitFor(() => expect(h.refs.latestRuntimesRef.current.parked).toBeDefined())
+    expect(loadInitialHistoryForSession).not.toHaveBeenCalled()
   })
 
   it('refuses an unreadable payload without confirming', async () => {
@@ -240,7 +252,10 @@ describe('adopting a closed window', () => {
     const colliding = JSON.parse(closedWindowPayload()) as {
       workspace: { sessions: Record<string, SessionMeta> }
     }
-    colliding.workspace.sessions['own-agent'] = meta('/collision')
+    // Filed under the closed window's project: an UNFILED row would be dropped
+    // as unowned before the merge ever compared ids, and the adoption would
+    // (correctly) succeed — testing the ownership prune, not the collision.
+    colliding.workspace.sessions['own-agent'] = { ...meta('/collision'), projectId: 'tab-closed', joinedAt: 2 }
     h.fire({ windowId: 'closed-window', workspace: JSON.stringify(colliding) })
 
     await waitFor(() => expect(refuseWorkspaceAdoption).toHaveBeenCalledWith('closed-window'))

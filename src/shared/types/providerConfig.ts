@@ -15,7 +15,7 @@
 
 import type { ComponentType, ReactNode } from 'react'
 import type { SessionOptions, AgentSession } from '@shared/types/session.js'
-import type { AgentProviderKind, SessionKind } from '@shared/types/providerKind.js'
+import type { AgentProviderKind } from '@shared/types/providerKind.js'
 import type { Entry, ToolResultBlock, ToolUseBlock } from '@shared/types/transcript.js'
 
 /**
@@ -108,22 +108,6 @@ export type ProviderTaskNotification = {
   usage: string | null
 }
 
-export type TileLeafRelatedAgentTab = {
-  sessionId: string
-  relation: 'parent' | 'linked' | 'orchestration'
-  label: string
-  title: string
-  // Typed SessionKind because the value flows from SessionMeta.kind, which is a
-  // SessionKind. buildGridRelatedAgentTabs guarantees at runtime that only agent
-  // kinds actually arrive here (it drops every non-agent owner and candidate via
-  // isAgentSessionKind), so the wider type is a plumbing artifact, not a claim
-  // that a terminal or extension-view pane can be a related-agent tab. Narrowing
-  // it to AgentProviderKind would need a cast at the one construction site and
-  // would move the guarantee from a readable filter into an assertion.
-  kind: SessionKind | undefined
-  placement: 'grid' | 'detached'
-}
-
 // Props the shell passes to every provider's TileLeaf.
 export type TileLeafProps = {
   sessionId: string
@@ -134,23 +118,10 @@ export type TileLeafProps = {
   workspace: unknown
   showStatusMode?: boolean
   showWorktreeBadges?: boolean
-  /**
-   * WHY these shell-chrome props live in the provider contract now:
-   * TileTree has always passed them to the concrete in-repo TileLeaf, but the
-   * public type claimed providers only received the bare pane identity/runtime
-   * fields. That mismatch forced TileTree to widen the component with a local
-   * cast, which hid the real call surface from any future provider pane.
-   *
-   * Keep the shapes structural and renderer-free here on purpose. Importing
-   * `Workspace`, `SessionId`, or `GridRelatedAgentTab` from the renderer would
-   * make this shared type drag renderer files into the node project again, the
-   * exact boundary leak this file exists to prevent. The concrete renderer
-   * types are assignable to these strings/records without coupling the halves.
-   */
-  ownerSessionId?: string
-  relatedAgentTabs?: TileLeafRelatedAgentTab[]
-  selectedRelatedSessionId?: string
-  onSelectRelatedSession?: (sessionId: string) => void
+  // `ownerSessionId`, `relatedAgentTabs`, `selectedRelatedSessionId` and
+  // `onSelectRelatedSession` (the related-agent chip row in the pane header)
+  // lived here until #992. The index nests children under their parent now,
+  // so no pane renders related agents and nothing passed these.
 }
 
 /**

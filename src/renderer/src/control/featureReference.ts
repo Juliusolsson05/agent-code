@@ -24,7 +24,6 @@ import { controlReference as reference22 } from '@renderer/features/session-prev
 import { controlReference as reference23 } from '@renderer/features/settings/controlReference'
 import { controlReference as reference24 } from '@renderer/features/setup/controlReference'
 import { controlReference as reference25 } from '@renderer/features/spotlight/controlReference'
-import { controlReference as reference27 } from '@renderer/features/tile-tabs/controlReference'
 import { controlReference as reference28 } from '@renderer/features/usage/controlReference'
 import { controlReference as reference29 } from '@renderer/features/voice-dictation/controlReference'
 import { controlReference as reference30 } from '@renderer/features/workflows/controlReference'
@@ -63,7 +62,6 @@ export const featureReferences = [
   ...reference23,
   ...reference24,
   ...reference25,
-  ...reference27,
   ...reference28,
   ...reference29,
   ...reference30,
@@ -87,7 +85,6 @@ export const referenceOwnership = {
   "caffeinate": "caffeinate",
   "session-preview": "session-preview",
   "voice-dictation": "dictation",
-  "tile-tabs": "tiled-tabs",
   "path-picker": "path-picker",
   "conversations": "conversations",
   "global-editor": "global-editor",

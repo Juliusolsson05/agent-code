@@ -8,7 +8,6 @@ import { tabCommands } from '@renderer/features/workspace/commands/tabCommands'
 import { windowCommands } from '@renderer/features/workspace/commands/windowCommands'
 import { settingsCommands } from '@renderer/features/settings/commands/settingsCommands'
 import { spotlightCommands } from '@renderer/features/spotlight/commands/spotlightCommands'
-import { tileTabsCommands } from '@renderer/features/tile-tabs/commands/tileTabsCommands'
 import { readerCommands } from '@renderer/features/reader/commands/readerCommands'
 import { copyAssistantCommands } from '@renderer/features/copy-assistant/commands/copyAssistantCommands'
 import { copyCodeBlockCommands } from '@renderer/features/copy-code-block/commands/copyCodeBlockCommands'
@@ -79,7 +78,6 @@ export const builtInCommandCatalog: readonly CommandDef[] = Object.freeze([
   ...tldrCommands,
   ...goalLoopCommands,
   ...readerCommands,
-  ...tileTabsCommands,
   ...settingsCommands,
   ...copyAssistantCommands,
   ...copyCodeBlockCommands,
@@ -158,5 +156,8 @@ export function findCatalogDefects(commands: readonly CommandDef[]): string[] {
 // the catalog is the boundary a future extension-contributed or
 // provider-generated command crosses, and those are built from strings that
 // TypeScript cannot check at the point of construction.
-const VALID_SURFACES = new Set(['app', 'grid', 'dispatch', 'session', 'editor', 'debug'])
+// Unified layout (#992): grid/dispatch merged into 'workspace'. Kept in
+// sync with CommandSurface by hand — this runtime set exists precisely
+// because generated provider commands escape the compile-time union check.
+const VALID_SURFACES = new Set(['app', 'workspace', 'session', 'editor', 'debug'])
 const VALID_TIERS = new Set(['default', 'advanced', 'experimental', 'debug'])

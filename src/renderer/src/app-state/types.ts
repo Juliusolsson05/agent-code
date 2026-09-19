@@ -2,7 +2,6 @@ import type { PerformancePanelRequest } from './uiShell/types'
 import type { PaletteMode } from '@renderer/features/command-palette/paletteMode'
 import type { Settings } from '@renderer/app-state/settings/types'
 import type {
-  DispatchAttachIntent,
   PendingCommandInvocation,
   UiShellState,
 } from '@renderer/app-state/uiShell/types'
@@ -14,7 +13,6 @@ import type { ExtensionFailure } from '@renderer/apps/types'
 import type {
   ReaderModeState,
   SpotlightState,
-  TileTabsState,
 } from '@renderer/workspace/types'
 
 import type { ColorFlagId } from '@renderer/app-state/settings/dispatchColorFlags'
@@ -47,8 +45,6 @@ export type UiShellSlice = UiShellState & {
   openPathPicker: (defaultValue?: string) => void
   closePathPicker: () => void
   setPathPickerDefault: (value: string) => void
-  openTileTabsModal: (initialSelectedIds: TabId[]) => void
-  closeTileTabsModal: () => void
   openReorderTabs: () => void
   closeReorderTabs: () => void
   openMergeProjectTabs: () => void
@@ -59,8 +55,6 @@ export type UiShellSlice = UiShellState & {
   closeSettingsPage: () => void
   openAgentTitlePrompt: (sessionId: SessionId) => void
   closeAgentTitlePrompt: () => void
-  openBuryPrompt: (sessionId: SessionId) => void
-  closeBuryPrompt: () => void
   openRootManagementPrompt: (sessionId: SessionId) => void
   closeRootManagementPrompt: () => void
   openDebugBundleNotePrompt: (payload: {
@@ -93,8 +87,6 @@ export type UiShellSlice = UiShellState & {
   openDispatchRowProjectPicker: (rowIndex: number) => void
   closeDispatchRowProjectPicker: () => void
   closeTiledDispatchPrompt: () => void
-  openDispatchAttach: (intent: DispatchAttachIntent) => void
-  closeDispatchAttach: () => void
   openLinkedAgent: (sessionId: SessionId) => void
   closeLinkedAgent: () => void
   toggleGitBar: () => void
@@ -157,7 +149,6 @@ export type WorkspaceSlice = {
   workspaceRuntimes: Record<string, SessionRuntime>
   workspaceSpotlight: SpotlightState | null
   workspaceReaderMode: ReaderModeState | null
-  workspaceTileTabs: TileTabsState | null
   /** Allocated spoken names keyed by SessionMeta.agentNameId.
    *
    *  WHY this is store state and not a ref or a React context: three unrelated
@@ -180,9 +171,6 @@ export type WorkspaceSlice = {
   ) => void
   setWorkspaceReaderMode: (
     next: ReaderModeState | null | ((prev: ReaderModeState | null) => ReaderModeState | null),
-  ) => void
-  setWorkspaceTileTabs: (
-    next: TileTabsState | null | ((prev: TileTabsState | null) => TileTabsState | null),
   ) => void
   setWorkspaceAgentNames: (
     next: Record<string, string>

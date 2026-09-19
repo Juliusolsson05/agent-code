@@ -4,6 +4,7 @@ import { describeCommandState } from '@renderer/features/command-palette/command
 
 import type { CommandContext } from '@renderer/features/command-palette/types'
 import { paneCommands } from '@renderer/features/workspace/commands/paneCommands'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 // Guards the command-availability half of terminal follow: both commands
 // previously carried `renderedViewPolicy: 'requires-rendered-feed'`, which
@@ -22,11 +23,11 @@ function contextWithKind(kind: string): CommandContext {
     workspace: {
       state: {
         activeTabId: 'tab',
-        dispatchMode: null,
+        stage: oneLaneStage('agent'),   pinnedSessionIds: [],
         sessions: {
-          agent: { cwd: '/projects/app', kind, providerSessionId: 'provider-abc' },
+          agent: { cwd: '/projects/app', kind, providerSessionId: 'provider-abc', projectId: 'tab', joinedAt: 0 },
         },
-        tabs: [{ id: 'tab', focusedSessionId: 'agent', root: { type: 'leaf', sessionId: 'agent' } }],
+        tabs: [{ id: 'tab' }],
       },
     },
     ui: {},

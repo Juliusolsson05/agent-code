@@ -17,34 +17,29 @@ export const controlReference = [
       "inspect results before cleanup."
     ],
     "outcome": "The intended session runs in the intended project and placement.",
-    "cautions": "Session IDs differ from provider IDs and positional pane labels. Bury, detach, close, stop, switch, duplicate and rewind have different effects. Closing parents can affect children.",
+    "cautions": "Session IDs differ from provider IDs and positional pane labels. Close, stop, switch, duplicate and rewind have different effects. Closing parents can affect children. There is no bury or detach: every session lives in the pool and is shown by placing it in a lane.",
     "commandIds": [
       "new-tab",
       "new-agent",
       "close-pane",
-      "bury-pane",
-      "linked-agent",
-      "detach-to-dispatch"
+      "linked-agent"
     ]
   },
   {
     "id": "dispatch",
     "title": "Dispatch rows, lanes and project scope",
-    "purpose": "Keep a fleet accessible independently of fixed grid placement.",
-    "ui": "Dispatch mode and its index, row headers and lane views.",
-    "prerequisites": "Existing sessions; global scope is needed when a row includes other projects.",
+    "purpose": "Show any pool session in any lane; rows of lanes are the whole workspace.",
+    "ui": "The lane stage: per-row agent index, row headers and lane views.",
+    "prerequisites": "Existing sessions; bind a row to projects when it should list only some of them.",
     "workflow": [
-      "Enter Dispatch",
-      "choose project/global scope",
       "add rows or lanes",
-      "select agents",
+      "select agents into lanes",
+      "bind rows to projects when useful",
       "pin frequently used sessions."
     ],
     "outcome": "Each lane shows its selected session; mirrored lanes share the same session.",
     "cautions": "To focus an agent already shown in another lane, use agents.show with reuse-existing-view. Clicking the shared index replaces the focused lane selection, and intentional mirrors remain supported. Visible labels are window-local; agents.search accepts exact label plus windowId. Removing a lane and closing its agent are separate actions. Empty lanes stay empty until selected, except that a grid entered from Dispatch seeds lane 0 with the focused agent. layout.read returns the revision required by dispatch.configure, layout.adjust and tabs.reorder. Grid edits carry explicit sourceRow identities to preserve each retained row's agents and project filters.",
     "commandIds": [
-      "dispatch-mode",
-      "global-dispatch",
       "tiled-dispatch",
       "new-dispatch-row",
       "new-tiled-lane",

@@ -28,8 +28,6 @@ function setup(options?: {
       tabs: [{
         id: 'project',
         title: 'Project',
-        root: { type: 'leaf', sessionId: 'source' },
-        focusedSessionId: 'source',
       }],
       sessions: {
         source: {
@@ -37,9 +35,10 @@ function setup(options?: {
           cwd: '/source',
           providerSessionId,
           builtInMcpDomains: ['orchestration'],
+          projectId: 'project',
+          joinedAt: 0,
         },
       },
-      buried: [],
     },
     workspaceRuntimes: {
       source: {

@@ -20,7 +20,6 @@ import {
   nextReaderSelection,
   sameReaderList,
 } from '@renderer/features/reader/model/readerSelection'
-import { resolveTabSessions } from '@renderer/workspace/queries'
 import { useSessionRuntime } from '@renderer/workspace/useSessionRuntime'
 import { dispatchSessionIdsForTab } from '@renderer/workspace/dispatch/dispatchSelectors'
 import type { SessionId, Workspace } from '@renderer/workspace/workspaceStore'
@@ -105,9 +104,9 @@ export function ReaderView({ workspace }: Props) {
   const tab = workspace.state.tabs.find(item => item.id === reader.tabId)
   if (!tab) return null
 
-  const sessionIds = (workspace.dispatchMode
-    ? dispatchSessionIdsForTab(workspace.state, tab.id)
-    : resolveTabSessions(workspace.state, tab.id))
+  // (A `resolveTabSessions` branch covered "Dispatch is off" until #992; the
+  // index is always the membership model now.)
+  const sessionIds = dispatchSessionIdsForTab(workspace.state, tab.id)
     // WHY Reader filters terminal sessions even though Dispatch can render
     // them: Reader is a transcript surface. Terminal sessions render raw PTY
     // scrollback through xterm.js and do not have assistant messages to

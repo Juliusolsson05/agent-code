@@ -1,120 +1,125 @@
 import { describe, expect, it } from 'vitest'
 
-import { UndoCloseStack, remapClosedEntryLineage, remapMetaLineage } from './undoClose'
-import type { ClosedDetached, ClosedGroup, ClosedPane, ClosedTab, UndoLineage } from './undoClose'
-import type { DetachedSessionRecord, SessionMeta } from '@renderer/workspace/types'
+import {
+  UNDO_CLOSE_MAX_ENTRIES,
+  UNDO_CLOSE_RETENTION_MS,
+  UndoCloseStack,
+  remapClosedEntryLineage,
+  remapMetaLineage,
+} from './undoClose'
+import type { ClosedGroup, ClosedSession, ClosedTab, UndoLineage } from './undoClose'
+import type { SessionMeta } from '@renderer/workspace/types'
 
 // Undo lineage (#886 review round 1 finding 4; coverage asked for in round 2 N3).
 //
 // A restore respawns under new ids, and entries still waiting on the stack were
 // captured against the old ones. The contract pinned here is narrow on purpose:
-// rewrite only ANCHORS (where an entry belongs, and the relationship pointers
-// its respawned session will carry), keep ids the restore did not touch, and
-// never rewrite an entry's OWN closed ids — those sessions are dead, and the
-// entry is the only thing that will ever bring them back.
+// rewrite only ANCHORS (the project an entry returns to, and the relationship
+// pointers its respawned session will carry), keep ids the restore did not
+// touch, and never rewrite an entry's OWN closed ids — those sessions are dead,
+// and the entry is the only thing that will ever bring them back.
+//
+// (Until #992 these cases covered three tree-era shapes: a split pane anchored
+// on a sibling leaf, a Dispatch row anchored on a record and an optional
+// promoted survivor, and a tab carrying a tile tree. A session's whole
+// placement is `projectId` + `joinedAt` now, so there are two shapes.)
 
 const lineage: UndoLineage = {
   sessions: new Map([
     ['parent', 'parent-2'],
-    ['sibling', 'sibling-2'],
-    ['survivor', 'survivor-2'],
     // Present only to prove an entry's own closed id is never rewritten.
     ['closed', 'must-not-appear'],
   ]),
   tabs: new Map([['tab', 'tab-2']]),
 }
 
-const meta = (patch: Partial<SessionMeta> = {}): SessionMeta => ({ cwd: '/project', kind: 'codex', ...patch })
-
-const row = (sessionId: string, projectTabId: string): DetachedSessionRecord => ({
-  sessionId, surface: 'dispatch', projectTabId, projectTabTitle: 'Project', projectTabIndex: 0, detachedAt: 7,
-})
+const meta = (patch: Partial<SessionMeta> = {}): SessionMeta =>
+  ({ cwd: '/project', kind: 'codex', projectId: 'tab', joinedAt: 7, ...patch })
 
 describe('remapClosedEntryLineage', () => {
-  it('re-anchors a pane on its sibling and tab, and its parent pointer, but not its own id', () => {
-    const pane: ClosedPane = {
-      type: 'pane', closedAt: 1, tabId: 'tab', sessionId: 'closed',
+  it('re-anchors a session on its restored project and parent, but not its own id or position', () => {
+    const entry: ClosedSession = {
+      type: 'session', closedAt: 1, sessionId: 'closed',
       sessionMeta: meta({ linkedParentId: 'parent' }),
-      direction: 'vertical', ratio: 0.5, side: 'a', siblingLeafId: 'sibling',
     }
-    expect(remapClosedEntryLineage(pane, lineage)).toEqual({
-      ...pane, tabId: 'tab-2', siblingLeafId: 'sibling-2', sessionMeta: meta({ linkedParentId: 'parent-2' }),
+    expect(remapClosedEntryLineage(entry, lineage)).toEqual({
+      ...entry,
+      sessionMeta: meta({ linkedParentId: 'parent-2', projectId: 'tab-2' }),
     })
   })
 
-  it('re-anchors a Dispatch row on its project and promoted survivor, but not its own record id', () => {
-    const detached: ClosedDetached = {
-      type: 'detached', closedAt: 1,
-      sessionMeta: meta({ orchestrationParentId: 'parent', orchestrationRootId: 'parent' }),
-      record: row('closed', 'tab'),
-      replacedRoot: row('survivor', 'tab'),
+  it('re-points a closed project s relationship pointers but never its own ids', () => {
+    // The tab's own id is NOT remapped: restoring this entry is what would
+    // mint its replacement, and its sessions' `projectId` is overwritten then.
+    const entry: ClosedTab = {
+      type: 'tab', closedAt: 1, tab: { id: 'tab', title: 'Project' }, tabIndex: 0,
+      sessions: [
+        { sessionId: 'closed', meta: meta({ orchestrationParentId: 'parent', orchestrationRootId: 'parent' }) },
+        { sessionId: 'other', meta: meta({ joinedAt: 9 }) },
+      ],
     }
-    expect(remapClosedEntryLineage(detached, lineage)).toEqual({
-      ...detached,
-      sessionMeta: meta({ orchestrationParentId: 'parent-2', orchestrationRootId: 'parent-2' }),
-      record: row('closed', 'tab-2'),
-      replacedRoot: row('survivor-2', 'tab-2'),
-    })
-  })
-
-  it('re-points a closed tab\'s relationship pointers but never its own leaves, keys or rows', () => {
-    const tab: ClosedTab = {
-      type: 'tab', closedAt: 1, tabIndex: 0,
-      tab: { id: 'tab', title: 'Project', root: { type: 'leaf', sessionId: 'closed' }, focusedSessionId: 'closed' },
-      sessionMetas: { closed: meta({ linkedParentId: 'parent' }) },
-      detachedEntries: [{ sessionId: 'closed', meta: meta({ linkedParentId: 'parent' }), detachedAt: 3 }],
-    }
-    expect(remapClosedEntryLineage(tab, lineage)).toEqual({
-      ...tab,
-      sessionMetas: { closed: meta({ linkedParentId: 'parent-2' }) },
-      detachedEntries: [{ sessionId: 'closed', meta: meta({ linkedParentId: 'parent-2' }), detachedAt: 3 }],
+    const remapped = remapClosedEntryLineage(entry, lineage) as ClosedTab
+    expect(remapped.tab.id).toBe('tab')
+    expect(remapped.sessions.map(member => member.sessionId)).toEqual(['closed', 'other'])
+    expect(remapped.sessions[0]!.meta).toMatchObject({
+      orchestrationParentId: 'parent-2', orchestrationRootId: 'parent-2',
     })
   })
 
   it('keeps ids the restore did not touch', () => {
-    const detached: ClosedDetached = {
-      type: 'detached', closedAt: 1,
-      sessionMeta: meta({ linkedParentId: 'unrelated-parent' }),
-      record: row('other', 'unrelated-tab'),
-      replacedRoot: row('unrelated-survivor', 'unrelated-tab'),
+    const entry: ClosedSession = {
+      type: 'session', closedAt: 1, sessionId: 'closed',
+      sessionMeta: meta({ linkedParentId: 'someone-else', projectId: 'another-tab' }),
     }
-    expect(remapClosedEntryLineage(detached, lineage)).toEqual(detached)
+    expect(remapClosedEntryLineage(entry, lineage)).toEqual(entry)
   })
 
   it('re-anchors every member of a group', () => {
     const group: ClosedGroup = {
       type: 'group', closedAt: 1,
       entries: [
-        { type: 'detached', closedAt: 1, sessionMeta: meta({ linkedParentId: 'parent' }), record: row('closed', 'tab') },
-        {
-          type: 'pane', closedAt: 1, tabId: 'tab', sessionId: 'closed', sessionMeta: meta(),
-          direction: 'horizontal', ratio: 0.5, side: 'b', siblingLeafId: 'sibling',
-        },
+        { type: 'session', closedAt: 1, sessionId: 'c1', sessionMeta: meta({ linkedParentId: 'parent' }) },
+        { type: 'session', closedAt: 1, sessionId: 'c2', sessionMeta: meta({ projectId: 'another-tab' }) },
       ],
     }
-    expect(remapClosedEntryLineage(group, lineage)).toMatchObject({
-      type: 'group',
-      entries: [
-        { sessionMeta: { linkedParentId: 'parent-2' }, record: { sessionId: 'closed', projectTabId: 'tab-2' } },
-        { sessionId: 'closed', tabId: 'tab-2', siblingLeafId: 'sibling-2' },
-      ],
-    })
+    const remapped = remapClosedEntryLineage(group, lineage) as ClosedGroup
+    expect(remapped.entries.map(entry => (entry as ClosedSession).sessionMeta.projectId)).toEqual(['tab-2', 'another-tab'])
+    expect((remapped.entries[0] as ClosedSession).sessionMeta.linkedParentId).toBe('parent-2')
   })
 })
 
 describe('remapMetaLineage', () => {
   it('returns the same object when no pointer changes, so untouched metadata keeps its identity', () => {
-    const untouched = meta({ linkedParentId: 'unrelated-parent' })
+    const untouched = meta({ linkedParentId: 'someone-else' })
     expect(remapMetaLineage(untouched, lineage.sessions)).toBe(untouched)
     expect(remapMetaLineage(untouched, undefined)).toBe(untouched)
   })
 })
 
-describe('UndoCloseStack.remapLineage', () => {
+describe('UndoCloseStack', () => {
+  const entry = (sessionId: string, closedAt: number): ClosedSession =>
+    ({ type: 'session', closedAt, sessionId, sessionMeta: meta() })
+
   it('rewrites the anchors of every entry still waiting', () => {
     const stack = new UndoCloseStack(() => 10)
-    stack.push({ type: 'detached', closedAt: 5, sessionMeta: meta({ linkedParentId: 'parent' }), record: row('closed', 'tab') })
+    stack.push({ type: 'session', closedAt: 5, sessionId: 'closed', sessionMeta: meta({ linkedParentId: 'parent' }) })
     stack.remapLineage(lineage)
-    expect(stack.peek()).toMatchObject({ sessionMeta: { linkedParentId: 'parent-2' }, record: { projectTabId: 'tab-2' } })
+    expect((stack.peek() as ClosedSession).sessionMeta).toMatchObject({ linkedParentId: 'parent-2', projectId: 'tab-2' })
+  })
+
+  it('is LIFO and keeps only the most recent entries', () => {
+    const stack = new UndoCloseStack(() => 1_000)
+    for (let index = 0; index < UNDO_CLOSE_MAX_ENTRIES + 3; index += 1) stack.push(entry(`s${index}`, 1_000))
+    expect(stack.length).toBe(UNDO_CLOSE_MAX_ENTRIES)
+    expect((stack.pop() as ClosedSession).sessionId).toBe(`s${UNDO_CLOSE_MAX_ENTRIES + 2}`)
+  })
+
+  it('expires entries lazily, so a stale close is never offered back', () => {
+    let now = 0
+    const stack = new UndoCloseStack(() => now)
+    stack.push(entry('old', 0))
+    now = UNDO_CLOSE_RETENTION_MS + 1
+    expect(stack.length).toBe(0)
+    expect(stack.pop()).toBeNull()
   })
 })

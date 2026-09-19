@@ -95,11 +95,10 @@ function workspaceFixture(entries: Entry[] = []): Workspace {
       tabs: [{
         id: 'project-tab',
         title: 'Project tab',
-        focusedSessionId: 'agent',
-        root: { type: 'leaf', sessionId: 'agent' },
       }],
-      sessions: { agent: { cwd: '/projects/agent-code', kind: 'codex' } },
-      detachedSessions: {},
+      sessions: { agent: { cwd: '/projects/agent-code', kind: 'codex', projectId: 'project-tab', joinedAt: 0 } },
+      pinnedSessionIds: [],
+      stage: { lanes: [{ selectedSessionId: 'agent' }], rows: [{ length: 1 }], focusedLane: 0 },
       lastProviderSwitchBatch: null,
     },
     runtimes: { agent: { ...emptyRuntime(), entries } },
@@ -116,7 +115,9 @@ function claudeWorkspaceFixture(): Workspace {
     ...base,
     state: {
       ...base.state,
-      sessions: { agent: { cwd: '/projects/agent-code', kind: 'claude' } },
+      // Spread the row, change only its kind: membership is ON the row (#992),
+      // so a bare literal here un-files the agent and the modal lists nobody.
+      sessions: { agent: { ...base.state.sessions.agent!, kind: 'claude' } },
     },
   } as unknown as Workspace
 }

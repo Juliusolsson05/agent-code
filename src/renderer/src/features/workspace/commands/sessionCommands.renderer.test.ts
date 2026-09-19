@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { CommandContext } from '@renderer/features/command-palette/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { sessionCommands } from '@renderer/features/workspace/commands/sessionCommands'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 const originalApiDescriptor = Object.getOwnPropertyDescriptor(window, 'api')
 
@@ -28,19 +29,19 @@ describe('Duplicate Agent command', () => {
     const workspace = {
       state: {
         activeTabId: 'tab-klay',
-        dispatchMode: null,
+        stage: oneLaneStage('source'),   pinnedSessionIds: [],
         sessions: {
           source: {
             cwd: '/projects/klay',
             kind: 'codex',
             providerSessionId: 'provider-source',
             builtInMcpDomains: ['workflows'],
+            projectId: 'tab-klay',
+            joinedAt: 0,
           },
         },
         tabs: [{
           id: 'tab-klay',
-          focusedSessionId: 'source',
-          root: { type: 'leaf', sessionId: 'source' },
         }],
       },
       splitFocused,
@@ -65,7 +66,6 @@ describe('Duplicate Agent command', () => {
     // The regression was invisible at transcript-clone time: only the next app restart exposed
     // that the clone had no durable domain names from which main could mint a fresh scoped token.
     expect(splitFocused).toHaveBeenCalledWith(
-      'vertical',
       'codex',
       {
         resumeSessionId: 'provider-clone',
@@ -83,7 +83,7 @@ describe('Duplicate Agent command', () => {
     const workspace = {
       state: {
         activeTabId: 'tab-klay',
-        dispatchMode: null,
+        stage: oneLaneStage('source'),   pinnedSessionIds: [],
         sessions: {
           source: {
             cwd: '/projects/klay',
@@ -91,9 +91,11 @@ describe('Duplicate Agent command', () => {
             providerSessionId: 'provider-source',
             builtInMcpDomains: ['tldr', 'root_management'],
             builtInMcpOverrides: { tldr: true, root_management: true },
+            projectId: 'tab-klay',
+            joinedAt: 0,
           },
         },
-        tabs: [{ id: 'tab-klay', focusedSessionId: 'source', root: { type: 'leaf', sessionId: 'source' } }],
+        tabs: [{ id: 'tab-klay' }],
       },
       splitFocused,
       showPaneToast: vi.fn(),
@@ -111,7 +113,7 @@ describe('Duplicate Agent command', () => {
     // The confirmation dialog names one agent, so a clone was never confirmed
     // by anyone — and the granting agent's own catalog can call this command,
     // so inheriting the grant would let one confirmation replicate itself.
-    expect(splitFocused).toHaveBeenCalledWith('vertical', 'codex', expect.objectContaining({
+    expect(splitFocused).toHaveBeenCalledWith('codex', expect.objectContaining({
       builtInMcpOverrides: { tldr: true },
     }))
   })
@@ -129,7 +131,7 @@ describe('Duplicate Agent command', () => {
       workspace: {
         state: {
           activeTabId: 'tab-opencode',
-          dispatchMode: null,
+          stage: oneLaneStage('source'),   pinnedSessionIds: [],
           sessions: {
             source: {
               cwd: '/projects/opencode',
@@ -137,12 +139,12 @@ describe('Duplicate Agent command', () => {
               providerRuntime: 'terminal',
               providerSessionId: 'ses_source',
               builtInMcpDomains: ['orchestration'],
+              projectId: 'tab-opencode',
+              joinedAt: 0,
             },
           },
           tabs: [{
             id: 'tab-opencode',
-            focusedSessionId: 'source',
-            root: { type: 'leaf', sessionId: 'source' },
           }],
         },
         splitFocused,
@@ -156,7 +158,7 @@ describe('Duplicate Agent command', () => {
 
     await command.run(context)
 
-    expect(splitFocused).toHaveBeenCalledWith('vertical', 'opencode', {
+    expect(splitFocused).toHaveBeenCalledWith('opencode', {
       resumeSessionId: 'ses_clone',
       builtInMcpOverrides: { orchestration: true },
       providerRuntime: 'terminal',
@@ -175,19 +177,19 @@ describe('Remove Cybersecurity Block command', () => {
       workspace: {
         state: {
           activeTabId: 'tab',
-          dispatchMode: null,
+          stage: oneLaneStage('agent'),   pinnedSessionIds: [],
           sessions: {
             agent: {
               cwd: '/project',
               kind: session.kind ?? 'codex',
               providerSessionId: session.providerSessionId,
               providerRuntime: session.providerRuntime,
+              projectId: 'tab',
+              joinedAt: 0,
             },
           },
           tabs: [{
             id: 'tab',
-            focusedSessionId: 'agent',
-            root: { type: 'leaf', sessionId: 'agent' },
           }],
         },
         removeFocusedCyberPolicyBlock: vi.fn().mockResolvedValue(undefined),
@@ -255,14 +257,12 @@ describe('Switch Provider command', () => {
       workspace: {
         state: {
           activeTabId: 'tab-1',
-          dispatchMode: null,
+          stage: oneLaneStage('source'),   pinnedSessionIds: [],
           sessions: {
-            source: { cwd: '/projects/app', kind: 'claude' },
+            source: { cwd: '/projects/app', kind: 'claude', projectId: 'tab-1', joinedAt: 0 },
           },
           tabs: [{
             id: 'tab-1',
-            focusedSessionId: 'source',
-            root: { type: 'leaf', sessionId: 'source' },
           }],
         },
         switchSessionProvider,
@@ -318,19 +318,19 @@ function mcpCommandContext(kind: 'claude' | 'codex' | 'opencode'): {
   const workspace = {
     state: {
       activeTabId: 'tab-mcp',
-      dispatchMode: null,
+      stage: oneLaneStage('agent'),   pinnedSessionIds: [],
       sessions: {
         agent: {
           cwd: '/projects/mcp',
           kind,
           providerSessionId: 'provider-session',
           builtInMcpDomains: [],
+          projectId: 'tab-mcp',
+          joinedAt: 0,
         },
       },
       tabs: [{
         id: 'tab-mcp',
-        focusedSessionId: 'agent',
-        root: { type: 'leaf', sessionId: 'agent' },
       }],
     },
     replaceSession,
@@ -462,18 +462,18 @@ describe('capability gates', () => {
       workspace: {
         state: {
           activeTabId: 'tab',
-          dispatchMode: null,
+          stage: oneLaneStage('agent'),   pinnedSessionIds: [],
           sessions: {
             agent: {
               cwd: '/projects/app',
               kind: 'claude',
               providerSessionId: 'provider-abc',
+              projectId: 'tab',
+              joinedAt: 0,
             },
           },
           tabs: [{
             id: 'tab',
-            focusedSessionId: 'agent',
-            root: { type: 'leaf', sessionId: 'agent' },
           }],
         },
       } as unknown as Workspace,
@@ -551,19 +551,19 @@ describe('Root Agent Code Management command (#906)', () => {
     const workspace = {
       state: {
         activeTabId: 'tab-app',
-        dispatchMode: null,
+        stage: oneLaneStage('agent'),   pinnedSessionIds: [],
         sessions: {
           agent: {
             cwd: '/projects/app',
             kind: 'claude',
             providerSessionId: 'provider-agent',
             ...(builtInMcpDomains ? { builtInMcpDomains } : {}),
+            projectId: 'tab-app',
+            joinedAt: 0,
           },
         },
         tabs: [{
           id: 'tab-app',
-          focusedSessionId: 'agent',
-          root: { type: 'leaf', sessionId: 'agent' },
         }],
       },
       replaceSession,

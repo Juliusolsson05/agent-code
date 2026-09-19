@@ -386,7 +386,7 @@ export const sessionCommands: CommandDef[] = [
     category: 'workspace-tools',
     surface: 'app',
     title: 'Close Idle Orchestration Agents',
-    description: '**What it does:** Closes every **orchestration agent** that has finished its work and is idle, after confirming the list.\n\n**Use when:** An orchestration run left finished workers behind in Dispatch.\n\n**Notes:** Working, starting, exited and failed agents stay open, and so do the agents that started them.',
+    description: '**What it does:** Closes every **orchestration agent** that has finished its work and is idle, after confirming the list.\n\n**Use when:** An orchestration run left finished workers parked in the pool.\n\n**Notes:** Working, starting, exited and failed agents stay open, and so do the agents that started them.',
     keywords: [
       'close',
       'idle',
@@ -633,7 +633,7 @@ export const sessionCommands: CommandDef[] = [
     pickerVisibility: 'advanced',
     surface: 'session',
     title: 'Agent Management MCP',
-    description: '**What it does:** Reloads the focused **agent** with project-wide Agent Code management tools on or off.\n\n**Use when:** You want this agent to inventory, inspect, prompt, or close other agents in its project.\n\n**Notes:** Read operations include visible, detached, and buried agents without waking them. Every close it attempts asks **you** to confirm first, and cascades are refused outright.',
+    description: '**What it does:** Reloads the focused **agent** with project-wide Agent Code management tools on or off.\n\n**Use when:** You want this agent to inventory, inspect, prompt, or close other agents in its project.\n\n**Notes:** Read operations include agents that are not in a lane, without waking them. Every close it attempts asks **you** to confirm first, and cascades are refused outright.',
     keywords: ['mcp', 'agent management', 'agents', 'project', 'transcripts', 'cleanup', 'prompt', 'close', 'enable', 'disable', 'reload', 'claude', 'codex', 'opencode'],
     when: ({ workspace }) => {
       return targetSupportsBuiltInMcpDomain(workspace, 'agent_management')
@@ -984,7 +984,7 @@ export const sessionCommands: CommandDef[] = [
 
     surface: 'session',
     title: 'Duplicate Agent',
-    description: '**What it does:** Clones the focused **agent session** into a new pane.\n\n**Use when:** You want a parallel branch of the same conversation.\n\n**Notes:** In **Dispatch**, the clone is created as a detached agent.',
+    description: '**What it does:** Clones the focused **agent session** into a new pane.\n\n**Use when:** You want a parallel branch of the same conversation.\n\n**Notes:** The clone lands in the pool with a **new** badge; place it in any lane.',
     keywords: ['duplicate', 'clone', 'fork', 'copy', 'session', 'agent'],
     when: ({ workspace }) => {
       // Needs a providerSessionId (something on disk to duplicate) AND a
@@ -1031,8 +1031,11 @@ export const sessionCommands: CommandDef[] = [
         // restart, then rehydrate had no domain names from which to mint a fresh project-scoped
         // token. The clone inherits CHOICES, never the source session's bearer token, and resolves
         // them against current Settings the way every other new provider process does.
+        // The comment below still explains WHY this routes through the spawn
+        // flow rather than newTab; the 'vertical' direction argument it used
+        // to pass died with the tile tree (#992) — placement is context-places
+        // now (fills the focused lane when empty, else pools).
         await workspace.splitFocused(
-          'vertical',
           kind,
           {
             resumeSessionId: newProviderSessionId,

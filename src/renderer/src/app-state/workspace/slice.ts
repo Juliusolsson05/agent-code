@@ -2,11 +2,11 @@ import type { StateCreator } from 'zustand'
 
 import type { AppStore, WorkspaceSlice } from '@renderer/app-state/types'
 import type { WorkspaceState } from '@renderer/workspace/types'
+import { freshStage } from '@renderer/workspace/dispatch/gridShape'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type {
   ReaderModeState,
   SpotlightState,
-  TileTabsState,
 } from '@renderer/workspace/types'
 
 function applyUpdater<T>(prev: T, next: T | ((prev: T) => T)): T {
@@ -18,11 +18,10 @@ function applyUpdater<T>(prev: T, next: T | ((prev: T) => T)): T {
 const initialWorkspaceState: WorkspaceState = {
   tabs: [],
   activeTabId: '',
-  gridRelatedSelections: {},
-  dispatchMode: null,
+  stage: freshStage(),
+  // The pool. `detachedSessions`, `buried` and `gridRelatedSelections` sat
+  // beside it until #992; see WorkspaceState for where each went.
   sessions: {},
-  detachedSessions: {},
-  buried: [],
   // Fresh workspace has no pins. The array is the source of truth
   // for order: index 0 is the topmost pin in the Pinned section.
   pinnedSessionIds: [],
@@ -38,7 +37,6 @@ export const createWorkspaceSlice: StateCreator<
   workspaceRuntimes: {},
   workspaceSpotlight: null,
   workspaceReaderMode: null,
-  workspaceTileTabs: null,
   workspaceAgentNames: {},
 
   setWorkspaceState: next =>
@@ -68,12 +66,6 @@ export const createWorkspaceSlice: StateCreator<
       const workspaceReaderMode = applyUpdater<ReaderModeState | null>(state.workspaceReaderMode, next)
       return Object.is(workspaceReaderMode, state.workspaceReaderMode) ? state : { workspaceReaderMode }
     }, false, 'workspace/setWorkspaceReaderMode'),
-
-  setWorkspaceTileTabs: next =>
-    set(state => {
-      const workspaceTileTabs = applyUpdater<TileTabsState | null>(state.workspaceTileTabs, next)
-      return Object.is(workspaceTileTabs, state.workspaceTileTabs) ? state : { workspaceTileTabs }
-    }, false, 'workspace/setWorkspaceTileTabs'),
 
   setWorkspaceAgentNames: next =>
     set(state => {

@@ -13,7 +13,7 @@ const context = { requestId: 'draft-trial', caller: { kind: 'external' as const,
 
 it('reads actual composer edits, protects concurrent text, and uses the existing clear/undo persistence path', async () => {
   const sessionId = crypto.randomUUID()
-  useAppStore.setState({ workspaceState: { ...original.workspaceState, sessions: { [sessionId]: { kind: 'claude', cwd: '/trial' } }, buried: [] }, workspaceRuntimes: { [sessionId]: emptyRuntime() } })
+  useAppStore.setState({ workspaceState: { ...original.workspaceState, sessions: { [sessionId]: { kind: 'claude', cwd: '/trial' } } }, workspaceRuntimes: { [sessionId]: emptyRuntime() } })
   const mounted = renderHook(() => {
     const [version, setVersion] = useState(0)
     const setRuntimes = useAppStore.getState().setWorkspaceRuntimes

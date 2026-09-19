@@ -8,10 +8,10 @@ import type { SessionId, SessionMeta } from '@renderer/workspace/types'
 // a fresh id for an existing pane and must swap old -> new everywhere the old
 // id is referenced: rehydrate (respawn on restart), replaceSession (reload /
 // provider-switch / resume / rewind), reloadAgentSessions ("reload all"),
-// undo-close. The tile tree, detached/buried records, Dispatch focus, and
-// tiled lanes are remapped at those sites; this module covers the remaining
-// cross-session references — SessionMeta relationship pointers and the pinned
-// list — so they don't get left pointing at dead ids. Centralizing it here is
+// undo-close. The pool row and the stage's lanes are remapped at those sites
+// (remapTiledLanes); this module covers the remaining cross-session references
+// — SessionMeta relationship pointers and the pinned list — so they don't get
+// left pointing at dead ids. Centralizing it here is
 // what stops the next remap site from forgetting one of these (the same class
 // of bug as the tiled-lane divergence).
 // ============================================================================
@@ -102,16 +102,5 @@ export function remapPinnedSessionIds(
   return pinned.map(id => idMap.get(id) ?? id)
 }
 
-export function remapGridRelatedSelections(
-  selections: Record<SessionId, SessionId> | undefined,
-  idMap: Map<SessionId, SessionId>,
-): Record<SessionId, SessionId> {
-  const out: Record<SessionId, SessionId> = {}
-  for (const [ownerId, selectedId] of Object.entries(selections ?? {})) {
-    const nextOwnerId = idMap.get(ownerId) ?? ownerId
-    const nextSelectedId = idMap.get(selectedId) ?? selectedId
-    if (nextOwnerId === nextSelectedId) continue
-    out[nextOwnerId] = nextSelectedId
-  }
-  return out
-}
+// `remapGridRelatedSelections` lived here until #992 deleted the selection map
+// it remapped (see TileTree.tsx).

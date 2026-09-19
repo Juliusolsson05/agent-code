@@ -120,17 +120,11 @@ export const ACCENTS: AccentMeta[] = [
 // of the two should we start in". Keeping this as a flat string union
 // keeps localStorage payload stable, makes coerceSettings trivial, and
 // avoids leaking workspace-internal shape into a global setting.
-export type WorkspaceModeId = 'grid' | 'dispatch'
-
-export type WorkspaceModeMeta = {
-  id: WorkspaceModeId
-  label: string
-}
-
-export const WORKSPACE_MODES: WorkspaceModeMeta[] = [
-  { id: 'grid', label: 'Grid' },
-  { id: 'dispatch', label: 'Dispatch' },
-]
+// 'WorkspaceModeId' / 'WorkspaceModeMeta' / 'WORKSPACE_MODES' were deleted
+// with the unified layout (#992 stage 8): they named the two layout modes a
+// fresh install could choose between, and there is one layout now. The
+// persisted `defaultWorkspaceMode` value is ignored on read and dropped from
+// coercion; a stale localStorage key simply stops mattering.
 
 export type AgentViewMode = 'agent' | 'terminal' | 'hybrid'
 
@@ -385,7 +379,6 @@ export type Settings = {
    *  This intentional narrowness matches the "new workspaces only"
    *  semantic the user asked for: the setting seeds initial state and
    *  then gets out of the way. */
-  defaultWorkspaceMode: WorkspaceModeId
   /** App-wide default surface for provider panes that support both surfaces.
    *
    * WHY this is global settings instead of per-session metadata:
@@ -706,7 +699,6 @@ export const DEFAULT_SETTINGS: Settings = {
   // the app all day; a public fresh install should open there (#973). The
   // setting still only seeds a workspace that has no workspace.json yet —
   // existing workspaces keep their last-used mode.
-  defaultWorkspaceMode: 'dispatch',
   agentNamesEnabled: false,
   agentViewMode: 'agent',
   // The owner's day-to-day set, shipped as the default (#973). TLDR and Goal

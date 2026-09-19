@@ -1,14 +1,11 @@
 import { useRef } from 'react'
 import { act, cleanup, renderHook } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
-import { readFileSync } from 'node:fs'
-const fixture = JSON.parse(readFileSync('testing/fixtures/worktree-context/dispatch-global-d23.json', 'utf8'))
 import { useAppStore } from '@renderer/app-state/store'
 import { useDispatchActions } from '@renderer/workspace/hook/actions/dispatch'
-import { useResizeActions } from '@renderer/workspace/hook/actions/resize'
 import { makeRefs } from '@renderer/workspace/hook/actions/testing/paneActionsHarness'
-import type { WorkspaceState } from '@renderer/workspace/types'
 import type { Workspace } from '@renderer/workspace/hook'
+import { loadRecordedDispatchWorkspace } from '@renderer/workspace/testing/recordedDispatchWorkspace'
 import { layoutControlCapabilities } from './layout'
 
 const original = useAppStore.getState()
@@ -19,15 +16,14 @@ it('preserves recorded workspace identities through row edits and refuses a stal
   // This is the persisted multi-project workspace already used by navigation
   // tests. All mutations below run the real workspace hooks against Zustand;
   // no alternative grid implementation or imagined lane normalizer is supplied.
-  useAppStore.setState({ workspaceState: structuredClone(fixture.state) as unknown as WorkspaceState })
+  useAppStore.setState({ workspaceState: loadRecordedDispatchWorkspace().state })
   const mounted = renderHook(() => {
     const state = useAppStore(store => store.workspaceState)
     const refs = useRef(makeRefs(state)).current
     refs.stateRef.current = state; refs.latestStateRef.current = state
     const store = useAppStore.getState()
-    const dispatch = useDispatchActions(state, store.setWorkspaceState, store.setWorkspaceTileTabs, () => {}, refs, vi.fn(), () => {})
-    const resize = useResizeActions(store.setWorkspaceState, store.setWorkspaceTileTabs)
-    return { ...dispatch, ...resize, restoreStatus: 'fresh' }
+    const dispatch = useDispatchActions(store.setWorkspaceState, store.setWorkspaceRuntimes, refs, vi.fn(), () => {})
+    return { ...dispatch, restoreStatus: 'fresh' }
   })
   const capabilities = layoutControlCapabilities(() => mounted.result.current as unknown as Workspace)
   const invoke = (id: string, input: unknown) => capabilities.find(item => item.descriptor.id === id)!.execute(input, context)
@@ -45,34 +41,32 @@ it('preserves recorded workspace identities through row edits and refuses a stal
   await configure({ action: 'row-projects', rowIndex: 1, tabIds: ['tab-2'] })
   const stale = await readRevision()
   await configure({ action: 'grid', rows: [{ sourceRow: 1, length: 2 }] })
-  const grid = useAppStore.getState().workspaceState.dispatchMode!.tiled!
+  const grid = useAppStore.getState().workspaceState.stage
   expect(grid.rows).toMatchObject([{ length: 2, projectTabIds: ['tab-2'] }])
   expect(grid.lanes).toEqual([{}, {}])
   expect(Object.keys(useAppStore.getState().workspaceState.sessions)).toEqual(originalSessions)
   expect(await invoke('dispatch.configure', { revision: stale, change: { action: 'lane-focus', laneIndex: 1 } })).toMatchObject({ ok: false, error: { code: 'stale_cursor' } })
 
-  act(() => { useAppStore.getState().setWorkspaceState(state => ({ ...state, activeTabId: 'tab-1' })) })
-  const revision = await readRevision()
-  await act(async () => { expect(await invoke('layout.adjust', { tabId: 'tab-4', revision, change: { action: 'rotate' } })).toMatchObject({ ok: true }) })
-  expect(useAppStore.getState().workspaceState.activeTabId).toBe('tab-1')
-  expect(useAppStore.getState().workspaceState.tabs.find(tab => tab.id === 'tab-4')!.root).toMatchObject({ direction: 'horizontal' })
+  // layout.adjust (rotate an explicit project's tree without activating it)
+  // was asserted here until #992 deleted the tile tree and that capability.
+  expect(capabilities.some(item => item.descriptor.id === 'layout.adjust')).toBe(false)
 })
 
-it('reports effective tiled focus separately from remembered classic selection after lane replacement and removal (#798)', async () => {
-  useAppStore.setState({ workspaceState: structuredClone(fixture.state) as unknown as WorkspaceState, workspaceTileTabs: null, workspaceReaderMode: null, workspaceSpotlight: null })
+it('reports the focused lane s agent as the one focus truth through lane replacement and removal (#798)', async () => {
+  useAppStore.setState({ workspaceState: loadRecordedDispatchWorkspace().state, workspaceReaderMode: null, workspaceSpotlight: null })
   const mounted = renderHook(() => {
     const state = useAppStore(store => store.workspaceState)
     const refs = useRef(makeRefs(state)).current
     refs.stateRef.current = state; refs.latestStateRef.current = state
     const store = useAppStore.getState()
-    return { ...useDispatchActions(state, store.setWorkspaceState, store.setWorkspaceTileTabs, () => {}, refs, vi.fn(), () => {}), restoreStatus: 'fresh' }
+    return { ...useDispatchActions(store.setWorkspaceState, store.setWorkspaceRuntimes, refs, vi.fn(), () => {}), restoreStatus: 'fresh' }
   })
   const caps = layoutControlCapabilities(() => mounted.result.current as unknown as Workspace)
   const invoke = (id: string, input: unknown) => caps.find(cap => cap.descriptor.id === id)!.execute(input, context)
   const read = async () => {
     const result = await invoke('layout.read', {})
     if (!result.ok) throw new Error(JSON.stringify(result))
-    return result.value as unknown as { revision: string; effectiveFocusedSessionId: string | null; dispatch: { focusedSessionId: string | null; classicFocusedSessionId: string | null } }
+    return result.value as unknown as { revision: string; effectiveFocusedSessionId: string | null; dispatch: { focusedSessionId: string | null } }
   }
   const configure = async (change: unknown) => { const revision = (await read()).revision; await act(async () => { expect(await invoke('dispatch.configure', { revision, change })).toMatchObject({ ok: true }) }) }
   await configure({ action: 'grid', rows: [{ sourceRow: 0, length: 4 }] })
@@ -87,4 +81,32 @@ it('reports effective tiled focus separately from remembered classic selection a
   const removed = await read()
   expect(removed.dispatch.focusedSessionId).toBe(removed.effectiveFocusedSessionId)
   expect(removed.effectiveFocusedSessionId).not.toBe('session-23')
+  // The published envelope no longer carries the two fields whose subjects
+  // #992 deleted: a remembered classic selection and a layout-wide scope.
+  expect(removed.dispatch).not.toHaveProperty('classicFocusedSessionId')
+  expect(removed.dispatch).not.toHaveProperty('scope')
+})
+
+it('refuses the retired enter / exit / scope actions instead of succeeding silently', async () => {
+  // An agent written against the two-mode layout will still send these. A
+  // no-op success would tell it the layout changed when nothing did, so the
+  // input schema rejects them outright (#992).
+  useAppStore.setState({ workspaceState: loadRecordedDispatchWorkspace().state, workspaceReaderMode: null, workspaceSpotlight: null })
+  const mounted = renderHook(() => {
+    const state = useAppStore(store => store.workspaceState)
+    const refs = useRef(makeRefs(state)).current
+    refs.stateRef.current = state; refs.latestStateRef.current = state
+    const store = useAppStore.getState()
+    return { ...useDispatchActions(store.setWorkspaceState, store.setWorkspaceRuntimes, refs, vi.fn(), () => {}), restoreStatus: 'fresh' }
+  })
+  const caps = layoutControlCapabilities(() => mounted.result.current as unknown as Workspace)
+  const invoke = (id: string, input: unknown) => caps.find(cap => cap.descriptor.id === id)!.execute(input, context)
+  const read = await invoke('layout.read', {})
+  if (!read.ok) throw new Error(JSON.stringify(read))
+  const revision = (read.value as { revision: string }).revision
+  const before = useAppStore.getState().workspaceState
+  for (const change of [{ action: 'enter', scope: 'global' }, { action: 'exit' }, { action: 'scope', scope: 'project' }]) {
+    expect(await invoke('dispatch.configure', { revision, change })).toMatchObject({ ok: false, error: { code: 'invalid_input' } })
+  }
+  expect(useAppStore.getState().workspaceState).toBe(before)
 })

@@ -133,7 +133,7 @@ describe('palette sub-mode', () => {
 
   it('resets to the command list on close, so reopening never resumes a sub-flow', async () => {
     const { useAppStore } = await import('@renderer/app-state/store')
-    useAppStore.getState().setPaletteMode('buried')
+    useAppStore.getState().setPaletteMode('prompt-template')
     useAppStore.getState().closeCommandPalette()
     expect(useAppStore.getState().paletteMode).toBe('commands')
 

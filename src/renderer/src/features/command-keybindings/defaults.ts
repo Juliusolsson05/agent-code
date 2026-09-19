@@ -20,9 +20,10 @@ import type { Keybinding } from '@renderer/features/command-keybindings/normaliz
 export type BindingContext =
   /** Fires anywhere the workspace router runs. */
   | 'global'
-  /** Only while the tile grid owns the layout. */
-  | 'grid'
-  /** Only while Dispatch owns the layout. */
+  /** Only while the stage (lanes and rows) owns the layout. With the tile
+   *  grid gone (#992) this is the only layout context — the 'grid' value it
+   *  replaced died with the tree, and with it the grid/dispatch disjointness
+   *  that existed only to separate the two layouts. */
   | 'dispatch'
   /** Only while Global Editor chrome owns focus. */
   | 'editor'
@@ -42,9 +43,10 @@ export type BindingContext =
  * relationships explicitly instead of inheriting a permissive default.
  */
 const DISJOINT_CONTEXT_PAIRS: ReadonlyArray<readonly [BindingContext, BindingContext]> = [
-  ['grid', 'dispatch'],
-  // `editor` is disjoint from both LAYOUT contexts as of #697:
-  // activeBindingContexts drops grid/dispatch entirely while the GLOBAL EDITOR
+  // (['grid', 'dispatch'] died with the tile grid — #992. There is one
+  //  layout, so the only disjointness left is between it and the editor.)
+  // `editor` is disjoint from the layout context as of #697:
+  // activeBindingContexts drops 'dispatch' entirely while the GLOBAL EDITOR
   // owns the target, so a chord can never be matched by a layout binding and an
   // editor binding for the same keystroke.
   //
@@ -76,7 +78,6 @@ const DISJOINT_CONTEXT_PAIRS: ReadonlyArray<readonly [BindingContext, BindingCon
   // pins the pure context map. It does NOT pin the `editorOwnsTarget` DOM
   // predicate or the call-site wiring, so a regression in either would keep the
   // test green while making this list false.
-  ['grid', 'editor'],
   ['dispatch', 'editor'],
 ]
 
@@ -138,6 +139,13 @@ export function buildDefaultKeybindings(): CommandBindingDefault[] {
     // so Settings can show it and a user can unbind it.
     { commandId: 'close-pane', bindings: ['Cmd+W', 'Alt+W'], context: 'global' },
 
+    // ⌘N for New Agent… — the platform convention for "new thing", unclaimed
+    // by any command, reservation, or Electron role (New Window is ⌘⇧N above).
+    // Added with the starter card (#992 §4.6), whose second slot points here:
+    // a card that says "New Agent" with no chord teaches nothing, and the
+    // chord the plan's ASCII sketch showed the operator was exactly this one.
+    { commandId: 'new-agent', bindings: ['Cmd+N'], context: 'global' },
+
     // --- Creation -----------------------------------------------------------
     // 'global', NOT 'grid'. These create commands work in BOTH modes —
     // splitFocused spawns a detached agent in Dispatch — and a 'grid' context
@@ -153,15 +161,33 @@ export function buildDefaultKeybindings(): CommandBindingDefault[] {
     { commandId: 'terminal-horizontal', bindings: ['Alt+T'], context: 'global' },
     { commandId: 'terminal-vertical', bindings: ['Alt+Shift+T'], context: 'global' },
 
+    // The stage's arrow grammar (#992 stage 5, re-homed from useKeybinds'
+    // inline branch). 'dispatch', not 'global': these act on the focused
+    // LANE, and — unlike the creation chords above — they are the whole point
+    // of Option+arrow in a layout. The H/J/K/L aliases ship on the same
+    // commands (one gesture, two keys, as it always was). Exact-match grammar
+    // means Alt+Shift+Arrow, which the old inline branch swallowed by not
+    // testing shift, stays with macOS word-selection.
+    { commandId: 'dispatch-select-previous-agent', bindings: ['Alt+Up', 'Alt+K'], context: 'dispatch' },
+    { commandId: 'dispatch-select-next-agent', bindings: ['Alt+Down', 'Alt+J'], context: 'dispatch' },
+    { commandId: 'dispatch-focus-lane-left', bindings: ['Alt+Left', 'Alt+H'], context: 'dispatch' },
+    { commandId: 'dispatch-focus-lane-right', bindings: ['Alt+Right', 'Alt+L'], context: 'dispatch' },
+
+    // Clear Lane (#992 §4.4): the gentle exit, ⌥⌫ to match the plan's card.
+    // 'dispatch', not 'global': it acts on the focused LANE, and the router
+    // additionally yields the chord while a text field owns the target (see
+    // isMacosTextEditingChord) because ⌥⌫ is the OS's delete-word — the one
+    // place a layout verb must not eat an editing chord.
+    { commandId: 'clear-focused-lane', bindings: ['Alt+Backspace'], context: 'dispatch' },
+
     // --- Navigation ---------------------------------------------------------
-    // The four ⌥Arrow aliases were live and undeclared. Note these are `grid`
-    // context: the same physical gestures move the Dispatch selection, which is
-    // a separate reserved interaction, and the overlap matrix proves the two
-    // can never both be live.
-    { commandId: 'nav-left', bindings: ['Alt+H', 'Alt+Left'], context: 'grid' },
-    { commandId: 'nav-right', bindings: ['Alt+L', 'Alt+Right'], context: 'grid' },
-    { commandId: 'nav-up', bindings: ['Alt+K', 'Alt+Up'], context: 'grid' },
-    { commandId: 'nav-down', bindings: ['Alt+J', 'Alt+Down'], context: 'grid' },
+    // DELETED with the tile tree (#992): the nav-left/right/up/down bindings
+    // (⌥H/J/K/L + ⌥Arrows, grid context) walked `tab.root` focus. The same
+    // physical gestures now belong to the lane stage — ⌥←/→ focus a lane,
+    // ⌥↑/↓ walk the index — handled in useKeybinds and migrated into
+    // registered, rebindable commands in stage 5. Until then they are
+    // deliberately NOT declared here: a binding row for a command that no
+    // longer exists would show a dead row in the shortcuts surface.
 
     // --- Editor -------------------------------------------------------------
     // ⌘⇧E ran with no declared metadata at all — the palette showed this row
@@ -238,15 +264,13 @@ export function buildDefaultKeybindings(): CommandBindingDefault[] {
     // `npm run check:keybindings`; do not trust a bespoke probe.
     //
     // Given the constraint, the higher-usage command takes the better chord:
-    // Tiled Dispatch (164) gets bare ⌘D, Dispatch Mode (52) gets ⌘⇧M for Mode.
-    // The pair is less elegant than ⌘D/⌘⇧D would have been, and that is the
-    // correct trade — an elegant scheme that shadows dictation is not elegant.
+    // The shape editor (né Tiled Dispatch, 164 uses) keeps bare ⌘D. Its old
+    // companion ⌘⇧M (Dispatch Mode, 52) died with the mode toggle (#992) and
+    // is free again; nothing claims it yet by design — a successor gets a
+    // clean chord choice, not an inherited one.
     { commandId: 'tiled-dispatch', bindings: ['Cmd+D'], context: 'global' },
-    { commandId: 'dispatch-mode', bindings: ['Cmd+Shift+M'], context: 'global' },
-    // `dispatch` context, not global: Dispatch Scope only means anything while
-    // Dispatch owns the layout, and scoping it here leaves ⌘⇧G free for a grid
-    // command later. The overlap matrix proves grid and dispatch are disjoint.
-    { commandId: 'global-dispatch', bindings: ['Cmd+Shift+G'], context: 'dispatch' },
+    // DELETED with the modes (#992): dispatch-mode (⌘⇧M) and global-dispatch
+    // (⌘⇧G, dispatch context). Scope is per-row binding now.
     // Grid Dispatch row focus (#681) ships with NO default binding.
     //
     // ⌥⇧↑/↓ was the obvious pair — it reads as "same axis, bigger unit" beside

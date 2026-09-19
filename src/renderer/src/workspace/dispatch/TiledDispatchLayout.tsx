@@ -4,6 +4,7 @@ import { useAppStore } from '@renderer/app-state/hooks'
 import type { AgentViewMode } from '@renderer/app-state/settings/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { SplitHandle } from '@renderer/features/shared/SplitHandle'
+import { StarterHintCard } from '@renderer/features/workspace/ui/StarterHintCard'
 import { useResizableSplitter } from '@renderer/features/shared/useResizableSplitter'
 import { renderWorkspaceLeaf } from '@renderer/workspace/tile-tree/TileTree'
 import {
@@ -26,6 +27,7 @@ import {
 } from '@renderer/workspace/dispatch/DispatchAgentList'
 import { DispatchMiniList } from '@renderer/workspace/dispatch/DispatchMiniList'
 import { rowScopedRows } from '@renderer/workspace/dispatch/rowScopedRows'
+import { stageOfWorkspace } from '@renderer/workspace/workspaceStage'
 import type { DispatchGridRow, SessionId, TabId } from '@renderer/workspace/types'
 
 type Props = {
@@ -78,7 +80,12 @@ export function TiledDispatchLayout({
   showWorktreeBadges,
 }: Props) {
   const state = workspace.state
-  const tiled = state.dispatchMode!.tiled!
+  // The stage is THE workspace (#992): read through the selector so a
+  // not-yet-seeded state (pre-bootstrap paint) derives the seeded default
+  // instead of crashing on a null tiled grid. Post-bootstrap the stored grid
+  // passes through unchanged, so every action below writes and reads the
+  // same stored shape it always did.
+  const tiled = stageOfWorkspace(state)
   // Normalized once per state change, so every child renders against a shape
   // whose row lengths are guaranteed to sum to the lane count. Nothing below
   // this line may splice lanes — that belongs in gridShape, behind the reducers.
@@ -321,7 +328,6 @@ function GridRowView({
               ? grid.lanes[focusedLaneInRow]?.selectedSessionId ?? null
               : null
           }
-          dispatchScope={workspace.state.dispatchMode?.scope === 'global' ? 'global' : 'project'}
           focusSessionInTab={(_tabId, sessionId) => selectIntoRow(sessionId)}
           targetLaneIndex={focusedLaneInRow ?? start}
           showWorktreeBadges={showWorktreeBadges}
@@ -431,12 +437,19 @@ function GridRowView({
                     showStatusMode,
                     showWorktreeBadges,
                     () => workspace.setTiledFocusedLane(laneIndex),
-                    false,
                     resolved.paneLabel,
                   )
                 ) : (
+                  <div className="flex h-full min-h-0 flex-col">
                   <DispatchEmpty
-                    message={lane?.selectedSessionId ? 'Not in this scope' : 'Empty lane'}
+                    // A lane that NAMES a session but cannot resolve it is showing
+                    // a dead id: the window between a session disappearing (killed
+                    // from Agent Activity, its project closed) and the clear path
+                    // blanking the lane. It read 'Not in this scope' until #992,
+                    // when the common cause was a project-scoped index that did
+                    // not list another project's agent; with no scope, "gone" is
+                    // the only way to get here.
+                    message={lane?.selectedSessionId ? 'Agent no longer available' : 'Empty lane'}
                     // The hint names a key that acts on `focusedLane`, so it
                     // must only appear in the lane that keystroke would move.
                     // Advertising it in an unfocused lane would tell the user
@@ -467,6 +480,17 @@ function GridRowView({
                         : undefined
                     }
                   />
+                  {/* The starter card, Context B (#992 §4.6): extends the
+                      focused empty lane's hint with the four placement-flavored
+                      slots. The same three conditions as the hint — focused,
+                      empty, row offers agents — for the same reason the hint
+                      has them: the card advertises keys that act on
+                      `focusedLane`, and an unfocused or agentless lane would
+                      be promising gestures that do nothing there. */}
+                  {focused && !lane?.selectedSessionId && rowOffersAgents && (
+                    <StarterHintCard variant="empty-lane" />
+                  )}
+                  </div>
                 )}
                 {!focused && (
                   <div className="absolute inset-0 pointer-events-none bg-canvas/34 ring-1 ring-inset ring-border" />

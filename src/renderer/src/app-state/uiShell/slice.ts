@@ -19,14 +19,11 @@ export const createUiShellSlice: StateCreator<
   paletteMode: DEFAULT_PALETTE_MODE,
   pathPickerOpen: false,
   pathPickerDefault: '',
-  tileTabsModalOpen: false,
-  tileTabsInitialSelectedIds: [],
   reorderTabsOpen: false,
   mergeProjectTabsOpen: false,
   pinAgentsOpen: false,
   settingsPageOpen: false,
   agentTitlePromptSessionId: null,
-  buryPromptSessionId: null,
   rootManagementPromptSessionId: null,
   debugBundleNotePrompt: null,
   recordingNotePrompt: null,
@@ -37,7 +34,6 @@ export const createUiShellSlice: StateCreator<
   newAgentInOpen: false,
   tiledDispatchPromptOpen: false,
   dispatchRowProjectPickerRow: null,
-  dispatchAttachIntent: null,
   linkedAgentParentId: null,
   gitBarOpen: false,
   worktreesBarOpen: false,
@@ -125,14 +121,6 @@ export const createUiShellSlice: StateCreator<
   setPathPickerDefault: value =>
     set({ pathPickerDefault: value }, false, 'uiShell/setPathPickerDefault'),
 
-  openTileTabsModal: initialSelectedIds =>
-    set({
-      tileTabsModalOpen: true,
-      tileTabsInitialSelectedIds: initialSelectedIds,
-    }, false, 'uiShell/openTileTabsModal'),
-  closeTileTabsModal: () =>
-    set({ tileTabsModalOpen: false }, false, 'uiShell/closeTileTabsModal'),
-
   openReorderTabs: () =>
     set({ reorderTabsOpen: true }, false, 'uiShell/openReorderTabs'),
   closeReorderTabs: () =>
@@ -156,11 +144,6 @@ export const createUiShellSlice: StateCreator<
     set({ agentTitlePromptSessionId: sessionId }, false, 'uiShell/openAgentTitlePrompt'),
   closeAgentTitlePrompt: () =>
     set({ agentTitlePromptSessionId: null }, false, 'uiShell/closeAgentTitlePrompt'),
-
-  openBuryPrompt: sessionId =>
-    set({ buryPromptSessionId: sessionId }, false, 'uiShell/openBuryPrompt'),
-  closeBuryPrompt: () =>
-    set({ buryPromptSessionId: null }, false, 'uiShell/closeBuryPrompt'),
 
   openRootManagementPrompt: sessionId =>
     set({ rootManagementPromptSessionId: sessionId }, false, 'uiShell/openRootManagementPrompt'),
@@ -222,11 +205,6 @@ export const createUiShellSlice: StateCreator<
     set({ dispatchRowProjectPickerRow: rowIndex }, false, 'uiShell/openDispatchRowProjectPicker'),
   closeDispatchRowProjectPicker: () =>
     set({ dispatchRowProjectPickerRow: null }, false, 'uiShell/closeDispatchRowProjectPicker'),
-
-  openDispatchAttach: intent =>
-    set({ dispatchAttachIntent: intent }, false, 'uiShell/openDispatchAttach'),
-  closeDispatchAttach: () =>
-    set({ dispatchAttachIntent: null }, false, 'uiShell/closeDispatchAttach'),
 
   openLinkedAgent: sessionId =>
     set({ linkedAgentParentId: sessionId }, false, 'uiShell/openLinkedAgent'),

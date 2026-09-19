@@ -148,18 +148,18 @@ describe('target expansion', () => {
     expect(expandSessionCloseTargets(state, runtimes, 'parent')[0].live).toBe(false)
   })
 
-  it('includes a tab detached sessions alongside its grid leaves', () => {
-    // The ones people forget: a detached session has no tile in the tab the
-    // user is looking at, so a tab close that takes six background agents with
-    // it looks like closing an empty tab.
-    const targets = expandTabCloseTargets(state, {}, ['parent'], ['detached'])
+  it('includes the project s parked sessions alongside the ones on screen', () => {
+    // The ones people forget: a parked session is on no lane, so a project
+    // close that takes six background agents with it looks like closing an
+    // empty tab. (Tree era: two lists — tile leaves and detached rows.)
+    const targets = expandTabCloseTargets(state, {}, ['parent', 'detached'])
     expect(targets.map(t => t.sessionId).sort()).toEqual([
       'child', 'detached', 'grandchild', 'parent',
     ])
   })
 
   it('does not double-count a session reachable two ways', () => {
-    const targets = expandTabCloseTargets(state, {}, ['parent', 'child'], [])
+    const targets = expandTabCloseTargets(state, {}, ['parent', 'child'])
     expect(targets).toHaveLength(3)
   })
 

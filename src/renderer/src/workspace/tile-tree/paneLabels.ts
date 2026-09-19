@@ -5,7 +5,6 @@ import type {
   SessionId,
   Tab,
   TabId,
-  TileTabsState,
   WorkspaceState,
 } from '@renderer/workspace/types'
 import { resolveTabSessions } from '@renderer/workspace/queries'
@@ -72,7 +71,6 @@ export function resolveAgentSessionTarget(state: WorkspaceState, sessionId: Sess
 export function resolveAgentPaneLabel(
   state: WorkspaceState,
   input: string,
-  tileTabs: TileTabsState | null = null,
 ): AgentPaneLabelTarget | null {
   const requestedLabel = input.trim().toUpperCase()
   if (!/^[A-Z]+[1-9]\d*$/.test(requestedLabel)) return null
@@ -87,22 +85,20 @@ export function resolveAgentPaneLabel(
   // still a valid workspace coordinate even though that project is not in the
   // current Dispatch index.
   //
-  // TileTabs wins MainSurface's render precedence over stale Dispatch state.
-  // Persisted workspaces can contain both because the two slices rehydrate
-  // independently, so hidden Dispatch rows must not redefine coordinates while
-  // the user is visibly looking at Tiled Tabs.
-  if (state.dispatchMode && !tileTabs) {
-    const dispatchRow = buildVisibleDispatchRows(state).find(
-      row => row.label === requestedLabel,
+  // (A Tile Tabs precedence check lived here until #992 deleted Tile Tabs.)
+  //
+  // (The index lookup was gated on "Dispatch is on" until the stage became a
+  // required field. The index is always on screen now, so it always wins.)
+  const dispatchRow = buildVisibleDispatchRows(state).find(
+    row => row.label === requestedLabel,
+  )
+  if (dispatchRow) {
+    return buildAgentPaneLabelTarget(
+      state,
+      requestedLabel,
+      dispatchRow.sessionId,
+      dispatchRow.tabId,
     )
-    if (dispatchRow) {
-      return buildAgentPaneLabelTarget(
-        state,
-        requestedLabel,
-        dispatchRow.sessionId,
-        dispatchRow.tabId,
-      )
-    }
   }
 
   for (let tabIndex = 0; tabIndex < state.tabs.length; tabIndex++) {

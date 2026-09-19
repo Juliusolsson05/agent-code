@@ -1,11 +1,11 @@
-import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 import {
-  normalizeDispatchModeGrid,
+  normalizeStage,
   scrubGridRowMetadata,
 } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
-import type { DispatchModeState, SessionId, WorkspaceState } from '@renderer/workspace/types'
+import { loadRecordedDispatchWorkspace } from '@renderer/workspace/testing/recordedDispatchWorkspace'
+import type { SessionId, TiledDispatchState } from '@renderer/workspace/types'
 
 // Restoring a workspace written before Grid Dispatch existed.
 //
@@ -14,74 +14,70 @@ import type { DispatchModeState, SessionId, WorkspaceState } from '@renderer/wor
 // it carries a genuine legacy `ratios` array produced by the single-row layout,
 // with the index fraction the user actually dragged. Every claim about the
 // migration is checked against that, not against a plausible-looking literal.
-const FIXTURE = JSON.parse(
-  readFileSync('testing/fixtures/worktree-context/dispatch-global-d23.json', 'utf8'),
-) as { state: WorkspaceState }
-
-const RECORDED = FIXTURE.state.dispatchMode!
+//
+// RECORDED is the recorded `tiled` block VERBATIM — the shared loader moves it
+// to `state.stage` without normalizing, precisely so this suite still gets the
+// legacy array. These helpers took the whole `dispatchMode` envelope until
+// #992 made the stage a required field; their subject was always the lane
+// grid inside it, which is what they take now.
+const RECORDED = loadRecordedDispatchWorkspace().state.stage
 
 describe('restoring a pre-grid workspace', () => {
   it('is a workspace with the legacy shape, or these assertions prove nothing', () => {
     // Guard on the fixture itself. If it is ever re-recorded from a build that
     // already writes `rows`, the migration below stops being exercised and
     // every test in this file would keep passing while covering nothing.
-    expect(RECORDED.tiled?.ratios).toBeDefined()
-    expect(RECORDED.tiled?.rows).toBeUndefined()
-    expect(RECORDED.tiled?.laneWeights).toBeUndefined()
+    expect(RECORDED.ratios).toBeDefined()
+    expect(RECORDED.rows).toBeUndefined()
+    expect(RECORDED.laneWeights).toBeUndefined()
   })
 
   it('restores as a single row holding every recorded lane', () => {
-    const normalized = normalizeDispatchModeGrid(RECORDED)
-    const tiled = normalized!.tiled!
+    const normalized = normalizeStage(RECORDED)
+    const tiled = normalized
 
     expect(tiled.rows).toHaveLength(1)
-    expect(tiled.rows![0]!.length).toBe(RECORDED.tiled!.lanes.length)
-    expect(tiled.lanes).toEqual(RECORDED.tiled!.lanes)
-    expect(tiled.focusedLane).toBe(RECORDED.tiled!.focusedLane)
+    expect(tiled.rows![0]!.length).toBe(RECORDED.lanes.length)
+    expect(tiled.lanes).toEqual(RECORDED.lanes)
+    expect(tiled.focusedLane).toBe(RECORDED.focusedLane)
   })
 
   it('keeps the index width the user actually dragged', () => {
     // The half of `ratios` that is NOT a lane weight. Losing it would snap the
     // sidebar back to its default on the first launch after upgrading — a width
     // the user deliberately set, silently discarded by a migration.
-    const normalized = normalizeDispatchModeGrid(RECORDED)
+    const normalized = normalizeStage(RECORDED)
 
-    expect(normalized!.tiled!.rows![0]!.indexFraction).toBe(RECORDED.tiled!.ratios![0])
+    expect(normalized.rows![0]!.indexFraction).toBe(RECORDED.ratios![0])
   })
 
   it('carries the recorded lane weights across, one per lane', () => {
-    const normalized = normalizeDispatchModeGrid(RECORDED)
+    const normalized = normalizeStage(RECORDED)
 
-    expect(normalized!.tiled!.laneWeights).toEqual(RECORDED.tiled!.ratios!.slice(1))
-    expect(normalized!.tiled!.laneWeights).toHaveLength(RECORDED.tiled!.lanes.length)
+    expect(normalized.laneWeights).toEqual(RECORDED.ratios!.slice(1))
+    expect(normalized.laneWeights).toHaveLength(RECORDED.lanes.length)
   })
 
   it('stops writing the legacy array once it has been split', () => {
     // Leaving both formats behind would mean two sources of truth for width,
     // and the next reader would have to guess which one the last drag wrote.
-    const normalized = normalizeDispatchModeGrid(RECORDED)
+    const normalized = normalizeStage(RECORDED)
 
-    expect(normalized!.tiled!.ratios).toBeUndefined()
+    expect(normalized.ratios).toBeUndefined()
   })
 
-  it('leaves classic Dispatch and grid-less state alone', () => {
-    // Same defensive shape as every other helper in this family: a stray call
-    // against non-tiled state must be a no-op, not a crash or a spurious grid.
-    const classic: DispatchModeState = { scope: 'project', focusedSessionId: 'a1' }
-
-    expect(normalizeDispatchModeGrid(classic)).toBe(classic)
-    expect(normalizeDispatchModeGrid(null)).toBeNull()
-  })
+  // "leaves classic Dispatch and grid-less state alone" lived here until #992:
+  // it fed the normalizer a lane-less envelope and `null`. Neither input can be
+  // expressed any more — the parameter is the grid itself.
 
   it('returns the same reference when a grid is already normalized', () => {
     // Rehydrate is not the only caller this could acquire, and a helper that
     // mints a new object on every call would churn every consumer that memoizes
-    // on dispatchMode identity.
-    const already = normalizeDispatchModeGrid(RECORDED)!
+    // on stage identity.
+    const already = normalizeStage(RECORDED)
 
-    expect(normalizeDispatchModeGrid(already)).toBe(already)
+    expect(normalizeStage(already)).toBe(already)
   })
-})
 
 describe('scrubbing row metadata at the autosave boundary', () => {
   // Row metadata names two things that can disappear: a project tab and a set
@@ -89,9 +85,8 @@ describe('scrubbing row metadata at the autosave boundary', () => {
   // durable pointer is, or workspace.json keeps a binding to a closed project —
   // which filters that row's index to nothing, permanently, with no UI path
   // back because the picker only lists tabs that exist.
-  const gridMode = (row: Record<string, unknown>): DispatchModeState => ({
-    scope: 'global',
-    tiled: { lanes: [{}], rows: [{ length: 1, ...row }], focusedLane: 0 },
+  const gridMode = (row: Record<string, unknown>): TiledDispatchState => ({
+    lanes: [{}], rows: [{ length: 1, ...row }], focusedLane: 0,
   })
 
   it('drops a binding to a project that no longer exists', () => {
@@ -101,7 +96,7 @@ describe('scrubbing row metadata at the autosave boundary', () => {
       new Set<SessionId>(),
     )
 
-    expect(scrubbed!.tiled!.rows![0]!.projectTabIds).toBeUndefined()
+    expect(scrubbed.rows![0]!.projectTabIds).toBeUndefined()
   })
 
   it('keeps a binding to a project that survives', () => {
@@ -111,7 +106,7 @@ describe('scrubbing row metadata at the autosave boundary', () => {
       new Set<SessionId>(),
     )
 
-    expect(scrubbed!.tiled!.rows![0]!.projectTabIds).toEqual(['tab-live'])
+    expect(scrubbed.rows![0]!.projectTabIds).toEqual(['tab-live'])
   })
 
   it('drops expanded parents whose sessions are gone, keeping the rest', () => {
@@ -121,7 +116,7 @@ describe('scrubbing row metadata at the autosave boundary', () => {
       new Set(['alive' as SessionId]),
     )
 
-    expect(scrubbed!.tiled!.rows![0]!.expandedParents).toEqual(['alive'])
+    expect(scrubbed.rows![0]!.expandedParents).toEqual(['alive'])
   })
 
   it('drops the field entirely when no expanded parent survives', () => {
@@ -133,7 +128,7 @@ describe('scrubbing row metadata at the autosave boundary', () => {
       new Set<SessionId>(),
     )
 
-    expect(scrubbed!.tiled!.rows![0]!.expandedParents).toBeUndefined()
+    expect(scrubbed.rows![0]!.expandedParents).toBeUndefined()
   })
 
   it('returns the same reference when nothing needed scrubbing', () => {
@@ -143,12 +138,9 @@ describe('scrubbing row metadata at the autosave boundary', () => {
       .toBe(clean)
   })
 
-  it('leaves classic Dispatch alone', () => {
-    const classic: DispatchModeState = { scope: 'project' }
-
-    expect(scrubGridRowMetadata(classic, new Set<string>(), new Set<SessionId>()))
-      .toBe(classic)
-  })
+  // ("leaves classic Dispatch alone" lived here until #992, for the same
+  // reason as its twin above: there is no lane-less input left to pass.)
+})
 })
 
 describe('ragged shapes survive persistence', () => {
@@ -158,21 +150,18 @@ describe('ragged shapes survive persistence', () => {
   // "tidied" 4/2 into 3/3 would look like a layout bug on the next launch, long
   // after the code that did it.
   it('round-trips an uneven grid unchanged', () => {
-    const uneven: DispatchModeState = {
-      scope: 'global',
-      tiled: {
-        lanes: Array.from({ length: 6 }, () => ({})),
-        rows: [{ length: 4 }, { length: 2 }],
-        focusedLane: 5,
-      },
+    const uneven: TiledDispatchState = {
+      lanes: Array.from({ length: 6 }, () => ({})),
+      rows: [{ length: 4 }, { length: 2 }],
+      focusedLane: 5,
     }
 
-    const restored = normalizeDispatchModeGrid(uneven)
+    const restored = normalizeStage(uneven)
 
-    expect(restored!.tiled!.rows!.map(row => row.length)).toEqual([4, 2])
-    expect(restored!.tiled!.focusedLane).toBe(5)
+    expect(restored.rows!.map(row => row.length)).toEqual([4, 2])
+    expect(restored.focusedLane).toBe(5)
     // Same reference: a coherent shape must not be rebuilt, or every consumer
-    // memoizing on dispatchMode identity churns on every restore.
+    // memoizing on stage identity churns on every restore.
     expect(restored).toBe(uneven)
   })
 
@@ -180,18 +169,15 @@ describe('ragged shapes survive persistence', () => {
     // A repair caused by a corrupt LENGTH must still not even out the rows it
     // leaves behind: the surplus goes to the last row, so row 0 keeps the width
     // the user chose.
-    const corrupt: DispatchModeState = {
-      scope: 'global',
-      tiled: {
-        lanes: Array.from({ length: 6 }, () => ({})),
-        rows: [{ length: 4 }, { length: 1 }],
-        focusedLane: 0,
-      },
+    const corrupt: TiledDispatchState = {
+      lanes: Array.from({ length: 6 }, () => ({})),
+      rows: [{ length: 4 }, { length: 1 }],
+      focusedLane: 0,
     }
 
-    const restored = normalizeDispatchModeGrid(corrupt)
+    const restored = normalizeStage(corrupt)
 
-    expect(restored!.tiled!.rows!.map(row => row.length)).toEqual([4, 2])
+    expect(restored.rows!.map(row => row.length)).toEqual([4, 2])
   })
 })
 
@@ -199,14 +185,13 @@ describe('row project bindings become a set', () => {
   // "Any project" must have exactly ONE representation. With `undefined`, `[]`,
   // and a stale single `projectTabId` all reachable, every reader would need to
   // test for three things and one would eventually forget.
-  const rowMode = (row: Record<string, unknown>): DispatchModeState => ({
-    scope: 'global',
-    tiled: { lanes: [{}], rows: [{ length: 1, ...row }], focusedLane: 0 },
+  const rowMode = (row: Record<string, unknown>): TiledDispatchState => ({
+    lanes: [{}], rows: [{ length: 1, ...row }], focusedLane: 0,
   })
-  const rowOf = (mode: DispatchModeState | null | undefined) => mode!.tiled!.rows![0]!
+  const rowOf = (stage: TiledDispatchState) => stage.rows![0]!
 
   it('folds a legacy single binding into the set and stops writing the old field', () => {
-    const restored = normalizeDispatchModeGrid(rowMode({ projectTabId: 'tab-a' }))
+    const restored = normalizeStage(rowMode({ projectTabId: 'tab-a' }))
 
     expect(rowOf(restored).projectTabIds).toEqual(['tab-a'])
     expect(rowOf(restored).projectTabId).toBeUndefined()
@@ -215,7 +200,7 @@ describe('row project bindings become a set', () => {
   it('prefers an explicit set over a stale legacy field', () => {
     // Both surviving means a partial write or an upgrade/downgrade cycle; the
     // plural field is the one the user's last edit produced.
-    const restored = normalizeDispatchModeGrid(
+    const restored = normalizeStage(
       rowMode({ projectTabId: 'tab-stale', projectTabIds: ['tab-a', 'tab-b'] }),
     )
 
@@ -224,7 +209,7 @@ describe('row project bindings become a set', () => {
   })
 
   it('collapses an empty set to absent', () => {
-    const restored = normalizeDispatchModeGrid(rowMode({ projectTabIds: [] }))
+    const restored = normalizeStage(rowMode({ projectTabIds: [] }))
 
     expect(rowOf(restored).projectTabIds).toBeUndefined()
   })
@@ -234,12 +219,9 @@ describe('row project bindings become a set', () => {
     // normalization rebuilt plain rows, the lane-selection race check — which
     // compares row objects across an async wake — would see a different object
     // every time and drop every selection.
-    const plain: DispatchModeState = {
-      scope: 'global',
-      tiled: { lanes: [{}], rows: [{ length: 1 }], focusedLane: 0 },
-    }
+    const plain: TiledDispatchState = { lanes: [{}], rows: [{ length: 1 }], focusedLane: 0 }
 
-    expect(normalizeDispatchModeGrid(plain)).toBe(plain)
+    expect(normalizeStage(plain)).toBe(plain)
   })
 
   it('leaves a healthy multi-project row untouched by reference', () => {
@@ -248,7 +230,7 @@ describe('row project bindings become a set', () => {
     // make every selection drop.
     const healthy = rowMode({ projectTabIds: ['tab-a', 'tab-b'] })
 
-    expect(normalizeDispatchModeGrid(healthy)).toBe(healthy)
+    expect(normalizeStage(healthy)).toBe(healthy)
   })
 
   it('scrubs dead bindings and unbinds a row that loses all of them', () => {

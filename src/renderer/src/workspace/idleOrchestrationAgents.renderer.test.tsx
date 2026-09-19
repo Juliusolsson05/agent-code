@@ -53,35 +53,18 @@ const working = (): SessionRuntime => answered({ sessionStatus: 'running', strea
  *   manual finished agent the user opened by hand
  */
 function mountRun(options: { busy?: string[] } = {}) {
-  const row = (sessionId: string, detachedAt: number) => ({
-    sessionId,
-    surface: 'dispatch' as const,
-    projectTabId: 'tab',
-    projectTabTitle: 'repo',
-    projectTabIndex: 0,
-    detachedAt,
-  })
   const state: WorkspaceState = {
-    tabs: [{ id: 'tab', title: 'repo', root: { type: 'leaf', sessionId: 'lead' }, focusedSessionId: 'lead' }],
+    tabs: [{ id: 'tab', title: 'repo' }],
     activeTabId: 'tab',
-    dispatchMode: { scope: 'project', focusedSessionId: 'lead' },
+    stage: { lanes: [{ selectedSessionId: 'lead' }], rows: [{ length: 1 }], focusedLane: 0 },
     sessions: {
-      lead: { cwd: '/repo', kind: 'claude', title: 'Lead' },
-      coord: { cwd: '/repo', kind: 'claude', title: 'Coordinator', orchestrationParentId: 'lead', orchestrationRootId: 'lead' },
-      worker: { cwd: '/repo/.worktrees/a', kind: 'codex', title: 'Worker', orchestrationParentId: 'coord', orchestrationRootId: 'lead' },
-      done: { cwd: '/repo/.worktrees/b', kind: 'codex', title: 'Done', orchestrationParentId: 'lead', orchestrationRootId: 'lead' },
-      busy: { cwd: '/repo/.worktrees/c', kind: 'codex', title: 'Busy', orchestrationParentId: 'lead', orchestrationRootId: 'lead' },
-      manual: { cwd: '/repo', kind: 'claude', title: 'Manual' },
+      lead: { cwd: '/repo', kind: 'claude', title: 'Lead', projectId: 'tab', joinedAt: 0 },
+      coord: { cwd: '/repo', kind: 'claude', title: 'Coordinator', orchestrationParentId: 'lead', orchestrationRootId: 'lead', projectId: 'tab', joinedAt: 1 },
+      worker: { cwd: '/repo/.worktrees/a', kind: 'codex', title: 'Worker', orchestrationParentId: 'coord', orchestrationRootId: 'lead', projectId: 'tab', joinedAt: 2 },
+      done: { cwd: '/repo/.worktrees/b', kind: 'codex', title: 'Done', orchestrationParentId: 'lead', orchestrationRootId: 'lead', projectId: 'tab', joinedAt: 3 },
+      busy: { cwd: '/repo/.worktrees/c', kind: 'codex', title: 'Busy', orchestrationParentId: 'lead', orchestrationRootId: 'lead', projectId: 'tab', joinedAt: 4 },
+      manual: { cwd: '/repo', kind: 'claude', title: 'Manual', projectId: 'tab', joinedAt: 5 },
     },
-    detachedSessions: {
-      coord: row('coord', 1),
-      worker: row('worker', 2),
-      done: row('done', 3),
-      busy: row('busy', 4),
-      manual: row('manual', 5),
-    },
-    gridRelatedSelections: {},
-    buried: [],
     pinnedSessionIds: [],
   }
   const refs = makeRefs(state)

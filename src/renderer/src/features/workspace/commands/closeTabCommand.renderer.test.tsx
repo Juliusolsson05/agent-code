@@ -7,9 +7,10 @@ import { CloseConfirmationDialog } from '@renderer/features/workspace/ui/CloseCo
 import { __resetCloseConfirmationForTests } from '@renderer/workspace/closeConfirmationBroker'
 import { buildVisibleDispatchRows } from '@renderer/workspace/dispatch/dispatchSelectors'
 import { mountPaneActions, mountUndoCloseAction } from '@renderer/workspace/hook/actions/testing/paneActionsHarness'
-import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
+import { resolveTabSessions } from '@renderer/workspace/queries'
 import type { WorkspaceState } from '@renderer/workspace/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 // The Close Tab COMMAND (⌘⇧W, tab bar ×, palette), driven end to end: palette
 // entry, the pane close executor, the confirmation dialog and Undo Close. Only
@@ -39,15 +40,32 @@ afterEach(() => {
   else Reflect.deleteProperty(window, 'api')
 })
 
+/**
+ * The invariants a close must never break, in the pool-first shape (#992).
+ *
+ * This used to check the TREE: every leaf has metadata, the tab's focus is one
+ * of its leaves, every detached row names a live tab. Those were three ways of
+ * saying one thing — nothing on screen points at something that is gone — and
+ * with ownership on the row it is said in three different places:
+ *   - every row names a project that exists (else autosave drops it as unowned,
+ *     which after a PARTIAL close would silently delete a survivor);
+ *   - every project still lists at least one session (a project exists only
+ *     while something names it — an empty one is a phantom tab);
+ *   - every lane and pin resolves (a pointer at a closed session is the
+ *     "selected-but-unresolvable lane" bug).
+ */
 function expectValidWorkspace(state: WorkspaceState): void {
+  const projectIds = new Set(state.tabs.map(tab => tab.id))
+  for (const [id, meta] of Object.entries(state.sessions)) {
+    expect(projectIds.has(meta.projectId ?? ''), `session ${id} names a live project`).toBe(true)
+  }
   for (const tab of state.tabs) {
-    const leaves = collectLeaves(tab.root)
-    for (const leaf of leaves) expect(state.sessions[leaf], `tab ${tab.id} leaf ${leaf}`).toBeDefined()
-    expect(leaves).toContain(tab.focusedSessionId)
+    expect(resolveTabSessions(state, tab.id).length, `project ${tab.id} lists a session`).toBeGreaterThan(0)
   }
-  for (const record of Object.values(state.detachedSessions)) {
-    expect(state.tabs.some(tab => tab.id === record.projectTabId), `row ${record.sessionId} has a project`).toBe(true)
+  for (const lane of state.stage.lanes) {
+    if (lane.selectedSessionId !== undefined) expect(state.sessions[lane.selectedSessionId]).toBeDefined()
   }
+  for (const pinned of state.pinnedSessionIds) expect(state.sessions[pinned]).toBeDefined()
 }
 
 function mountCommand(state: WorkspaceState) {
@@ -77,44 +95,42 @@ describe('Close Tab command runs the approved close operation (#886 review round
   it('closes a linked child attached in another project, captures it, and undo restores it under the restored parent', async () => {
     const state: WorkspaceState = {
       tabs: [
-        { id: 'a', title: 'A', root: { type: 'leaf', sessionId: 'parent' }, focusedSessionId: 'parent' },
-        { id: 'b', title: 'B', focusedSessionId: 'anchor', root: {
-          type: 'split', direction: 'vertical', ratio: 0.5,
-          a: { type: 'leaf', sessionId: 'anchor' }, b: { type: 'leaf', sessionId: 'child' },
-        } },
+        { id: 'a', title: 'A' },
+        { id: 'b', title: 'B' },
       ],
       activeTabId: 'a',
       sessions: {
-        parent: { cwd: '/a', kind: 'claude', title: 'Parent' },
-        worker: { cwd: '/a', kind: 'codex' },
-        // Attached beside a pane of project B; attachment keeps linkedParentId.
-        child: { cwd: '/a', kind: 'codex', linkedParentId: 'parent' },
-        anchor: { cwd: '/b', kind: 'claude' },
+        parent: { cwd: '/a', kind: 'claude', title: 'Parent', projectId: 'a', joinedAt: 0 },
+        worker: { cwd: '/a', kind: 'codex', projectId: 'a', joinedAt: 1 },
+        // Filed under project B while still linked to a parent in A: a linked
+        // child follows its PARENT's close, whatever project lists it.
+        child: { cwd: '/a', kind: 'codex', linkedParentId: 'parent', projectId: 'b', joinedAt: 1 },
+        anchor: { cwd: '/b', kind: 'claude', projectId: 'b', joinedAt: 0 },
       },
-      detachedSessions: {
-        worker: { sessionId: 'worker', surface: 'dispatch', projectTabId: 'a', projectTabTitle: 'A', projectTabIndex: 0, detachedAt: 1 },
-      },
-      dispatchMode: null, gridRelatedSelections: {}, buried: [], pinnedSessionIds: [],
+      stage: oneLaneStage('parent'),   pinnedSessionIds: [],
     }
     const { harness, context } = mountCommand(state)
     await runAndConfirm(context, 'Close 3')
 
-    // Exactly the listed set, the linked child before its parent, the tab's
-    // grid leaf last.
-    expect(killed()).toEqual(['child', 'worker', 'parent'])
-    expect(harness.getState().tabs).toEqual([expect.objectContaining({
-      id: 'b', root: { type: 'leaf', sessionId: 'anchor' }, focusedSessionId: 'anchor',
-    })])
+    // Exactly the listed set, the linked child before its parent. (The order
+    // used to end on the tab's grid leaf, because a tile tree could not be left
+    // empty mid-operation. Nothing needs to go last now; only depth orders.)
+    expect(killed()).toEqual(['child', 'parent', 'worker'])
+    expect(harness.getState().tabs).toEqual([{ id: 'b', title: 'B' }])
+    expect(harness.getState().activeTabId).toBe('b')
     expect(Object.keys(harness.getState().sessions)).toEqual(['anchor'])
+    // The lane that showed the closed parent is EMPTY, not refilled (#681).
+    expect(harness.getState().stage.lanes).toEqual([{}])
     expectValidWorkspace(harness.getState())
     expect(harness.showToast).toHaveBeenLastCalledWith('Closed “A” — ⌘⇧T Undo Close; repeat for earlier closes')
-    // One undo unit for one decision: the child's pane in B, then project A.
+    // One undo unit for one decision: the child's row in B, then project A
+    // with both of its sessions in index order.
     expect(harness.refs.undoStackRef.current.length).toBe(1)
     expect(harness.refs.undoStackRef.current.peek()).toMatchObject({
       type: 'group',
       entries: [
-        { type: 'pane', sessionId: 'child', tabId: 'b', siblingLeafId: 'anchor' },
-        { type: 'tab', tab: { id: 'a', root: { type: 'leaf', sessionId: 'parent' } }, detachedEntries: [{ sessionId: 'worker' }] },
+        { type: 'session', sessionId: 'child', sessionMeta: { projectId: 'b', joinedAt: 1 } },
+        { type: 'tab', tab: { id: 'a', title: 'A' }, tabIndex: 0, sessions: [{ sessionId: 'parent' }, { sessionId: 'worker' }] },
       ],
     })
 
@@ -128,47 +144,67 @@ describe('Close Tab command runs the approved close operation (#886 review round
     await act(async () => { await undo.actions.undoClose() })
     const restored = undo.getState()
     const restoredA = restored.tabs.find(tab => tab.title === 'A')
-    expect(restoredA?.root).toEqual({ type: 'leaf', sessionId: 'parent-2' })
-    expect(restored.detachedSessions['worker-2']).toMatchObject({ projectTabId: restoredA?.id, detachedAt: 1 })
+    expect(restoredA).toBeDefined()
+    expect(resolveTabSessions(restored, restoredA!.id)).toEqual(['parent-2', 'worker-2'])
+    expect(restored.sessions['worker-2']).toMatchObject({ projectId: restoredA!.id, joinedAt: 1 })
     expect(restored.sessions['child-2']?.linkedParentId).toBe('parent-2')
-    expect(collectLeaves(restored.tabs.find(tab => tab.id === 'b')!.root).sort()).toEqual(['anchor', 'child-2'])
+    // The child returns to project B, where it was listed — not to the
+    // restored A, even though that is where its parent lives.
+    expect(resolveTabSessions(restored, 'b')).toEqual(['anchor', 'child-2'])
     expect(harness.refs.undoStackRef.current.length).toBe(0)
     expectValidWorkspace(restored)
     undo.mounted.unmount()
     harness.mounted.unmount()
   })
 
-  it('leaves no phantom tab or undo entry when one member\'s kill rejects, and roots the tab on the survivor', async () => {
+  it('closes the project of the agent in the focused lane, not the one highlighted in the header', async () => {
+    // #1013 parity review. The active project is only a label (U4): lane
+    // focus and index selection never move it. ⌘⇧W used to close the
+    // HIGHLIGHTED project while the user worked in another project's lane,
+    // and a single idle session closes with no dialog.
+    const state: WorkspaceState = {
+      tabs: [{ id: 'highlighted', title: 'Highlighted' }, { id: 'working', title: 'Working' }],
+      activeTabId: 'highlighted',
+      sessions: {
+        header: { cwd: '/h', kind: 'claude', projectId: 'highlighted', joinedAt: 0 },
+        lane: { cwd: '/w', kind: 'claude', projectId: 'working', joinedAt: 0 },
+      },
+      stage: oneLaneStage('lane'), pinnedSessionIds: [],
+    }
+    const { harness, context } = mountCommand(state)
+    await act(async () => { await command!.run(context) })
+    expect(killed()).toEqual(['lane'])
+    expect(harness.getState().tabs).toEqual([{ id: 'highlighted', title: 'Highlighted' }])
+    expectValidWorkspace(harness.getState())
+  })
+
+  it('leaves no phantom tab or undo entry when one member\'s kill rejects, and the project keeps its survivor', async () => {
     killOwnedSession.mockImplementation(async owner => {
       if (owner.sessionId === 'row') throw new Error('backend refused')
       return true
     })
-    const split = {
-      type: 'split' as const, direction: 'vertical' as const, ratio: 0.4,
-      a: { type: 'leaf' as const, sessionId: 'grid' }, b: { type: 'leaf' as const, sessionId: 'term' },
-    }
     const state: WorkspaceState = {
-      tabs: [{ id: 'a', title: 'A', root: split, focusedSessionId: 'grid' }],
+      tabs: [{ id: 'a', title: 'A' }],
       activeTabId: 'a',
       sessions: {
-        grid: { cwd: '/a', kind: 'claude' },
-        term: { cwd: '/a', kind: 'terminal', tmuxName: 'agent-code-term' },
-        row: { cwd: '/a', kind: 'codex', title: 'Row' },
+        grid: { cwd: '/a', kind: 'claude', projectId: 'a', joinedAt: 0 },
+        term: { cwd: '/a', kind: 'terminal', tmuxName: 'agent-code-term', projectId: 'a', joinedAt: 1 },
+        row: { cwd: '/a', kind: 'codex', title: 'Row', projectId: 'a', joinedAt: 4 },
       },
-      detachedSessions: {
-        row: { sessionId: 'row', surface: 'dispatch', projectTabId: 'a', projectTabTitle: 'A', projectTabIndex: 0, detachedAt: 4 },
-      },
-      dispatchMode: { scope: 'project' }, gridRelatedSelections: {}, buried: [], pinnedSessionIds: [],
+      stage: { lanes: [{}], rows: [{ length: 1 }], focusedLane: 0 },   pinnedSessionIds: [],
     }
     const { harness, context } = mountCommand(state)
     await runAndConfirm(context, 'Close 3')
 
-    // Sequential, each revalidated: the row's kill rejected and it stays; both
-    // grid panes closed; the last one promoted the surviving row, so the tab is
-    // valid and rooted on it instead of naming a deleted session.
-    expect(killed()).toEqual(['row', 'grid', 'term'])
+    // Sequential, each revalidated: the row's kill rejected and it stays; the
+    // other two closed. The project is NOT removed — a project leaves only with
+    // the commit that takes its last session, and that commit never happened.
+    // (In v2 the last grid pane's close had to PROMOTE the surviving row into
+    // the tile root so the tab stayed renderable. There is nothing to promote
+    // into: the survivor was always a full member of the project.)
+    expect(killed()).toEqual(['grid', 'term', 'row'])
     const after = harness.getState()
-    expect(after.tabs).toEqual([expect.objectContaining({ id: 'a', root: { type: 'leaf', sessionId: 'row' }, focusedSessionId: 'row' })])
+    expect(after.tabs).toEqual([{ id: 'a', title: 'A' }])
     expect(Object.keys(after.sessions)).toEqual(['row'])
     expect(buildVisibleDispatchRows(after).map(visible => visible.sessionId)).toEqual(['row'])
     expectValidWorkspace(after)
@@ -181,20 +217,22 @@ describe('Close Tab command runs the approved close operation (#886 review round
     expect(harness.refs.undoStackRef.current.peek()).toMatchObject({
       type: 'group',
       entries: [
-        { type: 'pane', sessionId: 'grid', siblingLeafId: 'term' },
-        { type: 'detached', record: { sessionId: 'term' }, replacedRoot: { sessionId: 'row' } },
+        { type: 'session', sessionId: 'grid', sessionMeta: { joinedAt: 0 } },
+        // `tmuxName` is why a terminal must always get an entry: without it the
+        // next launch's reconcile kills the surviving tmux session as an orphan.
+        { type: 'session', sessionId: 'term', sessionMeta: { joinedAt: 1, tmuxName: 'agent-code-term' } },
       ],
     })
 
-    // And undo puts the project back as it was: the row returns to Dispatch,
-    // the terminal re-attaches as root, and the split is rebuilt around it.
+    // And undo puts the project back as it was: both closed sessions return to
+    // their old positions AHEAD of the survivor, which never moved.
     const spawn = vi.fn().mockResolvedValueOnce('term-2').mockResolvedValueOnce('grid-2')
     const undo = mountUndoCloseAction(after, harness.refs, spawn)
     await act(async () => { await undo.actions.undoClose() })
     const restored = undo.getState()
     expect(spawn.mock.calls[0]?.[1]).toMatchObject({ kind: 'terminal', recoverTmuxName: 'agent-code-term' })
-    expect(restored.tabs[0]?.root).toEqual({ ...split, a: { type: 'leaf', sessionId: 'grid-2' }, b: { type: 'leaf', sessionId: 'term-2' } })
-    expect(restored.detachedSessions.row).toMatchObject({ projectTabId: 'a', detachedAt: 4 })
+    expect(resolveTabSessions(restored, 'a')).toEqual(['grid-2', 'term-2', 'row'])
+    expect(restored.sessions.row).toMatchObject({ projectId: 'a', joinedAt: 4 })
     expectValidWorkspace(restored)
     undo.mounted.unmount()
     harness.mounted.unmount()

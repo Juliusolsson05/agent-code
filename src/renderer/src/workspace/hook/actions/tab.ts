@@ -1,32 +1,33 @@
 import { useCallback } from 'react'
+import { withLaneSession } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 
-import type { DetachedSessionRecord, SessionId, SessionKind, SessionMeta, Tab, TabId } from '@renderer/workspace/types'
+import type { SessionId, SessionKind, SessionMeta, Tab, TabId } from '@renderer/workspace/types'
 import { titleFromCwd } from '@renderer/workspace/layout/helpers'
-import { mergeProjectTabs, retargetTileTabsAfterMerge } from '@renderer/workspace/mergeProjectTabs'
+import { mergeProjectTabs } from '@renderer/workspace/mergeProjectTabs'
+import { fileSessionInProject } from '@renderer/workspace/pool'
 import type { MergeProjectTabsResult } from '@renderer/workspace/mergeProjectTabs'
 import { tabIndexLabel } from '@renderer/workspace/tile-tree/paneLabelFormat'
 
 import type {
   WorkspaceSetReaderMode,
+  WorkspaceSetRuntimes,
   WorkspaceSetSpotlight,
   WorkspaceSetState,
-  WorkspaceSetTileTabs,
 } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import type { SessionActions } from '@renderer/workspace/hook/actions/session'
+import { markPooledSpawn } from '@renderer/workspace/hook/actions/pooledSpawnBadge'
 
 // Tab actions — open/close + tab-navigation keybinds.
 
 export function useTabActions(
   state: {
     activeTabId: string
-    detachedSessions: Record<SessionId, DetachedSessionRecord>
     sessions: Record<SessionId, SessionMeta>
     tabs: Tab[]
   },
-  tileTabs: { tabIds: TabId[]; focusedTabId: TabId } | null,
   setState: WorkspaceSetState,
-  setTileTabs: WorkspaceSetTileTabs,
+  setRuntimes: WorkspaceSetRuntimes,
   setSpotlight: WorkspaceSetSpotlight,
   setReaderMode: WorkspaceSetReaderMode,
   refs: WorkspaceRefs,
@@ -60,22 +61,59 @@ export function useTabActions(
       }
       const tabId = crypto.randomUUID()
       const title = titleFromCwd(cwd)
+      let placed = false
       setState(prev => {
-        const tab: Tab = {
-          id: tabId,
-          title,
-          root: { type: 'leaf', sessionId },
-          focusedSessionId: sessionId,
-        }
+        // A project is a title and a position. Its first session belongs to
+        // it because the session SAYS so (fileSessionInProject below) — until
+        // #992 the tab was created holding a one-leaf tile tree instead.
+        const tab: Tab = { id: tabId, title }
+        // Context-places (#992, U2's second continuity write): the agent the
+        // user just asked for appears where they are looking — but ONLY when
+        // that lane is empty. An occupied lane is never displaced; the new
+        // agent is then in the pool, at the top of its project's index, one
+        // keystroke away. (Opening a lane beside an occupied one is stage 4's
+        // job, together with the other spawn paths.)
+        //
+        // WHY this lives in newTab rather than in bootstrap: a fresh install,
+        // the persisted-fallback recovery shell and an ordinary ⌘T are the
+        // same event — "first agent of a new project" — and bootstrap used to
+        // special-case the first two by entering Tiled Dispatch afterwards.
+        // One rule here means a fresh install's single lane shows its single
+        // agent without boot knowing anything about lanes.
+        //
+        // No wake is needed (#690): this session was spawned a few lines up.
+        //
+        // "Empty" means what it means for every other spawn
+        // (applyDispatchSpawnFocus in pane.ts): no occupant, OR an occupant
+        // whose session is gone. A lane pointing at a closed session reads
+        // empty to the user, and ⌘T used to refuse it as occupied (#1013
+        // review B).
+        const focusedLane = prev.stage.lanes[prev.stage.focusedLane]
+        const occupant = focusedLane?.selectedSessionId
+        const stage = focusedLane && (occupant === undefined || prev.sessions[occupant] === undefined)
+          ? {
+              ...prev.stage,
+              lanes: prev.stage.lanes.map((lane, index) =>
+                index === prev.stage.focusedLane ? withLaneSession(lane, sessionId) : lane,
+              ),
+            }
+          : prev.stage
+        placed = stage !== prev.stage
         return {
           ...prev,
           tabs: [...prev.tabs, tab],
           activeTabId: tabId,
+          sessions: fileSessionInProject(prev.sessions, sessionId, tabId),
+          stage,
         }
       })
+      // A first agent that could not take the lane is in the pool, and it
+      // wears the same "new" badge as every other pooled spawn. Without it,
+      // ⌘T with an occupied lane looked like it did nothing (#1013 review B).
+      if (!placed) markPooledSpawn(setRuntimes, sessionId)
       return { tabId, sessionId }
     },
-    [sessionActions, setState, showToast],
+    [sessionActions, setRuntimes, setState, showToast],
   )
 
   // WHY Close Tab no longer lives here (#886 review round 2): the command used
@@ -91,22 +129,8 @@ export function useTabActions(
     (tabId: TabId) => {
       setState(prev => ({ ...prev, activeTabId: tabId }))
       setSpotlight(null)
-      // Preserve tile-tabs mode when the activated tab is part of
-      // the tiled set — just shift the focused tile. If it's NOT
-      // part of the set, leave tile-tabs ALONE rather than nuking
-      // the mode. The previous behavior (setting null) caused the
-      // tile layout to silently collapse whenever the user clicked
-      // any other tab in the bar, which read as a phantom
-      // "auto-deselect."
-      setTileTabs(prev => {
-        if (!prev) return prev
-        if (prev.tabIds.includes(tabId)) {
-          return { ...prev, focusedTabId: tabId }
-        }
-        return prev
-      })
     },
-    [setSpotlight, setState, setTileTabs],
+    [setSpotlight, setState],
   )
 
   const activateTabByIndex = useCallback(
@@ -116,18 +140,8 @@ export function useTabActions(
         return t ? { ...prev, activeTabId: t.id } : prev
       })
       setSpotlight(null)
-      // Same preservation rule as activateTab — see comment there.
-      setTileTabs(prev => {
-        const target = refs.stateRef.current.tabs[index]
-        if (!prev) return prev
-        if (!target) return prev
-        if (prev.tabIds.includes(target.id)) {
-          return { ...prev, focusedTabId: target.id }
-        }
-        return prev
-      })
     },
-    [refs.stateRef, setSpotlight, setState, setTileTabs],
+    [setSpotlight, setState],
   )
 
   const mergeTabs = useCallback(
@@ -164,23 +178,25 @@ export function useTabActions(
         )
         return result
       }
-      setTileTabs(prev => retargetTileTabsAfterMerge(prev, sourceTabIds, targetTabId))
-      // Spotlight and Reader zoom a GRID pane of a tab; the pane they named
-      // is now a Dispatch agent of another tab, so the takeover has nothing
-      // to frame.
+      // A takeover framing a merged-away project FOLLOWS its session into the
+      // target: the session it shows is exactly as alive as before, only its
+      // project label changed, and a takeover's `tabId` is just which
+      // project's sessions its switcher lists. (Until #992 the takeover was
+      // dismissed here, because it framed a GRID PANE of the removed tab and
+      // that pane had stopped being one.)
       const removed = new Set(sourceTabIds)
-      setSpotlight(prev => (prev && removed.has(prev.tabId) ? null : prev))
-      setReaderMode(prev => (prev && removed.has(prev.tabId) ? null : prev))
+      setSpotlight(prev => (prev && removed.has(prev.tabId) ? { ...prev, tabId: targetTabId } : prev))
+      setReaderMode(prev => (prev && removed.has(prev.tabId) ? { ...prev, tabId: targetTabId } : prev))
       const { summary } = result
-      const moved = summary.detachedFromGrid.length + summary.repointedDetached.length
+      const moved = summary.movedSessionIds.length
       showToast(
         `Merged ${summary.removedTabIds.length} tab${summary.removedTabIds.length === 1 ? '' : 's'} into `
         + `${tabIndexLabel(summary.targetIndex)} · ${summary.targetTitle} — `
-        + `${moved} agent${moved === 1 ? '' : 's'} now in its Dispatch list`,
+        + `${moved} agent${moved === 1 ? '' : 's'} now listed under it`,
       )
       return result
     },
-    [setReaderMode, setSpotlight, setState, setTileTabs, showToast],
+    [setReaderMode, setSpotlight, setState, showToast],
   )
 
   const reorderTabs = useCallback(
@@ -210,14 +226,6 @@ export function useTabActions(
   )
 
   const nextTab = useCallback(() => {
-    const tiled = tileTabs
-    if (tiled && tiled.tabIds.length > 1) {
-      const idx = tiled.tabIds.indexOf(tiled.focusedTabId)
-      const nextId = tiled.tabIds[(idx + 1 + tiled.tabIds.length) % tiled.tabIds.length]
-      setState(prev => ({ ...prev, activeTabId: nextId }))
-      setTileTabs(prev => (prev ? { ...prev, focusedTabId: nextId } : prev))
-      return
-    }
     setState(prev => {
       const idx = prev.tabs.findIndex(t => t.id === prev.activeTabId)
       if (idx === -1) return prev
@@ -225,18 +233,9 @@ export function useTabActions(
       return { ...prev, activeTabId: next.id }
     })
     setSpotlight(null)
-  }, [setSpotlight, setState, setTileTabs, tileTabs])
+  }, [setSpotlight, setState])
 
   const prevTab = useCallback(() => {
-    const tiled = tileTabs
-    if (tiled && tiled.tabIds.length > 1) {
-      const idx = tiled.tabIds.indexOf(tiled.focusedTabId)
-      const nextId =
-        tiled.tabIds[(idx - 1 + tiled.tabIds.length) % tiled.tabIds.length]
-      setState(prev => ({ ...prev, activeTabId: nextId }))
-      setTileTabs(prev => (prev ? { ...prev, focusedTabId: nextId } : prev))
-      return
-    }
     setState(prev => {
       const idx = prev.tabs.findIndex(t => t.id === prev.activeTabId)
       if (idx === -1) return prev
@@ -244,7 +243,7 @@ export function useTabActions(
       return { ...prev, activeTabId: next.id }
     })
     setSpotlight(null)
-  }, [setSpotlight, setState, setTileTabs, tileTabs])
+  }, [setSpotlight, setState])
 
   return {
     newTab,
