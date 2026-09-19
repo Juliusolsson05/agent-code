@@ -52,7 +52,7 @@ function mutationMessage(result: AgentCodeCustomSkillsMutationResult): string {
   if (result.ok) return ''
   if ('message' in result) return result.message
   if (result.code === 'revision-conflict') return 'Custom skills changed elsewhere. Reload and retry.'
-  if (result.code === 'unsupported') return 'A registered provider does not support personal skills.'
+  if (result.code === 'unsupported') return 'No registered provider supports personal skills.'
   return 'Managed skill state needs recovery before it can be changed.'
 }
 

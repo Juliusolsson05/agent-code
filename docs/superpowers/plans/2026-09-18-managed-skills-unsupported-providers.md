@@ -36,7 +36,7 @@ Fixes #1014.
 - Modify: `src/main/agentCodeConventions/AgentCodeConventionsService.ts` (save gate ~1145, reconcileEnabledLocked ~2030, health ~3049)
 - Test: `src/main/agentCodeConventions/AgentCodeConventionsService.system.test.ts`
 
-- [ ] **Step 1: Rewrite the failing tests** — replace the test at line 428 ("blocks an all-provider enable when a registered provider is unsupported") with:
+- [x] **Step 1: Rewrite the failing tests** — replace the test at line 428 ("blocks an all-provider enable when a registered provider is unsupported") with:
 
 ```ts
   it('deploys to supported providers when a registered provider is unsupported', async () => {
@@ -85,12 +85,12 @@ Fixes #1014.
   })
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `NODE_ENV=test npx vitest run src/main/agentCodeConventions/AgentCodeConventionsService.system.test.ts --project unit`
 Expected: first new test FAILS (`ok: false, code: 'unsupported'`); second PASSES (degenerate case still blocks via existing gate).
 
-- [ ] **Step 3: Implement** — in `AgentCodeConventionsService.ts`:
+- [x] **Step 3: Implement** — in `AgentCodeConventionsService.ts`:
 
 1. `save()` gate (~1145) — condition swap, keep the row replacement (with zero real targets the unsupported rows are the whole display):
 
@@ -140,9 +140,9 @@ Expected: first new test FAILS (`ok: false, code: 'unsupported'`); second PASSES
   }
 ```
 
-- [ ] **Step 4: Run tests to verify pass** (same command as Step 2; whole conventions service system test file must pass)
+- [x] **Step 4: Run tests to verify pass** (same command as Step 2; whole conventions service system test file must pass)
 
-- [ ] **Step 5: Commit** — `git add -A && git commit -m "fix(managed-skills): deploy conventions to supported providers when one is unsupported - Refs #1014"`
+- [x] **Step 5: Commit** — `git add -A && git commit -m "fix(managed-skills): deploy conventions to supported providers when one is unsupported - Refs #1014"`
 
 ### Task 2: Custom + product skills (TLDR/Goal) — the spawn-blocking path
 
@@ -150,7 +150,7 @@ Expected: first new test FAILS (`ok: false, code: 'unsupported'`); second PASSES
 - Modify: `src/main/agentCodeConventions/AgentCodeConventionsService.ts` (prepareCustomMutation ~1807, reconcileCustomEnabledLocked ~2159, customHealth ~3031)
 - Test: `src/main/agentCodeConventions/AgentCodeCustomSkillsService.system.test.ts`
 
-- [ ] **Step 1: Write the failing regression tests** — extend the harness call sites with an unsupported-provider variant (the harness builder at line 45 constructs `resolved`; add an options param):
+- [x] **Step 1: Write the failing regression tests** — extend the harness call sites with an unsupported-provider variant (the harness builder at line 45 constructs `resolved`; add an options param):
 
 ```ts
 async function harness(options: { unsupportedProviders?: AgentProviderKind[] } = {}) {
@@ -232,12 +232,12 @@ Add tests (import `AgentProviderKind` type from `@shared/types/providerKind.js`)
 
 Note: verify the exact snapshot accessor name (`customSkillsSnapshot` vs other) against the service's public API before running; adjust to the real method that returns `AgentCodeCustomSkillsSnapshot`. Also confirm the TLDR product skill's `name` constant by reading `PRODUCT_SKILLS` in `AgentCodeConventionsService.ts` (top of file) — assert on `productSkillById`-visible name.
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `NODE_ENV=test npx vitest run src/main/agentCodeConventions/AgentCodeCustomSkillsService.system.test.ts --project unit`
 Expected: first two FAIL (ensureTldrSkill rejects / health 'unsupported'), third PASSES.
 
-- [ ] **Step 3: Implement** — in `AgentCodeConventionsService.ts`:
+- [x] **Step 3: Implement** — in `AgentCodeConventionsService.ts`:
 
 1. `prepareCustomMutation()` gate (~1807) — condition swap:
 
@@ -290,9 +290,9 @@ Expected: first two FAIL (ensureTldrSkill rejects / health 'unsupported'), third
   }
 ```
 
-- [ ] **Step 4: Run tests** (same file + Task 1 file; both must pass)
+- [x] **Step 4: Run tests** (same file + Task 1 file; both must pass)
 
-- [ ] **Step 5: Commit** — `git commit -m "fix(managed-skills): unsupported providers no longer block TLDR/Goal product skills - Refs #1014"`
+- [x] **Step 5: Commit** — `git commit -m "fix(managed-skills): unsupported providers no longer block TLDR/Goal product skills - Refs #1014"`
 
 ### Task 3: Installed skills fleet
 
@@ -300,7 +300,7 @@ Expected: first two FAIL (ensureTldrSkill rejects / health 'unsupported'), third
 - Modify: `src/main/agentCodeConventions/AgentCodeConventionsService.ts` (installed gate ~1400, reconcileInstalledSkillLocked ~1518, applyInstalledOperationsLocked ~1645, installedHealth ~1708)
 - Test: `src/main/agentCodeConventions/AgentCodeInstalledSkillsService.system.test.ts`
 
-- [ ] **Step 1: Write the failing test** — harness takes `resolveTargets` via `resolved` (line ~92); thread an options param like Task 2, then:
+- [x] **Step 1: Write the failing test** — harness takes `resolveTargets` via `resolved` (line ~92); thread an options param like Task 2, then:
 
 ```ts
   it('installs and reports active with an unsupported provider present', async () => {
@@ -319,12 +319,12 @@ Expected: first two FAIL (ensureTldrSkill rejects / health 'unsupported'), third
 
 Note: verify the real install API + snapshot accessor names against the service (`installDiscoveredSkill` / installed snapshot method) and the harness return shape before running; adjust names to the actual API.
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `NODE_ENV=test npx vitest run src/main/agentCodeConventions/AgentCodeInstalledSkillsService.system.test.ts --project unit`
 Expected: FAIL (`code: 'unsupported'` from the enable gate inside install).
 
-- [ ] **Step 3: Implement** — in `AgentCodeConventionsService.ts`:
+- [x] **Step 3: Implement** — in `AgentCodeConventionsService.ts`:
 
 1. Installed mutation gate (~1400) — condition swap to `enabled && this.targets.targets.length === 0`.
 2. `reconcileInstalledSkillLocked()` (~1518) — delete the `if (skill.enabled && targets.unsupportedProviders.length > 0) { ... return }` block.
@@ -352,19 +352,19 @@ Expected: FAIL (`code: 'unsupported'` from the enable gate inside install).
     return 'active'
 ```
 
-- [ ] **Step 4: Run tests; then the whole conventions directory**
+- [x] **Step 4: Run tests; then the whole conventions directory**
 
 Run: `NODE_ENV=test npx vitest run src/main/agentCodeConventions --project unit`
 Expected: all pass (including `targets.test.ts`? No — that is Task 4; it may still fail).
 
-- [ ] **Step 5: Commit** — `git commit -m "fix(managed-skills): unsupported providers no longer block installed skills - Refs #1014"`
+- [x] **Step 5: Commit** — `git commit -m "fix(managed-skills): unsupported providers no longer block installed skills - Refs #1014"`
 
 ### Task 4: Real-registry target contract
 
 **Files:**
 - Modify: `src/main/agentCodeConventions/targets.test.ts`
 
-- [ ] **Step 1: Update the expectation** (line 15) — grok is a registered provider with `personalAgentSkills.supported: false` by design (no recorded native skill layout), so the real registry now always reports it:
+- [x] **Step 1: Update the expectation** (line 15) — grok is a registered provider with `personalAgentSkills.supported: false` by design (no recorded native skill layout), so the real registry now always reports it:
 
 ```ts
     // Contract since grok (#1014): a registered provider MAY declare personal
@@ -373,16 +373,16 @@ Expected: all pass (including `targets.test.ts`? No — that is Task 4; it may s
     expect(result.unsupportedProviders).toEqual(['grok'])
 ```
 
-- [ ] **Step 2: Run** — `NODE_ENV=test npx vitest run src/main/agentCodeConventions/targets.test.ts --project unit` → PASS.
+- [x] **Step 2: Run** — `NODE_ENV=test npx vitest run src/main/agentCodeConventions/targets.test.ts --project unit` → PASS.
 
-- [ ] **Step 3: Commit** — `git commit -m "test(managed-skills): accept grok in the unsupported-providers registry contract - Refs #1014"`
+- [x] **Step 3: Commit** — `git commit -m "test(managed-skills): accept grok in the unsupported-providers registry contract - Refs #1014"`
 
 ### Task 5: Settings banner stays informative
 
 **Files:**
 - Modify: `src/renderer/src/features/settings/ui/AgentCodeConventionsRow.tsx` (~176)
 
-- [ ] **Step 1: Widen the banner condition** — health is now 'active' when only some providers are unsupported, but the user must still see which providers cannot receive the skill:
+- [x] **Step 1: Widen the banner condition** — health is now 'active' when only some providers are unsupported, but the user must still see which providers cannot receive the skill:
 
 ```tsx
       {snapshot.health === 'unsupported' || snapshot.unsupportedProviders.length > 0 ? (
@@ -394,16 +394,16 @@ Expected: all pass (including `targets.test.ts`? No — that is Task 4; it may s
 
 Button `disabled` conditions (`health === 'unsupported'`) stay unchanged — degenerate case only.
 
-- [ ] **Step 2: Run renderer row tests**
+- [x] **Step 2: Run renderer row tests**
 
 Run: `NODE_ENV=test npx vitest run src/renderer/src/features/settings/ui --project renderer`
 Expected: pass. If a row test asserts the old banner logic, update it to the new condition (informational when providers unsupported).
 
-- [ ] **Step 3: Commit** — `git commit -m "fix(settings): show unsupported providers as an informational banner - Refs #1014"`
+- [x] **Step 3: Commit** — `git commit -m "fix(settings): show unsupported providers as an informational banner - Refs #1014"`
 
 ### Task 6: Verification
 
-- [ ] **Step 1:** `npm run typecheck` — must pass.
-- [ ] **Step 2:** `NODE_ENV=test npx vitest run --project unit` — full unit project must pass (regressions elsewhere e.g. sessionManager recover tests that assert 'Session failed to start' flows are unrelated but verify).
-- [ ] **Step 3:** Manual end-to-end in the WORKTREE: `npm run dev`, spawn a Claude/Opencode pane — session must start; Settings → managed skills shows the grok informational banner with health Active.
-- [ ] **Step 4:** Update this plan's checkboxes; final diff review for unrelated changes.
+- [x] **Step 1:** `npm run typecheck` — must pass.
+- [x] **Step 2:** `NODE_ENV=test npx vitest run --project unit` — full unit project must pass (regressions elsewhere e.g. sessionManager recover tests that assert 'Session failed to start' flows are unrelated but verify).
+- [x] **Step 3:** Manual end-to-end in the WORKTREE: `npm run dev`, spawn a Claude/Opencode pane — session must start; Settings → managed skills shows the grok informational banner with health Active.
+- [x] **Step 4:** Update this plan's checkboxes; final diff review for unrelated changes.

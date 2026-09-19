@@ -30,7 +30,7 @@ function resultMessage(result: AgentCodeConventionsMutationResult): string {
   if (result.code === 'revision-conflict') return 'Conventions changed elsewhere. Reload the editor.'
   if (result.code === 'target-conflict') return 'An installation path needs review.'
   if (result.code === 'clear-blocked') return 'External changes must be resolved before clearing.'
-  if (result.code === 'unsupported') return 'A registered provider does not support personal skills.'
+  if (result.code === 'unsupported') return 'No registered provider supports personal skills.'
   return 'Conventions state needs recovery before it can be changed.'
 }
 
