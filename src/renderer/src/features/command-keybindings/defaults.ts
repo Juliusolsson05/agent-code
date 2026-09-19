@@ -20,9 +20,10 @@ import type { Keybinding } from '@renderer/features/command-keybindings/normaliz
 export type BindingContext =
   /** Fires anywhere the workspace router runs. */
   | 'global'
-  /** Only while the tile grid owns the layout. */
-  | 'grid'
-  /** Only while Dispatch owns the layout. */
+  /** Only while the stage (lanes and rows) owns the layout. With the tile
+   *  grid gone (#992) this is the only layout context — the 'grid' value it
+   *  replaced died with the tree, and with it the grid/dispatch disjointness
+   *  that existed only to separate the two layouts. */
   | 'dispatch'
   /** Only while Global Editor chrome owns focus. */
   | 'editor'
@@ -42,9 +43,10 @@ export type BindingContext =
  * relationships explicitly instead of inheriting a permissive default.
  */
 const DISJOINT_CONTEXT_PAIRS: ReadonlyArray<readonly [BindingContext, BindingContext]> = [
-  ['grid', 'dispatch'],
-  // `editor` is disjoint from both LAYOUT contexts as of #697:
-  // activeBindingContexts drops grid/dispatch entirely while the GLOBAL EDITOR
+  // (['grid', 'dispatch'] died with the tile grid — #992. There is one
+  //  layout, so the only disjointness left is between it and the editor.)
+  // `editor` is disjoint from the layout context as of #697:
+  // activeBindingContexts drops 'dispatch' entirely while the GLOBAL EDITOR
   // owns the target, so a chord can never be matched by a layout binding and an
   // editor binding for the same keystroke.
   //
@@ -76,7 +78,6 @@ const DISJOINT_CONTEXT_PAIRS: ReadonlyArray<readonly [BindingContext, BindingCon
   // pins the pure context map. It does NOT pin the `editorOwnsTarget` DOM
   // predicate or the call-site wiring, so a regression in either would keep the
   // test green while making this list false.
-  ['grid', 'editor'],
   ['dispatch', 'editor'],
 ]
 
@@ -152,6 +153,18 @@ export function buildDefaultKeybindings(): CommandBindingDefault[] {
     { commandId: 'split-horizontal', bindings: ['Alt+Shift+D'], context: 'global' },
     { commandId: 'terminal-horizontal', bindings: ['Alt+T'], context: 'global' },
     { commandId: 'terminal-vertical', bindings: ['Alt+Shift+T'], context: 'global' },
+
+    // The stage's arrow grammar (#992 stage 5, re-homed from useKeybinds'
+    // inline branch). 'dispatch', not 'global': these act on the focused
+    // LANE, and — unlike the creation chords above — they are the whole point
+    // of Option+arrow in a layout. The H/J/K/L aliases ship on the same
+    // commands (one gesture, two keys, as it always was). Exact-match grammar
+    // means Alt+Shift+Arrow, which the old inline branch swallowed by not
+    // testing shift, stays with macOS word-selection.
+    { commandId: 'dispatch-select-previous-agent', bindings: ['Alt+Up', 'Alt+K'], context: 'dispatch' },
+    { commandId: 'dispatch-select-next-agent', bindings: ['Alt+Down', 'Alt+J'], context: 'dispatch' },
+    { commandId: 'dispatch-focus-lane-left', bindings: ['Alt+Left', 'Alt+H'], context: 'dispatch' },
+    { commandId: 'dispatch-focus-lane-right', bindings: ['Alt+Right', 'Alt+L'], context: 'dispatch' },
 
     // Clear Lane (#992 §4.4): the gentle exit, ⌥⌫ to match the plan's card.
     // 'dispatch', not 'global': it acts on the focused LANE, and the router

@@ -12,10 +12,12 @@ import {
 } from '@renderer/features/command-keybindings/reservations'
 
 describe('context overlap matrix', () => {
-  it('treats grid and dispatch as mutually exclusive', () => {
-    // Two states of one layout switch. ⌥K focusing a grid pane and ⌥K moving
-    // the Dispatch selection is one gesture with two meanings, not a conflict.
-    expect(contextsOverlap('grid', 'dispatch')).toBe(false)
+  // ('grid' died with the tile grid — #992. It and its dispatch-disjointness
+  // were two states of one layout switch; with one layout there is nothing
+  // left to be mutually exclusive WITH, which is why the pair list now holds
+  // only dispatch/editor.)
+  it('treats dispatch and editor as mutually exclusive', () => {
+    expect(contextsOverlap('dispatch', 'editor')).toBe(false)
   })
 
   it('treats every other pair as potentially simultaneous', () => {
@@ -23,13 +25,13 @@ describe('context overlap matrix', () => {
     // overlays the workspace, the feed sits inside a pane, and global is by
     // definition everywhere.
     expect(contextsOverlap('global', 'editor')).toBe(true)
-    expect(contextsOverlap('global', 'grid')).toBe(true)
+    expect(contextsOverlap('global', 'dispatch')).toBe(true)
     expect(contextsOverlap('editor', 'feed')).toBe(true)
-    expect(contextsOverlap('feed', 'grid')).toBe(true)
+    expect(contextsOverlap('feed', 'dispatch')).toBe(true)
   })
 
   it('treats a context as overlapping itself', () => {
-    expect(contextsOverlap('grid', 'grid')).toBe(true)
+    expect(contextsOverlap('dispatch', 'dispatch')).toBe(true)
   })
 })
 
@@ -112,11 +114,11 @@ describe('findBindingCollisions', () => {
   })
 
   it('allows the same chord in mutually exclusive contexts', () => {
-    // The grid/dispatch case, which is legal by the overlap matrix.
+    // The dispatch/editor case, which is legal by the overlap matrix.
     const collisions = findBindingCollisions({
       commandDefaults: [
-        { commandId: 'grid-thing', bindings: ['Alt+K'], context: 'grid' },
         { commandId: 'dispatch-thing', bindings: ['Alt+K'], context: 'dispatch' },
+        { commandId: 'editor-thing', bindings: ['Alt+K'], context: 'editor' },
       ],
       reserved: [],
     })

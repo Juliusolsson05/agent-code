@@ -10,21 +10,12 @@ import { resolveEffectiveKeybindings } from '@renderer/features/command-keybindi
 import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { getEffectiveAgentSurface, isAgentKind } from '@renderer/workspace/agentDisplayMode'
-import {
-  buildVisibleDispatchRows,
-  selectVisibleDispatchRow,
-} from '@renderer/workspace/dispatch/dispatchSelectors'
-import { nextTiledRowIndex } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
-import {
-  normalizeGridShape,
-  rowIndexForLane,
-  rowStartIndex,
-} from '@renderer/workspace/dispatch/gridShape'
-import { rowScopedRows } from '@renderer/workspace/dispatch/rowScopedRows'
+import { selectVisibleDispatchRow } from '@renderer/workspace/dispatch/dispatchSelectors'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import { enumerateCodeBlockIds } from '@renderer/features/copy-code-block/lib/enumerateCodeBlocks'
 import { getCodeBlockCode } from '@renderer/features/copy-code-block/lib/codeBlockRegistry'
 import { isMacosTextEditingChord } from '@renderer/features/command-keybindings/reservations'
+import { focusRowByLabel } from '@renderer/workspace/dispatch/laneKeyboard'
 import { buildDefaultKeybindings } from '@renderer/features/command-keybindings/defaults'
 import { useGlobalEditorStore } from '@renderer/features/global-editor/store'
 
@@ -229,12 +220,15 @@ const SURFACE_OWNED_COMMAND_IDS: ReadonlySet<string> = new Set([
  * navigation, and a user typing in a file still expects them to work.
  */
 export function activeBindingContexts(input: {
-  dispatchMode: boolean
   editorOwnsTarget: boolean
   feedFocused: boolean
 }): ReadonlySet<BindingContext> {
+  // `dispatchMode` was a parameter until #992 stage 5: it chose between the
+  // 'grid' and 'dispatch' contexts, and both the parameter and 'grid' died
+  // with the tile grid. The stage is the workspace, so the layout context is
+  // simply live whenever the global editor does not own the target.
   const contexts = new Set<BindingContext>(['global'])
-  if (!input.editorOwnsTarget) contexts.add(input.dispatchMode ? 'dispatch' : 'grid')
+  if (!input.editorOwnsTarget) contexts.add('dispatch')
   if (input.editorOwnsTarget) contexts.add('editor')
   if (input.feedFocused) contexts.add('feed')
   return contexts
@@ -803,12 +797,9 @@ export function useKeybinds(
       // binding while Dispatch owns the layout, so ⌥J falls through to the
       // Dispatch handler instead of being swallowed and refused.
       const activeContexts = activeBindingContexts({
-        // The stage is the workspace (#992): the dispatch context is always
-        // live. Pre-merge this was Boolean(workspace.dispatchMode), gating
-        // grid-context bindings against dispatch ones; with one layout there
-        // is no grid context to fall back to and the 'grid' context dies
-        // with the tree (stage 3).
-        dispatchMode: true,
+        // The stage is the workspace (#992): the layout context is always
+        // 'dispatch' now — the 'grid' it alternated with and the
+        // `dispatchMode` flag that chose both died with the tile tree.
         editorOwnsTarget,
         // 'feed' is live only when a rendered feed is focused AND the user is
         // not typing — which is what keeps bare End as a caret key in every
@@ -854,9 +845,9 @@ export function useKeybinds(
             e.preventDefault()
             if (!e.repeat) {
               // cmd-N fills the FOCUSED LANE. Row index semantics come from
-              // buildVisibleDispatchRows via tiledRowScopedRows, exactly as
+              // buildVisibleDispatchRows via focusedLaneRowScopedRows, exactly as
               // the visible chips do.
-              const selectRow = (index: number) => focusTiledRowByIndex(workspace, index)
+              const selectRow = (index: number) => focusRowByLabel(workspace, index)
               const combined =
                 pendingDispatchDigit !== null ? pendingDispatchDigit * 10 + digit : null
               if (combined !== null && combined >= 10 && combined <= 99) {
@@ -875,67 +866,29 @@ export function useKeybinds(
         // grammar above consumes every digit. Projects keep ⌘⌥1..9.
       }
 
-      // --- ALT: pane management ---
+      // The lane arrows (⌥↑/↓ index walk, ⌥←/→ lane focus, ⌥H/J/K/L
+      // aliases) lived here as an inline `alt && !cmd` branch from #687 until
+      // the unified layout re-homed keyboard (#992 stage 5, the debt #681
+      // §7.1 filed). They are registered commands now — rebindable, visible
+      // in the shortcuts surface, routed by the binding table above — so the
+      // branch is gone. Two things the branch used to do are worth recording:
       //
-      // Important: on macOS, alt+letter produces Unicode symbols
-      // (alt+d → ∂, alt+h → ˙, alt+l → ¬). That means e.key is the
-      // produced symbol, NOT the letter. Use e.code ("KeyD", "KeyH",
-      // …) for reliable detection of alt combos. Arrow keys and
-      // punctuation still use e.key because their codes are verbose
-      // and the key values ARE what we want.
-      if (alt && !cmd) {
-        const code = e.code
-
-        // The lane grid is the workspace (#992): these arrows are always
-        // live. Up/down move the FOCUSED LANE's selection through the row's
-        // own scoped list; left/right switch which lane holds focus without
-        // ever touching another lane's selection.
-        //
-        // WHY these are consumed before any pane navigation could run:
-        // lane selection writes `focusedLane`-addressed state, while the
-        // legacy grid navigation below walks `activeTab.focusedSessionId`
-        // through `tab.root`. Those are deliberately different invariants;
-        // letting grid handlers run underneath the stage would make keyboard
-        // behavior depend on a hidden tree the user cannot see. The grid
-        // handlers themselves die with the tree in stage 3.
-        {
-          if (k === 'ArrowUp' || code === 'KeyK') {
-            e.preventDefault()
-            moveTiledLaneSelection(workspace, -1)
-            return
-          }
-          if (k === 'ArrowDown' || code === 'KeyJ') {
-            e.preventDefault()
-            moveTiledLaneSelection(workspace, 1)
-            return
-          }
-          if (k === 'ArrowLeft' || code === 'KeyH') {
-            e.preventDefault()
-            moveTiledFocusWithinRow(workspace, -1)
-            return
-          }
-          if (k === 'ArrowRight' || code === 'KeyL') {
-            e.preventDefault()
-            moveTiledFocusWithinRow(workspace, 1)
-            return
-          }
-        }
-
-        // Split resizing (fn+alt+arrow, alt+= / alt+-) lived here until the
-        // tile tree died (#992). Lane and row sizes are dragged, or set through
-        // dispatch.configure.
-        //
-        // RESERVED-CHORD RECORD — keep this even though the handler is gone,
-        // because it is the only place the fact is written down and
-        // check:keybindings cannot see it: Option+Shift+Arrow is the macOS
-        // system shortcut for word-by-word text selection and is load-bearing
-        // for every text field in the app (including our composer). It was
-        // tried for directional resize, broke selection, and was replaced by
-        // fn+alt+arrow. Never bind it. On macOS, Fn+arrow reaches the app as
-        // Home/End/PageUp/PageDown with altKey set; the Fn modifier itself is
-        // never visible to the page.
-      }
-
+      // 1. It consumed Alt+Shift+Arrow as if it were the bare arrow (the
+      //    `alt && !cmd` test never checked shift), silently breaking macOS
+      //    word-selection in every composer. The binding grammar is
+      //    exact-match, so registering the BARE chords fixed that by accident
+      //    of correctness rather than by a guard someone could remove.
+      //
+      // 2. Split resizing (fn+alt+arrow, alt+= / alt+-) lived under the same
+      //    branch until the tile tree died. RESERVED-CHORD RECORD, kept
+      //    because it is the only place the fact is written down and
+      //    check:keybindings cannot see it: Option+Shift+Arrow is the macOS
+      //    system shortcut for word-by-word text selection and is load-bearing
+      //    for every text field in the app (including our composer). It was
+      //    tried for directional resize, broke selection, and was replaced by
+      //    fn+alt+arrow. Never bind it. (The runtime yield in
+      //    routedCommandForEvent enforces this family for registered chords
+      //    too — see isMacosTextEditingChord.)
     }
 
     const onKeyUp = (e: KeyboardEvent) => {
@@ -995,15 +948,6 @@ function digitFromKeyboardEvent(
   return !Number.isNaN(digit) && digit >= 1 && digit <= 9 ? digit : null
 }
 
-function dispatchRows(workspace: Workspace) {
-  // WHY use the visible-row helper instead of flattening groups here:
-  // keyboard selection is the user's row-number contract. Once index rows
-  // include pinned agents and terminal sessions, "cmd-3" must resolve against
-  // the exact same list the user sees, not a convenient subset of project
-  // groups. The helper keeps this in lockstep with the lane grid and command
-  // targeting.
-  return buildVisibleDispatchRows(workspace.state)
-}
 
 // ---- Lane-grid keybind helpers ----
 //
@@ -1017,74 +961,4 @@ function dispatchRows(workspace: Workspace) {
 // classic layout: with the lane grid as the only workspace there is no
 // surface left for single-focus selection to act on.
 
-function focusedTiledLane(workspace: Workspace): number {
-  return workspace.stage.focusedLane
-}
 
-/**
- * The rows the FOCUSED grid row actually offers.
- *
- * Keyboard selection has to see the same list the user does. The row's index
- * and strips are filtered by `rowScopedRows` (project binding + child cap), so
- * walking the unfiltered canonical set would let ⌥↓ drop a project-A agent into
- * a row bound to project B — one the row's own selector does not list. The
- * empty-lane hint points straight at this key, which makes that reachable
- * rather than theoretical.
- *
- * Labels are NOT renumbered: these are the canonical rows, filtered. A bound
- * row shows gaps, which is what keeps cmd-N and the visible chip in agreement.
- */
-function tiledRowScopedRows(workspace: Workspace) {
-  const all = dispatchRows(workspace)
-  const grid = normalizeGridShape(workspace.stage)
-  const rowIndex = rowIndexForLane(grid.rows, grid.focusedLane)
-  const gridRow = rowIndex >= 0 ? grid.rows[rowIndex] : undefined
-  if (!gridRow) return all
-  return rowScopedRows(all, gridRow).flatMap(item => (item.kind === 'agent' ? [item.row] : []))
-}
-
-function focusTiledRowByIndex(workspace: Workspace, index: number) {
-  // cmd-N addresses a LABEL, and labels are canonical (never renumbered), so a
-  // bound row shows gaps like B12, B15. Resolving by label rather than by
-  // position keeps the key and the visible chip naming the same agent; asking
-  // for a label this row does not offer simply does nothing, instead of pulling
-  // in an agent the row's own selector excludes.
-  const row = tiledRowScopedRows(workspace).find(candidate => candidate.globalIndex === index + 1)
-  if (!row) return
-  // Wakes a hibernated detached agent before placing it (#690).
-  void workspace.selectTiledLaneSession(focusedTiledLane(workspace), row.sessionId)
-}
-
-function moveTiledLaneSelection(workspace: Workspace, delta: number) {
-  const tiled = workspace.stage
-  const rows = tiledRowScopedRows(workspace)
-  if (rows.length === 0) return
-  const laneIndex = tiled.focusedLane
-  const currentId = tiled.lanes[laneIndex]?.selectedSessionId
-  const currentIndex = currentId ? rows.findIndex(row => row.sessionId === currentId) : -1
-  // Step one row in `delta` direction, wrapping. Duplicates are allowed, so
-  // we do NOT skip rows shown in other lanes — landing on one just mirrors
-  // that agent into this lane too.
-  const probe = nextTiledRowIndex(currentIndex, delta, rows.length)
-  const row = rows[probe]
-  if (row) void workspace.selectTiledLaneSession(laneIndex, row.sessionId)
-}
-
-/**
- * Move lane focus one step, STOPPING at the row's edges.
- *
- * Wrapping into the neighbouring row would make one keystroke move focus a
- * single lane or jump it across the layout depending on where you started —
- * fine when you are looking, wrong when you are typing fast. Crossing rows is
- * the deliberate job of Focus Row Above/Below.
- */
-function moveTiledFocusWithinRow(workspace: Workspace, delta: number) {
-  const grid = normalizeGridShape(workspace.stage)
-  const rowIndex = rowIndexForLane(grid.rows, grid.focusedLane)
-  if (rowIndex < 0) return
-  const start = rowStartIndex(grid.rows, rowIndex)
-  const end = start + (grid.rows[rowIndex]?.length ?? 0) - 1
-  const next = grid.focusedLane + delta
-  if (next < start || next > end) return
-  workspace.setTiledFocusedLane(next)
-}

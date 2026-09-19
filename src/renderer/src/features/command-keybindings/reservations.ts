@@ -144,14 +144,15 @@ export const RESERVED_INTERACTIONS: readonly ReservedInteraction[] = [
     context: 'editor',
     owner: 'Monaco multi-cursor / column select',
   },
-  {
-    // Dispatch row/lane movement. Mutually exclusive with the grid navigation
-    // COMMANDS that share these chords — that disjointness is exactly what the
-    // overlap matrix encodes, and why this is legal rather than a conflict.
-    bindings: ['Alt+Up', 'Alt+Down', 'Alt+Left', 'Alt+Right', 'Alt+J', 'Alt+K', 'Alt+H', 'Alt+L'],
-    context: 'dispatch',
-    owner: 'Dispatch row and lane selection',
-  },
+  // 'Dispatch row and lane selection' (Alt+arrows + Alt+H/J/K/L, dispatch
+  // context) was reserved here until #992 stage 5: the gestures were an
+  // unregistered inline branch in useKeybinds, so a reservation was the only
+  // way to stop a user binding something the app would swallow. They are
+  // COMMANDS now — dispatch-select-previous/next-agent and
+  // dispatch-focus-lane-left/right — which own the chords in the defaults
+  // table and participate in collision checking like every other command.
+  // Keeping the reservation would have reported each chord as doubly owned by
+  // its own command.
   // 'Split resize' (Alt+= / Alt+-) and 'Directional split resize'
   // (Alt+Home/End/PageUp/PageDown, i.e. Fn+Option+Arrow) were reserved here
   // until the tile tree died (#992). A reservation exists to stop a user

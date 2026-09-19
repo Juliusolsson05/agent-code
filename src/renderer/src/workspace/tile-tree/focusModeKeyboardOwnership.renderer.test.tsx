@@ -131,6 +131,41 @@ describe('focus-mode keyboard ownership', () => {
     }
   })
 
+  it('routes the bare lane arrows to the registered commands on the plain stage', () => {
+    // #992 stage 5: the ⌥ grammar became commands. This is the end-to-end
+    // proof the router (not a resurrected inline branch) delivers them.
+    const { workspace } = makeWorkspace('reader' as const)
+    const plain = { ...workspace, readerMode: null, spotlight: null } as typeof workspace
+    const view = render(<KeyboardHarness workspace={plain} />)
+
+    fireEvent.keyDown(document, { altKey: true, code: 'ArrowDown', key: 'ArrowDown' })
+    fireEvent.keyDown(document, { altKey: true, code: 'ArrowLeft', key: 'ArrowLeft' })
+    fireEvent.keyDown(document, { altKey: true, code: 'KeyK', key: '˚' })
+
+    const invoked = (harness.appState.requestCommandInvocation as ReturnType<typeof vi.fn>).mock.calls
+      .map(call => call[0])
+    expect(invoked).toContain('dispatch-select-next-agent')
+    expect(invoked).toContain('dispatch-focus-lane-left')
+    expect(invoked).toContain('dispatch-select-previous-agent')
+    view.unmount()
+  })
+
+  it('yields Alt+Shift+Arrow to the OS instead of treating it as a lane arrow', () => {
+    // The inline branch this grammar replaced tested `alt && !cmd` without a
+    // shift check, so ⌥⇧↓ ran the index walk while the user was trying to
+    // select by word (#992 stage 5 record, useKeybinds). The binding grammar
+    // is exact-match, so the shifted chord matches nothing and stays native.
+    const { workspace } = makeWorkspace('reader' as const)
+    const plain = { ...workspace, readerMode: null, spotlight: null } as typeof workspace
+    const view = render(<KeyboardHarness workspace={plain} />)
+
+    fireEvent.keyDown(document, { altKey: true, shiftKey: true, code: 'ArrowDown', key: 'ArrowDown' })
+    fireEvent.keyDown(document, { altKey: true, shiftKey: true, code: 'ArrowLeft', key: 'ArrowLeft' })
+
+    expect(harness.appState.requestCommandInvocation).not.toHaveBeenCalled()
+    view.unmount()
+  })
+
   it('routes Alt+Backspace to Clear Lane when no text field owns the target', () => {
     // Clear Lane ships on ⌥⌫ (#992 §4.4). Outside text editing the chord is
     // the stage's to claim, and it must arrive as a COMMAND invocation —

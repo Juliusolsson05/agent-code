@@ -11,6 +11,7 @@ import {
 } from '@renderer/workspace/dispatch/gridShape'
 import { resolveStrictDispatchCommandTarget } from '@renderer/workspace/dispatch/dispatchTarget'
 import { sessionDisplayTitle } from '@renderer/workspace/sessionDisplayTitle'
+import { moveLaneSelection, moveLaneFocusWithinRow } from '@renderer/workspace/dispatch/laneKeyboard'
 import type { WorkspaceState } from '@renderer/workspace/types'
 import { useAppStore } from '@renderer/app-state/hooks'
 
@@ -24,6 +25,56 @@ import { useAppStore } from '@renderer/app-state/hooks'
 // it (#681). Paired with Remove Lane below — same slot, opposite blast
 // radius — and with Close Agent and Remove Lane for the destructive version
 // of each half.
+// The stage's keyboard grammar as commands (#992 stage 5, the #681 §7.1
+// debt): ⌥↑/↓ walk the focused lane's selection through its row's index,
+// ⌥←/→ move lane focus within the row. These were an unregistered inline
+// branch in useKeybinds — which meant they could not be rebound, never
+// appeared in the shortcuts surface, and silently swallowed Alt+Shift+Arrow
+// (the branch tested `alt && !cmd`, never shift). As registered commands the
+// chords are exact-match, so ⌥⇧-arrow stays the OS's word-selection.
+//
+// The movers live in workspace/dispatch/laneKeyboard.ts — one home for the
+// grammar — and selection writes through `selectTiledLaneSession`, never the
+// raw lane writer, so a hibernated agent wakes before it is placed (#690).
+const laneKeyboardCommands: CommandDef[] = [
+  {
+    id: 'dispatch-select-previous-agent',
+    category: 'layout-dispatch',
+    surface: 'workspace',
+    title: 'Select Previous Agent',
+    description: '**What it does:** Moves the **focused lane**\'s selection one step UP its row\'s agent index, wrapping around.\n\n**Use when:** You are scanning agents in the lane you are in.\n\n**Notes:** Agents shown in other lanes are not skipped — selecting one mirrors it here. Hibernated agents wake on selection.',
+    keywords: ['previous', 'up', 'agent', 'walk', 'index', 'lane', 'selection', 'arrows'],
+    run: ({ workspace }) => moveLaneSelection(workspace, -1),
+  },
+  {
+    id: 'dispatch-select-next-agent',
+    category: 'layout-dispatch',
+    surface: 'workspace',
+    title: 'Select Next Agent',
+    description: '**What it does:** Moves the **focused lane**\'s selection one step DOWN its row\'s agent index, wrapping around.\n\n**Use when:** You are scanning agents in the lane you are in.\n\n**Notes:** Agents shown in other lanes are not skipped — selecting one mirrors it here. Hibernated agents wake on selection.',
+    keywords: ['next', 'down', 'agent', 'walk', 'index', 'lane', 'selection', 'arrows'],
+    run: ({ workspace }) => moveLaneSelection(workspace, 1),
+  },
+  {
+    id: 'dispatch-focus-lane-left',
+    category: 'layout-dispatch',
+    surface: 'workspace',
+    title: 'Focus Lane Left',
+    description: '**What it does:** Moves lane focus one lane LEFT within the focused row, stopping at the row\'s edge.\n\n**Use when:** You want to type into the lane beside this one.\n\n**Notes:** Never wraps into another row and never changes any lane\'s agent — crossing rows is what Focus Row Above/Below is for.',
+    keywords: ['focus', 'left', 'lane', 'cursor', 'arrows'],
+    run: ({ workspace }) => moveLaneFocusWithinRow(workspace, -1),
+  },
+  {
+    id: 'dispatch-focus-lane-right',
+    category: 'layout-dispatch',
+    surface: 'workspace',
+    title: 'Focus Lane Right',
+    description: '**What it does:** Moves lane focus one lane RIGHT within the focused row, stopping at the row\'s edge.\n\n**Use when:** You want to type into the lane beside this one.\n\n**Notes:** Never wraps into another row and never changes any lane\'s agent — crossing rows is what Focus Row Above/Below is for.',
+    keywords: ['focus', 'right', 'lane', 'cursor', 'arrows'],
+    run: ({ workspace }) => moveLaneFocusWithinRow(workspace, 1),
+  },
+]
+
 export const clearFocusedLaneCommand: CommandDef = {
   id: 'clear-focused-lane',
   category: 'layout-dispatch',
@@ -143,6 +194,7 @@ export const layoutCommands: CommandDef[] = [
     },
   },
   clearFocusedLaneCommand,
+  ...laneKeyboardCommands,
   {
     id: 'close-agent-remove-lane',
     category: 'layout-dispatch',

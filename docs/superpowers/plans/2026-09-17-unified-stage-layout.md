@@ -824,6 +824,49 @@ What the test conversion taught this time:
   keystroke, and both halves (routes on the bare stage; yields in a
   composer) are ownership claims.
 
+
+---
+
+### 9.3 Stage 5 execution record (keyboard registry migration)
+
+Executed as designed in §5.2, plus the 'grid' context deletion that was filed
+under "still open" after 3b-ii:
+
+- **The four inline arrows are commands.** `dispatch-select-previous-agent` /
+  `dispatch-select-next-agent` (⌥↑/⌥↓, aliases ⌥K/⌥J) walk the focused lane's
+  selection through its row's index; `dispatch-focus-lane-left` / -right
+  (⌥←/⌥→, aliases ⌥H/⌥L) move lane focus within the row, stopping at the
+  edges. The movers live in `workspace/dispatch/laneKeyboard.ts` — one home
+  for the grammar — and selection writes through `selectTiledLaneSession`,
+  never the raw lane writer, so a hibernated agent wakes before it is placed
+  (#690). `useKeybinds`' inline `alt && !cmd` branch is deleted; the commands
+  route through the binding table like everything else, so they are
+  rebindable, visible in the shortcuts surface, and participate in collision
+  checking.
+- **The migration fixed Alt+Shift+Arrow by accident of correctness.** The
+  inline branch tested `alt && !cmd` and never checked shift, so ⌥⇧↓ ran the
+  index walk while the user was selecting text by word — the exact failure
+  the reservation table's header admitted it could not prevent ("does not
+  stop the inline dispatch grammar from consuming Alt+Shift+Arrow in a
+  composer today"). The binding grammar is exact-match, so the shifted chords
+  match nothing and stay native. Pinned by a keyboard test.
+- **The 'Dispatch row and lane selection' reservation became commands.** The
+  reservation existed because an unregistered handler owned eight chords; the
+  commands own them in the defaults table now, and keeping the reservation
+  would have reported each chord as doubly owned by its own command. The
+  entry is replaced by a ledger note, same pattern as the deleted resize
+  reservations.
+- **'grid' is gone as a binding context**, with the `dispatchMode` flag on
+  `activeBindingContexts` — the stage is the workspace, so the layout context
+  is simply live whenever the global editor does not own the target.
+  DISJOINT_CONTEXT_PAIRS keeps only `['dispatch', 'editor']` (#697's gate and
+  its test unchanged in substance). The shortcuts surface's context label for
+  `dispatch` reads "Workspace only" — no user-facing copy may name Dispatch
+  as a mode (§5.4).
+- The ⌘1–9 / two-digit row grammar stays INLINE deliberately: it is a
+  contextual interaction with continuation state (a pending digit and a
+  timer), not a command — exactly the class the reservation header describes.
+
 ## 10. Testing strategy
 
 Per `docs/testing/standard.md` — suffix picks the tier, each test protects

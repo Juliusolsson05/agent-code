@@ -92,8 +92,10 @@ const CATEGORY_RANK: Record<CommandCategory, number> = {
  */
 const CONTEXT_LABELS: Record<BindingContext, string | null> = {
   global: null,
-  grid: 'Grid only',
-  dispatch: 'Dispatch only',
+  // 'Workspace only': the layout context is the stage now — 'grid' and its
+  // label died with the tile grid (#992), and user-facing copy may not name
+  // "Dispatch" as a mode (§5.4).
+  dispatch: 'Workspace only',
   editor: 'Editor only',
   feed: 'Feed only',
 }

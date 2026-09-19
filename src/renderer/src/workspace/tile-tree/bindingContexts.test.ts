@@ -23,7 +23,6 @@ import { activeBindingContexts } from '@renderer/workspace/tile-tree/useKeybinds
 describe('activeBindingContexts', () => {
   const contexts = (input: Partial<Parameters<typeof activeBindingContexts>[0]>) =>
     activeBindingContexts({
-      dispatchMode: false,
       editorOwnsTarget: false,
       feedFocused: false,
       ...input,
@@ -33,31 +32,28 @@ describe('activeBindingContexts', () => {
     expect(contexts({}).has('global')).toBe(true)
   })
 
-  it('makes exactly one of grid and dispatch live for the current layout', () => {
-    // They are mutually exclusive by construction, which is what lets the
-    // overlap matrix declare them disjoint and legally share chords.
-    expect(contexts({ dispatchMode: false }).has('grid')).toBe(true)
-    expect(contexts({ dispatchMode: false }).has('dispatch')).toBe(false)
-    expect(contexts({ dispatchMode: true }).has('dispatch')).toBe(true)
-    expect(contexts({ dispatchMode: true }).has('grid')).toBe(false)
+  it('always includes the layout context outside the editor', () => {
+    // `dispatchMode` chose between 'grid' and 'dispatch' until the tile grid
+    // died (#992 stage 5). The stage is the workspace, so the layout context
+    // needs no condition and the flag is gone.
+    expect(contexts({}).has('dispatch')).toBe(true)
   })
 
   it('drops the layout context entirely while the Global Editor owns the target', () => {
-    // #697. `grid` and `dispatch` describe which WORKSPACE SURFACE owns the
-    // keyboard. When Monaco owns the target it owns the keyboard, so neither is
-    // live — otherwise a workspace chord is matched, preventDefault()ed, and
-    // invoked while the user is typing, and the editor never sees the key.
+    // #697. The layout context says the WORKSPACE owns the keyboard. When
+    // Monaco owns the target it owns the keyboard, so the layout context is
+    // not live — otherwise a workspace chord is matched, preventDefault()ed,
+    // and invoked while the user is typing, and the editor never sees the key.
     //
-    // Scope, precisely: `editorOwnsTarget` is the GLOBAL EDITOR only. The agent
-    // composer keeps grid/dispatch live on purpose, since navigating rows from
-    // a focused composer is Dispatch's core workflow.
+    // Scope, precisely: `editorOwnsTarget` is the GLOBAL EDITOR only. The
+    // agent composer keeps the layout context live on purpose, since
+    // navigating rows from a focused composer is the stage's core workflow.
     //
     // Concretely: Cmd+Alt+Down is Monaco's Add Cursor Below. With `dispatch`
-    // live it would move Dispatch row focus instead and add no cursor.
-    const inEditor = contexts({ dispatchMode: true, editorOwnsTarget: true })
+    // live it would move row focus instead and add no cursor.
+    const inEditor = contexts({ editorOwnsTarget: true })
 
     expect(inEditor.has('dispatch')).toBe(false)
-    expect(inEditor.has('grid')).toBe(false)
     expect(inEditor.has('editor')).toBe(true)
   })
 

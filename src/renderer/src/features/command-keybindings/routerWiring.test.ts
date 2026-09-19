@@ -46,13 +46,17 @@ describe('context filtering', () => {
   const contextOf = (id: string) => defaults.find(e => e.commandId === id)?.context
 
   // DELETED (#992): 'keeps navigation commands in the grid context' — the
-  // nav-* commands died with the tile tree; the grid context has no members
-  // until stage 5 re-homes the lane-stage gestures.
+  // nav-* commands died with the tile tree, and the 'grid' context followed in
+  // stage 5 when the lane-stage gestures (⌥ arrows / HJKL) became registered
+  // 'dispatch' commands (dispatch-select-previous/next-agent,
+  // dispatch-focus-lane-left/right).
 
-  it('does not let a grid binding match while Dispatch is live', () => {
-    // 'grid' and 'dispatch' are the one disjoint pair, which is exactly what
-    // lets Alt+K mean two different things without being a conflict.
-    expect(contextsOverlap('grid', 'dispatch')).toBe(false)
+  it('keeps the lane grammar in the layout context and the editor disjoint', () => {
+    // The one remaining disjoint pair: it is what lets a chord be a layout
+    // gesture here and a Monaco command inside the editor.
+    expect(contextsOverlap('dispatch', 'editor')).toBe(false)
+    expect(contextOf('dispatch-select-previous-agent')).toBe('dispatch')
+    expect(contextOf('dispatch-focus-lane-left')).toBe('dispatch')
   })
 
   it('scopes the feed binding so it cannot steal from a composer', () => {
