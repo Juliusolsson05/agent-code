@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { GOAL_LOOP_MAX_CONTINUATIONS_CEILING } from '@shared/types/goalLoop'
+import { useAgentTerminalOwnerVisible } from '@renderer/workspace/terminal/AgentTerminalOwnership'
 import type { GoalLoopControlAction, GoalLoopState } from '@shared/types/goalLoop'
 import { dismissGoalLoop, useGoalLoopView } from './viewState'
 
@@ -44,7 +45,16 @@ function GoalLoopOverlay({ children }: { children: ReactNode }) {
  * the clicks, and theme tokens so they read in every theme. */
 export function GoalLoopPane({ sessionId }: { sessionId: string }) {
   const [loop, setLoop] = useState<GoalLoopState | null>(null)
-  const latched = useGoalLoopView(state => state.latched)
+  // WHY the overlay also requires VISIBILITY, not just the latch (#1021
+  // review): Reader, Spotlight, Settings and the fullscreen Global Editor
+  // keep the whole workspace MOUNTED under display:none. An overlay rendered
+  // there exists in the DOM, so the keyboard gate saw it and swallowed every
+  // key, but nobody could see it. That is the same invisible trap, one level
+  // down. The visibility context composes every enclosing hiding shell (see
+  // AgentTerminalOwnership), so a hidden pane renders no overlay, and the
+  // router treats the latch as stale instead.
+  const visible = useAgentTerminalOwnerVisible()
+  const latched = useGoalLoopView(state => state.latched) && visible
   useEffect(() => {
     // Guard: pane tests stub window.api partially, and a loop surface that
     // crashes a pane over a missing IPC method is worse than one that renders

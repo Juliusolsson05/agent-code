@@ -1,10 +1,11 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { useEffect } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { GoalLoopState } from '@shared/types/goalLoop'
 import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { useKeybinds } from '@renderer/workspace/tile-tree/useKeybinds'
+import { RetainedWorkspaceSurface } from '@renderer/app/shell/RetainedWorkspaceSurface'
 import { GoalLoopPane } from './GoalLoopPane'
 import { goalLoopCommands } from './commands'
 import { dismissGoalLoop, toggleGoalLoop, useGoalLoopView } from './viewState'
@@ -132,6 +133,50 @@ describe('goal loop command with no loop on the session (#1021)', () => {
     fireEvent.blur(window)
     expect(useGoalLoopView.getState().latched).toBe(false)
     expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  // Review round 2: "mounted" is not "visible". Reader, Spotlight, Settings and
+  // the fullscreen editor keep the workspace mounted under display:none via
+  // the REAL RetainedWorkspaceSurface used here, so an overlay there sat in the
+  // DOM, passed the gate's check, and swallowed every key unseen.
+  it('does not trap input when the agent pane is inside a hidden retained workspace (Reader/Spotlight/Settings)', async () => {
+    render(<><Harness model={workspace()} /><RetainedWorkspaceSurface hidden><GoalLoopPane sessionId="a" /></RetainedWorkspaceSurface></>)
+    const composer = screen.getByLabelText('Composer')
+    composer.focus()
+    runGoalLoopCommand()
+    // Let React commit the latch change first. Firing the key before the
+    // overlay could mount would pass for the WRONG reason: the first draft of
+    // this test did exactly that, and passed on the unfixed code too.
+    await act(async () => { await Promise.resolve() })
+    expect(document.querySelector('[data-goal-loop-overlay]')).toBeNull()
+    expect(fireEvent.keyDown(composer, { key: 'a', code: 'KeyA' })).toBe(true)
+    expect(useGoalLoopView.getState().latched).toBe(false)
+  })
+
+  it('the toggle chord on a stale latch turns it off instead of re-arming it', () => {
+    // A terminal-only tab: no pane can render an overlay. Before the fix, each
+    // press re-ran the command and re-armed an invisible latch.
+    render(<Harness model={workspace()} />)
+    runGoalLoopCommand()
+    keyDown({ key: 'y', code: 'KeyY', metaKey: true, shiftKey: true })
+    expect(useGoalLoopView.getState().latched).toBe(false)
+    expect(harness.appState.requestCommandInvocation).not.toHaveBeenCalled()
+  })
+
+  it('drops a latch that no visible pane rendered, so it cannot pop an overlay into a later tab', async () => {
+    render(<Harness model={workspace()} />)
+    runGoalLoopCommand()
+    expect(useGoalLoopView.getState().latched).toBe(true)
+    await new Promise(resolve => window.requestAnimationFrame(() => resolve(undefined)))
+    expect(useGoalLoopView.getState().latched).toBe(false)
+  })
+
+  it('keeps the latch when a visible pane did render the overlay', async () => {
+    render(<><Harness model={workspace()} /><GoalLoopPane sessionId="a" /></>)
+    runGoalLoopCommand()
+    expect(await screen.findByRole('dialog')).toBeTruthy()
+    await new Promise(resolve => window.requestAnimationFrame(() => resolve(undefined)))
+    expect(useGoalLoopView.getState().latched).toBe(true)
   })
 
   it('a rebound goal-loop-preview chord still dismisses the overlay', async () => {

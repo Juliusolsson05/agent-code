@@ -484,6 +484,16 @@ export function useKeybinds(
       if (useGoalLoopView.getState().latched) {
         if (document.querySelector('[data-goal-loop-overlay]') == null) {
           dismissGoalLoop()
+          // The toggle chord on a stale latch means "turn it off". Letting it
+          // fall through would run goal-loop-preview again and RE-arm the
+          // latch with nothing to show, so every press in a terminal-only tab
+          // flipped an invisible flag that a later mouse tab switch then
+          // turned into an overlay out of nowhere (#1021 review).
+          if (routedCommandForEvent(e, bindingIndex, GLOBAL_CONTEXT_ONLY) === 'goal-loop-preview') {
+            e.preventDefault()
+            e.stopPropagation()
+            return
+          }
         } else {
           e.preventDefault()
           e.stopPropagation()
