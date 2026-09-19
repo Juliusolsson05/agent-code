@@ -299,6 +299,7 @@ export function buildDefaultKeybindings(): CommandBindingDefault[] {
     { commandId: 'toggle-reader-mode', bindings: ['Alt+R'], context: 'global' },
     { commandId: 'tldr-preview', bindings: ['Cmd+L'], context: 'global' },
     { commandId: 'goal-preview', bindings: ['Cmd+G'], context: 'global' },
+    { commandId: 'goal-loop-preview', bindings: ['Cmd+Shift+Y'], context: 'global' },
     { commandId: 'toggle-spotlight', bindings: ['Alt+S'], context: 'global' },
     // ⌥F, leaving ⌥⇧F open for Auto-follow ALL Visible Agents — the same
     // soft/heavy pairing, and the command that OWNS the effective state when

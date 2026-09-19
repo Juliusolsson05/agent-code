@@ -18,6 +18,7 @@ import type { SessionManager } from '@main/sessionManager.js'
 import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import type { WorkflowBridge } from '@main/workflows/WorkflowBridge.js'
 import type { WorkflowService } from 'workflow-mcp'
+import type { GoalLoopService } from '@main/goalLoop/GoalLoopService.js'
 import { performanceService } from '@main/performance/PerformanceService.js'
 import { filterBuiltInMcpDomainsForProvider } from '@mcp/shared/types.js'
 import type {
@@ -75,6 +76,7 @@ export type BuiltInMcpDependencies = {
   appRunJournal?: AppRunJournal
   workflowService?: WorkflowService
   workflowBridge?: WorkflowBridge
+  goalLoopService?: Pick<GoalLoopService, 'startLoop' | 'complete'>
   /**
    * Installs the operator control catalog (`ac_*` tools) on a session's server
    * when its scope carries `root_management` (#906).

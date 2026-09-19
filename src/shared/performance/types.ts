@@ -1,4 +1,3 @@
-import type { SessionKind } from '@shared/types/providerKind.js'
 
 export type PerformanceProcess = 'main' | 'renderer' | 'preload'
 
@@ -55,24 +54,6 @@ export type PerformanceSnapshot = {
   files: Array<{ name: string; content: string }>
 }
 
-export type PanePerformanceStats = {
-  sessionId: string
-  kind: SessionKind
-  status: 'running' | 'idle' | 'exited' | 'unknown'
-  rootPid: number | null
-  cpuPercent: number | null
-  memoryBytes: number | null
-  childCount: number
-  lastActivityAt: number | null
-  sampledAt: number
-}
-
-export type PanePerformanceSnapshot = {
-  enabled: boolean
-  sampledAt: number
-  panes: PanePerformanceStats[]
-}
-
 // Main-process snapshot powering the always-visible header badge.
 //
 // WHY a NEW type rather than extending PerformanceSnapshot or
@@ -80,11 +61,10 @@ export type PanePerformanceSnapshot = {
 //
 // - PerformanceSnapshot returns ON-DISK log files (large, infrequent
 //   IO) — wrong shape for the 1 Hz header poll.
-// - PanePerformanceSnapshot describes PER-AGENT processes (cpu /
-//   memory / status for sessionIds) — that's agent perf, not main-
-//   process perf. The header strip is intentionally NOT per-agent;
-//   the OOM crashes we're chasing happen in the Electron main
-//   process, not in agent subprocesses.
+// - Per-agent process stats live in the Performance Monitor's own
+//   snapshot contracts (processSnapshot.ts); this type is
+//   deliberately NOT per-agent — the OOM crashes we're chasing
+//   happen in the Electron main process, not in agent subprocesses.
 //
 // The fields below are deliberately the v8/process numbers a v8
 // fatal-error log reports, in the same units. `heapUsed` is the

@@ -17,4 +17,23 @@ describe('monitor read transport', () => {
     resolve(null)
     await next
   })
+
+  it('shares one pending agent-usage read across rapid polls and permits a fresh read after completion', async () => {
+    // The overview polls every 5 s; a frozen main must not accumulate one
+    // promise per poll across remounts — same contract as the snapshot.
+    // The invoke mock is module-shared and carries the previous test's calls,
+    // so counts are asserted relative to a cleared mock.
+    ipc.invoke.mockClear()
+    let resolve!: (value: null) => void
+    ipc.invoke.mockImplementation(() => new Promise(done => { resolve = done }))
+    const first = performanceApi.getMonitorAgentUsage()
+    for (let i = 0; i < 100; i++) expect(performanceApi.getMonitorAgentUsage()).toBe(first)
+    expect(ipc.invoke).toHaveBeenCalledTimes(1)
+    resolve(null)
+    await first
+    const next = performanceApi.getMonitorAgentUsage()
+    expect(ipc.invoke).toHaveBeenCalledTimes(2)
+    resolve(null)
+    await next
+  })
 })

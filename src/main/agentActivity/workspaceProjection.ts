@@ -19,6 +19,12 @@ export type SessionPlacement = {
   cwd: string | null
   title: string | null
   agentNameId: string | null
+  /** TLDR/Goal store identity. The remote subsystem joins this to the
+   *  TldrStore instances so TLDR/Goal frames can be keyed by sessionId on
+   *  the wire without the phone ever learning the identity scheme. */
+  tldrIdentity: string | null
+  /** Pinned to the top of its dispatch list. */
+  pinned: boolean
   /** Spawned by another agent through orchestration. */
   orchestration: boolean
   tabId: string | null
@@ -87,6 +93,15 @@ export function projectWorkspace(windows: readonly PersistedWindow[]): Workspace
         if (sessionId && tabId && !tabBySession.has(sessionId)) tabBySession.set(sessionId, tabId)
       }
     }
+    // Pinned ids live at the workspace level (the dispatch list's pin order
+    // is renderer state; the projection only needs membership).
+    const pinnedIds = new Set<string>()
+    if (Array.isArray(workspace.pinnedSessionIds)) {
+      for (const id of workspace.pinnedSessionIds) {
+        const sessionId = str(id)
+        if (sessionId) pinnedIds.add(sessionId)
+      }
+    }
     for (const record of Array.isArray(workspace.buried) ? workspace.buried : []) {
       if (!isRecord(record)) continue
       const sessionId = str(record.sessionId)
@@ -104,6 +119,8 @@ export function projectWorkspace(windows: readonly PersistedWindow[]): Workspace
         cwd: str(meta.cwd),
         title: str(meta.title),
         agentNameId: str(meta.agentNameId),
+        tldrIdentity: str(meta.tldrIdentity),
+        pinned: pinnedIds.has(sessionId),
         orchestration: str(meta.orchestrationParentId) !== null,
         tabId,
         tabTitle: tabId ? (tabTitleById.get(tabId) || null) : null,

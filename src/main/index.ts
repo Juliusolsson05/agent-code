@@ -10,6 +10,9 @@ import { performanceTraceController } from '@main/performance/PerformanceTraceCo
 import { TldrStore } from '@main/tldr/TldrStore.js'
 import { registerGoalIpc, registerTldrIpc } from '@main/tldr/ipc.js'
 import { TldrEnforcement } from '@main/tldr/enforcement.js'
+import { GoalLoopStore } from '@main/goalLoop/GoalLoopStore.js'
+import { GoalLoopService } from '@main/goalLoop/GoalLoopService.js'
+import { registerGoalLoopIpc } from '@main/goalLoop/ipc.js'
 import { sweepStaleTldrHookFiles } from '@providers/shared/runtime/tldrHooks.js'
 import { ExternalControlMcpHost } from './externalControlMcp/host'
 import { registerOperatorControlTools } from './externalControlMcp/tools'
@@ -106,6 +109,8 @@ import { ConversationLedger, readAgentNameAssignments } from '@main/conversation
 import { createConversationService } from '@main/conversations/service.js'
 import { listWorktreesForCwd } from '@main/ipc/git.js'
 import { AGENT_NAMES_FILE } from '@main/agentNames/ipc.js'
+import { RemoteWorkspaceProjection } from '@main/remote/workspaceProjection.js'
+import { getUsageSnapshot } from '@main/usage/usageService.js'
 import { CONVERSATIONS_LEDGER_FILE } from '@main/storage/paths.js'
 import { isSessionRecordingEnabled, isSessionRecordingAutoStart } from '@main/ipc/devDebug.js'
 import { registerAllIpc } from '@main/ipc/index.js'
@@ -265,6 +270,7 @@ const vaultService = new VaultService({
 // callbacks that fire after the assignment.
 let manager: SessionManager | null = null
 let remoteController: RemoteController | null = null
+let remoteWorkspaceProjection: RemoteWorkspaceProjection | null = null
 let tmuxRegistry: TmuxRegistry | null = null
 let stateProcessLock: Extract<StateProcessLock, { acquired: true }> | null = null
 let appRunJournal: AppRunJournal | null = null
@@ -930,6 +936,22 @@ async function startApp(): Promise<void> {
   remoteController = new RemoteController({
     manager,
     journal: appRunJournal,
+    // v2 identity projection: one read model over the persisted workspace
+    // (titles, spoken names, tabs, pins) for the remote server's session
+    // summaries. Handed over as a GETTER because the store opens later in
+    // startup than this construction (same pattern as getThemeSettings);
+    // the projection itself observes the store, so remote disabled costs
+    // it nothing and enable picks up whatever has opened by then.
+    getWorkspace: () => remoteWorkspaceProjection,
+    // TLDR/Goal note stores — constructed later in startup (shared with the
+    // desktop's IPC surface); remote only reads and subscribes, the MCP
+    // tools remain the only writers.
+    getNotes: () => ({ tldr: tldrStore, goal: goalStore }),
+    // v2 usage indicator on the phone: the shared service's cached snapshot
+    // getter (a cache read per connected minute, never a fresh provider
+    // call unless the TTL already expired).
+    getUsageSnapshot: () =>
+      getUsageSnapshot().then(snapshot => snapshot).catch(() => null),
     clientDistDir: join(app.getAppPath(), 'out', 'remote-client'),
     // Tunnel binary resolution — bundled artifact first (packaged app),
     // then the third_party dev cache (populated by `npm run
@@ -986,10 +1008,19 @@ async function startApp(): Promise<void> {
   })
   registerTldrIpc(tldrStore, tldrEnforcement)
   registerGoalIpc(goalStore)
+  // Goal Loop (#1001): constructed before setDependencies for the same
+  // one-shot reason as every other built-in dependency — the MCP handlers
+  // close over the service object. start() itself warns-and-continues on
+  // unreadable persisted state, matching the sweep pattern above.
+  const goalLoopStore = new GoalLoopStore(join(STATE_DIR, 'goal-loop.json'))
+  const goalLoopService = new GoalLoopService({ manager, store: goalLoopStore })
+  await goalLoopService.start()
+  registerGoalLoopIpc(goalLoopService)
   builtInMcpHost.setDependencies({
     tldrStore,
     goalStore,
     tldrEnforcement,
+    goalLoopService,
     orchestrationBridge,
     agentManagementBridge,
     aiWorkspaceRegistry,
@@ -1090,6 +1121,13 @@ async function startApp(): Promise<void> {
   }
   workspaceFileStore.observe(projectActivity)
   projectActivity(workspaceFileStore.windows())
+  // v2 remote identity projection — constructed beside its only input, once
+  // the store has opened. Observed forever (remote disabled costs nothing);
+  // RemoteController reads it through getWorkspace at enable time.
+  remoteWorkspaceProjection = new RemoteWorkspaceProjection(
+    workspaceFileStore,
+    () => readAgentNameAssignments(AGENT_NAMES_FILE),
+  )
   systemSuspension.on('suspension', (suspension: import('@shared/types/systemSuspension.js').SystemSuspension) => {
     agentActivityRecorder.noteSuspension(suspension)
   })

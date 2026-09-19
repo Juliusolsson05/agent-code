@@ -68,7 +68,17 @@ html, body, #root {
   }
 }
 
-.app { display: flex; flex-direction: column; height: 100%; }
+/* The app column. WHY var(--app-visible-height, 100dvh) instead of the old
+ * height:100%: iOS Safari keeps the layout viewport at window height when
+ * the on-screen keyboard opens — only visualViewport shrinks — so a
+ * 100%-tall flex column put the composer below the visible area while
+ * typing. Scaffold.tsx writes the live visible height into the var (rAF-
+ * throttled); before JS runs, on desktop, and wherever dvh is supported,
+ * 100dvh is already the correct self-updating default. */
+.app {
+  display: flex; flex-direction: column;
+  height: var(--app-visible-height, 100dvh);
+}
 
 .topbar {
   display: flex; align-items: center; gap: 10px;
@@ -186,7 +196,18 @@ html, body, #root {
  * selector outranks that single Tailwind class (no !important needed) and
  * restores the 16px anti-zoom floor on the phone only — the desktop has no
  * .composer wrapper, so its 12px is untouched. */
+/* iOS Safari zooms the page when a focused input's font-size is < 16px. The
+ * mounted desktop ComposerInput textarea is text-[12px]; this element+class
+ * selector outranks that single Tailwind class (no !important needed) and
+ * restores the 16px anti-zoom floor on the phone only — the desktop has no
+ * .composer wrapper, so its 12px is untouched.
+ *
+ * The floor extends to IN-FEED inputs (the AskUserQuestion custom-answer
+ * input renders at the desktop's 13px inside .feed-host): the composer-only
+ * rule used to be the single 16px island, so tapping "Type something" in an
+ * AUQ card zoomed the page anyway. */
 .composer textarea { font-size: 16px; }
+.feed-host input, .feed-host textarea { font-size: 16px; }
 
 .composer-actions {
   display: flex; align-items: center; gap: 8px;
@@ -212,4 +233,138 @@ html, body, #root {
 .working {
   padding: 6px 14px; font-size: 11px; color: var(--accent);
   border-top: 1px solid var(--border); flex-shrink: 0;
+}
+
+/* ── v2 chrome (remote-v2 rebuild) ────────────────────────────────────
+ * All structure, nothing detached: square at every Corners tier, tokens
+ * only, 12px gutters to match the feed column, 44px minimum touch
+ * targets on every control. The peek overlay is the one sanctioned
+ * full-cover surface (an overlay, not a floating card). */
+
+/* Session header: one bar — back, provider badge + identity, conn dot,
+ * peek, reader. `.lit` is the status strip: accent fill ONLY while the
+ * session is live AND working (absence of color is the idle signal,
+ * PaneHeader's rule). */
+.session-header {
+  display: flex; align-items: center; gap: 8px;
+  padding: calc(env(safe-area-inset-top, 0px) + 6px) 12px 6px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  flex-shrink: 0;
+  min-height: 48px;
+}
+.session-header.lit { background: var(--accent); }
+.session-header.lit .name, .session-header.lit .sub, .session-header.lit .short,
+.session-header.lit .glyph, .session-header.lit .back, .session-header.lit .header-action,
+.session-header.lit .conn-dot { color: var(--accent-fg); }
+.session-header .back, .session-header .header-action {
+  background: none; border: none; color: var(--accent); font-size: 13px;
+  min-width: 44px; min-height: 44px; display: flex; align-items: center; justify-content: center;
+  padding: 0;
+}
+.session-header .identity { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; }
+.session-header .badge { display: flex; align-items: baseline; gap: 4px; color: var(--ink-dim); flex-shrink: 0; }
+.session-header .glyph { font-size: 13px; }
+.session-header .short { font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em; }
+.session-header .name-column { min-width: 0; display: flex; flex-direction: column; }
+.session-header .name {
+  color: var(--ink); font-size: 13px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.session-header .sub {
+  color: var(--muted); font-size: 10px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* Fleet rows (v2): same structural language as v1 rows plus the TLDR
+ * one-line glance, pin flag, and live sub-agent count. Rows stay square —
+ * they are structure. */
+.session-row.pinned .marker { color: var(--accent); }
+.session-row .pin-flag {
+  font-size: 9px; text-transform: uppercase; letter-spacing: 0.12em;
+  color: var(--accent); border: 1px solid var(--accent); padding: 0 4px;
+  flex-shrink: 0;
+}
+.session-row .tldr-line {
+  color: var(--ink-dim); font-size: 11px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.usage-chip {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em;
+  padding: 2px 6px; flex-shrink: 0;
+}
+.usage-chip.warning { color: var(--accent); border: 1px solid var(--accent); }
+.usage-chip.critical { color: var(--danger); border: 1px solid var(--danger); }
+
+/* Peek overlay: opaque canvas cover, centered record text, muted freshness
+ * footer with the TLDR<->Goal toggle chip. Dots stay round; everything
+ * else stays square. */
+.peek-overlay {
+  position: absolute; inset: 0; z-index: 50;
+  background: var(--bg); color: var(--ink);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  padding: 48px 20px calc(env(safe-area-inset-bottom, 0px) + 20px);
+  text-align: center;
+}
+.peek-body {
+  max-width: 34rem; width: 100%;
+  max-height: 100%; overflow-y: auto;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+  font-size: 14px; line-height: 1.6; text-align: center;
+  margin: 0;
+}
+.peek-footer {
+  position: absolute; left: 12px; right: 12px;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
+  display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 14px;
+  font-size: 11px; color: var(--muted);
+}
+.peek-toggle {
+  background: none; border: 1px solid var(--border-hi); color: var(--ink-dim);
+  font-family: inherit; font-size: 11px; padding: 6px 10px; min-height: 44px;
+}
+
+/* Reader: one message per page, Older/Newer pager with 44px buttons. */
+.reader-host {
+  flex: 1; min-height: 0; display: flex; flex-direction: column;
+  padding: 16px 12px calc(env(safe-area-inset-bottom, 0px) + 12px);
+}
+.reader-text {
+  flex: 1; min-height: 0; overflow-y: auto; margin: 0;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+  font-size: 14px; line-height: 1.65; color: var(--ink);
+}
+.reader-pager {
+  display: flex; align-items: center; gap: 10px; padding-top: 10px;
+  border-top: 1px solid var(--border); flex-shrink: 0;
+}
+.reader-pager button {
+  background: var(--accent); color: var(--accent-fg); border: none;
+  min-height: 44px; padding: 10px 16px; font-size: 13px; font-weight: 600;
+}
+.reader-pager button:disabled { opacity: 0.4; }
+.reader-count { flex: 1; text-align: center; font-size: 11px; color: var(--muted); }
+
+/* Condition dialogs become BOTTOM SHEETS on the phone. The desktop's
+ * DialogContent is a centered 520px Radix modal with NO max-height — a
+ * long permission command clipped off both ends of a phone screen with
+ * no way to scroll (the worst mobile-rendering finding). Anchoring the
+ * same element to the bottom, capping its height, and making it scroll
+ * converts every provider condition view (permission, trust, approval)
+ * into a touch-sane sheet without forking one line of provider code.
+ * Only the TOP corners round — a sheet is detached from the bottom edge,
+ * and radius marks detachment on exactly that boundary.
+ *
+ * Scoped to [data-slot="dialog-content"] (the primitive's own slot
+ * attribute) so this can only affect dialogs; the phone mounts none
+ * besides condition views today. */
+[data-slot="dialog-content"] {
+  left: 0 !important; right: 0; bottom: 0; top: auto !important;
+  transform: none !important;
+  width: 100% !important; max-width: 100% !important;
+  max-height: calc(var(--app-visible-height, 100dvh) - 88px);
+  overflow-y: auto;
+  border-radius: var(--theme-radius-float) var(--theme-radius-float) 0 0;
+  border-bottom: none;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
 }
