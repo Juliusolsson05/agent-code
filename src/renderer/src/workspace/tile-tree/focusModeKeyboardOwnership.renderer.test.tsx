@@ -215,6 +215,41 @@ describe('focus-mode keyboard ownership', () => {
     else Reflect.deleteProperty(window, 'api')
   })
 
+  it('⌘ digits fill the focused lane by row label, and a second held digit reaches rows 10–99', () => {
+    // The two-digit grammar had no behavioural test (#1013 review B, finding
+    // 14). ⌘1 places row 1 and remembers the 1; ⌘2 inside the window makes
+    // it row 12, in digit order; ⌘0 only continues a pending digit.
+    const ids = Array.from({ length: 12 }, (_, i) => `s${i + 1}`)
+    const selectTiledLaneSession = vi.fn()
+    const stage = { lanes: [{ selectedSessionId: 's1' }], rows: [{ length: 1 }], focusedLane: 0 }
+    const state = {
+      activeTabId: 'p', tabs: [{ id: 'p', title: 'Project' }], pinnedSessionIds: [], stage,
+      sessions: Object.fromEntries(ids.map((id, i) => [id, { cwd: '/p', kind: 'claude' as const, projectId: 'p', joinedAt: i }])),
+    }
+    const workspace = {
+      state, stage, readerMode: null, spotlight: null, runtimes: {},
+      getRuntime: () => emptyRuntime(), selectTiledLaneSession, navigate: vi.fn(),
+      toggleReaderMode: vi.fn(), toggleSpotlight: vi.fn(),
+    } as unknown as Workspace
+    const view = render(<KeyboardHarness workspace={workspace} />)
+    const press = (digit: number) => fireEvent.keyDown(document, { metaKey: true, code: `Digit${digit}`, key: String(digit) })
+
+    press(1)
+    press(2)
+    expect(selectTiledLaneSession.mock.calls).toEqual([[0, 's1'], [0, 's12']])
+
+    selectTiledLaneSession.mockClear()
+    press(1)
+    press(0)
+    expect(selectTiledLaneSession.mock.calls).toEqual([[0, 's1'], [0, 's10']])
+
+    // With no pending digit, ⌘0 addresses nothing.
+    selectTiledLaneSession.mockClear()
+    press(0)
+    expect(selectTiledLaneSession).not.toHaveBeenCalled()
+    view.unmount()
+  })
+
   it('yields Alt+Shift+Arrow to the OS instead of treating it as a lane arrow', () => {
     // The inline branch this grammar replaced tested `alt && !cmd` without a
     // shift check, so ⌥⇧↓ ran the index walk while the user was trying to
