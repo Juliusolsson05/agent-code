@@ -406,6 +406,23 @@ claude 2.1.143 / codex 0.130.0 are stale versus the 2.1.278 / 0.155.1 in daily u
   - Unconfirmed product calls inside it: never displace an occupied lane, a `new`
     badge on pooled spawns, Clear Lane on ⌥⌫, and deleting the related-agent strip.
   - Resolve the conflicts, run 2 reviewers, and merge before stable.
+- **T11 #1013 review A (persistence), 2026-09-19: CHANGES REQUESTED.**
+  - **BLOCKER:** #1013 leaves the outer `WORKSPACE_FILE_VERSION` at 2, so older builds, including
+    the released beta, treat a v3 file as writable. Downgrade, then a two-window close, runs the
+    beta's `adoptWorkspace`, and its autosave drops the whole pool; the reviewer reproduced this.
+    Fix: write version 3, read 2 and 3. Older builds then see the file as `unreadable` and go
+    read-only, by design (`workspaceFile.ts:60-72`). #933 shares the decoder, so it follows.
+  - MINOR: add a one-time `workspace.json.pre-v3-<ts>.bak` before the first v3 write; carry v2
+    bury notes (`legacyWorkspaceV2.ts:75`), which are dropped today.
+  - MINOR: the tests are generated or hand literals. Add migration tests on REAL recordings: #933's
+    sanitized live file, `dispatch-global-d23.json`, and a fresh sanitized copy of the owner's
+    workspace.json. Pin field survival (tmuxName, providerSessionId, title, orchestration,
+    agentNameId, MCP) and v2→v3→re-read idempotence.
+  - NIT: a v2 file with zero tabs drops its buried rows; hand-edited `tabs: null` unlocks autosave
+    over an empty pool; closing a hibernated terminal leaks its tmux session until the next sweep.
+  - Verified OK on real data: 27/27 sessions, 10/10 lanes, tmuxName, and orchestration links kept,
+    with zero field changes. Idempotent. Autosave gating correct. #933 reads v3 correctly.
+  - Still to do: reviewer B (UI/keyboard/UX lens).
 - **T12 landing `feat/direct-beta-download`:** an uncommitted/unmerged fix in the
   landing worktree `.worktrees/landing-page-v1` ("commit/push/PR it?", unanswered).
   Evaluate it against the nightly/stable plan.
