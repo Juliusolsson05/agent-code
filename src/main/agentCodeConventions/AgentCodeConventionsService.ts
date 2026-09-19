@@ -1147,7 +1147,8 @@ export class AgentCodeManagedSkillsService {
       // targets would be a silent no-op write, so refuse it with the contract
       // the Settings UI already renders.
       if (request.enabled && this.targets.targets.length === 0) {
-        this.targetStatuses = this.unsupportedStatuses()
+        // The unsupported rows are added by snapshot(); see withUnsupportedRows.
+        this.targetStatuses = []
         return { ok: false, code: 'unsupported', snapshot: this.snapshot() }
       }
 
@@ -1197,10 +1198,6 @@ export class AgentCodeManagedSkillsService {
         }
         statuses.push(await this.publishTarget(item, rendered, desiredHash))
       }
-      // Same informational rows the startup reconcile appends (#1014): the
-      // post-save snapshot must already show which providers cannot receive
-      // the skill, not only after a restart.
-      statuses.push(...this.unsupportedStatuses())
       this.targetStatuses = statuses
       await this.persistBestEffort(statuses)
       return { ok: true, snapshot: this.snapshot() }
@@ -1651,11 +1648,6 @@ export class AgentCodeManagedSkillsService {
         conflictFingerprint: this.installedOwnershipPolicy.retiredFingerprint(key, record),
       })
     }
-    // Informational rows for providers without personal-skill support (#1014);
-    // installedHealth skips them when computing deployment health.
-    if (this.targets.unsupportedProviders.length > 0) {
-      statuses.push(...this.installedUnsupportedStatuses())
-    }
     this.installedTargetStatuses.set(skill.id, statuses)
   }
 
@@ -1711,7 +1703,7 @@ export class AgentCodeManagedSkillsService {
             ...skill,
             totalBytes: skill.files.reduce((total, file) => total + file.bytes, 0),
             health: this.installedHealth(skill, targets),
-            targets: [...targets],
+            targets: this.withUnsupportedRows(targets),
           }
         }),
       unsupportedProviders: [...this.targets.unsupportedProviders],
@@ -1738,21 +1730,16 @@ export class AgentCodeManagedSkillsService {
     if (deployable.some(status => status.state === 'conflict' || status.state === 'retired')) {
       return 'conflict'
     }
+    // Error BEFORE the degenerate 'unsupported', as health() and customHealth()
+    // already order it (#1017 review): a failed target resolution also empties
+    // this.targets, and "no provider can take this" is the wrong thing to say
+    // when the truth is "we could not look".
+    if (deployable.some(status => status.state === 'error')) return 'degraded'
     if (this.targets.targets.length === 0) return 'unsupported'
     if (deployable.length === 0 || deployable.some(status => status.state !== 'installed')) {
       return 'degraded'
     }
     return 'active'
-  }
-
-  private installedUnsupportedStatuses(): AgentCodeConventionsTargetStatus[] {
-    return this.targets.unsupportedProviders.map(provider => ({
-      id: `unsupported:${provider}`,
-      providers: [provider],
-      displayPath: 'No personal skill directory',
-      state: 'unsupported',
-      message: `${provider} does not declare personal Agent Skills support.`,
-    }))
   }
 
   private installedStatus(
@@ -1883,10 +1870,6 @@ export class AgentCodeManagedSkillsService {
       if (!next.pendingOperations[item.key]) statuses.push(this.customStatus(item.target, 'installed'))
       else statuses.push(await this.publishCustomTarget(updated, item, rendered, desiredHash))
     }
-    // Same informational rows the startup reconcile appends (#1014): the
-    // post-enable snapshot must already show providers that cannot receive
-    // the skill, not only after a restart.
-    statuses.push(...this.customUnsupportedStatuses())
     this.customTargetStatuses.set(skill.id, statuses)
     await this.persistBestEffort(statuses)
     return { ok: true, snapshot: this.customSnapshot() }
@@ -2145,9 +2128,6 @@ export class AgentCodeManagedSkillsService {
       // made an otherwise complete enabled reconciliation look degraded.
       if (removed.state !== 'not-installed') statuses.push(removed)
     }
-    // WHY appended, not replacing (#1014): unsupported providers are informational
-    // per-target rows; real deployment rows must survive so health stays truthful.
-    statuses.push(...this.unsupportedStatuses())
     this.targetStatuses = statuses
     await this.persistBestEffort(statuses)
   }
@@ -2187,8 +2167,7 @@ export class AgentCodeManagedSkillsService {
     if (!normalized.ok) {
       this.customTargetStatuses.set(
         skill.id,
-        [...targets.targets.map(target => this.customStatus(target, 'error', normalized.message)),
-          ...this.customUnsupportedStatuses()],
+        targets.targets.map(target => this.customStatus(target, 'error', normalized.message)),
       )
       return
     }
@@ -2284,9 +2263,6 @@ export class AgentCodeManagedSkillsService {
       const removed = await this.removeCustomMaterialization(skill, key, record)
       if (removed.state !== 'not-installed') statuses.push(removed)
     }
-    // Informational rows for providers that cannot receive skills (#1014);
-    // deployment rows above remain the health input.
-    statuses.push(...this.customUnsupportedStatuses())
     this.customTargetStatuses.set(skill.id, statuses)
     await this.persistBestEffort(statuses)
   }
@@ -2962,18 +2938,25 @@ export class AgentCodeManagedSkillsService {
         state: 'error',
         message: safeErrorMessage(error),
       }]
-      // A previous successful audit may have left every custom target marked
-      // Installed. Once discovery itself fails, those paths are no longer a
-      // trustworthy statement about the current provider configuration; keep
-      // the desired definitions but invalidate deployment health together.
+      // A previous successful audit may have left every custom AND installed
+      // target marked Installed. Once discovery itself fails, those paths are
+      // no longer a trustworthy statement about the current provider
+      // configuration; keep the desired definitions but invalidate deployment
+      // health together. (Installed skills were missed here until the #1017
+      // review: they kept their stale rows, and with zero resolved targets
+      // their health read 'unsupported'.)
+      const resolutionError: AgentCodeConventionsTargetStatus = {
+        id: 'provider-target-resolution',
+        providers: [],
+        displayPath: '',
+        state: 'error',
+        message: safeErrorMessage(error),
+      }
       for (const skill of Object.values(this.document.customSkills)) {
-        this.customTargetStatuses.set(skill.id, [{
-          id: 'provider-target-resolution',
-          providers: [],
-          displayPath: '',
-          state: 'error',
-          message: safeErrorMessage(error),
-        }])
+        this.customTargetStatuses.set(skill.id, [{ ...resolutionError }])
+      }
+      for (const skill of Object.values(this.document.installedSkills)) {
+        this.installedTargetStatuses.set(skill.id, [{ ...resolutionError }])
       }
       return false
     }
@@ -3031,7 +3014,7 @@ export class AgentCodeManagedSkillsService {
       warnings: normalized.ok ? normalized.value.warnings : [],
       unsupportedProviders: this.targets.unsupportedProviders,
       recovery: this.recovery,
-      targets: [...this.targetStatuses].sort((left, right) => left.id.localeCompare(right.id)),
+      targets: this.withUnsupportedRows(this.targetStatuses).sort((left, right) => left.id.localeCompare(right.id)),
     }
   }
 
@@ -3043,7 +3026,7 @@ export class AgentCodeManagedSkillsService {
       skills: Object.values(this.document.customSkills)
         .sort((left, right) => left.name.localeCompare(right.name))
         .map(skill => {
-          const targets = [...(this.customTargetStatuses.get(skill.id) ?? [])]
+          const targets = this.withUnsupportedRows(this.customTargetStatuses.get(skill.id) ?? [])
             .sort((left, right) => left.id.localeCompare(right.id))
           return {
             ...skill,
@@ -3101,24 +3084,31 @@ export class AgentCodeManagedSkillsService {
     return 'disabled'
   }
 
-  private unsupportedStatuses(): AgentCodeConventionsTargetStatus[] {
-    return this.targets.unsupportedProviders.map(provider => ({
-      id: `unsupported:${provider}`,
-      providers: [provider],
-      displayPath: '',
-      state: 'unsupported',
-      message: 'This provider does not declare personal Agent Skill support.',
-    }))
-  }
-
-  private customUnsupportedStatuses(): AgentCodeConventionsTargetStatus[] {
-    return this.targets.unsupportedProviders.map(provider => ({
-      id: `unsupported:${provider}`,
-      providers: [provider],
-      displayPath: '',
-      state: 'unsupported',
-      message: 'This provider does not declare personal Agent Skill support.',
-    }))
+  /**
+   * The informational rows for registered providers that declare no personal
+   * Agent Skills support (#1014), added to a surface's rows when a snapshot is
+   * built and never stored.
+   *
+   * WHY at snapshot time (#1017 review): the rows used to be appended by the
+   * code paths that set statuses, and only two of roughly fifteen did. The
+   * startup audit, a target conflict, a disable and every custom or installed
+   * reconcile replaced the list without them, so Settings stopped naming the
+   * unsupported provider as soon as anything else happened. The rows depend
+   * only on `this.targets`, so deriving them here makes every path agree. The
+   * three near-identical builders (conventions, custom, installed) are now
+   * one. Health never sees these rows: it reads the stored statuses.
+   */
+  private withUnsupportedRows(statuses: readonly AgentCodeConventionsTargetStatus[]): AgentCodeConventionsTargetStatus[] {
+    return [
+      ...statuses.filter(status => status.state !== 'unsupported'),
+      ...this.targets.unsupportedProviders.map(provider => ({
+        id: `unsupported:${provider}`,
+        providers: [provider],
+        displayPath: 'No personal skill directory',
+        state: 'unsupported' as const,
+        message: `${provider} does not declare personal Agent Skills support.`,
+      })),
+    ]
   }
 
   private status(
