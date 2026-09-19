@@ -38,9 +38,13 @@ describe('projectWorkspace — v3 documents (#992)', () => {
       pinnedSessionIds: [],
     })])
 
+    // Exact match on purpose: this pins the whole projected shape. It
+    // includes `tldrIdentity` and `pinned`, which main's remote read model
+    // (30424f13) added while #992 was in flight. They merged cleanly into the
+    // projection, but this exact expectation predated them.
     expect(projection.sessions.get('shown')).toEqual({
       sessionId: 'shown', kind: 'codex', cwd: '/x/app', title: 'Reviewer',
-      agentNameId: null, orchestration: false, tabId: 'p-app', tabTitle: 'app',
+      agentNameId: null, tldrIdentity: null, pinned: false, orchestration: false, tabId: 'p-app', tabTitle: 'app',
     })
     expect(projection.sessions.get('parked')).toMatchObject({ tabId: 'p-app', tabTitle: 'app', agentNameId: 'name-7' })
     expect(projection.sessions.get('worker')).toMatchObject({ tabId: 'p-svc', tabTitle: 'service', orchestration: true })
