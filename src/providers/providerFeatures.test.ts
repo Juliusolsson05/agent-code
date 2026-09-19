@@ -90,7 +90,7 @@ describe('provider feature matrix', () => {
     expect(opencode.transcriptDuplicate).toBe(true)
     expect(opencode.promptHistoryExtraction).toBe(true)
     expect(opencode.verifiedExternalResumeCommand).toBe(true)
-    expect(opencode.switchTargets).toEqual(['claude', 'codex'])
+    expect(opencode.switchTargets).toEqual(['claude', 'codex', 'grok'])
     expect(opencode.inAppResume).toBe(true)
   })
 
