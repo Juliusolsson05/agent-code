@@ -83,6 +83,14 @@ export class GoalLoopService extends EventEmitter {
    * in-flight run picks it up in its finally block, so neither a control
    * action nor a turn boundary can be silently dropped. */
   private readonly pendingContinue = new Set<string>()
+  /** Sessions whose provider has proven it calls turn hooks (#1024). For
+   * these, the provider's own Stop hook is the ONLY turn boundary; see
+   * observeProviderHook. */
+  private readonly hookSessions = new Set<string>()
+  /** Hook-driven sessions whose current turn has started and not yet had an
+   * allowed Stop. Replaces the phase-derived working state for those
+   * sessions: that state cannot tell a tool gap from a turn end. */
+  private readonly hookTurnOpen = new Set<string>()
 
   constructor(private readonly deps: {
     manager: GoalLoopManagerPort
@@ -111,6 +119,45 @@ export class GoalLoopService extends EventEmitter {
     manager.on('removed', ({ sessionId }: { sessionId: string }) => this.interrupt(sessionId))
     manager.on('exit', ({ sessionId }: { sessionId: string }) => this.interrupt(sessionId))
     await this.persist()
+  }
+
+  /**
+   * A provider turn hook fired for this session. Agent Code receives Claude
+   * and Codex hooks at /hooks/tldr/*, and BuiltInMcpHttpHost forwards every
+   * one here.
+   *
+   * WHY a hook and not the stream phase (#1024): for Claude, phase `idle`
+   * means "no main API request is streaming", and inside one turn that is
+   * true at every local tool gap. A Task subagent's API flow can take phase
+   * ownership during such a gap, publish `requesting`, then be demoted with
+   * `idle` as `cc_is_subagent`. That edge is never retracted. One recorded
+   * session delivered 37 continuations mid-turn that way, including pairs
+   * 0.4 s apart. The Stop hook fires only when the MAIN agent ends its turn
+   * (subagents have SubagentStop), so it is the boundary a loop needs.
+   *
+   * The first hook of any kind proves the session's hooks work.
+   * goal_loop_start is a tool call, so PostToolUse always arrives before the
+   * turn that started the loop can end. From then on stream phases no longer
+   * trigger continuations for this session. A provider that never calls hooks
+   * (OpenCode, Grok) never enters this mode and keeps the phase fallback.
+   *
+   * `blocked`: a Stop that TLDR enforcement answered with `decision: block`
+   * does not end the turn. The model keeps going, so it is not a boundary.
+   */
+  observeProviderHook(sessionId: string, hook: 'user-prompt-submit' | 'post-tool-use' | 'stop', outcome?: { blocked: boolean }): void {
+    this.hookSessions.add(sessionId)
+    if (hook !== 'stop') {
+      this.hookTurnOpen.add(sessionId)
+      return
+    }
+    if (outcome?.blocked) return
+    this.hookTurnOpen.delete(sessionId)
+    if (this.loops.get(sessionId)?.phase !== 'active') return
+    // Deferred one macrotask so the Stop hook's HTTP answer reaches the
+    // provider first. Delivering inside the hook request would race the
+    // provider's own turn close.
+    const timer = setTimeout(() => this.requestContinue(sessionId), 0)
+    timer.unref?.()
   }
 
   snapshot(): Record<string, GoalLoopState> {
@@ -195,6 +242,10 @@ export class GoalLoopService extends EventEmitter {
     const next = reduceWorkingState(state, { type: 'semantic', event })
     if (next === state) return
     this.working.set(sessionId, next)
+    // Hook-driven sessions take their turn boundary from the provider's Stop
+    // hook only (observeProviderHook). Their phase edges are exactly the
+    // false positives #1024 recorded, so they never schedule a continuation.
+    if (this.hookSessions.has(sessionId)) return
     if (isWorking(state) && !isWorking(next) && this.loops.get(sessionId)?.phase === 'active') {
       this.scheduleContinueCheck(sessionId)
     }
@@ -229,6 +280,10 @@ export class GoalLoopService extends EventEmitter {
     // Dropped unconditionally: a same-id wake starts a fresh process whose
     // events must not be folded onto the dead one's pending tools.
     this.working.delete(sessionId)
+    // A fresh process must prove its hooks again. A reload can change
+    // providers or MCP domains, and a turn open in the dead process is gone.
+    this.hookSessions.delete(sessionId)
+    this.hookTurnOpen.delete(sessionId)
     const loop = this.loops.get(sessionId)
     if (!loop || loop.phase !== 'active') return
     this.loops.set(sessionId, { ...loop, phase: 'paused', pauseReason: 'interrupted', updatedAt: this.now().toISOString() })
@@ -248,6 +303,10 @@ export class GoalLoopService extends EventEmitter {
    * pending tools are what hold a per-message `turn_completed` back. The
    * first version overwrote it with a blank state and lost exactly that. */
   private markOwedATurn(sessionId: string): void {
+    // Our delivery starts a turn. For a hook-driven session that turn is
+    // open until its Stop, so traffic in between can never re-deliver. That
+    // is the recorded 0.4 s double.
+    if (this.hookSessions.has(sessionId)) this.hookTurnOpen.add(sessionId)
     const tracked = this.working.get(sessionId) ?? INITIAL_WORKING_STATE
     if (!isWorking(tracked)) this.working.set(sessionId, { ...tracked, phase: 'responding' })
   }
@@ -270,7 +329,13 @@ export class GoalLoopService extends EventEmitter {
     // an in-flight delivery delivered the same continuation twice. Skipping is
     // safe: a working agent's turn end re-triggers us.
     const tracked = this.working.get(sessionId)
-    if (tracked && isWorking(tracked)) return
+    // Hook-driven sessions: an open turn (started, no allowed Stop yet) is
+    // the truth, and the phase-derived state is not consulted. It reads
+    // `requesting` whenever a subagent flow streams, which would stall a loop
+    // whose Stop just arrived.
+    if (this.hookSessions.has(sessionId)) {
+      if (this.hookTurnOpen.has(sessionId)) return
+    } else if (tracked && isWorking(tracked)) return
     this.continuing.add(sessionId)
     try {
       // The cap pauses BEFORE delivering past the budget: a confused agent
