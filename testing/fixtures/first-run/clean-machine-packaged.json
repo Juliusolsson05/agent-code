@@ -1,0 +1,55 @@
+{
+  "environment": "clean-machine-packaged",
+  "description": "The same clean Mac running the packaged app, which ships OpenCode under out/main/runtime/opencode (#994).",
+  "platform": "darwin",
+  "arch": "arm64",
+  "tools": {
+    "brew": {
+      "id": "brew",
+      "found": true,
+      "path": "/opt/homebrew/bin/brew",
+      "source": "system"
+    },
+    "claude": {
+      "id": "claude",
+      "found": false,
+      "path": null
+    },
+    "codex": {
+      "id": "codex",
+      "found": false,
+      "path": null
+    },
+    "opencode": {
+      "id": "opencode",
+      "found": true,
+      "path": null,
+      "source": "bundled"
+    },
+    "grok": {
+      "id": "grok",
+      "found": true,
+      "path": "/opt/homebrew/bin/grok",
+      "source": "system"
+    },
+    "git": {
+      "id": "git",
+      "found": true,
+      "path": "/usr/bin/git",
+      "source": "system"
+    },
+    "mitmdump": {
+      "id": "mitmdump",
+      "found": true,
+      "path": "/opt/homebrew/bin/mitmdump",
+      "source": "system"
+    }
+  },
+  "verdictAtRecording": {
+    "ready": false,
+    "blocking": [
+      "claude",
+      "codex"
+    ]
+  }
+}

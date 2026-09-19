@@ -1,0 +1,54 @@
+{
+  "environment": "developer-machine",
+  "description": "The recording developer's real HOME, PATH and SHELL, with every provider CLI installed. Machine-specific; replayed only as policy input.",
+  "platform": "darwin",
+  "arch": "arm64",
+  "tools": {
+    "brew": {
+      "id": "brew",
+      "found": true,
+      "path": "/opt/homebrew/bin/brew",
+      "source": "system"
+    },
+    "claude": {
+      "id": "claude",
+      "found": true,
+      "path": "~/.local/bin/claude",
+      "source": "system"
+    },
+    "codex": {
+      "id": "codex",
+      "found": true,
+      "path": "~/.local/bin/codex",
+      "source": "system"
+    },
+    "opencode": {
+      "id": "opencode",
+      "found": true,
+      "path": "~/.opencode/bin/opencode",
+      "source": "system"
+    },
+    "grok": {
+      "id": "grok",
+      "found": true,
+      "path": "~/.local/bin/grok",
+      "source": "system"
+    },
+    "git": {
+      "id": "git",
+      "found": true,
+      "path": "/opt/homebrew/bin/git",
+      "source": "system"
+    },
+    "mitmdump": {
+      "id": "mitmdump",
+      "found": true,
+      "path": "/opt/homebrew/bin/mitmdump",
+      "source": "system"
+    }
+  },
+  "verdictAtRecording": {
+    "ready": true,
+    "blocking": []
+  }
+}
