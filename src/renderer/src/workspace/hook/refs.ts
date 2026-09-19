@@ -3,10 +3,10 @@ import type { MutableRefObject } from 'react'
 
 import { UndoCloseStack } from '@renderer/lib/undoClose'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
+import type { HistoryWindow } from '@renderer/session-runtime/historyBoundary.js'
 import type {
   ReaderModeState,
   SpotlightState,
-  TileTabsState,
 } from '@renderer/workspace/types'
 import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
 import type { ConfigurableBuiltInMcpDomain } from '@mcp/shared/types'
@@ -19,8 +19,8 @@ import type { ConfigurableBuiltInMcpDomain } from '@mcp/shared/types'
 // need 15 separate useRef lines. Ref identity is stable across renders
 // (useRef contract), so putting them together doesn't cost anything.
 //
-// Layout/settings mirrors are refreshed in the caller's render body. Runtime
-// state additionally has a synchronous store subscription there: runtime-only
+// Settings mirrors are refreshed in the caller's render body. Workspace and
+// runtime state additionally have synchronous store subscriptions: runtime-only
 // updates no longer render the controller, but IPC/actions must see them before
 // React commits any subscribed pane. Keep that subscription and its cleanup
 // coupled to this identity-stable ref bundle.
@@ -30,11 +30,18 @@ export type WorkspaceRefs = {
   stateRef: MutableRefObject<WorkspaceState>
   latestStateRef: MutableRefObject<WorkspaceState>
   latestRuntimesRef: MutableRefObject<Record<SessionId, SessionRuntime>>
-  latestTileTabsRef: MutableRefObject<TileTabsState | null>
   dangerousAgentsRef: MutableRefObject<boolean>
   useProxyStreamingRef: MutableRefObject<boolean>
   defaultBuiltInMcpDomainsRef: MutableRefObject<ConfigurableBuiltInMcpDomain[]>
   seenUuidsRef: MutableRefObject<Record<SessionId, Set<string>>>
+  /** History-boundary window identity per session (grok Stage 5). Decisions
+   *  come from session-runtime/historyBoundary.ts — the phone and replay apply
+   *  the same ones — so the desktop must not re-derive them here. */
+  historyWindowsRef: MutableRefObject<Record<SessionId, HistoryWindow>>
+  /** Sessions whose transcript window was reset by a boundary and whose
+   *  semantic suffixes must be dropped until a fresh turn_started (the pure
+   *  owner's awaiting gate; api_error passes because it is diagnostic). */
+  historyAwaitingTurnStartRef: MutableRefObject<Set<SessionId>>
   latestScreenRef: MutableRefObject<Record<SessionId, string>>
   undoStackRef: MutableRefObject<UndoCloseStack>
   bootstrapTimersRef: MutableRefObject<Map<SessionId, ReturnType<typeof setTimeout>>>
@@ -61,7 +68,6 @@ export type WorkspaceRefs = {
 export function useWorkspaceRefs(
   initialState: WorkspaceState,
   initialRuntimes: Record<SessionId, SessionRuntime>,
-  initialTileTabs: TileTabsState | null,
   dangerousAgentsEnabled: boolean,
   useProxyStreaming: boolean,
   defaultBuiltInMcpDomains: ConfigurableBuiltInMcpDomain[],
@@ -93,11 +99,12 @@ export function useWorkspaceRefs(
   const stateRef = useRef(initialState)
   const latestStateRef = useRef(initialState)
   const latestRuntimesRef = useRef(initialRuntimes)
-  const latestTileTabsRef = useRef(initialTileTabs)
   const dangerousAgentsRef = useRef(dangerousAgentsEnabled)
   const useProxyStreamingRef = useRef(useProxyStreaming)
   const defaultBuiltInMcpDomainsRef = useRef(defaultBuiltInMcpDomains)
   const seenUuidsRef = useRef<Record<SessionId, Set<string>>>({})
+  const historyWindowsRef = useRef<Record<SessionId, HistoryWindow>>({})
+  const historyAwaitingTurnStartRef = useRef<Set<SessionId>>(new Set())
   const latestScreenRef = useRef<Record<SessionId, string>>({})
   const undoStackRef = useRef(new UndoCloseStack())
   const bootstrapTimersRef = useRef<Map<SessionId, ReturnType<typeof setTimeout>>>(new Map())
@@ -121,7 +128,6 @@ export function useWorkspaceRefs(
     // Ref mirror of runtimes so the debounced save callback can read
     // current drafts without re-creating the callback on every render.
     latestRuntimesRef,
-    latestTileTabsRef,
 
     // Settings mirror refs. Ref-mirrored so the spawn callbacks read
     // the live value without having to subscribe per-call.
@@ -135,6 +141,8 @@ export function useWorkspaceRefs(
     // Seen uuids per session, for JSONL dedup. Refs because we never
     // render against them — they're bookkeeping.
     seenUuidsRef,
+    historyWindowsRef,
+    historyAwaitingTurnStartRef,
 
     // Latest screen per session — mirrored from state into a ref so
     // the Enter handler in TileLeaf can capture a baseline

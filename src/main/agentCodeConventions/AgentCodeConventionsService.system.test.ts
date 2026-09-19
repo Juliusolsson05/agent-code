@@ -425,7 +425,10 @@ describe('AgentCodeConventionsService', () => {
     expect((await stat(currentTarget.skillDirectory)).isDirectory()).toBe(true)
   })
 
-  it('blocks an all-provider enable when a registered provider is unsupported', async () => {
+  // Regression for #1014: grok (registered, personalAgentSkills.supported:false)
+  // must not stop the conventions skill from deploying — a provider that cannot
+  // receive personal skills is informational, not a fleet-wide blocker.
+  it('deploys to supported providers when a registered provider is unsupported', async () => {
     const root = await temporaryDirectory()
     const currentTarget = target(
       'agents-standard-personal-skills',
@@ -444,12 +447,67 @@ describe('AgentCodeConventionsService', () => {
 
     const result = await service.save({ expectedRevision: 0, enabled: true, markdown: '# Rules' })
 
+    expect(result).toMatchObject({ ok: true, snapshot: { enabled: true, health: 'active' } })
+    expect((await stat(currentTarget.skillFile)).isFile()).toBe(true)
+    expect(result.ok && result.snapshot.unsupportedProviders).toEqual(['opencode'])
+    expect(result.ok && result.snapshot.targets).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'unsupported:opencode', state: 'unsupported' }),
+    ]))
+  })
+
+  // #1017 review: the informational `unsupported:*` rows were appended on
+  // two paths only. Every other path (the startup audit, a target conflict,
+  // a disable) replaced the list without them, so Settings stopped showing
+  // which provider cannot take the skill as soon as anything else happened.
+  it('shows the unsupported provider row from the first snapshot, before any save', async () => {
+    const root = await temporaryDirectory()
+    const currentTarget = target('agents-standard-personal-skills', join(root, '.agents', 'skills'), ['codex'])
+    const service = new AgentCodeConventionsService({
+      stateFilePath: join(root, 'state', 'conventions.json'),
+      homeDirectory: root,
+      resolveTargets: async () => ({ targets: [currentTarget], unsupportedProviders: ['grok'] }),
+    })
+    await service.initialize()
+    expect((await service.getSnapshot()).targets).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'unsupported:grok', state: 'unsupported' }),
+    ]))
+  })
+
+  it('keeps the unsupported provider row when enable stops on a target conflict', async () => {
+    const root = await temporaryDirectory()
+    const currentTarget = target('agents-standard-personal-skills', join(root, '.agents', 'skills'), ['codex'])
+    // A file the app does not own sits where the skill would go.
+    await writeFileWithParents(currentTarget.skillFile, '# Someone else\'s skill')
+    const service = new AgentCodeConventionsService({
+      stateFilePath: join(root, 'state', 'conventions.json'),
+      homeDirectory: root,
+      resolveTargets: async () => ({ targets: [currentTarget], unsupportedProviders: ['grok'] }),
+    })
+    await service.initialize()
+    const result = await service.save({ expectedRevision: 0, enabled: true, markdown: '# Rules' })
+    expect(result).toMatchObject({ ok: false, code: 'target-conflict' })
+    expect((await service.getSnapshot()).targets).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'unsupported:grok', state: 'unsupported' }),
+      expect.objectContaining({ id: 'agents-standard-personal-skills', state: 'conflict' }),
+    ]))
+  })
+
+  it('still blocks enable when no registered provider supports personal skills', async () => {
+    const root = await temporaryDirectory()
+    const service = new AgentCodeConventionsService({
+      stateFilePath: join(root, 'state', 'conventions.json'),
+      homeDirectory: root,
+      resolveTargets: async () => ({ targets: [], unsupportedProviders: ['grok'] }),
+    })
+    await service.initialize()
+
+    const result = await service.save({ expectedRevision: 0, enabled: true, markdown: '# Rules' })
+
     expect(result).toMatchObject({
       ok: false,
       code: 'unsupported',
       snapshot: { enabled: false, health: 'unsupported' },
     })
-    await expect(stat(currentTarget.skillFile)).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
   it.runIf(process.platform !== 'win32')('rejects symlinked provider roots', async () => {

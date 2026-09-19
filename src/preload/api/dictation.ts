@@ -1,6 +1,6 @@
 import { ipcRenderer } from 'electron'
 
-import { subscribe } from '@preload/api/ipc.js'
+import { subscribe, subscribeShared } from '@preload/api/ipc.js'
 import type {
   DictationApiKeyStatus,
   DictationApiKeySetResult,
@@ -31,8 +31,9 @@ export const dictationApi = {
   onDictationHotkeyUp: (handler: (payload: { binding: string }) => void): Unsub =>
     subscribe('dictation:hotkey-up', handler),
 
+  // Shared (#1015): every mounted composer subscribes.
   onDictationStreamTranscript: (handler: (payload: DictationStreamTranscriptEvent) => void): Unsub =>
-    subscribe('dictation:stream-transcript', handler),
+    subscribeShared('dictation:stream-transcript', handler),
 
   startDictationStream: (params: {
     provider: DictationProvider

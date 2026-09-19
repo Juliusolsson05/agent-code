@@ -14,7 +14,11 @@ import type { WorkspaceSetRuntimes } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import type { SessionActions } from '@renderer/workspace/hook/actions/session'
 import { resumableProviderSessionId } from '@renderer/workspace/providerSessionIdentity'
-import { switchAgentProvider, type SwitchAgentProviderResult } from '@renderer/workspace/hook/actions/providerSwitchCore'
+import {
+  LOSSY_SWITCH_TOAST_MS,
+  switchAgentProvider,
+  type SwitchAgentProviderResult,
+} from '@renderer/workspace/hook/actions/providerSwitchCore'
 import { providerChoiceLabel } from '@renderer/workspace/providerChoices'
 
 // Provider-level actions on the focused pane.
@@ -97,6 +101,8 @@ export function useProviderActions(
       showPaneToast(
         result.newSessionId,
         `Switched to ${providerChoiceLabel(result.targetKind, targetProviderRuntime)}${note}`,
+        // A lossy strategy's note is the whole disclosure; see the constant.
+        note ? LOSSY_SWITCH_TOAST_MS : undefined,
       )
     } else if (result.status === 'failed') {
       showPaneToast(sourceSessionId, result.message)

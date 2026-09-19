@@ -5,25 +5,28 @@ import {
   promptTemplateTargetSessionIdForState,
 } from '@renderer/features/prompt-templates/targetSession'
 import type { WorkspaceState } from '@renderer/workspace/types'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
-function stateWithFocusedSession(kind: 'claude' | 'terminal'): WorkspaceState {
+function stateWithFocusedSession(kind: 'claude' | 'terminal' | 'extension-view'): WorkspaceState {
   return {
     tabs: [{
       id: 'tab-1',
       title: 'Project',
-      root: { type: 'leaf', sessionId: 'session-1' },
-      focusedSessionId: 'session-1',
     }],
     activeTabId: 'tab-1',
-    dispatchMode: null,
-    sessions: { 'session-1': { cwd: '/project', kind } },
-    detachedSessions: {},
-    buried: [],
+    stage: oneLaneStage('session-1'),
+    sessions: { 'session-1': { cwd: '/project', kind, projectId: 'tab-1', joinedAt: 0 } },
     pinnedSessionIds: [],
   }
 }
 
 describe('promptTemplateTargetSessionIdForState', () => {
+  it('never offers delivery or composer operations to a processless extension', () => {
+    const state = stateWithFocusedSession('extension-view')
+    expect(promptTemplateTargetSessionIdForState(state)).toBeNull()
+    expect(promptTemplateComposerSessionIdForState(state)).toBeNull()
+  })
+
   it('accepts agent panes and terminal panes (bracket-paste insertion, #830)', () => {
     expect(promptTemplateTargetSessionIdForState(stateWithFocusedSession('claude')))
       .toBe('session-1')
@@ -40,13 +43,9 @@ describe('promptTemplateTargetSessionIdForState', () => {
       .toBeNull()
   })
 
-  it('rejects an empty Tiled Dispatch lane instead of falling back to hidden focus', () => {
+  it('rejects an empty focused lane instead of falling back to another lane s agent', () => {
     const state = stateWithFocusedSession('claude')
-    state.dispatchMode = {
-      scope: 'project',
-      focusedSessionId: 'session-1',
-      tiled: { focusedLane: 1, lanes: [{ selectedSessionId: 'session-1' }, {}] },
-    }
+    state.stage = { focusedLane: 1, lanes: [{ selectedSessionId: 'session-1' }, {}] }
 
     expect(promptTemplateTargetSessionIdForState(state)).toBeNull()
   })

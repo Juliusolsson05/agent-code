@@ -359,6 +359,11 @@ Status after Stage 6 (2026-09-11):
   replays a recorded session live, reloads the pane from the same database,
   and checks all three facts: the reloaded entries equal the live ones, the
   surface stays `terminal`, and feed commands stay hidden.
+- **Follow-up (#971, 2026-09-14):** "feed commands stay hidden" always meant
+  feed-MOUNTED commands — Reader Mode, View Prompts and Copy Last Response
+  carry no rendered-view policy and read `entries` through off-pane surfaces,
+  so `sessionHasTranscript` now admits the terminal runtime and offers them.
+  The three Stage 6 facts above are unchanged and still tested.
 - **10 mitigated, not measured.** A busy read is classified (`busy`) and
   retried on the reader's next wake instead of failing the channel. The
   replay rig writes with immediate transactions beside the reader, and the

@@ -42,7 +42,7 @@ function mutationMessage(result: AgentCodeInstalledSkillsMutationResult): string
   if (result.ok) return ''
   if ('message' in result) return result.message
   if (result.code === 'revision-conflict') return 'Managed skills changed elsewhere. Reload and retry.'
-  if (result.code === 'unsupported') return 'A registered provider does not support personal skills.'
+  if (result.code === 'unsupported') return 'No registered provider supports personal skills.'
   return 'Managed skill state needs recovery before it can be changed.'
 }
 
@@ -587,7 +587,7 @@ function TargetList({
     <div className="flex flex-col gap-1 text-[10px] text-muted">
       {skill.targets.map(target => (
         <div key={target.id} className="flex items-center justify-between gap-2 border border-control-border px-2 py-1">
-          <span className="min-w-0 break-all">{target.providers.join(' + ') || 'Historical'} · {target.state} · {target.displayPath}</span>
+          <span className="min-w-0 break-all">{target.providers.join(' + ') || 'Historical'} · {target.state} · {target.displayPath || target.message}</span>
           {target.state === 'installed' || target.state === 'conflict' ? (
             <button type="button" className="shrink-0 border border-control-border px-2 py-0.5" onClick={() => {
               void window.api.revealAgentCodeInstalledSkillTarget(skill.id, target.id).then(result => {

@@ -6,6 +6,7 @@ import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type { PersistedWorkspace } from '@renderer/workspace/persistence'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
+import { freshStage } from '@renderer/workspace/dispatch/gridShape'
 
 const { createSession, loadInitialHistoryForSession } = vi.hoisted(() => ({
   createSession: vi.fn(),
@@ -95,6 +96,11 @@ function ref<T>(current: T): MutableRefObject<T> {
 
 function makePersisted(): PersistedWorkspace {
   return {
+    // Deliberately a v2 FILE (a tab owning a tile tree): this suite is the
+    // cross-layer restart proof, and the restart users will actually perform
+    // first is the one that upgrades this shape. The migration seeds lane 0
+    // with the tab's focus (#977), which is what makes `stable-session` the
+    // focused lane's occupant — and therefore the one session boot recovers.
     tabs: [{
       id: 'tab-1',
       title: 'Project',
@@ -145,13 +151,10 @@ function makeRendererHarness() {
     tabs: [],
     activeTabId: 'tab-1',
     sessions: {},
-    detachedSessions: {},
-    buried: [],
     pinnedSessionIds: [],
-    dispatchMode: null,
+    stage: freshStage(),
   } as unknown as WorkspaceState
   let runtimes: Record<SessionId, SessionRuntime> = {}
-  let tileTabs: unknown = null
   const refs = {
     dangerousAgentsRef: ref(false),
     useProxyStreamingRef: ref(false),
@@ -177,11 +180,6 @@ function makeRendererHarness() {
     ) => {
       runtimes = typeof next === 'function' ? next(runtimes) : next
       refs.latestRuntimesRef.current = runtimes
-    },
-    setTileTabs: (next: unknown) => {
-      tileTabs = typeof next === 'function'
-        ? (next as (prev: unknown) => unknown)(tileTabs)
-        : next
     },
   }
 }
@@ -217,7 +215,6 @@ describe('cross-layer session restart reconciliation', () => {
       firstRenderer.refs,
       firstRenderer.setState,
       firstRenderer.setRuntimes,
-      firstRenderer.setTileTabs,
       vi.fn(),
       recoveryApi,
     )
@@ -227,7 +224,6 @@ describe('cross-layer session restart reconciliation', () => {
       reloadedRenderer.refs,
       reloadedRenderer.setState,
       reloadedRenderer.setRuntimes,
-      reloadedRenderer.setTileTabs,
       vi.fn(),
       recoveryApi,
     )
@@ -258,10 +254,11 @@ describe('cross-layer session restart reconciliation', () => {
         },
       },
     })
-    expect(reloadedRenderer.state().tabs[0].root).toEqual({
-      type: 'leaf',
-      sessionId: 'stable-session',
-    })
+    // Still owned, still on the lane it was on: a failed or pending backend is
+    // a fact about the runtime, never a reason to drop the session. (Tree era:
+    // "the tab's tile leaf survives".)
+    expect(reloadedRenderer.state().sessions['stable-session']).toMatchObject({ projectId: 'tab-1' })
+    expect(reloadedRenderer.state().stage.lanes[0]).toEqual({ selectedSessionId: 'stable-session' })
     expect(reloadedRenderer.runtimes()['stable-session']).toMatchObject({
       draftInput: 'unfinished prompt',
       processStatus: 'started',
@@ -276,7 +273,6 @@ describe('cross-layer session restart reconciliation', () => {
       restartedRenderer.refs,
       restartedRenderer.setState,
       restartedRenderer.setRuntimes,
-      restartedRenderer.setTileTabs,
       vi.fn(),
       recoveryApi,
     )
@@ -317,16 +313,16 @@ describe('cross-layer session restart reconciliation', () => {
       failedRenderer.refs,
       failedRenderer.setState,
       failedRenderer.setRuntimes,
-      failedRenderer.setTileTabs,
       vi.fn(),
       recoveryApi,
     )
 
     expect(failed).toEqual({ restoredSessions: 0, expectedSessions: 1, complete: true })
-    expect(failedRenderer.state().tabs[0].root).toEqual({
-      type: 'leaf',
-      sessionId: 'stable-session',
-    })
+    // Still owned, still on the lane it was on: a failed or pending backend is
+    // a fact about the runtime, never a reason to drop the session. (Tree era:
+    // "the tab's tile leaf survives".)
+    expect(failedRenderer.state().sessions['stable-session']).toMatchObject({ projectId: 'tab-1' })
+    expect(failedRenderer.state().stage.lanes[0]).toEqual({ selectedSessionId: 'stable-session' })
     expect(failedRenderer.runtimes()['stable-session']).toMatchObject({
       draftInput: 'unfinished prompt',
       processStatus: 'failed',
@@ -342,7 +338,6 @@ describe('cross-layer session restart reconciliation', () => {
       retryRenderer.refs,
       retryRenderer.setState,
       retryRenderer.setRuntimes,
-      retryRenderer.setTileTabs,
       vi.fn(),
       recoveryApi,
     )
@@ -388,7 +383,6 @@ describe('cross-layer session restart reconciliation', () => {
       renderer.refs,
       renderer.setState,
       renderer.setRuntimes,
-      renderer.setTileTabs,
       vi.fn(),
       recoveryApi,
     )
@@ -405,10 +399,11 @@ describe('cross-layer session restart reconciliation', () => {
     expect(mcpHost.revokeSession).toHaveBeenCalledTimes(1)
     expect(manager.getBackendSnapshot('stable-session')).toBeNull()
     expect(manager.list()).toEqual([])
-    expect(renderer.state().tabs[0].root).toEqual({
-      type: 'leaf',
-      sessionId: 'stable-session',
-    })
+    // Still owned, still on the lane it was on: a failed or pending backend is
+    // a fact about the runtime, never a reason to drop the session. (Tree era:
+    // "the tab's tile leaf survives".)
+    expect(renderer.state().sessions['stable-session']).toMatchObject({ projectId: 'tab-1' })
+    expect(renderer.state().stage.lanes[0]).toEqual({ selectedSessionId: 'stable-session' })
     expect(renderer.runtimes()['stable-session']).toMatchObject({
       processStatus: 'failed',
       processError: expect.stringContaining('cancelled'),

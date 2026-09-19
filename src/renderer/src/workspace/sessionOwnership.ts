@@ -1,207 +1,133 @@
 import type {
-  BuriedPaneRecord,
-  DetachedSessionRecord,
-  DispatchModeState,
   SessionId,
   SessionMeta,
   TabId,
-  TileNode,
-  TileTabsState,
+  TiledDispatchState,
 } from '@renderer/workspace/types'
-import { closeLeaf, collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
-import { sanitizeTileTabsState } from '@renderer/workspace/layout/helpers'
 import {
   keepTiledLaneSessions,
   scrubGridRowMetadata,
 } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
+import { hasSessionMeta } from '@renderer/workspace/legacyWorkspaceV2'
 
-type SessionOwnershipTab = {
-  id: TabId
-  root: TileNode
-}
+export { hasSessionMeta }
 
 export type SessionOwnershipInput = {
-  tabs: SessionOwnershipTab[]
+  tabs: ReadonlyArray<{ id: TabId }>
   sessions: Record<SessionId, SessionMeta>
-  detachedSessions?: Record<SessionId, DetachedSessionRecord>
-  buried?: BuriedPaneRecord[]
 }
 
 export type PrunedSessionOwnership = {
   sessions: Record<SessionId, SessionMeta>
-  detachedSessions: Record<SessionId, DetachedSessionRecord>
-  buried: BuriedPaneRecord[]
-  dispatchMode: DispatchModeState | null | undefined
+  stage: TiledDispatchState
   droppedSessionIds: SessionId[]
 }
 
-// WHY this module exists — and why TWO ownership sets, not one:
+// WHY this module exists — and why TWO sets, not one:
 //
-// Workspace persistence has three independent ownership surfaces for a session:
-// visible tile leaves, detached non-grid surfaces (dispatch parking), and
-// buried panes. The `sessions` map is deliberately only metadata for those
-// owners. Treating the map itself as authority creates a fourth hidden state:
-// "metadata exists but no UI/surface owns it". The original OOM bug was the
-// inverse direction of that same conflation: orphan metadata getting respawned
-// into invisible backend processes/proxies during startup.
+// The `sessions` map is metadata. A row being PRESENT has never been allowed
+// to mean "this session belongs to the workspace", because the inverse
+// conflation was a production incident twice over:
 //
-// The first fix collapsed everything into a single `owned` set and used it for
-// BOTH persistence pruning AND rehydrate spawn filtering. That solved orphan
-// metadata, but it also meant every detached session — which the user has
-// explicitly removed from their visible workspace — got a full claude/codex
-// process plus mitmdump on every restart. After weeks of "park this agent in
-// dispatch for later", the detached pool grew to 40+ records and each app
-// launch spawned the whole herd in parallel via rehydrate's Promise.all.
+//   - Orphan metadata getting respawned into invisible backend processes and
+//     proxies during startup (the original OOM bug).
+//   - The first fix collapsing everything into one `owned` set used for BOTH
+//     persistence pruning AND the boot spawn list. Every session the user had
+//     parked then got a full claude/codex process plus mitmdump on every
+//     restart. After weeks of "park this agent for later" the pool grew to 40+
+//     and each launch spawned the whole herd in parallel (#258: 49 persisted,
+//     9 visible, 40 parked -> 40 claude + 40 mitmdump, loadavg 906).
 //
-// The fix is to split the two concepts the previous code conflated:
+// Before #992 ownership was STRUCTURAL: a session was owned because a tile
+// leaf, a `detachedSessions` record or a `buried` record named it. Those
+// structures are gone. Ownership is now one fact on the row itself:
 //
-//   collectOwnedSessionIds  → metadata-preservation set.
-//                             Tile leaves + detached + buried.
-//                             Used by `pruneSessionOwnership` to decide which
-//                             rows in `sessions`, `detachedSessions`, and
-//                             `buried` survive a save cycle. Detached and
-//                             buried records are durable user state; losing
-//                             them would lose the cwd/providerSessionId needed
-//                             to revive a parked agent later.
+//   a session is OWNED  <=>  its `projectId` names a project that exists.
 //
-//   collectLiveProcessIds   → rehydrate-spawn set.
-//                             Tile leaves ONLY. The question this answers is
-//                             "which sessions does the user currently see on
-//                             screen, such that a backend process must exist
-//                             for typing/scrolling/streaming to work?". A
-//                             detached or buried session can be revived later
-//                             by an explicit user action; until then it is
-//                             metadata only and must NOT spawn a PTY, a
-//                             mitmdump, an MCP host, or any other runtime
-//                             resource.
+// That is the same rule v2 applied to a detached record ("a missing parent
+// means there is no surface from which the agent can be found or managed —
+// drop that closed ownership island as one unit"), restated for the pool. A
+// row whose project is gone is a ghost; a row with no `projectId` at all was
+// never filed (a spawn whose caller bailed out). Neither may become durable,
+// and neither may EVER be spawned.
 //
-// Dispatch focus is intentionally excluded from both sets. It is a selection
-// pointer, not ownership; allowing it to keep a session alive would let a
-// stale focus id resurrect work the user can no longer see or manage.
-/**
- * Does `sessions` actually carry metadata for this id?
- *
- * WHY an own-property check and not a bare `sessions[id]` truthiness test: a plain
- * index read walks the prototype chain, so a leaf id of `toString`,
- * `constructor`, or `valueOf` resolves to an inherited function and reads as
- * "has metadata". That is precisely inverted from what every caller here
- * wants, and it would make such a leaf invisible to BOTH the restore gate and
- * the repair guard — i.e. it would reproduce the permanent-freeze bug while
- * looking healthy. Session ids are `randomUUID()` today, so this needs a
- * hand-edited workspace.json to reach; hand-edited files are named as an
- * explicit threat model throughout this module, so the check should be total.
- *
- * The value must also be truthy, not merely present: rehydrate decides what to
- * restore with a truthiness test of its own (`freshSessions[id] ?`), so an own
- * key holding `undefined` has to read as "no metadata" on this side too or the
- * two halves disagree about what a pane is.
- */
-export function hasSessionMeta(
-  sessions: Record<SessionId, SessionMeta>,
-  id: SessionId,
-): boolean {
-  // `Object.prototype.hasOwnProperty.call` rather than `Object.hasOwn`: this
-  // project's TS lib target predates ES2022, and a own-property check is not
-  // worth moving the whole compiler target for.
-  return Object.prototype.hasOwnProperty.call(sessions, id) && Boolean(sessions[id])
-}
+// The two sets are still two questions:
+//
+//   collectOwnedSessionIds  -> metadata-preservation set. Which rows survive
+//                              a save and a load. Parked agents are durable
+//                              user state; losing them loses the
+//                              cwd/providerSessionId needed to wake one later.
+//
+//   collectLiveProcessIds   -> boot-spawn set. Which sessions must have a
+//                              backend the moment the window paints.
+//
+// Lane selections, pins and the active project are POINTERS, not ownership. A
+// stale pointer must never keep a session alive or bring one back.
 
 /**
- * Every tile leaf that has real metadata — the ownership half of "visible".
- *
- * WHY this is separate from `collectLiveProcessIds`, which on this branch
- * returns the same thing:
- *
- * Ownership answers "whose SessionMeta must survive a save?" while the live set
- * answers "which sessions need a backend process?". Those coincide today, and
- * `collectOwnedSessionIds` used to be built directly on the live set because of
- * that. But the sets are not the same question, and collapsing them makes any
- * future narrowing of "needs a process" silently narrow ownership too — which
- * deletes user data.
- *
- * That is not hypothetical. The in-flight extension-view work adds panes that
- * are real tile leaves with real metadata but deliberately spawn NO process, by
- * skipping them in `collectLiveProcessIds`. Built on the old shape, that skip
- * also removed them from the owned set, so `pickOwnedSessions` dropped their
- * metadata on the very next autosave — turning them into exactly the orphan
- * leaves this module now repairs, and handing the repair guard a live pane to
- * collapse out of the user's tree. Splitting the two sets here is what makes
- * "excluded from spawning" and "excluded from persistence" independent, so a
- * process-less pane kind is safe to add in one place.
+ * The metadata-preservation set: every session whose `projectId` names a
+ * project that exists (and which actually has metadata — see hasSessionMeta).
  */
-export function collectTileLeafIds(input: SessionOwnershipInput): Set<SessionId> {
-  const leaves = new Set<SessionId>()
-  for (const tab of input.tabs) {
-    for (const id of collectLeaves(tab.root)) {
-      if (!hasSessionMeta(input.sessions, id)) continue
-      leaves.add(id)
-    }
-  }
-  return leaves
-}
-
 export function collectOwnedSessionIds(input: SessionOwnershipInput): Set<SessionId> {
-  const owned = collectTileLeafIds(input)
-  const existingTabIds = new Set(input.tabs.map(tab => tab.id))
-
-  for (const entry of Object.values(input.detachedSessions ?? {})) {
-    // WHY a detached record is not ownership by itself:
-    //
-    // Dispatch agents are children of a project tab. Closing that tab kills
-    // its visible and detached sessions together, but older builds and
-    // interrupted saves could leave the detached half behind. Blindly treating
-    // that stale record as an owner made it immortal: autosave preserved both
-    // the record and its SessionMeta forever, and rehydrate constructed an
-    // idle runtime for it on every launch. Real workspaces accumulated dozens
-    // of these ghosts even though the user had only a handful of open agents.
-    //
-    // `projectTabId` is the durable parent relation, so a missing parent means
-    // there is no surface from which the agent can be found or managed. Drop
-    // that closed ownership island as one unit instead of manufacturing a
-    // fourth, invisible workspace surface.
-    if (!existingTabIds.has(entry.projectTabId)) continue
-    owned.add(entry.sessionId)
+  const projectIds = new Set<TabId>(input.tabs.map(tab => tab.id))
+  const owned = new Set<SessionId>()
+  for (const id of Object.keys(input.sessions)) {
+    if (!hasSessionMeta(input.sessions, id)) continue
+    const projectId = input.sessions[id]!.projectId
+    if (projectId !== undefined && projectIds.has(projectId)) owned.add(id)
   }
-
-  for (const entry of input.buried ?? []) {
-    owned.add(entry.sessionId)
-  }
-
   return owned
 }
 
-// WHY this is a separate set from `collectOwnedSessionIds`:
-//
-// See the module header. tl;dr: persistence wants to keep more than rehydrate
-// wants to spawn. Tile leaves are the only sessions whose absence would
-// produce a broken user-visible pane on startup; everything else is parked
-// state that the user must opt back into.
-//
-// WHY leaves without SessionMeta are excluded (via `collectTileLeafIds`):
-//
-// This set is BOTH the rehydrate spawn list and the denominator of the
-// restore-completion gate (`expectedSessions` in rehydrate.ts). A leaf whose id
-// has no row in `sessions` has no cwd and no kind, so there is literally
-// nothing to spawn for it — rehydrate's respawn loop iterates
-// `persisted.sessions` and can never even reach it. Counting it made
-// `resolvedIds.size === expectedSessions` unsatisfiable FOREVER: restore
-// reported `partial-restore`, autosave stayed locked to protect disk, and
-// because autosave is the only writer of workspace.json the corrupt tree could
-// never be rewritten. A single dangling leaf permanently froze a real user's
-// workspace file for three weeks (observed on every boot: expectedCount 4,
-// resolvedCount 3, ok false).
-//
-// The invariant this restores is `liveProcessIds ⊆ keys(sessions)`, which is
-// what makes the gate a real subset-equality test instead of a comparison that
-// can never hold. It is deliberately NOT "spawn a fresh session for the
-// orphan": we do not know its cwd or provider, and inventing one would
-// resurrect a pane the user never asked for, pointed at the wrong directory.
-//
-// If you add a pane kind that must NOT spawn a process, narrow it HERE and
-// nowhere else. Narrowing `collectTileLeafIds` instead would drop its metadata
-// on the next save — see the comment on that function.
-export function collectLiveProcessIds(input: SessionOwnershipInput): Set<SessionId> {
-  return collectTileLeafIds(input)
+/**
+ * The boot-spawn set: the FOCUSED lane's occupant, and nothing else.
+ *
+ * WHY so narrow. The question this answers is "which sessions must have a
+ * backend before the user can do anything?", and on a stage the honest answer
+ * is the one under the cursor. Every other session — shown in a lane or not —
+ * already has a complete wake path that does not need boot's help:
+ *
+ *   - an agent leaf renders its committed transcript with no backend at all,
+ *     and wakes on its first send (TileLeaf.send -> ensureSessionLive, the
+ *     #691 fix for a parked lane rejecting its first prompt);
+ *   - a terminal leaf wakes its shell when it mounts;
+ *   - placing a parked session in a lane wakes it first (#690).
+ *
+ * v2 spawned every TILE LEAF at boot, and the recorded real workspace shows
+ * what that had become: 3 one-pane tabs spawned 3 agents that no lane showed,
+ * while the 12 lanes the user actually worked in all booted parked and woke on
+ * first send. So "wake on first use" is not a new risk being introduced here;
+ * it is the path the product's only heavy user already exercised for every
+ * agent they touched. Spawning ALL lane occupants instead would be bounded by
+ * the 16-lane cap rather than unbounded like #258 — but 16 agent processes
+ * and 16 proxies in one Promise.all is the same incident at 40% scale, to
+ * save a wake the user already pays today.
+ *
+ * This set is ALSO the denominator of rehydrate's restore-completion gate
+ * (`expectedSessions`), so it must stay a subset of `keys(sessions)`: a lane
+ * naming a session with no metadata contributes nothing (there is no cwd or
+ * kind to spawn), or the gate could never be satisfied and autosave — the
+ * file's only writer — would stay locked forever. That exact shape froze a
+ * real workspace for three weeks under v2.
+ *
+ * If you add a session kind that must NOT spawn a process, narrow it HERE.
+ * Narrowing `collectOwnedSessionIds` instead would drop its metadata on the
+ * next save.
+ */
+export function collectLiveProcessIds(
+  input: SessionOwnershipInput & { stage: TiledDispatchState },
+): Set<SessionId> {
+  const live = new Set<SessionId>()
+  const focused = input.stage.lanes[input.stage.focusedLane]?.selectedSessionId
+  if (focused === undefined) return live
+  if (!collectOwnedSessionIds(input).has(focused)) return live
+  // Extension views have NO backing process (no PTY, no agent). Their pane is
+  // reconstructed purely from SessionMeta.extensionViewId; recovering one
+  // would fall through SessionManager's provider switch into the
+  // terminal-spawn branch and start a stray shell.
+  if (input.sessions[focused]?.kind === 'extension-view') return live
+  live.add(focused)
+  return live
 }
 
 export function collectUnownedSessionIds(input: SessionOwnershipInput): SessionId[] {
@@ -220,193 +146,49 @@ export function pickOwnedSessions(
   return out
 }
 
+/**
+ * What autosave may make durable: owned rows, and a stage whose every pointer
+ * resolves inside them.
+ *
+ * WHY autosave prunes instead of faithfully serializing runtime state: it is
+ * the durability boundary. If an action leaves an unowned row in
+ * `state.sessions`, writing it turns a transient invariant violation into a
+ * permanent one. Pruning here is the last line of defense, and it closes the
+ * model under restore: nothing this returns points at something it does not
+ * also contain.
+ *
+ * (`repairPersistedTabs` lived below until #992. It rewrote tile TREES before
+ * serialization, because a tree leaf was itself an owner and an orphan leaf
+ * could therefore never be pruned away — it had to be cut out of the tree.
+ * With ownership on the row, an orphan is just an unowned row and the
+ * ordinary prune drops it; there is no structure left to repair.)
+ */
 export function pruneSessionOwnership(
-  input: SessionOwnershipInput & {
-    dispatchMode?: DispatchModeState | null
-  },
+  // WHY `stage` is required here although ownership never reads it: the stage
+  // is a POINTER surface, not an owner (U2 — lanes are space, the pool is the
+  // home). It has to be scrubbed against the same live ids in the same pass,
+  // or the file can name a session in a lane that the same file no longer
+  // contains. Required rather than optional because the live state always has
+  // one and an optional field would let a caller silently skip the scrub.
+  input: SessionOwnershipInput & { stage: TiledDispatchState },
 ): PrunedSessionOwnership {
   const ownedIds = collectOwnedSessionIds(input)
   const sessions = pickOwnedSessions(input.sessions, ownedIds)
   const liveIds = new Set(Object.keys(sessions))
-
-  // WHY filter owner records after filtering `sessions`:
-  //
-  // A corrupted workspace can fail both directions. The OOM bug came from
-  // metadata without an owner, but the inverse is also possible after a failed
-  // rehydrate or hand-edited workspace.json: an owner points at missing
-  // metadata. Persisting that shape means the next load has to reason about a
-  // pane whose cwd/kind no longer exists. Pruning owner records to ids that
-  // survived in `sessions` keeps the serialized model closed under restore.
-  //
-  // Detached records are also normalized by session id while we are here. The
-  // object key is a lookup convenience, not user data; keeping an old runtime
-  // key around a remapped record makes later lifecycle actions target the wrong
-  // entry.
-  const detachedSessions: Record<SessionId, DetachedSessionRecord> = {}
-  for (const entry of Object.values(input.detachedSessions ?? {})) {
-    if (!liveIds.has(entry.sessionId)) continue
-    const sessionId = entry.sessionId
-    detachedSessions[sessionId] = {
-      ...entry,
-      sessionId,
-    }
-  }
-
-  const buried = (input.buried ?? []).filter(entry => liveIds.has(entry.sessionId))
   const droppedSessionIds = Object.keys(input.sessions).filter(id => !liveIds.has(id))
-  const focusedSessionId = input.dispatchMode?.focusedSessionId
-  const dispatchMode = input.dispatchMode
-    ? scrubGridRowMetadata(
-      keepTiledLaneSessions({
-        // WHY tiled lanes are scrubbed at the same durability boundary as
-        // focusedSessionId: autosave must serialize a model closed under
-        // restore. Kill/close paths already clear lanes, but corrupt or
-        // hand-edited workspace state can reach this persistence guard directly.
-        // If we only scrub classic focus, a tiled lane can keep pointing at a
-        // pruned session and force rehydrate/auto-fill to repair stale state on
-        // every launch.
-        ...input.dispatchMode,
-        focusedSessionId: focusedSessionId && liveIds.has(focusedSessionId)
-          ? focusedSessionId
-          : undefined,
-      }, liveIds),
-      // Grid rows also name a PROJECT and a set of expanded parent sessions.
-      // A binding to a closed tab filters that row's index to nothing with no
-      // UI path back (the picker only lists tabs that exist), so it has to be
-      // scrubbed at the same durability boundary as every other pointer.
-      new Set(input.tabs.map(tab => tab.id)),
-      liveIds,
-    )
-    : input.dispatchMode
-
-  return {
-    sessions,
-    detachedSessions,
-    buried,
-    dispatchMode,
-    droppedSessionIds,
-  }
-}
-
-
-/**
- * Repair the tab structures that autosave is about to serialize: drop tile
- * leaves whose session id has no `sessions` row, collapsing each orphaned split
- * into its surviving sibling, and fix up the pointers that repair invalidates.
- *
- * WHY this belongs at the autosave boundary and not in a close/kill path:
- *
- * `pruneSessionOwnership` already claims to keep the serialized model "closed
- * under restore", and it scrubs every pointer that aims AT a session —
- * `sessions`, `detachedSessions`, `buried`, dispatch focus, tiled lanes. Tile
- * trees were the one owner class it never validated, because `useAutoSave`
- * serialized `state.tabs` verbatim. That asymmetry is what let a torn in-memory
- * state (a leaf whose metadata had already been removed) become durable, and
- * durable corruption here is uniquely bad: it disables the very autosave that
- * would fix it.
- *
- * There is a self-reference that makes this the ONLY place the repair can
- * happen. Ownership is *derived from* tile leaves — `collectOwnedSessionIds`
- * walks the trees — so an orphan leaf can never be removed by pruning
- * `sessions` against owners. The orphan IS an owner; there is nothing for
- * `pickOwnedSessions` to drop. The tree itself has to be rewritten.
- *
- * WHAT THIS DOES NOT DO — do not let the next reader assume otherwise: it
- * repairs the object being SERIALIZED, not `state.tabs`. For the rest of the
- * session the orphan leaf stays in the live tree and still renders, as a
- * default-provider pane stuck idle with a `?` label (TileTree renderWorkspaceLeaf
- * falls back to DEFAULT_PROVIDER and an empty runtime). So on-screen and
- * on-disk deliberately diverge until the next launch, which is the trade this
- * whole change makes: a pane that cannot be restored must not be allowed to
- * hold the user's entire workspace file hostage.
- *
- * A tab that loses every leaf is dropped: its root would be empty, which
- * `TileNode` cannot represent and no pane could render. That is the one
- * destructive branch here, which is why `activeTabId` and `tileTabs` are
- * repaired in the same pure function rather than at the call site — it keeps
- * the whole destructive path testable without a React harness.
- */
-export function repairPersistedTabs<
-  TTab extends SessionOwnershipTab & { focusedSessionId?: SessionId },
->(input: {
-  tabs: readonly TTab[]
-  sessions: Record<SessionId, SessionMeta>
-  activeTabId: TabId
-  tileTabs: TileTabsState | null
-}): {
-  tabs: TTab[]
-  activeTabId: TabId
-  tileTabs: TileTabsState | null
-  droppedLeafSessionIds: SessionId[]
-  droppedTabIds: TabId[]
-} {
-  const { sessions } = input
-  const droppedLeafSessionIds = new Set<SessionId>()
-  const droppedTabIds: TabId[] = []
-  const kept: TTab[] = []
-
-  for (const tab of input.tabs) {
-    const orphans = collectLeaves(tab.root).filter(id => !hasSessionMeta(sessions, id))
-    if (orphans.length === 0) {
-      kept.push(tab)
-      continue
-    }
-    for (const id of orphans) droppedLeafSessionIds.add(id)
-
-    // closeLeaf is the same primitive the user-facing pane close uses, so a
-    // repaired tree has exactly the shape it would have had if the pane had
-    // been closed normally — splits collapse into the survivor, ratios of
-    // untouched splits are preserved. It nulls EVERY matching leaf in one
-    // pass, so iterating the deduped orphan set is sufficient.
-    let root: TileNode | null = tab.root
-    for (const orphanId of droppedLeafSessionIds) {
-      if (root === null) break
-      root = closeLeaf(root, orphanId)
-    }
-    if (root === null) {
-      droppedTabIds.push(tab.id)
-      continue
-    }
-
-    const survivingLeaves = collectLeaves(root)
-    kept.push({
-      ...tab,
-      root,
-      // WHY the test is tree membership and not "is focus still in `sessions`":
-      // the invariant a tab owes is that its focus names a leaf IT CONTAINS.
-      // Checking the sessions map instead would leave focus pointing at a real
-      // session that lives in another tab — rehydrate would not repair that
-      // either, because its `idMap.get(focusedSessionId) ?? leaves[0]` fallback
-      // only fires for an id it cannot resolve at all.
-      ...(tab.focusedSessionId !== undefined
-        && !survivingLeaves.includes(tab.focusedSessionId)
-        ? { focusedSessionId: survivingLeaves[0] }
-        : {}),
-    })
-  }
-
-  // Pointers that only a dropped TAB can invalidate. Both self-heal on read,
-  // but this function's whole claim is that what it returns is closed under
-  // restore, and leaving a known-dangling id behind would make that a lie.
-  const activeTabId = kept.some(t => t.id === input.activeTabId)
-    ? input.activeTabId
-    : kept[0]?.id ?? input.activeTabId
-  const survivingTabIds = new Set(kept.map(t => t.id))
-  const tileTabs = input.tileTabs === null || droppedTabIds.length === 0
-    ? input.tileTabs
-    // sanitizeTileTabsState re-picks focus, re-derives ratios to match the new
-    // tab count, and collapses to null below two tabs — so filtering the ids is
-    // all this needs to do.
-    : sanitizeTileTabsState({
-        ...input.tileTabs,
-        tabIds: input.tileTabs.tabIds.filter(id => survivingTabIds.has(id)),
-      })
-
-  return {
-    tabs: kept,
-    activeTabId,
-    tileTabs,
-    droppedLeafSessionIds: [...droppedLeafSessionIds],
-    droppedTabIds,
-  }
+  const stage = scrubGridRowMetadata(
+    // Kill/close paths already clear lanes, but corrupt or hand-edited state
+    // can reach this guard directly. An unscrubbed lane keeps pointing at a
+    // pruned session and forces rehydrate to repair stale state on every
+    // launch. The focused LANE is an index, not a session pointer, so it
+    // needs no liveness check.
+    keepTiledLaneSessions(input.stage, liveIds),
+    // Rows also name PROJECTS and a set of expanded parent sessions. A binding
+    // to a closed project filters that row's index to nothing with no UI path
+    // back (the picker only lists projects that exist), so it is scrubbed at
+    // the same durability boundary as every other pointer.
+    new Set(input.tabs.map(tab => tab.id)),
+    liveIds,
+  )
+  return { sessions, stage, droppedSessionIds }
 }

@@ -1,3 +1,4 @@
+import { useAppStore } from '@renderer/app-state/hooks'
 import { ExternalControlRow } from './ExternalControlRow'
 import type { Settings } from '@renderer/app-state/settings/types'
 import type {
@@ -14,6 +15,8 @@ import { DictationApiKeyRow } from '@renderer/features/voice-dictation/Dictation
 import { DictationHistoryRow } from '@renderer/features/voice-dictation/DictationHistoryRow'
 import { DictationAudioInputRow } from '@renderer/features/voice-dictation/DictationAudioInputRow'
 import { ThemePickerRow } from '@renderer/features/settings/ui/ThemePickerRow'
+import { AppsSettingsRow } from '@renderer/apps/ui/AppsSettingsRow'
+import { ExtensionSettingRow } from '@renderer/apps/ui/ExtensionSettingRow'
 import { AgentCodeConventionsRow } from '@renderer/features/settings/ui/AgentCodeConventionsRow'
 import { AgentCodeCustomSkillsRow } from '@renderer/features/settings/ui/AgentCodeCustomSkillsRow'
 import { AgentCodeInstalledSkillsRow } from '@renderer/features/settings/ui/AgentCodeInstalledSkillsRow'
@@ -214,9 +217,27 @@ function SettingRow({
               because the value lives in setup.json (main-owned), not
               in the renderer Settings store. See
               features/cli-updates/CliUpdateBehaviorRow.tsx. */}
+          {control.type === 'performance-monitor' ? (
+            <Button size="sm" variant="outline" onClick={() => {
+              actionContext.onClose()
+              const state = useAppStore.getState()
+              if (!state.performancePanelOpen) state.togglePerformancePanel()
+            }}>Open Performance Monitor</Button>
+          ) : null}
           {control.type === 'external-control' ? <ExternalControlRow /> : null}
 
           {control.type === 'command-keybindings' ? <CommandKeybindingsRow /> : null}
+
+          {/* One extension-contributed setting. Self-subscribing: the value lives
+              in the extension's own storage, not the Settings blob (#249). */}
+          {control.type === 'extension' ? (
+            <ExtensionSettingRow
+              extensionId={control.extensionId}
+              settingId={control.settingId}
+              valueType={control.valueType}
+              defaultValue={control.default}
+            />
+          ) : null}
 
           {control.type === 'cli-update-behavior' ? <CliUpdateBehaviorRow /> : null}
 
@@ -226,6 +247,11 @@ function SettingRow({
               round-trip. See features/voice-dictation/DictationApiKeyRow.tsx. */}
           {control.type === 'dictation-api-key' ? <DictationApiKeyRow /> : null}
 
+          {/* Built-in apps — the purest marker row: there is no value at all,
+              just a listing of apps/registry.ts, which is compile-time data the
+              Settings store has no business mirroring.
+              See apps/ui/AppsSettingsRow.tsx. */}
+          {control.type === 'apps' ? <AppsSettingsRow /> : null}
           {control.type === 'dictation-audio-input' ? (
             <DictationAudioInputRow
               value={settings.dictationAudioInput}

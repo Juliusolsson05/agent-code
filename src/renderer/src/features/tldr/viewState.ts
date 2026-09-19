@@ -2,11 +2,22 @@ import { create } from 'zustand'
 
 // Preview state is deliberately outside persisted Settings/workspace state.
 // Restarting the renderer while a key is held must never restore a darkened UI.
-export const useTldrView = create<{ held: boolean; latched: boolean }>(() => ({ held: false, latched: false }))
+//
+// `preview` says WHICH peek is showing. TLDR (Cmd+L) and Goal (Cmd+G, #936)
+// share one hold gesture, one native release watcher, and one input gate: two
+// independent stores would let both overlays be up at once and give Escape two
+// things to dismiss.
+export type PreviewKind = 'tldr' | 'goal'
+export const useTldrView = create<{ held: boolean; latched: boolean; preview: PreviewKind }>(() => ({ held: false, latched: false, preview: 'tldr' }))
 export function dismissTldr(): void { useTldrView.setState({ held: false, latched: false }) }
-export function toggleTldr(): void {
-  const state = useTldrView.getState()
-  useTldrView.setState({ held: false, latched: !(state.held || state.latched) })
+export function isPreviewVisible(state: { held: boolean; latched: boolean; preview: PreviewKind }, preview: PreviewKind): boolean {
+  return (state.held || state.latched) && state.preview === preview
+}
+export function toggleTldr(preview: PreviewKind = 'tldr'): void {
+  // Asking for the OTHER preview switches to it instead of closing: with TLDR
+  // latched, choosing Goal means "show me goals", not "dismiss".
+  const showing = isPreviewVisible(useTldrView.getState(), preview)
+  useTldrView.setState({ held: false, latched: !showing, preview })
 }
 
 type HoldEvent = Pick<KeyboardEvent, 'code' | 'metaKey' | 'ctrlKey' | 'altKey' | 'shiftKey' | 'repeat'>
@@ -23,7 +34,8 @@ export function observeTldrHoldRelease(event: HoldEvent, release: () => void): (
  * Remember the physical key and modifiers that actually began this hold, not
  * Cmd+L literals: rebinding in Settings must change both press AND release. */
 export function createTldrHoldController(
-  setHeld = (held: boolean) => useTldrView.setState({ held, latched: false }),
+  setHeld = (held: boolean, preview: PreviewKind = 'tldr') =>
+    useTldrView.setState(held ? { held, latched: false, preview } : { held, latched: false }),
   observeRelease: (event: HoldEvent, release: () => void) => () => void = () => () => {},
 ) {
   let gesture: HoldEvent | null = null
@@ -36,10 +48,10 @@ export function createTldrHoldController(
     setHeld(false)
   }
   return {
-    start(event: HoldEvent) {
+    start(event: HoldEvent, preview: PreviewKind = 'tldr') {
       if (event.repeat || gesture) return
       gesture = { code: event.code, metaKey: event.metaKey, ctrlKey: event.ctrlKey, altKey: event.altKey, shiftKey: event.shiftKey, repeat: false }
-      setHeld(true)
+      setHeld(true, preview)
       stopObserving = observeRelease(gesture, release)
     },
     keyUp(event: Pick<KeyboardEvent, 'code' | 'metaKey' | 'ctrlKey' | 'altKey' | 'shiftKey'>) {

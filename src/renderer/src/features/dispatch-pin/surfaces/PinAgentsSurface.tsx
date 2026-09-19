@@ -1,3 +1,4 @@
+import { isProcessSessionKind } from '@shared/types/providerKind'
 import { useMemo } from 'react'
 import { PinAgentsModal } from '@renderer/features/dispatch-pin/PinAgentsModal'
 import type { PinAgentsModalRow } from '@renderer/features/dispatch-pin/PinAgentsModal'
@@ -47,7 +48,7 @@ export function PinAgentsSurface() {
     const pushRow = (sessionId: SessionId, tabId: TabId): void => {
       if (seen.has(sessionId)) return
       const meta = state.sessions[sessionId]
-      if (!meta) return
+      if (!meta || !isProcessSessionKind(meta.kind)) return
       const tabIndex = tabIndexFor(tabId)
       const tab = state.tabs[tabIndex]
       if (!tab) return
@@ -88,7 +89,6 @@ export function PinAgentsSurface() {
 
     return result
   }, [
-    state.detachedSessions,
     state.pinnedSessionIds,
     state.sessions,
     state.tabs,

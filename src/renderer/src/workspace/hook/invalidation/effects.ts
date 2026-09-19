@@ -4,22 +4,20 @@ import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type {
   ReaderModeState,
   SpotlightState,
-  TileTabsState,
 } from '@renderer/workspace/types'
 import type { SessionId, Tab, TabId, WorkspaceState } from '@renderer/workspace/types'
-import { resolveTabSessions } from '@renderer/workspace/queries'
 import {
   buildVisibleDispatchRows,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
 import {
   assistantUuidsWithText,
 } from '@renderer/lib/copyAssistant'
-import { ratiosEqual, sanitizeTileTabsState } from '@renderer/workspace/layout/helpers'
+
+import { isAgentSessionKind, isProcessSessionKind } from '@shared/types/providerKind'
 
 import type {
   WorkspaceSetReaderMode,
   WorkspaceSetSpotlight,
-  WorkspaceSetTileTabs,
 } from '@renderer/workspace/hook/context'
 
 // Invalidation effects — these fire when state changes and adjust
@@ -107,14 +105,16 @@ function validFocusSessionIdsForMode(
   // user clicks a detached row in non-Dispatch Reader → validator
   // sees the id isn't a grid leaf → forces focus back to the first
   // grid pane → user's selection silently disappears.
-  const sessionIds = state.dispatchMode
-    ? buildVisibleDispatchRows(state)
-      .filter(row => row.tabId === tabId)
-      .map(row => row.sessionId)
-    : resolveTabSessions(state, tabId)
+  //
+  //   - Then the stage became the only layout (#992) and the views dropped
+  //     their non-Dispatch branch, so this did too. The rule is unchanged:
+  //     whatever ReaderView/SpotlightView list, this lists.
+  const sessionIds = buildVisibleDispatchRows(state)
+    .filter(row => row.tabId === tabId)
+    .map(row => row.sessionId)
 
   return options.agentOnly
-    ? sessionIds.filter(sessionId => state.sessions[sessionId]?.kind !== 'terminal')
+    ? sessionIds.filter(sessionId => isAgentSessionKind(state.sessions[sessionId]?.kind))
     : sessionIds
 }
 
@@ -172,7 +172,8 @@ export function usePinnedSessionIdsSanity(
     if (pinnedSessionIds.length === 0) return
     const valid = pinnedSessionIds.filter(id => {
       const meta = sessions[id]
-      return meta !== undefined
+      // Pins can own shells and agents, but never a processless extension view.
+      return meta !== undefined && isProcessSessionKind(meta.kind)
     })
     if (valid.length === pinnedSessionIds.length) return
     setState(prev => {
@@ -182,7 +183,7 @@ export function usePinnedSessionIdsSanity(
       // in this file.
       const next = prev.pinnedSessionIds.filter(id => {
         const meta = prev.sessions[id]
-        return meta !== undefined
+        return meta !== undefined && isProcessSessionKind(meta.kind)
       })
       if (next.length === prev.pinnedSessionIds.length) return prev
       return { ...prev, pinnedSessionIds: next }
@@ -190,34 +191,3 @@ export function usePinnedSessionIdsSanity(
   }, [setState, state])
 }
 
-export function useTileTabsSanity(
-  tileTabs: TileTabsState | null,
-  tabs: Tab[],
-  setTileTabs: WorkspaceSetTileTabs,
-): void {
-  useEffect(() => {
-    if (!tileTabs) return
-    const nextTileTabs = sanitizeTileTabsState(tileTabs)
-    if (!nextTileTabs) {
-      setTileTabs(null)
-      return
-    }
-    const validTabIds = nextTileTabs.tabIds.filter(id => tabs.some(t => t.id === id))
-    const sanitized = sanitizeTileTabsState({
-      ...nextTileTabs,
-      tabIds: validTabIds,
-    })
-    if (!sanitized) {
-      setTileTabs(null)
-      return
-    }
-    if (
-      sanitized.tabIds.length !== tileTabs.tabIds.length ||
-      sanitized.focusedTabId !== tileTabs.focusedTabId ||
-      sanitized.direction !== tileTabs.direction ||
-      !ratiosEqual(sanitized.ratios, tileTabs.ratios)
-    ) {
-      setTileTabs(sanitized)
-    }
-  }, [setTileTabs, tabs, tileTabs])
-}

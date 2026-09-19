@@ -15,8 +15,8 @@ afterEach(() => { cleanup(); useAppStore.setState(original, true); window.api = 
 it.each(['spawn', 'retirement'] as const)('retires an uncommittable successor when source closes during %s', async stage => {
   vi.useFakeTimers()
   useAppStore.setState({ workspaceState: { ...original.workspaceState, activeTabId: 'project',
-    tabs: [{ id: 'project', title: 'Project', root: { type: 'leaf', sessionId: 'source' }, focusedSessionId: 'source' }],
-    sessions: { source: { kind: 'claude', cwd: '/recorded/project', providerSessionId: 'native-source' } }, detachedSessions: {}, buried: [],
+    tabs: [{ id: 'project', title: 'Project' }],
+    sessions: { source: { kind: 'claude', cwd: '/recorded/project', providerSessionId: 'native-source', projectId: 'project', joinedAt: 0 } },  
   }, workspaceRuntimes: { source: { ...emptyRuntime(), draftInput: 'human draft' } } })
   const state = useAppStore.getState().workspaceState
   const refs = makeRefs(state)

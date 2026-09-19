@@ -1,3 +1,4 @@
+import { rendererOperations } from '@renderer/performance/monitorOperations'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 
@@ -758,7 +759,9 @@ export function useComposerDictation({
       const constraints = await pickDictationAudioConstraints(audioInput, (event, data) => {
         window.api.recordDictationDebugEvent(debugSessionId, { layer: 'DEVICE', event, data })
       })
-      const stream = await navigator.mediaDevices.getUserMedia(constraints).catch(cause => {
+      const finishCapture = rendererOperations.begin('dictation.capture')
+      const stream = await navigator.mediaDevices.getUserMedia(constraints).then(stream => { finishCapture(); return stream }).catch(cause => {
+        finishCapture('error')
         // Keep the native reason in diagnostics while giving the user a
         // recovery path; browser DOMException messages often omit the device.
         debug('start:get-user-media:error', {

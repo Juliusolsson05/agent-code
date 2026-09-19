@@ -18,22 +18,15 @@ describe('NewAgentPlacementOverlay OpenCode runtime choices', () => {
     const createDetachedDispatchAgent = vi.fn(async () => undefined)
     const onClose = vi.fn()
     const workspace = {
-      activeTab: {
-        id: 'tab-1',
-        title: 'Project',
-        focusedSessionId: 'parent',
-        root: { type: 'leaf', sessionId: 'parent' },
-      },
-      dispatchMode: { focusedSessionId: 'parent' },
+      activeTab: { id: 'tab-1', title: 'Project' },
+      stage: { lanes: [{ selectedSessionId: 'parent' }], rows: [{ length: 1 }], focusedLane: 0 },
       state: {
         activeTabId: 'tab-1',
         tabs: [{
           id: 'tab-1',
           title: 'Project',
-          focusedSessionId: 'parent',
-          root: { type: 'leaf', sessionId: 'parent' },
         }],
-        sessions: { parent: { cwd: '/project', kind: 'claude' } },
+        sessions: { parent: { cwd: '/project', kind: 'claude', projectId: 'tab-1', joinedAt: 0 } },
       },
       createDetachedDispatchAgent,
       createLinkedAgent: vi.fn(),
@@ -47,7 +40,6 @@ describe('NewAgentPlacementOverlay OpenCode runtime choices', () => {
         open
         workspace={workspace}
         onClose={onClose}
-        attachIntent={null}
         linkedAgentParentId={null}
         projectIntent={null}
       />,
@@ -72,12 +64,12 @@ describe('NewAgentPlacementOverlay OpenCode runtime choices', () => {
     // its project, which the old splitFocused route could not.
     const createDetachedDispatchAgent = vi.fn(async () => undefined)
     const workspace = {
-      activeTab: { id: 'tab-1', title: 'Project', focusedSessionId: 'parent', root: { type: 'leaf', sessionId: 'parent' } },
-      dispatchMode: { focusedSessionId: 'parent' },
+      activeTab: { id: 'tab-1', title: 'Project' },
+      stage: { lanes: [{ selectedSessionId: 'parent' }], rows: [{ length: 1 }], focusedLane: 0 },
       state: {
         activeTabId: 'tab-1',
-        tabs: [{ id: 'tab-1', title: 'Project', focusedSessionId: 'parent', root: { type: 'leaf', sessionId: 'parent' } }],
-        sessions: { parent: { cwd: '/project', kind: 'claude' } },
+        tabs: [{ id: 'tab-1', title: 'Project' }],
+        sessions: { parent: { cwd: '/project', kind: 'claude', projectId: 'tab-1', joinedAt: 0 } },
       },
       createDetachedDispatchAgent,
       createLinkedAgent: vi.fn(),
@@ -89,7 +81,7 @@ describe('NewAgentPlacementOverlay OpenCode runtime choices', () => {
 
     render(
       <NewAgentPlacementOverlay open workspace={workspace} onClose={vi.fn()}
-        attachIntent={null} linkedAgentParentId={null} projectIntent={projectIntent} />,
+        linkedAgentParentId={null} projectIntent={projectIntent} />,
     )
     fireEvent.click(screen.getByText('Terminal').closest('button')!)
     expect(createDetachedDispatchAgent).toHaveBeenCalledWith({ kind: 'terminal', providerRuntime: undefined }, projectIntent)

@@ -22,10 +22,12 @@
 // way. That is the whole argument; there is no ordering subtlety to get wrong.
 // ---------------------------------------------------------------------------
 
+// 'buried' and 'kill-buried' were modes here until #992 deleted bury/revive:
+// in the pool-first workspace a hidden-but-alive agent is simply an unplaced
+// pool row, reachable from every index, so the picker had nothing to list.
+// (The history above still names "the buried pair" — accurately, as history.)
 export type PaletteMode =
   | 'commands'
-  | 'buried'
-  | 'kill-buried'
   | 'prompt-template'
   | 'manage-prompt-template'
   | 'fill-prompt-template'

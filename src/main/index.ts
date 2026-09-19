@@ -3,9 +3,16 @@
 // reads env flags at module load) is imported. See
 // `./loadEnv.ts` for the rationale.
 import '@main/loadEnv.js'
+import { mainOperations } from '@main/performance/operations.js'
+import { monitorCoordinator } from '@main/performance/MonitorCoordinator.js'
+import { mainProbe } from '@main/performance/MainProbe.js'
+import { performanceTraceController } from '@main/performance/PerformanceTraceController.js'
 import { TldrStore } from '@main/tldr/TldrStore.js'
-import { registerTldrIpc } from '@main/tldr/ipc.js'
+import { registerGoalIpc, registerTldrIpc } from '@main/tldr/ipc.js'
 import { TldrEnforcement } from '@main/tldr/enforcement.js'
+import { GoalLoopStore } from '@main/goalLoop/GoalLoopStore.js'
+import { GoalLoopService } from '@main/goalLoop/GoalLoopService.js'
+import { registerGoalLoopIpc } from '@main/goalLoop/ipc.js'
 import { sweepStaleTldrHookFiles } from '@providers/shared/runtime/tldrHooks.js'
 import { ExternalControlMcpHost } from './externalControlMcp/host'
 import { registerOperatorControlTools } from './externalControlMcp/tools'
@@ -13,13 +20,18 @@ import { createExternalControlSettings } from './settings/externalControl'
 import { createExternalCodexIntegration } from './settings/externalCodexIntegration'
 import operatorSkillSource from '../../operator-skills/agent-code-computer-execution/SKILL.md?raw'
 
-import { app, clipboard, crashReporter, dialog, Menu, systemPreferences } from 'electron'
+import { app, clipboard, crashReporter, dialog, Menu, powerMonitor, systemPreferences } from 'electron'
 import { existsSync } from 'fs'
 import { readFile } from 'fs/promises'
 import { join } from 'path'
 import { performance } from 'perf_hooks'
 
 import { SessionManager } from '@main/sessionManager.js'
+import { SystemSuspensionTracker } from '@main/systemSuspension/SystemSuspensionTracker.js'
+import { readDarwinLastWakeAt } from '@main/systemSuspension/darwinWakeTime.js'
+import { AgentActivityRecorder } from '@main/agentActivity/AgentActivityRecorder.js'
+import { AgentActivityStore } from '@main/agentActivity/AgentActivityStore.js'
+import { AGENT_ACTIVITY_DIR } from '@main/storage/paths.js'
 import { createControlHost } from '@main/control/createControlHost.js'
 import { sessionHistoryControlCapabilities } from '@main/sessions/control.js'
 import { nativeHistoryControlCapabilities } from '@main/sessions/nativeHistoryControl.js'
@@ -41,9 +53,17 @@ import {
   pruneOldPasteDebugLogs,
 } from '@main/pasteDebugJournal.js'
 import { TmuxRegistry } from '@main/tmux/TmuxRegistry.js'
-import { reconcile } from '@main/tmux/tmuxRecovery.js'
-import type { PersistedTerminalRef } from '@main/tmux/tmuxRecovery.js'
+import { reconcileWorkspace } from '@main/tmux/tmuxRecovery.js'
 
+import {
+  handleExtensionScheme,
+  registerExtensionScheme,
+} from '@main/extensions/scheme.js'
+import { ExtensionRuntimeService } from '@main/extensions/runtimeService.js'
+import { ExtensionCapabilityService } from '@main/extensions/capabilityService.js'
+import { registerExtensionRuntimeIpc } from '@main/extensions/runtimeIpc.js'
+import { registerExtensionInputIpc } from '@main/extensions/nativeInput.js'
+import { sweepAbandonedInstallDirectories } from '@main/extensions/install.js'
 import { STATE_DIR, STATE_FILE, TLDR_HOOK_RUNTIME_DIR } from '@main/storage/paths.js'
 import {
   scheduleDebugStoragePrune,
@@ -88,6 +108,8 @@ import { ConversationLedger, readAgentNameAssignments } from '@main/conversation
 import { createConversationService } from '@main/conversations/service.js'
 import { listWorktreesForCwd } from '@main/ipc/git.js'
 import { AGENT_NAMES_FILE } from '@main/agentNames/ipc.js'
+import { RemoteWorkspaceProjection } from '@main/remote/workspaceProjection.js'
+import { getUsageSnapshot } from '@main/usage/usageService.js'
 import { CONVERSATIONS_LEDGER_FILE } from '@main/storage/paths.js'
 import { isSessionRecordingEnabled, isSessionRecordingAutoStart } from '@main/ipc/devDebug.js'
 import { registerAllIpc } from '@main/ipc/index.js'
@@ -247,6 +269,7 @@ const vaultService = new VaultService({
 // callbacks that fire after the assignment.
 let manager: SessionManager | null = null
 let remoteController: RemoteController | null = null
+let remoteWorkspaceProjection: RemoteWorkspaceProjection | null = null
 let tmuxRegistry: TmuxRegistry | null = null
 let stateProcessLock: Extract<StateProcessLock, { acquired: true }> | null = null
 let appRunJournal: AppRunJournal | null = null
@@ -255,6 +278,12 @@ let workflowBridge: WorkflowBridge | null = null
 let codexCliUpdateReserved = false
 let workflowShutdownPromise: Promise<void> | null = null
 let workflowShutdownComplete = false
+let extensionRuntime: ExtensionRuntimeService | null = null
+let extensionCapabilities: ExtensionCapabilityService | null = null
+let unregisterExtensionRuntime: (() => void) | null = null
+let unregisterExtensionInput: (() => void) | null = null
+let extensionQuitReady = false
+let extensionQuitPending: Promise<void> | null = null
 let sessionForwarder: SessionForwarderControl | null = null
 
 // A packaged release needs one executable-level smoke test that stops before
@@ -303,6 +332,14 @@ async function runPackagingSmoke(): Promise<void> {
 // shared. If that lock ever feels too strict, the storage model must be changed
 // first; deleting the guard alone would make last-writer-wins corruption
 // possible again.
+// MUST run at module scope, before any app.whenReady() handler. Electron silently
+// treats a scheme registered after ready as opaque — no origin semantics, no secure
+// context, no CORS — and the failure then surfaces in the renderer as a CSP or CORS
+// error, which sends you looking at index.html instead of at call ordering. There is
+// no runtime warning for getting this wrong. Verified working from a file:// document
+// (the production origin) by the B1 spike: dynamic import, relative specifiers, and
+// path-traversal rejection all behave.
+registerExtensionScheme()
 // WHY quit has to be distinguishable from an ordinary window close: closing one
 // window hands its workspace to a survivor, but quitting closes every window
 // and must NOT collapse them all into whichever one dies last.
@@ -600,6 +637,71 @@ async function startApp(): Promise<void> {
     appRunJournal.recordError('prior_run.classify.error', err)
   }
 
+  // Install the agent-code-ext:// handler before any window exists. The renderer
+  // imports extension modules over this scheme during startup, so a window that
+  // opened first could race a request against an unregistered handler and see a
+  // spurious load failure that never reproduces on a warm run.
+  handleExtensionScheme()
+  // The resolver closes over the late-created SessionManager rather than a
+  // focused renderer. Startup extensions may run with zero views, but every file
+  // target still has to name a live main-owned session and therefore a real cwd.
+  extensionCapabilities = new ExtensionCapabilityService({
+    resolveSessionRoot: sessionId => manager?.getSpawnCwd(sessionId) ?? null,
+    // Background runtimes have no view-owned toast callback. Deliver through
+    // the registered window fan-out so one timer event appears in every live
+    // application window and never leaks into hidden extension BrowserWindows.
+    notify: (extensionId, message) => {
+      broadcastToWindows('extensions:notification', { extensionId, message })
+    },
+  })
+  extensionRuntime = new ExtensionRuntimeService({
+    preload: join(__dirname, '../preload/extensionRuntime.js'),
+    capabilities: extensionCapabilities,
+  })
+  unregisterExtensionRuntime = registerExtensionRuntimeIpc(extensionRuntime, extensionCapabilities, contents => {
+    const id = windowIdFor(contents)
+    return !!id && getBrowserWindow(id)?.webContents === contents
+  })
+  unregisterExtensionInput = registerExtensionInputIpc(contents => {
+    const id = windowIdFor(contents)
+    return !!id && getBrowserWindow(id)?.webContents === contents
+  })
+
+  // Finish extension housekeeping before a window can install or load code.
+  // This is serialized with publication too; fire-and-forget previously let a
+  // slow startup sweep delete staging created by the first install dialog.
+  // Failures preserve data and are reported; they need not block the whole app.
+  await sweepAbandonedInstallDirectories().catch(err => {
+    console.warn('[extensions] staging sweep failed:', err)
+  })
+
+  // Performance monitoring and extension startup are independent main-process
+  // owners. Keep both before window creation: monitoring otherwise misses the
+  // startup interval, while extension frames can race an unregistered scheme or
+  // an unfinished install sweep if a window is allowed to open first.
+  // #963: ONE owner of "the machine was not running". It is the only
+  // powerMonitor subscriber; MainProbe keeps its Electron-only suspend/resume
+  // evidence through the tracker's power-monitor events, and every working-time
+  // consumer (turn clock, provider adapters, journal) reads the same intervals
+  // instead of deriving sleep on its own. Started before any window or session
+  // exists so a sleep during startup is not missed.
+  const systemSuspension = new SystemSuspensionTracker({ power: powerMonitor, readLastWakeAt: readDarwinLastWakeAt })
+  systemSuspension.on('suspend', () => mainProbe.noteSuspend())
+  systemSuspension.on('resume', () => mainProbe.noteResume())
+  systemSuspension.on('suspension', (suspension: import('@shared/types/systemSuspension.js').SystemSuspension) => {
+    // Journaled so a debug bundle finally shows when the machine slept: before
+    // this, no run journal on record contained a single power event.
+    appRunJournal?.record({
+      area: 'system.power',
+      name: 'system.suspension',
+      data: { ...suspension, durationMs: suspension.resumedAt - suspension.suspendedAt },
+    })
+  })
+  systemSuspension.start()
+  monitorCoordinator.start()
+  // Remove capture scratch stranded by a crash or forced quit in an earlier
+  // run. It is app-owned, so nothing else can depend on those partial files.
+  void performanceTraceController.sweep().catch(() => {})
   void performanceService.start().catch(err => {
     console.warn('[performance] failed to start:', err)
     appRunJournal?.recordError('performance.start.error', err)
@@ -614,8 +716,8 @@ async function startApp(): Promise<void> {
   startMainHeapWatchdog({
     onHeapPressure: (info) => {
       // Near-OOM is exactly the kind of incident users need to diagnose later.
-      // The watchdog already writes the heap snapshot; this records the durable
-      // incident that points at it.
+      // Automatic pressure capture is metadata-only: a synchronous heap dump
+      // can double memory and freeze main precisely when it is near OOM.
       appRunJournal?.recordIncident({
         kind: 'heap.pressure',
         severity: 'error',
@@ -733,49 +835,35 @@ async function startApp(): Promise<void> {
   if (tmuxAvailable) {
     try {
       appRunJournal.record({ area: 'app.tmux', name: 'tmux.recovery.start' })
-      const raw = await readFile(STATE_FILE, 'utf8')
-      // workspace.json is wrapped: { workspace: { sessions: {...} } }.
-      // The renderer's saveWorkspace() writes { workspace: workspaceState }
-      // — so persisted sessions live one level deep, not at the root.
-      // Reading parsed.sessions directly (as the original code did)
-      // always returned undefined, which is why recovery silently
-      // reported "0 recoverable" even when tmuxName WAS persisted.
-      const parsed = JSON.parse(raw) as {
-        workspace?: {
-          sessions?: Record<string, { kind?: string; tmuxName?: string }>
-        }
-      }
-      const persisted: PersistedTerminalRef[] = Object.entries(
-        parsed.workspace?.sessions ?? {},
-      )
-        .filter(([, meta]) => meta?.kind === 'terminal' && typeof meta?.tmuxName === 'string')
-        .map(([sessionId, meta]) => ({ sessionId, tmuxName: meta!.tmuxName! }))
-      const recoveryReport = await reconcile(tmuxRegistry, persisted)
-      performanceService.mark('app.tmux.recovery.complete', {
+      // Use restoration's canonical envelope decoder, including its evidence
+      // of discarded windows. A successful partial restore cannot authorize
+      // deleting a terminal whose only reference was in the discarded region.
+      const recoveryReport = await reconcileWorkspace(tmuxRegistry, () => readFile(STATE_FILE, 'utf8'))
+      const recoverySummary = {
+        inventory: recoveryReport.inventory,
+        inventoryIssues: recoveryReport.inventoryIssues,
+        inventoryDigest: recoveryReport.inventoryDigest,
         recoverable: recoveryReport.recoverable.length,
         lost: recoveryReport.lost.length,
         orphans: recoveryReport.orphans.length,
-      })
+        preserved: recoveryReport.preserved.length,
+      }
+      performanceService.mark('app.tmux.recovery.complete', recoverySummary)
       appRunJournal.record({
         area: 'app.tmux',
         name: 'tmux.recovery.end',
-        data: {
-          recoverable: recoveryReport.recoverable.length,
-          lost: recoveryReport.lost.length,
-          orphans: recoveryReport.orphans.length,
-        },
+        data: recoverySummary,
       })
       console.log(
-        `[tmux] recovery: ${recoveryReport.recoverable.length} recoverable, ${recoveryReport.lost.length} lost, ${recoveryReport.orphans.length} orphans cleaned`,
+        `[tmux] recovery (${recoveryReport.inventory} inventory): ${recoveryReport.recoverable.length} recoverable, ${recoveryReport.lost.length} lost, ${recoveryReport.orphans.length} orphans cleaned, ${recoveryReport.preserved.length} unmatched preserved`,
       )
     } catch (err) {
-      // Missing/corrupt workspace.json is fine — fresh launch falls
-      // through with empty buckets. Log so a real failure is visible.
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-        console.warn('[tmux] recovery failed (treating all sessions as fresh):', err)
-        performanceService.error('app.tmux.recovery.error', err)
-        appRunJournal?.recordError('tmux.recovery.error', err)
-      }
+      // Read/decode uncertainty is reported above with cleanup withheld.
+      // Registry or cleanup failures remain failures; do not claim every
+      // session was fresh or that all requested termination succeeded.
+      console.warn('[tmux] recovery failed:', err)
+      performanceService.error('app.tmux.recovery.error', err)
+      appRunJournal?.recordError('tmux.recovery.error', err)
     }
   }
 
@@ -801,6 +889,7 @@ async function startApp(): Promise<void> {
     async options => {
       await agentCodeConventionsService.audit()
       if (options.builtInMcpDomains?.includes('tldr')) await agentCodeConventionsService.ensureTldrSkill()
+      if (options.builtInMcpDomains?.includes('goal')) await agentCodeConventionsService.ensureGoalSkill()
     },
     (sessionId, sessionRunId, observation) => {
       sessionRecorders?.recordCodexTranscriptObservation(
@@ -810,6 +899,11 @@ async function startApp(): Promise<void> {
       )
     },
   )
+  // Adapters seal streams a sleep severed (#963); the manager fans each
+  // suspension out to the live agent runtimes.
+  systemSuspension.on('suspension', (suspension: import('@shared/types/systemSuspension.js').SystemSuspension) => {
+    manager?.noteSystemSuspension(suspension)
+  })
   // Project ownership lives in renderer state, while backend/transcript facts
   // live in SessionManager. Construct this bridge only after both the MCP host
   // and manager exist so tool calls cannot observe a half-wired authority.
@@ -827,6 +921,22 @@ async function startApp(): Promise<void> {
   remoteController = new RemoteController({
     manager,
     journal: appRunJournal,
+    // v2 identity projection: one read model over the persisted workspace
+    // (titles, spoken names, tabs, pins) for the remote server's session
+    // summaries. Handed over as a GETTER because the store opens later in
+    // startup than this construction (same pattern as getThemeSettings);
+    // the projection itself observes the store, so remote disabled costs
+    // it nothing and enable picks up whatever has opened by then.
+    getWorkspace: () => remoteWorkspaceProjection,
+    // TLDR/Goal note stores — constructed later in startup (shared with the
+    // desktop's IPC surface); remote only reads and subscribes, the MCP
+    // tools remain the only writers.
+    getNotes: () => ({ tldr: tldrStore, goal: goalStore }),
+    // v2 usage indicator on the phone: the shared service's cached snapshot
+    // getter (a cache read per connected minute, never a fresh provider
+    // call unless the TTL already expired).
+    getUsageSnapshot: () =>
+      getUsageSnapshot().then(snapshot => snapshot).catch(() => null),
     clientDistDir: join(app.getAppPath(), 'out', 'remote-client'),
     // Tunnel binary resolution — bundled artifact first (packaged app),
     // then the third_party dev cache (populated by `npm run
@@ -874,16 +984,28 @@ async function startApp(): Promise<void> {
   await externalSettings.initialize()
   app.once('will-quit', () => { void externalSettings.dispose(); controlHost.dispose() })
   const tldrStore = new TldrStore(join(STATE_DIR, 'tldr.json'))
-  const tldrEnforcement = new TldrEnforcement(tldrStore)
+  const goalStore = new TldrStore(join(STATE_DIR, 'goal.json'), undefined, { historyDirectoryName: 'goal-history', label: 'Goal' })
+  const tldrEnforcement = new TldrEnforcement(tldrStore, undefined, goalStore)
   // Before any session can register: the sweep removes every entry, and each
   // one left by an earlier run holds a bearer that run's host already revoked.
   await sweepStaleTldrHookFiles(TLDR_HOOK_RUNTIME_DIR).catch(error => {
     console.warn('[tldr] stale hook file sweep failed:', error)
   })
   registerTldrIpc(tldrStore, tldrEnforcement)
+  registerGoalIpc(goalStore)
+  // Goal Loop (#1001): constructed before setDependencies for the same
+  // one-shot reason as every other built-in dependency — the MCP handlers
+  // close over the service object. start() itself warns-and-continues on
+  // unreadable persisted state, matching the sweep pattern above.
+  const goalLoopStore = new GoalLoopStore(join(STATE_DIR, 'goal-loop.json'))
+  const goalLoopService = new GoalLoopService({ manager, store: goalLoopStore })
+  await goalLoopService.start()
+  registerGoalLoopIpc(goalLoopService)
   builtInMcpHost.setDependencies({
     tldrStore,
+    goalStore,
     tldrEnforcement,
+    goalLoopService,
     orchestrationBridge,
     agentManagementBridge,
     aiWorkspaceRegistry,
@@ -966,6 +1088,41 @@ async function startApp(): Promise<void> {
     workspaceFileStore.observe(projectConversations)
     projectConversations(workspaceFileStore.windows())
   }
+  // Agent Analytics (#964): record when each agent works, per tab, repository
+  // and agent. Wired here because it needs all three owners it joins — the
+  // session manager's events, the persisted workspace (tabs, titles, names)
+  // and the machine suspensions it must never count as work.
+  const agentActivityRecorder = new AgentActivityRecorder({
+    manager: manager!,
+    store: new AgentActivityStore(AGENT_ACTIVITY_DIR),
+    // The first worktree entry is the main checkout, so every worktree of one
+    // repository folds into it (the conversations picker's family rule).
+    resolveRepoRoot: cwd => listWorktreesForCwd(cwd).then(worktrees => worktrees[0]?.path ?? cwd),
+  })
+  const projectActivity = (windows: readonly PersistedWindow[]) => {
+    void readAgentNameAssignments(AGENT_NAMES_FILE)
+      .then(names => agentActivityRecorder.updateWorkspace(windows, names))
+      .catch(() => undefined)
+  }
+  workspaceFileStore.observe(projectActivity)
+  projectActivity(workspaceFileStore.windows())
+  // v2 remote identity projection — constructed beside its only input, once
+  // the store has opened. Observed forever (remote disabled costs nothing);
+  // RemoteController reads it through getWorkspace at enable time.
+  remoteWorkspaceProjection = new RemoteWorkspaceProjection(
+    workspaceFileStore,
+    () => readAgentNameAssignments(AGENT_NAMES_FILE),
+  )
+  systemSuspension.on('suspension', (suspension: import('@shared/types/systemSuspension.js').SystemSuspension) => {
+    agentActivityRecorder.noteSuspension(suspension)
+  })
+  // Not awaited: recovering a crashed run's open intervals is file I/O, and window
+  // restore must not wait on analytics. No turn can start before a window has
+  // loaded and restored its sessions, so nothing is missed in the gap.
+  void agentActivityRecorder.start().catch((error: unknown) => {
+    // History is a convenience; failing to open it must never break startup.
+    console.warn('[agent-activity] recorder failed to start', error)
+  })
   // Dragging a window to the other monitor changes nothing the renderer knows
   // about, so it triggers no autosave. Without this, the feature's central
   // promise — it comes back where you left it — would depend on the user
@@ -976,7 +1133,16 @@ async function startApp(): Promise<void> {
   // renderer/workspace/adoptWorkspace.ts for why the SURVIVOR performs the
   // merge rather than main.
   // The only party that knows a ⌘Q was cancelled is the unsaved-changes sheet.
-  setWindowCloseVetoedObserver(() => { quitting = false })
+  setWindowCloseVetoedObserver(() => {
+    quitting = false
+    extensionQuitReady = false
+    // Announce the resume so v2 views closed by the quit's pause re-attach
+    // (viewBridge retries only views that failed meanwhile). Without it every
+    // open extension view stayed on "failed to start" after Keep Editing.
+    void extensionRuntime?.resume()
+      .then(() => broadcastToWindows('extensions:runtime-resumed', null))
+      .catch(error => console.error('[extensions] resume after cancelled quit failed:', error))
+  })
   setWindowClosedObserver(closedWindowId => {
     // WHY quitting is excluded: on quit every window closes, and collapsing all
     // of them into whichever one happens to die last would destroy the
@@ -1066,6 +1232,8 @@ async function startApp(): Promise<void> {
     agentCodeConventionsService,
     workspaceFileStore,
     conversationService,
+    systemSuspension,
+    agentActivityRecorder,
   })
   // Boot probe runs after the IPC is wired so its first `state` push
   // has a live subscriber to receive it on the renderer side.
@@ -1125,6 +1293,11 @@ async function startApp(): Promise<void> {
   // items dispatch command ids to THIS window's renderer (issue #148).
   Menu.setApplicationMenu(buildAppMenu())
   performanceService.mark('app.main.window.created')
+  // Both belong at window creation. The startup timing is observed first so
+  // `app.startup` keeps meaning "process start until the first window exists"
+  // and never absorbs the synchronous prefix of extension activation.
+  mainOperations.observe('app.startup', performance.now())
+  void extensionRuntime?.activateStartupExtensions().catch(error => console.error('[extensions] startup catalog failed:', error))
 
   app.on('activate', () => {
     if (sessionShutdownGate.isTerminalShutdownAdmitted()) {
@@ -1188,6 +1361,17 @@ app.on('before-quit', (event) => {
     }
     return
   }
+  if (extensionRuntime && !extensionQuitReady) {
+    event.preventDefault()
+    if (!extensionQuitPending) {
+      extensionQuitPending = extensionRuntime.pause().then(() => {
+        extensionQuitReady = true
+        extensionQuitPending = null
+        app.quit()
+      })
+    }
+    return
+  }
   appRunJournal?.record({ area: 'app.lifecycle', name: 'app.before_quit' })
   performanceService.mark('app.main.beforeQuit')
   // WHY coalescers drain on the initial quit attempt: their buffers are cheap
@@ -1200,7 +1384,6 @@ app.on('before-quit', (event) => {
   void lspManager.dispose()
   caffeinateController.dispose()
   cleanupDictationIpcResources()
-  stopMainHeapWatchdog()
   // Flush pending ghost writes. Fire-and-forget is fine — Electron's
   // quit path gives us a tick before teardown. 100 ms queue depth is
   // worst-case; in practice drains are empty at quit time because
@@ -1222,7 +1405,6 @@ app.on('before-quit', (event) => {
   // is simply lost, with no error anywhere. See historyStore.ts.
   void flushHistoryWrites()
   void pasteDebugJournals.flushAll()
-  performanceService.stop()
 })
 
 const sessionShutdownGate = installSessionShutdownGate({
@@ -1232,7 +1414,14 @@ const sessionShutdownGate = installSessionShutdownGate({
     if (!current) return null
     return {
       killAll: async () => {
-        await current.killAll()
+        await Promise.all([current.killAll(), extensionRuntime?.dispose()])
+        unregisterExtensionRuntime?.()
+        unregisterExtensionRuntime = null
+        unregisterExtensionInput?.()
+        unregisterExtensionInput = null
+        extensionRuntime = null
+        extensionCapabilities?.dispose()
+        extensionCapabilities = null
         // WHY a second sweep after killAll: killAll stops the sessions it
         // knows about, and each ClaudeSession.stop() already terminates its
         // own mitmdump under a deadline. This catches what that snapshot
@@ -1256,6 +1445,22 @@ const sessionShutdownGate = installSessionShutdownGate({
         } catch (err) {
           appRunJournal?.recordError('proxy.mitmdump.quit_sweep.error', err)
         }
+
+        // Baseline samples are queued to an isolated utility process so disk
+        // writes never touch the UI or agent paths. That also means killing the
+        // helper synchronously can lose its final seconds. Once will-quit has
+        // crossed the renderer-veto boundary, grant the history queue and any
+        // explicitly started profiler a short, shared drain window. The
+        // deadline is deliberate: performance diagnostics must never make the
+        // application impossible to quit when storage or Chromium tracing is
+        // unhealthy.
+        await Promise.race([
+          Promise.allSettled([
+            monitorCoordinator.shutdown(1800),
+            performanceTraceController.shutdown(),
+          ]).then(() => undefined),
+          new Promise<void>(resolve => setTimeout(resolve, 2000)),
+        ])
       },
     }
   },
@@ -1270,6 +1475,11 @@ const sessionShutdownGate = installSessionShutdownGate({
     caffeinateController.dispose()
   },
   onQuitAllowed: () => {
+    // before-quit is still vetoable by an unsaved editor. These observers must
+    // remain live until the existing shutdown gate actually admits exit.
+    monitorCoordinator.stop()
+    stopMainHeapWatchdog()
+    performanceService.stop()
     appRunJournal?.record({ area: 'app.lifecycle', name: 'app.will_quit' })
     appRunJournal?.markCleanShutdown('will-quit')
     appRunJournal?.stop()

@@ -1,11 +1,40 @@
 import type { SetupToolId } from '@shared/types/setup.js'
 import { loadSetupState, updateToolPaths } from '@main/setup/setupState.js'
 import { isExecutable, resolveToolPath } from '@main/setup/binaryResolver.js'
+import { resolveBundledTool } from '@main/setup/runtimeTools.js'
 import { dirname } from 'path'
 
 type ToolchainPaths = Partial<Record<SetupToolId, string>>
 
 let cachedPaths: ToolchainPaths = {}
+
+// Bundled-runtime overrides, keyed by SetupToolId (#994). Populated by
+// refreshToolchainFromState so that every getToolPath consumer — the four
+// transcriptEngine opencode call sites, version probes, anything added
+// later — gets bundled-over-PATH precedence from one place instead of each
+// call site re-implementing "bundled first" against an async resolver.
+//
+// WHY this lives in toolchain and not in each caller: getToolPath is the
+// single synchronous choke point every spawn already goes through. The
+// runtimeTools module documents the resolution ladder as "callers implement
+// steps 1,3,4,5; this module owns step 2" — for the provider CLIs,
+// toolchain IS that caller, once, on behalf of all of them.
+//
+// WHY a VALID MANUAL OVERRIDE still wins over the bundle: the user's
+// explicit word beats every probe (the same policy checkPrerequisites
+// applies — a user deliberately pointing at ~/bin/opencode-custom must not
+// have it silently replaced by ours). A dead override (file gone or lost
+// +x) falls through to the bundle exactly like it falls through to the
+// auto layers at the gate.
+//
+// Kept out of cachedPaths deliberately: cachedPaths is persisted setup
+// truth (what the gate probed and wrote back), revalidation rewrites it
+// from PATH discoveries, and applyToolEnv derives child-process PATH from
+// it. Mixing the bundle into that would give revalidation the power to
+// clobber our shipped binary with a stale PATH find, and would prepend the
+// asar-unpacked dir to every child's PATH for no reason — the bundle is
+// used by absolute path, never discovered via PATH.
+const bundledOverrides: ToolchainPaths = {}
 
 // Snapshot of PATH as Electron inherited it from the launching context
 // (Finder/Dock when the user double-clicks the .app, the parent shell
@@ -39,7 +68,31 @@ export async function initializeToolchain(): Promise<void> {
 export async function refreshToolchainFromState(): Promise<void> {
   const state = await loadSetupState()
   cachedPaths = { ...state.toolPaths }
+  await refreshBundledOverrides(state)
   applyToolEnv()
+}
+
+/**
+ * Re-resolve the bundled-runtime override layer (see bundledOverrides).
+ *
+ * opencode is the only bundled provider CLI today; the map shape leaves
+ * room for more without touching getToolPath again. resolveBundledTool is
+ * cheap after the first success (file checks + one cached `--version`
+ * probe spawn) but NOT free, which is why it runs on refresh — boot fast
+ * path, setup-gate completion — rather than on every getToolPath call.
+ *
+ * In dev builds that never staged out/main/runtime/opencode, the resolver
+ * returns null and behavior is exactly today's cached/PATH lookup; the
+ * override layer only exists on machines whose build actually shipped the
+ * binary.
+ */
+async function refreshBundledOverrides(state: Awaited<ReturnType<typeof loadSetupState>>): Promise<void> {
+  const manual = state.manualToolPaths.opencode
+  if (manual && (await isExecutable(manual))) {
+    delete bundledOverrides.opencode
+    return
+  }
+  bundledOverrides.opencode = (await resolveBundledTool('opencode')) ?? undefined
 }
 
 /**
@@ -129,5 +182,8 @@ function applyToolEnv(): void {
 }
 
 export function getToolPath(tool: SetupToolId, fallback: string): string {
-  return cachedPaths[tool] ?? fallback
+  // Bundled layer first (when populated — see bundledOverrides), then the
+  // gate's persisted probe result, then the caller's fallback. This is the
+  // sync half of the bundled-over-PATH precedence (#994).
+  return bundledOverrides[tool] ?? cachedPaths[tool] ?? fallback
 }

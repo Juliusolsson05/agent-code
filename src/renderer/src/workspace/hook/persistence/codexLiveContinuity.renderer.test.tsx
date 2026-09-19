@@ -34,6 +34,8 @@ import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
 import { forwardCodexRolloutEntries } from '@providers/codex/runtime/codexHeadlessForwarding'
 
 import { useAutoSave } from './useAutoSave'
+import { freshStage } from '@renderer/workspace/dispatch/gridShape'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 const { createSession, loadInitialHistoryForSession } = vi.hoisted(() => ({
   createSession: vi.fn(),
@@ -205,7 +207,6 @@ function makeRefs(state: WorkspaceState, runtimes: Record<SessionId, SessionRunt
     stateRef: ref(state),
     latestStateRef: ref(state),
     latestRuntimesRef: ref(runtimes),
-    latestTileTabsRef: ref(null),
     dangerousAgentsRef: ref(false),
     useProxyStreamingRef: ref(false),
     defaultBuiltInMcpDomainsRef: ref([]),
@@ -254,10 +255,8 @@ function makeReloadHarness() {
     tabs: [],
     activeTabId: 'tab-1',
     sessions: {},
-    detachedSessions: {},
-    buried: [],
     pinnedSessionIds: [],
-    dispatchMode: null,
+    stage: freshStage(),
   } as unknown as WorkspaceState
   let runtimes: Record<SessionId, SessionRuntime> = {}
   const refs = makeRefs(state, runtimes)
@@ -276,7 +275,6 @@ function makeReloadHarness() {
       runtimes = typeof next === 'function' ? next(runtimes) : next
       refs.latestRuntimesRef.current = runtimes
     },
-    setTileTabs: vi.fn(),
   }
 }
 
@@ -310,17 +308,13 @@ describe('recorded Codex 0.151 live continuity across app layers', () => {
       tabs: [{
         id: 'tab-1',
         title: 'Recorded Codex',
-        focusedSessionId: localSessionId,
-        root: { type: 'leaf', sessionId: localSessionId },
       }],
       activeTabId: 'tab-1',
       sessions: {
-        [localSessionId]: { cwd: '/fixture/project-1', kind: 'codex' },
+        [localSessionId]: { cwd: '/fixture/project-1', kind: 'codex', projectId: 'tab-1', joinedAt: 0 },
       },
-      detachedSessions: {},
-      buried: [],
       pinnedSessionIds: [],
-      dispatchMode: null,
+      stage: oneLaneStage(localSessionId),
     } as WorkspaceState
     const initialRuntimes = {
       [localSessionId]: {
@@ -442,7 +436,6 @@ describe('recorded Codex 0.151 live continuity across app layers', () => {
       reload.refs,
       reload.setState,
       reload.setRuntimes,
-      reload.setTileTabs,
       vi.fn(),
       {
         recoverSession: restartedManager.recover.bind(restartedManager),

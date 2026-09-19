@@ -2,7 +2,6 @@ import type { PaletteMode } from '@renderer/features/command-palette/paletteMode
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { AgentViewMode, UsageHeaderLevel } from '@renderer/app-state/settings/types'
 import type { RenderedViewPolicy } from '@renderer/workspace/agentDisplayMode'
-import type { DispatchAttachIntent } from '@renderer/app-state/uiShell/types'
 
 /**
  * What a command's badge MEANS, not how it looks.
@@ -65,6 +64,14 @@ export type CommandCategory =
   | 'preferences'
   /** Diagnostics, recording, raw inspection, or support artifacts. */
   | 'developer'
+  /**
+   * Contributed by an installed extension, not a first-party command. Kept as a
+   * distinct category so the keybind editor and any grouped command UI list
+   * extension commands under their own heading — and so a third party can never
+   * masquerade as a first-party group. Extension commands are assigned this
+   * category at derivation time; the manifest never sets a category itself.
+   */
+  | 'extensions'
 
 /**
  * A closed family of commands controlled as ONE product unit.
@@ -113,41 +120,43 @@ export type CommandRisk =
  *
  * WHY this exists: the command registry used to be one flat list where
  * every command decided its own availability through ad-hoc `when`
- * guards (or didn't guard at all). That worked while Agent Code was
- * essentially a pane grid, but it broke down once Dispatch Mode became
- * a first-class layout. Grid-spatial commands — `Split Pane Right`,
- * `New Terminal Below`, `Focus Pane Left` — kept showing in the palette
- * while Dispatch was active, where "right"/"below"/"left" point at a
- * grid the user can't see. Worse, `Focus Pane *` and the layout
- * commands (`Normalize Layout`, `Rotate Layout`) were *silent no-ops*
- * in Dispatch: they mutate `tab.root` grid focus, which Dispatch does
- * not use. See issue #228.
+ * guards (or didn't guard at all) — grid-spatial commands showed in the
+ * palette as silent no-ops where their gestures pointed at nothing the
+ * user could see (issue #228). `surface` makes the classification
+ * explicit and machine-readable so the palette can hide commands that
+ * don't apply, and so a future native menu (#148) can build itself from
+ * the same model instead of re-deriving intent from title text.
  *
- * `surface` makes that classification explicit and machine-readable so
- * the palette can hide commands that don't apply to the current mode,
- * and so a future native menu (#148) can build itself from the same
- * model instead of re-deriving intent from title text.
- *
- *  - `app`      — always meaningful, mode-independent. New Tab,
- *                 Settings, Resume Session, Dispatch Mode toggle.
- *  - `grid`     — operates on the tile grid; hidden while Dispatch
- *                 Mode is active. Pane splits, directional pane
- *                 focus, layout normalize/rotate.
- *  - `dispatch` — only meaningful inside Dispatch Mode; hidden in the
- *                 grid. Pin/unpin agents, attach detached session,
- *                 Global Dispatch scope.
- *  - `session`  — acts on the current command-target session and
- *                 works in BOTH modes (the target resolver is already
- *                 Dispatch-aware — see commandTargetSessionId). Reload
- *                 Agent, Tail, Copy Last Response, Reader Mode.
- *  - `editor`   — Global Editor overlay. Orthogonal to grid/Dispatch
- *                 (the overlay wraps either), so NOT mode-gated; the
- *                 surface is a category, and editor commands keep
- *                 their own `when` for overlay-open checks.
- *  - `debug`    — developer/diagnostic tooling. Mode-independent;
- *                 grouped separately so it can be demoted or hidden.
+ * History (#992): this union used to be mode-split — `grid` hidden in
+ * Dispatch, `dispatch` hidden in the grid — because there were two
+ * layouts. The unified layout deleted the modes and merged both into
+ * `workspace`; see the union below for what each member means now.
  */
-export type CommandSurface = 'app' | 'grid' | 'dispatch' | 'session' | 'editor' | 'debug'
+/**
+ * Which part of the app a command acts on.
+ *
+ * Unified layout (#992): the mode-split surfaces `grid` and `dispatch` are
+ * GONE — there is one workspace, so a command is either workspace-shaped or
+ * it isn't. A command's visibility now comes from its own `when` (does a
+ * target exist? is the overlay open?), never from "which mode am I in".
+ * That was the whole point of killing the modes: onboarding no longer has
+ * to explain a toggle before a command can be found.
+ *
+ *  - `app`       — whole-application actions: settings, palette, resume,
+ *                  project rail, stage shape.
+ *  - `workspace` — acts on the lane stage / the pool: lane and row
+ *                  structure, project bindings, pins, placement.
+ *  - `session`   — acts on the current command-target session (the
+ *                  focused lane's occupant): Reload Agent, Tail, Copy
+ *                  Last Response, Reader Mode.
+ *  - `editor`    — Global Editor overlay. Orthogonal to the stage (the
+ *                  overlay wraps it), so NOT workspace-gated; the surface
+ *                  is a category, and editor commands keep their own
+ *                  `when` for overlay-open checks.
+ *  - `debug`     — developer/diagnostic tooling. Workspace-independent;
+ *                  grouped separately so it can be demoted or hidden.
+ */
+export type CommandSurface = 'app' | 'workspace' | 'session' | 'editor' | 'debug'
 
 /**
  * How visible a command should be in the command PICKER specifically.
@@ -187,7 +196,6 @@ export type CommandContext = {
   workspace: Workspace
   ui: {
     openNewTabPicker: () => void
-    openTileTabs: () => void
     openReorderTabs: () => void
     /** Open the Merge Project Tabs modal (#913); the modal performs the merge. */
     openMergeProjectTabs: () => void
@@ -205,6 +213,9 @@ export type CommandContext = {
     openBulkProviderSwitch: () => void
     openProviderSwitchPicker: (sessionId: string) => void
     openRewindPrompt: (sessionId: string) => void
+    /** Open a built-in app by its AppDefinition id. The host surface resolves the
+     *  id and treats a miss as closed, so a stale id here cannot throw. */
+    openApp: (appId: string) => void
     openAgentViewModePicker: (sessionId: string) => void
     /** Open the Dispatch color-flag swatch picker for a session. */
     openColorFlagPicker: (sessionId: string) => void
@@ -215,6 +226,8 @@ export type CommandContext = {
      *  reload, so a declined warning leaves the session untouched. */
     openRootManagementPrompt: (sessionId: string) => void
     openUsageModal: () => void
+    /** Open the Agent Analytics modal (#964); the modal fetches its own summary. */
+    openAgentAnalytics: () => void
     openKeyVault: () => void
     toggleGitBar: () => void
     toggleWorktreesBar: () => void
@@ -225,9 +238,12 @@ export type CommandContext = {
     toggleRenderingDebugMode: () => void
     /** Flip workspace-wide feed auto-follow (every visible agent pane). */
     toggleTailAllMode: () => void
+    toggleTailWorkingMode: () => void
     toggleDevDebugPanel: () => void
     toggleAgentStatusPanel: () => void
     togglePerformancePanel: () => void
+    /** Open the Performance Monitor, optionally performing a Recordings action there. */
+    openPerformancePanel: (request?: { view: 'recordings'; action: 'save-report' | 'record-chromium' }) => void
     toggleRemotePanel: () => void
     toggleCaffeinate: () => Promise<void> | void
     /** Idempotent open. Prefer this over `toggleGlobalEditor` whenever the
@@ -242,17 +258,18 @@ export type CommandContext = {
      *  global-editor store (not uiShell) because it's editor-scoped
      *  state, not workspace chrome. */
     toggleFileTreeVisible: () => void
-    enterDispatchMode: () => Promise<void> | void
-    enterGlobalDispatch: () => Promise<void> | void
-    exitDispatchMode: () => void
-    /** Open the Tiled Dispatch tile-count prompt overlay. The overlay
-     *  applies the chosen count via workspace.enterTiledDispatch. */
+    // enterDispatchMode / enterGlobalDispatch / exitDispatchMode lived here
+    // until #992: they backed the `dispatch-mode` and `global-dispatch`
+    // commands, which turned the lane grid on and off and switched a
+    // layout-wide project/global scope. The stage always exists and has no
+    // scope, so there is nothing for a command to enter, leave or widen.
+    /** Open the stage shape editor. The overlay applies the chosen rows via
+     *  workspace.setDispatchGridShape. */
     openTiledDispatchPrompt: () => void
     /** Open the placement overlay in "attach detached session to grid"
      *  mode for the given sessionId. The session must exist in
      *  workspace.state.detachedSessions; the command's `when` guard is
      *  responsible for that check. */
-    openDispatchAttach: (intent: DispatchAttachIntent) => void
     /** Open the shared placement overlay in "Linked Agent" mode. The
      *  session id is the parent agent; the overlay only asks for
      *  Claude/Codex and then delegates to workspace.createLinkedAgent. */
@@ -266,8 +283,6 @@ export type CommandContext = {
      *  modal itself, not the store. */
     openPinAgents: () => void
     setAggressiveDebugPersistence: (enabled: boolean) => void
-    enterBuriedMode: () => void
-    enterKillBuriedMode: () => void
     enterPromptTemplateMode: () => void
     enterManagePromptTemplateMode: () => void
     enterSavePromptTemplateMode: () => void
@@ -282,6 +297,7 @@ export type CommandContext = {
      * `closePalette` and nothing else used to be here.
      */
     closeUsageModal: () => void
+    closeAgentAnalytics: () => void
     closeKeyboardShortcuts: () => void
     closeAgentActivity: () => void
     closeCloseOldAgents: () => void
@@ -327,6 +343,8 @@ export type CommandContext = {
     paletteMode: PaletteMode
     /** The Usage modal is on screen. */
     usageModalOpen: boolean
+    /** The Agent Analytics modal is on screen. */
+    agentAnalyticsOpen: boolean
     /** The Keyboard Shortcuts reference is on screen. */
     keyboardShortcutsOpen: boolean
     /** The Agent Activity modal is on screen. */
@@ -358,6 +376,8 @@ export type CommandContext = {
      *  (its own on/off label) and per-session `Tail`, which must not report
      *  "Off" while the pane it targets is visibly tailing because of this. */
     tailAllMode: boolean
+    /** Window-wide follow applies only while the target agent is working. */
+    tailWorkingMode: boolean
     devDebugEnabled: boolean
     /** The recording CAPABILITY is available (dev-debug on). Gates the
      *  Start/Stop Session Recording and Attach-Recording-Note commands (plan
@@ -382,8 +402,9 @@ export type CommandContext = {
     /** Whether the Global Editor is in fullscreen (workspace hidden).
      *  Same scoping as fileTreeVisible — global-editor store owns it. */
     editorFullscreen: boolean
-    dispatchModeEnabled: boolean
-    globalDispatchEnabled: boolean
+    // `dispatchModeEnabled` and `globalDispatchEnabled` were flags here until
+    // #992. No command read them once the mode commands were deleted; a flag
+    // that is always `true` invites a `when` that looks meaningful and is not.
     /** App-wide agent pane surface policy from Settings. The command registry
      *  uses it to decide whether render-dependent commands are applicable.
      *  Threading it through flags keeps command modules declarative: commands

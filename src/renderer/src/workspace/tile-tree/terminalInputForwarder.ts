@@ -1,3 +1,4 @@
+import { rendererOperations } from '@renderer/performance/monitorOperations'
 // Outgoing keystroke path for the xterm hosts (AgentTerminalLeaf,
 // TerminalLeaf, AgentInlineTerminal) — #745.
 //
@@ -82,15 +83,18 @@ export function createTerminalInputForwarder(
         // already be up for whatever that parse provokes.
         replayDepth += writes.length
         for (let i = 0; i < writes.length; i += 1) {
+          const finishWrite = rendererOperations.begin('terminal.write')
           try {
             // xterm invokes the callback after the chunk has been parsed, i.e.
             // after every `onData` it provoked has already fired.
             term.write(writes[i]!, () => {
+              finishWrite()
               replayDepth -= 1
               remaining -= 1
               if (remaining === 0) resolve()
             })
           } catch (error) {
+            finishWrite('error')
             // `write` can throw synchronously (xterm's pending-bytes
             // watermark). The chunks that never got queued will never call
             // back; release their share of the latch or the pane would drop

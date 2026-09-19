@@ -60,8 +60,13 @@ describe('coerceSettings agentViewMode', () => {
       .promptTemplatesInCommandSearchEnabled).toBe(true)
   })
 
-  it('defaults missing built-in MCP defaults to an empty list', () => {
-    expect(coerceSettings({}).defaultBuiltInMcpDomains).toEqual([])
+  it('defaults missing built-in MCP defaults to the shipped public set', () => {
+    expect(coerceSettings({}).defaultBuiltInMcpDomains)
+      .toEqual(['tldr', 'goal', 'orchestration', 'agent_transcripts', 'workflows'])
+  })
+
+  it('respects an explicit empty MCP domain list', () => {
+    expect(coerceSettings({ defaultBuiltInMcpDomains: [] }).defaultBuiltInMcpDomains).toEqual([])
   })
 
   it('keeps only configurable built-in MCP defaults in first-seen order', () => {
@@ -92,5 +97,99 @@ describe('coerceSettings agentNamesEnabled', () => {
     expect(coerceSettings({ agentNamesEnabled: 'true' }).agentNamesEnabled).toBe(false)
     expect(coerceSettings({ agentNamesEnabled: 1 }).agentNamesEnabled).toBe(false)
     expect(coerceSettings({ agentNamesEnabled: null }).agentNamesEnabled).toBe(false)
+  })
+})
+
+describe('coerceSettings default appearance (#973)', () => {
+  it('opens a fresh install in Nord with the Frost accent', () => {
+    const settings = coerceSettings({})
+    expect(settings.mode).toBe('dark-nord')
+    expect(settings.accent).toBe('frost')
+  })
+
+  // The one deliberate exception to "persisted values win": a blob on exactly
+  // the OLD default pair never had its appearance touched, so it follows the
+  // default to Nord. Anything else is a choice and stays.
+  it('moves an untouched Dark + Lime install to Nord + Frost', () => {
+    const settings = coerceSettings({ mode: 'dark', accent: 'lime' })
+    expect(settings.mode).toBe('dark-nord')
+    expect(settings.accent).toBe('frost')
+  })
+
+  it('leaves a deliberate Dark theme alone when the accent was changed', () => {
+    const settings = coerceSettings({ mode: 'dark', accent: 'gold' })
+    expect(settings.mode).toBe('dark')
+    expect(settings.accent).toBe('gold')
+  })
+
+  it('keeps a non-default theme and only replaces the retired green accents', () => {
+    expect(coerceSettings({ mode: 'dark-dim', accent: 'lime' })).toMatchObject({ mode: 'dark-dim', accent: 'frost' })
+    expect(coerceSettings({ mode: 'light', accent: 'sage' })).toMatchObject({ mode: 'light', accent: 'frost' })
+  })
+
+  it('is idempotent across a second hydration', () => {
+    const once = coerceSettings({ mode: 'dark', accent: 'lime' })
+    expect(coerceSettings(JSON.parse(JSON.stringify(once)))).toMatchObject({ mode: 'dark-nord', accent: 'frost' })
+    // …and a user who goes back to Dark afterwards is not migrated again.
+    expect(coerceSettings({ ...once, mode: 'dark' })).toMatchObject({ mode: 'dark', accent: 'frost' })
+  })
+})
+
+describe('coerceSettings retired keys', () => {
+  // Found riding in a long-lived install's blob during the #973 audit: each
+  // was a Settings field once, and `...parsed` copies whatever it finds, so
+  // every one had survived every save since its field was deleted.
+  it.each([
+    'customRendering',
+    'codeLineWrap',
+    'showTerminalPreview',
+    'showSystemEvents',
+    'highContrast',
+    'eventDrivenPasteSubmit',
+    'dispatchProjectTerminal',
+  ])('drops %s instead of carrying it forever', key => {
+    expect(coerceSettings({ [key]: true })).not.toHaveProperty(key)
+  })
+})
+
+// 'coerceSettings default workspace mode (#973)' lived here until the
+// unified layout (#992 stage 8) deleted the setting: it chose between grid
+// and Dispatch for a fresh install, and there is one layout now. A stale
+// persisted `defaultWorkspaceMode` is dropped on read — which the generic
+// "drops %s instead of carrying it forever" cases above now cover by listing
+// the key among the dropped ones if it is ever reintroduced.
+
+describe('coerceSettings public-release defaults (#973)', () => {
+  // Each pair: an absent key resolves to the new default; an explicit value
+  // — including the old default — is preserved. This is the promise that a
+  // default flip never overrides a persisted choice.
+  it.each([
+    ['mouseModeEnabled', true, false],
+    ['dangerousAgentsEnabled', true, false],
+    ['usageHeaderEnabled', false, true],
+    ['autoSendPromptSuggestion', false, true],
+  ] as const)('%s defaults to %s but keeps an explicit %s', (key, fresh, explicit) => {
+    expect(coerceSettings({})[key]).toBe(fresh)
+    expect(coerceSettings({ [key]: explicit })[key]).toBe(explicit)
+  })
+
+  it('sorts the command picker by recency on a fresh install', () => {
+    expect(coerceSettings({}).commandSortMode).toBe('recent')
+    expect(coerceSettings({ commandSortMode: 'catalog' }).commandSortMode).toBe('catalog')
+  })
+
+  it('ships the owner dictation and palette bindings without turning dictation on', () => {
+    const fresh = coerceSettings({})
+    expect(fresh.dictationEnabled).toBe(false)
+    expect(fresh.dictationShortcut).toBe('Fn')
+    expect(fresh.dictationMouseButton).toBe('Middle')
+    expect(fresh.paletteMouseChord).toBe('Middle+Right')
+  })
+
+  it('keeps explicitly cleared bindings cleared', () => {
+    const cleared = coerceSettings({ dictationShortcut: 'off', dictationMouseButton: '', paletteMouseChord: '' })
+    expect(cleared.dictationShortcut).toBe('')
+    expect(cleared.dictationMouseButton).toBe('')
+    expect(cleared.paletteMouseChord).toBe('')
   })
 })

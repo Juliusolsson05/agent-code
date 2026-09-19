@@ -1,7 +1,8 @@
-import { fireEvent, render, screen } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { act, fireEvent, render, screen } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { GlobalToastProvider, useGlobalToast } from '@renderer/ui/GlobalToast'
+import { useAppStore } from '@renderer/app-state/hooks'
 import { PaneToast } from './PaneToast'
 
 function GlobalToastHarness(): JSX.Element {
@@ -9,7 +10,17 @@ function GlobalToastHarness(): JSX.Element {
   return <button onClick={() => showToast('global status')}>Show global toast</button>
 }
 
+const originalApi = window.api
 describe('toast radius ownership', () => {
+  beforeEach(() => {
+    useAppStore.setState({ installedExtensions: [] })
+    window.api = {
+      ...(originalApi ?? {}),
+      onExtensionNotification: vi.fn().mockReturnValue(() => {}),
+    } as typeof window.api
+  })
+  afterEach(() => { window.api = originalApi })
+
   it('keeps pane status modest while reserving float radius for detached toasts', () => {
     render(
       <>
@@ -52,5 +63,17 @@ describe('toast radius ownership', () => {
     expect(paneToast.className).toContain('line-clamp-3')
     expect(paneToast).toHaveAttribute('title', message)
     expect(paneToast).toHaveTextContent(message)
+  })
+
+  it('attributes a background extension notification in host-owned toast chrome', () => {
+    let notify!: (event: { extensionId: string; message: string }) => void
+    window.api.onExtensionNotification = vi.fn(handler => {
+      notify = handler
+      return () => {}
+    })
+    render(<GlobalToastProvider><span>content</span></GlobalToastProvider>)
+
+    act(() => { notify({ extensionId: 'timer', message: 'Focus session complete' }) })
+    expect(screen.getByText('timer: Focus session complete')).toBeInTheDocument()
   })
 })

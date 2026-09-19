@@ -1,3 +1,4 @@
+import { mainOperations } from './operations.js'
 import { ipcMain } from 'electron'
 import { performance } from 'perf_hooks'
 
@@ -12,10 +13,12 @@ function shouldInstrumentChannel(channel: string): boolean {
   // where this instrumentation is on we want the trace to describe the app, not
   // the logging pipe carrying the trace.
   return !channel.startsWith('performance:')
+    && !channel.startsWith('incident:')
+    && !channel.startsWith('lifecycle:')
 }
 
 export function installPerformanceIpcInstrumentation(): void {
-  if (installed || !performanceService.getConfig().enabled) return
+  if (installed) return
   installed = true
   const originalHandle = ipcMain.handle.bind(ipcMain)
 
@@ -23,8 +26,10 @@ export function installPerformanceIpcInstrumentation(): void {
     originalHandle(channel, async (...args: unknown[]) => {
       if (!shouldInstrumentChannel(channel)) return listener(...args)
       const startedAt = performance.now()
+      const end = mainOperations.begin('ipc.handler')
       try {
         const result = await listener(...args)
+        end()
         performanceService.record({
           kind: 'span_end',
           process: 'main',
@@ -35,6 +40,7 @@ export function installPerformanceIpcInstrumentation(): void {
         })
         return result
       } catch (err) {
+        end('error')
         performanceService.record({
           kind: 'span_end',
           process: 'main',

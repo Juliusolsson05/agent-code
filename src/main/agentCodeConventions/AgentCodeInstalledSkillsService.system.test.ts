@@ -91,7 +91,15 @@ function payload(candidate: StagedInstalledSkillCandidate): GitHubSkillDiscovery
   }
 }
 
-async function harness(options: { now?: () => Date; snapshotMaxBytes?: number } = {}) {
+async function harness(
+  options: {
+    now?: () => Date
+    snapshotMaxBytes?: number
+    unsupportedProviders?: ResolvedAgentCodeConventionsTargets['unsupportedProviders']
+    /** Flip `.fail` to make provider target discovery throw from then on. */
+    discovery?: { fail: boolean }
+  } = {},
+) {
   const root = await temporaryDirectory()
   const currentTarget = target(root)
   const discoveries: GitHubSkillDiscoveryPayload[] = []
@@ -104,7 +112,7 @@ async function harness(options: { now?: () => Date; snapshotMaxBytes?: number } 
   }
   const resolved: ResolvedAgentCodeConventionsTargets = {
     targets: [currentTarget],
-    unsupportedProviders: [],
+    unsupportedProviders: options.unsupportedProviders ?? [],
   }
   const pathSafety = new SkillPathSafety(root)
   const service = new AgentCodeConventionsService({
@@ -112,7 +120,10 @@ async function harness(options: { now?: () => Date; snapshotMaxBytes?: number } 
     installedSkillSnapshotRoot: join(root, 'state', 'managed-skill-snapshots'),
     installedSkillSnapshotMaxBytes: options.snapshotMaxBytes,
     homeDirectory: root,
-    resolveTargets: async () => resolved,
+    resolveTargets: async () => {
+      if (options.discovery?.fail) throw new Error('Could not read provider configuration')
+      return resolved
+    },
     githubSkillSource,
     now: options.now ?? (() => new Date('2026-08-27T00:00:00.000Z')),
     operationId: (() => { let value = 0; return () => `installed-operation-${++value}` })(),
@@ -140,6 +151,69 @@ async function discoverOne(
 }
 
 describe('AgentCode installed skills service', () => {
+  // Regression for #1014: an unsupported registered provider (grok) must not
+  // block installing GitHub skills for the providers that do support them.
+  it('installs and reports active with an unsupported provider present', async () => {
+    const { service, discoveries } = await harness({ unsupportedProviders: ['grok'] })
+    const staged = stagedPackage({
+      commit: 'a'.repeat(40),
+      files: [{ path: 'SKILL.md', content: '# Review code' }],
+    })
+    const discovery = await discoverOne(service, discoveries, staged)
+    const installed = await service.installGitHubSkills({
+      expectedRevision: 0,
+      discoveryId: discovery.discoveryId,
+      candidateIds: [staged.candidate.candidateId],
+    })
+    expect(installed).toMatchObject({
+      ok: true,
+      snapshot: { skills: [{ name: 'review-code', health: 'active' }] },
+    })
+    const snapshot = await service.getInstalledSkillsSnapshot()
+    const skill = snapshot.skills.find(item => item.name === 'review-code')
+    expect(skill?.targets).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'unsupported:grok', state: 'unsupported' }),
+    ]))
+    expect(snapshot.unsupportedProviders).toEqual(['grok'])
+  })
+
+  // #1017 review: when provider target discovery fails, the conventions
+  // and custom skills report 'degraded' with the error row, but an installed
+  // skill kept its stale rows, and with zero resolved targets its health
+  // read 'unsupported', which says "no provider can take this" when the
+  // truth is "we could not look".
+  it('reports an installed skill as degraded, with the error, when target discovery fails', async () => {
+    const discovery = { fail: false }
+    const { service, discoveries } = await harness({ discovery })
+    const staged = stagedPackage({ commit: 'a'.repeat(40), files: [{ path: 'SKILL.md', content: '# Review code' }] })
+    const found = await discoverOne(service, discoveries, staged)
+    await service.installGitHubSkills({ expectedRevision: 0, discoveryId: found.discoveryId, candidateIds: [staged.candidate.candidateId] })
+    discovery.fail = true
+    await service.audit()
+    const skill = (await service.getInstalledSkillsSnapshot()).skills.find(item => item.name === 'review-code')
+    expect(skill?.health).toBe('degraded')
+    expect(skill?.targets).toEqual([expect.objectContaining({ id: 'provider-target-resolution', state: 'error' })])
+  })
+
+  it('a disabled skill can still be deleted while target discovery is failing', async () => {
+    // #1037 review: the discovery-error row has no fingerprint, so as a
+    // delete blocker it could never be approved, and delete dead-ended with
+    // "External changes must be reviewed".
+    const discovery = { fail: false }
+    const { service, discoveries } = await harness({ discovery })
+    const staged = stagedPackage({ commit: 'a'.repeat(40), files: [{ path: 'SKILL.md', content: '# Review code' }] })
+    const found = await discoverOne(service, discoveries, staged)
+    const installed = await service.installGitHubSkills({ expectedRevision: 0, discoveryId: found.discoveryId, candidateIds: [staged.candidate.candidateId] })
+    if (!installed.ok) throw new Error(JSON.stringify(installed))
+    const skill = installed.snapshot.skills.find(item => item.name === 'review-code')!
+    const disabled = await service.setInstalledSkillEnabled({ expectedRevision: installed.snapshot.revision, skillId: skill.id, enabled: false })
+    if (!disabled.ok) throw new Error(JSON.stringify(disabled))
+    discovery.fail = true
+    await service.audit()
+    const deleted = await service.deleteInstalledSkill({ expectedRevision: disabled.snapshot.revision, skillId: skill.id })
+    expect(deleted).toMatchObject({ ok: true })
+  })
+
   it('installs a reviewed package and requires a second review before updating it', async () => {
     const { root, service, discoveries, skillDirectory } = await harness()
     const first = stagedPackage({

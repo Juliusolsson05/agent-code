@@ -2,25 +2,16 @@ import { useCallback } from 'react'
 
 import type {
   DispatchGridRow,
-  DispatchLane,
-  DispatchModeState,
   SessionId,
   SessionMeta,
   TabId,
   WorkspaceState,
 } from '@renderer/workspace/types'
-import {
-  clampTileCount,
-  dispatchFocusedSessionId,
-  withLaneSession,
-} from '@renderer/workspace/dispatch/tiledDispatchSelectors'
+import { withLaneSession } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import type { GridShapeRow } from '@renderer/workspace/dispatch/gridShape'
 import {
   clampIndexFraction,
   insertLaneRightIntoGrid,
-  MAX_DISPATCH_LANES,
-  MAX_DISPATCH_ROWS,
-  MIN_DISPATCH_TILES,
   insertRowBelowInGrid,
   normalizeGridShape,
   removeLaneFromGrid,
@@ -30,11 +21,13 @@ import {
   setGridShape,
 } from '@renderer/workspace/dispatch/gridShape'
 import type {
+  WorkspaceSetRuntimes,
   WorkspaceSetState,
-  WorkspaceSetTileTabs,
 } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import type { SessionActions } from '@renderer/workspace/hook/actions/session'
+import { isProcessSessionKind } from '@shared/types/providerKind'
+import { clearPooledSpawnBadge } from '@renderer/workspace/hook/actions/pooledSpawnBadge'
 
 /**
  * Write row METADATA without touching any row length.
@@ -54,60 +47,38 @@ function patchRow(
   rowIndex: number,
   patch: Partial<Omit<DispatchGridRow, 'length'>>,
 ): WorkspaceState {
-  const tiled = prev.dispatchMode?.tiled
-  if (!tiled) return prev
+  const tiled = prev.stage
   const grid = normalizeGridShape(tiled)
   if (!Number.isInteger(rowIndex) || rowIndex < 0 || rowIndex >= grid.rows.length) {
     return prev
   }
   return {
     ...prev,
-    dispatchMode: {
-      ...prev.dispatchMode!,
-      tiled: {
-        ...tiled,
-        rows: grid.rows.map((row, i) => (i === rowIndex ? { ...row, ...patch } : row)),
-        // Carried explicitly: normalizeGridShape may have just split a legacy
-        // `ratios` array, and spreading `tiled` alone would put the stale one
-        // back beside the fields it was split into.
-        laneWeights: grid.laneWeights,
-        ratios: undefined,
-      },
+    stage: {
+      ...tiled,
+      rows: grid.rows.map((row, i) => (i === rowIndex ? { ...row, ...patch } : row)),
+      // Carried explicitly: normalizeGridShape may have just split a legacy
+      // `ratios` array, and spreading `tiled` alone would put the stale one
+      // back beside the fields it was split into.
+      laneWeights: grid.laneWeights,
+      ratios: undefined,
     },
   }
 }
 
-/**
- * N blank lanes.
- *
- * Each lane is a fresh object rather than a shared literal: lanes are spread
- * and replaced individually by every writer, and a shared reference would make
- * two lanes alias one another the first time someone mutated instead of spread.
- */
-function emptyLanes(count: number): DispatchLane[] {
-  return Array.from({ length: Math.max(0, count) }, () => ({}))
-}
-
 export function useDispatchActions(
-  state: { activeTabId: TabId; dispatchMode: DispatchModeState | null; sessions: Record<SessionId, SessionMeta> },
   setState: WorkspaceSetState,
-  setTileTabs: WorkspaceSetTileTabs,
-  closeNewAgentPlacement: () => void,
+  setRuntimes: WorkspaceSetRuntimes,
   refs: WorkspaceRefs,
   ensureSessionLive: SessionActions['ensureSessionLive'],
   showToast: (message: string, durationMs?: number) => void,
 ): {
-  enterDispatchMode: (scope?: DispatchModeState['scope']) => Promise<void>
-  exitDispatchMode: () => void
-  setDispatchScope: (scope: DispatchModeState['scope']) => Promise<void>
-  focusDispatchSession: (tabId: TabId, sessionId: SessionId) => void
   pinSession: (sessionId: SessionId) => void
   unpinSession: (sessionId: SessionId) => void
   setPinnedSessionIds: (ids: SessionId[]) => void
-  // ---- Tiled Dispatch (issue #248) ----
-  enterTiledDispatch: (rowLengths: number[]) => Promise<void>
-  exitTiledDispatch: () => void
+  // ---- Lanes (issue #248) ----
   selectTiledLaneSession: (laneIndex: number, sessionId: SessionId) => Promise<void>
+  clearTiledLane: (laneIndex: number) => void
   insertTiledLaneRight: (laneIndex: number) => boolean
   removeTiledLane: (laneIndex: number) => void
   setTiledFocusedLane: (laneIndex: number) => void
@@ -122,138 +93,17 @@ export function useDispatchActions(
   setDispatchRowCapChildren: (rowIndex: number, cap: boolean) => void
   toggleDispatchRowExpandedParent: (rowIndex: number, sessionId: SessionId) => void
 } {
-  const enterDispatchMode = useCallback(
-    async (scope: DispatchModeState['scope'] = state.dispatchMode?.scope ?? 'project') => {
-      closeNewAgentPlacement()
-      setState(prev => ({
-        ...prev,
-        dispatchMode: {
-          scope,
-          focusedSessionId: prev.dispatchMode?.focusedSessionId,
-        },
-      }))
-      setTileTabs(null)
-    },
-    [closeNewAgentPlacement, setState, setTileTabs, state.dispatchMode?.scope],
-  )
-
-  const exitDispatchMode = useCallback(() => {
-    setState(prev => ({
-      ...prev,
-      dispatchMode: null,
-    }))
-  }, [setState])
-
-  const setDispatchScope = useCallback(
-    async (scope: DispatchModeState['scope']) => {
-      closeNewAgentPlacement()
-      setState(prev => ({
-        ...prev,
-        dispatchMode: {
-          scope,
-          focusedSessionId: prev.dispatchMode?.focusedSessionId,
-        },
-      }))
-      // Same rationale as enterDispatchMode: terminal mount is now the
-      // DispatchLayout effect's responsibility, gated by the global
-      // setting. Re-entering with a different scope must NOT spawn a
-      // terminal behind the setting's back.
-    },
-    [closeNewAgentPlacement, setState],
-  )
-
-  const focusDispatchSession = useCallback(
-    (tabId: TabId, sessionId: SessionId) => {
-      setState(prev => {
-        if (!prev.dispatchMode) return { ...prev, activeTabId: tabId }
-        // WHY not update Tab.focusedSessionId here: Dispatch rows can now be
-        // detached from the grid, while Tab.focusedSessionId is a tile-tree
-        // invariant used by resize, reader, spotlight, and normal pane
-        // commands. Dispatch focus is a mode-local selection; activeTabId still
-        // follows it so project-scoped chrome and terminal selection stay in
-        // sync with the visible command-center row.
-        return {
-          ...prev,
-          activeTabId: tabId,
-          dispatchMode: {
-            ...prev.dispatchMode,
-            focusedSessionId: sessionId,
-          },
-        }
-      })
-    },
-    [setState],
-  )
-
-  // ---- Tiled Dispatch reducers (issue #248) ----
+  // enterDispatchMode, exitDispatchMode, setDispatchScope, focusDispatchSession,
+  // enterTiledDispatch and exitTiledDispatch lived here until #992. They
+  // turned the lane grid ON and OFF, switched a layout-wide project/global
+  // scope, and tracked a classic single-selection focus. The stage is a
+  // required field now: nothing is entered or exited, every index lists every
+  // project (a row's projectTabIds is the only filter), and the focused lane
+  // is the one focus. The entry seed (#977) survives only in the v2 migration.
   //
-  // These all read/write `dispatchMode.tiled`. The `tiled` block being
-  // present is the single render fork (DispatchLayout renders the
-  // multi-lane layout iff it exists). Every reducer is a no-op when there
-  // is no dispatchMode/tiled, so a stray call from a stale keybind or
-  // command can never corrupt classic Dispatch. Duplicates across lanes are
-  // allowed (the views mirror — see DispatchLane), so these reducers no
-  // longer reject a session that's open elsewhere.
-
-  // Enter (or freshly build) a Tiled Dispatch layout. Enters Dispatch if it
-  // wasn't already on and clears tiled-tabs (mutually exclusive top-level mode).
-  //
-  // The lanes arrive EMPTY (#681). This used to auto-fill from unclaimed visible
-  // agents on the theory that asking for N tiles means wanting to see N agents.
-  // The cost of that convenience was a layout that rearranges itself: the same
-  // helper ran on growth, and the render-time healer ran on every unresolved
-  // lane, so killing an agent replaced it with an unrelated one. Making entry
-  // the single exception would have left the user unable to predict which of
-  // their slots the app feels entitled to fill.
-  const enterTiledDispatch = useCallback(
-    async (rowLengths: number[]) => {
-      closeNewAgentPlacement()
-      setState(prev => {
-        const scope = prev.dispatchMode?.scope ?? 'project'
-        // Takes a length PER ROW rather than a single count, because the grid
-        // is ragged by design and entering it should be able to express that
-        // in one step. A count would force the user into a rectangle and then
-        // make them edit their way out of it.
-        const rows = rowLengths
-          .slice(0, MAX_DISPATCH_ROWS)
-          .map(length => ({ length: clampTileCount(length) }))
-        const capped: { length: number }[] = []
-        let total = 0
-        for (const row of rows) {
-          const length = Math.min(row.length, MAX_DISPATCH_LANES - total)
-          if (length < MIN_DISPATCH_TILES) break
-          capped.push({ length })
-          total += length
-        }
-        const shape = capped.length > 0 ? capped : [{ length: clampTileCount(1) }]
-        return {
-          ...prev,
-          dispatchMode: {
-            scope,
-            focusedSessionId: prev.dispatchMode?.focusedSessionId,
-            tiled: {
-              lanes: emptyLanes(shape.reduce((sum, row) => sum + row.length, 0)),
-              rows: shape,
-              focusedLane: 0,
-            },
-          },
-        }
-      })
-      setTileTabs(null)
-    },
-    [closeNewAgentPlacement, setState, setTileTabs],
-  )
-
-  // Return to classic single-view Dispatch. Agents keep running — we only
-  // drop the `tiled` block. (Exiting Dispatch entirely via exitDispatchMode
-  // already drops it along with the rest of dispatchMode.)
-  const exitTiledDispatch = useCallback(() => {
-    setState(prev => {
-      if (!prev.dispatchMode?.tiled) return prev
-      const { tiled: _tiled, ...rest } = prev.dispatchMode
-      return { ...prev, dispatchMode: { ...rest } }
-    })
-  }, [setState])
+  // Every reducer below reads and writes `stage` directly. They used to guard
+  // on `dispatchMode?.tiled` being present; that guard is gone because the
+  // state it protected against can no longer be represented.
 
   // Assign a lane's agent. NOT exposed on the workspace: every caller must go
   // through `selectTiledLaneSession` below, which wakes a hibernated agent
@@ -267,27 +117,31 @@ export function useDispatchActions(
   // harmless, and a no-op when the lane already shows this session.
   const setTiledLaneSession = useCallback(
     (laneIndex: number, sessionId: SessionId) => {
+      let wrote = false
       setState(prev => {
-        const tiled = prev.dispatchMode?.tiled
-        if (!tiled) return prev
+        const tiled = prev.stage
         if (laneIndex < 0 || laneIndex >= tiled.lanes.length) return prev
         if (tiled.lanes[laneIndex]?.selectedSessionId === sessionId) return prev
+        wrote = true
         const lanes = tiled.lanes.map((lane, i) =>
           i === laneIndex ? withLaneSession(lane, sessionId) : lane,
         )
-        return {
-          ...prev,
-          dispatchMode: { ...prev.dispatchMode!, tiled: { ...tiled, lanes } },
-        }
+        return { ...prev, stage: { ...tiled, lanes } }
       })
+      // Placing a session is the user ANSWERING the "new in the pool" badge
+      // (#992 §4.3). The index click, lane strip, ⌘N and the ⌥↑/↓ walk place
+      // through here; label navigation and every control-plane "show" place
+      // through agentIndexNavigation, which clears it the same way. Without
+      // that, the chip outlives its question and trains the user to ignore it.
+      if (wrote) clearPooledSpawnBadge(setRuntimes, sessionId)
     },
-    [setState],
+    [setRuntimes, setState],
   )
 
   /**
-   * Put a session into a lane, WAKING it first when it is detached.
+   * Put a session into a lane, WAKING it first when it has no backend.
    *
-   * Rehydrate deliberately does not respawn detached sessions — they survive a
+   * Rehydrate deliberately does not respawn parked sessions — they survive a
    * restart as metadata with no provider process (see rehydrate.ts). Something
    * has to wake them before they are used, and agent-index navigation already
    * says exactly why:
@@ -307,23 +161,26 @@ export function useDispatchActions(
    * dead pane the user can type into during the gap, which is the very state
    * this is fixing.
    *
-   * Be honest about the cost. `DetachedSessionRecord` means "live but not
-   * grid-placed", so in an ordinary session EVERY dispatch agent is detached —
-   * this is the common path, not the exception. `ensureSessionLive` joins an
-   * in-flight wake and adopts rather than restarts a running agent, but it is
-   * not free: one `session:recover` round-trip and a transient `spawning` flip
-   * per gesture. Sub-frame in practice; not "nothing".
+   * The cost is paid once per session per app run: after the first wake its
+   * runtime reads 'started' and every later selection is the synchronous path.
+   * (Until #992 the fork was "is it a detached record", which EVERY lane agent
+   * was, so every gesture paid a `session:recover` round-trip and a transient
+   * `spawning` flip even for an agent that was already running.)
    */
   const selectTiledLaneSession = useCallback(
     async (laneIndex: number, sessionId: SessionId) => {
-      const detached = refs.stateRef.current.detachedSessions[sessionId] !== undefined
-      if (!detached) {
-        // Grid-placed: stays synchronous, so no coordinate can shift underneath
-        // it. NOT a guarantee that it is live — a tile leaf whose respawn failed
-        // at rehydrate, or whose process died since, is still selectable here
-        // and still needs the pane's own Retry. That gap is shared verbatim with
-        // agent-index navigation, which uses the identical predicate; widening
-        // both is its own change, not this one.
+      // Already has a backend: stays synchronous, so no coordinate can shift
+      // underneath it.
+      //
+      // The test is the RUNTIME. Until #992 it was "has no detachedSessions
+      // record" (i.e. is a tile leaf), which was a structural guess with a
+      // documented gap: a leaf whose respawn failed at rehydrate, or whose
+      // process died since, was written into the lane un-woken and needed the
+      // pane's own Retry. `processStatus` closes that gap — 'failed' and
+      // 'exited' now take the wake path below, which is also the retry path —
+      // and removes its mirror image, re-waking an agent that was already up.
+      // Agent-index navigation uses the identical predicate.
+      if (refs.latestRuntimesRef.current[sessionId]?.processStatus === 'started') {
         setTiledLaneSession(laneIndex, sessionId)
         return
       }
@@ -358,9 +215,7 @@ export function useDispatchActions(
       // The window is NOT narrow, which is why this matters: a cold wake allows
       // up to 30s, and Remove Row / Close Agent sit on a confirmation dialog
       // inside it.
-      const before = normalizeGridShape(refs.stateRef.current.dispatchMode?.tiled ?? {
-        lanes: [], focusedLane: 0,
-      })
+      const before = normalizeGridShape(refs.stateRef.current.stage)
       const rowIndex = rowIndexForLane(before.rows, laneIndex)
       const column = rowIndex >= 0 ? laneIndex - rowStartIndex(before.rows, rowIndex) : -1
       // Checked BEFORE the wake: an unresolvable coordinate can never produce a
@@ -380,9 +235,7 @@ export function useDispatchActions(
         return
       }
 
-      const after = normalizeGridShape(refs.stateRef.current.dispatchMode?.tiled ?? {
-        lanes: [], focusedLane: 0,
-      })
+      const after = normalizeGridShape(refs.stateRef.current.stage)
       const row = after.rows[rowIndex]
       // Not the same row any more (removed, or displaced by an insert above),
       // or it shrank past the column the user aimed at.
@@ -390,6 +243,37 @@ export function useDispatchActions(
       setTiledLaneSession(rowStartIndex(after.rows, rowIndex) + column, sessionId)
     },
     [refs, ensureSessionLive, showToast, setTiledLaneSession],
+  )
+
+  /**
+   * Empty ONE lane without ending anything: the occupant returns to the pool
+   * alive (#992 §4.4, "Clear Lane"). The lane is NOT removed — Remove Lane
+   * owns that — and nothing refills it (#681): the user asked for the space
+   * back, not for a different agent in it.
+   *
+   * WHY this is an action and not just a command-local state write: it is the
+   * non-destructive half of a pair whose destructive half (Close Agent and
+   * Remove Lane) is an action, and closeAgentRemoveLane's suite pins their
+   * shared lane-index semantics. A command-local write would drift from
+   * whatever lane validation the close path settles on.
+   *
+   * No undo entry, deliberately: the undo stack is for CLOSES (things whose
+   * sessions are gone). Undoing a lane clear is just selecting the session
+   * back into the lane — one click in the index it never left.
+   */
+  const clearTiledLane = useCallback(
+    (laneIndex: number) => {
+      setState(prev => {
+        const tiled = prev.stage
+        if (laneIndex < 0 || laneIndex >= tiled.lanes.length) return prev
+        if (tiled.lanes[laneIndex]?.selectedSessionId === undefined) return prev
+        const lanes = tiled.lanes.map((lane, i) =>
+          i === laneIndex ? { ...lane, selectedSessionId: undefined } : lane,
+        )
+        return { ...prev, stage: { ...tiled, lanes } }
+      })
+    },
+    [setState],
   )
 
   /**
@@ -404,12 +288,11 @@ export function useDispatchActions(
     (laneIndex: number) => {
       let inserted = false
       setState(prev => {
-        const tiled = prev.dispatchMode?.tiled
-        if (!tiled) return prev
+        const tiled = prev.stage
         const next = insertLaneRightIntoGrid(tiled, laneIndex)
         if (!next) return prev
         inserted = true
-        return { ...prev, dispatchMode: { ...prev.dispatchMode!, tiled: next } }
+        return { ...prev, stage: next }
       })
       // Zustand's workspace setter applies functional updaters synchronously,
       // so this reports the reducer's ACTUAL admission rather than the command
@@ -433,11 +316,10 @@ export function useDispatchActions(
   const removeTiledLane = useCallback(
     (laneIndex: number) => {
       setState(prev => {
-        const tiled = prev.dispatchMode?.tiled
-        if (!tiled) return prev
+        const tiled = prev.stage
         const next = removeLaneFromGrid(tiled, laneIndex)
         if (!next) return prev
-        return { ...prev, dispatchMode: { ...prev.dispatchMode!, tiled: next } }
+        return { ...prev, stage: next }
       })
     },
     [setState],
@@ -448,14 +330,10 @@ export function useDispatchActions(
   const setTiledFocusedLane = useCallback(
     (laneIndex: number) => {
       setState(prev => {
-        const tiled = prev.dispatchMode?.tiled
-        if (!tiled) return prev
+        const tiled = prev.stage
         const clamped = Math.max(0, Math.min(laneIndex, tiled.lanes.length - 1))
         if (clamped === tiled.focusedLane) return prev
-        return {
-          ...prev,
-          dispatchMode: { ...prev.dispatchMode!, tiled: { ...tiled, focusedLane: clamped } },
-        }
+        return { ...prev, stage: { ...tiled, focusedLane: clamped } }
       })
     },
     [setState],
@@ -473,12 +351,11 @@ export function useDispatchActions(
     (rowIndex: number) => {
       let inserted = false
       setState(prev => {
-        const tiled = prev.dispatchMode?.tiled
-        if (!tiled) return prev
+        const tiled = prev.stage
         const next = insertRowBelowInGrid(tiled, rowIndex)
         if (!next) return prev
         inserted = true
-        return { ...prev, dispatchMode: { ...prev.dispatchMode!, tiled: next } }
+        return { ...prev, stage: next }
       })
       // Reports the reducer's ACTUAL admission rather than the palette's earlier
       // render snapshot, so a stale invocation cannot announce a row that was
@@ -492,11 +369,10 @@ export function useDispatchActions(
   const removeDispatchRow = useCallback(
     (rowIndex: number) => {
       setState(prev => {
-        const tiled = prev.dispatchMode?.tiled
-        if (!tiled) return prev
+        const tiled = prev.stage
         const next = removeRowFromGrid(tiled, rowIndex)
         if (!next) return prev
-        return { ...prev, dispatchMode: { ...prev.dispatchMode!, tiled: next } }
+        return { ...prev, stage: next }
       })
     },
     [setState],
@@ -506,12 +382,11 @@ export function useDispatchActions(
     (rows: GridShapeRow[]) => {
       let applied = false
       setState(prev => {
-        const tiled = prev.dispatchMode?.tiled
-        if (!tiled) return prev
+        const tiled = prev.stage
         const next = setGridShape(tiled, rows)
         if (!next) return prev
         applied = true
-        return { ...prev, dispatchMode: { ...prev.dispatchMode!, tiled: next } }
+        return { ...prev, stage: next }
       })
       return applied
     },
@@ -521,17 +396,13 @@ export function useDispatchActions(
   const setDispatchLaneWeights = useCallback(
     (weights: number[]) => {
       setState(prev => {
-        const tiled = prev.dispatchMode?.tiled
-        if (!tiled) return prev
+        const tiled = prev.stage
         // Length-checked here as well as on read: a weights array that does not
         // describe every lane is dropped by normalizeGridShape anyway, and
         // storing one would make the next drag start from a silently discarded
         // value.
         if (weights.length !== tiled.lanes.length) return prev
-        return {
-          ...prev,
-          dispatchMode: { ...prev.dispatchMode!, tiled: { ...tiled, laneWeights: weights } },
-        }
+        return { ...prev, stage: { ...tiled, laneWeights: weights } }
       })
     },
     [setState],
@@ -547,18 +418,14 @@ export function useDispatchActions(
   const setDispatchRowHeights = useCallback(
     (heights: number[]) => {
       setState(prev => {
-        const tiled = prev.dispatchMode?.tiled
-        if (!tiled) return prev
+        const tiled = prev.stage
         const grid = normalizeGridShape(tiled)
         if (heights.length !== grid.rows.length) return prev
         return {
           ...prev,
-          dispatchMode: {
-            ...prev.dispatchMode!,
-            tiled: {
-              ...tiled,
-              rows: grid.rows.map((row, i) => ({ ...row, height: heights[i] })),
-            },
+          stage: {
+            ...tiled,
+            rows: grid.rows.map((row, i) => ({ ...row, height: heights[i] })),
           },
         }
       })
@@ -572,24 +439,12 @@ export function useDispatchActions(
         // Empty normalizes to ABSENT here, not to an empty array: "any project"
         // must have exactly one representation or every reader needs to test
         // for both.
-        const patched = patchRow(prev, rowIndex, {
+        // (Binding used to PROMOTE a layout-wide scope to 'global' so a row
+        // bound to another project did not list nothing. The scope is gone —
+        // every index already lists every project — so this is the whole write.)
+        return patchRow(prev, rowIndex, {
           projectTabIds: tabIds.length > 0 ? tabIds : undefined,
         })
-        if (patched === prev || !patched.dispatchMode) return patched
-        // Binding PROMOTES scope to global. Project scope builds its row set
-        // from activeTabId alone, so a row bound to any other project would
-        // show an empty index and every lane in it would fail to resolve. The
-        // same promotion, for the same reason, already happens in
-        // agentIndexNavigation when a cross-project label is used.
-        //
-        // Unbinding deliberately does NOT demote: other rows may still be
-        // bound, and silently narrowing the scope out from under them would
-        // empty those rows.
-        if (tabIds.length === 0 || patched.dispatchMode.scope === 'global') return patched
-        return {
-          ...patched,
-          dispatchMode: { ...patched.dispatchMode, scope: 'global' },
-        }
       })
     },
     [setState],
@@ -608,8 +463,7 @@ export function useDispatchActions(
   const toggleDispatchRowExpandedParent = useCallback(
     (rowIndex: number, sessionId: SessionId) => {
       setState(prev => {
-        const tiled = prev.dispatchMode?.tiled
-        if (!tiled) return prev
+        const tiled = prev.stage
         const current = normalizeGridShape(tiled).rows[rowIndex]?.expandedParents ?? []
         const next = current.includes(sessionId)
           ? current.filter(id => id !== sessionId)
@@ -634,7 +488,8 @@ export function useDispatchActions(
     (sessionId: SessionId) => {
       setState(prev => {
         if (prev.pinnedSessionIds.includes(sessionId)) return prev
-        if (!prev.sessions[sessionId]) return prev
+        const meta = prev.sessions[sessionId]
+        if (!meta || !isProcessSessionKind(meta.kind)) return prev
         return {
           ...prev,
           pinnedSessionIds: [...prev.pinnedSessionIds, sessionId],
@@ -665,7 +520,10 @@ export function useDispatchActions(
         // before they hit Enter) can never reintroduce an orphan into
         // the array. Same defensive shape as buildPinnedDispatchRows
         // at render time.
-        const filtered = ids.filter(id => prev.sessions[id] !== undefined)
+        const filtered = ids.filter(id => {
+          const meta = prev.sessions[id]
+          return meta !== undefined && isProcessSessionKind(meta.kind)
+        })
         // Deduplicate while preserving caller order (first occurrence wins).
         // The modal already enforces this client-side, but a programmatic
         // caller could pass duplicates; keeping the dedupe here means the
@@ -693,16 +551,11 @@ export function useDispatchActions(
   )
 
   return {
-    enterDispatchMode,
-    exitDispatchMode,
-    setDispatchScope,
-    focusDispatchSession,
     pinSession,
     unpinSession,
     setPinnedSessionIds,
-    enterTiledDispatch,
-    exitTiledDispatch,
     selectTiledLaneSession,
+    clearTiledLane,
     insertTiledLaneRight,
     removeTiledLane,
     setTiledFocusedLane,

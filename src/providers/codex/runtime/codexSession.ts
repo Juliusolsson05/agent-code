@@ -140,6 +140,10 @@ export type CodexPromptEvidenceDiagnostic = {
 }
 
 export type CodexSessionEvents = {
+  // Declared for AgentSession contract parity (grok Stage 4): a durable-history
+  // generation boundary. This provider never emits it today; it exists so the
+  // shared event map can carry providers whose transcripts rewrite in place.
+  'history-boundary': [{ type: 'reset' | 'caught-up'; generation: number; snapshotByteLength: number; byteOffset?: number; complete?: boolean; file: string }]
   started: [{ projectDir: string; proxyUrl?: string }]
   'input-readiness': [AgentInputReadiness]
   // Declared, never emitted. This provider latches a coarse ready boolean and
@@ -944,6 +948,16 @@ export class CodexSession extends EventEmitter {
 
   getProcessPid(): number | null {
     return this.pty?.pid ?? null
+  }
+
+  /**
+   * The machine was suspended (#963). Seal the proxy streams the sleep severed
+   * right away: unlike Claude, a Codex retry cannot take the active slot while a
+   * dead flow still holds it, so a grace period would only delay the retry. The
+   * adapter touches only flows with no event since the suspension began.
+   */
+  noteSystemSuspension(suspension: import('@shared/types/systemSuspension.js').SystemSuspension): void {
+    this.proxyAdapter?.sealFlowsSilentSince(suspension.suspendedAt, 'system-suspended')
   }
 
   async stop(): Promise<void> {

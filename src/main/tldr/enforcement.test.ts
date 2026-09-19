@@ -1,16 +1,26 @@
 import { describe, expect, it } from 'vitest'
-import { TLDR_GOAL_CONTEXT, TLDR_NEVER_WRITTEN_REASON, TLDR_STALE_REASON, TldrEnforcement } from './enforcement'
+import type { ReportingFeatures } from './enforcement'
+import {
+  GOAL_NEVER_SET_REASON, GOAL_SET_CONTEXT, TLDR_GOAL_CONTEXT, TLDR_NEVER_WRITTEN_REASON, TLDR_STALE_REASON,
+  TLDR_STATUS_NEVER_WRITTEN_REASON, TldrEnforcement,
+} from './enforcement'
 
-function setup() {
+function setup(features: ReportingFeatures = { tldr: true, goal: false }) {
   let clock = 1_000_000
   const written = new Map<string, string>()
-  const enforcement = new TldrEnforcement({ lastWrittenAt: async (identity: string) => written.get(identity) }, () => clock)
+  const goals = new Map<string, string>()
+  const enforcement = new TldrEnforcement(
+    { lastWrittenAt: async (identity: string) => written.get(identity) },
+    () => clock,
+    { lastWrittenAt: async (identity: string) => goals.get(identity) },
+  )
   return {
     enforcement,
     tick: (ms = 1_000) => { clock += ms },
     report: (identity: string) => { written.set(identity, new Date(clock).toISOString()) },
+    setGoal: (identity: string) => { goals.set(identity, new Date(clock).toISOString()) },
     hook: (event: 'user-prompt-submit' | 'post-tool-use' | 'stop', input: unknown = {}, token = 'process-a', identity = 'agent-a') =>
-      enforcement.handle(token, identity, event, input),
+      enforcement.handle(token, identity, event, input, features),
   }
 }
 
@@ -147,5 +157,66 @@ describe('TLDR turn-end enforcement', () => {
     t.tick()
     await t.hook('user-prompt-submit', { turn_id: 't2' })
     expect(await t.hook('stop', { turn_id: 't2' })).toEqual({})
+  })
+})
+
+describe('Goal turn enforcement', () => {
+  const goalContext = { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: GOAL_SET_CONTEXT } }
+
+  it('asks for the goal in its own tool, never in the TLDR, until one is set', async () => {
+    const t = setup({ tldr: true, goal: true })
+    expect(await t.hook('user-prompt-submit')).toEqual(goalContext)
+    // A TLDR must not satisfy the goal request: a goal kept in the status is
+    // overwritten by the next status, which is what this capability prevents.
+    t.report('agent-a')
+    t.tick()
+    expect(await t.hook('user-prompt-submit')).toEqual(goalContext)
+    t.setGoal('agent-a')
+    t.tick()
+    expect(await t.hook('user-prompt-submit')).toEqual({})
+  })
+
+  it('gathers a missing goal and a missing TLDR into one block, once', async () => {
+    const t = setup({ tldr: true, goal: true })
+    await t.hook('user-prompt-submit')
+    await t.hook('post-tool-use')
+    expect(await t.hook('stop')).toEqual(block(`${GOAL_NEVER_SET_REASON}\n\n${TLDR_STATUS_NEVER_WRITTEN_REASON}`))
+    expect(await t.hook('stop')).toEqual({})
+  })
+
+  it('asks a goal-holding agent for status only when its TLDR is missing', async () => {
+    const t = setup({ tldr: true, goal: true })
+    t.setGoal('agent-a')
+    t.tick()
+    // The prompt stays quiet once a goal exists; the missing TLDR is caught at
+    // the end of the turn, and it must not ask for the goal a second time.
+    expect(await t.hook('user-prompt-submit')).toEqual({})
+    await t.hook('post-tool-use')
+    expect(await t.hook('stop')).toEqual(block(TLDR_STATUS_NEVER_WRITTEN_REASON))
+  })
+
+  it('never treats a goal as stale: it changes with direction, not with work', async () => {
+    const t = setup({ tldr: true, goal: true })
+    t.setGoal('agent-a')
+    t.tick()
+    await t.hook('user-prompt-submit')
+    await t.hook('post-tool-use')
+    t.tick()
+    t.report('agent-a')
+    t.tick()
+    expect(await t.hook('stop')).toEqual({})
+  })
+
+  it('enforces only the goal for an agent without TLDR', async () => {
+    const t = setup({ tldr: false, goal: true })
+    await t.hook('user-prompt-submit')
+    await t.hook('post-tool-use')
+    expect(await t.hook('stop')).toEqual(block(GOAL_NEVER_SET_REASON))
+    t.setGoal('agent-a')
+    t.tick()
+    expect(await t.hook('user-prompt-submit')).toEqual({})
+    await t.hook('post-tool-use')
+    // No TLDR exists and none is asked for.
+    expect(await t.hook('stop')).toEqual({})
   })
 })

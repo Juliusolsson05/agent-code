@@ -214,26 +214,35 @@ export async function switchProvider(
       // obvious reading of "was history truncated":
       //
       // The flag's only job is to tell a caller that this switch LOST
-      // something, and every rung of the ladder loses something. Rung 4 cuts
+      // something, and every rung of the ladder loses something. Rung 5 cuts
       // back to the nearest safe resume boundary, and the entries between the
       // old start and that boundary need not contain a single user message — a
       // decoded `claude-sequence-oversized-turns` at a quarter of its own size
-      // drops 130 entries and zero complete turns. Rungs 2 and 3 keep every
-      // entry but replace tool outputs with placeholders and trim tool inputs,
-      // which is just as lossy from the target agent's point of view: it can
-      // still see that a command ran, and can no longer see what it printed.
-      // Rung 1 strips carriers the target could not have read, which is the
-      // one arguably-free step — but it only ever runs alongside the others,
-      // so including it costs nothing and keeps the expression readable as
-      // "the ladder removed anything at all".
+      // drops 130 entries and zero complete turns. Rungs 2 to 4 keep every
+      // entry but replace tool outputs and message attachments with
+      // placeholders and trim tool inputs, which is just as lossy from the
+      // target agent's point of view: it can still see that a command ran or
+      // that the user pasted a screenshot, and can no longer see what it
+      // printed or showed. Rung 1 strips carriers the target could not have
+      // read, which is the one arguably-free step — but it only ever runs
+      // alongside the others, so including it costs nothing and keeps the
+      // expression readable as "the ladder removed anything at all".
       //
-      // The sum is parenthesized because `a + b + c + d > 0` reads as if only
-      // the last term were compared; it is not, but a reader should not have to
-      // recall operator precedence to be sure of a flag that decides whether a
-      // user is told their history was cut.
+      // `clearedAttachments` joined the sum with agent-transcript-parser#28:
+      // before that rung existed a pasted image could not be removed at all and
+      // the switch failed outright (#998), so the flag had nothing to say
+      // about it. `liftedRecentTurnProtection` is deliberately NOT a term: it
+      // is a statement about WHERE the ladder cut, and every removal it made is
+      // already counted by the other fields.
+      //
+      // The sum gets a name of its own rather than being compared inline:
+      // `a + b + c > 0` reads as if only the last term were compared, and a
+      // reader should not have to recall operator precedence to be sure of a
+      // flag that decides whether a user is told their history was cut.
       const report = plan.report
       const removed = report.strippedCompactions
         + report.clearedResults
+        + report.clearedAttachments
         + report.trimmedInputs
         + report.droppedEntries
       truncatedBeforeSwitch = removed > 0
@@ -355,8 +364,8 @@ export async function switchProvider(
     now: new Date().toISOString(),
     targetProfile,
   })
-  const targetProviderSessionId = target.sessionId(projection.values)
-  const targetFilePath = await target.write(targetCwd, projection.values)
+  const targetProviderSessionId = target.sessionId(projection)
+  const targetFilePath = await target.write(targetCwd, projection)
 
   return {
     kind: 'switched',
@@ -382,23 +391,53 @@ export async function switchProvider(
  * the ladder is still free to reshape.
  *
  * WHY `droppedEntries` gets its own clause instead of only `droppedTurns`:
- * rung 4 cuts back to the nearest safe resume boundary, so it can drop a long
+ * rung 5 cuts back to the nearest safe resume boundary, so it can drop a long
  * run of assistant and tool entries without crossing a single user message.
  * Reporting "no changes" for a switch that just dropped 130 entries would break
  * design principle 3 (no lossy step is silent) in exactly the case the user is
  * least likely to notice on their own.
+ *
+ * WHY attachments say "omitted" while outputs say "cleared", and WHY the lift
+ * gets words of its own: an image the user pasted is not something the target
+ * can regenerate by re-running a command, so the toast should read as "you will
+ * need to paste that again", not as housekeeping. And the recent-turn
+ * protection is a promise this feature has made to users ("what I was just
+ * doing survives"); when the ladder had to break it because the newest turns
+ * alone did not fit (agent-transcript-parser#28), the one line the user reads
+ * must say so, or the first they hear of it is the target asking what the
+ * screenshot showed.
+ *
+ * WHY those two clauses come FIRST instead of in ladder order: the pane toast
+ * clamps to three lines, and in a narrow pane a full summary is longer than
+ * that, so whatever is last is what the clamp removes. The first version put
+ * the new clauses at the end — exactly the part nobody could read (review of
+ * #998). What the user has to ACT on leads; the housekeeping counts follow in
+ * ladder order, and the sizes, which are the least actionable, stay last.
+ *
+ * WHY the noun is "attachment" and not "image": the parser counts `image`,
+ * `document` and unrecognised blocks in one field and never tells the host
+ * which kind went, because the ladder does not inspect provider payloads. A
+ * toast that said "image" would be a guess.
  */
 export function describeShrink(report: ShrinkReport): string {
+  // One place for the plural so a count of one never reads "1 tool outputs";
+  // the lift often clears exactly the one result or image in the newest turn,
+  // which made the singular the common case rather than the rare one.
+  const count = (n: number, singular: string, plural: string): string => `${n} ${n === 1 ? singular : plural}`
   const parts: string[] = []
-  if (report.strippedCompactions > 0) {
-    parts.push(`${report.strippedCompactions} encrypted compaction${report.strippedCompactions === 1 ? '' : 's'} dropped`)
+  if (report.clearedAttachments > 0) {
+    parts.push(`${count(report.clearedAttachments, 'attachment', 'attachments')} omitted`)
   }
-  if (report.clearedResults > 0) parts.push(`${report.clearedResults} tool outputs cleared`)
-  if (report.trimmedInputs > 0) parts.push(`${report.trimmedInputs} tool inputs trimmed`)
+  if (report.liftedRecentTurnProtection) parts.push('newest turns trimmed')
+  if (report.strippedCompactions > 0) {
+    parts.push(`${count(report.strippedCompactions, 'encrypted compaction', 'encrypted compactions')} dropped`)
+  }
+  if (report.clearedResults > 0) parts.push(`${count(report.clearedResults, 'tool output', 'tool outputs')} cleared`)
+  if (report.trimmedInputs > 0) parts.push(`${count(report.trimmedInputs, 'tool input', 'tool inputs')} trimmed`)
   if (report.droppedTurns > 0) {
-    parts.push(`${report.droppedTurns} oldest turns dropped`)
+    parts.push(`${count(report.droppedTurns, 'oldest turn', 'oldest turns')} dropped`)
   } else if (report.droppedEntries > 0) {
-    parts.push(`${report.droppedEntries} oldest entries dropped`)
+    parts.push(`${count(report.droppedEntries, 'oldest entry', 'oldest entries')} dropped`)
   }
   const kb = (n: number): string => `${Math.round(n / 1000)}k`
   return `${parts.join(', ') || 'no changes'} (${kb(report.estimatedCharactersBefore)} → ${kb(report.estimatedCharactersAfter)} chars)`

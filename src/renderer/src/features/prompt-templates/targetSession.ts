@@ -1,4 +1,4 @@
-import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
+import { isAgentSessionKind, isProcessSessionKind } from '@shared/types/providerKind'
 import { commandTargetSessionIdForState } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import type { WorkspaceState } from '@renderer/workspace/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
@@ -11,13 +11,16 @@ import type { Workspace } from '@renderer/workspace/workspaceStore'
  * bracket-paste into any focused PTY via deliverTextToSession. The old
  * agent-only predicate hid the command from exactly the panes where
  * users run unsupported agent harnesses in a raw terminal.
+ * Extension views have neither a composer nor a PTY, so they remain excluded.
  */
 export function promptTemplateTargetSessionId(workspace: Workspace): string | null {
   return promptTemplateTargetSessionIdForState(workspace.state)
 }
 
 export function promptTemplateTargetSessionIdForState(state: WorkspaceState): string | null {
-  return commandTargetSessionIdForState(state)
+  const sessionId = commandTargetSessionIdForState(state)
+  const meta = sessionId ? state.sessions[sessionId] : undefined
+  return meta && isProcessSessionKind(meta.kind) ? sessionId : null
 }
 
 /**
@@ -28,6 +31,5 @@ export function promptTemplateTargetSessionIdForState(state: WorkspaceState): st
 export function promptTemplateComposerSessionIdForState(state: WorkspaceState): string | null {
   const sessionId = commandTargetSessionIdForState(state)
   if (!sessionId) return null
-  const kind = state.sessions[sessionId]?.kind ?? DEFAULT_PROVIDER
-  return kind === 'terminal' ? null : sessionId
+  return isAgentSessionKind(state.sessions[sessionId]?.kind) ? sessionId : null
 }

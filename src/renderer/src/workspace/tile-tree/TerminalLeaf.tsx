@@ -18,6 +18,7 @@ import { createTerminalInputForwarder } from '@renderer/workspace/tile-tree/term
 import { encodeTerminalPaste, registerTerminalPasteTarget } from '@renderer/workspace/terminal/textPasteTarget'
 import { subscribeToTerminalData } from '@renderer/workspace/terminal/sessionDataDispatcher'
 import { attachXtermWebglRenderer } from '@renderer/workspace/terminal/xtermWebglRenderer'
+import { attachTerminalWheelBoundary } from '@renderer/workspace/terminal/terminalWheelBoundary'
 import { PaneHeader } from '@renderer/workspace/tile-tree/TileLeaf/PaneHeader'
 import { paneHeaderStatusLit } from '@renderer/workspace/tile-tree/TileLeaf/paneHeaderStatus'
 import { useTerminalFollow } from '@renderer/workspace/tile-tree/terminalFollow'
@@ -203,6 +204,7 @@ export function TerminalLeaf({
     let term: Terminal | null = null
     let fit: FitAddon | null = null
     let webglRenderer: ReturnType<typeof attachXtermWebglRenderer> | null = null
+    let wheelBoundary: ReturnType<typeof attachTerminalWheelBoundary> | null = null
     let onDataDisposable: { dispose(): void } | null = null
     let offTerminalData: (() => void) | null = null
     // Nullable like the disposables above: xterm init can throw before the
@@ -314,6 +316,9 @@ export function TerminalLeaf({
       fit = new FitAddon()
       term.loadAddon(fit)
       term.open(container)
+      // Host-level, after open(): bubbles after every xterm wheel listener so
+      // xterm keeps first refusal — see terminalWheelBoundary.ts.
+      wheelBoundary = attachTerminalWheelBoundary(container)
       // Renderer changes (DOM -> WebGL, or back after a context loss) change
       // cell metrics without resizing the container, so the ResizeObserver
       // would never refit them; see XtermWebglRendererOptions.onRendererChange.
@@ -533,6 +538,7 @@ export function TerminalLeaf({
       offFollowAttach?.()
       offTextPaste?.()
       webglRenderer?.dispose()
+      wheelBoundary?.dispose()
       if (onThemeChangedListenerRef) {
         window.removeEventListener(THEME_CHANGED_EVENT, onThemeChangedListenerRef)
       }

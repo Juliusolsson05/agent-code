@@ -42,10 +42,18 @@ const opencodeRenderer: RendererProviderConfig = {
   TileLeaf: TileLeaf as ComponentType<TileLeafProps>,
 }
 
+// Grok has a REAL native terminal (the pane's PTY), so unlike OpenCode it
+// gets the shared Agent surface with no display-policy pinning.
+const grokRenderer: RendererProviderConfig = {
+  ...getRendererProviderCapabilities('grok'),
+  TileLeaf: TileLeaf as ComponentType<TileLeafProps>,
+}
+
 const rendererProviders: Record<AgentProviderKind, RendererProviderConfig> = {
   claude: claudeRenderer,
   codex: codexRenderer,
   opencode: opencodeRenderer,
+  grok: grokRenderer,
 }
 
 export function getRendererProvider(id: string): RendererProviderConfig {
