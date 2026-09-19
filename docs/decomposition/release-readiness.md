@@ -142,8 +142,8 @@ Each stage: **Produces / Verified by / Why separate / Reality check.**
 - [ ] Fix PR merged: **#1022**. Round 1 got CHANGES REQUESTED (the hidden-workspace trap, stale-latch re-arm); fixed in `5d959c77` with 3 more fail-first regressions. Next: CI, then merge.
 
 ### Stage 4: Release-blocker issues (from the Stage 1 ledger)
-- [ ] #898 tmux restart data loss (PR #933: rebase, real-fixture test, merge)
-- [ ] #878 OpenCode modal subject
+- [ ] #898 tmux restart data loss: PR #933, refreshed onto main (`93f60755`). A REAL sanitized v2 workspace.json fixture test was added (`b3961fba`). Independent review running; then CI and merge.
+- [ ] #878 OpenCode modal subject: package PR **opencode-headless#14**, a shared parser with 4 replays of RECORDED 1.18.30 streams (3 fail first). Review running. Then: bump the agent-code submodule, resync the lockfile, and open a PR.
 - [ ] #995 first-run (T1)
 - Known now: **#995**, first-run lockout. SetupGate demands claude+codex with no
   install path; an under-gate spawn silently disables autosave; the first project
@@ -457,6 +457,11 @@ claude 2.1.143 / codex 0.130.0 are stale versus the 2.1.278 / 0.155.1 in daily u
   (one per composer). Optional follow-up: a single app-level subscription.
 
 ### Progress log
+- 2026-09-19 07:20Z: **#1013** merged with main (`e52b0352`).
+  - 5 conflicts resolved, plus 1 semantic port (performance-monitor agentIdentity to the stage model).
+  - Catalog 123 re-derived; tsc clean; all 48 test files main touched pass.
+  - Pending: CI, then 2 deep reviewers.
+  - #1013 lands before #995, because #995's bootstrap and default-project stages build on #1013's model.
 - 2026-09-19 06:15Z: #1010 MERGED (`20f48130`).
   - #1012 rewritten: the logic moved into the tested script `scripts/release/nightly.mjs`,
     with 16 system tests on recorded payloads, all failing first. The `.gitignore` bug
