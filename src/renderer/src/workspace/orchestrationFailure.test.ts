@@ -131,6 +131,24 @@ describe('a child that did not fail never reports `failed` (#1044 review)', () =
     expect(orchestrationChildLifecycle(runtime, meta)).toBe('completed')
   })
 
+  it('an assistant row whose time cannot be read means "not failed": the order is unknown', () => {
+    // No provider writes such a row today (review checked the Claude JSONL,
+    // the Codex rollout and OpenCode time.created). This pins the direction a
+    // drifting mapper must fail in: a slow wait for the parent, never a
+    // healthy child reported dead.
+    const meta = { kind: 'codex', cwd: '/repo' } as SessionMeta
+    const answer = { type: 'assistant', uuid: 'a', message: { role: 'assistant', content: [{ type: 'text', text: 'ok' }] } }
+    const runtime = { ...withError(idle(), { requestId: 'req-1', message: 'boom', status: 500, source: 'proxy', ts: T1 }, 'codex'), entries: [answer] as never }
+    expect(terminalProviderFailure(runtime, meta)).toBeNull()
+    expect(terminalProviderFailure({ ...runtime, entries: [] }, meta)?.message).toBe('boom')
+  })
+
+  it('a meta with no kind is Claude, so its committed error still fails the child', () => {
+    const claude = load('claude-usage-limit-terminal') as { a_committedEntries: Array<Record<string, unknown>> }
+    const runtime: SessionRuntime = { ...idle(), entries: claude.a_committedEntries as never }
+    expect(orchestrationChildLifecycle(runtime, { cwd: '/repo' } as SessionMeta)).toBe('failed')
+  })
+
   it('Codex: an old error followed by a newer rollout answer reads completed', () => {
     const meta = { kind: 'codex', cwd: '/repo' } as SessionMeta
     const answer = { type: 'assistant', uuid: 'a', timestamp: new Date(T1 + 3000).toISOString(), message: { role: 'assistant', content: [{ type: 'text', text: 'ok' }] } }

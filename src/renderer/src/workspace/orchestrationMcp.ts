@@ -525,8 +525,12 @@ export function terminalProviderFailure(
   if (!idle) return null
   const entries = orchestrationVisibleEntries(runtime, meta)
   let signal: { message: string; at: number } | null = null
-  const semanticSource = meta?.kind ? SEMANTIC_FAILURE_SOURCE[meta.kind] : undefined
-  if (meta?.kind === 'claude') {
+  // A meta without `kind` is Claude (SessionMeta's documented default), the
+  // same reading lifecycleStateForRuntime uses. Without the default, a Claude
+  // child with no kind recorded would never read `failed`.
+  const kind = meta ? meta.kind ?? DEFAULT_PROVIDER : undefined
+  const semanticSource = kind ? SEMANTIC_FAILURE_SOURCE[kind] : undefined
+  if (kind === 'claude') {
     for (let index = entries.length - 1; index >= 0 && !signal; index -= 1) {
       const entry = entries[index] as Record<string, unknown>
       if (entry.type !== 'assistant' || entry.isApiErrorMessage !== true || entry.isSidechain === true) continue
