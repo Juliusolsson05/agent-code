@@ -100,7 +100,7 @@ Each stage: **Produces / Verified by / Why separate / Reality check.**
   or explicitly deferred with an issue.
 - **Why separate:** these are already reviewed; they unblock nightlies and the site.
 - **Reality check:** the six 2026-09-19 review reports.
-- [ ] **#1010 icon.** Doc fix pushed (`b0754260`). Still to do: correct the PR body
+- [x] **#1010 icon.** MERGED `20f48130` (2026-09-19); both reviewers' findings resolved. Doc fix pushed (`b0754260`). Still to do: correct the PR body
   ("A×" → Nord dragon + `</>` mark), merge `origin/main`, CI green, merge.
   Follow-up #1020 (no margin on macOS 12–15; an owner visual call).
 - [ ] **#1012 nightly.** Apply the review fixes:
@@ -138,8 +138,8 @@ Each stage: **Produces / Verified by / Why separate / Reality check.**
 - **Reality check:** the owner's report ("the whole app becomes unresponsive when I run
   the goal loop command; loops started via MCP work"), the MaxListeners warnings in
   the dev log, and the root-cause research.
-- [ ] Root cause recorded in the ledger
-- [ ] Fix PR merged
+- [x] Root cause recorded in the ledger
+- [ ] Fix PR merged: **#1022**. Round 1 got CHANGES REQUESTED (the hidden-workspace trap, stale-latch re-arm); fixed in `5d959c77` with 3 more fail-first regressions. Next: CI, then merge.
 
 ### Stage 4: Release-blocker issues (from the Stage 1 ledger)
 - [ ] #898 tmux restart data loss (PR #933: rebase, real-fixture test, merge)
@@ -409,6 +409,15 @@ claude 2.1.143 / codex 0.130.0 are stale versus the 2.1.278 / 0.155.1 in daily u
 - **T12 landing `feat/direct-beta-download`:** an uncommitted/unmerged fix in the
   landing worktree `.worktrees/landing-page-v1` ("commit/push/PR it?", unanswered).
   Evaluate it against the nightly/stable plan.
+- **T14 Redesign the Agent Activity command (owner, 2026-09-19): "that modal is ages and just shit across the board".**
+  This is a full redesign or reimagining, not a patch. Approach:
+  - Read the current command, its modal, and its data sources first.
+  - Enumerate what the owner actually uses it for; the Agent Analytics (#964) and
+    TLDR/Goal peeks are neighbours.
+  - Write a decomposition with a design proposal.
+  - Build it with the frontend-design standard and real recorded session data as fixtures.
+  - Ask the owner at the proposal stage if a product call is genuinely open.
+  Scheduled after Stage 4's blockers.
 - **T13 #1018** (orchestration hides API errors) and **#1009** (OpenCode live suite
   red on every version).
 - Out of scope: julius-workspace-features, bringdown, BuilderBase, the 6.1 GB old-install archive.
@@ -448,5 +457,11 @@ claude 2.1.143 / codex 0.130.0 are stale versus the 2.1.278 / 0.155.1 in daily u
   (one per composer). Optional follow-up: a single app-level subscription.
 
 ### Progress log
+- 2026-09-19 06:15Z: #1010 MERGED (`20f48130`).
+  - #1012 rewritten: the logic moved into the tested script `scripts/release/nightly.mjs`,
+    with 16 system tests on recorded payloads, all failing first. The `.gitignore` bug
+    (`release` ignored at depth) was fixed. A verification review is running.
+  - #1022 round-2 fixes pushed.
+  - The owner added T14 (the Agent Activity redesign) and Stage 10 (the issue sweep).
 - 2026-09-19 05:40Z: Stage 1 inventory folded in. Landing #3 merged (`2ef8bfb0`). #1022 opened (freeze fix, 4 fail-first regressions). Owner added the integration-testing standard.
 - 2026-09-19 05:25Z: #1019 merged → main green. Reviews of #1010, #1012 and landing #3 done.
