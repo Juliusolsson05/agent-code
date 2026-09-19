@@ -111,15 +111,51 @@ export function buildDispatchGroups(
         }
       }
       const ordered: Array<{ sessionId: SessionId; depth: number }> = []
+      const emitted = new Set<SessionId>()
+      // Every DESCENDANT goes under its root, depth-first, all at depth 1.
+      //
+      // WHY descendants and not just children (#1013 review B, MAJOR): an
+      // orchestration child can create agents of its own, and
+      // `orchestrationParentId` names the DIRECT parent. The one-level walk
+      // skipped a grandchild at the top level (its parent is in the group)
+      // and never reached it from below (only a root's children were
+      // emitted), so it got no row at all: no label, no ⌘N or ⌥↑/↓, no
+      // Spotlight chip, and "Agent no longer available" in a lane while it
+      // ran. The grid's related-agent strip, which matched on the root id,
+      // was the only way to reach one, and it is gone.
+      //
+      // WHY depth 1 and not depth 2: depth is 0 or 1 by contract. The row
+      // renders one connector cell and rowScopedRows caps the depth-1 run
+      // under a root. Tree order keeps each grandchild directly below its own
+      // parent. None of the 36 recorded workspaces on the owner's machine had
+      // a grandchild (up to 29 children, all direct), so a deeper visual
+      // grammar would be designed without evidence.
+      const emitDescendants = (parentId: SessionId) => {
+        for (const child of childrenByParent.get(parentId) ?? []) {
+          if (emitted.has(child.sessionId)) continue
+          emitted.add(child.sessionId)
+          ordered.push({ ...child, depth: 1 })
+          emitDescendants(child.sessionId)
+        }
+      }
       for (const e of entries) {
         const meta = state.sessions[e.sessionId]
         const parentId = meta?.linkedParentId ?? meta?.orchestrationParentId
         // Children are emitted under their parent below — skip here.
         if (parentId && entryIds.has(parentId)) continue
+        emitted.add(e.sessionId)
         ordered.push({ ...e, depth: 0 })
-        for (const child of childrenByParent.get(e.sessionId) ?? []) {
-          ordered.push({ ...child, depth: 1 })
-        }
+        emitDescendants(e.sessionId)
+      }
+      // A parent cycle (A under B under A, from a hand-edited file or a
+      // corrupted link) has no root, so the walk above never reaches it. Such
+      // rows appear at the top level instead of vanishing, the same rule as
+      // an orphaned child.
+      for (const e of entries) {
+        if (emitted.has(e.sessionId)) continue
+        emitted.add(e.sessionId)
+        ordered.push({ ...e, depth: 0 })
+        emitDescendants(e.sessionId)
       }
 
       // globalIndex is assigned in the FINAL (post-nesting) order so
