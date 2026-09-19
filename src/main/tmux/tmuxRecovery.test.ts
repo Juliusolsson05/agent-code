@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
 
 import { reconcileWorkspace } from '@main/tmux/tmuxRecovery.js'
@@ -20,6 +21,33 @@ const windowWith = (windowId: string, sessions: unknown) => ({ windowId, workspa
 const readJson = (value: unknown) => async () => JSON.stringify(value)
 
 describe('startup workspace inventory and tmux cleanup', () => {
+  // #898 on a REAL persisted file, not a typed literal. This is the live v2
+  // workspace.json the app wrote on 2026-09-19, sanitized
+  // (testing/fixtures/workspace-v2/README.md). It carries one real terminal
+  // whose tmux session was alive. Before #933 every restart killed that
+  // session: startup read `parsed.workspace?.sessions`, a v1-era path that
+  // does not exist in the v2 envelope, handed reconciliation an empty list,
+  // and reconciliation killed every managed session as an orphan.
+  it('keeps the live terminal of a real recorded v2 workspace.json and still cleans a proven orphan (#898)', async () => {
+    const raw = readFileSync(new URL('../../../testing/fixtures/workspace-v2/2026-09-19-live-workspace.sanitized.json', import.meta.url), 'utf8')
+    const parsed = JSON.parse(raw) as { version: number, windows: { workspace: { sessions: Record<string, { kind: string, tmuxName?: string }> } }[] }
+    const liveTerminals = parsed.windows.flatMap(window => Object.values(window.workspace.sessions))
+      .filter(session => session.kind === 'terminal' && session.tmuxName)
+      .map(session => session.tmuxName!)
+    expect(liveTerminals.length).toBeGreaterThan(0)
+    // The exact legacy read that caused #898 finds NOTHING in this real file.
+    expect((parsed as unknown as { workspace?: { sessions?: unknown } }).workspace?.sessions).toBeUndefined()
+
+    const registry = registryWith(...liveTerminals, 'agentcode-proven-orphan')
+    await reconcileWorkspace(registry, async () => raw)
+
+    for (const name of liveTerminals) expect(registry.killSession).not.toHaveBeenCalledWith(name)
+    // The inventory is complete, so cleanup authority is intact: the fix
+    // preserves the real terminal without disabling orphan cleanup altogether.
+    expect(registry.killSession).toHaveBeenCalledWith('agentcode-proven-orphan')
+  })
+
+
   it('recovers every window, including parked terminals, and only cleans a proven orphan', async () => {
     const registry = registryWith('agentcode-left', 'agentcode-right', 'agentcode-parked', 'agentcode-orphan')
     const report = await reconcileWorkspace(registry, readJson({
