@@ -1,0 +1,537 @@
+{
+  "fixture": "claude-usage-limit-terminal",
+  "provider": "claude",
+  "outcome": "TERMINAL for the turn: HTTP 429 happens before any SSE, so the Claude proxy adapter emits NO api_error/turn_started. The only signal is a committed synthetic assistant entry (isApiErrorMessage:true, error:\"rate_limit\", apiErrorStatus:429, model \"<synthetic>\") usually followed by system/turn_duration; the screen-derived process goes idle ~2.5 s later. (a) prompt submitted through the app composer: streamPhase stays \"submitting\" for the rest of the recording (>170 s). (b) prompt typed straight into the TUI: phase stays idle.",
+  "provenance": {
+    "a": {
+      "feedDebug": "~/.config/agent-code/feed-debug/1a57da1e-23fb-459f-a491-45e1cd56ae75.jsonl",
+      "transcript": "~/.claude/projects/<agent-code>/8b8e3715-53f3-42c9-8f7a-49681e1d1e5a.jsonl",
+      "recordedAt": "2026-09-19T01:06:50.392Z"
+    },
+    "b": {
+      "feedDebug": "~/.config/agent-code/feed-debug/361ef0c4-800b-4bb5-85f4-931183e8583c.jsonl",
+      "transcript": "~/.claude/projects/<agent-code>/61a7daed-9765-40ac-adab-b20c428c8afd.jsonl",
+      "recordedAt": "2026-09-17T23:27:15.336Z"
+    },
+    "otherShape": {
+      "transcript": "~/.claude/projects/<startup>/114171fa-a156-4ae6-96aa-54550170cd35.jsonl",
+      "note": "a different pane in the same limit window; shows error:\"unknown\" for a 429 that is not a usage-window message"
+    },
+    "claudeCli": "2.1.278"
+  },
+  "a_appSubmitStuckSubmitting": {
+    "feedDebug": {
+      "anchorEpochMs": 1789780010392,
+      "anchorIso": "2026-09-19T01:06:50.392Z",
+      "events": [
+        {
+          "tMs": 0,
+          "layer": "STATE",
+          "kind": "submit",
+          "summary": "submit started"
+        },
+        {
+          "tMs": 4,
+          "layer": "RENDER",
+          "kind": "visible_rows",
+          "summary": "rows 143 -> 144 (+1 -0)",
+          "data": {
+            "streamPhase": "submitting",
+            "workRows": [
+              "work submitting"
+            ],
+            "providerNotices": [],
+            "rowCount": 144
+          }
+        },
+        {
+          "tMs": 6,
+          "layer": "STATE",
+          "kind": "input_readiness",
+          "summary": "input blocked · rev 22",
+          "data": {
+            "revision": 22,
+            "reason": "starting"
+          }
+        },
+        {
+          "tMs": 76,
+          "layer": "STATE",
+          "kind": "input_readiness",
+          "summary": "input blocked · rev 23",
+          "data": {
+            "revision": 23,
+            "reason": "replaying-history"
+          }
+        },
+        {
+          "tMs": 115,
+          "layer": "STATE",
+          "kind": "session_started",
+          "summary": "session started · <HOME>/.claude/projects/<claude-project-dir>",
+          "data": {
+            "projectDir": "<HOME>/.claude/projects/<claude-project-dir>"
+          }
+        },
+        {
+          "tMs": 125,
+          "layer": "JSONL",
+          "kind": "jsonl_entries",
+          "summary": "jsonl side-effects only",
+          "data": {
+            "appended": [],
+            "entryCountAfter": 183
+          }
+        },
+        {
+          "tMs": 276,
+          "layer": "STATE",
+          "kind": "bootstrap_complete",
+          "summary": "bootstrap replay quiet window elapsed"
+        },
+        {
+          "tMs": 882,
+          "layer": "SEM",
+          "kind": "provider_session_observed",
+          "summary": "provider session observed",
+          "data": {
+            "note": "provider session id omitted"
+          }
+        },
+        {
+          "tMs": 1400,
+          "layer": "STATE",
+          "kind": "input_readiness",
+          "summary": "input ready · rev 24",
+          "data": {
+            "revision": 24,
+            "reason": "ready"
+          }
+        },
+        {
+          "tMs": 1482,
+          "layer": "STATE",
+          "kind": "initial_history",
+          "summary": "initial history +0",
+          "data": {
+            "rawEntries": 120,
+            "mappedEntries": 0,
+            "hasMore": true
+          }
+        },
+        {
+          "tMs": 1669,
+          "layer": "STATE",
+          "kind": "process_state",
+          "summary": "process active · Noodling…",
+          "data": {
+            "active": true,
+            "status": "Noodling…",
+            "clearedQueuedMessages": 0
+          }
+        },
+        {
+          "tMs": 1692,
+          "layer": "SEM",
+          "kind": "provider_session_observed",
+          "summary": "provider session observed",
+          "data": {
+            "note": "provider session id omitted"
+          }
+        },
+        {
+          "tMs": 1733,
+          "layer": "JSONL",
+          "kind": "jsonl_entries",
+          "summary": "entries +1",
+          "data": {
+            "appended": [
+              "user"
+            ],
+            "entryCountAfter": 184
+          }
+        },
+        {
+          "tMs": 1740,
+          "layer": "RENDER",
+          "kind": "visible_rows",
+          "summary": "rows 144 -> 145 (+1 -0)",
+          "data": {
+            "streamPhase": "submitting",
+            "workRows": [
+              "work submitting"
+            ],
+            "providerNotices": [],
+            "rowCount": 145
+          }
+        },
+        {
+          "tMs": 1977,
+          "layer": "STATE",
+          "kind": "bootstrap_complete",
+          "summary": "bootstrap replay quiet window elapsed"
+        },
+        {
+          "tMs": 2530,
+          "layer": "JSONL",
+          "kind": "jsonl_entries",
+          "summary": "entries +1",
+          "data": {
+            "appended": [
+              "assistant: You've hit your session limit · reset…"
+            ],
+            "entryCountAfter": 185
+          }
+        },
+        {
+          "tMs": 2533,
+          "layer": "RENDER",
+          "kind": "visible_rows",
+          "summary": "rows 145 -> 146 (+1 -0)",
+          "data": {
+            "streamPhase": "submitting",
+            "workRows": [
+              "work submitting"
+            ],
+            "providerNotices": [
+              "claude Usage limit reached"
+            ],
+            "rowCount": 146
+          }
+        },
+        {
+          "tMs": 2682,
+          "layer": "STATE",
+          "kind": "bootstrap_complete",
+          "summary": "bootstrap replay quiet window elapsed"
+        },
+        {
+          "tMs": 5052,
+          "layer": "STATE",
+          "kind": "process_state",
+          "summary": "process idle",
+          "data": {
+            "active": false,
+            "status": null,
+            "clearedQueuedMessages": 0
+          }
+        },
+        {
+          "tMs": 172965,
+          "layer": "STATE",
+          "kind": "input_readiness",
+          "summary": "input blocked · rev 28",
+          "data": {
+            "revision": 28,
+            "reason": "composer-occupied"
+          }
+        },
+        {
+          "tMs": 176529,
+          "layer": "STATE",
+          "kind": "initial_history",
+          "summary": "initial history +0",
+          "data": {
+            "rawEntries": 120,
+            "mappedEntries": 0,
+            "hasMore": true
+          }
+        }
+      ]
+    }
+  },
+  "b_tuiTypedIdle": {
+    "feedDebug": {
+      "anchorEpochMs": 1789687635336,
+      "anchorIso": "2026-09-17T23:27:15.336Z",
+      "events": [
+        {
+          "tMs": 0,
+          "layer": "JSONL",
+          "kind": "jsonl_entries",
+          "summary": "jsonl side-effects only",
+          "data": {
+            "appended": [],
+            "entryCountAfter": 276
+          }
+        },
+        {
+          "tMs": 77,
+          "layer": "STATE",
+          "kind": "process_state",
+          "summary": "process active · Swooping…",
+          "data": {
+            "active": true,
+            "status": "Swooping…",
+            "clearedQueuedMessages": 0
+          }
+        },
+        {
+          "tMs": 152,
+          "layer": "STATE",
+          "kind": "bootstrap_complete",
+          "summary": "bootstrap replay quiet window elapsed"
+        },
+        {
+          "tMs": 203,
+          "layer": "JSONL",
+          "kind": "jsonl_entries",
+          "summary": "entries +1",
+          "data": {
+            "appended": [
+              "user"
+            ],
+            "entryCountAfter": 277
+          }
+        },
+        {
+          "tMs": 214,
+          "layer": "RENDER",
+          "kind": "visible_rows",
+          "summary": "rows 224 -> 225 (+1 -0)",
+          "data": {
+            "streamPhase": "idle",
+            "workRows": [],
+            "providerNotices": [],
+            "rowCount": 225
+          }
+        },
+        {
+          "tMs": 355,
+          "layer": "STATE",
+          "kind": "bootstrap_complete",
+          "summary": "bootstrap replay quiet window elapsed"
+        },
+        {
+          "tMs": 8554,
+          "layer": "JSONL",
+          "kind": "jsonl_entries",
+          "summary": "entries +1",
+          "data": {
+            "appended": [
+              "assistant: You've hit your session limit · reset…"
+            ],
+            "entryCountAfter": 278
+          }
+        },
+        {
+          "tMs": 8561,
+          "layer": "RENDER",
+          "kind": "visible_rows",
+          "summary": "rows 225 -> 226 (+1 -0)",
+          "data": {
+            "streamPhase": "idle",
+            "workRows": [],
+            "providerNotices": [
+              "claude Usage limit reached"
+            ],
+            "rowCount": 226
+          }
+        },
+        {
+          "tMs": 8707,
+          "layer": "STATE",
+          "kind": "bootstrap_complete",
+          "summary": "bootstrap replay quiet window elapsed"
+        },
+        {
+          "tMs": 11110,
+          "layer": "STATE",
+          "kind": "process_state",
+          "summary": "process idle",
+          "data": {
+            "active": false,
+            "status": null,
+            "clearedQueuedMessages": 0
+          }
+        },
+        {
+          "tMs": 12275,
+          "layer": "JSONL",
+          "kind": "jsonl_entries",
+          "summary": "entries +1",
+          "data": {
+            "appended": [
+              "user"
+            ],
+            "entryCountAfter": 279
+          }
+        },
+        {
+          "tMs": 12288,
+          "layer": "RENDER",
+          "kind": "visible_rows",
+          "summary": "rows 226 -> 227 (+1 -0)",
+          "data": {
+            "streamPhase": "idle",
+            "workRows": [],
+            "providerNotices": [
+              "claude Usage limit reached"
+            ],
+            "rowCount": 227
+          }
+        },
+        {
+          "tMs": 12304,
+          "layer": "STATE",
+          "kind": "process_state",
+          "summary": "process active · Unravelling…",
+          "data": {
+            "active": true,
+            "status": "Unravelling…",
+            "clearedQueuedMessages": 0
+          }
+        },
+        {
+          "tMs": 12428,
+          "layer": "STATE",
+          "kind": "bootstrap_complete",
+          "summary": "bootstrap replay quiet window elapsed"
+        },
+        {
+          "tMs": 13717,
+          "layer": "JSONL",
+          "kind": "jsonl_entries",
+          "summary": "entries +1",
+          "data": {
+            "appended": [
+              "assistant: You've hit your session limit · reset…"
+            ],
+            "entryCountAfter": 280
+          }
+        },
+        {
+          "tMs": 13738,
+          "layer": "RENDER",
+          "kind": "visible_rows",
+          "summary": "rows 227 -> 228 (+1 -0)",
+          "data": {
+            "streamPhase": "idle",
+            "workRows": [],
+            "providerNotices": [
+              "claude Usage limit reached",
+              "claude Usage limit reached"
+            ],
+            "rowCount": 228
+          }
+        },
+        {
+          "tMs": 13872,
+          "layer": "STATE",
+          "kind": "bootstrap_complete",
+          "summary": "bootstrap replay quiet window elapsed"
+        },
+        {
+          "tMs": 16231,
+          "layer": "STATE",
+          "kind": "process_state",
+          "summary": "process idle",
+          "data": {
+            "active": false,
+            "status": null,
+            "clearedQueuedMessages": 0
+          }
+        }
+      ]
+    }
+  },
+  "a_committedEntries": [
+    {
+      "type": "assistant",
+      "timestamp": "2026-09-19T01:06:52.719Z",
+      "isSidechain": false,
+      "isApiErrorMessage": true,
+      "error": "rate_limit",
+      "apiErrorStatus": 429,
+      "message": {
+        "role": "assistant",
+        "model": "<synthetic>",
+        "content": [
+          {
+            "type": "text",
+            "text": "You've hit your session limit · resets 6:20pm (America/Los_Angeles)"
+          }
+        ]
+      }
+    }
+  ],
+  "b_committedEntries": [
+    {
+      "type": "assistant",
+      "timestamp": "2026-09-17T23:27:23.680Z",
+      "isSidechain": false,
+      "isApiErrorMessage": true,
+      "error": "rate_limit",
+      "apiErrorStatus": 429,
+      "message": {
+        "role": "assistant",
+        "model": "<synthetic>",
+        "content": [
+          {
+            "type": "text",
+            "text": "You've hit your session limit · resets 6:20pm (America/Los_Angeles)"
+          }
+        ]
+      }
+    },
+    {
+      "type": "system",
+      "subtype": "turn_duration",
+      "timestamp": "2026-09-17T23:27:23.709Z",
+      "parentIsTheErrorEntry": true,
+      "durationMs": 8533
+    },
+    {
+      "type": "assistant",
+      "timestamp": "2026-09-17T23:27:28.835Z",
+      "isSidechain": false,
+      "isApiErrorMessage": true,
+      "error": "rate_limit",
+      "apiErrorStatus": 429,
+      "message": {
+        "role": "assistant",
+        "model": "<synthetic>",
+        "content": [
+          {
+            "type": "text",
+            "text": "You've hit your session limit · resets 6:20pm (America/Los_Angeles)"
+          }
+        ]
+      }
+    },
+    {
+      "type": "system",
+      "subtype": "turn_duration",
+      "timestamp": "2026-09-17T23:27:28.847Z",
+      "parentIsTheErrorEntry": true,
+      "durationMs": 1334
+    }
+  ],
+  "otherCommittedErrorShape": [
+    {
+      "type": "assistant",
+      "timestamp": "2026-09-17T23:20:33.112Z",
+      "isSidechain": false,
+      "isApiErrorMessage": true,
+      "error": "unknown",
+      "apiErrorStatus": 429,
+      "message": {
+        "role": "assistant",
+        "model": "<synthetic>",
+        "content": [
+          {
+            "type": "text",
+            "text": "API Error: This request would exceed your account's rate limit. Please try again later."
+          }
+        ]
+      }
+    },
+    {
+      "type": "system",
+      "subtype": "turn_duration",
+      "timestamp": "2026-09-17T23:20:33.123Z",
+      "parentIsTheErrorEntry": true,
+      "durationMs": 55218
+    }
+  ]
+}
