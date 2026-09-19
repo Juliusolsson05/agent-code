@@ -6,7 +6,8 @@ import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { useKeybinds } from '@renderer/workspace/tile-tree/useKeybinds'
 import { GoalLoopPane } from './GoalLoopPane'
-import { dismissGoalLoop, toggleGoalLoop } from './viewState'
+import { goalLoopCommands } from './commands'
+import { dismissGoalLoop, toggleGoalLoop, useGoalLoopView } from './viewState'
 
 // The latched overlay claims app interaction ownership, so the router's
 // ownership branch admits nothing (goal-loop-preview is not in
@@ -81,6 +82,67 @@ describe('goal loop overlay keyboard dismissal', () => {
     render(<><Harness model={workspace()} /><GoalLoopPane sessionId="a" /></>)
     expect(await screen.findByRole('dialog')).toBeTruthy()
     keyDown({ key: 'y', code: 'KeyY', metaKey: true, shiftKey: true })
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+})
+
+// #1021: the owner ran "Goal Loop" and the whole app stopped taking input.
+// The focused agent had no loop, which is the NORMAL case: only an agent starts
+// a loop, through goal_loop_start. The latch was set and the router gate
+// swallowed every key, but the pane rendered nothing, so nothing on screen
+// explained it. Every case below runs with NO loop, which is the input the
+// earlier tests never used (they stubbed a loop for every session). The
+// invariant under test comes from lib/interaction-ownership.ts: input
+// ownership follows the mounted DOM, never a store flag.
+describe('goal loop command with no loop on the session (#1021)', () => {
+  // Runs the real CommandDef exactly as the palette does.
+  const runGoalLoopCommand = () => {
+    goalLoopCommands.find(command => command.id === 'goal-loop-preview')!.run({ ui: { closePalette: vi.fn() } } as never)
+  }
+  beforeEach(() => { api.readGoalLoops.mockImplementation(async () => ({})) })
+
+  it('never swallows input when no goal loop overlay is mounted (terminal-only or empty tab)', () => {
+    render(<Harness model={workspace()} />)
+    const composer = screen.getByLabelText('Composer')
+    composer.focus()
+    runGoalLoopCommand()
+    expect(useGoalLoopView.getState().latched).toBe(true)
+    // fireEvent returns false when a listener called preventDefault.
+    expect(fireEvent.keyDown(composer, { key: 'a', code: 'KeyA' })).toBe(true)
+    // The stale latch is dropped rather than left armed for the next surface.
+    expect(useGoalLoopView.getState().latched).toBe(false)
+    fireEvent.keyDown(composer, { key: 'p', code: 'KeyP', metaKey: true, shiftKey: true })
+    expect(harness.appState.requestCommandInvocation).toHaveBeenCalledWith('open-command-palette', 'keybinding')
+  })
+
+  it('shows a visible empty state on an agent pane without a loop, and Escape closes it', async () => {
+    render(<><Harness model={workspace()} /><GoalLoopPane sessionId="a" /></>)
+    runGoalLoopCommand()
+    expect(await screen.findByText('No goal loop on this agent')).toBeTruthy()
+    expect(screen.getByRole('dialog')).toBeTruthy()
+    keyDown({ key: 'Escape' })
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(useGoalLoopView.getState().latched).toBe(false)
+  })
+
+  it('window blur dismisses the latch, like the TLDR latch', async () => {
+    render(<><Harness model={workspace()} /><GoalLoopPane sessionId="a" /></>)
+    runGoalLoopCommand()
+    expect(await screen.findByRole('dialog')).toBeTruthy()
+    fireEvent.blur(window)
+    expect(useGoalLoopView.getState().latched).toBe(false)
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('a rebound goal-loop-preview chord still dismisses the overlay', async () => {
+    // #1007 plans to move the default chord off Cmd+Shift+Y. Before this fix
+    // the dismissal was a hardcoded Meta+Shift+KeyY check, so any rebind would
+    // have left Escape as the only keyboard exit.
+    harness.appState = { ...harness.appState, settings: { agentViewMode: 'agent', commandKeybindingOverrides: { 'goal-loop-preview': ['Cmd+Ctrl+J'] } } }
+    render(<><Harness model={workspace()} /><GoalLoopPane sessionId="a" /></>)
+    runGoalLoopCommand()
+    expect(await screen.findByRole('dialog')).toBeTruthy()
+    keyDown({ key: 'j', code: 'KeyJ', metaKey: true, ctrlKey: true })
     expect(screen.queryByRole('dialog')).toBeNull()
   })
 })

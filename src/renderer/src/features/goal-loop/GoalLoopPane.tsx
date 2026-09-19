@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import type { ReactNode } from 'react'
 import { GOAL_LOOP_MAX_CONTINUATIONS_CEILING } from '@shared/types/goalLoop'
 import type { GoalLoopControlAction, GoalLoopState } from '@shared/types/goalLoop'
 import { dismissGoalLoop, useGoalLoopView } from './viewState'
@@ -12,6 +13,27 @@ function describe(loop: GoalLoopState): string {
   if (loop.phase === 'ended') return `ended (${loop.endReason})`
   if (loop.phase === 'paused') return `paused · ${loop.pauseReason} · ${budget}`
   return `iteration ${budget}`
+}
+
+/** The latched overlay's shell, shared by the "loop" and "no loop" states so
+ * both carry the SAME interaction-ownership marker and the same
+ * `data-goal-loop-overlay` attribute. The keyboard router gates on that
+ * attribute being mounted (#1021), so a latched state that renders any other
+ * markup would reopen the invisible-trap bug. */
+function GoalLoopOverlay({ children }: { children: ReactNode }) {
+  return <div
+    data-agent-code-interaction-owner="app"
+    data-goal-loop-overlay=""
+    role="dialog"
+    aria-label="Agent goal loop"
+    className="absolute inset-0 z-50 bg-canvas text-ink"
+    onMouseDown={event => { event.preventDefault(); event.stopPropagation() }}
+    onClick={event => event.stopPropagation()}
+  >
+    <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 px-6 py-16 text-center">
+      {children}
+    </div>
+  </div>
 }
 
 /** Mounts inside TldrPane's relative container (TileTree): a slim always-on
@@ -41,7 +63,24 @@ export function GoalLoopPane({ sessionId }: { sessionId: string }) {
     read()
     return () => { current = false; unsubscribe() }
   }, [sessionId])
-  if (!loop) return null
+  if (!loop) {
+    if (!latched) return null
+    // #1021: the latch is app-wide and running the command is an explicit
+    // request to see this surface, so it must visibly answer even when this
+    // agent has no loop, which is the normal case since only an agent starts
+    // one. Rendering nothing here was half of the freeze: the router gated
+    // input on a surface the user could not see. TldrOverlay answers the same
+    // way ("No TLDR yet"). A loop being read for the first time also lands
+    // here briefly. That is acceptable: the overlay is up, it explains itself,
+    // and it swaps to the real loop the moment the read resolves.
+    return <GoalLoopOverlay>
+      <p className="text-sm sm:text-base">No goal loop on this agent</p>
+      <p className="max-w-xl text-xs">An agent starts a goal loop through Goal Loop MCP. Press Escape to close.</p>
+      <div className="flex gap-3 text-sm">
+        <button type="button" onClick={dismissGoalLoop}>Close</button>
+      </div>
+    </GoalLoopOverlay>
+  }
   // Raise cap is clamped to the ceiling main enforces: past 175 an unclamped
   // +25 exceeded the IPC schema's maximum, so the request was rejected and the
   // button silently did nothing. At the ceiling there is nothing to raise, so
@@ -87,16 +126,7 @@ export function GoalLoopPane({ sessionId }: { sessionId: string }) {
   if (!latched) return strip
   return <>
     {strip}
-    <div
-      data-agent-code-interaction-owner="app"
-      data-goal-loop-overlay=""
-      role="dialog"
-      aria-label="Agent goal loop"
-      className="absolute inset-0 z-50 bg-canvas text-ink"
-      onMouseDown={event => { event.preventDefault(); event.stopPropagation() }}
-      onClick={event => event.stopPropagation()}
-    >
-      <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 px-6 py-16 text-center">
+    <GoalLoopOverlay>
         <p className="text-sm sm:text-base">Goal loop · {PHASE_LABEL[loop.phase]}{loop.phase === 'paused' ? ` · ${loop.pauseReason}` : ''}</p>
         <p className="max-w-xl whitespace-pre-wrap break-words text-sm leading-relaxed [overflow-wrap:anywhere]">{loop.goal}</p>
         <p className="text-xs">{describe(loop)} continuations · started {loop.startedAt}</p>
@@ -114,7 +144,6 @@ export function GoalLoopPane({ sessionId }: { sessionId: string }) {
               capture-phase owner of that key is useKeybinds, not this pane. */}
           <button type="button" onClick={dismissGoalLoop}>Close</button>
         </div>
-      </div>
-    </div>
+    </GoalLoopOverlay>
   </>
 }

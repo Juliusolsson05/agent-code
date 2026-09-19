@@ -5,7 +5,7 @@ import { toggleGoalLoop, useGoalLoopView } from './viewState'
 
 export const goalLoopCommands: CommandDef[] = [{
   id: 'goal-loop-preview', title: 'Goal Loop', category: 'navigate', surface: 'app',
-  description: '**What it does:** Shows the focused agent’s goal loop — goal, iteration budget and state — with pause, resume, raise-cap and stop controls.\n\n**Use when:** A loop is running and you want to check or steer it without typing.\n\n**Notes:** The strip above the pane is always visible while a loop exists. Loops are started by the agent through Goal Loop MCP; this surface only controls them.',
+  description: '**What it does:** Shows the focused agent’s goal loop — goal, iteration budget and state — with pause, resume, raise-cap and stop controls.\n\n**Use when:** A loop is running and you want to check or steer it without typing.\n\n**Notes:** The strip above the pane is always visible while a loop exists. Loops are started by the agent through Goal Loop MCP; this surface only controls them, and says so when the agent has no loop. Press Escape, run it again, or switch away from the window to dismiss.',
   keywords: ['goal', 'loop', 'persistence', 'autonomous', 'pause', 'resume', 'stop', 'cap'],
   getState: () => toggle(useGoalLoopView.getState().latched),
   run: ({ ui }) => { ui.closePalette(); toggleGoalLoop() },
