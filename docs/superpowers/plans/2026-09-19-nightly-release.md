@@ -30,19 +30,29 @@ stays byte-for-byte untouched.
    A `nightly` tag cannot move without force-pushing a published tag, which
    is hostile to anyone who pinned it. The body marker is authoritative,
    trivially parseable with `gh api --jq`, and survives asset replacement.
-   Skip logic: fetch the `nightly` release, extract the marker, compare with
-   `origin/main`; equal ⇒ skip (exit success with a visible message — a
-   scheduled run that does nothing must look like success, not like a
-   failure).
+   Skip logic (in `scripts/release/nightly.mjs decide`): fetch the `nightly`
+   release, extract the marker, and compare it with the SHA the run was
+   triggered for (`GITHUB_SHA`; for a scheduled run that is main's HEAD).
+   Skip only when the SHAs are equal AND all four fixed assets are present
+   and `uploaded`. A skip exits successfully with a visible message.
+   **Revised after the PR review:**
+   - The marker is written LAST, by a `gh release edit` after softprops has
+     uploaded every asset, so a failed publish leaves no marker for its SHA.
+   - The parse is CRLF-safe and exact-40-hex, because bodies edited in the
+     web UI come back with CRLF.
+   - Only a 404 means "no nightly yet"; any other API error fails the run.
+   - A `force` dispatch input rebuilds regardless.
 
-4. **Non-prerelease, `make_latest: true`.** `releases/latest` (which the
-   landing page consumes) only returns non-prereleases; marking the nightly
-   as one makes the site's download buttons resolve real builds immediately
-   during the beta phase. A future stable versioned release outranks it by
-   creation date (`releases/latest` sorts by created_at, and asset
-   replacement does not bump it) — but when the first stable ships, the
-   owner should still revisit whether the nightly keeps `make_latest` (noted
-   in #1011).
+4. **PRERELEASE, `make_latest: false`** (revised after the PR review). The
+   first draft made the nightly a non-prerelease with `make_latest: true`, on
+   the claim that a later stable release would outrank it by creation date.
+   **That was false.** softprops sends `make_latest` on EVERY update, and an
+   explicit `true` overrides date ordering, so each nightly would take
+   "latest" back from a stable release. The goal is a stable production
+   release, so the stable versioned release owns `releases/latest`, which the
+   landing page resolves, and the nightly is a prerelease. Until the first
+   stable exists, the site's buttons fall back to the Releases page, which
+   is by design.
 
 5. **Shared pipeline via a new reusable workflow, extracted VERBATIM from
    `release.yml`.** The heavy middle — submodule auth, tests, audit gate,
@@ -58,11 +68,38 @@ stays byte-for-byte untouched.
    the plan doc and the reusable workflow's header carry a drift warning
    pointing at the mirror.
 
-6. **Concurrency group `release-macos`.** The nightly joins the versioned
-   release's existing group (not a new one) so a nightly and a manual release
-   can never package or publish at the same time; `cancel-in-progress:
-   false` queues rather than kills, because killing a 26-minute macOS
-   packaging run mid-notarization wastes the run and leaves no evidence.
+6. **Its own concurrency group, `release-nightly`** (revised after the PR
+   review). The first draft joined `release.yml`'s `release-macos` group and
+   claimed it "queues, never cancels". That is false: GitHub keeps ONE pending
+   run per group, and a newer pending run cancels the older pending one, so a
+   scheduled nightly could cancel a queued manual release. The two publish to
+   different releases, so they can safely run side by side. Within
+   `release-nightly`, the newest pending nightly replacing an older pending
+   one is the desired behaviour. `cancel-in-progress: false` still protects a
+   running, notarizing job.
+
+8. **The logic lives in a tested script, not inline YAML** (added after the
+   PR review). The review found three real bugs in the inline bash: the CRLF
+   marker, an unreachable previous SHA crashing `git log` after a full build,
+   and the marker being written before the uploads. None of them could be
+   tested while inline. `scripts/release/nightly.mjs` (`decide` / `rename` /
+   `notes`, Node built-ins only) is now the single implementation.
+   `testing/system/release/nightly.test.ts` runs it as a real process: a stub
+   `gh` replays RECORDED GitHub payloads (`testing/fixtures/release-nightly`,
+   provenance in its README), notes run against a real git repo, and rename
+   runs on the real v0.0.2-beta.1 artifact names.
+
+9. **Accepted trade-offs, stated honestly:**
+   - softprops deletes and re-uploads each asset, so a page loaded just
+     before a publish can 404 once. A fresh page load falls back to the
+     Releases page.
+   - The `nightly` tag and the "Source code" archives stay at the FIRST
+     nightly's commit, because moving a published tag breaks pins. The body
+     links the exact tree of each build. `target_commitish` makes that first
+     tag land on the built commit, not on the default branch HEAD at publish
+     time.
+   - Nightlies report the same app version as the last release. Version
+     stamping is a follow-up.
 
 7. **Secrets validated before anything expensive.** The nightly always
    publishes, so the five signing/notarization secrets are mandatory; the
@@ -74,22 +111,31 @@ stays byte-for-byte untouched.
 | File | Role |
 |---|---|
 | `.github/workflows/reusable-app-build-macos.yml` | `workflow_call`: build-app + package-macos, verbatim extraction from `release.yml` minus release creation |
-| `.github/workflows/nightly.yml` | schedule (05:00 UTC) + dispatch: validate secrets → skip-check → build (reusable) → publish fixed-name rolling `nightly` release |
+| `.github/workflows/nightly.yml` | schedule (05:00 UTC) + dispatch (`force` input): validate secrets → skip-check → build (reusable) → publish the fixed-name rolling `nightly` prerelease → record the marker |
+| `scripts/release/nightly.mjs` | the workflow's logic: `decide`, `rename`, `notes` |
+| `testing/system/release/nightly.test.ts` + `testing/fixtures/release-nightly/` | system tests against recorded GitHub payloads and a real git repo |
 | this plan | decisions + verification record |
 
 ## Verification
 
 - `actionlint` over both new workflow files (syntax, expression contexts,
   reusable-workflow wiring).
-- Real end-to-end: `gh workflow run nightly.yml --ref feat/nightly-release`
-  — dispatch works from a branch, the reusable reference resolves, and the
-  first run publishes the `nightly` release with fixed-name assets. This is
-  the intended production behavior, so it is run for real, not dry.
+- `testing/system/release/nightly.test.ts`: 16 cases, written before the
+  script and all failing first.
+- Real end-to-end AFTER merge. `workflow_dispatch` only runs workflow files
+  that exist on the default branch, so a pre-merge dispatch from this branch
+  returns 404; the first draft of this plan was wrong about that. The check
+  is `gh workflow run nightly.yml` on main: the first run publishes the
+  `nightly` prerelease with the four fixed-name assets.
 - A second dispatch with no new `main` commits must skip visibly.
-- `release.yml` untouched: `git diff origin/main -- .github/workflows/release.yml` is empty.
+- `release.yml` changes by one comment only: a drift pointer to the
+  reusable mirror.
 
 ## Out of scope
 
 - Switching `release.yml` to the reusable jobs (follow-up after first green nightly).
-- Landing-page changes (none needed — suffix match already resolves the fixed names).
+- Landing-page changes. The suffix match resolves the fixed names. The stale
+  "only an April prerelease" comment in `site.ts`, and a status line for
+  stable vs. nightly, are handled in the release stage of
+  docs/decomposition/release-readiness.md.
 - Auto-update channel design.
