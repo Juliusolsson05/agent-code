@@ -219,6 +219,9 @@ export class GrokSession extends EventEmitter implements AgentSession {
         }
       })
 
+      // Narrowed once so the handle's getter can never read a null local after
+      // TypeScript's flow analysis gives up inside the object literal.
+      const ownedControl = control
       const headless = new GrokHeadless({
         ...(this.deps.headlessOptions ?? {}),
         pty,
@@ -226,7 +229,10 @@ export class GrokSession extends EventEmitter implements AgentSession {
         launch,
         // Structural handle: the control helper IS the rpc surface; wrapping
         // keeps GrokHeadless's narrow structural type out of the app's imports.
-        control: { isClosed: control.isClosed, rpc: control, observe: observer => control!.observe(observer) },
+        // WHY a getter and not a snapshot: `isClosed` captured at construction stays
+        // false forever after the lifetime closes, and submitPrompt's closed check
+        // would pass a closed control through to a throw.
+        control: { get isClosed() { return ownedControl.isClosed }, rpc: ownedControl, observe: observer => ownedControl.observe(observer) },
         guard,
         resume: this.resumeSessionId !== null,
       })
