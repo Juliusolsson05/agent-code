@@ -22,6 +22,25 @@
 > - Scope: `agent-code` plus its landing page repo. Nothing else (not bringdown,
 >   BuilderBase, or julius-workspace-features).
 > - Never launch the app (`npm run dev` or electron). Reason from source; CI is the gate.
+>
+> **Testing standard (owner, 2026-09-19): write GOOD integration tests, using staged-decomposition principles.**
+> - **Fixtures come from reality.** Base them on recorded or captured real behavior: an existing
+>   corpus under `testing/`, a PTY/stream recording, a real persisted state file, real CLI output,
+>   or a captured GitHub API payload. Never use plausible-looking literals someone typed. If no
+>   recording exists, the first step of the fix is capturing one.
+> - **Test before the fix, and watch it fail.** The failure must be on the REAL code path, for the
+>   same reason the user hit it. Record the failing output in the PR body.
+> - **Prefer integration over unit mocks.** Drive the real entry point: the command, the router
+>   capture listener, the IPC handler, the main-process service, the workflow script run under
+>   bash. Mock only the true edges (OS, network, provider binaries), and only with recorded data.
+> - **Assert observable contracts and invariants,** not implementation details. A test written
+>   from the same imagination as the code, asserting what the code does, proves nothing. That is
+>   the vanity metric to avoid.
+> - **Never delete or weaken a failing test to get green.** Against a real fixture, the test is
+>   right and the code is wrong.
+> - When semantics are genuinely unclear, meaning which source owns the state or what should
+>   happen on disagreement, record the question in the ledger's owner items. Do not invent an
+>   answer and then bless it with a test.
 
 ---
 
