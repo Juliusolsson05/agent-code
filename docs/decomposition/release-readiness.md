@@ -89,9 +89,10 @@ Each stage: **Produces / Verified by / Why separate / Reality check.**
   context, which is the 40% failure mode.
 - **Reality check:** research sweeps from 2026-09-19: issue/branch triage,
   agent-thread briefs, freeze root cause, and the workspace status sweep.
-- [ ] Fold in the issue/branch triage results
-- [ ] Fold in the agent-thread briefs
-- [ ] Fold in the goal-loop freeze root cause
+- [x] Fold in the issue/branch triage results
+- [x] Fold in the agent-thread briefs
+- [x] Fold in the goal-loop freeze root cause
+- [ ] Push the orphaned #995 plan branch `feat/onboarding-first-run` (the only copy)
 
 ### Stage 2: Land the in-flight release PRs
 - **Produces:** #1010, #1012 and landing #3 merged, with review findings resolved.
@@ -141,6 +142,9 @@ Each stage: **Produces / Verified by / Why separate / Reality check.**
 - [ ] Fix PR merged
 
 ### Stage 4: Release-blocker issues (from the Stage 1 ledger)
+- [ ] #898 tmux restart data loss (PR #933: rebase, real-fixture test, merge)
+- [ ] #878 OpenCode modal subject
+- [ ] #995 first-run (T1)
 - Known now: **#995**, first-run lockout. SetupGate demands claude+codex with no
   install path; an under-gate spawn silently disables autosave; the first project
   defaults to `/`. The B5 thread holds a decomposition doc.
@@ -224,11 +228,67 @@ fixes. The release pipeline (`release.yml`, `nightly.yml`,
 
 ## Ledger (Stage 1 output; fill from the research sweeps)
 
-### Issues
-_pending_
+### Issues (triage 2026-09-19: 128 open)
+**RELEASE-BLOCKER (4):**
+- **#995** first-run lockout. L; see T1.
+- **#1021** Goal Loop freeze. Fix PR #1022 is open.
+- **#898 tmux sessions killed on every restart (data loss).**
+  - Cause: `src/main/index.ts:846-852` reads `parsed.workspace?.sessions`, but the saved file is
+    `{version:2, windows}`, so the list comes back empty and `tmuxRecovery.ts:54-57` kills every
+    managed session as an orphan.
+  - Fix: PR #933, MERGEABLE/CLEAN but 340 behind. Rebase, add a real-fixture integration test
+    (a real v2 workspace file), review, then merge.
+- **#878 OpenCode permission/question modals show no subject** (users approve bash blind).
+  - The title is read from `['title','tool',…]` (`EventDispatcher.ts:957`, `OpencodeHeadless.ts:387`).
+  - OpenCode is bundled now, so this is on the default path. S–M.
 
-### Worktrees / branches
-_pending_
+**OPERATIONAL (38):** fix the S-sized, user-visible ones before stable if cheap. Candidates:
+- #827 `wait_agents` timeout cap
+- #875 `observations.wait` exited schema
+- #879 reload drops orchestration metadata
+- #867 Enter on a focused Cancel applies the change
+- #863 closing a tab orphans its rows (moot if #1013 lands)
+- #699 Option+Shift+Arrow swallowed in the composer
+- #730/#731/#732 ghost logs
+- #677/#678 queue chips
+- #868 (PR #876)
+- #919/#941/#942 (PR #945)
+- #920 (PR #935)
+- #1018, #843 (T5)
+- #993 dev and installed app share state with no lock (important for a real release: users who
+  also run dev)
+- The rest are M/L, or evidence-blocked (#545, #290, #327, #774…). Leave them open after
+  release unless cheap.
+
+**POLISH/FOLLOW-UP (52):** includes #233/#234 (formal compat review: the accepted versions
+claude 2.1.143 / codex 0.130.0 are stale versus the 2.1.278 / 0.155.1 in daily use), #1006,
+#1007, #1015, #1020, #1009, #877.
+
+**STALE/OBSOLETE (12):** close with evidence: 118, 242, 495, 530, 669, 684, 839, 901, 768, 786,
+832, 944.
+
+**FEATURE/ROADMAP (22):** leave open. #992 = PR #1013; #1011 = PR #1012.
+
+### Worktrees / branches (75 worktrees, 365 local branches, 25 stashes)
+- **ORPHAN WORK to rescue or decide:**
+  - `onboarding-first-run`: #995's plan. The ONLY copy; push it.
+  - `grok-code-provider`: docs superseded by #844.
+  - `heap-watchdog-defer`: superseded.
+  - `feed-debug-batch`: PR #750 closed.
+  - `session-picker-identity`: superseded by #899.
+  - `feed-render-rewrite`: superseded by #555.
+  - `overlay-reland`: #518, reverted on purpose.
+  - `portability-hardening`: 2 plan docs, not on origin.
+  - `dependency-alerts-root`: uncommitted vitest/tsx bumps.
+  - `test-overhaul/agent-code`: uncommitted .gitmodules and submodule pointers.
+  - 35 local-only branches: 15 perf research docs from 05-18, among others.
+- **Merged cleanup:** 42 clean merged worktrees, which can be removed. Inspect these first:
+  `mac-distribution-readiness` (2 untracked tests not on main), `rendering-slice16` (fixture
+  edits), `composer-placeholder-detection`, the 6 `agent-code-cluster-worktrees/*` (content
+  landed via #356), and `agent-code-pr-merge-audit`.
+- **Main checkout:** the B17 gutter fix is uncommitted (T3). The untracked
+  `2026-09-07-loose-ends-takeover.md` is the previous loose-ends plan. It is mostly done: Task 6
+  (perf numbers) and part of Task 7 remain. Supersede it with this ledger and do not commit it.
 
 ### Agent threads (research 2026-09-19; implement from these, do not re-derive)
 - **T1 #995 first-run lockout (B5), L.**
@@ -363,4 +423,5 @@ _pending_
   (one per composer). Optional follow-up: a single app-level subscription.
 
 ### Progress log
+- 2026-09-19 05:40Z: Stage 1 inventory folded in. Landing #3 merged (`2ef8bfb0`). #1022 opened (freeze fix, 4 fail-first regressions). Owner added the integration-testing standard.
 - 2026-09-19 05:25Z: #1019 merged → main green. Reviews of #1010, #1012 and landing #3 done.
