@@ -1405,7 +1405,9 @@ export class AgentCodeManagedSkillsService {
         }
       }
     }
-    if (enabled && this.targets.unsupportedProviders.length > 0) {
+    // Degenerate-only gate (#1014): unsupported providers are informational;
+    // enabling with ZERO supported targets would be a silent no-op install.
+    if (enabled && this.targets.targets.length === 0) {
       return {
         ok: false,
         result: { ok: false, code: 'unsupported', snapshot: this.installedSnapshot() },
@@ -1522,11 +1524,10 @@ export class AgentCodeManagedSkillsService {
   }
 
   private async reconcileInstalledSkillLocked(skill: AgentCodeInstalledSkillRecord): Promise<void> {
+    // Unsupported providers no longer short-circuit (#1014); the informational
+    // rows are appended by applyInstalledOperationsLocked, the single funnel
+    // every enabled-skill status rebuild passes through.
     const targets = this.installedTargets(skill)
-    if (skill.enabled && targets.unsupportedProviders.length > 0) {
-      this.installedTargetStatuses.set(skill.id, this.installedUnsupportedStatuses())
-      return
-    }
     if (skill.enabled) {
       try {
         await this.installedSkillPackageStore.verify(skill.snapshotDigest, skill.files)
@@ -1650,6 +1651,11 @@ export class AgentCodeManagedSkillsService {
         conflictFingerprint: this.installedOwnershipPolicy.retiredFingerprint(key, record),
       })
     }
+    // Informational rows for providers without personal-skill support (#1014);
+    // installedHealth skips them when computing deployment health.
+    if (this.targets.unsupportedProviders.length > 0) {
+      statuses.push(...this.installedUnsupportedStatuses())
+    }
     this.installedTargetStatuses.set(skill.id, statuses)
   }
 
@@ -1725,11 +1731,15 @@ export class AgentCodeManagedSkillsService {
       if (statuses.some(status => status.state === 'error')) return 'degraded'
       return 'disabled'
     }
-    if (this.targets.unsupportedProviders.length > 0) return 'unsupported'
-    if (statuses.some(status => status.state === 'conflict' || status.state === 'retired')) {
+    // 'unsupported' rows are informational (#1014); health is computed over the
+    // deployable rows, with the degenerate zero-supported-targets case kept as
+    // 'unsupported' AFTER the conflict check so real conflicts win.
+    const deployable = statuses.filter(status => status.state !== 'unsupported')
+    if (deployable.some(status => status.state === 'conflict' || status.state === 'retired')) {
       return 'conflict'
     }
-    if (statuses.length === 0 || statuses.some(status => status.state !== 'installed')) {
+    if (this.targets.targets.length === 0) return 'unsupported'
+    if (deployable.length === 0 || deployable.some(status => status.state !== 'installed')) {
       return 'degraded'
     }
     return 'active'
