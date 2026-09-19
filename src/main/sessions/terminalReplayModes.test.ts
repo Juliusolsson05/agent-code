@@ -108,6 +108,23 @@ describe('replay restores the terminal modes the cap evicted (#843)', () => {
     expect(replayed).toEqual(live)
   })
 
+  it('a mode sequence straddling the boundary is replayed whole, not printed as text', async () => {
+    // Pieces of 50 put the boundary between `ESC [ ? 1 0` (evicted) and
+    // `4 9 h` (kept). Without the held fragment the replay printed "49h".
+    const stream = ['a'.repeat(46) + '\x1b[?10', '49h' + 'b'.repeat(47), 'c'.repeat(150)]
+    const { live, replayed, replayedTerminal } = await replayMatchesLive(stream, 160, 50)
+    expect(live.buffer).toBe('alternate')
+    expect(replayed).toEqual(live)
+    const text = Array.from({ length: replayedTerminal.buffer.active.length }, (_, index) => replayedTerminal.buffer.active.getLine(index)?.translateToString(true) ?? '').join('')
+    expect(text).not.toContain('49h')
+  })
+
+  it('an ESC that cuts a mode sequence short starts the next one, as xterm parses it', async () => {
+    const { live, replayed } = await replayMatchesLive(['\x1b[?10\x1b[?1003h', 'd'.repeat(400)], 200, 50)
+    expect(live.mouse).toBe('any')
+    expect(replayed).toEqual(live)
+  })
+
   it('a session that never set a mode replays byte for byte as before', () => {
     const buffer = new TerminalReplayBuffer(100, 20)
     for (let index = 0; index < 20; index += 1) buffer.append(`plain line ${index}\r\n`)

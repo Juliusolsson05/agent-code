@@ -38,6 +38,6 @@ export class TerminalReplayBuffer {
 
   /** What an attaching terminal must be fed to reach the program's state. */
   replay(): string {
-    return this.modes.prefix() + this.tail.read()
+    return this.modes.prefix() + this.modes.pendingFragment() + this.tail.read()
   }
 }

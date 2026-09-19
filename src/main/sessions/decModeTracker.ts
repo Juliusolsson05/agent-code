@@ -28,8 +28,8 @@
 // protocols are mutually exclusive in xterm. ?1000h ?1003h leaves ANY;
 // ?1003h then ?1000h leaves VT200; and resetting ANY protocol code turns
 // tracking off (xterm.js InputHandler.resetModePrivate). Encodings behave the
-// same way. `ESC c` (RIS) resets everything. 47, 1047 and 1049 all select the
-// alternate buffer.
+// same way. `ESC c` (RIS) resets them (see reset() for the one flag xterm
+// keeps). 47, 1047 and 1049 all select the alternate buffer.
 //
 // Deliberately NOT tracked:
 // - ?2026 (synchronized output) is per-frame. A prefix could leave the
@@ -48,8 +48,12 @@ const MOUSE_PROTOCOLS: ReadonlySet<number> = new Set([9, 1000, 1002, 1003])
 const MOUSE_ENCODINGS: ReadonlySet<number> = new Set([1006, 1016])
 const ALTERNATE_SCREEN: ReadonlySet<number> = new Set([47, 1047, 1049])
 /** Simple on/off modes with xterm's defaults: application cursor keys (1),
- *  cursor visible (25), focus reporting (1004) and bracketed paste (2004). */
-const FLAG_DEFAULTS: ReadonlyMap<number, boolean> = new Map([[1, false], [25, true], [1004, false], [2004, false]])
+ *  cursor visible (25), focus reporting (1004), bracketed paste (2004) and
+ *  theme-change notifications (2031). OpenCode sets 2031 once at startup and
+ *  switches its own light/dark palette on the reports; the app pushes theme
+ *  changes into xterm, which reports them only while 2031 is on (#1041
+ *  review). Setting it sends nothing by itself, so it is safe to prefix. */
+const FLAG_DEFAULTS: ReadonlyMap<number, boolean> = new Map([[1, false], [25, true], [1004, false], [2004, false], [2031, false]])
 
 /** An unterminated sequence longer than this is not a mode sequence and is
  *  dropped rather than carried forever. */
@@ -92,7 +96,10 @@ export class DecModeTracker {
             if (param !== '') this.apply(Number(param), final === 'h')
           }
         }
-        index = input.indexOf('\x1b', end + 1)
+        // An ESC that cut this sequence short starts the NEXT one: xterm
+        // aborts the unfinished sequence and parses the ESC afresh, so the
+        // search must restart ON it, not after it (#1041 review).
+        index = input.indexOf('\x1b', final === '\x1b' ? end : end + 1)
         continue
       }
       if (next === '[' && input[index + 2] === undefined) {
@@ -101,6 +108,15 @@ export class DecModeTracker {
       }
       index = input.indexOf('\x1b', index + 1)
     }
+  }
+
+  /** The unfinished escape sequence at the very end of the evicted bytes.
+   *  Those bytes sit immediately before the retained tail, so a replay that
+   *  puts this between the prefix and the tail is byte-faithful where the
+   *  sequence straddles the boundary. Without it xterm prints the tail's half
+   *  (`49h`) as text until the next eviction completes it (#1041 review). */
+  pendingFragment(): string {
+    return this.carry
   }
 
   /** The sequences that put a fresh xterm into the tracked state. Empty when
@@ -132,11 +148,22 @@ export class DecModeTracker {
     }
   }
 
+  /**
+   * `ESC c` (RIS), matched to the SHIPPED xterm 6.1 beta rather than to the
+   * spec: it leaves the cursor-visibility flag (25) as it was, so a hidden
+   * cursor stays hidden (#1041 review, reproduced against the bundle). The
+   * replay must show what a live terminal shows.
+   *
+   * Soft reset (DECSTR, `CSI ! p`) is NOT modelled. In xterm it clears 1,
+   * 1004 and 2004 and shows the cursor. Only `tput init`, `tset` and `reset`
+   * send it (and `reset` sends RIS first); OpenCode, Codex and Claude never
+   * do, per a binary grep. Model it if a recording ever shows one.
+   */
   private reset(): void {
     this.alternate = false
     this.protocol = null
     this.encoding = null
-    for (const [mode, value] of FLAG_DEFAULTS) this.flags.set(mode, value)
+    for (const [mode, value] of FLAG_DEFAULTS) if (mode !== 25) this.flags.set(mode, value)
   }
 }
 
