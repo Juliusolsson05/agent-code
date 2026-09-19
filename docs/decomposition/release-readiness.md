@@ -513,6 +513,13 @@ claude 2.1.143 / codex 0.130.0 are stale versus the 2.1.278 / 0.155.1 in daily u
   (one per composer). Optional follow-up: a single app-level subscription.
 
 ### Progress log
+- 2026-09-19 11:05Z:
+  - **MERGED:** #1037 (`aee2c0e2`, T10 managed-skills minors) and #1041 (`82babd21`, T5 part 1, DEC-mode replay).
+  - **New PRs:**
+    - #1045: T7 #1006 (`enable-goal-loop-mcp`, which gets a real-hook override/reset test) and T8 #1007 (goal-loop-preview moves ⌘⇧Y → ⌘⇧G; the router tests pin that the old chord is dead).
+    - #1046: T2 B9, the nine survivors of the owner's pick of 14 promoted (#1013 retired the other five). Fail-first taxonomy test.
+  - The T6 nits are already gone from main.
+  - **Pending:** the #1043/#1044 reviewer; CI for #1039, #1043, #1044, #1045 and #1046.
 - 2026-09-19 10:15Z:
   - **MERGED:**
     - **#1013** (`4d0374af`): the unified stage layout. Its verification of every fix commit was APPROVE, and the minor backup fix was applied.
