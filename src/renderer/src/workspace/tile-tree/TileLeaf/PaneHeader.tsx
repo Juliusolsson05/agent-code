@@ -1,11 +1,7 @@
 import type { ReactNode } from 'react'
 import { shortenCwd } from '@renderer/workspace/tile-tree/TileLeaf/labels'
-import { useAppStore } from '@renderer/app-state/hooks'
-import { useShallow } from 'zustand/react/shallow'
 import { PaneHeaderColorFlag } from '@renderer/workspace/tile-tree/TileLeaf/PaneHeaderColorFlag'
-import { dispatchAttentionLabelFromConditions } from '@renderer/workspace/conditions/selectors'
 import type { SessionId } from '@renderer/workspace/types'
-import type { SessionRuntime } from '@renderer/workspace/workspaceStore'
 import { AgentTitleHeader } from '@renderer/workspace/tile-tree/AgentTitleHeader'
 import { paneHeaderStatusLit } from '@renderer/workspace/tile-tree/TileLeaf/paneHeaderStatus'
 
@@ -49,7 +45,6 @@ export function PaneHeader({
   projectDir,
   statusMode,
   isSessionLive,
-  runtimes,
   badge,
   trailing,
 }: {
@@ -59,7 +54,6 @@ export function PaneHeader({
   projectDir: string | null
   statusMode: boolean
   isSessionLive: boolean
-  runtimes?: Record<string, SessionRuntime>
   /** Surface identity shown right after the pane label (e.g. `raw claude`). */
   badge?: ReactNode
   /** Surface state pinned to the right end of the status row, left of the

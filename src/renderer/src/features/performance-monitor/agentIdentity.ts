@@ -1,8 +1,6 @@
 import { useMemo } from 'react'
 import { buildVisibleDispatchRows } from '@renderer/workspace/dispatch/dispatchSelectors'
-import { resolveTabSessions } from '@renderer/workspace/queries'
 import { sessionDisplayTitle } from '@renderer/workspace/sessionDisplayTitle'
-import { tabIndexLabel } from '@renderer/workspace/tile-tree/paneLabelFormat'
 import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
 import { useWorkspaceLayoutContext } from '@renderer/workspace/WorkspaceContext'
 
@@ -47,9 +45,11 @@ export function buildAgentIdentityIndex(state: WorkspaceState): Map<SessionId, A
     // added, pins must be special-cased there.
     for (const row of buildVisibleDispatchRows(state)) place(row.sessionId, row.label, row.tabTitle)
   }
-  state.tabs.forEach((tab, tabIndex) => {
-    resolveTabSessions(state, tab.id).forEach((sessionId, paneIndex) => place(sessionId, `${tabIndexLabel(tabIndex)}${paneIndex + 1}`, tab.title))
-  })
+  // A per-project "A1, A2…" pass sat here: it labelled sessions the index did
+  // not list. The index lists every session of a live project now
+  // (dispatchSelectors), so that pass never labelled anything, and if it ever
+  // had, its project-local labels could collide with the index's. Sessions
+  // outside a live project get no label below, which is the honest answer.
   for (const [sessionId, meta] of Object.entries(state.sessions)) {
     if (!index.has(sessionId)) index.set(sessionId, { sessionId, label: null, title: sessionDisplayTitle(meta), tabTitle: null })
   }
