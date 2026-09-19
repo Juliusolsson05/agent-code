@@ -4677,6 +4677,25 @@ export class SessionManager extends EventEmitter {
   }
 
   /** List all live session ids. Used for state save / debug. */
+  /**
+   * Tell every live agent runtime the machine was suspended (#963).
+   *
+   * Terminals are skipped: a shell has no model stream to seal, and its
+   * foreground monitor already re-reads process state on its next poll. A
+   * runtime that throws must not stop the rest from hearing about the sleep,
+   * because each one's stuck stream is independent of the others.
+   */
+  noteSystemSuspension(suspension: import('@shared/types/systemSuspension.js').SystemSuspension): void {
+    for (const [sessionId, entry] of this.sessions) {
+      if (entry.kind === 'terminal') continue
+      try {
+        entry.session.noteSystemSuspension?.(suspension)
+      } catch (err) {
+        console.warn(`[session-manager] ${sessionId} failed to handle a system suspension:`, err)
+      }
+    }
+  }
+
   list(): string[] {
     return Array.from(this.sessions.keys())
   }
@@ -4815,6 +4834,14 @@ export class SessionManager extends EventEmitter {
    */
   getSpawnKind(sessionId: string): SessionKind | null {
     return this.spawnInfo.get(sessionId)?.kind ?? null
+  }
+
+  /** Provider execution runtime captured at spawn (OpenCode TUI vs
+   *  structured). Same spawnInfo freshness story as getSpawnKind; absent
+   *  means the provider's normal structured runtime, which is the type's
+   *  own semantics for a missing value. */
+  getSpawnProviderRuntime(sessionId: string): AgentProviderRuntime | null {
+    return this.spawnInfo.get(sessionId)?.providerRuntime ?? null
   }
 
   /** Epoch ms of the last observed activity (any relayed session event). */

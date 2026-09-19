@@ -96,7 +96,14 @@ describe('tier classification', () => {
   })
 
   it('keeps daily reversible actions in the default tier', () => {
-    for (const id of ['new-tab', 'close-tab', 'toggle-git-bar', 'reload-agent']) {
+    for (const id of [
+      'new-tab', 'close-tab', 'toggle-git-bar', 'reload-agent',
+      // Promoted from `advanced` for the public release (#973): every one of
+      // these was un-hidden by hand on the owner's install, which is the
+      // strongest signal available that they are daily rather than niche.
+      'search-conversation-prompts', 'duplicate-agent', 'rewind-to-prompt', 'close-old-agents',
+      'copy-code-block', 'copy-assistant-message', 'copy-resume-command', 'switch-provider',
+    ]) {
       expect(byId(id).pickerVisibility ?? 'default').toBe('default')
     }
   })
@@ -104,7 +111,7 @@ describe('tier classification', () => {
   it('marks niche supported operations advanced rather than hiding them entirely', () => {
     // `advanced` is not `debug`: these are supported operations a power user
     // wants, just not ones that should crowd a fuzzy search.
-    for (const id of ['rewind-to-prompt', 'remove-cybersecurity-block', 'duplicate-agent', 'normalize-layout', 'bury-pane']) {
+    for (const id of ['remove-cybersecurity-block', 'normalize-layout', 'bury-pane', 'soft-reload-agent', 'switch-agents-provider']) {
       expect(byId(id).pickerVisibility).toBe('advanced')
     }
   })

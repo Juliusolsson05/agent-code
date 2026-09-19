@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { WebSocket } from 'ws'
-import { manager, registry, pairing, baseUrl, restartServer, pairDevice, connect, waitFor, framesOfType } from './RemoteServer.testSupport.js'
+import { manager, registry, pairing, baseUrl, dir, restartServer, pairDevice, connect, waitFor, framesOfType, openAuthed } from './RemoteServer.testSupport.js'
 
 describe('pairing endpoint', () => {
   it('redeems a live code and rejects a bogus one', async () => {
@@ -271,6 +271,285 @@ describe('inbound scope enforcement on a live socket', () => {
     await waitFor(frames, f => framesOfType(f, 'reply').length > 0)
     expect(framesOfType(frames, 'reply')[0]?.ok).toBe(false)
     expect(manager.write).not.toHaveBeenCalled()
+    ws.close()
+  })
+})
+
+// ── v2 identity overlays on session summaries ─────────────────────────────
+//
+// The projection join (titles, spoken names, tabs, pins, OpenCode runtime)
+// is a pure read overlay — these tests pin that it reaches real sockets,
+// degrades to the v1 shape without a projection, and that a projection
+// change (a workspace save renaming/re-pinning/moving a session) resends
+// the list without any manager event firing.
+describe('v2 session summary overlays', () => {
+  type FakeIdentity = Omit<import('./workspaceProjection.js').RemoteSessionIdentity, 'sessionId'>
+  function fakeWorkspace(initial: Array<[string, FakeIdentity]>) {
+    const sessions = new Map(
+      initial.map(([sessionId, identity]) => [
+        sessionId,
+        { sessionId, ...identity },
+      ] as const),
+    ) as Map<string, import('./workspaceProjection.js').RemoteSessionIdentity>
+    const listeners = new Set<() => void>()
+    const model = {
+      snapshot: () => sessions,
+      onChange: (cb: () => void) => {
+        listeners.add(cb)
+        return () => {
+          listeners.delete(cb)
+        }
+      },
+    }
+    return {
+      model,
+      sessions,
+      /** Simulate a committed workspace save: mutate identity + notify. */
+      save(sessionId: string, patch: Partial<FakeIdentity>) {
+        const current = sessions.get(sessionId)
+        if (current) sessions.set(sessionId, { ...current, ...patch })
+        for (const listener of listeners) listener()
+      },
+    }
+  }
+
+  it('overlays title, agent name, tab, pin and the OpenCode runtime onto summaries', async () => {
+    const workspace = fakeWorkspace([
+      ['s-oc', { title: 'Shell rewrite', agentName: 'Apollo', tabTitle: 'agent-code', pinned: true, tldrIdentity: 't1', cwd: '/dev/agent-code', kind: 'opencode' }],
+      ['s-cl', { title: null, agentName: null, tabTitle: null, pinned: false, tldrIdentity: null, cwd: null, kind: 'claude' }],
+    ])
+    ;(manager.getSpawnProviderRuntime as ReturnType<typeof vi.fn>).mockImplementation(
+      (sessionId: string) => (sessionId === 's-oc' ? 'terminal' : null),
+    )
+    await restartServer({ workspace: workspace.model })
+    try {
+      manager.emit('started', { sessionId: 's-oc', kind: 'opencode', projectDir: '/dev/agent-code' })
+      manager.emit('started', { sessionId: 's-cl', kind: 'claude', projectDir: '/dev/x' })
+      const { ws, frames } = await openAuthed()
+      await waitFor(frames, f => framesOfType(f, 'session-list').length > 0)
+      const list = framesOfType(frames, 'session-list')[0]
+      const sessions = (list?.sessions ?? []) as Array<Record<string, unknown>>
+      const oc = sessions.find(s => s.sessionId === 's-oc')
+      const cl = sessions.find(s => s.sessionId === 's-cl')
+      expect(oc).toMatchObject({
+        title: 'Shell rewrite',
+        agentName: 'Apollo',
+        tabTitle: 'agent-code',
+        pinned: true,
+        providerRuntime: 'terminal',
+      })
+      // Runtime is stamped ONLY on the provider that has two runtimes.
+      expect(cl).toMatchObject({ title: null, agentName: null, pinned: false })
+      expect('providerRuntime' in (cl ?? {})).toBe(false)
+      ws.close()
+    } finally {
+      ;(manager.getSpawnProviderRuntime as ReturnType<typeof vi.fn>).mockImplementation(() => null)
+    }
+  })
+
+  it('resends the session list when the projection changes, with no manager event', async () => {
+    const workspace = fakeWorkspace([
+      ['s1', { title: 'Before rename', agentName: null, tabTitle: 'agent-code', pinned: false, tldrIdentity: null, cwd: '/dev/agent-code', kind: 'claude' }],
+    ])
+    await restartServer({ workspace: workspace.model })
+    manager.emit('started', { sessionId: 's1', kind: 'claude', projectDir: '/dev/agent-code' })
+    const { ws, frames } = await openAuthed()
+    const countBefore = framesOfType(frames, 'session-list').length
+
+    // A workspace save renames the session; the manager emits NOTHING.
+    workspace.save('s1', { title: 'After rename' })
+
+    await waitFor(frames, f => {
+      const lists = framesOfType(frames, 'session-list')
+      if (lists.length <= countBefore) return false
+      const sessions = (lists[lists.length - 1]?.sessions ?? []) as Array<Record<string, unknown>>
+      return sessions.some(s => s.sessionId === 's1' && s.title === 'After rename')
+    })
+    ws.close()
+  })
+})
+
+// ── v2 TLDR/Goal note frames ──────────────────────────────────────────────
+//
+// The phone's peek surfaces need three guarantees pinned here: a freshly
+// connected socket receives CURRENT records (bootstrap), a live store
+// update reaches connected phones with the identity→session join applied,
+// and an update for an identity no session carries produces no frame.
+describe('v2 TLDR/Goal note frames', () => {
+  type FakeStore = ReturnType<typeof fakeNoteStore>
+  function fakeNoteStore() {
+    const listeners = new Set<(u: { identity: string; record: { text: string; updatedAt: string; revision: number } }) => void>()
+    const records: Record<string, { text: string; updatedAt: string; revision: number }> = {}
+    return {
+      on: (_event: 'changed', listener: (u: never) => void) => {
+        listeners.add(listener as never)
+      },
+      off: (_event: 'changed', listener: (u: never) => void) => {
+        listeners.delete(listener as never)
+      },
+      read: async (identities: string[]) =>
+        Object.fromEntries(identities.filter(id => records[id]).map(id => [id, records[id]])),
+      /** Seed/emit exactly what TldrStore emits on update(). */
+      publish(identity: string, record: { text: string; updatedAt: string; revision: number }) {
+        records[identity] = record
+        for (const listener of listeners) listener({ identity, record })
+      },
+    }
+  }
+
+  function frameIs(frames: unknown[], type: string, pred: (f: Record<string, unknown>) => boolean) {
+    return framesOfType(frames, type).some(pred)
+  }
+
+  it('bootstraps current records with the identity→session join on connect', async () => {
+    const workspace = {
+      snapshot: () =>
+        new Map([['s1', { sessionId: 's1', title: null, agentName: null, tabTitle: null, pinned: false, tldrIdentity: 't-1', cwd: null, kind: 'claude' }]]),
+      onChange: () => () => {},
+    }
+    const tldr = fakeNoteStore()
+    const goal = fakeNoteStore()
+    tldr.publish('t-1', { text: 'Fixing the feed gutter', updatedAt: '2026-09-17T10:00:00Z', revision: 3 })
+    goal.publish('t-1', { text: 'Ship remote v2', updatedAt: '2026-09-17T09:00:00Z', revision: 1 })
+    await restartServer({ workspace, notes: { tldr, goal } })
+    manager.emit('started', { sessionId: 's1', kind: 'claude', projectDir: '/dev/x' })
+
+    const { ws, frames } = await openAuthed()
+    await waitFor(frames, f => frameIs(f, 'goal-updated', () => true))
+    expect(frameIs(frames, 'tldr-updated', f => f.sessionId === 's1' && f.text === 'Fixing the feed gutter' && f.revision === 3)).toBe(true)
+    expect(frameIs(frames, 'goal-updated', f => f.sessionId === 's1' && f.text === 'Ship remote v2')).toBe(true)
+    ws.close()
+  })
+
+  it('forwards live updates to connected phones, joined by session', async () => {
+    const listeners = new Set<() => void>()
+    const workspace = {
+      snapshot: () =>
+        new Map([
+          ['s1', { sessionId: 's1', title: null, agentName: null, tabTitle: null, pinned: false, tldrIdentity: 't-1', cwd: null, kind: 'claude' }],
+          ['s2', { sessionId: 's2', title: null, agentName: null, tabTitle: null, pinned: false, tldrIdentity: 't-2', cwd: null, kind: 'codex' }],
+        ]),
+      onChange: (cb: () => void) => {
+        listeners.add(cb)
+        return () => listeners.delete(cb)
+      },
+    }
+    const tldr = fakeNoteStore()
+    const goal = fakeNoteStore()
+    await restartServer({ workspace, notes: { tldr, goal } })
+    manager.emit('started', { sessionId: 's1', kind: 'claude', projectDir: '/dev/x' })
+    manager.emit('started', { sessionId: 's2', kind: 'codex', projectDir: '/dev/y' })
+    const { ws, frames } = await openAuthed()
+
+    tldr.publish('t-1', { text: 'Updated live', updatedAt: '2026-09-17T11:00:00Z', revision: 4 })
+    await waitFor(frames, f => frameIs(f, 'tldr-updated', fr => fr.sessionId === 's1' && fr.text === 'Updated live'))
+    // Joined to the OWNING session only — s2 carries a different identity.
+    expect(frameIs(frames, 'tldr-updated', fr => fr.sessionId === 's2')).toBe(false)
+    ws.close()
+  })
+
+  it('is silent for identities no session carries', async () => {
+    const workspace = {
+      snapshot: () => new Map(),
+      onChange: () => () => {},
+    }
+    const tldr = fakeNoteStore()
+    const goal = fakeNoteStore()
+    await restartServer({ workspace, notes: { tldr, goal } })
+    const { ws, frames } = await openAuthed()
+    tldr.publish('nobody', { text: 'orphan', updatedAt: '2026-09-17T11:00:00Z', revision: 1 })
+    // Give the (wrong) frame a chance to arrive before asserting absence.
+    await new Promise(resolve => setImmediate(resolve))
+    expect(framesOfType(frames, 'tldr-updated')).toHaveLength(0)
+    ws.close()
+  })
+})
+
+// ── v2 sub-agents channel end to end ──────────────────────────────────────
+//
+// Full production path: a Claude sidecar directory on disk, discovered by
+// the remote subsystem's own SubAgentWatcherManager through the same
+// jsonl-entry stream the desktop forwarder feeds its instance from, then
+// broadcast on the reserved channel and cached for late joiners/summary
+// counts. No mocks between the filesystem and the socket.
+describe('v2 sub-agents channel', () => {
+  it('discovers a sidecar fleet, broadcasts it, caches it, and stamps counts', async () => {
+    const { join: joinPath } = await import('node:path')
+    const { mkdir, writeFile: writeFileAsync } = await import('node:fs/promises')
+    // A transcript path whose basename derives the subagents dir, exactly
+    // like ~/.claude/projects/<dir>/<session>.jsonl does in production.
+    const transcriptFile = joinPath(dir, 'proj', '11111111-2222-3333-4444-555555555555.jsonl')
+    const subagentsDir = joinPath(dir, 'proj', '11111111-2222-3333-4444-555555555555', 'subagents')
+    await mkdir(subagentsDir, { recursive: true })
+
+    manager.emit('started', { sessionId: 's1', kind: 'claude', projectDir: dir })
+    // Feed the transcript stream: this creates the watcher bound to the
+    // sidecar dir above.
+    manager.emit('jsonl-entry', {
+      sessionId: 's1',
+      entry: { type: 'user', uuid: 'u0', message: { role: 'user', content: [] } },
+      file: transcriptFile,
+    })
+
+    const { ws, frames } = await openAuthed()
+
+    // A sub-agent appears: meta + one entry line.
+    await writeFileAsync(joinPath(subagentsDir, 'agent-side1.meta.json'), JSON.stringify({ description: 'Research the fold', toolUseId: 'tu-1' }))
+    await writeFileAsync(joinPath(subagentsDir, 'agent-side1.jsonl'), JSON.stringify({ type: 'assistant', uuid: 'a1', timestamp: '2026-09-17T10:00:00.000Z', message: { role: 'assistant', content: [{ type: 'text', text: 'Digging' }] } }) + '\n')
+
+    await waitFor(frames, f =>
+      framesOfType(f, 'session-event').some(
+        e => e.channel === 'sub-agents' &&
+          Object.keys((e.payload as { subAgents?: Record<string, unknown> }).subAgents ?? {}).length > 0,
+      ),
+    )
+
+    // Late joiner: the cached fleet replays without any new disk activity,
+    // and the session summary carries the live count.
+    const late = await connect(await pairDevice('second phone'))
+    await waitFor(late.frames, f =>
+      framesOfType(f, 'session-event').some(
+        e => e.channel === 'sub-agents' &&
+          Object.keys((e.payload as { subAgents?: Record<string, unknown> }).subAgents ?? {}).length > 0,
+      ),
+    )
+    await waitFor(late.frames, f => {
+      const lists = framesOfType(f, 'session-list')
+      return lists.some(list =>
+        ((list.sessions as Array<Record<string, unknown>>) ?? []).some(s => s.sessionId === 's1' && s.subAgentCount === 1),
+      )
+    })
+    ws.close()
+    late.ws.close()
+  })
+})
+
+// ── v2 usage snapshot frame ───────────────────────────────────────────────
+describe('v2 usage snapshot frame', () => {
+  it('pushes the shared snapshot at connect and keeps it server-shaped', async () => {
+    await restartServer({
+      notes: undefined,
+      getUsageSnapshot: async () => ({
+        fetchedAt: '2026-09-17T10:00:00Z',
+        cache: { hit: true as const, ttlMs: 30_000 },
+        providers: [
+          {
+            provider: 'claude' as const,
+            status: 'ok' as const,
+            sourceLabel: 'Claude',
+            plan: null,
+            rows: [],
+            spend: null,
+            extraUsage: null,
+            credits: null,
+          },
+        ],
+      }),
+    })
+    const { ws, frames } = await openAuthed()
+    await waitFor(frames, f => framesOfType(f, 'usage-snapshot').length > 0)
+    const snapshot = framesOfType(frames, 'usage-snapshot')[0]?.snapshot as Record<string, unknown>
+    expect(snapshot.fetchedAt).toBe('2026-09-17T10:00:00Z')
     ws.close()
   })
 })

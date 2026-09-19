@@ -35,6 +35,7 @@ import { ProviderSwitchPickerSurface } from '@renderer/features/workspace/surfac
 import { KeyVaultModalSurface } from '@renderer/features/key-vault/surfaces/KeyVaultModalSurface'
 import { NewAgentInSurface } from '@renderer/features/workspace/surfaces/NewAgentInSurface'
 import { TldrHistorySurface } from '@renderer/features/tldr/surfaces/TldrHistorySurface'
+import { AgentAnalyticsSurface } from '@renderer/features/agent-analytics/surfaces/AgentAnalyticsSurface'
 
 // The surface registry (issue #494). Adding a surface = write a wrapper
 // in the owning feature's surfaces/ folder + add ONE import + ONE array
@@ -108,6 +109,9 @@ export const modalSurfaces: SurfaceEntry[] = [
   // Appended per the contract above. Opened only from a session command that
   // closes the palette first, so it stacks over established modals by order.
   { id: 'tldr-history', Component: TldrHistorySurface },
+  // Appended per the contract above (#964). Opened only from a command that
+  // closes the palette first, so it stacks over established modals by order.
+  { id: 'agent-analytics', Component: AgentAnalyticsSurface },
   // Built-in apps host. Last in the array, which per the paint-order contract
   // above means it paints above every modal already mounted. That placement is
   // reasoned, not defaulted: an app is always user-initiated from the palette and

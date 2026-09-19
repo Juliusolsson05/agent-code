@@ -12,9 +12,10 @@ import {
   scrubPairingCodeFromHash,
 } from '../pairing'
 import { PairScreen } from './PairScreen'
-import { SessionList } from './SessionList'
+import { FleetHome } from './v2/FleetHome'
 import { EMPTY_MOBILE_COMPOSER_STATE, SessionView } from './SessionView'
 import type { MobileComposerState } from './SessionView'
+import { Scaffold } from './Scaffold'
 
 // Phone app shell. Three states, one screen each:
 //   no token            → PairScreen (QR hash auto-redeem or manual code)
@@ -94,50 +95,56 @@ export function App(): React.JSX.Element {
   // second PairScreen further down (review finding).
   if (!token || !feed || !store) {
     return (
-      <PairScreen
-        busy={autoPairing}
-        error={pairError}
-        onSubmitCode={async code => {
-          const result = await redeemPairingCode(code, defaultDeviceName())
-          if (result.ok) {
-            setPairError(null)
-            setToken(result.token)
-          } else {
-            setPairError(result.error)
-          }
-        }}
-      />
+      <Scaffold>
+        <PairScreen
+          busy={autoPairing}
+          error={pairError}
+          onSubmitCode={async code => {
+            const result = await redeemPairingCode(code, defaultDeviceName())
+            if (result.ok) {
+              setPairError(null)
+              setToken(result.token)
+            } else {
+              setPairError(result.error)
+            }
+          }}
+        />
+      </Scaffold>
     )
   }
 
   if (!selectedSessionId) {
     return (
-      <SessionList
-        feed={feed}
-        connection={connection}
-        onSelect={setSelectedSessionId}
-        onUnpair={unpair}
-      />
+      <Scaffold>
+        <FleetHome
+          feed={feed}
+          connection={connection}
+          onSelect={setSelectedSessionId}
+          onUnpair={unpair}
+        />
+      </Scaffold>
     )
   }
 
   return (
-    <SessionView
-      feed={feed}
-      store={store}
-      connection={connection}
-      sessionId={selectedSessionId}
-      token={token}
-      onBack={() => setSelectedSessionId(null)}
-      composerState={composerStates[selectedSessionId] ?? EMPTY_MOBILE_COMPOSER_STATE}
-      updateComposerState={updater => {
-        setComposerStates(current => ({
-          ...current,
-          [selectedSessionId]: updater(
-            current[selectedSessionId] ?? EMPTY_MOBILE_COMPOSER_STATE,
-          ),
-        }))
-      }}
-    />
+    <Scaffold>
+      <SessionView
+        feed={feed}
+        store={store}
+        connection={connection}
+        sessionId={selectedSessionId}
+        token={token}
+        onBack={() => setSelectedSessionId(null)}
+        composerState={composerStates[selectedSessionId] ?? EMPTY_MOBILE_COMPOSER_STATE}
+        updateComposerState={updater => {
+          setComposerStates(current => ({
+            ...current,
+            [selectedSessionId]: updater(
+              current[selectedSessionId] ?? EMPTY_MOBILE_COMPOSER_STATE,
+            ),
+          }))
+        }}
+      />
+    </Scaffold>
   )
 }

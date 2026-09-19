@@ -44,7 +44,8 @@ vi.mock('@main/providerSwitch/transcriptEngine.js', () => ({
 // answer". A stubbed planner would let this file agree with a planner that does
 // not exist, which is exactly the failure the Stage 0 fixtures were recorded to
 // prevent. Real decode, real plan, mocked disk.
-import { switchProvider } from './switchProvider.js'
+import { describeShrink, switchProvider } from './switchProvider.js'
+import type { ShrinkReport } from 'agent-transcript-parser'
 import { loadFixtureConversation } from './testing/fixtureConversations.js'
 
 const conversation = {
@@ -392,6 +393,55 @@ describe('switchProvider neutral hub integration', () => {
       expect((result as { shrinkSummary: string }).shrinkSummary).toMatch(/cleared|dropped/)
     })
 
+    it('reports a switch whose only loss was an old pasted image as truncated, with the toast line', async () => {
+      // The one state where `clearedAttachments` alone carries the flag: a short
+      // conversation pushed over budget by a screenshot OUTSIDE the protected
+      // recent turns, with no tool output to clear and nothing to drop. Without
+      // the term in the sum this switch would report `truncatedBeforeSwitch:
+      // false` after dropping the user's image. It is also the only end-to-end
+      // proof that the host reads the real planner's new field — the
+      // describeShrink cases below feed it a hand-built report.
+      const at = (line: number) => ({
+        timestamp: '2026-09-18T20:00:00.000Z',
+        source: { provider: 'claude', line, raw: {}, evidence: [] },
+      })
+      const turns = ['first', 'second', 'third', 'fourth', 'fifth'].flatMap((text, index) => ([
+        {
+          kind: 'message' as const,
+          role: 'user' as const,
+          content: index === 0
+            ? [
+                { kind: 'text' as const, text },
+                { kind: 'image' as const, value: { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'A'.repeat(20_000) } } },
+              ]
+            : [{ kind: 'text' as const, text }],
+          ...at(index * 2),
+        },
+        { kind: 'message' as const, role: 'assistant' as const, content: [{ kind: 'text' as const, text: `reply to ${text}` }], ...at(index * 2 + 1) },
+      ]))
+      const source: ConversationDocument = { schemaVersion: 1, sourceProvider: 'claude', sourceSessionIds: ['src'], entries: turns }
+      mocks.sourceRead.mockResolvedValue(source)
+      mocks.targetProfile.mockResolvedValue({ model: 'fixture', modelProvider: 'opencode', budgetCharacters: 5_000 })
+      mocks.targetProject.mockResolvedValue(projection)
+      mocks.targetWrite.mockResolvedValue('/opencode/target.json')
+      mocks.targetSessionId.mockReturnValue('target-session')
+
+      const result = await switchProvider({
+        sourceKind: 'claude',
+        targetKind: 'opencode',
+        sourceProviderSessionId: 'src',
+        cwd: '/project',
+        sourceSessionId: 'local',
+      })
+
+      expect(result).toMatchObject({
+        kind: 'switched',
+        strategy: 'shrunk',
+        truncatedBeforeSwitch: true,
+        shrinkSummary: expect.stringMatching(/^1 attachment omitted \(\d+k → \d+k chars\)$/),
+      })
+    })
+
     it('routes overflowPolicy truncate to the ladder even when source turns are allowed', async () => {
       // The behaviour change nothing else pins: `truncate` used to mean
       // `fitConversationToCharacterBudget` (drop whole turns, refuse outright
@@ -517,5 +567,59 @@ describe('switchProvider neutral hub integration', () => {
       expect(compactSource).toHaveBeenCalledOnce()
       expect(result).toMatchObject({ kind: 'switched', strategy: 'native' })
     })
+  })
+})
+
+describe('describeShrink', () => {
+  const report: ShrinkReport = {
+    strippedCompactions: 0,
+    clearedResults: 0,
+    clearedChars: 0,
+    clearedAttachments: 0,
+    clearedAttachmentChars: 0,
+    trimmedInputs: 0,
+    trimmedChars: 0,
+    droppedEntries: 0,
+    droppedTurns: 0,
+    retainedDeveloperMessages: 0,
+    promptIndexLength: 0,
+    liftedRecentTurnProtection: false,
+    estimatedCharactersBefore: 2_458_176,
+    estimatedCharactersAfter: 32_605,
+    budgetCharacters: 288_000,
+  }
+
+  it('leads with what the user must act on, then the counts in ladder order', () => {
+    // The numbers are the recorded #998 switch after the fix. The pane toast
+    // clamps to three lines, so the tail is what a narrow pane cuts: the
+    // omitted screenshot and the broken recency promise must not be there.
+    const summary = describeShrink({
+      ...report,
+      clearedResults: 256,
+      clearedAttachments: 2,
+      trimmedInputs: 3,
+      droppedEntries: 1055,
+      droppedTurns: 13,
+      liftedRecentTurnProtection: true,
+    })
+
+    expect(summary).toBe(
+      '2 attachments omitted, newest turns trimmed, 256 tool outputs cleared, 3 tool inputs trimmed, 13 oldest turns dropped (2458k → 33k chars)',
+    )
+  })
+
+  it('singularises every clause and stays silent about a protection that held', () => {
+    expect(describeShrink({
+      ...report,
+      strippedCompactions: 1,
+      clearedResults: 1,
+      clearedAttachments: 1,
+      trimmedInputs: 1,
+      droppedEntries: 4,
+      droppedTurns: 1,
+    })).toBe(
+      '1 attachment omitted, 1 encrypted compaction dropped, 1 tool output cleared, 1 tool input trimmed, 1 oldest turn dropped (2458k → 33k chars)',
+    )
+    expect(describeShrink({ ...report, droppedEntries: 1 })).toBe('1 oldest entry dropped (2458k → 33k chars)')
   })
 })

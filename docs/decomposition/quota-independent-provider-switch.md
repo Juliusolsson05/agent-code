@@ -137,7 +137,8 @@ Two measurements reversed assumptions this decomposition was written on, and
 both changed the ladder. First, **dropping turns is not a last resort**: with
 every tool-result output cleared, 46 of the 91 local Claude transcripts over the
 581,400-character Codex budget (50.5 percent) are still over it — median 1.04×,
-p90 3.81×, worst 12.41× — so rung 4 is a primary mechanism that fires about half
+p90 3.81×, worst 12.41× — so rung 4 (the drop rung; rung 5 since the 2026-09-18
+attachment rung was inserted) is a primary mechanism that fires about half
 the time in production, and its drop marker had to be designed for real use
 rather than as an apology nobody reads. Second, **developer messages are not
 boilerplate**: they are 36.9 percent of the repeatedly-compacted Codex fixture's

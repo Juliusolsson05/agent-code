@@ -66,24 +66,24 @@ function currentThemeName(): string {
 
 function defineThemes(monaco: typeof Monaco): void {
   const styles = getComputedStyle(document.documentElement)
-  const bg = normalizeMonacoThemeColor(styles.getPropertyValue('--theme-code-bg'), '#12120f')
-  const fg = normalizeMonacoThemeColor(styles.getPropertyValue('--theme-code-ink'), '#e8e8e6')
+  const bg = normalizeMonacoThemeColor(styles.getPropertyValue('--theme-code-bg'), '#171b21')
+  const fg = normalizeMonacoThemeColor(styles.getPropertyValue('--theme-code-ink'), '#d8dee9')
   const muted = normalizeMonacoThemeColor(
     styles.getPropertyValue('--theme-code-ink-dim'),
-    '#a8a8a4',
+    '#9aa0a9',
   )
   const border = normalizeMonacoThemeColor(
     styles.getPropertyValue('--theme-code-border'),
-    '#262622',
+    '#2e3440',
   )
-  const accent = normalizeMonacoThemeColor(styles.getPropertyValue('--theme-accent'), '#7dd3a0')
+  const accent = normalizeMonacoThemeColor(styles.getPropertyValue('--theme-accent'), '#88c0d0')
   const selection = normalizeMonacoThemeColor(
     styles.getPropertyValue('--theme-code-selection-bg'),
-    normalizeMonacoThemeColorAlpha(accent, '33', '#7dd3a0'),
+    normalizeMonacoThemeColorAlpha(accent, '33', '#88c0d0'),
   )
   const inactiveSelection = normalizeMonacoThemeColor(
     styles.getPropertyValue('--theme-code-selection-inactive-bg'),
-    normalizeMonacoThemeColorAlpha(muted, '33', '#5a5a56'),
+    normalizeMonacoThemeColorAlpha(muted, '33', '#686d75'),
   )
   const currentLine = normalizeMonacoThemeColor(
     styles.getPropertyValue('--theme-code-current-line-bg'),

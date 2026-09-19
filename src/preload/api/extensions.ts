@@ -79,8 +79,10 @@ export const extensionsApi = {
   onExtensionsChanged: (handler: (rows: InstalledExtension[]) => void): (() => void) =>
     subscribe('extensions:changed', handler),
 
-  extensionsInstall: (repo: string): Promise<ExtensionInstallResult> =>
-    ipcRenderer.invoke('extensions:install', repo),
+  // `useGithubCliAuth` mirrors the renderer setting; omitted means "default
+  // on" so the credential upgrade reaches callers that predate the toggle.
+  extensionsInstall: (repo: string, useGithubCliAuth?: boolean): Promise<ExtensionInstallResult> =>
+    ipcRenderer.invoke('extensions:install', repo, useGithubCliAuth),
 
   // "Load unpacked" from a local folder (main opens the native directory picker).
   extensionsInstallPath: (): Promise<ExtensionInstallResult> =>

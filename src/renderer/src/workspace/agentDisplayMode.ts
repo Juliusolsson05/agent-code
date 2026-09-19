@@ -66,10 +66,11 @@ export function getEffectiveAgentSurface(args: {
   if (!isAgentKind(kind)) return 'rendered'
   // A terminal-flavoured provider session is a different process contract,
   // not merely a view preference. Its runtime does hold committed entries
-  // (history plus opencode-terminal-headless's durable stream), but those
-  // exist for app features and MCP reads, not for display: the TUI owns the
-  // pane, so no global/per-pane mode may mount the rendered leaf. This pin
-  // is what makes loading its history safe.
+  // (history plus opencode-terminal-headless's durable stream), and since #971
+  // off-pane surfaces may display them (Reader Mode's overlay projects them);
+  // what they still may not do is mount the rendered leaf: the TUI owns the
+  // pane, so no global/per-pane mode may put Agent Code's feed there. This
+  // pin is what makes loading its history safe.
   if (args.providerRuntime === 'terminal') return 'terminal'
   const mode = normalizeAgentViewModeForKind(kind, requestedMode)
 

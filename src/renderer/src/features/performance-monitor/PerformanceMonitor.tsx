@@ -1,9 +1,11 @@
 import { Timeline } from './Timeline'
+import { Overview } from './overview/Overview'
+import { useAgentIdentities } from './agentIdentity'
 import { useEffect, useMemo, useState } from 'react'
 import type { PerformancePanelRequest } from '@renderer/app-state/uiShell/types'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@renderer/components/ui/dialog'
 import { Button } from '@renderer/components/ui/button'
-import type { MonitorMainSample, MonitorSnapshot } from '@shared/performance/monitorSnapshot.js'
+import type { MonitorSnapshot } from '@shared/performance/monitorSnapshot.js'
 import type { MonitorReportPreview, MonitorTraceMode, MonitorTraceStatus } from '@shared/performance/monitorHistory.js'
 import type { MonitorProcessPage } from '@shared/performance/processSnapshot.js'
 import { latencyQuantile } from '@shared/performance/latencyHistogram.js'
@@ -21,7 +23,7 @@ export function PerformanceMonitor({ onClose, request = null, onRequestHandled }
   const [view, setView] = useState<View>(request?.view ?? 'overview')
   useEffect(() => { if (request) setView(request.view) }, [request])
   return <Dialog open onOpenChange={open => { if (!open) onClose() }}>
-    <DialogContent className="w-[min(1040px,94vw)] max-h-[90vh] grid-rows-[auto_auto_minmax(0,1fr)]" showCloseButton>
+    <DialogContent className="w-[min(1360px,96vw)] h-[min(920px,94vh)] grid-rows-[auto_auto_minmax(0,1fr)]" showCloseButton>
       <DialogHeader>
         <DialogTitle>Performance Monitor</DialogTitle>
         <DialogDescription>Live health and local performance evidence for Agent Code and your agents.</DialogDescription>
@@ -30,7 +32,10 @@ export function PerformanceMonitor({ onClose, request = null, onRequestHandled }
             {error ? 'Readings delayed' : snapshot ? snapshot.collector === 'healthy' ? 'Collecting locally' : `Collector ${snapshot.collector}` : 'Connecting…'}
           </span>
           <span>Always on · no automatic uploads</span>
-          {snapshot && <span>{snapshot.droppedRecords.toLocaleString()} dropped records · {snapshot.restarts} collector restarts</span>}
+          {/* Coverage counters only when they say something: a permanent "0 dropped
+              records · 0 restarts" line was noise that trained people to skip
+              the header. */}
+          {snapshot && (snapshot.droppedRecords > 0 || snapshot.restarts > 0) && <span className="text-warning-fg">{snapshot.droppedRecords.toLocaleString()} dropped records · {snapshot.restarts} collector restarts</span>}
         </div>
       </DialogHeader>
       <nav aria-label="Performance views" className="flex gap-2 border-b border-border px-4 py-2">
@@ -40,7 +45,7 @@ export function PerformanceMonitor({ onClose, request = null, onRequestHandled }
       </nav>
       <div className="overflow-auto p-4 text-[12px] min-h-[min(400px,50vh)]">
         {!snapshot ? <p className="text-muted" role="status">{error ? 'Performance readings are unavailable. Collection will reconnect automatically.' : 'Waiting for the first sample…'}</p>
-          : view === 'overview' ? <Overview snapshot={snapshot} />
+          : view === 'overview' ? <Overview snapshot={snapshot} onClose={onClose} />
             : view === 'timeline' ? <Timeline incidents={snapshot.incidents ?? []} />
               : view === 'processes' ? <Processes /> : view === 'recordings' ? <Recordings snapshot={snapshot} request={request} onRequestHandled={onRequestHandled} /> : <Operations snapshot={snapshot} />}
       </div>
@@ -150,69 +155,8 @@ function Recordings({ snapshot, request, onRequestHandled }: { snapshot: Monitor
   </div>
 }
 
-function Stat({ label, value, detail }: { label: string; value: string; detail: string }) {
-  return <div className="rounded-slab border border-border bg-canvas p-4">
-    <div className="text-[11px] text-muted">{label}</div><div className="my-2 text-[23px] font-code tabular-nums text-ink">{value}</div>
-    <div className="text-[10px] leading-4 text-muted">{detail}</div>
-  </div>
-}
-function Overview({ snapshot }: { snapshot: MonitorSnapshot }) {
-  const main = snapshot.main
-  return <div className="space-y-5">
-    <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-      <Stat label="Application CPU" value={number(snapshot.processes?.cpuPercent, '%')} detail="100% means one logical CPU core." />
-      <Stat label="Application memory" value={bytes(snapshot.processes?.memoryBytes)} detail="Approximate sum of process RSS; shared pages can be counted more than once." />
-      <Stat label="Main event-loop p99" value={number(main?.loopP99Ms, ' ms')} detail="Last completed window; the probe resolution is 20 ms." />
-      <Stat label="Main JavaScript heap" value={bytes(main?.heapUsed)} detail={`Heap limit ${bytes(main?.heapLimit)}. Heap is part of process memory.`} />
-    </div>
-    <div className="grid gap-3 md:grid-cols-2">
-      <Series title="Main CPU" points={snapshot.recent} metric="cpuPercent" unit="%" />
-      <Series title="Main event-loop peak" points={snapshot.recent} metric="loopMaxMs" unit="ms" />
-    </div>
-    <section className="rounded-slab border border-border">
-      <h2 className="border-b border-border px-3 py-2 font-medium">Windows</h2>
-      <div className="overflow-auto"><table className="w-full text-left text-[11px] tabular-nums">
-        <thead className="text-muted"><tr>{['Window', 'Visibility', 'Heartbeat age', 'Scheduler lag', 'Long tasks', 'Slow input peak', 'Heap'].map(label => <th className="px-3 py-2 font-normal" key={label}>{label}</th>)}</tr></thead>
-        <tbody>{snapshot.windows.map(window => <tr key={window.windowId} className="border-t border-border">
-          <td className="px-3 py-2">{window.windowId}</td><td>{window.visibility}</td>
-          <td>{number(Math.max(0, Date.now() - window.receivedAt) / 1000, ' s')}</td><td>{number(window.lagMs, ' ms')}</td>
-          <td>{window.longTasksSupported ? window.longTaskCount : 'Unsupported'}</td>
-          <td>{window.inputSupported ? number(window.inputMaxMs, ' ms') : 'Unsupported'}</td><td>{bytes(window.heapUsedBytes)}</td>
-        </tr>)}</tbody>
-      </table></div>
-      {!snapshot.windows.length && <p className="p-3 text-muted">Waiting for window heartbeats.</p>}
-    </section>
-    <p className="text-[11px] leading-5 text-muted">Input timing includes browser events above 16 ms, so it is a slow-input indicator. Hidden windows may be throttled. CPU and memory coverage: {snapshot.processes?.quality ?? 'warming-up'} · {snapshot.processes?.count ?? 0} processes · {snapshot.processes?.sessionCount ?? 0} managed sessions. Monitor helper RSS: {bytes(snapshot.workerRss)}.</p>
-  </div>
-}
-
-function Series({ title, points, metric, unit }: { title: string; points: MonitorMainSample[]; metric: 'cpuPercent' | 'loopMaxMs'; unit: string }) {
-  const valid = points.filter(point => point[metric] !== null && !point.sleepGap)
-  const peak = valid.length ? Math.max(...valid.map(point => point[metric]!)) : null
-  const scale = Math.max(1, peak ?? 0)
-  const firstAt = points[0]?.at ?? 0
-  const duration = Math.max(1, (points[points.length - 1]?.at ?? firstAt) - firstAt)
-  // Separate path segments preserve missing/sleep gaps; connecting across
-  // those gaps would imply observations we never collected.
-  let penDown = false
-  let path = ''
-  points.forEach((point, index) => {
-    const value = point[metric]
-    if (value === null || point.sleepGap) { penDown = false; return }
-    if (index > 0 && (point.at - points[index - 1].at > 2500 || point.at < points[index - 1].at)) penDown = false
-    path += `${penDown ? 'L' : 'M'}${Math.max(0, Math.min(600, (point.at - firstAt) / duration * 600))},${100 - value / scale * 90} `
-    penDown = true
-  })
-  return <section className="rounded-slab border border-border bg-canvas p-3">
-    <div className="flex justify-between"><h2>{title}</h2><span className="text-muted">Peak {number(peak, ` ${unit}`)}</span></div>
-    <svg viewBox="0 0 600 112" className="my-2 h-28 w-full text-accent" role="img" aria-label={`${title}, ${valid.length} available samples, peak ${number(peak, unit)}`}>
-      <path d="M0 100H600" stroke="currentColor" opacity="0.15" /><path d={path} stroke="currentColor" strokeWidth="2" fill="none" vectorEffect="non-scaling-stroke" />
-    </svg>
-    <div className="flex justify-between text-[10px] text-muted"><span>{points[0] ? new Date(points[0].at).toLocaleTimeString() : 'Waiting for samples'}</span><span>{points.length ? new Date(points[points.length - 1].at).toLocaleTimeString() : ''}</span></div>
-  </section>
-}
-
 function Processes() {
+  const { identities } = useAgentIdentities()
   const [page, setPage] = useState<MonitorProcessPage | null>(null)
   const [offset, setOffset] = useState(0)
   const [sort, setSort] = useState<'cpu' | 'memory'>('cpu')
@@ -239,7 +183,12 @@ function Processes() {
     <div className="overflow-auto rounded-slab border border-border"><table className="w-full text-left text-[11px] tabular-nums">
       <thead className="bg-canvas text-muted"><tr>{['Process', 'PID', 'Agent / session', 'CPU', 'Memory (RSS)', 'Coverage'].map(label => <th className="px-3 py-2 font-normal" key={label}>{label}</th>)}</tr></thead>
       <tbody>{page?.rows.map(row => <tr key={row.identity} className="border-t border-border"><td className="px-3 py-2 capitalize">{row.provider ?? row.type}</td><td>{row.pid ?? '—'}</td>
-        <td title={row.sessionIds.join(', ')}>{row.sharedSessionCount > 1 ? `Shared by ${row.sharedSessionCount} sessions` : row.sessionIds[0]?.slice(0, 12) ?? 'Application'}</td>
+        <td title={row.sharedSessionCount > 1 ? row.sessionIds.map(id => identities.get(id)?.label ?? '—').join(', ') : undefined}>{row.sharedSessionCount > 1
+          ? `Shared by ${row.sharedSessionCount} sessions`
+          // The label beside the agent in the workspace, never a raw session
+          // UUID: an ID prefix is not something a person can find on screen.
+          : row.sessionIds[0] ? <span className="flex items-center gap-1.5"><span className="rounded-chip border border-current/30 px-1 text-[9px] font-semibold leading-[14px]">{identities.get(row.sessionIds[0])?.label ?? '—'}</span><span className="truncate">{identities.get(row.sessionIds[0])?.title ?? 'Unplaced session'}</span></span>
+            : 'Application'}</td>
         <td>{number(row.cpuPercent, '%')}</td><td>{bytes(row.memoryBytes)}</td><td>{row.quality}</td></tr>)}</tbody>
     </table></div>
     {!page?.rows.length && <p className="text-muted">Waiting for process discovery. A new process needs two samples for CPU.</p>}

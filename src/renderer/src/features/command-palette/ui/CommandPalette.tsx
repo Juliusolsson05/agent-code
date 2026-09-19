@@ -284,6 +284,7 @@ function OpenCommandPalette({
   const openAgentTitlePrompt = useAppStore(state => state.openAgentTitlePrompt)
   const openRootManagementPrompt = useAppStore(state => state.openRootManagementPrompt)
   const closeUsageModal = useAppStore(state => state.closeUsageModal)
+  const closeAgentAnalytics = useAppStore(state => state.closeAgentAnalytics)
   const closeKeyboardShortcuts = useAppStore(state => state.closeKeyboardShortcuts)
   const closeAgentActivity = useAppStore(state => state.closeAgentActivity)
   const closeCloseOldAgents = useAppStore(state => state.closeCloseOldAgents)
@@ -294,6 +295,7 @@ function OpenCommandPalette({
   const closePinAgents = useAppStore(state => state.closePinAgents)
   const closePathPicker = useAppStore(state => state.closePathPicker)
   const openUsageModal = useAppStore(state => state.openUsageModal)
+  const openAgentAnalytics = useAppStore(state => state.openAgentAnalytics)
   const openApp = useAppStore(state => state.openApp)
   const openKeyVault = useAppStore(state => state.openKeyVault)
   const toggleGitBar = useAppStore(state => state.toggleGitBar)
@@ -356,6 +358,7 @@ function OpenCommandPalette({
   const aggressiveDebugPersistenceEnabled = settings.aggressiveDebugPersistence
   const commandPaletteOpenFlag = useAppStore(state => state.commandPaletteOpen)
   const usageModalOpen = useAppStore(state => state.usageModalOpen)
+  const agentAnalyticsOpen = useAppStore(state => state.agentAnalyticsOpen)
   const keyboardShortcutsOpen = useAppStore(state => state.keyboardShortcutsOpen)
   const agentActivityOpen = useAppStore(state => state.agentActivityOpen)
   const closeOldAgentsOpen = useAppStore(state => state.closeOldAgentsOpen)
@@ -598,6 +601,7 @@ function OpenCommandPalette({
         openAgentTitlePrompt,
         openRootManagementPrompt,
         closeUsageModal,
+        closeAgentAnalytics,
         closeKeyboardShortcuts,
         closeAgentActivity,
         closeCloseOldAgents,
@@ -608,6 +612,7 @@ function OpenCommandPalette({
         closePinAgents,
         closePathPicker,
         openUsageModal,
+        openAgentAnalytics,
         openKeyVault,
         toggleGitBar,
         toggleWorktreesBar,
@@ -663,6 +668,7 @@ function OpenCommandPalette({
         commandPaletteOpen: commandPaletteOpenFlag,
         paletteMode: mode,
         usageModalOpen,
+        agentAnalyticsOpen,
         keyboardShortcutsOpen,
         agentActivityOpen,
         closeOldAgentsOpen,
@@ -721,6 +727,7 @@ function OpenCommandPalette({
       openAgentTitlePrompt,
       openRootManagementPrompt,
       closeUsageModal,
+      closeAgentAnalytics,
       closeKeyboardShortcuts,
       closeAgentActivity,
       closeCloseOldAgents,
@@ -731,6 +738,7 @@ function OpenCommandPalette({
       closePinAgents,
       closePathPicker,
       openUsageModal,
+      openAgentAnalytics,
       openApp,
       openKeyVault,
       toggleGitBar,
@@ -779,6 +787,7 @@ function OpenCommandPalette({
       commandPaletteOpenFlag,
       mode,
       usageModalOpen,
+      agentAnalyticsOpen,
       keyboardShortcutsOpen,
       agentActivityOpen,
       closeOldAgentsOpen,

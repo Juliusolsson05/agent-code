@@ -10,7 +10,7 @@ import { DeviceRegistry } from './auth/deviceRegistry.js'
 import { SessionFeedSource } from './SessionFeedSource.js'
 import { LanTransport } from './transport/LanTransport.js'
 import { RemoteServer } from './RemoteServer.js'
-import type { RemoteSessionControl } from './RemoteServer.js'
+import type { RemoteSessionControl, RemoteWorkspaceReadModel, RemoteNoteStore } from './RemoteServer.js'
 
 // End-to-end over real sockets: pairing over HTTP, authenticated WS,
 // feed fan-out, and the scope gate applied to a live connection. The
@@ -28,6 +28,9 @@ function makeManager(): FakeManager {
   emitter.resolveTranscriptFile = vi.fn(async () => null)
   emitter.getSpawnCwd = vi.fn(() => null)
   emitter.getLastActivityAt = vi.fn(() => null)
+  // v2 overlay source; tests override per-session via mockReturnValueOnce
+  // or mockImplementation. Default null = structured runtime semantics.
+  emitter.getSpawnProviderRuntime = vi.fn(() => null)
   emitter.write = vi.fn(() => true)
   emitter.submitStagedPrompt = vi.fn(sessionId => emitter.write(sessionId, '\r'))
   emitter.resolveCondition = vi.fn(async () => ({ ok: true as const }))
@@ -128,7 +131,15 @@ async function openAuthed(): Promise<{ ws: WebSocket; frames: unknown[]; token: 
 
 export { dir, manager, registry, pairing, feedSource, server, baseUrl, pairDevice, connect, waitFor, framesOfType, openAuthed, restartServer }
 
-async function restartServer(): Promise<void> {
+async function restartServer(options?: {
+  /** v2 identity read model; absent keeps v1 summaries (and every
+   *  pre-existing test on this fixture runs exactly as before). */
+  workspace?: RemoteWorkspaceReadModel
+  /** v2 TLDR/Goal note stores; absent disables note frames. */
+  notes?: { tldr: RemoteNoteStore; goal: RemoteNoteStore }
+  /** v2 usage snapshot source; absent disables usage frames. */
+  getUsageSnapshot?: () => Promise<import('@shared/types/usage.js').UsageSnapshot | null>
+}): Promise<void> {
   await server?.stop()
   feedSource?.dispose()
   feedSource = new SessionFeedSource(manager as never)
@@ -138,6 +149,9 @@ async function restartServer(): Promise<void> {
     pairing,
     registry,
     transport: new LanTransport({ port: 0 }),
+    ...(options?.workspace ? { workspace: options.workspace } : {}),
+    ...(options?.notes ? { notes: options.notes } : {}),
+    ...(options?.getUsageSnapshot ? { getUsageSnapshot: options.getUsageSnapshot } : {}),
   })
   const { url } = await server.start()
   // The LAN URL uses the machine's LAN IP; loopback is fine for tests.

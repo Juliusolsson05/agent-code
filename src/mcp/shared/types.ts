@@ -1,8 +1,12 @@
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
 
+// `goal_loop` is harness-driven (main observes turn boundaries and re-prompts
+// through its own send interface), so unlike `workflows` it duplicates no
+// provider-native control plane and is safe on every provider (#1001).
 export type BuiltInMcpDomain =
   | 'tldr'
   | 'goal'
+  | 'goal_loop'
   | 'ping'
   | 'orchestration'
   | 'ai_workspace'
@@ -14,6 +18,7 @@ export type BuiltInMcpDomain =
 export const BUILT_IN_MCP_DOMAINS = [
   'tldr',
   'goal',
+  'goal_loop',
   'ping',
   'orchestration',
   'ai_workspace',
@@ -44,6 +49,7 @@ export const BUILT_IN_MCP_DOMAINS = [
 export const CONFIGURABLE_BUILT_IN_MCP_DOMAINS = [
   'tldr',
   'goal',
+  'goal_loop',
   'orchestration',
   'ai_workspace',
   'agent_transcripts',
@@ -101,6 +107,7 @@ const BUILT_IN_MCP_DOMAINS_BY_PROVIDER = {
   claude: [
     'tldr',
     'goal',
+    'goal_loop',
     'ping',
     'orchestration',
     'ai_workspace',

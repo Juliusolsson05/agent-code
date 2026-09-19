@@ -10,6 +10,9 @@ import { performanceTraceController } from '@main/performance/PerformanceTraceCo
 import { TldrStore } from '@main/tldr/TldrStore.js'
 import { registerGoalIpc, registerTldrIpc } from '@main/tldr/ipc.js'
 import { TldrEnforcement } from '@main/tldr/enforcement.js'
+import { GoalLoopStore } from '@main/goalLoop/GoalLoopStore.js'
+import { GoalLoopService } from '@main/goalLoop/GoalLoopService.js'
+import { registerGoalLoopIpc } from '@main/goalLoop/ipc.js'
 import { sweepStaleTldrHookFiles } from '@providers/shared/runtime/tldrHooks.js'
 import { ExternalControlMcpHost } from './externalControlMcp/host'
 import { registerOperatorControlTools } from './externalControlMcp/tools'
@@ -24,6 +27,11 @@ import { join } from 'path'
 import { performance } from 'perf_hooks'
 
 import { SessionManager } from '@main/sessionManager.js'
+import { SystemSuspensionTracker } from '@main/systemSuspension/SystemSuspensionTracker.js'
+import { readDarwinLastWakeAt } from '@main/systemSuspension/darwinWakeTime.js'
+import { AgentActivityRecorder } from '@main/agentActivity/AgentActivityRecorder.js'
+import { AgentActivityStore } from '@main/agentActivity/AgentActivityStore.js'
+import { AGENT_ACTIVITY_DIR } from '@main/storage/paths.js'
 import { createControlHost } from '@main/control/createControlHost.js'
 import { sessionHistoryControlCapabilities } from '@main/sessions/control.js'
 import { nativeHistoryControlCapabilities } from '@main/sessions/nativeHistoryControl.js'
@@ -101,6 +109,8 @@ import { ConversationLedger, readAgentNameAssignments } from '@main/conversation
 import { createConversationService } from '@main/conversations/service.js'
 import { listWorktreesForCwd } from '@main/ipc/git.js'
 import { AGENT_NAMES_FILE } from '@main/agentNames/ipc.js'
+import { RemoteWorkspaceProjection } from '@main/remote/workspaceProjection.js'
+import { getUsageSnapshot } from '@main/usage/usageService.js'
 import { CONVERSATIONS_LEDGER_FILE } from '@main/storage/paths.js'
 import { isSessionRecordingEnabled, isSessionRecordingAutoStart } from '@main/ipc/devDebug.js'
 import { registerAllIpc } from '@main/ipc/index.js'
@@ -260,6 +270,7 @@ const vaultService = new VaultService({
 // callbacks that fire after the assignment.
 let manager: SessionManager | null = null
 let remoteController: RemoteController | null = null
+let remoteWorkspaceProjection: RemoteWorkspaceProjection | null = null
 let tmuxRegistry: TmuxRegistry | null = null
 let stateProcessLock: Extract<StateProcessLock, { acquired: true }> | null = null
 let appRunJournal: AppRunJournal | null = null
@@ -669,8 +680,25 @@ async function startApp(): Promise<void> {
   // owners. Keep both before window creation: monitoring otherwise misses the
   // startup interval, while extension frames can race an unregistered scheme or
   // an unfinished install sweep if a window is allowed to open first.
-  powerMonitor.on('suspend', () => mainProbe.noteSuspend())
-  powerMonitor.on('resume', () => mainProbe.noteResume())
+  // #963: ONE owner of "the machine was not running". It is the only
+  // powerMonitor subscriber; MainProbe keeps its Electron-only suspend/resume
+  // evidence through the tracker's power-monitor events, and every working-time
+  // consumer (turn clock, provider adapters, journal) reads the same intervals
+  // instead of deriving sleep on its own. Started before any window or session
+  // exists so a sleep during startup is not missed.
+  const systemSuspension = new SystemSuspensionTracker({ power: powerMonitor, readLastWakeAt: readDarwinLastWakeAt })
+  systemSuspension.on('suspend', () => mainProbe.noteSuspend())
+  systemSuspension.on('resume', () => mainProbe.noteResume())
+  systemSuspension.on('suspension', (suspension: import('@shared/types/systemSuspension.js').SystemSuspension) => {
+    // Journaled so a debug bundle finally shows when the machine slept: before
+    // this, no run journal on record contained a single power event.
+    appRunJournal?.record({
+      area: 'system.power',
+      name: 'system.suspension',
+      data: { ...suspension, durationMs: suspension.resumedAt - suspension.suspendedAt },
+    })
+  })
+  systemSuspension.start()
   monitorCoordinator.start()
   // Remove capture scratch stranded by a crash or forced quit in an earlier
   // run. It is app-owned, so nothing else can depend on those partial files.
@@ -886,6 +914,11 @@ async function startApp(): Promise<void> {
       )
     },
   )
+  // Adapters seal streams a sleep severed (#963); the manager fans each
+  // suspension out to the live agent runtimes.
+  systemSuspension.on('suspension', (suspension: import('@shared/types/systemSuspension.js').SystemSuspension) => {
+    manager?.noteSystemSuspension(suspension)
+  })
   // Project ownership lives in renderer state, while backend/transcript facts
   // live in SessionManager. Construct this bridge only after both the MCP host
   // and manager exist so tool calls cannot observe a half-wired authority.
@@ -903,6 +936,22 @@ async function startApp(): Promise<void> {
   remoteController = new RemoteController({
     manager,
     journal: appRunJournal,
+    // v2 identity projection: one read model over the persisted workspace
+    // (titles, spoken names, tabs, pins) for the remote server's session
+    // summaries. Handed over as a GETTER because the store opens later in
+    // startup than this construction (same pattern as getThemeSettings);
+    // the projection itself observes the store, so remote disabled costs
+    // it nothing and enable picks up whatever has opened by then.
+    getWorkspace: () => remoteWorkspaceProjection,
+    // TLDR/Goal note stores — constructed later in startup (shared with the
+    // desktop's IPC surface); remote only reads and subscribes, the MCP
+    // tools remain the only writers.
+    getNotes: () => ({ tldr: tldrStore, goal: goalStore }),
+    // v2 usage indicator on the phone: the shared service's cached snapshot
+    // getter (a cache read per connected minute, never a fresh provider
+    // call unless the TTL already expired).
+    getUsageSnapshot: () =>
+      getUsageSnapshot().then(snapshot => snapshot).catch(() => null),
     clientDistDir: join(app.getAppPath(), 'out', 'remote-client'),
     // Tunnel binary resolution — bundled artifact first (packaged app),
     // then the third_party dev cache (populated by `npm run
@@ -959,10 +1008,19 @@ async function startApp(): Promise<void> {
   })
   registerTldrIpc(tldrStore, tldrEnforcement)
   registerGoalIpc(goalStore)
+  // Goal Loop (#1001): constructed before setDependencies for the same
+  // one-shot reason as every other built-in dependency — the MCP handlers
+  // close over the service object. start() itself warns-and-continues on
+  // unreadable persisted state, matching the sweep pattern above.
+  const goalLoopStore = new GoalLoopStore(join(STATE_DIR, 'goal-loop.json'))
+  const goalLoopService = new GoalLoopService({ manager, store: goalLoopStore })
+  await goalLoopService.start()
+  registerGoalLoopIpc(goalLoopService)
   builtInMcpHost.setDependencies({
     tldrStore,
     goalStore,
     tldrEnforcement,
+    goalLoopService,
     orchestrationBridge,
     agentManagementBridge,
     aiWorkspaceRegistry,
@@ -1045,6 +1103,41 @@ async function startApp(): Promise<void> {
     workspaceFileStore.observe(projectConversations)
     projectConversations(workspaceFileStore.windows())
   }
+  // Agent Analytics (#964): record when each agent works, per tab, repository
+  // and agent. Wired here because it needs all three owners it joins — the
+  // session manager's events, the persisted workspace (tabs, titles, names)
+  // and the machine suspensions it must never count as work.
+  const agentActivityRecorder = new AgentActivityRecorder({
+    manager: manager!,
+    store: new AgentActivityStore(AGENT_ACTIVITY_DIR),
+    // The first worktree entry is the main checkout, so every worktree of one
+    // repository folds into it (the conversations picker's family rule).
+    resolveRepoRoot: cwd => listWorktreesForCwd(cwd).then(worktrees => worktrees[0]?.path ?? cwd),
+  })
+  const projectActivity = (windows: readonly PersistedWindow[]) => {
+    void readAgentNameAssignments(AGENT_NAMES_FILE)
+      .then(names => agentActivityRecorder.updateWorkspace(windows, names))
+      .catch(() => undefined)
+  }
+  workspaceFileStore.observe(projectActivity)
+  projectActivity(workspaceFileStore.windows())
+  // v2 remote identity projection — constructed beside its only input, once
+  // the store has opened. Observed forever (remote disabled costs nothing);
+  // RemoteController reads it through getWorkspace at enable time.
+  remoteWorkspaceProjection = new RemoteWorkspaceProjection(
+    workspaceFileStore,
+    () => readAgentNameAssignments(AGENT_NAMES_FILE),
+  )
+  systemSuspension.on('suspension', (suspension: import('@shared/types/systemSuspension.js').SystemSuspension) => {
+    agentActivityRecorder.noteSuspension(suspension)
+  })
+  // Not awaited: recovering a crashed run's open intervals is file I/O, and window
+  // restore must not wait on analytics. No turn can start before a window has
+  // loaded and restored its sessions, so nothing is missed in the gap.
+  void agentActivityRecorder.start().catch((error: unknown) => {
+    // History is a convenience; failing to open it must never break startup.
+    console.warn('[agent-activity] recorder failed to start', error)
+  })
   // Dragging a window to the other monitor changes nothing the renderer knows
   // about, so it triggers no autosave. Without this, the feature's central
   // promise — it comes back where you left it — would depend on the user
@@ -1154,6 +1247,8 @@ async function startApp(): Promise<void> {
     agentCodeConventionsService,
     workspaceFileStore,
     conversationService,
+    systemSuspension,
+    agentActivityRecorder,
   })
   // Boot probe runs after the IPC is wired so its first `state` push
   // has a live subscriber to receive it on the renderer side.

@@ -464,7 +464,7 @@ export function getSettingsRegistry(
       title: 'Theme',
       description: 'Switch between built-in themes and your saved color schemes.',
       keywords: [
-        'theme', 'mode', 'dark', 'light', 'tokyonight', 'dim',
+        'theme', 'mode', 'nord', 'dark', 'light', 'tokyonight', 'dim',
         'custom', 'color', 'colour', 'scheme', 'saved', 'palette',
       ],
       control: { type: 'theme-picker' },
@@ -511,6 +511,27 @@ export function getSettingsRegistry(
         type: 'toggle',
         getValue: settings => settings.contrast,
         onToggle: (ctx, value) => ctx.onChange({ contrast: value }),
+      },
+    },
+    {
+      // WHY this lives under Extensions and defaults to ON: the anonymous
+      // api.github.com bucket is 60/hour per IP and an install spends two
+      // requests, so iterating on installs exhausts it and every further
+      // attempt 403s (#980, #982). Reading `gh auth token` raises the limit to
+      // 5000/hour. The credential is used only for those two requests, held
+      // only in main-process memory, never logged or persisted — and turning
+      // this off stops the gh subprocess entirely, restoring fully anonymous
+      // behavior.
+      id: 'extensions-github-cli-auth',
+      category: 'apps',
+      title: 'GitHub CLI Authentication',
+      description:
+        'Use your GitHub CLI login for extension installs and updates (5000 instead of 60 API requests per hour). The token is read per install, kept in memory only, and never stored. Turning this off makes installs fully anonymous again.',
+      keywords: ['github', 'cli', 'gh', 'authentication', 'token', 'rate limit', 'extensions', 'install'],
+      control: {
+        type: 'toggle',
+        getValue: settings => settings.extensionsGithubCliAuth,
+        onToggle: (ctx, value) => ctx.onChange({ extensionsGithubCliAuth: value }),
       },
     },
     {
@@ -751,6 +772,20 @@ export function getSettingsRegistry(
         type: 'toggle',
         getValue: settings => settings.defaultBuiltInMcpDomains.includes('goal'),
         onToggle: (ctx, value) => updateDefaultBuiltInMcpDomain(ctx, 'goal', value),
+      },
+    },
+    {
+      id: 'default-goal-loop-mcp',
+      category: 'agents',
+      title: 'Goal Loop MCP',
+      description:
+        'Let agents run harness-owned goal loops that keep re-prompting until the goal is complete, with a control strip and Cmd+Shift+Y overlay. Off by default. Applies to new agents and existing agents on their next reload. Per-agent overrides take precedence; Use Global MCP Settings clears them.',
+      keywords: ['mcp', 'goal', 'loop', 'persistence', 'autonomous', 'default', 'reload', 'existing agents'],
+      metadata: { scope: 'app', apply: 'new-session', storage: 'settings' },
+      control: {
+        type: 'toggle',
+        getValue: settings => settings.defaultBuiltInMcpDomains.includes('goal_loop'),
+        onToggle: (ctx, value) => updateDefaultBuiltInMcpDomain(ctx, 'goal_loop', value),
       },
     },
     {

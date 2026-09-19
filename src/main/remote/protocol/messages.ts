@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import type { PromptDeliveryResult } from '@shared/types/providerConfig.js'
+import type { UsageSnapshot } from '@shared/types/usage.js'
 
 // Wire schemas for the remote mobile companion's WebSocket protocol.
 //
@@ -149,6 +150,26 @@ export type OutboundSessionSummary = {
    *  "active 2m ago" label for the phone's picker. Read fresh from the
    *  manager at list time; the client bumps it locally from live events. */
   lastActivityAt: number | null
+  // ── v2 identity overlays (remote-v2 rebuild). Every field is OPTIONAL
+  // and server-authored, so the v1 tolerant-reader discipline covers both
+  // skew directions: an old bundle ignores unknown fields structurally, and
+  // a server with no workspace projection simply omits them. None of these
+  // widen the inbound union — the security scope is untouched.
+  /** User-assigned session title (renderer metadata via workspace.json). */
+  title?: string | null
+  /** Spoken agent name (Apollo/Boreas…), joined from the assignments file. */
+  agentName?: string | null
+  /** Project tab title for grouping the fleet list. */
+  tabTitle?: string | null
+  /** Pinned to the top of its dispatch list. */
+  pinned?: boolean
+  /** OpenCode execution runtime ('terminal' = the TUI runtime; absent =
+   *  the structured runtime, and always absent for other providers). The
+   *  phone uses this to label expectations honestly — the TUI runtime has
+   *  no streaming text and its Stop goes to a PTY, not an HTTP abort. */
+  providerRuntime?: 'terminal' | null
+  /** Live in-provider sub-agents working under this session. */
+  subAgentCount?: number
 }
 
 export type OutboundFrame =
@@ -170,6 +191,31 @@ export type OutboundFrame =
     }
   | { type: 'theme-settings'; themeSettings: Record<string, unknown> | null }
   | { type: 'session-list'; sessions: OutboundSessionSummary[] }
+  // ── v2 note frames (remote-v2 rebuild). TLDR and Goal records, keyed by
+  // SESSION id — the server owns the identity join (workspace projection →
+  // TldrStore identity), so the phone never learns the identity scheme and
+  // these frames drop safely on old bundles (unknown frame type, ignored).
+  // Read-only pushes: nothing on the phone can write these back.
+  | {
+      type: 'tldr-updated'
+      sessionId: string
+      text: string
+      /** ISO timestamp, matching TldrRecord.updatedAt exactly. */
+      updatedAt: string
+      revision: number
+    }
+  | {
+      type: 'goal-updated'
+      sessionId: string
+      text: string
+      updatedAt: string
+      revision: number
+    }
+  // v2: account usage snapshot (normalized provider limit rows), pushed at
+  // connect and on a slow interval while phones are connected. Read-only;
+  // the shape is the shared UsageSnapshot so the phone renders the same
+  // rows the desktop's Usage view does. Old bundles drop the frame safely.
+  | { type: 'usage-snapshot'; snapshot: UsageSnapshot }
   | {
       type: 'session-event'
       channel:

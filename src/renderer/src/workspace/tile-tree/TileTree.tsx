@@ -1,4 +1,5 @@
 import { TldrPane } from '@renderer/features/tldr/TldrOverlay'
+import { GoalLoopPane } from '@renderer/features/goal-loop/GoalLoopPane'
 import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
 import { memo, useCallback, useRef } from 'react'
 import { useSessionRuntime } from '@renderer/workspace/useSessionRuntime'
@@ -210,6 +211,9 @@ const WorkspaceLeaf = memo(function WorkspaceLeaf({
   }) === 'terminal') {
     return (
       <TldrPane runtime={runtime} provider={kind} identity={meta?.tldrIdentity ?? renderedSessionId} enabled={Boolean(meta?.builtInMcpDomains?.includes('tldr'))} goalEnabled={Boolean(meta?.builtInMcpDomains?.includes('goal'))}>
+        {/* Goal Loop strip/overlay rides inside TldrPane's relative container;
+            keyed by sessionId because the loop's actuator is the session. */}
+        <GoalLoopPane sessionId={renderedSessionId} />
         <MountedAgentTerminalOwner sessionId={renderedSessionId}>
           <AgentTerminalLeaf
             sessionId={renderedSessionId}
@@ -244,6 +248,7 @@ const WorkspaceLeaf = memo(function WorkspaceLeaf({
   const LeafComponent = provider.TileLeaf
   return (
     <TldrPane runtime={runtime} provider={kind} identity={meta?.tldrIdentity ?? renderedSessionId} enabled={Boolean(meta?.builtInMcpDomains?.includes('tldr'))} goalEnabled={Boolean(meta?.builtInMcpDomains?.includes('goal'))}>
+      <GoalLoopPane sessionId={renderedSessionId} />
       <LeafComponent
         sessionId={renderedSessionId}
         runtime={runtime}

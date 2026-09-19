@@ -100,7 +100,11 @@ export function useBootstrap(
             // a layout change.
             if (defaultWorkspaceMode === 'dispatch') {
               try {
-                await enterDispatchMode('project')
+                // Global, not project (#973): a fresh install has exactly one
+                // tab, so project scope would show the same agents while
+                // hiding the scope switch's purpose; global is also the scope
+                // the owner runs in and the one every later tab benefits from.
+                await enterDispatchMode('global')
               } catch (dispatchErr) {
                 // Non-fatal: user lands in grid mode, can flip later.
                 // We don't surface a toast because a fresh-install user

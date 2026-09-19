@@ -12,7 +12,6 @@ import { pid, versions } from 'process'
 
 import type {
   PerformanceConfig,
-  PanePerformanceStats,
   PerformanceRecord,
   PerformanceSnapshot,
 } from '@shared/performance/types.js'
@@ -314,15 +313,6 @@ export class PerformanceService {
       runDir: this.runDir,
       files,
     }
-  }
-
-  async recordPaneProcessStats(stats: PanePerformanceStats[]): Promise<void> {
-    if (!this.enabled || !this.runDir || stats.length === 0) return
-    await queuePerformanceAppend(
-      this.runDir,
-      'pane-process',
-      stats.map(stat => JSON.stringify(stat)),
-    )
   }
 
   private recordSpan(input: PerformanceRecord): void {

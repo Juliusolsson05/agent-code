@@ -226,6 +226,8 @@ export type CommandContext = {
      *  reload, so a declined warning leaves the session untouched. */
     openRootManagementPrompt: (sessionId: string) => void
     openUsageModal: () => void
+    /** Open the Agent Analytics modal (#964); the modal fetches its own summary. */
+    openAgentAnalytics: () => void
     openKeyVault: () => void
     toggleGitBar: () => void
     toggleWorktreesBar: () => void
@@ -296,6 +298,7 @@ export type CommandContext = {
      * `closePalette` and nothing else used to be here.
      */
     closeUsageModal: () => void
+    closeAgentAnalytics: () => void
     closeKeyboardShortcuts: () => void
     closeAgentActivity: () => void
     closeCloseOldAgents: () => void
@@ -341,6 +344,8 @@ export type CommandContext = {
     paletteMode: PaletteMode
     /** The Usage modal is on screen. */
     usageModalOpen: boolean
+    /** The Agent Analytics modal is on screen. */
+    agentAnalyticsOpen: boolean
     /** The Keyboard Shortcuts reference is on screen. */
     keyboardShortcutsOpen: boolean
     /** The Agent Activity modal is on screen. */

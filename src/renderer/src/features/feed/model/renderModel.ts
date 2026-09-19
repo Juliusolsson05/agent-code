@@ -108,6 +108,13 @@ export type FeedRenderItem =
       order: FeedRenderItemOrder
     }
   | {
+      /** The newest turn was sealed because the machine slept, and the pane is
+       *  idle (#963). Paints in the work slot; see RenderContentKind. */
+      type: 'sleep-interruption'
+      key: string
+      order: FeedRenderItemOrder
+    }
+  | {
       type: 'empty'
       key: string
       provider: AgentProvider
@@ -135,6 +142,8 @@ function labelForItem(item: FeedRenderItem, provider: AgentProvider): string {
       )
         ? `work ${item.phase} · ${item.toolName}`
         : `work ${item.phase}`
+    case 'sleep-interruption':
+      return 'interrupted while asleep'
     case 'empty':
       return `waiting for ${getRendererProviderCapabilities(provider).name}…`
   }
@@ -152,6 +161,7 @@ function slotForItem(item: FeedRenderItem): DebugVisibleRow['slot'] {
     case 'semantic-text':
       return 'semantic'
     case 'work':
+    case 'sleep-interruption':
       return 'work'
     case 'empty':
       return 'empty'

@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import type { ReactNode } from 'react'
 import { Button } from '@renderer/components/ui/button'
-import type { MonitorHistoryPage } from '@shared/performance/monitorHistory.js'
+import type { MonitorHistoryPage, MonitorHistoryPoint } from '@shared/performance/monitorHistory.js'
+import { TimeSeriesChart } from '@renderer/components/charts/TimeSeriesChart'
+import { formatBytes, formatCpu, formatMs } from './format'
 import type { MonitorIncidentSummary } from '@shared/performance/monitorIncidents.js'
-import { MONITOR_POLICY } from '@shared/performance/monitorPolicy.js'
 import { Incidents } from './Incidents'
 
-const ranges = [{ label: '15 min', ms: 15 * 60_000 }, { label: '24 hours', ms: 24 * 60 * 60_000 }, { label: '7 days', ms: 7 * 24 * 60 * 60_000 }] as const
+const ranges = [{ label: '15 min', ms: 15 * 60_000 }, { label: '1 hour', ms: 60 * 60_000 }, { label: '6 hours', ms: 6 * 60 * 60_000 }, { label: '24 hours', ms: 24 * 60 * 60_000 }, { label: '7 days', ms: 7 * 24 * 60 * 60_000 }] as const
 
 export function Timeline({ incidents }: { incidents: MonitorIncidentSummary[] }) {
   const [range, setRange] = useState<(typeof ranges)[number]>(ranges[0])
@@ -44,34 +46,33 @@ export function Timeline({ incidents }: { incidents: MonitorIncidentSummary[] })
     return () => { disposed = true; clearTimeout(timer) }
   }, [live, range, revision, to])
 
-  const path = useMemo(() => {
+  const [hoverAt, setHoverAt] = useState<number | null>(null)
+  const [incidentFocus, setIncidentFocus] = useState<{ key: string; nonce: number } | null>(null)
+  // Three lanes on one time axis with one crosshair. WHY lanes instead of one
+  // chart with every series: memory, CPU and delay have different units, and
+  // a shared y-axis would flatten two of them into the floor.
+  const lanes = useMemo(() => {
     const points = page?.points ?? []
-    if (!points.length) return ''
-    const first = points[0]!.at
-    const duration = Math.max(1, points.at(-1)!.at - first)
-    const sourceStep = page?.resolution === '1s' ? 1000 : page?.resolution === '10s' ? 10_000 : 60_000
-    // The worker reserves response headroom for incident summaries and returns
-    // at most 300 chart buckets. Use that same density when recognizing gaps;
-    // a seven-day overview would otherwise mistake every healthy 34-minute
-    // bucket step for missing data and draw 300 disconnected points.
-    const expectedStep = Math.max(sourceStep, (page!.to - page!.from) / MONITOR_POLICY.historyPagePoints)
-    const peak = Math.max(1, ...points.map(point => point.main?.loopMaxMs ?? 0))
-    let penDown = false
-    let previousAt: number | null = null
-    let result = ''
-    for (const point of points) {
-      const value = point.main?.loopMaxMs
-      if (value === null || value === undefined || point.main?.sleepGap) {
-        penDown = false
-        previousAt = point.at
-        continue
-      }
-      if (previousAt !== null && (point.at <= previousAt || point.at - previousAt > expectedStep * 3)) penDown = false
-      result += `${penDown ? 'L' : 'M'}${(point.at - first) / duration * 600},${100 - value / peak * 90} `
-      penDown = true
-      previousAt = point.at
+    const series = (id: string, label: string, colorClass: string, read: (point: MonitorHistoryPoint) => number | null | undefined) => ({
+      id, label, colorClass, points: points.map(point => ({ at: point.at, value: read(point) ?? null })),
+    })
+    return {
+      memory: [
+        series('app', 'App memory', 'text-accent', point => point.processes?.memoryBytes),
+        series('heap', 'Main JS heap', 'text-info', point => point.main?.heapUsed),
+      ],
+      cpu: [
+        series('app', 'App CPU', 'text-accent', point => point.processes?.cpuPercent),
+        series('main', 'Main process', 'text-info', point => point.main?.cpuPercent),
+      ],
+      // A sleep-gap sample's loop delay is the suspension itself; hide it so
+      // every lid close does not draw a stall.
+      delay: [
+        series('loop', 'Main loop peak', 'text-warning', point => point.main?.sleepGap ? null : point.main?.loopMaxMs),
+        series('lag', 'Worst renderer lag', 'text-accent', point => point.windows.maxLagMs),
+        series('input', 'Slowest input', 'text-info', point => point.windows.maxInputMs || null),
+      ],
     }
-    return result
   }, [page])
   const shownIncidents = useMemo(() => {
     const merged = new Map<string, MonitorIncidentSummary>()
@@ -92,24 +93,45 @@ export function Timeline({ incidents }: { incidents: MonitorIncidentSummary[] })
       : window.api.getMonitorHistoryIncident(incident.at, incident.id)
   }, [liveSignature])
 
-  return <div className="space-y-5">
+  // Panning moves a paused window by half its width. WHY half: consecutive
+  // views overlap, so an event near an edge is never split out of sight.
+  const pan = (direction: -1 | 1) => {
+    const base = live ? Date.now() : to
+    setTo(Math.min(Date.now(), base + direction * range.ms / 2))
+    setLive(false)
+  }
+  const markers = shownIncidents.map(incident => ({
+    key: `${incident.at}:${incident.id}`, at: incident.at,
+    label: `${incident.rule.replace(/-/g, ' ')} · ${new Date(incident.at).toLocaleTimeString()}`,
+    tone: incident.severity === 'error' ? 'danger' as const : 'warning' as const,
+    onSelect: () => setIncidentFocus(current => ({ key: `${incident.at}:${incident.id}`, nonce: (current?.nonce ?? 0) + 1 })),
+  }))
+  const lane = (title: string, subtitle: string, chart: ReactNode) => (
+    <section className="rounded-slab border border-border bg-surface px-3 pb-1 pt-2" aria-label={title}>
+      <div className="flex items-baseline justify-between gap-2"><h3 className="text-[12px] font-semibold text-ink">{title}</h3><span className="text-[10px] text-muted">{subtitle}</span></div>
+      {chart}
+    </section>
+  )
+
+  return <div className="space-y-4">
     <div className="flex flex-wrap items-center justify-between gap-3">
-      <div><h2 className="font-medium">Responsiveness timeline</h2><p className="mt-1 text-[11px] text-muted">Local rollups; gaps and shortened retention remain visible in coverage.</p></div>
-      <div className="flex flex-wrap gap-2">{ranges.map(option => <Button key={option.label} size="sm" variant={range === option ? 'default' : 'ghost'} onClick={() => { setRange(option); setRevision(value => value + 1) }}>{option.label}</Button>)}
-        <Button size="sm" variant="outline" onClick={() => { if (live) { setTo(Date.now()); setLive(false) } else { setLive(true); setRevision(value => value + 1) } }}>{live ? 'Pause timeline' : 'Resume live'}</Button>
+      <div><h2 className="font-medium">History</h2><p className="mt-1 text-[11px] text-muted">{page ? `${new Date(page.from).toLocaleString()} – ${live ? 'now' : new Date(page.to).toLocaleString()} · ${page.resolution} samples, peak per bucket` : 'Local rollups kept for up to 7 days.'}</p></div>
+      <div className="flex flex-wrap items-center gap-1">
+        {ranges.map(option => <Button key={option.label} size="sm" variant={range === option ? 'secondary' : 'ghost'} aria-pressed={range === option} onClick={() => { setRange(option); setRevision(value => value + 1) }}>{option.label}</Button>)}
+        <span className="mx-1 h-4 w-px bg-border" aria-hidden="true" />
+        <Button size="sm" variant="outline" onClick={() => pan(-1)} aria-label="Show earlier">← Earlier</Button>
+        <Button size="sm" variant="outline" disabled={live} onClick={() => pan(1)} aria-label="Show later">Later →</Button>
+        <Button size="sm" variant={live ? 'secondary' : 'default'} onClick={() => { if (live) { setTo(Date.now()); setLive(false) } else { setLive(true); setRevision(value => value + 1) } }}>{live ? 'Pause' : 'Back to live'}</Button>
       </div>
     </div>
     {!page ? <p role="status" className="text-muted">{error ? 'History is temporarily unavailable. Live monitoring continues.' : 'Loading local history…'}</p> : <>
       {error && <p role="status" className="text-[11px] text-muted">History reading delayed; showing the last loaded view.</p>}
-      <section className="rounded-slab border border-border bg-canvas p-3">
-        <div className="flex justify-between text-[11px]"><span>Main event-loop peak</span><span className="text-muted">{page.resolution} source · {page.points.length.toLocaleString()} chart points</span></div>
-        <svg viewBox="0 0 600 112" className="my-2 h-28 w-full text-accent" role="img" aria-label={`Main event-loop peak over ${range.label}; ${page.points.length} local points`}>
-          <path d="M0 100H600" stroke="currentColor" opacity="0.15" /><path d={path} stroke="currentColor" strokeWidth="2" fill="none" vectorEffect="non-scaling-stroke" />
-        </svg>
-        <div className="flex justify-between text-[10px] text-muted"><span>{page.points[0] ? new Date(page.points[0].at).toLocaleString() : 'No retained data'}</span><span>{page.points.at(-1) ? new Date(page.points.at(-1)!.at).toLocaleString() : ''}</span></div>
-      </section>
-      <p className="text-[11px] text-muted">{(page.status.bytes / 1024 / 1024).toFixed(1)} MiB stored · {page.status.points.toLocaleString()} tiered points · {page.status.state}{page.status.shortened ? ' · retention shortened by capacity' : ''}{page.nextCursor ? ' · older points available outside this bounded view' : ''}</p>
+      {lane('Memory', 'Resident memory of all Agent Code processes', <TimeSeriesChart label="Memory history" series={lanes.memory} from={page.from} to={page.to} formatValue={formatBytes} minCeiling={512 * 1024 ** 2} markers={markers} hoverAt={hoverAt} onHoverAt={setHoverAt} emptyLabel="No retained data in this range" />)}
+      {lane('CPU', '100% = one core', <TimeSeriesChart label="CPU history" series={lanes.cpu} from={page.from} to={page.to} formatValue={formatCpu} minCeiling={100} markers={markers} hoverAt={hoverAt} onHoverAt={setHoverAt} emptyLabel="No retained data in this range" />)}
+      {lane('Responsiveness', 'Peak delay per bucket', <TimeSeriesChart label="Responsiveness history" series={lanes.delay} from={page.from} to={page.to} formatValue={formatMs} minCeiling={50} markers={markers} hoverAt={hoverAt} onHoverAt={setHoverAt}
+        thresholds={[{ value: 100, label: 'Slow · 100 ms', tone: 'warning' }, { value: 1000, label: 'Stall · 1 s', tone: 'danger' }]} emptyLabel="No retained data in this range" />)}
+      <p className="text-[10px] text-muted">{formatBytes(page.status.bytes)} stored · {page.status.points.toLocaleString()} tiered points · {page.status.state}{page.status.shortened ? ' · retention shortened by capacity' : ''} · click a marker to open its incident</p>
     </>}
-    <section className="space-y-3"><h2 className="font-medium">Detected incidents</h2><Incidents incidents={shownIncidents} readIncident={readIncident} /></section>
+    <section className="space-y-3"><h2 className="font-medium">Detected incidents</h2><Incidents incidents={shownIncidents} readIncident={readIncident} focus={incidentFocus} /></section>
   </div>
 }

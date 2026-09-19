@@ -43,19 +43,19 @@ function currentModeIsLight(): boolean {
 }
 
 function defineEditorThemes(monaco: typeof Monaco): void {
-  const bg = normalizeMonacoThemeColor(readToken('--theme-editor-bg', '#0a0a0a'), '#0a0a0a')
-  const fg = normalizeMonacoThemeColor(readToken('--theme-editor-fg', '#e8e8e6'), '#e8e8e6')
-  const muted = normalizeMonacoThemeColor(readToken('--theme-muted', '#5a5a56'), '#5a5a56')
-  const border = normalizeMonacoThemeColor(readToken('--theme-border', '#1a1a1c'), '#1a1a1c')
-  const borderHi = normalizeMonacoThemeColor(readToken('--theme-border-hi', '#272729'), '#272729')
-  const accent = normalizeMonacoThemeColor(readToken('--theme-accent', '#7dd3a0'), '#7dd3a0')
+  const bg = normalizeMonacoThemeColor(readToken('--theme-editor-bg', '#171b21'), '#171b21')
+  const fg = normalizeMonacoThemeColor(readToken('--theme-editor-fg', '#d8dee9'), '#d8dee9')
+  const muted = normalizeMonacoThemeColor(readToken('--theme-muted', '#686d75'), '#686d75')
+  const border = normalizeMonacoThemeColor(readToken('--theme-border', '#262b35'), '#262b35')
+  const borderHi = normalizeMonacoThemeColor(readToken('--theme-border-hi', '#3b4252'), '#3b4252')
+  const accent = normalizeMonacoThemeColor(readToken('--theme-accent', '#88c0d0'), '#88c0d0')
   const selection = normalizeMonacoThemeColor(
     readToken('--theme-editor-selection-bg', ''),
-    normalizeMonacoThemeColorAlpha(accent, '33', '#7dd3a0'),
+    normalizeMonacoThemeColorAlpha(accent, '33', '#88c0d0'),
   )
   const inactiveSelection = normalizeMonacoThemeColor(
     readToken('--theme-editor-selection-inactive-bg', ''),
-    normalizeMonacoThemeColorAlpha(accent, '22', '#7dd3a0'),
+    normalizeMonacoThemeColorAlpha(accent, '22', '#88c0d0'),
   )
   const currentLine = normalizeMonacoThemeColor(
     readToken('--theme-editor-current-line-bg', ''),
@@ -63,15 +63,15 @@ function defineEditorThemes(monaco: typeof Monaco): void {
   )
   const scrollbarBackground = normalizeMonacoThemeColor(
     readToken('--theme-editor-scrollbar-bg', ''),
-    normalizeMonacoThemeColorAlpha(muted, '55', '#5a5a56'),
+    normalizeMonacoThemeColorAlpha(muted, '55', '#686d75'),
   )
   const scrollbarHover = normalizeMonacoThemeColor(
     readToken('--theme-editor-scrollbar-hover-bg', ''),
-    normalizeMonacoThemeColorAlpha(muted, '88', '#5a5a56'),
+    normalizeMonacoThemeColorAlpha(muted, '88', '#686d75'),
   )
   const scrollbarActive = normalizeMonacoThemeColor(
     readToken('--theme-editor-scrollbar-active-bg', ''),
-    normalizeMonacoThemeColorAlpha(accent, 'aa', '#7dd3a0'),
+    normalizeMonacoThemeColorAlpha(accent, 'aa', '#88c0d0'),
   )
 
   const sharedColors = {
