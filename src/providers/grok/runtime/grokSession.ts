@@ -2,7 +2,7 @@
 //
 // This class is a thin translator, the job OpencodeTerminalSession does for
 // OpenCode: it starts the app-owned helpers in the one order the recordings
-// prove (leader leader → session over control → guard → prepared launch →
+// prove (leader → session over control → guard → prepared launch →
 // terminal PTY), constructs GrokHeadless around them, and maps the package's
 // events onto the AgentSession contract SessionManager already speaks.
 // Everything about HOW native Grok is observed — acceptance, queue semantics,

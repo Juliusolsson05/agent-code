@@ -523,7 +523,9 @@ function TargetList({ skill, targets, onError }: {
     <div className="flex flex-col gap-1 border-t border-panel-border pt-2 text-[10px]">
       {targets.map(target => (
         <div key={target.id} className="flex items-center justify-between gap-3">
-          <span className="min-w-0 flex-1 truncate text-muted">{target.displayPath || target.id} · {target.state}</span>
+          {/* An unsupported row names the provider, which is the one thing it
+              is about; it has no path (#1037 review). */}
+          <span className="min-w-0 flex-1 truncate text-muted">{target.state === 'unsupported' ? target.providers.join(' + ') : (target.displayPath || target.id)} · {target.state}</span>
           {target.state === 'installed' || target.state === 'conflict' || target.state === 'retired' ? (
             <button
               type="button"
