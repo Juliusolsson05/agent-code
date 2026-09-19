@@ -513,6 +513,21 @@ claude 2.1.143 / codex 0.130.0 are stale versus the 2.1.278 / 0.155.1 in daily u
   (one per composer). Optional follow-up: a single app-level subscription.
 
 ### Progress log
+- 2026-09-19 09:30Z:
+  - **MERGED:** #1035 (`39323fda`, Stage 8's stable channel). The first nightly (run 35430444567) PUBLISHED: 4 fixed-name assets, prerelease, marker `built-from: 7446aef3`, both arches `accepted / Notarized Developer ID`, and `releases/latest` still 404. A forced re-run (35432092386) is in flight to prove asset replacement.
+  - **#1013:** the verification of every fix commit is APPROVE (2528/2528). Its one minor, the truncated backup on a failed write, is fixed (`3f61d426`). Merge on green CI.
+  - **#1028:** the third review is small; addressed in `4181873a` (a typed prompt seeds busy; the Claude-Esc limit is pinned and tracked in #1040). Merge on green CI.
+  - **New PRs:**
+    - #1041: T5 #843 part 1, replay DEC-mode restore, real OpenCode recording plus real headless xterm. Under review.
+    - #1042: the security deps, superseding #991 with a surgical lockfile that both npm 10 and npm 11 gates accept.
+    - #1036, #1037 and #1039 are under review.
+  - **Stage 6 decisions:**
+    - #987 is DEFERRED post-release: Monaco's TS API was removed, the MCP SDK is duplicated with workflow-mcp, and the LSP types changed.
+    - #991 is superseded by #1042.
+    - #945 and #935 CONFLICT; rebase them after #1013.
+    - #931 (plan only) and #876 (feed order, #868) are clean; review, then merge.
+    - #575 (OpenCode apply_patch rendering, a July draft) goes post-release.
+  - **#995's plan branch** is confirmed on origin.
 - 2026-09-19 08:45Z:
   - **Open PRs, with state:**
     - **#1013 (unified stage):** parity sweep A's findings are all covered; its one new fix is Close Tab closing the commanded agent's project (`461ab40f`). A verification reviewer is running on all the fix commits.
