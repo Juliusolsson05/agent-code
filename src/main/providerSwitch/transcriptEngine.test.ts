@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   importOpencodeSession: vi.fn(),
   listOpencodeModels: vi.fn(),
   readResolvedOpencodeConfig: vi.fn(),
+  readOpencodeRecentModels: vi.fn(async () => [] as string[]),
 }))
 
 vi.mock('fs/promises', () => ({ readFile: mocks.readFile }))
@@ -26,6 +27,7 @@ vi.mock('@providers/opencode/runtime/opencodeCliSessions.js', () => ({
   importOpencodeSession: mocks.importOpencodeSession,
   listOpencodeModels: mocks.listOpencodeModels,
   readResolvedOpencodeConfig: mocks.readResolvedOpencodeConfig,
+  readOpencodeRecentModels: mocks.readOpencodeRecentModels,
   opencodeExportSessionId: (value: { info?: { id?: string } }) => value.info?.id,
 }))
 
@@ -221,3 +223,54 @@ describe('host transcript adapter registry', () => {
 function jsonl(value: Record<string, unknown>): string {
   return JSON.stringify(value)
 }
+
+// B18: switching to OpenCode pinned `opencode/big-pickle`, the first row of
+// `opencode models`, onto every imported message. The inputs below are the
+// owner's REAL OpenCode state (testing/fixtures/opencode-model-selection:
+// model.json and the `opencode models` output, recorded 2026-09-19). The
+// recents are parsed by the real parser; only the file and CLI I/O are stubbed.
+describe('OpenCode switch target model (B18)', () => {
+  const fixtures = new URL('../../../testing/fixtures/opencode-model-selection/', import.meta.url)
+  const recordedModels = async () => (await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises'))
+    .readFile(new URL('opencode-models.txt', fixtures), 'utf8')
+    .then(text => text.split(/\r?\n/u).map(line => line.trim()).filter(line => /^[^/\s]+\/.+/u.test(line)))
+  const recordedRecents = async () => {
+    const { opencodeRecentModelsFromState } = await vi.importActual<typeof import('@providers/opencode/runtime/opencodeCliSessions.js')>('@providers/opencode/runtime/opencodeCliSessions.js')
+    const text = await (await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')).readFile(new URL('model.json', fixtures), 'utf8')
+    return opencodeRecentModelsFromState(JSON.parse(text) as unknown)
+  }
+
+  beforeEach(async () => {
+    vi.clearAllMocks()
+    // The owner's resolved config sets no model: this is the case that fell
+    // through to the catalog's first row.
+    mocks.readResolvedOpencodeConfig.mockResolvedValue({})
+    mocks.listOpencodeModels.mockResolvedValue(await recordedModels())
+    mocks.readOpencodeRecentModels.mockResolvedValue(await recordedRecents())
+  })
+
+  it('uses the model the user last picked, not the first row of the catalog', async () => {
+    const profile = await getHostTranscriptAdapter('opencode').targetProfile('/project')
+    expect(`${profile.modelProvider}/${profile.model}`).toBe('zai-coding-plan/glm-5.3')
+  })
+
+  it('skips a recent model this install no longer offers', async () => {
+    const [newest, ...older] = await recordedRecents()
+    const offered = (await recordedModels()).filter(model => model !== newest)
+    mocks.listOpencodeModels.mockResolvedValue(offered)
+    const profile = await getHostTranscriptAdapter('opencode').targetProfile('/project')
+    // The next most recent pick that is still offered, in recency order.
+    expect(`${profile.modelProvider}/${profile.model}`).toBe(older.find(model => offered.includes(model)))
+  })
+
+  it('asks the user to pick a model instead of guessing when there is no usable recent', async () => {
+    mocks.readOpencodeRecentModels.mockResolvedValue([])
+    await expect(getHostTranscriptAdapter('opencode').targetProfile('/project')).rejects.toThrow(/select a model in OpenCode/)
+  })
+
+  it('still prefers a configured model over every recent', async () => {
+    mocks.readResolvedOpencodeConfig.mockResolvedValue({ model: 'anthropic/claude-opus-4-6' })
+    const profile = await getHostTranscriptAdapter('opencode').targetProfile('/project')
+    expect(`${profile.modelProvider}/${profile.model}`).toBe('anthropic/claude-opus-4-6')
+  })
+})
