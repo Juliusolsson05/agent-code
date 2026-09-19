@@ -7,7 +7,6 @@ import type { HistoryWindow } from '@renderer/session-runtime/historyBoundary.js
 import type {
   ReaderModeState,
   SpotlightState,
-  TileTabsState,
 } from '@renderer/workspace/types'
 import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
 import type { ConfigurableBuiltInMcpDomain } from '@mcp/shared/types'
@@ -31,7 +30,6 @@ export type WorkspaceRefs = {
   stateRef: MutableRefObject<WorkspaceState>
   latestStateRef: MutableRefObject<WorkspaceState>
   latestRuntimesRef: MutableRefObject<Record<SessionId, SessionRuntime>>
-  latestTileTabsRef: MutableRefObject<TileTabsState | null>
   dangerousAgentsRef: MutableRefObject<boolean>
   useProxyStreamingRef: MutableRefObject<boolean>
   defaultBuiltInMcpDomainsRef: MutableRefObject<ConfigurableBuiltInMcpDomain[]>
@@ -70,7 +68,6 @@ export type WorkspaceRefs = {
 export function useWorkspaceRefs(
   initialState: WorkspaceState,
   initialRuntimes: Record<SessionId, SessionRuntime>,
-  initialTileTabs: TileTabsState | null,
   dangerousAgentsEnabled: boolean,
   useProxyStreaming: boolean,
   defaultBuiltInMcpDomains: ConfigurableBuiltInMcpDomain[],
@@ -102,7 +99,6 @@ export function useWorkspaceRefs(
   const stateRef = useRef(initialState)
   const latestStateRef = useRef(initialState)
   const latestRuntimesRef = useRef(initialRuntimes)
-  const latestTileTabsRef = useRef(initialTileTabs)
   const dangerousAgentsRef = useRef(dangerousAgentsEnabled)
   const useProxyStreamingRef = useRef(useProxyStreaming)
   const defaultBuiltInMcpDomainsRef = useRef(defaultBuiltInMcpDomains)
@@ -132,7 +128,6 @@ export function useWorkspaceRefs(
     // Ref mirror of runtimes so the debounced save callback can read
     // current drafts without re-creating the callback on every render.
     latestRuntimesRef,
-    latestTileTabsRef,
 
     // Settings mirror refs. Ref-mirrored so the spawn callbacks read
     // the live value without having to subscribe per-call.

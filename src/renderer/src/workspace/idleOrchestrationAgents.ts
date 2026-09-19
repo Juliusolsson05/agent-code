@@ -40,7 +40,7 @@ type Runtimes = Record<SessionId, SessionRuntime>
  * `when`, which the palette evaluates for every command on every render, and
  * idleness scans transcripts. The run re-derives the real target list and says
  * so when nothing is idle, so offering the command for a workspace whose only
- * orchestration child is buried or busy costs one toast, while an exact gate
+ * orchestration child is busy costs one toast, while an exact gate
  * would cost transcript scans on every palette keystroke.
  */
 export function hasOrchestrationAgents(state: WorkspaceState): boolean {

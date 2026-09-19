@@ -43,14 +43,14 @@ export const AGENT_MANAGEMENT_MCP_INSTRUCTIONS = `Agent Management controls Agen
  * Instructions for a session whose user enabled Root Agent Code Management.
  *
  * WHY the caller's own session ID is spelled out: the `ac_*` catalog can
- * close, bury, detach, reload and provider-switch ANY session, and the model
+ * close, reload and provider-switch ANY session, and the model
  * only knows itself as "this conversation". Naming the ID is the one fact
  * that lets it keep its own pane out of a reorganization. The authorization
  * language mirrors Agent Management's, with a wider allowed surface (placement
  * and focus) because reorganizing the workspace is the feature's purpose.
  */
 export function rootManagementInstructions(sessionId: string): string {
-  return `Root Agent Code Management is enabled for this agent by an explicit user action confirmed in a dialog; it is off for every other agent. The ac_* tools are the application-wide operator control surface: every window, project tab, agent, terminal and layout in Agent Code, not only the caller's project. Start with ac_app_describe, then ac_app_observe or ac_app_windows for identities; use stable session and tab IDs, never pane labels. Your own Agent Code session ID is ${sessionId}: never close, bury, detach, reload, rewind or switch the provider of that session. Prefer reads, make the smallest layout change that satisfies the user's current request, and re-read the layout revision after every mutation. Never close, kill, bury, restore, switch providers for, or prompt another agent unless the user's current request names that agent or that outcome; a request to organize, tidy or focus the workspace authorizes placement, focus, pin and title changes only. The app's own confirmation dialogs still apply, and a declined dialog is a refusal, not a reason to retry. When you finish, say exactly what you changed and where.`
+  return `Root Agent Code Management is enabled for this agent by an explicit user action confirmed in a dialog; it is off for every other agent. The ac_* tools are the application-wide operator control surface: every window, project tab, agent, terminal and layout in Agent Code, not only the caller's project. Start with ac_app_describe, then ac_app_observe or ac_app_windows for identities; use stable session and tab IDs, never pane labels. Your own Agent Code session ID is ${sessionId}: never close, reload, rewind or switch the provider of that session. Prefer reads, make the smallest layout change that satisfies the user's current request, and re-read the layout revision after every mutation. Never close, kill, switch providers for, or prompt another agent unless the user's current request names that agent or that outcome; a request to organize, tidy or focus the workspace authorizes placement, focus, pin and title changes only. The app's own confirmation dialogs still apply, and a declined dialog is a refusal, not a reason to retry. When you finish, say exactly what you changed and where.`
 }
 
 export function createBuiltInMcpServer(
@@ -321,7 +321,7 @@ function registerAgentManagementTools(
     {
       title: 'List Project Agents',
       description:
-        'Lists every Agent Code agent in the caller\'s exact project tab, including visible panes, detached Dispatch agents, and buried agents. Returns transcript paths/availability, backend and activity state, last activity, idle duration, conditions, and relationships. This read-only audit does not wake agents.',
+        'Lists every Agent Code agent in the caller\'s exact project, including the ones that are not in a lane. Returns transcript paths/availability, backend and activity state, last activity, idle duration, conditions, and relationships. This read-only audit does not wake agents.',
       inputSchema: {},
       annotations: {
         readOnlyHint: true,

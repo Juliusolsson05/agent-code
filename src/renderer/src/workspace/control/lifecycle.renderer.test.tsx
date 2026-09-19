@@ -13,9 +13,8 @@ afterEach(() => { cleanup(); useAppStore.setState(original, true); window.api = 
 const context = { requestId: 'original-call', operationId: 'original-call', caller: { kind: 'external' as const, id: 'operator' }, owner: { kind: 'window' as const, windowId: 'one', generation: 'current' } }
 function setup() {
   useAppStore.setState({ workspaceState: { ...original.workspaceState, activeTabId: 'project',
-    tabs: [{ id: 'project', title: 'Project', root: { type: 'leaf', sessionId: 'other' }, focusedSessionId: 'other' }],
-    sessions: { source: { kind: 'codex', cwd: '/source', providerSessionId: 'native-source' }, other: { kind: 'claude', cwd: '/other' } },
-    detachedSessions: { source: { sessionId: 'source', projectTabId: 'project', projectTabTitle: 'Project', projectTabIndex: 0, detachedAt: 1, surface: 'dispatch' } }, buried: [],
+    tabs: [{ id: 'project', title: 'Project' }],
+    sessions: { source: { kind: 'codex', cwd: '/source', providerSessionId: 'native-source', projectId: 'project', joinedAt: 1 }, other: { kind: 'claude', cwd: '/other', projectId: 'project', joinedAt: 0 } },
   }, workspaceRuntimes: { source: { ...emptyRuntime(), draftInput: 'Human draft' } } })
   const refs = makeRefs(useAppStore.getState().workspaceState)
   refs.latestRuntimesRef.current = useAppStore.getState().workspaceRuntimes

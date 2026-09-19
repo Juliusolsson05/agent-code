@@ -5,7 +5,7 @@ This repo treats command titles as stable names, not as descriptions of the curr
 ## Rules
 
 1. Use a stable noun phrase for toggles and modes.
-   Examples: `Reader Mode`, `Spotlight`, `Tiled Tabs`, `Dangerous Agents`, `Git Bar`.
+   Examples: `Reader Mode`, `Spotlight`, `Auto-follow All Visible Agents`, `Git Bar`.
 
 2. Do not encode state changes into the title.
    Avoid: `Toggle`, `Enable`, `Disable`, `Enter`, `Exit`, `Turn On`, `Turn Off`.
@@ -14,7 +14,7 @@ This repo treats command titles as stable names, not as descriptions of the curr
    Use short badges like `On`, `Off`, `Claude`, `Codex`, `Active`.
 
 4. Use imperative verbs for one-shot actions.
-   Examples: `Open Settings`, `Copy Last Response`, `Normalize Layout`, `Reload Agent`.
+   Examples: `Open Settings`, `Copy Last Response`, `Close Focused Session`, `Reload Agent`.
 
 5. Use `New X` for creation commands.
    Examples: `New Tab`, `New Agent`, `New Terminal Right`.

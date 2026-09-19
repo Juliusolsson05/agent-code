@@ -8,6 +8,7 @@ import { TldrPane } from './TldrOverlay'
 import { AgentTerminalOwnerVisibilityProvider } from '@renderer/workspace/terminal/AgentTerminalOwnership'
 import { dismissTldr, toggleTldr, useTldrView } from './viewState'
 import type { TldrRecord, TldrUpdate } from '@shared/types/tldr'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 const harness = vi.hoisted(() => ({ appState: {} as Record<string, unknown> }))
 vi.mock('@renderer/app-state/hooks', () => ({
@@ -33,10 +34,10 @@ const api = {
 
 function workspace(): Workspace {
   const runtime = emptyRuntime()
-  const tab = { id: 'tab', title: 'Project', focusedSessionId: 'a', root: { type: 'leaf', sessionId: 'a' } }
+  const tab = { id: 'tab', title: 'Project' }
   return {
-    state: { activeTabId: 'tab', tabs: [tab], sessions: { a: { kind: 'claude', cwd: '/project' } }, detachedSessions: {}, buried: [], pinnedSessionIds: [] },
-    activeTab: tab, dispatchMode: null, tileTabs: null, spotlight: null, readerMode: null,
+    state: { activeTabId: 'tab', tabs: [tab], sessions: { a: { kind: 'claude', cwd: '/project', projectId: 'tab', joinedAt: 0 } },   pinnedSessionIds: [], stage: oneLaneStage('a') },
+    activeTab: tab, stage: oneLaneStage('a'), spotlight: null, readerMode: null,
     runtimes: { a: runtime }, getRuntime: () => runtime,
   } as unknown as Workspace
 }

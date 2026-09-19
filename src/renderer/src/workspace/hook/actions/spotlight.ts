@@ -1,7 +1,6 @@
 import { useCallback } from 'react'
 
 import type { SessionId } from '@renderer/workspace/types'
-import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 import {
   buildVisibleDispatchRows,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
@@ -13,12 +12,12 @@ import type {
 } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 
-// Spotlight mode — focused-pane zoom for the current command target.
-// toggleSpotlight exits whenever Spotlight is already open; otherwise it uses
-// the same command target selector as lifecycle commands so Tiled Dispatch,
-// pinned rows, and grid-related children all enter the session the user is
-// actually commanding. setSpotlightSession switches which session is showing
-// inside Spotlight.
+// Spotlight mode — a full-window takeover of the current command target.
+// toggleSpotlight exits whenever Spotlight is already open; otherwise it enters
+// on the same command target lifecycle commands use (the focused lane's
+// agent). setSpotlightSession switches which session is showing inside
+// Spotlight, and while Spotlight is open that session IS the command target
+// (commandTargetSessionIdForState reads the takeover first).
 
 export function useSpotlightActions(
   setSpotlight: WorkspaceSetSpotlight,
@@ -58,9 +57,7 @@ export function useSpotlightActions(
   const setSpotlightSession = useCallback(
     (sessionId: SessionId) => {
       const snapshot = refs.stateRef.current
-      const rows = snapshot.dispatchMode
-        ? buildVisibleDispatchRows(snapshot)
-        : []
+      const rows = buildVisibleDispatchRows(snapshot)
       const dispatchRow = rows.find(row => row.sessionId === sessionId) ?? null
       setSpotlight(prev => (
         prev
@@ -71,35 +68,20 @@ export function useSpotlightActions(
             }
           : prev
       ))
+      // Only the active PROJECT follows the Spotlight selection — it is a label
+      // (U4) that decides where the next agent defaults and which header is
+      // highlighted, so it should name the project the user is looking at.
+      //
+      // WHY no lane is written, although this used to mirror the selection
+      // into a classic-Dispatch focus (and, outside Dispatch, into the tree's
+      // Tab.focusedSessionId): both of those fields are gone (#992), and the
+      // stage has no equivalent on purpose. Spotlight is a takeover that holds
+      // its own focusedSessionId; browsing agents inside it is not the user
+      // naming a lane occupant (U2, #681), so leaving Spotlight returns to the
+      // stage exactly as it was left.
       setState(prev => {
-        // Tab.focusedSessionId has a hard invariant: it must be a
-        // leaf in `tab.root`. The non-Dispatch Spotlight view now
-        // surfaces detached agents (via resolveTabSessions), so a
-        // detached id can land here. Writing it into focusedSessionId
-        // would corrupt the tab — every downstream surface that
-        // reads tab.focusedSessionId (resize, split, bury, command
-        // target fallback) assumes it points at an actual tile. So
-        // we only mirror to focusedSessionId when the id is provably
-        // a grid leaf for the active tab. The Spotlight surface
-        // itself already holds the chosen id; the grid-focus mirror
-        // is just a convenience for the "Spotlight off → land on
-        // this pane" handoff, which is moot for a detached session.
-        const activeTab = prev.tabs.find(t => t.id === prev.activeTabId) ?? null
-        const isGridLeaf = activeTab ? collectLeaves(activeTab.root).includes(sessionId) : false
-        return {
-          ...prev,
-          activeTabId: dispatchRow?.tabId ?? prev.activeTabId,
-          dispatchMode: prev.dispatchMode && dispatchRow
-            ? { ...prev.dispatchMode, focusedSessionId: sessionId }
-            : prev.dispatchMode,
-          tabs: prev.dispatchMode
-            ? prev.tabs
-            : prev.tabs.map(t =>
-                t.id === prev.activeTabId && isGridLeaf
-                  ? { ...t, focusedSessionId: sessionId }
-                  : t,
-              ),
-        }
+        const activeTabId = dispatchRow?.tabId ?? prev.activeTabId
+        return activeTabId === prev.activeTabId ? prev : { ...prev, activeTabId }
       })
     },
     [refs.stateRef, setSpotlight, setState],

@@ -9,7 +9,7 @@ export function conditionControlCapabilities() {
     const meta = state.sessions[input.sessionId]
     // Positive agent check: a terminal-only guard sent extension panes to main
     // as `provider: 'extension-view'`, a provider main has no backend for.
-    if (!meta || !isAgentSessionKind(meta.kind) || state.buried.some(item => item.sessionId === input.sessionId)) throw new ControlError('unavailable', 'Choose a current, non-buried agent')
+    if (!meta || !isAgentSessionKind(meta.kind)) throw new ControlError('unavailable', 'Choose a current agent')
     const result = await window.api.controlInvoke({ capabilityId, input: { ...input, cwd: meta.cwd, provider: meta.kind ?? 'claude' } })
     if (!result.ok) throw new ControlError(result.error.code, result.error.message, result.error.outcome)
     return result.value

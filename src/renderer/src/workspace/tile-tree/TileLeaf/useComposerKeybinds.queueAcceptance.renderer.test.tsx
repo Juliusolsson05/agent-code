@@ -9,7 +9,8 @@ import type { FakeSessionFeed } from '@renderer/features/sessionFeed/FakeSession
 import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
 import { reduceStreamPhase } from '@renderer/session-runtime/semantic/streamPhaseMachine'
-import type { TileNode, WorkspaceState } from '@renderer/workspace/types'
+import type { WorkspaceState } from '@renderer/workspace/types'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 import type { SessionId } from '@renderer/workspace/types'
 import { useWorkspace } from '@renderer/workspace/hook'
 import { useSessionRuntime } from '@renderer/workspace/useSessionRuntime'
@@ -43,7 +44,8 @@ vi.mock('@renderer/workspace/hook/ipc/useWorkspaceAdoption', () => ({ useWorkspa
 vi.mock('@renderer/workspace/hook/persistence/useBootstrap', async () => {
   const { useEffect } = await import('react')
   return { useBootstrap: (...args: Parameters<typeof import('@renderer/workspace/hook/persistence/useBootstrap').useBootstrap>) => {
-    useEffect(() => args[5](true), [args[5]])
+    // args[4] is setBootstrapComplete ([5] until #992 removed setTileTabs).
+    useEffect(() => args[4](true), [args[4]])
   } }
 })
 
@@ -130,10 +132,10 @@ function mount(feed: FakeSessionFeed) {
 }
 
 function seed(runtime: Partial<SessionRuntime>) {
-  const root: TileNode = { type: 'leaf', sessionId: SESSION }
   const state: WorkspaceState = { ...original.workspaceState,
-    tabs: [{ id: 'tab', title: 'Test', focusedSessionId: SESSION, root }], activeTabId: 'tab',
-    sessions: { [SESSION]: { kind: 'claude', cwd: '/repo' } },
+    tabs: [{ id: 'tab', title: 'Test' }], activeTabId: 'tab',
+    sessions: { [SESSION]: { kind: 'claude', cwd: '/repo', projectId: 'tab', joinedAt: 0 } },
+    stage: oneLaneStage(SESSION),
   }
   useAppStore.setState({
     workspaceState: state,

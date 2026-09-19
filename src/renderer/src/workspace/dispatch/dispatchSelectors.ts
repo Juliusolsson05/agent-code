@@ -1,5 +1,5 @@
 import type { SessionId, SessionKind, Tab, TabId, WorkspaceState } from '@renderer/workspace/types'
-import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
+import { resolveTabSessions } from '@renderer/workspace/queries'
 import { tabIndexLabel } from '@renderer/workspace/tile-tree/paneLabelFormat'
 import { isProcessSessionKind } from '@shared/types/providerKind'
 import {
@@ -20,7 +20,9 @@ export type DispatchAgentRow = {
   /** Explicit durable SessionMeta title, before fallback derivation. */
   agentTitle?: string
   title: string
-  placement: 'grid' | 'detached'
+  // `placement: 'grid' | 'detached'` was a field here until #992. It said which
+  // v2 OWNER held the session (a tile leaf or a detachedSessions record). With
+  // one pool there is one kind of row.
   /** Nesting depth in the dispatch list. 0 = ordinary row; 1 = a
    *  linked agent rendered indented directly under its parent row.
    *  Linked agents never chain, so this is only ever 0 or 1. */
@@ -36,10 +38,10 @@ export type DispatchTabGroup = {
 export function buildDispatchGroups(
   state: WorkspaceState,
 ): DispatchTabGroup[] {
-  const activeOnly = state.dispatchMode?.scope !== 'global'
-  const sourceTabs = activeOnly
-    ? state.tabs.filter(tab => tab.id === state.activeTabId)
-    : state.tabs
+  // Every project, always. A layout-wide 'project' scope filtered this to the
+  // active tab until #992; the command that switched scope died with the mode,
+  // and a ROW's projectTabIds binding (rowScopedRows) is the only filter now.
+  const sourceTabs = state.tabs
 
   // Pins live in their own section at the top of the list. A pinned
   // session is intentionally NOT also rendered in its project group —
@@ -61,24 +63,23 @@ export function buildDispatchGroups(
   return sourceTabs
     .map(tab => {
       const tabIndex = state.tabs.findIndex(item => item.id === tab.id)
-      const gridSessionIds = collectLeaves(tab.root)
-        // WHY terminals belong in the primary Dispatch row stream now:
-        // Dispatch focus is session-based, not transcript-based. TerminalLeaf
-        // already renders through renderWorkspaceLeaf and uses the same
-        // sessionId-scoped IPC lifecycle as agents, so filtering terminals here
-        // made the list lie about which live sessions the user could command.
-        // Agent-only affordances stay guarded at their command/action sites;
-        // row construction should answer the broader placement question:
-        // "which sessions are in this Dispatch scope?"
-        .filter(sessionId => state.sessions[sessionId] !== undefined)
+      // The project's sessions in index order, straight from the pool.
+      //
+      // Until #992 this was `[...treeLeaves, ...detachedByDetachedAt]`, and
+      // that concatenation was load-bearing in a bad way: everything created
+      // in the grid sorted above everything created in Dispatch no matter when
+      // (#671 — a Dispatch terminal was structurally guaranteed to list above
+      // every agent). One `joinedAt` key has no such cliff.
+      //
+      // WHY terminals belong in the primary row stream: focus is session-based,
+      // not transcript-based. TerminalLeaf renders through renderWorkspaceLeaf
+      // and uses the same sessionId-scoped IPC lifecycle as agents, so
+      // filtering terminals here would make the list lie about which live
+      // sessions the user can command. Agent-only affordances stay guarded at
+      // their command/action sites.
+      const entries = resolveTabSessions(state, tab.id)
         .filter(sessionId => !pinnedSet.has(sessionId))
-      const detachedSessionIds = detachedDispatchSessionIdsForTab(state, tab.id)
-        .filter(sessionId => !pinnedSet.has(sessionId))
-
-      const entries = [
-        ...gridSessionIds.map(sessionId => ({ sessionId, placement: 'grid' as const })),
-        ...detachedSessionIds.map(sessionId => ({ sessionId, placement: 'detached' as const })),
-      ]
+        .map(sessionId => ({ sessionId }))
 
       // Nesting pass: manual linked agents and MCP-created orchestration
       // agents render indented immediately under their parent row rather than
@@ -109,30 +110,62 @@ export function buildDispatchGroups(
           childrenByParent.set(parentId, arr)
         }
       }
-      const ordered: Array<{
-        sessionId: SessionId
-        placement: 'grid' | 'detached'
-        depth: number
-      }> = []
+      const ordered: Array<{ sessionId: SessionId; depth: number }> = []
+      const emitted = new Set<SessionId>()
+      // Every DESCENDANT goes under its root, depth-first, all at depth 1.
+      //
+      // WHY descendants and not just children (#1013 review B, MAJOR): an
+      // orchestration child can create agents of its own, and
+      // `orchestrationParentId` names the DIRECT parent. The one-level walk
+      // skipped a grandchild at the top level (its parent is in the group)
+      // and never reached it from below (only a root's children were
+      // emitted), so it got no row at all: no label, no ⌘N or ⌥↑/↓, no
+      // Spotlight chip, and "Agent no longer available" in a lane while it
+      // ran. The grid's related-agent strip, which matched on the root id,
+      // was the only way to reach one, and it is gone.
+      //
+      // WHY depth 1 and not depth 2: depth is 0 or 1 by contract. The row
+      // renders one connector cell and rowScopedRows caps the depth-1 run
+      // under a root. Tree order keeps each grandchild directly below its own
+      // parent. None of the 36 recorded workspaces on the owner's machine had
+      // a grandchild (up to 29 children, all direct), so a deeper visual
+      // grammar would be designed without evidence.
+      const emitDescendants = (parentId: SessionId) => {
+        for (const child of childrenByParent.get(parentId) ?? []) {
+          if (emitted.has(child.sessionId)) continue
+          emitted.add(child.sessionId)
+          ordered.push({ ...child, depth: 1 })
+          emitDescendants(child.sessionId)
+        }
+      }
       for (const e of entries) {
         const meta = state.sessions[e.sessionId]
         const parentId = meta?.linkedParentId ?? meta?.orchestrationParentId
         // Children are emitted under their parent below — skip here.
         if (parentId && entryIds.has(parentId)) continue
+        emitted.add(e.sessionId)
         ordered.push({ ...e, depth: 0 })
-        for (const child of childrenByParent.get(e.sessionId) ?? []) {
-          ordered.push({ ...child, depth: 1 })
-        }
+        emitDescendants(e.sessionId)
+      }
+      // A parent cycle (A under B under A, from a hand-edited file or a
+      // corrupted link) has no root, so the walk above never reaches it. Such
+      // rows appear at the top level instead of vanishing, the same rule as
+      // an orphaned child.
+      for (const e of entries) {
+        if (emitted.has(e.sessionId)) continue
+        emitted.add(e.sessionId)
+        ordered.push({ ...e, depth: 0 })
+        emitDescendants(e.sessionId)
       }
 
       // globalIndex is assigned in the FINAL (post-nesting) order so
       // the A1/A2/A3 labels run top-to-bottom exactly as the rows
       // render — a linked child takes the number of its visual slot.
-      const rows = ordered.map(({ sessionId, placement, depth }) => {
+      const rows = ordered.map(({ sessionId, depth }) => {
         const meta = state.sessions[sessionId]
         const rowIndex = globalIndex++
         return {
-          key: `${tab.id}:${placement}:${sessionId}`,
+          key: `${tab.id}:${sessionId}`,
           label: `${tabIndexLabel(tabIndex)}${rowIndex}`,
           globalIndex: rowIndex,
           tabId: tab.id,
@@ -142,7 +175,6 @@ export function buildDispatchGroups(
           kind: meta?.kind,
           agentTitle: explicitAgentTitle(meta),
           title: sessionTitle(meta),
-          placement,
           depth,
         } satisfies DispatchAgentRow
       })
@@ -188,24 +220,9 @@ export function dispatchSessionIdsForTab(
     .map(row => row.sessionId)
 }
 
-export function detachedDispatchSessionIdsForTab(
-  state: WorkspaceState,
-  tabId: TabId,
-): SessionId[] {
-  // Keep this ordering in one place so the list UI and bulk attach agree on
-  // what "all detached Dispatch sessions for this tab" means. Detached rows
-  // are displayed oldest-first in buildDispatchGroups; bulk attach should
-  // preserve that same user-visible sequence inside the normalized incoming
-  // subtree.
-  return Object.values(state.detachedSessions)
-    .filter(entry => (
-      entry.surface === 'dispatch' &&
-      entry.projectTabId === tabId &&
-      state.sessions[entry.sessionId] !== undefined
-    ))
-    .sort((a, b) => a.detachedAt - b.detachedAt)
-    .map(entry => entry.sessionId)
-}
+// `detachedDispatchSessionIdsForTab` lived here until #992: the project's
+// parked sessions, oldest `detachedAt` first. It is `resolveTabSessions` now —
+// one membership query, one order key.
 
 export function selectVisibleDispatchRow(
   rows: DispatchAgentRow[],
@@ -254,32 +271,17 @@ export function buildPinnedDispatchRows(
   for (const sessionId of state.pinnedSessionIds) {
     const meta = state.sessions[sessionId]
     if (!meta || !isProcessSessionKind(meta.kind)) continue
-    // Locate the owning tab. A pinned agent that's detached has its
-    // tab id on `detachedSessions[sessionId].projectTabId`; a
-    // grid-placed pinned agent is a leaf in some tab's tree. We do
-    // the lookup detached-first because detachedSessions is O(1) and
-    // catches the "background pinned agent" case the user is likely
-    // pinning in the first place (an agent they don't want crowding
-    // the visible grid but want one keystroke away).
-    const detached = state.detachedSessions[sessionId]
-    let tabId: TabId | null = null
-    let placement: 'grid' | 'detached' = 'grid'
-    if (detached) {
-      tabId = detached.projectTabId
-      placement = 'detached'
-    } else {
-      const owner = state.tabs.find(tab =>
-        collectLeaves(tab.root).includes(sessionId),
-      )
-      tabId = owner?.id ?? null
-    }
+    // The owning project is on the row itself. (Until #992 this was a
+    // two-step lookup: the detachedSessions record first, then a walk of
+    // every tab's tile tree.)
+    const tabId: TabId | null = meta.projectId ?? null
     if (!tabId) continue
     const tabIndex = state.tabs.findIndex(tab => tab.id === tabId)
     const tab = state.tabs[tabIndex]
     if (!tab) continue
     rows.push({
       // ★ prefix keeps the row key unique against project-group rows
-      // (whose keys are `${tabId}:${placement}:${sessionId}`) so any
+      // (whose keys are `${tabId}:${sessionId}`) so any
       // caller that flat-concats both arrays — see the spread in
       // DispatchLayout — won't collide on React keys.
       key: `pinned:${sessionId}`,
@@ -292,7 +294,6 @@ export function buildPinnedDispatchRows(
       kind: meta.kind,
       agentTitle: explicitAgentTitle(meta),
       title: sessionTitle(meta),
-      placement,
       // Pinned rows live in their own flat section — never nested.
       depth: 0,
     })
@@ -319,23 +320,25 @@ export function isPinned(state: WorkspaceState, sessionId: SessionId): boolean {
  *  - `cwdSessionId` — the existing session whose cwd the new agent
  *                     inherits, or null to let the caller fall back to
  *                     the tab's leaves.
- *  - `laneIndex`    — in Tiled Dispatch, the lane the new agent should
- *                     occupy so it appears where the user is looking;
- *                     null in classic Dispatch.
+ *  - `laneIndex`    — the lane the new agent should occupy so it appears
+ *                     where the user is looking. This resolver always
+ *                     returns one now (the focused lane); the type stays
+ *                     nullable because callers may override it with "no
+ *                     lane" — a linked agent whose parent is not in the
+ *                     focused lane must not take that lane.
  *
  * WHY this is a selector instead of inline logic in the spawn actions:
  * `createDetachedDispatchAgent` and `splitFocused` both have to answer
- * "which project does a new agent belong to?" and they used to read
- * cwd from `dispatchMode.focusedSessionId` but the project tab from
- * `activeTabId`. Those two fields agree in classic Dispatch (focusing a
- * row syncs both via focusDispatchSession) but DIVERGE in Tiled
- * Dispatch: lane focus/selection (setTiledFocusedLane /
- * selectTiledLaneSession) writes only `tiled.focusedLane` and
- * `lanes[].selectedSessionId` — never the classic focus fields. The
- * result was new agents landing in the stale active tab instead of the
- * focused lane's project (issue #266 / #248 regression). Resolving the
- * target in one place keeps cwd and projectTab on the SAME project for
- * both surfaces.
+ * "which project does a new agent belong to?" and they used to read cwd
+ * from a classic-Dispatch focus field but the project tab from
+ * `activeTabId`. Those two agreed in classic Dispatch and DIVERGED once
+ * lanes existed: lane focus/selection writes only `focusedLane` and
+ * `lanes[].selectedSessionId`. The result was new agents landing in the
+ * stale active tab instead of the focused lane's project (issue #266 /
+ * #248 regression). #992 removed the classic focus outright, which
+ * removes the divergence at its source — but the rule that made this a
+ * selector still holds: cwd and project must come from the SAME place,
+ * resolved once.
  */
 export type DispatchSpawnTarget = {
   tabId: TabId
@@ -360,67 +363,47 @@ export type DispatchSpawnTarget = {
  * place that folds the legacy field and repairs lengths.
  */
 export function focusedLaneBoundProjectTabIds(state: WorkspaceState): readonly TabId[] {
-  const tiled = state.dispatchMode?.tiled
-  if (!tiled) return []
+  const tiled = state.stage
   const grid = normalizeGridShape(tiled)
   const rowIndex = rowIndexForLane(grid.rows, tiled.focusedLane)
   return (rowIndex >= 0 ? grid.rows[rowIndex]?.projectTabIds : undefined) ?? []
 }
 
 export function resolveDispatchSpawnTarget(state: WorkspaceState): DispatchSpawnTarget {
-  const dm = state.dispatchMode
-  if (!dm) {
-    return { tabId: state.activeTabId, cwdSessionId: null, laneIndex: null }
-  }
-
   // The visible rows are the scope-correct source of "which tab owns this
   // session?" — the same list the user sees and that lane resolution uses.
   const rows = buildVisibleDispatchRows(state)
   const tabForSession = (id: SessionId | undefined | null): TabId | null =>
     id ? rows.find(row => row.sessionId === id)?.tabId ?? null : null
 
-  // Tiled Dispatch: the focused lane is the command target.
-  if (dm.tiled) {
-    const laneIndex = dm.tiled.focusedLane
-    const laneSessionId = dm.tiled.lanes[laneIndex]?.selectedSessionId ?? null
-    const laneTab = tabForSession(laneSessionId)
-    if (laneTab) {
-      return { tabId: laneTab, cwdSessionId: laneSessionId, laneIndex }
-    }
-    // Focused lane is empty / its agent is gone. If its ROW is bound to a
-    // project, that binding is the answer and outranks every fallback below:
-    // the row's index offers only that project, so spawning into it from a
-    // stale classic focus would file the new agent under a project the row does
-    // not even list. Bindings constrain what may live in a row, and a spawn is
-    // something coming to live there.
-    //
-    // A row can be bound to SEVERAL projects, so "which project does a new
-    // agent belong to" needs a rule rather than a lookup. The active tab when
-    // it is one of them, otherwise the first: deterministic, and "the project
-    // you were last in" is the least surprising answer. The per-group `+` in
-    // the index is unaffected — it already carries an explicit tabId.
-    const bound = focusedLaneBoundProjectTabIds(state)
-    if (bound.length > 0) {
-      const tabId = bound.includes(state.activeTabId) ? state.activeTabId : bound[0]!
-      return { tabId, cwdSessionId: null, laneIndex }
-    }
-    // Unbound: fall back to the classic focus, then the active tab — but still
-    // place the new agent INTO the focused lane.
-    const focusTab = tabForSession(dm.focusedSessionId)
-    return {
-      tabId: focusTab ?? state.activeTabId,
-      cwdSessionId: focusTab ? dm.focusedSessionId ?? null : null,
-      laneIndex,
-    }
+  // The focused lane is the command target.
+  const laneIndex = state.stage.focusedLane
+  const laneSessionId = state.stage.lanes[laneIndex]?.selectedSessionId ?? null
+  const laneTab = tabForSession(laneSessionId)
+  if (laneTab) {
+    return { tabId: laneTab, cwdSessionId: laneSessionId, laneIndex }
   }
-
-  // Classic Dispatch: prefer the focused session's own tab so cwd and
-  // projectTab stay on the same project even if activeTabId ever drifts.
-  const focusTab = tabForSession(dm.focusedSessionId)
-  if (focusTab) {
-    return { tabId: focusTab, cwdSessionId: dm.focusedSessionId ?? null, laneIndex: null }
+  // Focused lane is empty / its agent is gone. If its ROW is bound to a
+  // project, that binding is the answer and outranks every fallback below:
+  // the row's index offers only that project, so spawning into it from the
+  // active project would file the new agent under a project the row does
+  // not even list. Bindings constrain what may live in a row, and a spawn is
+  // something coming to live there.
+  //
+  // A row can be bound to SEVERAL projects, so "which project does a new
+  // agent belong to" needs a rule rather than a lookup. The active tab when
+  // it is one of them, otherwise the first: deterministic, and "the project
+  // you were last in" is the least surprising answer. The per-group `+` in
+  // the index is unaffected — it already carries an explicit tabId.
+  const bound = focusedLaneBoundProjectTabIds(state)
+  if (bound.length > 0) {
+    const tabId = bound.includes(state.activeTabId) ? state.activeTabId : bound[0]!
+    return { tabId, cwdSessionId: null, laneIndex }
   }
-  return { tabId: state.activeTabId, cwdSessionId: null, laneIndex: null }
+  // Unbound and empty: the active project — but still place the new agent
+  // INTO the focused lane. (A classic single-selection focus was consulted
+  // first until #992; that second focus truth no longer exists.)
+  return { tabId: state.activeTabId, cwdSessionId: null, laneIndex }
 }
 
 function sessionTitle(

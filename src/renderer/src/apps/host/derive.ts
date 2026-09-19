@@ -58,11 +58,11 @@ export function deriveAppDefinitions(installed: ExtensionListEntry[]): AppDefini
 export function deriveExtensionCommands(
   installed: ExtensionListEntry[],
   openApp: (appId: string) => void,
-  // Opens a contributed view as a PANE (a tile leaf) instead of a modal. A view
+  // Opens a contributed view as a PANE (a stage session) instead of a modal. A view
   // whose manifest `mount` is 'panel' routes here; 'modal' routes to openApp. Made
   // optional with a no-op default so the Settings call sites that only LIST commands
   // stay a 3-arg call — the routing still resolves there, it just never fires.
-  openInPane: (viewId: string) => void = () => {},
+  openInPane: (viewId: string, options?: { reveal?: boolean }) => void = () => {},
 ): CommandDef[] {
   const seen = new Set<string>()
   const commands: CommandDef[] = []
@@ -151,7 +151,17 @@ export function deriveExtensionCommands(
               // extension's action command opened it as a floating modal — directly
               // contradicting its own manifest — because deriveAppDefinitions builds
               // an AppDefinition for every view regardless of declared mount.
-              if (viewMountById.get(onlyView) === 'panel') openInPane(onlyView)
+              //
+              // `reveal` (#1013 parity review, MAJOR): the queued command
+              // flushes only when a frame MOUNTS. Under the unified stage a
+              // plain pane open waits in the pool when the focused lane is
+              // occupied, so no frame mounted. The command never ran, each
+              // retry pooled another copy of the view and queued it again,
+              // and placing any copy later fired them all at once. On main
+              // the view split in beside the focus and was visible at once.
+              // Reveal restores that: the view (an existing one if there is
+              // one) takes the focused lane.
+              if (viewMountById.get(onlyView) === 'panel') openInPane(onlyView, { reveal: true })
               else openApp(onlyView)
             }
           }

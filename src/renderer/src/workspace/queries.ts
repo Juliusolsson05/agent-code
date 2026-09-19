@@ -1,4 +1,3 @@
-import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 import type {
   SessionId,
   TabId,
@@ -7,136 +6,94 @@ import type {
 
 // Canonical session-set queries for the workspace.
 //
-// WHY this file exists: the workspace has FIVE session-placement
-// buckets (grid via tile-tree leaves, detached via
-// state.detachedSessions, buried via state.buried, plus pinned +
-// focused as cross-cutting attributes). Asking "which sessions are
-// in tab X?" without composing the right subset has been the
-// recurring root cause of PRs #37, #39, #44, #45, #46, #58, #59,
-// #69, #83, and issue #104. Every patch caught an instance; none
-// caught the pattern.
+// WHY this file exists, and what changed under it (#992):
 //
-// The pattern is broken because surfaces reach for `tab.root`
-// directly (via collectLeaves) without remembering that detached
-// agents also "belong" to the tab via projectTabId. This file is
-// the contract: callers should ask their question through one of
-// these functions, and the implementation handles the union
-// correctly once. Adding a new surface that walks the grid directly
-// is — per the resolver-discipline CI check — a build failure.
+// The workspace used to have FIVE session-placement buckets (grid via
+// tile-tree leaves, detached via state.detachedSessions, buried via
+// state.buried, plus pinned + focused as cross-cutting attributes). Asking
+// "which sessions are in project X?" without composing the right subset was
+// the recurring root cause of PRs #37, #39, #44, #45, #46, #58, #59, #69,
+// #83, and issue #104: surfaces reached for `tab.root` directly and forgot
+// that detached agents also belonged to the tab via `projectTabId`. This
+// file was the contract that composed the union once.
 //
-// SCOPE: these queries answer "membership" questions ("which
-// sessions are in this tab?"). They do NOT decide which session a
-// command targets — that's the focus-resolution concern, handled by
-// `commandTargetSessionId` in
-// `hook/selectors/commandTargetSessionId.ts`, which already
-// correctly composes Dispatch focus → grid focus.
+// There is no union any more. A session belongs to a project because its own
+// row says so (`SessionMeta.projectId`), and its position is its own
+// `joinedAt`. The contract this file holds is therefore smaller but not
+// gone: callers still ask membership questions HERE, so that the day a
+// second fact affects membership or order there is one place to put it —
+// which is the lesson of those ten PRs, not the five buckets themselves.
+//
+// SCOPE: these queries answer "membership" questions. They do NOT decide
+// which session a command targets — that is the focused lane's occupant,
+// resolved by `commandTargetSessionId` in
+// `hook/selectors/commandTargetSessionId.ts`.
+
+type PoolView = Pick<WorkspaceState, 'sessions'>
 
 /**
- * Every live session owned by this tab, regardless of placement.
- *
- * Composes:
- *   - grid leaves (collectLeaves(tab.root)) — the visible tile tree
- *   - detached agents whose `projectTabId === tabId` and whose
- *     surface === 'dispatch' — Dispatch Mode agents that live
- *     outside the grid but belong to this project
- *
- * Includes detached terminals as well as detached agents. Dispatch rows are
- * session rows now; terminals can be parked out of the grid and attached
- * back later just like provider sessions. Agent-only surfaces must filter by
- * kind at their own boundary instead of baking that policy into membership.
- *
- * Excludes `state.buried` deliberately: burying a pane is the
- * user's signal to put it away. Surfaces that ask "what's in this
- * tab right now" should not surface buried items as if they were
- * active. The unbury / undo flow is the place to walk
- * `state.buried`.
- *
- * Order: grid leaves first (in depth-first tile-tree order), then
- * detached agents oldest-detached-first (matches the existing UI
- * ordering documented in
- * `dispatchSelectors.detachedDispatchSessionIdsForTab`).
+ * The project a session belongs to, or undefined when the session is unknown
+ * or has not been filed yet (the instant between `spawn` writing a row and
+ * its caller stamping membership).
  */
-export function resolveTabSessions(
-  state: WorkspaceState,
-  tabId: TabId,
-): SessionId[] {
-  const tab = state.tabs.find(t => t.id === tabId)
-  const gridIds = tab ? collectLeaves(tab.root) : []
-  const detachedIds = Object.values(state.detachedSessions)
-    .filter(entry => (
-      entry.surface === 'dispatch' &&
-      entry.projectTabId === tabId &&
-      state.sessions[entry.sessionId] !== undefined
-    ))
-    .sort((a, b) => a.detachedAt - b.detachedAt)
-    .map(entry => entry.sessionId)
-  // De-dupe defensively — the types-level invariant says a session
-  // is in the tile tree OR detachedSessions, never both, but a
-  // future bug that violates that invariant should not silently
-  // produce duplicates in callers' filter/count loops.
-  const seen = new Set<SessionId>()
-  const out: SessionId[] = []
-  for (const id of [...gridIds, ...detachedIds]) {
-    if (seen.has(id)) continue
-    seen.add(id)
-    out.push(id)
-  }
-  return out
+export function projectIdOf(state: PoolView, sessionId: SessionId): TabId | undefined {
+  return state.sessions[sessionId]?.projectId
 }
 
 /**
- * Every live session in the workspace, across every tab and every
- * placement.
+ * Every session owned by this project, in index order.
  *
- * Used by surfaces that genuinely operate globally: cross-tab
- * pickers, global telemetry, the "most recent session" finder. For
- * per-tab questions use `resolveTabSessions` instead — passing an
- * `activeTabId` filter on top of this is a code smell that usually
- * means the caller wanted `resolveTabSessions` to begin with.
+ * Order: ascending `joinedAt`, ties broken by the `sessions` map's insertion
+ * order (Array.prototype.sort is stable, and Object.keys preserves insertion
+ * order for string keys). A row with no `joinedAt` sorts as 0 — first —
+ * which is where a migrated v2 tree leaf belongs and is harmless for a row
+ * that is mid-spawn.
  *
- * The `state.sessions` map already includes every live session by
- * definition. Iterating it directly is the cleanest implementation;
- * the helper exists for discoverability (so callers don't reach for
- * `Object.keys(state.sessions)` directly and bypass any future
- * filtering or ordering rules this layer adds).
+ * Includes every session kind: terminals and extension views are pool
+ * citizens like agents. Agent-only surfaces must filter by kind at their own
+ * boundary instead of baking that policy into membership.
  */
-export function resolveAllSessions(state: WorkspaceState): SessionId[] {
+export function resolveTabSessions(
+  state: PoolView,
+  tabId: TabId,
+): SessionId[] {
+  return Object.keys(state.sessions)
+    .filter(id => state.sessions[id]?.projectId === tabId)
+    .sort((a, b) => (state.sessions[a]?.joinedAt ?? 0) - (state.sessions[b]?.joinedAt ?? 0))
+}
+
+/**
+ * Every session in the workspace, across every project.
+ *
+ * Used by surfaces that genuinely operate globally: cross-project pickers,
+ * global telemetry, the "most recent session" finder. For per-project
+ * questions use `resolveTabSessions` instead.
+ *
+ * The helper exists for discoverability, so callers don't reach for
+ * `Object.keys(state.sessions)` directly and bypass any future filtering or
+ * ordering rules this layer adds.
+ */
+export function resolveAllSessions(state: PoolView): SessionId[] {
   return Object.keys(state.sessions)
 }
 
-/**
- * Is this session currently detached (i.e. lives in
- * `state.detachedSessions`, not in any tab's tile tree)?
- *
- * WHY this helper exists rather than letting callers index
- * `state.detachedSessions[sessionId]` directly: that subscript is the
- * exact pattern the resolver-discipline CI check flags. Some commands
- * legitimately need to ask "is this thing detached?" (e.g. the
- * attach-to-grid command's when-guard, which should only show for
- * detached agents). Routing through a named query keeps the API
- * surface honest — the violating pattern stays in the resolver layer
- * where it's defined and reviewed.
- *
- * Returns `false` for unknown session ids — callers should always
- * pair this with a `state.sessions[id]` existence check if they need
- * to distinguish "detached" from "doesn't exist."
- */
-export function isDetached(state: WorkspaceState, sessionId: SessionId): boolean {
-  return state.detachedSessions[sessionId] !== undefined
-}
+// `isDetached(state, id)` lived here until #992. "Detached" meant "owned by a
+// detachedSessions record rather than a tile leaf"; with neither structure
+// there is nothing for it to distinguish. Callers that really meant "has no
+// backend right now" read the session's runtime (`processStatus`) instead.
 
 /**
- * Tabs that currently hold a session whose working directory is exactly
- * `cwd`, in tab order.
+ * Projects that currently hold a session whose working directory is exactly
+ * `cwd`, in project order.
  *
  * WHY this is the definition of "this project is already open" (#913): a
- * `Tab` carries no directory of its own; its title is the basename chosen at
- * creation and the only durable link to a folder is the cwd of the sessions
- * it holds. The operator capability `projects.open` has used this rule since
- * it shipped; the path picker now shares it so ⌘T stops minting a fresh tab
- * for a folder that is already on screen. Exact match on purpose: a worktree
- * is a different directory, and Merge Project Tabs is the tool for folding
- * worktree tabs together.
+ * project carries no directory of its own; its title is the basename chosen
+ * at creation and the only durable link to a folder is the cwd of the
+ * sessions it holds. The operator capability `projects.open` has used this
+ * rule since it shipped; the path picker shares it so ⌘T stops minting a
+ * fresh project for a folder that is already open. Exact match on purpose: a
+ * worktree is a different directory, and Merge Project Tabs is the tool for
+ * folding worktree projects together.
  *
  * The comparison is on the cwd string as stored. `expandCwd` resolves `~`
  * and trailing slashes but not symlinks, so a session spawned through

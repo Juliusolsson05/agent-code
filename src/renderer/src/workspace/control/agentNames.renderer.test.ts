@@ -1,11 +1,10 @@
-import { readFileSync } from 'node:fs'
 import { afterEach, expect, it } from 'vitest'
 
 import { globalControlCapabilities } from '@main/control/globalCapabilities'
 import { useAppStore } from '@renderer/app-state/store'
 import { claimMissingIdentities } from '@renderer/workspace/agentNames/reconcile'
 import { observeWorkspace } from '@renderer/workspace/control'
-import type { WorkspaceState } from '@renderer/workspace/types'
+import { loadRecordedDispatchWorkspace } from '@renderer/workspace/testing/recordedDispatchWorkspace'
 
 const initial = useAppStore.getState()
 afterEach(() => useAppStore.setState(initial, true))
@@ -23,16 +22,15 @@ function searchOver(workspace: ReturnType<typeof observeWorkspace>) {
 }
 
 it('publishes enabled names and resolves an exact spoken name across windows', async () => {
-  const fixture = JSON.parse(readFileSync('testing/fixtures/worktree-context/dispatch-global-d23.json', 'utf8'))
-  const id: string = fixture.$fixture.observed.targetSessionId
+  const fixture = loadRecordedDispatchWorkspace()
+  const id: string = fixture.observed.targetSessionId
   // Claim identities the same way the running app does, from the recorded
   // workspace, so the test cannot drift from the reconciler's rule.
-  const claimed = claimMissingIdentities(fixture.state as WorkspaceState)
+  const claimed = claimMissingIdentities(fixture.state)
   const identity = claimed.sessions[id].agentNameId!
 
   useAppStore.setState({
     workspaceState: claimed,
-    workspaceTileTabs: null,
     workspaceReaderMode: null,
     workspaceSpotlight: null,
     workspaceRuntimes: {},
@@ -75,13 +73,12 @@ it('publishes enabled names and resolves an exact spoken name across windows', a
 })
 
 it('hides names and name lookup while the setting is off', async () => {
-  const fixture = JSON.parse(readFileSync('testing/fixtures/worktree-context/dispatch-global-d23.json', 'utf8'))
-  const id: string = fixture.$fixture.observed.targetSessionId
-  const claimed = claimMissingIdentities(fixture.state as WorkspaceState)
+  const fixture = loadRecordedDispatchWorkspace()
+  const id: string = fixture.observed.targetSessionId
+  const claimed = claimMissingIdentities(fixture.state)
 
   useAppStore.setState({
     workspaceState: claimed,
-    workspaceTileTabs: null,
     workspaceReaderMode: null,
     workspaceSpotlight: null,
     workspaceRuntimes: {},

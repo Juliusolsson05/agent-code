@@ -26,7 +26,8 @@ import {
 } from '../src/renderer/src/rendering/replay/redact.js'
 import { buildVisibleDispatchRows } from '../src/renderer/src/workspace/dispatch/dispatchSelectors.js'
 import { paneLabelForSession } from '../src/renderer/src/workspace/tile-tree/paneLabels.js'
-import type { WorkspaceState } from '../src/renderer/src/workspace/types.js'
+import type { PersistedWorkspace } from '../src/renderer/src/workspace/persistence.js'
+import { liveWorkspaceFromPersisted } from '../src/renderer/src/workspace/workspaceShape.js'
 
 type JsonRecord = Record<string, unknown>
 
@@ -782,10 +783,20 @@ type DispatchObservation = {
   targetPlacement: string
 }
 
-function replayDispatchState(state: WorkspaceState): {
-  state: WorkspaceState
+// WHY the recording is a PERSISTED workspace and the selectors get a LIFTED one
+// (#992): the fixture is evidence of what the app wrote, so it stays in the
+// shape it was written in (v2: tile trees, a detached bucket, a dispatchMode
+// envelope). The selectors take live state, which has none of that, so the
+// replay runs them on exactly what the app would build from this file at boot.
+// `state` in the result is still the persisted recording — that is what gets
+// written to disk — and `targetPlacement` is read off the recording too,
+// because "grid" vs "detached" is a fact about the v2 file, not about live
+// state, where every session is just a pool row.
+function replayDispatchState(persisted: PersistedWorkspace): {
+  state: PersistedWorkspace
   observed: DispatchObservation
 } {
+  const state = liveWorkspaceFromPersisted(persisted)
   const rows = buildVisibleDispatchRows(state)
   const target = rows.find(row => row.label === 'D23')
   if (!target) throw new Error('recorded workspace no longer contains D23')
@@ -797,7 +808,7 @@ function replayDispatchState(state: WorkspaceState): {
     paneLabelForSession(state, row.tabId, row.sessionId) !== row.label
   ))
   return {
-    state,
+    state: persisted,
     observed: {
       tabCount: state.tabs.length,
       visibleRowCount: rows.length,
@@ -805,23 +816,18 @@ function replayDispatchState(state: WorkspaceState): {
       targetSessionId: target.sessionId,
       targetVisibleLabel: target.label,
       targetLocalLabel: local,
-      targetPlacement: target.placement,
+      targetPlacement: persisted.detachedSessions?.[target.sessionId] ? 'detached' : 'grid',
     },
   }
 }
 
 function reducedDispatchState(raw: JsonRecord): {
-  state: WorkspaceState
+  state: PersistedWorkspace
   observed: DispatchObservation
 } {
   const persisted = asRecord(raw.workspace)
   if (!persisted) throw new Error('workspace.json has no workspace object')
-  const sourceState = {
-    ...persisted,
-    pinnedSessionIds: Array.isArray(persisted.pinnedSessionIds)
-      ? persisted.pinnedSessionIds
-      : [],
-  } as unknown as WorkspaceState
+  const sourceState = liveWorkspaceFromPersisted(persisted as unknown as PersistedWorkspace)
   const sourceRows = buildVisibleDispatchRows(sourceState)
   const sourceTarget = sourceRows.find(row => row.label === 'D23')
   if (!sourceTarget) throw new Error('recorded workspace no longer contains D23')
@@ -961,7 +967,7 @@ function reducedDispatchState(raw: JsonRecord): {
           .map(mapSessionId)
           .filter((value): value is string => Boolean(value))
       : [],
-  } as unknown as WorkspaceState
+  } as unknown as PersistedWorkspace
 
   const targetSessionId = mapSessionId(sourceTarget.sessionId)
   const replayed = replayDispatchState(state)
@@ -981,7 +987,7 @@ function reducedDispatchState(raw: JsonRecord): {
 }
 
 async function recordedDispatchState(): Promise<{
-  state: WorkspaceState
+  state: PersistedWorkspace
   observed: DispatchObservation
 }> {
   // WHY the default source becomes the checked-in reduced recording after the
@@ -999,7 +1005,7 @@ async function recordedDispatchState(): Promise<{
       const existing = asRecord(JSON.parse(existingText))
       const state = asRecord(existing?.state)
       if (!state) throw new Error('existing Dispatch fixture has no state object')
-      return replayDispatchState(state as unknown as WorkspaceState)
+      return replayDispatchState(state as unknown as PersistedWorkspace)
     }
   }
 

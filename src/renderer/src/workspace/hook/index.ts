@@ -2,7 +2,6 @@ import { createElement, useCallback, useEffect, useLayoutEffect, useMemo, useRef
 
 import { useAppStore } from '@renderer/app-state/hooks'
 import { useGlobalToast } from '@renderer/ui/GlobalToast'
-import type { WorkspaceModeId } from '@renderer/app-state/settings/types'
 import type { ConfigurableBuiltInMcpDomain } from '@mcp/shared/types'
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 import type { AgentViewModeOverride, SessionId } from '@renderer/workspace/types'
@@ -14,8 +13,6 @@ import { useStreamingActions } from '@renderer/workspace/hook/actions/streaming'
 import { usePickerActions } from '@renderer/workspace/hook/actions/picker'
 import { useSpotlightActions } from '@renderer/workspace/hook/actions/spotlight'
 import { useReaderActions } from '@renderer/workspace/hook/actions/reader'
-import { useTileTabsActions } from '@renderer/workspace/hook/actions/tileTabs'
-import { useResizeActions } from '@renderer/workspace/hook/actions/resize'
 import { useSessionActions } from '@renderer/workspace/hook/actions/session'
 import { useTabActions } from '@renderer/workspace/hook/actions/tab'
 import { usePaneActions } from '@renderer/workspace/hook/actions/pane'
@@ -34,7 +31,6 @@ import {
   usePinnedSessionIdsSanity,
   useReaderModeSanity,
   useSpotlightSanity,
-  useTileTabsSanity,
 } from '@renderer/workspace/hook/invalidation/effects'
 import { useIpcSubscriptions } from '@renderer/workspace/hook/ipc/useIpcSubscriptions'
 import { useTerminalForeground } from '@renderer/workspace/hook/ipc/useTerminalForeground'
@@ -82,17 +78,10 @@ export type Workspace = ReturnType<typeof useWorkspace>
 export function useWorkspace(
   dangerousAgentsEnabled = false,
   useProxyStreaming = false,
-  // Read once at mount via useBootstrap's useEffect closure. Live
-  // changes to this preference do not retro-trigger bootstrap — that
-  // is intentional, the setting only seeds initial state on a fresh
-  // install (no workspace.json yet).
-  defaultWorkspaceMode: WorkspaceModeId = 'grid',
   defaultBuiltInMcpDomains: ConfigurableBuiltInMcpDomain[] = [],
 ) {
   // ---- Zustand subscriptions (these drive re-renders) ----
   const { showToast } = useGlobalToast()
-  const openBuryPrompt = useAppStore(store => store.openBuryPrompt)
-  const closeBuryPrompt = useAppStore(store => store.closeBuryPrompt)
   const openNewAgentPlacement = useAppStore(store => store.openNewAgentPlacement)
   const closeNewAgentPlacement = useAppStore(store => store.closeNewAgentPlacement)
 
@@ -105,8 +94,6 @@ export function useWorkspace(
   const setRuntimes = useAppStore(store => store.setWorkspaceRuntimes)
   const spotlight = useAppStore(store => store.workspaceSpotlight)
   const setSpotlight = useAppStore(store => store.setWorkspaceSpotlight)
-  const tileTabs = useAppStore(store => store.workspaceTileTabs)
-  const setTileTabs = useAppStore(store => store.setWorkspaceTileTabs)
   const readerMode = useAppStore(store => store.workspaceReaderMode)
   const setReaderMode = useAppStore(store => store.setWorkspaceReaderMode)
 
@@ -114,7 +101,6 @@ export function useWorkspace(
   const refs = useWorkspaceRefs(
     state,
     runtimes,
-    tileTabs,
     dangerousAgentsEnabled,
     useProxyStreaming,
     defaultBuiltInMcpDomains,
@@ -141,7 +127,6 @@ export function useWorkspace(
     })
     return () => { unsubscribeRuntime(); unsubscribeState() }
   }, [refs])
-  refs.latestTileTabsRef.current = tileTabs
   refs.dangerousAgentsRef.current = dangerousAgentsEnabled
   refs.useProxyStreamingRef.current = useProxyStreaming
   refs.defaultBuiltInMcpDomainsRef.current = defaultBuiltInMcpDomains
@@ -156,21 +141,6 @@ export function useWorkspace(
   // says "are we past the once-only effect", not "is the on-disk state
   // intact". See useBootstrap for the four possible terminal values.
   const [restoreStatus, setRestoreStatus] = useState<WorkspaceRestoreStatus>('pending')
-  const selectGridRelatedSession = useCallback((ownerSessionId: string, selectedSessionId: string) => {
-    setState(prev => {
-      const nextSelections = { ...(prev.gridRelatedSelections ?? {}) }
-      if (ownerSessionId === selectedSessionId) {
-        delete nextSelections[ownerSessionId]
-      } else {
-        nextSelections[ownerSessionId] = selectedSessionId
-      }
-      return {
-        ...prev,
-        gridRelatedSelections: nextSelections,
-      }
-    })
-  }, [setState])
-
   const setSessionAgentViewModeOverride = useCallback((
     sessionId: SessionId,
     override: AgentViewModeOverride | null,
@@ -305,23 +275,9 @@ export function useWorkspace(
     setState,
     refs,
   )
-  const {
-    openTileTabs,
-    closeTileTabs,
-    focusTiledTab,
-    focusTiledTabByIndex,
-    resizeFocusedTiledTab,
-    resizeTiledTabByIndex,
-  } = useTileTabsActions(setTileTabs, setSpotlight, setState, refs)
-  const {
-    resizeFocused,
-    resizeFocusedDirectional,
-    setSplitRatio,
-    setSplitRatioInTab,
-    normalizeLayout,
-    hardNormalizeLayout,
-    rotateLayout,
-  } = useResizeActions(setState, setTileTabs)
+  // useTileTabsActions and useResizeActions were composed here until the
+  // unified layout (#992): Tile Tabs and split resizing both died with the
+  // tile tree. Lane/row sizing lives in useDispatchActions.
 
   // Session lifecycle + derivatives that depend on it
   const sessionActions = useSessionActions(state, setState, setRuntimes, refs)
@@ -332,7 +288,7 @@ export function useWorkspace(
 
   const { focusAgentByPaneLabel, focusAgentBySessionId } = useAgentIndexNavigationActions(
     setState,
-    setTileTabs,
+    setRuntimes,
     refs,
     sessionActions,
     showToast,
@@ -340,9 +296,8 @@ export function useWorkspace(
 
   const tabActions = useTabActions(
     state,
-    tileTabs,
     setState,
-    setTileTabs,
+    setRuntimes,
     setSpotlight,
     setReaderMode,
     refs,
@@ -355,12 +310,9 @@ export function useWorkspace(
     setState,
     setRuntimes,
     setSpotlight,
-    setTileTabs,
     setReaderMode,
     refs,
     showToast,
-    openBuryPrompt,
-    closeBuryPrompt,
     openNewAgentPlacement,
     closeNewAgentPlacement,
     sessionActions,
@@ -369,8 +321,6 @@ export function useWorkspace(
   createOrchestrationAgentRef.current = paneActions.createOrchestrationAgent
   const closeOrchestrationSessionRef = useRef(paneActions.closeSession)
   closeOrchestrationSessionRef.current = paneActions.closeSession
-  const killBuriedSessionRef = useRef(paneActions.killBuried)
-  killBuriedSessionRef.current = paneActions.killBuried
 
   useEffect(() => {
     const off = window.api.onOrchestrationRequest(async request => {
@@ -788,11 +738,15 @@ export function useWorkspace(
           callerSessionId: request.callerSessionId,
           sessionId: request.sessionId,
         })
-        if (placement.placement === 'buried') {
-          const buried = current.buried.find(item => item.sessionId === request.sessionId)
-          if (!buried) throw new Error('agent_not_found')
-          await killBuriedSessionRef.current(buried.id)
-        } else {
+        // A 'buried' placement used to branch to Kill Buried here. Buried
+        // records become ordinary pool rows when an old file is migrated
+        // (#992, legacyWorkspaceV2.ts legacyMemberships) and live state has no
+        // `buried` field at all, so nothing can report one and every
+        // managed close takes the one authorized path below. `placement` is
+        // still resolved for its side effect: assertManagedTarget throws when
+        // the caller does not manage this target.
+        void placement
+        {
           // THE authorization check for the Agent Management close tool.
           //
           // The tool's rule used to be prose in its description ("never close
@@ -885,10 +839,8 @@ export function useWorkspace(
   )
 
   const dispatchActions = useDispatchActions(
-    state,
     setState,
-    setTileTabs,
-    closeNewAgentPlacement,
+    setRuntimes,
     refs,
     sessionActions.ensureSessionLive,
     showToast,
@@ -908,12 +860,9 @@ export function useWorkspace(
     refs,
     setState,
     setRuntimes,
-    setTileTabs,
     tabActions.newTab,
     setBootstrapComplete,
     setRestoreStatus,
-    defaultWorkspaceMode,
-    dispatchActions.enterDispatchMode,
   )
   // The persist effect reads current refs on its own timer, so it needs no
   // render-time snapshot — passing `runtimes` here would suggest a reactivity
@@ -921,7 +870,6 @@ export function useWorkspace(
   useFeedDebugPersist(refs)
   useSpotlightSanity(spotlight, state, setSpotlight)
   useReaderModeSanity(readerMode, state, setReaderMode)
-  useTileTabsSanity(tileTabs, state.tabs, setTileTabs)
   usePinnedSessionIdsSanity(state, setState)
   // Beside the sanity hooks because it is the same kind of thing: a
   // membership-driven correction that keeps an orthogonal slice consistent
@@ -950,9 +898,11 @@ export function useWorkspace(
     }),
     activeTab,
     spotlight,
-    tileTabs,
     readerMode,
-    dispatchMode: state.dispatchMode,
+    // The lane grid. Exposed as `stage`, replacing the nullable `dispatchMode`
+    // envelope (#992): consumers used to branch on "is Dispatch on?" and then
+    // on "is it tiled?"; both questions are gone, so the field is the grid.
+    stage: state.stage,
     restoreStatus,
     setReaderModeTarget,
     toggleReaderMode,
@@ -978,40 +928,24 @@ export function useWorkspace(
     splitFocused: paneActions.splitFocused,
     openExtensionViewInPane: paneActions.openExtensionViewInPane,
     startNewAgentPlacement: paneActions.startNewAgentPlacement,
-    commitNewAgentPlacement: paneActions.commitNewAgentPlacement,
     createDetachedDispatchAgent: paneActions.createDetachedDispatchAgent,
     createDetachedSession: paneActions.createDetachedSession,
     createLinkedAgent: paneActions.createLinkedAgent,
     createOrchestrationAgent: paneActions.createOrchestrationAgent,
-    attachDetachedToGrid: paneActions.attachDetachedToGrid,
-    attachAllDetachedForTab: paneActions.attachAllDetachedForTab,
-    detachSessionToDispatch: paneActions.detachSessionToDispatch,
-    detachFocusedToDispatch: paneActions.detachFocusedToDispatch,
     closeFocused: paneActions.closeFocused,
     closeSession: paneActions.closeSession,
     closeIdleOrchestrationAgents,
-    requestBuryFocused: paneActions.requestBuryFocused,
-    buryFocused: paneActions.buryFocused,
-    reviveBuried: paneActions.reviveBuried,
-    killBuried: paneActions.killBuried,
-    focusSession: paneActions.focusSession,
     focusSessionInTab: paneActions.focusSessionInTab,
     focusAgentByPaneLabel,
     focusAgentBySessionId,
     setAgentTitle,
     setSessionAgentViewModeOverride,
-    selectGridRelatedSession,
-    navigate: paneActions.navigate,
     activateTab: tabActions.activateTab,
     activateTabByIndex: tabActions.activateTabByIndex,
     reorderTabs: tabActions.reorderTabs,
     mergeTabs: tabActions.mergeTabs,
     nextTab: tabActions.nextTab,
     prevTab: tabActions.prevTab,
-    resizeFocused,
-    resizeFocusedDirectional,
-    setSplitRatio,
-    setSplitRatioInTab,
     beginOptimisticSubmit,
     unwindOptimisticSubmit,
     settleQueuedSubmit,
@@ -1028,9 +962,6 @@ export function useWorkspace(
     showPaneToast,
     undoClose,
     undoCloseCount,
-    normalizeLayout,
-    hardNormalizeLayout,
-    rotateLayout,
     replaceSession,
     reloadFocusedAgent,
     softReloadAgentView,
@@ -1048,12 +979,6 @@ export function useWorkspace(
     setSpotlightTarget,
     toggleSpotlight,
     setSpotlightSession,
-    openTileTabs,
-    closeTileTabs,
-    focusTiledTab,
-    focusTiledTabByIndex,
-    resizeFocusedTiledTab,
-    resizeTiledTabByIndex,
     toggleTailMode,
     acquireRenderedViewLease,
     releaseRenderedViewLease,
@@ -1064,16 +989,11 @@ export function useWorkspace(
     pickerConfirm,
     pickerCancel,
     setCodeBlockPicker,
-    enterDispatchMode: dispatchActions.enterDispatchMode,
-    exitDispatchMode: dispatchActions.exitDispatchMode,
-    setDispatchScope: dispatchActions.setDispatchScope,
-    focusDispatchSession: dispatchActions.focusDispatchSession,
     pinSession: dispatchActions.pinSession,
     unpinSession: dispatchActions.unpinSession,
     setPinnedSessionIds: dispatchActions.setPinnedSessionIds,
-    enterTiledDispatch: dispatchActions.enterTiledDispatch,
-    exitTiledDispatch: dispatchActions.exitTiledDispatch,
     selectTiledLaneSession: dispatchActions.selectTiledLaneSession,
+    clearTiledLane: dispatchActions.clearTiledLane,
     insertTiledLaneRight: dispatchActions.insertTiledLaneRight,
     removeTiledLane: dispatchActions.removeTiledLane,
     setTiledFocusedLane: dispatchActions.setTiledFocusedLane,

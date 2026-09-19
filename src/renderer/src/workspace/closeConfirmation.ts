@@ -43,15 +43,14 @@ export type CloseConfirmationRequest =
       targets: readonly CloseTargetSnapshot[]
       /** One-line summary naming the exact count. */
       summary: string
-      /** Root rows also own a project. The choice must spell out both scopes;
-       * approving the tab list must never be inferred from an agent close.
-       * `noun` follows the root's kind: since #865/#872 a terminal can be the
-       * root, and "Close Agent ends zsh" names the wrong thing. */
-      agentOnly?: {
-        title: string
-        targets: readonly CloseTargetSnapshot[]
-        noun: 'agent' | 'terminal'
-      }
+      // An `agentOnly` field lived here until #992. It drove a THREE-way dialog
+      // ("Close the agent or the tab?") for one specific session: the tab's
+      // root tile leaf, whose close would otherwise have emptied the tile tree
+      // and therefore removed the whole project. The user had to be asked
+      // which of the two they meant. With no tree there is no root: every
+      // close is session-scoped, a project leaves only with its LAST session,
+      // and "close everything here" is its own command (Close Tab). A request
+      // therefore has exactly one scope — `targets` — and one yes/no answer.
     }
 
 /** The count-and-liveness sentence, shared by the judged and forced paths so
@@ -343,22 +342,24 @@ export function expandSessionCloseTargets(
 }
 
 /**
- * Every session a TAB close will end: each grid leaf expanded through its
- * linked descendants, plus the tab's detached Dispatch sessions.
+ * Every session a PROJECT close will end: each of its sessions expanded
+ * through its linked descendants, wherever those descendants are filed.
  *
- * Detached sessions are the ones people forget. They have no tile in the tab
- * the user is looking at, so a tab close that silently takes six background
- * agents with it looks like closing an empty tab.
+ * The sessions people forget are the ones no lane shows. A project close that
+ * silently takes six parked agents with it looks like closing an empty tab,
+ * which is why the whole list goes in front of the user first.
+ *
+ * (Until #992 this took the tab's tile leaves and its detached rows as two
+ * separate lists, because they were owned by two separate structures.)
  */
 export function expandTabCloseTargets(
   state: CloseExpansionState,
   runtimes: CloseExpansionRuntimes,
-  gridSessionIds: readonly string[],
-  detachedSessionIds: readonly string[],
+  sessionIds: readonly string[],
 ): CloseTargetSnapshot[] {
   const seen = new Set<string>()
   const out: CloseTargetSnapshot[] = []
-  for (const id of [...gridSessionIds, ...detachedSessionIds]) {
+  for (const id of sessionIds) {
     for (const target of expandSessionCloseTargets(state, runtimes, id)) {
       if (seen.has(target.sessionId)) continue
       seen.add(target.sessionId)

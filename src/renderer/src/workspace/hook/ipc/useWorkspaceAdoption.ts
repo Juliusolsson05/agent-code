@@ -146,13 +146,13 @@ export function useWorkspaceAdoption(
       }
     }))
 
-    // Runtimes first, state second. A tile leaf whose runtime does not exist
-    // yet renders through `emptyRuntime()` as an idle pane with a `?` label
-    // (see repairPersistedTabs' note on orphan leaves); seeding before the
-    // tabs are visible means the adopted panes never paint in that state.
+    // Runtimes first, state second. A session whose runtime does not exist yet
+    // renders through `emptyRuntime()` as an idle pane with a `?` label;
+    // seeding before the rows are visible means an adopted agent selected into
+    // a lane never paints in that state.
     //
-    // WHY EVERY adopted session gets a runtime and not just the tile leaves:
-    // `ensureSessionLive` — the wake path behind Attach to Grid and revive —
+    // WHY EVERY adopted session gets a runtime, not just the ones with a
+    // backend: `ensureSessionLive` — the wake path behind lane selection —
     // gates on `latestRuntimesRef.current[sessionId]` being present, and every
     // one of its `setRuntimes` writes no-ops when it is missing. A parked agent
     // adopted without a runtime therefore wakes into an empty feed with no
@@ -190,9 +190,12 @@ export function useWorkspaceAdoption(
 
     // History is loaded per session and not awaited as a batch: each pane fills
     // in as its transcript arrives, which is the same progressive behavior
-    // bootstrap has. Only tile leaves are loaded eagerly — a parked agent's
-    // transcript is fetched by `ensureSessionLive` when it is actually woken.
-    for (const sessionId of adoption.adoptedLeafSessionIds) {
+    // bootstrap has. Only sessions that arrived WITH A LIVE BACKEND are loaded
+    // eagerly — those are the ones the closed window was actively running. A
+    // parked agent's transcript is fetched by `ensureSessionLive` when it is
+    // actually woken. (Until #992 the eager set was "the adopted tile leaves",
+    // a structural stand-in for the same idea.)
+    for (const sessionId of adoption.adoptedSessionIds.filter(id => snapshots.get(id) != null)) {
       void loadInitialHistoryForSession({
         sessionId: sessionId as SessionId,
         refs,
