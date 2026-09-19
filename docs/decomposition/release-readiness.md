@@ -513,6 +513,21 @@ claude 2.1.143 / codex 0.130.0 are stale versus the 2.1.278 / 0.155.1 in daily u
   (one per composer). Optional follow-up: a single app-level subscription.
 
 ### Progress log
+- 2026-09-19 10:15Z:
+  - **MERGED:**
+    - **#1013** (`4d0374af`): the unified stage layout. Its verification of every fix commit was APPROVE, and the minor backup fix was applied.
+    - **#1028** (`d19d5a8e`): the goal-loop Stop boundary. It fixes the owner's ~40 mid-turn continuations (#1024), after three review rounds. Follow-up: #1040 (the Claude-Esc proxy error hook, and the subagent classification in the adapter).
+    - **#1034** (`89b24d39`): T4, the OpenCode model and variant. Parser #33 is merged.
+    - **#1036** (`b3d57001`): #1027, the TLDR latch trap.
+    - **#1042** (`0c2a189b`): the security deps. #991 is closed as superseded.
+  - **Nightly VERIFIED:** the forced run 35432092386 replaced all 4 asset ids, kept its marker, and left `latest` as 404.
+  - **Open, with state:**
+    - #1037 (T10 managed-skills): the review's MEDIUM is fixed (the discovery-error row no longer blocks delete).
+    - #1039 (T9 shared IPC): all six per-pane channels are shared, and the warning check is fixed.
+    - #1041 (T5 part 1, DEC-mode replay): APPROVE, with the follow-ups folded in.
+    - #1043 (T5 part 2, Jump to Latest): opencode-terminal-headless #3 is merged and proven live against the real TUI. `messages_last` works; `session.last` is accepted and ignored. CI fixed after its tile-tree failure.
+    - #1044 (#1018, orchestration failures): catalog-first, 27 recorded errors. opencode-headless #15 is merged. Needs review.
+  - **Now unblocked by #1013:** T7 (#1006), T8 (#1007), T2 (command promotion), T1 (#995), and rebasing #945 and #935.
 - 2026-09-19 09:30Z:
   - **MERGED:** #1035 (`39323fda`, Stage 8's stable channel). The first nightly (run 35430444567) PUBLISHED: 4 fixed-name assets, prerelease, marker `built-from: 7446aef3`, both arches `accepted / Notarized Developer ID`, and `releases/latest` still 404. A forced re-run (35432092386) is in flight to prove asset replacement.
   - **#1013:** the verification of every fix commit is APPROVE (2528/2528). Its one minor, the truncated backup on a failed write, is fixed (`3f61d426`). Merge on green CI.
