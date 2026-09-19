@@ -46,7 +46,7 @@ import { getToolPath, refreshToolchainFromState } from '@main/setup/toolchain.js
 import { resolveToolPath } from '@main/setup/binaryResolver.js'
 import { updateToolPaths } from '@main/setup/setupState.js'
 import { forgetFeedDebugSession } from '@main/storage/feedDebugLog.js'
-import { CappedTextBuffer } from '@main/sessions/cappedTextBuffer.js'
+import { TerminalReplayBuffer } from '@main/sessions/terminalReplayBuffer.js'
 import { ScreenFrameGate } from '@main/sessions/screenFrameGate.js'
 import type {
   ConditionCustomAction,
@@ -641,7 +641,7 @@ export class SessionManager extends EventEmitter {
   // WHY CappedTextBuffer and not a string: see src/main/sessions/
   // cappedTextBuffer.ts — the string version copied the whole cap on every
   // chunk and retained sliced-string parents (#726).
-  private readonly terminalBuffers = new Map<string, CappedTextBuffer>()
+  private readonly terminalBuffers = new Map<string, TerminalReplayBuffer>()
   private readonly terminalAttached = new Set<string>()
 
   // Shell activity producer (#865). Emits on a channel of its own, NOT
@@ -676,7 +676,7 @@ export class SessionManager extends EventEmitter {
   // terminal, and agent PTYs can be noisy. Buffer in main, broadcast
   // only after an attach, and let the renderer replay the buffer before
   // draining live bytes.
-  private readonly agentPtyBuffers = new Map<string, CappedTextBuffer>()
+  private readonly agentPtyBuffers = new Map<string, TerminalReplayBuffer>()
   private readonly agentPtyAttachCounts = new Map<string, number>()
   private readonly agentPtyRestoreSizes = new Map<string, PtySize>()
 
@@ -2713,7 +2713,7 @@ export class SessionManager extends EventEmitter {
       })
 
       this.sessionSizes.set(sessionId, initialSize)
-      this.agentPtyBuffers.set(sessionId, new CappedTextBuffer(AGENT_PTY_BUFFER_CAP))
+      this.agentPtyBuffers.set(sessionId, new TerminalReplayBuffer(AGENT_PTY_BUFFER_CAP))
       session.on('started', ({ projectDir }) => {
         if (!ownsEntry()) return
         this.markActivity(sessionId)
@@ -2752,7 +2752,7 @@ export class SessionManager extends EventEmitter {
         this.markActivity(sessionId)
         let replay = this.agentPtyBuffers.get(sessionId)
         if (!replay) {
-          replay = new CappedTextBuffer(AGENT_PTY_BUFFER_CAP)
+          replay = new TerminalReplayBuffer(AGENT_PTY_BUFFER_CAP)
           this.agentPtyBuffers.set(sessionId, replay)
         }
         replay.append(data)
@@ -3102,7 +3102,7 @@ export class SessionManager extends EventEmitter {
     // and is replayed to the renderer on attach — see the block
     // comment on terminalBuffers above for the full reasoning.
     this.sessionSizes.set(sessionId, initialSize)
-    this.terminalBuffers.set(sessionId, new CappedTextBuffer(TERMINAL_BUFFER_CAP))
+    this.terminalBuffers.set(sessionId, new TerminalReplayBuffer(TERMINAL_BUFFER_CAP))
 
     // Terminal sessions only emit started / data / exit. The 'data'
     // event carries raw PTY bytes for xterm.js on the renderer side;
@@ -3130,7 +3130,7 @@ export class SessionManager extends EventEmitter {
       // standard terminal scrollback behavior.
       let replay = this.terminalBuffers.get(sessionId)
       if (!replay) {
-        replay = new CappedTextBuffer(TERMINAL_BUFFER_CAP)
+        replay = new TerminalReplayBuffer(TERMINAL_BUFFER_CAP)
         this.terminalBuffers.set(sessionId, replay)
       }
       replay.append(data)
@@ -3305,7 +3305,8 @@ export class SessionManager extends EventEmitter {
       )
       return ''
     }
-    const buffer = this.terminalBuffers.get(sessionId)?.read() ?? ''
+    // replay(), not read(): the modes the evicted bytes set come first (#843).
+    const buffer = this.terminalBuffers.get(sessionId)?.replay() ?? ''
     // Flip the attach flag in the SAME synchronous block as reading
     // the buffer. JavaScript is single-threaded and event emission
     // can only happen on a later tick, so nothing can sneak in.
@@ -3353,7 +3354,8 @@ export class SessionManager extends EventEmitter {
       )
       return null
     }
-    const buffer = this.agentPtyBuffers.get(sessionId)?.read() ?? ''
+    // replay(), not read(): the modes the evicted bytes set come first (#843).
+    const buffer = this.agentPtyBuffers.get(sessionId)?.replay() ?? ''
     const attachCount = this.agentPtyAttachCounts.get(sessionId) ?? 0
     if (attachCount === 0) {
       const currentSize = this.sessionSizes.get(sessionId)

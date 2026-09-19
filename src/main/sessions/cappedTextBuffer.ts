@@ -43,7 +43,14 @@ export class CappedTextBuffer {
   private live = 0
   readonly pieceSize: number
 
-  constructor(readonly cap: number, pieceSize?: number) {
+  constructor(
+    readonly cap: number,
+    pieceSize?: number,
+    /** Called with every span of text the cap discards, oldest first, before
+     *  it is gone. TerminalReplayBuffer feeds these to a DEC mode tracker so
+     *  the replay can restore the modes they set (#843). */
+    private readonly onEvict?: (text: string) => void,
+  ) {
     if (!(cap > 0)) throw new RangeError(`CappedTextBuffer cap must be positive, got ${cap}`)
     // A sixteenth of the cap bounds overflow loss to ~6% of the replay, with
     // a floor so small caps (tests, tiny terminals) do not shred every chunk.
@@ -80,6 +87,16 @@ export class CappedTextBuffer {
       // never a slice, which would retain the whole oversized chunk (#321).
       // Cutting straight from the tail offset copies each byte once.
       start = surrogateSafeStart(chunk, chunk.length - this.cap)
+      // Everything retained so far, then the chunk's own discarded head, in
+      // stream order: the evict hook must see bytes in the order the
+      // program wrote them.
+      if (this.onEvict) {
+        for (let index = this.head; index < this.pieces.length; index += 1) {
+          const piece = this.pieces[index]!
+          if (piece.length > 0) this.onEvict(piece)
+        }
+        if (start > 0) this.onEvict(chunk.slice(0, start))
+      }
       this.pieces = []
       this.head = 0
       this.live = 0
@@ -116,6 +133,7 @@ export class CappedTextBuffer {
       this.pieces[this.head] = ''
       this.head += 1
       this.live -= dropped.length
+      this.onEvict?.(dropped)
     }
   }
 }
