@@ -1812,7 +1812,9 @@ export class AgentCodeManagedSkillsService {
         }
       }
     }
-    if (enabled && this.targets.unsupportedProviders.length > 0) {
+    // Degenerate-only gate (#1014): unsupported providers are informational;
+    // enabling with ZERO supported targets would be a silent no-op write.
+    if (enabled && this.targets.targets.length === 0) {
       return {
         ok: false,
         result: { ok: false, code: 'unsupported', snapshot: this.customSnapshot() },
@@ -1871,6 +1873,10 @@ export class AgentCodeManagedSkillsService {
       if (!next.pendingOperations[item.key]) statuses.push(this.customStatus(item.target, 'installed'))
       else statuses.push(await this.publishCustomTarget(updated, item, rendered, desiredHash))
     }
+    // Same informational rows the startup reconcile appends (#1014): the
+    // post-enable snapshot must already show providers that cannot receive
+    // the skill, not only after a restart.
+    statuses.push(...this.customUnsupportedStatuses())
     this.customTargetStatuses.set(skill.id, statuses)
     await this.persistBestEffort(statuses)
     return { ok: true, snapshot: this.customSnapshot() }
@@ -2164,16 +2170,15 @@ export class AgentCodeManagedSkillsService {
   }
 
   private async reconcileCustomEnabledLocked(skill: AgentCodeCustomSkillRecord): Promise<void> {
+    // Unsupported providers no longer short-circuit (#1014): they contribute
+    // informational rows at the exits instead of replacing deployment rows.
     const targets = this.customTargets(skill)
-    if (targets.unsupportedProviders.length > 0) {
-      this.customTargetStatuses.set(skill.id, this.customUnsupportedStatuses())
-      return
-    }
     const normalized = normalizeAgentCodeCustomSkill(skill, { requireContent: true })
     if (!normalized.ok) {
       this.customTargetStatuses.set(
         skill.id,
-        targets.targets.map(target => this.customStatus(target, 'error', normalized.message)),
+        [...targets.targets.map(target => this.customStatus(target, 'error', normalized.message)),
+          ...this.customUnsupportedStatuses()],
       )
       return
     }
@@ -2269,6 +2274,9 @@ export class AgentCodeManagedSkillsService {
       const removed = await this.removeCustomMaterialization(skill, key, record)
       if (removed.state !== 'not-installed') statuses.push(removed)
     }
+    // Informational rows for providers that cannot receive skills (#1014);
+    // deployment rows above remain the health input.
+    statuses.push(...this.customUnsupportedStatuses())
     this.customTargetStatuses.set(skill.id, statuses)
     await this.persistBestEffort(statuses)
   }
@@ -3042,15 +3050,19 @@ export class AgentCodeManagedSkillsService {
     targets: AgentCodeConventionsTargetStatus[],
   ): AgentCodeCustomSkill['health'] {
     if (this.recovery) return 'recovery-required'
-    if (skill.enabled && this.targets.unsupportedProviders.length > 0) return 'unsupported'
-    if (targets.some(status => status.state === 'conflict' || status.state === 'retired')) {
+    // 'unsupported' rows are informational (#1014): health is computed over the
+    // deployable rows only. Degenerate zero-supported-targets keeps 'unsupported'
+    // AFTER the error check so target-resolution failures stay 'degraded'.
+    const deployable = targets.filter(status => status.state !== 'unsupported')
+    if (deployable.some(status => status.state === 'conflict' || status.state === 'retired')) {
       return 'conflict'
     }
-    if (targets.some(status => status.state === 'error' || status.state === 'missing')) {
+    if (deployable.some(status => status.state === 'error' || status.state === 'missing')) {
       return 'degraded'
     }
+    if (this.targets.targets.length === 0) return 'unsupported'
     if (!skill.enabled) return 'disabled'
-    return targets.length > 0 && targets.every(status => status.state === 'installed')
+    return deployable.length > 0 && deployable.every(status => status.state === 'installed')
       ? 'active'
       : 'degraded'
   }

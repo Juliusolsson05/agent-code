@@ -12,6 +12,7 @@ import {
   createEmptyAgentCodeConventionsDocument,
   type AgentCodeCustomSkillRecord,
 } from '@shared/types/agentCodeConventions.js'
+import type { AgentProviderKind } from '@shared/types/providerKind.js'
 import type {
   AgentCodeConventionsTarget,
   ResolvedAgentCodeConventionsTargets,
@@ -42,13 +43,16 @@ function target(id: string, skillsDirectory: string): AgentCodeConventionsTarget
   }
 }
 
-async function harness() {
+async function harness(options: { unsupportedProviders?: AgentProviderKind[] } = {}) {
   const root = await temporaryDirectory()
   const targets = [
     target('agents-standard', join(root, '.agents', 'skills')),
     target('claude-personal', join(root, '.claude', 'skills')),
   ]
-  const resolved: ResolvedAgentCodeConventionsTargets = { targets, unsupportedProviders: [] }
+  const resolved: ResolvedAgentCodeConventionsTargets = {
+    targets,
+    unsupportedProviders: options.unsupportedProviders ?? [],
+  }
   const stateFilePath = join(root, 'state', 'conventions.json')
   let sequence = 0
   const service = new AgentCodeConventionsService({
@@ -553,5 +557,64 @@ describe('product-owned Goal skill', () => {
     await writeFileWithParents(file, 'User owned instructions')
     await expect(service.ensureGoalSkill()).rejects.toThrow('Goal skill deployment failed')
     expect(await readFile(file, 'utf8')).toBe('User owned instructions')
+  })
+})
+
+describe('product skills with an unsupported registered provider', () => {
+  // Regression for #1014: grok (registered, personalAgentSkills.supported:false)
+  // must not stop the TLDR product skill from deploying — pre-spawn reconcile
+  // throws when ensureTldrSkill() cannot reach health 'active', which killed
+  // EVERY session spawn, claude/codex/opencode included.
+  it('keeps TLDR deployable and active while a provider is unsupported', async () => {
+    const { targets, service } = await harness({ unsupportedProviders: ['grok'] })
+    await expect(service.ensureTldrSkill()).resolves.toBeUndefined()
+    for (const targetValue of targets) {
+      expect((await stat(customPath(targetValue, 'agent-code-tldr'))).isFile()).toBe(true)
+    }
+    const snapshot = await service.getCustomSkillsSnapshot()
+    const tldr = snapshot.skills.find(skill => skill.managedBy === 'tldr')
+    expect(tldr?.health).toBe('active')
+    expect(tldr?.targets).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'unsupported:grok', state: 'unsupported' }),
+    ]))
+    expect(snapshot.unsupportedProviders).toEqual(['grok'])
+  })
+
+  it('survives a restart-reconcile with an unsupported provider and stays spawnable', async () => {
+    const first = await harness({ unsupportedProviders: ['grok'] })
+    await first.service.ensureTldrSkill()
+    // Restart against the same state: initialize() runs the startup reconcile
+    // that previously replaced TLDR's deployment rows with unsupported rows.
+    const restarted = new AgentCodeConventionsService({
+      stateFilePath: first.stateFilePath,
+      homeDirectory: first.root,
+      resolveTargets: async () => ({
+        targets: first.targets,
+        unsupportedProviders: ['grok'],
+      }),
+    })
+    await restarted.initialize()
+    await expect(restarted.ensureTldrSkill()).resolves.toBeUndefined()
+    const snapshot = await restarted.getCustomSkillsSnapshot()
+    expect(snapshot.skills.find(skill => skill.managedBy === 'tldr')?.health).toBe('active')
+  })
+
+  it('still refuses TLDR when no provider supports personal skills', async () => {
+    const root = await temporaryDirectory()
+    const stateFilePath = join(root, 'state', 'conventions.json')
+    let sequence = 0
+    const service = new AgentCodeConventionsService({
+      stateFilePath,
+      homeDirectory: root,
+      resolveTargets: async () => ({ targets: [], unsupportedProviders: ['grok'] }),
+      now: () => new Date('2026-08-26T00:00:00.000Z'),
+      operationId: () => `id-${++sequence}`,
+    })
+    await service.initialize()
+    // The degenerate zero-supported-targets enable is refused by the mutation
+    // gate, so the deployment-failed message fires before the health check.
+    await expect(service.ensureTldrSkill()).rejects.toThrow(
+      'TLDR skill deployment failed. Review managed skill health in Settings.',
+    )
   })
 })
