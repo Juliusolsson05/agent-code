@@ -27,12 +27,19 @@ vi.mock('@main/performance/PerformanceService.js', () => ({ performanceService: 
 // goal_loop sessions get it at all, and that a Stop TLDR blocks is not one.
 
 const cleanups: Array<() => Promise<unknown>> = []
-afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup() })
+afterEach(async () => {
+  // A loop persists after every delivery, so a test that ends on
+  // waitFor(deliver) can still have a temp file being renamed. Let it settle
+  // before the directory goes (the #1028 re-review measured ENOTEMPTY in 4 of
+  // 12 runs without this).
+  await settle()
+  for (const cleanup of cleanups.splice(0).reverse()) await cleanup()
+})
 const settle = () => new Promise(resolve => setTimeout(resolve, 20))
 
 async function setup() {
   const directory = await mkdtemp(join(tmpdir(), 'agent-code-goal-loop-hooks-'))
-  cleanups.push(() => rm(directory, { recursive: true, force: true }))
+  cleanups.push(() => rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }))
   const store = new TldrStore(join(directory, 'tldr.json'))
   const goalStore = new TldrStore(join(directory, 'goal.json'), undefined, { historyDirectoryName: 'goal-history', label: 'Goal' })
   const deliver = vi.fn(async () => ({ ok: true } as PromptDeliveryResult))
@@ -114,6 +121,26 @@ describe('goal loop turn boundary through the real MCP host (#1024)', () => {
     await hook(config!, 'stop', { session_id: 'claude-session', stop_hook_active: false })
     await hook(config!, 'post-tool-use', { session_id: 'claude-session', agent_id: 'background-reviewer', tool_name: 'Read' })
     loops.control('s3', { action: 'resume' })
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1))
+  })
+
+  it('a hook body the host cannot read never reopens the turn', async () => {
+    // #1028 re-review: an unreadable body hides whether a subagent sent it,
+    // so the agent_id rule failed open. Only a Stop is forwarded blind; a
+    // blind non-Stop hook is dropped.
+    const { host, loops, deliver, hook } = await setup()
+    const [config] = host.registerSession({ sessionId: 's4', cwd: '/project', providerKind: 'claude', domains: ['goal_loop'] })
+    await loops.startLoop('s4', { goal: 'G.', loopPrompt: 'P.' })
+    await hook(config!, 'post-tool-use', { session_id: 'claude-session' })
+    loops.control('s4', { action: 'pause' })
+    await hook(config!, 'stop', { session_id: 'claude-session', stop_hook_active: false })
+    const malformed = await fetch(`${config!.tldrHooks!.baseUrl}/post-tool-use`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', Authorization: `Bearer ${config!.bearerToken}` },
+      body: '{"agent_id": "background-reviewer", "tool_response": ',
+    })
+    expect(malformed.status).toBe(200)
+    loops.control('s4', { action: 'resume' })
     await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1))
   })
 })

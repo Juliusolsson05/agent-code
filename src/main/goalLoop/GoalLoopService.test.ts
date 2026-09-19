@@ -23,6 +23,18 @@ async function service(deliver: Deliver = vi.fn(async () => ({ ok: true } as Pro
   return { svc, manager, deliver }
 }
 const idleTurn = (manager: FakeManager) => manager.emit('semantic-event', { sessionId: 's1', event: { type: 'turn_completed' } })
+// The sequence the session's feed log recorded 4–60 ms before EVERY sampled
+// mid-turn delivery (#1024): a Task subagent's API flow is selected on its
+// first chunk while the main agent runs a local tool, then demoted as
+// `cc_is_subagent`. The phase values are the ones the Claude proxy adapter
+// publishes on that path: `requesting` on first-chunk promotion, `idle` on
+// subagent demotion.
+const subagentFlowInToolGap = (manager: FakeManager) => {
+  manager.emit('semantic-event', { sessionId: 's1', event: { type: 'flow_selected', flowId: 'f-sub' } })
+  manager.emit('semantic-event', { sessionId: 's1', event: { type: 'stream_phase', phase: 'requesting' } })
+  manager.emit('semantic-event', { sessionId: 's1', event: { type: 'stream_phase', phase: 'idle' } })
+  manager.emit('semantic-event', { sessionId: 's1', event: { type: 'flow_ignored', flowId: 'f-sub', reason: 'subagent' } })
+}
 
 describe('GoalLoopService', () => {
   it('delivers the continuation prompt when the session goes idle without completion', async () => {
@@ -267,19 +279,7 @@ describe('GoalLoopService idle-blip retraction', () => {
 
 describe('GoalLoopService turn boundary from provider hooks (#1024)', () => {
   const settle = () => new Promise(resolve => setTimeout(resolve, 20))
-  // The sequence the session's feed log recorded 4–60 ms before EVERY sampled
-  // mid-turn delivery: a Task subagent's API flow is selected on its first
-  // chunk while the main agent runs a local tool, then demoted as
-  // `cc_is_subagent`. The phase values are the ones the Claude proxy adapter
-  // publishes on that path: `requesting` on first-chunk promotion, `idle` on
-  // subagent demotion. Nothing retracts that idle, so the old phase trigger
-  // read it as a turn end.
-  const subagentFlowInToolGap = (manager: FakeManager) => {
-    manager.emit('semantic-event', { sessionId: 's1', event: { type: 'flow_selected', flowId: 'f-sub' } })
-    manager.emit('semantic-event', { sessionId: 's1', event: { type: 'stream_phase', phase: 'requesting' } })
-    manager.emit('semantic-event', { sessionId: 's1', event: { type: 'stream_phase', phase: 'idle' } })
-    manager.emit('semantic-event', { sessionId: 's1', event: { type: 'flow_ignored', flowId: 'f-sub', reason: 'subagent' } })
-  }
+  // subagentFlowInToolGap (module level) is the recorded pre-delivery edge.
 
   it('ignores the recorded subagent-flow idle edge once the session has hooks, and continues on the allowed Stop', async () => {
     const { svc, manager, deliver } = await service()
@@ -373,64 +373,114 @@ describe('GoalLoopService turn boundary from provider hooks (#1024)', () => {
 describe('GoalLoopService hook turns that end without a Stop (#1028 review)', () => {
   // Claude runs no Stop hook on an Esc interrupt, a model or API error, or
   // prompt-too-long. Codex runs none on interrupt or on turn errors. The
-  // sequence below is the review's Probe A: hooks proven, a tool finished,
-  // the turn completed, and then silence.
+  // sequence below is the first review's Probe A: hooks proven, a tool
+  // finished, the turn completed, and then silence. The re-review's probes
+  // (Codex reasoning with no summary deltas, a long tool, Resume during a
+  // running tool) are the busy cases Resume must NOT mistake for it.
   afterEach(() => { vi.useRealTimers() })
-  const quietTurnWithoutStop = async () => {
+  const hookTurn = async () => {
     const ctx = await service()
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
     await ctx.svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
     ctx.svc.observeProviderHook('s1', 'post-tool-use')
-    idleTurn(ctx.manager)
     return ctx
   }
-
-  it('pauses the loop visibly once the turn has been silent for the quiet window, and Resume continues it', async () => {
-    const { svc, deliver } = await quietTurnWithoutStop()
-    await vi.advanceTimersByTimeAsync(GOAL_LOOP_QUIET_TURN_MS - 1_000)
-    expect(svc.snapshot()['s1']?.phase).toBe('active')
-    await vi.advanceTimersByTimeAsync(2_000)
-    // Paused, not continued: this turn was cut short by the user or an error.
-    expect(svc.snapshot()['s1']).toMatchObject({ phase: 'paused', pauseReason: 'interrupted' })
-    expect(deliver).not.toHaveBeenCalled()
-    svc.control('s1', { action: 'resume' })
-    await vi.advanceTimersByTimeAsync(0)
-    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1))
-  })
-
-  it('a manual Pause then Resume recovers a turn that went quiet with a tool still pending', async () => {
-    // An Esc during a tool leaves that tool pending, so the quiet check keeps
-    // waiting. Before the review fix this Resume was a no-op, forever.
-    const { svc, manager, deliver } = await quietTurnWithoutStop()
-    manager.emit('semantic-event', { sessionId: 's1', event: { type: 'block_started', kind: 'tool_use', toolUseId: 'aborted' } })
-    await vi.advanceTimersByTimeAsync(GOAL_LOOP_QUIET_TURN_MS * 3)
-    expect(svc.snapshot()['s1']?.phase).toBe('active')
+  const pauseResume = (svc: GoalLoopService) => {
     svc.control('s1', { action: 'pause' })
     svc.control('s1', { action: 'resume' })
-    await vi.advanceTimersByTimeAsync(0)
-    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1))
-  })
+  }
 
-  it('never pauses a turn that is running a long tool, however long it takes', async () => {
-    const { svc, manager, deliver } = await quietTurnWithoutStop()
-    manager.emit('semantic-event', { sessionId: 's1', event: { type: 'block_started', kind: 'tool_use', toolUseId: 'build' } })
+  it('never pauses or prompts on its own: the next user prompt is the boundary', async () => {
+    const { svc, manager, deliver } = await hookTurn()
+    idleTurn(manager)
     await vi.advanceTimersByTimeAsync(10 * GOAL_LOOP_QUIET_TURN_MS)
+    // The first review fix paused here; the re-review showed that also paused
+    // turns that were still working, so silence alone decides nothing.
     expect(svc.snapshot()['s1']?.phase).toBe('active')
     expect(deliver).not.toHaveBeenCalled()
-    // The tool finishes, the turn ends normally, and the loop continues.
-    manager.emit('semantic-event', { sessionId: 's1', event: { type: 'tool_result', toolUseId: 'build' } })
-    svc.observeProviderHook('s1', 'post-tool-use')
+    svc.observeProviderHook('s1', 'user-prompt-submit')
     svc.observeProviderHook('s1', 'stop', { blocked: false })
     await vi.advanceTimersByTimeAsync(0)
     await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1))
   })
 
-  it('never pauses a turn that keeps streaming', async () => {
-    const { svc, manager } = await quietTurnWithoutStop()
-    for (let i = 0; i < 10; i++) {
+  it('Resume continues a turn that is idle, has nothing pending and has been silent for the window', async () => {
+    const { svc, manager, deliver } = await hookTurn()
+    idleTurn(manager)
+    await vi.advanceTimersByTimeAsync(GOAL_LOOP_QUIET_TURN_MS + 1_000)
+    pauseResume(svc)
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1))
+  })
+
+  it('Resume never prompts an agent whose tool is still running, however long it has run', async () => {
+    const { svc, manager, deliver } = await hookTurn()
+    manager.emit('semantic-event', { sessionId: 's1', event: { type: 'block_started', kind: 'tool_use', toolUseId: 'npm-test' } })
+    // The recorded #1024 edge: a subagent flow during the tool leaves the
+    // phase idle, so only the pending tool says the turn is still running.
+    subagentFlowInToolGap(manager)
+    await vi.advanceTimersByTimeAsync(3 * GOAL_LOOP_QUIET_TURN_MS)
+    pauseResume(svc)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(deliver).not.toHaveBeenCalled()
+    // The tool finishes and the turn Stops: exactly one continuation.
+    manager.emit('semantic-event', { sessionId: 's1', event: { type: 'tool_result', toolUseId: 'npm-test' } })
+    svc.observeProviderHook('s1', 'stop', { blocked: false })
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1))
+    await vi.advanceTimersByTimeAsync(100)
+    expect(deliver).toHaveBeenCalledTimes(1)
+  })
+
+  it('Resume never prompts during silent reasoning (Codex streams no summary for minutes)', async () => {
+    const { svc, manager, deliver } = await hookTurn()
+    manager.emit('semantic-event', { sessionId: 's1', event: { type: 'stream_phase', phase: 'thinking' } })
+    await vi.advanceTimersByTimeAsync(2 * GOAL_LOOP_QUIET_TURN_MS)
+    pauseResume(svc)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(deliver).not.toHaveBeenCalled()
+    svc.observeProviderHook('s1', 'stop', { blocked: false })
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1))
+  })
+
+  it('any traffic restarts the silence, including events that change nothing', async () => {
+    // A stream of identical events returns early from the reducer; the
+    // activity stamp must happen before that return.
+    const { svc, manager, deliver } = await hookTurn()
+    idleTurn(manager)
+    for (let i = 0; i < 4; i++) {
       await vi.advanceTimersByTimeAsync(GOAL_LOOP_QUIET_TURN_MS / 2)
-      manager.emit('semantic-event', { sessionId: 's1', event: { type: 'stream_phase', phase: i % 2 ? 'requesting' : 'responding' } })
+      idleTurn(manager)
     }
-    expect(svc.snapshot()['s1']?.phase).toBe('active')
+    await vi.advanceTimersByTimeAsync(GOAL_LOOP_QUIET_TURN_MS / 2)
+    pauseResume(svc)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(deliver).not.toHaveBeenCalled()
+  })
+
+  it('a hook restarts the silence', async () => {
+    const { svc, manager, deliver } = await hookTurn()
+    idleTurn(manager)
+    await vi.advanceTimersByTimeAsync(GOAL_LOOP_QUIET_TURN_MS - 10_000)
+    svc.observeProviderHook('s1', 'post-tool-use')
+    await vi.advanceTimersByTimeAsync(20_000)
+    pauseResume(svc)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(deliver).not.toHaveBeenCalled()
+  })
+
+  it('Resume right after our own delivery waits for that turn', async () => {
+    const { svc, manager, deliver } = await hookTurn()
+    idleTurn(manager)
+    svc.observeProviderHook('s1', 'stop', { blocked: false })
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1))
+    // The continuation's turn has just started, so a Resume 30 s in, after
+    // the previous turn's silence, must not deliver a second one.
+    await vi.advanceTimersByTimeAsync(GOAL_LOOP_QUIET_TURN_MS / 2)
+    pauseResume(svc)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(deliver).toHaveBeenCalledTimes(1)
   })
 })

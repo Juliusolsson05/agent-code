@@ -28,10 +28,16 @@ import type {
 } from '@mcp/shared/types.js'
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
 
-// Hook bodies are small provider payloads (session ids, a cwd, a flag, and at
-// most the last assistant message). The cap bounds memory for a hostile or
-// runaway client without ever truncating a real one.
-const TLDR_HOOK_MAX_BODY_BYTES = 256 * 1024
+// The cap bounds memory for a hostile or runaway client on a loopback,
+// bearer-authenticated route.
+//
+// WHY 16 MiB and not the 256 KiB this started at: the old comment said hook
+// bodies are small (ids, a cwd, a flag, at most the last assistant message).
+// That holds for Stop, but PostToolUse carries the whole `tool_input` and
+// `tool_response`, so one Write of a large file or one big Read overflows
+// 256 KiB (#1028 re-review). An overflow destroys the socket, and the goal
+// loop cannot then tell whether the hook came from a subagent.
+const TLDR_HOOK_MAX_BODY_BYTES = 16 * 1024 * 1024
 const TLDR_HOOK_PATH_PREFIX = '/hooks/tldr/'
 
 function readBody(req: IncomingMessage, limit: number): Promise<string> {
@@ -565,8 +571,15 @@ export class BuiltInMcpHttpHost {
     // has decided, because a Stop that enforcement blocks does not end the
     // turn (#1024). Only a loop-enabled registration reports, and only for its
     // own session id: the bearer already scopes this request to one process.
+    // A body that could not be read or parsed hides who sent it. Only a Stop
+    // is still forwarded then, because missing the main agent's turn end
+    // stalls the loop. A non-Stop hook only OPENS a turn, and opening one on
+    // behalf of a subagent is exactly what the agent_id rule prevents, so an
+    // unattributable one is dropped (#1028 re-review).
+    const unattributable = input === null
     const tellGoalLoop = (output: unknown) => {
       if (!loopReporting || registration.revoked || fromSubagent) return
+      if (unattributable && event !== 'stop') return
       const blocked = Boolean(output && typeof output === 'object' && (output as { decision?: unknown }).decision === 'block')
       this.dependencies.goalLoopService?.observeProviderHook(registration.scope.sessionId, event, { blocked })
     }

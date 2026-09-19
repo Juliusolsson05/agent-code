@@ -9,9 +9,8 @@ import { GOAL_LOOP_STORE_LIMIT, GoalLoopStore } from './GoalLoopStore.js'
 
 const MAX_DELIVERY_FAILURES = 3
 const DELIVERY_RETRY_DELAY_MS = 250
-/** How long a hook-driven turn may go without ANY hook or semantic event, and
- * with no tool pending, before the loop treats it as over without a Stop.
- * See checkQuietTurn. */
+/** How long a hook-driven turn must have been silent (no hook, no semantic
+ * event) before Resume may treat it as over without a Stop. See control(). */
 export const GOAL_LOOP_QUIET_TURN_MS = 60_000
 
 // WHY structural instead of Pick<SessionManager, 'on'>: SessionManager's
@@ -103,11 +102,9 @@ export class GoalLoopService extends EventEmitter {
    * allowed Stop. Replaces the phase-derived working state for those
    * sessions: that state cannot tell a tool gap from a turn end. */
   private readonly hookTurnOpen = new Set<string>()
-  /** Last hook or semantic event per hook-driven session, in ms. Only the
-   * quiet-turn check reads it. */
+  /** Last hook, semantic event or delivery per hook-driven session, in ms.
+   * Only Resume reads it; see control(). */
   private readonly lastHookSessionActivity = new Map<string, number>()
-  /** One pending quiet-turn check per session; see checkQuietTurn. */
-  private readonly quietTurnTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
   constructor(private readonly deps: {
     manager: GoalLoopManagerPort
@@ -175,7 +172,6 @@ export class GoalLoopService extends EventEmitter {
     this.lastHookSessionActivity.set(sessionId, Date.now())
     if (hook !== 'stop') {
       this.hookTurnOpen.add(sessionId)
-      this.armQuietTurnCheck(sessionId)
       return
     }
     if (outcome?.blocked) return
@@ -248,13 +244,43 @@ export class GoalLoopService extends EventEmitter {
       // fresh failure budget; otherwise a loop resumed from paused(error)
       // would re-pause on its first hiccup with no backoff at all.
       this.loops.set(sessionId, { ...loop, phase: 'active', pauseReason: null, consecutiveDeliveryFailures: 0, updatedAt: now })
-      // A hook-driven turn that has been silent for the quiet window ended
-      // without a Stop (Esc, an API error; see checkQuietTurn). Resume is the
-      // user vouching that the agent is idle, so it closes that turn. WHY not
-      // the phase state instead: for these sessions it reads idle in the middle
-      // of a turn (#1024), and Resume would then prompt a busy agent. A turn
-      // with recent traffic stays open, and its Stop is the trigger.
-      if (this.hookTurnOpen.has(sessionId) && this.quietForMs(sessionId) >= GOAL_LOOP_QUIET_TURN_MS) {
+      // A hook-driven turn can end with NO Stop hook (#1028 review). Claude
+      // skips Stop on an Esc interrupt, a model or API error (it runs
+      // StopFailure, which Agent Code does not register, see below), and
+      // prompt-too-long. Codex skips it on interrupt and on turn errors. The
+      // turn then stays open here until the next turn boundary. Any user
+      // prompt is one (UserPromptSubmit, then that turn's Stop), and Resume
+      // is the other.
+      //
+      // Resume closes such a turn only when every signal agrees it is over:
+      // - no tool pending;
+      // - the phase state idle;
+      // - nothing heard for GOAL_LOOP_QUIET_TURN_MS.
+      // Each one alone is wrong somewhere. Phase idle happens mid-turn on
+      // Claude's subagent flows (#1024). Silence happens mid-turn during
+      // Codex reasoning that streams no summary and during Claude's API retry
+      // backoff; there the phase is thinking or requesting. A pending tool
+      // can run for minutes (a build, a test suite). A Resume that finds the
+      // turn still open delivers nothing, and the turn's own Stop continues
+      // the loop.
+      //
+      // WHY there is no automatic "quiet turn" pause: the first review fix
+      // paused the loop after 60 s of silence. The re-review showed that it
+      // paused turns that were still working, and unattended loops then
+      // stopped for good. A turn that ended without a Stop costs one user
+      // prompt; a false pause costs the whole loop.
+      //
+      // WHY Claude's StopFailure is not registered as a turn end: the hook
+      // JSON shares one --settings argument with the external-control
+      // exclusion, and Claude validates hook keys against a fixed enum. A CLI
+      // older than the event would reject that argument, exclusion included,
+      // and nothing gates on the CLI version.
+      const tracked = this.working.get(sessionId)
+      if (
+        this.hookTurnOpen.has(sessionId)
+        && this.quietForMs(sessionId) >= GOAL_LOOP_QUIET_TURN_MS
+        && (!tracked || (!isWorking(tracked) && tracked.pendingTools.length === 0))
+      ) {
         this.hookTurnOpen.delete(sessionId)
       }
       // Resuming an already-idle agent must not wait for a turn end that
@@ -264,7 +290,6 @@ export class GoalLoopService extends EventEmitter {
       // keeps updating while the loop is paused. For a hook session it is an
       // open turn.
       this.requestContinue(sessionId)
-      this.armQuietTurnCheck(sessionId)
     }
     const next = this.loops.get(sessionId)!
     void this.persist()
@@ -328,9 +353,6 @@ export class GoalLoopService extends EventEmitter {
     this.hookSessions.delete(sessionId)
     this.hookTurnOpen.delete(sessionId)
     this.lastHookSessionActivity.delete(sessionId)
-    const quiet = this.quietTurnTimers.get(sessionId)
-    if (quiet) clearTimeout(quiet)
-    this.quietTurnTimers.delete(sessionId)
     const loop = this.loops.get(sessionId)
     if (!loop || loop.phase !== 'active') return
     this.loops.set(sessionId, { ...loop, phase: 'paused', pauseReason: 'interrupted', updatedAt: this.now().toISOString() })
@@ -353,80 +375,19 @@ export class GoalLoopService extends EventEmitter {
     // Our delivery starts a turn. For a hook-driven session that turn is
     // open until its Stop, so traffic in between can never re-deliver. That
     // is the recorded 0.4 s double.
-    if (this.hookSessions.has(sessionId)) {
-      this.hookTurnOpen.add(sessionId)
-      // The delivery itself counts as activity: a quiet window measured from
-      // the PREVIOUS turn's last event would expire at once.
-      this.lastHookSessionActivity.set(sessionId, Date.now())
-      this.armQuietTurnCheck(sessionId)
-    }
+    // No activity stamp is needed here for Resume's quiet window: the seed
+    // below leaves the tracked phase busy, and only an event (which stamps)
+    // can make it idle again.
+    if (this.hookSessions.has(sessionId)) this.hookTurnOpen.add(sessionId)
     const tracked = this.working.get(sessionId) ?? INITIAL_WORKING_STATE
     if (!isWorking(tracked)) this.working.set(sessionId, { ...tracked, phase: 'responding' })
   }
 
+  /** Wall-clock silence, not the injected `now()`: that clock stamps loop
+   * records and tests pin it to a fixed instant, which would make every turn
+   * look silent forever. */
   private quietForMs(sessionId: string): number {
     return Date.now() - (this.lastHookSessionActivity.get(sessionId) ?? 0)
-  }
-
-  /** Arm (once) the check that notices a hook-driven turn ending WITHOUT a
-   * Stop. Cheap on purpose: events only stamp a time, and the timer re-arms
-   * itself for the remainder instead of being reset on every delta. */
-  private armQuietTurnCheck(sessionId: string, delayMs = GOAL_LOOP_QUIET_TURN_MS): void {
-    if (this.quietTurnTimers.has(sessionId)) return
-    if (!this.hookTurnOpen.has(sessionId) || this.loops.get(sessionId)?.phase !== 'active') return
-    const timer = setTimeout(() => {
-      this.quietTurnTimers.delete(sessionId)
-      this.checkQuietTurn(sessionId)
-    }, delayMs)
-    timer.unref?.()
-    this.quietTurnTimers.set(sessionId, timer)
-  }
-
-  /**
-   * A hook-driven turn can end with no Stop hook at all (#1028 review). Claude
-   * skips Stop on an Esc interrupt, on a model or API error (it runs
-   * `StopFailure` instead), and on prompt-too-long. Codex skips it on
-   * interrupt and on turn and compaction errors. The turn stays open here,
-   * nothing else will ever close it, and the loop would sit "active" with no
-   * trigger left.
-   *
-   * WHY silence plus no pending tool, and WHY that PAUSES rather than
-   * continues:
-   * - A turn that is still running produces events: stream deltas, hooks,
-   *   tool results. The one long silence inside a live turn is a tool that is
-   *   still running (a build, a test suite, a subagent) or a permission prompt
-   *   waiting on the user, and both keep a tool pending.
-   * - The turns this catches were cut short by the user or by an error.
-   *   Continuing after an Esc overrides the user. Continuing after a usage
-   *   limit burns the budget on turns that fail at once. A visible
-   *   paused(interrupted) is honest, and Resume continues from there.
-   *
-   * WHY not register Claude's `StopFailure` hook: the hook JSON shares one
-   * `--settings` argument with the external-control exclusion, and Claude
-   * validates hook keys against a fixed enum. A CLI older than the event
-   * would reject that argument, exclusion included, and nothing gates on the
-   * CLI version.
-   *
-   * An aborted tool can stay pending (no tool_result follows an Esc until the
-   * next request), so this check never fires for that case. Pause then
-   * Resume still recovers the loop, because Resume closes a turn that has
-   * been quiet for the window.
-   */
-  private checkQuietTurn(sessionId: string): void {
-    const loop = this.loops.get(sessionId)
-    if (!loop || loop.phase !== 'active' || !this.hookTurnOpen.has(sessionId)) return
-    const quietFor = this.quietForMs(sessionId)
-    if (quietFor < GOAL_LOOP_QUIET_TURN_MS) {
-      this.armQuietTurnCheck(sessionId, GOAL_LOOP_QUIET_TURN_MS - quietFor)
-      return
-    }
-    if ((this.working.get(sessionId)?.pendingTools.length ?? 0) > 0) {
-      this.armQuietTurnCheck(sessionId)
-      return
-    }
-    this.hookTurnOpen.delete(sessionId)
-    this.loops.set(sessionId, { ...loop, phase: 'paused', pauseReason: 'interrupted', updatedAt: this.now().toISOString() })
-    void this.persist()
   }
 
   /** Every trigger (turn boundary, resume, backoff retry) funnels through
