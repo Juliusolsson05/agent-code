@@ -513,6 +513,20 @@ claude 2.1.143 / codex 0.130.0 are stale versus the 2.1.278 / 0.155.1 in daily u
   (one per composer). Optional follow-up: a single app-level subscription.
 
 ### Progress log
+- 2026-09-19 13:40Z:
+  - **MERGED:** #1039 (`fe2b3bfc`, T9 shared IPC) and #1043 (`479df7a7`, T5 part 2: Jump to Latest; merged main in, resolving a screenGate test conflict). #843 CLOSED with evidence (#1041 + #1043).
+  - **#1044 (#1018):** CHANGES REQUESTED, then fixed, then APPROVE on the delta review.
+    - Fixes: the Grok regression; source-scoped signals per catalog §3.1; errorType, with MessageAbortedError / instance / part_overflow treated as non-terminal; the kind-less meta defaults to Claude; the fail-open clause is pinned.
+    - Package PRs MERGED: opencode-headless#16 (`973ad4e`) and opencode-terminal-headless#4 (`c8486dc`), both bumped in #1044.
+    - Merge on green CI.
+  - **#1047 (T1 #995 first-run lockout) OPENED.**
+    - Recorder: the real checkPrerequisites on a simulated clean Mac. The baseline shows the wall: ready:false even with bundled OpenCode.
+    - readiness.ts policy; reopenable Setup (command + File › Setup…); bootstrap waits for the first-run decision and falls back to a terminal; cwd is home instead of `/`; picker hints.
+    - 5 of 6 integration tests fail against main's bootstrap.
+    - Two reviewers running (policy/bootstrap lens, UI/keyboard lens).
+    - The branch was renamed to fix/onboarding-first-run; the old plan branch feat/onboarding-first-run on origin is untouched.
+  - **Reviewer running** on #1045 + #1046.
+  - Unconfirmed product call inside #1047: a packaged-clean Mac opens its first project in the bundled OpenCode, with no notice that Claude Code or Codex exist beyond File › Setup….
 - 2026-09-19 11:05Z:
   - **MERGED:** #1037 (`aee2c0e2`, T10 managed-skills minors) and #1041 (`82babd21`, T5 part 1, DEC-mode replay).
   - **New PRs:**
