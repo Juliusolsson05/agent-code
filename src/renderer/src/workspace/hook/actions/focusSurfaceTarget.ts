@@ -22,14 +22,12 @@ export function resolveFocusSurfaceTarget(state: WorkspaceState, explicitSession
     return { tabId: row.tabId, sessionId }
   }
 
-  // WHY this does an ownership lookup instead of assuming activeTabId:
-  // focus-takeover commands are wired to commandTargetSessionIdForState, which
-  // can legitimately resolve a visible grid-related child instead of the
-  // physical tab leaf. That child is usually detached and owned by the same
-  // project tab via projectTabId. Reader/Spotlight store the owner tab id so
-  // their pill lists use the same membership model as the normal workspace
-  // surfaces; activeTabId is only a layout pointer and is stale in several
-  // Dispatch/Tiled Dispatch flows.
+  // WHY this does an ownership lookup instead of assuming activeTabId: an
+  // explicit target (an MCP caller, a Performance Monitor row) can name an
+  // agent the index does not list, such as a pinned one. Reader/Spotlight
+  // store the OWNING project so their pill lists use the same membership as
+  // the index. activeTabId is only a label (U4) and need not name the project
+  // the target belongs to.
   const owner = state.tabs.find(tab => resolveTabSessions(state, tab.id).includes(sessionId))
   return owner ? { tabId: owner.id, sessionId } : null
 }

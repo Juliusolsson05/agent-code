@@ -12,12 +12,12 @@ import type {
 } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 
-// Spotlight mode — focused-pane zoom for the current command target.
-// toggleSpotlight exits whenever Spotlight is already open; otherwise it uses
-// the same command target selector as lifecycle commands so Tiled Dispatch,
-// pinned rows, and grid-related children all enter the session the user is
-// actually commanding. setSpotlightSession switches which session is showing
-// inside Spotlight.
+// Spotlight mode — a full-window takeover of the current command target.
+// toggleSpotlight exits whenever Spotlight is already open; otherwise it enters
+// on the same command target lifecycle commands use (the focused lane's
+// agent). setSpotlightSession switches which session is showing inside
+// Spotlight, and while Spotlight is open that session IS the command target
+// (commandTargetSessionIdForState reads the takeover first).
 
 export function useSpotlightActions(
   setSpotlight: WorkspaceSetSpotlight,

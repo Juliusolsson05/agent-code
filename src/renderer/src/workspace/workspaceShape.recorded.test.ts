@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-import type { PersistedWorkspace } from '@renderer/workspace/types'
+import type { PersistedWorkspace } from '@renderer/workspace/persistence'
 import { migrateWorkspaceToStage } from '@renderer/workspace/workspaceShape'
 
 // v2→v3 migration on REAL persisted workspaces (#992 review A).
