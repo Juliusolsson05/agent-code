@@ -101,6 +101,17 @@ describe('tier classification', () => {
       // strongest signal available that they are daily rather than niche.
       'search-conversation-prompts', 'duplicate-agent', 'rewind-to-prompt', 'close-old-agents',
       'copy-code-block', 'copy-assistant-message', 'copy-resume-command', 'switch-provider',
+      // Promoted for the stable release (B9, the owner's pick of 2026-09-19:
+      // "every ON command except the debug and remote ones"). The pick named
+      // 14; five of them (rotate/normalize/hard-normalize layout and the two
+      // attach-detached commands) were retired by the unified stage (#1013)
+      // before this landed, so these nine are the survivors. The per-agent MCP
+      // toggles belong here because the MCP stack is now a headline feature:
+      // hiding the only per-agent switch behind "show hidden commands" meant
+      // users found the Settings default and never the override.
+      'toggle-tail-all', 'set-agent-view-mode', 'soft-reload-agent', 'switch-agents-provider',
+      'remove-cybersecurity-block', 'enable-agent-transcripts-mcp', 'enable-agent-management-mcp',
+      'enable-ai-workspace-mcp', 'enable-root-agent-code-management',
     ]) {
       expect(byId(id).pickerVisibility ?? 'default').toBe('default')
     }
@@ -109,7 +120,10 @@ describe('tier classification', () => {
   it('marks niche supported operations advanced rather than hiding them entirely', () => {
     // `advanced` is not `debug`: these are supported operations a power user
     // wants, just not ones that should crowd a fuzzy search.
-    for (const id of ['remove-cybersecurity-block', 'soft-reload-agent', 'switch-agents-provider']) {
+    // These three used to be remove-cybersecurity-block, soft-reload-agent and
+    // switch-agents-provider, which B9 promoted (see above). The ones below
+    // were NOT in the owner's pick and stay advanced.
+    for (const id of ['undo-rewind', 'enable-orchestration-mcp', 'enable-workflow-mcp', 'toggle-tail-working']) {
       expect(byId(id).pickerVisibility).toBe('advanced')
     }
   })

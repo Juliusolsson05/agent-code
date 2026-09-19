@@ -329,7 +329,6 @@ export const paneCommands: CommandDef[] = [
   {
     id: 'toggle-tail-all',
     category: 'layout-dispatch',
-    pickerVisibility: 'advanced',
     // WHY 'app' and not 'session': this acts on the workspace, not on the
     // resolved command target. Same reasoning recorded for
     // `switch-agents-provider` — the user is acting across the workspace, not
