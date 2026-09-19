@@ -239,3 +239,28 @@ describe('GoalLoopService', () => {
     await expect(svc.complete('other', 'done', 'x.')).rejects.toThrow('No goal loop')
   })
 })
+
+describe('GoalLoopService idle-blip retraction', () => {
+  // Claude's adapter clears a mis-promoted 'requesting' sidecar phase by
+  // publishing a brief 'idle' mid-turn (ClaudeProxyAdapter.ts "Publish
+  // phase: 'idle' to clear the brief requesting"), and a poll batch can carry
+  // the blip and its retraction together. Deciding synchronously on the
+  // working→idle transition delivered a continuation into a live turn.
+  it('does not deliver on a mid-turn idle blip the same batch retracts', async () => {
+    const { svc, manager, deliver } = await service()
+    await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+    manager.emit('semantic-event', { sessionId: 's1', event: { type: 'stream_phase', phase: 'idle' } })
+    manager.emit('semantic-event', { sessionId: 's1', event: { type: 'stream_phase', phase: 'requesting' } })
+    await new Promise(resolve => setTimeout(resolve, 25))
+    expect(deliver).not.toHaveBeenCalled()
+    expect(svc.snapshot()['s1']?.phase).toBe('active')
+  })
+  it('does not deliver while a tool result is still owed after an idle phase', async () => {
+    const { svc, manager, deliver } = await service()
+    await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+    manager.emit('semantic-event', { sessionId: 's1', event: { type: 'block_started', kind: 'tool_use', toolUseId: 't1' } })
+    manager.emit('semantic-event', { sessionId: 's1', event: { type: 'stream_phase', phase: 'idle' } })
+    await new Promise(resolve => setTimeout(resolve, 25))
+    expect(deliver).not.toHaveBeenCalled()
+  })
+})

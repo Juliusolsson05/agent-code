@@ -75,6 +75,8 @@ export class GoalLoopService extends EventEmitter {
   private readonly loops = new Map<string, GoalLoopState>()
   private readonly working = new Map<string, WorkingState>()
   private readonly continuing = new Set<string>()
+  /** One deferred turn-boundary check per session; see scheduleContinueCheck. */
+  private readonly continueCheckTimers = new Map<string, ReturnType<typeof setTimeout>>()
   /** A continuation requested while another was still finishing (resume
    * racing the tail of a cap-pause write, a backoff retry racing a slow
    * persist, a turn that settled during the post-delivery write). The
@@ -194,8 +196,33 @@ export class GoalLoopService extends EventEmitter {
     if (next === state) return
     this.working.set(sessionId, next)
     if (isWorking(state) && !isWorking(next) && this.loops.get(sessionId)?.phase === 'active') {
-      this.requestContinue(sessionId)
+      this.scheduleContinueCheck(sessionId)
     }
+  }
+
+  /** WHY the turn-boundary decision is deferred to a macrotask: a provider
+   * event batch can contain a transient working→idle blip that the very next
+   * event in the SAME batch retracts — Claude's adapter clears a mis-promoted
+   * 'requesting' sidecar phase by publishing a brief 'idle' mid-turn
+   * (ClaudeProxyAdapter.ts, "Publish phase: 'idle' to clear the brief
+   * requesting"). Deciding synchronously delivered a continuation into a live
+   * turn. After the batch settles, the re-checks below see the retraction.
+   * Resume and backoff paths do NOT go through here: they already evaluate a
+   * settled state. */
+  private scheduleContinueCheck(sessionId: string): void {
+    if (this.continueCheckTimers.has(sessionId)) return
+    const timer = setTimeout(() => {
+      this.continueCheckTimers.delete(sessionId)
+      const tracked = this.working.get(sessionId)
+      // Same two safety lines as maybeContinue's entry check, evaluated AFTER
+      // the batch: an agent back to work, or one whose turn still owes a tool
+      // result (the fold's hasPendingSemanticTools semantics), is not idle —
+      // skipping is safe because the real turn end re-triggers this path.
+      if (tracked && (isWorking(tracked) || tracked.pendingTools.length > 0)) return
+      this.requestContinue(sessionId)
+    }, 0)
+    timer.unref?.()
+    this.continueCheckTimers.set(sessionId, timer)
   }
 
   private interrupt(sessionId: string): void {
