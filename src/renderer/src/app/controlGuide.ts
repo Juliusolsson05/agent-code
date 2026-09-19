@@ -30,14 +30,18 @@ Give the agent a concrete task, constraints and the desired completion evidence.
 For several tasks, create separate agents, title them by responsibility, and arrange or pin them. Read their progress before issuing dependent work. When one needs attention, reveal that existing session rather than creating another agent with a similar name.`,
   },
   {
-    id: 'layouts', title: 'Grid, tiled tabs and Dispatch',
-    markdown: `Grid uses split panes within each project tab. Splitting, resizing, normalizing and rotating change the layout. Tiled Tabs shows several project tabs at once; each retains its own pane layout and focus. Focusing a project tab is different from focusing an agent inside it.
+    // Retitled with #992: "Grid, tiled tabs and Dispatch" named three surfaces
+    // that no longer exist. There is one layout and its vocabulary is lanes,
+    // rows, the agent index and projects (§5.4 of the plan: no guide, diagram
+    // or heading may name a mode).
+    id: 'layouts', title: 'The workspace: lanes, rows and the agent index',
+    markdown: `The workspace is a stage: ragged rows of lanes over a pool of sessions grouped by project. There is one layout; nothing is entered or toggled.
 
 The workspace is a stage: ragged rows of lanes over a pool of sessions grouped by project. A session not shown in a lane is parked, not gone — it stays in its project’s index. The same agent may legitimately be selected in more than one lane; those are mirrored views of one session, not independent agents. Clicking a row’s index places that agent in that row’s focused lane; agents.show instead reuses an existing view. Agent creation fills the lane focused at creation ONLY when it is empty (context-places): an occupied lane is never displaced, so creations usually land in the pool and the index marks them new until placed. To keep every lane assignment untouched, pass selectCreated:false to agents.create, agents.resume or agents.duplicate, then read layout.read and use dispatch.configure with lane-select and the exact returned session ID.
 
-Related linked/orchestration children can be displayed inside a parent's grid pane without becoming new grid leaves. A navigation request should normally reuse an existing view of the target. Opening it in a specifically chosen lane is a different intent and can deliberately create another view. Cross-project navigation can change Dispatch scope when needed to keep selected work reachable.
+Linked and orchestration children nest under their parent in every index that lists them. A navigation request should normally reuse an existing view of the target; opening it in a specifically chosen lane is a different intent and deliberately creates another view.
 
-Buried sessions are hidden from normal placement and have a separate restore route. Detached, buried, off-screen, hibernated and closed are different states. Search the inventory and inspect placement before deciding to restore, wake or recreate anything.`,
+Parked, off-screen, hibernated and closed are different states. A parked agent with no backend wakes on selection or first send; reading its history does not wake it. Search the inventory and inspect placement before deciding to restore, wake or recreate anything.`,
   },
   {
     id: 'agent-lifecycle', title: 'Agent identity, runtime and lifecycle',

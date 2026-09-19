@@ -6,24 +6,26 @@ import { z } from 'zod'
 // 'project': it belongs to the project `tabId` — plus one view placement per
 // place it is on screen: 'dispatch' (a lane, by index), 'reader', 'spotlight'.
 //
-// 'grid', 'related', 'detached' and 'buried' are v2's four ownership kinds
-// (a tile-tree leaf, a related child shown in a parent's tile, a parked
-// Dispatch row, a hidden pane). Nothing produces them any more; they stay in
-// the enum for one release so a client that switches on them still parses,
-// and leave with the rest of this schema's renames in stage 7 of the plan.
+// The v2 ownership kinds ('grid', 'related', 'detached', 'buried') were held
+// in this enum for one release after nothing produced them (#992 stage 3b);
+// stage 7 removes them. An OLD client parsing NEW observations is unaffected
+// (it simply never sees the removed values); a NEW client that still switches
+// on them fails at compile time, which is the point of narrowing.
 export const placementSchema = z.object({
-  kind: z.enum(['project', 'dispatch', 'reader', 'spotlight', 'grid', 'related', 'detached', 'buried']),
+  kind: z.enum(['project', 'dispatch', 'reader', 'spotlight']),
   tabId: z.string().optional(), lane: z.number().optional(),
   gridOwnerSessionId: z.string().optional(), visible: z.boolean(),
 })
 
 export const workspaceObservationSchema = z.object({
   observedAt: z.number(), focusedSessionId: z.string().nullable(), ui: z.object({ commandPickerOpen: z.boolean(), settingsOpen: z.boolean(), inputOwnedBySurface: z.boolean() }), restoreStatus: z.string(), activeTabId: z.string(),
-  // 'tiled-tabs' left this enum with the Tile Tabs feature (#992). The
-  // remaining modes describe the stored layout shape until the stage is the
-  // only shape (stage 3b of the unified layout); 'grid' and 'dispatch' then
-  // go too.
-  mode: z.enum(['grid', 'dispatch', 'tiled-dispatch']),
+  // The layout-mode field's whole vocabulary died with the two-mode layout
+  // (#992): 'grid' and 'dispatch' described shapes that no longer save, and
+  // 'tiled-tabs' went earlier. The FIELD stays as a literal for one release
+  // so observations still parse for clients reading it; it is deprecated and
+  // leaves with the next schema version — "which layout" is no longer a
+  // question the app can ask.
+  mode: z.literal('tiled-dispatch').describe('Deprecated: one layout since #992. Always \'tiled-dispatch\'.'),
   // `focusedSessionId` was each tab's tile-tree focus. A project has no focus
   // of its own (#992): the one focus is the top-level `focusedSessionId`, the
   // focused lane's agent. Optional and never produced, for the same one-release

@@ -750,7 +750,7 @@ accTitle: Why does streaming output not save the whole workspace?
 accDescr: Layout changes and agent output update different stores. Only workspace metadata goes through workspace persistence.
 %% scope: Renderer data flow · persisted layout versus live session state
 subgraph Layout["Workspace changes"]
-        Action["Move a pane / change a tab"] -->|updates placement| Metadata["Workspace metadata"]
+        Action["Move a lane / switch project"] -->|updates placement| Metadata["Workspace metadata"]
         Metadata -->|persists via preload| Saved[("Saved workspace")]
     end
     subgraph Live["Live agent output"]
@@ -1483,49 +1483,54 @@ Closing a window while the app continues can transfer its sessions to a survivin
 
 <!-- architecture-diagram: workspace-model -->
 
-[![How does the grid refer to its sessions?](docs/architecture/diagrams/workspace-model.svg)](docs/architecture/diagrams/workspace-model.svg)
+[![How does the stage refer to its sessions?](docs/architecture/diagrams/workspace-model.svg)](docs/architecture/diagrams/workspace-model.svg)
 
-A split contains two tiles; a leaf refers to session metadata by ID. Rearranging tiles changes placement without making the layout own a provider process.
+A lane refers to session metadata by ID; a session's PROJECT is a field on its own row. Rearranging lanes changes placement without making the layout own a provider process.
 
 <details>
 <summary>Mermaid source</summary>
 
 ```text
 classDiagram
-accTitle: How does the grid refer to its sessions?
-accDescr: A split contains two tiles; a leaf refers to session metadata by ID. Rearranging tiles changes placement without making the layout own a provider process.
-%% scope: Grid layout · selected type relationships, not runtime class inheritance
+accTitle: How does the stage refer to its sessions?
+accDescr: A lane refers to session metadata by ID; a session's project is a field on its own row. Rearranging lanes changes placement without making the layout own a provider process.
+%% scope: Stage layout · selected type relationships, not runtime class inheritance
 direction LR
-    class Tab
-    class TileNode {
-        <<union>>
+    class WorkspaceState
+    class Stage {
+        lanes
+        rows
+        focusedLane
     }
-    class TileLeaf {
-        sessionId
-    }
-    class TileSplit {
-        direction
-        ratio
+    class DispatchLane {
+        selectedSessionId
     }
     class SessionMeta {
         kind
         providerRuntime
         cwd
+        projectId
+        joinedAt
     }
-    Tab *-- TileNode : root
-    TileNode <|-- TileLeaf : leaf variant
-    TileNode <|-- TileSplit : split variant
-    TileSplit "1" *-- "2" TileNode : children
-    TileLeaf ..> SessionMeta : references sessionId
+    class Project {
+        id
+        title
+    }
+    WorkspaceState *-- Stage
+    WorkspaceState *-- SessionMeta : sessions by ID
+    WorkspaceState *-- Project : projects
+    Stage *-- DispatchLane : row-major
+    DispatchLane ..> SessionMeta : references sessionId
+    SessionMeta ..> Project : projectId names a project
 ```
 
 </details>
 
-`TileNode` is a TypeScript discriminated union: a leaf references a session, while a split contains child tiles. The class notation here summarizes that data structure. Each split has exactly two children, either of which can be a leaf or another split. A split ratio is normalized to the allowed range; a tab's focused session must be an actual leaf.
+A session is OWNED iff its `projectId` names a project that exists; unowned rows are dropped at the read boundary. Lane selections, pins and the active project are pointers, never ownership — a stale pointer must not keep a session alive or bring one back. A project exists while at least one session names it and is removed by the commit that takes its last session.
 
-Grid placement, Dispatch Mode lanes, pinning, detached sessions, and buried sessions describe visibility and organization. They do not by themselves terminate a backend. Dispatch lanes are a flat ordered sequence with explicit row structure; row weights and scope are normalized separately. Empty lanes remain meaningful and are not automatically populated from the session pool.
+Lane placement, pinning and pool parking describe visibility and organization. They do not by themselves terminate a backend. Lanes are a flat row-major sequence with explicit row structure; row weights and per-row project bindings are normalized separately. Empty lanes remain meaningful and are not automatically populated from the session pool, and an occupied lane is never displaced by a spawn (context-places).
 
-Related-session selection can display a child in a physical grid leaf owned by another session. Linked terminal parentage is a one-level association with cascading close behavior. Orchestration parent/root/run metadata is a separate relationship and should not be reused as the linked-terminal tree.
+Linked terminal parentage is a one-level association with cascading close behavior. Orchestration parent/root/run metadata is a separate relationship and should not be reused as the linked-terminal tree.
 
 #### 6.2.3 Recovery preserves the workspace shell
 

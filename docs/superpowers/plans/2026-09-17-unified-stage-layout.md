@@ -911,6 +911,42 @@ walkthrough recorded below:
   that is what "registry-driven, always" means, and the sketch was
   illustrative in a way the plan's own §4.6 table already was not.
 
+
+---
+
+### 9.5 Stage 7 execution record (contracts + docs)
+
+- **The placement enum narrowed** to `['project', 'dispatch', 'reader',
+  'spotlight']`. The v2 ownership kinds ('grid', 'related', 'detached',
+  'buried') had been held one release after nothing produced them; stage 7
+  removes them per the hold's own comment. An old client parsing new
+  observations is unaffected (it never sees the removed values); a new
+  client still switching on them fails at compile time, which is the point.
+- **`mode` is `z.literal('tiled-dispatch')`, deprecated.** The field stays
+  one release so observations still parse for clients reading it, described
+  as deprecated in the schema itself; it leaves with the next schema
+  version because "which layout" is no longer a question the app can ask.
+- **`ManagedAgentPlacement` narrowed to `'dispatch'`** — same one-release
+  hold, same compile-time-failure rationale.
+- **ARCHITECTURE §6.2.2 rewritten** around the stage/pool model: the
+  workspace-model diagram now shows lanes referencing sessions by ID and
+  sessions naming projects by field; the prose states the v3 ownership rule
+  (owned iff `projectId` names a live project; lanes/pins/active-project are
+  pointers, never ownership), project lifetime, and context-places. §5.4's
+  renderer-state diagram label updated ("Move a lane / switch project").
+  Both SVGs regenerated with the pinned tooling.
+  ENVIRONMENT NOTE, not a regression: `render-architecture-diagrams.mjs
+  --check` fails on 16 UNTOUCHED diagrams in this environment — the
+  committed SVGs were rendered with a different Chrome and this one's font
+  metrics differ. The two diagrams this stage changed render and verify.
+- **The control guide's layout entry retitled** ("The workspace: lanes, rows
+  and the agent index") and rewritten: no mode names, buried/detached
+  vocabulary replaced with parked/hibernated, the related-children paragraph
+  now describes index nesting, and the context-places paragraph from stage 4
+  is the spine. `dispatch.configure`'s title says "stage rows and lanes".
+- **README** no longer says "grid, Dispatch, and buried agent"; the
+  orchestration screenshot alt says "agent index".
+
 ## 10. Testing strategy
 
 Per `docs/testing/standard.md` — suffix picks the tier, each test protects

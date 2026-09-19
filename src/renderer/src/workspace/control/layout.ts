@@ -69,8 +69,8 @@ export function layoutControlCapabilities(getWorkspace: () => Workspace) {
       },
     }),
     defineCapability({
-      id: 'dispatch.configure', title: 'Configure Dispatch rows and lanes', execution: 'window', effect: 'ui',
-      description: 'Change one explicit Dispatch setting through normal workspace actions, then return the resulting layout. Requires layout.read revision; refresh it between actions. Grid sets row lengths, preserving existing lane assignments where the domain permits. Every row lists every project unless a row project filter narrows it. Lane selection may wake the chosen existing agent; it never creates one.',
+      id: 'dispatch.configure', title: 'Configure stage rows and lanes', execution: 'window', effect: 'ui',
+      description: 'Change one explicit stage setting through normal workspace actions, then return the resulting layout. Requires layout.read revision; refresh it between actions. Grid sets row lengths (preserving existing lane assignments where the domain permits). Every row lists every project unless a row project filter narrows it. Lane selection may wake the chosen existing agent; it never creates one.',
       input: z.object({ revision, change: z.discriminatedUnion('action', [
         // 'enter', 'exit' and 'scope' were actions here until #992. The lane
         // grid is the only layout, so there is nothing to enter or leave, and
