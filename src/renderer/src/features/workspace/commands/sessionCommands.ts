@@ -196,7 +196,6 @@ export const sessionCommands: CommandDef[] = [
     // request would resend. The source file is never edited.
     id: 'remove-cybersecurity-block',
     category: 'session',
-    pickerVisibility: 'advanced',
     surface: 'session',
     title: 'Remove Cybersecurity Block',
     description: '**What it does:** Forks the focused **Codex** session with the last model step after a cybersecurity block removed.\n\n**Use when:** Codex ended the turn with a cybersecurity flag and you want to keep chatting without Rewind to Prompt deleting the whole assistant response.\n\n**Notes:** The original transcript is not edited. Undo Rewind restores it until the next submit.',
@@ -422,7 +421,6 @@ export const sessionCommands: CommandDef[] = [
     // frequency operation, and a second command/keybind would be clutter.
     id: 'switch-agents-provider',
     category: 'session',
-    pickerVisibility: 'advanced',
     surface: 'app',
     title: 'Switch Agents to Another Provider…',
     description: '**What it does:** Opens a modal to move a batch of agents between **Claude, Codex, and OpenCode**, and to return the most recent batch.\n\n**Use when:** You hit a usage limit on one provider and want to move agents elsewhere (then back later).\n\n**Notes:** History is translated; the most recent batch is remembered so you can send it back from the same modal.',
@@ -531,7 +529,6 @@ export const sessionCommands: CommandDef[] = [
   {
     id: 'enable-ai-workspace-mcp',
     category: 'session',
-    pickerVisibility: 'advanced',
     surface: 'session',
     title: 'AI Workspace MCP',
     description: '**What it does:** Reloads the focused **agent** with Agent Code AI Workspace MCP tools on or off.\n\n**Use when:** You want this agent to create curated cross-worktree file review workspaces.\n\n**Notes:** Orchestration agents can use this domain, but it remains a separate MCP capability.',
@@ -597,7 +594,6 @@ export const sessionCommands: CommandDef[] = [
   {
     id: 'enable-agent-transcripts-mcp',
     category: 'session',
-    pickerVisibility: 'advanced',
     surface: 'session',
     title: 'Agent Transcripts MCP',
     description: '**What it does:** Reloads the focused **agent** with Agent Code transcript-consumption MCP tools on or off.\n\n**Use when:** You want this agent to read a specific transcript file through filtered projections instead of manual shell parsing.\n\n**Notes:** The tool accepts an explicit file path and returns bounded normalized transcript context; it does not discover transcripts for the agent.',
@@ -630,7 +626,6 @@ export const sessionCommands: CommandDef[] = [
   {
     id: 'enable-agent-management-mcp',
     category: 'session',
-    pickerVisibility: 'advanced',
     surface: 'session',
     title: 'Agent Management MCP',
     description: '**What it does:** Reloads the focused **agent** with project-wide Agent Code management tools on or off.\n\n**Use when:** You want this agent to inventory, inspect, prompt, or close other agents in its project.\n\n**Notes:** Read operations include agents that are not in a lane, without waking them. Every close it attempts asks **you** to confirm first, and cascades are refused outright.',
@@ -664,7 +659,6 @@ export const sessionCommands: CommandDef[] = [
   {
     id: 'enable-root-agent-code-management',
     category: 'session',
-    pickerVisibility: 'advanced',
     surface: 'session',
     risk: 'destructive',
     title: 'Root Agent Code Management',
@@ -849,7 +843,6 @@ export const sessionCommands: CommandDef[] = [
   {
     id: 'soft-reload-agent',
     category: 'session',
-    pickerVisibility: 'advanced',
     surface: 'session',
     title: 'Soft Reload Agent',
     description: '**What it does:** Refreshes the focused **agent view** without restarting its backend process.\n\n**Use when:** The feed or rendering state looks stale, duplicated, or corrupted while the agent is still working.\n\n**Notes:** Keeps the same session, draft, pane placement, and running process.',
@@ -894,7 +887,6 @@ export const sessionCommands: CommandDef[] = [
   {
     id: 'set-agent-view-mode',
     category: 'session',
-    pickerVisibility: 'advanced',
     surface: 'session',
     title: 'Agent View for This Session…',
     description: '**What it does:** Overrides the focused agent pane to use Agent rendering, Terminal rendering, or the global default.\n\n**Use when:** One session needs the raw provider terminal while the rest of the app keeps its normal view mode.\n\n**Notes:** Persists with the session. Hybrid remains a global/default setting, not a per-session override.',
