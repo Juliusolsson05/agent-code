@@ -92,7 +92,7 @@ Each stage: **Produces / Verified by / Why separate / Reality check.**
 - [x] Fold in the issue/branch triage results
 - [x] Fold in the agent-thread briefs
 - [x] Fold in the goal-loop freeze root cause
-- [ ] Push the orphaned #995 plan branch `feat/onboarding-first-run` (the only copy)
+- [x] Push the orphaned #995 plan branch `feat/onboarding-first-run` (the only copy). Pushed, `68803efa`.
 
 ### Stage 2: Land the in-flight release PRs
 - **Produces:** #1010, #1012 and landing #3 merged, with review findings resolved.
@@ -121,7 +121,7 @@ Each stage: **Produces / Verified by / Why separate / Reality check.**
   - Then merge `origin/main`, CI green, merge, `gh workflow run nightly.yml`, and
     verify the first nightly (signed, 4 fixed-name assets). Follow-ups: nightly
     version stamping; the landing status line (`published_at` is frozen).
-- [ ] **Landing #3 Pages.**
+- [x] **Landing #3 Pages.** MERGED `2ef8bfb0` (2026-09-19); both reviewers' findings resolved.
   - Add a "do NOT connect yet" guard: the hero screenshot fails privacy, the repo
     is private, every deployment URL is public and persists.
   - Drop the NODE_VERSION step (the builder reads `.nvmrc`; toml vars live under `[vars]`).
@@ -192,6 +192,31 @@ Known now:
   Cloudflare connect and domain (OWNER), and a status line that handles the stable
   release and the nightly
 - [ ] Dispatch the stable release; verify the artifacts; publish
+
+### Stage 10: Issue sweep, newest → oldest (owner, 2026-09-19)
+**Start only after** Stages 2–7 are done: every PR merged or closed, and every agent thread
+finished. It may overlap the release in Stage 8. The loop must NOT call goal_loop_complete while
+this stage still has workable issues.
+- **Produces:** every open issue ends in one of three states:
+  - **closed as fixed**, by a merged PR with a fail-first integration test;
+  - **closed as stale or obsolete**, with a comment citing evidence (a commit, file:line, or
+    superseding PR/issue);
+  - **left open**, with a comment saying why it cannot be done now. Examples: it needs real-use
+    evidence, it is a feature or roadmap item, or it needs an owner decision (then also add it
+    to the owner items).
+- **Order:** `gh issue list --state open --limit 500`, sorted newest first. Batch the obvious
+  stale closes; the Stage 1 STALE list is the first batch.
+- **Method, for the hard ones:**
+  - Read a LOT before touching code: the issue history, linked PRs, the code path, and any
+    recordings.
+  - Use internal subagents for research and for independent review (still ≤3 at a time).
+  - Integration testing matters even more here. Many of these are cross-boundary bugs (boot,
+    recovery, queue, orchestration) where a unit mock would bless the bug.
+  - If the evidence needed does not exist (the #545/#290 class), record that and move on. Do not
+    guess-fix.
+- **Verified by:** the issue count drops; every closure links its evidence or its PR.
+- [ ] Stage 1 STALE batch closed with evidence
+- [ ] Newest-first pass complete
 
 ### Stage 9: Final verification → goal_loop_complete
 - [ ] main green, 0 open PRs without a decision, 0 release-blocker issues,
