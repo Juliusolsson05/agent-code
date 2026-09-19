@@ -416,6 +416,38 @@ claude 2.1.143 / codex 0.130.0 are stale versus the 2.1.278 / 0.155.1 in daily u
   into a busy input.
   Test: replay a recorded session that has a background subagent. HIGH priority, since it
   is a shipped feature misbehaving. Schedule right after the Stage 4 blockers.
+  **Decomposition (researched 2026-09-19):**
+  - A: what already exists.
+    - Agent Code already receives each session's `Stop` hook at `/hooks/tldr/stop`
+      (`BuiltInMcpHttpHost.handleTldrHook` → `tldr/enforcement.ts`), but ONLY when the
+      registration has a reporting domain (`hasReportingDomain`: tldr or goal). A
+      goal_loop-only session gets no hook.
+    - `GoalLoopService` (`src/main/goalLoop/GoalLoopService.ts:107,195`) infers the
+      turn end from `semantic-event` → `reduceWorkingState` working→idle, which is
+      not turn-scoped for Claude.
+  - Stage 1 (recorder, evidence).
+    - Ground truth is `~/.config/agent-code/proxy/<project>/`, the raw provider
+      HTTP/SSE flows. Subagent requests are included, because Claude Code's Agent tool
+      runs in-process.
+    - Cut a window from THIS session (5906040e…) spanning a main-turn tool call, a
+      background-subagent flow, and a goal-loop delivery. It must also show
+      `feed-debug/5906040e….jsonl` `flow_selected` / `flow_ignored` / `stream_phase`
+      around the same time. Sanitize it, and commit it under
+      `testing/fixtures/goal-loop-turn-boundary/`.
+    - Replay it through the REAL Claude proxy adapter into semantic events, and show a
+      working→idle while the main turn is still open. That is the fail-first.
+  - Stage 2: the turn-boundary source.
+    - A small module `goalLoop/turnBoundary.ts`: for a provider with hooks (Claude,
+      Codex) the boundary is a NON-blocked `Stop` hook for that session's
+      registration. The `stop` hook fires and TLDR enforcement decides; only an
+      "allow" outcome is a boundary.
+    - Phases remain the fallback only for providers without hooks (OpenCode, Grok).
+    - Install the hook whenever the goal_loop domain is enabled, not just tldr or goal.
+  - Stage 3: a delivery guard. Never deliver while the agent's input is busy (queued
+    input, or composer in a working state), whatever the trigger.
+  - Test: the recorded replay plus the hook sequence give exactly one continuation per
+    real stop. Also: a blocked Stop (TLDR asks for an update) followed by an allowed
+    Stop gives one continuation, not two.
 - **T14 Redesign the Agent Activity command (owner, 2026-09-19): "that modal is ages and just shit across the board".**
   This is a full redesign or reimagining, not a patch. Approach:
   - Read the current command, its modal, and its data sources first.
