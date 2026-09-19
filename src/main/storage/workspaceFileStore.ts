@@ -284,6 +284,14 @@ export class WorkspaceFileStore {
           // A failed backup must not block saving. That would cost the
           // user's current session to protect a copy. It retries on the next
           // save and is warned about here, so it is not silently skipped.
+          //
+          // The partial file goes (#1013 verification review): a full disk
+          // fails the write AFTER `wx` created it, and each retry uses a new
+          // timestamp. The earliest "backup", the one a user would take as
+          // the original, was a 0-byte file. EEXIST is the exception: `wx`
+          // refused a file that already existed, which is someone's real
+          // backup and must stay.
+          if ((error as NodeJS.ErrnoException).code !== 'EEXIST') await unlink(backup).catch(() => undefined)
           // eslint-disable-next-line no-console
           console.warn('[workspace] could not write the pre-upgrade backup; will retry on next save', error)
         }
