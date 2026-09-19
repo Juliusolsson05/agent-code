@@ -211,11 +211,137 @@ _pending_
 ### Worktrees / branches
 _pending_
 
-### Agent threads
-_pending_
+### Agent threads (research 2026-09-19; implement from these, do not re-derive)
+- **T1 #995 first-run lockout (B5), L.**
+  - Plan: `docs/decomposition/onboarding-first-run.md` on branch
+    `feat/onboarding-first-run` (worktree `.worktrees/onboarding-first-run`,
+    based on old `76ede416`; the doc says rebase after #994, which is merged as #1002).
+  - Root cause:
+    - claude and codex are `required:true` (`src/providers/registry.setup.ts:43,50`),
+      and there is no Continue button (`SetupGate.tsx:154-163`).
+    - The gate cannot be reopened, so the toast at `sessionManager.ts:2586` points at nothing.
+    - `useBootstrap.ts:87-121` spawns under the gate; a failure leaves
+      `bootstrapComplete` false, which disables autosave (`useBootstrap.ts:221-225`,
+      `useAutoSave.ts:242`).
+    - The first project's cwd is `/` (`ipc/workspace.ts:64-66`, `process.cwd()`).
+  - Plan stages:
+    1. Recorder fixtures under `testing/first-run/fixtures/` (vitest system project).
+    2. `src/main/setup/readiness.ts` as the single policy; providers are no longer required.
+    3. A reopenable gate (menu, palette, toast action, Settings path rows).
+    4. Bootstrap de-race.
+    5. Default cwd = home, and pickers disable missing providers.
+    6. An integration system test.
+  - Open owner question, with a default: with ZERO providers, the default workspace
+    is a single terminal-pane project (the agent's recommendation; use it).
+- **T2 B9 promote commands to default, S.**
+  - The owner picked "14": every ON command except the debug and remote ones.
+    Remove `pickerVisibility:'advanced'` from:
+    - `layoutCommands.ts`: rotate-layout, normalize-layout, hard-normalize-layout
+    - `paneCommands.ts`: toggle-tail-all, attach-detached-to-grid, attach-all-detached-for-tab
+    - `sessionCommands.ts`: set-agent-view-mode, soft-reload-agent, switch-agents-provider,
+      remove-cybersecurity-block, enable-agent-transcripts-mcp,
+      enable-agent-management-mcp, enable-ai-workspace-mcp, enable-root-agent-code-management
+  - Test to update: `taxonomy.test.ts` ~:98-117.
+  - **Depends on #1013**, which retires rotate/normalize/hard-normalize and the two
+    attach commands. Do this AFTER deciding #1013 and promote only the survivors.
+- **T3 B17 phone gutter 14→12px, S.**
+  - The change is UNCOMMITTED in the MAIN checkout: `src/remote-client/src/styles.css`
+    plus the new `src/remote-client/src/ui/gutterContract.test.ts` (8/8, and the
+    remote suite 65/65).
+  - Move it to a branch from origin/main and open a PR. Do NOT include the untracked
+    `docs/superpowers/plans/2026-09-07-loose-ends-takeover.md`.
+- **T4 B18 OpenCode switch pins big-pickle, S–M.**
+  - Cause: `transcriptEngine.ts` `resolveOpencodeTargetProfile` (~:279) falls back
+    to `listOpencodeModels()[0]`, which is `opencode/big-pickle`. The projector then
+    stamps it on every imported message (`agent-transcript-parser`
+    `src/opencode/project/nativeResume.ts:76,106,162,269`), and OpenCode's
+    `lastModel()` keeps it for good.
+  - Fix: use OpenCode's own order. First the config `model`; then the first `recent`
+    entry of model.json (`XDG_STATE_HOME` or `~/.local/state/opencode/model.json`)
+    that still exists in `opencode models`; otherwise throw the existing "select a
+    model" error. Never fall back to `[0]`.
+  - Add the helper `readOpencodeRecentModels` in
+    `src/providers/opencode/runtime/opencodeCliSessions.ts` and mock it in
+    `transcriptEngine.test.ts`.
+  - Check whether a `variant` must be stamped too (model.json has a variant map).
+- **T5 #843 OpenCode wheel dead after remount (B22), M–L.**
+  - Cause: `CappedTextBuffer` (512 KiB, `sessionManager.ts:425`) evicts the TUI's
+    one-time mode setup (1049h/1000h/1002h/1003h/1006h), so `attachAgentPty`
+    (`:3346`) replays without mouse tracking.
+  - Fix, part 1: an `onEvict` hook feeds a DEC private-mode tracker that models
+    mutual exclusion, `ESC c` and the 1047/1048/1049 aliases. Prepend the state AS
+    OF THE REPLAY START, never the current state; prepending current state was
+    already tried and withdrawn.
+  - Fix, part 2: route Jump to Latest for OpenCode terminal panes through
+    `LiveServerClient` `POST /tui/execute-command {"command":"session.last"}` via
+    `opencodeTerminalSession.ts`; replace the stale note in
+    `tile-tree/terminalFollow.ts:56-65`. Never send the TUI chord.
+  - History: `docs/superpowers/research/2026-09-08-post-merge-regression-audit.md`.
+- **T6 Grok leftovers (B13/B11): DONE on main** (`a4d20723`, `2caa5428`). Only nits
+  remain: `transcriptEngine.ts:5` `join , dirname`, and "leader leader" at
+  `grokSession.ts:5`. Fold these into any nearby PR.
+- **T7 #1006, S:** add `enable-goal-loop-mcp` mirroring `enable-goal-mcp`
+  (`sessionCommands.ts` ~:747), add it to `goal-loop/controlReference.ts:22`, and
+  move the catalog from 134 to 135 by growing the subtrahend.
+- **T8 #1007, S:** move `goal-loop-preview` off Cmd+Shift+Y (it clashes with the
+  macOS Sticky Note service) in `command-keybindings/defaults.ts:302`, then update
+  the docs and pass `check:keybindings`. Fits with the freeze fix, same feature.
+- **T9 #1015, S–M:** not a leak. It is one listener per pane. Use one shared
+  `ipcRenderer` listener feeding a set of subscribers (the LSP diagnostics bridge
+  pattern in `preload/api/ipc.ts`) for `goal-loop:changed` and
+  `dictation:stream-transcript`.
+- **T10 #1017 internal-review minors, S:**
+  - `unsupported:*` rows are skipped on conflict and early-exit paths in
+    `AgentCodeConventionsService.ts` (~:1166, :1856, :2060, :2155, :2294).
+  - `installedHealth` reports 'unsupported' instead of 'degraded' when target
+    resolution fails (`resolveTargetsSafely` ~:2950).
+- **T11 #1013 unified stage layout, M:**
+  - Built in OpenCode session `ses_1953a797…`; 3741 tests green locally; 117
+    commits behind and CONFLICTING.
+  - The owner asked for a thorough review that never happened (B14 stopped).
+  - Unconfirmed product calls inside it: never displace an occupied lane, a `new`
+    badge on pooled spawns, Clear Lane on ⌥⌫, and deleting the related-agent strip.
+  - Resolve the conflicts, run 2 reviewers, and merge before stable.
+- **T12 landing `feat/direct-beta-download`:** an uncommitted/unmerged fix in the
+  landing worktree `.worktrees/landing-page-v1` ("commit/push/PR it?", unanswered).
+  Evaluate it against the nightly/stable plan.
+- **T13 #1018** (orchestration hides API errors) and **#1009** (OpenCode live suite
+  red on every version).
+- Out of scope: julius-workspace-features, bringdown, BuilderBase, the 6.1 GB old-install archive.
+- NOTE: B5's and B20's transcripts contain secrets (an Apple app-specific password
+  and a Brave key). They are local only; never paste them anywhere.
 
-### Goal-loop freeze
-_pending_
+### Goal-loop freeze (root cause, research 2026-09-19, reproduced in a renderer test)
+- **Chain of events:**
+  1. The palette `goal-loop-preview` command ("Goal Loop"), or its keybinding
+     Cmd+Shift+Y (`command-keybindings/defaults.ts:302`), calls `toggleGoalLoop()`,
+     which sets the app-wide `useGoalLoopView.latched` flag
+     (`features/goal-loop/viewState.ts:9-11`, `commands.ts:6-12`).
+  2. `useKeybinds.ts:472-479` is a capture-phase keydown gate. It checks ONLY that
+     flag, and calls preventDefault + stopPropagation on every key.
+  3. The overlay renders only when the pane HAS a loop (`GoalLoopPane.tsx:44`
+     returns null otherwise), and the normal case is no loop. So all input
+     (composer, terminal, the palette chord) is swallowed with nothing on screen.
+  4. The only exits are Escape or a hardcoded Cmd+Shift+Y. Window blur does not
+     clear it, although it clears TLDR.
+- **Origin:** regression from #1008 (`c1286081`, which added the gate). The router
+  tests always stubbed a loop, so they never covered the no-loop case. Starting a
+  loop via MCP never touches the flag, which is why MCP loops work.
+- **Principle violated:** `lib/interaction-ownership.ts:1-11`. Input ownership must
+  follow the mounted DOM, not UI store state.
+- **Fix:**
+  1. Gate only while `[data-goal-loop-overlay]` is mounted; a stale flag is
+     dismissed and the key routes normally.
+  2. Render the overlay with a "No goal loop on this agent" empty state, and add
+     "press Escape to dismiss" to the description.
+  3. `onBlur` also dismisses.
+  4. The dismiss chord goes through `routedCommandForEvent`, so a rebound chord
+     still closes it.
+- **Regression test:** `goalLoop.router.renderer.test.tsx`, run with no loop. The
+  repro is in the session scratchpad at `goal-loop-freeze/`.
+- **#1015:** the goal-loop part is NOT a leak. There is one listener per mounted
+  pane, so 11 panes cross Node's default max of 10; the same goes for dictation
+  (one per composer). Optional follow-up: a single app-level subscription.
 
 ### Progress log
 - 2026-09-19 05:25Z: #1019 merged → main green. Reviews of #1010, #1012 and landing #3 done.
