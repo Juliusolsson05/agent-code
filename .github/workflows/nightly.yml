@@ -1,0 +1,200 @@
+name: Nightly release
+
+# Rolling nightly of `main` with FIXED-NAME assets (#1011). The design
+# decisions live in docs/superpowers/plans/2026-09-19-nightly-release.md;
+# the load-bearing ones:
+#
+#   - The release identity (tag `nightly`) and asset names are constants;
+#     the CONTENTS roll, so external links never break. Auto-updater
+#     metadata (blockmaps, latest-mac.yml) is dropped on purpose — the app
+#     has no update channel and those names carry the version.
+#   - The skip state is a `built-from: <sha>` marker in the release body,
+#     not a moving tag: force-pushing a published tag is hostile to anyone
+#     who pinned it.
+#   - The nightly is a non-prerelease with make_latest so the landing
+#     page's `releases/latest` resolution serves real builds during the
+#     beta phase; a future stable versioned release outranks it by
+#     creation date.
+#   - Concurrency: joins `release.yml`'s `release-macos` group so a nightly
+#     and a manual versioned release never package or publish at once, and
+#     queues (never cancels) — killing a 26-minute notarizing run wastes it
+#     and leaves no evidence.
+
+on:
+  schedule:
+    # 05:00 UTC daily. GitHub's scheduler delays under load; a late nightly
+    # is fine, a missing one is not — the skip-check keeps it idempotent.
+    - cron: "0 5 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: release-macos
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  validate-nightly-secrets:
+    # The nightly always publishes, so signing is mandatory — fail in
+    # seconds, not after a 9-minute build. Same shape as release.yml's
+    # validate-release step (deliberate mirror; see the drift warning in
+    # reusable-app-build-macos.yml).
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate signing secrets
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          missing=()
+          [ -z "${CSC_LINK:-}" ] && missing+=(CSC_LINK)
+          [ -z "${CSC_KEY_PASSWORD:-}" ] && missing+=(CSC_KEY_PASSWORD)
+          [ -z "${APPLE_ID:-}" ] && missing+=(APPLE_ID)
+          [ -z "${APPLE_APP_SPECIFIC_PASSWORD:-}" ] && missing+=(APPLE_APP_SPECIFIC_PASSWORD)
+          [ -z "${APPLE_TEAM_ID:-}" ] && missing+=(APPLE_TEAM_ID)
+          if [ "${#missing[@]}" -gt 0 ]; then
+            printf 'The nightly always publishes a signed release; missing secrets: %s\n' "${missing[*]}"
+            exit 1
+          fi
+
+  check-for-changes:
+    needs: validate-nightly-secrets
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.compare.outputs.changed }}
+      head-sha: ${{ steps.compare.outputs.head-sha }}
+      prev-sha: ${{ steps.compare.outputs.prev-sha }}
+    steps:
+      - name: Compare main with the last nightly build
+        id: compare
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          # For scheduled runs github.sha IS main's HEAD; for a manual
+          # dispatch from a branch it is that branch's HEAD — which is what
+          # a tester wants (the nightly then reflects what was dispatched).
+          HEAD="${GITHUB_SHA}"
+          # No checkout needed: the previous build's SHA is recorded in the
+          # nightly release body, written by this workflow's publish step.
+          BODY="$(gh api "repos/${REPO}/releases/tags/nightly" --jq .body 2>/dev/null || true)"
+          PREV="$(printf '%s' "$BODY" | sed -n 's/^built-from: //p')"
+          echo "head-sha=${HEAD}" >> "$GITHUB_OUTPUT"
+          echo "prev-sha=${PREV}" >> "$GITHUB_OUTPUT"
+          if [ -n "$PREV" ] && [ "$HEAD" = "$PREV" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No commits on ${GITHUB_REF_NAME} since the last nightly (${PREV}); skipping."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Nightly needed: ${PREV:-<no previous nightly>} -> ${HEAD}"
+          fi
+
+  build:
+    needs: check-for-changes
+    if: needs.check-for-changes.outputs.changed == 'true'
+    # Verbatim extraction of release.yml's build+package jobs; see that
+    # file's header for the drift warning. secrets: inherit is required —
+    # the packaging step reads the signing secrets directly.
+    uses: ./.github/workflows/reusable-app-build-macos.yml
+    secrets: inherit
+
+  publish-nightly:
+    # Needs BOTH: `build` for ordering, `check-for-changes` for its outputs —
+    # the `needs.<id>` context only contains direct dependencies.
+    needs: [check-for-changes, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout full history
+        # For the commit list in the release body; the previous nightly's
+        # SHA must exist as an ancestor for `git log prev..head`.
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Download packaged artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: macos-release
+          # Defense in depth: if signing was somehow absent the reusable
+          # workflow uploaded `macos-unsigned-dev` instead, and asking for
+          # `macos-release` fails here rather than publishing unsigned bits.
+          path: release
+
+      - name: Rename artifacts to fixed nightly names
+        env:
+          HEAD_SHA: ${{ needs.check-for-changes.outputs.head-sha }}
+        run: |
+          set -eu
+          cd release
+          # Exactly one DMG and one ZIP per architecture are expected from
+          # the packaging job. The globs cannot cross-match arches
+          # (`*-x64.dmg` does not match `...-arm64.dmg` — the landing page
+          # relies on the same suffix property).
+          for arch in arm64 x64; do
+            dmgs=( *-"${arch}".dmg )
+            zips=( *-"${arch}".zip )
+            if [ "${#dmgs[@]}" -ne 1 ] || [ "${#zips[@]}" -ne 1 ]; then
+              printf 'Expected exactly one dmg and one zip for %s, found %s dmg and %s zip.\n' \
+                "$arch" "${#dmgs[@]}" "${#zips[@]}"
+              ls -1
+              exit 1
+            fi
+            mv "${dmgs[0]}" "Agent.Code-nightly-${arch}.dmg"
+            mv "${zips[0]}" "Agent.Code-nightly-${arch}.zip"
+          done
+          # Updater metadata is deliberately not shipped: blockmaps and
+          # latest-mac.yml reference the versioned filenames and nothing
+          # consumes an update channel from a rolling nightly.
+          rm -f -- *.blockmap latest-mac.yml
+          ls -1
+
+      - name: Compose release body
+        env:
+          HEAD_SHA: ${{ needs.check-for-changes.outputs.head-sha }}
+          PREV_SHA: ${{ needs.check-for-changes.outputs.prev-sha }}
+        run: |
+          # `built-from:` is load-bearing: the check-for-changes job parses
+          # it to skip unchanged builds. Keep it on the first line, exact.
+          {
+            printf 'built-from: %s\n' "${HEAD_SHA}"
+            printf '\n'
+            printf 'Rolling nightly build from `%s` — signed and notarized. Asset names are fixed, so links stay stable across builds.\n' "${GITHUB_REF_NAME}"
+            printf '\n'
+            printf '### Commits since the previous nightly\n'
+            if [ -n "${PREV_SHA}" ]; then
+              git log --oneline "${PREV_SHA}..${HEAD_SHA}"
+            else
+              printf '_First nightly — the last 30 commits on the branch:_\n'
+              git log --oneline -30 "${HEAD_SHA}"
+            fi
+          } > nightly-body.md
+
+      - name: Publish the rolling nightly release
+        # softprops updates the existing release when the tag already
+        # exists, replacing assets under the same names — that replacement
+        # IS the rolling mechanism. The `nightly` tag keeps pointing at the
+        # commit of the FIRST publish (moving published tags is hostile to
+        # pinners); the body's built-from marker is the authoritative
+        # record of what this build contains.
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
+        with:
+          tag_name: nightly
+          name: Agent Code Nightly
+          prerelease: false
+          # The landing page resolves downloads through `releases/latest`,
+          # which only returns non-prereleases; during the beta phase the
+          # nightly IS the latest real build. Revisit when the first stable
+          # ships (#1011).
+          make_latest: true
+          body_path: nightly-body.md
+          files: |
+            release/Agent.Code-nightly-arm64.dmg
+            release/Agent.Code-nightly-arm64.zip
+            release/Agent.Code-nightly-x64.dmg
+            release/Agent.Code-nightly-x64.zip
