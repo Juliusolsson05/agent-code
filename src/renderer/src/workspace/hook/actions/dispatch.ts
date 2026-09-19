@@ -27,6 +27,7 @@ import type {
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import type { SessionActions } from '@renderer/workspace/hook/actions/session'
 import { isProcessSessionKind } from '@shared/types/providerKind'
+import { clearPooledSpawnBadge } from '@renderer/workspace/hook/actions/pooledSpawnBadge'
 
 /**
  * Write row METADATA without touching any row length.
@@ -128,17 +129,11 @@ export function useDispatchActions(
         return { ...prev, stage: { ...tiled, lanes } }
       })
       // Placing a session is the user ANSWERING the "new in the pool" badge
-      // (#992 §4.3): every placement gesture — index click, lane strip, ⌘N,
-      // the ⌥↑/↓ walk — funnels through here, so this is the one write point
-      // that retires it. Without this the chip would outlive its question and
-      // train the user to ignore it.
-      if (wrote) {
-        setRuntimes(prev => {
-          const runtime = prev[sessionId]
-          if (!runtime?.pooledSpawnAt) return prev
-          return { ...prev, [sessionId]: { ...runtime, pooledSpawnAt: null } }
-        })
-      }
+      // (#992 §4.3). The index click, lane strip, ⌘N and the ⌥↑/↓ walk place
+      // through here; label navigation and every control-plane "show" place
+      // through agentIndexNavigation, which clears it the same way. Without
+      // that, the chip outlives its question and trains the user to ignore it.
+      if (wrote) clearPooledSpawnBadge(setRuntimes, sessionId)
     },
     [setRuntimes, setState],
   )

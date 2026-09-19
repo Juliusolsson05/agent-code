@@ -288,6 +288,7 @@ export function useWorkspace(
 
   const { focusAgentByPaneLabel, focusAgentBySessionId } = useAgentIndexNavigationActions(
     setState,
+    setRuntimes,
     refs,
     sessionActions,
     showToast,
@@ -296,6 +297,7 @@ export function useWorkspace(
   const tabActions = useTabActions(
     state,
     setState,
+    setRuntimes,
     setSpotlight,
     setReaderMode,
     refs,

@@ -3,7 +3,8 @@ import { useCallback } from 'react'
 import { navigateToAgentIndexTarget } from '@renderer/workspace/agentIndexNavigation'
 import type { AgentIndexNavigationIntent } from '@renderer/workspace/agentIndexNavigation'
 import { resolveAgentPaneLabel, resolveAgentSessionTarget } from '@renderer/workspace/tile-tree/paneLabels'
-import type { WorkspaceSetState } from '@renderer/workspace/hook/context'
+import type { WorkspaceSetRuntimes, WorkspaceSetState } from '@renderer/workspace/hook/context'
+import { clearPooledSpawnBadge } from '@renderer/workspace/hook/actions/pooledSpawnBadge'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import type { AgentPaneLabelTarget } from '@renderer/workspace/tile-tree/paneLabels'
 import type { WorkspaceState } from '@renderer/workspace/types'
@@ -11,6 +12,7 @@ import type { SessionActions } from '@renderer/workspace/hook/actions/session'
 
 export function useAgentIndexNavigationActions(
   setState: WorkspaceSetState,
+  setRuntimes: WorkspaceSetRuntimes,
   refs: WorkspaceRefs,
   sessionActions: SessionActions,
   showToast: (message: string, durationMs?: number) => void,
@@ -98,9 +100,12 @@ export function useAgentIndexNavigationActions(
         showToast(`Agent index ${initialTarget.label} changed; open the command palette again`)
         return false
       }
+      // The session is on screen now, so its "new" badge has been answered
+      // (pooledSpawnBadge.ts).
+      clearPooledSpawnBadge(setRuntimes, initialTarget.sessionId)
       return true
     },
-    [refs.stateRef, sessionActions, setState, showToast],
+    [refs.stateRef, sessionActions, setRuntimes, setState, showToast],
   )
 
   // Both UI coordinates and stable SDK targets use the same wake/commit path.

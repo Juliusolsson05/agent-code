@@ -6,7 +6,9 @@ import { describe, expect, it, vi } from 'vitest'
 import { UndoCloseStack } from '@renderer/lib/undoClose'
 import { useAgentIndexNavigationActions } from '@renderer/workspace/hook/actions/agentIndexNavigation'
 import type { SessionActions } from '@renderer/workspace/hook/actions/session'
-import type { WorkspaceSetState } from '@renderer/workspace/hook/context'
+import type { WorkspaceSetRuntimes, WorkspaceSetState } from '@renderer/workspace/hook/context'
+import { emptyRuntime } from '@renderer/session-runtime/state'
+import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import type { WorkspaceState } from '@renderer/workspace/types'
 
@@ -57,6 +59,7 @@ function makeRefs(state: WorkspaceState): WorkspaceRefs {
 function mountNavigation(
   ensureSessionLive: ReturnType<typeof vi.fn>,
   initialState: WorkspaceState = makeState(),
+  runtimesInitial: Record<string, SessionRuntime> = {},
 ) {
   const refs = makeRefs(initialState)
   let state = refs.stateRef.current
@@ -66,11 +69,16 @@ function mountNavigation(
     refs.latestStateRef.current = state
   }
   const showToast = vi.fn()
+  let runtimes: Record<string, SessionRuntime> = runtimesInitial
+  const setRuntimes: WorkspaceSetRuntimes = next => {
+    runtimes = typeof next === 'function' ? next(runtimes) : next
+  }
   let actions!: ReturnType<typeof useAgentIndexNavigationActions>
 
   function Harness(): React.JSX.Element {
     actions = useAgentIndexNavigationActions(
       setState,
+      setRuntimes,
       refs,
       { ensureSessionLive } as unknown as SessionActions,
       showToast,
@@ -79,7 +87,7 @@ function mountNavigation(
   }
 
   const mounted = render(<Harness />)
-  return { actions, mounted, showToast, getState: () => state, setState }
+  return { actions, mounted, showToast, getState: () => state, setState, runtimes: () => runtimes }
 }
 
 const laneIds = (state: WorkspaceState) =>
@@ -112,6 +120,20 @@ describe('useAgentIndexNavigationActions', () => {
     await act(async () => { finish(); expect(await navigation).toBe(false) })
     expect(laneIds(harness.getState())).toEqual(['a1', null])
     expect(harness.getState().stage.focusedLane).toBe(0)
+    harness.mounted.unmount()
+  })
+
+  it('placing a pooled agent by label clears its "new" badge', async () => {
+    // #1013 review B: label navigation, agents.show, views.agentSet, Agent
+    // Activity's Focus and the Performance Monitor all place through here,
+    // not through setTiledLaneSession, so the badge stayed on an agent that
+    // was on screen for the rest of the run.
+    const harness = mountNavigation(vi.fn().mockResolvedValue('a2'), makeState(), {
+      a2: { ...emptyRuntime(), pooledSpawnAt: 1 },
+    })
+    await act(async () => { expect(await harness.actions.focusAgentByPaneLabel('A2')).toBe(true) })
+    expect(laneIds(harness.getState())).toEqual(['a1', 'a2'])
+    expect(harness.runtimes().a2?.pooledSpawnAt ?? null).toBeNull()
     harness.mounted.unmount()
   })
 

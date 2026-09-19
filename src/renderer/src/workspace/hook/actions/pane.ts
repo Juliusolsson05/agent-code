@@ -7,7 +7,6 @@ import {
   isSessionLiveForClose,
   runCloseConfirmationGate,
 } from '@renderer/workspace/closeConfirmation'
-import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type { CloseExpansionRuntimes, CloseTargetSnapshot } from '@renderer/workspace/closeConfirmation'
 import {
@@ -60,6 +59,7 @@ import {
   type SessionActions,
 } from '@renderer/workspace/hook/actions/session'
 import type { AgentProviderKind } from '@shared/types/providerKind'
+import { clearPooledSpawnBadge, markPooledSpawn } from '@renderer/workspace/hook/actions/pooledSpawnBadge'
 
 // -----------------------------------------------------------------------------
 // Pane / focus / navigation actions.
@@ -659,29 +659,8 @@ function applyDispatchSpawnFocus(
   return { ...stage, lanes, focusedLane: laneIndex }
 }
 
-/**
- * Badge a spawn that landed in the POOL (#992 §4.3). Under context-places a
- * spawn from an occupied lane, the palette, ⌘N, MCP or orchestration moves
- * nothing on screen — which makes a spawn that cost a real backend boot look
- * exactly like a command that did nothing. The index row wears a small "new"
- * chip (SessionRuntime.pooledSpawnAt) until the session is placed into any
- * lane, so "where did my agent go?" is answered by the next thing the user
- * was going to look at anyway.
- *
- * WHY a local wrapper instead of inlining setRuntimes at each spawn site: the
- * "guard the row exists" dance (`prev[id] ?? emptyRuntime()`) is exactly the
- * kind of thing one site gets subtly wrong, and a spawn whose badge write
- * throws would report a creation failure after the backend already booted.
- */
-function markPooledSpawn(
-  setRuntimes: WorkspaceSetRuntimes,
-  sessionId: SessionId,
-): void {
-  setRuntimes(prev => {
-    const runtime = prev[sessionId] ?? emptyRuntime()
-    return { ...prev, [sessionId]: { ...runtime, pooledSpawnAt: Date.now() } }
-  })
-}
+// markPooledSpawn moved to pooledSpawnBadge.ts, beside the clear it pairs
+// with (#1013 review B).
 
 export type OpenExtensionViewOptions = {
   /** Put the view on screen even when the focused lane is occupied, reusing a
@@ -1768,11 +1747,15 @@ export function usePaneActions(
       // process await here, so metadata, ownership and visible focus can land as
       // one change rather than leaving a session whose split silently failed.
       let openedId: SessionId | null = null
+      let revealedId: SessionId | null = null
       let pooled = false
       setState(prev => {
         if (options?.reveal) {
           const revealed = revealExtensionView(prev, viewId)
-          if (revealed) return revealed
+          if (revealed) {
+            revealedId = revealed.stage.lanes[revealed.stage.focusedLane]?.selectedSessionId ?? null
+            return revealed
+          }
         }
         const sessionId = crypto.randomUUID() as SessionId
         // (This block sat behind `if (dispatchMode)` until #992, with a
@@ -1817,6 +1800,7 @@ export function usePaneActions(
         }
       })
       if (openedId !== null && pooled) markPooledSpawn(setRuntimes, openedId)
+      if (revealedId !== null) clearPooledSpawnBadge(setRuntimes, revealedId)
     },
     [setRuntimes, setState],
   )

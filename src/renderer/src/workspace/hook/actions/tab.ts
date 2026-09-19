@@ -10,11 +10,13 @@ import { tabIndexLabel } from '@renderer/workspace/tile-tree/paneLabelFormat'
 
 import type {
   WorkspaceSetReaderMode,
+  WorkspaceSetRuntimes,
   WorkspaceSetSpotlight,
   WorkspaceSetState,
 } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import type { SessionActions } from '@renderer/workspace/hook/actions/session'
+import { markPooledSpawn } from '@renderer/workspace/hook/actions/pooledSpawnBadge'
 
 // Tab actions — open/close + tab-navigation keybinds.
 
@@ -25,6 +27,7 @@ export function useTabActions(
     tabs: Tab[]
   },
   setState: WorkspaceSetState,
+  setRuntimes: WorkspaceSetRuntimes,
   setSpotlight: WorkspaceSetSpotlight,
   setReaderMode: WorkspaceSetReaderMode,
   refs: WorkspaceRefs,
@@ -58,6 +61,7 @@ export function useTabActions(
       }
       const tabId = crypto.randomUUID()
       const title = titleFromCwd(cwd)
+      let placed = false
       setState(prev => {
         // A project is a title and a position. Its first session belongs to
         // it because the session SAYS so (fileSessionInProject below) — until
@@ -78,8 +82,15 @@ export function useTabActions(
         // agent without boot knowing anything about lanes.
         //
         // No wake is needed (#690): this session was spawned a few lines up.
+        //
+        // "Empty" means what it means for every other spawn
+        // (applyDispatchSpawnFocus in pane.ts): no occupant, OR an occupant
+        // whose session is gone. A lane pointing at a closed session reads
+        // empty to the user, and ⌘T used to refuse it as occupied (#1013
+        // review B).
         const focusedLane = prev.stage.lanes[prev.stage.focusedLane]
-        const stage = focusedLane && focusedLane.selectedSessionId === undefined
+        const occupant = focusedLane?.selectedSessionId
+        const stage = focusedLane && (occupant === undefined || prev.sessions[occupant] === undefined)
           ? {
               ...prev.stage,
               lanes: prev.stage.lanes.map((lane, index) =>
@@ -87,6 +98,7 @@ export function useTabActions(
               ),
             }
           : prev.stage
+        placed = stage !== prev.stage
         return {
           ...prev,
           tabs: [...prev.tabs, tab],
@@ -95,9 +107,13 @@ export function useTabActions(
           stage,
         }
       })
+      // A first agent that could not take the lane is in the pool, and it
+      // wears the same "new" badge as every other pooled spawn. Without it,
+      // ⌘T with an occupied lane looked like it did nothing (#1013 review B).
+      if (!placed) markPooledSpawn(setRuntimes, sessionId)
       return { tabId, sessionId }
     },
-    [sessionActions, setState, showToast],
+    [sessionActions, setRuntimes, setState, showToast],
   )
 
   // WHY Close Tab no longer lives here (#886 review round 2): the command used

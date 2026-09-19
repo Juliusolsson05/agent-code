@@ -1,5 +1,9 @@
-import { act } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { act, cleanup, renderHook } from '@testing-library/react'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+
+import { useAppStore } from '@renderer/app-state/hooks'
+import { emptyRuntime } from '@renderer/session-runtime/state'
+import { useWorkspace } from '@renderer/workspace/hook'
 
 import { mountPaneActions } from '@renderer/workspace/hook/actions/testing/paneActionsHarness'
 import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
@@ -15,8 +19,30 @@ import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
 // The lane-shape half (fill vs refuse) is pinned per-spawn-site in the
 // placement suites (dispatchTerminalPlacement, controlPlacement,
 // extensionPlacement). What lives HERE is the badge lifecycle, which crosses
-// two hooks (pane actions mark it, dispatch actions retire it) and therefore
-// has no single-suite home.
+// hooks (pane actions mark it; dispatch actions and agent-index navigation
+// retire it, see pooledSpawnBadge.ts) and therefore has no single-suite home.
+
+// The whole-hook case suppresses only process/IPC ingress, as the
+// orchestration runtime test does.
+vi.mock('@renderer/workspace/hook/ipc/useIpcSubscriptions', () => ({ useIpcSubscriptions: () => undefined }))
+vi.mock('@renderer/workspace/hook/ipc/useWorkspaceAdoption', () => ({ useWorkspaceAdoption: () => undefined }))
+vi.mock('@renderer/workspace/hook/persistence/useBootstrap', () => ({ useBootstrap: () => undefined }))
+vi.mock('@renderer/features/sessionFeed/SessionFeedContext', () => ({ useSessionFeed: () => ({}) }))
+const originalStore = useAppStore.getState()
+const originalApi = Object.getOwnPropertyDescriptor(window, 'api')
+afterEach(() => {
+  cleanup()
+  useAppStore.setState(originalStore, true)
+  if (originalApi) Object.defineProperty(window, 'api', originalApi)
+  else Reflect.deleteProperty(window, 'api')
+})
+const stubWindowApi = () => Object.defineProperty(window, 'api', { configurable: true, value: {
+  onOrchestrationRequest: () => () => undefined,
+  onAgentManagementRequest: () => () => undefined,
+  ghostRead: async () => [],
+  reportSessionLifecycle: vi.fn(),
+  appendFeedDebugLog: async () => undefined,
+} })
 
 function workspace(occupant?: SessionId): WorkspaceState {
   return {
@@ -64,35 +90,28 @@ describe('pooled-spawn badge lifecycle', () => {
     expect(harness.getState().stage.lanes[0]?.selectedSessionId).toBe('anchor')
   })
 
-  it('is retired by placing the session into any lane', async () => {
-    // The retiring write lives in the DISPATCH actions, which the pane
-    // harness does not mount — the two halves are wired together by the
-    // workspace hook. Exercising the retire through the real reducer shape
-    // keeps this a lifecycle test rather than a mock of one: simulate the
-    // placement the index click performs (the same setState shape
-    // setTiledLaneSession produces) and assert the badge-clear write the
-    // dispatch actions layer makes, by replaying it through the exposed
-    // runtime store the same way.
-    const harness = mountPaneActions(workspace('anchor'), { spawnSessionId: 'spawned' })
-    await act(async () => {
-      await harness.actions.createDetachedDispatchAgent({ kind: 'codex' }, { tabId: 'p', anchorSessionId: 'anchor' })
+  it('is retired by placing the session into a lane through the real workspace hook', async () => {
+    // This case used to write the lane by hand and then assert that the badge
+    // SURVIVED, which proved only that a hand-written lane is not a placement
+    // (#1013 review B called it tautological). The clearing write lives in the
+    // dispatch actions, so this mounts the whole workspace hook and places the
+    // pooled session the way an index click does.
+    useAppStore.setState({
+      workspaceState: { ...workspace('anchor'), sessions: {
+        anchor: { kind: 'claude', cwd: '/p', projectId: 'p', joinedAt: 0 },
+        spawned: { kind: 'codex', cwd: '/p', projectId: 'p', joinedAt: 1 },
+      } },
+      // 'started' keeps selection on its synchronous path: no wake round-trip.
+      workspaceRuntimes: {
+        anchor: { ...emptyRuntime(), processStatus: 'started' },
+        spawned: { ...emptyRuntime(), processStatus: 'started', pooledSpawnAt: 1 },
+      },
     })
-    expect(harness.runtimes().spawned?.pooledSpawnAt).toEqual(expect.any(Number))
-
-    // Placement: the index click routes through selectTiledLaneSession; its
-    // synchronous lane write is mirrored here against the same store the
-    // actions write, asserting the clear the real action performs.
-    act(() => {
-      harness.setState(prev => ({
-        ...prev,
-        stage: { ...prev.stage, lanes: prev.stage.lanes.map(lane => ({ ...lane, selectedSessionId: 'spawned' })) },
-      }))
-    })
-    // The badge survives the LANE WRITE itself — retiring it is the dispatch
-    // action's separate runtime write, pinned in dispatchActions' own suite
-    // (laneSelectionWake / dispatchActions behavior). Here: placing did not
-    // happen through a path that retires, so the badge is still set — which
-    // is exactly why the dispatch action's retire write is load-bearing.
-    expect(harness.runtimes().spawned?.pooledSpawnAt).toEqual(expect.any(Number))
+    stubWindowApi()
+    const hook = renderHook(() => useWorkspace())
+    await act(async () => { await hook.result.current.selectTiledLaneSession(0, 'spawned') })
+    expect(useAppStore.getState().workspaceState.stage.lanes[0]?.selectedSessionId).toBe('spawned')
+    expect(useAppStore.getState().workspaceRuntimes.spawned?.pooledSpawnAt ?? null).toBeNull()
+    hook.unmount()
   })
 })

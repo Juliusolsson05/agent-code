@@ -8,6 +8,7 @@ import {
   sessionActionsWithSpawn,
   stateWriter,
 } from '@renderer/workspace/hook/actions/testing/paneActionsHarness'
+import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type { TiledDispatchState, WorkspaceState } from '@renderer/workspace/types'
 
 // Where a new project's first agent appears (#992).
@@ -39,16 +40,21 @@ function mount(initial: WorkspaceState) {
   const refs = makeRefs(initial)
   const writer = stateWriter(initial, refs)
   const spawn = vi.fn().mockResolvedValue('new-session')
+  let runtimes: Record<string, SessionRuntime> = {}
+  const setRuntimes = (next: Record<string, SessionRuntime> | ((prev: Record<string, SessionRuntime>) => Record<string, SessionRuntime>)) => {
+    runtimes = typeof next === 'function' ? next(runtimes) : next
+  }
   const hook = renderHook(() => useTabActions(
     initial,
     writer.setState,
+    setRuntimes,
     vi.fn(),
     vi.fn(),
     refs,
     vi.fn(),
     sessionActionsWithSpawn(spawn),
   ))
-  return { hook, getState: writer.getState }
+  return { hook, getState: writer.getState, runtimes: () => runtimes }
 }
 
 describe('newTab places the first agent of a new project', () => {
@@ -90,5 +96,27 @@ describe('newTab places the first agent of a new project', () => {
     // Same reference: not rebuilt, so lane memos do not churn on ⌘T either.
     expect(getState().stage).toBe(stage)
     expect(getState().activeTabId).toBe(created.tabId)
+  })
+
+  it('badges the first agent it could not place, like every other pooled spawn', async () => {
+    // #1013 review B: ⌘T never marked the badge, so with an occupied lane
+    // nothing on screen changed and nothing said where the agent went.
+    const { hook, runtimes } = mount(workspace({ lanes: [{ selectedSessionId: 'a1' }], rows: [{ length: 1 }], focusedLane: 0 }))
+    await act(async () => { await hook.result.current.newTab('/work/second') })
+    expect(runtimes()['new-session']?.pooledSpawnAt).toEqual(expect.any(Number))
+  })
+
+  it('does not badge an agent that filled the lane', async () => {
+    const { hook, runtimes } = mount(workspace({ lanes: [{}], rows: [{ length: 1 }], focusedLane: 0 }))
+    await act(async () => { await hook.result.current.newTab('/work/second') })
+    expect(runtimes()['new-session']?.pooledSpawnAt ?? null).toBeNull()
+  })
+
+  it('fills a lane whose occupant was closed, as every other spawn does', async () => {
+    // A lane pointing at a gone session reads empty. ⌘T refused it as
+    // occupied, unlike applyDispatchSpawnFocus (#1013 review B).
+    const { hook, getState } = mount(workspace({ lanes: [{ selectedSessionId: 'closed' }], rows: [{ length: 1 }], focusedLane: 0 }))
+    await act(async () => { await hook.result.current.newTab('/work/second') })
+    expect(getState().stage.lanes).toEqual([{ selectedSessionId: 'new-session' }])
   })
 })
