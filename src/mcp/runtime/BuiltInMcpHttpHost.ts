@@ -539,18 +539,9 @@ export class BuiltInMcpHttpHost {
     const identity = registration.scope.tldrIdentity
     const domains = registration.scope.domains
     const enforcing = Boolean(enforcement && identity && hasReportingDomain(domains))
-    // Tell the goal loop about every turn hook, AFTER enforcement has decided,
-    // because a Stop that enforcement blocks does not end the turn (#1024).
-    // Only a loop-enabled registration reports, and only for its own session
-    // id: the bearer already scopes this request to exactly one process.
-    const tellGoalLoop = (output: unknown) => {
-      if (!domains.includes('goal_loop') || registration.revoked) return
-      const blocked = Boolean(output && typeof output === 'object' && (output as { decision?: unknown }).decision === 'block')
-      this.dependencies.goalLoopService?.observeProviderHook(registration.scope.sessionId, event, { blocked })
-    }
-    if (!enforcing) {
+    const loopReporting = domains.includes('goal_loop')
+    if (!enforcing && !loopReporting) {
       this.writeJson(res, 200, {})
-      tellGoalLoop({})
       return
     }
     let input: unknown = null
@@ -559,6 +550,30 @@ export class BuiltInMcpHttpHost {
     } catch {
       // A malformed or oversized body is still a turn boundary worth
       // recording; the rules only ever read `stop_hook_active` from it.
+    }
+    // WHY subagent hooks never reach the loop (#1028 review): both CLIs send a
+    // subagent's hooks with the PARENT's bearer, marked only by a non-empty
+    // `agent_id` (enforcement ignores them for the same reason). A background
+    // Task's PostToolUse is not the main agent's turn. Forwarded, it reopened
+    // a turn the main agent had already Stopped, so a Resume, a backoff retry,
+    // or the deferred continuation after an allowed Stop found the turn "open"
+    // and delivered nothing, with the loop still showing active.
+    const fromSubagent = Boolean(input && typeof input === 'object'
+      && typeof (input as { agent_id?: unknown }).agent_id === 'string'
+      && (input as { agent_id: string }).agent_id.length > 0)
+    // Tell the goal loop about every main-agent turn hook, AFTER enforcement
+    // has decided, because a Stop that enforcement blocks does not end the
+    // turn (#1024). Only a loop-enabled registration reports, and only for its
+    // own session id: the bearer already scopes this request to one process.
+    const tellGoalLoop = (output: unknown) => {
+      if (!loopReporting || registration.revoked || fromSubagent) return
+      const blocked = Boolean(output && typeof output === 'object' && (output as { decision?: unknown }).decision === 'block')
+      this.dependencies.goalLoopService?.observeProviderHook(registration.scope.sessionId, event, { blocked })
+    }
+    if (!enforcing) {
+      this.writeJson(res, 200, {})
+      tellGoalLoop({})
+      return
     }
     try {
       const output = await enforcement!.handle(registration.token, identity!, event, input, {
