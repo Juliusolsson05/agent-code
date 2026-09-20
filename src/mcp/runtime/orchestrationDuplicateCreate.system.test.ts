@@ -27,6 +27,9 @@ const renderer = {
 
 vi.mock('@main/window/windowRegistry.js', () => ({
   windowForSession: () => 'test-window',
+  // Returns true because this harness DOES deliver. `sendToWindow` reports
+  // whether the renderer actually received the message (#926) —
+  // `windowForSession` can hand back a window that delivery then skips.
   sendToWindow: (_windowId: string, _channel: string, request: Record<string, unknown>) => {
     renderer.requests.push(request)
     // Answer as the renderer does, on a later tick — the gap is where a
@@ -67,6 +70,7 @@ vi.mock('@main/window/windowRegistry.js', () => ({
       }
       bridge.resolve({ requestId: request.requestId as string, ok: true, type, agents: [] } as never)
     })
+    return true
   },
 }))
 

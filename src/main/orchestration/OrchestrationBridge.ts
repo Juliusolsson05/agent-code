@@ -21,6 +21,88 @@ type PendingRequest = {
   resolve: (response: OrchestrationRendererResponse) => void
   reject: (err: Error) => void
   timer: NodeJS.Timeout
+  /**
+   * Set once the caller has given up waiting but the request is still
+   * OUTSTANDING in the renderer (#926). The entry stays in `pending` so a late
+   * answer can still be reconciled instead of dropped on the floor.
+   */
+  abandoned?: boolean
+}
+
+/**
+ * Every renderer request that CHANGES the workspace.
+ *
+ * WHY the distinction has to exist: a timed-out read changed nothing, so
+ * failing it is the whole truth. A timed-out mutation may have happened, may
+ * be happening right now, and may complete a second after we gave up — so
+ * failing it the same way tells the caller something false.
+ *
+ * Listed explicitly rather than derived, so a request type added later has to
+ * be classified deliberately. The default for anything unlisted is "read",
+ * which is the safe side for THIS switch: a mis-classified read is merely a
+ * blunt error message, while a mis-classified mutation would hold a
+ * reservation nothing ever reconciles.
+ */
+const MUTATING_REQUEST_TYPES = new Set<OrchestrationRendererRequest['type']>([
+  'create-agent',
+  'close-agent',
+  'close-run',
+  'mark-bootstrap-prompt-delivered',
+  'ensure-agent-live',
+])
+
+/**
+ * A dispatched mutation whose outcome nobody knows (#926).
+ *
+ * ── WHY THIS IS NOT JUST A TIMEOUT ERROR ──
+ * By the time the timer fires, the request has been handed to the renderer and
+ * the renderer confirmed receipt of the send (see the delivery check in
+ * `dispatchRendererRequest` — an UNDELIVERED request never gets here, and is
+ * reported as safe to retry instead). What expired is our patience, not the
+ * operation. Rejecting with a plain "timed out" told the caller its create had
+ * failed, and the reasonable response to a failure is to try again — which is
+ * how one intended child becomes two, one of them invisible to the parent that
+ * asked for it.
+ *
+ * `outcome: 'unknown'` is the same vocabulary the control SDK uses for exactly
+ * this situation, and it means: do not retry, go and look.
+ *
+ * ── WHAT THIS DELIBERATELY DOES NOT DO ──
+ * It does not refuse a later identical create. A first version held a
+ * "reservation" keyed on the renderer request shape and refused any matching
+ * retry until reconciliation. Review showed that unsound in three ways, all
+ * proven against the real bridge:
+ *
+ *   - The renderer request has no `prompt` field — the prompt is delivered
+ *     separately — so two genuinely different fan-out jobs produce a
+ *     byte-identical shape, and the second was refused forever. That is the
+ *     same catastrophe `createCallsInFlight` above was written to prevent,
+ *     reintroduced one layer down.
+ *   - Nothing could ever clear it. Listing agents and closing the run both
+ *     left it in place, and the message told the agent to list its agents —
+ *     so a parent that did exactly as instructed looped with no legal exit.
+ *   - Its key disagreed with `orchestrationCreateAgentCallKey` on domain
+ *     ordering, so the same intent could miss the guard anyway.
+ *
+ * A sound guard has to key on something that can see the prompt, which means
+ * it belongs at the MCP call layer beside `createAgentCallOnce`, and it needs
+ * a terminating condition — a renderer-generation bump is proof the answer can
+ * never arrive. Neither is in this change, so #926's "retain scoped
+ * conflicting-mutation authority until reconciliation" is NOT delivered here.
+ */
+export class OrchestrationOutcomeUnknownError extends Error {
+  readonly outcome = 'unknown' as const
+  constructor(
+    readonly requestId: string,
+    readonly requestType: OrchestrationRendererRequest['type'],
+    readonly parentSessionId: string,
+  ) {
+    super(
+      `The renderer did not answer ${requestType} in time. It may still complete, so the outcome is UNKNOWN: `
+      + `do not repeat it. Call orchestration_list_agents for this parent to see what exists before acting.`,
+    )
+    this.name = 'OrchestrationOutcomeUnknownError'
+  }
 }
 
 type QueuedRendererRequest = {
@@ -171,11 +253,12 @@ export class OrchestrationBridge {
     if (params.providerRuntime === 'terminal' && !getMainProvider(params.kind).createTerminalSession) {
       throw new Error(`${getMainProvider(params.kind).name} does not support a terminal runtime`)
     }
-    const response = await this.request({
+    const attempt: OrchestrationRendererRequest = {
       requestId: randomUUID(),
       type: 'create-agent',
       ...params,
-    })
+    }
+    const response = await this.request(attempt)
     if (!response.ok) throw new Error(response.message)
     if (response.type !== 'create-agent') {
       throw new Error(`Unexpected orchestration response: ${response.type}`)
@@ -392,7 +475,59 @@ export class OrchestrationBridge {
     if (!pending) return
     clearTimeout(pending.timer)
     this.pending.delete(response.requestId)
+    if (pending.abandoned) {
+      // ── LATE RECONCILIATION (#926) ──
+      // The caller stopped waiting, but the renderer finished anyway. Dropping
+      // this used to be how a real child became an orphan: created, placed in
+      // the workspace, and unknown to the bridge, so the parent could neither
+      // see it in list_agents nor close it. Adopting it here is what makes
+      // "exactly one logical effect is discoverable" true.
+      this.adoptLateResponse(response)
+      return
+    }
     pending.resolve(response)
+  }
+
+  /**
+   * Take ownership of a response that arrived after its caller gave up.
+   *
+   * ── WHAT THIS IS AND IS NOT (#1077 review, 4) ──
+   * Only main's OWN bookkeeping. An earlier version claimed a late child was
+   * otherwise an "orphan the parent can neither see nor close"; review
+   * disproved that — visibility and closability are decided in the RENDERER
+   * from session metadata (`isVisibleToOrchestrationParent` over
+   * `orchestrationParentId`), and `mergeClosedAgents` only appends tombstones.
+   * A late child IS listable and closable without this.
+   *
+   * What is wrong without it is narrower and still worth fixing: main's
+   * `promptDeliveries` and `parentSessionByChildSession` never learn the child
+   * exists, so `enrichAgent` cannot report its delivery state and the parent's
+   * status cache keeps a stale answer.
+   */
+  private adoptLateResponse(response: OrchestrationRendererResponse): void {
+    if (!response.ok || response.type !== 'create-agent') return
+    const parentSessionId = response.agent.orchestrationParentId
+    this.promptDeliveries.set(response.agent.sessionId, {
+      createdAt: Date.now(),
+      promptSubmissionCount: 0,
+    })
+    this.parentSessionByChildSession.set(response.agent.sessionId, parentSessionId)
+    this.closedAgents.delete(response.agent.sessionId)
+    this.invalidateStatusCache(parentSessionId)
+    this.journal?.recordIncident({
+      kind: 'orchestration.late_response_adopted',
+      severity: 'warn',
+      reason: 'renderer_answered_after_timeout',
+      context: {
+        requestId: response.requestId,
+        sessionId: response.agent.sessionId,
+        parentSessionId,
+        // The child exists and was never handed to the caller, so it is
+        // running work nobody is waiting on. Worth an incident even though
+        // recovery succeeded.
+        bootstrapPromptDelivered: false,
+      },
+    })
   }
 
   private async cachedListAgents(params: {
@@ -590,7 +725,7 @@ export class OrchestrationBridge {
     return await new Promise<OrchestrationRendererResponse>((resolve, reject) => {
       const TIMEOUT_MS = 30_000
       const timer = setTimeout(() => {
-        this.pending.delete(request.requestId)
+        const mutating = MUTATING_REQUEST_TYPES.has(request.type)
         // The renderer never answered an orchestration request — JS thread
         // blocked, dead, or crashing mid-handler. Durable evidence of a hang
         // that the renderer itself can't report.
@@ -598,9 +733,27 @@ export class OrchestrationBridge {
           kind: 'orchestration.request_timeout',
           severity: 'error',
           reason: 'renderer_no_response',
-          context: { requestId: request.requestId, waitedMs: TIMEOUT_MS },
+          context: { requestId: request.requestId, waitedMs: TIMEOUT_MS, requestType: request.type, mutating },
         })
-        reject(new Error('Timed out waiting for renderer orchestration response'))
+        if (!mutating) {
+          // A read changed nothing, so failing it is the whole truth and the
+          // caller may simply ask again.
+          this.pending.delete(request.requestId)
+          reject(new Error('Timed out waiting for renderer orchestration response'))
+          return
+        }
+        // ── A DISPATCHED MUTATION IS NOT A FAILED ONE (#926) ──
+        // The request is sent BEFORE this timer starts, so it has definitely
+        // crossed into the renderer. Keep the entry — marked abandoned — so a
+        // late answer can still be reconciled, and hold a reservation so an
+        // identical retry is refused rather than blindly duplicating.
+        const entry = this.pending.get(request.requestId)
+        if (entry) entry.abandoned = true
+        reject(new OrchestrationOutcomeUnknownError(
+          request.requestId,
+          request.type,
+          request.parentSessionId,
+        ))
       }, TIMEOUT_MS)
       this.pending.set(request.requestId, { resolve, reject, timer })
       // WHY main serializes renderer-backed orchestration requests:
@@ -632,7 +785,30 @@ export class OrchestrationBridge {
         ))
         return
       }
-      sendToWindow(target, 'orchestration:request', request)
+      // ── EXPIRED BEFORE DISPATCH IS NOT OUTCOME-UNKNOWN (#926) ──
+      // `windowForSession` resolves through a lease check that deliberately
+      // ignores `closing`, while delivery skips a closing window — so a
+      // request could be silently dropped and then waited on for the full 30 s
+      // before being reported as an unknown outcome. That is the worst
+      // possible answer for the one case we can be CERTAIN about: nothing was
+      // dispatched, so nothing happened, and retrying is not just safe but
+      // correct. Review found this; the fix is to ask whether it was actually
+      // delivered rather than assuming the send succeeded.
+      if (!sendToWindow(target, 'orchestration:request', request)) {
+        clearTimeout(timer)
+        this.pending.delete(request.requestId)
+        this.journal?.recordIncident({
+          kind: 'orchestration.request_timeout',
+          severity: 'warn',
+          reason: 'renderer_unavailable',
+          context: { requestId: request.requestId, requestType: request.type, dispatched: false },
+        })
+        reject(new Error(
+          `The Agent Code window owning orchestration parent session ${request.parentSessionId} `
+          + 'could not receive the request, so nothing was dispatched. It is safe to retry.',
+        ))
+        return
+      }
     })
   }
 

@@ -598,11 +598,19 @@ export function sessionsOwnedBy(id: WindowId): string[] {
 // Routing
 // ---------------------------------------------------------------------------
 
-function deliver(targets: RegisteredWindow[], channel: string, args: unknown[]): void {
+function deliver(targets: RegisteredWindow[], channel: string, args: unknown[]): number {
   recordOutboundIpcBreadcrumb(channel, args)
+  let sent = 0
   for (const entry of targets) {
+    // WHY a skipped window is counted rather than silently dropped (#926
+    // review): a `closing` window still resolves through `windowForSession`,
+    // because that lease check deliberately ignores `closing`. So a caller
+    // that waits for an answer waited its full deadline for a message nobody
+    // received, and then could not tell "never dispatched" from "dispatched,
+    // outcome unknown" — which is the whole distinction #926 is about.
     if (entry.closing || entry.window.isDestroyed()) continue
     entry.window.webContents.send(channel, ...args)
+    sent += 1
   }
   // Observe AFTER the send so recording can never delay or break delivery, and
   // exactly ONCE per logical event regardless of how many windows received it —
@@ -615,6 +623,7 @@ function deliver(targets: RegisteredWindow[], channel: string, args: unknown[]):
       /* recording is a diagnostic; never let it break IPC */
     }
   }
+  return sent
 }
 
 function liveWindows(): RegisteredWindow[] {
@@ -629,10 +638,20 @@ export function broadcastToWindows(channel: string, ...args: unknown[]): void {
   deliver(liveWindows(), channel, args)
 }
 
-export function sendToWindow(id: WindowId | null, channel: string, ...args: unknown[]): void {
-  if (!id) return
+/**
+ * Returns whether the message actually reached a renderer.
+ *
+ * WHY a return value (#926 review): `windowForSession` resolves through a
+ * lease check that deliberately ignores `closing`, while `deliver` skips a
+ * closing window. A caller that waits for an answer therefore waited its full
+ * deadline for a message nobody received, and could not tell "never
+ * dispatched" from "dispatched, outcome unknown" — a distinction that decides
+ * whether retrying is safe. Existing callers may keep ignoring it.
+ */
+export function sendToWindow(id: WindowId | null, channel: string, ...args: unknown[]): boolean {
+  if (!id) return false
   const entry = windows.get(id)
-  deliver(entry ? [entry] : [], channel, args)
+  return deliver(entry ? [entry] : [], channel, args) > 0
 }
 
 /** User-gesture traffic: native menu commands, dictation hotkeys, "open this AI

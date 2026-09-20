@@ -137,6 +137,31 @@ describe('window registry routing', () => {
     expect(built[0]?.sent).toEqual([])
   })
 
+  it('tells the sender when a closing window did NOT receive the message', () => {
+    // `windowForSession` deliberately ignores `closing`, so it hands back a
+    // window that delivery then skips. A caller that waits for an answer used
+    // to wait its full deadline for a message nobody received, and could not
+    // tell "never dispatched" from "dispatched, outcome unknown" — which is
+    // the distinction that decides whether retrying is safe (#926).
+    const window = registry.createAppWindow()
+    registry.claimSessionForWindow('agent-1', window)
+    expect(registry.sendToWindow(registry.windowForSession('agent-1'), 'orchestration:request', {}))
+      .toBe(true)
+
+    built[0]?.hooks.onClosing()
+    // Still resolvable…
+    expect(registry.windowForSession('agent-1')).toBe(window)
+    // …and still skipped, which the sender now learns.
+    expect(registry.sendToWindow(registry.windowForSession('agent-1'), 'orchestration:request', {}))
+      .toBe(false)
+    expect(built[0]?.sent).toHaveLength(1)
+  })
+
+  it('reports no delivery for an unknown window', () => {
+    expect(registry.sendToWindow(null, 'orchestration:request', {})).toBe(false)
+    expect(registry.sendToWindow('nobody', 'orchestration:request', {})).toBe(false)
+  })
+
   it('reports a closed window only after it is gone from the registry', () => {
     const closing = registry.createAppWindow()
     const survivor = registry.createAppWindow()

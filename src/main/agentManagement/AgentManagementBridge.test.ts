@@ -14,6 +14,7 @@ const sessionWindowOwner = vi.fn((_sessionId: string): string | null => 'test-wi
 vi.mock('@main/window/windowRegistry.js', () => ({
   sendToWindow: (_windowId: string, _channel: string, request: unknown) => {
     sentRendererRequests.push(request)
+    return true
   },
   windowForSession: (sessionId: string) => sessionWindowOwner(sessionId),
 }))
