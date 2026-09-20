@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
+import { focusedControlOwnsEnter } from '@renderer/components/ui/dialog-actions'
 import { Button } from '@renderer/components/ui/button'
 import {
   Dialog,
@@ -140,6 +141,13 @@ export function AgentViewModePickerModal({
             return
           }
           if (e.key === 'Enter') {
+          // A focused footer button owns its own Enter (#867). This handler
+          // sits on `DialogContent`, so without the check it `preventDefault`s
+          // the focused button's native click and runs the LIST's action
+          // instead — Tab to Cancel, Enter, and the change being abandoned is
+          // applied. Same rule `DialogActions` follows, same helper (#860),
+          // same bug #862 fixed in Switch Provider.
+          if (focusedControlOwnsEnter(e.target)) return
             e.preventDefault()
             pick(cursor)
           }
@@ -164,6 +172,12 @@ export function AgentViewModePickerModal({
               <button
                 key={option.value}
                 type="button"
+                // Out of the tab order, with the arrow-driven highlight the
+                // only selection signal (#867, same as #862). A Tab-focused
+                // row can diverge from that highlight, and Space clicks the
+                // FOCUSED one — so the user would act on a row other than the
+                // one the dialog is showing as chosen, whatever Enter does.
+                tabIndex={-1}
                 disabled={disabled}
                 onMouseEnter={() => setCursor(option.value)}
                 onClick={() => pick(option.value)}

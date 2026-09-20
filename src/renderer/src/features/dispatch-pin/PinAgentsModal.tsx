@@ -96,6 +96,12 @@ export function PinAgentsModal({
                 <button
                   key={row.sessionId}
                   type="button"
+                  // Out of the tab order, with the arrow-driven highlight the
+                  // only selection signal (#867, same as #862). A Tab-focused
+                  // row can diverge from that highlight, and Space clicks the
+                  // FOCUSED one — so the user would act on a row other than the
+                  // one the dialog is showing as chosen, whatever Enter does.
+                  tabIndex={-1}
                   onClick={() => {
                     setFocusedIndex(index)
                     toggle(row.sessionId)

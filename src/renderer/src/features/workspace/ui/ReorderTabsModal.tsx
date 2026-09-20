@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
+import { focusedControlOwnsEnter } from '@renderer/components/ui/dialog-actions'
 import { Button } from '@renderer/components/ui/button'
 import {
   Dialog,
@@ -147,6 +148,12 @@ export function ReorderTabsModal({
       // ids separate is what prevents accidental reorders while the user is
       // still browsing the list.
       if (e.key === 'Enter') {
+        // A focused footer button owns its own Enter (#867). This footer is a
+        // plain `<div>` rather than a `DialogFooter`, which is exactly why the
+        // check is on the focused CONTROL and not on the slot: Tab to Cancel
+        // and Enter used to `confirm()` the reorder being abandoned, and Tab
+        // to Done with nothing picked entered move mode instead.
+        if (focusedControlOwnsEnter(e.target)) return
         e.preventDefault()
         if (movingTabId) {
           confirm()
@@ -225,6 +232,12 @@ export function ReorderTabsModal({
               >
               <button
                 type="button"
+                // Out of the tab order, with the arrow-driven highlight the
+                // only selection signal (#867, same as #862). A Tab-focused
+                // row can diverge from that highlight, and Space clicks the
+                // FOCUSED one — so the user would act on a row other than the
+                // one the dialog is showing as chosen, whatever Enter does.
+                tabIndex={-1}
                 onClick={() => {
                   setError(null)
                   setCursorTabId(tab.id)

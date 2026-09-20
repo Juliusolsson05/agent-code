@@ -1,3 +1,4 @@
+import { focusedControlOwnsEnter } from '@renderer/components/ui/dialog-actions'
 import { useCallback, useEffect, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 
@@ -98,6 +99,11 @@ export function usePinAgentsKeybinds<R extends PinAgentsCandidateRow>({
       // make this feature's key handler race Radix's close/focus-restoration
       // path and can call the owner twice for one key press.
       if (event.key === 'Enter') {
+        // A focused footer button owns its own Enter (#867). Without this,
+        // Tab to Cancel and Enter SAVED the unpinning the user was
+        // abandoning — and with nothing selected it committed an empty list,
+        // which is what `DialogActions`' `confirmDisabled` exists to prevent.
+        if (focusedControlOwnsEnter(event.target)) return
         event.preventDefault()
         onCommit(selectedIds)
         return
