@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   project: vi.fn(),
   write: vi.fn(),
   sessionId: vi.fn(),
+  sourceProfile: vi.fn(),
 }))
 
 vi.mock('node:crypto', () => ({
@@ -20,6 +21,7 @@ vi.mock('@main/providerSwitch/transcriptEngine.js', () => ({
       projectNativeResume: mocks.project,
       write: mocks.write,
       sessionId: mocks.sessionId,
+      sourceProfile: mocks.sourceProfile,
     }
   },
 }))
@@ -115,5 +117,42 @@ describe('duplicateSession neutral integration', () => {
       expect.objectContaining({ cwd: '/project' }),
     )
     expect(result.newProviderSessionId).toBe('new-session')
+  })
+})
+
+// #1038. A duplicate is the same conversation continuing, so it keeps the
+// model it ran on; the machine's current default may be something the user
+// switched to long afterwards, in another pane.
+describe('duplicate keeps the source conversation\'s own model', () => {
+  beforeEach(() => {
+    // Call history from the suites above would otherwise be inspected here.
+    for (const mock of Object.values(mocks)) mock.mockReset()
+    mocks.read.mockResolvedValue({ entries: [{ kind: 'message', role: 'user' }], sourceSessionIds: ['ses_source'] })
+    mocks.project.mockResolvedValue({ values: [{}] })
+    mocks.write.mockResolvedValue('/fixture/new.json')
+    mocks.sessionId.mockReturnValue('ses_new')
+  })
+
+  it('passes the recorded profile through as the projection target', async () => {
+    const recorded = { model: 'glm-5.3', modelProvider: 'zai-coding-plan', modelVariant: 'max', budgetCharacters: 500_000 }
+    mocks.sourceProfile.mockResolvedValue(recorded)
+    await duplicateSession({ provider: 'opencode', sourceProviderSessionId: 'ses_source', cwd: '/fixture' })
+    expect(mocks.sourceProfile).toHaveBeenCalledWith('/fixture', 'ses_source')
+    expect(mocks.project.mock.calls[0]![1]).toMatchObject({ targetProfile: recorded })
+  })
+
+  it('falls back to the adapter default when the provider records no model, and when the read fails', async () => {
+    // Claude and Codex have no sourceProfile at all; OpenCode can still fail
+    // to export. Neither may block a duplicate — the projector then resolves
+    // its own target profile, which is the pre-#1038 behaviour.
+    mocks.sourceProfile.mockResolvedValue(null)
+    await duplicateSession({ provider: 'opencode', sourceProviderSessionId: 'ses_source', cwd: '/fixture' })
+    expect(mocks.project.mock.calls[0]![1].targetProfile).toBeUndefined()
+
+    mocks.project.mockClear()
+    mocks.sourceProfile.mockRejectedValue(new Error('opencode export failed'))
+    await expect(duplicateSession({ provider: 'opencode', sourceProviderSessionId: 'ses_source', cwd: '/fixture' }))
+      .resolves.toMatchObject({ newProviderSessionId: 'ses_new' })
+    expect(mocks.project.mock.calls[0]![1].targetProfile).toBeUndefined()
   })
 })
