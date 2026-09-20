@@ -8,6 +8,8 @@ import { DialogActions } from '@renderer/components/ui/dialog-actions'
 import { tabIndexLabel } from '@renderer/workspace/tile-tree/paneLabels'
 import type { SessionId } from '@renderer/workspace/types'
 
+import { useRef } from 'react'
+
 import { usePinAgentsKeybinds } from './usePinAgentsKeybinds'
 import { withVisibleControls } from '@shared/text/visibleControls'
 
@@ -65,6 +67,7 @@ export function PinAgentsModal({
     })
 
   const selectedSet = new Set(selectedIds)
+  const dialogRef = useRef<HTMLDivElement>(null)
 
   return (
     <Dialog
@@ -74,8 +77,19 @@ export function PinAgentsModal({
       }}
     >
       <DialogContent
+        ref={dialogRef}
         tabIndex={-1}
         onKeyDown={onKeyDown}
+        onOpenAutoFocus={event => {
+          // WHY this dialog needs what its two siblings already had (#867
+          // review): Radix's FocusScope focuses the first TABBABLE node on
+          // mount. Taking the rows out of the tab order made that node
+          // CANCEL — so on a fresh open, the Enter this dialog advertises as
+          // "commit" was handed to Cancel and threw the pins away. Nothing in
+          // here ever moves DOM focus, so no arrow key could rescue it.
+          event.preventDefault()
+          dialogRef.current?.focus()
+        }}
         className="flex max-h-[80vh] w-[520px] max-w-[calc(100vw-64px)] flex-col p-5"
       >
         <DialogTitle className="mb-1 flex-shrink-0 font-semibold">Pin Sessions</DialogTitle>
@@ -83,7 +97,17 @@ export function PinAgentsModal({
           Choose the agents pinned in Dispatch. Space toggles and Enter commits.
         </DialogDescription>
 
-        <div className="rounded-slab flex-1 min-h-0 overflow-auto border border-border bg-canvas">
+        {/* Roving focus: the rows left the tab order, so the highlight has to be
+            announced instead of focused. `aria-activedescendant` on the
+            listbox is what tells a screen reader which option the arrows are
+            on — without it the highlight is a CSS class and nothing else
+            (#867 review). */}
+        <div
+          role="listbox"
+          aria-label="Agents to pin"
+          aria-activedescendant={rows[focusedIndex] ? `pin-agents-row-${rows[focusedIndex]!.sessionId}` : undefined}
+          className="rounded-slab flex-1 min-h-0 overflow-auto border border-border bg-canvas"
+        >
           {rows.length === 0 ? (
             <div className="px-3 py-4 text-[12px] text-muted">
               No agents available to pin.
@@ -96,6 +120,23 @@ export function PinAgentsModal({
                 <button
                   key={row.sessionId}
                   type="button"
+                  id={`pin-agents-row-${row.sessionId}`}
+                  role="option"
+                  aria-selected={isSelected}
+                  // Out of the tab order, with the arrow-driven highlight the
+                  // only selection signal (#867, same as #862). A Tab-focused
+                  // row can diverge from that highlight, and Space clicks the
+                  // FOCUSED one — so the user would act on a row other than the
+                  // one the dialog is showing as chosen, whatever Enter does.
+                  tabIndex={-1}
+                  // The other half, and the one `tabIndex={-1}` does NOT buy:
+                  // Chromium focuses a button on CLICK whatever its tabindex.
+                  // A clicked row then held focus and owned every following
+                  // Enter, so the commit bowed out and the surviving default
+                  // re-clicked the row — Enter looked like it undid the click.
+                  // Preventing mousedown's default keeps focus on the dialog
+                  // and still fires onClick.
+                  onMouseDown={event => event.preventDefault()}
                   onClick={() => {
                     setFocusedIndex(index)
                     toggle(row.sessionId)

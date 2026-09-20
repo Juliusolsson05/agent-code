@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { emptyRuntime } from '@renderer/session-runtime/state'
@@ -140,4 +140,28 @@ describe('closed workspace modal derivations', () => {
       mounted.unmount()
     },
   )
+})
+
+describe('Agent Activity rows keep the keys on the selected row (#867 review)', () => {
+  it('keeps the per-row close button out of the tab order and out of click focus', () => {
+    // The row's `close` button sits INSIDE the scroller that handles the keys,
+    // and the scroller acts on the SELECTED row. The button was tabbable and
+    // `opacity-0` unless its row is selected or hovered — so it was an
+    // invisible tab stop, and Tab to row 2's close followed by Delete closed
+    // ROW 1. `tabIndex={-1}` plus a cancelled mousedown keeps focus on the
+    // scroller, which is the only place where "the row the keys act on" and
+    // "the row the user can see highlighted" are the same row.
+    const workspace = replaceRuntime(workspaceFixture(), false)
+    const mounted = render(<AgentActivityModal open workspace={workspace} onClose={vi.fn()} />)
+
+    const close = screen.getByRole('button', { name: 'close' })
+    expect(close.getAttribute('tabindex')).toBe('-1')
+    // `false` = the default was prevented, which is what stops a real browser
+    // moving focus to the button on click.
+    expect(fireEvent.mouseDown(close)).toBe(false)
+    // And it still closes on an actual click — the fix must not disarm it.
+    fireEvent.click(close)
+    expect(workspace.closeSession).toHaveBeenCalled()
+    mounted.unmount()
+  })
 })
