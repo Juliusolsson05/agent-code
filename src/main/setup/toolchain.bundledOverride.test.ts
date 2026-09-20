@@ -44,6 +44,7 @@ function setupState(overrides: {
     toolPaths: overrides.toolPaths ?? {},
     manualToolPaths: overrides.manualToolPaths ?? {},
     skippedOptionalTools: {},
+    acknowledgedNoProviders: false,
     cliUpdateBehavior: 'automatic' as const,
     cliUpdateCache: {},
     updatedAt: 0,

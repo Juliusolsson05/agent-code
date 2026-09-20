@@ -1,6 +1,7 @@
-import { AGENT_PROVIDER_KINDS, DEFAULT_PROVIDER } from '@shared/types/providerKind'
+import { AGENT_PROVIDER_KINDS } from '@shared/types/providerKind'
 import type { AgentProviderKind } from '@shared/types/providerKind'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
+import { MISSING_PROVIDER_HINT, preferredPickerProvider, useMissingProviders } from '@renderer/features/setup/store'
 import { useEffect, useRef, useState } from 'react'
 
 import { Button } from '@renderer/components/ui/button'
@@ -89,8 +90,12 @@ export function PathPickerModal({
   const [value, setValue] = useState(defaultValue)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  // Provider toggle: Claude (default) or Codex. Resets on modal open.
-  const [provider, setProvider] = useState<AgentProvider>(DEFAULT_PROVIDER)
+  // Provider toggle. Resets on modal open. Preselects the provider a fresh
+  // install would use (#995): the default when it is installed, otherwise the
+  // first one that is. It used to be Claude unconditionally, so on a Mac
+  // without Claude, ⌘T failed only after the user had chosen a directory.
+  const [provider, setProvider] = useState<AgentProvider>(() => preferredPickerProvider())
+  const missingProviders = useMissingProviders()
 
   // Resume list state. We eagerly refresh the list whenever the path
   // changes and resolves to a valid directory — gives the user live
@@ -139,7 +144,7 @@ export function PathPickerModal({
     setListingTarget(null)
     setResolvedPath(null)
     setPendingCreatePath(null)
-    setProvider(DEFAULT_PROVIDER)
+    setProvider(preferredPickerProvider())
   }, [open, defaultValue])
 
   // Refresh the sessions list whenever the typed path changes. Run
@@ -321,12 +326,17 @@ export function PathPickerModal({
                 if (p !== provider) invalidateResumeListing()
                 setProvider(p)
               }}
+              // Still selectable when missing: the probe can be wrong, and
+              // the spawn re-resolves the CLI itself (see useMissingProviders).
+              title={missingProviders.has(p) ? MISSING_PROVIDER_HINT : undefined}
+              data-provider-missing={missingProviders.has(p) || undefined}
               className={`rounded-control
                 px-3 py-1 text-[11px] font-semibold uppercase tracking-wider
                 border transition-colors duration-120
                 ${provider === p
                   ? 'bg-accent text-accent-fg border-accent'
                   : 'bg-transparent text-muted border-border hover:border-border-hi hover:text-ink'}
+                ${missingProviders.has(p) ? 'line-through decoration-muted' : ''}
               `}
             >
               {getRendererProviderCapabilities(p).shortLabel}
