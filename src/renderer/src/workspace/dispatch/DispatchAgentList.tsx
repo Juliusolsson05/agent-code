@@ -7,6 +7,7 @@ import {
 import { memo, useCallback, useLayoutEffect, useMemo, useRef } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 
+import { sessionIsWorking } from '@renderer/session-runtime/working'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { useAppStore } from '@renderer/app-state/hooks'
 import { goalLoopChipLabel, goalLoopChipTitle, isShownGoalLoop, useGoalLoops } from '@renderer/features/goal-loop/useGoalLoops'
@@ -389,7 +390,7 @@ const DispatchGroupHeader = memo(function DispatchGroupHeader({
     let count = 0
     for (const sessionId of sessionIds) {
       const runtime = state.workspaceRuntimes[sessionId]
-      if (runtime?.sessionStatus === 'running' || runtime?.streamPhase !== 'idle') count += 1
+      if (sessionIsWorking(runtime)) count += 1
     }
     return count
   }))
