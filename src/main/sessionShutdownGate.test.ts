@@ -52,6 +52,36 @@ function createFakeApp(): {
 }
 
 describe('installSessionShutdownGate', () => {
+  it('holds synchronous throws behind the committed gate and allows an explicit retry', async () => {
+    const fake = createFakeApp()
+    const failure = new Error('synchronous stop failure')
+    const drain = vi.fn<() => Promise<void>>().mockImplementationOnce(() => { throw failure })
+      .mockResolvedValue(undefined)
+    const onShutdownError = vi.fn()
+    const gate = installSessionShutdownGate({ app: fake.app, drain, onShutdownError, onQuitAllowed: vi.fn() })
+    expect(() => fake.emitWillQuit()).not.toThrow()
+    await vi.waitFor(() => expect(onShutdownError).toHaveBeenCalledWith(failure))
+    expect(gate.isTerminalShutdownAdmitted()).toBe(true)
+    expect(fake.app.quit).not.toHaveBeenCalled()
+    fake.emitWillQuit()
+    await vi.waitFor(() => expect(fake.app.quit).toHaveBeenCalledOnce())
+    expect(drain).toHaveBeenCalledTimes(2)
+  })
+
+  it('publishes the exact join before a stop can synchronously request quit again', async () => {
+    const fake = createFakeApp()
+    const pending = deferred()
+    const drain = vi.fn(() => {
+      fake.emitWillQuit()
+      return pending.promise
+    })
+    installSessionShutdownGate({ app: fake.app, drain, onQuitAllowed: vi.fn() })
+    fake.emitWillQuit()
+    expect(drain).toHaveBeenCalledOnce()
+    pending.resolve()
+    await vi.waitFor(() => expect(fake.app.quit).toHaveBeenCalledOnce())
+  })
+
   it('leaves the manager usable when Keep Editing prevents will-quit', async () => {
     const fake = createFakeApp()
     const onQuitAllowed = vi.fn()
@@ -68,7 +98,7 @@ describe('installSessionShutdownGate', () => {
 
     const gate = installSessionShutdownGate({
       app: fake.app,
-      getManager: () => manager,
+      drain: () => manager.killAll(),
       onQuitAllowed,
     })
 
@@ -87,7 +117,7 @@ describe('installSessionShutdownGate', () => {
     const manager = { killAll: vi.fn(() => teardown.promise) }
     const onQuitAllowed = vi.fn()
 
-    installSessionShutdownGate({ app: fake.app, getManager: () => manager, onQuitAllowed })
+    installSessionShutdownGate({ app: fake.app, drain: () => manager.killAll(), onQuitAllowed })
 
     const first = fake.emitWillQuit()
     const duplicate = fake.emitWillQuit()
@@ -98,6 +128,7 @@ describe('installSessionShutdownGate', () => {
 
     teardown.resolve()
     await teardown.promise
+    await Promise.resolve()
     await Promise.resolve()
 
     expect(fake.app.quit).toHaveBeenCalledOnce()
@@ -112,18 +143,15 @@ describe('installSessionShutdownGate', () => {
     const fake = createFakeApp()
     const teardown = deferred()
     const manager = { killAll: vi.fn(() => teardown.promise) }
-    const onLastWindowClosed = vi.fn()
 
     installSessionShutdownGate({
       app: fake.app,
-      getManager: () => manager,
+      drain: () => manager.killAll(),
       onQuitAllowed: vi.fn(),
       platform: 'linux',
-      onLastWindowClosed,
     })
 
     fake.emitWindowAllClosed()
-    expect(onLastWindowClosed).toHaveBeenCalledOnce()
     expect(fake.app.quit).toHaveBeenCalledOnce()
     expect(manager.killAll).not.toHaveBeenCalled()
 
@@ -134,24 +162,22 @@ describe('installSessionShutdownGate', () => {
     teardown.resolve()
     await teardown.promise
     await Promise.resolve()
+    await Promise.resolve()
     expect(fake.app.quit).toHaveBeenCalledTimes(2)
   })
 
   it('keeps macOS last-window closure outside application teardown', () => {
     const fake = createFakeApp()
     const manager = { killAll: vi.fn(async () => undefined) }
-    const onLastWindowClosed = vi.fn()
 
     installSessionShutdownGate({
       app: fake.app,
-      getManager: () => manager,
+      drain: () => manager.killAll(),
       onQuitAllowed: vi.fn(),
       platform: 'darwin',
-      onLastWindowClosed,
     })
 
     fake.emitWindowAllClosed()
-    expect(onLastWindowClosed).not.toHaveBeenCalled()
     expect(fake.app.quit).not.toHaveBeenCalled()
     expect(manager.killAll).not.toHaveBeenCalled()
   })
@@ -162,7 +188,7 @@ describe('installSessionShutdownGate', () => {
     const manager = { killAll: vi.fn(() => teardown.promise) }
     const gate = installSessionShutdownGate({
       app: fake.app,
-      getManager: () => manager,
+      drain: () => manager.killAll(),
       onQuitAllowed: vi.fn(),
       platform: 'darwin',
     })

@@ -1,3 +1,5 @@
+import { homedir } from 'node:os'
+
 import { ipcMain } from 'electron'
 
 import type { SessionManager } from '@main/sessionManager.js'
@@ -61,7 +63,25 @@ export function registerWorkspaceIpc(
   // Renderer calls this on first launch when there's no saved state
   // and no user-picked cwd yet. AGENT_CODE_CWD overrides — useful in
   // dev for launching the app pointed at a specific test project.
-  ipcMain.handle('workspace:default-cwd', () => {
-    return process.env.AGENT_CODE_CWD || process.cwd()
-  })
+  ipcMain.handle('workspace:default-cwd', () => defaultWorkspaceCwd())
+}
+
+/**
+ * The first project's directory.
+ *
+ * WHY home instead of `/` (#995): an app launched from Finder or the Dock is
+ * started by launchd with cwd `/`, so every fresh install's first project was
+ * the filesystem root. There an agent's first `ls` lists system folders, the
+ * project title reads "/", and anything the agent writes is refused or lands
+ * somewhere nobody meant. `process.cwd()` is kept when it is anything else:
+ * `npm run dev` from a checkout, or a terminal `open -a` that passes a real
+ * directory, still starts where the developer was.
+ */
+export function defaultWorkspaceCwd(
+  env: NodeJS.ProcessEnv = process.env,
+  cwd: string = process.cwd(),
+  home: string = homedir(),
+): string {
+  if (env.AGENT_CODE_CWD) return env.AGENT_CODE_CWD
+  return cwd === '/' ? home : cwd
 }

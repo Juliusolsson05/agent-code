@@ -1,0 +1,47 @@
+{
+  "provenance": "The verdict the REAL checkPrerequisites returned on main 82babd21, before #995, recorded by testing/system/first-run/prerequisites.firstRun.test.ts. Kept verbatim as the baseline: both clean machines were locked out (ready:false) although OpenCode was usable in the packaged one and Grok was found in both.",
+  "environments": {
+    "clean-machine": {
+      "verdict": {
+        "ready": false,
+        "blocking": [
+          "claude",
+          "codex"
+        ]
+      },
+      "providersFound": {
+        "claude": false,
+        "codex": false,
+        "opencode": false,
+        "grok": true
+      }
+    },
+    "clean-machine-packaged": {
+      "verdict": {
+        "ready": false,
+        "blocking": [
+          "claude",
+          "codex"
+        ]
+      },
+      "providersFound": {
+        "claude": false,
+        "codex": false,
+        "opencode": true,
+        "grok": true
+      }
+    },
+    "developer-machine": {
+      "verdict": {
+        "ready": true,
+        "blocking": []
+      },
+      "providersFound": {
+        "claude": true,
+        "codex": true,
+        "opencode": true,
+        "grok": true
+      }
+    }
+  }
+}

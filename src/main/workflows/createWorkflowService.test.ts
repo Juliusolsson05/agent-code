@@ -46,6 +46,7 @@ describe('createWorkflowService', () => {
     vi.unstubAllEnvs()
   })
 
+
   it('lets WorkflowService acquire storage ownership before initialization without eagerly constructing Codex', async () => {
     const service = await createWorkflowService()
 
@@ -79,4 +80,18 @@ describe('createWorkflowService', () => {
       sessionSourceHome: '/tmp/agent-code-home/.codex',
     })
   })
+  it('publishes the exact workflow owner before initialization can block or reject', async () => {
+    let reject!: (error: unknown) => void
+    serviceInitialize.mockImplementationOnce(() => new Promise<never>((_resolve, no) => { reject = no }))
+    const onCreated = vi.fn()
+    const creation = createWorkflowService({ onCreated })
+    expect(onCreated).toHaveBeenCalledOnce()
+    expect(onCreated.mock.calls[0]![0].initialize).toBe(serviceInitialize)
+    reject(new Error('store repair failed'))
+    await expect(creation).rejects.toThrow('store repair failed')
+    // The caller still owns this exact object after a rejected factory promise;
+    // it can invoke WorkflowService's existing initialization-aware stop path.
+    expect(onCreated).toHaveBeenCalledOnce()
+  })
+
 })

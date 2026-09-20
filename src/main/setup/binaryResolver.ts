@@ -77,6 +77,18 @@ export async function isExecutable(path: string): Promise<boolean> {
 // dirs earn their keep.
 const WELL_KNOWN_BIN_DIRS = [
   join(homedir(), '.local', 'bin'),
+  // WHY ~/.opencode/bin (#995 Codex review, reproduced): OpenCode's own
+  // installer — the command the setup panel now tells users to run — writes
+  // the binary here and appends its PATH export to ~/.zshrc. The login-shell
+  // probe runs `$SHELL -lc`, and `zsh -lc` sources .zprofile/.zshenv but NOT
+  // .zshrc, so the probe cannot see it either. Without this entry the loop the
+  // feature exists to close dead-ended: the gate says "Not installed", the
+  // user runs the command it gave them, presses Retry, and it still says
+  // "Not installed".
+  join(homedir(), '.opencode', 'bin'),
+  // The Grok CLI's own layout, for the same reason. Its npm install lands in a
+  // prefix already scanned below, but a native install puts the binary here.
+  join(homedir(), '.grok', 'bin'),
   join(homedir(), '.volta', 'bin'),
   join(homedir(), '.asdf', 'shims'),
   join(homedir(), '.bun', 'bin'),

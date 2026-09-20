@@ -8,7 +8,7 @@ import type {
 import { classifyExecutable } from '@main/setup/binaryResolver.js'
 import { installWithHomebrew } from '@main/setup/homebrewInstaller.js'
 import { checkPrerequisites } from '@main/setup/prerequisites.js'
-import { markOptionalSkipped, setManualToolPath } from '@main/setup/setupState.js'
+import { markNoProvidersAcknowledged, markOptionalSkipped, setManualToolPath } from '@main/setup/setupState.js'
 import { refreshToolchainFromState } from '@main/setup/toolchain.js'
 
 export function registerSetupIpc(): void {
@@ -35,6 +35,14 @@ export function registerSetupIpc(): void {
 
   ipcMain.handle('setup:skip-optional', async (_evt, tool: SetupToolId) => {
     await markOptionalSkipped(tool, true)
+    return await checkPrerequisites()
+  })
+
+  // The first-run answer "continue without a provider" (#995). Durable for the
+  // same reason a skipped helper is: otherwise the panel reopens on every
+  // launch, and in every new window, for a user who has already answered it.
+  ipcMain.handle('setup:acknowledge-no-providers', async () => {
+    await markNoProvidersAcknowledged()
     return await checkPrerequisites()
   })
 

@@ -3,6 +3,7 @@ import type { MenuItemConstructorOptions } from 'electron'
 
 import {
   createAppWindow,
+  isWindowCreationAllowed,
   sendToFocusedWindow,
   zoomFocusedWindow,
 } from '@main/window/windowRegistry.js'
@@ -80,7 +81,7 @@ export function buildAppMenu(): Menu {
           // windows per press.
           label: 'New Window',
           click: () => {
-            createAppWindow()
+            if (isWindowCreationAllowed()) createAppWindow()
           },
         },
         { type: 'separator' },
@@ -113,6 +114,15 @@ export function buildAppMenu(): Menu {
           // (>1 tab) lives in the renderer; the menu always dispatches and the
           // command no-ops when not applicable.
           click: () => dispatchCommand('reorder-tabs'),
+        },
+        { type: 'separator' },
+        {
+          label: 'Setup…',
+          // → renderer command `open-setup` (#995). The spawn error for a
+          // missing CLI tells the user to "open Setup"; a user who has never
+          // opened the command palette looks in the menu bar, so it has to be
+          // here too.
+          click: () => dispatchCommand('open-setup'),
         },
         { type: 'separator' },
         {
