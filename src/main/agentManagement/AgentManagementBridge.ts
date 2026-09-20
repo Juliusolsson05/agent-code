@@ -469,6 +469,7 @@ export class AgentManagementBridge {
     const descriptor: ManagedAgentRendererDescriptor = {
       agent: item.output.agent,
       ...(item.providerSessionId ? { providerSessionId: item.providerSessionId } : {}),
+      ...(item.lastActiveAt ? { lastActiveAt: item.lastActiveAt } : {}),
       ...(item.transcriptActivityAt
         ? { transcriptActivityAt: item.transcriptActivityAt }
         : {}),
@@ -519,9 +520,21 @@ export class AgentManagementBridge {
       if (modifiedAt === null) transcriptPath = null
       else transcriptLastModifiedAt = modifiedAt
     }
+    // ── ONE RENDERER ANSWER, NOT TWO RAW FIELDS (#915) ──
+    // This used to recombine `transcriptActivityAt` and `runtimeActivityAt`
+    // itself, with a rule that differed from the TLDR peek footer's — so the
+    // footer and this inventory could report different "last active" times for
+    // the same agent. They diverged exactly when the newest transcript entry
+    // was a tool or system record: the footer counted it, this did not.
+    //
+    // `descriptor.lastActiveAt` is now the renderer's single answer, shared
+    // with the footer through `sessionActivity`. The other two candidates stay
+    // because they are evidence the RENDERER cannot see — a transcript file's
+    // mtime and the backend's own activity — not a second opinion about the
+    // same facts.
     const activityCandidates = [
-      { value: transcriptLastModifiedAt ?? descriptor.transcriptActivityAt, source: 'transcript' as const },
-      { value: descriptor.runtimeActivityAt, source: 'runtime' as const },
+      { value: transcriptLastModifiedAt, source: 'transcript' as const },
+      { value: descriptor.lastActiveAt, source: 'runtime' as const },
       { value: backendActivityAt, source: 'backend' as const },
     ].filter((item): item is { value: number; source: 'transcript' | 'runtime' | 'backend' } => (
       typeof item.value === 'number' && Number.isFinite(item.value)

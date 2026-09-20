@@ -91,13 +91,29 @@ export type ManagedAgentTranscriptOutput = {
 export type ManagedAgentRendererDescriptor = {
   agent: ManagedAgentRecord
   providerSessionId?: string
+  /**
+   * The ONE answer to "when was this agent last active" (#915), shared with
+   * the TLDR peek footer via `sessionActivity`.
+   *
+   * The two fields below are the evidence that feeds it. They are kept because
+   * an existing caller may read them, but an agent deciding whether a child is
+   * idle should read THIS — combining the raw fields itself is precisely how
+   * the inventory and the footer came to report different times for the same
+   * agent, and "is this safe to close" is not a question that should have two
+   * answers.
+   */
+  lastActiveAt?: number
+  /** Newest transcript time the reader has seen. One input to `lastActiveAt`. */
   transcriptActivityAt?: number
+  /** Newest runtime-observed work. One input to `lastActiveAt`. */
   runtimeActivityAt?: number
 }
 
 export type ManagedAgentRendererOutput = {
   output: ManagedAgentTranscriptOutput
   providerSessionId?: string
+  /** See `ManagedAgentRendererDescriptor.lastActiveAt` (#915). */
+  lastActiveAt?: number
   transcriptActivityAt?: number
   runtimeActivityAt?: number
 }

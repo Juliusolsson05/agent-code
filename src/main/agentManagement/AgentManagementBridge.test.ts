@@ -75,6 +75,45 @@ describe('AgentManagementBridge', () => {
     vi.useRealTimers()
   })
 
+  it('takes the renderer\'s UNIFIED last-active, not its raw runtime field (#915)', async () => {
+    // The bridge used to recombine `transcriptActivityAt` and
+    // `runtimeActivityAt` with a rule that differed from the TLDR peek
+    // footer's, so the two surfaces could report different "last active" times
+    // for the same agent — and this inventory is what an orchestrating agent
+    // reads to decide whether a child is idle.
+    //
+    // `lastActiveAt` is the renderer's single answer, shared with the footer.
+    // The transcript mtime and the backend are still candidates because they
+    // are evidence the RENDERER cannot see, not a second opinion on the same
+    // facts.
+    const manager = managerFixture()
+    const bridge = new AgentManagementBridge(manager as never)
+    const pending = bridge.listAgents({ callerSessionId: 'caller' })
+    const request = sentRendererRequests[0] as { requestId: string }
+
+    bridge.resolve({
+      requestId: request.requestId,
+      ok: true,
+      type: 'list-agents',
+      observedAt: 10_000,
+      project: { tabId: 'tab-1', title: 'Project', index: 0 },
+      // The unified answer is NEWER than both the raw runtime field and the
+      // transcript's mtime (9_000), which is the whole point: a tool record
+      // the old rule refused to count. Recombining the raw fields gives
+      // 9_000/transcript instead.
+      agents: [{ ...rendererDescriptor(), lastActiveAt: 9_500, runtimeActivityAt: 7_000 }],
+    })
+
+    await expect(pending).resolves.toMatchObject({
+      agents: [{
+        sessionId: 'agent-1',
+        lastActivityAt: 9_500,
+        lastActivitySource: 'runtime',
+        idleForMs: 500,
+      }],
+    })
+  })
+
   it('enriches renderer ownership with main-owned backend, path, and activity facts', async () => {
     const manager = managerFixture()
     const bridge = new AgentManagementBridge(manager as never)

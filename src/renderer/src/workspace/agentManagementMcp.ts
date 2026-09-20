@@ -12,6 +12,7 @@ import { entryTextContent } from '@renderer/session-runtime/entries'
 import { projectIdOf, resolveTabSessions } from '@renderer/workspace/queries'
 import { visibleMessageSummary } from '@renderer/workspace/orchestrationMcp'
 import type { SessionId, SessionMeta, Tab, WorkspaceState } from '@renderer/workspace/types'
+import { sessionActivity } from '@renderer/session-runtime/activity'
 
 type RuntimeMap = Record<SessionId, SessionRuntime>
 
@@ -79,6 +80,21 @@ function conditionSummary(runtime: SessionRuntime | undefined): {
   }
 }
 
+/**
+ * The UNIFIED answer to "when was this agent last active" (#915).
+ *
+ * Shared with the TLDR peek footer on purpose — see `sessionActivity`. The two
+ * raw fields below are kept as the EVIDENCE that feeds it, because an existing
+ * caller may read them, but an agent deciding whether a child is idle should
+ * read this one: combining the raw fields itself is exactly how the two
+ * surfaces came to disagree.
+ */
+function lastActiveAt(runtime: SessionRuntime | undefined): number | undefined {
+  return sessionActivity(runtime).timestamp ?? undefined
+}
+
+/** Runtime-observed work only: phase changes, turn starts, submissions. One
+ *  input to `lastActiveAt`, not an answer on its own. */
 function runtimeActivityAt(runtime: SessionRuntime | undefined): number | undefined {
   if (!runtime) return undefined
   const values = [
@@ -171,6 +187,7 @@ function descriptorForSession(params: {
   const runtime = params.runtimes[params.sessionId]
   const runtimeAt = runtimeActivityAt(runtime)
   const transcriptAt = runtime?.lastJsonlEntryAt ?? latestVisibleTimestamp(runtime)
+  const activeAt = lastActiveAt(runtime)
   const summary = statusSummary(runtime)
   return {
     agent: {
@@ -205,6 +222,7 @@ function descriptorForSession(params: {
       ...(meta.orchestrationRole ? { orchestrationRole: meta.orchestrationRole } : {}),
     },
     ...(meta.providerSessionId ? { providerSessionId: meta.providerSessionId } : {}),
+    ...(activeAt ? { lastActiveAt: activeAt } : {}),
     ...(transcriptAt ? { transcriptActivityAt: transcriptAt } : {}),
     ...(runtimeAt ? { runtimeActivityAt: runtimeAt } : {}),
   }
@@ -280,6 +298,7 @@ export function readManagedAgentOutput(params: {
   return {
     output,
     ...(descriptor.providerSessionId ? { providerSessionId: descriptor.providerSessionId } : {}),
+    ...(descriptor.lastActiveAt ? { lastActiveAt: descriptor.lastActiveAt } : {}),
     ...(descriptor.transcriptActivityAt
       ? { transcriptActivityAt: descriptor.transcriptActivityAt }
       : {}),
@@ -349,6 +368,7 @@ export function readManagedAgentOutputs(params: {
         ...(descriptor.providerSessionId
           ? { providerSessionId: descriptor.providerSessionId }
           : {}),
+        ...(descriptor.lastActiveAt ? { lastActiveAt: descriptor.lastActiveAt } : {}),
         ...(descriptor.transcriptActivityAt
           ? { transcriptActivityAt: descriptor.transcriptActivityAt }
           : {}),
