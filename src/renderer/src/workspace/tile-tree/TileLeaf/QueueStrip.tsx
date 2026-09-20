@@ -13,6 +13,7 @@ import {
 } from '@renderer/components/ui/dialog'
 import { PagedTextViewer } from '@renderer/lib/text/PagedTextViewer'
 import { useEffect, useId, useMemo, useState } from 'react'
+import { withVisibleControls } from '@shared/text/visibleControls'
 
 // The browsing surface must stay cheap even when somebody pastes a whole
 // design document as their next prompt. CSS clipping alone still leaves the
@@ -23,7 +24,11 @@ const PREVIEW_SCAN_CHARACTERS = 320
 const PREVIEW_CHARACTERS = 180
 
 function queuedPromptPreview(content: string): string {
-  const scanned = content.slice(0, PREVIEW_SCAN_CHARACTERS)
+  // Escaped BEFORE truncation (#1029): a queued prompt is text the user is
+  // about to send on their own authority, and #1049's review found both this
+  // preview and the dialog below showing reordering controls raw. Escaping
+  // first also means the marker itself cannot be cut in half by the slice.
+  const scanned = withVisibleControls(content.slice(0, PREVIEW_SCAN_CHARACTERS))
   // Preserve line boundaries because they are the only cheap hint that a
   // queued item contains pasted instructions or code. Horizontal whitespace
   // is normalized so an indented block cannot make the compact lane look
@@ -96,7 +101,7 @@ function QueuedPromptDialog({
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
           {message ? (
             <PagedTextViewer
-              source={message.content}
+              source={withVisibleControls(message.content)}
               className="text-ink [overflow-wrap:anywhere]"
             />
           ) : null}

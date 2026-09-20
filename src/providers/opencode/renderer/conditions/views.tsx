@@ -220,11 +220,11 @@ export const opencodePermissionView = defineView<
                 </>
               ) : (
                 <>
-                  Allow always covers {permission ? <>{permission}{' '}</> : null}
+                  Allow always covers {permission ? <>{withVisibleControls(permission)}{' '}</> : null}
                   {always.map((pattern, index) => (
                     <span key={pattern}>
                       {index > 0 ? ', ' : ''}
-                      <code className="text-accent">{pattern}</code>
+                      <code className="text-accent">{withVisibleControls(pattern)}</code>
                     </span>
                   ))}{' '}
                   for this agent and its subagents until this agent restarts.

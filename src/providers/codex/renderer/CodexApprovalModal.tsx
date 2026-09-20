@@ -139,7 +139,7 @@ export function CodexApprovalModal({ approval, onSend, interactionActive }: Prop
       {/* Reason — parsed from the screen's "Reason: <text>" line */}
       {approval.reason && (
         <div className="text-ink-dim italic mb-2">
-          Reason: {approval.reason}
+          Reason: {withVisibleControls(approval.reason)}
         </div>
       )}
 
@@ -165,7 +165,7 @@ export function CodexApprovalModal({ approval, onSend, interactionActive }: Prop
             <span className={`select-none ${i === localSelected ? 'text-accent' : 'text-transparent'}`}>
               ›{' '}
             </span>
-            {i + 1}. {opt}
+            {i + 1}. {withVisibleControls(opt)}
             <span className="text-muted ml-1">({DEFAULT_HINTS[i] ?? ''})</span>
           </div>
         ))}

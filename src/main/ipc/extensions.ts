@@ -17,6 +17,7 @@ import type {
   ExtensionInstallResult,
   ExtensionListEntry,
 } from '@shared/types/extensions.js'
+import { withVisibleControls } from '@shared/text/visibleControls.js'
 
 // The capability-consent dialog, shared by both install paths (GitHub + local
 // folder). A blocking, OS-native dialog on purpose: granting an extension
@@ -73,9 +74,10 @@ function consentPromptFor(evt: IpcMainInvokeEvent, source: string): ConsentPromp
       // one thing the dialog did not show. `manifest.name` is attacker-chosen and
       // only length-bounded, so it is presented as a claim about an identity
       // (`id`), never as the identity itself.
-      message: `Install ${manifest.id} from ${source}?`,
+      // Every interpolated field here is attacker-chosen (#1049 review).
+      message: `Install ${withVisibleControls(manifest.id)} from ${withVisibleControls(source)}?`,
       detail:
-        `"${manifest.name}" wants these capabilities:\n\n${detail}\n\n` +
+        `"${withVisibleControls(manifest.name)}" wants these capabilities:\n\n${withVisibleControls(detail)}\n\n` +
         `${canWrite ? 'It can change project files.' : 'It cannot change project files.'} ` +
         `It has no network access. ` +
         `Install it only if you trust ${source}.`,

@@ -47,7 +47,7 @@ export function PermissionPromptModal({ state, onSend }: Props) {
           <div className="text-accent text-[18px] leading-none select-none pt-0.5">!</div>
           <div>
             <DialogTitle className="text-[14px] font-semibold leading-[1.3]">
-              {title}
+              {withVisibleControls(title)}
             </DialogTitle>
             <DialogDescription className="sr-only">
               Review the requested tool and choose whether Claude may continue.
@@ -73,7 +73,7 @@ export function PermissionPromptModal({ state, onSend }: Props) {
                   key={`${option.key}:${option.label}`}
                   className={index === state.selectedIndex ? 'text-ink' : undefined}
                 >
-                  {option.key}. {option.label}
+                  {option.key}. {withVisibleControls(option.label)}
                 </div>
               ))}
             </div>

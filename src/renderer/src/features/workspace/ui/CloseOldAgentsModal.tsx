@@ -29,6 +29,7 @@ import { resolveTabSessions } from '@renderer/workspace/queries'
 import type { SessionId, Tab } from '@renderer/workspace/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { Entry } from '@shared/types/transcript'
+import { withVisibleControls } from '@shared/text/visibleControls'
 
 type Props = {
   open: boolean
@@ -641,11 +642,13 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
                       </span>
                     </div>
                     <div className="min-w-0 flex-1">
+                      {/* Same rule as the close confirmation: these identify
+                          what a bulk close is about to terminate (#1049). */}
                       <div className="text-[12px] text-ink truncate">
-                        {row.title}
+                        {withVisibleControls(row.title)}
                       </div>
                       <div className="mt-0.5 text-[10px] text-muted truncate">
-                        {tabIndexLabel(row.tabIndex)} · {row.tabTitle} · {row.cwd}
+                        {tabIndexLabel(row.tabIndex)} · {withVisibleControls(row.tabTitle)} · {withVisibleControls(row.cwd)}
                       </div>
                     </div>
                     <div className="flex-shrink-0 w-[150px] text-right">

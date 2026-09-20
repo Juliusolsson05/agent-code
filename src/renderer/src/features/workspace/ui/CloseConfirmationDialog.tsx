@@ -15,6 +15,7 @@ import {
   subscribeToCloseConfirmation,
 } from '@renderer/workspace/closeConfirmationBroker'
 import type { PendingCloseConfirmation } from '@renderer/workspace/closeConfirmationBroker'
+import { withVisibleControls } from '@shared/text/visibleControls'
 
 /**
  * The confirmation the close paths await before ending anything.
@@ -78,7 +79,9 @@ export function CloseConfirmationDialog() {
                 key={target.sessionId}
                 className="flex items-center justify-between border-b border-border/40 px-2 py-1 text-xs last:border-b-0"
               >
-                <span className="min-w-0 truncate text-ink">{target.title}</span>
+                {/* The title is model-controlled (#1049 review): a reordered
+                    one misrepresents WHICH session is about to be killed. */}
+                <span className="min-w-0 truncate text-ink">{withVisibleControls(target.title)}</span>
                 {target.live ? (
                   <span className="ml-2 flex-shrink-0 text-[10px] uppercase tracking-wider text-danger">
                     working

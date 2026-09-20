@@ -102,6 +102,21 @@ describe('opencode permission modal on a recorded 1.18.30 ask', () => {
     expect(rendered.textContent).not.toContain('\u202E')
   })
 
+  it('escapes the persistent grant\'s scope too, since that is what "Allow always" authorises (#1049 review)', () => {
+    // The command is only half of the decision: "Allow always covers <pattern>"
+    // describes what the grant will keep allowing, for this agent and its
+    // subagents. A reordered pattern misdescribes that scope.
+    const rec = recording()
+    for (const { event } of rec.sse) {
+      if (event.type === 'permission.asked') {
+        event.properties = { ...event.properties, metadata: { command: 'ls -1' }, pattern: ['ls \u202E rm -rf *'] }
+      }
+    }
+    mount(permissionStateFrom(rec))
+    const always = screen.getByText(/Allow always covers/)
+    expect(always.textContent).not.toContain('\u202E')
+  })
+
   it('shows the command behind a default-permission external_directory ask, not just the directory', () => {
     // #1026 review: OpenCode's DEFAULT rules allow bash and ask only for
     // external_directory, so for most users this is THE shell-command
