@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { opencodeQuestionView } from './views'
 import type { ConditionAction } from '@shared/conditions-core/contract'
+import { validateQuestionAnswers } from '@providers/opencode/runtime/questionAnswers'
 import type { OpencodeQuestion, OpencodeQuestionState } from '@shared/types/providerConditions'
 
 // ---------------------------------------------------------------------------
@@ -174,5 +175,48 @@ describe('a multi-question prompt is answered as one positional set', () => {
     renderView({ visible: true, questionID: 'q1', questions: two }, [rejectAction()])
     expect(screen.getByText('Question 1 of 2')).toBeInTheDocument()
     expect(screen.getByText('Question 2 of 2')).toBeInTheDocument()
+  })
+})
+
+describe('the view and the runtime validator agree', () => {
+  // The two halves are written independently, so the only way to know the
+  // modal is not offering a button whose answer is then silently refused is to
+  // run the REAL view's payload through the REAL validator.
+  const run = (questions: OpencodeQuestion[], clicks: string[]) => {
+    const { dispatch } = renderView({ visible: true, questionID: 'q1', questions }, [rejectAction()])
+    for (const label of clicks) fireEvent.click(screen.getByRole('button', { name: label }))
+    fireEvent.click(screen.getByRole('button', { name: 'Answer' }))
+    const submitted = (dispatch.mock.calls[0]?.[0] as { payload?: { answers?: unknown } } | undefined)?.payload?.answers
+    return validateQuestionAnswers(questions, submitted)
+  }
+
+  it('accepts what the view posts for an ordinary multi-question set', () => {
+    const questions: OpencodeQuestion[] = [
+      { question: 'Colour?', options: [{ label: 'Red' }, { label: 'Blue' }] },
+      { question: 'Size?', options: [{ label: 'Small' }, { label: 'Large' }] },
+    ]
+    expect(run(questions, ['Blue', 'Small'])).toEqual([['Blue'], ['Small']])
+  })
+
+  it('accepts it when one question has no options at all', () => {
+    // The view used to post `['']` for such a question — a label OpenCode
+    // never offered — so the validator refused the whole set and Submit
+    // silently did nothing, leaving the prompt unanswerable.
+    const questions: OpencodeQuestion[] = [
+      { question: 'Colour?', options: [{ label: 'Red' }] },
+      { question: 'Anything?', options: [] },
+    ]
+    expect(run(questions, ['Red'])).toEqual([['Red'], []])
+  })
+
+  it('keeps answers attached to their own question when only later ones are answerable', () => {
+    // Positional: a view that filtered to the answerable questions and then
+    // indexed the filtered list would answer question 0 with question 1's
+    // choice.
+    const questions: OpencodeQuestion[] = [
+      { question: 'Skip me', options: [] },
+      { question: 'Colour?', options: [{ label: 'Red' }, { label: 'Blue' }] },
+    ]
+    expect(run(questions, ['Blue'])).toEqual([[], ['Blue']])
   })
 })

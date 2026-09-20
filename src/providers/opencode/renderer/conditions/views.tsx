@@ -344,9 +344,12 @@ export const opencodeQuestionView = defineView<
     // One question is answered by its own action — the runtime built one per
     // option, so a single click submits and the view needs no submit button.
     const single = questions.length === 1
-    const answerable = questions.filter(question => question.options.length > 0)
-    const complete = answerable.length > 0
-      && answerable.every((_, index) => picked[questions.indexOf(answerable[index]!)] !== undefined)
+    // Indexed by POSITION, never by filtering-then-indexing: `answers` is
+    // positional, so a derived list that loses the original index is how an
+    // answer ends up attached to the wrong question.
+    const needsAnswer = (question: OpencodeQuestion) => question.options.length > 0
+    const complete = questions.some(needsAnswer)
+      && questions.every((question, index) => !needsAnswer(question) || picked[index] !== undefined)
 
     const submit = () => {
       if (!questionID) return
@@ -357,7 +360,17 @@ export const opencodeQuestionView = defineView<
         name: 'opencode.question.reply',
         // Positional, in the payload's own question order — the same order
         // the runtime validates against.
-        payload: { questionID, answers: questions.map((_, index) => [picked[index] ?? '']) },
+        //
+        // A question with NO options contributes an EMPTY array, not `['']`.
+        // The provider offered nothing to choose, so an empty selection is
+        // the only truthful answer and the one the validator accepts; an
+        // empty STRING is a label OpenCode never offered, so the whole set
+        // was refused and Submit silently did nothing.
+        payload: {
+          questionID,
+          answers: questions.map((question, index) =>
+            needsAnswer(question) ? [picked[index]!] : []),
+        },
       })
     }
 
