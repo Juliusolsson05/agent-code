@@ -105,12 +105,15 @@ export function ensureSetupCheck(): Promise<SetupCheckResult | null> {
 export async function awaitFirstRunDecision(): Promise<SetupCheckResult | null> {
   const first = await ensureSetupCheck()
   if (!first) return null
-  if (first.usableProviders.length > 0 || useSetupStore.getState().dismissed) return first
+  // The persisted answer counts as an answer (#995 Codex review). Without it,
+  // a terminal-only install that already acknowledged this opened a SECOND
+  // window — whose workspace slice is absent, so bootstrap runs again — and
+  // parked forever on a panel that correctly refused to show itself.
+  if (decided(first)) return first
   useSetupStore.setState({ firstRunWaiting: true })
   return await new Promise(resolve => {
     const unsubscribe = useSetupStore.subscribe(state => {
-      const decided = state.dismissed || (state.check?.usableProviders.length ?? 0) > 0
-      if (!decided) return
+      if (!decided(state.check)) return
       settleFirstRunWaiter(state.check)
     })
     // Held at module scope so resetSetupStoreForTests can settle a parked
@@ -127,6 +130,15 @@ export async function awaitFirstRunDecision(): Promise<SetupCheckResult | null> 
 }
 
 let settleFirstRunWaiter: (check: SetupCheckResult | null | undefined) => void = () => undefined
+
+/** The three ways the first-run question is already answered: a provider
+ *  exists, this run dismissed the panel, or the machine acknowledged running
+ *  without one on an earlier launch. */
+function decided(check: SetupCheckResult | null | undefined): boolean {
+  return useSetupStore.getState().dismissed
+    || (check?.usableProviders.length ?? 0) > 0
+    || check?.noProvidersAcknowledged === true
+}
 
 /**
  * Providers the last check did not find, for the pickers' "not installed"

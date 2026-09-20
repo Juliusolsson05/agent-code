@@ -213,6 +213,18 @@ describe('the setup panel never strands the first run (#1047 review)', () => {
     expect(api.setupAcknowledgeNoProviders).toHaveBeenCalledOnce()
   })
 
+  it('a second window on an acknowledged terminal-only machine opens its project without waiting', async () => {
+    // A new window's workspace slice is absent, so its bootstrap takes the
+    // fresh path. The panel correctly stays hidden — the machine already
+    // answered — so nothing would ever have released a bootstrap that waited
+    // for that answer again (#995 Codex review).
+    const acknowledged = { ...withoutMachineWideInstalls(loadFirstRunCheck('clean-machine')), noProvidersAcknowledged: true }
+    const { spawnSession } = mountMachine([acknowledged])
+    await waitFor(() => expect(projects()).toBe(1))
+    expect(spawnedKinds(spawnSession)).toEqual(['terminal'])
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
   it('does not record an answer for a panel the user merely opened', async () => {
     // Close on a panel opened from the menu used to durably skip mitmproxy,
     // while Escape in the same panel recorded nothing.
