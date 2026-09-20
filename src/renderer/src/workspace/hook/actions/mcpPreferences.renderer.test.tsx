@@ -34,7 +34,7 @@ function setup(meta: Partial<SessionMeta> = { builtInMcpDomains: [], builtInMcpO
   }
   let sequence = 0
   const spawnSession = vi.fn(async (options: SessionSpawnOptions) => ({ sessionId: `new-${++sequence}`, providerSessionId: options.resumeSessionId }))
-  window.api = { ...originalApi, spawnSession, killOwnedSession: vi.fn(async () => true), ghostRead: vi.fn(async () => []) }
+  window.api = { ...originalApi, spawnSession, killOwnedSession: vi.fn(async () => true), ghostRead: vi.fn(async () => []), controlGoalLoop: vi.fn(async () => null) }
   const hook = renderHook(() => {
     const sessions = useSessionActions(state, writer.setState, setRuntimes, refs)
     return { sessions, provider: useProviderActions(refs, setRuntimes, vi.fn(), sessions) }
@@ -88,6 +88,23 @@ describe('global MCP preferences at actual provider replacement', () => {
     await perform(() => h.command('use-global-mcp-settings'))
     expect(h.spawnSession.mock.calls.at(-1)![0].builtInMcpDomains).toEqual([domain, 'orchestration'])
     expect(h.writer.getState().sessions[h.focused()]!.builtInMcpOverrides).toEqual({})
+  })
+
+  it('ends a running goal loop when its tools are turned off (#1045 review)', async () => {
+    // The loop is harness-owned and survives the reload, but the reloaded
+    // agent has no goal_loop_complete: it could never report success, and
+    // every continuation would run to the cap. The stop names the session the
+    // loop is filed under, before the replacement exists.
+    const controlGoalLoop = vi.fn(async () => null)
+    const h = setup({ builtInMcpDomains: ['goal_loop'], builtInMcpOverrides: {} })
+    window.api = { ...window.api, controlGoalLoop }
+    h.refs.defaultBuiltInMcpDomainsRef.current = ['goal_loop']
+    await perform(() => h.command('enable-goal-loop-mcp'))
+    expect(controlGoalLoop).toHaveBeenCalledWith({ sessionId: 'original', action: 'stop' })
+    // Turning them back ON must not touch the loop.
+    controlGoalLoop.mockClear()
+    await perform(() => h.command('enable-goal-loop-mcp'))
+    expect(controlGoalLoop).not.toHaveBeenCalled()
   })
 
   it('migrates a legacy agent and resolves bulk reload through the same preference policy', async () => {

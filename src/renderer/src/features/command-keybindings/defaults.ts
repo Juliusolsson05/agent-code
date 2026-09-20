@@ -327,6 +327,12 @@ export function buildDefaultKeybindings(): CommandBindingDefault[] {
     // Sticky Note" service, which check:keybindings cannot see. ⌘⇧G sits
     // beside the Goal peek (⌘G), and the unified stage (#992) freed it when
     // Global Dispatch was retired.
+    //
+    // ⌘⇧G is ALSO Monaco's Find Previous, exactly as ⌘G beside it is Monaco's
+    // Find Next (#1045 review reproduced the collision). Both are approved
+    // overlaps: the router yields the chord whenever editor chrome owns the
+    // target, so only one owner is ever live. reservations.ts records
+    // Monaco's claim so the checker stops offering the chord as free.
     { commandId: 'goal-loop-preview', bindings: ['Cmd+Shift+G'], context: 'global' },
     { commandId: 'toggle-spotlight', bindings: ['Alt+S'], context: 'global' },
     // ⌥F, leaving ⌥⇧F open for Auto-follow ALL Visible Agents — the same

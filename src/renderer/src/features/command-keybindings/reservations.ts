@@ -264,6 +264,15 @@ export const RESERVED_INTERACTIONS: readonly ReservedInteraction[] = [
   },
   { bindings: ['Cmd+L'], context: 'editor', owner: 'Editor Select Line' },
   { bindings: ['Cmd+G'], context: 'editor', owner: 'Editor Find Next' },
+  // Monaco's Find Previous, verified in
+  // node_modules/monaco-editor/esm/vs/editor/contrib/find/browser/findController.js
+  // (PreviousMatchFindAction, mac: CtrlCmd|Shift|KeyG) rather than from memory.
+  // Missing until #1007 moved goal-loop-preview onto this chord: the app-side
+  // checker passed because nothing in this table claimed it, and review found
+  // the router was latching the goal-loop overlay on top of Monaco's own
+  // Find Previous. This is the second time the "incomplete list" failure in
+  // the header has happened, and both times a reservation was the fix.
+  { bindings: ['Cmd+Shift+G'], context: 'editor', owner: 'Editor Find Previous' },
 ]
 
 export type BindingOwnerRef = {
@@ -294,6 +303,7 @@ const APPROVED_OVERLAPS: ReadonlyArray<{
 }> = [
   { binding: 'Cmd+L', owners: ['tldr-preview', 'Editor Select Line'], reason: 'The TLDR hold handler explicitly yields while editor chrome owns the input target; Monaco keeps its native Select Line command and TLDR operates only in the agent workspace.' },
   { binding: 'Cmd+G', owners: ['goal-preview', 'Editor Find Next'], reason: 'Goal shares the TLDR hold handler, which yields while editor chrome owns the input target; Monaco keeps its native Find Next and Goal operates only in the agent workspace.' },
+  { binding: 'Cmd+Shift+G', owners: ['goal-loop-preview', 'Editor Find Previous'], reason: 'The router yields the chord while editor chrome owns the input target, the same rule Cmd+L and Cmd+G already follow; Monaco keeps its native Find Previous and the goal loop overlay opens only in the agent workspace.' },
   {
     binding: 'Cmd+W',
     owners: ['close-pane', 'Editor-native close file and indentation', 'Native application menu'],

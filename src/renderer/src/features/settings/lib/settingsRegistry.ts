@@ -747,7 +747,7 @@ export function getSettingsRegistry(
       category: 'agents',
       title: 'Goal Loop MCP',
       description:
-        'Let agents run harness-owned goal loops that keep re-prompting until the goal is complete, with a control strip and Cmd+Shift+G overlay. Off by default. Applies to new agents and existing agents on their next reload. Per-agent overrides take precedence; Use Global MCP Settings clears them.',
+        'Let agents run harness-owned goal loops that keep re-prompting until the goal is complete, with a control strip and an overlay on the Goal Loop chord (Cmd+Shift+G by default; it yields to the editor, which owns that chord as Find Previous). Off by default. Applies to new agents and existing agents on their next reload. Per-agent overrides take precedence; Use Global MCP Settings clears them.',
       keywords: ['mcp', 'goal', 'loop', 'persistence', 'autonomous', 'default', 'reload', 'existing agents'],
       metadata: { scope: 'app', apply: 'new-session', storage: 'settings' },
       control: {

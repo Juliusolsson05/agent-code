@@ -784,7 +784,7 @@ export const sessionCommands: CommandDef[] = [
     category: 'session',
     surface: 'session',
     title: 'Goal Loop MCP',
-    description: '**What it does:** Reloads the focused agent with goal-loop tools on or off.\n\n**Use when:** You want this agent to be able to run a harness-owned goal loop that keeps re-prompting it until the goal is done.\n\n**Notes:** The agent starts a loop itself when you ask it to (goal_loop_start). Every continuation is a model call, and the loop pauses at its budget. The Goal Loop command shows and controls a running loop.',
+    description: '**What it does:** Reloads the focused agent with goal-loop tools on or off.\n\n**Use when:** You want this agent to be able to run a harness-owned goal loop that keeps re-prompting it until the goal is done.\n\n**Notes:** The agent starts a loop itself when you ask it to (goal_loop_start). Every continuation is a model call, and the loop pauses at its budget. Turning the tools off ends a running loop, because the agent would no longer be able to report that it is done. The Goal Loop command shows and controls a running loop.',
     keywords: ['goal', 'loop', 'autonomous', 'persistence', 'keep going', 'mcp'],
     when: ({ workspace }) => {
       return targetSupportsBuiltInMcpDomain(workspace, 'goal_loop')
@@ -805,6 +805,20 @@ export const sessionCommands: CommandDef[] = [
 
       ui.closePalette()
       const enable = !meta.builtInMcpDomains?.includes('goal_loop')
+      // Turning the tools off ENDS a running loop (#1045 review). The loop is
+      // harness-owned, so it survives the reload on its own, but the reloaded
+      // agent no longer has goal_loop_complete: it cannot say it is done, and
+      // every continuation it is sent runs to the cap. Ending it here is the
+      // honest reading of "this agent does not do goal loops any more", and it
+      // happens BEFORE the reload so it applies to the session id the loop is
+      // filed under rather than the replacement's.
+      if (!enable) {
+        // try/catch, not .catch(): a preload without the channel throws
+        // synchronously. Either way the reload is what the user asked for and
+        // must still happen; a loop left running is visible and stoppable from
+        // the Goal Loop command.
+        try { await window.api.controlGoalLoop({ sessionId, action: 'stop' }) } catch { /* reload anyway */ }
+      }
       await reloadSessionWithBuiltInMcpChoice(workspace, sessionId, 'goal_loop', enable, {
         reloaded: enable ? 'Reloaded with Goal Loop MCP' : 'Reloaded without Goal Loop MCP',
         failed: 'Goal Loop MCP reload failed',
