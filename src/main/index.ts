@@ -981,6 +981,12 @@ async function startApp(): Promise<void> {
         appRunJournal?.recordError('tmux.detached_sweep.error', error)
       },
     })
+    // Ownership published on the tick it becomes true. Every authority the
+    // sweep reads is a snapshot taken before an await; this is the one signal
+    // that cannot be stale, and it is what keeps an Undo Close restore from
+    // being killed by a scan that started before it.
+    const sweepAttachments = detachedTmuxSweep
+    manager.onTmuxAttached(name => sweepAttachments.noteAttached(name))
   }
   // Project ownership lives in renderer state, while backend/transcript facts
   // live in SessionManager. Construct this bridge only after both the MCP host

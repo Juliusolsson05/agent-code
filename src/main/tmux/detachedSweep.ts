@@ -63,7 +63,7 @@ export type DetachedSweepReport = {
   /** Alive, unreferenced, still inside the retention window. */
   pending: string[]
   /** Why cleanup was withheld, when it was. Absent on a normal run. */
-  withheld?: 'tmux-unavailable' | 'inventory-incomplete'
+  withheld?: 'tmux-unavailable' | 'inventory-incomplete' | 'stopped'
 }
 
 /**
@@ -92,6 +92,29 @@ export class DetachedTerminalSweep {
   /** name → when this sweep FIRST saw it alive with no reference anywhere. */
   private firstUnreferencedAt = new Map<string, number>()
 
+  /**
+   * Names main bound to a live terminal at ANY point since the current run
+   * began reading its evidence.
+   *
+   * WHY a second structure instead of trusting the authorities (review
+   * finding 2): every authority this reads is a snapshot taken before an
+   * `await`. `listManagedSessions()` spawns a tmux process, the workspace read
+   * hits the disk, and an Undo Close restore can land in either gap — after
+   * which the snapshot says "nobody owns this" about a terminal the user is
+   * looking at. `noteAttached` is called SYNCHRONOUSLY by SessionManager the
+   * instant a tmux session is bound to a registry entry, so a name that
+   * appears here after a scan started is disqualified from that scan's kills
+   * with no race left: the check and the kill have no await between them.
+   */
+  private attachedDuringScan = new Set<string>()
+
+  /**
+   * Set by `stop()`. A cleared interval does not stop a run already awaiting
+   * tmux (review finding 3), and quit is exactly when a kill must not happen:
+   * those shells are what the NEXT launch recovers terminals from.
+   */
+  private stopped = false
+
   private readonly now: () => number
   private readonly retentionMs: number
 
@@ -100,40 +123,74 @@ export class DetachedTerminalSweep {
     this.retentionMs = options.retentionMs ?? UNDO_CLOSE_RETENTION_MS + DETACHED_REAP_GRACE_MS
   }
 
+  /**
+   * Main bound `tmuxName` to a live terminal.
+   *
+   * Clearing the timer here rather than at the next sweep is what makes
+   * close → undo → close survive (review finding 1): with the timer only ever
+   * reset by an observing sweep, an undo at minute 55 and a second close at
+   * minute 56 left the ORIGINAL deadline standing, so the shell died at minute
+   * 65 while its new undo entry stayed valid until minute 116 — and the undo
+   * silently produced a fresh shell with none of the original processes or
+   * scrollback.
+   */
+  noteAttached(tmuxName: string): void {
+    this.firstUnreferencedAt.delete(tmuxName)
+    this.attachedDuringScan.add(tmuxName)
+  }
+
+  /** Permanently disarm. Any run already in flight stops before its next kill. */
+  stop(): void {
+    this.stopped = true
+  }
+
+  /**
+   * Both authorities as one set, or null when the workspace file cannot be
+   * vouched for. Re-read immediately before the kill phase, because
+   * everything computed from the first read happened across awaits.
+   */
+  private async readReferences(): Promise<Set<string> | null> {
+    let text: string
+    try {
+      text = await this.options.readWorkspace()
+    } catch {
+      return null
+    }
+    const inventory = terminalInventoryFromWorkspaceText(text)
+    // Same rule as startup: an inventory we cannot vouch for authorizes
+    // nothing (#898). Deliberately NOT clearing the timers — the next
+    // readable sweep should not have to start the clock over because one
+    // autosave was caught mid-write.
+    if (inventory.kind !== 'complete') return null
+    const referenced = new Set<string>(inventory.references.map(reference => reference.tmuxName))
+    for (const name of this.options.liveTmuxNames()) referenced.add(name)
+    return referenced
+  }
+
   async run(): Promise<DetachedSweepReport> {
-    const { registry, readWorkspace, liveTmuxNames } = this.options
+    const { registry } = this.options
+    if (this.stopped) return { reaped: [], pending: [], withheld: 'stopped' }
+    // The window opens here: anything main attaches from now until this run's
+    // last kill is off limits, however stale the snapshots below turn out.
+    this.attachedDuringScan.clear()
+
     if (!registry.isAvailable()) {
       // Not evidence about any session: forget nothing, kill nothing.
       return { reaped: [], pending: [], withheld: 'tmux-unavailable' }
     }
 
-    let text: string
-    try {
-      text = await readWorkspace()
-    } catch {
-      return { reaped: [], pending: [], withheld: 'inventory-incomplete' }
-    }
-    const inventory = terminalInventoryFromWorkspaceText(text)
-    if (inventory.kind !== 'complete') {
-      // Same rule as startup: an inventory we cannot vouch for authorizes
-      // nothing. Deliberately NOT clearing the timers — the next readable
-      // sweep should not have to start the clock over because one autosave
-      // was caught mid-write.
-      return { reaped: [], pending: [], withheld: 'inventory-incomplete' }
-    }
-
-    const referenced = new Set<string>(inventory.references.map(reference => reference.tmuxName))
-    for (const name of liveTmuxNames()) referenced.add(name)
+    const referenced = await this.readReferences()
+    if (!referenced) return { reaped: [], pending: [], withheld: 'inventory-incomplete' }
 
     const alive = await registry.listManagedSessions()
     const aliveNames = new Set(alive.map(session => session.name))
     const now = this.now()
-    const reaped: string[] = []
     const pending: string[] = []
+    const due: string[] = []
 
     for (const name of aliveNames) {
       if (referenced.has(name)) {
-        // Back in use — an Undo Close restore, or autosave catching up with a
+        // In use — an Undo Close restore, or autosave catching up with a
         // terminal that was live all along. Its clock restarts if it is ever
         // unreferenced again.
         this.firstUnreferencedAt.delete(name)
@@ -149,11 +206,7 @@ export class DetachedTerminalSweep {
         pending.push(name)
         continue
       }
-      // kill first, forget second: a kill that throws keeps its timer, so the
-      // next sweep retries instead of restarting the whole window.
-      await registry.killSession(name)
-      this.firstUnreferencedAt.delete(name)
-      reaped.push(name)
+      due.push(name)
     }
 
     // A name that is no longer alive was killed by something else (a user
@@ -161,6 +214,34 @@ export class DetachedTerminalSweep {
     // would make a RECYCLED name look overdue the moment it appeared.
     for (const name of [...this.firstUnreferencedAt.keys()]) {
       if (!aliveNames.has(name)) this.firstUnreferencedAt.delete(name)
+    }
+
+    if (due.length === 0) return { reaped: [], pending }
+
+    // A kill is imminent, so pay for fresh evidence. `referenced` above was
+    // read before the tmux listing, which spawns a process; on a loaded
+    // machine that gap is long enough for a user to press ⌘⇧T.
+    const confirmed = await this.readReferences()
+    if (!confirmed) return { reaped: [], pending: [...pending, ...due], withheld: 'inventory-incomplete' }
+
+    const reaped: string[] = []
+    for (const name of due) {
+      // Re-checked per name: each kill awaits, and the next name's evidence
+      // must be as fresh as the first one's was.
+      if (this.stopped) {
+        pending.push(name)
+        continue
+      }
+      if (confirmed.has(name) || this.attachedDuringScan.has(name)) {
+        this.firstUnreferencedAt.delete(name)
+        pending.push(name)
+        continue
+      }
+      // kill first, forget second: a kill that throws keeps its timer, so the
+      // next sweep retries instead of restarting the whole window.
+      await registry.killSession(name)
+      this.firstUnreferencedAt.delete(name)
+      reaped.push(name)
     }
 
     return { reaped, pending }
@@ -174,7 +255,12 @@ export class DetachedTerminalSweep {
  */
 export const DETACHED_SWEEP_INTERVAL_MS = 5 * 60 * 1000
 
-export type DetachedSweepSchedule = { stop: () => void }
+export type DetachedSweepSchedule = {
+  /** Disarm permanently, including any run already in flight. */
+  stop: () => void
+  /** Main bound this tmux name to a live terminal; see DetachedTerminalSweep.noteAttached. */
+  noteAttached: (tmuxName: string) => void
+}
 
 /**
  * Run the sweep on a timer until stopped.
@@ -211,5 +297,11 @@ export function startDetachedTerminalSweep(
   }, options.intervalMs ?? DETACHED_SWEEP_INTERVAL_MS)
   // Reaping idle shells is never a reason to hold the process open.
   timer.unref?.()
-  return { stop: () => clearInterval(timer) }
+  return {
+    // `sweep.stop()` is the half that matters: clearing the interval leaves a
+    // run already awaiting tmux free to kill afterwards, and quit is precisely
+    // when it must not (review finding 3).
+    stop: () => { sweep.stop(); clearInterval(timer) },
+    noteAttached: name => { sweep.noteAttached(name) },
+  }
 }

@@ -120,6 +120,170 @@ describe('detached tmux sweep', () => {
     expect((await sweep.run()).reaped).toEqual(['agentcode-undone'])
   })
 
+  it('protects a persisted-only terminal, and reaps an overdue one that is in neither authority', async () => {
+    // The hibernated case, which is the one the unified stage made common: the
+    // terminal exists in the workspace file and has NO live registry entry.
+    // Without the persisted authority this shell would be killed; the earlier
+    // tests could not see that, because they also handed the recorded name in
+    // as a live name (review finding 4).
+    const persisted = recordedTerminalNames()
+    const registry = registryWith(...persisted, 'agentcode-really-gone')
+    let clock = 1_000_000
+    const sweep = new DetachedTerminalSweep({
+      registry,
+      readWorkspace: async () => RECORDED,
+      liveTmuxNames: () => [], // nothing hibernated is live in main
+      now: () => clock,
+    })
+
+    await sweep.run()
+    clock += REAP_AFTER_MS + 1
+    expect((await sweep.run()).reaped).toEqual(['agentcode-really-gone'])
+    for (const name of persisted) expect(registry.killSession).not.toHaveBeenCalledWith(name)
+  })
+
+  it('an undo between sweeps restarts the window even though no sweep saw it', async () => {
+    // Close at t0, undo at t0+55min, close again a minute later, all between
+    // two ticks. With the clock reset only by an observing sweep, the ORIGINAL
+    // deadline stood and the shell died while its new undo entry was still
+    // valid — the undo then produced a fresh shell with none of the original
+    // processes or scrollback.
+    const registry = registryWith('agentcode-reopened')
+    let clock = 1_000_000
+    const sweep = new DetachedTerminalSweep({
+      registry,
+      readWorkspace: async () => RECORDED,
+      liveTmuxNames: () => [],
+      now: () => clock,
+    })
+
+    await sweep.run() // clock starts
+    clock += REAP_AFTER_MS - 60_000
+    sweep.noteAttached('agentcode-reopened') // ⌘⇧T re-attached the same session
+    clock += 60_000 // closed again, one minute later
+    clock += 1_000
+
+    // Past the original deadline, nowhere near a new one.
+    expect((await sweep.run()).reaped).toEqual([])
+    clock += REAP_AFTER_MS - 1_000
+    expect((await sweep.run()).reaped).toEqual([])
+    clock += 2_000
+    expect((await sweep.run()).reaped).toEqual(['agentcode-reopened'])
+  })
+
+  it('does not kill a terminal restored while the scan was awaiting tmux', async () => {
+    // Every authority the sweep reads is a snapshot taken before an await, and
+    // `tmux list-sessions` spawns a process. A restore landing in that gap used
+    // to be killed by evidence that was already false.
+    let release!: () => void
+    const listing = new Promise<void>(resolve => { release = resolve })
+    const registry = {
+      isAvailable: () => true,
+      listManagedSessions: vi.fn(async () => {
+        await listing
+        return [{ name: 'agentcode-raced', createdAt: 1 }]
+      }),
+      killSession: vi.fn(async (_name: string) => {}),
+    }
+    let clock = 1_000_000
+    const sweep = new DetachedTerminalSweep({
+      registry,
+      readWorkspace: async () => RECORDED,
+      liveTmuxNames: () => [],
+      now: () => clock,
+    })
+
+    registry.listManagedSessions = vi.fn(async () => [{ name: 'agentcode-raced', createdAt: 1 }])
+    await sweep.run() // clock starts
+    clock += REAP_AFTER_MS + 1
+
+    registry.listManagedSessions = vi.fn(async () => { await listing; return [{ name: 'agentcode-raced', createdAt: 1 }] })
+    const inFlight = sweep.run()
+    sweep.noteAttached('agentcode-raced') // the user pressed ⌘⇧T
+    release()
+
+    expect((await inFlight).reaped).toEqual([])
+    expect(registry.killSession).not.toHaveBeenCalled()
+  })
+
+  it('does not kill a terminal restored after the scan already judged it overdue', async () => {
+    // The narrower half of the same race: the restore lands AFTER the
+    // classification loop has put the name on the kill list, while the sweep is
+    // re-reading its evidence. Only the check taken immediately before the kill
+    // — with no await after it — can catch this one.
+    let release!: () => void
+    const confirmRead = new Promise<void>(resolve => { release = resolve })
+    let announceConfirm!: () => void
+    const reachedConfirm = new Promise<void>(resolve => { announceConfirm = resolve })
+    let reads = 0
+    const registry = registryWith('agentcode-late-undo')
+    let clock = 1_000_000
+    const sweep = new DetachedTerminalSweep({
+      registry,
+      readWorkspace: async () => {
+        reads += 1
+        // Read 1 is the first sweep. Read 2 is the second sweep's
+        // classification; read 3 is its PRE-KILL confirmation, i.e. the sweep
+        // has already decided this name is overdue. Hold that one open.
+        if (reads === 3) {
+          announceConfirm()
+          await confirmRead
+        }
+        return RECORDED
+      },
+      liveTmuxNames: () => [],
+      now: () => clock,
+    })
+
+    await sweep.run() // read 1: clock starts (nothing due, so no confirm read)
+    clock += REAP_AFTER_MS + 1
+
+    const inFlight = sweep.run()
+    // Only once the confirm read is in flight is the name genuinely on the
+    // kill list — that is the state this test is about.
+    await reachedConfirm
+    expect(reads).toBe(3)
+    sweep.noteAttached('agentcode-late-undo')
+    release()
+
+    expect((await inFlight).reaped).toEqual([])
+    expect(registry.killSession).not.toHaveBeenCalled()
+  })
+
+  it('issues no kill after stop(), even from a run already in flight', async () => {
+    // Quit. These shells are exactly what the next launch recovers terminals
+    // from, so a tick that fires during shutdown must not reach killSession.
+    let release!: () => void
+    const listing = new Promise<void>(resolve => { release = resolve })
+    const registry = {
+      isAvailable: () => true,
+      listManagedSessions: vi.fn(async () => [{ name: 'agentcode-quitting', createdAt: 1 }]),
+      killSession: vi.fn(async (_name: string) => {}),
+    }
+    let clock = 1_000_000
+    const sweep = new DetachedTerminalSweep({
+      registry,
+      readWorkspace: async () => RECORDED,
+      liveTmuxNames: () => [],
+      now: () => clock,
+    })
+
+    await sweep.run()
+    clock += REAP_AFTER_MS + 1
+
+    registry.listManagedSessions = vi.fn(async () => { await listing; return [{ name: 'agentcode-quitting', createdAt: 1 }] })
+    const inFlight = sweep.run()
+    sweep.stop()
+    release()
+    expect((await inFlight).reaped).toEqual([])
+    expect(registry.killSession).not.toHaveBeenCalled()
+
+    // And it stays disarmed.
+    registry.listManagedSessions = vi.fn(async () => [{ name: 'agentcode-quitting', createdAt: 1 }])
+    expect((await sweep.run()).withheld).toBe('stopped')
+    expect(registry.killSession).not.toHaveBeenCalled()
+  })
+
   it('withholds cleanup when the inventory is not complete', async () => {
     // A partially-decoded file cannot prove orphanhood (#898). The discarded
     // region is exactly where a terminal's only reference may have been.
