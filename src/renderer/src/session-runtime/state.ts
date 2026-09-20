@@ -290,7 +290,12 @@ export type SemanticLiveTurn = {
    *  `turn_stopped.interruption`). The feed shows "Interrupted while asleep"
    *  while this is the newest turn and the pane is idle. Absent for every
    *  upstream-terminated turn. */
-  interruption?: 'system-suspended'
+  /** Why the turn stopped without a stop reason of its own.
+   *  `system-suspended`: the machine slept mid-stream (#963).
+   *  `transport-error`: the stream's socket died before the message ended —
+   *  an Esc interrupt, a proxy timeout, an upstream failure (#1040). The
+   *  provider cannot tell those apart, so neither does this. */
+  interruption?: 'system-suspended' | 'transport-error'
 }
 
 export type SemanticFlow = {

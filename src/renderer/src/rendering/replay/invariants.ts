@@ -43,7 +43,8 @@ function isLifecycleRow(row: RenderRow): boolean {
   const kind = row.candidate.contentKind
   // The sleep-interruption marker (#963) is the work slot's idle-side twin: it
   // toggles with the same phase edge, so it is lifecycle, not content.
-  return kind === 'work' || kind === 'empty' || kind === 'sleep-interruption'
+  return kind === 'work' || kind === 'empty'
+    || kind === 'sleep-interruption' || kind === 'transport-interruption'
 }
 
 export type InvariantKind =

@@ -70,6 +70,10 @@ export type RenderContentKind =
    *  RenderOwner — it is a phase fact of the process plane exactly like the work
    *  chip, carries no provider content, and paints at the tail. */
   | 'sleep-interruption'
+  /** The same marker for a turn whose STREAM died before it finished (#1040):
+   *  an Esc interrupt, a proxy timeout, an upstream failure. The provider
+   *  cannot tell those apart, so the row says only that it was cut off. */
+  | 'transport-interruption'
   | 'empty'
   | 'unknown'
 

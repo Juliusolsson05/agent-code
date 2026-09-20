@@ -424,12 +424,12 @@ export class GoalLoopService extends EventEmitter {
       // prompt is one (UserPromptSubmit, then that turn's Stop). Resume is
       // the other, but ONLY when the phase has gone idle.
       //
-      // KNOWN LIMIT (#1040): after an Esc during a Claude stream the phase
-      // never goes idle. mitmproxy reports a client disconnect only through
-      // its `error` hook, which the proxy addon does not implement, so no
-      // response-end reaches the adapter. For that case only a typed prompt
-      // recovers the loop, and Resume delivers nothing. That is safe but
-      // unhelpful, and the fix belongs in claude-code-headless.
+      // #1040, FIXED at the source: an Esc during a Claude stream used to
+      // leave the phase busy forever, because mitmproxy reports a client
+      // disconnect only through its `error` hook and the addon implemented
+      // none, so `response-end` never arrived. claude-code-headless#61 emits
+      // that event and the adapter seals the flow, so such a turn now reaches
+      // idle like any other and Resume can close it.
       //
       // Resume closes such a turn only when every signal agrees it is over:
       // - no tool pending;

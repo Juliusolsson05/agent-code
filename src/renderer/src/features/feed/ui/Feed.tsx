@@ -1085,6 +1085,18 @@ function FeedImpl({
             </div>
           </MarkerRow>
         )
+      case 'transport-interruption':
+        // #1040: the same courtesy for a stream that died mid-answer. The
+        // wording claims no cause — an Esc, a proxy timeout and an upstream
+        // failure are indistinguishable from here, and the provider's own
+        // error text says "Client disconnected." for all three.
+        return (
+          <MarkerRow key={item.key} marker="" tone="muted">
+            <div className="py-0.5 text-[13px] leading-[1.55] text-muted">
+              Interrupted before the response finished
+            </div>
+          </MarkerRow>
+        )
       case 'empty':
         return (
           <div

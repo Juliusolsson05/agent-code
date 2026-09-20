@@ -63,7 +63,7 @@ export type RuntimeSemanticTurn = {
   endedAt: number | null
   isCompactionSynthesis?: boolean
   /** #963: the adapter sealed this turn because the machine slept. */
-  interruption?: 'system-suspended'
+  interruption?: 'system-suspended' | 'transport-error'
   /** Runtime lookup snapshot — tool-call status by id. Optional because
    *  hand-written fixtures omit it. `toTurnLike` reads
    *  lookups.toolCallsById[toolUseId].status to stamp lookupStatus onto
@@ -193,6 +193,7 @@ export function createLedgerInputAdapter(): (slices: RuntimeLedgerSlices) => Led
   let staticsCache: {
     streamPhaseIdle: boolean
     sleepInterruptedTurnId: string | null
+    transportInterruptedTurnId: string | null
     provider: AgentProviderKind
     candidates: readonly RenderCandidate[]
   } | null = null
@@ -375,21 +376,31 @@ export function createLedgerInputAdapter(): (slices: RuntimeLedgerSlices) => Led
       newestTurn?.interruption === 'system-suspended' && newestTurn.endedAt !== null
         ? newestTurn.turnId
         : null
+    // #1040: the same for a turn whose stream died before it finished. Kept as
+    // a separate key so the two markers cannot be confused in the cache, and
+    // so a turn cannot switch from one to the other without a new identity.
+    const transportInterruptedTurnId =
+      newestTurn?.interruption === 'transport-error' && newestTurn.endedAt !== null
+        ? newestTurn.turnId
+        : null
     if (
       !staticsCache ||
       staticsCache.streamPhaseIdle !== streamPhaseIdle ||
       staticsCache.sleepInterruptedTurnId !== sleepInterruptedTurnId ||
+      staticsCache.transportInterruptedTurnId !== transportInterruptedTurnId ||
       staticsCache.provider !== provider
     ) {
       staticsCache = {
         streamPhaseIdle,
         sleepInterruptedTurnId,
+        transportInterruptedTurnId,
         provider,
         candidates: collectLifecycleCandidates({
           provider,
           sessionId,
           streamPhaseIdle,
           sleepInterruptedTurnId,
+          transportInterruptedTurnId,
         }),
       }
     }

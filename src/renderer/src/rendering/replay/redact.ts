@@ -100,6 +100,12 @@ const STRUCTURAL_STRING_KEYS: ReadonlySet<string> = new Set([
   'disposition',
   'stop_reason',
   'stopReason',
+  // Why a turn stopped with no stop reason of its own: `system-suspended` or
+  // `transport-error`. A closed enum, never prose, and the feed paints a
+  // different marker row for each — so without it an extracted recording
+  // replays the interruption as `⟨text:15⟩`, the fold drops it, and the
+  // recording cannot reproduce what the user saw (#1040 review).
+  'interruption',
   'agentType',
   // tool identity — the tool NAME (Bash/Read/Grep) is a discriminator the
   // semantic collector reads (`toolName`) and is never prose or a secret; the
