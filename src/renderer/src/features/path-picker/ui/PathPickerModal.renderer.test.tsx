@@ -4,6 +4,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Conversation, ConversationListRequest, ConversationListResponse } from '@shared/conversations/types'
 
 import { PathPickerModal } from './PathPickerModal'
+import { MISSING_PROVIDER_HINT, resetSetupStoreForTests, useSetupStore } from '@renderer/features/setup/store'
+import { loadFirstRunCheck } from '@shared/setup/firstRunRecordings.testSupport'
 
 const originalApiDescriptor = Object.getOwnPropertyDescriptor(window, 'api')
 
@@ -220,5 +222,28 @@ describe('PathPickerModal reuse of an open tab (#913)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'new session' }))
     await waitFor(() => expect(onAccept).toHaveBeenCalledWith('/repo', 'claude'))
     expect(onActivateTab).not.toHaveBeenCalled()
+  })
+})
+
+describe('PathPickerModal on a machine without the default provider (#995)', () => {
+  afterEach(() => resetSetupStoreForTests())
+
+  it('preselects the provider the machine has and marks the missing ones, without disabling them', async () => {
+    // The packaged app on a clean Mac, as main recorded it: only the bundled
+    // OpenCode (and this recording machine's npm-global Grok) resolve. The
+    // picker used to preselect Claude, so ⌘T failed only after the user had
+    // chosen a directory.
+    useSetupStore.getState().setCheck(loadFirstRunCheck('clean-machine-packaged'))
+    const list = vi.fn(async () => response([]))
+    installApi(list)
+    render(<PathPickerModal open defaultValue="/repo" onCancel={vi.fn()} onAccept={vi.fn()} onResume={vi.fn()} />)
+    await waitFor(() => expect(list).toHaveBeenCalledWith(expect.objectContaining({ providers: ['opencode'] })))
+    const claude = screen.getByRole('button', { name: /^claude$/i })
+    expect(claude).toHaveAttribute('data-provider-missing', 'true')
+    expect(claude).toHaveAttribute('title', MISSING_PROVIDER_HINT)
+    expect(screen.getByRole('button', { name: /^opencode$/i })).not.toHaveAttribute('data-provider-missing')
+    // Still selectable: a probe can be wrong, and the spawn re-resolves.
+    fireEvent.click(claude)
+    await waitFor(() => expect(list).toHaveBeenCalledWith(expect.objectContaining({ providers: ['claude'] })))
   })
 })

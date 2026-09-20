@@ -12,7 +12,21 @@ vi.mock('electron', () => ({
 }))
 vi.mock('@main/window/windowRegistry.js', () => ({ windowIdFor, getBrowserWindow }))
 
-const { registerWorkspaceIpc } = await import('@main/ipc/workspace.js')
+const { registerWorkspaceIpc, defaultWorkspaceCwd } = await import('@main/ipc/workspace.js')
+
+// #995: launchd starts a Finder/Dock launch with cwd `/`, and every fresh
+// install's first project used to be the filesystem root.
+describe('the first project directory', () => {
+  it('is home when the app was launched from Finder or the Dock (cwd /)', () => {
+    expect(defaultWorkspaceCwd({}, '/', '/Users/someone')).toBe('/Users/someone')
+  })
+  it('keeps a real working directory, as a terminal launch or npm run dev has', () => {
+    expect(defaultWorkspaceCwd({}, '/Users/someone/project', '/Users/someone')).toBe('/Users/someone/project')
+  })
+  it('honours AGENT_CODE_CWD over both', () => {
+    expect(defaultWorkspaceCwd({ AGENT_CODE_CWD: '/work' }, '/', '/Users/someone')).toBe('/work')
+  })
+})
 
 // The addressing layer: which window a workspace payload belongs to, and what
 // main tells SessionManager afterwards.
