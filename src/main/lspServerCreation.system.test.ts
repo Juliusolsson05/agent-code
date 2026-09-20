@@ -129,7 +129,20 @@ describe('initialized reaches the server that initialized (#1078 review, 4)', ()
     const second = await internal.createServer('/repo', key, spec)
     internal.servers.set(key, second as unknown)
 
-    await new Promise(resolve => setTimeout(resolve, 20))
+    // WAIT FOR THE CONDITION, not for 20 ms.
+    //
+    // This was `await new Promise(resolve => setTimeout(resolve, 20))`, which
+    // is a guess about how long two faked spawns take to answer `initialize`
+    // and send their didOpen. It holds when this file runs alone and stops
+    // holding when the machine is busy: running `src/main` and `src/mcp`
+    // together is enough to lose the second notification and fail on
+    // `[gen-a] !== [gen-a, gen-b]`. A fixed sleep used as a synchronization
+    // primitive is a defect in the test, not weather — it fails on exactly
+    // the slow machine a CI runner is.
+    //
+    // The assertion below is unchanged and still exact: both generations, in
+    // order. Only the waiting is now tied to the thing being waited for.
+    await vi.waitFor(() => expect(notified).toHaveLength(2))
     expect(notified).toEqual([first!.generation, second!.generation])
   })
 })
