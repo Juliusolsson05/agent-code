@@ -1,4 +1,4 @@
-import { focusedControlOwnsEnter } from '@renderer/components/ui/dialog-actions'
+import { focusedControlOwnsEnter, focusedControlOwnsSpace } from '@renderer/components/ui/dialog-actions'
 import { useCallback, useEffect, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 
@@ -122,6 +122,13 @@ export function usePinAgentsKeybinds<R extends PinAgentsCandidateRow>({
         return
       }
       if (event.key === ' ') {
+        // The same rule as Enter above, and for the same reason — this one was
+        // missed the first time (#867 review). Space is a BUTTON's activation
+        // key, so `preventDefault()` here suppressed Cancel and Done while
+        // this handler toggled the highlighted row instead: with Cancel
+        // focused, Space silently changed a pin the user was not looking at
+        // and the button they pressed did nothing.
+        if (focusedControlOwnsSpace(event.target)) return
         event.preventDefault()
         const row = rows[focusedIndex]
         if (row) toggle(row.sessionId)

@@ -74,6 +74,28 @@ describe('ConversationsPicker', () => {
     expect(onClose).toHaveBeenCalled()
   })
 
+  it('does not resume the highlighted row when Enter presses a filter chip (#867)', async () => {
+    // The picker handles Enter on `DialogContent` and `preventDefault`s it, so
+    // the chips inside that content — ordinary tabbable buttons — never got
+    // their native click. Tab to "everywhere" and press Enter and the chip did
+    // not toggle: the picker RESUMED the highlighted conversation instead,
+    // replacing what was running in the focused pane. The #867 audit called
+    // this consumer safe for having no footer; the rule is about the focused
+    // CONTROL, not the footer slot.
+    install()
+    const ws = workspace()
+    render(<ConversationsPicker open focusSearch={false} workspace={ws} onClose={vi.fn()} />)
+    await screen.findByText('break down this project')
+    const chip = screen.getByRole('button', { name: 'everywhere' })
+
+    // `true` = the default survived, which is what lets a real browser deliver
+    // the chip's own click.
+    expect(fireEvent.keyDown(chip, { key: 'Enter' })).toBe(true)
+
+    expect(ws.replaceSession).not.toHaveBeenCalled()
+    expect(chip.getAttribute('aria-pressed')).toBe('false')
+  })
+
   it('re-queries with the toggled scope, provider and children filters, and with the typed query', async () => {
     const list = install()
     render(<ConversationsPicker open focusSearch workspace={workspace()} onClose={vi.fn()} />)

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { focusedControlOwnsEnter } from '@renderer/components/ui/dialog-actions'
 
 import type { Conversation, ConversationScope } from '@shared/conversations/types'
 import { AGENT_PROVIDER_KINDS, type AgentProviderKind } from '@shared/types/providerKind'
@@ -109,6 +110,14 @@ export function ConversationsPicker({ open, focusSearch, workspace, onClose }: P
       e.preventDefault()
       setSelected(i => Math.max(0, i - 1))
     } else if (e.key === 'Enter') {
+      // A focused control owns its own Enter (#867). This handler sits on
+      // `DialogContent`, and the scope and provider chips below are ordinary
+      // tabbable buttons inside it — so without this, Tab to the "everywhere"
+      // chip and Enter did not toggle the chip: it RESUMED the highlighted
+      // conversation, replacing what was running in the focused pane. The
+      // #867 audit called this picker safe because it has no footer; the rule
+      // is about the focused CONTROL, not the footer slot.
+      if (focusedControlOwnsEnter(e.target)) return
       e.preventDefault()
       const row = rows[selected]
       if (row) void resume(row)

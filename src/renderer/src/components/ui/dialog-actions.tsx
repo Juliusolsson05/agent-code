@@ -84,11 +84,41 @@ export type DialogActionsProps = {
  *
  * Such dialogs must also keep their list rows out of the tab order: a
  * Tab-focused row would own Enter here and diverge from the arrow-driven
- * highlight (and Space would click it regardless of any Enter handling).
+ * highlight.
+ *
+ * `tabIndex={-1}` is only HALF of that, and the half that is easy to forget is
+ * the one this predicate cannot help with: Chromium focuses a `<button>` on
+ * CLICK regardless of `tabindex="-1"`. A clicked row therefore holds DOM focus,
+ * owns the next Enter by this predicate, and the dialog-level handler bows out
+ * of a keystroke the user meant for it. Rows in these dialogs pair the
+ * tabIndex with `onMouseDown={e => e.preventDefault()}`, which keeps focus on
+ * the dialog while still firing the click.
  */
 export function focusedControlOwnsEnter(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false
   return target.tagName === 'BUTTON' || target.tagName === 'A' || target.tagName === 'TEXTAREA'
+}
+
+/**
+ * The same question for SPACE, which a dialog-level handler must ask whenever
+ * it `preventDefault`s Space — a toggling list is the case here.
+ *
+ * WHY it is a separate predicate rather than `focusedControlOwnsEnter` reused:
+ * the two keys do not activate the same set of elements. Space activates a
+ * focused BUTTON and types into a TEXTAREA or INPUT, but it does NOT activate
+ * a link — on an `<a>` it scrolls. Sharing the Enter predicate would have this
+ * hand Space to a focused link and swallow the scroll; answering "which
+ * element owns this key" with one list for two different keys is how the wrong
+ * one gets quietly returned.
+ *
+ * The bug it is for (#867, found in review): Pin Sessions `preventDefault`s
+ * Space unconditionally and toggles the HIGHLIGHTED row, so with Cancel
+ * focused, Space did not press Cancel — it toggled a pin the user was not
+ * looking at.
+ */
+export function focusedControlOwnsSpace(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false
+  return target.tagName === 'BUTTON' || target.tagName === 'TEXTAREA' || target.tagName === 'INPUT'
 }
 
 export function DialogActions({

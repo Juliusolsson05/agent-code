@@ -8,7 +8,6 @@ import {
   DialogDescription,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
-import { useAppStore } from '@renderer/app-state/hooks'
 import { resolveTabSessions } from '@renderer/workspace/queries'
 import type { SessionId, Tab } from '@renderer/workspace/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
@@ -435,6 +434,17 @@ export function AgentActivityModal({ open, workspace, onClose }: Props) {
         >
           <button
             type="button"
+            // Out of the tab order, and out of click-focus, for the same
+            // reason as the list dialogs (#867 review). This button is
+            // `opacity-0` unless its row is selected or hovered, so as a tab
+            // stop it was an INVISIBLE one — and the keys are handled by the
+            // scroller above, which acts on the SELECTED row. Tab to row 2's
+            // close, press Delete, and row 1 closed. Keeping focus on the
+            // scroller keeps "the row the keys act on" and "the row the user
+            // is looking at" the same row, which is the whole contract of an
+            // arrow-driven list.
+            tabIndex={-1}
+            onMouseDown={e => e.preventDefault()}
             onClick={() => void closeRow(row)}
             className="rounded-control px-2 py-0.5 text-[10px] border border-danger-border text-danger hover:bg-danger-soft"
             title="Close (del)"
