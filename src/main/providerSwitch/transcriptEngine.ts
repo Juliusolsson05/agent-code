@@ -696,41 +696,115 @@ function claudeDraft(content: readonly ConversationContent[]): RewindDraft {
     })
   }
 
-  // Claude's PASTE envelope comes off first, and it is the same kind of
-  // scaffolding as the tags below: a wrapper Claude Code put around what the
-  // user typed (#1059). This draft is used TWICE — as the Rewind picker's row
-  // text and as the composer prefill of the rewound session — so leaving it on
-  // both showed the user `<pasted_content id="…">` in the picker and, worse,
-  // RE-SENT the envelope when they rewound and hit enter, which makes Claude
-  // wrap the already-wrapped text.
+  // ── PROVENANCE: A WRAPPER MUST OPEN THE MESSAGE CLAUDE WROTE (#930) ──
+  // `<bash-input>` and `<command-name>` are not content, they are Claude
+  // Code's record of HOW a turn was entered, and acting on them changes what
+  // the rewound composer will do. So they may only be believed where Claude
+  // Code actually writes them, and nowhere else.
   //
-  // Placed before the tag extraction so ONE value flows through every branch
-  // below. It is not load-bearing for the tag branches — `extractTagBody` is
-  // unanchored and finds `<bash-input>` inside the envelope either way — but
-  // putting it here means the fallback and the tag branches cannot disagree
-  // about what the prompt text is, which is how the second copy of an
-  // unwrapping rule usually starts.
+  // It used to be enough that the tag appeared ANYWHERE in the prompt, because
+  // `extractTagBody`'s regex is unanchored. Two things then went wrong at
+  // once, because extracting a tag body DISCARDS everything around it:
+  //
+  //   "How do I use <bash-input>ls</bash-input> in Claude Code?"
+  //     → promptText 'ls', promptMode 'bash'
+  //
+  // The question is gone, and the composer is armed to EXECUTE. Rewind and
+  // press enter and you run a command you were only ever asking about. Asking
+  // about `<command-name>` lost the surrounding prose the same way.
+  //
+  // The rule comes from upstream, not from taste. `processBashCommand.tsx`
+  // builds the message as `<bash-input>${inputString}</bash-input>` — the
+  // wrapper IS the whole input string, never a fragment inside prose — and
+  // `prepareUserContent` puts that string in the LAST content block, after any
+  // pasted images. Claude Code's own title heuristic (REPL.tsx) discriminates
+  // these same tags with `text.startsWith('<' + TAG + '>')`, so this matches
+  // the producer's own test rather than inventing a second one.
+  //
+  // Checked against the LAST TEXT BLOCK rather than the joined prompt text:
+  // that is exactly the block upstream wraps, so the check survives preceding
+  // blocks, and it is the RAW recorded bytes. That last part is what makes the
+  // rule safe against a paste: a user who pastes the text `<bash-input>rm -rf /`
+  // is handed a `<pasted_content>` envelope by Claude Code, and reading
+  // provenance from an already-unwrapped string would leave something that
+  // starts with `<bash-input>` and arm the composer to run it. Reading the
+  // content array means no later unwrapping can reach this decision.
+  const wrapped = claudeWrappedInput(content)
+
+  if (wrapped?.startsWith('<bash-input>')) {
+    const bash = extractTagBody(wrapped, 'bash-input')
+    // The BODY is still unwrapped: pasting into bash mode nests a real
+    // envelope inside a real wrapper, and the composer must be prefilled with
+    // the command, not with the scaffolding around it.
+    if (bash !== null) {
+      return { promptText: unwrapClaudePastedContent(bash) ?? bash, promptMode: 'bash', promptImages: images }
+    }
+  }
+  // ── BOTH COMMAND BREADCRUMBS, NOT JUST ONE (#1071 review, finding 1) ──
+  // Upstream has TWO formatters and they open with different tags:
+  //
+  //   formatCommandInputTags          (utils/messages.ts)
+  //     <command-name> first — local/JSX commands: /model, /login
+  //   formatSlashCommandLoadingMetadata (processSlashCommand.tsx)
+  //     <command-message> first — every PROMPT-type command: /loop,
+  //     /simplify, plugin and user-invocable skills
+  //
+  // The second is written by `getMessagesForPromptSlashCommand` as an ordinary
+  // non-meta user turn, so it reaches the picker like any other prompt — and it
+  // is the MAJORITY shape in the local corpus (136 turns against 105). An
+  // earlier version of this fix only knew `<command-name>`, which turned every
+  // /loop and /simplify row in the Rewind picker into raw XML and prefilled the
+  // composer with the breadcrumb. REPL.tsx checks four prefixes for exactly
+  // this reason, and its own comment names `<command-message>` as the
+  // prompt-skill case.
+  //
+  // The BODY is still read by tag, not by position: `<command-name>` carries
+  // the command either way, and `<command-message>` holds the bare name
+  // without its slash.
+  if (wrapped?.startsWith('<command-name>') || wrapped?.startsWith('<command-message>')) {
+    const command = extractTagBody(wrapped, 'command-name')
+    if (command !== null) {
+      const args = extractTagBody(wrapped, 'command-args') ?? ''
+      return {
+        promptText: args.length > 0 ? `${command} ${args}` : command,
+        promptMode: 'prompt',
+        promptImages: images,
+      }
+    }
+  }
+
+  // Claude's PASTE envelope is the same kind of scaffolding: a wrapper Claude
+  // Code put around what the user typed (#1059). This draft is used TWICE — as
+  // the Rewind picker's row text and as the composer prefill of the rewound
+  // session — so leaving it on both showed the user `<pasted_content id="…">`
+  // in the picker and, worse, RE-SENT the envelope when they rewound and hit
+  // enter, which makes Claude wrap the already-wrapped text.
   const unwrapped = unwrapClaudePastedContent(plain.promptText)
   if (unwrapped !== null) plain.promptText = unwrapped
 
-  const bash = extractTagBody(plain.promptText, 'bash-input')
-  if (bash !== null) {
-    return { promptText: bash, promptMode: 'bash', promptImages: images }
-  }
-  const command = extractTagBody(plain.promptText, 'command-name')
-  if (command !== null) {
-    const args = extractTagBody(plain.promptText, 'command-args') ?? ''
-    return {
-      promptText: args.length > 0 ? `${command} ${args}` : command,
-      promptMode: 'prompt',
-      promptImages: images,
-    }
-  }
   return {
     promptText: stripClaudeContext(plain.promptText),
     promptMode: 'prompt',
     promptImages: images,
   }
+}
+
+/**
+ * The text block Claude Code would have wrapped, raw.
+ *
+ * `processUserInput` takes the LAST content block when it is text as the
+ * turn's input string, keeps everything before it as `precedingInputBlocks`,
+ * and hands only that input string to the bash/command wrappers. So the last
+ * text block is the one place a provider-authored wrapper can legitimately
+ * open, and checking the joined prompt text instead would answer the wrong
+ * question whenever another text block precedes it.
+ *
+ * Returns null when the message ends in something other than text — there is
+ * then no wrapped input at all, and no wrapper may be believed.
+ */
+function claudeWrappedInput(content: readonly ConversationContent[]): string | null {
+  const last = content[content.length - 1]
+  return last?.kind === 'text' ? last.text : null
 }
 
 function extractTagBody(source: string, tag: string): string | null {
@@ -739,21 +813,50 @@ function extractTagBody(source: string, tag: string): string | null {
 }
 
 function stripClaudeContext(source: string): string {
-  // These are Claude-authored transport wrappers, not arbitrary XML. Keeping
-  // the list closed prevents a user-authored tag from silently disappearing.
-  const wrappers = [
-    'ide_selection',
-    'ide_diagnostics',
-    'ide_opened_files',
-    'local-command-caveat',
-    'local-command-stdout',
-    'system-reminder',
-  ]
-  let result = source
-  for (const tag of wrappers) {
-    result = result.replace(new RegExp(`<${tag}>[\\s\\S]*?</${tag}>`, 'g'), '')
+  // Claude-authored transport wrappers, not arbitrary XML. Keeping the list
+  // closed prevents a user-authored tag from silently disappearing.
+  //
+  // They are split by WHO WROTE THE MESSAGE, which is the only thing that
+  // decides what to do when stripping empties it (#1071 review, finding 2).
+  //
+  // PROVIDER OUTPUT: Claude Code composes the whole message itself —
+  // `createUserMessage({ content: '<local-command-stdout>…' })`. A user never
+  // types one, and 87 such turns are visible (non-meta) in the local corpus,
+  // several carrying raw ANSI escapes. If one of these is all there is, the
+  // right answer is an empty draft: the turn is not a prompt.
+  const providerOutput = ['local-command-caveat', 'local-command-stdout']
+  // INJECTED CONTEXT: appended BESIDE what the user typed. These can be the
+  // whole message only when the user wrote the markup themselves — asking
+  // about it — which is the #930 case.
+  const injectedContext = ['ide_selection', 'ide_diagnostics', 'ide_opened_files', 'system-reminder']
+
+  const strip = (text: string, tags: string[]): string => {
+    let result = text
+    for (const tag of tags) {
+      result = result.replace(new RegExp(`<${tag}>[\\s\\S]*?</${tag}>`, 'g'), '')
+    }
+    return result
   }
-  return result.trim()
+
+  // Provider output comes off unconditionally, and is not eligible for the
+  // restore below — that is the whole point of the split.
+  const withoutOutput = strip(source, providerOutput)
+  const result = strip(withoutOutput, injectedContext).trim()
+  if (result.length > 0) return result
+
+  // ── NEVER STRIP A USER'S PROMPT DOWN TO NOTHING (#930) ──
+  // Injected context really is embedded mid-message, so unlike the anchored
+  // wrappers above it cannot be given provenance. That leaves one ambiguous
+  // case: a prompt that is ONLY this markup, because the user was asking about
+  // it. `promptsFromSnapshot` drops prompts with no text and no images, so
+  // stripping it makes the turn vanish from the Rewind picker and become
+  // unreachable. Showing the markup is a strictly smaller harm than losing the
+  // prompt.
+  //
+  // Restored only when Claude Code wrote NONE of this message. If any provider
+  // output was present, the turn is scaffolding rather than a user's literal
+  // example, and the ambiguity the restore exists to resolve does not arise.
+  return withoutOutput === source ? source.trim() : ''
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
