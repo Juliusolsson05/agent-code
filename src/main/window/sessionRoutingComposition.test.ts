@@ -185,7 +185,10 @@ describe('read-only gap repair through the registry, forwarder and IPC', () => {
     const lease = registry.claimSessionForWindow('pane', left)!
     const gap = registry.sessionRoutingGapsForWindow(left)[0]!
     const event = { sender: harness.built[0]!.webContents }
-    return { left, lease, gap, event, resync: () => harness.handlers.get('session:resync-routing')!(event, gap) }
+    const resync = () => harness.handlers.get('session:resync-routing')!(event, gap)
+    // The source key the renderer echoes back on the history read.
+    const receiptSourceKey = () => (resync() as { history?: { sourceKey: string } }).history!.sourceKey
+    return { left, lease, gap, event, resync, receiptSourceKey }
   }
 
   it('flushes old coalesced frames before current seeds and does not manufacture lifecycle or input', () => {
@@ -198,7 +201,24 @@ describe('read-only gap repair through the registry, forwarder and IPC', () => {
     expect(harness.built[0]!.sent.some(e => ['session:started', 'session:exit', 'session:semantic-event'].includes(e.channel))).toBe(false)
     expect(harness.built[1]!.sent).toEqual([])
     expect(manager.recover).not.toHaveBeenCalled()
-    expect(registry.sessionRoutingGapsForWindow(left)).toEqual([])
+    // The ticket survives the seed when saved history is still to be read: the
+    // repair is not finished, and that read can fail (#935 Codex review). It
+    // is spent by the history handler below.
+    expect(registry.sessionRoutingGapsForWindow(left)).toHaveLength(1)
+  })
+
+  it('spends the repair ticket only when the history read succeeds, and keeps it when it fails', async () => {
+    // Acknowledging on the seed left a pane showing "refresh is unavailable"
+    // with a button whose ticket main had already dropped; an ordinary
+    // recovery then rotated ownership, so every later press returned `stale`.
+    const failing = setup()
+    expect(failing.resync().kind).toBe('seeded')
+    harness.history.mockRejectedValueOnce(new Error('disk is unhappy'))
+    expect(await harness.handlers.get('session:load-routing-history')!(failing.event, failing.gap, failing.receiptSourceKey())).toEqual({ kind: 'unavailable' })
+    expect(registry.sessionRoutingGapsForWindow(failing.left)).toHaveLength(1)
+
+    expect(await harness.handlers.get('session:load-routing-history')!(failing.event, failing.gap, failing.receiptSourceKey())).toMatchObject({ kind: 'loaded' })
+    expect(registry.sessionRoutingGapsForWindow(failing.left)).toEqual([])
   })
 
   it('rejects another window and old owner revisions before loading content', async () => {
@@ -260,6 +280,26 @@ describe('read-only gap repair through the registry, forwarder and IPC', () => {
     expect(await harness.handlers.get('session:kill-owned')!(event, options)).toBe(true)
     expect(registry.windowForSession(options.sessionId)).toBeNull()
     realForwarder.flush()
+    real.removeAllListeners()
+  })
+
+  it('keeps the claim while a Codex replacement reservation still owns the session (#935 Codex review)', async () => {
+    // Mid-handoff the predecessor has no backend snapshot, but its
+    // reservation is authoritative and compensation can restore it. Reading
+    // "no snapshot" as "nothing left to display" released the pane's claim,
+    // and the restored session's output then went nowhere.
+    const { SessionManager: RealManager } = await import('@main/sessionManager.js')
+    const real = new RealManager()
+    const reserved = 'handoff-pane'
+    registry.createAppWindow()
+    const event = { sender: harness.built[0]!.webContents }
+    registerSessionIpc(real, {} as never)
+    const lease = registry.claimSessionForWindow(reserved, registry.windowIdFor(event.sender))
+    expect(lease).not.toBeNull()
+    // No entry, no recovery claim: only the reservation speaks for it.
+    vi.spyOn(real, 'retainsSessionOwnership').mockReturnValue(true)
+    expect(await harness.handlers.get('session:kill-owned')!(event, { sessionId: reserved, kind: 'codex' as const, cwd: '/fixture' })).toBe(false)
+    expect(registry.windowForSession(reserved)).not.toBeNull()
     real.removeAllListeners()
   })
 

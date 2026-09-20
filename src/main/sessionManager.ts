@@ -4461,6 +4461,26 @@ export class SessionManager extends EventEmitter {
   }
 
   /** Kill only when the caller's durable workspace ownership still matches. */
+  /**
+   * Does main still hold ANY ownership record for this session?
+   *
+   * WHY this exists (#935 Codex delta review): a caller that was refused a
+   * close needs to tell "you do not own that backend" from "there is nothing
+   * left to close", and a backend snapshot alone cannot answer it. During a
+   * destructive Codex handoff the predecessor has no snapshot while its
+   * replacement reservation is still authoritative — and if the successor's
+   * startup then fails, compensation restores the predecessor. Treating that
+   * window as "gone" released the pane's display claim, and the restored
+   * session's output went nowhere. These are the same four tables killOwned
+   * itself consults.
+   */
+  retainsSessionOwnership(sessionId: string): boolean {
+    return this.sessions.has(sessionId)
+      || this.recoveriesInFlight.has(sessionId)
+      || this.findCodexReplacementReservation(sessionId) !== null
+      || this.codexReplacements.findRedirects(sessionId).length > 0
+  }
+
   async killOwned(options: SessionOwnershipOptions): Promise<boolean> {
     return await this.killOwnedInternal(options)
   }

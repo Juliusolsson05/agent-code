@@ -62,8 +62,17 @@ export function registerSessionRoutingIpc(manager: SessionManager, forwarder: Se
     for (const [channel, payload] of seeds) {
       if (sendToSessionWindow(scope.sessionId, channel, payload) !== 'delivered') return { kind: 'unavailable' }
     }
-    acknowledgeSessionRoutingGap(lease, scope.gapRevision)
-    return { kind: 'seeded', sessionRunId: backend?.sessionRunId ?? null, history: source(scope.sessionId) }
+    const history = source(scope.sessionId)
+    // WHY the acknowledgement waits when there is history to read (#935 Codex
+    // delta review): acknowledging DELETES the ticket, and the repair is not
+    // finished here — the renderer still has to load saved history through the
+    // handler below, which can fail. Acknowledging first left the pane showing
+    // "refresh is unavailable" with a button whose ticket main had already
+    // dropped, and an ordinary recovery then rotated ownership so every later
+    // press returned `stale`. A seed with nothing further to read is complete,
+    // so that case still acknowledges here.
+    if (!history) acknowledgeSessionRoutingGap(lease, scope.gapRevision)
+    return { kind: 'seeded', sessionRunId: backend?.sessionRunId ?? null, history }
   })
 
   // One admitted history read per pane and at most four across the application.
@@ -81,6 +90,9 @@ export function registerSessionRoutingIpc(manager: SessionManager, forwarder: Se
     try {
       const chunk = await loadInitialHistoryChunk({ ...captured, limit: 120 })
       if (owner(evt, scope) !== lease || source(scope.sessionId)?.sourceKey !== sourceKey) return { kind: 'stale' }
+      // The repair is complete only now: the seeds landed and the saved
+      // history is on its way back. This is where the ticket is spent.
+      acknowledgeSessionRoutingGap(lease, scope.gapRevision)
       return { kind: 'loaded', chunk }
     } catch {
       // Native errors can contain paths/credentials. Preserve the gap and a

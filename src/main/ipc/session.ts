@@ -146,9 +146,11 @@ export function registerSessionIpc(
     // session. Releasing there revoked the display claim of a session that is
     // still running, and since this branch removes the broadcast fallback its
     // output was then quarantined with no owner left to show the gap — the
-    // pane simply went quiet. The backend snapshot is the same evidence
-    // killOwned itself checks: absent means nothing is left to display.
-    if (killed || manager.getBackendSnapshot(options.sessionId) === null) releaseSession(lease)
+    // pane simply went quiet. `retainsSessionOwnership` asks the same four
+    // tables killOwned consults, because a backend snapshot alone is not
+    // enough: mid-handoff a Codex predecessor has no snapshot while its
+    // replacement reservation still owns it (#935 Codex delta review).
+    if (killed || !manager.retainsSessionOwnership(options.sessionId)) releaseSession(lease)
     return killed
   })
 
