@@ -465,6 +465,42 @@ claude 2.1.143 / codex 0.130.0 are stale versus the 2.1.278 / 0.155.1 in daily u
   - Test: the recorded replay plus the hook sequence give exactly one continuation per
     real stop. Also: a blocked Stop (TLDR asks for an update) followed by an allowed
     Stop gives one continuation, not two.
+- **T16 Make `/model` work (owner, 2026-09-19).**
+  The slash command that switches a provider's model does not work today, and
+  the obvious implementation — driving the provider's own TUI by screen
+  automation (type `/model`, read the menu, arrow to the row, press Enter) —
+  is the thing to avoid if there is any alternative. Investigate, in order:
+  1. A native/API route per provider: OpenCode already takes model + variant on
+     `prompt_async` (see the prompt-selection memory: agent, model and variant
+     must be sent TOGETHER or the session is moved to the default agent), and
+     its config carries a model list; Claude Code and Codex both have config
+     and CLI flags whose reach needs checking; Grok's ACP control may expose it.
+  2. A restart-with-selection route: the provider-switch machinery already
+     replaces a session while keeping its transcript, so "change the model" may
+     be a narrower case of that.
+  3. Screen automation LAST, and only with real integration tests: a recorded
+     TUI menu per provider, the condition system below as the readiness signal,
+     and no blind key timing.
+  Owner's words: "pretty sure we can not rely on screen automation, lets figure
+  out how to maybe do this in a different way? Or maybe we do the screen
+  automation but that requires quite a bit of integration testing and love."
+- **T17 Test suite audit and restructuring (owner, 2026-09-19).**
+  The suite has grown by accretion: unit/renderer/system projects, `testing/`
+  fixtures, per-feature `*.test.ts` beside sources, live suites, package suites.
+  Group and re-hierarchy it so a reader can find the test that owns a behaviour,
+  and so the tiers mean something. Use an ORCHESTRATED agent for the review half
+  (the owner named Astra). Deliverables:
+  - an inventory of every suite with its tier, runtime and what it actually
+    pins;
+  - a proposed hierarchy (by owner/feature, not by accident of file location),
+    with the moves scripted rather than hand-done;
+  - the test-quality rules already recorded (real recorded fixtures, fail-first
+    on the real path) applied as the acceptance bar for what stays.
+  Tied to it: the SCREEN CONDITION system is still unused for some providers.
+  Work out how far it can drive provider automation (readiness, menu state,
+  prompt acceptance) for every provider, since that is what a real automation
+  test needs instead of sleeps.
+
 - **T14 Redesign the Agent Activity command (owner, 2026-09-19): "that modal is ages and just shit across the board".**
   This is a full redesign or reimagining, not a patch. Approach:
   - Read the current command, its modal, and its data sources first.
