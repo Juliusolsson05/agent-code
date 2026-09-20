@@ -31,7 +31,7 @@ type InventoryIssue =
 // workspace content, paths, or per-row parse errors into the startup journal.
 type InventoryIssues = Partial<Record<InventoryIssue, number>>
 
-type TerminalInventory = {
+export type TerminalInventory = {
   kind: 'complete' | 'incomplete' | 'unknown'
   references: PersistedTerminalRef[]
   issues: InventoryIssues
@@ -135,7 +135,18 @@ export async function reconcileWorkspace(
   // different inventories apart. A digest carries that evidence without
   // copying workspace paths, prompts, or terminal content into diagnostics.
   const digest = createHash('sha256').update(text, 'utf8').digest('hex')
-  return reconcile(registry, terminalInventory(parseWorkspaceFile(text, randomUUID)), digest)
+  return reconcile(registry, terminalInventoryFromWorkspaceText(text), digest)
+}
+
+/**
+ * Decode workspace.json text into the terminal inventory, through the canonical
+ * envelope decoder. Exported for the running-app sweep (`detachedSweep.ts`),
+ * which needs the SAME answer startup gets — including `kind`, the authority
+ * bit that says whether the absence of a reference may be read as orphanhood.
+ * Two decoders here is exactly the shape that produced #898.
+ */
+export function terminalInventoryFromWorkspaceText(text: string): TerminalInventory {
+  return terminalInventory(parseWorkspaceFile(text, randomUUID))
 }
 
 async function reconcile(

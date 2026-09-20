@@ -36,6 +36,7 @@ it('keeps the real editor veto ahead of all application service disposal', async
     stopBuiltInMcp: supportStop, stopRemote: supportStop, stopLsp: supportStop,
     stopExternalControl: supportStop, disposeControl: supportStop,
     disposeWorkflowBridge: supportStop, disposeCaffeinate: supportStop, stopHeapWatchdog: supportStop,
+    stopDetachedTmuxSweep: supportStop,
     drainWorkspace: supportStop, drainDictationHistory: supportStop,
     flushGhosts: supportStop, flushRecordings: supportStop, flushDictationDebug: supportStop,
     flushPasteDebug: supportStop, stopPerformance: supportStop, stopExtensions: supportStop,

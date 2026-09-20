@@ -21,6 +21,10 @@ export interface ApplicationShutdownServices {
   disposeWorkflowBridge: Stop
   disposeCaffeinate: Stop
   stopHeapWatchdog: Stop
+  /** The periodic detached-tmux reaper (#1030 item 4). Stopping it is pure
+   *  timer teardown — it must NEVER kill tmux sessions at quit, because those
+   *  shells are exactly what the next launch recovers terminals from. */
+  stopDetachedTmuxSweep: Stop
   drainWorkspace: Stop
   drainDictationHistory: Stop
   flushGhosts: Stop
@@ -131,6 +135,7 @@ export function installApplicationShutdown(options: {
       run('workflow-bridge', services.disposeWorkflowBridge),
       run('caffeinate', services.disposeCaffeinate),
       run('heap-watchdog', services.stopHeapWatchdog),
+      run('detached-tmux-sweep', services.stopDetachedTmuxSweep),
     ])
     await join([
       run('workspace', services.drainWorkspace),

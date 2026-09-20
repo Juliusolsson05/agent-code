@@ -4925,6 +4925,24 @@ export class SessionManager extends EventEmitter {
     return this.terminalForeground.snapshot()
   }
 
+  /**
+   * Every tmux session name main currently owns a live terminal for.
+   *
+   * The detached sweep (`tmux/detachedSweep.ts`) needs this as the second
+   * authority beside the persisted workspace file: autosave is debounced, so a
+   * terminal created seconds ago is live here and absent from the file, and the
+   * file alone would read it as an orphan and kill the user's brand-new shell.
+   * Read live from the registry rather than cached — a snapshot taken before an
+   * await is exactly the stale evidence that would authorize that kill.
+   */
+  getLiveTmuxNames(): string[] {
+    const names: string[] = []
+    for (const entry of this.sessions.values()) {
+      if (entry.kind === 'terminal' && entry.tmuxName) names.push(entry.tmuxName)
+    }
+    return names
+  }
+
   /** Kill every live session. Called on app quit. */
   async killAll(): Promise<void> {
     this.shuttingDown = true

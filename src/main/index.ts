@@ -55,6 +55,8 @@ import {
 } from '@main/pasteDebugJournal.js'
 import { TmuxRegistry } from '@main/tmux/TmuxRegistry.js'
 import { reconcileWorkspace } from '@main/tmux/tmuxRecovery.js'
+import { startDetachedTerminalSweep } from '@main/tmux/detachedSweep.js'
+import type { DetachedSweepSchedule } from '@main/tmux/detachedSweep.js'
 
 import {
   handleExtensionScheme,
@@ -277,6 +279,8 @@ let manager: SessionManager | null = null
 let remoteController: RemoteController | null = null
 let remoteWorkspaceProjection: RemoteWorkspaceProjection | null = null
 let tmuxRegistry: TmuxRegistry | null = null
+// The running-app tmux reaper's timer handle, so quit can stop it (#1030).
+let detachedTmuxSweep: DetachedSweepSchedule | null = null
 let stateProcessLock: Extract<StateProcessLock, { acquired: true }> | null = null
 let appRunJournal: AppRunJournal | null = null
 let workflowService: WorkflowService | null = null
@@ -945,6 +949,39 @@ async function startApp(): Promise<void> {
   systemSuspension.on('suspension', (suspension: import('@shared/types/systemSuspension.js').SystemSuspension) => {
     manager?.noteSystemSuspension(suspension)
   })
+
+  // The running-app half of tmux cleanup (#1030 item 4). Startup reconciliation
+  // above reaps what a previous run left behind; this reaps what THIS run
+  // leaves behind, once the undo window that kept each shell alive has closed.
+  // Armed only when tmux is available and only after the manager exists,
+  // because the manager is one of the two authorities the sweep consults — the
+  // other is the persisted workspace file, read through the same decoder
+  // startup uses.
+  if (tmuxAvailable && manager) {
+    const sweepingManager = manager
+    detachedTmuxSweep = startDetachedTerminalSweep({
+      registry: tmuxRegistry,
+      readWorkspace: () => readFile(STATE_FILE, 'utf8'),
+      liveTmuxNames: () => sweepingManager.getLiveTmuxNames(),
+      onSweep: report => {
+        // Only worth a line when something actually happened; a five-minute
+        // heartbeat saying "nothing" would bury the log.
+        if (report.reaped.length === 0) return
+        console.log(`[tmux] reaped ${report.reaped.length} detached terminal session(s)`)
+        appRunJournal?.record({
+          area: 'app.tmux',
+          name: 'tmux.detached.reaped',
+          data: { reaped: report.reaped.length, pending: report.pending.length },
+        })
+      },
+      onError: error => {
+        // Never fatal: a failed sweep is a leak that gets another chance in
+        // five minutes, not a reason to stop cleaning for the rest of the run.
+        performanceService.error('app.tmux.detachedSweep.error', error)
+        appRunJournal?.recordError('tmux.detached_sweep.error', error)
+      },
+    })
+  }
   // Project ownership lives in renderer state, while backend/transcript facts
   // live in SessionManager. Construct this bridge only after both the MCP host
   // and manager exist so tool calls cannot observe a half-wired authority.
@@ -1421,6 +1458,7 @@ const sessionShutdownGate = installApplicationShutdown({
     disposeWorkflowBridge: () => workflowBridge?.dispose(),
     disposeCaffeinate: () => caffeinateController.dispose(),
     stopHeapWatchdog: stopMainHeapWatchdog,
+    stopDetachedTmuxSweep: () => { detachedTmuxSweep?.stop(); detachedTmuxSweep = null },
     drainWorkspace: () => shutdownWorkspaceStore?.drainAdmittedWrites(),
     drainDictationHistory: flushHistoryWrites,
     flushGhosts: () => ghostJournals.flushAll(),
