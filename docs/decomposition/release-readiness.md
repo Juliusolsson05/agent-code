@@ -667,6 +667,61 @@ claude 2.1.143 / codex 0.130.0 are stale versus the 2.1.278 / 0.155.1 in daily u
   - **#1018 (orchestration hides API errors):** an evidence catalog from real feed-debug recordings is being built (research agent, worktree `.worktrees/fix-orchestration-api-error`). Implementation follows the catalog.
   - **Waiting on #1013's merge:** T7 (#1006), T8 (#1007), T2 (command promotion) and T1 (#995), all of which touch the catalog, keybindings or bootstrap.
   - **Nightly** run 35430444567: build-app is green, package-macos is running.
+- 2026-09-20 15:55Z — **#910 CLOSED. All four items merged; five PRs open.**
+
+  **MERGED**: **oth#5** (item 1) and **#1082** (item 4, plus the submodule bump).
+  #910 is closed with a table of what shipped and what each review caught.
+
+  **The lesson of this round, four times over**: every one of these changes was
+  wrong in a way only an adversarial reviewer found, and three of the four were
+  wrong in the SAME shape — I had written an "equivalent mutant" or a safety
+  argument into a comment, and the argument did not hold.
+  - oth#5: `OpencodeStore.read` opens a DEFERRED transaction, so a
+    statement-free settle never meets the lock. **The thrown `refuseReads`
+    stand-in cannot express that finding — only a real `BEGIN EXCLUSIVE` can.**
+    A stand-in that refuses everything cannot prove a guard that only matters
+    when something gets through.
+  - #1082: "promise continuations drain first" is true and irrelevant — a timer
+    callback runs in the TIMERS phase, ahead of the CHECK phase where
+    `setImmediate` resumes. The facade counts lease holders now.
+  - #1081: the item-2 fix recreated item 3 from the other side.
+  - A surviving mutant is a claim about the TEST SUITE, never about the code.
+
+  **#1083 (#895) REDESIGNED after review, not patched.** The reviewer proved
+  the ordering rule could not be made right — `ts` is `Date.now()` at 1 ms and
+  the compared snapshots are two entries of ONE sequence, so a tie is
+  unordered, and OpenCode emits several per millisecond with no dedupe latch.
+  The tie rule **put an answered prompt back on screen**, where a keypress
+  writes into a live agent's composer.
+
+  The fix was already in the codebase: `session:resync-routing` re-emits main's
+  cached snapshot on the ORDINARY event channel, which needs no ordering key
+  because main updates its cache before forwarding. New
+  `session:reseed-conditions` does the same for adoption / cold restore /
+  wake, asked for by the renderer once its runtimes exist. That REMOVED five of
+  the seven findings rather than fixing them. Also fixed: the adoption seed
+  clobbered an exit observed mid-fetch, and the live conditions handler — the
+  projection's only call site — had zero coverage.
+
+  **OPENED**:
+  - **#1084** (#901 + #839, one bug reported twice): image-fixture provenance
+    split into a repo-only check and an opt-in live one. **CI caught a real
+    defect in my own control** — it matched `CORPUS_ROOTS`, which embed
+    `homedir()`, so the live check skipped every citation on any machine but
+    mine and would have passed vacuously forever. It matches provider
+    directory SEGMENTS now.
+  - **#1085** (#826 + #880): sweep `workspace.json.<pid>.*.tmp` whose writer is
+    dead (80 had accumulated in one profile); and one owner for "is this
+    session working", since `undefined !== 'idle'` counted a runtime-less
+    session as running.
+  - **#1086** (#875): `observations.wait` never settled because the consumer
+    re-declared the producer's status schema with `exited: z.boolean()`. The
+    SHARED FIXTURE was the accomplice — it hand-built `exited: false`, a value
+    the producer cannot emit, so the suite agreed with the bug. Rebuilding it
+    alone turns 11 tests red.
+
+  **In review**: #1084, #1085, #1086. #1083 answered, awaiting CI.
+
 - 2026-09-20 15:20Z — **#1080 and #1081 merged. Two review blockers found and fixed.**
 
   **MERGED**: **#1080** (#915, one last-active derivation — closes #915) and
