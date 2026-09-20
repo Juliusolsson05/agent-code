@@ -397,6 +397,18 @@ export class OrchestrationBridge {
     runId?: string
   }): Promise<OrchestrationCloseResult> {
     this.pruneCoordinationMetadata()
+    // WHY this stays on the CACHED read while `closeAgent` deliberately uses
+    // the uncached `readAgent` for the same job (#1101 review): the tombstone
+    // wants the run's outputs, and re-reading every child's transcript at close
+    // time is the most expensive round trip the bridge makes.
+    //
+    // What #925 changed here: the join window used to be 250 ms and is now
+    // "however long that read stays in flight", so this snapshot can join a
+    // read dispatched seconds earlier and the tombstone can miss the last few
+    // seconds of a child's output. It needs an MCP caller to have asked for
+    // exactly `maxMessagesPerAgent: MAX_CLOSED_AGENT_MESSAGES` with no char
+    // caps, so the key collides — narrow, and the alternative (an uncached read
+    // of every child at close) costs more than the seconds it recovers.
     const before = await this.readRunOutputs({
       parentSessionId: params.parentSessionId,
       runId: params.runId,
@@ -648,6 +660,15 @@ export class OrchestrationBridge {
    * key while the read was in flight, the entry is gone and MUST NOT come
    * back: its answer describes the world before the change, and a caller that
    * polls after the mutation has to see the renderer, not this.
+   *
+   * ONE observable this changes, named because `wait_agents` shows the error
+   * text to the model (#1101 review): a caller that joins an in-flight read
+   * inherits the ORIGINAL dispatch's 30 s deadline rather than getting a fresh
+   * one. A poll that joins at t=29 s fails one second later with "Timed out
+   * waiting for renderer orchestration response". That is better than what it
+   * replaces — the old duplicate could not dispatch until the first read timed
+   * out, so it failed at t≈60 s and burned a queue slot doing it — but it is
+   * a real difference in when a slow read gives up, and it is not a bug.
    */
   private startFreshnessOnSettle<T>(
     cache: Map<string, CachedValue<T>>,
