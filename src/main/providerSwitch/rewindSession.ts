@@ -72,10 +72,23 @@ export async function rewindSession(
     throw new Error('No resumable conversation remains before that prompt.')
   }
 
+  // #1038: a duplicate and a rewind are the SAME conversation continuing, so
+  // it keeps the model it ran on. Without this the projector stamped the
+  // machine's current default on every message, silently moving the copy to
+  // whatever model the user last picked somewhere else. A provider SWITCH is
+  // different and still takes the destination's default: there is no source
+  // model to inherit across providers.
+  // Promise.resolve wraps the OPTIONAL call: an adapter without
+  // sourceProfile (Claude, Codex) returns undefined, and `.catch` on
+  // undefined throws — which would turn a missing capability into a failed
+  // duplicate. A failing export is not fatal either; the projector then
+  // resolves its own target profile.
+  const sourceProfile = await Promise.resolve(adapter.sourceProfile?.(request.cwd, request.sourceProviderSessionId)).catch(() => null)
   const projection = await adapter.projectNativeResume(rewind.conversation, {
     cwd: request.cwd,
     targetSessionId: randomUUID(),
     now: new Date().toISOString(),
+    ...(sourceProfile ? { targetProfile: sourceProfile } : {}),
   })
   const newProviderSessionId = adapter.sessionId(projection)
   const draft = adapter.draft(rewind.draft)

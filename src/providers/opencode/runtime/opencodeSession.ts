@@ -119,6 +119,8 @@ export class OpencodeSession extends EventEmitter implements AgentSession {
   private readonly binary: string | undefined
   private readonly extraEnv: Record<string, string | undefined>
   private readonly resumeSessionId: string | null
+  /** See the assignment in start(). */
+  private liveSessionId: string | null = null
   private readonly builtInMcpServers: NonNullable<SessionOptions['builtInMcpServers']>
 
   constructor(options: SessionOptions) {
@@ -164,6 +166,18 @@ export class OpencodeSession extends EventEmitter implements AgentSession {
       sessionID: this.resumeSessionId ?? undefined,
     })
     this.headless = headless
+
+    // The live conversation's id. The package keeps its own copy private, and
+    // this is the only thing that can name the session row a prompt's model
+    // selection is read from (conversationSelection). A resume knows it up
+    // front; a fresh pane learns it when the server creates one.
+    this.liveSessionId = this.resumeSessionId ?? null
+    headless.on('ready', ({ sessionID }: { sessionID: string | null }) => {
+      if (sessionID) this.liveSessionId = sessionID
+    })
+    headless.on('session', (sessionID: string) => {
+      this.liveSessionId = sessionID
+    })
 
     headless.on('exit', ({ exitCode }) => {
       this.exited = true
@@ -457,7 +471,73 @@ export class OpencodeSession extends EventEmitter implements AgentSession {
     // prompt() defaults sessionID to the active/ensured session, so a
     // fresh pane that never resumed still gets a session created on the
     // first prompt.
-    await this.headless.prompt({ prompt: text })
+    // The selection and the destination are ONE decision (#1038 re-review):
+    // the row read is async, and the live session can change while it is in
+    // flight — a reload, a switch, the TUI navigating away. Submitting with
+    // the default destination then sent session A's agent, model and variant
+    // to session B, which OpenCode persists onto B's row. Pin both together,
+    // or send neither.
+    const pinned = await this.conversationSelection()
+    await this.headless.prompt({ prompt: text, ...pinned })
+  }
+
+  /**
+   * The agent, model and variant THIS conversation runs on, read from its own
+   * session row immediately before a prompt.
+   *
+   * WHY the prompt has to carry them at all (#1038 review): OpenCode resolves
+   * a submission's model as `input.model ?? agent.model ?? session model`, so
+   * a machine-level `agent.build.model` outranks the session's own selection.
+   * A duplicated or rewound conversation therefore kept its model in every
+   * imported message and then answered the next prompt on whatever this
+   * machine's config named — which is the exact loss #1038 is about, one
+   * layer below the transcript. Reproduced against the 1.18.30 binary with
+   * `agent.build.model = opencode/big-pickle`.
+   *
+   * WHY agent AND model AND variant, never a subset: OpenCode persists what a
+   * prompt selects back onto the session row, so a partial selection MOVES
+   * the conversation — sending a model without an agent re-homes it to the
+   * default agent, permanently.
+   *
+   * WHY it is re-read per prompt instead of cached at start: the row is the
+   * source of truth and it changes underneath us — the TUI, another client or
+   * a model switch all write it. One local HTTP GET against a server on this
+   * machine is cheaper than a stale selection that silently re-homes the
+   * session. A failure or an unparseable row yields no selection at all,
+   * which is exactly the behaviour that shipped before this existed.
+   */
+  private async conversationSelection(): Promise<{
+    sessionID?: string
+    agent?: string
+    providerID?: string
+    modelID?: string
+    variant?: string
+  }> {
+    const sessionID = this.liveSessionId
+    if (!this.headless || !sessionID) return {}
+    const row = await this.headless.client.getSession(sessionID).catch(() => null)
+    // The session moved while the row was in flight. Its selection is not this
+    // session's to send, and sending it would write A's model onto B's row.
+    if (this.liveSessionId !== sessionID) return {}
+    if (!isRecord(row)) return {}
+    const model = isRecord(row.model) ? row.model : null
+    // The session row spells the model `id`, not `modelID` as a message does.
+    const text = (value: unknown): string | undefined =>
+      typeof value === 'string' && value.length > 0 ? value : undefined
+    const modelID = text(model?.id)
+    const providerID = text(model?.providerID)
+    const variant = text(model?.variant)
+    const agent = text(row.agent)
+    // ALL FOUR or nothing (#1038 re-review found model+variant going without
+    // an agent, and agent+model going without a variant). OpenCode persists
+    // what a prompt selects back onto the row, so a partial selection does
+    // not merely under-specify this one submission — it REWRITES the
+    // conversation's own selection, permanently, to whatever the server fills
+    // the gaps with. A row that cannot answer all four is a row we do not
+    // act on; the server's own defaults then apply, exactly as they did
+    // before any of this existed.
+    if (!modelID || !providerID || !variant || !agent) return {}
+    return { sessionID, agent, modelID, providerID, variant }
   }
 
   async stop(): Promise<void> {
@@ -504,4 +584,9 @@ export class OpencodeSession extends EventEmitter implements AgentSession {
     // / in attach mode.
     return this.headless?.processPid ?? null
   }
+}
+
+/** Narrow an unknown HTTP payload before reading fields off it. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
 }
