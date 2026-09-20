@@ -1,0 +1,267 @@
+{
+  "version": 3,
+  "windows": [
+    {
+      "windowId": "8ba30627-5c41-4986-a325-b4ada30aa5f0",
+      "bounds": {
+        "x": 35,
+        "y": 33,
+        "width": 1400,
+        "height": 859
+      },
+      "displayId": 1,
+      "fullScreen": true,
+      "workspace": {
+        "projects": [
+          {
+            "id": "3bf27c7f-2e3a-4da1-a35a-e013ad86f937",
+            "title": "Title 1"
+          },
+          {
+            "id": "e0224b91-da18-4b20-9cc0-da491569a6b5",
+            "title": "Title 2"
+          },
+          {
+            "id": "d3a84a9d-2993-4423-9fa4-8c6a457b4e7b",
+            "title": "Title 3"
+          }
+        ],
+        "activeProjectId": "e0224b91-da18-4b20-9cc0-da491569a6b5",
+        "stage": {
+          "lanes": [
+            {
+              "selectedSessionId": "5906040e-f07c-4699-a153-d79647e07edb"
+            },
+            {
+              "selectedSessionId": "edc2bc2f-56cc-4313-bb59-2ea6d84dadcf"
+            }
+          ],
+          "rows": [
+            {
+              "length": 2,
+              "capChildren": false,
+              "indexFraction": 0.1,
+              "height": 0.4928831303208002
+            }
+          ],
+          "focusedLane": 0,
+          "laneWeights": [
+            0.22054063618877104,
+            0.24008905432342076
+          ]
+        },
+        "sessions": {
+          "575880c6-d447-49b8-aa9b-64705d70c287": {
+            "tldrIdentity": "6fb1cb83-be8e-4def-a697-0c1568bccdf7",
+            "cwd": "/fixture/project-1",
+            "kind": "claude",
+            "builtInMcpDomains": [
+              "tldr",
+              "goal",
+              "orchestration",
+              "agent_transcripts",
+              "goal_loop"
+            ],
+            "builtInMcpOverrides": {},
+            "agentNameId": "575880c6-d447-49b8-aa9b-64705d70c287",
+            "providerSessionId": "dc60ca6b-50a9-4179-b36e-12f6de366f49",
+            "providerSessionIdSource": "proxy-header",
+            "projectId": "e0224b91-da18-4b20-9cc0-da491569a6b5",
+            "joinedAt": 0
+          },
+          "e6e19a29-f8b4-44da-bb9a-38fcfca2a314": {
+            "tldrIdentity": "8181bc5b-8eb8-4ee5-b2a0-85c8a9f17e39",
+            "cwd": "/fixture/project-2",
+            "kind": "opencode",
+            "providerRuntime": "terminal",
+            "providerSessionId": "ses_11e052c875fb4a9a85c25fe68823817c",
+            "providerSessionIdSource": "jsonl-entry",
+            "builtInMcpDomains": [
+              "agent_transcripts",
+              "workflows",
+              "orchestration",
+              "tldr",
+              "goal",
+              "root_management"
+            ],
+            "builtInMcpOverrides": {
+              "root_management": true
+            },
+            "agentNameId": "e6e19a29-f8b4-44da-bb9a-38fcfca2a314",
+            "projectId": "3bf27c7f-2e3a-4da1-a35a-e013ad86f937",
+            "joinedAt": 1789450871302
+          },
+          "9bb36de4-39a0-434a-b0b1-00f017d759bd": {
+            "tldrIdentity": "c95d99b5-ce11-4567-ae13-a848117e59d0",
+            "cwd": "/fixture/project-3",
+            "kind": "claude",
+            "builtInMcpDomains": [
+              "tldr",
+              "goal",
+              "orchestration",
+              "agent_transcripts",
+              "goal_loop"
+            ],
+            "builtInMcpOverrides": {},
+            "agentNameId": "9bb36de4-39a0-434a-b0b1-00f017d759bd",
+            "providerSessionId": "2a2aa626-fcb0-4f47-a467-2f928b913a0b",
+            "providerSessionIdSource": "proxy-header",
+            "projectId": "d3a84a9d-2993-4423-9fa4-8c6a457b4e7b",
+            "joinedAt": 0
+          },
+          "1220cbcb-cabf-41b8-a37c-cebd8b506ce7": {
+            "tldrIdentity": "4a8a189b-d663-4190-a82c-d44f5893e86d",
+            "cwd": "/fixture/project-3",
+            "kind": "opencode",
+            "providerRuntime": "terminal",
+            "providerSessionId": "ses_a121d2d5434b4b6bb970ee5dfc170156",
+            "providerSessionIdSource": "jsonl-entry",
+            "builtInMcpDomains": [
+              "agent_transcripts",
+              "workflows",
+              "orchestration",
+              "tldr",
+              "goal"
+            ],
+            "builtInMcpOverrides": {},
+            "agentNameId": "1220cbcb-cabf-41b8-a37c-cebd8b506ce7",
+            "projectId": "d3a84a9d-2993-4423-9fa4-8c6a457b4e7b",
+            "joinedAt": 1789679456635
+          },
+          "a15c8aa6-9d69-4907-ad51-71f7fbe5cc01": {
+            "cwd": "/fixture/project-1",
+            "kind": "terminal",
+            "tmuxName": "agentcode-b5f36ea3-4d90-4b32-866e-586bfd09b3c7",
+            "builtInMcpOverrides": {},
+            "projectId": "e0224b91-da18-4b20-9cc0-da491569a6b5",
+            "joinedAt": 1789693969704
+          },
+          "6579b6f4-77eb-4813-93dd-2e66a9c46789": {
+            "tldrIdentity": "d4b81a48-1657-4038-8b92-e49107ee22c2",
+            "cwd": "/fixture/project-1",
+            "kind": "opencode",
+            "providerRuntime": "terminal",
+            "providerSessionId": "ses_6840aca1a7c64d5eaa557982bb32284f",
+            "providerSessionIdSource": "jsonl-entry",
+            "builtInMcpDomains": [
+              "tldr",
+              "goal",
+              "orchestration",
+              "agent_transcripts",
+              "workflows"
+            ],
+            "builtInMcpOverrides": {},
+            "projectId": "e0224b91-da18-4b20-9cc0-da491569a6b5",
+            "joinedAt": 1789695773526
+          },
+          "4d757102-4a13-47c2-9fe0-8a9359cd8323": {
+            "tldrIdentity": "7c218c21-e550-41b6-805e-3399481313fc",
+            "cwd": "/fixture/project-1",
+            "kind": "codex",
+            "builtInMcpDomains": [
+              "tldr",
+              "goal",
+              "orchestration",
+              "agent_transcripts",
+              "workflows"
+            ],
+            "builtInMcpOverrides": {},
+            "projectId": "e0224b91-da18-4b20-9cc0-da491569a6b5",
+            "joinedAt": 1789763911968
+          },
+          "5906040e-f07c-4699-a153-d79647e07edb": {
+            "tldrIdentity": "2776c698-22a4-41ee-bed2-26cd0ac41e20",
+            "cwd": "/fixture/project-1",
+            "kind": "claude",
+            "providerSessionId": "83a02301-2e9a-42a6-98cb-38cffc008e25",
+            "providerSessionIdSource": "jsonl-entry",
+            "builtInMcpDomains": [
+              "tldr",
+              "goal",
+              "orchestration",
+              "agent_transcripts",
+              "goal_loop",
+              "root_management"
+            ],
+            "builtInMcpOverrides": {
+              "root_management": true
+            },
+            "projectId": "e0224b91-da18-4b20-9cc0-da491569a6b5",
+            "joinedAt": 1789782517126
+          },
+          "edc2bc2f-56cc-4313-bb59-2ea6d84dadcf": {
+            "tldrIdentity": "92fd066e-5cca-4363-af35-2993873b426d",
+            "cwd": "/fixture/project-1",
+            "kind": "codex",
+            "builtInMcpDomains": [
+              "tldr",
+              "goal",
+              "orchestration",
+              "agent_transcripts",
+              "workflows",
+              "goal_loop"
+            ],
+            "builtInMcpOverrides": {},
+            "providerSessionId": "01a0bc36-1032-7da0-863d-1ad6f63e85f3",
+            "providerSessionIdSource": "jsonl-entry",
+            "projectId": "e0224b91-da18-4b20-9cc0-da491569a6b5",
+            "joinedAt": 1789864054446
+          },
+          "2bd51d81-4bbe-4e31-999d-797fc27d30b3": {
+            "tldrIdentity": "cc77d9de-b086-4af1-acb5-39d72f6c8195",
+            "cwd": "/fixture/project-1",
+            "kind": "claude",
+            "builtInMcpDomains": [
+              "tldr",
+              "goal",
+              "orchestration",
+              "agent_transcripts",
+              "goal_loop"
+            ],
+            "builtInMcpOverrides": {},
+            "projectId": "e0224b91-da18-4b20-9cc0-da491569a6b5",
+            "joinedAt": 1789867306111
+          },
+          "a88b59a3-0898-4d02-b941-f43be354acc7": {
+            "cwd": "/fixture/project-1",
+            "kind": "extension-view",
+            "extensionViewId": "julius-workspace-features.main",
+            "projectId": "e0224b91-da18-4b20-9cc0-da491569a6b5",
+            "joinedAt": 1789886865905,
+            "builtInMcpOverrides": {}
+          },
+          "dbd157af-851f-46ff-a88c-b7e0b4a0f8ba": {
+            "cwd": "/fixture/project-1",
+            "kind": "terminal",
+            "tmuxName": "agentcode-3ecf1262-5b1c-42e3-ac29-3c081d6fa391",
+            "projectId": "e0224b91-da18-4b20-9cc0-da491569a6b5",
+            "joinedAt": 1789893133675,
+            "builtInMcpOverrides": {}
+          },
+          "b05e03c1-fc0a-43ad-ac7e-78f3640c7327": {
+            "tldrIdentity": "0e388bf3-d210-4831-a799-97541ccc4e9a",
+            "cwd": "/fixture/project-4",
+            "kind": "claude",
+            "builtInMcpDomains": [
+              "tldr",
+              "goal",
+              "orchestration",
+              "agent_transcripts",
+              "goal_loop"
+            ],
+            "builtInMcpOverrides": {},
+            "title": "Title 4",
+            "orchestrationParentId": "5906040e-f07c-4699-a153-d79647e07edb",
+            "orchestrationRootId": "5906040e-f07c-4699-a153-d79647e07edb",
+            "orchestrationRole": "reviewer",
+            "projectId": "e0224b91-da18-4b20-9cc0-da491569a6b5",
+            "joinedAt": 1789893300288,
+            "providerSessionId": "07a27d03-c9f3-47c5-9de0-2135e240f31c",
+            "providerSessionIdSource": "jsonl-entry",
+            "orchestrationBootstrapPromptDelivered": true
+          }
+        }
+      }
+    }
+  ]
+}
