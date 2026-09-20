@@ -154,14 +154,17 @@ export class GoalLoopService extends EventEmitter {
   /** Last hook, semantic event or delivery per hook-driven session, in ms.
    * Only Resume reads it; see control(). */
   private readonly lastHookSessionActivity = new Map<string, number>()
-  /** Continuations HELD because something said the agent was still working,
-   * with the wall-clock instant each one last saw PROGRESS — the hold's start,
-   * then any hook or state-changing event after it (noteHeldProgress). Both
-   * deadlines measure from here, so they bound how long we wait on a SILENT
-   * signal, never how long an agent is allowed to keep working. A held
-   * continuation is never a dropped one: it re-evaluates itself every
-   * HOLD_POLL_MS. */
+  /** When each held continuation STARTED waiting. Never moves while the hold
+   * lasts, which is what makes the screen grace a real bound: the screen is
+   * the signal that latches on a stale row, so the time it may hold a
+   * delivery cannot be renewable by unrelated traffic (#1033 round 4 renewed
+   * it indefinitely with turn_started/turn_completed churn). */
   private readonly heldSince = new Map<string, number>()
+  /** When each held continuation last saw PROGRESS — the hold's start, then
+   * any provider event or hook after it. The stall pause measures from here,
+   * so it bounds how long we wait on a SILENT signal and never how long an
+   * agent may keep working. */
+  private readonly progressSince = new Map<string, number>()
   /** The re-evaluation timer for each held session; see holdUntilQuiet. */
   private readonly holdPolls = new Map<string, ReturnType<typeof setTimeout>>()
   /** Sessions whose last continuation was QUEUED by the provider rather than
@@ -258,7 +261,7 @@ export class GoalLoopService extends EventEmitter {
       // is still wanted — this turn's own end is what will deliver it — but
       // its stall deadline must not keep running across work that is
       // legitimately ongoing, or the loop pauses itself for being patient
-      // (second #1033 review). Restart the clock, keep the continuation.
+      // (second #1033 review). Restart the stall clock, keep the continuation.
       this.noteHeldProgress(sessionId)
       // A typed prompt STARTS a turn, and UserPromptSubmit publishes no
       // semantic event, so the tracked phase would still read the previous
@@ -440,6 +443,12 @@ export class GoalLoopService extends EventEmitter {
     // Any event at all, deltas included, means the provider is still doing
     // something; the quiet-turn check (Resume) measures silence from here.
     this.lastHookSessionActivity.set(sessionId, Date.now())
+    // And so does a held continuation's stall deadline. This is deliberately
+    // BEFORE the reducer's identity check below (#1033 round 4): a streamed
+    // answer is mostly text and thinking deltas, which the reducer collapses
+    // to the same state, so a loop held through forty minutes of visible
+    // streaming paused itself for "silence" while the model was talking.
+    this.noteHeldProgress(sessionId)
     // Reduce for every session, in every loop phase (see the class comment):
     // only the DECISION to continue is gated on an active loop. The reducer
     // returns the same object for the high-volume delta events, so the common
@@ -454,10 +463,16 @@ export class GoalLoopService extends EventEmitter {
     // one case where pausing the loop is plainly wrong, and it was reachable
     // — a reopened turn streaming every minute for thirty minutes paused
     // itself. Restart the clock on anything that changed the tracked state.
-    this.noteHeldProgress(sessionId)
-    // A queued continuation that has begun: for a provider without hooks this
-    // phase edge is the only signal that the queue drained.
-    if (isWorking(next) && !isWorking(state)) this.queuedContinuation.delete(sessionId)
+    // A queued continuation that has begun. For a provider WITHOUT hooks this
+    // phase edge is the only signal that the queue drained; for a hook-driven
+    // one it is a false positive waiting to happen — a Claude subagent flow
+    // publishes exactly this edge mid-turn (#1024), and the reviewer used
+    // that recorded sequence to release a queued continuation and deliver a
+    // second one without any UserPromptSubmit. Hook sessions wait for the
+    // hook.
+    if (!this.hookSessions.has(sessionId) && isWorking(next) && !isWorking(state)) {
+      this.queuedContinuation.delete(sessionId)
+    }
     // Hook-driven sessions take their turn boundary from the provider's Stop
     // hook only (observeProviderHook). Their phase edges are exactly the
     // false positives #1024 recorded, so they never schedule a continuation.
@@ -606,11 +621,16 @@ export class GoalLoopService extends EventEmitter {
    * stuck signal. Both deadlines (the 45 s screen grace and the 30 min stall
    * pause) hang off this instant. */
   private noteHeldProgress(sessionId: string): void {
-    if (this.heldSince.has(sessionId)) this.heldSince.set(sessionId, Date.now())
+    if (this.progressSince.has(sessionId)) this.progressSince.set(sessionId, Date.now())
   }
 
   private heldForMs(sessionId: string): number {
     const since = this.heldSince.get(sessionId)
+    return since === undefined ? 0 : Date.now() - since
+  }
+
+  private quietWhileHeldMs(sessionId: string): number {
+    const since = this.progressSince.get(sessionId)
     return since === undefined ? 0 : Date.now() - since
   }
 
@@ -633,8 +653,11 @@ export class GoalLoopService extends EventEmitter {
    * that exists only while something is held cannot have that failure mode.
    */
   private holdUntilQuiet(sessionId: string, reason: string): void {
-    if (!this.heldSince.has(sessionId)) this.heldSince.set(sessionId, Date.now())
-    if (this.heldForMs(sessionId) >= GOAL_LOOP_HOLD_STALL_MS) {
+    if (!this.heldSince.has(sessionId)) {
+      this.heldSince.set(sessionId, Date.now())
+      this.progressSince.set(sessionId, Date.now())
+    }
+    if (this.quietWhileHeldMs(sessionId) >= GOAL_LOOP_HOLD_STALL_MS) {
       this.pauseStalledHold(sessionId, reason)
       return
     }
@@ -655,6 +678,7 @@ export class GoalLoopService extends EventEmitter {
 
   private releaseHold(sessionId: string): void {
     this.heldSince.delete(sessionId)
+    this.progressSince.delete(sessionId)
     const timer = this.holdPolls.get(sessionId)
     if (timer) clearTimeout(timer)
     this.holdPolls.delete(sessionId)
@@ -666,6 +690,13 @@ export class GoalLoopService extends EventEmitter {
    * and will never prompt again. */
   private pauseStalledHold(sessionId: string, reason: string): void {
     this.releaseHold(sessionId)
+    // The latch goes with it. If we are pausing, whatever we were waiting for
+    // did not arrive — a queued prompt the user cleared, a start signal the
+    // provider never sent — and keeping the latch made Resume useless: it
+    // re-held on the same stale reason and paused again half an hour later
+    // without ever delivering (#1033 round 4). The user asking for a retry is
+    // the signal that the queue is no longer what it was.
+    this.queuedContinuation.delete(sessionId)
     const loop = this.loops.get(sessionId)
     if (!loop || loop.phase !== 'active') return
     console.warn(`[goal-loop] ${sessionId}: held for ${Math.round(GOAL_LOOP_HOLD_STALL_MS / 60_000)} min on "${reason}" after its turn ended; pausing instead of typing into it`)

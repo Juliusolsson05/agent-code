@@ -189,7 +189,14 @@ describe('GoalLoopService', () => {
     await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
     svc.observeProviderHook('s1', 'post-tool-use')
     svc.observeProviderHook('s1', 'stop', { blocked: false })
-    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1))
+    // Wait for the delivery to be RECORDED, not merely issued: the
+    // re-entrancy guard holds until the loop's state is persisted, so a slow
+    // store would otherwise swallow the second Stop and let this test pass
+    // with the latch removed (#1033 round 4).
+    await vi.waitFor(() => {
+      expect(deliver).toHaveBeenCalledTimes(1)
+      expect(svc.snapshot()['s1']?.continuationsDelivered).toBe(1)
+    })
 
     // The turn that was already running now ends. Our continuation is still
     // in the queue, so this Stop is not ours to answer.
@@ -243,6 +250,96 @@ describe('GoalLoopService', () => {
       // And when that long turn finally ends, the held continuation lands.
       svc.observeProviderHook('s1', 'stop', { blocked: false })
       await vi.advanceTimersByTimeAsync(2_000)
+      expect(deliver).toHaveBeenCalledTimes(1)
+    } finally { vi.useRealTimers() }
+  })
+
+  it('a hook session does not release a queued continuation on a subagent phase edge (#1033 round 4)', async () => {
+    // The phase fallback exists for providers without hooks. For a hook
+    // session it is the #1024 false positive itself: a Claude subagent flow
+    // publishes working→idle mid-turn, which released the latch and delivered
+    // a second continuation with no UserPromptSubmit in sight.
+    const queued = vi.fn(async () => ({ ok: true, acceptance: { kind: 'queue', acceptedAt: 1 } } as unknown as PromptDeliveryResult))
+    const { svc, manager, deliver } = await service(queued)
+    await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+    svc.observeProviderHook('s1', 'post-tool-use')
+    svc.observeProviderHook('s1', 'stop', { blocked: false })
+    await vi.waitFor(() => expect(svc.snapshot()['s1']?.continuationsDelivered).toBe(1))
+
+    // The turn that was already running ends, so the continuation is held on
+    // the queue latch alone — the Stop cleared the turn guard and the tracked
+    // phase with it.
+    svc.observeProviderHook('s1', 'stop', { blocked: false })
+    // Now the recorded subagent sequence: a flow promoted on its first chunk
+    // and demoted as a subagent, which reads as working→idle. The hold poll
+    // re-evaluates every second, so a latch released by that edge delivers
+    // with no further hook at all.
+    subagentFlowInToolGap(manager)
+    await new Promise(resolve => setTimeout(resolve, 1_500))
+    expect(deliver).toHaveBeenCalledTimes(1)
+  })
+
+  it('a stall pause drops the queue latch so Resume can act (#1033 round 4)', async () => {
+    // The queued prompt never started — the user cleared the queue, or the
+    // start signal never came. Pausing while KEEPING the latch made Resume
+    // useless: it re-held on the same stale reason and paused again half an
+    // hour later, forever, without delivering.
+    const queued = vi.fn(async () => ({ ok: true, acceptance: { kind: 'queue', acceptedAt: 1 } } as unknown as PromptDeliveryResult))
+    const { svc, deliver } = await service(queued)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+    svc.observeProviderHook('s1', 'post-tool-use')
+    svc.observeProviderHook('s1', 'stop', { blocked: false })
+    await vi.waitFor(() => expect(svc.snapshot()['s1']?.continuationsDelivered).toBe(1))
+
+    vi.useFakeTimers()
+    try {
+      svc.observeProviderHook('s1', 'stop', { blocked: false })
+      await vi.advanceTimersByTimeAsync(GOAL_LOOP_HOLD_STALL_MS + 2_000)
+      expect(svc.snapshot()['s1']).toMatchObject({ phase: 'paused', pauseReason: 'error' })
+    } finally { vi.useRealTimers(); warn.mockRestore() }
+
+    svc.control('s1', { action: 'resume' })
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(2))
+  })
+
+  it('a streamed answer is progress, not silence (#1033 round 4)', async () => {
+    // A streamed answer is mostly text and thinking deltas, which the reducer
+    // collapses to the same state. Treating only state CHANGES as progress
+    // paused a loop for "silence" through forty minutes of visible streaming.
+    const { svc, manager, deliver } = await service()
+    vi.useFakeTimers()
+    try {
+      await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+      svc.observeProviderHook('s1', 'user-prompt-submit')
+      svc.control('s1', { action: 'pause' })
+      svc.control('s1', { action: 'resume' })
+      manager.emit('semantic-event', { sessionId: 's1', event: { type: 'stream_phase', phase: 'responding' } })
+      for (let minute = 0; minute < 40; minute += 1) {
+        manager.emit('semantic-event', { sessionId: 's1', event: { type: 'text_delta', text: 'still going' } })
+        await vi.advanceTimersByTimeAsync(60_000)
+      }
+      expect(svc.snapshot()['s1']).toMatchObject({ phase: 'active' })
+      expect(deliver).not.toHaveBeenCalled()
+    } finally { vi.useRealTimers() }
+  })
+
+  it('unrelated traffic cannot renew the screen grace (#1033 round 4)', async () => {
+    // The screen is the signal that latches on a stale row, so the time it is
+    // allowed to hold a delivery must be a real bound — not one any passing
+    // event can renew. With a latched active screen and an idle phase, turn
+    // metadata arriving every 30 s held a continuation forever.
+    const { svc, manager, deliver, processState } = await service()
+    vi.useFakeTimers()
+    try {
+      await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+      processState.active = true
+      idleTurn(manager)
+      for (let tick = 0; tick < 4; tick += 1) {
+        manager.emit('semantic-event', { sessionId: 's1', event: { type: 'turn_started', turnId: `t${tick}` } })
+        manager.emit('semantic-event', { sessionId: 's1', event: { type: 'turn_completed', turnId: `t${tick}` } })
+        await vi.advanceTimersByTimeAsync(30_000)
+      }
       expect(deliver).toHaveBeenCalledTimes(1)
     } finally { vi.useRealTimers() }
   })
