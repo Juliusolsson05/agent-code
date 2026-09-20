@@ -206,99 +206,65 @@ describe('adopting a closed window', () => {
   })
 
   // #895. A permission or question pending when a window closes vanished from
-  // the adopting window: the adopted runtime was seeded from `emptyRuntime()`,
-  // which has `conditions: null`, and providers publish conditions only when
+  // the adopting window: the adopted runtime is seeded from `emptyRuntime()`,
+  // whose `conditions` is null, and providers publish conditions only when
   // they CHANGE — the OpenCode Terminal package and claude-code-headless both
   // deduplicate — so nothing ever re-sent them. Dispatch lost ACTION/QUESTION
   // and orchestration summaries stopped naming the blocker, while the raw TUI
   // still showed the prompt. Found by review R4 of #882; generic, not
   // OpenCode-specific.
-  const permissionSnapshot = (ts: number) => ({
-    provider: 'claude' as const,
-    ts,
-    conditions: {
-      'claude.permission-prompt': {
-        kind: 'claude.permission-prompt',
-        state: { visible: true, title: 'Allow Bash?' },
-        actions: [],
-      },
-    },
-  })
-
-  it('seeds the pending conditions main already holds, so a blocked agent stays blocked', async () => {
+  //
+  // The fix does NOT carry the snapshot on this window's `getBackendSnapshot`
+  // reply. Conditions have no revision, so a reply raced against live events
+  // cannot be ordered against them — the first attempt compared `ts`, and 1 ms
+  // ties are genuinely unordered, so a prompt answered in the same millisecond
+  // it appeared could be restored onto the user's screen. Main re-emits on the
+  // ordinary event channel instead, which is ordered by construction.
+  it('asks main to re-emit blockers AFTER its runtimes exist, never before', async () => {
     getBackendSnapshot.mockImplementation(async (sessionId: string) => (
       sessionId === 'grid-a'
-        ? {
-            sessionId,
-            kind: 'claude',
-            cwd: '/closed',
-            lifecycle: 'live',
-            input: { ready: true, reason: null, revision: 7 },
-            conditions: permissionSnapshot(1_000),
-          }
+        ? { sessionId, kind: 'claude', cwd: '/closed', lifecycle: 'live', input: { ready: true, reason: null, revision: 7 } }
         : null
     ))
+    // The ONE thing that makes this correct is the ORDER: a re-emit that
+    // landed before the seed would be overwritten by `emptyRuntime()`, which
+    // is the bug it exists to fix. So the assertion is what the runtime map
+    // looked like AT THE MOMENT the request went out, not afterwards.
+    let seededWhenAsked: string[] = []
+    let askedFor: string[] = []
+    const reseedSessionConditions = vi.fn(async (ids: string[]) => {
+      askedFor = ids
+      seededWhenAsked = Object.keys(h.refs.latestRuntimesRef.current)
+      return ids.length
+    })
+    ;(window as unknown as { api: Record<string, unknown> }).api.reseedSessionConditions = reseedSessionConditions
 
     const h = harness(true)
     h.fire({ windowId: 'closed-window', workspace: closedWindowPayload() })
 
-    await waitFor(() => {
-      expect(h.refs.latestRuntimesRef.current['grid-a']?.conditions).not.toBeNull()
-    })
-    expect(h.refs.latestRuntimesRef.current['grid-a']?.conditions)
-      .toEqual(permissionSnapshot(1_000))
+    await waitFor(() => expect(reseedSessionConditions).toHaveBeenCalled())
+    // Every adopted session is asked for, parked ones included: main answers
+    // only for the ones it actually holds a snapshot for.
+    expect(askedFor).toEqual(expect.arrayContaining(['grid-a', 'parked']))
+    expect(seededWhenAsked).toEqual(expect.arrayContaining(['grid-a', 'parked']))
   })
 
-  it('projects the composer picker out of the seeded snapshot, not just the raw field', async () => {
-    // `conditions` is not the only thing the projection owns: the composer
-    // picker is a separate renderer model derived from the same snapshot
-    // (`conditionPolicy.composerPickerKind`). A seed that copied the field but
-    // skipped the projection would adopt an agent whose composer disagrees
-    // with its own conditions — exactly the split authority the single
-    // `applyConditionSnapshot` exists to prevent.
-    const withPicker = {
-      provider: 'claude' as const,
-      ts: 1_000,
-      conditions: {
-        'claude.slash-picker': {
-          kind: 'claude.slash-picker',
-          state: { visible: true, items: [{ name: '/clear', description: 'clear', selected: true }] },
-          actions: [],
-        },
-      },
-    }
-    getBackendSnapshot.mockImplementation(async (sessionId: string) => (
-      sessionId === 'grid-a'
-        ? {
-            sessionId,
-            kind: 'claude',
-            cwd: '/closed',
-            lifecycle: 'live',
-            input: { ready: true, reason: null, revision: 7 },
-            conditions: withPicker,
-          }
-        : null
-    ))
-
+  it('adopts normally against a preload that has no re-emit at all', async () => {
+    // The hint is not a step. An older shell, or a test double that does not
+    // care, must still get its workspace back.
+    delete (window as unknown as { api: Record<string, unknown> }).api.reseedSessionConditions
     const h = harness(true)
     h.fire({ windowId: 'closed-window', workspace: closedWindowPayload() })
-
-    await waitFor(() => {
-      expect(h.refs.latestRuntimesRef.current['grid-a']?.conditions).not.toBeNull()
-    })
-    expect(h.refs.latestRuntimesRef.current['grid-a']?.picker).toEqual({
-      visible: true,
-      items: [{ name: '/clear', description: 'clear', selected: true }],
-    })
+    await waitFor(() => expect(h.refs.latestRuntimesRef.current.parked).toBeDefined())
+    expect(h.refs.pendingAdoptionWindowIdsRef.current).toEqual(['closed-window'])
   })
 
-  it('lets a condition that changed DURING the fetch win, instead of resurrecting the stale one', async () => {
-    // Session routing is transferred to this window BEFORE the adoption offer
-    // arrives, and `onSessionConditions` creates a runtime for a session it has
-    // never seen (`prev[sessionId] ?? emptyRuntime()`). So a clear that lands
-    // while the snapshot is in flight is already in the runtime map when the
-    // seed runs — and a seed that simply overwrites it puts the dismissed
-    // prompt back, in the surface the user acts on.
+  it('keeps an exit observed while the snapshot was in flight (#1083 review, finding 2)', async () => {
+    // Routing moves to this window BEFORE the offer arrives, so the live
+    // channel can write `exited` while `getBackendSnapshot` is still in
+    // flight. The reply was computed while the backend was alive; applying it
+    // blindly repaints a dead agent as `started` with an enabled composer.
+    // Both sibling seed sites already guarded this; adoption did not.
     let resolveSnapshot: (value: unknown) => void = () => {}
     getBackendSnapshot.mockImplementation(async (sessionId: string) => {
       if (sessionId !== 'grid-a') return null
@@ -309,29 +275,18 @@ describe('adopting a closed window', () => {
     h.fire({ windowId: 'closed-window', workspace: closedWindowPayload() })
     await waitFor(() => expect(getBackendSnapshot).toHaveBeenCalled())
 
-    // The live channel clears it while main's cached snapshot is still in
-    // flight: the newer `ts` is the whole ordering signal.
+    // The PTY dies mid-fetch, exactly as `onSessionExit` writes it.
     h.refs.latestRuntimesRef.current = {
       ...h.refs.latestRuntimesRef.current,
-      'grid-a': {
-        ...emptyRuntime(),
-        conditions: { provider: 'claude', ts: 2_000, conditions: {} },
-      } as SessionRuntime,
+      'grid-a': { ...emptyRuntime(), processStatus: 'exited', exited: 0, recoveryFailureCode: null } as SessionRuntime,
     }
     resolveSnapshot({
-      sessionId: 'grid-a',
-      kind: 'claude',
-      cwd: '/closed',
-      lifecycle: 'live',
+      sessionId: 'grid-a', kind: 'claude', cwd: '/closed', lifecycle: 'live',
       input: { ready: true, reason: null, revision: 7 },
-      conditions: permissionSnapshot(1_000),
     })
 
-    await waitFor(() => {
-      expect(h.refs.latestRuntimesRef.current['grid-a']?.processStatus).toBe('started')
-    })
-    expect(h.refs.latestRuntimesRef.current['grid-a']?.conditions)
-      .toEqual({ provider: 'claude', ts: 2_000, conditions: {} })
+    await waitFor(() => expect(h.refs.latestRuntimesRef.current.parked).toBeDefined())
+    expect(h.refs.latestRuntimesRef.current['grid-a']).toMatchObject({ processStatus: 'exited', exited: 0 })
   })
 
   it('loads history only for adopted sessions that have a live backend', async () => {

@@ -70,6 +70,19 @@ export const sessionApi = {
   getBackendSnapshot: (sessionId: string): Promise<SessionBackendSnapshot | null> =>
     ipcRenderer.invoke('session:get-backend-snapshot', sessionId),
 
+  /**
+   * Ask main to re-emit these sessions' cached provider conditions on
+   * `session:conditions` (#895).
+   *
+   * Call it once the runtimes exist: a window that adopts, restores or wakes a
+   * session rebuilds it from `emptyRuntime()`, and providers publish
+   * conditions only when they CHANGE — so an agent already blocked on a
+   * permission or a question sends nothing to a renderer that just started
+   * watching it. Returns how many were delivered.
+   */
+  reseedSessionConditions: (sessionIds: string[]): Promise<number> =>
+    ipcRenderer.invoke('session:reseed-conditions', sessionIds),
+
   killSession: (sessionId: string): Promise<boolean> =>
     ipcRenderer.invoke('session:kill', sessionId),
 

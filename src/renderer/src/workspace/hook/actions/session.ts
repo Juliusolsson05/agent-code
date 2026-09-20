@@ -11,7 +11,6 @@ import type { AgentProviderRuntime } from '@shared/types/providerKind'
 import type { SessionRecoverFailureCode } from '@shared/types/session'
 import { useCallback, useRef } from 'react'
 
-import { seedBackendConditions } from '@renderer/session-runtime/conditions'
 import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
 import { clearLiveEntryWindowSession } from '@renderer/session-runtime/liveEntryWindow'
@@ -809,12 +808,7 @@ export function useSessionActions(
                 : recovery.snapshot.sessionRunId ?? current.sessionRunId
               return {
                 ...prev,
-                // #895: a parked session woken into a backend that is ALREADY
-                // blocked never hears about it — providers publish conditions
-                // only when they change, and `current` here predates the
-                // recovery. `current` is also the newest thing the live channel
-                // has written, so it wins a tie.
-                [sessionId]: seedBackendConditions({
+                [sessionId]: {
                   ...current,
                   sessionRunId: recoveredSessionRunId,
                   ...(preserveObservedTerminalProcess
@@ -843,9 +837,15 @@ export function useSessionActions(
                           : {}),
                         exited: null,
                       }),
-                }, current, recovery.snapshot.conditions),
+                },
               }
             })
+            // The runtime exists and the backend is live, so main can re-emit
+            // what it is blocked on (#895). A parked agent woken onto a
+            // backend that is ALREADY sitting on a permission or a question
+            // hears nothing otherwise: providers publish conditions only when
+            // they CHANGE, and this renderer has never seen one for it.
+            void window.api.reseedSessionConditions?.([sessionId])
           }
         } catch {
           // WHY unexpected IPC errors use a fixed message: rejected invokes

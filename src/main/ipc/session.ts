@@ -123,6 +123,51 @@ export function registerSessionIpc(
     return manager.getBackendSnapshot(sessionId)
   })
 
+  /**
+   * Re-emit each session's cached provider-conditions snapshot to the window
+   * that owns it, on the ORDINARY event channel (#895).
+   *
+   * WHY the renderer asks, rather than main pushing when it transfers routing:
+   * every path that needs this — adopting a closed window's sessions, a cold
+   * restore, waking a parked agent — rebuilds the runtime from `emptyRuntime()`
+   * AFTER its own `invoke` resolves. A snapshot delivered before that seed is
+   * simply overwritten by it. The renderer is the only side that knows when
+   * its runtimes exist.
+   *
+   * WHY the event channel and not the reply to that invoke: conditions have no
+   * revision, and a reply raced against live events cannot be ordered against
+   * them. The first attempt at #895 carried the snapshot on
+   * `SessionBackendSnapshot` and compared `ts` — and 1 ms `Date.now()` ties are
+   * genuinely unordered (OpenCode emits several snapshots per millisecond with
+   * no dedupe latch), so a prompt answered in the same millisecond it appeared
+   * could be RESTORED onto the user's screen. On this channel there is nothing
+   * to order: main updates its cache before forwarding, so the cache is never
+   * older than what the renderer has already folded, and the re-emit is just
+   * the next event in the same stream. The renderer's own handler then applies
+   * the one projection, the unread mark and the debug log, exactly as it does
+   * for a live change — `session:resync-routing` seeds the same way, for the
+   * same reason.
+   *
+   * Ownership is checked per session, so a stale request cannot make main
+   * deliver another window's state.
+   */
+  ipcMain.handle('session:reseed-conditions', (evt, sessionIds: string[]): number => {
+    if (!Array.isArray(sessionIds)) return 0
+    let delivered = 0
+    for (const sessionId of sessionIds) {
+      if (typeof sessionId !== 'string' || !sessionId) continue
+      const lease = captureSessionWindowLease(sessionId)
+      if (!lease || lease.windowId !== windowIdFor(evt.sender) || !isSessionWindowLeaseCurrent(lease)) continue
+      const snapshot = manager.getConditionsSnapshot(sessionId)
+      // No cached snapshot means no condition has ever been live for this
+      // session. Sending nothing is the honest answer; an empty snapshot would
+      // be a claim that everything is clear, which is a different statement.
+      if (!snapshot) continue
+      if (sendToSessionWindow(sessionId, 'session:conditions', { sessionId, snapshot }) === 'delivered') delivered += 1
+    }
+    return delivered
+  })
+
   ipcMain.handle('session:kill', async (evt, sessionId: string) => {
     const lease = captureSessionWindowLease(sessionId)
     if (lease && (lease.windowId !== windowIdFor(evt.sender) || !isSessionWindowLeaseCurrent(lease))) return false

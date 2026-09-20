@@ -307,43 +307,35 @@ describe('useSessionActions recovery retry', () => {
     return { result, recoverSession, killOwnedSession, runtimes: () => runtimes, setRuntimes }
   }
 
-  it('seeds the conditions the woken backend is already blocked on (#895)', async () => {
-    // A parked session woken into a backend that is ALREADY sitting on a
-    // permission prompt hears nothing: providers publish conditions only when
-    // they CHANGE, and the runtime this spreads from predates the recovery.
-    // Dispatch showed no ACTION while the raw TUI still showed the prompt.
-    const sessionId = 'woken'
+  it.each([
+    { what: 'asks main to re-emit what the woken backend is blocked on', present: true },
+    // The hint is not a step: a preload without it must still wake the pane.
+    { what: 'wakes normally against a preload that cannot re-emit', present: false },
+  ])('$what (#895)', async ({ present }) => {
+    // A parked session woken onto a backend that is ALREADY sitting on a
+    // permission or a question hears nothing otherwise: providers publish
+    // conditions only when they CHANGE, and this renderer has never seen one
+    // for it. The request goes out after the runtime is updated, on the
+    // ordinary event channel, so the wake itself cannot overwrite it.
+    const sessionId = present ? 'woken' : 'woken-bare'
     const h = spawnedNotReadyHarness(sessionId)
-    const blocked = {
-      provider: 'claude' as const,
-      ts: 5_000,
-      conditions: {
-        'claude.permission-prompt': {
-          kind: 'claude.permission-prompt',
-          state: { visible: true, title: 'Allow Bash?' },
-          actions: [],
-        },
-      },
-    }
-    // Cast because the harness's `vi.fn` pinned its literal types from the
-    // spawn case it was written for; `adopted` is the disposition that
-    // matters here — this is an EXISTING backend, which is how it can already
-    // be blocked.
+    const reseedSessionConditions = vi.fn(async () => 1)
     h.recoverSession.mockResolvedValue({
       ok: true,
       disposition: 'adopted',
       snapshot: {
-        sessionId,
-        kind: 'claude',
-        cwd: '/tmp/project',
-        lifecycle: 'live',
-        input: { ready: true, revision: 2, reason: 'ready' },
-        builtInMcpDomains: [],
-        conditions: blocked,
+        sessionId, kind: 'claude', cwd: '/tmp/project', lifecycle: 'live',
+        input: { ready: true, revision: 2, reason: 'ready' }, builtInMcpDomains: [],
       },
     } as unknown as Awaited<ReturnType<typeof h.recoverSession>>)
+    const api = (window as unknown as { api: Record<string, unknown> }).api
+    if (present) api.reseedSessionConditions = reseedSessionConditions
+    else delete api.reseedSessionConditions
+
     await act(async () => { await h.result.current.ensureSessionLive(sessionId, 'tile-leaf.send') })
-    expect(h.runtimes()[sessionId]?.conditions).toEqual(blocked)
+
+    expect(h.runtimes()[sessionId]).toMatchObject({ processStatus: 'started' })
+    if (present) expect(reseedSessionConditions).toHaveBeenCalledExactlyOnceWith([sessionId])
   })
 
   it('does not kill a spawned backend that is alive but not ready when the deadline passes', async () => {

@@ -11,7 +11,6 @@ import type {
   SessionRecoverOptions,
   SessionRecoverResult,
 } from '@shared/types/session'
-import { seedBackendConditions } from '@renderer/session-runtime/conditions'
 import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type {
@@ -55,7 +54,10 @@ import {
 type WorkspaceRecoveryApi = Pick<
   Window['api'],
   'recoverSession' | 'cancelSessionRecovery' | 'defaultCwd'
->
+  // Optional because it is a hint, not a step: a preload without it (an older
+  // shell, a test double that does not care) still restores the workspace,
+  // just without re-seeding blockers.
+> & Partial<Pick<Window['api'], 'reseedSessionConditions'>>
 
 const DEFAULT_SESSION_RECOVERY_TIMEOUT_MS = 30_000
 
@@ -397,13 +399,7 @@ export async function rehydrateWorkspace(
       }
     }
     if (backend && !preserveObservedTerminalProcess) {
-      // #895: the same hole adoption had. On a cold restore `base` is
-      // `emptyRuntime()`, so a recovered backend already blocked on a
-      // permission or a question came back with `conditions: null` — and
-      // providers publish conditions only when they CHANGE, so nothing ever
-      // re-sent it. Dispatch showed no ACTION/QUESTION while the raw TUI still
-      // showed the prompt.
-      return seedBackendConditions({
+      return {
         ...seeded,
         processStatus: backend.lifecycle === 'live' ? 'started' : 'spawning',
         processError: null,
@@ -424,7 +420,7 @@ export async function rehydrateWorkspace(
               inputReadinessChangedAt: Date.now(),
             }
           : {}),
-      }, existing, backend.conditions)
+      }
     }
     if (visibleProcess) {
       // WHY a pending pane is visible and explicitly "spawning": the durable
@@ -798,6 +794,19 @@ export async function rehydrateWorkspace(
     const cwd = await recoveryApi.defaultCwd()
     await newTab(cwd)
   }
+  // Every runtime that is going to exist now does, so main can re-emit what
+  // these backends are blocked on (#895). A cold restore builds each runtime
+  // from `emptyRuntime()`, and providers publish conditions only when they
+  // CHANGE — so a session recovered onto a backend already sitting on a
+  // permission or a question came back with no blocker at all, while the raw
+  // TUI still showed it.
+  //
+  // AFTER the seeding above, never before: anything delivered earlier is
+  // overwritten by it. Only sessions with a live backend, because a parked one
+  // has no process to be blocked by; it is re-seeded when it is woken.
+  // Not awaited — it arrives on the event channel like any other condition
+  // change, and boot must not wait on it.
+  void recoveryApi.reseedSessionConditions?.([...liveBackendIds])
   // WHY restored/expected count live-spawned sessions, not owned:
   //
   // `complete` here gates autosave (useBootstrap reads it to decide whether

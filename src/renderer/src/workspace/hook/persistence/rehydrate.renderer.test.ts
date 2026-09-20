@@ -137,43 +137,28 @@ describe('rehydrateWorkspace backend reconciliation', () => {
     expect(harness.state().sessions['stable-session']?.tldrIdentity).toBe('main-summary')
   })
 
-  it('seeds the pending conditions the recovered backend is already blocked on (#895)', async () => {
+  it('asks main to re-emit blockers for the backends it restored (#895)', async () => {
     // Providers publish conditions only when they CHANGE — the OpenCode
-    // Terminal package and claude-code-headless both deduplicate — so an agent
-    // that was already sitting on a permission prompt when the app quit emits
-    // nothing to the restored renderer. `base` here is `emptyRuntime()`, whose
-    // `conditions` is null, so Dispatch showed no ACTION and orchestration
-    // summaries stopped naming the blocker while the raw TUI still showed it.
+    // Terminal package and claude-code-headless both deduplicate — so a
+    // session recovered onto a backend already sitting on a permission or a
+    // question came back with no blocker at all, while the raw TUI still
+    // showed it. A cold restore builds each runtime from `emptyRuntime()`,
+    // so the re-emit has to come after, on the ordinary event channel.
     const persisted = makePersisted()
     const harness = makeHarness()
-    const blocked = {
-      provider: 'claude' as const,
-      ts: 1_000,
-      conditions: {
-        'claude.permission-prompt': {
-          kind: 'claude.permission-prompt',
-          state: { visible: true, title: 'Allow Bash?' },
-          actions: [],
-        },
-      },
-    }
+    const reseedSessionConditions = vi.fn(async () => 1)
     const recoverSession = vi.fn(async () => ({
       ok: true as const,
       disposition: 'adopted' as const,
       snapshot: {
-        sessionId: 'stable-session',
-        kind: 'claude' as const,
-        cwd: '/tmp/project',
-        lifecycle: 'live' as const,
-        input: { ready: true, revision: 1, reason: 'ready' as const },
-        conditions: blocked,
+        sessionId: 'stable-session', kind: 'claude' as const, cwd: '/tmp/project',
+        lifecycle: 'live' as const, input: { ready: true, revision: 1, reason: 'ready' as const },
       },
     }))
     Object.defineProperty(window, 'api', {
       configurable: true,
       value: {
-        recoverSession,
-        defaultCwd: vi.fn(),
+        recoverSession, reseedSessionConditions, defaultCwd: vi.fn(),
         loadInitialHistory: vi.fn(async () => ({ entries: [], hasMore: false, totalEntries: 0 })),
         gitWorktrees: vi.fn(async () => ({ ok: true, worktrees: [] })),
       },
@@ -181,58 +166,31 @@ describe('rehydrateWorkspace backend reconciliation', () => {
 
     await rehydrateWorkspace(persisted, harness.refs, harness.setState, harness.setRuntimes, vi.fn())
 
-    expect(harness.runtimes()['stable-session']?.conditions).toEqual(blocked)
+    // Only sessions with a live backend: a parked one has no process to be
+    // blocked by, and is re-seeded when it is woken.
+    expect(reseedSessionConditions).toHaveBeenCalledExactlyOnceWith(['stable-session'])
   })
 
-  it('does not resurrect a condition the live channel cleared while recovery was in flight (#895)', async () => {
-    // Session events reach this window while `recoverSession` is still
-    // awaiting, and `onSessionConditions` writes them straight into the
-    // runtime map. A seed that simply overwrote that would put a dismissed
-    // prompt back in the surface the user acts on; `ts` is the ordering signal.
+  it('restores normally against a preload with no re-emit at all', async () => {
+    // The hint is not a step. A shell without it must still get the workspace
+    // back; the pane simply paints without its blocker until the next change.
     const persisted = makePersisted()
     const harness = makeHarness()
-    const cleared = { provider: 'claude' as const, ts: 2_000, conditions: {} }
-    const recoverSession = vi.fn(async () => {
-      harness.setRuntimes(prev => ({
-        ...prev,
-        'stable-session': { ...(prev['stable-session'] ?? emptyRuntime()), conditions: cleared },
-      }))
-      return {
-        ok: true as const,
-        disposition: 'adopted' as const,
-        snapshot: {
-          sessionId: 'stable-session',
-          kind: 'claude' as const,
-          cwd: '/tmp/project',
-          lifecycle: 'live' as const,
-          input: { ready: true, revision: 1, reason: 'ready' as const },
-          conditions: {
-            provider: 'claude' as const,
-            ts: 1_000,
-            conditions: {
-              'claude.permission-prompt': {
-                kind: 'claude.permission-prompt',
-                state: { visible: true, title: 'Allow Bash?' },
-                actions: [],
-              },
-            },
-          },
-        },
-      }
-    })
     Object.defineProperty(window, 'api', {
       configurable: true,
       value: {
-        recoverSession,
+        recoverSession: vi.fn(async () => ({
+          ok: true as const, disposition: 'adopted' as const,
+          snapshot: { sessionId: 'stable-session', kind: 'claude' as const, cwd: '/tmp/project', lifecycle: 'live' as const, input: { ready: true, revision: 1, reason: 'ready' as const } },
+        })),
         defaultCwd: vi.fn(),
         loadInitialHistory: vi.fn(async () => ({ entries: [], hasMore: false, totalEntries: 0 })),
         gitWorktrees: vi.fn(async () => ({ ok: true, worktrees: [] })),
       },
     })
 
-    await rehydrateWorkspace(persisted, harness.refs, harness.setState, harness.setRuntimes, vi.fn())
-
-    expect(harness.runtimes()['stable-session']?.conditions).toEqual(cleared)
+    await expect(rehydrateWorkspace(persisted, harness.refs, harness.setState, harness.setRuntimes, vi.fn()))
+      .resolves.toMatchObject({ complete: true })
   })
 
   it('recovers OpenCode Terminal with its runtime selector and durable provider id intact', async () => {
