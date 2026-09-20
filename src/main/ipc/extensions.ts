@@ -9,7 +9,7 @@ import {
 } from '@main/extensions/storage.js'
 import { installExtension, installExtensionFromPath } from '@main/extensions/install.js'
 import type { ConsentPrompt } from '@main/extensions/install.js'
-import { listInstalledExtensions, listQuarantinedExtensions, onExtensionPublication, removeExtension } from '@main/extensions/ledger.js'
+import { listInstalledExtensions, listQuarantinedExtensions, onExtensionPublication, removeExtension, removeQuarantinedExtension } from '@main/extensions/ledger.js'
 import { installedExtensionCapabilities } from '@main/extensions/grants.js'
 import { isValidExtensionId } from '@shared/types/extensionId.js'
 import type {
@@ -310,6 +310,14 @@ export function registerExtensionsIpc(): void {
 
   ipcMain.handle('extensions:remove', async (_evt, id: string): Promise<void> => {
     await removeExtension(id)
+  })
+
+  // Clearing a SET-ASIDE row is a different operation from uninstalling an
+  // extension, not a flag on it (#959 review): a ledger can hold both under one
+  // id, and one handler doing whichever it found meant clearing the set-aside
+  // row uninstalled the working extension and deleted its bundle.
+  ipcMain.handle('extensions:remove-quarantined', async (_evt, id: string): Promise<void> => {
+    await removeQuarantinedExtension(id)
   })
 
   // Consent belongs to the committed installation, and is checked against a

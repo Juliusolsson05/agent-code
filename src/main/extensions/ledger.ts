@@ -319,52 +319,79 @@ export async function removeExtension(id: string): Promise<void> {
   // failed file deletion after that point is garbage collection, not a failed
   // uninstall: reporting failure would encourage retrying an already-removed
   // extension. Saved extension state lives elsewhere and is never touched.
+  //
+  // ── THIS TOUCHES ONLY RUNNABLE ROWS (review finding 1) ──
+  // An earlier version also dropped a PRESERVED row with the same id, because
+  // it computed the two independently and let both act. A ledger can hold both
+  // — a rollback writes a preserved row beside an id this build still runs —
+  // and a single Remove then did both things in both directions: clearing the
+  // set-aside row uninstalled the working extension and deleted its bundle,
+  // and uninstalling the working extension silently destroyed the row we have
+  // the least right to destroy. Ambiguity between two different objects is not
+  // resolvable by a precedence rule, so the two are separate operations:
+  // `removeQuarantinedExtension` is the other one.
   await withLedgerLock(async () => {
-    const { rows, preserved } = await readLedgerContents()
+    const rows = await readLedger()
     const previous = rows.find(row => row.manifest.id === id)
-    // Uninstalling a QUARANTINED extension is the recovery path #959 exists for:
-    // the user can see a row this build cannot run and get rid of it from
-    // Settings, instead of editing JSON in ~/.config. Its bundle directory is
-    // not reclaimed — the path is built from validated fields, and a preserved
-    // row has by definition not been validated, so there is no path we are
-    // entitled to delete. The sweep stops treating it as referenced once the
-    // row is gone and collects it on the next pass.
-    const quarantined = preserved.some(row => row.id === id)
-    await writeLedger(
-      rows.filter(row => row.manifest.id !== id),
-      quarantined ? { dropPreservedId: id } : undefined,
-    )
+    await writeLedger(rows.filter(row => row.manifest.id !== id))
     if (previous) await discardExtensionBundle(previous)
   })
 }
 
 /**
- * Every bundle directory a PRESERVED row could be pointing at (#959).
+ * Drop a PRESERVED row, and nothing else.
  *
- * WHY both layouts, and why this is safe despite the row being unvalidated:
- * `extensionBundleDirectory` picks one of two shapes depending on whether the
- * row has an `installation` generation, and we cannot ask a row this build
- * failed to parse which era it is from. The only consumer is the sweep's
- * "do not delete this" set, so over-protecting costs at most a stale directory
- * until the row is removed, while under-protecting deletes an extension's code.
- *
- * The id and generation are still validated before being joined — an
- * unvalidated row must never be able to name a path, even a protected one, and
- * an id that does not pass `isValidExtensionId` yields NO paths rather than a
- * guess. A protected path is never served, executed or read from; it is only
- * ever compared against candidates for deletion.
+ * This is the in-app recovery path #959 exists for: a user can clear a row this
+ * build cannot run instead of editing JSON in `~/.config`. It never removes a
+ * runnable row and never deletes a bundle — the path would have to be built
+ * from fields that failed validation, and once the row is gone the sweep stops
+ * protecting the id and collects the directory on its own.
  */
-export function preservedBundleDirectories(row: PreservedLedgerRow): string[] {
-  if (row.id === null) return []
-  const record = row.raw && typeof row.raw === 'object' ? (row.raw as Record<string, unknown>) : null
-  const installation = record && typeof record.installation === 'object' && record.installation !== null
-    ? (record.installation as { id?: unknown }).id
-    : null
-  const paths = [join(EXTENSIONS_DIR, row.id)]
-  if (typeof installation === 'string' && /^[0-9a-f-]{36}$/i.test(installation)) {
-    paths.push(join(EXTENSIONS_DIR, '.bundles', row.id, installation))
-  }
-  return paths
+export async function removeQuarantinedExtension(id: string): Promise<void> {
+  if (!isValidExtensionId(id)) throw new Error(`invalid extension id: ${id}`)
+  await withLedgerLock(async () => {
+    const { rows, preserved } = await readLedgerContents()
+    if (!preserved.some(row => row.id === id)) return
+    await writeLedger(rows, { dropPreservedId: id })
+  })
+}
+
+/**
+ * The extension ids that PRESERVED rows claim (#959).
+ *
+ * ── WHY IDS AND NOT PATHS (review finding 3) ──
+ * The first version returned exact bundle directories, built from the raw
+ * row's `installation.id`. That protected nothing in the one case the feature
+ * exists for: a future build that RESHAPES `installation` — renames it, nests
+ * it, adds a layout — writes rows this build both rejects AND cannot locate,
+ * so the sweep deleted the newer build's bundles on the first launch after a
+ * rollback. Protection that depends on parsing the very field that failed to
+ * parse is protection that evaporates exactly when it is needed.
+ *
+ * An id is different: it is validated independently by `isValidExtensionId`,
+ * and it is the ONE level of the `.bundles/<id>/<generation>` layout the sweep
+ * itself walks. Protecting the whole `<id>` subtree needs no guess about what a
+ * future generation looks like. (The earlier flat `EXTENSIONS_DIR/<id>` path
+ * was dead weight besides: the sweep never considers that level, so it could
+ * not have protected anything.)
+ *
+ * ── WHAT THIS COSTS ──
+ * If an id is both preserved and runnable, that extension's SUPERSEDED
+ * generations stop being collected until the preserved row is removed. That is
+ * a stale directory, against deleting code a rolled-forward build still needs.
+ * The trade is deliberate and one-directional.
+ *
+ * ── THE LIMIT, STATED ──
+ * A row whose id does not validate protects NOTHING: we cannot name a
+ * directory we have no trustworthy name for, and guessing is how the sweep
+ * would delete an unrelated tree. Such a row survives in the ledger while its
+ * bundle is collected. Settings says so rather than offering a button that
+ * cannot work.
+ */
+export function preservedBundleExtensionIds(preserved: readonly PreservedLedgerRow[]): Set<string> {
+  const ids = new Set<string>()
+  for (const row of preserved) if (row.id !== null) ids.add(row.id)
+  return ids
 }
 
 /** Construct paths only from validated ledger fields, never a caller's path. */

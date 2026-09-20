@@ -22,7 +22,7 @@ import { computeBundleHash } from '@main/extensions/bundleHash.js'
 import { BUNDLE_MAX_BYTES, BUNDLE_MAX_DEPTH, BUNDLE_MAX_ENTRIES } from './bundleLimits.js'
 import { githubApiHeaders, resolveGitHubCliToken } from './githubCli.js'
 import { ManifestError, parseExtensionManifest } from '@main/extensions/manifest.js'
-import { discardExtensionBundle, extensionBundleDirectory, preservedBundleDirectories, readLedger, readLedgerContents, withLedgerLock, writeLedger } from '@main/extensions/ledger.js'
+import { discardExtensionBundle, extensionBundleDirectory, preservedBundleExtensionIds, readLedger, readLedgerContents, withLedgerLock, writeLedger } from '@main/extensions/ledger.js'
 import type { ExtensionManifest, InstalledExtension } from '@shared/types/extensions.js'
 
 /**
@@ -725,7 +725,7 @@ export async function sweepAbandonedInstallDirectories(): Promise<void> {
     // deletion here, never served or executed.
     const { rows, preserved } = await readLedgerContents()
     const referenced = new Set(rows.map(extensionBundleDirectory))
-    for (const path of preserved.flatMap(preservedBundleDirectories)) referenced.add(path)
+    const preservedIds = preservedBundleExtensionIds(preserved)
     const bundlesRoot = join(EXTENSIONS_DIR, '.bundles')
     let extensionDirs
     try { extensionDirs = await readdir(bundlesRoot, { withFileTypes: true }) } catch (error) {
@@ -735,6 +735,12 @@ export async function sweepAbandonedInstallDirectories(): Promise<void> {
     for (const extension of extensionDirs) {
       // Never follow a hand-created symlink during recursive housekeeping.
       if (!extension.isDirectory()) continue
+      // A preserved row claims this id, so none of its generations may be
+      // collected: we cannot tell WHICH one the row points at without parsing
+      // the field that failed to parse, and the build that can read the row
+      // will need it. Skipping the whole subtree is the only answer that does
+      // not depend on a guess.
+      if (preservedIds.has(extension.name)) continue
       const parent = join(bundlesRoot, extension.name)
       for (const generation of await readdir(parent, { withFileTypes: true })) {
         const path = join(parent, generation.name)

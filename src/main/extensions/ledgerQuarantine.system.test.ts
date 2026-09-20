@@ -29,12 +29,14 @@ vi.mock('@main/storage/paths.js', () => ({
 const {
   listInstalledExtensions,
   listQuarantinedExtensions,
-  preservedBundleDirectories,
+  preservedBundleExtensionIds,
   readLedger,
   readLedgerContents,
   removeExtension,
+  removeQuarantinedExtension,
   writeLedger,
 } = await import('./ledger.js')
+const { sweepAbandonedInstallDirectories } = await import('./install.js')
 
 /** A row the current build CAN run. Shaped like one finalizeInstall writes. */
 function validRow(id: string): Record<string, unknown> {
@@ -117,7 +119,7 @@ describe('one unusable ledger row (#959)', () => {
 
   it('lets the user remove the set-aside row itself', async () => {
     await seed([validRow('timer'), futureApiRow('from-the-future')])
-    await removeExtension('from-the-future')
+    await removeQuarantinedExtension('from-the-future')
 
     expect(await onDisk()).toEqual([validRow('timer')])
     expect(await listQuarantinedExtensions()).toEqual([])
@@ -158,24 +160,78 @@ describe('one unusable ledger row (#959)', () => {
   })
 })
 
-describe('a set-aside row keeps its bundle (#959)', () => {
-  it('protects both possible bundle layouts, and nothing when the id is unusable', () => {
-    const generation = '11111111-2222-4333-8444-555555555555'
-    const paths = preservedBundleDirectories({
-      raw: { manifest: { id: 'timer' }, installation: { id: generation } },
-      id: 'timer',
-      reason: 'fixture',
-    })
-    // The sweep runs at STARTUP, so under-protecting means one
-    // rollback-and-relaunch deletes the extension's code for good.
-    expect(paths.some(path => path.endsWith(join('extensions', 'timer')))).toBe(true)
-    expect(paths.some(path => path.endsWith(join('.bundles', 'timer', generation)))).toBe(true)
+describe('a set-aside row and a runnable row can share an id (#959 review)', () => {
+  // A rollback writes a preserved row beside an id this build still runs. The
+  // two are different objects, so neither operation may act on the other: one
+  // handler doing whichever it found meant clearing the set-aside row
+  // uninstalled the working extension and deleted its bundle.
+  it('removing the set-aside row leaves the running extension and its bundle alone', async () => {
+    await seed([validRow('timer'), futureApiRow('timer')])
+    const bundle = join(stateRoot, 'extensions', '.bundles', 'timer', '11111111-2222-4333-8444-555555555555')
+    await mkdir(bundle, { recursive: true })
+    await writeFile(join(bundle, 'index.js'), 'export function activate() {}', 'utf8')
 
-    // An id we could not validate yields NO path rather than a guess.
-    expect(preservedBundleDirectories({ raw: { manifest: { id: '../escape' } }, id: null, reason: 'x' })).toEqual([])
-    // A generation that is not a uuid is not joined either.
-    expect(
-      preservedBundleDirectories({ raw: { manifest: { id: 'timer' }, installation: { id: '../..' } }, id: 'timer', reason: 'x' }),
-    ).toEqual([join(stateRoot, 'extensions', 'timer')])
+    await removeQuarantinedExtension('timer')
+
+    expect((await readLedger()).map(row => row.manifest.id)).toEqual(['timer'])
+    expect(await listQuarantinedExtensions()).toEqual([])
+    await expect(readFile(join(bundle, 'index.js'), 'utf8')).resolves.toContain('activate')
+  })
+
+  it('uninstalling the running extension leaves the set-aside row in the file', async () => {
+    await seed([validRow('timer'), futureApiRow('timer')])
+    await removeExtension('timer')
+
+    expect((await readLedger())).toEqual([])
+    // The row we could not read is still there, byte for byte.
+    expect(await onDisk()).toEqual([futureApiRow('timer')])
+    expect((await listQuarantinedExtensions())[0]!.id).toBe('timer')
+  })
+})
+
+describe('a set-aside row keeps its bundle through the sweep (#959)', () => {
+  // The change the whole feature turns on: the sweep runs at STARTUP, so a
+  // single rollback-and-relaunch would otherwise delete the extension's code
+  // for good. Driven through the REAL sweep, not the helper — covering the
+  // helper alone left this untested, and deleting the protection changed
+  // nothing in the suite.
+  async function bundleAt(id: string, generation: string): Promise<string> {
+    const dir = join(stateRoot, 'extensions', '.bundles', id, generation)
+    await mkdir(dir, { recursive: true })
+    await writeFile(join(dir, 'index.js'), 'export function activate() {}', 'utf8')
+    return dir
+  }
+
+  it('survives the sweep, and is collected once the row is gone', async () => {
+    await seed([futureApiRow('from-the-future')])
+    const dir = await bundleAt('from-the-future', '11111111-2222-4333-8444-555555555555')
+
+    await sweepAbandonedInstallDirectories()
+    await expect(readFile(join(dir, 'index.js'), 'utf8')).resolves.toContain('activate')
+
+    await removeQuarantinedExtension('from-the-future')
+    await sweepAbandonedInstallDirectories()
+    await expect(readFile(join(dir, 'index.js'), 'utf8')).rejects.toThrow()
+  })
+
+  it('survives even when this build cannot parse the row\'s generation', async () => {
+    // THE case the feature exists for: a future build reshapes `installation`,
+    // so its rows are both rejected AND unlocatable. Protection keyed on the
+    // exact path evaporated here — precisely when it was needed.
+    const reshaped = validRow('from-the-future')
+    reshaped.installation = { generation: 'v2', digest: 'a'.repeat(64) }
+    await seed([reshaped])
+    expect((await listQuarantinedExtensions())[0]!.id).toBe('from-the-future')
+
+    const dir = await bundleAt('from-the-future', 'whatever-a-future-build-writes')
+    await sweepAbandonedInstallDirectories()
+    await expect(readFile(join(dir, 'index.js'), 'utf8')).resolves.toContain('activate')
+  })
+
+  it('protects only ids it can trust', () => {
+    expect(preservedBundleExtensionIds([
+      { raw: {}, id: 'timer', reason: 'x' },
+      { raw: {}, id: null, reason: 'unreadable' },
+    ])).toEqual(new Set(['timer']))
   })
 })

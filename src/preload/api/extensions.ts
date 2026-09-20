@@ -108,6 +108,11 @@ export const extensionsApi = {
 
   extensionsRemove: (id: string): Promise<void> => ipcRenderer.invoke('extensions:remove', id),
 
+  // Clear a set-aside row. A DIFFERENT operation from uninstalling: a ledger
+  // can hold a preserved row and a runnable one under the same id.
+  extensionsRemoveQuarantined: (id: string): Promise<void> =>
+    ipcRenderer.invoke('extensions:remove-quarantined', id),
+
   // Reads the set of capabilities a user granted an extension, for the frame broker
   // to gate Tier 1-3 calls. A HOST method, not part of AgentCodeApiV1 — an extension
   // must never read (or change) its own or another's grants; only the broker calls it.

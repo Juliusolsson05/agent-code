@@ -174,7 +174,9 @@ export function AppsSettingsRow() {
       setError(null)
       setNotice(null)
       try {
-        await window.api.extensionsRemove(id)
+        // The quarantine-specific call: `extensionsRemove` uninstalls the
+        // RUNNABLE extension of that id, and a ledger can hold both.
+        await window.api.extensionsRemoveQuarantined(id)
         setNotice(`Removed ${id}`)
       } catch (removeError) {
         setError(removeError instanceof Error ? removeError.message : String(removeError))
