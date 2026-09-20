@@ -121,7 +121,21 @@ export function useWorkspaceAdoption(
       return
     }
 
-    const adoption = adoptWorkspace(refs.latestStateRef.current, incoming)
+    // WHY the migration is inside the same guard as a JSON failure (#1048
+    // Codex review): adoptWorkspace migrates the incoming document, and that
+    // now THROWS on a corrupt project container rather than silently
+    // producing an empty pool. An escaping exception was only logged by the
+    // callers, so main — which has already transferred session routing here
+    // and recorded a pending bequest — never heard a refusal, and those
+    // sessions stayed pinned to a window that would never display them.
+    let adoption: ReturnType<typeof adoptWorkspace>
+    try {
+      adoption = adoptWorkspace(refs.latestStateRef.current, incoming)
+    } catch (err) {
+      console.warn('[workspace] unmigratable adoption payload:', err)
+      await window.api.refuseWorkspaceAdoption(windowId)
+      return
+    }
     if (!adoption.ok) {
       // Refusing tells main to leave the slice on disk AND to roll back the
       // session routing it moved here optimistically. Staying silent would

@@ -13,6 +13,7 @@ import {
 } from '@renderer/components/ui/dialog'
 import { PagedTextViewer } from '@renderer/lib/text/PagedTextViewer'
 import { useEffect, useId, useMemo, useState } from 'react'
+import { unwrapClaudePastedContent } from '@shared/claude/pastedContent.js'
 
 // The browsing surface must stay cheap even when somebody pastes a whole
 // design document as their next prompt. CSS clipping alone still leaves the
@@ -23,7 +24,11 @@ const PREVIEW_SCAN_CHARACTERS = 320
 const PREVIEW_CHARACTERS = 180
 
 function queuedPromptPreview(content: string): string {
-  const scanned = content.slice(0, PREVIEW_SCAN_CHARACTERS)
+  // Claude stores a queued PASTE wrapped in its own envelope (#1052), so the
+  // first 26 characters of a long queued prompt were `<pasted_content id="…"`
+  // — the two lines the lane can show, spent on provider scaffolding. The
+  // dialog behind it shows the exact stored text either way.
+  const scanned = (unwrapClaudePastedContent(content) ?? content).slice(0, PREVIEW_SCAN_CHARACTERS)
   // Preserve line boundaries because they are the only cheap hint that a
   // queued item contains pasted instructions or code. Horizontal whitespace
   // is normalized so an indented block cannot make the compact lane look
