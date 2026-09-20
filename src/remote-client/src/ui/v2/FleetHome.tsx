@@ -28,9 +28,11 @@ const HOLD_SLOP_PX = 10
 
 type PeekTarget = { sessionId: string; kind: PeekKind }
 
-/** How far ahead of this device's clock a recency stamp may sit and still be
- *  treated as real: ordinary skew between two machines, not an artefact. */
-const FUTURE_STAMP_TOLERANCE_MS = 60_000
+
+/** How far ahead of this device's clock a stamp may sit and still be treated
+ *  as real. Everything here is already in this device's time base, so this
+ *  covers transit and rounding, not the gap between two machines. */
+const FUTURE_STAMP_TOLERANCE_MS = 5_000
 
 export function FleetHome({
   feed,
@@ -47,7 +49,7 @@ export function FleetHome({
   const [activity, setActivity] = useState<Record<string, boolean>>({})
   const [usage, setUsage] = useState<UsageSnapshot | null>(feed.getUsage())
   const [peek, setPeek] = useState<PeekTarget | null>(null)
-  const [, setClockTick] = useState(0)
+  const [clockTick, setClockTick] = useState(0)
 
   useEffect(() => {
     const offs = [
@@ -69,8 +71,10 @@ export function FleetHome({
   }, [feed])
 
   const groups = useMemo(() => {
-    // Re-read per recompute, and the 30 s clock tick already re-renders this
-    // list, so a clamped row recovers its true place within one tick.
+    // Recomputed on the clock tick as well as on new sessions (see the memo's
+    // dependencies): a clamped row's place depends on `now`, so without the
+    // tick the arrangement froze at whatever the clock said when the list was
+    // opened (#1055 review).
     const now = Date.now()
     // Every comparison ends in the session id, and the groups are ordered by a
     // rule rather than by arrival.
@@ -85,14 +89,17 @@ export function FleetHome({
     // makes the remaining updates land on the same arrangement instead of a
     // reshuffled one.
     // A stamp cannot describe activity that has not happened yet (#1055
-    // review). A phone that was fast when a row last emitted carries an
-    // inflated stamp, and a QUIET row has no further event to retire it.
+    // review). Every stamp reaching here is in THIS device's time base — the
+    // feed converts a server frame on arrival — so an overshoot is not skew
+    // between two machines. It is this phone's own clock having been fast
+    // when the row last emitted, and then corrected.
     //
-    // Small overshoot is ordinary skew between two machines' clocks, and it
-    // clamps to now. A gross one is a clock artefact carrying no information
-    // about when that agent last worked, so the row is ranked as UNKNOWN
-    // rather than as the most recent thing on the phone — which is what an
-    // hour-fast clock made it, above everything genuinely newer.
+    // Under a few seconds, that is transit and rounding: clamp and keep the
+    // row where it is. Beyond it, the value says nothing about when that
+    // agent last worked, and a QUIET row has no further event to retire it,
+    // so it ranks as unknown rather than as the most recent thing on the
+    // phone — which is what an hour-fast clock had made it, above everything
+    // genuinely newer.
     const seenAt = (row: RemoteSessionSummary): number => {
       const at = row.lastActivityAt ?? 0
       if (at <= now) return at
@@ -131,7 +138,7 @@ export function FleetHome({
       return recencyB - recencyA || nameA.localeCompare(nameB) || (nameA < nameB ? -1 : nameA > nameB ? 1 : 0)
     })
     return { grouped: groupOrder, exited: exited.sort(byRecency) }
-  }, [sessions])
+  }, [sessions, clockTick])
 
   const peekSession = peek ? sessions.find(s => s.sessionId === peek.sessionId) ?? null : null
   const peekRecord: RemoteNoteRecord | null =

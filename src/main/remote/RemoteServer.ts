@@ -656,7 +656,7 @@ export class RemoteServer extends EventEmitter {
       // recording (see the sttAvailable WHY in protocol/messages.ts).
       sttAvailable: Boolean(this.deps.transcribeAudio) && (this.deps.isSttAvailable?.() ?? true),
     })
-    this.send(ws, { type: 'session-list', sessions: this.summarizeSessions() })
+    this.send(ws, { type: 'session-list', sessions: this.summarizeSessions(), serverNow: Date.now() })
     // v2: current TLDR/Goal records for the listed sessions, so a freshly
     // connected phone's peek surfaces are instantly correct instead of
     // blank until an agent happens to update. Per-socket (bootstrap, not
@@ -977,7 +977,7 @@ export class RemoteServer extends EventEmitter {
    *  events of their own. */
   private broadcastSessionList(): void {
     if (!this.server) return
-    this.broadcast({ type: 'session-list', sessions: this.summarizeSessions() })
+    this.broadcast({ type: 'session-list', sessions: this.summarizeSessions(), serverNow: Date.now() })
   }
 
   /** Reverse join: which live sessions carry this TLDR/Goal identity. */

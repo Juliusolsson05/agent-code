@@ -132,6 +132,29 @@ describe('FleetHome', () => {
     expect(titles[1]).toContain('Quiet')
   })
 
+  it('re-ranks a clamped row on the clock tick, not only when sessions change (#1055 review)', () => {
+    // The arrangement depends on `now`, so the memo has to recompute when the
+    // clock moves — the list already re-renders every 30 s for its relative
+    // labels. Without the tick in its dependencies, a phone whose clock was
+    // corrected kept the inflated row first until something else changed.
+    vi.useFakeTimers()
+    try {
+      const base = Date.now()
+      const rows = [
+        { ...BASE, sessionId: 's-future', kind: 'claude', title: 'Quiet', tabTitle: 'p', lastActivityAt: base + 20_000 },
+        { ...BASE, sessionId: 's-now', kind: 'claude', title: 'Working', tabTitle: 'p', lastActivityAt: base - 1_000 },
+      ]
+      const { container } = render(<FleetHome feed={fakeFeed({ summaries: rows })} connection="open" onSelect={() => {}} onUnpair={() => {}} />)
+      const order = () => [...container.querySelectorAll('.session-row')].map(row => row.textContent ?? '')
+      // 20 s ahead is beyond the tolerance, so it already ranks as unknown…
+      expect(order()[0]).toContain('Working')
+
+      // …and once the clock passes it, it is an ordinary recent row again.
+      act(() => { vi.setSystemTime(base + 25_000); vi.advanceTimersByTime(30_000) })
+      expect(order()[0]).toContain('Quiet')
+    } finally { vi.useRealTimers() }
+  })
+
   it('opens the TLDR peek on long-press and navigates on tap', () => {
     vi.useFakeTimers()
     const onSelect = vi.fn()

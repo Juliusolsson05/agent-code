@@ -480,17 +480,29 @@ export class WebSocketSessionFeed implements SessionFeed {
         // newer happened, never because two clocks disagree.
         const previous = new Map(this.lastSessionList.map(row => [row.sessionId, row.lastActivityAt ?? 0]))
         const now = Date.now()
+        // ONE CLOCK. The server stamps `lastActivityAt` with its clock; this
+        // client stamps its local activity bumps with the phone's; and the
+        // list sorts the mixture. Two devices sit minutes apart often enough
+        // that a just-finished turn sorted below one from three minutes
+        // earlier (#1055 review). Converting the whole frame on arrival means
+        // every later comparison — newer-of below, the sort, the "3m ago"
+        // label — spans one time base.
+        //
+        // An older desktop sends no `serverNow`; then the offset is zero and
+        // the behaviour is what it was.
+        const offset = typeof frame.serverNow === 'number' ? frame.serverNow - now : 0
         this.lastSessionList = frame.sessions.map(row => {
+          const server = row.lastActivityAt === null || row.lastActivityAt === undefined
+            ? null
+            : row.lastActivityAt - offset
           const local = previous.get(row.sessionId) ?? 0
-          // A local stamp in the FUTURE is a clock artefact, not activity, and
-          // dropping it is the recovery path an unconditional maximum across
-          // two independent clocks cannot have (#1055 review): a phone that
-          // was an hour fast when a session emitted would otherwise keep that
-          // row pinned above genuinely newer ones — reading "now" the whole
-          // time — long after its clock was corrected. Here the correction
-          // itself retires the stamp and the server's value takes over.
+          // A local stamp in the FUTURE is this phone's own clock artefact —
+          // it was fast when the row emitted — and dropping it is the recovery
+          // path an unconditional maximum cannot have: otherwise that row
+          // stays pinned above genuinely newer ones, reading "now", long after
+          // the clock was corrected.
           const usable = local <= now ? local : 0
-          return usable > (row.lastActivityAt ?? 0) ? { ...row, lastActivityAt: usable } : row
+          return usable > (server ?? 0) ? { ...row, lastActivityAt: usable } : { ...row, lastActivityAt: server }
         })
         for (const cb of [...this.sessionListListeners]) cb(this.lastSessionList)
         return

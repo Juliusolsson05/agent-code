@@ -28,14 +28,33 @@ function mount(): { feed: WebSocketSessionFeed; deliver: (frame: unknown) => voi
   return { feed, deliver: frame => onMessage?.({ data: JSON.stringify(frame) }) }
 }
 
-const list = (lastActivityAt: number) => ({
+const list = (lastActivityAt: number, serverNow?: number) => ({
   type: 'session-list',
   sessions: [{ sessionId: 's1', kind: 'claude', cwd: '/repo', alive: true, lastActivityAt }],
+  ...(serverNow === undefined ? {} : { serverNow }),
 })
 
 afterEach(() => vi.useRealTimers())
 
 describe('recency across two clocks', () => {
+  it('converts a server frame into this device\'s time base', () => {
+    // The server stamps with ITS clock and this client stamps local bumps
+    // with the phone's, and the list sorts the mixture. Two devices two
+    // minutes apart made a just-finished turn sort below one from three
+    // minutes earlier (#1055 review). The frame carries the sender's `now`,
+    // so the whole thing is converted on arrival.
+    const { feed, deliver } = mount()
+    vi.useFakeTimers()
+    const phoneNow = Date.parse('2026-09-20T04:00:00.000Z')
+    vi.setSystemTime(phoneNow)
+
+    // The desktop is two minutes ahead and reports work it finished a second
+    // ago: a raw stamp of phoneNow + 119s.
+    deliver(list(phoneNow + 120_000 - 1_000, phoneNow + 120_000))
+    expect(feed.getSessionList()[0]?.lastActivityAt).toBe(phoneNow - 1_000)
+  })
+
+
   it('retires an inflated stamp on the next EVENT, with no list publication', () => {
     // The server only re-lists on a workspace change, which may never come.
     // Recovery cannot depend on it: a corrected clock must be able to fix the
