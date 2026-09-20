@@ -109,16 +109,26 @@ type HistoryPlacement = { fresh: Entry } | { anchor: string }
  * pagination cursor on the window's oldest entry rather than the chunk's.
  */
 /**
- * Exported for tests only. The placement rule is a pure function of a chunk
- * and a window, and every bug it has had — the unanchored prepend, and the
- * retained-prefix ordering below — is expressible as one array in and one
- * array out. Driving it through the loader and a seeded database would test
- * the same rule through three layers that can hide it.
+ * Exported for tests only — nothing but the loader below may call it.
+ *
+ * WHY the direct export rather than driving it through the loader, which the
+ * cursor half of #910 does successfully: this rule's inputs are a chunk/window
+ * PAIR, and the interesting ones (a trimmed anchor, an anchor the window holds
+ * out of durable order) take a specific paging history to stage through a
+ * seeded database. The loader seam is better where it can reach — and finding
+ * 2 of the #1081 review is the cost of this one: a hand-authored placement let
+ * a case be pinned whose own timestamps contradicted the asserted order,
+ * because nothing forced the question "can a chunk actually look like this?".
+ * Author placements in DURABLE ORDER, or the test is about nothing.
+ *
+ * `keptWindowHead` reports whether the merged result still begins with the
+ * window's first entry. That, not "did this load add anything", is what the
+ * pagination cursor needs — see its use below.
  */
 export function placeHistoryEntries(
   placement: HistoryPlacement[],
   existing: Entry[],
-): { entries: Entry[]; appendedAfterWindow: boolean } {
+): { entries: Entry[]; appendedAfterWindow: boolean; keptWindowHead: boolean } {
   const position = new Map<string, number>()
   existing.forEach((entry, index) => {
     const uuid = (entry as { uuid?: string }).uuid
@@ -128,7 +138,7 @@ export function placeHistoryEntries(
   if (!anchored && existing.length > 0) {
     const fresh = placement.flatMap(item => ('fresh' in item ? [item.fresh] : []))
     if (isStrictlyNewer(fresh, existing)) {
-      return { entries: [...existing, ...fresh], appendedAfterWindow: true }
+      return { entries: [...existing, ...fresh], appendedAfterWindow: true, keptWindowHead: true }
     }
   }
   const merged: Entry[] = []
@@ -136,20 +146,38 @@ export function placeHistoryEntries(
   for (const [at, item] of placement.entries()) {
     if ('fresh' in item) {
       // ── FLUSH THE RETAINED PREFIX FIRST (#910 item 2) ──
-      // A fresh entry belongs immediately BEFORE the next anchor it shares
-      // with the window — which means after everything the window holds ahead
-      // of that anchor. This used to push the fresh row straight out, so a
-      // pane holding [a,c] receiving [b,c] produced [b,a,c]: `b` emitted, then
-      // `a` and `c` flushed behind it. Nothing errors, uuid dedup makes the
-      // order permanent, and the user simply reads the conversation wrong.
+      // A fresh entry belongs before the next anchor it shares with the
+      // window. This used to push the fresh row straight out, so a pane
+      // holding [a,c] receiving [b,c] produced [b,a,c]: `b` emitted, then `a`
+      // and `c` flushed behind it. Nothing errors, uuid dedup makes the order
+      // permanent, and the user simply reads the conversation wrong.
       //
-      // Only when a following anchor EXISTS. With none, the chunk shares
-      // nothing further with the window and the prepend is deliberate — see
-      // the unanchored case above, where a chunk that does not reach back far
-      // enough must not be interleaved on a guess.
+      // WHY the flush is bounded by TIME and not only by the anchor (#1081
+      // review, finding 2): "before the anchor" does not mean "after
+      // everything the window holds ahead of it". The window can hold a row
+      // the chunk skips, and that row can fall on either side of the fresh
+      // one:
+      //
+      //   window [a,c]   chunk [b, *c]        a < b  → flush a, then b   ✓
+      //   window [b,d,e] chunk [*b, c, *e, g] d > c  → b, c, d, e, g     ✓
+      //
+      // Flushing unconditionally gets the first right and the second wrong
+      // (b,d,c,e,g); flushing nothing gets the second right and the first
+      // wrong. The timestamps are already on these entries and are exactly
+      // what tells the two families apart, so the loop stops at the first
+      // retained row that is strictly NEWER than the fresh one. When either
+      // side is undated the comparison is false and the row is flushed, which
+      // is the pre-timestamp behaviour and the better default: a fuzz over
+      // ~48k random chunk/window pairs found flushing beat not flushing by
+      // 12,275 to 1,397 on chronological inversions.
+      //
+      // The anchor bound stays on top of it. With no following anchor the
+      // chunk shares nothing further with the window and the prepend is
+      // deliberate — see the unanchored case above, where a chunk that does
+      // not reach back far enough must not be interleaved on a guess.
       const anchorIndex = nextAnchorIndex(placement, at + 1, position, next)
       if (anchorIndex !== null) {
-        while (next < anchorIndex) merged.push(existing[next++]!)
+        while (next < anchorIndex && !isAfter(existing[next], item.fresh)) merged.push(existing[next++]!)
       }
       merged.push(item.fresh)
       continue
@@ -160,7 +188,13 @@ export function placeHistoryEntries(
     while (next <= index) merged.push(existing[next++]!)
   }
   while (next < existing.length) merged.push(existing[next++]!)
-  return { entries: merged, appendedAfterWindow: false }
+  return {
+    entries: merged,
+    appendedAfterWindow: false,
+    // Observed, not inferred: whatever the rule above did, either the window's
+    // first entry is still first or it is not.
+    keptWindowHead: existing.length > 0 && merged[0] === existing[0],
+  }
 }
 
 /**
@@ -170,11 +204,19 @@ export function placeHistoryEntries(
  * conditions the anchor branch applies — so a fresh entry is never flushed
  * against an anchor the loop is going to skip.
  *
- * The already-emitted half is SYMMETRY, not load-bearing: a stale index is by
- * definition below `next`, and the caller's flush loop (`while (next < index)`)
- * is a no-op for any such value. Dropping it cannot change an answer, which is
- * why no test pins it. It stays because a reader comparing this to the anchor
- * branch should not have to work that out.
+ * WHY the already-emitted half is load-bearing, though an earlier version of
+ * this comment claimed it was mere symmetry (#1081 review, finding 3): a stale
+ * index would indeed make the caller's flush loop a no-op — but skipping it
+ * lets the scan CONTINUE to a later anchor that does flush. Same input,
+ * different output:
+ *
+ *   window [b,a,x,c]  chunk [*a, f, *b, *c]
+ *   with the guard: b,a,x,f,c        without it: b,a,f,x,c
+ *
+ * That window is out of durable order, which is the state this whole rule
+ * exists to stop creating — but a pane can already be in it, because uuid
+ * dedup made the old misorder permanent. Pinned by a test rather than left to
+ * the claim.
  */
 function nextAnchorIndex(
   placement: HistoryPlacement[],
@@ -190,6 +232,17 @@ function nextAnchorIndex(
     return index
   }
   return null
+}
+
+/**
+ * Is `candidate` strictly newer than `reference`? False whenever either side
+ * has no usable timestamp — an unknown order is not evidence of one, and the
+ * callers all want the timestamp-free behaviour as their default.
+ */
+function isAfter(candidate: Entry | undefined, reference: Entry | undefined): boolean {
+  const left = entryTime(candidate)
+  const right = entryTime(reference)
+  return left !== null && right !== null && left > right
 }
 
 function entryTime(entry: Entry | undefined): number | null {
@@ -467,26 +520,33 @@ export async function loadInitialHistoryForSession({
 
       const placed = initialEntries.length > 0
         ? placeHistoryEntries(placement, current.entries)
-        : { entries: current.entries, appendedAfterWindow: false }
-      // When the chunk went AFTER the window (see placeHistoryEntries), the
-      // oldest entry the pane holds is still the window's first, so older
-      // pages must keep starting from the window's cursor. Moving it to the
-      // chunk's head would page the gap in ABOVE the window: the misorder the
-      // append exists to prevent.
-      // ── A LOAD THAT ADDED NOTHING MUST NOT MOVE THE CURSOR (#910 item 3) ──
-      // Re-hydrating a tail the window already holds produces an all-anchor
-      // placement: nothing is added, so `appendedAfterWindow` is false and the
-      // cursor used to jump to that chunk's head. With a window of [c,d] that
-      // had already paged back to [a,b] and then re-read [g,h], the marker
-      // moved to `g` and the next older page landed ABOVE everything —
-      // [e,f,a,b,c,d,g,h] — which is precisely the misorder the append rule
-      // exists to prevent, arrived at from the other side.
+        : { entries: current.entries, appendedAfterWindow: false, keptWindowHead: current.entries.length > 0 }
+      // ── THE CURSOR NAMES THE OLDEST ENTRY THE PANE HOLDS (#910 item 3) ──
+      // So the only question is whether this load changed which entry that is,
+      // and `placeHistoryEntries` answers it by observation: `keptWindowHead`
+      // is true exactly when the merged result still begins with the window's
+      // first row.
       //
-      // The pagination cursor names the OLDEST entry the pane holds. A load
-      // that contributed no entry cannot have changed which one that is, so
-      // the only honest answer is to leave it alone.
-      const addedFreshEntries = placement.some(item => 'fresh' in item)
-      const keepWindowCursor = placed.appendedAfterWindow || !addedFreshEntries
+      // Two cases it covers, which used to be two separate rules:
+      //   - the chunk went AFTER the window (the strictly-newer append). The
+      //     pane's oldest row is unchanged, so older pages must keep starting
+      //     from the window's cursor; moving it to the chunk's head would page
+      //     the gap in ABOVE the window, the misorder the append prevents.
+      //   - the chunk added nothing (an all-anchor re-read of a tail the
+      //     window ALREADY HOLDS). With a window of [c,d] that had paged back
+      //     to [a,b] and then re-read its own [g,h], the marker moved to `g`
+      //     and the next older page landed above everything —
+      //     [e,f,a,b,c,d,g,h].
+      //
+      // WHY this replaced `appendedAfterWindow || !addedFreshEntries` (#1081
+      // review, finding 1): that pair was true before item 2's prefix flush,
+      // when a chunk starting with a fresh row really did put it at merged[0].
+      // After the flush the merged head is the WINDOW's head while
+      // `addedFreshEntries` is still true — so the cursor jumped to the
+      // chunk's head for a row that is no longer the oldest, and the next
+      // older page prepended above a row that precedes it. The fix to item 2
+      // had quietly recreated item 3 from the other side.
+      const keepWindowCursor = placed.keptWindowHead
 
       const nextRuntime = appendFeedDebugLog(
         {
@@ -503,6 +563,14 @@ export async function loadInitialHistoryForSession({
           historyOldestMarker: keepWindowCursor
             ? current.historyOldestMarker
             : initialOldestMarker ?? current.historyOldestMarker,
+          // The `initialOldestMarker !== null` half is an EQUIVALENT MUTANT
+          // today and no test pins it (#1081 review, finding 4). The marker
+          // and the offset are assigned together, so a null marker implies a
+          // null offset; and `keepWindowCursor` can only be false with a null
+          // marker when the window was empty, where `current.historyOldestOffset`
+          // is null too. It stays because it states the invariant the two
+          // lines share — the offset belongs to the marker directly above it,
+          // and must never be dropped while that marker is retained.
           historyOldestOffset: !keepWindowCursor && initialOldestMarker !== null
             ? initialOldestOffset
             : current.historyOldestOffset,
