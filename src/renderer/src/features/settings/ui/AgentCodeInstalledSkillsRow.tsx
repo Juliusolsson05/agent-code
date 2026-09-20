@@ -436,14 +436,18 @@ function DiscoveryReview({
   return (
     <>
       <div className="border border-panel-border p-3 text-[10px] text-muted">
-        <div>{discovery.repositoryUrl}</div>
+        {/* The repository, the ref and the notices are all attacker-chosen:
+            a default branch named `main<U+200B>` reads as `main` in the line
+            the user approves an installation from (#1049 re-review). Only the
+            resolved commit is a hash we computed. */}
+        <div>{withVisibleControls(discovery.repositoryUrl)}</div>
         <div className="mt-1">
-          {discovery.requestedRefType === 'branch' ? 'Branch' : 'Tag'} {discovery.requestedRef}
+          {discovery.requestedRefType === 'branch' ? 'Branch' : 'Tag'} {withVisibleControls(discovery.requestedRef)}
           {' · '}commit {discovery.resolvedCommit.slice(0, 12)}
         </div>
       </div>
       {discovery.notices.map(notice => (
-        <div key={notice} className="border border-warning p-2 text-[10px] text-warning">{notice}</div>
+        <div key={notice} className="border border-warning p-2 text-[10px] text-warning">{withVisibleControls(notice)}</div>
       ))}
       {discovery.candidates.map(candidate => (
         <div key={candidate.candidateId} className="flex items-start gap-3 border border-panel-border p-3">
@@ -476,7 +480,11 @@ function CandidateDetails({ candidate }: { candidate: AgentCodeInstalledSkillCan
       </div>
       {candidate.warnings.length > 0 ? (
         <ul className="mt-2 list-disc space-y-1 pl-4 text-warning">
-          {candidate.warnings.map(warning => <li key={warning}>{warning}</li>)}
+          {/* A warning names the file it is warning ABOUT, so an unescaped
+              one can describe `scripts/check.sh` while meaning a different
+              file — the collapsed list below escapes it, this line did not
+              (#1049 re-review). */}
+          {candidate.warnings.map(warning => <li key={warning}>{withVisibleControls(warning)}</li>)}
         </ul>
       ) : null}
       <details className="mt-2">
@@ -542,8 +550,10 @@ function InstalledSkillRow({
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 text-[10px]">
           <div className="text-[12px] text-ink">{skill.name}</div>
-          <div className="mt-1 text-muted">{skill.description}</div>
-          <div className="mt-1 break-all text-muted">{skill.source.skillUrl}</div>
+          {/* Beside Enable / Disable / Remove: the identity the user acts on
+              (#1049 re-review). */}
+          <div className="mt-1 text-muted">{withVisibleControls(skill.description)}</div>
+          <div className="mt-1 break-all text-muted">{withVisibleControls(skill.source.skillUrl)}</div>
           <div className="mt-1 text-muted">
             {HEALTH_LABELS[skill.health]} · commit {skill.source.resolvedCommit.slice(0, 12)} · {skill.files.length} files · {formatBytes(skill.totalBytes)}
           </div>
@@ -563,7 +573,7 @@ function InstalledSkillRow({
       </div>
       {skill.warnings.length > 0 ? (
         <ul className="list-disc space-y-1 pl-4 text-[10px] text-warning">
-          {skill.warnings.map(warning => <li key={warning}>{warning}</li>)}
+          {skill.warnings.map(warning => <li key={warning}>{withVisibleControls(warning)}</li>)}
         </ul>
       ) : null}
       <TargetList skill={skill} onError={onError} />
