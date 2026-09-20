@@ -11,6 +11,7 @@ import type {
   SessionRecoverOptions,
   SessionRecoverResult,
 } from '@shared/types/session'
+import { seedBackendConditions } from '@renderer/session-runtime/conditions'
 import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type {
@@ -396,7 +397,13 @@ export async function rehydrateWorkspace(
       }
     }
     if (backend && !preserveObservedTerminalProcess) {
-      return {
+      // #895: the same hole adoption had. On a cold restore `base` is
+      // `emptyRuntime()`, so a recovered backend already blocked on a
+      // permission or a question came back with `conditions: null` — and
+      // providers publish conditions only when they CHANGE, so nothing ever
+      // re-sent it. Dispatch showed no ACTION/QUESTION while the raw TUI still
+      // showed the prompt.
+      return seedBackendConditions({
         ...seeded,
         processStatus: backend.lifecycle === 'live' ? 'started' : 'spawning',
         processError: null,
@@ -417,7 +424,7 @@ export async function rehydrateWorkspace(
               inputReadinessChangedAt: Date.now(),
             }
           : {}),
-      }
+      }, existing, backend.conditions)
     }
     if (visibleProcess) {
       // WHY a pending pane is visible and explicitly "spawning": the durable

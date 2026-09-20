@@ -113,6 +113,42 @@ describe('SessionManager restart wake recovery', () => {
     }))
   })
 
+  it('carries the conditions a live backend is blocked on, so a late renderer can seed them (#895)', async () => {
+    // Providers publish conditions only when they CHANGE. A window that adopts
+    // another window's sessions, a cold restore, and a wake all start watching
+    // a backend that has ALREADY emitted its prompt, so without this snapshot
+    // they showed no blocker at all while the raw TUI still showed one.
+    // Asserted here because every renderer-side test for it seeds a stubbed
+    // snapshot: if this field is absent in production, all of them still pass.
+    const { SessionManager } = await import('./sessionManager')
+    const session = new FakeAgentSession()
+    createSession.mockImplementation(() => session)
+    const manager = new SessionManager()
+    const result = await manager.recover({
+      sessionId: 'blocked-session',
+      kind: 'claude',
+      cwd: '/tmp/project',
+    })
+    expect(result.ok).toBe(true)
+
+    // Before any condition has ever been live, null is the honest answer.
+    expect(manager.getBackendSnapshot('blocked-session')?.conditions).toBeNull()
+
+    const blocked = {
+      provider: 'claude' as const,
+      ts: 4_000,
+      conditions: {
+        'claude.permission-prompt': {
+          kind: 'claude.permission-prompt',
+          state: { visible: true, title: 'Allow Bash?' },
+          actions: [],
+        },
+      },
+    }
+    session.emit('conditions', blocked)
+    expect(manager.getBackendSnapshot('blocked-session')?.conditions).toEqual(blocked)
+  })
+
   it('selects and preserves the separate OpenCode terminal runtime identity', async () => {
     const { SessionManager } = await import('./sessionManager')
     createTerminalSession.mockImplementation(() => new FakeTerminalAgentSession())

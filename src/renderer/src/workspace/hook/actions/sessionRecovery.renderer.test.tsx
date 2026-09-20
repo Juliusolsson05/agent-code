@@ -307,6 +307,45 @@ describe('useSessionActions recovery retry', () => {
     return { result, recoverSession, killOwnedSession, runtimes: () => runtimes, setRuntimes }
   }
 
+  it('seeds the conditions the woken backend is already blocked on (#895)', async () => {
+    // A parked session woken into a backend that is ALREADY sitting on a
+    // permission prompt hears nothing: providers publish conditions only when
+    // they CHANGE, and the runtime this spreads from predates the recovery.
+    // Dispatch showed no ACTION while the raw TUI still showed the prompt.
+    const sessionId = 'woken'
+    const h = spawnedNotReadyHarness(sessionId)
+    const blocked = {
+      provider: 'claude' as const,
+      ts: 5_000,
+      conditions: {
+        'claude.permission-prompt': {
+          kind: 'claude.permission-prompt',
+          state: { visible: true, title: 'Allow Bash?' },
+          actions: [],
+        },
+      },
+    }
+    // Cast because the harness's `vi.fn` pinned its literal types from the
+    // spawn case it was written for; `adopted` is the disposition that
+    // matters here — this is an EXISTING backend, which is how it can already
+    // be blocked.
+    h.recoverSession.mockResolvedValue({
+      ok: true,
+      disposition: 'adopted',
+      snapshot: {
+        sessionId,
+        kind: 'claude',
+        cwd: '/tmp/project',
+        lifecycle: 'live',
+        input: { ready: true, revision: 2, reason: 'ready' },
+        builtInMcpDomains: [],
+        conditions: blocked,
+      },
+    } as unknown as Awaited<ReturnType<typeof h.recoverSession>>)
+    await act(async () => { await h.result.current.ensureSessionLive(sessionId, 'tile-leaf.send') })
+    expect(h.runtimes()[sessionId]?.conditions).toEqual(blocked)
+  })
+
   it('does not kill a spawned backend that is alive but not ready when the deadline passes', async () => {
     vi.useFakeTimers()
     try {

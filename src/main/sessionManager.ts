@@ -4845,6 +4845,15 @@ export class SessionManager extends EventEmitter {
             tldrIdentity: this.builtInMcpHost?.sessionTldrIdentity?.(sessionId),
           }
         : {}),
+      // WHY conditions ride this snapshot (#895): providers publish them only
+      // when they CHANGE, so an agent already blocked on a permission or a
+      // question emits nothing to a renderer that just started watching it. A
+      // window adopting a closed window's sessions therefore lost the blocker
+      // — Dispatch dropped ACTION/QUESTION and orchestration summaries stopped
+      // naming it — while the raw TUI still showed the prompt. Carrying it
+      // here rather than in a second fetch also means readiness and conditions
+      // are seeded from ONE instant.
+      conditions: this.lastConditionsSnapshot.get(sessionId) ?? null,
     }
   }
 

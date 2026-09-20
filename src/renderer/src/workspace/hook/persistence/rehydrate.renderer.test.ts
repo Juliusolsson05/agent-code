@@ -137,6 +137,104 @@ describe('rehydrateWorkspace backend reconciliation', () => {
     expect(harness.state().sessions['stable-session']?.tldrIdentity).toBe('main-summary')
   })
 
+  it('seeds the pending conditions the recovered backend is already blocked on (#895)', async () => {
+    // Providers publish conditions only when they CHANGE — the OpenCode
+    // Terminal package and claude-code-headless both deduplicate — so an agent
+    // that was already sitting on a permission prompt when the app quit emits
+    // nothing to the restored renderer. `base` here is `emptyRuntime()`, whose
+    // `conditions` is null, so Dispatch showed no ACTION and orchestration
+    // summaries stopped naming the blocker while the raw TUI still showed it.
+    const persisted = makePersisted()
+    const harness = makeHarness()
+    const blocked = {
+      provider: 'claude' as const,
+      ts: 1_000,
+      conditions: {
+        'claude.permission-prompt': {
+          kind: 'claude.permission-prompt',
+          state: { visible: true, title: 'Allow Bash?' },
+          actions: [],
+        },
+      },
+    }
+    const recoverSession = vi.fn(async () => ({
+      ok: true as const,
+      disposition: 'adopted' as const,
+      snapshot: {
+        sessionId: 'stable-session',
+        kind: 'claude' as const,
+        cwd: '/tmp/project',
+        lifecycle: 'live' as const,
+        input: { ready: true, revision: 1, reason: 'ready' as const },
+        conditions: blocked,
+      },
+    }))
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: {
+        recoverSession,
+        defaultCwd: vi.fn(),
+        loadInitialHistory: vi.fn(async () => ({ entries: [], hasMore: false, totalEntries: 0 })),
+        gitWorktrees: vi.fn(async () => ({ ok: true, worktrees: [] })),
+      },
+    })
+
+    await rehydrateWorkspace(persisted, harness.refs, harness.setState, harness.setRuntimes, vi.fn())
+
+    expect(harness.runtimes()['stable-session']?.conditions).toEqual(blocked)
+  })
+
+  it('does not resurrect a condition the live channel cleared while recovery was in flight (#895)', async () => {
+    // Session events reach this window while `recoverSession` is still
+    // awaiting, and `onSessionConditions` writes them straight into the
+    // runtime map. A seed that simply overwrote that would put a dismissed
+    // prompt back in the surface the user acts on; `ts` is the ordering signal.
+    const persisted = makePersisted()
+    const harness = makeHarness()
+    const cleared = { provider: 'claude' as const, ts: 2_000, conditions: {} }
+    const recoverSession = vi.fn(async () => {
+      harness.setRuntimes(prev => ({
+        ...prev,
+        'stable-session': { ...(prev['stable-session'] ?? emptyRuntime()), conditions: cleared },
+      }))
+      return {
+        ok: true as const,
+        disposition: 'adopted' as const,
+        snapshot: {
+          sessionId: 'stable-session',
+          kind: 'claude' as const,
+          cwd: '/tmp/project',
+          lifecycle: 'live' as const,
+          input: { ready: true, revision: 1, reason: 'ready' as const },
+          conditions: {
+            provider: 'claude' as const,
+            ts: 1_000,
+            conditions: {
+              'claude.permission-prompt': {
+                kind: 'claude.permission-prompt',
+                state: { visible: true, title: 'Allow Bash?' },
+                actions: [],
+              },
+            },
+          },
+        },
+      }
+    })
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: {
+        recoverSession,
+        defaultCwd: vi.fn(),
+        loadInitialHistory: vi.fn(async () => ({ entries: [], hasMore: false, totalEntries: 0 })),
+        gitWorktrees: vi.fn(async () => ({ ok: true, worktrees: [] })),
+      },
+    })
+
+    await rehydrateWorkspace(persisted, harness.refs, harness.setState, harness.setRuntimes, vi.fn())
+
+    expect(harness.runtimes()['stable-session']?.conditions).toEqual(cleared)
+  })
+
   it('recovers OpenCode Terminal with its runtime selector and durable provider id intact', async () => {
     const persisted = makePersisted()
     persisted.sessions['stable-session'] = {

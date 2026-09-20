@@ -205,6 +205,135 @@ describe('adopting a closed window', () => {
     expect(h.refs.latestRuntimesRef.current['grid-a']?.inputReadinessRevision).toBe(7)
   })
 
+  // #895. A permission or question pending when a window closes vanished from
+  // the adopting window: the adopted runtime was seeded from `emptyRuntime()`,
+  // which has `conditions: null`, and providers publish conditions only when
+  // they CHANGE — the OpenCode Terminal package and claude-code-headless both
+  // deduplicate — so nothing ever re-sent them. Dispatch lost ACTION/QUESTION
+  // and orchestration summaries stopped naming the blocker, while the raw TUI
+  // still showed the prompt. Found by review R4 of #882; generic, not
+  // OpenCode-specific.
+  const permissionSnapshot = (ts: number) => ({
+    provider: 'claude' as const,
+    ts,
+    conditions: {
+      'claude.permission-prompt': {
+        kind: 'claude.permission-prompt',
+        state: { visible: true, title: 'Allow Bash?' },
+        actions: [],
+      },
+    },
+  })
+
+  it('seeds the pending conditions main already holds, so a blocked agent stays blocked', async () => {
+    getBackendSnapshot.mockImplementation(async (sessionId: string) => (
+      sessionId === 'grid-a'
+        ? {
+            sessionId,
+            kind: 'claude',
+            cwd: '/closed',
+            lifecycle: 'live',
+            input: { ready: true, reason: null, revision: 7 },
+            conditions: permissionSnapshot(1_000),
+          }
+        : null
+    ))
+
+    const h = harness(true)
+    h.fire({ windowId: 'closed-window', workspace: closedWindowPayload() })
+
+    await waitFor(() => {
+      expect(h.refs.latestRuntimesRef.current['grid-a']?.conditions).not.toBeNull()
+    })
+    expect(h.refs.latestRuntimesRef.current['grid-a']?.conditions)
+      .toEqual(permissionSnapshot(1_000))
+  })
+
+  it('projects the composer picker out of the seeded snapshot, not just the raw field', async () => {
+    // `conditions` is not the only thing the projection owns: the composer
+    // picker is a separate renderer model derived from the same snapshot
+    // (`conditionPolicy.composerPickerKind`). A seed that copied the field but
+    // skipped the projection would adopt an agent whose composer disagrees
+    // with its own conditions — exactly the split authority the single
+    // `applyConditionSnapshot` exists to prevent.
+    const withPicker = {
+      provider: 'claude' as const,
+      ts: 1_000,
+      conditions: {
+        'claude.slash-picker': {
+          kind: 'claude.slash-picker',
+          state: { visible: true, items: [{ name: '/clear', description: 'clear', selected: true }] },
+          actions: [],
+        },
+      },
+    }
+    getBackendSnapshot.mockImplementation(async (sessionId: string) => (
+      sessionId === 'grid-a'
+        ? {
+            sessionId,
+            kind: 'claude',
+            cwd: '/closed',
+            lifecycle: 'live',
+            input: { ready: true, reason: null, revision: 7 },
+            conditions: withPicker,
+          }
+        : null
+    ))
+
+    const h = harness(true)
+    h.fire({ windowId: 'closed-window', workspace: closedWindowPayload() })
+
+    await waitFor(() => {
+      expect(h.refs.latestRuntimesRef.current['grid-a']?.conditions).not.toBeNull()
+    })
+    expect(h.refs.latestRuntimesRef.current['grid-a']?.picker).toEqual({
+      visible: true,
+      items: [{ name: '/clear', description: 'clear', selected: true }],
+    })
+  })
+
+  it('lets a condition that changed DURING the fetch win, instead of resurrecting the stale one', async () => {
+    // Session routing is transferred to this window BEFORE the adoption offer
+    // arrives, and `onSessionConditions` creates a runtime for a session it has
+    // never seen (`prev[sessionId] ?? emptyRuntime()`). So a clear that lands
+    // while the snapshot is in flight is already in the runtime map when the
+    // seed runs — and a seed that simply overwrites it puts the dismissed
+    // prompt back, in the surface the user acts on.
+    let resolveSnapshot: (value: unknown) => void = () => {}
+    getBackendSnapshot.mockImplementation(async (sessionId: string) => {
+      if (sessionId !== 'grid-a') return null
+      return await new Promise(resolve => { resolveSnapshot = resolve })
+    })
+
+    const h = harness(true)
+    h.fire({ windowId: 'closed-window', workspace: closedWindowPayload() })
+    await waitFor(() => expect(getBackendSnapshot).toHaveBeenCalled())
+
+    // The live channel clears it while main's cached snapshot is still in
+    // flight: the newer `ts` is the whole ordering signal.
+    h.refs.latestRuntimesRef.current = {
+      ...h.refs.latestRuntimesRef.current,
+      'grid-a': {
+        ...emptyRuntime(),
+        conditions: { provider: 'claude', ts: 2_000, conditions: {} },
+      } as SessionRuntime,
+    }
+    resolveSnapshot({
+      sessionId: 'grid-a',
+      kind: 'claude',
+      cwd: '/closed',
+      lifecycle: 'live',
+      input: { ready: true, reason: null, revision: 7 },
+      conditions: permissionSnapshot(1_000),
+    })
+
+    await waitFor(() => {
+      expect(h.refs.latestRuntimesRef.current['grid-a']?.processStatus).toBe('started')
+    })
+    expect(h.refs.latestRuntimesRef.current['grid-a']?.conditions)
+      .toEqual({ provider: 'claude', ts: 2_000, conditions: {} })
+  })
+
   it('loads history only for adopted sessions that have a live backend', async () => {
     // Re-based with #992. The rule was "tile leaves load, detached rows do
     // not" — a structural stand-in for "has a backend", because the closed

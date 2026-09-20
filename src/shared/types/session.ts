@@ -84,6 +84,24 @@ export type SessionBackendSnapshot = {
   builtInMcpDomains?: BuiltInMcpDomain[]
   /** Main-owned logical summary identity when this backend exposes TLDR. */
   tldrIdentity?: string
+  /**
+   * The latest provider-conditions snapshot main has cached for this backend,
+   * or null when no condition has ever been live.
+   *
+   * WHY it rides the readiness snapshot rather than getting its own fetch
+   * (#895): it is level-triggered state with exactly the readiness rationale.
+   * Providers publish conditions only when they CHANGE — the OpenCode Terminal
+   * package and claude-code-headless both deduplicate — so an agent sitting on
+   * a permission prompt emits nothing further to a renderer that just started
+   * watching it, and the adopting window lost the blocker entirely. One round
+   * trip also means readiness and conditions cannot be seeded from two
+   * different instants.
+   *
+   * Consumers must order it by `ts` against what they already hold: a
+   * condition that changed while this snapshot was in flight is NEWER than the
+   * cache it came from.
+   */
+  conditions?: ProviderConditionSnapshot | null
 }
 
 export type SessionRecoverOptions = {

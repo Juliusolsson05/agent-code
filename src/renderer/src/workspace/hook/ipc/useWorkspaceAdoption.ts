@@ -3,6 +3,7 @@ import { useEffect, useRef } from 'react'
 import type { SessionBackendSnapshot } from '@shared/types/session'
 import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
+import { seedBackendConditions } from '@renderer/session-runtime/conditions'
 import type { PersistedWorkspace } from '@renderer/workspace/persistence'
 import type { SessionId, SessionMeta } from '@renderer/workspace/types'
 import { adoptWorkspace } from '@renderer/workspace/adoptWorkspace'
@@ -64,7 +65,7 @@ function seedAdoptedRuntime(
   // Same authority rule as rehydrate: a snapshot older than what this runtime
   // has already observed must not roll readiness backwards.
   const snapshotIsAuthoritative = snapshot.input.revision >= base.inputReadinessRevision
-  return {
+  const seeded: SessionRuntime = {
     ...base,
     processStatus: snapshot.lifecycle === 'live' ? 'started' : 'spawning',
     processError: null,
@@ -79,6 +80,21 @@ function seedAdoptedRuntime(
         }
       : {}),
   }
+  // WHY conditions need their own ordering check rather than riding
+  // `snapshotIsAuthoritative` (#895): readiness and conditions are separate
+  // channels with separate counters, and `previous` here is not "what this
+  // window used to show" — it is whatever the LIVE channel has already written
+  // for a session whose routing moved here before the adoption offer arrived.
+  // `onSessionConditions` creates a runtime for a session it has never seen,
+  // so a prompt dismissed while this snapshot was in flight is already in the
+  // map, and seeding over it would put the dismissed prompt back in the
+  // surface the user acts on.
+  //
+  // Note `base` deliberately starts from `emptyRuntime()`, which is exactly
+  // the bug: without this the adopted pane began with `conditions: null`, and
+  // providers publish conditions only when they CHANGE, so nothing ever
+  // re-sent the blocker.
+  return seedBackendConditions(seeded, previous, snapshot.conditions)
 }
 
 export function useWorkspaceAdoption(

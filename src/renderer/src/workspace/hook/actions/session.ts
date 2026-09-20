@@ -11,6 +11,7 @@ import type { AgentProviderRuntime } from '@shared/types/providerKind'
 import type { SessionRecoverFailureCode } from '@shared/types/session'
 import { useCallback, useRef } from 'react'
 
+import { seedBackendConditions } from '@renderer/session-runtime/conditions'
 import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
 import { clearLiveEntryWindowSession } from '@renderer/session-runtime/liveEntryWindow'
@@ -808,7 +809,12 @@ export function useSessionActions(
                 : recovery.snapshot.sessionRunId ?? current.sessionRunId
               return {
                 ...prev,
-                [sessionId]: {
+                // #895: a parked session woken into a backend that is ALREADY
+                // blocked never hears about it — providers publish conditions
+                // only when they change, and `current` here predates the
+                // recovery. `current` is also the newest thing the live channel
+                // has written, so it wins a tie.
+                [sessionId]: seedBackendConditions({
                   ...current,
                   sessionRunId: recoveredSessionRunId,
                   ...(preserveObservedTerminalProcess
@@ -837,7 +843,7 @@ export function useSessionActions(
                           : {}),
                         exited: null,
                       }),
-                },
+                }, current, recovery.snapshot.conditions),
               }
             })
           }
