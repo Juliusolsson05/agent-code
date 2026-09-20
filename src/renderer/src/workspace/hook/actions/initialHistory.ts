@@ -108,7 +108,14 @@ type HistoryPlacement = { fresh: Entry } | { anchor: string }
  * missing rows in order, not rows out of order, and the caller keeps the
  * pagination cursor on the window's oldest entry rather than the chunk's.
  */
-function placeHistoryEntries(
+/**
+ * Exported for tests only. The placement rule is a pure function of a chunk
+ * and a window, and every bug it has had — the unanchored prepend, and the
+ * retained-prefix ordering below — is expressible as one array in and one
+ * array out. Driving it through the loader and a seeded database would test
+ * the same rule through three layers that can hide it.
+ */
+export function placeHistoryEntries(
   placement: HistoryPlacement[],
   existing: Entry[],
 ): { entries: Entry[]; appendedAfterWindow: boolean } {
@@ -126,8 +133,24 @@ function placeHistoryEntries(
   }
   const merged: Entry[] = []
   let next = 0
-  for (const item of placement) {
+  for (const [at, item] of placement.entries()) {
     if ('fresh' in item) {
+      // ── FLUSH THE RETAINED PREFIX FIRST (#910 item 2) ──
+      // A fresh entry belongs immediately BEFORE the next anchor it shares
+      // with the window — which means after everything the window holds ahead
+      // of that anchor. This used to push the fresh row straight out, so a
+      // pane holding [a,c] receiving [b,c] produced [b,a,c]: `b` emitted, then
+      // `a` and `c` flushed behind it. Nothing errors, uuid dedup makes the
+      // order permanent, and the user simply reads the conversation wrong.
+      //
+      // Only when a following anchor EXISTS. With none, the chunk shares
+      // nothing further with the window and the prepend is deliberate — see
+      // the unanchored case above, where a chunk that does not reach back far
+      // enough must not be interleaved on a guess.
+      const anchorIndex = nextAnchorIndex(placement, at + 1, position, next)
+      if (anchorIndex !== null) {
+        while (next < anchorIndex) merged.push(existing[next++]!)
+      }
       merged.push(item.fresh)
       continue
     }
@@ -138,6 +161,35 @@ function placeHistoryEntries(
   }
   while (next < existing.length) merged.push(existing[next++]!)
   return { entries: merged, appendedAfterWindow: false }
+}
+
+/**
+ * Where in the window the next usable anchor sits, scanning forward from `from`.
+ *
+ * "Usable" means present in the window and not already emitted — the same two
+ * conditions the anchor branch applies — so a fresh entry is never flushed
+ * against an anchor the loop is going to skip.
+ *
+ * The already-emitted half is SYMMETRY, not load-bearing: a stale index is by
+ * definition below `next`, and the caller's flush loop (`while (next < index)`)
+ * is a no-op for any such value. Dropping it cannot change an answer, which is
+ * why no test pins it. It stays because a reader comparing this to the anchor
+ * branch should not have to work that out.
+ */
+function nextAnchorIndex(
+  placement: HistoryPlacement[],
+  from: number,
+  position: Map<string, number>,
+  next: number,
+): number | null {
+  for (let at = from; at < placement.length; at += 1) {
+    const item = placement[at]!
+    if ('fresh' in item) continue
+    const index = position.get(item.anchor)
+    if (index === undefined || index < next) continue
+    return index
+  }
+  return null
 }
 
 function entryTime(entry: Entry | undefined): number | null {
@@ -421,7 +473,20 @@ export async function loadInitialHistoryForSession({
       // pages must keep starting from the window's cursor. Moving it to the
       // chunk's head would page the gap in ABOVE the window: the misorder the
       // append exists to prevent.
-      const keepWindowCursor = placed.appendedAfterWindow
+      // ── A LOAD THAT ADDED NOTHING MUST NOT MOVE THE CURSOR (#910 item 3) ──
+      // Re-hydrating a tail the window already holds produces an all-anchor
+      // placement: nothing is added, so `appendedAfterWindow` is false and the
+      // cursor used to jump to that chunk's head. With a window of [c,d] that
+      // had already paged back to [a,b] and then re-read [g,h], the marker
+      // moved to `g` and the next older page landed ABOVE everything —
+      // [e,f,a,b,c,d,g,h] — which is precisely the misorder the append rule
+      // exists to prevent, arrived at from the other side.
+      //
+      // The pagination cursor names the OLDEST entry the pane holds. A load
+      // that contributed no entry cannot have changed which one that is, so
+      // the only honest answer is to leave it alone.
+      const addedFreshEntries = placement.some(item => 'fresh' in item)
+      const keepWindowCursor = placed.appendedAfterWindow || !addedFreshEntries
 
       const nextRuntime = appendFeedDebugLog(
         {
