@@ -11,6 +11,7 @@ import { useEditorBeforeUnloadGuard } from '@renderer/features/global-editor/hoo
 import { useDevDebugConfigSync } from '@renderer/features/debug/devDebugConfig'
 import { useDebugAutosave } from '@renderer/features/debug/useDebugAutosave'
 import { useCaffeinateSync } from '@renderer/features/caffeinate/useCaffeinateSync'
+import { useDictationFocusedSession } from '@renderer/features/voice-dictation/useDictationFocusedSession'
 import { useDictationHotkeySync } from '@renderer/features/voice-dictation/useDictationHotkeySync'
 import { useDictationMouseTrigger } from '@renderer/features/voice-dictation/useDictationMouseTrigger'
 import { useMouseChordPalette } from '@renderer/features/command-palette/useMouseChordPalette'
@@ -68,6 +69,9 @@ export default function App() {
   useCaffeinateSync()
   useDictationHotkeySync()
   useDictationMouseTrigger()
+  // Dictation follows the focused lane, not whichever composer was typed in
+  // most recently (#1031 item 3).
+  useDictationFocusedSession()
   // Mount order between these two no longer matters — both register with the
   // shared arbiter rather than installing their own window listeners, which is
   // the whole reason that module exists.
