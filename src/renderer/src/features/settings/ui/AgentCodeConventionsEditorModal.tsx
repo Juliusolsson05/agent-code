@@ -15,6 +15,7 @@ import {
   type AgentCodeConventionsMutationResult,
   type AgentCodeConventionsSnapshot,
 } from '@shared/types/agentCodeConventions.js'
+import { withVisibleControls } from '@shared/text/visibleControls'
 
 type Props = {
   open: boolean
@@ -268,7 +269,13 @@ export function AgentCodeConventionsEditorModal({
               <div className="mb-1 text-[11px] text-ink">Installations</div>
               {shownSnapshot.targets.map(target => (
                 <div key={target.id} className="flex flex-wrap items-center justify-between gap-2 border-t border-panel-border py-1 first:border-t-0">
-                  <span className="min-w-0 flex-1 truncate text-muted">{target.displayPath || target.id} · {target.state}</span>
+                  {/* The path comes from the provider's own config
+                      resolution — `CLAUDE_CONFIG_DIR=~/.claude<U+200B>` makes
+                      a different directory read as `~/.claude` (#1049
+                      re-review) — and it is what identifies the file the
+                      buttons beside it reveal and OVERWRITE. Display only:
+                      every action still uses `target.id`. */}
+                  <span className="min-w-0 flex-1 truncate text-muted">{withVisibleControls(target.displayPath || target.id)} · {target.state}</span>
                   {(target.state === 'conflict' || target.state === 'retired') ? (
                     <>
                       <button type="button" className="rounded-control border border-control-border px-1.5 py-0.5" onClick={() => void window.api.revealAgentCodeConventionsTarget(target.id)}>Reveal</button>
@@ -277,7 +284,7 @@ export function AgentCodeConventionsEditorModal({
                           type="button"
                           className="rounded-control border border-danger px-1.5 py-0.5 text-danger"
                           onClick={() => {
-                            if (!window.confirm(`Replace the reviewed file at ${target.displayPath}?`)) return
+                            if (!window.confirm(`Replace the reviewed file at ${withVisibleControls(target.displayPath)}?`)) return
                             const next = [
                               ...overwriteApprovals.filter(value => value.targetId !== target.id),
                               { targetId: target.id, expectedConflictFingerprint: target.conflictFingerprint! },
