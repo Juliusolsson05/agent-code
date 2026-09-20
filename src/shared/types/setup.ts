@@ -34,20 +34,52 @@ export type SetupToolSource = 'bundled' | 'system'
 export type SetupToolStatus = {
   id: SetupToolId
   label: string
-  required: boolean
+  /**
+   * An agent provider CLI rather than a helper tool.
+   *
+   * WHY this replaced `required` (#995): `required` meant "a missing binary
+   * blocks app launch", and Claude Code and Codex were both required. A fresh
+   * Mac therefore met a gate with no Continue button, even in the packaged app
+   * where OpenCode ships bundled and works (testing/fixtures/first-run records
+   * that wall). No single tool is a launch prerequisite any more: a terminal
+   * pane needs none, and any ONE provider is enough for agents. The gate still
+   * needs to tell providers from helpers, to show install commands and the
+   * manual path override, and this is that distinction without the lockout.
+   */
+  provider: boolean
   found: boolean
   path: string | null
   installable: boolean
   source?: SetupToolSource
   skipped?: boolean
   detail?: string
+  /** A copyable install command for a provider CLI (registry.setup.ts). */
+  installCommand?: string
+  /** The provider's own install documentation. */
+  docsUrl?: string
 }
 
 export type SetupCheckResult = {
   checkedAt: number
-  ready: boolean
-  blocking: SetupToolId[]
   tools: Record<SetupToolId, SetupToolStatus>
+  /**
+   * Providers whose CLI resolved, in AGENT_PROVIDER_KINDS order. Computed once,
+   * in src/main/setup/readiness.ts. The gate, the fresh-install bootstrap and
+   * the provider pickers all read it; none of them re-derives it from `tools`.
+   */
+  usableProviders: AgentProviderKind[]
+  /**
+   * What a fresh install opens its first project with: the default provider
+   * when it is usable, otherwise the first usable one, otherwise a terminal.
+   */
+  firstSessionKind: AgentProviderKind | 'terminal'
+  /**
+   * The user has already answered "continue without a provider" on this
+   * machine. The panel stops opening by itself for that reason; it is still
+   * one command away. Without this, a terminal-only user met the modal on
+   * every launch and in every new window.
+   */
+  noProvidersAcknowledged: boolean
 }
 
 // Targets the SetupGate's "Install via Homebrew" button can hand to

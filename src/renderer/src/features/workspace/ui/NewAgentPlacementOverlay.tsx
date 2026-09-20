@@ -8,6 +8,7 @@ import type {
   TabId,
 } from '@renderer/workspace/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
+import { MISSING_PROVIDER_HINT, useMissingProviders } from '@renderer/features/setup/store'
 import {
   SESSION_SPAWN_CHOICES,
   type AgentProviderChoice,
@@ -64,6 +65,7 @@ export function NewAgentPlacementOverlay({
 }: Props) {
   const linkedMode = linkedAgentParentId !== null
   const [selectedIndex, setSelectedIndex] = useState(0)
+  const missingProviders = useMissingProviders()
   // One-shot latch around the spawn. Creation is async (spawns a session,
   // awaits an IPC round-trip, then closes the overlay). Until the close fires,
   // this overlay keeps its `open` prop true and its keydown listener
@@ -202,7 +204,9 @@ export function NewAgentPlacementOverlay({
                 >
                   <span className="text-[12px]">{option.label}</span>
                   <span className={`text-[10px] ${active ? 'text-accent-fg/80' : 'text-muted'}`}>
-                    {option.description}
+                    {isAgentProviderKind(option.kind) && missingProviders.has(option.kind)
+                      ? MISSING_PROVIDER_HINT
+                      : option.description}
                   </span>
                 </button>
               )
