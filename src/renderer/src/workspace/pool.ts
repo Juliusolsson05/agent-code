@@ -1,4 +1,4 @@
-import { clearTiledLaneSessions } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
+import { clearTiledLaneSessions, scrubGridRowMetadata } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import type {
   SessionId,
   SessionMeta,
@@ -143,12 +143,33 @@ export function workspaceWithoutSessions(
     ? prev.pinnedSessionIds.filter(id => !removed.has(id))
     : prev.pinnedSessionIds
 
+  // WHY the row bindings are scrubbed HERE and not only at the persistence
+  // boundary (#863): `scrubGridRowMetadata` already ran in
+  // `sessionOwnership.ts`, which cleans the copy written to disk — so memory
+  // and disk disagreed for the rest of the session. A row left bound to a
+  // project that no longer exists filters its index to nothing, and New Agent
+  // from one of its empty lanes resolves the dead tab, hits `if (!tab) return
+  // null` in `createDetachedDispatchAgent` and fails with NO TOAST: the
+  // placement overlay stays open until the user presses Escape, because only a
+  // successful spawn closes it.
+  //
+  // This is the one place a project leaves live state, so it is the one place
+  // that has to say so.
+  //
+  // It runs on EVERY commit, not only when a project left: the same helper
+  // also prunes `expandedParents`, and a parent that just closed must not stay
+  // expanded either. Guarding it on `emptied.size` was the first version and
+  // it silently kept that second prune from ever running. There is no cost to
+  // pay for dropping the guard — `scrubGridRowMetadata` returns the SAME stage
+  // object when it changes nothing, so a close that touches no row still does
+  // not re-allocate the stage the user arranged (#681).
+  const stage = clearTiledLaneSessions(prev.stage, removed)
   return {
     ...prev,
     tabs,
     activeTabId,
     sessions,
     pinnedSessionIds,
-    stage: clearTiledLaneSessions(prev.stage, removed),
+    stage: scrubGridRowMetadata(stage, new Set(tabs.map(tab => tab.id)), new Set(Object.keys(sessions))),
   }
 }

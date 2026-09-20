@@ -1046,7 +1046,18 @@ export function usePaneActions(
         ? { ...resolved, tabId: projectOverride.tabId, cwdSessionId: projectOverride.anchorSessionId }
         : resolved
       const tab = snapshot.tabs.find(t => t.id === target.tabId)
-      if (!tab) return null
+      if (!tab) {
+        // WHY this says something instead of returning quietly (#863): a bare
+        // `return null` here is the primary creation command failing with NO
+        // feedback at all — the placement overlay stays open, because only a
+        // successful spawn closes it, and the user has to guess that Escape is
+        // the way out. The cause that made it reachable (a row still bound to
+        // a closed project) is fixed in `workspaceWithoutSessions`, so this
+        // should now be unreachable; it stays because the next stale target
+        // must be visible rather than silent.
+        showToast('New Agent could not find the project this lane is pointing at. Try another lane, or pick a project.')
+        return null
+      }
 
       // A native continuation owns its cwd; the project only owns placement.
       // Reusing the anchor cwd here can resume a transcript in another repo.

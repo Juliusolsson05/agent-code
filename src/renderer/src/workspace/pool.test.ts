@@ -43,6 +43,17 @@ function workspace(): WorkspaceState {
 
 function expectCoherent(state: WorkspaceState): void {
   expect(collectUnownedSessionIds(state), 'every row names a live project').toEqual([])
+  // #863. The header's first invariant, asserted on the LIVE state and not
+  // only on the copy autosave writes. A row bound to a project that no longer
+  // exists filters its index to nothing, and New Agent from its empty lane
+  // resolves the dead tab, hits `if (!tab) return null` and fails with no
+  // toast — the placement overlay stays open until Escape.
+  const liveTabIds = new Set(state.tabs.map(tab => tab.id))
+  for (const row of state.stage.rows ?? []) {
+    for (const bound of row.projectTabIds ?? []) {
+      expect(liveTabIds.has(bound), `row binding ${bound} names a live project`).toBe(true)
+    }
+  }
   for (const tab of state.tabs) {
     expect(resolveTabSessions(state, tab.id).length, `project ${tab.id} lists a session`).toBeGreaterThan(0)
   }
@@ -68,6 +79,63 @@ describe('workspaceWithoutSessions', () => {
     expect(next.tabs).toBe(prev.tabs)
     expect(next.activeTabId).toBe('b')
     expectCoherent(next)
+  })
+
+  it('unbinds a row from a project that left with its last session (#863)', () => {
+    // `scrubGridRowMetadata` ran only at the persistence boundary, so memory
+    // and disk disagreed for the rest of the session: autosave wrote a clean
+    // row while the live row stayed bound to a tab that was gone.
+    const prev = workspace()
+    prev.stage.rows = [{ length: 2 }, { length: 2, projectTabIds: ['b'] }]
+
+    const next = workspaceWithoutSessions(prev, ['b1', 'b2'])
+
+    expect(next.tabs.map(tab => tab.id)).toEqual(['a', 'c'])
+    // UNBOUND, not bound to an empty set: an empty set filters the index to
+    // nothing with no UI path back, because the picker only offers tabs that
+    // exist.
+    expect(next.stage.rows?.[1]).not.toHaveProperty('projectTabIds')
+    expectCoherent(next)
+  })
+
+  it('keeps the bindings that survive, and leaves an untouched row alone (#863)', () => {
+    const prev = workspace()
+    prev.stage.rows = [{ length: 2, projectTabIds: ['a'] }, { length: 2, projectTabIds: ['b', 'c'] }]
+
+    const next = workspaceWithoutSessions(prev, ['b1', 'b2'])
+
+    expect(next.stage.rows?.[1]?.projectTabIds).toEqual(['c'])
+    // Row 0 named nothing that died, so it is the same object: a close must
+    // not churn the stage the user arranged (#681).
+    expect(next.stage.rows?.[0]).toEqual({ length: 2, projectTabIds: ['a'] })
+    expectCoherent(next)
+  })
+
+  it('does not re-allocate the rows when there is nothing to scrub (#863)', () => {
+    // The scrub runs on every commit, so it has to be free when it changes
+    // nothing — otherwise every session close re-allocates the stage and every
+    // memoised consumer re-renders.
+    const prev = workspace()
+    prev.stage.rows = [{ length: 2 }, { length: 2, projectTabIds: ['b'] }]
+
+    const next = workspaceWithoutSessions(prev, ['b1'])
+
+    expect(next.tabs).toBe(prev.tabs)
+    expect(next.stage.rows).toBe(prev.stage.rows)
+  })
+
+  it('collapses an expanded parent that just closed, even when its project stays (#863)', () => {
+    // The second thing `scrubGridRowMetadata` prunes. The first version of
+    // this fix ran the scrub only when a PROJECT left, which silently kept
+    // this prune from ever running: a row stayed expanded on a parent that no
+    // longer exists.
+    const prev = workspace()
+    prev.stage.rows = [{ length: 2, expandedParents: ['b1', 'b2'] }, { length: 2 }]
+
+    const next = workspaceWithoutSessions(prev, ['b1'])
+
+    expect(next.tabs).toBe(prev.tabs)
+    expect(next.stage.rows?.[0]?.expandedParents).toEqual(['b2'])
   })
 
   it('removes a project with its LAST session and moves the active project to the previous neighbour', () => {
