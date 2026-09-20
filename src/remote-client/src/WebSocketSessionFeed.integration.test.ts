@@ -164,6 +164,129 @@ describe('WebSocketSessionFeed against a live RemoteServer', () => {
     )
   })
 
+  it('does not re-notify the session list for every stream frame (#1055)', async () => {
+    // THE PHONE BUG: the list screen re-sorts on every array identity change,
+    // and this feed rebuilt the array — restamping lastActivityAt to
+    // Date.now() — for ANY event on ANY channel. screen and process-state are
+    // broadcast unbatched, so with two working agents the two rows swapped
+    // places at frame rate: "flashing, switching positions like a million
+    // times".
+    //
+    // The list is a PICKER. It has to move when something meaningful changes,
+    // not when a terminal repaints.
+    const f = makeFeed()
+    await waitForOpen(f)
+    manager.emit('started', { sessionId: 's1', kind: 'claude', projectDir: '/repo' })
+    manager.emit('started', { sessionId: 's2', kind: 'claude', projectDir: '/repo' })
+    await vi.waitFor(() => expect(f.getSessionList()).toHaveLength(2))
+
+    let notifications = 0
+    const offList = f.onSessionList(() => { notifications += 1 })
+    // Count the frames as the CLIENT receives them. Asserting on a sleep
+    // instead let the whole test pass with every frame discarded (#1055
+    // review): a rate limit that is never exercised looks identical to one
+    // that works.
+    let screens = 0
+    const offScreen = f.onSessionScreen(() => { screens += 1 })
+    for (let frame = 0; frame < 30; frame += 1) {
+      manager.emit('screen', { sessionId: frame % 2 ? 's1' : 's2', plain: `frame ${frame}`, cursor: null })
+      manager.emit('process-state', { sessionId: frame % 2 ? 's1' : 's2', active: true })
+    }
+    await vi.waitFor(() => expect(screens).toBe(30))
+    offList()
+    offScreen()
+    expect(notifications).toBeLessThanOrEqual(2)
+  })
+
+  it('keeps the recency ORDER stable while two agents work (#1055)', async () => {
+    // Even one notification must not reorder the list: the client stamps
+    // Date.now() locally, so whichever agent painted last would jump to the
+    // top, and they alternate.
+    const f = makeFeed()
+    await waitForOpen(f)
+    manager.emit('started', { sessionId: 's1', kind: 'claude', projectDir: '/repo' })
+    manager.emit('started', { sessionId: 's2', kind: 'claude', projectDir: '/repo' })
+    await vi.waitFor(() => expect(f.getSessionList()).toHaveLength(2))
+    const order = () => f.getSessionList()
+      .slice()
+      .sort((a, b) => (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0))
+      .map(s => s.sessionId)
+      .join(',')
+    const before = order()
+    let screens = 0
+    const offScreen = f.onSessionScreen(() => { screens += 1 })
+    for (let frame = 0; frame < 20; frame += 1) {
+      manager.emit('screen', { sessionId: frame % 2 ? 's1' : 's2', plain: `frame ${frame}`, cursor: null })
+    }
+    await vi.waitFor(() => expect(screens).toBe(20))
+    offScreen()
+    expect(order()).toBe(before)
+  })
+
+  it('still refreshes a stamp that has gone stale (#1055 review)', async () => {
+    // The other half of the rate limit, and the one a lazy implementation
+    // passes by simply never refreshing: a row whose recency is older than
+    // the window must move on the next frame, or an agent that wakes after an
+    // hour would keep sorting below one that has been quiet for a minute.
+    manager.emit('started', { sessionId: 's-stale', kind: 'claude', projectDir: '/repo' })
+    ;(manager.getLastActivityAt as ReturnType<typeof vi.fn>).mockReturnValue(Date.now() - 120_000)
+    const f = makeFeed()
+    await waitForOpen(f)
+    await vi.waitFor(() => expect(f.getSessionList()).toHaveLength(1))
+    const stale = f.getSessionList()[0]?.lastActivityAt ?? 0
+    expect(Date.now() - stale).toBeGreaterThan(60_000)
+
+    let screens = 0
+    const offScreen = f.onSessionScreen(() => { screens += 1 })
+    manager.emit('screen', { sessionId: 's-stale', plain: 'awake', cursor: null })
+    await vi.waitFor(() => expect(screens).toBe(1))
+    offScreen()
+    expect(f.getSessionList()[0]?.lastActivityAt ?? 0).toBeGreaterThan(stale)
+  })
+
+  it('a server list refresh cannot move a row backwards in time (#1055 review)', async () => {
+    // The server stamps when it last SAW activity; the client stamps when it
+    // last RECEIVED a frame, and the two disagree. Taking the server's value
+    // wholesale reordered the list on every projection change — the reviewer
+    // measured two reversals inside 300 ms — and it also reset the very stamp
+    // the rate limit is measured from.
+    //
+    // A workspace projection change is what re-sends the whole list, so the
+    // server is rebuilt here with one whose onChange this test can fire.
+    let republish = (): void => {}
+    // The projection also carries identity, so this test can tell WHICH
+    // publication the client has processed: waiting on a sleep instead let it
+    // pass with `broadcastSessionList` doing nothing at all (#1055 review).
+    let title = 'before the refresh'
+    await restartWithDeps({
+      workspace: {
+        snapshot: () => new Map([['s1', { sessionId: 's1', title, agentName: null, tabTitle: null, pinned: false, tldrIdentity: null, cwd: '/repo', kind: 'claude' }]]),
+        onChange: (listener: () => void) => { republish = listener; return () => {} },
+      },
+    })
+    manager.emit('started', { sessionId: 's1', kind: 'claude', projectDir: '/repo' })
+    const f = makeFeed()
+    await waitForOpen(f)
+    await vi.waitFor(() => expect(f.getSessionList()).toHaveLength(1))
+
+    // A frame arrives, so the client's stamp is now newer than anything the
+    // server knows about.
+    let screens = 0
+    const offScreen = f.onSessionScreen(() => { screens += 1 })
+    manager.emit('screen', { sessionId: 's1', plain: 'working', cursor: null })
+    await vi.waitFor(() => expect(screens).toBe(1))
+    offScreen()
+    const local = f.getSessionList()[0]?.lastActivityAt ?? 0
+    expect(local).toBeGreaterThan(0)
+
+    ;(manager.getLastActivityAt as ReturnType<typeof vi.fn>).mockReturnValue(local - 60_000)
+    title = 'after the refresh'
+    republish()
+    // The identity change proves this exact publication arrived.
+    await vi.waitFor(() => expect(f.getSessionList()[0]?.title).toBe('after the refresh'))
+    expect(f.getSessionList()[0]?.lastActivityAt ?? 0).toBeGreaterThanOrEqual(local)
+  })
+
   it('deliverPrompt round-trips to the manager and resolves ok', async () => {
     const f = makeFeed()
     await waitForOpen(f)

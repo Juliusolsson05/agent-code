@@ -30,6 +30,19 @@ import type {
 } from './wire'
 import type { UsageSnapshot } from '@shared/types/usage'
 
+/**
+ * How stale the picker's recency stamp may get before a stream frame
+ * refreshes it.
+ *
+ * It is not a debounce on rendering — it is the resolution of the value
+ * itself. The list sorts by it, so a finer stamp does not make the phone more
+ * informative, it only makes rows change places; the row's own `working`
+ * marker is what shows live state. Thirty seconds also matches the interval
+ * the list already re-renders on to keep its relative labels fresh, so a
+ * refreshed stamp is visible on the next tick at the latest.
+ */
+const ACTIVITY_REFRESH_MS = 30_000
+
 function applyRemoteThemeSettings(settings: Record<string, unknown> | null | undefined): void {
   if (!settings) return
   applyTheme({ ...DEFAULT_SETTINGS, ...settings } as Settings)
@@ -136,6 +149,8 @@ export class WebSocketSessionFeed implements SessionFeed {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private nextRequestId = 1
   private lastSessionList: RemoteSessionSummary[] = []
+  /** See serverClockKnown. Set from each `session-list` frame. */
+  private serverClockSeen = false
   /** Latest hello-declared STT capability. null = unknown (no hello yet, or
    *  a pre-capability server that omits the field) — consumers treat null as
    *  available so version skew degrades to the old fail-at-upload behavior,
@@ -149,6 +164,19 @@ export class WebSocketSessionFeed implements SessionFeed {
   }
 
   // --- client-specific surface (beyond SessionFeed) ---
+
+  /** Did the CURRENT list carry the sender's clock?
+   *
+   *  The list screen needs this to know whether the stamps it is sorting were
+   *  CONVERTED into this device's time base. Against a desktop too old to
+   *  send one they are not, and an overshoot can then be the gap between two
+   *  machines rather than this phone's own clock artefact (#1055 review).
+   *
+   *  It answers for the list currently held, so a reconnect to an older
+   *  desktop takes the wider tolerance back. */
+  serverClockKnown(): boolean {
+    return this.serverClockSeen
+  }
 
   getSessionList(): RemoteSessionSummary[] {
     return this.lastSessionList
@@ -454,20 +482,84 @@ export class WebSocketSessionFeed implements SessionFeed {
     }
     switch (frame.type) {
       case 'session-list': {
-        this.lastSessionList = frame.sessions
-        for (const cb of [...this.sessionListListeners]) cb(frame.sessions)
+        // Identity (title, pin, runtime, membership) comes from the server and
+        // replaces ours immediately. The RECENCY does not: the server stamps
+        // when it last saw activity, we stamp when we last received a frame,
+        // and the server's value can be OLDER. Taking it wholesale made the
+        // list reorder on every projection change — the reviewer measured two
+        // reversals inside 300 ms — and it also undid the rate limit below by
+        // resetting the stamp the limit is measured from.
+        //
+        // Keeping the newer of the two makes recency monotone per session,
+        // which is what a picker's ordering needs: rows move when something
+        // newer happened, never because two clocks disagree.
+        const previous = new Map(this.lastSessionList.map(row => [row.sessionId, row.lastActivityAt ?? 0]))
+        const now = Date.now()
+        // ONE CLOCK. The server stamps `lastActivityAt` with its clock; this
+        // client stamps its local activity bumps with the phone's; and the
+        // list sorts the mixture. Two devices sit minutes apart often enough
+        // that a just-finished turn sorted below one from three minutes
+        // earlier (#1055 review). Converting the whole frame on arrival means
+        // every later comparison — newer-of below, the sort, the "3m ago"
+        // label — spans one time base.
+        //
+        // An older desktop sends no `serverNow`; then the offset is zero and
+        // the behaviour is what it was.
+        const offset = typeof frame.serverNow === 'number' ? frame.serverNow - now : 0
+        // Per FRAME, not latched (#1055 review): a feed that reconnects to an
+        // older desktop at the same endpoint — a rollback — converts nothing
+        // from then on, and a sticky flag would keep handing the list the
+        // tighter tolerance that only a converted list has earned.
+        this.serverClockSeen = typeof frame.serverNow === 'number'
+        this.lastSessionList = frame.sessions.map(row => {
+          const server = row.lastActivityAt === null || row.lastActivityAt === undefined
+            ? null
+            : row.lastActivityAt - offset
+          const local = previous.get(row.sessionId) ?? 0
+          // A local stamp in the FUTURE is this phone's own clock artefact —
+          // it was fast when the row emitted — and dropping it is the recovery
+          // path an unconditional maximum cannot have: otherwise that row
+          // stays pinned above genuinely newer ones, reading "now", long after
+          // the clock was corrected.
+          const usable = local <= now ? local : 0
+          return usable > (server ?? 0) ? { ...row, lastActivityAt: usable } : { ...row, lastActivityAt: server }
+        })
+        for (const cb of [...this.sessionListListeners]) cb(this.lastSessionList)
         return
       }
       case 'session-event': {
-        // Keep the picker's recency live without re-requesting the list:
-        // any event for a session IS activity. Cheap (one map when the
-        // session is present) and mirrors how the server stamps the value.
+        // Keep the picker's recency live without re-requesting the list: any
+        // event for a session IS activity, and the server only re-sends the
+        // whole list when the workspace projection changes.
+        //
+        // WHY this is rate-limited and was not: it fired for EVERY event on
+        // every channel — screen, process-state, semantic-event,
+        // jsonl-entries — and screen/process-state are broadcast unbatched, so
+        // a working agent rebuilt the array at frame rate. Each rebuild is a
+        // new array identity, so the phone's list screen re-ran its sort and
+        // repainted every row; with two agents working the two rows swapped
+        // places continuously, which is what "the phone menu is flashing and
+        // switching positions like a million times" is. Measured on the real
+        // socket: 60 notifications for 60 frames.
+        //
+        // The value is a SORT KEY for a picker, accurate to the minute at
+        // most — the row already shows `working` for the live state. Refresh
+        // it when it has gone stale, not when a terminal repaints.
         const activeId = (frame.payload as { sessionId?: string })?.sessionId
-        if (activeId && this.lastSessionList.some(s => s.sessionId === activeId)) {
-          this.lastSessionList = this.lastSessionList.map(s =>
-            s.sessionId === activeId ? { ...s, lastActivityAt: Date.now() } : s,
-          )
-          for (const cb of [...this.sessionListListeners]) cb(this.lastSessionList)
+        if (activeId) {
+          const current = this.lastSessionList.find(s => s.sessionId === activeId)
+          // `Math.abs`, so a stamp in the FUTURE is refreshed on the next
+          // event rather than waiting for a list publication (#1055 review):
+          // the elapsed time is negative there, and the plain comparison
+          // never fired, so a phone whose clock was corrected kept an
+          // inflated stamp until an unrelated workspace change happened to
+          // re-list. Any activity now retires it.
+          if (current && Math.abs(Date.now() - (current.lastActivityAt ?? 0)) >= ACTIVITY_REFRESH_MS) {
+            this.lastSessionList = this.lastSessionList.map(s =>
+              s.sessionId === activeId ? { ...s, lastActivityAt: Date.now() } : s,
+            )
+            for (const cb of [...this.sessionListListeners]) cb(this.lastSessionList)
+          }
         }
         const set = this.listeners[frame.channel]
         if (!set) return

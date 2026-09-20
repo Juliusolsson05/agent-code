@@ -15,6 +15,7 @@ void (undefined as Summary as never)
 
 function fakeFeed(options: {
   summaries?: Array<Record<string, unknown>>
+  serverClockKnown?: boolean
   tldr?: Record<string, { text: string; updatedAt: string; revision: number }>
   usage?: UsageSnapshot | null
 }) {
@@ -28,6 +29,10 @@ function fakeFeed(options: {
   }
   return {
     getSessionList: () => summaries,
+    // The real feed learns this from a `session-list` frame; a modern desktop
+    // always sends its clock, so the converted-stamp tolerance is the default
+    // these tests run under.
+    serverClockKnown: () => options.serverClockKnown ?? true,
     onSessionList: on('onSessionList'),
     onSessionProcessState: on('onSessionProcessState'),
     onUsage: on('onUsage'),
@@ -66,6 +71,110 @@ describe('FleetHome', () => {
     const groups = screen.getAllByText('agent-code')
     expect(groups.length).toBeGreaterThanOrEqual(1)
     expect(screen.getAllByText('exited').length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('keeps its arrangement when the feed republishes the same sessions (#T18)', () => {
+    // The phone bug the owner reported: "flashing, switching positions for
+    // the agent index like a million times". Two agents working at once get
+    // activity stamps a millisecond apart or identical, and the feed
+    // republishes the list; with no tiebreak the rows landed in whatever
+    // order the rebuilt array happened to carry, and whole GROUPS moved
+    // because their order was Map insertion order.
+    //
+    // Same sessions, same stamps, two different array orders: the rendered
+    // arrangement must be identical.
+    const stamp = Date.now() - 10_000
+    const rows = [
+      { ...BASE, sessionId: 's-b', kind: 'claude', title: 'Beta', tabTitle: 'project-two', lastActivityAt: stamp },
+      { ...BASE, sessionId: 's-a', kind: 'claude', title: 'Alpha', tabTitle: 'project-one', lastActivityAt: stamp },
+      { ...BASE, sessionId: 's-c', kind: 'claude', title: 'Gamma', tabTitle: 'project-one', lastActivityAt: stamp },
+    ]
+    const arrangement = (summaries: Array<Record<string, unknown>>): string => {
+      const view = render(<FleetHome feed={fakeFeed({ summaries })} connection="open" onSelect={() => {}} onUnpair={() => {}} />)
+      const text = [...view.container.querySelectorAll('.session-row')]
+        .map(row => row.textContent?.replace(/\s+/g, ' ').trim() ?? '')
+        .join(' | ')
+      view.unmount()
+      return text
+    }
+    expect(arrangement(rows)).toBe(arrangement([...rows].reverse()))
+  })
+
+  it('orders two groups whose names compare EQUAL but are not (#1055 review)', () => {
+    // localeCompare is not a total order: composed `café` and decomposed
+    // `café` are different strings, stay different Map keys, and compare
+    // equal — so without a final code-unit tiebreak the arrangement went
+    // back to depending on arrival order.
+    const stamp = Date.now() - 10_000
+    const rows = [
+      { ...BASE, sessionId: 's-1', kind: 'claude', title: 'One', tabTitle: 'caf\u00e9', lastActivityAt: stamp },
+      { ...BASE, sessionId: 's-2', kind: 'claude', title: 'Two', tabTitle: 'cafe\u0301', lastActivityAt: stamp },
+    ]
+    const arrangement = (summaries: Array<Record<string, unknown>>): string => {
+      const view = render(<FleetHome feed={fakeFeed({ summaries })} connection="open" onSelect={() => {}} onUnpair={() => {}} />)
+      const text = [...view.container.querySelectorAll('.session-row')]
+        .map(row => row.textContent?.replace(/\s+/g, ' ').trim() ?? '')
+        .join(' | ')
+      view.unmount()
+      return text
+    }
+    expect(arrangement(rows)).toBe(arrangement([...rows].reverse()))
+  })
+
+  it('does not let a stamp from the future outrank real activity (#1055 review)', () => {
+    // A QUIET row carrying an inflated stamp — the phone's clock was fast
+    // when it last emitted, and it has emitted nothing since, so no event can
+    // retire it. The list must still not put it above work that is genuinely
+    // newer.
+    const now = Date.now()
+    const rows = [
+      { ...BASE, sessionId: 's-future', kind: 'claude', title: 'Quiet', tabTitle: 'p', lastActivityAt: now + 3_600_000 },
+      { ...BASE, sessionId: 's-now', kind: 'claude', title: 'Working', tabTitle: 'p', lastActivityAt: now - 1_000 },
+    ]
+    const { container } = render(<FleetHome feed={fakeFeed({ summaries: rows })} connection="open" onSelect={() => {}} onUnpair={() => {}} />)
+    const titles = [...container.querySelectorAll('.session-row')].map(row => row.textContent ?? '')
+    expect(titles[0]).toContain('Working')
+    expect(titles[1]).toContain('Quiet')
+  })
+
+  it('re-ranks a clamped row on the clock tick, not only when sessions change (#1055 review)', () => {
+    // The arrangement depends on `now`, so the memo has to recompute when the
+    // clock moves — the list already re-renders every 30 s for its relative
+    // labels. Without the tick in its dependencies, a phone whose clock was
+    // corrected kept the inflated row first until something else changed.
+    vi.useFakeTimers()
+    try {
+      const base = Date.now()
+      const rows = [
+        { ...BASE, sessionId: 's-future', kind: 'claude', title: 'Quiet', tabTitle: 'p', lastActivityAt: base + 20_000 },
+        { ...BASE, sessionId: 's-now', kind: 'claude', title: 'Working', tabTitle: 'p', lastActivityAt: base - 1_000 },
+      ]
+      const { container } = render(<FleetHome feed={fakeFeed({ summaries: rows })} connection="open" onSelect={() => {}} onUnpair={() => {}} />)
+      const order = () => [...container.querySelectorAll('.session-row')].map(row => row.textContent ?? '')
+      // 20 s ahead is beyond the tolerance, so it already ranks as unknown…
+      expect(order()[0]).toContain('Working')
+
+      // …and once the clock passes it, it is an ordinary recent row again.
+      act(() => { vi.setSystemTime(base + 25_000); vi.advanceTimersByTime(30_000) })
+      expect(order()[0]).toContain('Quiet')
+    } finally { vi.useRealTimers() }
+  })
+
+  it('keeps the wider tolerance against a desktop that sends no clock (#1055 review)', () => {
+    // An older desktop cannot be converted, so its stamps arrive in ITS time
+    // base: a machine twenty seconds ahead reports work from a second ago as
+    // `phoneNow + 19s`. Under the converted tolerance that would rank as
+    // unknown — below work from three minutes ago — which is a regression for
+    // exactly the pairing that cannot be fixed at the source.
+    const now = Date.now()
+    const rows = [
+      { ...BASE, sessionId: 's-fresh', kind: 'claude', title: 'Fresh', tabTitle: 'p', lastActivityAt: now + 19_000 },
+      { ...BASE, sessionId: 's-older', kind: 'claude', title: 'Older', tabTitle: 'p', lastActivityAt: now - 180_000 },
+    ]
+    const { container } = render(
+      <FleetHome feed={fakeFeed({ summaries: rows, serverClockKnown: false })} connection="open" onSelect={() => {}} onUnpair={() => {}} />,
+    )
+    expect([...container.querySelectorAll('.session-row')][0]?.textContent ?? '').toContain('Fresh')
   })
 
   it('opens the TLDR peek on long-press and navigates on tap', () => {

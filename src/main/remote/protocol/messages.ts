@@ -190,7 +190,20 @@ export type OutboundFrame =
       sttAvailable?: boolean
     }
   | { type: 'theme-settings'; themeSettings: Record<string, unknown> | null }
-  | { type: 'session-list'; sessions: OutboundSessionSummary[] }
+  | {
+      type: 'session-list'
+      sessions: OutboundSessionSummary[]
+      /** This machine's clock when the frame was built.
+       *
+       *  WHY the phone needs it (#1055 review): every `lastActivityAt` in
+       *  `sessions` is stamped by THIS clock, while the phone stamps its own
+       *  local activity bumps with ITS clock, and the list is sorted by the
+       *  mixed result. Two devices are minutes apart often enough that a
+       *  just-finished turn sorted below one from three minutes ago. With the
+       *  sender's `now` the phone converts the whole frame into its own time
+       *  base on arrival, so one comparison only ever spans one clock. */
+      serverNow: number
+    }
   // ── v2 note frames (remote-v2 rebuild). TLDR and Goal records, keyed by
   // SESSION id — the server owns the identity join (workspace projection →
   // TldrStore identity), so the phone never learns the identity scheme and

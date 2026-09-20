@@ -72,7 +72,10 @@ export type OutboundFrame =
       sttAvailable?: boolean
     }
   | { type: 'theme-settings'; themeSettings: Record<string, unknown> | null }
-  | { type: 'session-list'; sessions: RemoteSessionSummary[] }
+  // `serverNow` is the sender's clock when the frame was built, so the phone
+  // can convert `lastActivityAt` into its own time base — see the feed's
+  // session-list handler. Optional for a phone talking to an older desktop.
+  | { type: 'session-list'; sessions: RemoteSessionSummary[]; serverNow?: number }
   // v2 note frames — server-joined by sessionId (see wire notes in
   // protocol/messages.ts). Unknown to old servers; we simply never receive
   // them there, and the peek surfaces show their "unavailable" state.
