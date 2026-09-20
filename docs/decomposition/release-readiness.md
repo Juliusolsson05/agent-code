@@ -1384,6 +1384,37 @@ claude 2.1.143 / codex 0.130.0 are stale versus the 2.1.278 / 0.155.1 in daily u
       - lane and ⌘-digit grammar tests (`af0c88d7`).
     
     The PR body now lists the owner decisions (never displace, the badge, ⌥⌫, strip deletion, Close Project = Close Tab). Follow-ups: #1030 (persistence edges), #1031 (phone list, pooled goal loop, dictation, v3 phone test). Parity sweep A (nav/close) is still running. CI is pending.
+- 2026-09-20 20:35Z — **#1100 merged (nine this pass). Three PRs open, all three reviewed and answered.**
+  - **MERGED**: #1100 (`fix/rewind-attachment-loss`, closes **#1075**) — rewind now names
+    what it could not bring back, per attachment, with the reviewer's finding fixed
+    (the first cut printed a false message on 3 of 4 providers).
+  - **#1099** (#1070, condition refusals): all EIGHT review findings fixed in `86be41db`.
+    The severe one was mine: the control plane swallowed refusals, so a refused
+    trust-dialog reply answered `accepted: true` to an agent that then believed a folder
+    was trusted. `dispatchCustom` now takes a `rethrow` flag — views report, the control
+    plane reports AND rejects. Also: unknown provider reasons no longer return `undefined`
+    from the describer (Grok/OpenCode Terminal emit `stale`/`closed`/`no-live-channel`,
+    and `PaneToast` renders nothing for an empty message — the providers with the most
+    reachable refusal path were still silent); the phone gets all five messages instead of
+    one; the AUQ row stopped printing `option-not-found at select-option` at a human.
+    The three surviving mutations were real gaps: `TileLeaf.follow`'s test mocks the outlet
+    to `() => null`, and the phone dispatch was an inline `useCallback` reachable only by
+    mounting the whole session screen. Both now have real tests
+    (`TileLeaf.conditionRefusal.renderer.test.tsx`, `remote-client/src/ui/conditionDispatch.ts`).
+  - **#1101** (#925, bridge dedup): the reviewer found the implementation clean and 8 of 19
+    mutations alive. The finding that mattered: the identity-guarded `.catch` delete is now
+    the ONLY thing that removes a pending entry, so a single renderer error poisons that key
+    **until the app restarts** — where before #925 prune healed it in 250 ms. Nine mutations
+    now killed (`cae83772`), including the whole `readRunOutputs` half, which could have been
+    reverted wholesale with the suite green. #925's own measurement criterion shipped as a
+    test: 500 polls over 20 keys leave 20 pending entries.
+  - **#1096** (#854): was CONFLICTING. Merged `origin/main` in (`d68dc6c2`) — one conflict,
+    both sides additive at the same seam (#1089's wait-cap constants vs #854's
+    `isNotReadyYet`). tsc clean, mcp+sessionManager 191/191.
+  - Process note worth keeping: a batched mutation harness reported a live mutation as dead
+    earlier in this series, so every mutation in this pass was applied **individually**
+    against a verified-clean tree, with the file restored from a backup between runs.
+
 - 2026-09-19 07:13Z: MERGED #1022 (`52af3dfd`, goal-loop freeze, closes #1021), #933 (`40218b03`, tmux data loss, closes #898) and #1012 (`1195487d`, nightly). First nightly dispatched: run 35428680412. #1024 root-caused from recordings and fixed in PR #1028 (Stop-hook boundary). #1026 review findings fixed (`48bce88a`). Filed #1027 (TLDR latch trap), #1029 (bidi spoofing).
 - 2026-09-19 07:55Z: #1023 MERGED (phone gutter). #933 reviewed GREEN; docs fixed (`7da7a255`), CI rerunning. #878 package half merged (opencode-headless#14 `62440add`); app PR #1026 in review. #1013 CI fixes pushed (lockfile, projection shape). #1024 decomposed.
 - 2026-09-19 07:20Z: **#1013** merged with main (`e52b0352`).
