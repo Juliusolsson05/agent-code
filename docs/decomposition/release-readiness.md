@@ -501,6 +501,16 @@ claude 2.1.143 / codex 0.130.0 are stale versus the 2.1.278 / 0.155.1 in daily u
   prompt acceptance) for every provider, since that is what a real automation
   test needs instead of sleeps.
 
+- **T18 The phone remote-control menu is unusable (owner, 2026-09-20): "completely fucked up … flashing, switching positions for the agent index like a million times".**
+  The agent index on the phone remote reorders and repaints continuously, so the
+  list cannot be read or tapped. Treat it as a LIST IDENTITY/ORDERING bug before
+  a styling one: something is re-deriving the order (or the keys) on every feed
+  tick instead of holding a stable identity, which is the same class of defect
+  as the stale-session severing fixed in #911. Start from the phone's list
+  source and its sort, capture a recording of the flashing (the remote feed is
+  already journaled), and pin the fix with that recording. Pre-launch blocker:
+  remote control is a headline feature and this makes it unusable.
+
 - **T14 Redesign the Agent Activity command (owner, 2026-09-19): "that modal is ages and just shit across the board".**
   This is a full redesign or reimagining, not a patch. Approach:
   - Read the current command, its modal, and its data sources first.
