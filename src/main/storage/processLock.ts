@@ -168,6 +168,15 @@ export function classifyLockOwner(
   // So anything older than five minutes was stolen from exactly as before, and
   // five minutes of uptime is nothing.
   //
+  // Why it matters more than "two apps run at once": once the incumbent's lock
+  // has been overwritten, the file carries the SUCCESSOR's token. The
+  // incumbent's own release no longer matches and is a silent no-op, while the
+  // successor's release deletes the file although the incumbent is still
+  // running — so the state directory ends up with a live writer and no lock at
+  // all. That is the state #993 reports, though not precisely the moment it
+  // reports: that snapshot has both mains live AND the file already gone, so
+  // this is one way to reach it rather than a proven account of the incident.
+  //
   // There is no need to guess at all. The question the heuristic was groping
   // for is "is this pid the process that wrote the lock, or a recycled number
   // wearing it?", and the kernel answers it exactly: a process cannot have
