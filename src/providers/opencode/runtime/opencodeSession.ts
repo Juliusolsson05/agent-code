@@ -457,7 +457,54 @@ export class OpencodeSession extends EventEmitter implements AgentSession {
     // prompt() defaults sessionID to the active/ensured session, so a
     // fresh pane that never resumed still gets a session created on the
     // first prompt.
-    await this.headless.prompt({ prompt: text })
+    await this.headless.prompt({ prompt: text, ...await this.conversationSelection() })
+  }
+
+  /**
+   * The agent, model and variant THIS conversation runs on, read from its own
+   * session row immediately before a prompt.
+   *
+   * WHY the prompt has to carry them at all (#1038 review): OpenCode resolves
+   * a submission's model as `input.model ?? agent.model ?? session model`, so
+   * a machine-level `agent.build.model` outranks the session's own selection.
+   * A duplicated or rewound conversation therefore kept its model in every
+   * imported message and then answered the next prompt on whatever this
+   * machine's config named — which is the exact loss #1038 is about, one
+   * layer below the transcript. Reproduced against the 1.18.30 binary with
+   * `agent.build.model = opencode/big-pickle`.
+   *
+   * WHY agent AND model AND variant, never a subset: OpenCode persists what a
+   * prompt selects back onto the session row, so a partial selection MOVES
+   * the conversation — sending a model without an agent re-homes it to the
+   * default agent, permanently.
+   *
+   * WHY it is re-read per prompt instead of cached at start: the row is the
+   * source of truth and it changes underneath us — the TUI, another client or
+   * a model switch all write it. One local HTTP GET against a server on this
+   * machine is cheaper than a stale selection that silently re-homes the
+   * session. A failure or an unparseable row yields no selection at all,
+   * which is exactly the behaviour that shipped before this existed.
+   */
+  private async conversationSelection(): Promise<{
+    agent?: string
+    providerID?: string
+    modelID?: string
+    variant?: string
+  }> {
+    const sessionID = this.headless?.sessionID
+    if (!this.headless || !sessionID) return {}
+    const row = await this.headless.client.getSession(sessionID).catch(() => null)
+    if (!isRecord(row)) return {}
+    const model = isRecord(row.model) ? row.model : null
+    // The session row spells the model `id`, not `modelID` as a message does.
+    const modelID = typeof model?.id === 'string' && model.id.length > 0 ? model.id : undefined
+    const providerID = typeof model?.providerID === 'string' && model.providerID.length > 0
+      ? model.providerID
+      : undefined
+    if (!modelID || !providerID) return {}
+    const variant = typeof model?.variant === 'string' && model.variant.length > 0 ? model.variant : undefined
+    const agent = typeof row.agent === 'string' && row.agent.length > 0 ? row.agent : undefined
+    return { modelID, providerID, ...(variant ? { variant } : {}), ...(agent ? { agent } : {}) }
   }
 
   async stop(): Promise<void> {
@@ -504,4 +551,9 @@ export class OpencodeSession extends EventEmitter implements AgentSession {
     // / in attach mode.
     return this.headless?.processPid ?? null
   }
+}
+
+/** Narrow an unknown HTTP payload before reading fields off it. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
 }
