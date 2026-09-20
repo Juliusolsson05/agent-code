@@ -231,7 +231,18 @@ export function createControlHost(windowAccess: {
     } = {}) {
       executor.closeAdmission()
       waits.dispose()
-      const outcome = await executor.settled(options.timeoutMs ?? CONTROL_DRAIN_TIMEOUT_MS)
+      // The deadline lives HERE, not in the executor: `src/control-sdk` is
+      // platform-neutral and has no timer in its type lib, which the CI
+      // type-check caught when the race was written there.
+      let timer: ReturnType<typeof setTimeout> | undefined
+      await Promise.race([
+        executor.settled(),
+        new Promise<void>(resolve => {
+          timer = setTimeout(resolve, options.timeoutMs ?? CONTROL_DRAIN_TIMEOUT_MS)
+        }),
+      ])
+      if (timer) clearTimeout(timer)
+      const outcome = executor.outstanding()
       await history.drain?.()
       if (!outcome.drained) {
         options.onIncompleteDrain?.({ operations: outcome.operations, tasks: outcome.tasks })

@@ -95,45 +95,32 @@ export function createControlExecutor(ports: {
     },
 
     /**
+     * What is still outstanding right now: admitted calls that have not
+     * returned, plus accepted tasks whose bodies have not reported back.
+     *
+     * Synchronous on purpose. The DEADLINE lives in the host, not here — this
+     * package is provider- and platform-neutral and has no timer in its lib
+     * (review caught `setTimeout` failing the neutral type-check), so the
+     * executor exposes the fact and the host decides how long to wait for it.
+     */
+    outstanding(): { drained: boolean; operations: number; tasks: number } {
+      return {
+        drained: inFlight === 0 && acceptedTasks.size === 0,
+        operations: inFlight,
+        tasks: acceptedTasks.size,
+      }
+    },
+
+    /**
      * Resolves once every ADMITTED operation has finished — including its
      * durable result write, and including the body of an ACCEPTED task, which
      * outlives the call that started it.
      *
-     * ── WHY THERE IS A DEADLINE (#1074 review, 4) ──
-     * This holds the exit AND the state-process lock. Without a bound, one
-     * never-resolving operation — a stalled `fsync` inside the history append
-     * is the realistic candidate, and it blocks admission too — makes the
-     * application impossible to quit. The user's answer to that is a force
-     * quit, which loses exactly the record this drain protects AND strands the
-     * lock, so waiting forever buys nothing and costs both.
-     *
-     * The codebase already settled this trade-off in the other direction three
-     * stages later: `stopPerformance` races a 2 s timer because "diagnostics
-     * must never make the application impossible to quit". A drain that gives
-     * up and SAYS SO is strictly better than one that hangs silently.
-     *
-     * Returns what was still outstanding, so the caller can journal it rather
-     * than exiting quietly on an incomplete drain.
+     * Unbounded by design; see `outstanding` for why the bound is the host's.
      */
-    async settled(timeoutMs?: number): Promise<{ drained: boolean; operations: number; tasks: number }> {
-      const outstanding = () => ({
-        drained: inFlight === 0 && acceptedTasks.size === 0,
-        operations: inFlight,
-        tasks: acceptedTasks.size,
-      })
-      if (outstanding().drained) return outstanding()
-      const idle = new Promise<void>(resolve => { idleWaiters.push(resolve) })
-      if (timeoutMs === undefined) {
-        await idle
-        return outstanding()
-      }
-      let timer: ReturnType<typeof setTimeout> | undefined
-      await Promise.race([
-        idle,
-        new Promise<void>(resolve => { timer = setTimeout(resolve, timeoutMs) }),
-      ])
-      if (timer) clearTimeout(timer)
-      return outstanding()
+    async settled(): Promise<void> {
+      if (inFlight === 0 && acceptedTasks.size === 0) return
+      await new Promise<void>(resolve => { idleWaiters.push(resolve) })
     },
 
     async invoke(
