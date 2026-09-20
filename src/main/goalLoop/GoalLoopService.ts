@@ -7,12 +7,33 @@ import type { GoalLoopControlAction, GoalLoopState } from '@shared/types/goalLoo
 import { GOAL_LOOP_DEFAULT_MAX_CONTINUATIONS, GOAL_LOOP_MAX_CONTINUATIONS_CEILING } from '@shared/types/goalLoop.js'
 import { GOAL_LOOP_STORE_LIMIT, GoalLoopStore } from './GoalLoopStore.js'
 
-/** `flow_selected` / `flow_ignored`: the proxy reporting WHICH upstream call
- * it renders from. Diagnostics about other flows, never evidence that this
- * agent is working. See signal(). */
-function isFlowDiagnostic(event: unknown): boolean {
+/**
+ * Is this event evidence that the AGENT is doing work, as opposed to the
+ * proxy talking about itself?
+ *
+ * The excluded set is the flow-selection machinery: `flow_selected` and
+ * `flow_ignored` name which upstream /v1/messages call is being rendered
+ * from, and the `stream_phase` transitions that bracket them belong to the
+ * same bookkeeping. Promoting a sidecar or subagent flow on its first chunk
+ * and demoting it as `cc_is_subagent` publishes
+ * `flow_selected → requesting → idle → flow_ignored` (#1024's recorded
+ * sequence) — four events, none of them this agent making progress. Filtering
+ * only the two by name left the two phases renewing a stale hold, and the
+ * reviewer kept one alive for forty minutes by replaying that sequence once a
+ * minute (#1033 round 6).
+ *
+ * WHY excluding ALL phase transitions rather than only bracketed ones: a
+ * phase says what the stream is doing, and the stream can be somebody else's.
+ * Everything that survives this filter carries content or tool activity —
+ * text, thinking, tool input, a tool result, a completed message — and those
+ * are published only for the flow the adapter actually renders. Holding on a
+ * phase was never the point; the phase's VALUE is already read directly by
+ * the delivery gate.
+ */
+function isAgentProgress(event: unknown): boolean {
   const type = (event as { type?: unknown } | null)?.type
-  return type === 'flow_selected' || type === 'flow_ignored'
+  if (typeof type !== 'string') return false
+  return type !== 'flow_selected' && type !== 'flow_ignored' && type !== 'stream_phase'
 }
 
 const MAX_DELIVERY_FAILURES = 3
@@ -459,14 +480,10 @@ export class GoalLoopService extends EventEmitter {
     // to the same state, so a loop held through forty minutes of visible
     // streaming paused itself for "silence" while the model was talking.
     //
-    // EXCEPT the flow diagnostics (#1033 round 5): `flow_selected` and
-    // `flow_ignored` say which /v1/messages call the proxy decided to render
-    // from — title generation, retries, a subagent's stream. They are
-    // published about calls this agent is NOT working on, and one every
-    // minute kept a stale `turn-open` or stuck `phase-working` hold alive for
-    // two simulated hours with zero deliveries. Background chatter must not
-    // be able to postpone a stall pause forever.
-    if (!isFlowDiagnostic(event)) this.noteHeldProgress(sessionId)
+    // EXCEPT the proxy's flow bookkeeping (#1033 rounds 5 and 6) — see
+    // isAgentProgress. Background chatter about other flows must not be able
+    // to postpone a stall pause forever.
+    if (isAgentProgress(event)) this.noteHeldProgress(sessionId)
     // Reduce for every session, in every loop phase (see the class comment):
     // only the DECISION to continue is gated on an active loop. The reducer
     // returns the same object for the high-volume delta events, so the common
@@ -647,6 +664,36 @@ export class GoalLoopService extends EventEmitter {
     return since === undefined ? 0 : Date.now() - since
   }
 
+  /**
+   * Is a tool actually running for this session right now?
+   *
+   * A pending tool the provider is still waiting on, with a live process
+   * behind it, is not a stuck signal — it is a build, a test suite, an
+   * install. The stall pause exists for signals that will never resolve, and
+   * firing it here cost a loop its own turn: the tool's eventual result and
+   * Stop cannot continue a loop that has already been paused (#1033 round 6,
+   * reproduced with a 30-minute tool run and no traffic but flow
+   * bookkeeping).
+   *
+   * BOTH halves are required. A pending tool alone can be a leftover of a
+   * turn whose process died, and an active process alone is the latching
+   * screen detector the grace above already bounds.
+   */
+  private toolIsRunning(sessionId: string): boolean {
+    const tracked = this.working.get(sessionId)
+    // Two shapes, because the two providers report a dispatched tool
+    // differently: `pendingTools` is filled by tool BLOCKS (Claude's
+    // block_started, Codex's tool_started), while a Claude stream that is
+    // parked on a tool publishes `stream_phase: awaiting-tool` carrying the
+    // tool's id and nothing else. Either one means a tool was dispatched and
+    // has not come back.
+    const dispatched = tracked
+      ? tracked.pendingTools.length > 0 || (tracked.phase === 'awaiting-tool' && tracked.pendingToolUseId !== null)
+      : false
+    if (!dispatched) return false
+    return this.deps.manager.getProcessStateSnapshot(sessionId)?.active === true
+  }
+
   private quietWhileHeldMs(sessionId: string): number {
     const since = this.progressSince.get(sessionId)
     return since === undefined ? 0 : Date.now() - since
@@ -675,7 +722,7 @@ export class GoalLoopService extends EventEmitter {
       this.heldSince.set(sessionId, Date.now())
       this.progressSince.set(sessionId, Date.now())
     }
-    if (this.quietWhileHeldMs(sessionId) >= GOAL_LOOP_HOLD_STALL_MS) {
+    if (this.quietWhileHeldMs(sessionId) >= GOAL_LOOP_HOLD_STALL_MS && !this.toolIsRunning(sessionId)) {
       this.pauseStalledHold(sessionId, reason)
       return
     }
