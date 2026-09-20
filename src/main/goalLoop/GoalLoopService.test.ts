@@ -344,6 +344,28 @@ describe('GoalLoopService', () => {
     } finally { vi.useRealTimers() }
   })
 
+  it('flow bookkeeping is not progress, so it cannot postpone a stall forever (#1033 round 5)', async () => {
+    // `flow_selected` / `flow_ignored` report which upstream call the proxy
+    // renders from — title generation, a retry, a subagent's stream. They say
+    // nothing about THIS agent working, and one a minute kept a stale hold
+    // alive for two simulated hours with zero deliveries.
+    const { svc, manager, deliver } = await service()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.useFakeTimers()
+    try {
+      await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+      svc.observeProviderHook('s1', 'user-prompt-submit')
+      svc.control('s1', { action: 'pause' })
+      svc.control('s1', { action: 'resume' })
+      for (let minute = 0; minute < 40; minute += 1) {
+        manager.emit('semantic-event', { sessionId: 's1', event: { type: 'flow_ignored', flowId: `f${minute}`, reason: 'secondary call' } })
+        await vi.advanceTimersByTimeAsync(60_000)
+      }
+      expect(deliver).not.toHaveBeenCalled()
+      expect(svc.snapshot()['s1']).toMatchObject({ phase: 'paused', pauseReason: 'error' })
+    } finally { vi.useRealTimers(); warn.mockRestore() }
+  })
+
   it('does not continue while tools are pending (awaiting-tool)', async () => {
     const { svc, manager, deliver } = await service()
     await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })

@@ -7,6 +7,14 @@ import type { GoalLoopControlAction, GoalLoopState } from '@shared/types/goalLoo
 import { GOAL_LOOP_DEFAULT_MAX_CONTINUATIONS, GOAL_LOOP_MAX_CONTINUATIONS_CEILING } from '@shared/types/goalLoop.js'
 import { GOAL_LOOP_STORE_LIMIT, GoalLoopStore } from './GoalLoopStore.js'
 
+/** `flow_selected` / `flow_ignored`: the proxy reporting WHICH upstream call
+ * it renders from. Diagnostics about other flows, never evidence that this
+ * agent is working. See signal(). */
+function isFlowDiagnostic(event: unknown): boolean {
+  const type = (event as { type?: unknown } | null)?.type
+  return type === 'flow_selected' || type === 'flow_ignored'
+}
+
 const MAX_DELIVERY_FAILURES = 3
 const DELIVERY_RETRY_DELAY_MS = 250
 /** How long a hook-driven turn must have been silent (no hook, no semantic
@@ -443,12 +451,22 @@ export class GoalLoopService extends EventEmitter {
     // Any event at all, deltas included, means the provider is still doing
     // something; the quiet-turn check (Resume) measures silence from here.
     this.lastHookSessionActivity.set(sessionId, Date.now())
-    // And so does a held continuation's stall deadline. This is deliberately
+    // And so does a held continuation's stall deadline, for everything except
+    // flow bookkeeping.
+    //
     // BEFORE the reducer's identity check below (#1033 round 4): a streamed
     // answer is mostly text and thinking deltas, which the reducer collapses
     // to the same state, so a loop held through forty minutes of visible
     // streaming paused itself for "silence" while the model was talking.
-    this.noteHeldProgress(sessionId)
+    //
+    // EXCEPT the flow diagnostics (#1033 round 5): `flow_selected` and
+    // `flow_ignored` say which /v1/messages call the proxy decided to render
+    // from — title generation, retries, a subagent's stream. They are
+    // published about calls this agent is NOT working on, and one every
+    // minute kept a stale `turn-open` or stuck `phase-working` hold alive for
+    // two simulated hours with zero deliveries. Background chatter must not
+    // be able to postpone a stall pause forever.
+    if (!isFlowDiagnostic(event)) this.noteHeldProgress(sessionId)
     // Reduce for every session, in every loop phase (see the class comment):
     // only the DECISION to continue is gated on an active loop. The reducer
     // returns the same object for the high-volume delta events, so the common
