@@ -183,8 +183,10 @@ Known now:
 - **Produces:** a stable signed and notarized GitHub Release, plus a landing page that serves it.
 - **Verified by:** codesign, spctl and stapler in CI; `releases/latest` returns it;
   a DMG download resolves.
-- [ ] `release.yml`: a prerelease/stable input (today it hardcodes `prerelease: true`)
-  and `make_latest` for stable
+- [x] `release.yml`: a prerelease/stable input and `make_latest` for stable —
+  DONE in #1035 (merged). The workflow takes `release_channel`
+  (prerelease|stable), validates it against package.json's version, and sets
+  `make_latest` explicitly.
 - [ ] Version bump. Default **0.1.0** unless the owner says otherwise.
   Release notes cover everything since beta.1, including #1013's retired commands.
 - [ ] README screenshots refreshed (pre-Nord, Jul 4); check them for privacy too
