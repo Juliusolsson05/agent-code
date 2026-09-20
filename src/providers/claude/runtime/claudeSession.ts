@@ -1098,6 +1098,14 @@ export class ClaudeSession extends EventEmitter {
    * that did survive is never cut.
    */
   noteSystemSuspension(suspension: import('@shared/types/systemSuspension.js').SystemSuspension): void {
+    // Tell the adapter NOW, not in a minute (#1040 review). The grace below
+    // exists so a stream that survives the sleep is not cut off — but a
+    // stream that did NOT survive often reports its own death first, as a
+    // transport error seconds after wake. Whichever signal arrives first
+    // decides what the user is told, and without this the turn was reported
+    // as a transport failure and the later seal found nothing left to
+    // attribute, so the feed lost "Interrupted while asleep".
+    this.headless?.proxy?.noteSuspension(suspension.suspendedAt)
     if (this.sleepSealTimer) clearTimeout(this.sleepSealTimer)
     this.sleepSealTimer = setTimeout(() => {
       this.sleepSealTimer = null
