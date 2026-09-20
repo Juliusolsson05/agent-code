@@ -1,0 +1,236 @@
+{
+  "fixture": "opencode-terminal-retry-in-flight",
+  "provider": "opencode",
+  "providerRuntime": "terminal (packages/opencode-terminal-headless)",
+  "outcome": "IN-FLIGHT RETRY, NOT TERMINAL BY ERROR: retrying (attempt 1..5) for ~70 s with processActive=true and no api_error; the turn then ended (turn_completed + idle) with NO session.error. The DB row has time.completed set, no error, no finish, zero tokens -> the process was stopped externally within 1 s of a sibling session (2aee6636) doing the same. No recording in this corpus shows a retry that later SUCCEEDED.",
+  "provenance": {
+    "feedDebug": "~/.config/agent-code/feed-debug/53330d96-5c65-4e55-a385-d8f8b3a3d267.jsonl",
+    "opencodeDb": "message msg_0b7ffafa2… of ses_73d5e74b…",
+    "recordedAt": "2026-09-19T04:49:40.926Z"
+  },
+  "feedDebug": {
+    "anchorEpochMs": 1789793380926,
+    "anchorIso": "2026-09-19T04:49:40.926Z",
+    "events": [
+      {
+        "tMs": 0,
+        "layer": "STATE",
+        "kind": "process_state",
+        "summary": "process active · responding",
+        "data": {
+          "active": true,
+          "status": "responding",
+          "clearedQueuedMessages": 0
+        },
+        "repeats": 2,
+        "lastTMs": 999
+      },
+      {
+        "tMs": 1426,
+        "layer": "JSONL",
+        "kind": "jsonl_entries",
+        "summary": "entries +2",
+        "data": {
+          "appended": [
+            "assistant: You're logged in, `/auth` redirected …",
+            "user"
+          ],
+          "entryCountAfter": 237
+        }
+      },
+      {
+        "tMs": 1578,
+        "layer": "STATE",
+        "kind": "bootstrap_complete",
+        "summary": "bootstrap replay quiet window elapsed"
+      },
+      {
+        "tMs": 2000,
+        "layer": "STATE",
+        "kind": "process_state",
+        "summary": "process active · responding",
+        "data": {
+          "active": true,
+          "status": "responding",
+          "clearedQueuedMessages": 0
+        }
+      },
+      {
+        "tMs": 2330,
+        "layer": "STATE",
+        "kind": "process_state",
+        "summary": "process active · retrying (attempt 1)",
+        "data": {
+          "active": true,
+          "status": "retrying (attempt 1)",
+          "clearedQueuedMessages": 0
+        },
+        "repeats": 3,
+        "lastTMs": 4001
+      },
+      {
+        "tMs": 4657,
+        "layer": "STATE",
+        "kind": "process_state",
+        "summary": "process active · responding",
+        "data": {
+          "active": true,
+          "status": "responding",
+          "clearedQueuedMessages": 0
+        },
+        "repeats": 2,
+        "lastTMs": 5001
+      },
+      {
+        "tMs": 5183,
+        "layer": "STATE",
+        "kind": "process_state",
+        "summary": "process active · retrying (attempt 2)",
+        "data": {
+          "active": true,
+          "status": "retrying (attempt 2)",
+          "clearedQueuedMessages": 0
+        },
+        "repeats": 6,
+        "lastTMs": 10004
+      },
+      {
+        "tMs": 10122,
+        "layer": "STATE",
+        "kind": "process_state",
+        "summary": "process active · responding",
+        "data": {
+          "active": true,
+          "status": "responding",
+          "clearedQueuedMessages": 0
+        }
+      },
+      {
+        "tMs": 10642,
+        "layer": "STATE",
+        "kind": "process_state",
+        "summary": "process active · retrying (attempt 3)",
+        "data": {
+          "active": true,
+          "status": "retrying (attempt 3)",
+          "clearedQueuedMessages": 0
+        },
+        "repeats": 10,
+        "lastTMs": 19013
+      },
+      {
+        "tMs": 19741,
+        "layer": "STATE",
+        "kind": "process_state",
+        "summary": "process active · responding",
+        "data": {
+          "active": true,
+          "status": "responding",
+          "clearedQueuedMessages": 0
+        },
+        "repeats": 2,
+        "lastTMs": 20010
+      },
+      {
+        "tMs": 20366,
+        "layer": "STATE",
+        "kind": "process_state",
+        "summary": "process active · retrying (attempt 4)",
+        "data": {
+          "active": true,
+          "status": "retrying (attempt 4)",
+          "clearedQueuedMessages": 0
+        },
+        "repeats": 19,
+        "lastTMs": 38025
+      },
+      {
+        "tMs": 38443,
+        "layer": "STATE",
+        "kind": "process_state",
+        "summary": "process active · responding",
+        "data": {
+          "active": true,
+          "status": "responding",
+          "clearedQueuedMessages": 0
+        },
+        "repeats": 2,
+        "lastTMs": 39024
+      },
+      {
+        "tMs": 39621,
+        "layer": "STATE",
+        "kind": "process_state",
+        "summary": "process active · retrying (attempt 5)",
+        "data": {
+          "active": true,
+          "status": "retrying (attempt 5)",
+          "clearedQueuedMessages": 0
+        },
+        "repeats": 34,
+        "lastTMs": 72044
+      },
+      {
+        "tMs": 72238,
+        "layer": "SEM",
+        "kind": "turn_completed",
+        "summary": "turn_completed src=opencode-sse turn=opencode-t",
+        "data": {
+          "eventType": "turn_completed"
+        }
+      },
+      {
+        "tMs": 72338,
+        "layer": "STATE",
+        "kind": "process_state",
+        "summary": "process idle",
+        "data": {
+          "active": false,
+          "status": null,
+          "clearedQueuedMessages": 0
+        }
+      },
+      {
+        "tMs": 76590,
+        "layer": "STATE",
+        "kind": "initial_history",
+        "summary": "initial history +0",
+        "data": {
+          "rawEntries": 120,
+          "mappedEntries": 0,
+          "hasMore": true
+        }
+      }
+    ]
+  },
+  "opencodeDbAssistantRow": [
+    {
+      "table": "message",
+      "id": "msg_0b7ffafa20019UDN61MKsXKuql",
+      "session_id": "ses_73d5e74bf2275eba803a297118586008",
+      "time_created": 1789793382306,
+      "time_updated": 1789793453141,
+      "data": {
+        "role": "assistant",
+        "parentID": "msg_0b7fdb38d001YBSIPRLKn5jW1F",
+        "providerID": "zai-coding-plan",
+        "modelID": "glm-5.3",
+        "time": {
+          "created": 1789793382306,
+          "completed": 1789793453139
+        },
+        "finish": null,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        },
+        "error": null
+      }
+    }
+  ]
+}

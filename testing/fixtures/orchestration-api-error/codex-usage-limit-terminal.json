@@ -1,0 +1,466 @@
+{
+  "fixture": "codex-usage-limit-terminal",
+  "provider": "codex",
+  "outcome": "TERMINAL, no retry: proxy sees HTTP 429 usage_limit_reached ~0.3 s into the turn; api_error(src=proxy) then rollout turn_completed 76-675 ms later, screen-derived process idle ~2.5-3.1 s later",
+  "provenance": {
+    "feedDebug": "~/.config/agent-code/feed-debug/822500c6-d223-4ceb-b3cd-ebdad9726972.jsonl",
+    "proxy": "~/.config/agent-code/proxy/<project>/shell-822500c6…/2026-09-18T21-11-55-475Z/proxy-events.jsonl (req-4)",
+    "rollout": "~/.codex/sessions/2026/09/18/rollout-2026-09-18T14-12-02-01a0b65c-ac48-….jsonl",
+    "recordedAt": "2026-09-18T21:11:55.339Z",
+    "codexCli": "0.155.1"
+  },
+  "feedDebug": {
+    "anchorEpochMs": 1789765915339,
+    "anchorIso": "2026-09-18T21:11:55.339Z",
+    "events": [
+      {
+        "tMs": 0,
+        "layer": "STATE",
+        "kind": "input_readiness",
+        "summary": "input blocked · rev 67",
+        "data": {
+          "revision": 67,
+          "reason": "starting"
+        }
+      },
+      {
+        "tMs": 1921,
+        "layer": "STATE",
+        "kind": "input_readiness",
+        "summary": "input ready · rev 69",
+        "data": {
+          "revision": 69,
+          "reason": "ready"
+        }
+      },
+      {
+        "tMs": 6622,
+        "layer": "STATE",
+        "kind": "process_state",
+        "summary": "process active · working… 1s",
+        "data": {
+          "active": true,
+          "status": "working… 1s",
+          "clearedQueuedMessages": 0
+        }
+      },
+      {
+        "tMs": 6632,
+        "layer": "SEM",
+        "kind": "stream_phase",
+        "summary": "stream_phase src=screen",
+        "data": {
+          "eventType": "stream_phase"
+        }
+      },
+      {
+        "tMs": 7070,
+        "layer": "STATE",
+        "kind": "process_state",
+        "summary": "process active · working… 2s",
+        "data": {
+          "active": true,
+          "status": "working… 2s",
+          "clearedQueuedMessages": 0
+        }
+      },
+      {
+        "tMs": 8288,
+        "layer": "STATE",
+        "kind": "process_state",
+        "summary": "process active · working… 3s",
+        "data": {
+          "active": true,
+          "status": "working… 3s",
+          "clearedQueuedMessages": 0
+        }
+      },
+      {
+        "tMs": 9227,
+        "layer": "STATE",
+        "kind": "process_state",
+        "summary": "process active · working… 4s",
+        "data": {
+          "active": true,
+          "status": "working… 4s",
+          "clearedQueuedMessages": 0
+        }
+      },
+      {
+        "tMs": 9999,
+        "layer": "SEM",
+        "kind": "turn_started",
+        "summary": "turn_started src=rollout turn=01a0b65c-a",
+        "data": {
+          "eventType": "turn_started"
+        }
+      },
+      {
+        "tMs": 10005,
+        "layer": "JSONL",
+        "kind": "jsonl_entries",
+        "summary": "entries +1",
+        "data": {
+          "appended": [
+            "user: <orchestration-handoff> You are now an orc…"
+          ],
+          "entryCountAfter": 1
+        }
+      },
+      {
+        "tMs": 10157,
+        "layer": "STATE",
+        "kind": "bootstrap_complete",
+        "summary": "bootstrap replay quiet window elapsed"
+      },
+      {
+        "tMs": 10302,
+        "layer": "SEM",
+        "kind": "api_error",
+        "summary": "api_error src=proxy",
+        "data": {
+          "eventType": "api_error"
+        }
+      },
+      {
+        "tMs": 10758,
+        "layer": "STATE",
+        "kind": "process_state",
+        "summary": "process active · working… 5s",
+        "data": {
+          "active": true,
+          "status": "working… 5s",
+          "clearedQueuedMessages": 0
+        }
+      },
+      {
+        "tMs": 10977,
+        "layer": "SEM",
+        "kind": "turn_completed",
+        "summary": "turn_completed src=rollout turn=01a0b65c-a",
+        "data": {
+          "eventType": "turn_completed"
+        }
+      },
+      {
+        "tMs": 13410,
+        "layer": "STATE",
+        "kind": "process_state",
+        "summary": "process idle",
+        "data": {
+          "active": false,
+          "status": null,
+          "clearedQueuedMessages": 0
+        }
+      }
+    ]
+  },
+  "proxyWire": {
+    "response": {
+      "kind": "response",
+      "requestId": "req-4",
+      "path": "/v1/responses",
+      "status": 429,
+      "headers": {
+        "x-codex-active-limit": "premium",
+        "x-codex-primary-reset-at": "1789843274",
+        "x-codex-primary-used-percent": "100",
+        "x-codex-primary-window-minutes": "10080",
+        "x-codex-secondary-reset-at": "",
+        "x-codex-secondary-used-percent": "0",
+        "x-codex-secondary-window-minutes": "0"
+      }
+    },
+    "decodedBody": {
+      "error": {
+        "type": "usage_limit_reached",
+        "message": "The usage limit has been reached",
+        "plan_type": "pro",
+        "resets_at": 1789843274,
+        "eligible_promo": null,
+        "resets_in_seconds": 77349
+      }
+    },
+    "responseEnd": {
+      "kind": "response-end",
+      "requestId": "req-4",
+      "bytes": 174
+    }
+  },
+  "derivedSemanticApiError": {
+    "note": "Derived by applying packages/codex-headless/src/proxy/CodexResponsesAdapter.ts classifyHttpFailure to the recorded wire above (no retry-after header, no x-premium-limit-name header, no x-codex-rate-limit-reached-type header).",
+    "event": {
+      "type": "api_error",
+      "requestId": "req-4",
+      "turnId": null,
+      "errorType": "usage_limit_reached",
+      "message": "The usage limit has been reached",
+      "status": 429,
+      "resetsAt": 1789843274,
+      "limitId": "premium",
+      "source": "proxy"
+    }
+  },
+  "rolloutTurnEvents": [
+    {
+      "timestamp": "2026-09-18T21:12:06.258Z",
+      "type": "event_msg",
+      "payload": {
+        "type": "task_started",
+        "turn_id": "01a0b65c-ba34-79b2-9231-424961b9b2fc",
+        "started_at": 1789765926,
+        "model_context_window": 258400,
+        "collaboration_mode_kind": "default"
+      }
+    },
+    {
+      "timestamp": "2026-09-18T21:12:10.881Z",
+      "type": "event_msg",
+      "payload": {
+        "type": "token_count",
+        "info": null,
+        "rate_limits": {
+          "limit_id": "premium",
+          "limit_name": null,
+          "primary": null,
+          "secondary": null,
+          "credits": {
+            "has_credits": false,
+            "unlimited": false,
+            "balance": "0"
+          },
+          "individual_limit": null,
+          "spend_control_reached": null,
+          "plan_type": null,
+          "rate_limit_reached_type": null
+        }
+      }
+    },
+    {
+      "timestamp": "2026-09-18T21:12:10.975Z",
+      "type": "event_msg",
+      "payload": {
+        "type": "task_complete",
+        "turn_id": "01a0b65c-ba34-79b2-9231-424961b9b2fc",
+        "last_agent_message": null,
+        "error": {
+          "message": "You’ve hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Sep 19th, 2026 11:41 AM.",
+          "codex_error_info": "usage_limit_exceeded"
+        },
+        "started_at": 1789765926,
+        "completed_at": 1789765930,
+        "duration_ms": 4838
+      }
+    }
+  ],
+  "rolloutNote": "The rollout task_complete carries the richer text and codex_error_info, but no consumer in src/ or packages/codex-headless reads task_complete.error (only src/main/providerSwitch/* for cyber_policy).",
+  "visibleSibling_c214f5c1": {
+    "note": "Same failure in a visible pane: RENDER shows the provider-notice row and the phase returning to idle only at turn_completed.",
+    "feedDebug": {
+      "anchorEpochMs": 1789783939054,
+      "anchorIso": "2026-09-19T02:12:19.054Z",
+      "events": [
+        {
+          "tMs": 0,
+          "layer": "STATE",
+          "kind": "submit",
+          "summary": "submit started"
+        },
+        {
+          "tMs": 4,
+          "layer": "STATE",
+          "kind": "optimistic_user_add",
+          "summary": "optimistic user row added · -",
+          "data": {
+            "text": "-"
+          }
+        },
+        {
+          "tMs": 35,
+          "layer": "RENDER",
+          "kind": "visible_rows",
+          "summary": "rows 1 -> 2 (+2 -1)",
+          "data": {
+            "streamPhase": "submitting",
+            "workRows": [
+              "work submitting"
+            ],
+            "providerNotices": [],
+            "rowCount": 2
+          }
+        },
+        {
+          "tMs": 192,
+          "layer": "JSONL",
+          "kind": "jsonl_entries",
+          "summary": "jsonl side-effects only",
+          "data": {
+            "appended": [],
+            "entryCountAfter": 1
+          }
+        },
+        {
+          "tMs": 294,
+          "layer": "SEM",
+          "kind": "turn_started",
+          "summary": "turn_started src=rollout turn=01a0b76f-9",
+          "data": {
+            "eventType": "turn_started"
+          }
+        },
+        {
+          "tMs": 297,
+          "layer": "RENDER",
+          "kind": "visible_rows",
+          "summary": "rows 2 -> 2 (+1 -1)",
+          "data": {
+            "streamPhase": "responding",
+            "workRows": [
+              "work responding"
+            ],
+            "providerNotices": [],
+            "rowCount": 2
+          }
+        },
+        {
+          "tMs": 314,
+          "layer": "STATE",
+          "kind": "process_state",
+          "summary": "process active · working… 0s",
+          "data": {
+            "active": true,
+            "status": "working… 0s",
+            "clearedQueuedMessages": 0
+          }
+        },
+        {
+          "tMs": 316,
+          "layer": "SEM",
+          "kind": "stream_phase",
+          "summary": "stream_phase src=screen turn=01a0b76f-9",
+          "data": {
+            "eventType": "stream_phase"
+          }
+        },
+        {
+          "tMs": 319,
+          "layer": "RENDER",
+          "kind": "visible_rows",
+          "summary": "rows 2 -> 2 (+1 -1)",
+          "data": {
+            "streamPhase": "thinking",
+            "workRows": [
+              "work thinking"
+            ],
+            "providerNotices": [],
+            "rowCount": 2
+          }
+        },
+        {
+          "tMs": 444,
+          "layer": "STATE",
+          "kind": "bootstrap_complete",
+          "summary": "bootstrap replay quiet window elapsed"
+        },
+        {
+          "tMs": 898,
+          "layer": "JSONL",
+          "kind": "jsonl_entries",
+          "summary": "jsonl side-effects only",
+          "data": {
+            "appended": [],
+            "entryCountAfter": 1
+          }
+        },
+        {
+          "tMs": 996,
+          "layer": "JSONL",
+          "kind": "jsonl_entries",
+          "summary": "entries +1 · reconciled optimistic users 1",
+          "data": {
+            "appended": [
+              "user: -"
+            ],
+            "entryCountAfter": 1
+          }
+        },
+        {
+          "tMs": 1148,
+          "layer": "STATE",
+          "kind": "bootstrap_complete",
+          "summary": "bootstrap replay quiet window elapsed"
+        },
+        {
+          "tMs": 1360,
+          "layer": "STATE",
+          "kind": "process_state",
+          "summary": "process active · working… 1s",
+          "data": {
+            "active": true,
+            "status": "working… 1s",
+            "clearedQueuedMessages": 0
+          }
+        },
+        {
+          "tMs": 1365,
+          "layer": "SEM",
+          "kind": "api_error",
+          "summary": "api_error src=proxy",
+          "data": {
+            "eventType": "api_error"
+          }
+        },
+        {
+          "tMs": 1371,
+          "layer": "RENDER",
+          "kind": "visible_rows",
+          "summary": "rows 2 -> 3 (+1 -0)",
+          "data": {
+            "streamPhase": "thinking",
+            "workRows": [
+              "work thinking"
+            ],
+            "providerNotices": [
+              "codex Usage limit reached"
+            ],
+            "rowCount": 3
+          }
+        },
+        {
+          "tMs": 1398,
+          "layer": "SEM",
+          "kind": "turn_completed",
+          "summary": "turn_completed src=rollout turn=01a0b76f-9",
+          "data": {
+            "eventType": "turn_completed"
+          }
+        },
+        {
+          "tMs": 1402,
+          "layer": "RENDER",
+          "kind": "visible_rows",
+          "summary": "rows 3 -> 2 (+0 -1)",
+          "data": {
+            "streamPhase": "idle",
+            "workRows": [],
+            "providerNotices": [
+              "codex Usage limit reached"
+            ],
+            "rowCount": 2
+          }
+        },
+        {
+          "tMs": 3939,
+          "layer": "STATE",
+          "kind": "process_state",
+          "summary": "process idle",
+          "data": {
+            "active": false,
+            "status": null,
+            "clearedQueuedMessages": 0
+          }
+        }
+      ]
+    }
+  }
+}

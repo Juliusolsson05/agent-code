@@ -109,6 +109,31 @@ describe('OrchestrationBridge status cache', () => {
     expect(sentRendererRequests).toHaveLength(4)
   })
 
+  it('a failed child reads failed until the parent prompts it again, then prompt_sent (#1018)', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    sentRendererRequests.length = 0
+    const bridge = new OrchestrationBridge()
+    const child = { sessionId: 'child-1', kind: 'opencode' as const, cwd: '/tmp/project', orchestrationParentId: 'parent-1', orchestrationRootId: 'parent-1' }
+    const listWith = async (agent: Record<string, unknown>) => {
+      const listed = bridge.listAgents({ parentSessionId: 'parent-1' })
+      const request = sentRendererRequests.at(-1) as { requestId: string }
+      bridge.resolve({ requestId: request.requestId, ok: true, type: 'list-agents', agents: [{ ...child, ...agent }] as never })
+      return (await listed)[0]!
+    }
+    vi.setSystemTime(1_000)
+    bridge.notePromptSubmitted('child-1')
+    // The renderer reports the provider failure produced after that prompt.
+    expect(await listWith({ lifecycleState: 'failed', failedAt: 2_000, errorSummary: 'Usage limit reached' }))
+      .toMatchObject({ lifecycleState: 'failed', errorSummary: 'Usage limit reached' })
+    // The parent retries: until the provider picks the new prompt up, the
+    // renderer still carries the old failure, but the child is waiting on
+    // the new prompt, not failed.
+    vi.setSystemTime(3_000)
+    bridge.notePromptSubmitted('child-1')
+    expect(await listWith({ lifecycleState: 'failed', failedAt: 2_000, errorSummary: 'Usage limit reached' }))
+      .toMatchObject({ lifecycleState: 'prompt_sent' })
+  })
+
   it('drops expired status cache entries before issuing a new status read', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(1_000)
