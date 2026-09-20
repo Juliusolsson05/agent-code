@@ -21,8 +21,11 @@ import type { ConditionView } from '@shared/conditions-core/view'
 import type { ConditionAction } from '@shared/conditions-core/contract'
 import type {
   OpencodePermissionState,
+  OpencodeQuestion,
   OpencodeQuestionState,
 } from '@shared/types/providerConditions'
+import { useState } from 'react'
+
 import { Button } from '@renderer/components/ui/button'
 import {
   Dialog,
@@ -242,6 +245,83 @@ export const opencodePermissionView = defineView<
   },
 })
 
+/**
+ * One question, rendered as its own block (#1025).
+ *
+ * WHY blocks rather than a flat button row: `answers` is POSITIONAL — one
+ * entry per question, submitted together — so with several questions the user
+ * has to see which options belong to which question before choosing. A single
+ * row of buttons cannot express that, and would silently answer question 1
+ * with a click meant for question 2.
+ */
+function QuestionBlock({
+  question,
+  index,
+  total,
+  selected,
+  onSelect,
+}: {
+  question: OpencodeQuestion
+  index: number
+  total: number
+  selected: string | null
+  onSelect: (label: string) => void
+}) {
+  return (
+    <div className="mb-3">
+      {total > 1 && (
+        <div className="text-[10px] uppercase tracking-wide text-muted mb-1">
+          Question {index + 1} of {total}
+        </div>
+      )}
+      {question.header && (
+        <div className="text-[12px] font-semibold text-ink mb-1">
+          {withVisibleControls(question.header)}
+        </div>
+      )}
+      {/* Bounded and scrollable for the same reason as the permission
+          subject: Escape and outside-click are disabled, so a long question
+          must never push the controls off-screen. */}
+      <pre className="bg-code-bg rounded-slab text-code-ink px-3 py-2 mb-2 max-h-[30vh] overflow-auto whitespace-pre-wrap break-words text-[11.5px]">
+        {withVisibleControls(question.question)}
+      </pre>
+      {question.options.length === 0 ? (
+        // The provider offered nothing to choose. Saying so beats rendering
+        // an empty space the user waits at; Reject is still available below.
+        <p className="text-[11px] text-muted">
+          OpenCode offered no options for this question.
+        </p>
+      ) : (
+        <div className="flex flex-wrap gap-2">
+          {question.options.map(option => {
+            const active = selected === option.label
+            return (
+              <button
+                key={option.label}
+                type="button"
+                onClick={() => onSelect(option.label)}
+                // The description is the only place the difference between two
+                // similarly-named options can live, so it rides the tooltip
+                // rather than being dropped.
+                title={option.description ? withVisibleControls(option.description) : undefined}
+                className={`rounded-control border px-2.5 py-1 text-[11.5px] ${
+                  active
+                    ? 'border-accent bg-accent/15 text-accent'
+                    : 'border-control-border bg-control-bg text-control-fg hover:border-control-border-hover'
+                }`}
+              >
+                {/* Provider-authored, and it is the text the user reads to
+                    decide WHAT they are answering (#1049). */}
+                {withVisibleControls(option.label)}
+              </button>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export const opencodeQuestionView = defineView<
   'opencode.question',
   OpencodeQuestionState
@@ -250,22 +330,91 @@ export const opencodeQuestionView = defineView<
   layout: 'modal',
   attention: state => (state?.visible ? 'ACTION' : null),
   Component: ({ state, actions, dispatch }) => {
+    // Selection lives here because a multi-question prompt is answered as ONE
+    // positional set, and that is the only thing in this flow the runtime
+    // cannot own. The runtime still decides which options EXIST and validates
+    // every submitted label against them, so the view composes a choice and
+    // can never invent one.
+    const [picked, setPicked] = useState<Record<number, string>>({})
+    const questions = state?.questions ?? []
+    const questionID = state?.questionID
+
     if (!state?.visible) return null
+
+    // One question is answered by its own action — the runtime built one per
+    // option, so a single click submits and the view needs no submit button.
+    const single = questions.length === 1
+    const answerable = questions.filter(question => question.options.length > 0)
+    const complete = answerable.length > 0
+      && answerable.every((_, index) => picked[questions.indexOf(answerable[index]!)] !== undefined)
+
+    const submit = () => {
+      if (!questionID) return
+      void dispatch({
+        kind: 'custom',
+        id: `${questionID}:answer`,
+        label: 'Answer',
+        name: 'opencode.question.reply',
+        // Positional, in the payload's own question order — the same order
+        // the runtime validates against.
+        payload: { questionID, answers: questions.map((_, index) => [picked[index] ?? '']) },
+      })
+    }
+
+    // The runtime publishes one action per option for the single-question
+    // case, and those same options are rendered inside the block above — so
+    // the footer keeps only what is NOT an option (Reject). Passing them all
+    // would show every option twice, once beside its question and once in a
+    // row at the bottom with no question attached.
+    const footerActions = questions.length === 0
+      ? actions
+      : actions.filter(action => action.kind !== 'custom' || action.name !== 'opencode.question.reply')
+
     return (
-      <ConditionShell heading="OpenCode is asking" actions={actions} dispatch={dispatch}>
-        {state.text ? (
-          // Bounded and scrollable for the same reason as the permission
-          // subject: the text is now populated (#878), the modal has no max
-          // height, and Escape and outside-click are disabled, so a long
-          // question must never push the only button (Reject) off-screen.
-          <pre className="bg-code-bg rounded-slab text-code-ink px-3 py-2 mb-1 max-h-[40vh] overflow-auto whitespace-pre-wrap break-words text-[11.5px]">
-            {/* Reject-only today, so no affirmative grant hangs off it — but
-                it is still a provider-authored question the user answers, and
-                the escape costs nothing (#1049 re-review). */}
-            {withVisibleControls(state.text)}
-          </pre>
+      <ConditionShell heading="OpenCode is asking" actions={footerActions} dispatch={dispatch}>
+        {questions.length === 0 ? (
+          state.text ? (
+            <pre className="bg-code-bg rounded-slab text-code-ink px-3 py-2 mb-1 max-h-[40vh] overflow-auto whitespace-pre-wrap break-words text-[11.5px]">
+              {withVisibleControls(state.text)}
+            </pre>
+          ) : (
+            <p className="mb-2">OpenCode is waiting for a response.</p>
+          )
         ) : (
-          <p className="mb-2">OpenCode is waiting for a response.</p>
+          <>
+            {questions.map((question, index) => (
+              <QuestionBlock
+                key={index}
+                question={question}
+                index={index}
+                total={questions.length}
+                selected={single ? null : picked[index] ?? null}
+                onSelect={label => {
+                  if (single) {
+                    // Answer immediately: the runtime published one action per
+                    // option, and using it keeps the single-question path on
+                    // the runtime-owns-the-choice rule.
+                    const action = actions.find(
+                      candidate => candidate.kind === 'custom' && candidate.label === label,
+                    )
+                    if (action) void dispatch(action)
+                    return
+                  }
+                  setPicked(current => ({ ...current, [index]: label }))
+                }}
+              />
+            ))}
+            {!single && (
+              <button
+                type="button"
+                disabled={!complete}
+                onClick={submit}
+                className="rounded-control border border-control-border bg-control-bg px-3 py-1 text-[12px] text-control-fg disabled:opacity-40"
+              >
+                {complete ? 'Answer' : 'Choose an option for each question'}
+              </button>
+            )}
+          </>
         )}
       </ConditionShell>
     )

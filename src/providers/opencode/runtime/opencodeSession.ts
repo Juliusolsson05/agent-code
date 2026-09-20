@@ -23,6 +23,7 @@ import { excludeExternalControlFromOpencode } from '@providers/shared/runtime/ex
 import { EventEmitter } from 'events'
 
 import { OpencodeHeadless } from 'opencode-headless'
+import { parseOpencodeQuestions, validateQuestionAnswers } from './questionAnswers.js'
 import { opencodeTranscriptFile } from 'opencode-terminal-headless'
 import type {
   CommittedEntryEvent,
@@ -41,6 +42,7 @@ import type {
   ConditionAction,
   ConditionCustomAction,
   OpencodePermissionState,
+  OpencodeQuestion,
   OpencodeQuestionState,
   ProviderConditionRecord,
   ProviderConditionSnapshot,
@@ -55,6 +57,7 @@ import { mapOpenCodeSemanticEvent, OpenCodeBlockIndexTracker } from './semanticM
 // — a rename that touches only one side is a compile error at the other.
 const PERMISSION_REPLY = 'opencode.permission.reply'
 const QUESTION_REJECT = 'opencode.question.reject'
+const QUESTION_REPLY = 'opencode.question.reply'
 
 // The three replies OpenCode's permission API accepts. Declared here so
 // resolveCondition can validate an inbound payload against it rather than
@@ -363,27 +366,43 @@ export class OpencodeSession extends EventEmitter implements AgentSession {
       return
     }
     const questionID = state.questionID
+    const questions = parseOpencodeQuestions(state.metadata)
     const questionState: OpencodeQuestionState = {
       visible: true,
       questionID,
       text: state.text,
       metadata: state.metadata,
+      questions,
     }
-    // v1 is reject-only. opencode's question payload carries no parsed
-    // option list at this seam, so offering a real Reject that unblocks
-    // the turn beats guessing answer strings; structured answering
-    // (replyQuestion) is a follow-up that only touches this method and
-    // the QUESTION_* action names — the view already renders whatever
-    // actions arrive.
-    const actions: ConditionAction[] = [
-      {
-        kind: 'custom',
-        id: `${questionID}:reject`,
-        label: 'Reject',
-        name: QUESTION_REJECT,
-        payload: { questionID },
-      },
-    ]
+    // ── WHY ONE ACTION PER OPTION ONLY FOR A SINGLE QUESTION (#1025) ──
+    // `answers` is POSITIONAL — one entry per question, submitted once — so a
+    // multi-question prompt cannot be answered by a single click on one
+    // option. That case needs a selection per question and a submit, which is
+    // view state; the view composes a QUESTION_REPLY payload and
+    // `resolveConditionAction` validates it against these same options.
+    //
+    // The single-question case is the common one and stays a plain action, so
+    // the runtime remains the source of truth for what may be chosen and the
+    // view stays dumb for it.
+    const actions: ConditionAction[] = []
+    if (questions.length === 1) {
+      for (const option of questions[0]!.options) {
+        actions.push({
+          kind: 'custom',
+          id: `${questionID}:answer:${option.label}`,
+          label: option.label,
+          name: QUESTION_REPLY,
+          payload: { questionID, answers: [[option.label]] },
+        })
+      }
+    }
+    actions.push({
+      kind: 'custom',
+      id: `${questionID}:reject`,
+      label: 'Reject',
+      name: QUESTION_REJECT,
+      payload: { questionID },
+    })
     this.liveConditions.set('opencode.question', {
       kind: 'opencode.question',
       state: questionState,
@@ -434,6 +453,36 @@ export class OpencodeSession extends EventEmitter implements AgentSession {
         }
       }
       if (this.liveConditions.delete('opencode.permission')) this.emitConditionsSnapshot()
+      return { ok: true }
+    }
+
+    if (action.name === QUESTION_REPLY) {
+      const questionID = payload && typeof payload.questionID === 'string' ? payload.questionID : null
+      if (!questionID) return { ok: false, reason: 'invalid-payload' }
+      // ── THE TRUST BOUNDARY (#1025) ──
+      // The view may COMPOSE a choice — it has to, because a multi-question
+      // prompt is answered as one positional set and that is selection state
+      // — but it must never INVENT one. `validateQuestionAnswers` checks every
+      // submitted label against the options THIS runtime published for that
+      // question, so a renderer cannot answer a question OpenCode did not ask
+      // or with a label it did not offer. It is a separate pure function so
+      // the boundary is testable without standing up a session.
+      const live = this.liveConditions.get('opencode.question')
+      const offered: OpencodeQuestion[] = live?.kind === 'opencode.question'
+        ? (live.state as OpencodeQuestionState).questions ?? []
+        : []
+      const answers = validateQuestionAnswers(offered, payload?.answers)
+      if (!answers) return { ok: false, reason: 'invalid-payload' }
+      try {
+        await this.headless.replyQuestion(questionID, answers)
+      } catch (err) {
+        return {
+          ok: false,
+          reason: 'aborted',
+          failedAtStep: `question.reply: ${err instanceof Error ? err.message : String(err)}`,
+        }
+      }
+      if (this.liveConditions.delete('opencode.question')) this.emitConditionsSnapshot()
       return { ok: true }
     }
 

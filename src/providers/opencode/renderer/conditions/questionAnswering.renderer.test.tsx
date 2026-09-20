@@ -1,0 +1,178 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+
+import { opencodeQuestionView } from './views'
+import type { ConditionAction } from '@shared/conditions-core/contract'
+import type { OpencodeQuestion, OpencodeQuestionState } from '@shared/types/providerConditions'
+
+// ---------------------------------------------------------------------------
+// #1025. Since #878 the modal SHOWED the question but offered only Reject, so
+// a user could read "Do you prefer red or blue?" and still not answer it.
+//
+// The option list was never missing: `LiveStateProjector.questionFromPayload`
+// sets `metadata` to the whole raw payload, so `questions[].options` has
+// always been there — `foldQuestion`'s comment claiming otherwise was stale.
+//
+// The single-question payload below is REAL: it is the `questions` array from
+// the recorded live stream in
+// packages/opencode-terminal-headless/testing/fixtures/live/question-reject.json.
+// The multi-question case has no recording; it is built from the wire SCHEMA
+// (`answers` is positional, one array of selected labels per question) and is
+// labelled as such rather than pretending to be a recording.
+// ---------------------------------------------------------------------------
+
+type RecordedPayload = { questions?: OpencodeQuestion[] }
+
+/** The `questions` array exactly as the recorded stream carries it. */
+function recordedQuestions(): OpencodeQuestion[] {
+  const raw = readFileSync(
+    resolve(__dirname, '../../../../../packages/opencode-terminal-headless/testing/fixtures/live/question-reject.json'),
+    'utf8',
+  )
+  const found: OpencodeQuestion[][] = []
+  const walk = (node: unknown): void => {
+    if (Array.isArray(node)) { for (const item of node) walk(item); return }
+    if (!node || typeof node !== 'object') return
+    const record = node as RecordedPayload & Record<string, unknown>
+    if (Array.isArray(record.questions)) found.push(record.questions as OpencodeQuestion[])
+    for (const value of Object.values(record)) walk(value)
+  }
+  walk(JSON.parse(raw))
+  return found[0] ?? []
+}
+
+const RECORDED = recordedQuestions()
+
+function rejectAction(): ConditionAction {
+  return { kind: 'custom', id: 'q1:reject', label: 'Reject', name: 'opencode.question.reject', payload: { questionID: 'q1' } }
+}
+
+/** The per-option actions the runtime builds for a single question. */
+function optionActions(question: OpencodeQuestion): ConditionAction[] {
+  return question.options.map(option => ({
+    kind: 'custom' as const,
+    id: `q1:answer:${option.label}`,
+    label: option.label,
+    name: 'opencode.question.reply',
+    payload: { questionID: 'q1', answers: [[option.label]] },
+  }))
+}
+
+function renderView(state: OpencodeQuestionState, actions: ConditionAction[]) {
+  const dispatch = vi.fn(async (_action: ConditionAction) => {})
+  const Component = opencodeQuestionView.Component as (props: {
+    state: OpencodeQuestionState
+    actions: ConditionAction[]
+    dispatch: (action: ConditionAction) => Promise<void>
+  }) => JSX.Element | null
+  render(<Component state={state} actions={actions} dispatch={dispatch} />)
+  return { dispatch }
+}
+
+afterEach(cleanup)
+
+describe('answering a REAL recorded OpenCode question (#1025)', () => {
+  it('the recording really carries options — otherwise everything below is vacuous', () => {
+    expect(RECORDED).toHaveLength(1)
+    expect(RECORDED[0]!.question).toContain('red or blue')
+    expect(RECORDED[0]!.options.map(option => option.label)).toEqual(['Red', 'Blue'])
+  })
+
+  it('renders the header and every option, not just the question text', () => {
+    renderView({ visible: true, questionID: 'q1', questions: RECORDED }, [
+      ...optionActions(RECORDED[0]!),
+      rejectAction(),
+    ])
+    expect(screen.getByText(RECORDED[0]!.header!)).toBeInTheDocument()
+    for (const option of RECORDED[0]!.options) {
+      expect(screen.getByRole('button', { name: option.label })).toBeInTheDocument()
+    }
+    // Reject survives: answering is added, never substituted.
+    expect(screen.getByRole('button', { name: 'Reject' })).toBeInTheDocument()
+  })
+
+  it('answers with the chosen label, through the runtime-built action', () => {
+    const { dispatch } = renderView(
+      { visible: true, questionID: 'q1', questions: RECORDED },
+      [...optionActions(RECORDED[0]!), rejectAction()],
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Blue' }))
+    expect(dispatch).toHaveBeenCalledTimes(1)
+    expect(dispatch.mock.calls[0]![0]).toMatchObject({
+      name: 'opencode.question.reply',
+      payload: { questionID: 'q1', answers: [['Blue']] },
+    })
+  })
+
+  it('shows each option exactly once', () => {
+    // The runtime publishes one action per option AND the block renders them,
+    // so an unfiltered footer would show every option twice — once beside its
+    // question and once in a row at the bottom with no question attached.
+    renderView({ visible: true, questionID: 'q1', questions: RECORDED }, [
+      ...optionActions(RECORDED[0]!),
+      rejectAction(),
+    ])
+    expect(screen.getAllByRole('button', { name: 'Red' })).toHaveLength(1)
+    expect(screen.getAllByRole('button', { name: 'Blue' })).toHaveLength(1)
+  })
+
+  it('falls back to the plain text when nothing parsed', () => {
+    // A payload shape we cannot read must still show the question and offer
+    // Reject rather than rendering an empty modal.
+    renderView({ visible: true, questionID: 'q1', text: 'Unparsed question', questions: [] }, [rejectAction()])
+    expect(screen.getByText('Unparsed question')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Reject' })).toBeInTheDocument()
+  })
+
+  it('says so when the provider offered no options', () => {
+    renderView(
+      { visible: true, questionID: 'q1', questions: [{ question: 'Anything?', options: [] }] },
+      [rejectAction()],
+    )
+    expect(screen.getByText(/offered no options/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Reject' })).toBeInTheDocument()
+  })
+})
+
+describe('a multi-question prompt is answered as one positional set', () => {
+  // SCHEMA-derived, not recorded: `answers` is documented as "User answers in
+  // order of questions (each answer is an array of selected labels)", and no
+  // multi-question stream has been captured. Saying so beats dressing an
+  // invented payload up as evidence.
+  const two: OpencodeQuestion[] = [
+    { question: 'Colour?', header: 'Colour', options: [{ label: 'Red' }, { label: 'Blue' }] },
+    { question: 'Size?', header: 'Size', options: [{ label: 'Small' }, { label: 'Large' }] },
+  ]
+
+  it('will not submit until every question has an answer', () => {
+    const { dispatch } = renderView({ visible: true, questionID: 'q1', questions: two }, [rejectAction()])
+    const submit = screen.getByRole('button', { name: /each question/i })
+    expect(submit).toBeDisabled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Red' }))
+    expect(screen.getByRole('button', { name: /each question/i })).toBeDisabled()
+    expect(dispatch).not.toHaveBeenCalled()
+  })
+
+  it('submits the answers in question order once complete', () => {
+    const { dispatch } = renderView({ visible: true, questionID: 'q1', questions: two }, [rejectAction()])
+    fireEvent.click(screen.getByRole('button', { name: 'Blue' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Large' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Answer' }))
+
+    expect(dispatch).toHaveBeenCalledTimes(1)
+    // Positional: entry 0 answers question 0. Swapping them would answer the
+    // wrong question, which is why the order is asserted rather than the set.
+    expect(dispatch.mock.calls[0]![0]).toMatchObject({
+      payload: { questionID: 'q1', answers: [['Blue'], ['Large']] },
+    })
+  })
+
+  it('labels each block so a choice cannot be attached to the wrong question', () => {
+    renderView({ visible: true, questionID: 'q1', questions: two }, [rejectAction()])
+    expect(screen.getByText('Question 1 of 2')).toBeInTheDocument()
+    expect(screen.getByText('Question 2 of 2')).toBeInTheDocument()
+  })
+})
