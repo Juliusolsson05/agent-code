@@ -26,12 +26,14 @@ vi.mock('@renderer/app-state/hooks', () => ({
   useAppStore: (selector: (value: typeof state) => unknown) => selector(state),
 }))
 
-const row = (sessionId: string, index: number): DispatchAgentRow => ({
+const row = (sessionId: string, index: number, depth = 0): DispatchAgentRow => ({
   key: `project:${sessionId}`, label: `A${index}`, globalIndex: index,
   tabId: 'project', tabTitle: 'Project', tabIndex: 0, sessionId,
-  kind: 'claude', title: sessionId, depth: 0,
+  kind: 'claude', title: sessionId, depth,
 })
 const rows = [row('placed', 1), row('pooled', 2)]
+/** A parent with 5 orchestration children: the child cap hides all but three. */
+const familyRows = [row('parent', 1), ...[1, 2, 3, 4, 5].map(n => row(`worker-${n}`, n + 1, 1))]
 
 function loop(overrides: Partial<GoalLoopState> = {}): GoalLoopState {
   return {
@@ -65,8 +67,8 @@ function installGoalLoopBridge(loops: Record<string, GoalLoopState>) {
   return { readGoalLoops, ping: () => { for (const listener of listeners) listener() } }
 }
 
-const renderList = () => render(<DispatchAgentList
-  groups={[{ tab: { id: 'project', title: 'Project' }, tabIndex: 0, rows }]}
+const renderList = (listRows: DispatchAgentRow[] = rows) => render(<DispatchAgentList
+  groups={[{ tab: { id: 'project', title: 'Project' }, tabIndex: 0, rows: listRows }]}
   pinnedRows={[]}
   activeSessionId="placed"
   focusSessionInTab={vi.fn()}
@@ -146,5 +148,134 @@ describe('a goal loop on a pooled agent (#1031 item 2)', () => {
     renderList()
     await waitFor(() => { expect(screen.getByText('pooled')).toBeInTheDocument() })
     expect(chipOf('pooled')).toBeNull()
+  })
+})
+
+describe('a goal loop on a COLLAPSED orchestration child (#1063 review)', () => {
+  // The feature's own headline case: the child cap hides every child past the
+  // third, and orchestration children are exactly the agents that land in the
+  // pool running a loop. A 5-worker run showed chips for two workers and said
+  // nothing at all about the other three.
+  beforeEach(() => {
+    for (const id of ['parent', 'worker-1', 'worker-2', 'worker-3', 'worker-4', 'worker-5']) {
+      state.workspaceRuntimes[id] = emptyRuntime()
+    }
+  })
+
+  const collapseRow = () => screen.getByText(/\+ \d+ more/).closest('button')!
+
+  it('announces it on the "+N more" row', async () => {
+    installGoalLoopBridge({ 'worker-5': loop({ sessionId: 'worker-5' }) })
+    renderList(familyRows)
+    await waitFor(() => {
+      expect(collapseRow().querySelector('[data-dispatch-goal-loop]')).not.toBeNull()
+    })
+    expect(collapseRow().querySelector('[data-dispatch-goal-loop]')!.textContent).toContain('8/25')
+  })
+
+  it('counts them when several hidden children are looping', async () => {
+    installGoalLoopBridge({
+      'worker-4': loop({ sessionId: 'worker-4' }),
+      'worker-5': loop({ sessionId: 'worker-5' }),
+    })
+    renderList(familyRows)
+    await waitFor(() => {
+      expect(collapseRow().querySelector('[data-dispatch-goal-loop]')?.textContent).toContain('2 loops')
+    })
+  })
+
+  it('says nothing when only a VISIBLE child is looping — its own row carries that', async () => {
+    installGoalLoopBridge({ 'worker-1': loop({ sessionId: 'worker-1' }) })
+    renderList(familyRows)
+    await waitFor(() => { expect(chipOf('worker-1')).not.toBeNull() })
+    expect(collapseRow().querySelector('[data-dispatch-goal-loop]')).toBeNull()
+  })
+})
+
+describe('goal loop chip states (#1063 review)', () => {
+  it('shows a BLOCKED loop even though it has ended', async () => {
+    // `goal_loop_complete` with outcome "blocked" means the agent stopped
+    // because it needs the user. Hiding it made the index silent about the one
+    // loop state that is a request for attention.
+    installGoalLoopBridge({ pooled: loop({ phase: 'ended', endReason: 'blocked' }) })
+    renderList()
+    await waitFor(() => { expect(chipOf('pooled')).not.toBeNull() })
+    expect(chipOf('pooled')!.textContent).toContain('blocked')
+    expect(chipOf('pooled')!.getAttribute('title')).toContain('needs you')
+  })
+
+  it('still hides a loop that ended normally', async () => {
+    installGoalLoopBridge({ pooled: loop({ phase: 'ended', endReason: 'done' }) })
+    renderList()
+    await waitFor(() => { expect(screen.getByText('pooled')).toBeInTheDocument() })
+    expect(chipOf('pooled')).toBeNull()
+  })
+
+  it('names the pause reason, and offers raise-cap only when the cap is why', async () => {
+    installGoalLoopBridge({ pooled: loop({ phase: 'paused', pauseReason: 'cap' }) })
+    const view = renderList()
+    await waitFor(() => { expect(chipOf('pooled')!.textContent).toContain('cap') })
+    expect(chipOf('pooled')!.getAttribute('title')).toContain('raise its cap')
+    view.unmount()
+
+    installGoalLoopBridge({ pooled: loop({ phase: 'paused', pauseReason: 'error' }) })
+    renderList()
+    await waitFor(() => { expect(chipOf('pooled')!.textContent).toContain('error') })
+    // Naming a control that is not there sends the user looking for a button
+    // that does not exist.
+    expect(chipOf('pooled')!.getAttribute('title')).not.toContain('raise its cap')
+  })
+})
+
+describe('reads that resolve out of order (#1063 review finding 2)', () => {
+  it('never lets an older read overwrite a newer one', async () => {
+    // Pings arrive faster than the IPC resolves, so two reads are easily in
+    // flight at once and nothing makes them land in order. An older read
+    // landing last wrote a stale answer — and after a loop's FINAL ping there
+    // is no later read to correct it, so the chip could stay wrong forever.
+    const resolvers: Array<(value: Record<string, GoalLoopState>) => void> = []
+    const readGoalLoops = vi.fn(() => new Promise<Record<string, GoalLoopState>>(resolve => { resolvers.push(resolve) }))
+    const listeners = new Set<() => void>()
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: {
+        readGoalLoops,
+        onGoalLoopChanged: (listener: () => void) => {
+          listeners.add(listener)
+          return () => { listeners.delete(listener) }
+        },
+      },
+    })
+
+    renderList()
+    await waitFor(() => { expect(resolvers).toHaveLength(1) })
+    for (const listener of listeners) listener() // a second read, still in flight
+    await waitFor(() => { expect(resolvers).toHaveLength(2) })
+
+    // The NEWER read lands first…
+    resolvers[1]!({ pooled: loop({ continuationsDelivered: 9 }) })
+    await waitFor(() => { expect(chipOf('pooled')?.textContent).toContain('9/25') })
+
+    // …and the older one lands after it. It must be discarded.
+    resolvers[0]!({ pooled: loop({ continuationsDelivered: 8 }) })
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(chipOf('pooled')!.textContent).toContain('9/25')
+  })
+
+  it('drops a read that lands after unmount', async () => {
+    const resolvers: Array<(value: Record<string, GoalLoopState>) => void> = []
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: {
+        readGoalLoops: vi.fn(() => new Promise<Record<string, GoalLoopState>>(resolve => { resolvers.push(resolve) })),
+        onGoalLoopChanged: () => () => {},
+      },
+    })
+    const view = renderList()
+    await waitFor(() => { expect(resolvers).toHaveLength(1) })
+    view.unmount()
+    // No "update on an unmounted component" warning, and no throw.
+    resolvers[0]!({ pooled: loop() })
+    await new Promise(resolve => setTimeout(resolve, 0))
   })
 })

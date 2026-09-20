@@ -41,9 +41,21 @@ export function useGoalLoops(sessionIds: readonly string[]): Record<string, Goal
       return
     }
     let current = true
+    // WHY reads are SEQUENCED, not just guarded by `current` (review finding
+    // 2): pings arrive faster than the IPC resolves, so two reads are easily
+    // in flight at once and nothing makes them resolve in order. An older read
+    // landing last wrote a stale answer — 9/25 reverting to 8/25 — and after a
+    // loop's FINAL ping there is no later read to correct it, so the index
+    // could show a live chip for a loop that had ended, indefinitely. A
+    // monotonic ticket makes a late arrival discard itself.
+    let issued = 0
+    let applied = 0
     const read = () => {
+      const ticket = ++issued
       void window.api.readGoalLoops(ids).then(next => {
-        if (current) setLoops(next)
+        if (!current || ticket <= applied) return
+        applied = ticket
+        setLoops(next)
       }).catch(() => {})
     }
     const unsubscribe = window.api.onGoalLoopChanged(read)
@@ -57,11 +69,49 @@ export function useGoalLoops(sessionIds: readonly string[]): Record<string, Goal
 /**
  * Is this loop worth a chip in the index?
  *
- * An `ended` loop is not: the pane strip keeps an ended loop around so the
- * user can read why it stopped, but that is a detail of the surface they are
- * already looking at. In a list of twenty agents it would be stale noise that
+ * Active and paused loops, yes: they are live state the user cannot otherwise
+ * see on a pooled agent.
+ *
+ * An ended loop, normally no — the pane strip keeps one so the user can read
+ * why it stopped, but in a list of twenty agents that is stale noise that
  * never clears, and the index's job is to answer "what is happening now".
+ *
+ * EXCEPT `blocked` (review finding 3). That is the agent calling
+ * `goal_loop_complete` with outcome "blocked": it stopped BECAUSE it needs the
+ * user. Hiding it makes the index silent about the one loop state that is
+ * actually a request for attention — an agent waiting for you, looking exactly
+ * like an agent that finished.
  */
-export function isLiveGoalLoop(loop: GoalLoopState | undefined): loop is GoalLoopState {
-  return loop !== undefined && loop.phase !== 'ended'
+export function isShownGoalLoop(loop: GoalLoopState | undefined): loop is GoalLoopState {
+  if (loop === undefined) return false
+  return loop.phase !== 'ended' || loop.endReason === 'blocked'
+}
+
+/** The chip's text: short enough for a dense row, specific enough to act on. */
+export function goalLoopChipLabel(loop: GoalLoopState): string {
+  if (loop.phase === 'ended') return 'loop blocked'
+  // WHY the pause REASON is on the chip (review finding 4): "paused" alone
+  // does not say whether the loop hit its cap (raise it), errored (look), was
+  // paused by the user (resume), or was interrupted. Those are four different
+  // next actions, and the row is where the user decides whether to open it.
+  if (loop.phase === 'paused') return loop.pauseReason ? `loop paused · ${loop.pauseReason}` : 'loop paused'
+  return `loop ${loop.continuationsDelivered}/${loop.maxContinuations}`
+}
+
+/** The chip's tooltip: what this state means and what can be done about it. */
+export function goalLoopChipTitle(loop: GoalLoopState): string {
+  const budget = `continuation ${loop.continuationsDelivered} of ${loop.maxContinuations}`
+  // Only name controls that EXIST for this phase (review finding 4): offering
+  // "pause" on an ended loop, or "raise its cap" on one that did not hit the
+  // cap, tells the user to look for a button that is not there.
+  if (loop.phase === 'ended') {
+    return `Goal loop stopped and needs you — the agent reported it is blocked (${budget}). Select this agent to read its goal.`
+  }
+  if (loop.phase === 'paused') {
+    const action = loop.pauseReason === 'cap'
+      ? 'Select this agent to raise its cap, resume or stop it.'
+      : 'Select this agent to resume or stop it.'
+    return `Goal loop paused${loop.pauseReason ? ` (${loop.pauseReason})` : ''} at ${budget}. ${action}`
+  }
+  return `Goal loop running — ${budget}. Select this agent to pause, raise its cap or stop it.`
 }

@@ -9,7 +9,7 @@ import { useShallow } from 'zustand/react/shallow'
 
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { useAppStore } from '@renderer/app-state/hooks'
-import { isLiveGoalLoop, useGoalLoops } from '@renderer/features/goal-loop/useGoalLoops'
+import { goalLoopChipLabel, goalLoopChipTitle, isShownGoalLoop, useGoalLoops } from '@renderer/features/goal-loop/useGoalLoops'
 import type { GoalLoopState } from '@shared/types/goalLoop'
 import { useAgentName } from '@renderer/workspace/agentNames/useAgentName'
 import { WorktreeBadge } from '@renderer/workspace/tile-tree/TileLeaf/SessionBadges'
@@ -284,6 +284,7 @@ export const DispatchAgentList = memo(function DispatchAgentList({
               ) : (
                 <ChildCollapseRow
                   key={`${item.kind}:${item.parentSessionId}`}
+                  goalLoops={goalLoops}
                   label={item.kind === 'more' ? `+ ${item.hidden} more` : '− Show fewer'}
                   hiddenSessionIds={item.kind === 'more' ? item.hiddenSessionIds : EMPTY_SESSION_IDS}
                   onToggle={() => onToggleExpandedParent?.(item.parentSessionId)}
@@ -312,12 +313,28 @@ const ChildCollapseRow = memo(function ChildCollapseRow({
   label,
   hiddenSessionIds,
   onToggle,
+  goalLoops,
 }: {
   label: string
   hiddenSessionIds: SessionId[]
   onToggle: () => void
+  /** Every listed agent's loop, so a HIDDEN child's loop is still announced. */
+  goalLoops: Record<string, GoalLoopState>
 }) {
   const hidesNew = useAppStore(state => hiddenSessionIds.some(id => state.workspaceRuntimes[id]?.pooledSpawnAt != null))
+  // WHY this row carries the chip too (review finding 1): the child cap hides
+  // every orchestration child past the third, and orchestration children are
+  // exactly the agents that land in the pool running a goal loop. Without it
+  // the feature missed its own headline case — a 5-worker run showed chips for
+  // two workers and said nothing about the other three. `hidesNew` solves the
+  // identical problem for the pooled-spawn badge, immediately above.
+  const hidden = hiddenSessionIds.map(id => goalLoops[id]).filter(isShownGoalLoop)
+  // The most urgent hidden state leads: blocked asks for the user, active is
+  // still moving, paused is waiting. Showing a count instead would make the
+  // user expand to find out which kind it is.
+  const hiddenLoop = hidden.find(loop => loop.phase === 'ended')
+    ?? hidden.find(loop => loop.phase === 'active')
+    ?? hidden[0]
   return (
     <button
       type="button"
@@ -333,6 +350,17 @@ const ChildCollapseRow = memo(function ChildCollapseRow({
           className="ml-1 flex-shrink-0 rounded-chip border border-accent/70 bg-accent/10 px-1.5 py-[1px] text-[9px] font-semibold leading-none text-accent"
         >
           new
+        </span>
+      )}
+      {hiddenLoop && (
+        <span
+          data-dispatch-goal-loop="true"
+          title={`${hidden.length === 1 ? 'A hidden agent has a goal loop' : `${hidden.length} hidden agents have goal loops`}. Expand to see ${hidden.length === 1 ? 'it' : 'them'}. — ${goalLoopChipTitle(hiddenLoop)}`}
+          className={`ml-1 flex-shrink-0 rounded-chip border px-1.5 py-[1px] text-[9px] font-semibold leading-none ${
+            hiddenLoop.phase === 'active' ? 'border-accent/70 bg-accent/10 text-accent' : 'border-border text-muted'
+          }`}
+        >
+          {hidden.length === 1 ? goalLoopChipLabel(hiddenLoop) : `${hidden.length} loops`}
         </span>
       )}
     </button>
@@ -560,7 +588,7 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
               new
             </span>
           )}
-          {isLiveGoalLoop(goalLoop) && (
+          {isShownGoalLoop(goalLoop) && (
             // The answer to "why is this agent still working when I never
             // prompted it?" (#1031 item 2). Before this the index showed
             // nothing: GoalLoopPane mounts only for a session occupying a
@@ -578,15 +606,15 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
             // watches.
             <span
               data-dispatch-goal-loop="true"
-              title={`Goal loop ${goalLoop.phase} — continuation ${goalLoop.continuationsDelivered} of ${goalLoop.maxContinuations}. Select this agent to pause, raise its cap or stop it.`}
+              title={goalLoopChipTitle(goalLoop)}
               className={`
                 flex-shrink-0 rounded-chip border px-1.5 py-[1px] text-[9px] font-semibold leading-none
-                ${goalLoop.phase === 'paused'
-                  ? 'border-border text-muted'
-                  : 'border-accent/70 bg-accent/10 text-accent'}
+                ${goalLoop.phase === 'active'
+                  ? 'border-accent/70 bg-accent/10 text-accent'
+                  : 'border-border text-muted'}
               `}
             >
-              {goalLoop.phase === 'paused' ? 'loop paused' : `loop ${goalLoop.continuationsDelivered}/${goalLoop.maxContinuations}`}
+              {goalLoopChipLabel(goalLoop)}
             </span>
           )}
           {unreadBadge && (
