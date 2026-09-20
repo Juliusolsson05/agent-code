@@ -6,21 +6,25 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { SessionManager } from '@main/sessionManager.js'
 import type { PromptDeliveryResult } from '@shared/types/providerConfig.js'
 import { buildGoalLoopContinuationPrompt } from '@mcp/shared/goalLoopPrompt.js'
-import { GOAL_LOOP_QUIET_TURN_MS, GoalLoopService } from './GoalLoopService.js'
+import { GOAL_LOOP_BUSY_HOLD_LIMIT_MS, GOAL_LOOP_QUIET_TURN_MS, GoalLoopService } from './GoalLoopService.js'
 import { GOAL_LOOP_STORE_LIMIT, GoalLoopStore } from './GoalLoopStore.js'
 
 const directories: string[] = []
 afterEach(async () => { await Promise.all(directories.splice(0).map(d => rm(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }))) })
 
 type Deliver = SessionManager['deliverPromptToAgent']
-type FakeManager = EventEmitter & { deliverPromptToAgent: Deliver; getBackendSnapshot: () => never }
+type FakeManager = EventEmitter & { deliverPromptToAgent: Deliver; getProcessStateSnapshot: () => { active: boolean } }
 async function service(deliver: Deliver = vi.fn(async () => ({ ok: true } as PromptDeliveryResult))) {
   const directory = await mkdtemp(join(tmpdir(), 'agent-code-goal-loop-'))
   directories.push(directory)
-  const manager = Object.assign(new EventEmitter(), { deliverPromptToAgent: deliver, getBackendSnapshot: () => ({ input: { ready: true, revision: 1 } } as never) }) as FakeManager
+  // The provider's activity level, mutable so a test can put the agent back
+  // to work between events. Idle by default: these cases are about the turn
+  // boundary, not about #1033's delivery hold.
+  const processState = { active: false }
+  const manager = Object.assign(new EventEmitter(), { deliverPromptToAgent: deliver, getProcessStateSnapshot: () => processState }) as FakeManager
   const svc = new GoalLoopService({ manager, store: new GoalLoopStore(join(directory, 'goal-loop.json')), now: () => new Date('2026-09-18T00:00:00.000Z') })
   await svc.start()
-  return { svc, manager, deliver }
+  return { svc, manager, deliver, processState }
 }
 const idleTurn = (manager: FakeManager) => manager.emit('semantic-event', { sessionId: 's1', event: { type: 'turn_completed' } })
 // The sequence the session's feed log recorded 4–60 ms before EVERY sampled
@@ -46,6 +50,50 @@ describe('GoalLoopService', () => {
       goal: 'Migrate tests.', loopPrompt: 'Keep migrating.', iteration: 1, maxContinuations: 25,
     }))
     expect(svc.snapshot()['s1']?.continuationsDelivered).toBe(1)
+  })
+  it('holds the continuation while the provider is still working, then delivers on its quiet edge (#1033)', async () => {
+    const { svc, manager, deliver, processState } = await service()
+    await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+    // The turn boundary says the turn ended; the provider says otherwise
+    // (another Stop hook blocked ours and the model kept going).
+    processState.active = true
+    idleTurn(manager)
+    await new Promise(resolve => setTimeout(resolve, 10))
+    expect(deliver).not.toHaveBeenCalled()
+    expect(svc.snapshot()['s1']).toMatchObject({ phase: 'active' })
+
+    // No new boundary event ever arrives for that turn. The held continuation
+    // is released by the provider itself, once.
+    processState.active = false
+    manager.emit('process-state', { sessionId: 's1', active: false })
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1))
+    manager.emit('process-state', { sessionId: 's1', active: false })
+    await new Promise(resolve => setTimeout(resolve, 10))
+    expect(deliver).toHaveBeenCalledTimes(1)
+  })
+  it('pauses visibly when the provider never goes quiet (#1033)', async () => {
+    // A latched activity detector (a stale tool label in the last rows) would
+    // otherwise leave the loop `active` forever with nothing to release it.
+    const { svc, manager, deliver, processState } = await service()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    // The clock must be fake BEFORE the hold is taken: the watchdog timer is
+    // armed at that moment, and a timer created on the real clock cannot be
+    // advanced afterwards.
+    vi.useFakeTimers()
+    try {
+      await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+      processState.active = true
+      idleTurn(manager)
+      await vi.advanceTimersByTimeAsync(10)
+      expect(deliver).not.toHaveBeenCalled()
+      expect(svc.snapshot()['s1']).toMatchObject({ phase: 'active' })
+      await vi.advanceTimersByTimeAsync(GOAL_LOOP_BUSY_HOLD_LIMIT_MS + 1)
+    } finally {
+      vi.useRealTimers()
+      warn.mockRestore()
+    }
+    expect(deliver).not.toHaveBeenCalled()
+    expect(svc.snapshot()['s1']).toMatchObject({ phase: 'paused', pauseReason: 'error' })
   })
   it('does not continue while tools are pending (awaiting-tool)', async () => {
     const { svc, manager, deliver } = await service()
@@ -101,7 +149,7 @@ describe('GoalLoopService', () => {
       completionSummary: null, maxContinuations: 25, continuationsDelivered: 2,
       consecutiveDeliveryFailures: 0, startedAt: '2026-09-18T00:00:00.000Z', updatedAt: '2026-09-18T00:00:00.000Z',
     } })
-    const manager = Object.assign(new EventEmitter(), { deliverPromptToAgent: vi.fn(), getBackendSnapshot: () => ({ input: { ready: true, revision: 1 } } as never) })
+    const manager = Object.assign(new EventEmitter(), { deliverPromptToAgent: vi.fn(), getProcessStateSnapshot: () => ({ active: false }) })
     const svc = new GoalLoopService({ manager, store: new GoalLoopStore(join(directory, 'goal-loop.json')) })
     await svc.start()
     expect(svc.snapshot()['s1']).toMatchObject({ phase: 'paused', pauseReason: 'interrupted' })
@@ -216,7 +264,7 @@ describe('GoalLoopService', () => {
     }))
     const file = join(directory, 'goal-loop.json')
     await new GoalLoopStore(file).write(persisted)
-    const manager = Object.assign(new EventEmitter(), { deliverPromptToAgent: vi.fn(), getBackendSnapshot: () => ({ input: { ready: true, revision: 1 } } as never) })
+    const manager = Object.assign(new EventEmitter(), { deliverPromptToAgent: vi.fn(), getProcessStateSnapshot: () => ({ active: false }) })
     const svc = new GoalLoopService({ manager, store: new GoalLoopStore(file) })
     await svc.start()
     await svc.startLoop('fresh', { goal: 'G.', loopPrompt: 'P.' })
@@ -237,7 +285,7 @@ describe('GoalLoopService', () => {
     await writeFile(file, '{broken')
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const store = new GoalLoopStore(file)
-    const svc = new GoalLoopService({ manager: Object.assign(new EventEmitter(), { deliverPromptToAgent: vi.fn(), getBackendSnapshot: () => ({ input: { ready: true, revision: 1 } } as never) }), store })
+    const svc = new GoalLoopService({ manager: Object.assign(new EventEmitter(), { deliverPromptToAgent: vi.fn(), getProcessStateSnapshot: () => ({ active: false }) }), store })
     await svc.start()
     warn.mockRestore()
     // start() persists immediately, which used to replace the bad file.

@@ -12,18 +12,41 @@ const DELIVERY_RETRY_DELAY_MS = 250
 /** How long a hook-driven turn must have been silent (no hook, no semantic
  * event) before Resume may treat it as over without a Stop. See control(). */
 export const GOAL_LOOP_QUIET_TURN_MS = 60_000
+/**
+ * How long a continuation may sit held because the provider is still visibly
+ * working before the loop pauses instead of waiting forever.
+ *
+ * WHY there is a limit at all: the hold is released by the provider's own
+ * active→idle edge (see holdUntilQuiet). Every provider we ship derives that
+ * edge from a detector — a TUI spinner for Claude/Codex/Grok, the session
+ * event stream for OpenCode — and a detector can latch: a stale `⏺ … (ctrl+o
+ * to expand)` line left in the last fifteen rows reads as activity forever.
+ * A loop that waits on an edge that will never arrive is invisible, which is
+ * the failure the #1033 review called out ("unrecoverable states should
+ * produce a visible pause").
+ *
+ * WHY fifteen minutes and not one: the hold begins AFTER the provider told us
+ * the turn ended, so what we are waiting out is another Stop hook's work — a
+ * test suite, a lint, a build. Those are minutes. A legitimate multi-hour
+ * turn does not reach here, because its Stop has not fired yet.
+ */
+export const GOAL_LOOP_BUSY_HOLD_LIMIT_MS = 15 * 60_000
 
 // WHY structural instead of Pick<SessionManager, 'on'>: SessionManager's
 // typed event map is not satisfied by a plain EventEmitter test double, and
-// the service only needs these three subscriptions plus delivery. The real
+// the service only needs these four subscriptions plus delivery. The real
 // manager satisfies every signature (method bivariance); fakes stay trivial.
 type GoalLoopManagerPort = {
   on(event: 'semantic-event', listener: (payload: { sessionId: string; event: unknown }) => void): unknown
   on(event: 'removed', listener: (payload: { sessionId: string }) => void): unknown
   on(event: 'exit', listener: (payload: { sessionId: string }) => void): unknown
+  /** The provider's own activity edge. Its quiet side is what releases a held
+   *  continuation (#1033) — the same source getProcessStateSnapshot reads, so
+   *  a held loop can never disagree with the level it is waiting on. */
+  on(event: 'process-state', listener: (payload: { sessionId: string; active: boolean }) => void): unknown
   deliverPromptToAgent: SessionManager['deliverPromptToAgent']
-  /** The provider's own readiness, read at delivery time (#1033). */
-  getBackendSnapshot: SessionManager['getBackendSnapshot']
+  /** Is the provider visibly working right now? Read at delivery time. */
+  getProcessStateSnapshot: SessionManager['getProcessStateSnapshot']
 }
 
 /** The harness-owned goal loop (#1001).
@@ -107,6 +130,14 @@ export class GoalLoopService extends EventEmitter {
   /** Last hook, semantic event or delivery per hook-driven session, in ms.
    * Only Resume reads it; see control(). */
   private readonly lastHookSessionActivity = new Map<string, number>()
+  /** Continuations HELD because the provider was still visibly working when
+   * the delivery gate ran, with the wall-clock instant each one started
+   * waiting. A held continuation is not a dropped one: the provider's next
+   * quiet edge re-runs it, and GOAL_LOOP_BUSY_HOLD_LIMIT_MS bounds the wait.
+   * See holdUntilQuiet. */
+  private readonly heldSince = new Map<string, number>()
+  /** One stall watchdog per held session; see armHoldWatchdog. */
+  private readonly holdWatchdogs = new Map<string, ReturnType<typeof setTimeout>>()
 
   constructor(private readonly deps: {
     manager: GoalLoopManagerPort
@@ -130,6 +161,14 @@ export class GoalLoopService extends EventEmitter {
     const { manager } = this.deps
     manager.on('semantic-event', ({ sessionId, event }: { sessionId: string; event: unknown }) => {
       this.signal(sessionId, event)
+    })
+    // The release edge for a held continuation (#1033). Level and edge come
+    // from the same map in SessionManager, so a session that goes quiet
+    // between the hold and this event is still covered: the re-run reads the
+    // level, not the event.
+    manager.on('process-state', ({ sessionId, active }: { sessionId: string; active: boolean }) => {
+      if (active || !this.heldSince.has(sessionId)) return
+      this.requestContinue(sessionId)
     })
     // `removed` is the reliable end (forwarder.ts); `exit` can precede it.
     manager.on('removed', ({ sessionId }: { sessionId: string }) => this.interrupt(sessionId))
@@ -164,9 +203,9 @@ export class GoalLoopService extends EventEmitter {
    * hook in parallel and keeps the turn going if ANY of them blocks, and
    * Codex aggregates the same way, so a user, project or plugin hook that
    * blocks ("run the tests before stopping") leaves the turn running after we
-   * were told it ended. That is why the boundary is not trusted alone:
-   * `providerAcceptsInput` re-asks the provider itself immediately before
-   * typing (#1033).
+   * were told it ended. That is why the boundary is not trusted alone: the
+   * delivery gate watches the provider's own activity and HOLDS the
+   * continuation until it goes quiet (#1033, providerIsWorking).
    */
   observeProviderHook(sessionId: string, hook: 'user-prompt-submit' | 'post-tool-use' | 'stop', outcome?: { blocked: boolean }): void {
     this.hookSessions.add(sessionId)
@@ -216,6 +255,9 @@ export class GoalLoopService extends EventEmitter {
   async complete(sessionId: string, outcome: 'done' | 'blocked', summary: string): Promise<GoalLoopState> {
     const loop = this.loops.get(sessionId)
     if (!loop || loop.phase === 'ended') throw new Error('No goal loop is active for this session.')
+    // Nothing may be typed into a finished loop, and a live watchdog would
+    // outlive it.
+    this.releaseHold(sessionId)
     const ended: GoalLoopState = {
       ...loop, phase: 'ended', endReason: outcome, completionSummary: summary.trim(),
       pauseReason: null, updatedAt: this.now().toISOString(),
@@ -241,6 +283,11 @@ export class GoalLoopService extends EventEmitter {
       void this.persist()
       return null
     }
+    // Any control action other than resume either stops the loop or takes it
+    // out of the delivering phase, so a continuation held for it is void.
+    // Resume deliberately keeps nothing: it re-runs the gate below, which
+    // re-holds if the provider is still working.
+    if (command.action !== 'raise-cap') this.releaseHold(sessionId)
     if (command.action === 'pause' && loop.phase === 'active') {
       this.loops.set(sessionId, { ...loop, phase: 'paused', pauseReason: 'user', updatedAt: now })
     } else if (command.action === 'stop' && loop.phase !== 'ended') {
@@ -364,6 +411,11 @@ export class GoalLoopService extends EventEmitter {
     // Dropped unconditionally: a same-id wake starts a fresh process whose
     // events must not be folded onto the dead one's pending tools.
     this.working.delete(sessionId)
+    // A held continuation belongs to the dead process's turn. Its quiet edge
+    // will never come (the last thing a dying session emits is active:false,
+    // which must not resurrect a delivery into a process that is gone), and
+    // the loop is about to be paused as `interrupted` anyway.
+    this.releaseHold(sessionId)
     // A fresh process must prove its hooks again. A reload can change
     // providers or MCP domains, and a turn open in the dead process is gone.
     this.hookSessions.delete(sessionId)
@@ -418,19 +470,100 @@ export class GoalLoopService extends EventEmitter {
   }
 
   /**
-   * Is the provider ready to accept typed input right now?
+   * Is the provider visibly working right now?
    *
-   * WHY an UNKNOWN session answers yes: a session main has no snapshot for is
-   * one it is not tracking (a terminal-runtime pane whose backend row lives
-   * elsewhere, a fake in a test). Treating "I cannot tell" as "do not
-   * deliver" would silently stop those loops forever, which is a worse
-   * failure than the one this guards. `deliverPromptToAgent` still refuses a
+   * WHY activity and NOT input readiness (#1033's re-review): readiness
+   * answers "can something be typed", which is a composer question. Claude's
+   * gate derives it from blocking conditions, composer occupancy and
+   * transcript replay (claudeSession.derivePromptGateState) and Codex's
+   * latches true for the whole session once a composer has ever painted
+   * (codexSession.markComposerReady). Both are TRUE in the middle of an
+   * ordinary turn — that is exactly why a mid-turn prompt becomes a QUEUED
+   * command instead of being refused. Gating on readiness therefore did not
+   * catch the case it was written for: a second Stop hook blocking our
+   * allowed Stop leaves the model working with a perfectly typeable composer.
+   *
+   * `process-state` is the provider's own answer to "is a turn running": a
+   * screen-spinner detector for Claude, Codex and Grok (the spinner is up
+   * while hooks run and while the model continues after one blocks) and the
+   * session event stream for OpenCode. It is also runtime-correct for the
+   * terminal runtimes: OpenCode Terminal derives it from its headless
+   * activity channel, not from the PTY paint grace period its input readiness
+   * waits on, so a pane whose HTTP prompt channel is already usable is no
+   * longer held back by a UI-readiness flag it does not need.
+   *
+   * WHY an UNKNOWN session counts as NOT working: a session main has no
+   * process state for is one it is not tracking (a fake in a test, a backend
+   * row that lives elsewhere). Treating "I cannot tell" as "working" would
+   * park those loops until the watchdog pauses them, which is a worse failure
+   * than the one this guards. `deliverPromptToAgent` still refuses a
    * genuinely unready target, retry-safely.
    */
-  private providerAcceptsInput(sessionId: string): boolean {
-    const snapshot = this.deps.manager.getBackendSnapshot(sessionId)
-    if (!snapshot) return true
-    return snapshot.input.ready
+  private providerIsWorking(sessionId: string): boolean {
+    return this.deps.manager.getProcessStateSnapshot(sessionId)?.active === true
+  }
+
+  /**
+   * Hold this session's continuation until the provider goes quiet.
+   *
+   * WHY holding rather than returning (#1033's re-review): the first version
+   * simply skipped the delivery and relied on "the turn's real end
+   * re-triggers the loop". For a hook session there is no such re-trigger —
+   * the Stop we were answering IS the turn's end, and no further Stop fires
+   * while the model works through another hook's continuation. The loop then
+   * sat `active` with zero deliveries and nothing left to observe: a silent
+   * death, and the exact shape of the #1024 bug this all descends from.
+   *
+   * The hold is level-triggered on re-entry: maybeContinue re-reads
+   * providerIsWorking, so a release that arrives while the provider is busy
+   * again simply re-holds, keeping the ORIGINAL heldSince stamp so the
+   * watchdog measures the whole stall rather than the last leg of it.
+   */
+  private holdUntilQuiet(sessionId: string): void {
+    if (!this.heldSince.has(sessionId)) this.heldSince.set(sessionId, Date.now())
+    this.armHoldWatchdog(sessionId)
+  }
+
+  /** Wall-clock, not the injected now(): tests pin that clock to a fixed
+   * instant, which would make every hold look instantaneous forever. */
+  private armHoldWatchdog(sessionId: string): void {
+    if (this.holdWatchdogs.has(sessionId)) return
+    const timer = setTimeout(() => {
+      this.holdWatchdogs.delete(sessionId)
+      if (!this.heldSince.has(sessionId)) return
+      // One last look at the LEVEL before giving up: a provider can stop
+      // emitting edges (a headless that dies quietly, a missed frame) while
+      // its snapshot has long since gone idle. Re-running is free and turns a
+      // missed edge into a delivery instead of a pause.
+      if (!this.providerIsWorking(sessionId)) {
+        this.requestContinue(sessionId)
+        return
+      }
+      this.pauseStalledHold(sessionId)
+    }, GOAL_LOOP_BUSY_HOLD_LIMIT_MS)
+    timer.unref?.()
+    this.holdWatchdogs.set(sessionId, timer)
+  }
+
+  private releaseHold(sessionId: string): void {
+    this.heldSince.delete(sessionId)
+    const timer = this.holdWatchdogs.get(sessionId)
+    if (timer) clearTimeout(timer)
+    this.holdWatchdogs.delete(sessionId)
+  }
+
+  /** The activity signal never went quiet. Pause VISIBLY (the pane strip
+   * shows paused · error with a Resume button) rather than leaving a loop
+   * that looks armed and will never prompt again. Resume re-runs the same
+   * gate, so a user who can see the agent is idle can recover it in one
+   * click. */
+  private pauseStalledHold(sessionId: string): void {
+    this.releaseHold(sessionId)
+    const loop = this.loops.get(sessionId)
+    if (!loop || loop.phase !== 'active') return
+    console.warn(`[goal-loop] ${sessionId}: provider still reports activity ${Math.round(GOAL_LOOP_BUSY_HOLD_LIMIT_MS / 60_000)} min after its turn ended; pausing instead of typing into it`)
+    this.loops.set(sessionId, { ...loop, phase: 'paused', pauseReason: 'error', updatedAt: this.now().toISOString() })
+    void this.persist()
   }
 
   private async maybeContinue(sessionId: string): Promise<void> {
@@ -467,11 +600,15 @@ export class GoalLoopService extends EventEmitter {
       // The last gate, and the only one that asks the PROVIDER rather than our
       // own bookkeeping (#1033). Our Stop hook allowing a turn to end does not
       // mean the turn ended: another configured hook can block, and both CLIs
-      // keep going when any hook does. Input readiness is the provider's own
-      // answer to "can something be typed right now", and it is the same
-      // signal the composer gate uses, so a continuation can no longer land
-      // mid-turn as a queued command — the #1024 symptom.
-      if (!this.providerAcceptsInput(sessionId)) return
+      // keep going when any hook does. A still-working provider therefore
+      // holds the continuation — it is not dropped — and its own quiet edge
+      // delivers it, so a continuation can no longer land mid-turn as a
+      // queued command (the #1024 symptom) and cannot be lost either.
+      if (this.providerIsWorking(sessionId)) {
+        this.holdUntilQuiet(sessionId)
+        return
+      }
+      this.releaseHold(sessionId)
       let result = await this.deps.manager.deliverPromptToAgent(sessionId, prompt)
       if (!result.ok && result.retrySafe) result = await this.deps.manager.deliverPromptToAgent(sessionId, prompt)
       const current = this.loops.get(sessionId)
