@@ -358,6 +358,22 @@ describe('ClaudeSession prompt acceptance', () => {
     await expect(waiter.promise).resolves.toMatchObject({ kind: 'timeout' })
   })
 
+  it('refuses two sibling blocks that share an id (#1052 review)', async () => {
+    // The unwrap is greedy, so with two blocks carrying the SAME id it used to
+    // capture across the boundary between them and return
+    // `first</pasted_content id="x"><pasted_content id="x">second`. That
+    // string can be armed as a prompt, and then a completely different
+    // two-block entry acknowledges it. Ambiguous input must yield no candidate
+    // at all — this is the whole reason the unwrap is allowed to exist.
+    const spanning = 'first\n</pasted_content id="cade">\n<pasted_content id="cade">\nsecond'
+    const twoBlocks = `<pasted_content id="cade">\n${spanning}\n</pasted_content id="cade">`
+    const session = new ClaudeSession()
+    const waiter = session.armPromptAcceptance(spanning, { timeoutMs: 30 })
+    ;(session as unknown as { resolvePromptAcceptance(value: unknown, cursor: number): void })
+      .resolvePromptAcceptance({ type: 'user', message: { role: 'user', content: twoBlocks } }, 1)
+    await expect(waiter.promise).resolves.toMatchObject({ kind: 'timeout' })
+  })
+
   it('refuses an envelope whose opening and closing ids disagree (#1052)', async () => {
     // Mismatched ids mean the text is not one whole wrapped paste — it is
     // content that merely looks like one, and the app must not unwrap it.
