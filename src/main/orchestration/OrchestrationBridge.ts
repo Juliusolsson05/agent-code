@@ -21,6 +21,82 @@ type PendingRequest = {
   resolve: (response: OrchestrationRendererResponse) => void
   reject: (err: Error) => void
   timer: NodeJS.Timeout
+  /**
+   * Set once the caller has given up waiting but the request is still
+   * OUTSTANDING in the renderer (#926). The entry stays in `pending` so a late
+   * answer can still be reconciled instead of dropped on the floor.
+   */
+  abandoned?: boolean
+}
+
+/**
+ * Every renderer request that CHANGES the workspace.
+ *
+ * WHY the distinction has to exist: a timed-out read changed nothing, so
+ * failing it is the whole truth. A timed-out mutation may have happened, may
+ * be happening right now, and may complete a second after we gave up — so
+ * failing it the same way tells the caller something false.
+ *
+ * Listed explicitly rather than derived, so a request type added later has to
+ * be classified deliberately. The default for anything unlisted is "read",
+ * which is the safe side for THIS switch: a mis-classified read is merely a
+ * blunt error message, while a mis-classified mutation would hold a
+ * reservation nothing ever reconciles.
+ */
+const MUTATING_REQUEST_TYPES = new Set<OrchestrationRendererRequest['type']>([
+  'create-agent',
+  'close-agent',
+  'close-run',
+  'mark-bootstrap-prompt-delivered',
+  'ensure-agent-live',
+])
+
+/**
+ * Everything that distinguishes one renderer request from another, minus its
+ * id. Two requests with the same shape ask for the same effect (#926).
+ *
+ * Built by sorting the request's own keys rather than listing them, so a field
+ * added to a request type is part of the identity automatically — the opposite
+ * choice from the create-call key in `createBuiltInMcpServer`, which lists
+ * fields because it must decide what a NEW field means. Here an unlisted field
+ * can only make two requests look different, which fails open to today's
+ * behaviour rather than silently collapsing two distinct effects.
+ */
+function rendererRequestShape(request: OrchestrationRendererRequest): string {
+  const record = request as unknown as Record<string, unknown>
+  return JSON.stringify(
+    Object.keys(record).filter(key => key !== 'requestId').sort()
+      .map(key => [key, record[key]]),
+  )
+}
+
+/**
+ * A dispatched mutation whose outcome nobody knows (#926).
+ *
+ * ── WHY THIS IS NOT JUST A TIMEOUT ERROR ──
+ * The renderer request is sent BEFORE the timer starts, so when the timer
+ * fires the request has definitely crossed into the renderer. What expired is
+ * our patience, not the operation. Rejecting with a plain "timed out" told the
+ * caller its create had failed, and the reasonable response to a failure is to
+ * try again — which is how one intended child becomes two, one of them
+ * invisible to the parent that asked for it.
+ *
+ * `outcome: 'unknown'` is the same vocabulary the control SDK uses for exactly
+ * this situation, and it means: do not retry, go and look.
+ */
+export class OrchestrationOutcomeUnknownError extends Error {
+  readonly outcome = 'unknown' as const
+  constructor(
+    readonly requestId: string,
+    readonly requestType: OrchestrationRendererRequest['type'],
+    readonly parentSessionId: string,
+  ) {
+    super(
+      `The renderer did not answer ${requestType} in time. It may still complete, so the outcome is UNKNOWN: `
+      + `do not repeat it. Call orchestration_list_agents for this parent to see what exists before acting.`,
+    )
+    this.name = 'OrchestrationOutcomeUnknownError'
+  }
 }
 
 type QueuedRendererRequest = {
@@ -72,6 +148,33 @@ const STATUS_CACHE_TTL_MS = 250
 
 export class OrchestrationBridge {
   private readonly pending = new Map<string, PendingRequest>()
+  /**
+   * Dispatched mutations whose outcome nobody knows, keyed by requestId (#926).
+   *
+   * ── WHY A RESERVATION SURVIVES THE TIMEOUT ──
+   * The timer fires 30 s after the request crossed into the renderer, and
+   * proves only that main stopped waiting. The old code deleted the pending
+   * entry and rejected, which threw away BOTH halves of the truth: a late
+   * answer had nowhere to land, so a child that really was created became an
+   * orphan the parent could not see or close; and the caller was told its
+   * create had FAILED, whose reasonable response is to try again — turning one
+   * intended child into two.
+   *
+   * The reservation is what holds the authority to say "an identical request
+   * may already have taken effect" until something reconciles it. It is
+   * released only by a late answer arriving, never by time, because nothing
+   * about the passage of time proves the effect did not happen.
+   *
+   * It is scoped to the PARENT plus the request shape, so an unreconciled
+   * create for one parent never blocks another parent's work, and never blocks
+   * a read.
+   */
+  private readonly unreconciled = new Map<string, {
+    parentSessionId: string
+    requestType: OrchestrationRendererRequest['type']
+    shape: string
+    at: number
+  }>()
   private readonly rendererQueue: QueuedRendererRequest[] = []
   private activeRendererRequests = 0
   private readonly promptDeliveries = new Map<string, PromptDeliveryMetadata>()
@@ -152,6 +255,23 @@ export class OrchestrationBridge {
     this.journal = journal
   }
 
+  /**
+   * Is an identical mutation already outstanding with an unknown outcome?
+   *
+   * Returns the reservation so the caller can name it. Matching on the SHAPE
+   * rather than the request id is the point: the retry is a new request with a
+   * new id, and what makes it dangerous is that it describes the same effect.
+   */
+  private outstandingMutation(
+    request: OrchestrationRendererRequest,
+  ): { requestId: string; requestType: OrchestrationRendererRequest['type'] } | null {
+    const shape = rendererRequestShape(request)
+    for (const [requestId, reservation] of this.unreconciled) {
+      if (reservation.shape === shape) return { requestId, requestType: reservation.requestType }
+    }
+    return null
+  }
+
   async createAgent(params: {
     parentSessionId: string
     kind: OrchestrationAgentKind
@@ -171,11 +291,25 @@ export class OrchestrationBridge {
     if (params.providerRuntime === 'terminal' && !getMainProvider(params.kind).createTerminalSession) {
       throw new Error(`${getMainProvider(params.kind).name} does not support a terminal runtime`)
     }
-    const response = await this.request({
+    const attempt: OrchestrationRendererRequest = {
       requestId: randomUUID(),
       type: 'create-agent',
       ...params,
-    })
+    }
+    // ── REFUSE A BLIND REPEAT (#926) ──
+    // An earlier identical create timed out, which means it may already have
+    // produced a child. Creating another one now is the exact duplication this
+    // reservation exists to prevent, and the caller gets the same
+    // outcome-unknown answer it got the first time: go and look.
+    const outstanding = this.outstandingMutation(attempt)
+    if (outstanding) {
+      throw new OrchestrationOutcomeUnknownError(
+        outstanding.requestId,
+        outstanding.requestType,
+        params.parentSessionId,
+      )
+    }
+    const response = await this.request(attempt)
     if (!response.ok) throw new Error(response.message)
     if (response.type !== 'create-agent') {
       throw new Error(`Unexpected orchestration response: ${response.type}`)
@@ -392,7 +526,57 @@ export class OrchestrationBridge {
     if (!pending) return
     clearTimeout(pending.timer)
     this.pending.delete(response.requestId)
+    if (pending.abandoned) {
+      // ── LATE RECONCILIATION (#926) ──
+      // The caller stopped waiting, but the renderer finished anyway. Dropping
+      // this used to be how a real child became an orphan: created, placed in
+      // the workspace, and unknown to the bridge, so the parent could neither
+      // see it in list_agents nor close it. Adopting it here is what makes
+      // "exactly one logical effect is discoverable" true.
+      this.adoptLateResponse(response)
+      return
+    }
     pending.resolve(response)
+  }
+
+  /**
+   * Take ownership of a response that arrived after its caller gave up.
+   *
+   * Only bookkeeping: the workspace mutation already happened in the renderer,
+   * and this is main catching up with it. The unreconciled reservation is
+   * released here and nowhere else, so a create whose answer never comes keeps
+   * blocking an identical retry forever — which is the correct end state,
+   * because nothing has proved that child does not exist.
+   */
+  private adoptLateResponse(response: OrchestrationRendererResponse): void {
+    const reservation = this.unreconciled.get(response.requestId)
+    this.unreconciled.delete(response.requestId)
+    if (!response.ok || response.type !== 'create-agent') {
+      if (reservation) this.invalidateStatusCache(reservation.parentSessionId)
+      return
+    }
+    const parentSessionId = reservation?.parentSessionId ?? response.agent.orchestrationParentId
+    this.promptDeliveries.set(response.agent.sessionId, {
+      createdAt: Date.now(),
+      promptSubmissionCount: 0,
+    })
+    this.parentSessionByChildSession.set(response.agent.sessionId, parentSessionId)
+    this.closedAgents.delete(response.agent.sessionId)
+    this.invalidateStatusCache(parentSessionId)
+    this.journal?.recordIncident({
+      kind: 'orchestration.late_response_adopted',
+      severity: 'warn',
+      reason: 'renderer_answered_after_timeout',
+      context: {
+        requestId: response.requestId,
+        sessionId: response.agent.sessionId,
+        parentSessionId,
+        // The child exists and was never handed to the caller, so it is
+        // running work nobody is waiting on. Worth an incident even though
+        // recovery succeeded.
+        bootstrapPromptDelivered: false,
+      },
+    })
   }
 
   private async cachedListAgents(params: {
@@ -590,7 +774,7 @@ export class OrchestrationBridge {
     return await new Promise<OrchestrationRendererResponse>((resolve, reject) => {
       const TIMEOUT_MS = 30_000
       const timer = setTimeout(() => {
-        this.pending.delete(request.requestId)
+        const mutating = MUTATING_REQUEST_TYPES.has(request.type)
         // The renderer never answered an orchestration request — JS thread
         // blocked, dead, or crashing mid-handler. Durable evidence of a hang
         // that the renderer itself can't report.
@@ -598,9 +782,33 @@ export class OrchestrationBridge {
           kind: 'orchestration.request_timeout',
           severity: 'error',
           reason: 'renderer_no_response',
-          context: { requestId: request.requestId, waitedMs: TIMEOUT_MS },
+          context: { requestId: request.requestId, waitedMs: TIMEOUT_MS, requestType: request.type, mutating },
         })
-        reject(new Error('Timed out waiting for renderer orchestration response'))
+        if (!mutating) {
+          // A read changed nothing, so failing it is the whole truth and the
+          // caller may simply ask again.
+          this.pending.delete(request.requestId)
+          reject(new Error('Timed out waiting for renderer orchestration response'))
+          return
+        }
+        // ── A DISPATCHED MUTATION IS NOT A FAILED ONE (#926) ──
+        // The request is sent BEFORE this timer starts, so it has definitely
+        // crossed into the renderer. Keep the entry — marked abandoned — so a
+        // late answer can still be reconciled, and hold a reservation so an
+        // identical retry is refused rather than blindly duplicating.
+        const entry = this.pending.get(request.requestId)
+        if (entry) entry.abandoned = true
+        this.unreconciled.set(request.requestId, {
+          parentSessionId: request.parentSessionId,
+          requestType: request.type,
+          shape: rendererRequestShape(request),
+          at: Date.now(),
+        })
+        reject(new OrchestrationOutcomeUnknownError(
+          request.requestId,
+          request.type,
+          request.parentSessionId,
+        ))
       }, TIMEOUT_MS)
       this.pending.set(request.requestId, { resolve, reject, timer })
       // WHY main serializes renderer-backed orchestration requests:

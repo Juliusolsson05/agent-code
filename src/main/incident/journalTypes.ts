@@ -108,6 +108,10 @@ export type AppRunIncidentKind =
   | 'renderer.unhandledrejection'
   | 'session.input_write_failed'
   | 'orchestration.request_timeout'
+  // A renderer mutation answered AFTER its caller gave up. Recovery worked —
+  // the child was adopted — but it ran work nobody was waiting on, so the
+  // timeout budget or the renderer's responsiveness is worth looking at (#926).
+  | 'orchestration.late_response_adopted'
   | 'orchestration.prompt_delivery_failed'
   | 'mcp.host_start_failed'
   // Remote mobile companion (src/main/remote/) — declared here because this
