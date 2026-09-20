@@ -31,7 +31,9 @@ export type MacHotkeyHelperStartResult = { ok: boolean; message?: string }
 // deterministic: it either prints `{"type":"ready"}` on stdout immediately
 // after the CGEventTap is installed, or it exits within milliseconds with a
 // distinct code (64 empty binding / 65 unsupported key / 66 tap creation
-// failed — the accessibility-denied case). So on a healthy machine this wait
+// failed — the accessibility-denied case; 67 keyboard not observable, which
+// only the --watch-release mode emits, see holdRelease.ts). So on a healthy
+// machine this wait
 // costs ~tens of ms, not the full window; the timeout only fires if the
 // helper neither became ready nor exited (a machine so loaded the tiny
 // binary hasn't reached emit("ready") yet), and in that ambiguous case we

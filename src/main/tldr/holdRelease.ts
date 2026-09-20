@@ -1,5 +1,7 @@
 import { spawn } from 'node:child_process'
 
+import type { HoldEndReason } from '@shared/types/tldr.js'
+
 // DOM code is a physical key, unlike event.key on Option/non-US layouts.
 // These are Apple's virtual key codes (the helper does no layout translation).
 const macKeyCodes: Record<string, number> = {
@@ -20,26 +22,36 @@ const macKeyCodes: Record<string, number> = {
   F7: 0x62, F8: 0x64, F9: 0x65, F10: 0x6d, F11: 0x67, F12: 0x6f,
 }
 
+/** Exit code the helper uses for "cannot see the keyboard"; see main.swift. */
+const KEYBOARD_UNOBSERVABLE_EXIT = 67
+
 /** The observer cannot activate a preview. It can only end a renderer-owned
  * hold, and returns a cancellation function synchronously, even while the dev
  * helper is compiling. This prevents an old async start from surviving blur,
  * navigation, or a second gesture. The packaged binary is built ahead of time. */
 export function watchMacTldrRelease(
-  binary: Promise<string>, code: string, release: () => void,
+  binary: Promise<string>, code: string, release: (reason: HoldEndReason) => void,
   start = (file: string, args: string[]) => spawn(file, args, { stdio: 'ignore' }),
 ): () => void {
   let cancelled = false
   let child: ReturnType<typeof start> | undefined
   const keyCode = macKeyCodes[code]
+  const end = (reason: HoldEndReason) => {
+    if (cancelled) return
+    cancelled = true
+    release(reason)
+  }
   void binary.then(file => {
     if (cancelled) return
-    if (keyCode === undefined) { release(); return }
+    if (keyCode === undefined) { end('released'); return }
     child = start(file, ['--watch-release', String(keyCode)])
-    // Exiting because the key is up and failing to observe it both dismiss the
-    // hold. Never leave an opaque overlay stuck on a helper/packaging failure.
-    const ended = () => { if (!cancelled) { cancelled = true; release() } }
-    child.once('exit', ended)
-    child.once('error', ended)
-  }).catch(() => { if (!cancelled) { cancelled = true; release() } })
+    // Every exit ends the hold — never leave an opaque overlay stuck on a
+    // helper or packaging failure. Only the reason differs, and only one exit
+    // code carries evidence about the keyboard itself.
+    child.once('exit', (exitCode: number | null) => {
+      end(exitCode === KEYBOARD_UNOBSERVABLE_EXIT ? 'unobservable' : 'released')
+    })
+    child.once('error', () => end('released'))
+  }).catch(() => end('released'))
   return () => { cancelled = true; child?.kill() }
 }
