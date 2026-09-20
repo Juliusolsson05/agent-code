@@ -261,6 +261,43 @@ export function registerExtensionsIpc(): void {
     }
   })
 
+  // Re-install a GITHUB extension from the `owner/repo` already recorded in its
+  // ledger row — the counterpart of update-local, and for the same reason.
+  //
+  // WHY this exists instead of the Update button re-calling `extensions:install`
+  // with `entry.repo` (#1049 round 9): that handler hardcodes `firstInstall=true`,
+  // because everything reaching it IS a first install — a string the user just
+  // typed or pasted into the box, which is exactly when an invisible-character
+  // repo name has to be shown before code runs. Routing Update through it made
+  // every Tier-0 update prompt again, which is the noise the firstInstall split
+  // was introduced to avoid: the source was chosen once, approved once, and is
+  // now read back from OUR ledger, not from the renderer.
+  //
+  // The renderer names an id, never a repo, so this cannot be turned into
+  // "install any repository on the renderer's say-so". Everything else is
+  // unchanged: normalizeRepo, download, tree/entry containment, and an
+  // unconditional consent prompt for any manifest that requests capabilities.
+  ipcMain.handle(
+    'extensions:update-github',
+    async (evt, id: string, useGithubCliAuth?: boolean): Promise<ExtensionInstallResult> => {
+      if (!isValidExtensionId(id)) return { ok: false, error: 'Unknown extension.' }
+      const installed = await listInstalledExtensions()
+      const entry = installed.find(candidate => candidate.manifest.id === id)
+      if (!entry) return { ok: false, error: 'Extension is no longer installed.' }
+      if (entry.origin !== 'github') {
+        return { ok: false, error: 'This extension was loaded from a folder; use Reload.' }
+      }
+      try {
+        const record = await installExtension(entry.repo, consentPromptFor(evt, entry.repo), {
+          githubCliAuth: useGithubCliAuth !== false,
+        })
+        return { ok: true, entry: { ...record, present: true } }
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) }
+      }
+    },
+  )
+
   ipcMain.handle('extensions:remove', async (_evt, id: string): Promise<void> => {
     await removeExtension(id)
   })
