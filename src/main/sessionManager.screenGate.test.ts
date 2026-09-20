@@ -135,6 +135,24 @@ describe('SessionManager screen-frame gate', () => {
     await manager.kill(sessionId)
   })
 
+  it('routes Jump to Latest to a provider that can scroll its own view, and says unsupported otherwise (#843)', async () => {
+    const { SessionManager } = await import('./sessionManager')
+    const manager = new SessionManager()
+    const plain = new FakeAgentSession()
+    createSession.mockImplementationOnce(() => plain)
+    const { sessionId: plainId } = await manager.spawn({ kind: 'claude', cwd: '/tmp/project' })
+    expect(await manager.jumpToLatest(plainId)).toEqual({ ok: false, reason: 'unsupported' })
+
+    const jumper = Object.assign(new FakeAgentSession(), { jumpToLatest: vi.fn(async () => ({ ok: true as const })) })
+    createSession.mockImplementationOnce(() => jumper)
+    const { sessionId: jumperId } = await manager.spawn({ kind: 'claude', cwd: '/tmp/project' })
+    expect(await manager.jumpToLatest(jumperId)).toEqual({ ok: true })
+    expect(jumper.jumpToLatest).toHaveBeenCalledTimes(1)
+    expect(await manager.jumpToLatest('missing')).toEqual({ ok: false, reason: 'no-session' })
+    await manager.kill(plainId)
+    await manager.kill(jumperId)
+  })
+
   it('a remounted raw terminal gets the modes its evicted startup bytes set (#843, real OpenCode recording)', async () => {
     const { readFileSync } = await import('node:fs')
     const { resolve } = await import('node:path')
@@ -160,3 +178,4 @@ describe('SessionManager screen-frame gate', () => {
     await manager.kill(sessionId)
   })
 })
+

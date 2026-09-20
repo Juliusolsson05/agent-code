@@ -323,7 +323,17 @@ export function buildDefaultKeybindings(): CommandBindingDefault[] {
     { commandId: 'toggle-reader-mode', bindings: ['Alt+R'], context: 'global' },
     { commandId: 'tldr-preview', bindings: ['Cmd+L'], context: 'global' },
     { commandId: 'goal-preview', bindings: ['Cmd+G'], context: 'global' },
-    { commandId: 'goal-loop-preview', bindings: ['Cmd+Shift+Y'], context: 'global' },
+    // Not Cmd+Shift+Y (#1007): macOS reserves ⇧⌘Y for the system "New
+    // Sticky Note" service, which check:keybindings cannot see. ⌘⇧G sits
+    // beside the Goal peek (⌘G), and the unified stage (#992) freed it when
+    // Global Dispatch was retired.
+    //
+    // ⌘⇧G is ALSO Monaco's Find Previous, exactly as ⌘G beside it is Monaco's
+    // Find Next (#1045 review reproduced the collision). Both are approved
+    // overlaps: the router yields the chord whenever editor chrome owns the
+    // target, so only one owner is ever live. reservations.ts records
+    // Monaco's claim so the checker stops offering the chord as free.
+    { commandId: 'goal-loop-preview', bindings: ['Cmd+Shift+G'], context: 'global' },
     { commandId: 'toggle-spotlight', bindings: ['Alt+S'], context: 'global' },
     // ⌥F, leaving ⌥⇧F open for Auto-follow ALL Visible Agents — the same
     // soft/heavy pairing, and the command that OWNS the effective state when

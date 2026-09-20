@@ -622,6 +622,12 @@ export class OrchestrationBridge {
       return 'prompt_sent'
     }
     const lastSubmittedAt = delivery.lastPromptSubmittedAt
+    // A failed child that the parent has prompted AGAIN is waiting on that new
+    // prompt, not failed (#1018): the stale failure would otherwise show until
+    // the provider picked the prompt up.
+    if (agent.lifecycleState === 'failed' && agent.failedAt && lastSubmittedAt && lastSubmittedAt > agent.failedAt) {
+      return 'prompt_sent'
+    }
     if (!lastSubmittedAt || agent.lifecycleState !== 'completed') return agent.lifecycleState
     const lastAgentActivityAt = Math.max(
       agent.completedAt ?? 0,

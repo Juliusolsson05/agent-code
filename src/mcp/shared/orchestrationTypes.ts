@@ -139,6 +139,9 @@ export type OrchestrationAgentRecord = {
   createdAt?: number
   lastActivityAt?: number
   completedAt?: number
+  /** When the provider error that ended the child's last turn was produced
+   *  (#1018). Main uses it to report `prompt_sent` for a newer prompt. */
+  failedAt?: number
   lastPromptSubmittedAt?: number
   promptSubmissionCount?: number
   promptSubmitted?: boolean

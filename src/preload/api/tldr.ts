@@ -1,4 +1,5 @@
 import { ipcRenderer } from 'electron'
+import { subscribeShared } from '@preload/api/ipc.js'
 import type { TldrEnforcementStatus, TldrHistoryEntry, TldrRecord, TldrUpdate } from '@shared/types/tldr.js'
 
 export const tldrApi = {
@@ -13,15 +14,11 @@ export const tldrApi = {
   readTldrHistory: (identity: string): Promise<TldrHistoryEntry[]> => ipcRenderer.invoke('tldr:history', identity),
   readGoals: (identities: string[]): Promise<Record<string, TldrRecord>> => ipcRenderer.invoke('goal:read', identities),
   readGoalHistory: (identity: string): Promise<TldrHistoryEntry[]> => ipcRenderer.invoke('goal:history', identity),
-  onGoalChanged: (listener: (update: TldrUpdate) => void): (() => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, update: TldrUpdate) => listener(update)
-    ipcRenderer.on('goal:changed', handler)
-    return () => { ipcRenderer.removeListener('goal:changed', handler) }
-  },
+  // Shared (#1039 review): every visible pane's peek subscribes while a
+  // TLDR/Goal peek is up.
+  onGoalChanged: (listener: (update: TldrUpdate) => void): (() => void) =>
+    subscribeShared('goal:changed', listener),
   readTldrEnforcement: (identities: string[]): Promise<Record<string, TldrEnforcementStatus>> => ipcRenderer.invoke('tldr:enforcement', identities),
-  onTldrChanged: (listener: (update: TldrUpdate) => void): (() => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, update: TldrUpdate) => listener(update)
-    ipcRenderer.on('tldr:changed', handler)
-    return () => { ipcRenderer.removeListener('tldr:changed', handler) }
-  },
+  onTldrChanged: (listener: (update: TldrUpdate) => void): (() => void) =>
+    subscribeShared('tldr:changed', listener),
 }

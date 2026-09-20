@@ -133,6 +133,7 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
   'enable-root-agent-code-management',
   'enable-tldr-mcp',
   'enable-goal-mcp',
+  'enable-goal-loop-mcp',
   'enable-workflow-mcp',
   'reload-agent',
   'soft-reload-agent',
@@ -236,12 +237,12 @@ const NAVIGATION_COMMAND_GROUP: readonly string[] = [
 const ids = (): string[] => builtInCommandCatalog.map(c => c.id)
 
 describe('built-in command catalog — baseline characterization', () => {
-  it('contains exactly the 124 governed commands in registration order', () => {
+  it('contains exactly the 125 governed commands in registration order', () => {
     // Order matters: this is the palette's empty-query browse order.
     expect(ids()).toEqual([...BASELINE_COMMAND_IDS])
   })
 
-  it('has exactly 124 commands', () => {
+  it('has exactly 125 commands', () => {
     // Stated separately from the order assertion because this number is the
     // thing that moves, and a bare count failure is a clearer signal than a
     // 99-line array diff.
@@ -264,11 +265,11 @@ describe('built-in command catalog — baseline characterization', () => {
     // −attach×2, −detach → 115 with Clear Lane (#992 stage 4) → 119 with the
     // lane keyboard grammar (#992 stage 5) → 123 once main's Goal Loop preview
     // and stop (#1001) and the two generated Grok splits (#844) merged in → 124
-    // with Open Setup (#995).
+    // with Goal Loop MCP (#1006) → 125 with Open Setup (#995).
     // Each step of that arithmetic was a deliberate edit to this line, which is the entire point of pinning it. (The two test
     // titles above had drifted to "115" while this line said 116; they now
     // track it again.)
-    expect(builtInCommandCatalog).toHaveLength(124)
+    expect(builtInCommandCatalog).toHaveLength(125)
   })
 
   it('reports no structural defects', () => {
@@ -302,14 +303,15 @@ describe('generated per-provider split commands', () => {
   })
 
   it('accounts for the difference between literal and total command count', () => {
-    // 124 total - 6 generated = 118 literal `id:` fields across the command
+    // 125 total - 6 generated = 119 literal `id:` fields across the command
     // modules. At the original baseline this read 102 - 4 = 98; it moved down by
     // the five retirements, then back up by the nine additions, Grid Dispatch's
     // six row commands, New Window, and the later additions recorded in the
     // count test above (through the lane keyboard grammar, #992 stage 5, and
-    // Goal Loop, #1001, and Open Setup, #995). Grok (#844) grew only the
+    // Goal Loop, #1001, Goal Loop MCP, #1006, and Open Setup, #995). Grok
+    // (#844) grew only the
     // GENERATED term, 4 → 6.
-    expect(builtInCommandCatalog.length - nonDefaultProviders.length * 2).toBe(118)
+    expect(builtInCommandCatalog.length - nonDefaultProviders.length * 2).toBe(119)
   })
 
   it('emits both directions for every non-default provider', () => {
@@ -419,7 +421,7 @@ describe('governance targets', () => {
   })
 
   it('lands on the arithmetic the plan predicted', () => {
-    // 102 baseline - 21 retirements + 43 additions = 124, checked against the
+    // 102 baseline - 21 retirements + 44 additions = 125, checked against the
     // real catalog rather than trusted as prose. (5 governance retirements +
     // 16 unified-layout retirements, all recorded in RETIRED_COMMAND_IDS.)
     //
@@ -449,9 +451,10 @@ describe('governance targets', () => {
     // `agent-analytics.open` (#964), `goal-loop-preview` and `goal-loop-stop`
     // (#1001), `grok-vertical` and `grok-horizontal` (#844, generated from
     // AGENT_PROVIDER_KINDS), `clear-focused-lane` (#992 stage 4), and the four
-    // lane-grammar commands (#992 stage 5), and `open-setup` (#995).
-    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 43).toBe(102)
-    expect(builtInCommandCatalog).toHaveLength(124)
+    // lane-grammar commands (#992 stage 5), `enable-goal-loop-mcp` (#1006)
+    // and `open-setup` (#995).
+    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 44).toBe(102)
+    expect(builtInCommandCatalog).toHaveLength(125)
   })
 })
 
