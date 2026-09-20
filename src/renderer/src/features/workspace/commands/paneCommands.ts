@@ -5,6 +5,7 @@ import {
   isAgentSessionKind,
   isProcessSessionKind,
 } from '@shared/types/providerKind'
+import { enabledAgentProviderKindsSnapshot } from '@renderer/features/providers/store'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { extractLastAssistantText } from '@renderer/lib/copyAssistant'
 import type { CommandContext, CommandDef } from '@renderer/features/command-palette/types'
@@ -242,6 +243,10 @@ export const paneCommands: CommandDef[] = [
         // than creating a default one, it just names the provider.
         category: 'create' as const,
         title: `New ${caps.shortLabel}`,
+        // #1102: a disabled provider keeps its chord (keybinding tables are
+        // static) but the command declines to run — the honest cheap
+        // behavior until command visibility becomes flag-driven.
+        when: () => enabledAgentProviderKindsSnapshot().has(kind),
         description: `**What it does:** Starts a **${caps.shortLabel} agent** now, without opening a picker.\n\n**Use when:** You know which provider you want.\n\n**Notes:** Fills the focused lane when it is empty; otherwise the agent lands in the pool with a **new** badge in the index.`,
         run: ({ workspace }: CommandContext) =>
           workspace.splitFocused(kind),
@@ -252,6 +257,7 @@ export const paneCommands: CommandDef[] = [
         category: 'create' as const,
         pickerVisibility: 'advanced' as const,
         title: `New ${caps.shortLabel} (legacy id)`,
+        when: () => enabledAgentProviderKindsSnapshot().has(kind),
         description: `**What it does:** Same as **New ${caps.shortLabel}**.\n\n**Notes:** Kept runnable for the ⌥⇧ chord and old bindings; hidden from the default palette because it is a duplicate.`,
         run: ({ workspace }: CommandContext) =>
           workspace.splitFocused(kind),

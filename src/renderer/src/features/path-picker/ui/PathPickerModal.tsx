@@ -1,4 +1,5 @@
-import { AGENT_PROVIDER_KINDS } from '@shared/types/providerKind'
+import { AGENT_PROVIDER_KINDS, DEFAULT_PROVIDER } from '@shared/types/providerKind'
+import { useEnabledAgentProviderKinds } from '@renderer/features/providers/store'
 import type { AgentProviderKind } from '@shared/types/providerKind'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { MISSING_PROVIDER_HINT, preferredPickerProvider, useMissingProviders } from '@renderer/features/setup/store'
@@ -95,7 +96,15 @@ export function PathPickerModal({
   // install would use (#995): the default when it is installed, otherwise the
   // first one that is. It used to be Claude unconditionally, so on a Mac
   // without Claude, ⌘T failed only after the user had chosen a directory.
-  const [provider, setProvider] = useState<AgentProvider>(() => preferredPickerProvider())
+  const enabledKinds = useEnabledAgentProviderKinds()
+  // A disabled preselect would open the picker on a provider the user asked
+  // to hide (#1102); fall back to the first enabled kind, then the default.
+  const initialProvider = (): AgentProvider => {
+    const preferred = preferredPickerProvider()
+    if (enabledKinds.has(preferred)) return preferred
+    return AGENT_PROVIDER_KINDS.find(kind => enabledKinds.has(kind)) ?? DEFAULT_PROVIDER
+  }
+  const [provider, setProvider] = useState<AgentProvider>(initialProvider)
   const missingProviders = useMissingProviders()
 
   // Resume list state. We eagerly refresh the list whenever the path
@@ -145,7 +154,7 @@ export function PathPickerModal({
     setListingTarget(null)
     setResolvedPath(null)
     setPendingCreatePath(null)
-    setProvider(preferredPickerProvider())
+    setProvider(initialProvider())
   }, [open, defaultValue])
 
   // Refresh the sessions list whenever the typed path changes. Run
@@ -319,7 +328,7 @@ export function PathPickerModal({
 
         {/* Provider toggle: Claude / Codex */}
         <div className="flex gap-2 mb-3 flex-shrink-0">
-          {AGENT_PROVIDER_KINDS.map(p => (
+          {AGENT_PROVIDER_KINDS.filter(p => enabledKinds.has(p)).map(p => (
             <button
               key={p}
               type="button"

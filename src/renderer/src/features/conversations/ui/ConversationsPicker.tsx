@@ -3,6 +3,7 @@ import { focusedControlOwnsEnter } from '@renderer/components/ui/dialog-actions'
 
 import type { Conversation, ConversationScope } from '@shared/conversations/types'
 import { AGENT_PROVIDER_KINDS, type AgentProviderKind } from '@shared/types/providerKind'
+import { useEnabledAgentProviderKinds } from '@renderer/features/providers/store'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@renderer/components/ui/dialog'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
@@ -34,6 +35,14 @@ export function ConversationsPicker({ open, focusSearch, workspace, onClose }: P
   const [query, setQuery] = useState('')
   const [scope, setScope] = useState<ConversationScope>('repository')
   const [providers, setProviders] = useState<AgentProviderKind[]>([])
+  // The provider filter buttons follow enablement (#1102 "everywhere");
+  // sessions of a disabled provider stay in the list itself — only the
+  // shortcut buttons hide. A selected-but-now-disabled kind is dropped so
+  // the filter cannot silently narrow results to a hidden provider.
+  const enabledKinds = useEnabledAgentProviderKinds()
+  useEffect(() => {
+    setProviders(prev => prev.filter(kind => enabledKinds.has(kind)))
+  }, [enabledKinds])
   const [includeChildren, setIncludeChildren] = useState(false)
   const [selected, setSelected] = useState(0)
   const [resumeError, setResumeError] = useState<string | null>(null)
@@ -166,7 +175,7 @@ export function ConversationsPicker({ open, focusSearch, workspace, onClose }: P
             ))}
           </div>
           <div role="group" aria-label="Providers" className="flex gap-1">
-            {AGENT_PROVIDER_KINDS.map(kind => (
+            {AGENT_PROVIDER_KINDS.filter(kind => enabledKinds.has(kind)).map(kind => (
               <button key={kind} type="button" aria-pressed={providers.includes(kind)} onClick={() => toggleProvider(kind)} className={`rounded-slab border border-border px-2 py-0.5 ${providers.includes(kind) ? 'bg-row-selected-bg text-row-selected-fg' : 'hover:bg-row-hover-bg'}`}>{kind}</button>
             ))}
           </div>
