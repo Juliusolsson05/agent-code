@@ -120,6 +120,11 @@ export function mountPaneActions(
     return spawnId
   })
   const showToast = options.showToast ?? (vi.fn() as (message: string, durationMs?: number) => void)
+  // Exposed rather than anonymous: the placement overlay closing is part of
+  // what a creation FAILURE has to do (#863), and an anonymous vi.fn() made
+  // that assertion impossible to write.
+  const openNewAgentPlacement = vi.fn()
+  const closeNewAgentPlacement = vi.fn()
   const sessionActions = sessionActionsWithSpawn(spawn)
   let actions!: ReturnType<typeof usePaneActions>
 
@@ -142,8 +147,8 @@ export function mountPaneActions(
       (() => undefined) as WorkspaceSetReaderMode,
       refs,
       showToast,
-      vi.fn(),
-      vi.fn(),
+      openNewAgentPlacement,
+      closeNewAgentPlacement,
       sessionActions,
     )
     return <div />
@@ -158,6 +163,8 @@ export function mountPaneActions(
     mounted,
     spawn,
     showToast,
+    openNewAgentPlacement,
+    closeNewAgentPlacement,
     refs,
     sessionActions,
     getState: writer.getState,

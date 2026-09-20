@@ -185,11 +185,39 @@ export function scrubGridRowMetadata(
 
   let changed = false
   const rows = tiled.rows.map(row => {
+    // Per-ROW, not per-call. Returning `{ ...row }` for rows this pass did not
+    // touch was a real regression, and an invisible one: row object identity is
+    // load-bearing, not a micro-optimisation (gridShape.ts's
+    // `normalizeGridShape` says so, and gridPersistence.test.ts pins it). The
+    // consumer is the lane-selection race check in dispatch.ts, which compares
+    // `after.rows[rowIndex] !== before.rows[rowIndex]` across a WAKE to decide
+    // whether the grid moved under the user — a window that a cold wake can
+    // hold open for 30s. Re-allocating every row made an unrelated close in
+    // that window read as "the grid changed", so the woken agent was started
+    // and then never placed, with no toast. Before this file ran on closes
+    // that only happened at the persistence boundary, whose output never
+    // entered live state, so the whole-map copy was harmless there.
+    let rowChanged = false
     const next = { ...row }
+    if (next.projectTabId !== undefined) {
+      // FOLD the legacy single binding rather than dropping it, matching the
+      // only two other readers of the field (`normalizeRowProjects` in
+      // gridShape.ts and mergeProjectTabs.ts). Deleting it outright would take
+      // a live binding away from a row whose shape simply predates the array.
+      //
+      // Dead in practice today — rehydrate runs `normalizeStage` before it
+      // publishes, so a live row never carries the legacy field — but this is
+      // the third caller of this helper and nothing enforces that ordering.
+      const legacy = next.projectTabId
+      const merged = next.projectTabIds ?? []
+      next.projectTabIds = merged.includes(legacy) ? merged : [...merged, legacy]
+      delete next.projectTabId
+      rowChanged = true
+    }
     if (next.projectTabIds) {
       const surviving = next.projectTabIds.filter(id => liveTabIds.has(id))
       if (surviving.length !== next.projectTabIds.length) {
-        changed = true
+        rowChanged = true
         // A row whose every binding died becomes UNBOUND rather than keeping an
         // empty set: an empty set would filter its index to nothing with no UI
         // path back, since the picker only offers tabs that exist.
@@ -197,22 +225,18 @@ export function scrubGridRowMetadata(
         else delete next.projectTabIds
       }
     }
-    if (next.projectTabId !== undefined) {
-      // Legacy field: normalizeGridShape folds it away on read, but the prune
-      // can see state that has not been through a rehydrate this run.
-      delete next.projectTabId
-      changed = true
-    }
     if (next.expandedParents) {
       const kept = next.expandedParents.filter(id => liveSessionIds.has(id))
       if (kept.length !== next.expandedParents.length) {
-        changed = true
+        rowChanged = true
         // An empty array and an absent field read identically; persisting the
         // empty one is durable noise.
         if (kept.length > 0) next.expandedParents = kept
         else delete next.expandedParents
       }
     }
+    if (!rowChanged) return row
+    changed = true
     return next
   })
   if (!changed) return stage
