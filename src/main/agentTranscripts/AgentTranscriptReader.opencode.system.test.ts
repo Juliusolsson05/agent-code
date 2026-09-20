@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -11,7 +11,7 @@ import {
   sessionRowFor,
 } from 'opencode-terminal-headless/testing/index'
 
-import { createOpencodeDatabase, type OpencodeDatabase } from '@providers/opencode/runtime/opencodeDatabase.js'
+import { createOpencodeDatabase, REVALIDATE_INTERVAL_MS, type OpencodeDatabase } from '@providers/opencode/runtime/opencodeDatabase.js'
 import type { AgentTranscriptItem, AgentTranscriptStats } from '@mcp/shared/agentTranscriptTypes.js'
 
 import {
@@ -48,11 +48,84 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true })
 })
 
-function depsFor(file: string): AgentTranscriptReaderDeps {
-  const database = createOpencodeDatabase({ resolveDbPath: async () => file })
+function depsFor(file: string, opts: { now?: () => number } = {}): AgentTranscriptReaderDeps {
+  const database = createOpencodeDatabase({ resolveDbPath: async () => file, ...opts })
   databases.push(database)
   return { opencode: database }
 }
+
+describe('a database replaced while a walk is in flight (#1082 review, finding 1)', () => {
+  // `transcriptRecords` walks an OpenCode session one page at a time and
+  // yields with `setImmediate` between pages, by design. The facade may notice
+  // `opencode.db` was replaced during one of those yields — and a handle it
+  // retires throws on its next read, so the walk dies half way through with
+  // `transcript_read_failed`.
+  //
+  // The first version of this fix released the superseded handle on
+  // `setTimeout(…, 0)` and argued that promise continuations drain first. They
+  // do — but a timer callback runs in the TIMERS phase, before the CHECK phase
+  // where `setImmediate` resumes, so the release reliably won that race.
+  //
+  // More than one page of messages is the whole point: with 25 or fewer the
+  // walk never yields and nothing can land in the gap.
+  const MESSAGES = 60
+
+  function seeded(file: string, prefix: string): void {
+    const writer = new LiveFixtureWriter(file, SESSION, sessionRowFor(SESSION))
+    try {
+      for (let index = 0; index < MESSAGES; index += 1) {
+        const id = `msg_${prefix}_${index}`
+        writer.apply('message.updated.1', {
+          sessionID: SESSION,
+          info: { id, sessionID: SESSION, role: index % 2 === 0 ? 'user' : 'assistant', time: { created: index + 1, completed: index + 1 } },
+        })
+        writer.apply('message.part.updated.1', {
+          sessionID: SESSION,
+          part: { id: `prt_${prefix}_${index}`, sessionID: SESSION, messageID: id, type: 'text', text: `${prefix} line ${index}` },
+        })
+      }
+    } finally {
+      writer.close()
+    }
+  }
+
+  const SESSION = 'ses_swap'
+
+  it('finishes the walk on the handle it started with, and closes the old one after', async () => {
+    const target = join(dir, 'opencode.db')
+    seeded(target, 'old')
+    let clock = 0
+    const deps = depsFor(target, { now: () => clock })
+
+    // Warm the facade so the walk starts on a handle that already exists.
+    await inspectAgentTranscriptFile({ path: `opencode://session/${SESSION}` }, deps)
+
+    // Replace the file WITHOUT moving the clock, so the walk below still
+    // starts on the old handle — the swap has to land inside the walk, not
+    // before it, or the test proves nothing.
+    const replacement = join(dir, 'replacement.db')
+    seeded(replacement, 'new')
+    renameSync(replacement, target)
+
+    const walking = readAgentTranscriptFile({ path: `opencode://session/${SESSION}`, projection: 'timeline', maxItems: 500 }, deps)
+    // Inside the walk's first `setImmediate` gap: a history load from another
+    // pane borrows the store, the window has now passed, and the facade
+    // retires the handle the walk is holding.
+    await new Promise<void>(resolve => setImmediate(resolve))
+    clock += REVALIDATE_INTERVAL_MS
+    await deps.opencode.store()
+
+    const result = await walking
+    expect(result).toMatchObject({ ok: true })
+    // The walk read the file it opened on, whole. Half a transcript reported
+    // as a complete one would be worse than the error.
+    expect((result as { items: AgentTranscriptItem[] }).items.length).toBeGreaterThan(25)
+
+    // And the new file is what the NEXT reader sees, so the swap still happened.
+    const after = await inspectAgentTranscriptFile({ path: `opencode://session/${SESSION}` }, deps)
+    expect(after.ok).toBe(true)
+  })
+})
 
 const SESSION = 'ses_reader_known'
 const locator = (sessionID: string) => `opencode://session/${sessionID}`
