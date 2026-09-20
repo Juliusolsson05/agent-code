@@ -661,21 +661,32 @@ export function useComposerDictation({
 
   useEffect(() => {
     if (enabled) return
-    const recording = activeRef.current
-    if (!recording) return
-    activeRef.current = null
-    cleanup(recording)
-    restoreBaseInput(recording)
-    recording.discarded = true
-    if (recording.id) {
-      void window.api.cancelDictationStream({ id: recording.id })
-    } else if (recording.streamStartPromise) {
-      void recording.streamStartPromise.then(id => {
-        if (id) void window.api.cancelDictationStream({ id })
-      })
-    }
-    setLifecycleStatus('idle')
-  }, [cleanup, enabled, restoreBaseInput, setLifecycleStatus])
+    if (!activeRef.current) return
+    // ── HIDING THE PANE FINISHES THE RECORDING, IT DOES NOT DISCARD IT (#916) ──
+    // This used to cancel: stop the tracks, restore the base draft, mark the
+    // recording discarded and cancel the provider stream. So opening Settings
+    // mid-sentence silently threw away everything the user had said — including
+    // when they opened Settings to look at the dictation configuration.
+    //
+    // `enabled` goes false whenever the owning pane is hidden, which
+    // `MainSurface` does for Settings, Reader and Spotlight by hiding the
+    // RETAINED workspace surface. Retained means still mounted, so `stop()` can
+    // run to completion here: the recorder is drained, the provider finalises,
+    // and the transcript lands in the draft exactly as a normal stop would.
+    //
+    // WHY FINISH RATHER THAN WARN OR KEEP RECORDING — an UNCONFIRMED product
+    // call, and the two alternatives #916 lists are both worse by default. A
+    // confirmation dialog interrupts a navigation the user already committed
+    // to, and has nothing useful to offer beyond what finishing does. Keeping
+    // the microphone live while the user is somewhere else with no visible
+    // stop control is both a privacy surprise and the "orphaned capture
+    // ownership" the issue warns against. Finishing loses nothing, ends
+    // capture deterministically, and needs no new surface.
+    //
+    // Starting is still blocked while hidden — the start effect checks
+    // `enabled` — so this only ever ends a recording the pane already owned.
+    void stopRef.current()
+  }, [enabled])
 
   useEffect(() => () => {
     // True unmount cleanup: empty deps so this fires once when the component
