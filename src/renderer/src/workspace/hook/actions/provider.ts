@@ -1,3 +1,4 @@
+import { describeRewindAttachmentLoss } from '@renderer/workspace/hook/actions/rewindAttachmentLoss'
 import { sessionMcpOverrides } from '@renderer/workspace/mcpDomains'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { tldrIdentityForSession } from '@renderer/features/tldr/identity'
@@ -297,7 +298,22 @@ export function useProviderActions(
           }
         })
 
-        showPaneToast(newSessionId, 'Rewound to prompt - Undo Rewind available until next submit')
+        // What did NOT come back (#1075). Main has produced this report since
+        // #1073 and the Rewind picker uses it; nothing used it after the
+        // rewind, so a user who picked a row labelled `[Image prompt]` got an
+        // empty composer and no explanation. The capability is part of the
+        // question: a perfectly restored image is still a loss when the
+        // provider's composer cannot carry it, which is every provider except
+        // Claude today.
+        const attachmentLoss = describeRewindAttachmentLoss(result.promptAttachments, {
+          composerCarriesImages: getRendererProviderCapabilities(kind).supportsImageAttachments,
+        })
+        showPaneToast(
+          newSessionId,
+          attachmentLoss
+            ? `Rewound to prompt, but ${attachmentLoss} Undo Rewind available until next submit`
+            : 'Rewound to prompt - Undo Rewind available until next submit',
+        )
         return { status: 'completed', sourceSessionId, newSessionId }
       } catch (err) {
         const message =
