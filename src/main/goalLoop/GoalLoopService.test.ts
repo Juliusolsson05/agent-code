@@ -6,7 +6,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { SessionManager } from '@main/sessionManager.js'
 import type { PromptDeliveryResult } from '@shared/types/providerConfig.js'
 import { buildGoalLoopContinuationPrompt } from '@mcp/shared/goalLoopPrompt.js'
-import { GOAL_LOOP_BUSY_HOLD_LIMIT_MS, GOAL_LOOP_QUIET_TURN_MS, GoalLoopService } from './GoalLoopService.js'
+import {
+  GOAL_LOOP_ACTIVITY_GRACE_MS, GOAL_LOOP_HOLD_STALL_MS, GOAL_LOOP_QUIET_TURN_MS, GoalLoopService,
+} from './GoalLoopService.js'
 import { GOAL_LOOP_STORE_LIMIT, GoalLoopStore } from './GoalLoopStore.js'
 
 const directories: string[] = []
@@ -71,30 +73,107 @@ describe('GoalLoopService', () => {
     await new Promise(resolve => setTimeout(resolve, 10))
     expect(deliver).toHaveBeenCalledTimes(1)
   })
-  it('pauses visibly when the provider never goes quiet (#1033)', async () => {
-    // A latched activity detector (a stale tool label in the last rows) would
-    // otherwise leave the loop `active` forever with nothing to release it.
+  it('is not stopped by a latched activity detector — the screen is outvoted (#1033 round 2)', async () => {
+    // The spinner detector reports a COMPLETED tool row that is still in the
+    // bottom fifteen lines (`⏺ 2 agents finished (ctrl+o to expand)`) as
+    // activity, forever, on a session that is doing nothing. Holding on that
+    // signal without a deadline is how a loop dies quietly, so the screen may
+    // only postpone a delivery.
     const { svc, manager, deliver, processState } = await service()
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    // The clock must be fake BEFORE the hold is taken: the watchdog timer is
-    // armed at that moment, and a timer created on the real clock cannot be
-    // advanced afterwards.
     vi.useFakeTimers()
     try {
       await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
       processState.active = true
       idleTurn(manager)
-      await vi.advanceTimersByTimeAsync(10)
+      await vi.advanceTimersByTimeAsync(GOAL_LOOP_ACTIVITY_GRACE_MS - 2_000)
       expect(deliver).not.toHaveBeenCalled()
-      expect(svc.snapshot()['s1']).toMatchObject({ phase: 'active' })
-      await vi.advanceTimersByTimeAsync(GOAL_LOOP_BUSY_HOLD_LIMIT_MS + 1)
-    } finally {
-      vi.useRealTimers()
-      warn.mockRestore()
-    }
-    expect(deliver).not.toHaveBeenCalled()
-    expect(svc.snapshot()['s1']).toMatchObject({ phase: 'paused', pauseReason: 'error' })
+      await vi.advanceTimersByTimeAsync(3_000)
+      expect(deliver).toHaveBeenCalledTimes(1)
+    } finally { vi.useRealTimers() }
   })
+
+  it('holds while the model keeps streaming after an allowed Stop, even with the spinner down (#1033 round 2)', async () => {
+    // ANOTHER configured Stop hook blocked ours: we were told the turn ended
+    // and it did not. Claude hides its spinner while it streams visible text,
+    // so the screen says idle here — the phase is what knows better, and it is
+    // trustworthy precisely because these events are NEWER than the Stop.
+    const { svc, manager, deliver, processState } = await service()
+    vi.useFakeTimers()
+    try {
+      await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+      svc.observeProviderHook('s1', 'post-tool-use')
+      svc.observeProviderHook('s1', 'stop', { blocked: false })
+      processState.active = false
+      manager.emit('semantic-event', { sessionId: 's1', event: { type: 'stream_phase', phase: 'responding' } })
+      await vi.advanceTimersByTimeAsync(GOAL_LOOP_ACTIVITY_GRACE_MS + 10_000)
+      expect(deliver).not.toHaveBeenCalled()
+
+      // The continued turn finishes for real.
+      idleTurn(manager)
+      await vi.advanceTimersByTimeAsync(2_000)
+      expect(deliver).toHaveBeenCalledTimes(1)
+    } finally { vi.useRealTimers() }
+  })
+
+  it('pauses visibly when a hold never resolves (#1033)', async () => {
+    // A turn that ended without a Stop (Claude skips it on Esc and on API
+    // errors) leaves the turn open here forever. Nothing will ever release the
+    // hold, so the loop must say so instead of looking armed.
+    const { svc, deliver } = await service()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.useFakeTimers()
+    try {
+      await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+      svc.observeProviderHook('s1', 'user-prompt-submit')
+      svc.control('s1', { action: 'pause' })
+      svc.control('s1', { action: 'resume' })
+      await vi.advanceTimersByTimeAsync(GOAL_LOOP_HOLD_STALL_MS + 2_000)
+      expect(deliver).not.toHaveBeenCalled()
+      expect(svc.snapshot()['s1']).toMatchObject({ phase: 'paused', pauseReason: 'error' })
+    } finally { vi.useRealTimers(); warn.mockRestore() }
+  })
+
+  it('a turn that reopens restarts the stall clock instead of pausing live work (#1033 round 2)', async () => {
+    const { svc, deliver } = await service()
+    vi.useFakeTimers()
+    try {
+      await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+      svc.observeProviderHook('s1', 'user-prompt-submit')
+      svc.control('s1', { action: 'pause' })
+      svc.control('s1', { action: 'resume' })
+      await vi.advanceTimersByTimeAsync(GOAL_LOOP_HOLD_STALL_MS - 60_000)
+      // Real work is happening — a tool just ran. Pausing a loop for being
+      // patient with a long turn is exactly the wrong answer.
+      svc.observeProviderHook('s1', 'post-tool-use')
+      await vi.advanceTimersByTimeAsync(GOAL_LOOP_HOLD_STALL_MS - 60_000)
+      expect(svc.snapshot()['s1']).toMatchObject({ phase: 'active' })
+      svc.observeProviderHook('s1', 'stop', { blocked: false })
+      await vi.advanceTimersByTimeAsync(2_000)
+      expect(deliver).toHaveBeenCalledTimes(1)
+    } finally { vi.useRealTimers() }
+  })
+
+  it('a second resume does not throw away the first one\'s hold (#1033 round 2)', async () => {
+    // Double-clicking Resume before the strip repaints used to clear the hold
+    // on the second click while only the first one re-requested, leaving an
+    // active loop with nothing pending and no timer looking at it again.
+    const { svc, manager, deliver, processState } = await service()
+    vi.useFakeTimers()
+    try {
+      await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+      processState.active = true
+      idleTurn(manager)
+      await vi.advanceTimersByTimeAsync(2_000)
+      expect(deliver).not.toHaveBeenCalled()
+      svc.control('s1', { action: 'pause' })
+      svc.control('s1', { action: 'resume' })
+      svc.control('s1', { action: 'resume' })
+      processState.active = false
+      await vi.advanceTimersByTimeAsync(2_000)
+      expect(deliver).toHaveBeenCalledTimes(1)
+    } finally { vi.useRealTimers() }
+  })
+
   it('does not continue while tools are pending (awaiting-tool)', async () => {
     const { svc, manager, deliver } = await service()
     await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })

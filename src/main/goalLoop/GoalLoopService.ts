@@ -13,24 +13,48 @@ const DELIVERY_RETRY_DELAY_MS = 250
  * event) before Resume may treat it as over without a Stop. See control(). */
 export const GOAL_LOOP_QUIET_TURN_MS = 60_000
 /**
- * How long a continuation may sit held because the provider is still visibly
- * working before the loop pauses instead of waiting forever.
+ * THE RULE THIS FILE IS BUILT ON (#1033, second review): no signal a provider
+ * gives us is trustworthy on its own, so hold a continuation only while
+ * something POSITIVELY says the agent is working, bound every hold, and when
+ * the evidence runs out, deliver.
  *
- * WHY there is a limit at all: the hold is released by the provider's own
- * active→idle edge (see holdUntilQuiet). Every provider we ship derives that
- * edge from a detector — a TUI spinner for Claude/Codex/Grok, the session
- * event stream for OpenCode — and a detector can latch: a stale `⏺ … (ctrl+o
- * to expand)` line left in the last fifteen rows reads as activity forever.
- * A loop that waits on an edge that will never arrive is invisible, which is
- * the failure the #1033 review called out ("unrecoverable states should
- * produce a visible pause").
+ * WHY that direction and not "be certain before typing": the certainty is not
+ * available. Both reviews killed a gate that claimed it:
  *
- * WHY fifteen minutes and not one: the hold begins AFTER the provider told us
- * the turn ended, so what we are waiting out is another Stop hook's work — a
- * test suite, a lint, a build. Those are minutes. A legitimate multi-hour
- * turn does not reach here, because its Stop has not fired yet.
+ *  - Input readiness is a composer question. Claude derives it from blocking
+ *    conditions, composer occupancy and transcript replay; Codex latches it
+ *    true for the session once a composer has ever painted. Both read READY in
+ *    the middle of a turn — which is exactly why a mid-turn prompt is QUEUED
+ *    rather than refused.
+ *  - Screen activity (the TUI spinner) is wrong in BOTH directions. Claude
+ *    hides the spinner while it streams visible text (upstream REPL.tsx), so a
+ *    token gap past the 2.5 s idle debounce publishes `idle` mid-turn; and a
+ *    completed tool row that stays in the bottom fifteen lines
+ *    (`⏺ 2 agents finished (ctrl+o to expand)`) keeps publishing ACTIVE on an
+ *    idle session.
+ *
+ * So the cost of each mistake decides the design. Typing early costs one
+ * QUEUED continuation: Claude accepts it into the queue and runs it when the
+ * turn ends — the continuation is early, not lost, and the user sees it in the
+ * queue strip. Holding forever costs the whole loop, silently, which is the
+ * bug (#1024) this work exists to kill. Early beats stalled, so every hold
+ * below has a deadline.
  */
-export const GOAL_LOOP_BUSY_HOLD_LIMIT_MS = 15 * 60_000
+/** How long the SCREEN alone may hold a continuation back once everything else
+ * has gone quiet. This is the bound on the latched-tool-label failure: after
+ * it, the screen is simply outvoted. */
+export const GOAL_LOOP_ACTIVITY_GRACE_MS = 45_000
+/** A hold this old is not a long turn — a turn that long has not sent its Stop
+ * yet, so nothing is held for it. It means a signal is stuck (a severed stream
+ * left `Thinking`, a turn that ended without a Stop). Pause visibly: the strip
+ * shows paused · error and Resume re-runs the whole gate. */
+export const GOAL_LOOP_HOLD_STALL_MS = 30 * 60_000
+/** How often a held continuation re-evaluates itself. A poll, deliberately:
+ * every edge-driven version of this lost the continuation when the edge did
+ * not arrive (a provider that stops emitting, a turn that ends without a
+ * Stop), and a 1 s timer that exists only while something is held is cheaper
+ * than the bugs. */
+const HOLD_POLL_MS = 1_000
 
 // WHY structural instead of Pick<SessionManager, 'on'>: SessionManager's
 // typed event map is not satisfied by a plain EventEmitter test double, and
@@ -130,14 +154,22 @@ export class GoalLoopService extends EventEmitter {
   /** Last hook, semantic event or delivery per hook-driven session, in ms.
    * Only Resume reads it; see control(). */
   private readonly lastHookSessionActivity = new Map<string, number>()
-  /** Continuations HELD because the provider was still visibly working when
-   * the delivery gate ran, with the wall-clock instant each one started
-   * waiting. A held continuation is not a dropped one: the provider's next
-   * quiet edge re-runs it, and GOAL_LOOP_BUSY_HOLD_LIMIT_MS bounds the wait.
-   * See holdUntilQuiet. */
+  /** Continuations HELD because something said the agent was still working,
+   * with the wall-clock instant each one started waiting. A held continuation
+   * is never a dropped one: it re-evaluates itself every HOLD_POLL_MS. */
   private readonly heldSince = new Map<string, number>()
-  /** One stall watchdog per held session; see armHoldWatchdog. */
-  private readonly holdWatchdogs = new Map<string, ReturnType<typeof setTimeout>>()
+  /** The re-evaluation timer for each held session; see holdUntilQuiet. */
+  private readonly holdPolls = new Map<string, ReturnType<typeof setTimeout>>()
+  /** Hook-driven sessions that have published a semantic event SINCE their
+   * last allowed Stop — the ones whose tracked phase is fresh enough to gate
+   * a delivery (see phaseIsFresh).
+   *
+   * WHY a set keyed on arrival order rather than two timestamps compared with
+   * `>`: the Stop hook and the events around it land in the same millisecond
+   * often enough to matter (it is one local process writing both), and under
+   * a test clock they always do. Ordering is what this question is actually
+   * about, and a set records it exactly. */
+  private readonly eventSinceStop = new Set<string>()
 
   constructor(private readonly deps: {
     manager: GoalLoopManagerPort
@@ -162,10 +194,10 @@ export class GoalLoopService extends EventEmitter {
     manager.on('semantic-event', ({ sessionId, event }: { sessionId: string; event: unknown }) => {
       this.signal(sessionId, event)
     })
-    // The release edge for a held continuation (#1033). Level and edge come
-    // from the same map in SessionManager, so a session that goes quiet
-    // between the hold and this event is still covered: the re-run reads the
-    // level, not the event.
+    // A quiet edge makes a held continuation land promptly instead of waiting
+    // out the poll. It is an OPTIMISATION, never the mechanism: the poll re-
+    // reads the level, so a provider that stops emitting edges (or never emits
+    // this one) still resolves its hold.
     manager.on('process-state', ({ sessionId, active }: { sessionId: string; active: boolean }) => {
       if (active || !this.heldSince.has(sessionId)) return
       this.requestContinue(sessionId)
@@ -204,14 +236,21 @@ export class GoalLoopService extends EventEmitter {
    * Codex aggregates the same way, so a user, project or plugin hook that
    * blocks ("run the tests before stopping") leaves the turn running after we
    * were told it ended. That is why the boundary is not trusted alone: the
-   * delivery gate watches the provider's own activity and HOLDS the
-   * continuation until it goes quiet (#1033, providerIsWorking).
+   * delivery gate weighs every other signal too and HOLDS the continuation
+   * until they all go quiet (#1033, deliveryHold).
    */
   observeProviderHook(sessionId: string, hook: 'user-prompt-submit' | 'post-tool-use' | 'stop', outcome?: { blocked: boolean }): void {
     this.hookSessions.add(sessionId)
     this.lastHookSessionActivity.set(sessionId, Date.now())
     if (hook !== 'stop') {
       this.hookTurnOpen.add(sessionId)
+      // New work has started (the same turn continuing past another hook's
+      // block, or a prompt the user typed). A continuation held from before it
+      // is still wanted — this turn's own end is what will deliver it — but
+      // its stall deadline must not keep running across work that is
+      // legitimately ongoing, or the loop pauses itself for being patient
+      // (second #1033 review). Restart the clock, keep the continuation.
+      if (this.heldSince.has(sessionId)) this.heldSince.set(sessionId, Date.now())
       // A typed prompt STARTS a turn, and UserPromptSubmit publishes no
       // semantic event, so the tracked phase would still read the previous
       // turn's idle. Seed it busy, exactly as markOwedATurn does for our own
@@ -224,6 +263,7 @@ export class GoalLoopService extends EventEmitter {
     }
     if (outcome?.blocked) return
     this.hookTurnOpen.delete(sessionId)
+    this.eventSinceStop.delete(sessionId)
     if (this.loops.get(sessionId)?.phase !== 'active') return
     // Deferred one macrotask so the Stop hook's HTTP answer reaches the
     // provider first. Delivering inside the hook request would race the
@@ -283,11 +323,20 @@ export class GoalLoopService extends EventEmitter {
       void this.persist()
       return null
     }
-    // Any control action other than resume either stops the loop or takes it
-    // out of the delivering phase, so a continuation held for it is void.
-    // Resume deliberately keeps nothing: it re-runs the gate below, which
-    // re-holds if the provider is still working.
-    if (command.action !== 'raise-cap') this.releaseHold(sessionId)
+    // A loop that is pausing, stopping or being dismissed will not type, so a
+    // continuation held for it is void and its poll must not outlive it.
+    //
+    // WHY RESUME IS NOT IN THAT LIST (second #1033 review): resume used to
+    // clear the hold too, on the theory that it re-requests below. It does —
+    // but only when the loop was PAUSED. Two resumes in a row (a double-click
+    // before the strip repaints) therefore re-armed the loop on the first and
+    // threw away its hold and poll on the second, leaving an active loop with
+    // no continuation pending and nothing scheduled to look again. Resume now
+    // leaves the hold alone and always re-requests, so it can only ever make
+    // the loop more likely to deliver.
+    // `dismiss` is not in this list because it returned above — an ended loop
+    // holds nothing anyway.
+    if (command.action === 'pause' || command.action === 'stop') this.releaseHold(sessionId)
     if (command.action === 'pause' && loop.phase === 'active') {
       this.loops.set(sessionId, { ...loop, phase: 'paused', pauseReason: 'user', updatedAt: now })
     } else if (command.action === 'stop' && loop.phase !== 'ended') {
@@ -352,8 +401,12 @@ export class GoalLoopService extends EventEmitter {
       // without hooks, "working" is the tracked phase state, which signal()
       // keeps updating while the loop is paused. For a hook session it is an
       // open turn.
-      this.requestContinue(sessionId)
     }
+    // Outside the branch above on purpose: a resume of an ALREADY-active loop
+    // (the double-click case) must still push the loop forward rather than do
+    // nothing. requestContinue is idempotent — the gate re-runs, and a hold
+    // that is still justified simply stays.
+    if (command.action === 'resume') this.requestContinue(sessionId)
     const next = this.loops.get(sessionId)!
     void this.persist()
     return { ...next }
@@ -363,8 +416,13 @@ export class GoalLoopService extends EventEmitter {
 
   private signal(sessionId: string, event: unknown): void {
     // Any event at all, deltas included, means the provider is still doing
-    // something; the quiet-turn check measures silence from here.
-    if (this.hookSessions.has(sessionId)) this.lastHookSessionActivity.set(sessionId, Date.now())
+    // something; both the quiet-turn check (Resume) and the settle window
+    // (the delivery gate) measure silence from here. Stamped for EVERY
+    // session, not only hook-driven ones: the settle window is what covers
+    // Claude streaming visible text with its spinner hidden, and that is not
+    // a hook-session-only shape.
+    this.lastHookSessionActivity.set(sessionId, Date.now())
+    this.eventSinceStop.add(sessionId)
     // Reduce for every session, in every loop phase (see the class comment):
     // only the DECISION to continue is gated on an active loop. The reducer
     // returns the same object for the high-volume delta events, so the common
@@ -421,6 +479,7 @@ export class GoalLoopService extends EventEmitter {
     this.hookSessions.delete(sessionId)
     this.hookTurnOpen.delete(sessionId)
     this.lastHookSessionActivity.delete(sessionId)
+    this.eventSinceStop.delete(sessionId)
     const loop = this.loops.get(sessionId)
     if (!loop || loop.phase !== 'active') return
     this.loops.set(sessionId, { ...loop, phase: 'paused', pauseReason: 'interrupted', updatedAt: this.now().toISOString() })
@@ -470,98 +529,139 @@ export class GoalLoopService extends EventEmitter {
   }
 
   /**
-   * Is the provider visibly working right now?
+   * What, if anything, says this agent is still working? `null` means the
+   * continuation may be typed now.
    *
-   * WHY activity and NOT input readiness (#1033's re-review): readiness
-   * answers "can something be typed", which is a composer question. Claude's
-   * gate derives it from blocking conditions, composer occupancy and
-   * transcript replay (claudeSession.derivePromptGateState) and Codex's
-   * latches true for the whole session once a composer has ever painted
-   * (codexSession.markComposerReady). Both are TRUE in the middle of an
-   * ordinary turn — that is exactly why a mid-turn prompt becomes a QUEUED
-   * command instead of being refused. Gating on readiness therefore did not
-   * catch the case it was written for: a second Stop hook blocking our
-   * allowed Stop leaves the model working with a perfectly typeable composer.
+   * The order is by decreasing trust, and each rule exists because the one
+   * above it has a known blind spot:
    *
-   * `process-state` is the provider's own answer to "is a turn running": a
-   * screen-spinner detector for Claude, Codex and Grok (the spinner is up
-   * while hooks run and while the model continues after one blocks) and the
-   * session event stream for OpenCode. It is also runtime-correct for the
-   * terminal runtimes: OpenCode Terminal derives it from its headless
-   * activity channel, not from the PTY paint grace period its input readiness
-   * waits on, so a pane whose HTTP prompt channel is already usable is no
-   * longer held back by a UI-readiness flag it does not need.
+   *  1. OUR OWN boundary. A hook-driven session's turn is open until its Stop
+   *     arrives (observeProviderHook). This is the only signal with no false
+   *     "idle" — Claude's subagent flows publish idle mid-turn (#1024), which
+   *     is why the phase below is not consulted for these sessions until the
+   *     Stop has landed.
+   *  2. The semantic phase. After ANOTHER Stop hook blocks ours, the model
+   *     keeps going and the proxy publishes `requesting`/`responding` and
+   *     pending tools for that continued work. A turn that owes a tool result
+   *     is working even when nothing is streaming.
+   *  3. The screen, bounded. A live spinner is real evidence of work, and it
+   *     is the ONLY signal during the gap between our Stop landing and a
+   *     blocked turn's next API request — no event has been published yet, so
+   *     (2) is still stale there. But it latches on a completed
+   *     `⏺ … (ctrl+o to expand)` row left in the bottom fifteen lines, so it
+   *     may only postpone a delivery by GOAL_LOOP_ACTIVITY_GRACE_MS, never
+   *     prevent one.
    *
-   * WHY an UNKNOWN session counts as NOT working: a session main has no
+   * THE RESIDUAL, stated because it is a choice and not an oversight: if
+   * another hook blocks our Stop while Claude's spinner happens to be down,
+   * nothing here knows the turn continued, and the continuation is typed into
+   * a live turn — where Claude QUEUES it and runs it when the turn ends. One
+   * early continuation, visible in the queue strip. A wait long enough to
+   * close that window would have to outlast an arbitrary user hook (a test
+   * suite, a build), and every version of this file that tried to be certain
+   * instead stalled the loop for good. Early beats stalled.
+   *
+   * WHY an UNKNOWN session counts as not working: a session main has no
    * process state for is one it is not tracking (a fake in a test, a backend
-   * row that lives elsewhere). Treating "I cannot tell" as "working" would
-   * park those loops until the watchdog pauses them, which is a worse failure
-   * than the one this guards. `deliverPromptToAgent` still refuses a
-   * genuinely unready target, retry-safely.
+   * row that lives elsewhere). "I cannot tell" must not hold a loop.
    */
-  private providerIsWorking(sessionId: string): boolean {
-    return this.deps.manager.getProcessStateSnapshot(sessionId)?.active === true
+  private deliveryHold(sessionId: string): 'turn-open' | 'phase-working' | 'screen-busy' | null {
+    if (this.hookSessions.has(sessionId) && this.hookTurnOpen.has(sessionId)) return 'turn-open'
+    const tracked = this.working.get(sessionId)
+    if (tracked && this.phaseIsFresh(sessionId) && (isWorking(tracked) || tracked.pendingTools.length > 0)) {
+      return 'phase-working'
+    }
+    const active = this.deps.manager.getProcessStateSnapshot(sessionId)?.active === true
+    if (active && this.heldForMs(sessionId) < GOAL_LOOP_ACTIVITY_GRACE_MS) return 'screen-busy'
+    return null
   }
 
   /**
-   * Hold this session's continuation until the provider goes quiet.
+   * May the tracked phase gate a delivery for this session?
    *
-   * WHY holding rather than returning (#1033's re-review): the first version
-   * simply skipped the delivery and relied on "the turn's real end
-   * re-triggers the loop". For a hook session there is no such re-trigger —
-   * the Stop we were answering IS the turn's end, and no further Stop fires
-   * while the model works through another hook's continuation. The loop then
-   * sat `active` with zero deliveries and nothing left to observe: a silent
-   * death, and the exact shape of the #1024 bug this all descends from.
+   * For a session without hooks, always: its working→idle transition IS the
+   * turn boundary, so the same state cannot be too stale to read.
    *
-   * The hold is level-triggered on re-entry: maybeContinue re-reads
-   * providerIsWorking, so a release that arrives while the provider is busy
-   * again simply re-holds, keeping the ORIGINAL heldSince stamp so the
-   * watchdog measures the whole stall rather than the last leg of it.
+   * For a hook-driven session, only when an event has arrived SINCE the
+   * allowed Stop. Two things make that condition load-bearing, in opposite
+   * directions:
+   *
+   *  - Without it, a loop stalls. `markOwedATurn` seeds the state busy when we
+   *    deliver, and only a provider event clears it. A hook session that
+   *    publishes no semantic stream (or whose stream is late) would sit on
+   *    that seed forever and never receive a continuation — the #1028 failure
+   *    this file already documents, where phases were rightly distrusted for
+   *    hook sessions.
+   *  - With it, the phase becomes the thing that catches ANOTHER Stop hook
+   *    blocking ours: the model keeps going, its proxy publishes `requesting`
+   *    and pending tools, and those events are by construction newer than the
+   *    Stop we observed. That is the one case where the phase knows something
+   *    the Stop boundary cannot.
    */
-  private holdUntilQuiet(sessionId: string): void {
-    if (!this.heldSince.has(sessionId)) this.heldSince.set(sessionId, Date.now())
-    this.armHoldWatchdog(sessionId)
+  private phaseIsFresh(sessionId: string): boolean {
+    return !this.hookSessions.has(sessionId) || this.eventSinceStop.has(sessionId)
   }
 
-  /** Wall-clock, not the injected now(): tests pin that clock to a fixed
-   * instant, which would make every hold look instantaneous forever. */
-  private armHoldWatchdog(sessionId: string): void {
-    if (this.holdWatchdogs.has(sessionId)) return
+  private heldForMs(sessionId: string): number {
+    const since = this.heldSince.get(sessionId)
+    return since === undefined ? 0 : Date.now() - since
+  }
+
+  /**
+   * Keep this session's continuation and re-evaluate it until it can be
+   * delivered.
+   *
+   * WHY holding rather than returning: the first #1033 fix skipped the
+   * delivery and relied on "the turn's real end re-triggers the loop". For a
+   * hook session there is no such re-trigger — the Stop we were answering IS
+   * the turn's end, and no further Stop fires while the model works through
+   * another hook's continuation. The loop sat `active` with zero deliveries
+   * and nothing left to observe.
+   *
+   * WHY the re-evaluation is a poll and not the provider's quiet edge: the
+   * second review reproduced three ways an edge never arrives — a turn that
+   * reopens and then ends through Esc or an API error (no Stop), a provider
+   * that stops emitting, a detector latched on a stale row. Each one left the
+   * continuation held with nothing scheduled to look at it again. A 1 s timer
+   * that exists only while something is held cannot have that failure mode.
+   */
+  private holdUntilQuiet(sessionId: string, reason: string): void {
+    if (!this.heldSince.has(sessionId)) this.heldSince.set(sessionId, Date.now())
+    if (this.heldForMs(sessionId) >= GOAL_LOOP_HOLD_STALL_MS) {
+      this.pauseStalledHold(sessionId, reason)
+      return
+    }
+    if (this.holdPolls.has(sessionId)) return
     const timer = setTimeout(() => {
-      this.holdWatchdogs.delete(sessionId)
-      if (!this.heldSince.has(sessionId)) return
-      // One last look at the LEVEL before giving up: a provider can stop
-      // emitting edges (a headless that dies quietly, a missed frame) while
-      // its snapshot has long since gone idle. Re-running is free and turns a
-      // missed edge into a delivery instead of a pause.
-      if (!this.providerIsWorking(sessionId)) {
-        this.requestContinue(sessionId)
+      this.holdPolls.delete(sessionId)
+      // The loop may have been paused, stopped or completed while we waited;
+      // releasing here is what stops the poll from outliving it.
+      if (this.loops.get(sessionId)?.phase !== 'active') {
+        this.releaseHold(sessionId)
         return
       }
-      this.pauseStalledHold(sessionId)
-    }, GOAL_LOOP_BUSY_HOLD_LIMIT_MS)
+      this.requestContinue(sessionId)
+    }, HOLD_POLL_MS)
     timer.unref?.()
-    this.holdWatchdogs.set(sessionId, timer)
+    this.holdPolls.set(sessionId, timer)
   }
 
   private releaseHold(sessionId: string): void {
     this.heldSince.delete(sessionId)
-    const timer = this.holdWatchdogs.get(sessionId)
+    const timer = this.holdPolls.get(sessionId)
     if (timer) clearTimeout(timer)
-    this.holdWatchdogs.delete(sessionId)
+    this.holdPolls.delete(sessionId)
   }
 
-  /** The activity signal never went quiet. Pause VISIBLY (the pane strip
-   * shows paused · error with a Resume button) rather than leaving a loop
-   * that looks armed and will never prompt again. Resume re-runs the same
-   * gate, so a user who can see the agent is idle can recover it in one
-   * click. */
-  private pauseStalledHold(sessionId: string): void {
+  /** Something has claimed this agent is working for half an hour after its
+   * turn ended. That is a stuck signal, not a long turn, so pause VISIBLY
+   * (paused · error, with Resume) rather than leaving a loop that looks armed
+   * and will never prompt again. */
+  private pauseStalledHold(sessionId: string, reason: string): void {
     this.releaseHold(sessionId)
     const loop = this.loops.get(sessionId)
     if (!loop || loop.phase !== 'active') return
-    console.warn(`[goal-loop] ${sessionId}: provider still reports activity ${Math.round(GOAL_LOOP_BUSY_HOLD_LIMIT_MS / 60_000)} min after its turn ended; pausing instead of typing into it`)
+    console.warn(`[goal-loop] ${sessionId}: held for ${Math.round(GOAL_LOOP_HOLD_STALL_MS / 60_000)} min on "${reason}" after its turn ended; pausing instead of typing into it`)
     this.loops.set(sessionId, { ...loop, phase: 'paused', pauseReason: 'error', updatedAt: this.now().toISOString() })
     void this.persist()
   }
@@ -569,21 +669,6 @@ export class GoalLoopService extends EventEmitter {
   private async maybeContinue(sessionId: string): Promise<void> {
     const loop = this.loops.get(sessionId)
     if (!loop || loop.phase !== 'active' || this.continuing.has(sessionId)) return
-    // The one rule every trigger shares: never prompt an agent that is
-    // working. A turn-boundary trigger arrives idle by construction, but a
-    // backoff retry or a parked pendingContinue is evaluated LATER — after a
-    // user-typed turn began, or after the delivery it raced succeeded and
-    // marked the session owed a turn. Without this check, pause→resume during
-    // an in-flight delivery delivered the same continuation twice. Skipping is
-    // safe: a working agent's turn end re-triggers us.
-    const tracked = this.working.get(sessionId)
-    // Hook-driven sessions: an open turn (started, no allowed Stop yet) is
-    // the truth, and the phase-derived state is not consulted. It reads
-    // `requesting` whenever a subagent flow streams, which would stall a loop
-    // whose Stop just arrived.
-    if (this.hookSessions.has(sessionId)) {
-      if (this.hookTurnOpen.has(sessionId)) return
-    } else if (tracked && isWorking(tracked)) return
     this.continuing.add(sessionId)
     try {
       // The cap pauses BEFORE delivering past the budget: a confused agent
@@ -597,15 +682,15 @@ export class GoalLoopService extends EventEmitter {
         goal: loop.goal, loopPrompt: loop.loopPrompt,
         iteration: loop.continuationsDelivered + 1, maxContinuations: loop.maxContinuations,
       })
-      // The last gate, and the only one that asks the PROVIDER rather than our
-      // own bookkeeping (#1033). Our Stop hook allowing a turn to end does not
-      // mean the turn ended: another configured hook can block, and both CLIs
-      // keep going when any hook does. A still-working provider therefore
-      // holds the continuation — it is not dropped — and its own quiet edge
-      // delivers it, so a continuation can no longer land mid-turn as a
-      // queued command (the #1024 symptom) and cannot be lost either.
-      if (this.providerIsWorking(sessionId)) {
-        this.holdUntilQuiet(sessionId)
+      // The one gate every trigger passes through, evaluated as late as
+      // possible so it reads the freshest state (#1033). A turn-boundary
+      // trigger is idle by construction, but a backoff retry, a parked
+      // pendingContinue or a hold poll is evaluated LATER — after a user-typed
+      // turn began, or after the delivery it raced succeeded. A held
+      // continuation is kept and re-evaluated, never dropped.
+      const hold = this.deliveryHold(sessionId)
+      if (hold) {
+        this.holdUntilQuiet(sessionId, hold)
         return
       }
       this.releaseHold(sessionId)
