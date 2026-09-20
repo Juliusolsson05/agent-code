@@ -23,7 +23,12 @@ import { excludeExternalControlFromOpencode } from '@providers/shared/runtime/ex
 import { EventEmitter } from 'events'
 
 import { OpencodeHeadless } from 'opencode-headless'
-import { parseOpencodeQuestions, validateQuestionAnswers } from './questionAnswers.js'
+import {
+  OPENCODE_QUESTION_REJECT,
+  OPENCODE_QUESTION_REPLY,
+  parseOpencodeQuestions,
+  validateQuestionAnswers,
+} from './questionAnswers.js'
 import { opencodeTranscriptFile } from 'opencode-terminal-headless'
 import type {
   CommittedEntryEvent,
@@ -42,7 +47,6 @@ import type {
   ConditionAction,
   ConditionCustomAction,
   OpencodePermissionState,
-  OpencodeQuestion,
   OpencodeQuestionState,
   ProviderConditionRecord,
   ProviderConditionSnapshot,
@@ -55,9 +59,15 @@ import { mapOpenCodeSemanticEvent, OpenCodeBlockIndexTracker } from './semanticM
 // permission/question into the snapshot) and DISPATCHES (in
 // resolveCondition). Kept as constants so the two halves can never drift
 // — a rename that touches only one side is a compile error at the other.
+//
+// The two QUESTION names are imported rather than declared because since
+// #1025 a THIRD party knows them: the view composes a multi-question reply
+// and filters the runtime's per-option actions out of the footer by name. A
+// constant private to this file could not bind that half, so the names moved
+// to `questionAnswers.ts` — the one question module both processes import.
 const PERMISSION_REPLY = 'opencode.permission.reply'
-const QUESTION_REJECT = 'opencode.question.reject'
-const QUESTION_REPLY = 'opencode.question.reply'
+const QUESTION_REJECT = OPENCODE_QUESTION_REJECT
+const QUESTION_REPLY = OPENCODE_QUESTION_REPLY
 
 // The three replies OpenCode's permission API accepts. Declared here so
 // resolveCondition can validate an inbound payload against it rather than
@@ -411,6 +421,60 @@ export class OpencodeSession extends EventEmitter implements AgentSession {
     this.emitConditionsSnapshot()
   }
 
+  /**
+   * The live question, but ONLY if it is the one this payload is answering.
+   *
+   * ── WHY THE IDs MUST BE COMPARED (#1068 review, finding 2) ──
+   * An action carries the questionID it was BUILT with; `liveConditions`
+   * holds whatever question is current at RESOLVE time. Those are not the
+   * same thing, because `foldQuestion` overwrites the record in place when
+   * OpenCode replaces a question (`question.updated` and `question.asked`
+   * both land there), and a click can be in flight across that swap.
+   *
+   * Without this check the two halves came apart in the worst possible way:
+   * the answer was validated against the NEW question's options, sent to the
+   * OLD question's id, and then the new question's modal was torn down
+   * unanswered — so the user watched a prompt they were looking at vanish
+   * while a dead question received a reply they never gave it, and the agent
+   * waiting on the live one was left blocked with no UI to unblock it.
+   *
+   * A question that was fully CLEARED was already safe (no record → no
+   * options → the validator refuses). It is specifically replacement that
+   * slipped through, and only an id comparison catches it.
+   *
+   * Returning the record rather than a boolean is deliberate: the caller then
+   * physically cannot validate against one question and reply about another.
+   */
+  private liveQuestion(
+    payload: Record<string, unknown> | null,
+  ): { questionID: string; state: OpencodeQuestionState } | null {
+    const questionID = payload && typeof payload.questionID === 'string' ? payload.questionID : null
+    if (!questionID) return null
+    const live = this.liveConditions.get('opencode.question')
+    if (live?.kind !== 'opencode.question') return null
+    const state = live.state as OpencodeQuestionState
+    if (state.questionID !== questionID) return null
+    return { questionID, state }
+  }
+
+  /**
+   * Drop the question record, but only while it is still the one that was
+   * resolved.
+   *
+   * The old code deleted unconditionally. Between the `await` on the HTTP
+   * reply and this line OpenCode can publish a NEW question, and destroying
+   * that one leaves its agent blocked with nothing on screen to answer it.
+   * `liveQuestion` above guarantees the id matched when we started; this
+   * guarantees it still matches when we finish.
+   */
+  private clearResolvedQuestion(questionID: string): void {
+    const live = this.liveConditions.get('opencode.question')
+    if (live?.kind !== 'opencode.question') return
+    if ((live.state as OpencodeQuestionState).questionID !== questionID) return
+    this.liveConditions.delete('opencode.question')
+    this.emitConditionsSnapshot()
+  }
+
   private emitConditionsSnapshot(): void {
     const conditions: Record<string, ProviderConditionRecord> = {}
     for (const [kind, record] of this.liveConditions) conditions[kind] = record
@@ -457,8 +521,6 @@ export class OpencodeSession extends EventEmitter implements AgentSession {
     }
 
     if (action.name === QUESTION_REPLY) {
-      const questionID = payload && typeof payload.questionID === 'string' ? payload.questionID : null
-      if (!questionID) return { ok: false, reason: 'invalid-payload' }
       // ── THE TRUST BOUNDARY (#1025) ──
       // The view may COMPOSE a choice — it has to, because a multi-question
       // prompt is answered as one positional set and that is selection state
@@ -467,14 +529,12 @@ export class OpencodeSession extends EventEmitter implements AgentSession {
       // question, so a renderer cannot answer a question OpenCode did not ask
       // or with a label it did not offer. It is a separate pure function so
       // the boundary is testable without standing up a session.
-      const live = this.liveConditions.get('opencode.question')
-      const offered: OpencodeQuestion[] = live?.kind === 'opencode.question'
-        ? (live.state as OpencodeQuestionState).questions ?? []
-        : []
-      const answers = validateQuestionAnswers(offered, payload?.answers)
+      const live = this.liveQuestion(payload)
+      if (!live) return { ok: false, reason: 'invalid-payload' }
+      const answers = validateQuestionAnswers(live.state.questions ?? [], payload?.answers)
       if (!answers) return { ok: false, reason: 'invalid-payload' }
       try {
-        await this.headless.replyQuestion(questionID, answers)
+        await this.headless.replyQuestion(live.questionID, answers)
       } catch (err) {
         return {
           ok: false,
@@ -482,15 +542,15 @@ export class OpencodeSession extends EventEmitter implements AgentSession {
           failedAtStep: `question.reply: ${err instanceof Error ? err.message : String(err)}`,
         }
       }
-      if (this.liveConditions.delete('opencode.question')) this.emitConditionsSnapshot()
+      this.clearResolvedQuestion(live.questionID)
       return { ok: true }
     }
 
     if (action.name === QUESTION_REJECT) {
-      const questionID = payload && typeof payload.questionID === 'string' ? payload.questionID : null
-      if (!questionID) return { ok: false, reason: 'invalid-payload' }
+      const live = this.liveQuestion(payload)
+      if (!live) return { ok: false, reason: 'invalid-payload' }
       try {
-        await this.headless.rejectQuestion(questionID)
+        await this.headless.rejectQuestion(live.questionID)
       } catch (err) {
         return {
           ok: false,
@@ -498,7 +558,7 @@ export class OpencodeSession extends EventEmitter implements AgentSession {
           failedAtStep: `question.reject: ${err instanceof Error ? err.message : String(err)}`,
         }
       }
-      if (this.liveConditions.delete('opencode.question')) this.emitConditionsSnapshot()
+      this.clearResolvedQuestion(live.questionID)
       return { ok: true }
     }
 

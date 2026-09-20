@@ -95,3 +95,24 @@ export function parseOpencodeQuestions(metadata: unknown): OpencodeQuestion[] {
   }
   return questions
 }
+
+/**
+ * The custom-action names for the two question arms.
+ *
+ * ── WHY THEY LIVE HERE, NOT IN `opencodeSession.ts` ──
+ * They used to be private constants in the session, under a comment claiming
+ * "the two halves can never drift — a rename that touches only one side is a
+ * compile error at the other". That stopped being true with #1025: the VIEW
+ * now dispatches a reply it composed itself, and filters the runtime's
+ * per-option actions out of the footer by matching the same name. Those were
+ * two bare string literals on opposite sides of the process boundary, so a
+ * rename in the runtime would have compiled clean and broken at runtime — the
+ * view dispatching an unknown name (`no-resolver`) and, worse, silently
+ * failing to filter, putting every option in the footer twice.
+ *
+ * This module is the one piece of question logic BOTH halves already import
+ * (it is pure, with no main-process dependencies), so it is where a name they
+ * must agree on belongs. The comment's promise is now real.
+ */
+export const OPENCODE_QUESTION_REPLY = 'opencode.question.reply'
+export const OPENCODE_QUESTION_REJECT = 'opencode.question.reject'

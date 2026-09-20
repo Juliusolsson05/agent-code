@@ -3,7 +3,8 @@ import { resolve } from 'node:path'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { opencodeQuestionView } from './views'
+import { OPENCODE_VIEWS, opencodeQuestionView } from './views'
+import { ConditionOutlet } from '@shared/conditions-core/ConditionOutlet'
 import type { ConditionAction } from '@shared/conditions-core/contract'
 import { validateQuestionAnswers } from '@providers/opencode/runtime/questionAnswers'
 import type { OpencodeQuestion, OpencodeQuestionState } from '@shared/types/providerConditions'
@@ -218,5 +219,112 @@ describe('the view and the runtime validator agree', () => {
       { question: 'Colour?', options: [{ label: 'Red' }, { label: 'Blue' }] },
     ]
     expect(run(questions, ['Blue'])).toEqual([[], ['Blue']])
+  })
+})
+
+describe('a replaced question never inherits the previous one\'s answer', () => {
+  // Review finding 1, driven through the REAL `ConditionOutlet` rather than a
+  // hand-rolled rerender, because the whole bug lives in the outlet's mount
+  // identity: it keys the view on `condition.kind`, and `foldQuestion`
+  // replaces the question record in place, so a new question re-renders the
+  // SAME component instance. Asserting that with a spy would only assert my
+  // belief about the outlet.
+  const outlet = (questions: OpencodeQuestion[], questionID: string) => ({
+    provider: 'opencode' as const,
+    ts: 0,
+    conditions: {
+      'opencode.question': {
+        kind: 'opencode.question' as const,
+        state: { visible: true, questionID, questions },
+        actions: [rejectAction()],
+      },
+    },
+  })
+
+  const benign: OpencodeQuestion[] = [
+    { question: 'Add a changelog entry?', options: [{ label: 'Yes' }, { label: 'No' }] },
+    { question: 'Run the linter first?', options: [{ label: 'Yes' }, { label: 'No' }] },
+  ]
+  const grave: OpencodeQuestion[] = [
+    { question: 'Delete the production database?', options: [{ label: 'Yes' }, { label: 'No' }] },
+    { question: 'Force push to main?', options: [{ label: 'Yes' }, { label: 'No' }] },
+  ]
+
+  function renderOutlet(questions: OpencodeQuestion[], questionID: string) {
+    const dispatch = vi.fn(async (_action: ConditionAction) => {})
+    const view = render(
+      <ConditionOutlet
+        snapshot={outlet(questions, questionID) as never}
+        registry={OPENCODE_VIEWS}
+        dispatch={dispatch}
+        interactionActive
+      />,
+    )
+    return {
+      dispatch,
+      replace: (next: OpencodeQuestion[], nextID: string) => view.rerender(
+        <ConditionOutlet
+          snapshot={outlet(next, nextID) as never}
+          registry={OPENCODE_VIEWS}
+          dispatch={dispatch}
+          interactionActive
+        />,
+      ),
+    }
+  }
+
+  it('does not carry a selection across the swap, even when the labels match', () => {
+    // The labels are identical ('Yes'/'Yes'), so the trust boundary is
+    // structurally unable to help: 'Yes' IS a label the new question offers.
+    // Only the view knows the click belonged to a question that is gone.
+    const { dispatch, replace } = renderOutlet(benign, 'que_benign')
+    const yeses = screen.getAllByRole('button', { name: 'Yes' })
+    fireEvent.click(yeses[0]!)
+    fireEvent.click(yeses[1]!)
+    expect(screen.getByRole('button', { name: 'Answer' })).toBeEnabled()
+
+    replace(grave, 'que_grave')
+
+    expect(screen.getByText('Delete the production database?')).toBeInTheDocument()
+    // The gate is closed again: nothing has been chosen for THIS question.
+    expect(screen.getByRole('button', { name: /each question/i })).toBeDisabled()
+    expect(dispatch).not.toHaveBeenCalled()
+  })
+
+  it('answers the new question with the new question\'s clicks', () => {
+    const { dispatch, replace } = renderOutlet(benign, 'que_benign')
+    fireEvent.click(screen.getAllByRole('button', { name: 'Yes' })[0]!)
+    replace(grave, 'que_grave')
+
+    const nos = screen.getAllByRole('button', { name: 'No' })
+    fireEvent.click(nos[0]!)
+    fireEvent.click(nos[1]!)
+    fireEvent.click(screen.getByRole('button', { name: 'Answer' }))
+
+    expect(dispatch).toHaveBeenCalledTimes(1)
+    expect(dispatch.mock.calls[0]![0]).toMatchObject({
+      payload: { questionID: 'que_grave', answers: [['No'], ['No']] },
+    })
+  })
+})
+
+describe('a multi-question set where nothing has options is still answerable', () => {
+  it('submits all-empty answers instead of disabling the button forever', () => {
+    // Review finding 5. The validator accepts `[[],[]]` — the provider
+    // offered nothing, so an empty selection is the only truthful answer —
+    // but the gate demanded at least one answerable question, so the button
+    // read "Choose an option for each question" when there was nothing to
+    // choose and the prompt could only be rejected.
+    const questions: OpencodeQuestion[] = [
+      { question: 'Anything?', options: [] },
+      { question: 'Anything else?', options: [] },
+    ]
+    const { dispatch } = renderView({ visible: true, questionID: 'q1', questions }, [rejectAction()])
+    const submit = screen.getByRole('button', { name: 'Answer' })
+    expect(submit).toBeEnabled()
+    fireEvent.click(submit)
+    const answers = (dispatch.mock.calls[0]![0] as { payload: { answers: unknown } }).payload.answers
+    expect(answers).toEqual([[], []])
+    expect(validateQuestionAnswers(questions, answers)).toEqual([[], []])
   })
 })

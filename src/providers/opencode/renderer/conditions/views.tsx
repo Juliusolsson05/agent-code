@@ -11,11 +11,24 @@
 //
 // WHY the Component renders buttons straight off `actions` instead of
 // hardcoding Allow/Reject: the runtime is the single source of truth for
-// which choices exist and what they mean (once/always/reject, or a
-// reject-only question). Rendering the runtime's action list keeps the
-// view dumb and means a future richer question answerer only touches the
-// runtime — the view already renders whatever actions arrive.
+// which choices exist and what they mean (once/always/reject, reject, or
+// — since #1025 — reply). Rendering the runtime's action list keeps the
+// view dumb.
+//
+// The QUESTION view is the one documented exception, and it is worth being
+// honest about why. `answers` is POSITIONAL: a multi-question prompt is one
+// submission carrying one array of labels per question, so it cannot be
+// answered by clicking a single runtime-built action. Somebody has to hold a
+// selection per question until the user submits, and that is view state the
+// runtime cannot own. So for TWO OR MORE questions the view composes the
+// reply action itself and filters the runtime's per-option actions out of
+// the footer. The runtime still decides which options exist and
+// `validateQuestionAnswers` refuses every label it did not publish, so the
+// view composes a choice and can never invent one.
 
+import {
+  OPENCODE_QUESTION_REPLY,
+} from '@providers/opencode/runtime/questionAnswers'
 import { defineView, eraseRegistry } from '@shared/conditions-core/view'
 import type { ConditionView } from '@shared/conditions-core/view'
 import type { ConditionAction } from '@shared/conditions-core/contract'
@@ -335,9 +348,31 @@ export const opencodeQuestionView = defineView<
     // cannot own. The runtime still decides which options EXIST and validates
     // every submitted label against them, so the view composes a choice and
     // can never invent one.
-    const [picked, setPicked] = useState<Record<number, string>>({})
+    //
+    // ── WHY THE SELECTION IS STAMPED WITH ITS QUESTION (#1068 review, 1) ──
+    // This component is NOT remounted when the question changes.
+    // `ConditionOutlet` keys it on `condition.kind`, and `foldQuestion`
+    // replaces the question record in place, so a brand-new question
+    // re-renders the SAME instance with the previous question's `picked`
+    // intact. Indexed by position, those stale labels line straight up with
+    // the new questions: the submit gate read as satisfied and one click
+    // answered "Delete the production database?" with a Yes the user had
+    // given to "Add a changelog entry?". The trust boundary structurally
+    // cannot catch that — `Yes` IS a label the new question offered, so the
+    // validator is right to accept it. Only the view knows the selection is
+    // stale, so only the view can refuse it.
+    //
+    // Keying the outlet on the question id would fix it too, but that is
+    // shared machinery every provider's conditions run through; stamping the
+    // state keeps the blast radius on the one view that has this problem.
+    const [picked, setPicked] = useState<{ forQuestionID: string | null; byIndex: Record<number, string> }>(
+      { forQuestionID: null, byIndex: {} },
+    )
     const questions = state?.questions ?? []
     const questionID = state?.questionID
+    // Read THROUGH the stamp: a selection belonging to a different question
+    // is not a selection, it is the previous prompt's answer.
+    const selection = picked.forQuestionID === questionID ? picked.byIndex : {}
 
     if (!state?.visible) return null
 
@@ -348,8 +383,15 @@ export const opencodeQuestionView = defineView<
     // positional, so a derived list that loses the original index is how an
     // answer ends up attached to the wrong question.
     const needsAnswer = (question: OpencodeQuestion) => question.options.length > 0
-    const complete = questions.some(needsAnswer)
-      && questions.every((question, index) => !needsAnswer(question) || picked[index] !== undefined)
+    // Every question that CAN be answered has been. Deliberately not "…and at
+    // least one question has options": a multi-question set where the
+    // provider offered nothing to choose anywhere is answered with all-empty
+    // arrays, which the validator accepts — gating on `some` left the button
+    // permanently disabled reading "Choose an option for each question" when
+    // there was nothing to choose, so the prompt could only be rejected.
+    const complete = questions.every(
+      (question, index) => !needsAnswer(question) || selection[index] !== undefined,
+    )
 
     const submit = () => {
       if (!questionID) return
@@ -357,7 +399,7 @@ export const opencodeQuestionView = defineView<
         kind: 'custom',
         id: `${questionID}:answer`,
         label: 'Answer',
-        name: 'opencode.question.reply',
+        name: OPENCODE_QUESTION_REPLY,
         // Positional, in the payload's own question order — the same order
         // the runtime validates against.
         //
@@ -369,7 +411,7 @@ export const opencodeQuestionView = defineView<
         payload: {
           questionID,
           answers: questions.map((question, index) =>
-            needsAnswer(question) ? [picked[index]!] : []),
+            needsAnswer(question) ? [selection[index]!] : []),
         },
       })
     }
@@ -381,7 +423,7 @@ export const opencodeQuestionView = defineView<
     // row at the bottom with no question attached.
     const footerActions = questions.length === 0
       ? actions
-      : actions.filter(action => action.kind !== 'custom' || action.name !== 'opencode.question.reply')
+      : actions.filter(action => action.kind !== 'custom' || action.name !== OPENCODE_QUESTION_REPLY)
 
     return (
       <ConditionShell heading="OpenCode is asking" actions={footerActions} dispatch={dispatch}>
@@ -401,7 +443,7 @@ export const opencodeQuestionView = defineView<
                 question={question}
                 index={index}
                 total={questions.length}
-                selected={single ? null : picked[index] ?? null}
+                selected={single ? null : selection[index] ?? null}
                 onSelect={label => {
                   if (single) {
                     // Answer immediately: the runtime published one action per
@@ -413,7 +455,15 @@ export const opencodeQuestionView = defineView<
                     if (action) void dispatch(action)
                     return
                   }
-                  setPicked(current => ({ ...current, [index]: label }))
+                  setPicked(current => ({
+                    forQuestionID: questionID ?? null,
+                    // Drop the whole map when the stamp does not match: those
+                    // entries answer a question that is no longer on screen.
+                    byIndex: {
+                      ...(current.forQuestionID === questionID ? current.byIndex : {}),
+                      [index]: label,
+                    },
+                  }))
                 }}
               />
             ))}
