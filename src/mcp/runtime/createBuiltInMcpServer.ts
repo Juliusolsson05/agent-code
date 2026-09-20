@@ -22,6 +22,7 @@ import {
 import type {
   OrchestrationAgentKind,
   OrchestrationAgentOutput,
+  OrchestrationAgentRecord,
 } from '@mcp/shared/orchestrationTypes.js'
 import { buildOrchestrationBootstrapPrompt } from '@mcp/shared/orchestrationPrompt.js'
 import type { BuiltInMcpDependencies } from '@mcp/runtime/BuiltInMcpHttpHost.js'
@@ -1276,7 +1277,7 @@ function orchestrationCreateAgentCallKey(
     {
       title: 'Wait For Orchestration Agents',
       description:
-        `Waits for all matching orchestration-created child agents to leave active states, then returns their statuses and latest outputs. ONE CALL STOPS WAITING AFTER ${WAIT_AGENTS_MAX_WAIT_MS / 1000} SECONDS whatever timeoutMs asks for, then reads outputs once and replies; when it is cut short the reply carries done=false and remainingMs, and you call this again with remainingMs to keep waiting. Outputs are byte-capped per message/agent and share a cross-agent total budget; over-budget agents degrade to status summaries with short excerpts and truncated=true. To recover a truncated agent, re-read it with orchestration_read_agent and explicit larger caps, or use agent_transcript_read_file on its transcript.`,
+        `Waits for all matching orchestration-created child agents to leave active states, then returns their statuses and latest outputs. ONE CALL STOPS WAITING AFTER ${WAIT_AGENTS_MAX_WAIT_MS / 1000} SECONDS whatever timeoutMs asks for, then reads outputs once and replies; when it is cut short the reply carries done=false and, if any of your budget is left, remainingMs — call this again with that value to keep waiting. A cut-short reply can also carry outputsUnavailable=true, meaning the agents are reported but their outputs were not read in time; get them with orchestration_read_run_outputs. Outputs are byte-capped per message/agent and share a cross-agent total budget; over-budget agents degrade to status summaries with short excerpts and truncated=true. To recover a truncated agent, re-read it with orchestration_read_agent and explicit larger caps, or use agent_transcript_read_file on its transcript.`,
       inputSchema: {
         runId: z.string().optional(),
         sessionIds: z.array(z.string()).optional(),
@@ -1314,69 +1315,153 @@ function orchestrationCreateAgentCallKey(
       const cappedTimeoutMs = Math.min(args.timeoutMs, WAIT_AGENTS_MAX_WAIT_MS)
       // Before the first `listAgents`, deliberately: that call is a round trip
       // through the bridge, which serializes every orchestration request
-      // app-wide behind one in-flight slot. Starting the clock after it would
-      // let an unbounded queue wait be added to the cap rather than spent
-      // inside it.
+      // app-wide behind one in-flight slot and puts NO timer on the queue wait
+      // (the bridge's 30 s `TIMEOUT_MS` starts only once dispatch is granted).
+      // Starting the clock after it would let that wait be added to the cap
+      // rather than spent inside it.
       const deadline = startedAt + cappedTimeoutMs
-      let agents = await bridge.listAgents({ parentSessionId: scope.sessionId, runId: args.runId })
-      if (args.sessionIds && args.sessionIds.length > 0) {
-        const wanted = new Set(args.sessionIds)
-        agents = agents.filter(agent => wanted.has(agent.sessionId))
-      }
-      while (Date.now() < deadline && agents.some(agent => isOrchestrationAgentActive(agent.lifecycleState))) {
-        // Clamped to what is LEFT, not the raw interval. `pollIntervalMs` is
-        // schema-legal up to 10 s, so an unclamped sleep let one call overshoot
-        // the cap by a whole interval — the deadline is checked before the
-        // sleep, never during it. Measured at 90_010 ms against a 90_000 ms
-        // cap before this clamp existed; a promise that is off by an argument
-        // the caller chooses is not a promise.
-        await sleep(Math.min(args.pollIntervalMs, Math.max(0, deadline - Date.now())))
-        agents = await bridge.listAgents({ parentSessionId: scope.sessionId, runId: args.runId })
-        if (args.sessionIds && args.sessionIds.length > 0) {
-          const wanted = new Set(args.sessionIds)
-          agents = agents.filter(agent => wanted.has(agent.sessionId))
-        }
-      }
-      const agentIds = new Set(agents.map(agent => agent.sessionId))
-      const outputs = await bridge.readRunOutputs({
-        parentSessionId: scope.sessionId,
-        runId: args.runId,
-        maxMessagesPerAgent: args.maxMessagesPerAgent,
-        maxCharsPerMessage: args.maxCharsPerMessage,
-        maxCharsPerAgent: args.maxCharsPerAgent,
-      }).then(outputs => outputs.filter(output => agentIds.has(output.agent.sessionId)))
-      // The `agents` status array below is part of the same tool response, so
-      // its JSON size is charged against maxTotalChars as reservedChars —
-      // otherwise wait_agents' real payload would exceed the budget by
-      // exactly the part the budget was never told about (#510 review).
-      // Status records carry no message bodies, so this reservation is small
-      // and proportional to agent count, not output size.
-      const bounded = boundOutputsToTotalChars(
-        outputs,
-        args.maxTotalChars,
-        JSON.stringify(agents).length,
-      )
-      const done = !agents.some(agent => isOrchestrationAgentActive(agent.lifecycleState))
-      return toolText({
-        ok: true,
-        done,
-        agents,
-        outputs: bounded.outputs,
-        // Only when the cap actually cut the wait short AND there is still
-        // something to wait for. Reporting it on a completed run would tell
-        // the caller to call again for children that are already done.
-        //
-        // The caller's UNSPENT budget, not the cap. Reporting the cap made the
-        // caller reconstruct "how much of what I asked for is left" from an
-        // argument it had to remember; `remainingMs` is the number it passes
-        // straight back as the next `timeoutMs`. It is computed from real
-        // elapsed time rather than from the cap, so the final read's cost is
-        // charged to the caller's budget instead of quietly vanishing from it.
-        ...(!done && cappedTimeoutMs < args.timeoutMs
-          ? { remainingMs: Math.max(0, args.timeoutMs - (Date.now() - startedAt)) }
-          : {}),
-        ...(bounded.truncated ? { truncated: true } : {}),
+      // One deadline for the WHOLE call, raced against every bridge read —
+      // not a bound on the sleeps between them.
+      //
+      // WHY the clamped sleep is not enough (#1089 review, round 2): the loop
+      // checks the deadline before the sleep and never during an `await`, so
+      // clamping the sleep alone left each `listAgents` free to run past it.
+      // Measured, with a bridge under the contention its own comments describe
+      // ("with 20 orchestrated children it is common for several wait/list
+      // calls to poll the same parent/run during the same quarter-second"):
+      // one call took 87,250 ms against a 30 s promise — past the SDK's 60 s
+      // default request timeout, which is the reported bug reproduced by its
+      // own fix.
+      //
+      // This is the shape `observations.wait` already uses
+      // (`src/main/control/waits.ts`), including its accepted cost: losing the
+      // race leaves a read in flight, because the bridge has no cancellation.
+      // Nothing is retried and nothing is mutated by these reads, so a
+      // stranded one costs a slot for its own duration and no more.
+      let expired = false
+      let stopWaiting!: () => void
+      const expiry = new Promise<typeof EXPIRED>(resolve => {
+        stopWaiting = () => resolve(EXPIRED)
       })
+      const expiryTimer = setTimeout(() => { expired = true; stopWaiting() }, cappedTimeoutMs)
+      // The measured cost of a bridge round trip on THIS call, used as the
+      // reserve the poll loop leaves for the final `readRunOutputs`. A fixed
+      // reserve would be another invented number; the last read's own duration
+      // is the only honest estimate available, and it grows automatically
+      // exactly when the bridge is congested.
+      let bridgeCostMs = 0
+      const withDeadline = async <T>(operation: Promise<T>): Promise<T | typeof EXPIRED> => {
+        const calledAt = Date.now()
+        const result = await Promise.race([operation, expiry])
+        bridgeCostMs = Math.max(bridgeCostMs, Date.now() - calledAt)
+        return result
+      }
+      const scopeAgents = (list: OrchestrationAgentRecord[]): OrchestrationAgentRecord[] => {
+        if (!args.sessionIds || args.sessionIds.length === 0) return list
+        const wanted = new Set(args.sessionIds)
+        return list.filter(agent => wanted.has(agent.sessionId))
+      }
+
+      try {
+        // `null` means NO READ SUCCEEDED, which is not the same as "no agents
+        // matched" and must never be reported as `done`. An empty list from a
+        // real read still means the run is finished; an empty list because the
+        // read lost the race means we know nothing.
+        let agents: OrchestrationAgentRecord[] | null = null
+        const first = await withDeadline(bridge.listAgents({ parentSessionId: scope.sessionId, runId: args.runId }))
+        if (first !== EXPIRED) agents = scopeAgents(first)
+        while (
+          !expired
+          && agents !== null
+          && agents.some(agent => isOrchestrationAgentActive(agent.lifecycleState))
+          // Stop polling once what is left would not cover another round trip
+          // plus the final read. Without this the loop spends the entire
+          // budget on polling and the reply's outputs are always the thing
+          // that gets dropped.
+          && Date.now() + bridgeCostMs * 2 < deadline
+        ) {
+          // Clamped to what is LEFT, not the raw interval. `pollIntervalMs` is
+          // schema-legal up to 10 s, so an unclamped sleep overshot the cap by
+          // a whole interval: measured 90_010 ms against a 90_000 ms cap.
+          await sleep(Math.min(args.pollIntervalMs, Math.max(0, deadline - Date.now())))
+          const next = await withDeadline(bridge.listAgents({ parentSessionId: scope.sessionId, runId: args.runId }))
+          if (next === EXPIRED) break
+          // The scope is re-applied on EVERY poll, not only the first read: a
+          // child created after the call started would otherwise join the set
+          // the caller explicitly named, and its activity would keep a
+          // `sessionIds` wait running past the agents it asked about.
+          agents = scopeAgents(next)
+        }
+        const agentIds = new Set((agents ?? []).map(agent => agent.sessionId))
+        const read = agents === null
+          ? EXPIRED
+          : await withDeadline(bridge.readRunOutputs({
+            parentSessionId: scope.sessionId,
+            runId: args.runId,
+            maxMessagesPerAgent: args.maxMessagesPerAgent,
+            maxCharsPerMessage: args.maxCharsPerMessage,
+            maxCharsPerAgent: args.maxCharsPerAgent,
+          }))
+        const outputs = read === EXPIRED
+          ? []
+          : read.filter(output => agentIds.has(output.agent.sessionId))
+        // The `agents` status array below is part of the same tool response, so
+        // its JSON size is charged against maxTotalChars as reservedChars —
+        // otherwise wait_agents' real payload would exceed the budget by
+        // exactly the part the budget was never told about (#510 review).
+        // Status records carry no message bodies, so this reservation is small
+        // and proportional to agent count, not output size.
+        const bounded = boundOutputsToTotalChars(
+          outputs,
+          args.maxTotalChars,
+          JSON.stringify(agents ?? []).length,
+        )
+        // `done` requires a read that actually happened. A list we never got
+        // is empty, and an empty list otherwise means "the run has finished" —
+        // the exact shape that tells a parent every child is done while one is
+        // still working.
+        const done = agents !== null && !agents.some(agent => isOrchestrationAgentActive(agent.lifecycleState))
+        const elapsedMs = Date.now() - startedAt
+        const remainingMs = Math.max(0, args.timeoutMs - elapsedMs)
+        return toolText({
+          ok: true,
+          done,
+          agents: agents ?? [],
+          outputs: bounded.outputs,
+          // Only when the cap actually cut the wait short, there is still
+          // something to wait for, and what is left is a LEGAL next
+          // `timeoutMs`. Reporting it on a completed run would tell the caller
+          // to call again for children that are already done.
+          //
+          // The caller's UNSPENT budget, not the cap: reporting the cap made
+          // the caller reconstruct "how much of what I asked for is left" from
+          // an argument it had to remember. It is computed from real elapsed
+          // time, so the final read's cost comes out of that budget instead of
+          // vanishing from it.
+          //
+          // WHY the schema minimum is the floor for reporting it (#1089
+          // review, round 2): `timeoutMs` is `min(1000)`, and the description
+          // tells the caller to pass this straight back. A remainder of 500 —
+          // reachable from any `timeoutMs` whose remainder mod the cap lands
+          // under a second — then walked the documented recovery path into a
+          // hard `-32602` validation error. Omitting it says the same thing
+          // the `timeoutMs <= cap` case already says: your budget is spent.
+          ...(!done && cappedTimeoutMs < args.timeoutMs && remainingMs >= MIN_WAIT_AGENTS_TIMEOUT_MS
+            ? { remainingMs }
+            : {}),
+          // The call hit its own deadline with reads still outstanding. Said
+          // out loud because the reply is PARTIAL: without this a caller
+          // cannot tell "no outputs, the children produced none" from "no
+          // outputs, we ran out of time before reading them".
+          ...(agents === null ? { agentsUnavailable: true } : {}),
+          ...(read === EXPIRED && agents !== null ? { outputsUnavailable: true } : {}),
+          ...(bounded.truncated ? { truncated: true } : {}),
+        })
+      } finally {
+        // Always: an early return or a throw would otherwise leave a 30 s
+        // timer holding the event loop open after the reply was sent.
+        clearTimeout(expiryTimer)
+      }
     },
   )
 
@@ -1476,14 +1561,33 @@ function orchestrationCreateAgentCallKey(
 // for the whole call, and with no event store it is not resumable — so when a
 // client's SSE reconnects are exhausted the reply is gone for good. A shorter
 // wait shortens the exposure window; it does not close it. The mechanism fixes
-// are progress notifications (the SDK resets its request timer on progress) or
-// `enableJsonResponse: true`, neither verified here — see #1091.
+// are progress notifications or `enableJsonResponse: true`, neither verified
+// here — see #1091. Progress extends a client's timer only when that client
+// OPTS IN (`resetTimeoutOnProgress`, default false in the SDK): OpenCode does,
+// Claude Code does not. So it is a partial mitigation, not the cure it first
+// looked like.
 //
 // It is a CAP, not a new maximum: `timeoutMs` still accepts up to 600 s
 // because the number the caller passes is what it wants in total, and the
 // reply says when a call was cut short. Lowering the schema bound instead
 // would make every existing caller's request invalid rather than shorter.
 const WAIT_AGENTS_MAX_WAIT_MS = 30_000
+
+/**
+ * The schema's own floor for `timeoutMs`, named once so the handler can refuse
+ * to hand a caller a `remainingMs` the schema would then reject (#1089 review).
+ */
+const MIN_WAIT_AGENTS_TIMEOUT_MS = 1_000
+
+/**
+ * "This read lost the race against the call's deadline."
+ *
+ * A unique symbol rather than null/undefined because a bridge read can
+ * legitimately resolve to an empty array, and the difference between "no
+ * agents" and "we never found out" is what decides whether the reply may say
+ * `done`.
+ */
+const EXPIRED = Symbol('wait-agents-expired')
 
 // Cross-agent total budget for read_run_outputs / wait_agents (#373).
 //
