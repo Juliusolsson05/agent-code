@@ -549,6 +549,15 @@ claude 2.1.143 / codex 0.130.0 are stale versus the 2.1.278 / 0.155.1 in daily u
   (one per composer). Optional follow-up: a single app-level subscription.
 
 ### Progress log
+- 2026-09-19 20:15Z — Codex round complete, Stage 6 closed out, issue sweep started:
+  - **MERGED:** #1045 (`⌘⇧G` + Goal Loop MCP, closes #1006/#1007), #945 (`quit lifecycle`, closes #941/#942) and #935 (window-scoped delivery, closes #920). All three carried a second Codex delta round that found real defects first.
+  - Codex found, and this session fixed: the transcript-code-block gap in #1045's editor yield; concurrent quit-failure dialogs in #945; a refused close releasing a live claim, plus a repair ticket spent before the repair finished, in #935; and in #1047 both the ~/.opencode/bin resolver gap (the install→Retry loop dead-ended) and a new window parking forever on an acknowledged terminal-only machine.
+  - **#1047** is Codex-APPROVE, conflict with the merged command PRs resolved (catalog now 125/119/44), waiting on CI.
+  - **Issue sweep, newest first:**
+    - #1011 CLOSED with evidence (nightly shipped and verified; the prerelease flag is a recorded deviation, since the landing page resolves the newest NON-prerelease release and the stable will be it).
+    - **#1048 OPENED** for #1030 items 2–4: a corrupt `tabs`/`projects` container no longer migrates to an empty pool (it unlocked autosave and overwrote the real file), a v2 file with zero tabs keeps its buried rows, and closing a hibernated terminal kills its tmux session. Item 1 (bury notes) stays open: it needs a parked-note surface first.
+    - **#1049 OPENED** for #1029: Trojan Source. One shared helper escapes bidi overrides, isolates, zero-width characters and a lone CR as `⟨U+202E RLO⟩` on every approval surface (Claude, Codex, OpenCode, Grok), driven by the real recorded OpenCode ask.
+  - **T14** decomposed at docs/decomposition/agent-activity-redesign.md on branch feat/agent-activity-redesign, with the owner's real 33-agent fleet recorded as the evidence. Two owner calls are open: modal vs takeover, and whether it absorbs Close Old Agents + Close Idle Orchestration Agents.
 - 2026-09-19 19:30Z — Codex review round 1 (owner asked for Codex reviewers):
   - **MERGED:** #876 (`68f7d6e3`, feed block order, Codex APPROVE) and #1046 (`ecf7c727`, command promotion, APPROVE + its three description nits fixed).
   - **#1045** (`0e8cc5e9`): Codex found the editor yield incomplete — a transcript code block is a real Monaco instance with no global-editor marker, so the overlay still latched over it. Both guards now match Monaco's own root class through one shared selector.
