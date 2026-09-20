@@ -90,7 +90,13 @@ export function CodexApprovalModal({ approval, onSend, interactionActive }: Prop
 
   if (!approval) return null
 
-  const command = approval.command.join(' ').trim()
+  // Escape BEFORE trimming, never after. `./check.sh\r` is a filename whose
+  // last byte is CR — the exact trick #1049 exists to expose — and `.trim()`
+  // removes CR, so trimming first deleted the evidence and left two different
+  // commands rendering identically (#1049 re-review). After escaping, the CR
+  // is the visible text `⟨U+000D CR⟩`, which trim leaves alone, and ordinary
+  // surrounding whitespace is still tidied.
+  const command = withVisibleControls(approval.command.join(' ')).trim()
 
   return (
     <div

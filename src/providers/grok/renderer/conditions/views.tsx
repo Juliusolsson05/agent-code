@@ -73,7 +73,9 @@ function ConditionButtons({
             }}
             variant={reject ? 'outline' : 'default'}
           >
-            {action.label}
+            {/* Provider-supplied, and it is the text the user reads to decide
+                WHICH grant they are giving (#1049 re-review). */}
+            {withVisibleControls(action.label)}
           </Button>
         )
       })}
@@ -184,7 +186,10 @@ export const grokPlanApprovalView = defineView<
       <ConditionShell heading="Grok proposes a plan" actions={actions} dispatch={dispatch}>
         {state.planContent ? (
           <pre className="bg-code-bg rounded-slab text-code-ink px-3 py-2 mb-1 overflow-x-auto whitespace-pre-wrap text-[11.5px]">
-            {state.planContent}
+            {/* The plan is the thing being approved; a reordering override in
+                it misrepresents what the user is authorising (#1049
+                re-review). */}
+            {withVisibleControls(state.planContent)}
           </pre>
         ) : (
           <p className="mb-2">Grok is waiting for plan approval.</p>

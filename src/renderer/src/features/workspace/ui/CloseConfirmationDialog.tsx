@@ -69,7 +69,11 @@ export function CloseConfirmationDialog() {
                 ? 'Kill this session permanently?'
                 : 'Close these sessions?'}
           </DialogTitle>
-          <DialogDescription>{request?.summary}</DialogDescription>
+          {/* The summary embeds the session's own title, and for a SINGLE
+              target the escaped target list below never renders — so this line
+              is the only identity the user is shown before authorising a kill
+              (#1049 re-review). */}
+          <DialogDescription>{request ? withVisibleControls(request.summary) : null}</DialogDescription>
         </DialogHeader>
 
         {request && request.targets.length > 1 ? (

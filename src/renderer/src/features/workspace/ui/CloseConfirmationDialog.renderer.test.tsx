@@ -64,6 +64,23 @@ it('asks about one working session without a list or a count', () => {
   expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument()
 })
 
+it('escapes the summary, the ONLY identity a single-target close shows (#1049 re-review)', () => {
+  // With one target the list below never renders, so the summary — which
+  // embeds the session's own title — is the whole of what the user reads
+  // before authorising a kill. A title carrying a bidi override could name a
+  // different session than the one that dies.
+  render(<CloseConfirmationDialog />)
+  act(() => {
+    void requestCloseConfirmation({
+      required: true, reason: 'running', targets: [worker],
+      summary: 'staging \u202Eprod deploy is still working. Close it anyway?',
+    })
+  })
+  const description = screen.getByText(/is still working/)
+  expect(description.textContent).not.toContain('\u202E')
+  expect(description.textContent).toContain('U+202E')
+})
+
 it('offers exactly two answers — no narrower or wider scope than the list shown', () => {
   // The regression guard for the deleted branch: a third button means some
   // close path has grown a second scope again, and the user is once more

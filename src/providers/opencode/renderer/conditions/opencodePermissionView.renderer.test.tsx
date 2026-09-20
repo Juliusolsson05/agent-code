@@ -117,6 +117,28 @@ describe('opencode permission modal on a recorded 1.18.30 ask', () => {
     expect(always.textContent).not.toContain('\u202E')
   })
 
+  it('escapes the WILDCARD grant scope, the broadest one we offer (#1049 re-review)', () => {
+    // `always: ['*']` renders a different branch — "every <permission>
+    // request" — and that branch was left unescaped while the pattern branch
+    // beside it was fixed. It is also the worst one to lose: the wildcard is
+    // the broadest grant in the modal, so the permission name is the only
+    // thing telling the user what they are signing away.
+    const rec = recording()
+    for (const { event } of rec.sse) {
+      if (event.type === 'permission.asked') {
+        // The recorded payload's own field names: `permission` and `always`
+        // sit beside `metadata`, and the dispatcher folds the whole payload
+        // into the state's metadata. `always: ['*']` is the wildcard shape
+        // OpenCode really sends for edit/write/MCP asks.
+        event.properties = { ...event.properties, permission: 'bash \u202E harmless', always: ['*'] }
+      }
+    }
+    mount(permissionStateFrom(rec))
+    const always = screen.getByText(/Allow always covers/)
+    expect(always.textContent).not.toContain('\u202E')
+    expect(always.textContent).toContain('U+202E')
+  })
+
   it('shows the command behind a default-permission external_directory ask, not just the directory', () => {
     // #1026 review: OpenCode's DEFAULT rules allow bash and ask only for
     // external_directory, so for most users this is THE shell-command

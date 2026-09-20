@@ -215,7 +215,11 @@ export const opencodePermissionView = defineView<
               {always.includes('*') ? (
                 <>
                   Allow always covers{' '}
-                  <strong>every {permission ? <code className="text-accent">{permission}</code> : 'such'} request</strong>{' '}
+                  {/* The wildcard branch names the SCOPE the grant will cover,
+                      so it is the one a spoofed permission name would misstate
+                      most profitably — `*` is the broadest grant we offer
+                      (#1049 re-review found this branch unescaped). */}
+                  <strong>every {permission ? <code className="text-accent">{withVisibleControls(permission)}</code> : 'such'} request</strong>{' '}
                   from this agent and its subagents until this agent restarts.
                 </>
               ) : (

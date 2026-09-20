@@ -80,7 +80,10 @@ function consentPromptFor(evt: IpcMainInvokeEvent, source: string): ConsentPromp
         `"${withVisibleControls(manifest.name)}" wants these capabilities:\n\n${withVisibleControls(detail)}\n\n` +
         `${canWrite ? 'It can change project files.' : 'It cannot change project files.'} ` +
         `It has no network access. ` +
-        `Install it only if you trust ${source}.`,
+        // The same value, twice, and the second one was raw: a source string
+        // with a bidi override could therefore spoof the sentence that carries
+        // the whole trust decision (#1049 re-review).
+        `Install it only if you trust ${withVisibleControls(source)}.`,
     }
     const result = win
       ? await dialog.showMessageBox(win, options)
