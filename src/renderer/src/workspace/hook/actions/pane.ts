@@ -1049,13 +1049,29 @@ export function usePaneActions(
       if (!tab) {
         // WHY this says something instead of returning quietly (#863): a bare
         // `return null` here is the primary creation command failing with NO
-        // feedback at all — the placement overlay stays open, because only a
-        // successful spawn closes it, and the user has to guess that Escape is
-        // the way out. The cause that made it reachable (a row still bound to
-        // a closed project) is fixed in `workspaceWithoutSessions`, so this
-        // should now be unreachable; it stays because the next stale target
-        // must be visible rather than silent.
-        showToast('New Agent could not find the project this lane is pointing at. Try another lane, or pick a project.')
+        // feedback at all. The cause that made it reachable (a row still bound
+        // to a closed project) is fixed in `workspaceWithoutSessions`, so this
+        // should be unreachable; it stays because the next stale target must be
+        // visible rather than silent.
+        //
+        // WHY it also CLOSES the overlay, and unconditionally: a toast alone
+        // left the user in the dead end it was describing. The overlay only
+        // closes on a successful spawn, and `NewAgentPlacementOverlay` latches
+        // `committingRef` before calling this and clears it only in its `open`
+        // effect — so after a failure the overlay is still up with every
+        // gesture latched off, and Escape is the only way out. Advice the user
+        // cannot act on is worse than silence, not better.
+        //
+        // The copy splits on `projectOverride` because the callers are not
+        // alike: without one the project came from the focused LANE (Dispatch
+        // "+" on the grid, splitFocused), so "try another lane" is actionable.
+        // With one, the caller named the project outright — the Dispatch
+        // header's per-project "+", the New Agent In dialog, MCP
+        // `agents.create` — and there is no lane in the story at all.
+        showToast(projectOverride
+          ? 'New Agent could not find that project. It may have just closed.'
+          : 'New Agent could not find the project this lane is pointing at. Try another lane, or pick a project.')
+        closeNewAgentPlacement()
         return null
       }
 

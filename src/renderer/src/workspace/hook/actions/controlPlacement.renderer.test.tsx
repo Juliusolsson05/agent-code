@@ -40,6 +40,61 @@ it('returns the exact created ID, files it under the project, and moves nothing 
   harness.mounted.unmount()
 })
 
+// #863. The dead end this PR is about, at the point where it is felt.
+//
+// `createDetachedDispatchAgent` resolves a target project and then does
+// `if (!tab) return null`. Before this, that return was the primary creation
+// command failing with NOTHING: no toast, and — because only a successful
+// spawn closes it — the placement overlay still up, with
+// `NewAgentPlacementOverlay`'s `committingRef` latched true and cleared only
+// by its `open` effect, so Enter and clicks were no-ops and Escape was the
+// only way out. The user's report was "New Agent just stopped working".
+//
+// The cause (a row bound to a project that closed) is fixed in
+// `workspaceWithoutSessions`, so these cases construct the stale target
+// directly. That is the point: the branch is meant to be unreachable, and the
+// next thing that makes it reachable must be loud.
+it.each([
+  {
+    name: 'a lane-resolved create names the lane, because the lane is the thing the user can change',
+    override: undefined,
+    expected: /this lane is pointing at/,
+  },
+  {
+    name: 'an explicitly targeted create does not, because there is no lane in the story',
+    override: { tabId: 'ghost-project' as never, anchorSessionId: 'anchor' as never },
+    expected: /could not find that project/,
+  },
+])('says so and gets out of the way when the target project is gone: $name', async ({ override, expected }) => {
+  const initial = state()
+  if (!override) {
+    // The reported state exactly: an EMPTY focused lane whose row is still
+    // bound to a project that closed. `resolveDispatchSpawnTarget` treats a
+    // row binding as outranking the active project — correctly, since the
+    // row's index offers only that project — so the binding is what resolves,
+    // and it names a tab that no longer exists.
+    //
+    // Setting `activeTabId` to a ghost would NOT reproduce this: the focused
+    // lane's occupant resolves first, so the create would quietly succeed
+    // under the lane's real project and this test would pass for the wrong
+    // reason.
+    initial.stage = { focusedLane: 0, lanes: [{}], rows: [{ length: 1, projectTabIds: ['ghost-project' as never] }] }
+  }
+  const harness = mountPaneActions(initial)
+
+  await act(async () => {
+    expect(await harness.actions.createDetachedDispatchAgent({ kind: 'codex' }, override)).toBeNull()
+  })
+
+  expect(harness.showToast).toHaveBeenCalledWith(expect.stringMatching(expected))
+  // The half a toast alone did not fix: the overlay has to come down, or the
+  // advice in it is advice the user cannot act on.
+  expect(harness.closeNewAgentPlacement).toHaveBeenCalled()
+  // And nothing was created on the way out.
+  expect(harness.spawn).not.toHaveBeenCalled()
+  harness.mounted.unmount()
+})
+
 it('fills the focused lane when it is EMPTY and selectCreated is not false', async () => {
   const initial = state()
   initial.stage = { focusedLane: 0, lanes: [{}, { selectedSessionId: 'anchor' }] }

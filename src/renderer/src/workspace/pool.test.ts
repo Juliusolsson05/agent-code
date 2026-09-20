@@ -34,7 +34,11 @@ function workspace(): WorkspaceState {
     },
     stage: {
       lanes: [{ selectedSessionId: 'b1' }, { selectedSessionId: 'b2' }, {}, { selectedSessionId: 'b1' }],
-      rows: [{ length: 2 }, { length: 2 }],
+      // Bound on purpose. `expectCoherent`'s binding loop iterates
+      // `row.projectTabIds`, so a fixture with none makes every call site that
+      // does not set its own rows assert nothing at all — the invariant would
+      // read as covered while proving only that an empty list is empty.
+      rows: [{ length: 2, projectTabIds: ['a'] }, { length: 2, projectTabIds: ['b', 'c'] }],
       focusedLane: 1,
     },
     pinnedSessionIds: ['b1', 'c1'],
@@ -50,7 +54,11 @@ function expectCoherent(state: WorkspaceState): void {
   // toast — the placement overlay stays open until Escape.
   const liveTabIds = new Set(state.tabs.map(tab => tab.id))
   for (const row of state.stage.rows ?? []) {
-    for (const bound of row.projectTabIds ?? []) {
+    // The legacy single binding counts: a row carrying only `projectTabId`
+    // has a binding, `normalizeRowProjects` folds it into the array on read,
+    // and a dead one filters the index to nothing exactly like a dead entry in
+    // the array does.
+    for (const bound of [...(row.projectTabIds ?? []), ...(row.projectTabId !== undefined ? [row.projectTabId] : [])]) {
       expect(liveTabIds.has(bound), `row binding ${bound} names a live project`).toBe(true)
     }
   }
@@ -105,9 +113,36 @@ describe('workspaceWithoutSessions', () => {
     const next = workspaceWithoutSessions(prev, ['b1', 'b2'])
 
     expect(next.stage.rows?.[1]?.projectTabIds).toEqual(['c'])
-    // Row 0 named nothing that died, so it is the same object: a close must
-    // not churn the stage the user arranged (#681).
+    // Row 0 named nothing that died, so it is the SAME OBJECT — `toBe`, not
+    // `toEqual`, because reference is the property that matters and `toEqual`
+    // cannot see the difference. Row identity is load-bearing: the
+    // lane-selection race check in dispatch.ts compares row objects across a
+    // wake, so a scrub that rebuilt untouched rows would silently drop the
+    // selection of an agent it had just woken (see
+    // laneSelectionWake.renderer.test.tsx). It is also #681: a close must not
+    // churn the stage the user arranged.
+    expect(next.stage.rows?.[0]).toBe(prev.stage.rows?.[0])
+    expectCoherent(next)
+  })
+
+  it('folds a legacy single binding instead of dropping it', () => {
+    // `projectTabId` is the pre-array shape. The two other readers
+    // (`normalizeRowProjects`, `mergeProjectTabs`) fold it into the array
+    // before acting on it; the scrub used to just delete it, which takes a
+    // LIVE binding away from a row whose only crime is being old.
+    //
+    // Unreachable in live state today — rehydrate normalizes before it
+    // publishes — but this helper now has three callers and nothing enforces
+    // that ordering, so the branch has to be right rather than merely unused.
+    const prev = workspace()
+    prev.stage.rows = [{ length: 2, projectTabId: 'a' }, { length: 2, projectTabId: 'b' }]
+
+    const next = workspaceWithoutSessions(prev, ['b1', 'b2'])
+
     expect(next.stage.rows?.[0]).toEqual({ length: 2, projectTabIds: ['a'] })
+    // b left with its last session, so that binding is gone rather than folded.
+    expect(next.stage.rows?.[1]).not.toHaveProperty('projectTabIds')
+    expect(next.stage.rows?.[1]).not.toHaveProperty('projectTabId')
     expectCoherent(next)
   })
 

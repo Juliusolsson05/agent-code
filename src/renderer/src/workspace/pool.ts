@@ -153,16 +153,31 @@ export function workspaceWithoutSessions(
   // placement overlay stays open until the user presses Escape, because only a
   // successful spawn closes it.
   //
-  // This is the one place a project leaves live state, so it is the one place
-  // that has to say so.
+  // This is the one place a CLOSE removes a project from live state. Two other
+  // sites shorten `state.tabs` and are consistent for their own reasons, not
+  // because of this call: `mergeProjectTabs` re-points bindings at the merge
+  // target instead of scrubbing them (and folds the legacy `projectTabId`
+  // while it does), and `rehydrate` filters tabs that `migrateWorkspaceToStage`
+  // has already scrubbed against the same project set. A FOURTH removal site
+  // would have to make its own arrangement — it does not inherit this one.
   //
-  // It runs on EVERY commit, not only when a project left: the same helper
-  // also prunes `expandedParents`, and a parent that just closed must not stay
-  // expanded either. Guarding it on `emptied.size` was the first version and
-  // it silently kept that second prune from ever running. There is no cost to
-  // pay for dropping the guard — `scrubGridRowMetadata` returns the SAME stage
-  // object when it changes nothing, so a close that touches no row still does
-  // not re-allocate the stage the user arranged (#681).
+  // It runs on every commit that gets this far, not only when a project left:
+  // the same helper also prunes `expandedParents`, and a parent that just
+  // closed must not stay expanded either. Guarding it on `emptied.size` was
+  // the first version and it silently kept that second prune from ever
+  // running. There is no cost to pay for dropping the guard —
+  // `scrubGridRowMetadata` returns the SAME stage object when it changes
+  // nothing, and the same ROW object for every row it does not touch, so a
+  // close that touches no row does not re-allocate the stage the user arranged
+  // (#681) and cannot trip the lane-selection race check in dispatch.ts.
+  //
+  // What it does NOT cover: the early return above. A fully successful "Reload
+  // All" calls this with an empty `failedIds`, so nothing gets this far and
+  // live `expandedParents` keep the pre-reload session ids — row metadata has
+  // no equivalent of `remapTiledLanes` / `remapPinnedSessionIds`. Harmless
+  // today (an unknown id collapses the group, which is what a reload does to
+  // it anyway) but it is the same memory-vs-disk divergence as #863, one
+  // function away.
   const stage = clearTiledLaneSessions(prev.stage, removed)
   return {
     ...prev,
