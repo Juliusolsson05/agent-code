@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { withVisibleControls } from '@shared/text/visibleControls'
 
 // CodexApprovalPane — inline approval prompt rendered inside the pane,
 // matching how Codex's TUI draws it in the bottom pane.
@@ -146,7 +147,7 @@ export function CodexApprovalModal({ approval, onSend, interactionActive }: Prop
       {command && (
         <div className="mb-2">
           <span className="text-muted select-none">$ </span>
-          <span className="text-accent">{command}</span>
+          <span className="text-accent">{withVisibleControls(command)}</span>
         </div>
       )}
 

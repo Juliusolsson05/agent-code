@@ -81,6 +81,27 @@ describe('opencode permission modal on a recorded 1.18.30 ask', () => {
     expect(subject.className).toMatch(/max-h-/)
   })
 
+  it('renders a bidi override as a visible escape, so the command cannot lie about itself (#1029)', () => {
+    // Trojan Source, CVE-2021-42574: U+202E reorders the glyphs a browser
+    // draws without changing the bytes the shell runs, so a prompt-injected
+    // model can make a destructive command read as a harmless one. This modal
+    // is frequently the only place the command is shown, so what it renders
+    // IS the user's evidence. DERIVED from the recording: only the command
+    // changes, to the canonical attack shape.
+    const rec = recording()
+    const spoofed = 'rm -rf ~/work \u202E# this is fine\u202C'
+    for (const { event } of rec.sse) {
+      if (event.type === 'permission.asked') event.properties = { ...event.properties, metadata: { command: spoofed } }
+    }
+    mount(permissionStateFrom(rec))
+    const rendered = screen.getByText((_, element) => element?.tagName === 'PRE' && (element.textContent ?? '').includes('rm -rf'))
+    expect(rendered.textContent).toContain('⟨U+202E RLO⟩')
+    expect(rendered.textContent).toContain('⟨U+202C PDF⟩')
+    // The override itself must not survive into the DOM, or the browser
+    // reorders the line exactly as the attack intends.
+    expect(rendered.textContent).not.toContain('\u202E')
+  })
+
   it('shows the command behind a default-permission external_directory ask, not just the directory', () => {
     // #1026 review: OpenCode's DEFAULT rules allow bash and ask only for
     // external_directory, so for most users this is THE shell-command

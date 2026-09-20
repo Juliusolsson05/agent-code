@@ -30,6 +30,7 @@ import {
   DialogDescription,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
+import { withVisibleControls } from '@shared/text/visibleControls'
 
 // Per-provider kind→state binding (see CodexStateByKind for the rationale
 // — eraseRegistry checks the registry literal against this, so filing a
@@ -167,7 +168,7 @@ export const opencodePermissionView = defineView<
                 `python3 -c` legible; the height cap keeps the buttons on
                 screen. */}
             <pre className="bg-code-bg rounded-slab text-code-ink px-3 py-2 mb-2 max-h-[40vh] overflow-auto whitespace-pre-wrap break-words text-[11.5px]">
-              {state.title}
+              {withVisibleControls(state.title)}
             </pre>
           </>
         ) : (
@@ -187,7 +188,7 @@ export const opencodePermissionView = defineView<
             <>
               <p className="mb-1">Command:</p>
               <pre className="bg-code-bg rounded-slab text-code-ink px-3 py-2 mb-2 max-h-[40vh] overflow-auto whitespace-pre-wrap break-words text-[11.5px]">
-                {command}
+                {withVisibleControls(command)}
               </pre>
             </>
           )

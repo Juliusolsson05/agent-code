@@ -31,6 +31,7 @@ import {
   DialogDescription,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
+import { withVisibleControls } from '@shared/text/visibleControls'
 
 // Per-provider kind→state binding: eraseRegistry checks the registry literal
 // against this, so filing a view under the wrong kind is a compile error.
@@ -134,7 +135,7 @@ export const grokPermissionView = defineView<
           Grok is requesting permission
           {state.title ? (
             <>
-              {' '}for <span className="text-accent">{state.title}</span>
+              {' '}for <span className="text-accent">{withVisibleControls(state.title)}</span>
             </>
           ) : null}
           .
