@@ -21,7 +21,7 @@ describe('ClaudeSession.noteSystemSuspension', () => {
     }
 
     const suspendedAt = Date.parse('2026-09-20T04:00:00.000Z')
-    session.noteSystemSuspension({ suspendedAt, resumedAt: suspendedAt + 60_000, durationMs: 60_000 })
+    session.noteSystemSuspension({ suspendedAt, resumedAt: suspendedAt + 60_000, source: 'power-monitor' })
 
     expect(noteSuspension).toHaveBeenCalledWith(suspendedAt)
     // The seal itself still waits out the grace period.
@@ -31,7 +31,7 @@ describe('ClaudeSession.noteSystemSuspension', () => {
   it('does nothing when there is no proxy (a session without one still works)', () => {
     const session = new ClaudeSession()
     expect(() => session.noteSystemSuspension({
-      suspendedAt: 1, resumedAt: 2, durationMs: 1,
+      suspendedAt: 1, resumedAt: 2, source: 'power-monitor',
     })).not.toThrow()
   })
 })

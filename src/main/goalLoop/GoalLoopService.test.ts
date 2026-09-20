@@ -836,19 +836,24 @@ describe('GoalLoopService hook turns that end without a Stop (#1028 review)', ()
     await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1))
   })
 
-  it('KNOWN LIMIT (#1040): after an Esc mid-stream the phase stays busy, so only a typed prompt recovers', async () => {
-    // Pinned so the limit is visible, not assumed away. The Esc leaves the
-    // proxy phase at `thinking` (no response-end on a client disconnect).
+  it('an Esc mid-stream now ends the phase, and Resume recovers the loop (#1040)', async () => {
+    // This used to be pinned as a KNOWN LIMIT: an Esc left the proxy phase at
+    // `thinking` forever, because mitmproxy reports a client disconnect only
+    // through its `error` hook and the addon did not implement one, so no
+    // `response-end` ever arrived. Resume could not close that turn and only
+    // a typed prompt recovered the loop.
+    //
+    // claude-code-headless#61 gives that flow an ending, so the phase reaches
+    // idle like any other severed stream, and Resume does its job.
     const { svc, manager, deliver } = await hookTurn()
     manager.emit('semantic-event', { sessionId: 's1', event: { type: 'stream_phase', phase: 'thinking' } })
+    // The adapter seals the flow: turn stopped, phase idle.
+    manager.emit('semantic-event', { sessionId: 's1', event: { type: 'turn_stopped', interruption: 'transport-error' } })
+    manager.emit('semantic-event', { sessionId: 's1', event: { type: 'stream_phase', phase: 'idle' } })
     await vi.advanceTimersByTimeAsync(2 * GOAL_LOOP_QUIET_TURN_MS)
+
     svc.control('s1', { action: 'pause' })
     svc.control('s1', { action: 'resume' })
-    await vi.advanceTimersByTimeAsync(0)
-    expect(deliver).not.toHaveBeenCalled()
-    svc.observeProviderHook('s1', 'user-prompt-submit')
-    svc.observeProviderHook('s1', 'stop', { blocked: false })
-    await vi.advanceTimersByTimeAsync(0)
     await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1))
   })
 

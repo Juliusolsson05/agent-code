@@ -115,6 +115,13 @@ export type FeedRenderItem =
       order: FeedRenderItemOrder
     }
   | {
+      /** The newest turn's stream died before it finished (#1040): an Esc, a
+       *  timeout, an upstream failure. Same slot, different sentence. */
+      type: 'transport-interruption'
+      key: string
+      order: FeedRenderItemOrder
+    }
+  | {
       type: 'empty'
       key: string
       provider: AgentProvider
@@ -144,6 +151,8 @@ function labelForItem(item: FeedRenderItem, provider: AgentProvider): string {
         : `work ${item.phase}`
     case 'sleep-interruption':
       return 'interrupted while asleep'
+    case 'transport-interruption':
+      return 'interrupted before the response finished'
     case 'empty':
       return `waiting for ${getRendererProviderCapabilities(provider).name}…`
   }
@@ -162,6 +171,7 @@ function slotForItem(item: FeedRenderItem): DebugVisibleRow['slot'] {
       return 'semantic'
     case 'work':
     case 'sleep-interruption':
+    case 'transport-interruption':
       return 'work'
     case 'empty':
       return 'empty'

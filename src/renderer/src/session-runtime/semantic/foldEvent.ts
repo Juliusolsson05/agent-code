@@ -1005,9 +1005,14 @@ export function foldSemanticEvent(
         blocks: stoppedBlocks,
         stopReason,
         endedAt: now,
-        // #963: carried onto the turn (and into history when it archives) so the
-        // feed can say the turn was cut off by sleep rather than finishing.
-        ...(ev.interruption === 'system-suspended' ? { interruption: 'system-suspended' as const } : {}),
+        // #963/#1040: carried onto the turn (and into history when it
+        // archives) so the feed can say the turn was CUT OFF rather than
+        // finished — by sleep, or by a stream whose socket died. Dropping the
+        // transport case left an unexplained half-answer on desktop and
+        // phone, which share this pipeline.
+        ...(ev.interruption === 'system-suspended' || ev.interruption === 'transport-error'
+          ? { interruption: ev.interruption }
+          : {}),
       }
       break
     }
