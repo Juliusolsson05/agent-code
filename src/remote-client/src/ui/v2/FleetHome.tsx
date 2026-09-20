@@ -102,7 +102,12 @@ export function FleetHome({
     const groupOrder = [...grouped.entries()].sort(([nameA, rowsA], [nameB, rowsB]) => {
       const recencyA = Math.max(...rowsA.map(row => row.lastActivityAt ?? 0))
       const recencyB = Math.max(...rowsB.map(row => row.lastActivityAt ?? 0))
-      return recencyB - recencyA || nameA.localeCompare(nameB)
+      // localeCompare is not a TOTAL order: two distinct strings can compare
+      // equal (composed `café` and decomposed `café` do), and they stay
+      // separate groups, so the arrangement would again depend on arrival
+      // order. The code-unit comparison after it is the tiebreak that makes
+      // this deterministic for every pair (#1055 review).
+      return recencyB - recencyA || nameA.localeCompare(nameB) || (nameA < nameB ? -1 : nameA > nameB ? 1 : 0)
     })
     return { grouped: groupOrder, exited: exited.sort(byRecency) }
   }, [sessions])

@@ -467,8 +467,23 @@ export class WebSocketSessionFeed implements SessionFeed {
     }
     switch (frame.type) {
       case 'session-list': {
-        this.lastSessionList = frame.sessions
-        for (const cb of [...this.sessionListListeners]) cb(frame.sessions)
+        // Identity (title, pin, runtime, membership) comes from the server and
+        // replaces ours immediately. The RECENCY does not: the server stamps
+        // when it last saw activity, we stamp when we last received a frame,
+        // and the server's value can be OLDER. Taking it wholesale made the
+        // list reorder on every projection change — the reviewer measured two
+        // reversals inside 300 ms — and it also undid the rate limit below by
+        // resetting the stamp the limit is measured from.
+        //
+        // Keeping the newer of the two makes recency monotone per session,
+        // which is what a picker's ordering needs: rows move when something
+        // newer happened, never because two clocks disagree.
+        const previous = new Map(this.lastSessionList.map(row => [row.sessionId, row.lastActivityAt ?? 0]))
+        this.lastSessionList = frame.sessions.map(row => {
+          const local = previous.get(row.sessionId) ?? 0
+          return local > (row.lastActivityAt ?? 0) ? { ...row, lastActivityAt: local } : row
+        })
+        for (const cb of [...this.sessionListListeners]) cb(this.lastSessionList)
         return
       }
       case 'session-event': {

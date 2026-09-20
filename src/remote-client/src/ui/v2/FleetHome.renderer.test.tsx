@@ -95,6 +95,27 @@ describe('FleetHome', () => {
     expect(arrangement(rows)).toBe(arrangement([...rows].reverse()))
   })
 
+  it('orders two groups whose names compare EQUAL but are not (#1055 review)', () => {
+    // localeCompare is not a total order: composed `café` and decomposed
+    // `café` are different strings, stay different Map keys, and compare
+    // equal — so without a final code-unit tiebreak the arrangement went
+    // back to depending on arrival order.
+    const stamp = Date.now() - 10_000
+    const rows = [
+      { ...BASE, sessionId: 's-1', kind: 'claude', title: 'One', tabTitle: 'caf\u00e9', lastActivityAt: stamp },
+      { ...BASE, sessionId: 's-2', kind: 'claude', title: 'Two', tabTitle: 'cafe\u0301', lastActivityAt: stamp },
+    ]
+    const arrangement = (summaries: Array<Record<string, unknown>>): string => {
+      const view = render(<FleetHome feed={fakeFeed({ summaries })} connection="open" onSelect={() => {}} onUnpair={() => {}} />)
+      const text = [...view.container.querySelectorAll('.session-row')]
+        .map(row => row.textContent?.replace(/\s+/g, ' ').trim() ?? '')
+        .join(' | ')
+      view.unmount()
+      return text
+    }
+    expect(arrangement(rows)).toBe(arrangement([...rows].reverse()))
+  })
+
   it('opens the TLDR peek on long-press and navigates on tap', () => {
     vi.useFakeTimers()
     const onSelect = vi.fn()
