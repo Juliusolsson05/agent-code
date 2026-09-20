@@ -43,7 +43,15 @@ async function setup() {
   const store = new TldrStore(join(directory, 'tldr.json'))
   const goalStore = new TldrStore(join(directory, 'goal.json'), undefined, { historyDirectoryName: 'goal-history', label: 'Goal' })
   const deliver = vi.fn(async () => ({ ok: true } as PromptDeliveryResult))
-  const manager = Object.assign(new EventEmitter(), { deliverPromptToAgent: deliver })
+  // The provider accepts input: this suite is about the hook boundary, not
+  // about #1033's delivery-time readiness gate.
+  // The provider's own readiness, which #1033's delivery gate consults. It
+  // starts ready: every case except that one is about the hook boundary.
+  const input = { ready: true, revision: 1 }
+  const manager = Object.assign(new EventEmitter(), {
+    deliverPromptToAgent: deliver,
+    getBackendSnapshot: () => ({ input } as never),
+  })
   const loops = new GoalLoopService({ manager, store: new GoalLoopStore(join(directory, 'goal-loop.json')) })
   await loops.start()
   const host = new BuiltInMcpHttpHost()
@@ -65,7 +73,7 @@ async function setup() {
     await client.callTool({ name: 'tldr_update', arguments: { text } })
     await settle()
   }
-  return { host, loops, deliver, hook, report }
+  return { host, loops, deliver, hook, report, input }
 }
 
 describe('goal loop turn boundary through the real MCP host (#1024)', () => {
@@ -89,6 +97,28 @@ describe('goal loop turn boundary through the real MCP host (#1024)', () => {
     await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1))
     await settle()
     expect(deliver).toHaveBeenCalledTimes(1)
+  })
+
+  it('never types into a turn that ANOTHER configured Stop hook kept going (#1033)', async () => {
+    // Our hook allowing the stop says nothing about the user's own hooks:
+    // Claude runs them all in parallel and Codex aggregates, so either keeps
+    // the turn going when any of them blocks ("run the tests before
+    // stopping"). We are told the turn ended, the turn has not ended, and the
+    // continuation used to land mid-turn as a queued command — #1024's
+    // symptom. The provider reports that as input that cannot take text.
+    const { host, loops, deliver, hook, input } = await setup()
+    const [config] = host.registerSession({ sessionId: 's-other-hook', cwd: '/project', providerKind: 'claude', domains: ['goal_loop'] })
+    await loops.startLoop('s-other-hook', { goal: 'G.', loopPrompt: 'P.' })
+    input.ready = false
+    expect((await hook(config!, 'stop', { stop_hook_active: false })).status).toBe(200)
+    await settle()
+    expect(deliver).not.toHaveBeenCalled()
+
+    // When that hook's work finishes, the turn really ends and the next Stop
+    // delivers exactly once.
+    input.ready = true
+    await hook(config!, 'stop', { stop_hook_active: false })
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1))
   })
 
   it('does not treat a Stop that TLDR enforcement blocked as a turn end', async () => {

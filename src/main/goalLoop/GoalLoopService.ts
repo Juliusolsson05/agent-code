@@ -22,6 +22,8 @@ type GoalLoopManagerPort = {
   on(event: 'removed', listener: (payload: { sessionId: string }) => void): unknown
   on(event: 'exit', listener: (payload: { sessionId: string }) => void): unknown
   deliverPromptToAgent: SessionManager['deliverPromptToAgent']
+  /** The provider's own readiness, read at delivery time (#1033). */
+  getBackendSnapshot: SessionManager['getBackendSnapshot']
 }
 
 /** The harness-owned goal loop (#1001).
@@ -158,14 +160,13 @@ export class GoalLoopService extends EventEmitter {
    * `blocked`: a Stop that TLDR enforcement answered with `decision: block`
    * does not end the turn. The model keeps going, so it is not a boundary.
    *
-   * KNOWN GAP (#1028 review): "allowed" means only that OUR hook allowed it.
-   * Claude runs every Stop hook in parallel and keeps the turn going if any
-   * of them blocks, and Codex aggregates the same way. A user, project or
-   * plugin Stop hook that blocks ("run the tests before stopping") therefore
-   * still gets a continuation queued into a turn that goes on. This predates
-   * the hook boundary: the phase trigger did the same. The fix is on the
-   * delivery side (never deliver into input that is busy), tracked in
-   * #1033.
+   * "Allowed" means only that OUR hook allowed it. Claude runs every Stop
+   * hook in parallel and keeps the turn going if ANY of them blocks, and
+   * Codex aggregates the same way, so a user, project or plugin hook that
+   * blocks ("run the tests before stopping") leaves the turn running after we
+   * were told it ended. That is why the boundary is not trusted alone:
+   * `providerAcceptsInput` re-asks the provider itself immediately before
+   * typing (#1033).
    */
   observeProviderHook(sessionId: string, hook: 'user-prompt-submit' | 'post-tool-use' | 'stop', outcome?: { blocked: boolean }): void {
     this.hookSessions.add(sessionId)
@@ -416,6 +417,22 @@ export class GoalLoopService extends EventEmitter {
     else void this.maybeContinue(sessionId)
   }
 
+  /**
+   * Is the provider ready to accept typed input right now?
+   *
+   * WHY an UNKNOWN session answers yes: a session main has no snapshot for is
+   * one it is not tracking (a terminal-runtime pane whose backend row lives
+   * elsewhere, a fake in a test). Treating "I cannot tell" as "do not
+   * deliver" would silently stop those loops forever, which is a worse
+   * failure than the one this guards. `deliverPromptToAgent` still refuses a
+   * genuinely unready target, retry-safely.
+   */
+  private providerAcceptsInput(sessionId: string): boolean {
+    const snapshot = this.deps.manager.getBackendSnapshot(sessionId)
+    if (!snapshot) return true
+    return snapshot.input.ready
+  }
+
   private async maybeContinue(sessionId: string): Promise<void> {
     const loop = this.loops.get(sessionId)
     if (!loop || loop.phase !== 'active' || this.continuing.has(sessionId)) return
@@ -447,6 +464,14 @@ export class GoalLoopService extends EventEmitter {
         goal: loop.goal, loopPrompt: loop.loopPrompt,
         iteration: loop.continuationsDelivered + 1, maxContinuations: loop.maxContinuations,
       })
+      // The last gate, and the only one that asks the PROVIDER rather than our
+      // own bookkeeping (#1033). Our Stop hook allowing a turn to end does not
+      // mean the turn ended: another configured hook can block, and both CLIs
+      // keep going when any hook does. Input readiness is the provider's own
+      // answer to "can something be typed right now", and it is the same
+      // signal the composer gate uses, so a continuation can no longer land
+      // mid-turn as a queued command — the #1024 symptom.
+      if (!this.providerAcceptsInput(sessionId)) return
       let result = await this.deps.manager.deliverPromptToAgent(sessionId, prompt)
       if (!result.ok && result.retrySafe) result = await this.deps.manager.deliverPromptToAgent(sessionId, prompt)
       const current = this.loops.get(sessionId)

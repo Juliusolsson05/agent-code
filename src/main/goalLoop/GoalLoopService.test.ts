@@ -13,11 +13,11 @@ const directories: string[] = []
 afterEach(async () => { await Promise.all(directories.splice(0).map(d => rm(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }))) })
 
 type Deliver = SessionManager['deliverPromptToAgent']
-type FakeManager = EventEmitter & { deliverPromptToAgent: Deliver }
+type FakeManager = EventEmitter & { deliverPromptToAgent: Deliver; getBackendSnapshot: () => never }
 async function service(deliver: Deliver = vi.fn(async () => ({ ok: true } as PromptDeliveryResult))) {
   const directory = await mkdtemp(join(tmpdir(), 'agent-code-goal-loop-'))
   directories.push(directory)
-  const manager = Object.assign(new EventEmitter(), { deliverPromptToAgent: deliver }) as FakeManager
+  const manager = Object.assign(new EventEmitter(), { deliverPromptToAgent: deliver, getBackendSnapshot: () => ({ input: { ready: true, revision: 1 } } as never) }) as FakeManager
   const svc = new GoalLoopService({ manager, store: new GoalLoopStore(join(directory, 'goal-loop.json')), now: () => new Date('2026-09-18T00:00:00.000Z') })
   await svc.start()
   return { svc, manager, deliver }
@@ -101,7 +101,7 @@ describe('GoalLoopService', () => {
       completionSummary: null, maxContinuations: 25, continuationsDelivered: 2,
       consecutiveDeliveryFailures: 0, startedAt: '2026-09-18T00:00:00.000Z', updatedAt: '2026-09-18T00:00:00.000Z',
     } })
-    const manager = Object.assign(new EventEmitter(), { deliverPromptToAgent: vi.fn() })
+    const manager = Object.assign(new EventEmitter(), { deliverPromptToAgent: vi.fn(), getBackendSnapshot: () => ({ input: { ready: true, revision: 1 } } as never) })
     const svc = new GoalLoopService({ manager, store: new GoalLoopStore(join(directory, 'goal-loop.json')) })
     await svc.start()
     expect(svc.snapshot()['s1']).toMatchObject({ phase: 'paused', pauseReason: 'interrupted' })
@@ -216,7 +216,7 @@ describe('GoalLoopService', () => {
     }))
     const file = join(directory, 'goal-loop.json')
     await new GoalLoopStore(file).write(persisted)
-    const manager = Object.assign(new EventEmitter(), { deliverPromptToAgent: vi.fn() })
+    const manager = Object.assign(new EventEmitter(), { deliverPromptToAgent: vi.fn(), getBackendSnapshot: () => ({ input: { ready: true, revision: 1 } } as never) })
     const svc = new GoalLoopService({ manager, store: new GoalLoopStore(file) })
     await svc.start()
     await svc.startLoop('fresh', { goal: 'G.', loopPrompt: 'P.' })
@@ -237,7 +237,7 @@ describe('GoalLoopService', () => {
     await writeFile(file, '{broken')
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const store = new GoalLoopStore(file)
-    const svc = new GoalLoopService({ manager: Object.assign(new EventEmitter(), { deliverPromptToAgent: vi.fn() }), store })
+    const svc = new GoalLoopService({ manager: Object.assign(new EventEmitter(), { deliverPromptToAgent: vi.fn(), getBackendSnapshot: () => ({ input: { ready: true, revision: 1 } } as never) }), store })
     await svc.start()
     warn.mockRestore()
     // start() persists immediately, which used to replace the bad file.
