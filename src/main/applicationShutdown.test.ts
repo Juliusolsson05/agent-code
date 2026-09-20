@@ -35,6 +35,7 @@ function harness() {
     disposeWorkflowBridge: vi.fn(async (): Promise<void> => undefined),
     disposeCaffeinate: vi.fn(async (): Promise<void> => undefined),
     stopHeapWatchdog: vi.fn(async (): Promise<void> => undefined),
+    stopDetachedTmuxSweep: vi.fn(async (): Promise<void> => undefined),
     drainWorkspace: vi.fn(async (): Promise<void> => undefined),
     drainDictationHistory: vi.fn(async (): Promise<void> => undefined),
     flushGhosts: vi.fn(async (): Promise<void> => undefined),

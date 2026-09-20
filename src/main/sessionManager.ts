@@ -475,6 +475,8 @@ export class SessionManager extends EventEmitter {
     timer?: ReturnType<typeof setTimeout>
   }>()
   private readonly lastActivityAt = new Map<string, number>()
+  /** Subscribers to tmux ownership becoming true; see onTmuxAttached. */
+  private readonly tmuxAttachListeners = new Set<(tmuxName: string) => void>()
   // Latest per-session UI-state snapshots, cached at the emit sites below.
   // WHY: consumers that attach mid-flight (the remote mobile companion's
   // SessionFeedSource/RemoteServer — enabled long after sessions started —
@@ -3182,6 +3184,11 @@ export class SessionManager extends EventEmitter {
     })
 
     this.sessions.set(sessionId, terminalEntry)
+    // Publish ownership at the moment it becomes true, on the same tick. The
+    // detached sweep uses this to disqualify a name from an in-flight scan's
+    // kills, and to reset a retention clock the next sweep would otherwise
+    // still be counting from a PREVIOUS close (#1030 item 4 review).
+    this.noteTmuxAttached(tmuxSessionName)
     this.rememberSessionId(sessionId)
     this.throwIfSpawnCancelled(recoveryClaim, codexReplacementHandoff)
     try {
@@ -4923,6 +4930,46 @@ export class SessionManager extends EventEmitter {
   /** Current foreground state of every tracked terminal (#865). */
   getTerminalForegrounds(): Record<string, TerminalForegroundState> {
     return this.terminalForeground.snapshot()
+  }
+
+  /**
+   * Called synchronously whenever a tmux session is bound to a live terminal
+   * entry. The detached sweep subscribes; see its `noteAttached`.
+   *
+   * WHY a listener rather than the sweep polling `getLiveTmuxNames()`: every
+   * answer the sweep computes is a snapshot taken before an await, and an Undo
+   * Close restore can land inside one. This is the one signal that cannot be
+   * stale, because it fires on the same tick as the registration.
+   */
+  onTmuxAttached(listener: (tmuxName: string) => void): () => void {
+    this.tmuxAttachListeners.add(listener)
+    return () => { this.tmuxAttachListeners.delete(listener) }
+  }
+
+  private noteTmuxAttached(tmuxName: string | null): void {
+    if (!tmuxName) return
+    for (const listener of this.tmuxAttachListeners) {
+      // A listener must never be able to fail a terminal spawn.
+      try { listener(tmuxName) } catch { /* diagnostics only */ }
+    }
+  }
+
+  /**
+   * Every tmux session name main currently owns a live terminal for.
+   *
+   * The detached sweep (`tmux/detachedSweep.ts`) needs this as the second
+   * authority beside the persisted workspace file: autosave is debounced, so a
+   * terminal created seconds ago is live here and absent from the file, and the
+   * file alone would read it as an orphan and kill the user's brand-new shell.
+   * Read live from the registry rather than cached — a snapshot taken before an
+   * await is exactly the stale evidence that would authorize that kill.
+   */
+  getLiveTmuxNames(): string[] {
+    const names: string[] = []
+    for (const entry of this.sessions.values()) {
+      if (entry.kind === 'terminal' && entry.tmuxName) names.push(entry.tmuxName)
+    }
+    return names
   }
 
   /** Kill every live session. Called on app quit. */

@@ -21,6 +21,10 @@ export interface ApplicationShutdownServices {
   disposeWorkflowBridge: Stop
   disposeCaffeinate: Stop
   stopHeapWatchdog: Stop
+  /** The periodic detached-tmux reaper (#1030 item 4). Stopping it is pure
+   *  timer teardown — it must NEVER kill tmux sessions at quit, because those
+   *  shells are exactly what the next launch recovers terminals from. */
+  stopDetachedTmuxSweep: Stop
   drainWorkspace: Stop
   drainDictationHistory: Stop
   flushGhosts: Stop
@@ -105,6 +109,11 @@ export function installApplicationShutdown(options: {
   async function drain(): Promise<void> {
     for (const [name, stage] of stages) if (stage.state === 'failed') stages.delete(name)
     const earlyStops = stopExecution()
+    // Disarmed FIRST, before anything that can stall: it is the one shutdown
+    // stage that is purely about NOT doing something. Leaving it armed behind a
+    // hung provider stop would let a five-minute tick fire during quit and kill
+    // the tmux sessions the next launch recovers terminals from (#1030 item 4).
+    const detachedTmuxSweepStop = run('detached-tmux-sweep', services.stopDetachedTmuxSweep)
     const dictationStop = run('dictation', services.stopDictation)
     // Startup checks the committed gate after asynchronous acquisition. Its
     // settlement closes the resource inventory; a missing SessionManager alone
@@ -113,7 +122,7 @@ export function installApplicationShutdown(options: {
     // Extensions stop only after startup settles: startup creates the
     // runtime, and `run` keeps the first receipt, so an early stop against a
     // not-yet-published runtime would complete and let the real one escape.
-    await join([...earlyStops, ...stopExecution(), dictationStop, run('extensions', services.stopExtensions)])
+    await join([...earlyStops, ...stopExecution(), detachedTmuxSweepStop, dictationStop, run('extensions', services.stopExtensions)])
     await run('observations', services.flushObservations)
     await run('proxy-sweep', services.sweepOwnedProxies)
 

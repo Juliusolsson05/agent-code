@@ -1,3 +1,5 @@
+import { UNDO_CLOSE_RETENTION_MS } from '@shared/undoRetention'
+
 import type {
   SessionId,
   SessionMeta,
@@ -68,7 +70,11 @@ import type {
 // background timer whose only job would be making command-palette
 // visibility slightly fresher.
 
-export const UNDO_CLOSE_RETENTION_MS = 60 * 60 * 1000 // 1 hour
+// The retention window is defined in shared/ and re-exported here: main derives
+// its detached-tmux reap deadline from the same constant, because a closed
+// terminal's shell is kept alive for exactly as long as an undo entry can still
+// ask for it back. See src/shared/undoRetention.ts.
+export { UNDO_CLOSE_RETENTION_MS }
 export const UNDO_CLOSE_MAX_ENTRIES = 10
 
 // ---- Entry types ----
