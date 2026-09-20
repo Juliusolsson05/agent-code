@@ -770,6 +770,56 @@ export const sessionCommands: CommandDef[] = [
     },
   },
   {
+    // #1006: the per-agent toggle every sibling domain has (TLDR, Goal).
+    // goal_loop already had the Settings row and the per-session override
+    // plumbing, but no command, so "turn the loop on for just this agent"
+    // meant a trip through Settings and a reload by hand.
+    id: 'enable-goal-loop-mcp',
+    category: 'session',
+    surface: 'session',
+    title: 'Goal Loop MCP',
+    description: '**What it does:** Reloads the focused agent with goal-loop tools on or off.\n\n**Use when:** You want this agent to be able to run a harness-owned goal loop that keeps re-prompting it until the goal is done.\n\n**Notes:** The agent starts a loop itself when you ask it to (goal_loop_start). Every continuation is a model call, and the loop pauses at its budget. Turning the tools off ends a running loop, because the agent would no longer be able to report that it is done. The Goal Loop command shows and controls a running loop.',
+    keywords: ['goal', 'loop', 'autonomous', 'persistence', 'keep going', 'mcp'],
+    when: ({ workspace }) => {
+      return targetSupportsBuiltInMcpDomain(workspace, 'goal_loop')
+    },
+    getState: ctx => builtInMcpDomainState(ctx, 'goal_loop'),
+    run: async ({ workspace, ui }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return
+      const meta = workspace.state.sessions[sessionId]
+      const kind = meta?.kind ?? DEFAULT_PROVIDER
+      // Provider policy is repeated at the mutation boundary: visibility is
+      // advisory and the command stays reachable from keybindings and control.
+      if (
+        !isAgentProviderKind(kind) ||
+        !providerSupportsBuiltInMcpDomain(kind, 'goal_loop') ||
+        !meta
+      ) return
+
+      ui.closePalette()
+      const enable = !meta.builtInMcpDomains?.includes('goal_loop')
+      // Turning the tools off ENDS a running loop (#1045 review). The loop is
+      // harness-owned, so it survives the reload on its own, but the reloaded
+      // agent no longer has goal_loop_complete: it cannot say it is done, and
+      // every continuation it is sent runs to the cap. Ending it here is the
+      // honest reading of "this agent does not do goal loops any more", and it
+      // happens BEFORE the reload so it applies to the session id the loop is
+      // filed under rather than the replacement's.
+      if (!enable) {
+        // try/catch, not .catch(): a preload without the channel throws
+        // synchronously. Either way the reload is what the user asked for and
+        // must still happen; a loop left running is visible and stoppable from
+        // the Goal Loop command.
+        try { await window.api.controlGoalLoop({ sessionId, action: 'stop' }) } catch { /* reload anyway */ }
+      }
+      await reloadSessionWithBuiltInMcpChoice(workspace, sessionId, 'goal_loop', enable, {
+        reloaded: enable ? 'Reloaded with Goal Loop MCP' : 'Reloaded without Goal Loop MCP',
+        failed: 'Goal Loop MCP reload failed',
+      })
+    },
+  },
+  {
     id: 'enable-workflow-mcp',
     category: 'session',
     pickerVisibility: 'advanced',

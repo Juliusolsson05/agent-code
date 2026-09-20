@@ -48,8 +48,22 @@ function workspace(): Workspace {
 }
 function Harness({ model }: { model: Workspace }) {
   useKeybinds(model)
-  // A composer-like focus target, as in the tldr router harness.
-  return <input aria-label="Composer" />
+  return (
+    <>
+      {/* A composer-like focus target, as in the tldr router harness. */}
+      <input aria-label="Composer" />
+      {/* Editor chrome, with the marker the router reads to decide that Monaco
+          owns the target. The real global editor stamps it the same way. */}
+      <div data-global-editor-input-owner data-global-editor-monaco>
+        <textarea aria-label="Editor" />
+      </div>
+      {/* A transcript code block: a real Monaco instance with NO global-editor
+          marker, which is what lib/code/CodeBlock.tsx mounts in the feed. */}
+      <div className="monaco-editor">
+        <textarea aria-label="Code block" />
+      </div>
+    </>
+  )
 }
 function keyDown(options: Record<string, unknown>) {
   return fireEvent.keyDown(document.activeElement ?? document.body, options)
@@ -78,11 +92,11 @@ describe('goal loop overlay keyboard dismissal', () => {
     keyDown({ key: 'Escape' })
     expect(screen.queryByRole('dialog')).toBeNull()
   })
-  it('the Cmd+Shift+Y toggle chord dismisses the latched overlay', async () => {
+  it('the Cmd+Shift+G toggle chord dismisses the latched overlay', async () => {
     toggleGoalLoop()
     render(<><Harness model={workspace()} /><GoalLoopPane sessionId="a" /></>)
     expect(await screen.findByRole('dialog')).toBeTruthy()
-    keyDown({ key: 'y', code: 'KeyY', metaKey: true, shiftKey: true })
+    keyDown({ key: 'g', code: 'KeyG', metaKey: true, shiftKey: true })
     expect(screen.queryByRole('dialog')).toBeNull()
   })
 })
@@ -158,7 +172,7 @@ describe('goal loop command with no loop on the session (#1021)', () => {
     // press re-ran the command and re-armed an invisible latch.
     render(<Harness model={workspace()} />)
     runGoalLoopCommand()
-    keyDown({ key: 'y', code: 'KeyY', metaKey: true, shiftKey: true })
+    keyDown({ key: 'g', code: 'KeyG', metaKey: true, shiftKey: true })
     expect(useGoalLoopView.getState().latched).toBe(false)
     expect(harness.appState.requestCommandInvocation).not.toHaveBeenCalled()
   })
@@ -180,8 +194,8 @@ describe('goal loop command with no loop on the session (#1021)', () => {
   })
 
   it('a rebound goal-loop-preview chord still dismisses the overlay', async () => {
-    // #1007 plans to move the default chord off Cmd+Shift+Y. Before this fix
-    // the dismissal was a hardcoded Meta+Shift+KeyY check, so any rebind would
+    // #1007 moved the default chord off Cmd+Shift+Y. Before #1021's fix the
+    // dismissal was a hardcoded Meta+Shift+KeyY check, so any rebind would
     // have left Escape as the only keyboard exit.
     harness.appState = { ...harness.appState, settings: { agentViewMode: 'agent', commandKeybindingOverrides: { 'goal-loop-preview': ['Cmd+Ctrl+J'] } } }
     render(<><Harness model={workspace()} /><GoalLoopPane sessionId="a" /></>)
@@ -189,5 +203,55 @@ describe('goal loop command with no loop on the session (#1021)', () => {
     expect(await screen.findByRole('dialog')).toBeTruthy()
     keyDown({ key: 'j', code: 'KeyJ', metaKey: true, ctrlKey: true })
     expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('opens on the new Cmd+Shift+G chord (#1007)', () => {
+    render(<Harness model={workspace()} />)
+    keyDown({ key: 'g', code: 'KeyG', metaKey: true, shiftKey: true })
+    expect(harness.appState.requestCommandInvocation).toHaveBeenCalledWith('goal-loop-preview', 'keybinding')
+  })
+
+  it('yields Cmd+Shift+G to the editor, which owns it as Find Previous (#1045 review)', () => {
+    // Reproduced by review: the router latched the overlay on top of Monaco's
+    // own Find Previous, and the latch gate then swallowed every keystroke
+    // until Escape. Monaco's dispatcher does not check defaultPrevented, so
+    // both ran. The router must not consume the chord here at all.
+    render(<Harness model={workspace()} />)
+    const editor = screen.getByLabelText('Editor')
+    editor.focus()
+    expect(fireEvent.keyDown(editor, { key: 'g', code: 'KeyG', metaKey: true, shiftKey: true })).toBe(true)
+    expect(harness.appState.requestCommandInvocation).not.toHaveBeenCalled()
+    expect(useGoalLoopView.getState().latched).toBe(false)
+  })
+
+  it('yields Cmd+Shift+G to a transcript code block too (#1045 Codex review)', () => {
+    // Code blocks in the ordinary feed are Monaco editors without the global
+    // editor's marker, and Monaco binds Find Previous on read-only editors.
+    // A guard that knew only the global editor let the overlay latch over a
+    // code block and swallow every key after it.
+    render(<Harness model={workspace()} />)
+    const code = screen.getByLabelText('Code block')
+    code.focus()
+    expect(fireEvent.keyDown(code, { key: 'g', code: 'KeyG', metaKey: true, shiftKey: true })).toBe(true)
+    expect(harness.appState.requestCommandInvocation).not.toHaveBeenCalled()
+    expect(useGoalLoopView.getState().latched).toBe(false)
+  })
+
+  it('a stale latch does not cost the editor a Find Previous either (#1045 review)', () => {
+    // The stale-latch branch runs before the routed path. It must still drop
+    // the latch, but it may not consume the chord while the editor owns it.
+    render(<Harness model={workspace()} />)
+    runGoalLoopCommand()
+    expect(useGoalLoopView.getState().latched).toBe(true)
+    const editor = screen.getByLabelText('Editor')
+    editor.focus()
+    expect(fireEvent.keyDown(editor, { key: 'g', code: 'KeyG', metaKey: true, shiftKey: true })).toBe(true)
+    expect(useGoalLoopView.getState().latched).toBe(false)
+  })
+
+  it('the old Cmd+Shift+Y no longer opens the goal loop (#1007: macOS New Sticky Note)', () => {
+    render(<Harness model={workspace()} />)
+    keyDown({ key: 'y', code: 'KeyY', metaKey: true, shiftKey: true })
+    expect(harness.appState.requestCommandInvocation).not.toHaveBeenCalledWith('goal-loop-preview', expect.anything())
   })
 })

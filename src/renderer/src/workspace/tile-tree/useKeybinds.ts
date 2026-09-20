@@ -308,6 +308,20 @@ function buildBindingIndex(
   return index
 }
 
+/**
+ * Any Monaco editor, not just the global editor's.
+ *
+ * WHY the class and not only `[data-global-editor-input-owner]` (#1045 Codex
+ * review): a transcript code block is a real Monaco instance created by
+ * lib/code/CodeBlock.tsx, and it carries no global-editor marker. It still
+ * owns Cmd+Shift+G as Find Previous — Monaco binds that action on read-only
+ * editors too — so a guard that only knew the global editor let the goal-loop
+ * overlay latch over a code block in the ordinary feed and swallow every key
+ * after it. `.monaco-editor` is Monaco's own root class, so this covers every
+ * instance the app mounts, present and future.
+ */
+const MONACO_TARGET_SELECTOR = '[data-global-editor-input-owner], .monaco-editor'
+
 export function useKeybinds(
   workspace: Workspace,
 ): void {
@@ -487,7 +501,15 @@ export function useKeybinds(
           // latch with nothing to show, so every press in a terminal-only tab
           // flipped an invisible flag that a later mouse tab switch then
           // turned into an overlay out of nowhere (#1021 review).
-          if (routedCommandForEvent(e, bindingIndex, GLOBAL_CONTEXT_ONLY) === 'goal-loop-preview') {
+          //
+          // ...unless editor chrome owns the target: the chord is Monaco's
+          // Find Previous there (#1045 review), and the latch is already off,
+          // so consuming the key would cost one find per stale latch and buy
+          // nothing. Falling through leaves it to the editor, which is what
+          // the routed path below does for the same reason.
+          const editorOwnsStaleChord =
+            e.target instanceof Element && e.target.closest(MONACO_TARGET_SELECTOR) !== null
+          if (!editorOwnsStaleChord && routedCommandForEvent(e, bindingIndex, GLOBAL_CONTEXT_ONLY) === 'goal-loop-preview') {
             e.preventDefault()
             e.stopPropagation()
             return
@@ -496,9 +518,10 @@ export function useKeybinds(
           e.preventDefault()
           e.stopPropagation()
           // The toggle chord comes from the binding index rather than a
-          // hardcoded Meta+Shift+KeyY. Otherwise rebinding goal-loop-preview
-          // (#1007 plans to move it off a macOS-reserved chord) would silently
-          // remove the chord exit and leave Escape as the only way out.
+          // hardcoded chord literal. Otherwise rebinding goal-loop-preview
+          // (#1007 moved it off ⌘⇧Y, which macOS reserves for the New Sticky
+          // Note service) would silently remove the chord exit and leave
+          // Escape as the only way out.
           // GLOBAL_CONTEXT_ONLY for the same reason as the ownership branch
           // below: an overlay owns the screen, so only an app-wide chord can
           // mean "dismiss the thing in front of me".
@@ -764,6 +787,18 @@ export function useKeybinds(
         return
       }
 
+      // The goal loop overlay is not a hold gesture, so it does not share the
+      // TLDR hold path below — but it shares that path's editor rule, and for
+      // the same reason: Monaco owns Cmd+Shift+G as Find Previous exactly as it
+      // owns Cmd+G as Find Next and Cmd+L as Select Line (#1045 review
+      // reproduced the collision — the overlay latched on top of Monaco's find,
+      // and the latch gate then swallowed every keystroke until Escape).
+      // Yielding means returning WITHOUT preventDefault, so the editor's own
+      // handler still runs.
+      const editorOwnsRoutedCommand = (commandId: string | null): boolean =>
+        commandId === 'goal-loop-preview'
+        && (fullscreenEditorOwnsWorkspace || (eventElement?.closest(MONACO_TARGET_SELECTOR) ?? null) !== null)
+
       const handleTldrHold = (commandId: string | null): boolean => {
         // Goal (#936) shares TLDR's synchronous hold path, including the
         // Spotlight admission below and the editor yield: Monaco owns Cmd+G as
@@ -867,6 +902,7 @@ export function useKeybinds(
         textEditingTarget: isTextEditingTarget(e.target),
       })
       if (handleTldrHold(routedCommandId)) return
+      if (editorOwnsRoutedCommand(routedCommandId)) return
       if (routedCommandId) {
         e.preventDefault()
         requestCommandInvocation(routedCommandId, 'keybinding')
