@@ -120,6 +120,7 @@ describe('app interaction ownership at composer ingress', () => {
       active = false
     })
     const unregister = registerDictationTarget({
+      sessionId: 'session-1',
       enabled: true,
       focused: true,
       lastFocusedAt: Date.now(),

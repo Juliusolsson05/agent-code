@@ -1191,6 +1191,10 @@ export function useComposerDictation({
           pendingDiscardRef.current = true
         }
       },
+      // The lane boundary dictation follows (#1031 item 3): the registry
+      // matches this against the workspace's focused session rather than
+      // guessing from recency.
+      sessionId: sinkRef.current.sessionId,
       isStarting: () => statusRef.current === 'starting',
       isActive: () => activeRef.current !== null,
     }
