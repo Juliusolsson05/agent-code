@@ -5,6 +5,11 @@ import { LspManager } from './lspManager.js'
 type TestDocument = {
   clientUri: string
   serverKey: string
+  // Kept in step with `OpenDocumentRecord` deliberately (#921): a record built
+  // without a generation compares EQUAL to any other missing one, so the
+  // cleanup fence would silently match everything if one of these tests ever
+  // reached `discardServer`.
+  serverGeneration: string
   serverUri: string
   serverDocumentKey: string
   version: number
@@ -17,6 +22,8 @@ type TestDocument = {
 type TestServerDocument = {
   key: string
   serverKey: string
+  /** See `TestDocument`. */
+  serverGeneration: string
   serverUri: string
   language: string
   version: number
@@ -64,6 +71,7 @@ describe('LspManager document ownership', () => {
     internal.serverDocuments.set(sharedKey, {
       key: sharedKey,
       serverKey: 'server',
+      serverGeneration: 'gen-1',
       serverUri: 'file:///repo/file.ts',
       language: 'typescript',
       version: 1,
@@ -74,6 +82,7 @@ describe('LspManager document ownership', () => {
     internal.docs.set('file:///repo/file.ts', {
       clientUri: 'file:///repo/file.ts',
       serverKey: 'server',
+      serverGeneration: 'gen-1',
       serverUri: 'file:///repo/file.ts',
       serverDocumentKey: sharedKey,
       version: 1,
@@ -231,6 +240,7 @@ describe('LspManager document ownership', () => {
     internal.serverDocuments.set(sharedKey, {
       key: sharedKey,
       serverKey: 'server',
+      serverGeneration: 'gen-1',
       serverUri: 'file:///repo/shared.ts',
       language: 'typescript',
       version: 1,
@@ -241,6 +251,7 @@ describe('LspManager document ownership', () => {
     internal.docs.set(clientUri, {
       clientUri,
       serverKey: 'server',
+      serverGeneration: 'gen-1',
       serverUri: 'file:///repo/shared.ts',
       serverDocumentKey: sharedKey,
       version: 1,
@@ -303,6 +314,7 @@ describe('LspManager document ownership', () => {
       internal.serverDocuments.set(sharedKey, {
         key: sharedKey,
         serverKey: 'server',
+        serverGeneration: 'gen-1',
         serverUri: 'file:///repo/hung.ts',
         language: 'typescript',
         version: 1,
@@ -313,6 +325,7 @@ describe('LspManager document ownership', () => {
       internal.docs.set(clientUri, {
         clientUri,
         serverKey: 'server',
+        serverGeneration: 'gen-1',
         serverUri: 'file:///repo/hung.ts',
         serverDocumentKey: sharedKey,
         version: 1,
@@ -344,6 +357,7 @@ describe('LspManager document ownership', () => {
     internal.serverDocuments.set(sharedKey, {
       key: sharedKey,
       serverKey: 'server',
+      serverGeneration: 'gen-1',
       serverUri,
       language: 'typescript',
       version: 4,
@@ -358,6 +372,7 @@ describe('LspManager document ownership', () => {
       internal.docs.set(clientUri, {
         clientUri,
         serverKey: 'server',
+        serverGeneration: 'gen-1',
         serverUri,
         serverDocumentKey: sharedKey,
         version: 4,
@@ -432,6 +447,7 @@ describe('LspManager document ownership', () => {
     internal.docs.set('file:///repo/file.ts', {
       clientUri: 'file:///repo/file.ts',
       serverKey: 'server',
+      serverGeneration: 'gen-1',
       serverUri: 'file:///repo/file.ts',
       serverDocumentKey: 'server\0file:///repo/file.ts',
       version: 1,
@@ -477,6 +493,7 @@ describe('LspManager document ownership', () => {
       internal.docs.set('file:///repo/file.ts', {
         clientUri: 'file:///repo/file.ts',
         serverKey: 'server',
+        serverGeneration: 'gen-1',
         serverUri: 'file:///repo/file.ts',
         serverDocumentKey: 'server\0file:///repo/file.ts',
         version: 1,
@@ -505,6 +522,7 @@ describe('LspManager document ownership', () => {
     const doc: TestDocument = {
       clientUri: 'file:///repo/file.ts',
       serverKey: 'server',
+      serverGeneration: 'gen-1',
       serverUri: 'file:///repo/file.ts',
       serverDocumentKey: 'server\0file:///repo/file.ts',
       version: 1,
