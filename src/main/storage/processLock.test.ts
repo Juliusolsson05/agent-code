@@ -1,11 +1,11 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { acquireStateProcessLock } from './processLock.js'
-import type { StateProcessLockOwner } from './processLock.js'
+import { acquireStateProcessLock, classifyLockOwner } from './processLock.js'
+import type { LockOwnerProbe, StateProcessLockOwner } from './processLock.js'
 
 // ---------------------------------------------------------------------------
 // The lock that is supposed to guarantee ONE main process per state directory
@@ -72,58 +72,142 @@ describe('the lock refuses a second main process', () => {
   })
 })
 
-describe('a LIVE pid is never stolen from on a heuristic (#993)', () => {
-  // `defaultIsLockOwnerActive` answers 'inactive' in two very different
-  // situations: the pid is GONE, and the pid is ALIVE but `ps` did not show a
-  // command line matching the recorded argv0. The second is a guess — an app
-  // updated in place, a renamed bundle, a dev binary at a moved path — and
-  // acting on it takes the lock away from a process that is still writing.
-  //
-  // That is the only mechanism that produces #993's exact evidence: two live
-  // mains, and then NO lock file at all, because whichever one exits first
-  // matches its own token and deletes the file while the other keeps running.
-  //
-  // Not stealing costs a bounded wait. Stealing costs a corrupted state
-  // directory, so an unconfirmable live owner must get the same grace window a
-  // failed `ps` already gets.
-  // Driven through the REAL classifier and a REAL live pid — this process —
-  // because the bug is in the classifier, not in how acquire treats its
-  // answer. `ps` genuinely runs; the command line it prints for vitest cannot
-  // contain the recorded argv0, which is exactly the shape of an app whose
-  // bundle moved or was replaced in place while running.
-  const liveButUnconfirmable = {
-    pid: process.pid,
-    argv0: '/Applications/Agent Code.app/Contents/MacOS/Agent Code',
+describe('classifying the recorded owner (#993)', () => {
+  // Driven through the exported `classifyLockOwner` because every branch is a
+  // different kind of evidence and the interesting ones need a world this
+  // machine does not have: a live pid whose command line does not match, a
+  // recycled pid, a `ps` that refuses to answer. Injecting the probe makes all
+  // of them reachable without coupling the suite to the checkout's path — an
+  // earlier version drove the real classifier against the vitest pid and would
+  // have flipped had the repository lived under a directory named "Agent Code".
+  const owner: StateProcessLockOwner = {
     token: 'incumbent',
+    pid: 4242,
+    startedAt: '2026-09-18T10:00:00.000Z',
+    argv0: '/Applications/Agent Code.app/Contents/MacOS/Agent Code',
   }
+  const probe = (over: Partial<LockOwnerProbe> = {}): LockOwnerProbe => ({
+    isPidRunning: () => true,
+    commandLineForPid: () => '/Applications/Agent Code.app/Contents/MacOS/Agent Code',
+    processStartedAtMs: () => Date.parse('2026-09-18T09:59:59.000Z'),
+    ...over,
+  })
+  const ms = (iso: string) => Date.parse(iso)
 
-  it('does not take the lock from a live pid it cannot confirm', async () => {
-    await writeOwner({ ...liveButUnconfirmable, startedAt: new Date().toISOString() })
-    const lock = await acquireStateProcessLock({ stateDir, pid: 100, argv0: '/apps/Agent Code' })
-    expect(lock).toMatchObject({ acquired: false, reason: 'active-owner' })
-    // The incumbent's file is still its own. Overwriting it is what leaves the
-    // incumbent unable to clean up after itself later.
-    const still = JSON.parse(await readFile(lockPath, 'utf8')) as StateProcessLockOwner
-    expect(still.token).toBe('incumbent')
+  it('a dead pid is free', () => {
+    expect(classifyLockOwner(owner, probe({ isPidRunning: () => false }))).toBe('inactive')
   })
 
-  it('still self-heals once such a lock is old, so PID reuse cannot lock anyone out', async () => {
-    await writeOwner({ ...liveButUnconfirmable, startedAt: new Date('2026-09-18T10:00:00Z').toISOString() })
+  it('a live pid still advertising the recorded executable is the owner', () => {
+    expect(classifyLockOwner(owner, probe())).toBe('active')
+  })
+
+  // Each of these is asserted against a start time that would say 'inactive'
+  // on its own, so the command-line match is what decides the answer. Probing
+  // with a start time that already implies 'active' would let the whole match
+  // be deleted with the suite still green.
+  const looksRecycled = { processStartedAtMs: () => ms('2026-09-18T11:00:00.000Z') }
+
+  it('matches the recorded executable however the argv is rendered', () => {
+    expect(classifyLockOwner(owner, probe({
+      ...looksRecycled,
+      commandLineForPid: () => `${owner.argv0} --enable-features=X`,
+    }))).toBe('active')
+  })
+
+  it('matches on the basename when the path has moved', () => {
+    // The bundle running from a different directory is still the same app.
+    expect(classifyLockOwner(owner, probe({
+      ...looksRecycled,
+      commandLineForPid: () => '/Volumes/Install/Agent Code.app/Contents/MacOS/Agent Code',
+    }))).toBe('active')
+  })
+
+  it('treats an empty recorded argv0 as unmatchable rather than as a mismatch', () => {
+    // `process.argv[0]` can be absent; refusing to decide on no evidence is
+    // not the same as deciding the owner is gone.
+    expect(classifyLockOwner({ ...owner, argv0: '' }, probe({
+      ...looksRecycled,
+      commandLineForPid: () => 'something else entirely',
+    }))).toBe('active')
+  })
+
+  // ── THE #993 CASE ──
+  // A live pid whose command line does not match is NOT evidence the owner is
+  // gone. The bundle may have been replaced in place by an update, renamed or
+  // moved. Stealing here puts two mains on one state directory.
+  const mismatched = probe({ commandLineForPid: () => '/opt/homebrew/bin/some-other-process' })
+
+  it('keeps the lock when the live pid started BEFORE it — that is the owner', () => {
+    // A process cannot have started after the lock its own acquisition wrote,
+    // so this is the incumbent however its command line now reads. No grace
+    // window is involved: the answer is exact and permanent.
+    expect(classifyLockOwner(owner, { ...mismatched, processStartedAtMs: () => ms('2026-09-18T09:00:00.000Z') }))
+      .toBe('active')
+  })
+
+  it('does not care how OLD such a lock is', () => {
+    // The first attempt at this fix routed the mismatch into the five-minute
+    // grace window, which is measured from the lock's `startedAt` — the
+    // incumbent's UPTIME. Every reason for a mismatch is permanent for the
+    // life of that process, so anything older than five minutes was stolen
+    // from exactly as before, and five minutes of uptime is nothing.
+    expect(classifyLockOwner(
+      { ...owner, startedAt: '2020-01-01T00:00:00.000Z' },
+      { ...mismatched, processStartedAtMs: () => ms('2019-12-31T23:00:00.000Z') },
+    )).toBe('active')
+  })
+
+  it('frees a lock whose pid started AFTER it — that is a recycled number', () => {
+    expect(classifyLockOwner(owner, { ...mismatched, processStartedAtMs: () => ms('2026-09-18T11:00:00.000Z') }))
+      .toBe('inactive')
+  })
+
+  it('tolerates a start time a shade later than the lock it wrote', () => {
+    // `lstart` rounds to the second and the two clocks are read at different
+    // moments, so the owner can look marginally younger than its own lock.
+    expect(classifyLockOwner(owner, { ...mismatched, processStartedAtMs: () => ms('2026-09-18T10:00:01.000Z') }))
+      .toBe('active')
+  })
+
+  it('falls back to the bounded window when neither question can be answered', () => {
+    expect(classifyLockOwner(owner, probe({
+      commandLineForPid: () => null,
+      processStartedAtMs: () => null,
+    }))).toBe('inconclusive')
+    // …and when the lock's own timestamp is unusable.
+    expect(classifyLockOwner({ ...owner, startedAt: 'not a date' }, mismatched)).toBe('inconclusive')
+  })
+})
+
+describe('an unconfirmable live owner gets a bounded window, and only a bounded one', () => {
+  it('refuses while the window is open', () => {
+    // The guard itself. Nothing else pins this from BELOW: shrinking the
+    // window to a second would otherwise ship green.
+    const lock = acquireStateProcessLock({
+      stateDir, pid: 100, now: at('2026-09-18T10:04:00Z'), isLockOwnerActive: () => 'inconclusive',
+    })
+    return writeOwner({ startedAt: '2026-09-18T10:00:00.000Z' })
+      .then(() => lock)
+      .then(result => expect(result).toMatchObject({ acquired: false, reason: 'active-owner' }))
+  })
+
+  it('takes over once it has expired', async () => {
+    await writeOwner({ startedAt: '2026-09-18T10:00:00.000Z' })
     const lock = await acquireStateProcessLock({
-      stateDir,
-      pid: 100,
-      argv0: '/apps/Agent Code',
-      now: at('2026-09-18T10:30:00Z'),
+      stateDir, pid: 100, now: at('2026-09-18T10:30:00Z'), isLockOwnerActive: () => 'inconclusive',
     })
     expect(lock.acquired).toBe(true)
   })
 
-  it('takes over immediately when the pid is really gone', async () => {
-    // The distinction that has to survive: a DEAD owner costs nothing to
-    // clean up, and making every stale lock wait five minutes would turn a
-    // crash into a five-minute outage.
-    await writeOwner({ pid: 0x7ffffffe, startedAt: new Date().toISOString() })
-    const lock = await acquireStateProcessLock({ stateDir, pid: 100, argv0: '/apps/Agent Code' })
+  it('opens even when the lock claims a FUTURE start time', async () => {
+    // A clock corrected backwards leaves `startedAt` ahead of now. A negative
+    // age is below every threshold forever, so the window never opened and the
+    // user had to delete a JSON file by hand to launch.
+    await writeOwner({ startedAt: '2030-01-01T00:00:00.000Z' })
+    const lock = await acquireStateProcessLock({
+      stateDir, pid: 100, now: at('2026-09-18T10:00:00Z'), isLockOwnerActive: () => 'inconclusive',
+    })
     expect(lock.acquired).toBe(true)
   })
 })
@@ -147,6 +231,22 @@ describe('release is owner-scoped', () => {
     expect((JSON.parse(await readFile(lockPath, 'utf8')) as StateProcessLockOwner).pid).toBe(200)
   })
 
+  it('gives each acquisition a distinct token, so a stale release cannot fire', async () => {
+    // The real sequence: A exits and releases, B launches and acquires, and
+    // only THEN does a late `releaseSync` from A run. With a constant token
+    // that late call would match B's lock and delete it, leaving B running
+    // unprotected — which is the state #993 reports.
+    const first = await acquireStateProcessLock({ stateDir, pid: 100 })
+    if (!first.acquired) throw new Error('expected the lock')
+    await first.release()
+    const second = await acquireStateProcessLock({ stateDir, pid: 200 })
+    if (!second.acquired) throw new Error('expected the lock')
+    expect(second.token).not.toBe(first.token)
+
+    first.releaseSync()
+    expect(existsSync(lockPath)).toBe(true)
+  })
+
   it('does the same synchronously, which is the crash path', async () => {
     const lock = await acquireStateProcessLock({ stateDir, pid: 100 })
     if (!lock.acquired) throw new Error('expected the lock')
@@ -157,6 +257,27 @@ describe('release is owner-scoped', () => {
 })
 
 describe('a half-written lock is not treated as free', () => {
+  it('still treats a lock a few seconds ahead of the clock as fresh', async () => {
+    // Filesystem mtimes carry sub-millisecond precision that `Date.now()` does
+    // not, so the freshest possible lock — the one being written during the
+    // create/write race — can read as a hair in the future. Without a jitter
+    // margin, treating "future" as "infinitely old" would delete exactly that.
+    await writeFile(lockPath, '', 'utf8')
+    const soon = new Date(Date.now() + 5_000)
+    await utimes(lockPath, soon, soon)
+    expect(await acquireStateProcessLock({ stateDir, pid: 100 }))
+      .toMatchObject({ acquired: false, reason: 'unreadable-lock' })
+  })
+
+  it('does not block forever on a garbage lock with a FUTURE mtime', async () => {
+    // Needs no live pid at all: a lock file restored from a backup with a
+    // future mtime used to block startup indefinitely, because a negative age
+    // is below every staleness threshold.
+    await writeFile(lockPath, 'not json', 'utf8')
+    await utimes(lockPath, new Date('2030-01-01T00:00:00Z'), new Date('2030-01-01T00:00:00Z'))
+    expect((await acquireStateProcessLock({ stateDir, pid: 100 })).acquired).toBe(true)
+  })
+
   it('refuses a fresh unparseable lock, which is the create/write window', async () => {
     // `open(..., 'wx')` creates the file before the JSON body is written. A
     // sibling that reads that instant must not call it stale.

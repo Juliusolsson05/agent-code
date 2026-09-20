@@ -10,6 +10,7 @@ const LOCK_FILE_NAME = 'agent-code.process-lock.json'
 const INVALID_LOCK_STALE_MS = 5 * 60 * 1000
 const INCONCLUSIVE_OWNER_STALE_MS = 5 * 60 * 1000
 const MAX_STALE_RETRIES = 2
+const CLOCK_JITTER_TOLERANCE_MS = 60 * 1000
 
 export type StateProcessLockOwner = {
   token: string
@@ -72,49 +73,117 @@ function commandLineForPid(pid: number): string | null {
   }
 }
 
-function defaultIsLockOwnerActive(owner: StateProcessLockOwner): LockOwnerActivity {
-  if (!isPidRunning(owner.pid)) return 'inactive'
-  const commandLine = commandLineForPid(owner.pid)
-  if (!commandLine) return 'inconclusive'
-  const ownerExecutable = basename(owner.argv0)
-  // WHY PID liveness is not enough:
-  //
-  // Lock files intentionally survive crashes so the next launch can decide
-  // whether the recorded owner is still alive. PIDs are recycled, though; a
-  // random unrelated process can inherit the old number after reboot and make
-  // `kill(pid, 0)` succeed forever. The command-line check is not a security
-  // boundary, but it is a practical stale-lock discriminator: a live Agent
-  // Code/Electron owner still advertises the executable that wrote the lock,
-  // while a recycled PID almost certainly does not.
-  if (
-    ownerExecutable.length === 0 ||
-    commandLine.includes(owner.argv0) ||
-    commandLine.includes(ownerExecutable)
-  ) {
-    return 'active'
+/**
+ * When the kernel says that pid started, in epoch milliseconds.
+ *
+ * `LC_ALL=C` because the format is parsed, not displayed — `mitmproxyReaper`
+ * pins the same locale for the same `lstart` field and for the same reason.
+ * `lstart` has one-second resolution, which is all this needs.
+ */
+function processStartedAtMs(pid: number): number | null {
+  try {
+    const raw = execFileSync('ps', ['-p', String(pid), '-o', 'lstart='], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      env: { ...process.env, LC_ALL: 'C' },
+    }).trim()
+    if (raw.length === 0) return null
+    const parsed = Date.parse(raw)
+    return Number.isFinite(parsed) ? parsed : null
+  } catch {
+    return null
   }
-  // ── A LIVE PID WE CANNOT CONFIRM IS 'inconclusive', NEVER 'inactive' (#993) ──
+}
+
+/**
+ * The ports the classifier reads the world through. Injected so every branch
+ * can be driven in a test — including the ones that need a pid, a command line
+ * or a process start time this machine does not happen to have.
+ */
+export type LockOwnerProbe = {
+  isPidRunning(pid: number): boolean
+  commandLineForPid(pid: number): string | null
+  processStartedAtMs(pid: number): number | null
+}
+
+const REAL_PROBE: LockOwnerProbe = { isPidRunning, commandLineForPid, processStartedAtMs }
+
+/**
+ * `lstart` rounds to the second and the two clocks are read at different
+ * moments, so a process that acquired the lock in its first instant can look a
+ * shade younger than its own lock. Only a gap larger than this counts as
+ * evidence of a DIFFERENT process wearing the same pid.
+ */
+const PID_REUSE_TOLERANCE_MS = 2_000
+
+/**
+ * Is the process named in this lock still the one that wrote it?
+ *
+ * Exported so the decision can be driven directly; every branch here is a
+ * different kind of evidence and each one changes what happens to a live
+ * process's state directory.
+ */
+export function classifyLockOwner(
+  owner: StateProcessLockOwner,
+  probe: LockOwnerProbe = REAL_PROBE,
+): LockOwnerActivity {
+  // The pid is gone. Nothing to protect; the lock is free.
+  if (!probe.isPidRunning(owner.pid)) return 'inactive'
+
+  const commandLine = probe.commandLineForPid(owner.pid)
+  if (commandLine !== null) {
+    // WHY a PID liveness check is not enough:
+    //
+    // Lock files intentionally survive crashes so the next launch can decide
+    // whether the recorded owner is still alive. PIDs are recycled, though; a
+    // random unrelated process can inherit the old number after reboot and make
+    // `kill(pid, 0)` succeed forever. The command-line check is not a security
+    // boundary, but a live Agent Code/Electron owner still advertises the
+    // executable that wrote the lock, while a recycled PID almost certainly
+    // does not.
+    //
+    // Matched on the BASENAME alone, which is not a loosening: any command
+    // line containing the full `argv0` necessarily contains its basename, and
+    // an empty `argv0` yields an empty basename that `includes` accepts from
+    // every string. The two extra clauses this used to carry could never be
+    // the deciding one — mutation testing found both unreachable — and a
+    // condition that cannot change an answer is a condition the next reader
+    // has to disprove.
+    if (commandLine.includes(basename(owner.argv0))) return 'active'
+  }
+
+  // ── LIVE PID, NO MATCH: ASK THE KERNEL INSTEAD OF GUESSING (#993) ──
   //
-  // This used to answer 'inactive' here, which sends acquisition down the
-  // stale-lock path: delete the file and take over. But the only thing that
-  // failed is a STRING MATCH against a command line — and there are ordinary
-  // reasons for that to fail while the owner is very much alive and writing:
-  // the bundle was replaced in place by an update, the app was renamed or
-  // moved, a dev binary lives at a path that has since changed, or `ps`
-  // rendered the argv differently than `process.argv[0]` spelled it.
+  // This used to answer 'inactive' — delete the file and take over. But the
+  // only thing that failed is a STRING MATCH against a command line, and there
+  // are ordinary reasons for that to fail while the owner is very much alive
+  // and writing: the bundle was replaced in place by an update, the app was
+  // renamed or moved, a dev binary lives at a path that has since changed, or
+  // `ps` rendered the argv differently than `process.argv[0]` spelled it.
   //
-  // Acting on that guess is what #993 looks like from the inside. Two mains
-  // ran against ~/.config/agent-code at once, and then the lock file was gone
-  // ENTIRELY — because once the incumbent's lock has been overwritten, its own
-  // release no longer matches the token, so whichever process exits first
-  // deletes the file and leaves the other running unprotected and invisible.
+  // A first attempt at this routed the mismatch into the 'inconclusive' grace
+  // window below. Review showed that does almost nothing: the window is
+  // measured from the lock's `startedAt`, which is the incumbent's UPTIME, and
+  // every reason for the mismatch is permanent for the life of that process.
+  // So anything older than five minutes was stolen from exactly as before, and
+  // five minutes of uptime is nothing.
   //
-  // The asymmetry decides it. Refusing to steal costs a bounded wait: the
-  // grace window below expires and the lock is cleaned up anyway, so PID reuse
-  // after a reboot still cannot lock anyone out. Stealing costs two main
-  // processes writing one state directory, which is the corruption this whole
-  // file exists to prevent. So 'inactive' is now reserved for the one case we
-  // actually KNOW: the pid is gone.
+  // There is no need to guess at all. The question the heuristic was groping
+  // for is "is this pid the process that wrote the lock, or a recycled number
+  // wearing it?", and the kernel answers it exactly: a process cannot have
+  // started AFTER the lock that its own acquisition wrote. So a start time
+  // later than `startedAt` is a reused pid and nothing else, while a start
+  // time at or before it is the genuine owner, however its command line now
+  // reads.
+  const lockWrittenAtMs = Date.parse(owner.startedAt)
+  const startedAtMs = probe.processStartedAtMs(owner.pid)
+  if (startedAtMs !== null && Number.isFinite(lockWrittenAtMs)) {
+    return startedAtMs > lockWrittenAtMs + PID_REUSE_TOLERANCE_MS ? 'inactive' : 'active'
+  }
+
+  // Neither `ps` query answered, or the lock carries no usable timestamp. The
+  // pid IS alive, so this is the one genuinely unknown case, and it gets the
+  // bounded window below rather than a takeover.
   return 'inconclusive'
 }
 
@@ -146,6 +215,40 @@ function parseLock(raw: string): StateProcessLockOwner | null {
   }
 }
 
+/**
+ * How old something is, where a timestamp FROM THE FUTURE counts as infinitely
+ * old rather than infinitely young.
+ *
+ * ── WHY NOT JUST CLAMP TO ZERO (#1072 review, finding 5b) ──
+ * A clock corrected backwards — bad RTC, VM snapshot restore, a dual-boot
+ * machine treating the RTC as local time — leaves a recorded time ahead of
+ * `now`. Subtracting gives a NEGATIVE age, which is below every threshold, so
+ * the grace window never opens and the user has to delete a JSON file by hand
+ * to launch. Clamping to zero does not fix that: the age stays pinned at zero
+ * until the real clock catches up, which may be years.
+ *
+ * A timestamp that cannot have happened yet is not evidence of freshness, and
+ * the entire point of these windows is that they are BOUNDED. So an
+ * impossible time makes the lock immediately eligible for cleanup.
+ *
+ * That is safe here because it is no longer load-bearing for a live owner:
+ * `classifyLockOwner` answers 'active' for a real incumbent from the kernel's
+ * process start time, with no window involved. Reaching this with a live pid
+ * now requires `ps` to answer nothing at all AND the timestamp to be corrupt —
+ * and between a permanent lockout and a bounded takeover in that corner, the
+ * bounded one is the lesser harm.
+ */
+function ageFrom(basisMs: number, now: () => Date): number {
+  const age = now().getTime() - basisMs
+  // The tolerance is not cosmetic. A file's mtime carries sub-millisecond
+  // precision that `Date.now()` does not, so a lock written microseconds ago
+  // can read as a hair in the future — and without a margin that would make
+  // the freshest possible lock, the one being written RIGHT NOW in the
+  // create/write race, instantly eligible for deletion. A minute is far beyond
+  // any filesystem or scheduling jitter and far below any real clock skew.
+  return age < -CLOCK_JITTER_TOLERANCE_MS ? Number.POSITIVE_INFINITY : Math.max(0, age)
+}
+
 async function readExistingLock(
   lockPath: string,
   now: () => Date,
@@ -167,12 +270,12 @@ async function readExistingLock(
       : fileStat?.mtimeMs
     return {
       owner,
-      ownerAgeMs: ageBaseMs === undefined ? null : now().getTime() - ageBaseMs,
+      ownerAgeMs: ageBaseMs === undefined ? null : ageFrom(ageBaseMs, now),
       invalidAgeMs: null,
     }
   }
   if (!fileStat) return { owner: null, ownerAgeMs: null, invalidAgeMs: null }
-  return { owner: null, ownerAgeMs: null, invalidAgeMs: now().getTime() - fileStat.mtimeMs }
+  return { owner: null, ownerAgeMs: null, invalidAgeMs: ageFrom(fileStat.mtimeMs, now) }
 }
 
 export async function acquireStateProcessLock(
@@ -182,7 +285,7 @@ export async function acquireStateProcessLock(
   const pid = options.pid ?? process.pid
   const argv0 = options.argv0 ?? process.argv[0] ?? 'unknown'
   const now = options.now ?? (() => new Date())
-  const isLockOwnerActive = options.isLockOwnerActive ?? defaultIsLockOwnerActive
+  const isLockOwnerActive = options.isLockOwnerActive ?? ((owner: StateProcessLockOwner) => classifyLockOwner(owner))
   const lockPath = join(stateDir, LOCK_FILE_NAME)
   const token = randomUUID()
 
