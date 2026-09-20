@@ -513,6 +513,13 @@ claude 2.1.143 / codex 0.130.0 are stale versus the 2.1.278 / 0.155.1 in daily u
   (one per composer). Optional follow-up: a single app-level subscription.
 
 ### Progress log
+- 2026-09-19 19:30Z — Codex review round 1 (owner asked for Codex reviewers):
+  - **MERGED:** #876 (`68f7d6e3`, feed block order, Codex APPROVE) and #1046 (`ecf7c727`, command promotion, APPROVE + its three description nits fixed).
+  - **#1045** (`0e8cc5e9`): Codex found the editor yield incomplete — a transcript code block is a real Monaco instance with no global-editor marker, so the overlay still latched over it. Both guards now match Monaco's own root class through one shared selector.
+  - **#945** (`ff0b9a0b`, `9309b9d5`): CI caught a merge that staged index.ts but not applicationShutdown.ts. Codex then found that a failed committed quit offered only "Keep Agent Code Open" and ignored the answer — with every window gone and window creation fenced, that stranded the process. A new quitFailureDialog.ts offers Retry Quit and acts on it.
+  - **#935** (`b6223f78`): Codex found a P1 — a REFUSED kill-owned still released the display claim, so a live session's output was quarantined with no owner to show the gap. The release now needs the close to have happened or the backend to be gone. Also: the pane stops offering "Refresh view" once the ticket is spent, and the old test that clicked it again only passed because its mock ignored the ticket.
+  - **#1047**: the policy/bootstrap review found a BLOCKING one — the panel told users to run OpenCode's installer, which writes ~/.opencode/bin and exports PATH from ~/.zshrc, which `zsh -lc` never sources, so "install, then Retry" dead-ended. Fixed in `14377943` with the durable provider-less acknowledgment, the answer-recording rule, the open-setup guard and the test-seam waiter.
+  - **Delta re-reviews dispatched** to the same Codex children for #1045, #945, #935; a fresh Codex reviewer is on #1047.
 - 2026-09-19 18:45Z (session resumed after an interrupt; the goal loop is re-armed):
   - **MERGED:** #1044 (`ef8219d0`, #1018 orchestration failures, APPROVE on the delta re-review) and #931 (session-ownership plan doc, with a comment that it predates #1013).
   - **Reviews landed:**
