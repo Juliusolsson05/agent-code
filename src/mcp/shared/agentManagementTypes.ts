@@ -30,6 +30,17 @@ export type ManagedAgentTranscriptAvailability =
   | 'not_created'
   | 'unavailable'
 
+/**
+ * Which class of evidence a published `lastActivityAt` rests on. An auditing
+ * agent cites it, and the design doc ranks these deliberately: a real
+ * transcript record outranks a clock that a screen repaint can move
+ * (docs/superpowers/plans/2026-07-23-open-agent-mcp-control.md).
+ */
+export type ManagedAgentActivitySource = 'transcript' | 'runtime' | 'backend'
+
+/** The subset the RENDERER can decide: it has no view of the backend's clock. */
+export type ManagedAgentRendererActivitySource = Exclude<ManagedAgentActivitySource, 'backend'>
+
 export type ManagedAgentProject = {
   tabId: string
   title: string
@@ -52,7 +63,7 @@ export type ManagedAgentRecord = {
     lastModifiedAt?: number
   }
   lastActivityAt?: number
-  lastActivitySource?: 'transcript' | 'runtime' | 'backend'
+  lastActivitySource?: ManagedAgentActivitySource
   idleForMs?: number
   processActive: boolean
   awaitingAssistant: boolean
@@ -93,20 +104,25 @@ export type ManagedAgentRendererDescriptor = {
   providerSessionId?: string
   /**
    * The ONE answer to "when was this agent last active" (#915), shared with
-   * the TLDR peek footer via `sessionActivity`.
+   * the TLDR peek footer via `sessionActivity`, plus which class of evidence
+   * produced it.
    *
-   * The two fields below are the evidence that feeds it. They are kept because
-   * an existing caller may read them, but an agent deciding whether a child is
-   * idle should read THIS — combining the raw fields itself is precisely how
-   * the inventory and the footer came to report different times for the same
-   * agent, and "is this safe to close" is not a question that should have two
-   * answers.
+   * WHY the renderer decides the source and the bridge does not: the bridge
+   * sees this as a single number and would have to label it by where it
+   * arrived from, which is how a JSONL watermark came to be published as
+   * `lastActivitySource: 'runtime'` — the value right, the citation wrong
+   * (review of #1080). Only the renderer knows whether a transcript record or
+   * a runtime clock won.
+   *
+   * This type is renderer-private and never serialised to an MCP caller (see
+   * `providerSessionId` above); its sole consumer is `AgentManagementBridge`,
+   * in the same binary. An earlier version also carried the raw
+   * `transcriptActivityAt`/`runtimeActivityAt` components "because an existing
+   * caller may read them" — there is no such caller, and once the bridge
+   * stopped recombining them nothing read them at all, so they are gone.
    */
   lastActiveAt?: number
-  /** Newest transcript time the reader has seen. One input to `lastActiveAt`. */
-  transcriptActivityAt?: number
-  /** Newest runtime-observed work. One input to `lastActiveAt`. */
-  runtimeActivityAt?: number
+  lastActiveSource?: ManagedAgentRendererActivitySource
 }
 
 export type ManagedAgentRendererOutput = {
@@ -114,8 +130,7 @@ export type ManagedAgentRendererOutput = {
   providerSessionId?: string
   /** See `ManagedAgentRendererDescriptor.lastActiveAt` (#915). */
   lastActiveAt?: number
-  transcriptActivityAt?: number
-  runtimeActivityAt?: number
+  lastActiveSource?: ManagedAgentRendererActivitySource
 }
 
 type AgentManagementRequestBase = {

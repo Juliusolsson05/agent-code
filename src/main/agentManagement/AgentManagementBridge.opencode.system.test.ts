@@ -84,7 +84,8 @@ function rendererDescriptor(): ManagedAgentRendererDescriptor {
       isCaller: false,
     },
     providerSessionId: 'provider-agent-1',
-    runtimeActivityAt: 7_000,
+    lastActiveAt: 7_000,
+    lastActiveSource: 'runtime' as const,
   }
 }
 

@@ -209,19 +209,24 @@ function absoluteTime(ts: number): string {
 // screen receipt alone is not activity: cursor redraws must not make an idle
 // agent look new. Unknown/bootstrap history remains ineligible until observed.
 //
-// WHY this is its own, deliberately conservative rule instead of a shared
-// "last active" helper (#886 review m1): #915 documents that the TLDR footer
-// (features/tldr/freshness.ts) and Agent Management (agentManagementMcp.ts)
-// already derive last-active differently, and unifying them changes Agent
-// Management's MCP output for existing callers — #915 owns that decision, so
-// this PR does not pre-empt it. This rule answers a narrower question, "is it
-// SAFE to kill this as old?", so it takes the newest of every channel
-// (transcript tail, ingest watermark, submission, phase, semantic turns) and
-// refuses to age incomplete history. It can call an agent recent that Agent
-// Activity (AgentActivityModal: last entry ?? turnStartedAt) shows as "8h ago";
-// for a destructive filter that is the right direction to be wrong in. When
-// #915 lands one helper, this should become its most conservative consumer,
-// not be loosened to match the display surfaces.
+// WHY this is its own, deliberately conservative rule instead of the shared
+// `sessionActivity` helper (#886 review m1, revisited when #915 landed):
+// #915 unified the TLDR footer and Agent Management on `sessionActivity`,
+// which takes the newest of the ingest watermark, the transcript tail and the
+// three runtime clocks. This rule keeps TWO signals that helper does not have:
+// the semantic turn boundaries (`semantic.currentTurn`/`history`), and the
+// refusal to answer at all while history is still bootstrapping. Both exist
+// because the question here is narrower and destructive — "is it SAFE to kill
+// this as old?" — and `null` is a real answer to it, while `sessionActivity`
+// is a display value that must always produce something.
+//
+// So `latestAgentActivityAt(runtime) >= sessionActivity(runtime).timestamp`
+// by construction: this rule can call an agent recent that Agent Activity
+// (AgentActivityModal: last entry ?? turnStartedAt) shows as "8h ago", and for
+// a destructive filter that is the right direction to be wrong in. Keep it
+// that way — if these ever need to converge, the move is to give
+// `sessionActivity` an optional conservative mode, never to loosen this one to
+// match a display surface.
 function latestAgentActivityAt(runtime: Workspace['runtimes'][string]): number | null {
   // A replayed transcript is historical evidence, not proof that this live
   // agent has been idle since then. Submission/phase clocks survive the gap

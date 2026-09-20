@@ -23,11 +23,14 @@ describe('TLDR freshness', () => {
   })
   it('uses observed work and producer timestamps without making reload itself activity', () => {
     const runtime = emptyRuntime()
-    expect(tldrActivity(runtime)).toEqual({ active: false, timestamp: null })
+    expect(tldrActivity(runtime)).toEqual({ active: false, timestamp: null, source: null })
     runtime.lastJsonlEntryAt = now - day
-    expect(tldrActivity(runtime).timestamp).toBe(now - day)
+    expect(tldrActivity(runtime)).toMatchObject({ timestamp: now - day, source: 'transcript' })
+    // A newer runtime clock takes the answer AND the citation with it: the
+    // source has to follow the value, or an auditing agent quotes the wrong
+    // evidence (#915, review of #1080).
     runtime.phaseChangedAt = now - minute
-    expect(tldrActivity(runtime).timestamp).toBe(now - minute)
+    expect(tldrActivity(runtime)).toMatchObject({ timestamp: now - minute, source: 'runtime' })
     runtime.sessionStatus = 'running'
     expect(tldrActivity(runtime).active).toBe(true)
     runtime.exited = 0
