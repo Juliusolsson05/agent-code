@@ -1,7 +1,3 @@
-import { existsSync, readFileSync, readdirSync } from 'node:fs'
-import { homedir } from 'node:os'
-import { join } from 'node:path'
-
 import { describe, expect, it } from 'vitest'
 
 import {
@@ -9,6 +5,14 @@ import {
   recognizeResultParts,
   sidecarImageMetadata,
 } from '@providers/shared/renderer/protocols/media/imageAttachment'
+import {
+  CORPUS_ROOTS,
+  loadImageFixture as fixture,
+  loadImageFixtures as allFixtures,
+  malformedCitations,
+  unreachableCitations,
+  type ImageFixture as Fixture,
+} from '@providers/shared/renderer/protocols/media/imageFixtureProvenance'
 
 // Stage D of docs/decomposition/image-read-base64-dump.md.
 //
@@ -28,37 +32,6 @@ import {
 // If one of these fails, the fixture is right and the code is wrong. Do not
 // adjust an expectation to match new behaviour without first confirming against
 // the source record named in the fixture's `$fixture.source`.
-
-const FIXTURE_DIR = join(process.cwd(), 'testing/fixtures/image-reads')
-
-// The developer-local corpora the fixtures were extracted from. Absent on CI by
-// definition — see the provenance note below.
-const CORPUS_ROOTS = {
-  claude: join(homedir(), '.claude', 'projects'),
-  codex: join(homedir(), '.codex', 'sessions'),
-}
-
-type Fixture = {
-  $fixture: {
-    id: string
-    censusRows: number[]
-    source: string
-    proves: string
-    substitutions: { path: string; originalChars: number; mime: string }[]
-    totalOriginalPayloadChars: number
-  }
-  entry: Record<string, unknown>
-}
-
-function fixture(id: string): Fixture {
-  return JSON.parse(readFileSync(join(FIXTURE_DIR, `${id}.json`), 'utf8')) as Fixture
-}
-
-function allFixtures(): Fixture[] {
-  return readdirSync(FIXTURE_DIR)
-    .filter(name => name.endsWith('.json'))
-    .map(name => JSON.parse(readFileSync(join(FIXTURE_DIR, name), 'utf8')) as Fixture)
-}
 
 describe('recognizeResultParts — Codex exec output (the reported bug)', () => {
   it('preserves the text/image interleaving verbatim', () => {
@@ -266,40 +239,71 @@ describe('recognizeImageNode — what must NOT be recognized', () => {
 })
 
 describe('corpus-wide invariants', () => {
-  it('every fixture is traceable to a census row and a real session', () => {
-    for (const f of allFixtures()) {
-      expect(f.$fixture.censusRows.length).toBeGreaterThan(0)
-      expect(f.$fixture.proves.length).toBeGreaterThan(0)
+  it('every fixture cites a census row and a well-formed session line', () => {
+    // #901. This used to assert that every cited session still EXISTED, as
+    // soon as either corpus root did — so a developer whose old transcripts
+    // had rotated away could not get a green `npm test`, and `npm run check`
+    // was blocked for work that had nothing to do with these fixtures. Nothing
+    // was wrong with the fixtures; the gate was reading the machine.
+    //
+    // `docs/testing/standard.md`: reading a developer's home directory is LIVE
+    // behaviour and needs an explicit opt-in variable on top of `test:live`.
+    // "The directory happens to be there" is not an opt-in. The reachability
+    // half now lives in imageAttachment.live.test.ts.
+    expect(malformedCitations(allFixtures())).toEqual([])
+  })
 
-      const path = f.$fixture.source.slice(0, f.$fixture.source.lastIndexOf(':'))
-      const line = Number(f.$fixture.source.slice(f.$fixture.source.lastIndexOf(':') + 1))
-      expect(path).toMatch(/\.jsonl$/)
-      expect(line).toBeGreaterThan(0)
+  it('the reachability check it replaced is still a real check', () => {
+    // The negative control. Without it, "no malformed citations" would also
+    // hold for a provenance check that had quietly stopped checking anything —
+    // and the live suite would be theatre. Every fixture in this corpus was
+    // extracted from one of the two roots, so a resolver that finds nothing
+    // must flag every one of them.
+    const missingEverything = unreachableCitations(allFixtures(), () => false)
+    expect(missingEverything).toHaveLength(allFixtures().length)
+    expect(missingEverything.every(problem => problem.reason.includes('missing session'))).toBe(true)
+  })
 
-      // WHY provenance is only asserted when the corpus is present:
-      //
-      // Review correctly objected that the original check — a regex on the
-      // citation string — proved the citation was well-FORMED, not that it
-      // pointed at anything. The obvious repair was to `existsSync` the cited
-      // file. That repair was wrong, and CI caught it: the source corpora are
-      // the developer's own `~/.claude/projects` and `~/.codex/sessions`. They
-      // are machine-local by nature and cannot exist on a runner, so asserting
-      // their presence turned a portable test into one that only passed on one
-      // laptop.
-      //
-      // The real provenance gate is GENERATION, not assertion: a fixture cannot
-      // exist unless scripts/extract-image-fixtures.mts opened that exact file
-      // at that exact line and read a parseable record. This check adds a second
-      // opinion where the evidence is available, and says nothing where it is
-      // not — which is honest, rather than pretending to verify what it cannot
-      // reach.
-      if (existsSync(CORPUS_ROOTS.claude) || existsSync(CORPUS_ROOTS.codex)) {
-        const rooted = path.startsWith(CORPUS_ROOTS.claude) || path.startsWith(CORPUS_ROOTS.codex)
-        if (rooted) {
-          expect(existsSync(path), `${f.$fixture.id} cites a missing session: ${path}`).toBe(true)
-        }
-      }
-    }
+  // The positive controls. "No problems reported" is also what a check that
+  // reports nothing would say, and five mutations proved exactly that: the
+  // assertions above passed with the census-row rule deleted, the `proves`
+  // rule deleted, the line number no longer parsed, and the whole function
+  // returning an empty list.
+  //
+  // These inputs are hand-built on purpose, for the same reason the negative
+  // assertions at the top of this file are: they describe fixtures the check
+  // must REJECT, which by definition are not in a corpus of ones it accepted.
+  describe('what the provenance check must reject', () => {
+    const broken = (over: Partial<Fixture['$fixture']>): Fixture => ({
+      $fixture: {
+        id: 'synthetic',
+        censusRows: [1],
+        source: `${CORPUS_ROOTS.claude}/p/session.jsonl:42`,
+        proves: 'something',
+        substitutions: [],
+        totalOriginalPayloadChars: 0,
+        ...over,
+      },
+      entry: {},
+    })
+
+    it.each([
+      { what: 'no census row', over: { censusRows: [] }, reason: 'cites no census row' },
+      { what: 'nothing claimed proved', over: { proves: '' }, reason: 'claims to prove nothing' },
+      { what: 'a citation with no line', over: { source: `${CORPUS_ROOTS.claude}/p/session.jsonl` }, reason: 'source is not' },
+      { what: 'a citation with a zero line', over: { source: `${CORPUS_ROOTS.claude}/p/session.jsonl:0` }, reason: 'source is not' },
+      { what: 'a citation that is not a transcript', over: { source: `${CORPUS_ROOTS.claude}/p/session.txt:1` }, reason: 'source is not' },
+    ])('rejects $what', ({ over, reason }) => {
+      const problems = malformedCitations([broken(over)])
+      expect(problems).toHaveLength(1)
+      expect(problems[0]!.reason).toContain(reason)
+    })
+
+    it('ignores a citation outside the corpus roots, which was never this machine\'s to hold', () => {
+      const elsewhere = broken({ source: '/somewhere/else/session.jsonl:7' })
+      expect(malformedCitations([elsewhere])).toEqual([])
+      expect(unreachableCitations([elsewhere], () => false)).toEqual([])
+    })
   })
 
   it('records the real payload size that was substituted away', () => {
