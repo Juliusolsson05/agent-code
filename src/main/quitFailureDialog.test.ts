@@ -43,6 +43,26 @@ describe('a failed committed quit', () => {
     expect(detail).toContain('sessions: EBUSY')
   })
 
+  it('shows one dialog at a time, so a second failure cannot stack a second Retry', async () => {
+    // The gate clears its shutdown promise when a drain fails, so a second
+    // quit can fail while the first dialog is still unanswered.
+    let answer!: (value: { response: number }) => void
+    const pending = new Promise<{ response: number }>(resolve => { answer = resolve })
+    const dialog = { showMessageBox: vi.fn(async (_options: Options) => await pending) }
+    const app = { quit: vi.fn() }
+    const first = presentQuitFailure(dialog, app, new Error('first'))
+    const second = presentQuitFailure(dialog, app, new Error('second'))
+    expect(dialog.showMessageBox).toHaveBeenCalledOnce()
+    answer({ response: 1 })
+    await Promise.all([first, second])
+    expect(dialog.showMessageBox).toHaveBeenCalledOnce()
+    expect(app.quit).not.toHaveBeenCalled()
+    // Once answered, a later failure can present again.
+    const third = presentQuitFailure(host(1), app, new Error('third'))
+    await third
+    expect(app.quit).not.toHaveBeenCalled()
+  })
+
   it('never lets a failing dialog throw into the shutdown path', async () => {
     const dialog = { showMessageBox: vi.fn(async (_options: Options) => { throw new Error('no display') }) }
     const app = { quit: vi.fn() }

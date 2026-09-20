@@ -49,11 +49,40 @@ export function quitFailureDetail(error: unknown): string {
 }
 
 /**
+ * One presentation at a time.
+ *
+ * WHY (#945 Codex delta review, reproduced against the real gate): the gate
+ * clears its shutdown promise when a drain fails, so a second quit can fail
+ * and report while the first dialog is still unanswered. That opened a second
+ * dialog with its own live Retry button — two ways to re-enter shutdown, and
+ * a stack of modals over an application with no windows. A later report while
+ * one is open is dropped: it is the same failure being retried, and the open
+ * dialog already offers the only two answers.
+ */
+let presenting: Promise<void> | null = null
+
+/**
  * Shows the failure and acts on the answer. Resolves once the user has
- * answered (or immediately if the dialog itself fails), so callers can await
- * it in tests; production calls it fire-and-forget.
+ * answered (or immediately if the dialog itself fails, or if a presentation
+ * is already open), so callers can await it in tests; production calls it
+ * fire-and-forget.
  */
 export async function presentQuitFailure(
+  host: QuitFailureDialogHost,
+  app: QuitFailureApp,
+  error: unknown,
+): Promise<void> {
+  if (presenting) return await presenting
+  const run = presentOnce(host, app, error)
+  presenting = run
+  try {
+    await run
+  } finally {
+    presenting = null
+  }
+}
+
+async function presentOnce(
   host: QuitFailureDialogHost,
   app: QuitFailureApp,
   error: unknown,
@@ -73,7 +102,12 @@ export async function presentQuitFailure(
       cancelId: 1,
       noLink: true,
     })
-    if (response === 0) app.quit()
+    // Ownership is cleared before the retry, so the quit this triggers can
+    // report its own failure rather than being swallowed as a duplicate.
+    if (response === 0) {
+      presenting = null
+      app.quit()
+    }
   } catch (dialogError) {
     console.error('[app] could not show shutdown error:', dialogError)
   }
