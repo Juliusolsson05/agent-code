@@ -75,6 +75,37 @@ export class OrchestrationBridge {
   private readonly rendererQueue: QueuedRendererRequest[] = []
   private activeRendererRequests = 0
   private readonly promptDeliveries = new Map<string, PromptDeliveryMetadata>()
+  /**
+   * Identical create calls that are still in flight, keyed by their request
+   * shape (#952).
+   *
+   * WHY THIS EXISTS: on 2026-09-12 one `orchestration_create_agent` call
+   * produced TWO children 0.9 s apart, with the same title, cwd, role and
+   * prompt, both bootstrapped, both working in the same worktree and writing
+   * the same report. Only one was returned, so the parent could not see or
+   * close the other and it ran unobserved.
+   *
+   * Nothing in this process retries: `request`/`dispatchRendererRequest` send
+   * once, the 30 s timeout does not match a 0.9 s gap, and the renderer
+   * request is addressed to ONE window (broadcasting was considered and
+   * rejected here in #992). Both children were bootstrapped, which means two
+   * complete tool invocations ran — the duplicate arrived from the MCP client,
+   * above anything this codebase controls.
+   *
+   * So the fix is not to find our retry; there isn't one. It is to make the
+   * operation IDEMPOTENT, because the damage is real whatever the cause:
+   * duplicate paid agent work, two writers racing on the same files, and
+   * side effects (commits, pushes) performed twice.
+   *
+   * WHY IN-FLIGHT ONLY, and not a time window over completed creates: two
+   * identical creates overlapping IN FLIGHT is never something a caller
+   * intends — nobody asks for two identical workers and needs the second
+   * started before the first has finished starting. A completed-create window,
+   * by contrast, would silently collapse a deliberate "spawn another one just
+   * like that", which is a legitimate thing to ask for. This refuses to guess
+   * about anything the caller could plausibly mean.
+   */
+  private readonly createsInFlight = new Map<string, Promise<OrchestrationAgentRecord>>()
   private readonly closedAgents = new Map<string, ClosedAgentRecord>()
   private readonly parentSessionByChildSession = new Map<string, string>()
   private readonly listAgentsCache = new Map<string, CachedValue<OrchestrationAgentRecord[]>>()
@@ -107,23 +138,48 @@ export class OrchestrationBridge {
     if (params.providerRuntime === 'terminal' && !getMainProvider(params.kind).createTerminalSession) {
       throw new Error(`${getMainProvider(params.kind).name} does not support a terminal runtime`)
     }
-    const response = await this.request({
-      requestId: randomUUID(),
-      type: 'create-agent',
-      ...params,
-    })
-    if (!response.ok) throw new Error(response.message)
-    if (response.type !== 'create-agent') {
-      throw new Error(`Unexpected orchestration response: ${response.type}`)
+    // Everything that distinguishes one requested child from another. The
+    // prompt is deliberately NOT part of it: it is delivered after this
+    // returns, so two calls that differ only by prompt still describe the same
+    // child being created twice.
+    const shape = JSON.stringify([
+      params.parentSessionId, params.kind, params.providerRuntime ?? null,
+      params.cwd ?? null, params.title ?? null, params.role ?? null,
+      params.runId ?? null, params.builtInMcpDomains ?? null,
+    ])
+    const inFlight = this.createsInFlight.get(shape)
+    // The duplicate gets the FIRST call's child rather than an error: the
+    // caller asked for a child and there is one, so failing would turn a
+    // duplicate delivery into a visible failure for work that succeeded.
+    if (inFlight) return await inFlight
+
+    const creation = (async () => {
+      const response = await this.request({
+        requestId: randomUUID(),
+        type: 'create-agent',
+        ...params,
+      })
+      if (!response.ok) throw new Error(response.message)
+      if (response.type !== 'create-agent') {
+        throw new Error(`Unexpected orchestration response: ${response.type}`)
+      }
+      this.promptDeliveries.set(response.agent.sessionId, {
+        createdAt: Date.now(),
+        promptSubmissionCount: 0,
+      })
+      this.parentSessionByChildSession.set(response.agent.sessionId, params.parentSessionId)
+      this.closedAgents.delete(response.agent.sessionId)
+      this.invalidateStatusCache(params.parentSessionId)
+      return this.enrichAgent(response.agent)
+    })()
+    this.createsInFlight.set(shape, creation)
+    try {
+      return await creation
+    } finally {
+      // Cleared on failure too: a create that threw left no child, so the next
+      // identical call must really create one rather than inherit the error.
+      this.createsInFlight.delete(shape)
     }
-    this.promptDeliveries.set(response.agent.sessionId, {
-      createdAt: Date.now(),
-      promptSubmissionCount: 0,
-    })
-    this.parentSessionByChildSession.set(response.agent.sessionId, params.parentSessionId)
-    this.closedAgents.delete(response.agent.sessionId)
-    this.invalidateStatusCache(params.parentSessionId)
-    return this.enrichAgent(response.agent)
   }
 
   async listAgents(params: {

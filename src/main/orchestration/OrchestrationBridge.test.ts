@@ -208,3 +208,117 @@ describe('OrchestrationBridge status cache', () => {
       .promptDeliveries.has('child-1')).toBe(false)
   })
 })
+
+describe('a duplicate create must not spawn a second child (#952)', () => {
+  // On 2026-09-12 one `orchestration_create_agent` call produced TWO children
+  // 0.9 s apart — same title, cwd, role and prompt, both bootstrapped, both
+  // working in the same worktree and writing the same report. Only one was
+  // returned, so the parent could not see or close the other.
+  //
+  // Nothing in this process retries, and both children were bootstrapped, so
+  // two complete tool invocations ran: the duplicate arrived from the MCP
+  // client, above anything this codebase controls. These pin the property
+  // that makes that harmless.
+  const child = (sessionId: string) => ({
+    sessionId,
+    kind: 'claude' as const,
+    cwd: '/tmp/project',
+    orchestrationParentId: 'parent-1',
+    orchestrationRootId: 'parent-1',
+  })
+
+  const createRequests = () =>
+    sentRendererRequests.filter(entry => (entry as { type?: string }).type === 'create-agent')
+
+  it('asks the renderer once and returns the same child to both callers', async () => {
+    sentRendererRequests.length = 0
+    const bridge = new OrchestrationBridge()
+    const params = { parentSessionId: 'parent-1', kind: 'claude' as const, title: 'Reviewer', runId: 'run-a' }
+
+    const first = bridge.createAgent(params)
+    const second = bridge.createAgent(params)
+
+    // Deliberately NOT asserted before the resolve: the bridge already
+    // serialises renderer requests, so "only one sent so far" is true even
+    // WITHOUT the dedupe and would pass for the wrong reason. What separates
+    // them is what happens after the first settles — an undeduped second
+    // would dispatch off the queue and create a real second child.
+    const request = createRequests()[0] as { requestId: string }
+    bridge.resolve({ requestId: request.requestId, ok: true, type: 'create-agent', agent: child('child-1') })
+
+    expect((await first).sessionId).toBe('child-1')
+    expect((await second).sessionId).toBe('child-1')
+    expect(createRequests()).toHaveLength(1)
+  })
+
+  it('still creates a second child once the first has finished', async () => {
+    // The guard is IN-FLIGHT only. A deliberate "spawn another one just like
+    // that" is legitimate, and collapsing it would be guessing at something
+    // the caller could plausibly mean.
+    sentRendererRequests.length = 0
+    const bridge = new OrchestrationBridge()
+    const params = { parentSessionId: 'parent-1', kind: 'claude' as const, title: 'Reviewer' }
+
+    const first = bridge.createAgent(params)
+    bridge.resolve({
+      requestId: (createRequests()[0] as { requestId: string }).requestId,
+      ok: true, type: 'create-agent', agent: child('child-1'),
+    })
+    await first
+
+    const second = bridge.createAgent(params)
+    await vi.waitFor(() => expect(createRequests()).toHaveLength(2))
+    bridge.resolve({
+      requestId: (createRequests()[1] as { requestId: string }).requestId,
+      ok: true, type: 'create-agent', agent: child('child-2'),
+    })
+    expect((await second).sessionId).toBe('child-2')
+  })
+
+  it('does not collapse creates that describe DIFFERENT children', async () => {
+    // Concurrent fan-out is the normal orchestration pattern. Only an
+    // identical request is a duplicate.
+    sentRendererRequests.length = 0
+    const bridge = new OrchestrationBridge()
+    const pending = [
+      bridge.createAgent({ parentSessionId: 'parent-1', kind: 'claude', title: 'A' }),
+      bridge.createAgent({ parentSessionId: 'parent-1', kind: 'claude', title: 'B' }),
+      bridge.createAgent({ parentSessionId: 'parent-1', kind: 'codex', title: 'A' }),
+      bridge.createAgent({ parentSessionId: 'parent-2', kind: 'claude', title: 'A' }),
+    ]
+
+    // One at a time, because the bridge serialises renderer requests: the next
+    // is dispatched only once the previous settles.
+    const children = ['child-a', 'child-b', 'child-c', 'child-d']
+    for (let index = 0; index < children.length; index += 1) {
+      await vi.waitFor(() => expect(createRequests()).toHaveLength(index + 1))
+      const request = createRequests()[index] as { requestId: string }
+      bridge.resolve({ requestId: request.requestId, ok: true, type: 'create-agent', agent: child(children[index]!) })
+    }
+    expect((await Promise.all(pending)).map(agent => agent.sessionId)).toEqual(children)
+    expect(createRequests()).toHaveLength(4)
+  })
+
+  it('lets the next identical create through after a failure', async () => {
+    // A create that threw left no child behind, so the caller must be able to
+    // really create one rather than inherit the earlier error forever.
+    sentRendererRequests.length = 0
+    const bridge = new OrchestrationBridge()
+    const params = { parentSessionId: 'parent-1', kind: 'claude' as const, title: 'Reviewer' }
+
+    const failed = bridge.createAgent(params)
+    bridge.resolve({
+      requestId: (createRequests()[0] as { requestId: string }).requestId,
+      ok: false, type: 'create-agent', message: 'renderer refused',
+    } as never)
+    await expect(failed).rejects.toThrow(/renderer refused/)
+
+    const retried = bridge.createAgent(params)
+    await vi.waitFor(() => expect(createRequests()).toHaveLength(2))
+    bridge.resolve({
+      requestId: (createRequests()[1] as { requestId: string }).requestId,
+      ok: true, type: 'create-agent', agent: child('child-1'),
+    })
+    expect((await retried).sessionId).toBe('child-1')
+  })
+})
