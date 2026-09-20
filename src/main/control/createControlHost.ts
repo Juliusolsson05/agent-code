@@ -16,6 +16,15 @@ import { globalControlCapabilities, type ObserveWindows } from './globalCapabili
 import { batchControlCapabilities } from './batches'
 import { createWaitControl } from './waits'
 
+/**
+ * How long committed shutdown waits for admitted control work.
+ *
+ * Long enough that an ordinary operation and its durable write always finish,
+ * short enough that a wedged one cannot hold the application hostage. See
+ * `dispose` for why a bound exists at all.
+ */
+const CONTROL_DRAIN_TIMEOUT_MS = 10_000
+
 export function createControlHost(windowAccess: {
   getBrowserWindow(id: string): BrowserWindow | null
   windowIdFor(sender: WebContents): string | null
@@ -56,6 +65,21 @@ export function createControlHost(windowAccess: {
     dispatch: (request, context) => registry.invoke(request, context) })
   // Nested: a wait's inner read belongs to the wait that was already
   // admitted, and refusing it mid-shutdown would strand the parent.
+  //
+  // ── WHY THESE FLAGS ARE UNTESTABLE TODAY, AND KEPT ANYWAY ──
+  // Removing `nested` from any of the three internal call sites leaves the
+  // suite green, and that is honest rather than a coverage gap: none of them
+  // can currently reach the gate.
+  //   - The main task port carries only `operations.start`/`operations.finish`,
+  //     which are receipt-exempt (see the gate in `executor.invoke`).
+  //   - `agents.batchRead` is a read and its members are hardcoded
+  //     `agents.read` — also reads, admitted regardless.
+  //   - `agents.batchPrompt` is a MUTATION, so the batch itself is refused at
+  //     the gate before any member runs.
+  //   - A wait's inner request is hardcoded `agents.read`/`operations.read`.
+  // The flags are the standing answer for the first non-read batch member or
+  // non-receipt main-port capability, which would otherwise be half-finished
+  // by a shutdown with no test to notice.
   const waits = createWaitControl((request, caller) => executor.invoke(request, caller, { nested: true }))
   const bridge = new ControlRendererBridge((windowId, message) => {
     const window = getBrowserWindow(windowId)
@@ -159,46 +183,61 @@ export function createControlHost(windowAccess: {
     /**
      * Committed shutdown for the control surface (#943).
      *
-     * ── WHY THIS IS ASYNC NOW, AND ORDERED ──
+     * ── WHY THIS IS ASYNC, AND WHY THE ORDER IS THE CONTRACT ──
      * It used to retire waits, window registrations and IPC handlers and
      * return. None of that is evidence that anything STOPPED: an admitted
      * operation was still running, and its durable result was still queued
      * behind `FileControlHistory`'s append tail. The caller
-     * (`applicationShutdown`'s `control` stage) then went on to release the
-     * exit and the state-process lock, so the process could die between an
-     * effect happening and the record of it reaching disk — the one state
-     * that makes a retry after restart unanswerable.
+     * (`applicationShutdown`'s `control` stage) then released the exit and the
+     * state-process lock, so the process could die between an effect happening
+     * and the record of it reaching disk — the one state that makes a retry
+     * after restart unanswerable.
      *
-     * The order that IS load-bearing is the last step: everything before the
-     * first `await` is synchronous, so nothing can enter between closing
-     * admission and retiring the surface — their relative order reads better
-     * this way but is not observable, and a comment should not claim
-     * otherwise.
-     *
-     *  1. Close admission. Reads keep answering; they change nothing and
+     *  1. Close admission. Reads keep answering; they change nothing, and
      *     refusing them would blind the tooling used to diagnose a stuck quit.
-     *  2. Retire the renderer-facing surface. Window registrations and waits
-     *     go now because an admitted operation that still needs a window
-     *     would be stalled anyway — the renderer is already going away.
-     *  3. AWAIT what was already admitted, THEN the history tail. This order
-     *     is real: an operation finishing appends its own result, so draining
-     *     the file first would leave the very last one behind. And the tail
-     *     covers what the executor cannot — `recordTransport` appends
-     *     straight to the history, outside any call.
+     *  2. Cancel outstanding WAITS. A wait is a read that would otherwise sit
+     *     in the drain for its full deadline for no purpose — the thing it is
+     *     waiting for is being torn down. This does not touch the registry.
+     *  3. AWAIT what was admitted, THEN the history tail. This order is real:
+     *     an operation finishing appends its own result, so draining the file
+     *     first would leave the very last one behind. And the tail covers what
+     *     the executor cannot — `recordTransport` appends straight to the
+     *     history, outside any call.
+     *  4. ONLY NOW retire the registrations, and last of all the IPC handlers.
      *
-     * IPC handlers are removed LAST. `operations.start`/`operations.finish`
-     * travel the private main port, not IPC, so the main process can still
-     * record its own receipts throughout — but leaving `control:invoke`
-     * registered until the end costs nothing, since admission is already shut
-     * and the gate answers a structured refusal instead of a dead channel.
+     * ── WHY STEP 4 IS LAST, WHICH IT WAS NOT (#1074 review, 1) ──
+     * `unregisterMain()` and the window retirements EMPTY THE CATALOG, and the
+     * admission gate resolves a capability's declared effect against that
+     * catalog, treating an unknown id as effectful. Doing them before the
+     * drain therefore refused everything during it — including every declared
+     * read, and including `operations.start`/`operations.finish`, whose own
+     * owner had just been unregistered ("No owner for operations.start").
+     * Three of the claims in this comment were false as written. Draining
+     * first keeps the catalog intact for exactly as long as anything still
+     * needs it.
+     *
+     * ── WHY THE DRAIN IS BOUNDED ──
+     * It holds the exit and the state-process lock. A never-resolving
+     * operation — a stalled `fsync` in the history append is the realistic
+     * one — would make the application impossible to quit, and the user's
+     * answer to that is a force quit, which loses the record this protects AND
+     * strands the lock. `stopPerformance` already settled the same trade-off
+     * three stages later for the same reason. Giving up loudly beats hanging
+     * silently, so what was still outstanding is reported to the caller.
      */
-    async dispose() {
+    async dispose(options: {
+      timeoutMs?: number
+      onIncompleteDrain?: (outstanding: { operations: number; tasks: number }) => void
+    } = {}) {
       executor.closeAdmission()
       waits.dispose()
+      const outcome = await executor.settled(options.timeoutMs ?? CONTROL_DRAIN_TIMEOUT_MS)
+      await history.drain?.()
+      if (!outcome.drained) {
+        options.onIncompleteDrain?.({ operations: outcome.operations, tasks: outcome.tasks })
+      }
       for (const window of [...windows.values()]) window.dispose()
       unregisterMain()
-      await executor.settled()
-      await history.drain?.()
       for (const name of ['register', 'unregister', 'response', 'catalog', 'invoke']) ipcMain.removeHandler(`control:${name}`)
     },
   }

@@ -292,11 +292,15 @@ let startupTask: Promise<void> | null = null
 let startupFailed = false
 let disposeExternalControl: (() => Promise<void>) | null = null
 // Returns a PROMISE since #943: control shutdown awaits admitted operations
-// and the history append tail. Typed as such deliberately — a `() => void`
-// here still COMPILES when assigned an async function, and the shutdown stage
-// would then resolve immediately and release the exit and the state-process
-// lock while the drain was still running. The type is the only thing standing
-// between that and a silent regression.
+// and the history append tail.
+//
+// The annotation is honest documentation, NOT a safety mechanism. An earlier
+// comment here claimed a `() => void` would make the shutdown stage resolve
+// immediately — review showed that is false twice over: types are erased, and
+// `applicationShutdown.run` does `Promise.resolve(action()).then(...)`, which
+// adopts the returned promise whatever its declared type. What the annotation
+// actually buys is catching a future `disposeControl: () => { dispose() }`
+// that drops the promise on the floor at the CALL SITE.
 let disposeControlHost: (() => Promise<void>) | null = null
 let shutdownWorkspaceStore: WorkspaceFileStore | null = null
 
@@ -1072,7 +1076,16 @@ async function startApp(): Promise<void> {
   ])
   externalHost = new ExternalControlMcpHost(controlHost.forCaller({ kind: 'external', id: 'agent-code-control' }))
   disposeExternalControl = () => externalSettings.dispose()
-  disposeControlHost = () => controlHost.dispose()
+  disposeControlHost = () => controlHost.dispose({
+    // An incomplete drain is not a clean exit, and it is the one thing a
+    // restart needs to know when it finds an operation with no result.
+    onIncompleteDrain: outstanding => appRunJournal?.recordIncident({
+      kind: 'control.drain_incomplete',
+      severity: 'error',
+      reason: 'timeout',
+      context: outstanding,
+    }),
+  })
   await externalSettings.initialize()
   assertStartupOpen()
   const tldrStore = new TldrStore(join(STATE_DIR, 'tldr.json'))

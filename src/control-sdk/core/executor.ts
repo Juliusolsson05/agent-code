@@ -5,6 +5,12 @@ import {
 import type { ControlHistory, HistoryEvent, HistoryWrite } from '../history'
 import { resolveOwner } from './target-resolution/resolveOwner'
 
+/**
+ * Capabilities that RECORD an effect rather than causing one. See the gate in
+ * `invoke` for why they are exempt from it.
+ */
+const RECEIPT_CAPABILITY_IDS = new Set(['operations.start', 'operations.finish'])
+
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`
   if (value && typeof value === 'object') return `{${Object.keys(value).sort().map(key =>
@@ -39,9 +45,28 @@ export function createControlExecutor(ports: {
   // serialized part is.
   let closed = false
   let inFlight = 0
+  /**
+   * Operations that were ACCEPTED rather than completed (#1074 review, 2).
+   *
+   * `startControlTask` journals `operations.start`, returns
+   * `{callId, accepted:true}` immediately and runs the real work in a floating
+   * async body. So the executor call that admitted it finishes at once,
+   * `inFlight` drops to zero, and a drain built on `inFlight` alone reports
+   * settled while the mutation is still running — every `agents.prompt`,
+   * `agents.close`, `agents.rewind`, `commands.run`, `workflows.start` and the
+   * rest of the accepted class. Review drove it: the journal ended with
+   * `task.started` and no `task.finished`, which is verbatim the state this
+   * drain exists to prevent.
+   *
+   * The executor already computes `status: 'pending'` for exactly these, and
+   * the task's own completion travels back through it as `operations.finish`
+   * carrying the same callId, so it can account for them without knowing
+   * anything about what a task DOES.
+   */
+  const acceptedTasks = new Set<string>()
   const idleWaiters: Array<() => void> = []
   function releaseIfIdle(): void {
-    if (inFlight > 0) return
+    if (inFlight > 0 || acceptedTasks.size > 0) return
     for (const waiter of idleWaiters.splice(0)) waiter()
   }
 
@@ -69,12 +94,46 @@ export function createControlExecutor(ports: {
       closed = true
     },
 
-    /** Resolves once every ADMITTED operation has finished, including its
-     *  durable result write. Does not wait for anything new, because nothing
-     *  effectful can be admitted after `closeAdmission`. */
-    async settled(): Promise<void> {
-      if (inFlight === 0) return
-      await new Promise<void>(resolve => { idleWaiters.push(resolve) })
+    /**
+     * Resolves once every ADMITTED operation has finished — including its
+     * durable result write, and including the body of an ACCEPTED task, which
+     * outlives the call that started it.
+     *
+     * ── WHY THERE IS A DEADLINE (#1074 review, 4) ──
+     * This holds the exit AND the state-process lock. Without a bound, one
+     * never-resolving operation — a stalled `fsync` inside the history append
+     * is the realistic candidate, and it blocks admission too — makes the
+     * application impossible to quit. The user's answer to that is a force
+     * quit, which loses exactly the record this drain protects AND strands the
+     * lock, so waiting forever buys nothing and costs both.
+     *
+     * The codebase already settled this trade-off in the other direction three
+     * stages later: `stopPerformance` races a 2 s timer because "diagnostics
+     * must never make the application impossible to quit". A drain that gives
+     * up and SAYS SO is strictly better than one that hangs silently.
+     *
+     * Returns what was still outstanding, so the caller can journal it rather
+     * than exiting quietly on an incomplete drain.
+     */
+    async settled(timeoutMs?: number): Promise<{ drained: boolean; operations: number; tasks: number }> {
+      const outstanding = () => ({
+        drained: inFlight === 0 && acceptedTasks.size === 0,
+        operations: inFlight,
+        tasks: acceptedTasks.size,
+      })
+      if (outstanding().drained) return outstanding()
+      const idle = new Promise<void>(resolve => { idleWaiters.push(resolve) })
+      if (timeoutMs === undefined) {
+        await idle
+        return outstanding()
+      }
+      let timer: ReturnType<typeof setTimeout> | undefined
+      await Promise.race([
+        idle,
+        new Promise<void>(resolve => { timer = setTimeout(resolve, timeoutMs) }),
+      ])
+      if (timer) clearTimeout(timer)
+      return outstanding()
     },
 
     async invoke(
@@ -91,7 +150,16 @@ export function createControlExecutor(ports: {
         nested?: boolean
       } = {},
     ): Promise<ControlResult> {
-      if (closed && options.nested !== true && declaredEffect(request.capabilityId) !== 'read') {
+      // ── RECEIPTS ARE NEVER REFUSED (#1074 review, 3) ──
+      // `operations.start` and `operations.finish` do not CAUSE an effect,
+      // they RECORD one. The renderer reports its own lifecycle through
+      // `control:invoke`, which carries no `nested` flag, so closing admission
+      // refused the receipt for an effect that had already happened — with
+      // `outcome: 'not_started'`, which is the opposite of the truth. They are
+      // also how an accepted task's body reports back, so refusing them would
+      // make the drain below wait for something that can never arrive.
+      const receipt = RECEIPT_CAPABILITY_IDS.has(request.capabilityId)
+      if (closed && !receipt && options.nested !== true && declaredEffect(request.capabilityId) !== 'read') {
         return {
           ...controlFailure(
             'unavailable',
@@ -202,6 +270,12 @@ export function createControlExecutor(ports: {
           : result.error.outcome === 'unknown' ? 'outcome_unknown' : 'blocked',
         ...(previous ? { reusedCallId: previous.callId } : {}),
       } }
+      // Accounting for the accepted class, from facts already computed above.
+      if (result.operation?.status === 'pending') acceptedTasks.add(callId)
+      if (request.capabilityId === 'operations.finish') {
+        const finished = (request.input as { callId?: unknown } | undefined)?.callId
+        if (typeof finished === 'string') acceptedTasks.delete(finished)
+      }
       try { await write('result', result) } catch {
         // The effect may be known in this process even though its final record
         // failed. Preserve that distinction and the durable intent's call ID.
