@@ -667,6 +667,41 @@ claude 2.1.143 / codex 0.130.0 are stale versus the 2.1.278 / 0.155.1 in daily u
   - **#1018 (orchestration hides API errors):** an evidence catalog from real feed-debug recordings is being built (research agent, worktree `.worktrees/fix-orchestration-api-error`). Implementation follows the catalog.
   - **Waiting on #1013's merge:** T7 (#1006), T8 (#1007), T2 (command promotion) and T1 (#995), all of which touch the catalog, keybindings or bootstrap.
   - **Nightly** run 35430444567: build-app is green, package-macos is running.
+- 2026-09-20 16:35Z — **Nine merged this session. #1084/#1085/#1086 in; #901, #839, #826, #880, #875 closed.**
+
+  **MERGED**: **#1084** (#901 + #839), **#1085** (#826 + #880), **#1086** (#875).
+  All three after a review that found something the PR had got wrong.
+
+  **Verified the thing #901 actually reported**: the image-attachment suite that
+  failed on main in this checkout now passes (34 tests). The local deterministic
+  gate is unblocked, which was the whole point.
+
+  **#1086's review was the sharpest on evidence.** The PR body claimed "11 tests
+  red"; the real number is **5**, because 6 of the new tests pass against the
+  buggy code — a parser that never succeeds satisfies every "does NOT settle"
+  case vacuously. And the "fixture was the accomplice" story was backwards:
+  `exited: false` was never READ by anything, because the old suite never ran
+  settled/attention on an agent target. What was missing was tests. The body is
+  rewritten. Also fixed there: the rebuilt fixture STILL carried an impossible
+  value (`process: 'running'` is not a `ProcessStatus`), so the three status
+  fields are closed `z.enum`s now; a backend that FAILED TO START raised
+  neither predicate and timed out silently; and the throw applied to
+  `until: 'change'`, the one mode that always worked.
+
+  **OPENED**:
+  - **#1088** (#867): three list dialogs let Enter on a focused Cancel apply the
+    change being abandoned — a view-mode override, a tab reorder, an unpinning.
+    `focusedControlOwnsEnter` on each, rows out of the tab order (Space clicks
+    the FOCUSED control, which Enter handling cannot cover). Reorder Tabs'
+    per-row Move buttons stay focusable because they NAME their target.
+  - **#1089** (#827): `orchestration_wait_agents` could wait 600 s; a harness
+    backgrounds a foreground MCP call at 120 s, drops the transport, and the
+    reply is LOST while the children are fine. One call waits at most 90 s and
+    reports `waitCappedMs` so the caller calls again. A cap, not a lower schema
+    bound — the number the caller passes is what it wants in TOTAL.
+
+  **In review**: #1087 (#863), #1088, #1089.
+
 - 2026-09-20 16:20Z — **#1083 merged (closes #895). Four PRs in their review round.**
 
   **MERGED**: **#1083** — and it shipped a REDESIGN, not the reviewed change.
