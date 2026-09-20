@@ -8,8 +8,9 @@ import type { AgentProviderKind } from '@shared/types/providerKind.js'
 // keeps each feature file focused on its own translation / cloning
 // logic without re-implementing path math and jsonl IO.
 
-import { mkdir, readdir, stat, writeFile } from 'fs/promises'
-import { join } from 'path'
+import { randomUUID } from 'node:crypto'
+import { link, mkdir, open, readFile, readdir, rm, stat } from 'fs/promises'
+import { dirname, join } from 'path'
 
 import { getProjectDirForCwd } from '@shared/runtime/projectDir.js'
 import { getCodexSessionsDir } from '@providers/codex/runtime/projectDir.js'
@@ -24,6 +25,102 @@ export function encodeJsonl(items: readonly unknown[]): string {
   // the result aligned with native writers and avoids odd diffs when
   // debugging translated files by hand.
   return `${items.map(item => JSON.stringify(item)).join('\n')}\n`
+}
+
+/**
+ * What happened when a projected transcript was published (#928).
+ *
+ * `created` — this call wrote the file.
+ * `already-published` — the exact same bytes were already there under that
+ * name. A retry after an interruption between the publish and the caller's own
+ * bookkeeping lands here, and it is a success, not a collision.
+ */
+export type PublishOutcome = 'created' | 'already-published'
+
+/**
+ * Publish a projected native transcript so that nothing can ever discover a
+ * PARTIAL one (#928).
+ *
+ * ── WHAT WAS WRONG ──
+ * Both writers called `writeFile` on the final, discoverable native filename —
+ * `~/.claude/projects/<slug>/<uuid>.jsonl`, `~/.codex/sessions/<y>/<m>/<d>/
+ * rollout-<ts>-<uuid>.jsonl`. `writeFile` truncates and then streams, so a
+ * crash, a full disk or a killed process mid-write leaves a TRUNCATED file
+ * under exactly the name the provider enumerates and will happily resume from.
+ * Validating the projection in memory first cannot help: the projection was
+ * perfect, the bytes on disk are not. A switch, duplicate or rewind that dies
+ * halfway leaves a conversation that opens and is silently missing its tail.
+ *
+ * ── WHY link() AND NOT rename() ──
+ * `rename` is atomic but it CLOBBERS. The target name embeds a session id, so
+ * if something is already there it is either our own completed publish or a
+ * session another process adopted — and overwriting the second is exactly the
+ * "never delete a target adopted by another process" rule this must not break.
+ * `link` is the atomic create-exclusive primitive: it either creates the name
+ * or fails EEXIST, with no window in between and no way to destroy an
+ * incumbent. The temporary file is unlinked afterwards, so the inode keeps one
+ * name.
+ *
+ * ── WHY EEXIST IS NOT AUTOMATICALLY A FAILURE ──
+ * We generated the session id in this process, so an existing target is
+ * overwhelmingly our own retry after an interruption. Comparing the bytes
+ * settles it without guessing: identical means the publish already happened
+ * and the caller may proceed; different means a genuine collision, which
+ * throws rather than destroying someone else's conversation.
+ *
+ * ── DURABILITY ──
+ * The file is fsynced before it is given a discoverable name, and the
+ * directory is fsynced after, so the name survives a power loss too. A
+ * directory fsync is not portable — on some platforms opening a directory for
+ * read fails — so it is best-effort and never fails the publish: the ordering
+ * guarantee that matters (contents before name) is already established by the
+ * file fsync.
+ */
+export async function publishNativeTranscript(
+  filePath: string,
+  contents: string,
+): Promise<{ path: string; outcome: PublishOutcome }> {
+  const directory = dirname(filePath)
+  await mkdir(directory, { recursive: true })
+  // Staged in the SAME directory, because `link` cannot cross a filesystem and
+  // a temp dir may well be on another one. The suffix keeps a partial file
+  // from ever matching the providers' own discovery globs (`*.jsonl`,
+  // `rollout-*.jsonl`), so an abandoned stage is inert rather than resumable.
+  const staged = join(directory, `.${randomUUID()}.partial`)
+  try {
+    const handle = await open(staged, 'wx', 0o600)
+    try {
+      await handle.writeFile(contents, 'utf8')
+      await handle.sync()
+    } finally {
+      await handle.close()
+    }
+    try {
+      await link(staged, filePath)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+      const existing = await readFile(filePath, 'utf8').catch(() => null)
+      if (existing === contents) return { path: filePath, outcome: 'already-published' }
+      throw new Error(
+        `Refusing to overwrite ${filePath}: a different transcript already exists under that name.`,
+      )
+    }
+    await syncDirectory(directory)
+    return { path: filePath, outcome: 'created' }
+  } finally {
+    // The staged copy is ours alone and is never the published name, so
+    // removing it can never touch an adopted target.
+    await rm(staged, { force: true }).catch(() => undefined)
+  }
+}
+
+async function syncDirectory(directory: string): Promise<void> {
+  try {
+    const handle = await open(directory, 'r')
+    try { await handle.sync() } finally { await handle.close() }
+  } catch {
+    // Best-effort; see the WHY above.
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -49,10 +146,8 @@ export async function writeProjectedClaudeSessionFile(
 ): Promise<string> {
   const providerSessionId = projectedClaudeSessionId(values)
   const projectDir = await getProjectDirForCwd(cwd)
-  await mkdir(projectDir, { recursive: true })
   const filePath = join(projectDir, `${providerSessionId}.jsonl`)
-  await writeFile(filePath, encodeJsonl(values), 'utf8')
-  return filePath
+  return (await publishNativeTranscript(filePath, encodeJsonl(values))).path
 }
 
 // ---------------------------------------------------------------------------
@@ -173,11 +268,9 @@ export async function writeProjectedCodexRolloutFile(
     pad2(timestamp.getUTCMonth() + 1),
     pad2(timestamp.getUTCDate()),
   )
-  await mkdir(dayDir, { recursive: true })
   const filename = `rollout-${formatCodexRolloutTimestamp(timestamp)}-${sessionMeta.id}.jsonl`
   const filePath = join(dayDir, filename)
-  await writeFile(filePath, encodeJsonl(values), 'utf8')
-  return filePath
+  return (await publishNativeTranscript(filePath, encodeJsonl(values))).path
 }
 
 export function projectedClaudeSessionId(values: readonly Record<string, unknown>[]): string {
