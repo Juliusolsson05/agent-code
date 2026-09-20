@@ -107,6 +107,10 @@ export type AppRunIncidentKind =
   | 'renderer.error'
   | 'renderer.unhandledrejection'
   | 'session.input_write_failed'
+  // Committed shutdown gave up waiting for admitted control work. The
+  // operations it names may have completed after exit with no durable result,
+  // so a restart that finds one unresolved should look here first (#943).
+  | 'control.drain_incomplete'
   | 'orchestration.request_timeout'
   | 'orchestration.prompt_delivery_failed'
   | 'mcp.host_start_failed'
