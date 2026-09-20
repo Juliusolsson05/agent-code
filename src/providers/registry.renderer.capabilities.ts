@@ -67,6 +67,7 @@ import { CODEX_IDENTITY } from '@providers/codex/renderer/identity'
 import {
   createClaudeTranscriptEntryMapper,
   extractClaudeProviderSessionId,
+  claudeTypedUserPromptText,
   isClaudeTypedUserPrompt,
 } from '@providers/claude/renderer/transcript/mapper'
 import {
@@ -177,6 +178,26 @@ export type RendererProviderCapabilities = {
    * failure class). A new provider now has to answer this to compile.
    */
   isTypedUserPrompt: (entry: Entry, text: string) => boolean
+  /**
+   * The user's own words, with provider scaffolding removed — what to SHOW
+   * and what to REPLAY into the composer.
+   *
+   * WHY this is separate from `isTypedUserPrompt` (#1059): that predicate
+   * already had to understand Claude's `<pasted_content id="…">` envelope to
+   * answer "did the user type this?", but it only unwrapped to DECIDE, and
+   * handed the raw envelope on. So the feed painted `❯ <pasted_content
+   * id="cade"> …`, pane titles for any pasted prompt started with
+   * `<pasted_content id="…`, and ⌘↑ replayed the envelope into the composer —
+   * where sending it again made Claude wrap the already-wrapped text, adding
+   * one envelope per round trip.
+   *
+   * WHY it is NOT applied to the acceptance comparison in main: that compares
+   * against the row Claude committed, and Claude committed the envelope. This
+   * is the display edge only.
+   *
+   * The default is identity; a provider that wraps prompts overrides it.
+   */
+  typedUserPromptText: (text: string) => string
   /**
    * Composer submit protocol (#394 phase 2c-4). Owns the provider's
    * paste/submit discipline (Codex: one atomic bracketed-paste+Enter;
@@ -313,6 +334,7 @@ const claudeCapabilities: RendererProviderCapabilities = {
   createTranscriptEntryMapper: () => createClaudeTranscriptEntryMapper(),
   extractProviderSessionId: extractClaudeProviderSessionId,
   isTypedUserPrompt: isClaudeTypedUserPrompt,
+  typedUserPromptText: claudeTypedUserPromptText,
   composerSubmit: claudeComposerSubmit,
   supportsImageAttachments: true,
   usesOptimisticUserEcho: false,
@@ -338,6 +360,8 @@ const codexCapabilities: RendererProviderCapabilities = {
     createCodexTranscriptEntryMapper(initialTurnCursor ?? null),
   extractProviderSessionId: extractCodexProviderSessionId,
   isTypedUserPrompt: isCodexTypedUserPrompt,
+  // Codex's non-typed rows are excluded outright; what survives is verbatim.
+  typedUserPromptText: text => text,
   composerSubmit: codexComposerSubmit,
   supportsImageAttachments: false,
   usesOptimisticUserEcho: true,
@@ -359,6 +383,8 @@ const opencodeCapabilities: RendererProviderCapabilities = {
   createTranscriptEntryMapper: () => createOpencodeTranscriptEntryMapper(),
   extractProviderSessionId: extractOpencodeProviderSessionId,
   isTypedUserPrompt: isOpencodeTypedUserPrompt,
+  // OpenCode's mapper drops `synthetic` parts; what survives is verbatim.
+  typedUserPromptText: text => text,
   composerSubmit: opencodeComposerSubmit,
   supportsImageAttachments: false,
   usesOptimisticUserEcho: true,
@@ -381,6 +407,8 @@ const grokCapabilities: RendererProviderCapabilities = {
   createTranscriptEntryMapper: () => createGrokTranscriptEntryMapper(),
   extractProviderSessionId: extractGrokProviderSessionId,
   isTypedUserPrompt: isGrokTypedUserPrompt,
+  // Grok's non-typed rows are excluded outright; what survives is verbatim.
+  typedUserPromptText: text => text,
   composerSubmit: grokComposerSubmit,
   // Grok's own terminal can attach clipboard images on paste, but the
   // composer→prompt path is control-only; image attachments via the app are
