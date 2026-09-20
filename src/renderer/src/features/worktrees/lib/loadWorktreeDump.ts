@@ -3,6 +3,7 @@ import type { SessionKind } from '@shared/types/providerKind'
 import type { WorktreeActivityIndexStatus, WorktreeActivitySummary } from '@preload/index'
 import type { GitWorktreeStatus, WorktreeIdentity } from '@shared/types/git'
 import { matchWorktree } from '@shared/work-context/matching'
+import { sessionIsWorking } from '@renderer/session-runtime/working'
 import { resolveTabSessions } from '@renderer/workspace/queries'
 import type { SessionId, Tab } from '@renderer/workspace/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
@@ -153,7 +154,7 @@ export function collectLiveAgentsByWorktree(
         sessionId,
         kind,
         tabTitle: tab.title,
-        live: Boolean(runtime?.sessionStatus === 'running' || runtime?.streamPhase !== 'idle'),
+        live: sessionIsWorking(runtime),
         focused: focusedSessionId === sessionId,
       })
       byPath.set(matched.path, rows)
