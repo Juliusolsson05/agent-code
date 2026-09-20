@@ -149,7 +149,7 @@ export class WebSocketSessionFeed implements SessionFeed {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private nextRequestId = 1
   private lastSessionList: RemoteSessionSummary[] = []
-  /** See serverClockKnown. */
+  /** See serverClockKnown. Set from each `session-list` frame. */
   private serverClockSeen = false
   /** Latest hello-declared STT capability. null = unknown (no hello yet, or
    *  a pre-capability server that omits the field) — consumers treat null as
@@ -165,12 +165,15 @@ export class WebSocketSessionFeed implements SessionFeed {
 
   // --- client-specific surface (beyond SessionFeed) ---
 
-  /** Has a `session-list` frame ever carried the sender's clock?
+  /** Did the CURRENT list carry the sender's clock?
    *
    *  The list screen needs this to know whether the stamps it is sorting were
    *  CONVERTED into this device's time base. Against a desktop too old to
    *  send one they are not, and an overshoot can then be the gap between two
-   *  machines rather than this phone's own clock artefact (#1055 review). */
+   *  machines rather than this phone's own clock artefact (#1055 review).
+   *
+   *  It answers for the list currently held, so a reconnect to an older
+   *  desktop takes the wider tolerance back. */
   serverClockKnown(): boolean {
     return this.serverClockSeen
   }
@@ -503,7 +506,11 @@ export class WebSocketSessionFeed implements SessionFeed {
         // An older desktop sends no `serverNow`; then the offset is zero and
         // the behaviour is what it was.
         const offset = typeof frame.serverNow === 'number' ? frame.serverNow - now : 0
-        this.serverClockSeen = this.serverClockSeen || typeof frame.serverNow === 'number'
+        // Per FRAME, not latched (#1055 review): a feed that reconnects to an
+        // older desktop at the same endpoint — a rollback — converts nothing
+        // from then on, and a sticky flag would keep handing the list the
+        // tighter tolerance that only a converted list has earned.
+        this.serverClockSeen = typeof frame.serverNow === 'number'
         this.lastSessionList = frame.sessions.map(row => {
           const server = row.lastActivityAt === null || row.lastActivityAt === undefined
             ? null

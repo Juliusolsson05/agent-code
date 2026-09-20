@@ -37,6 +37,19 @@ const list = (lastActivityAt: number, serverNow?: number) => ({
 afterEach(() => vi.useRealTimers())
 
 describe('recency across two clocks', () => {
+  it('stops claiming a converted list when it reconnects to an older desktop', () => {
+    // A rollback at the same endpoint: the next list carries no `serverNow`,
+    // so nothing is converted and the display must take its wider tolerance
+    // back. A latched flag kept promising conversion that was no longer
+    // happening (#1055 review).
+    const { feed, deliver } = mount()
+    const stamp = Date.parse('2026-09-20T04:00:00.000Z')
+    deliver(list(stamp, stamp))
+    expect(feed.serverClockKnown()).toBe(true)
+    deliver(list(stamp))
+    expect(feed.serverClockKnown()).toBe(false)
+  })
+
   it('converts a server frame into this device\'s time base', () => {
     // The server stamps with ITS clock and this client stamps local bumps
     // with the phone's, and the list sorts the mixture. Two devices two
