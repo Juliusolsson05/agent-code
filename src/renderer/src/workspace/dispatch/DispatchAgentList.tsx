@@ -9,6 +9,8 @@ import { useShallow } from 'zustand/react/shallow'
 
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { useAppStore } from '@renderer/app-state/hooks'
+import { isLiveGoalLoop, useGoalLoops } from '@renderer/features/goal-loop/useGoalLoops'
+import type { GoalLoopState } from '@shared/types/goalLoop'
 import { useAgentName } from '@renderer/workspace/agentNames/useAgentName'
 import { WorktreeBadge } from '@renderer/workspace/tile-tree/TileLeaf/SessionBadges'
 import { dispatchRowTitle } from './rowTitle'
@@ -124,6 +126,19 @@ export const DispatchAgentList = memo(function DispatchAgentList({
       : pinnedRows.filter(row => boundProjects.includes(row.tabId))),
     [pinnedRows, boundProjects],
   )
+  // Every agent the index is showing, for ONE goal-loop read (#1031 item 2).
+  // Read at the list level rather than per row: `goal-loop:changed` is a
+  // payload-free ping, so a per-row subscription would mean one IPC round trip
+  // per listed agent per loop event.
+  const listedSessionIds = useMemo(
+    () => [
+      ...scopedPinnedRows.map(row => row.sessionId),
+      ...scopedGroups.flatMap(group => group.rows.map(row => row.sessionId)),
+    ],
+    [scopedPinnedRows, scopedGroups],
+  )
+  const goalLoops = useGoalLoops(listedSessionIds)
+
   // Tab LETTERS, not names: the header is 10px uppercase with room for a few
   // characters, and A/B/C is already how dispatch labels and pinned project
   // chips read. Degrades to "A·B +2" rather than truncating a name to nothing.
@@ -238,6 +253,7 @@ export const DispatchAgentList = memo(function DispatchAgentList({
                 showWorktreeBadges={showWorktreeBadges}
                 focusSessionInTab={focusSessionInTab}
                 targetLaneIndex={targetLaneIndex}
+                goalLoop={goalLoops[row.sessionId]}
                 projectChip={`${tabIndexLabel(row.tabIndex)} · ${row.tabTitle}`}
               />
             ))}
@@ -263,6 +279,7 @@ export const DispatchAgentList = memo(function DispatchAgentList({
                   showWorktreeBadges={showWorktreeBadges}
                   focusSessionInTab={focusSessionInTab}
                   targetLaneIndex={targetLaneIndex}
+                  goalLoop={goalLoops[item.row.sessionId]}
                 />
               ) : (
                 <ChildCollapseRow
@@ -389,6 +406,7 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
   focusSessionInTab,
   projectChip,
   targetLaneIndex,
+  goalLoop,
 }: {
   row: DispatchAgentRow
   active: boolean
@@ -398,6 +416,8 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
   disabled?: boolean
   showWorktreeBadges: boolean
   focusSessionInTab: (tabId: TabId, sessionId: SessionId) => void
+  /** This agent's goal loop, when it has a live one (#1031 item 2). */
+  goalLoop?: GoalLoopState
   // Optional small label (tab letter + project title) shown next to
   // the secondary metadata row. Only pinned rows pass this — regular
   // rows already live under a group header that names the project,
@@ -538,6 +558,35 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
               "
             >
               new
+            </span>
+          )}
+          {isLiveGoalLoop(goalLoop) && (
+            // The answer to "why is this agent still working when I never
+            // prompted it?" (#1031 item 2). Before this the index showed
+            // nothing: GoalLoopPane mounts only for a session occupying a
+            // lane, so a loop on a POOLED agent — which is where every
+            // orchestration child lands — was invisible, and
+            // `commandTargetSessionId` resolves the focused lane's occupant,
+            // so Stop Goal Loop could not reach it either. Selecting the row
+            // places the agent and makes it the command target, which is what
+            // makes the existing controls reachable again; this chip is what
+            // tells the user there is a reason to.
+            //
+            // Rendered beside the unread badge rather than in the secondary
+            // metadata row because it is live state, not provenance, and it is
+            // the one thing on the row that is still changing while nobody
+            // watches.
+            <span
+              data-dispatch-goal-loop="true"
+              title={`Goal loop ${goalLoop.phase} — continuation ${goalLoop.continuationsDelivered} of ${goalLoop.maxContinuations}. Select this agent to pause, raise its cap or stop it.`}
+              className={`
+                flex-shrink-0 rounded-chip border px-1.5 py-[1px] text-[9px] font-semibold leading-none
+                ${goalLoop.phase === 'paused'
+                  ? 'border-border text-muted'
+                  : 'border-accent/70 bg-accent/10 text-accent'}
+              `}
+            >
+              {goalLoop.phase === 'paused' ? 'loop paused' : `loop ${goalLoop.continuationsDelivered}/${goalLoop.maxContinuations}`}
             </span>
           )}
           {unreadBadge && (
