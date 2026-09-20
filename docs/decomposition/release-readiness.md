@@ -667,6 +667,48 @@ claude 2.1.143 / codex 0.130.0 are stale versus the 2.1.278 / 0.155.1 in daily u
   - **#1018 (orchestration hides API errors):** an evidence catalog from real feed-debug recordings is being built (research agent, worktree `.worktrees/fix-orchestration-api-error`). Implementation follows the catalog.
   - **Waiting on #1013's merge:** T7 (#1006), T8 (#1007), T2 (command promotion) and T1 (#995), all of which touch the catalog, keybindings or bootstrap.
   - **Nightly** run 35430444567: build-app is green, package-macos is running.
+- 2026-09-20 09:45Z — **v0.1.0 IS PUBLISHED.** Signed, notarized, both
+  architectures, `releases/latest` returns it, and the landing page's download
+  buttons + status line resolve to the real DMGs (verified in a browser, not
+  inferred). Stage 8 is done except the two OWNER items (hero screenshot,
+  Cloudflare connect/domain) and the pre-Nord README screenshots.
+  - **Merged since:** #1060 (paste envelope shown/replayed), #1061 (#959
+    extension ledger quarantine), #1062 (the release cut), #1063 (#1031 item 2,
+    goal-loop chip on the index), #1064 (#1031 item 3, dictation stays in the
+    focused lane). #1031 was REOPENED: GitHub closed it off "Closes #1031 item
+    3" while items 1 and 4 were still outstanding.
+  - **Open:** #1065 (#1031 item 4, phone v3 coverage), #1067 (#1066, the
+    hold-peek fix), #1068 (#1025, answering OpenCode questions). All reviewed
+    except #1068, whose review is running.
+  - **THE REVIEWS EARNED THEIR KEEP THREE TIMES, and twice the bug was MINE:**
+    - #1061: with a quarantined row and a RUNNING extension sharing an id, one
+      Remove click uninstalled the working extension and `rm -rf`'d its bundle.
+      Also: the sweep's bundle protection had no test at all (deleting it left
+      206 tests green), and was keyed on parsing the very field that failed to
+      parse.
+    - #1067: my first fix was **worse than the bug**. Latching the peek
+      re-created the #1021 input trap — an overlay owning every keystroke but
+      Escape, on exactly the machines the fix targets. The way out was that
+      only the Cmd-LETTER keyup is swallowed; the COMMAND keyup still arrives,
+      so the peek can just keep holding. Plus a toast (the half of the
+      `dictation.hotkey.unavailable` precedent I had copied from), plus
+      corroborating the permission with `isTrustedAccessibilityClient` instead
+      of inferring it from a 20 ms probe.
+    - #1065: **my central claim was false.** `agentActivity` already covers v3;
+      I had run the mutation only against `src/main/remote/` and generalised.
+      Corrected in the header, README, commit and PR. The review also found
+      `tldrIdentity` — the phone's join key — unpinned across all 74 remote
+      tests, and that `drafts` persists raw composer text (clean here by
+      timing, not by process).
+  - **Two standing rules, unchanged from the owner:** ONE review round per PR
+    then merge on green; reviewers are CLAUDE orchestration children, never
+    Codex. (The loop prompt still says Codex; the owner's later instruction
+    wins.)
+  - **#1025 built (#1068):** the modal can answer, not only reject. The
+    options were in `metadata` all along — `foldQuestion`'s comment saying
+    otherwise was stale. Wire confirmed against the SHIPPED 1.18.31 binary.
+    Self-review caught that a no-options question posted `['']`, which the
+    validator refused, making such a prompt unanswerable.
 - 2026-09-20 07:15Z — **#1049, #1056, #1057 and #1058 MERGED.** Release 0.1.0 is
   staged and blocked only on #1060.
   - **Two standing rules changed, on the owner's word.** (1) **ONE review round
