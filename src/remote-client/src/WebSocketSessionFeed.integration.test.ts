@@ -164,6 +164,57 @@ describe('WebSocketSessionFeed against a live RemoteServer', () => {
     )
   })
 
+  it('does not re-notify the session list for every stream frame (#T18)', async () => {
+    // THE PHONE BUG: the list screen re-sorts on every array identity change,
+    // and this feed rebuilt the array — restamping lastActivityAt to
+    // Date.now() — for ANY event on ANY channel. screen and process-state are
+    // broadcast unbatched, so with two working agents the two rows swapped
+    // places at frame rate: "flashing, switching positions like a million
+    // times".
+    //
+    // The list is a PICKER. It has to move when something meaningful changes,
+    // not when a terminal repaints.
+    const f = makeFeed()
+    await waitForOpen(f)
+    manager.emit('started', { sessionId: 's1', kind: 'claude', projectDir: '/repo' })
+    manager.emit('started', { sessionId: 's2', kind: 'claude', projectDir: '/repo' })
+    await vi.waitFor(() => expect(f.getSessionList()).toHaveLength(2))
+
+    let notifications = 0
+    const off = f.onSessionList(() => { notifications += 1 })
+    for (let frame = 0; frame < 30; frame += 1) {
+      manager.emit('screen', { sessionId: frame % 2 ? 's1' : 's2', plain: `frame ${frame}`, cursor: null })
+      manager.emit('process-state', { sessionId: frame % 2 ? 's1' : 's2', active: true })
+    }
+    // Give every frame time to arrive before judging the count.
+    await new Promise(resolve => setTimeout(resolve, 250))
+    off()
+    expect(notifications).toBeLessThanOrEqual(2)
+  })
+
+  it('keeps the recency ORDER stable while two agents work (#T18)', async () => {
+    // Even one notification must not reorder the list: the client stamps
+    // Date.now() locally, so whichever agent painted last would jump to the
+    // top, and they alternate.
+    const f = makeFeed()
+    await waitForOpen(f)
+    manager.emit('started', { sessionId: 's1', kind: 'claude', projectDir: '/repo' })
+    manager.emit('started', { sessionId: 's2', kind: 'claude', projectDir: '/repo' })
+    await vi.waitFor(() => expect(f.getSessionList()).toHaveLength(2))
+    const order = () => f.getSessionList()
+      .slice()
+      .sort((a, b) => (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0))
+      .map(s => s.sessionId)
+      .join(',')
+    const before = order()
+    for (let frame = 0; frame < 20; frame += 1) {
+      manager.emit('screen', { sessionId: frame % 2 ? 's1' : 's2', plain: `frame ${frame}`, cursor: null })
+      await new Promise(resolve => setTimeout(resolve, 5))
+    }
+    await new Promise(resolve => setTimeout(resolve, 100))
+    expect(order()).toBe(before)
+  })
+
   it('deliverPrompt round-trips to the manager and resolves ok', async () => {
     const f = makeFeed()
     await waitForOpen(f)

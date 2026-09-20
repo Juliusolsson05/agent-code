@@ -30,6 +30,19 @@ import type {
 } from './wire'
 import type { UsageSnapshot } from '@shared/types/usage'
 
+/**
+ * How stale the picker's recency stamp may get before a stream frame
+ * refreshes it.
+ *
+ * It is not a debounce on rendering — it is the resolution of the value
+ * itself. The list sorts by it, so a finer stamp does not make the phone more
+ * informative, it only makes rows change places; the row's own `working`
+ * marker is what shows live state. Thirty seconds also matches the interval
+ * the list already re-renders on to keep its relative labels fresh, so a
+ * refreshed stamp is visible on the next tick at the latest.
+ */
+const ACTIVITY_REFRESH_MS = 30_000
+
 function applyRemoteThemeSettings(settings: Record<string, unknown> | null | undefined): void {
   if (!settings) return
   applyTheme({ ...DEFAULT_SETTINGS, ...settings } as Settings)
@@ -459,15 +472,32 @@ export class WebSocketSessionFeed implements SessionFeed {
         return
       }
       case 'session-event': {
-        // Keep the picker's recency live without re-requesting the list:
-        // any event for a session IS activity. Cheap (one map when the
-        // session is present) and mirrors how the server stamps the value.
+        // Keep the picker's recency live without re-requesting the list: any
+        // event for a session IS activity, and the server only re-sends the
+        // whole list when the workspace projection changes.
+        //
+        // WHY this is rate-limited and was not: it fired for EVERY event on
+        // every channel — screen, process-state, semantic-event,
+        // jsonl-entries — and screen/process-state are broadcast unbatched, so
+        // a working agent rebuilt the array at frame rate. Each rebuild is a
+        // new array identity, so the phone's list screen re-ran its sort and
+        // repainted every row; with two agents working the two rows swapped
+        // places continuously, which is what "the phone menu is flashing and
+        // switching positions like a million times" is. Measured on the real
+        // socket: 60 notifications for 60 frames.
+        //
+        // The value is a SORT KEY for a picker, accurate to the minute at
+        // most — the row already shows `working` for the live state. Refresh
+        // it when it has gone stale, not when a terminal repaints.
         const activeId = (frame.payload as { sessionId?: string })?.sessionId
-        if (activeId && this.lastSessionList.some(s => s.sessionId === activeId)) {
-          this.lastSessionList = this.lastSessionList.map(s =>
-            s.sessionId === activeId ? { ...s, lastActivityAt: Date.now() } : s,
-          )
-          for (const cb of [...this.sessionListListeners]) cb(this.lastSessionList)
+        if (activeId) {
+          const current = this.lastSessionList.find(s => s.sessionId === activeId)
+          if (current && Date.now() - (current.lastActivityAt ?? 0) >= ACTIVITY_REFRESH_MS) {
+            this.lastSessionList = this.lastSessionList.map(s =>
+              s.sessionId === activeId ? { ...s, lastActivityAt: Date.now() } : s,
+            )
+            for (const cb of [...this.sessionListListeners]) cb(this.lastSessionList)
+          }
         }
         const set = this.listeners[frame.channel]
         if (!set) return

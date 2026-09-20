@@ -68,6 +68,33 @@ describe('FleetHome', () => {
     expect(screen.getAllByText('exited').length).toBeGreaterThanOrEqual(2)
   })
 
+  it('keeps its arrangement when the feed republishes the same sessions (#T18)', () => {
+    // The phone bug the owner reported: "flashing, switching positions for
+    // the agent index like a million times". Two agents working at once get
+    // activity stamps a millisecond apart or identical, and the feed
+    // republishes the list; with no tiebreak the rows landed in whatever
+    // order the rebuilt array happened to carry, and whole GROUPS moved
+    // because their order was Map insertion order.
+    //
+    // Same sessions, same stamps, two different array orders: the rendered
+    // arrangement must be identical.
+    const stamp = Date.now() - 10_000
+    const rows = [
+      { ...BASE, sessionId: 's-b', kind: 'claude', title: 'Beta', tabTitle: 'project-two', lastActivityAt: stamp },
+      { ...BASE, sessionId: 's-a', kind: 'claude', title: 'Alpha', tabTitle: 'project-one', lastActivityAt: stamp },
+      { ...BASE, sessionId: 's-c', kind: 'claude', title: 'Gamma', tabTitle: 'project-one', lastActivityAt: stamp },
+    ]
+    const arrangement = (summaries: Array<Record<string, unknown>>): string => {
+      const view = render(<FleetHome feed={fakeFeed({ summaries })} connection="open" onSelect={() => {}} onUnpair={() => {}} />)
+      const text = [...view.container.querySelectorAll('.session-row')]
+        .map(row => row.textContent?.replace(/\s+/g, ' ').trim() ?? '')
+        .join(' | ')
+      view.unmount()
+      return text
+    }
+    expect(arrangement(rows)).toBe(arrangement([...rows].reverse()))
+  })
+
   it('opens the TLDR peek on long-press and navigates on tap', () => {
     vi.useFakeTimers()
     const onSelect = vi.fn()

@@ -65,8 +65,21 @@ export function FleetHome({
   }, [feed])
 
   const groups = useMemo(() => {
+    // Every comparison ends in the session id, and the groups are ordered by a
+    // rule rather than by arrival.
+    //
+    // WHY (#T18): this list reorders itself from `lastActivityAt`, and two
+    // agents working at once produce stamps that are equal or a millisecond
+    // apart. With no tiebreak, Array.sort left them in whatever order the feed
+    // last rebuilt the array in — so the rows swapped places on every update.
+    // The group list had it worse: it was Map INSERTION order, i.e. the order
+    // the first live session of each project happened to appear in, so whole
+    // sections jumped. The feed's own rate limit stops most of the churn; this
+    // makes the remaining updates land on the same arrangement instead of a
+    // reshuffled one.
     const byRecency = (a: RemoteSessionSummary, b: RemoteSessionSummary) =>
       (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0)
+      || a.sessionId.localeCompare(b.sessionId)
     const live = sessions.filter(s => s.alive)
     const exited = sessions.filter(s => !s.alive)
     const grouped = new Map<string, RemoteSessionSummary[]>()
@@ -84,7 +97,14 @@ export function FleetHome({
         return pinDelta !== 0 ? pinDelta : byRecency(a, b)
       })
     }
-    return { grouped: [...grouped.entries()], exited: exited.sort(byRecency) }
+    // The group with the most recent work first, ties broken by name. A group
+    // keeps its place while its rows do.
+    const groupOrder = [...grouped.entries()].sort(([nameA, rowsA], [nameB, rowsB]) => {
+      const recencyA = Math.max(...rowsA.map(row => row.lastActivityAt ?? 0))
+      const recencyB = Math.max(...rowsB.map(row => row.lastActivityAt ?? 0))
+      return recencyB - recencyA || nameA.localeCompare(nameB)
+    })
+    return { grouped: groupOrder, exited: exited.sort(byRecency) }
   }, [sessions])
 
   const peekSession = peek ? sessions.find(s => s.sessionId === peek.sessionId) ?? null : null
