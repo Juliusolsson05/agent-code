@@ -48,6 +48,29 @@ export type ExtensionContributions = {
   settings?: ExtensionSettingContribution[]
   keybindings?: ExtensionKeybindingContribution[]
   themes?: ExtensionThemeContribution[]
+  services?: ExtensionServiceContribution[]
+}
+
+/**
+ * A bundled Node entry the host runs as a long-lived service process
+ * (Electron utilityProcess), started explicitly by the extension's own runtime
+ * or view — never auto-started, so nothing native begins running without a
+ * user-visible action from the extension that owns it.
+ *
+ * Services are the VS Code sidecar pattern (LSP servers, dev-server launchers,
+ * device bridges) with one deliberate difference: the power is a consented,
+ * per-extension capability rather than a default of the platform. A service is
+ * native code with the user's privileges — `service.run` gates the host's
+ * lifecycle/RPC conveniences and the consent dialog says exactly that; it is a
+ * trust boundary, not a sandbox claim.
+ */
+export type ExtensionServiceContribution = {
+  /** Namespaced `<extensionId>.…`, like every other contributed id. */
+  id: string
+  /** Optional display name for Settings/runtime surfaces. */
+  title?: string
+  /** Built JS module exporting the service contract. Must stay inside the bundle. */
+  entry: string
 }
 
 /**
@@ -98,6 +121,12 @@ export type ExtensionCapability =
   // borrow. This explicit grant is the narrow channel used by timers and other
   // requested background work to report a short status to application windows.
   | 'notifications.show'
+  // Tier 2 — native sidecar processes. `service.run` covers the whole service
+  // lifecycle surface (start/stop/status/invoke) for BOTH transports; the
+  // broker arms below cannot compile without their REQUIRED_CAPABILITY entry.
+  // Consent copy must state that a service is native code running with the
+  // user's privileges — the grant is trust, not a sandbox.
+  | 'service.run'
 
 export const EXTENSION_CAPABILITIES: readonly ExtensionCapability[] = [
   'workspace.observe',
@@ -106,6 +135,7 @@ export const EXTENSION_CAPABILITIES: readonly ExtensionCapability[] = [
   'fs.read',
   'fs.write',
   'notifications.show',
+  'service.run',
 ]
 
 /**

@@ -65,6 +65,7 @@ import {
 import { ExtensionRuntimeService } from '@main/extensions/runtimeService.js'
 import { ExtensionCapabilityService } from '@main/extensions/capabilityService.js'
 import { registerExtensionRuntimeIpc } from '@main/extensions/runtimeIpc.js'
+import { ExtensionServiceHost } from '@main/extensions/serviceHost.js'
 import { registerExtensionInputIpc } from '@main/extensions/nativeInput.js'
 import { sweepAbandonedInstallDirectories } from '@main/extensions/install.js'
 import { STATE_DIR, STATE_FILE, TLDR_HOOK_RUNTIME_DIR } from '@main/storage/paths.js'
@@ -315,6 +316,7 @@ function assertStartupOpen(): void {
 // before-quit handler that used them (#945).
 let extensionRuntime: ExtensionRuntimeService | null = null
 let extensionCapabilities: ExtensionCapabilityService | null = null
+let extensionServiceHost: ExtensionServiceHost | null = null
 let unregisterExtensionRuntime: (() => void) | null = null
 let unregisterExtensionInput: (() => void) | null = null
 let extensionQuitReady = false
@@ -694,6 +696,11 @@ async function startApp(): Promise<void> {
   // The resolver closes over the late-created SessionManager rather than a
   // focused renderer. Startup extensions may run with zero views, but every file
   // target still has to name a live main-owned session and therefore a real cwd.
+  // Services are real child processes, not renderer lifetimes: the quit veto
+  // exists for sandboxed runtimes (their deactivate may still want one storage
+  // write). A native process is killed outright at the committed stage below;
+  // holding quit hostage to a third-party process is exactly backwards.
+  extensionServiceHost = new ExtensionServiceHost()
   extensionCapabilities = new ExtensionCapabilityService({
     resolveSessionRoot: sessionId => manager?.getSpawnCwd(sessionId) ?? null,
     // Background runtimes have no view-owned toast callback. Deliver through
@@ -702,6 +709,7 @@ async function startApp(): Promise<void> {
     notify: (extensionId, message) => {
       broadcastToWindows('extensions:notification', { extensionId, message })
     },
+    services: extensionServiceHost,
   })
   extensionRuntime = new ExtensionRuntimeService({
     preload: join(__dirname, '../preload/extensionRuntime.js'),
@@ -1538,6 +1546,8 @@ const sessionShutdownGate = installApplicationShutdown({
       extensionRuntime = null
       extensionCapabilities?.dispose()
       extensionCapabilities = null
+      extensionServiceHost?.dispose()
+      extensionServiceHost = null
     },
   },
   onQuitAllowed: () => {

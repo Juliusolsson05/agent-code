@@ -41,6 +41,14 @@ const api = {
   notifications: {
     show: (message) => transport.request({ method: 'notifications.show', message }),
   },
+  // Native sidecar lifecycle, brokered in main under the service.run grant.
+  // Same shapes as the view api on purpose: SDK authors learn one surface.
+  services: {
+    start: (serviceId) => transport.request({ method: 'service.start', serviceId }),
+    stop: (serviceId) => transport.request({ method: 'service.stop', serviceId }),
+    status: (serviceId) => transport.request({ method: 'service.status', serviceId }),
+    invoke: (serviceId, name, params) => transport.request({ method: 'service.invoke', serviceId, name, params }),
+  },
 };
 function register(map, id, handler) {
   if (typeof handler !== 'function') throw new Error('A runtime handler must be a function.');

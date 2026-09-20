@@ -10,6 +10,7 @@ import { extensionStorageGet } from '../storage.js'
 import { ExtensionRuntimeService } from '../runtimeService.js'
 import { ExtensionRuntimeViews } from '../runtimeViews.js'
 import { ExtensionCapabilityService, MAX_EXTENSION_TEXT_FILE_BYTES } from '../capabilityService.js'
+import { ExtensionServiceHost } from '../serviceHost.js'
 import { extensionRevision } from '@shared/types/extensions.js'
 import type { ExtensionJson, RuntimeStatus, RuntimeViewEvent } from '@shared/types/extensionRuntime.js'
 
@@ -62,6 +63,10 @@ void (async () => {
   const capabilities = new ExtensionCapabilityService({
     resolveSessionRoot: sessionId => sessionId === 'fixture-session' ? projectRoot : null,
     notify: () => {},
+    // Real host under the Electron journey: exercising the actual spawn path is
+    // the point of this harness. Timeouts stay short so a broken fixture fails
+    // the journey instead of hanging it.
+    services: new ExtensionServiceHost({ readyTimeoutMs: 3000, invokeTimeoutMs: 1500 }),
   })
   const service = new ExtensionRuntimeService({ preload: process.env.AGENT_CODE_EXTENSION_RUNTIME_PRELOAD ?? join(root!, 'preload.cjs'), capabilities, startupTimeoutMs: 3000, invocationTimeoutMs: 1500, onStatus: status => statuses.push(status) })
 

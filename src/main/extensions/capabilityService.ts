@@ -16,9 +16,11 @@ import { extensionRevision, type ExtensionCapability } from '@shared/types/exten
 import type {
   ExtensionServiceRequest,
   ExtensionServiceResult,
+  ExtensionServiceStatus,
   ExtensionTextFile,
   ExtensionTextFileWrite,
 } from '@shared/types/extensionServices.js'
+import type { ExtensionJson } from '@shared/types/extensionRuntime.js'
 import { installedExtensionCapabilities } from './grants.js'
 import { onExtensionPublication } from './ledger.js'
 
@@ -36,6 +38,21 @@ const REQUIRED_CAPABILITY: Record<ExtensionServiceRequest['method'], ExtensionCa
   'fs.readText': 'fs.read',
   'fs.writeText': 'fs.write',
   'notifications.show': 'notifications.show',
+  // The whole service lifecycle surface rides on ONE capability: start, stop,
+  // status and invoke are the same power (make consented native code run and
+  // talk to it). Splitting them would let a manifest request "invoke" without
+  // "start" — a grant that can do nothing, i.e. consent theatre again.
+  'service.start': 'service.run',
+  'service.stop': 'service.run',
+  'service.status': 'service.run',
+  'service.invoke': 'service.run',
+}
+
+export type ExtensionServiceInvoker = {
+  start(extensionId: string, revision: string, serviceId: string): Promise<ExtensionServiceStatus>
+  stop(extensionId: string, revision: string, serviceId: string): Promise<void>
+  status(extensionId: string, revision: string, serviceId: string): Promise<ExtensionServiceStatus>
+  invoke(extensionId: string, revision: string, serviceId: string, name: string, params?: ExtensionJson): Promise<ExtensionJson | undefined>
 }
 
 export type ExtensionCapabilityServiceOptions = {
@@ -43,6 +60,8 @@ export type ExtensionCapabilityServiceOptions = {
   resolveSessionRoot(sessionId: string): string | null
   /** Deliver a bounded extension-attributed status to application windows. */
   notify(extensionId: string, message: string): void
+  /** Lifecycle + RPC owner for `service.run` (ExtensionServiceHost). */
+  services: ExtensionServiceInvoker
 }
 
 type GrantCheck = { value: Promise<ReadonlySet<ExtensionCapability>> }
@@ -83,7 +102,7 @@ export class ExtensionCapabilityService {
     this.pending.set(authority, count + 1)
     try {
       const check = await this.requireCapability(extensionId, revision, REQUIRED_CAPABILITY[request.method])
-      const result = await this.perform(extensionId, request, authority, check)
+      const result = await this.perform(extensionId, revision, request, authority, check)
       // Do not return user data to a runtime/frame whose generation was revoked
       // while filesystem I/O was pending. The caller transport independently
       // checks its own document/runtime identity; this closes the main-service
@@ -131,6 +150,7 @@ export class ExtensionCapabilityService {
 
   private async perform(
     extensionId: string,
+    revision: string,
     request: ExtensionServiceRequest,
     authority: string,
     check: GrantCheck,
@@ -155,6 +175,26 @@ export class ExtensionCapabilityService {
         // beside the message so renderer chrome can attribute third-party text.
         this.options.notify(extensionId, request.message)
         return undefined
+      // Service lifecycle/RPC is performed by the dedicated process owner. This
+      // broker adds only the grant + revocation race handling it adds to fs:
+      // the arms stay one-liners so no transport grows its own lifecycle rules.
+      case 'service.start':
+        return this.options.services.start(extensionId, revision, request.serviceId)
+      case 'service.stop':
+        await this.options.services.stop(extensionId, revision, request.serviceId)
+        return undefined
+      case 'service.status':
+        return this.options.services.status(extensionId, revision, request.serviceId)
+      case 'service.invoke': {
+        // A service RPC's value is author-defined bounded JSON, not one of the
+        // host-shaped results this union describes. Both transports surface
+        // broker results as unknown to callers, so the honest options were a
+        // union widened for this one arm (which breaks narrowing at every fs
+        // call site) or this single documented seam. The value was already
+        // bounded by the process protocol's schema before it got here.
+        const value = await this.options.services.invoke(extensionId, revision, request.serviceId, request.name, request.params)
+        return value === undefined || value === null ? undefined : (value as ExtensionServiceResult)
+      }
       default: {
         const unhandled: never = request
         throw new Error(`Unhandled extension service request: ${String(unhandled)}`)

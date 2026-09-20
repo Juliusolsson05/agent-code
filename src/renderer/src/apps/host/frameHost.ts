@@ -133,6 +133,10 @@ export function createFrameHost(options: {
     'fs.readText': 'fs.read',
     'fs.writeText': 'fs.write',
     'notifications.show': 'notifications.show',
+    'service.start': 'service.run',
+    'service.stop': 'service.run',
+    'service.status': 'service.run',
+    'service.invoke': 'service.run',
   }
 
   const perform = async (request: FrameRequest): Promise<unknown> => {
@@ -184,6 +188,10 @@ export function createFrameHost(options: {
       case 'fs.readText':
       case 'fs.writeText':
       case 'notifications.show':
+      case 'service.start':
+      case 'service.stop':
+      case 'service.status':
+      case 'service.invoke':
         return window.api.extensionsServiceRequest(extensionId, bundleRevision, request)
       default:
         // Exhaustiveness. Without it an unhandled method fell off the end returning

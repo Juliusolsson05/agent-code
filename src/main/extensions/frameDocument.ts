@@ -246,6 +246,16 @@ const api = {
     writeText: ({ sessionId, path, text, expectedVersion }) => request('fs.writeText', { sessionId, path, text, expectedVersion }),
   },
   notifications: { show: (message) => request('notifications.show', { message }) },
+  // Native sidecar lifecycle, brokered in main under the service.run grant.
+  // start() is the ONLY thing that can make native code run, so it is explicit
+  // and returns the live handle (pid + reported loopback endpoints) — a caller
+  // never has to guess whether the process actually came up.
+  services: {
+    start: (serviceId) => request('service.start', { serviceId }),
+    stop: (serviceId) => request('service.stop', { serviceId }),
+    status: (serviceId) => request('service.status', { serviceId }),
+    invoke: (serviceId, name, params) => request('service.invoke', { serviceId, name, params }),
+  },
 };
 
 // Listeners for host-pushed change nudges (Tier-1 observe live updates), keyed by

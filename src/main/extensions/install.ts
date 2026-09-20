@@ -794,6 +794,13 @@ export async function installExtension(
     for (const view of manifest.contributes?.views ?? []) {
       if (manifest.apiVersion === 2 && view.entry) await verifyEntryInsideBundle(staging, view.entry)
     }
+    // Service entries are launch targets for native processes, so they get the
+    // same bundle containment as the runtime entry at BOTH install sites. A
+    // manifest-level escape (e.g. ../../tool.js) already failed the schema; this
+    // closes the symlink flavor of the same attack before any fork happens.
+    for (const service of manifest.contributes?.services ?? []) {
+      await verifyEntryInsideBundle(staging, service.entry)
+    }
 
     return await finalizeInstall(
       manifest,
@@ -888,6 +895,9 @@ export async function installExtensionFromPath(
     await verifyEntryInsideBundle(staging, manifest.entry)
     for (const view of manifest.contributes?.views ?? []) {
       if (manifest.apiVersion === 2 && view.entry) await verifyEntryInsideBundle(staging, view.entry)
+    }
+    for (const service of manifest.contributes?.services ?? []) {
+      await verifyEntryInsideBundle(staging, service.entry)
     }
 
     // PROVENANCE ONLY. There is no tarball, so the entry digest answers "which
