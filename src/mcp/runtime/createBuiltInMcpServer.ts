@@ -940,7 +940,17 @@ function orchestrationCreateAgentCallKey(
           // child. So instead the prompt waits for the composer, and the reply
           // says so — the child is created, the brief is coming, and the
           // parent is told not to send it again.
-          if (!delivery.ok && isNotReadyYet(delivery) && typeof manager.deliverPromptWhenReady === 'function') {
+          // `canWaitForPromptReadiness` decides BEFORE the reply promises
+          // anything (#854 review). Only Claude and Codex have a readiness
+          // gate to subscribe to; OpenCode and Grok report not-readiness as an
+          // ordinary failure, so promising a wait there replaced a retry the
+          // parent could act on with a silent loss it could not.
+          if (
+            !delivery.ok
+            && isNotReadyYet(delivery)
+            && typeof manager.deliverPromptWhenReady === 'function'
+            && manager.canWaitForPromptReadiness?.(agent.sessionId) === true
+          ) {
             const pending = manager.deliverPromptWhenReady(agent.sessionId, prompt)
             // Deliberately not awaited: the wait outlives this MCP call by
             // design, and its whole purpose is that the caller does not have
@@ -1167,7 +1177,15 @@ function orchestrationCreateAgentCallKey(
             task: args.prompt.trim(),
           })
         : args.prompt.trim()
-      const delivery = await manager.deliverPromptToAgent(args.sessionId, prompt)
+      // `supersedesPendingPrompt` (#854 review): THIS caller is sending the
+      // child's brief by hand, so a brief still waiting for the composer is
+      // the same task and must not arrive twice. Every other delivery path —
+      // a human typing in the pane, the phone, the goal loop, compaction — is
+      // writing something else and leaves the waiting brief alone.
+      const delivery = await manager.deliverPromptToAgent(
+        args.sessionId, prompt, undefined, undefined, undefined,
+        { supersedesPendingPrompt: true },
+      )
       if (!delivery.ok) {
         dependencies.appRunJournal?.recordIncident({
           kind: 'orchestration.prompt_delivery_failed',
@@ -1466,11 +1484,17 @@ function orchestrationCreateAgentCallKey(
  * something else has to clear, which in the recorded corpus is almost always
  * Claude's first-launch trust dialog. Both are the prompt arriving early.
  *
- * Everything else — bytes already written, a session the provider calls
- * unusable, an absorption or acceptance failure — is a real failure about a
- * real attempt and must keep failing loudly. Waiting after bytes were written
- * would risk a second copy of the same prompt, which is the orphaned-draft
- * half of #854 rather than a fix for it.
+ * Everything else — a session the provider calls unusable, an absorption or
+ * acceptance failure — is a real failure about a real attempt and must keep
+ * failing loudly. The `stage` check is what excludes those.
+ *
+ * The bytes check in front of it is DEFENCE IN DEPTH and unreachable today:
+ * review enumerated every `ok: false` shape the four provider paths can
+ * produce and none carries `stage: 'before-write'` together with written
+ * bytes. It stays because the consequence of the two ever meeting is a second
+ * copy of the same prompt — the orphaned-draft half of #854 rather than a fix
+ * for it — and a future provider that writes before it decides it is not ready
+ * would otherwise inherit that silently.
  */
 function isNotReadyYet(delivery: Extract<PromptDeliveryResult, { ok: false }>): boolean {
   if (delivery.promptWritten || delivery.enterWritten) return false

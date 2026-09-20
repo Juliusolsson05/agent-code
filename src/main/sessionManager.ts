@@ -376,13 +376,21 @@ const INPUT_WRITE_COALESCE_MS = 1000
 
 /**
  * How long one `awaitReadyForPrompt` arm lasts while a bootstrap prompt waits
- * for its child's composer (#854).
+ * for its child's composer, and how long the wait pauses before re-arming
+ * (#854).
  *
- * It is NOT a deadline for the wait — the wait ends when the prompt lands, the
- * session ends, or someone takes it over. It is only how often that wait comes
- * up for air to notice it was cancelled. The gate itself is event-driven, so
- * this costs one timer per waiting child and nothing else; two seconds keeps a
- * cancellation from looking hung to a human watching Dispatch.
+ * It is NOT a deadline for the wait — that ends when the prompt lands, the
+ * session ends, or an orchestration send supersedes it. It is also NOT a
+ * cancellation checkpoint, which an earlier version of this comment claimed:
+ * cancellation wakes the current arm directly and was measured at 4 ms, not at
+ * this interval.
+ *
+ * What it really is: the floor on how often the gate is asked. Claude answers
+ * `blocked` SYNCHRONOUSLY — and `blocked` (its first-launch trust dialog) is
+ * 26 of the 47 recorded cases this feature exists for — so without a pause
+ * between arms the loop would spin at full speed for as long as a human takes
+ * to answer a dialog. The pacing is load-bearing for the primary case, not a
+ * guard against a hypothetical future provider.
  */
 const PENDING_PROMPT_GATE_WAIT_MS = 2_000
 
@@ -4173,14 +4181,38 @@ export class SessionManager extends EventEmitter {
    * painting), neither of which has a useful upper bound — a timer here would
    * be a number invented to look decisive. The bound is the session itself:
    * this resolves when the prompt is delivered, when the session ends, or when
-   * something else takes the delivery over. A child that never becomes ready
-   * holds one waiter and nothing else.
+   * an orchestration send supersedes it.
+   *
+   * A child that never becomes ready therefore holds one waiter for as long as
+   * it lives, which is why the loop below re-creates its wake each iteration
+   * rather than racing one long-lived promise: review measured the earlier
+   * shape retaining ~969 bytes per re-arm, about 40 MB a day per waiting
+   * child, because a `Promise.race` reaction on a promise that never settles
+   * is never released.
    *
    * WHY it re-arms `awaitReadyForPrompt` in a loop instead of asking for one
    * long wait: that call is event-driven (it listens for gate changes) but
    * takes a deadline, and a very distant one would make cancellation wait for
    * it. Re-arming gives cancellation a checkpoint without polling the gate.
    */
+  /**
+   * Can this session's readiness actually be WAITED on (#854 review)?
+   *
+   * Only Claude and Codex implement `awaitReadyForPrompt`. OpenCode and Grok
+   * report not-readiness as an ordinary delivery failure and have nothing to
+   * subscribe to — so "wait for the gate" there is one instant retry into the
+   * identical window, and a caller that then tells its parent "do not send it
+   * again" has turned a retryable failure into a silent loss.
+   *
+   * The caller asks this BEFORE it decides what to promise, because the
+   * promise is the part that cannot be taken back.
+   */
+  canWaitForPromptReadiness(sessionId: string): boolean {
+    const entry = this.sessions.get(sessionId)
+    if (!entry || entry.kind === 'terminal') return false
+    return typeof entry.session.awaitReadyForPrompt === 'function'
+  }
+
   async deliverPromptWhenReady(
     sessionId: string,
     prompt: string,
@@ -4196,17 +4228,28 @@ export class SessionManager extends EventEmitter {
         message: `A prompt is already waiting for session ${sessionId} to become ready`,
       }
     }
+    // WHY the wake is re-created every iteration instead of racing one
+    // long-lived promise (#854 review): `Promise.race` SUBSCRIBES a reaction,
+    // and a reaction on a promise that never settles is retained until it
+    // does. Racing the same cancellation promise on every arm therefore grew
+    // the heap for as long as the child waited — measured at 969 bytes per
+    // iteration surviving a forced GC, which at this pacing is about 40 MB a
+    // day per waiting child, unbounded. The dominant recorded case is a trust
+    // dialog answered by a human in their own time, so "for as long as the
+    // child waits" is not a small number.
+    //
+    // One slot, replaced each time, dropped at the end of the iteration. The
+    // flag is what cancellation actually decides; the wake only stops the
+    // current sleep early.
     let cancelledFor: string | null = null
-    let wake!: () => void
-    const cancelled = new Promise<'cancelled'>(resolve => {
-      wake = () => resolve('cancelled')
-    })
-    this.pendingPromptDeliveries.set(sessionId, {
-      cancel: reason => {
+    let wakeCurrent: (() => void) | null = null
+    const pending = {
+      cancel: (reason: string) => {
         cancelledFor = reason
-        wake()
+        wakeCurrent?.()
       },
-    })
+    }
+    this.pendingPromptDeliveries.set(sessionId, pending)
     record?.('pending-armed')
     try {
       for (;;) {
@@ -4230,15 +4273,32 @@ export class SessionManager extends EventEmitter {
           }
         }
         if (typeof session.awaitReadyForPrompt !== 'function') {
-          // A provider with no gate has nothing to wait for; its own delivery
-          // path owns readiness.
-          return await this.deliverPromptToAgent(sessionId, prompt, undefined, record)
+          // Refuse rather than "wait" (#854 review). An earlier version fell
+          // through to one immediate delivery here, on the premise that a
+          // provider without a gate owns readiness in its own delivery path.
+          // That premise is false for OpenCode and Grok: they report
+          // not-readiness as an ordinary failure, so the "wait" was a single
+          // retry into the same window — measured at 1 ms and one attempt —
+          // after which the prompt was gone and the reply still said "do not
+          // send it again".
+          //
+          // Callers ask `canWaitForPromptReadiness` first, so reaching this is
+          // a capability skew (a session replaced under the same id between
+          // the question and the answer). Failing honestly hands the caller
+          // back the retry it would have had.
+          return {
+            ok: false, stage: 'before-write', code: 'not-ready', retrySafe: true,
+            disposition: 'retry-same-session',
+            promptWritten: false, enterWritten: false,
+            message: `Session ${sessionId} cannot be waited on for prompt readiness`,
+          }
         }
         const armedAt = Date.now()
         const outcome = await Promise.race([
           session.awaitReadyForPrompt({ timeoutMs: PENDING_PROMPT_GATE_WAIT_MS }),
-          cancelled,
+          new Promise<'cancelled'>(resolve => { wakeCurrent = () => resolve('cancelled') }),
         ])
+        wakeCurrent = null
         if (outcome === 'cancelled' || cancelledFor !== null) break
         if (outcome.kind === 'ready') {
           record?.('pending-ready')
@@ -4246,7 +4306,17 @@ export class SessionManager extends EventEmitter {
           // other caller's cancellation is racing, and holding the pending
           // slot across it would make a legitimate concurrent delivery look
           // like a second waiter.
-          this.pendingPromptDeliveries.delete(sessionId)
+          //
+          // BY IDENTITY, here and in the `finally` (#854 review). Deleting by
+          // id alone let this waiter's teardown remove a DIFFERENT waiter that
+          // armed while this one was delivering — and that one was then
+          // unreachable, so no direct delivery could supersede it and it fired
+          // its own copy when the gate opened. Two briefs, one child. Only one
+          // caller exists today, so the invariant held by luck rather than by
+          // construction.
+          if (this.pendingPromptDeliveries.get(sessionId) === pending) {
+            this.pendingPromptDeliveries.delete(sessionId)
+          }
           return await this.deliverPromptToAgent(sessionId, prompt, undefined, record)
         }
         // `timeout` is OUR re-arm expiring, not the session's verdict — a
@@ -4269,21 +4339,26 @@ export class SessionManager extends EventEmitter {
             message: `Session ${sessionId} cannot accept prompts (${outcome.kind})`,
           }
         }
-        // Pace the re-arm on what the gate actually costs, not on trust.
+        // Pace the re-arm on what the gate actually costs.
         //
-        // `awaitReadyForPrompt` is documented to hold until the gate changes
-        // or its own timeout expires, and Claude's does. A provider whose gate
-        // answers "not ready" IMMEDIATELY — a capability-skewed session, a
-        // future provider, a stub — would otherwise turn this into a hot loop
-        // burning a core for as long as a child sits behind a trust dialog.
-        // Waiting out the rest of the window costs nothing when the gate
-        // already blocked for it, and cancellation still wins the race.
+        // This is NOT defence against a hypothetical provider: Claude's gate
+        // returns `blocked` synchronously (`awaitReadyForPrompt` short-circuits
+        // for any non-warming verdict), and `blocked` is the trust dialog —
+        // 26 of the 47 recorded cases this whole feature is for. Without the
+        // pause the loop spins at full speed for as long as a human takes to
+        // answer that dialog. Waiting out the rest of the window costs nothing
+        // when the gate already blocked for it, and a cancellation still ends
+        // the sleep immediately.
         const spentMs = Date.now() - armedAt
         if (spentMs < PENDING_PROMPT_GATE_WAIT_MS) {
-          await Promise.race([
-            new Promise<void>(resolve => { setTimeout(resolve, PENDING_PROMPT_GATE_WAIT_MS - spentMs) }),
-            cancelled,
-          ])
+          await new Promise<void>(resolve => {
+            const timer = setTimeout(resolve, PENDING_PROMPT_GATE_WAIT_MS - spentMs)
+            wakeCurrent = () => {
+              clearTimeout(timer)
+              resolve()
+            }
+          })
+          wakeCurrent = null
         }
       }
       record?.('pending-cancelled', { reason: cancelledFor ?? 'unknown' })
@@ -4294,7 +4369,9 @@ export class SessionManager extends EventEmitter {
         message: `Prompt for session ${sessionId} was not delivered (${cancelledFor ?? 'cancelled'})`,
       }
     } finally {
-      this.pendingPromptDeliveries.delete(sessionId)
+      if (this.pendingPromptDeliveries.get(sessionId) === pending) {
+        this.pendingPromptDeliveries.delete(sessionId)
+      }
     }
   }
 
@@ -4319,6 +4396,24 @@ export class SessionManager extends EventEmitter {
     imagePaths?: string[],
     record?: (event: string, data?: Record<string, unknown>) => void,
     operationId?: string,
+    options?: {
+      /**
+       * This delivery REPLACES a bootstrap prompt that is waiting for the
+       * child's composer (#854 review).
+       *
+       * Only the orchestration send path passes it. An earlier version
+       * cancelled the waiter from EVERY delivery, and this function has seven
+       * callers — a human typing in the child's pane, the phone, the goal
+       * loop, and two compaction paths among them. A child whose composer
+       * holds a human draft parks the waiter indefinitely, so the moment that
+       * human pressed Enter the brief the parent was promised was silently
+       * thrown away.
+       *
+       * Those callers are not sending the brief. They are writing something
+       * else, and the brief still has to arrive.
+       */
+      supersedesPendingPrompt?: boolean
+    },
   ): Promise<PromptDeliveryResult> {
     if (this.promptDeliveriesInFlight.has(sessionId)) {
       record?.('duplicate-blocked')
@@ -4334,11 +4429,14 @@ export class SessionManager extends EventEmitter {
         message: `A prompt delivery is already in flight for session ${sessionId}`,
       }
     }
-    // A prompt waiting for this session is superseded by one being delivered
-    // now (#854): the parent decided not to wait, and two bootstraps would be
-    // two tasks. The waiter that called us releases its own slot first, so
-    // this only fires for a genuinely different caller.
-    this.cancelPendingPromptDelivery(sessionId, 'superseded-by-direct-delivery')
+    // A prompt waiting for this session is superseded ONLY by a caller that
+    // says it is sending the same thing (#854): the parent decided not to
+    // wait, and two bootstraps would be two tasks. The waiter that called us
+    // releases its own slot first, so this only fires for a genuinely
+    // different caller.
+    if (options?.supersedesPendingPrompt) {
+      this.cancelPendingPromptDelivery(sessionId, 'superseded-by-direct-delivery')
+    }
     const entry = this.sessions.get(sessionId)
     // `=== 'terminal'` rather than !isAgentProviderKind: TypeScript
     // only discriminates the RegistryEntry union on literal kind

@@ -54,6 +54,41 @@ vi.mock('@main/window/windowRegistry.js', () => ({
         } as never)
         return
       }
+      if (type === 'ensure-agent-live') {
+        // `send_prompt` wakes the child before delivering; without an answer
+        // in this shape it refuses long before the supersede flag matters.
+        bridge.resolve({
+          requestId: request.requestId as string,
+          ok: true,
+          type: 'ensure-agent-live',
+          agent: {
+            sessionId: request.sessionId as string,
+            kind: 'claude',
+            cwd: '/tmp/project',
+            orchestrationParentId: 'parent-1',
+            orchestrationRootId: 'parent-1',
+          },
+        } as never)
+        return
+      }
+      if (type === 'read-agent') {
+        bridge.resolve({
+          requestId: request.requestId as string,
+          ok: true,
+          type: 'read-agent',
+          output: {
+            agent: {
+              sessionId: request.sessionId as string,
+              kind: 'claude',
+              cwd: '/tmp/project',
+              orchestrationParentId: 'parent-1',
+              orchestrationRootId: 'parent-1',
+            },
+            messages: [],
+          },
+        } as never)
+        return
+      }
       if (type === 'mark-bootstrap-prompt-delivered') {
         bridge.resolve({
           requestId: request.requestId as string,
@@ -111,16 +146,27 @@ const SESSION_UNUSABLE = {
 }
 
 type Manager = {
+  getSessionKind: ReturnType<typeof vi.fn>
   deliverPromptToAgent: ReturnType<typeof vi.fn>
   deliverPromptWhenReady: ReturnType<typeof vi.fn>
+  canWaitForPromptReadiness: ReturnType<typeof vi.fn>
   releasePending?: () => void
 }
 
-function manager(immediate: Record<string, unknown>, pendingOutcome: Record<string, unknown> = { ok: true }): Manager {
+function manager(
+  immediate: Record<string, unknown>,
+  pendingOutcome: Record<string, unknown> = { ok: true },
+  // Claude and Codex have a readiness gate; OpenCode and Grok do not, and for
+  // them a "wait" is one instant retry into the same window (#854 review).
+  canWait = true,
+): Manager {
   let release!: () => void
   const opened = new Promise<void>(resolve => { release = resolve })
   return {
     deliverPromptToAgent: vi.fn(async () => immediate),
+    canWaitForPromptReadiness: vi.fn(() => canWait),
+    // `send_prompt` refuses a non-agent session before it ever delivers.
+    getSessionKind: vi.fn(() => 'claude'),
     // Resolves only when the test says the gate opened, which is what a
     // composer painting or a human answering the trust dialog is.
     deliverPromptWhenReady: vi.fn(async () => { await opened; return pendingOutcome }),
@@ -184,6 +230,23 @@ describe('a child that is not ready YET keeps its prompt instead of losing it (#
     expect(marked()).toEqual([])
   })
 
+  it('does NOT promise a wait for a provider with no readiness gate', async () => {
+    // OpenCode and Grok report not-readiness as an ordinary failure and have
+    // nothing to subscribe to. Promising a wait there swapped a retry the
+    // parent could act on for a silent loss it could not — the reply said "do
+    // not send it again" and nothing ever sent it (#854 review).
+    //
+    // The justifying corpus contains zero OpenCode or Grok rows: all 63
+    // recorded bootstrap failures are Claude or Codex. The conclusion was
+    // drawn from two providers and applied to four.
+    const sessions = manager(NOT_READY_YET.warming, { ok: true }, false)
+
+    const result = await create(sessions)
+
+    expect(result).toMatchObject({ ok: false, error: 'prompt_delivery_failed', retrySafe: true })
+    expect(sessions.deliverPromptWhenReady).not.toHaveBeenCalled()
+  })
+
   it('marks the bootstrap delivered only when the prompt actually lands', async () => {
     const sessions = manager(NOT_READY_YET.warming)
 
@@ -239,5 +302,43 @@ describe('a child that is not ready YET keeps its prompt instead of losing it (#
     expect(result).toMatchObject({ ok: false, error: 'prompt_delivery_failed' })
     expect(sessions.deliverPromptWhenReady).not.toHaveBeenCalled()
     expect(closed()).toHaveLength(1)
+  })
+})
+
+describe('a hand-sent prompt replaces the waiting brief, and nothing else does (#854)', () => {
+  it('orchestration_send_prompt says it supersedes', async () => {
+    // The parent, told its child's brief is pending, sends the same thing
+    // itself. That is the ONE delivery that means "replace it" — and
+    // `deliverPromptToAgent` has seven callers, including a human typing in
+    // the child's pane, the phone, the goal loop and two compaction paths. An
+    // earlier version cancelled the waiter from all of them, so the moment a
+    // human pressed Enter in that pane the brief was thrown away silently.
+    const sessions = manager({ ok: true })
+    const server = createBuiltInMcpServer(
+      { sessionId: 'parent-1', cwd: '/tmp/project', domains: ['orchestration'] },
+      { orchestrationBridge: bridge as never, sessionManager: sessions as never },
+    )
+    const client = new Client({ name: 'supersede-test', version: '0.0.0' })
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+    try {
+      await server.connect(serverTransport)
+      await client.connect(clientTransport)
+      // The child has to exist for send_prompt to reach delivery.
+      await client.callTool({ name: 'orchestration_create_agent', arguments: { kind: 'claude' } })
+      const reply = await client.callTool({
+        name: 'orchestration_send_prompt',
+        arguments: { sessionId: 'child-1', prompt: 'the brief, sent by hand' },
+      })
+      // If send_prompt refused before delivering, the assertion below would
+      // pass or fail for a reason that has nothing to do with superseding.
+      const parsed = JSON.parse(((reply.content as Array<{ text: string }>)[0]!).text) as Record<string, unknown>
+      if (parsed.ok !== true) throw new Error(`send_prompt refused: ${JSON.stringify(parsed)}`)
+    } finally {
+      await client.close()
+      await server.close()
+    }
+
+    const sent = sessions.deliverPromptToAgent.mock.calls.at(-1)
+    expect(sent?.[5]).toMatchObject({ supersedesPendingPrompt: true })
   })
 })

@@ -78,6 +78,10 @@ async function createAgentWithDelivery(delivery: PromptDeliveryResult): Promise<
         // wait outlives the tool call, so the call's answer cannot depend on
         // it.
         deliverPromptWhenReady: vi.fn(() => new Promise<never>(() => {})),
+        // Claude-shaped: it has a readiness gate to wait on. Providers without
+        // one keep the old failure reply instead (#854 review), which has its
+        // own case in orchestrationBootstrapPending.system.test.ts.
+        canWaitForPromptReadiness: vi.fn(() => true),
       } as never,
     },
   )

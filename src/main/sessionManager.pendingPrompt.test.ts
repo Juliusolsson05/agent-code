@@ -69,9 +69,11 @@ function gatedSession() {
   let screen = '❯'
   let open = false
   let asked = 0
+  let acceptance: Promise<{ kind: 'user'; acceptedAt: number }> | null = null
   return {
     write: vi.fn((data: string) => { if (data !== '\r') screen = `❯ ${data}` }),
     open: () => { open = true },
+    close: () => { open = false },
     asked: () => asked,
     isExited: () => false,
     snapshotScreen: () => screen,
@@ -80,9 +82,17 @@ function gatedSession() {
       return open ? { kind: 'ready', waitedMs: 1 } : warming()
     }),
     armPromptAcceptance: () => ({
-      promise: Promise.resolve({ kind: 'user' as const, acceptedAt: 123 }),
+      promise: acceptance ?? Promise.resolve({ kind: 'user' as const, acceptedAt: 123 }),
       cancel: vi.fn(),
     }),
+    /** Hold the delivery open: the window in which a second waiter can arm. */
+    holdAcceptance: () => {
+      let settle!: () => void
+      acceptance = new Promise(resolve => {
+        settle = () => resolve({ kind: 'user' as const, acceptedAt: 123 })
+      })
+      return settle
+    },
   }
 }
 
@@ -200,7 +210,13 @@ describe('a bootstrap prompt waits for a child that is not ready YET (#854)', ()
       await vi.advanceTimersByTimeAsync(10)
 
       session.open()
-      const direct = await manager.deliverPromptToAgent('child', 'the brief, sent by hand')
+      // The orchestration send path is the only one that says it is replacing
+      // the brief. Every other delivery leaves a waiting brief alone (#854
+      // review) — that case is asserted below.
+      const direct = await manager.deliverPromptToAgent(
+        'child', 'the brief, sent by hand', undefined, undefined, undefined,
+        { supersedesPendingPrompt: true },
+      )
       expect(direct.ok).toBe(true)
 
       // Long past the waiter's next re-arm: if it were still armed it would
@@ -215,9 +231,97 @@ describe('a bootstrap prompt waits for a child that is not ready YET (#854)', ()
     }
   })
 
-  it('delivers straight away for a provider with no gate to wait on', async () => {
-    // Not every provider exposes readiness. Waiting on a capability that does
-    // not exist would hang the brief forever for those.
+  it('does NOT let an unrelated delivery eat the waiting brief', async () => {
+    // `deliverPromptToAgent` has seven callers: a human typing in the child's
+    // pane, the phone, the goal loop, two compaction paths, and the
+    // orchestration send. Only the last is sending the brief. Cancelling from
+    // all of them meant a human who typed into a child whose composer was busy
+    // silently threw away the brief its parent had been promised — and
+    // `occupied` (a human draft) appears ten times in the recorded corpus.
+    vi.useFakeTimers()
+    try {
+      const session = gatedSession()
+      const manager = managerWith(session)
+
+      const pending = manager.deliverPromptWhenReady('child', 'the brief')
+      await vi.advanceTimersByTimeAsync(10)
+
+      session.open()
+      // A human pressing Enter in the child's pane: no supersede flag.
+      await manager.deliverPromptToAgent('child', 'something the user typed')
+      // Past the re-arm pacing — nothing woke the waiter early, because
+      // nothing cancelled it. That wait is the feature working, not a stall.
+      await vi.advanceTimersByTimeAsync(3_000)
+
+      // The brief still arrives, because nobody said they were replacing it.
+      await expect(pending).resolves.toMatchObject({ ok: true })
+      expect(session.write.mock.calls.map(([data]) => data))
+        .toEqual(['something the user typed', '\r', 'the brief', '\r'])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not let a finishing waiter delete a DIFFERENT waiter (#854 review)', async () => {
+    // "One waiter per session" is the whole double-delivery invariant, and the
+    // map was keyed and deleted by session id. The `ready` branch releases the
+    // slot BEFORE delivering — deliberately, so a concurrent delivery is not
+    // mistaken for a second waiter — which opens a window where another waiter
+    // can arm. That waiter's entry was then deleted by the first one's
+    // `finally`, leaving it unreachable: no direct delivery could supersede
+    // it, and it fired its own copy when the gate opened. Two briefs, one
+    // child.
+    //
+    // Only one caller exists today, so the invariant held by luck rather than
+    // by construction.
+    vi.useFakeTimers()
+    try {
+      const session = gatedSession()
+      const manager = managerWith(session)
+      const settleDelivery = session.holdAcceptance()
+
+      const first = manager.deliverPromptWhenReady('child', 'brief A')
+      session.open()
+      // Let the gate open and the delivery start; it now hangs on acceptance.
+      await vi.advanceTimersByTimeAsync(3_000)
+
+      // The gate shuts again while that delivery is absorbing — which is what
+      // Claude's really does, since a composer mid-paste reads as occupied.
+      // That is what PARKS the second waiter instead of letting it run
+      // straight through.
+      session.close()
+      // The slot is free while the first waiter delivers, so a second can arm.
+      const second = manager.deliverPromptWhenReady('child', 'brief B')
+      await vi.advanceTimersByTimeAsync(10)
+
+      // The first delivery completes, and its teardown runs.
+      settleDelivery()
+      await first
+      await vi.advanceTimersByTimeAsync(10)
+
+      // The second waiter must still be REACHABLE. With deletion by id, its
+      // entry is gone and this returns false — after which nothing can stop it
+      // delivering a second brief.
+      expect(manager.cancelPendingPromptDelivery('child', 'test')).toBe(true)
+      await vi.advanceTimersByTimeAsync(10)
+      await expect(second).resolves.toMatchObject({ ok: false })
+      // And only ONE brief ever reached the composer.
+      expect(session.write.mock.calls.map(([data]) => data)).toEqual(['brief A', '\r'])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('refuses to WAIT for a provider that has no gate, instead of retrying once and calling it a wait', async () => {
+    // The regression this replaces (#854 review): an earlier version fell
+    // through to one immediate delivery here, on the premise that a provider
+    // without `awaitReadyForPrompt` owns readiness in its own delivery path.
+    // That premise is false for OpenCode and Grok — they report not-readiness
+    // as an ordinary `before-write` failure — so the "wait" was a single retry
+    // into the same window, measured at 1 ms, after which the prompt was gone
+    // while the caller's reply told the parent not to send it again.
+    //
+    // Refusing hands the caller back the retry it would have had.
     let screen = '❯'
     const session = {
       write: vi.fn((data: string) => { if (data !== '\r') screen = `❯ ${data}` }),
@@ -227,7 +331,51 @@ describe('a bootstrap prompt waits for a child that is not ready YET (#854)', ()
     }
     const manager = managerWith(session)
 
-    await expect(manager.deliverPromptWhenReady('child', 'the brief')).resolves.toMatchObject({ ok: true })
-    expect(session.write.mock.calls.map(([data]) => data)).toEqual(['the brief', '\r'])
+    expect(manager.canWaitForPromptReadiness('child')).toBe(false)
+    const result = await manager.deliverPromptWhenReady('child', 'the brief')
+
+    expect(result).toMatchObject({ ok: false, retrySafe: true, disposition: 'retry-same-session', promptWritten: false })
+    // And nothing was written, so there is no half-delivered draft to clean up.
+    expect(session.write).not.toHaveBeenCalled()
+  })
+
+  it('says a gated session CAN be waited on', () => {
+    // The control: "nothing can be waited on" would satisfy the case above and
+    // turn the whole feature off.
+    const manager = managerWith(gatedSession())
+
+    expect(manager.canWaitForPromptReadiness('child')).toBe(true)
+    expect(manager.canWaitForPromptReadiness('no-such-session')).toBe(false)
+  })
+
+  it('does not let one waiter\'s teardown remove another waiter (#854 review)', async () => {
+    // "One waiter per session" is the whole double-delivery invariant, and it
+    // held by luck: the map was keyed by session id and deleted by session id,
+    // so a waiter that armed while another was delivering had its entry
+    // removed by that other one's teardown. It was then unreachable —
+    // `cancelPendingPromptDelivery` returned false, no direct delivery could
+    // supersede it — and it fired its own copy when the gate opened.
+    vi.useFakeTimers()
+    try {
+      const session = gatedSession()
+      const manager = managerWith(session)
+
+      const first = manager.deliverPromptWhenReady('child', 'brief A')
+      await vi.advanceTimersByTimeAsync(10)
+      // A second waiter is refused while the first holds the slot, which is
+      // the guard that makes the identity check reachable only in teardown.
+      const second = await manager.deliverPromptWhenReady('child', 'brief B')
+      expect(second).toMatchObject({ ok: false, code: 'delivery-in-flight' })
+
+      manager.cancelPendingPromptDelivery('child', 'test')
+      await vi.advanceTimersByTimeAsync(10)
+      await first
+
+      // The slot is free again, and a new waiter owns it — not a ghost of the
+      // one that just left.
+      expect(manager.cancelPendingPromptDelivery('child', 'nothing-to-cancel')).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
