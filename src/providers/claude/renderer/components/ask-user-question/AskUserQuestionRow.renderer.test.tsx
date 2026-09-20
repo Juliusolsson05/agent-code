@@ -94,12 +94,38 @@ describe('AskUserQuestionRow input routing', () => {
     expect(fake.calls.some(c => c.method === 'resolveCondition')).toBe(false)
   })
 
+  it('explains a refusal in the row instead of printing the wire token', async () => {
+    // The reviewer's exact example (#1099): this box read
+    // "Answer failed: option-not-found at select-option" — a log line shown to
+    // a person, naming an internal step and saying nothing about what to do.
+    // It is the same refusal the toast path describes, so it must read the
+    // same way.
+    const fake = createFakeSessionFeed()
+    fake.nextResolveConditionResult = {
+      ok: false,
+      reason: 'option-not-found',
+      failedAtStep: 'select-option',
+    }
+    renderRow(fake)
+    fireEvent.click(screen.getByRole('button', { name: /Option A/ }))
+
+    expect(await screen.findByText(
+      'That answer no longer matches what the agent is asking. Read the question again and answer it.',
+    )).toBeInTheDocument()
+    expect(screen.queryByText(/option-not-found/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/select-option/)).not.toBeInTheDocument()
+  })
+
   it('does not append an absent resolver step to an error message', async () => {
     const fake = createFakeSessionFeed()
     fake.nextResolveConditionResult = { ok: false, reason: 'no-resolver' }
     renderRow(fake)
     fireEvent.click(screen.getByRole('button', { name: /Option A/ }))
-    expect(await screen.findByText('Answer failed: no-resolver')).toBeInTheDocument()
+    // The sentence, not the wire token (#1099): this row used to print
+    // "Answer failed: option-not-found at select-option" verbatim.
+    expect(await screen.findByText(
+      'This agent cannot receive that kind of answer. Answer it in the terminal instead.',
+    )).toBeInTheDocument()
     expect(screen.queryByText(/undefined/)).not.toBeInTheDocument()
   })
 })

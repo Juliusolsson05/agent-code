@@ -9,6 +9,7 @@ import { useSessionFeed } from '@renderer/features/sessionFeed/SessionFeedContex
 import { useGlobalToast } from '@renderer/ui/GlobalToast'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import type { ConditionCustomAction } from '@shared/types/providerConditions'
+import { describeConditionRefusal, refusalOf } from '@shared/conditions-core/dispatch'
 import {
   readAskQuestions,
   type AskOption,
@@ -206,19 +207,21 @@ export function AskUserQuestionRow({
           // "option not found" without corrupting the terminal, so keeping the row
           // interactive is the safer failure mode.
           endAnswer(operationId)
-          // WHY failedAtStep is optional: transport-level refusals can explain
-          // the failure without entering the multi-step TUI driver. Appending
-          // an absent step produced the user-facing nonsense “at undefined”.
-          setResolveError(
-            result.failedAtStep === undefined
-              ? result.reason
-              : `${result.reason} at ${result.failedAtStep}`,
-          )
+          // WHY the shared describer and not `result.reason` (#1099 review):
+          // this row used to print the wire token verbatim — "option-not-found
+          // at select-option" — which is a log line, not a sentence, and told
+          // the reader nothing about what to do next. `refusalOf` narrows the
+          // same answer the toast path narrows, so the row and the toast now
+          // say the identical thing for the identical refusal. The `?? `
+          // fallback is unreachable (we are inside `!result.ok`) but costs
+          // nothing and keeps the box from going blank if that ever changes.
+          const refusal = refusalOf(action, result)
+          setResolveError(refusal ? describeConditionRefusal(refusal) : 'That answer could not be delivered. Try again.')
         }
       })
       .catch(() => {
         endAnswer(operationId)
-        setResolveError('resolver IPC failed')
+        setResolveError('That answer could not be delivered. Try again.')
       })
   }
 
@@ -511,9 +514,15 @@ export function AskUserQuestionRow({
         ) : answering ? (
           <div className="text-[11px] text-muted italic">Answering…</div>
         ) : null}
+        {/* No "Answer failed:" prefix any more: every message that reaches
+            here is now a complete sentence (from `describeConditionRefusal`,
+            from `deliverAnswersViaPrompt`, or the pick-something-first hint),
+            and the danger styling already carries the "this failed" framing.
+            The prefix only survived because the old messages were bare tokens
+            that made no sense on their own. */}
         {resolveError ? (
           <div className="rounded-slab border border-danger-border bg-danger-soft px-2 py-1 text-[11px] text-danger">
-            Answer failed: {resolveError}
+            {resolveError}
           </div>
         ) : null}
       </div>

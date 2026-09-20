@@ -16,6 +16,7 @@ import { Feed } from '@renderer/features/feed/ui/Feed'
 import { StarterHintCard, starterCardVisibleForAgent } from '@renderer/features/workspace/ui/StarterHintCard'
 import type { ScrollInfo } from '@renderer/features/feed/ui/Feed'
 import { ProviderConditionOutlet } from '@providers/shared/renderer/conditions/ProviderConditionOutlet'
+import { describeConditionRefusal } from '@shared/conditions-core/dispatch'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import type { SessionRuntime, Workspace } from '@renderer/workspace/workspaceStore'
 import {
@@ -975,6 +976,26 @@ export function TileLeaf({
         conditions={normalizedConditions}
         onSend={sendConditionKey}
         onResolveCustom={(action) => feed.resolveCondition(sessionId, action)}
+        // #1070. The answer came back `{ ok: false }` and was discarded, so
+        // clicking an option that the agent had already replaced did nothing
+        // at all — no toast, no log, no state change.
+        //
+        // WHY the GLOBAL toast and not the pane toast (#1099 review): every
+        // condition that can refuse a custom action is a Radix modal, and a
+        // refusal does not clear it — so the modal is ALWAYS up when this
+        // fires. The pane toast is an in-flow sibling with no z-index, sitting
+        // under a 1100-z, 85%-opaque scrim and inside the subtree Radix marks
+        // `aria-hidden`. `GlobalToast`'s own header records this exact trap
+        // and is why it is z-[1200]. The first version of this fix put the one
+        // message it produced where nobody could read it.
+        //
+        // The duration is long because the message asks the user to re-read a
+        // question; the default is two seconds.
+        onConditionRefused={(refusal) => {
+          // eslint-disable-next-line no-console
+          console.warn(`[condition ${sessionId.slice(0, 8)}] refused`, refusal.rawReason, refusal.failedAtStep ?? '')
+          showToast(describeConditionRefusal(refusal), 6000)
+        }}
         interactionActive={interactive}
       />
 

@@ -386,12 +386,20 @@ export class WebSocketSessionFeed implements SessionFeed {
     action: ConditionCustomAction,
   ): Promise<ResolveConditionResult> {
     const reply = await this.request({ type: 'permission-reply', sessionId, action })
-    // The server flattens the resolver's structured failure into reply.error;
-    // reconstruct the nearest ResolveConditionResult shape. 'aborted' is the
-    // most honest generic bucket for a transport-level failure.
-    return reply.ok
-      ? { ok: true, state: reply.result }
-      : { ok: false, reason: 'aborted', failedAtStep: reply.error }
+    // The server sends the resolver's REASON as itself since #1099; older
+    // hosts send only the flattened `error` string, and `aborted` remains the
+    // honest generic bucket for those and for a transport-level failure.
+    // Without this the phone could reach exactly one of the app's five
+    // refusal messages, and printed the internal reason token while doing it.
+    const refused = reply as { reason?: string; failedAtStep?: string; error?: string }
+    if (reply.ok) return { ok: true, state: reply.result }
+    return {
+      ok: false,
+      // The wire carries whatever the provider said; `refusalOf` on the other
+      // side narrows it by membership and keeps unknown words as themselves.
+      reason: (refused.reason ?? 'aborted') as Extract<ResolveConditionResult, { ok: false }>['reason'],
+      failedAtStep: refused.failedAtStep ?? refused.error,
+    }
   }
 
   /** Transcript backfill (client-specific, beyond SessionFeed — the desktop

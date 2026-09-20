@@ -11,6 +11,7 @@ import { conditionStateByKind } from '@shared/types/providerConditions'
 import type { ClaudeAskUserQuestionState } from '@shared/types/providerConditions'
 
 import { ConditionOutlet } from '@shared/conditions-core/ConditionOutlet'
+import { makePhoneConditionDispatch } from './conditionDispatch'
 import type { ConditionAction, ConditionSnapshot } from '@shared/conditions-core/contract'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 
@@ -299,28 +300,11 @@ export function SessionView({
     onError: setError,
   })
 
-  // The dispatch the generic ConditionOutlet drives. Same routing the old
-  // hand-rolled tap-bar used (pty -> structured replyWithPtyAction, custom ->
-  // resolveCondition), just expressed as the (action) => Promise<void> the
-  // core outlet expects. WHY the STRUCTURED replyWithPtyAction and not a raw
-  // sendInput: the phone wire refuses arbitrary bytes, and the pty reply must
-  // carry the action's own {id,label,data} so the desktop can verify it
-  // against the live condition menu — which is exactly why we mount the core
-  // ConditionOutlet directly and NOT ProviderConditionOutlet (its
-  // makeDispatchFromOnSend collapses the action to bytes and throws the id
-  // away). The error branches differ by result shape: pty replies carry
-  // `error`, custom resolutions carry `failedAtStep`.
+  // The dispatch the generic ConditionOutlet drives. Lives in its own module
+  // so the refusal reporting is reachable by a test without mounting this
+  // whole screen — see the header of `conditionDispatch.ts`.
   const dispatch = useCallback(
-    async (action: ConditionAction): Promise<void> => {
-      setError(null)
-      if (action.kind === 'pty') {
-        const r = await feed.replyWithPtyAction(sessionId, action)
-        if (!r.ok) setError(r.error ?? 'Action failed — it may have expired.')
-      } else {
-        const r = await feed.resolveCondition(sessionId, action)
-        if (!r.ok) setError(r.failedAtStep ?? 'Action failed — it may have expired.')
-      }
-    },
+    (action: ConditionAction) => makePhoneConditionDispatch(feed, sessionId, setError)(action),
     [feed, sessionId],
   )
 
