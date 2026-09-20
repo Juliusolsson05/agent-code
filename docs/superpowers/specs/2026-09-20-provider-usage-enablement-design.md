@@ -54,20 +54,27 @@ percentages, if shown, are `model-family`-scoped detail rows.
 
 ### Provider enablement state (main-owned)
 
-Per agent kind (claude, codex, grok, opencode, opencode-terminal):
+Per agent kind — the four `AGENT_PROVIDER_KINDS` members (claude, codex,
+opencode, grok). There is no `opencode-terminal` kind: OpenCode Terminal is
+a runtime choice under `opencode` (`providerChoices.ts`), so the OpenCode
+toggle covers both runtimes.
 
 ```ts
-type ProviderEnablement = { enabled: boolean; source: 'detected' | 'user' }
+// Only explicit user overrides persist; detection is recomputed, not stored.
+type UserProviderOverrides = Partial<Record<AgentProviderKind, boolean>>
 type OpencodeUsageSource = 'none' | 'zai'
 ```
 
-- Stored as main-owned setup state; the settings rows front it via the
-  existing `storage: 'setup'` metadata pattern (settingsRegistry.ts).
-- First read runs PATH detection (`which`-equivalent against the app's spawn
-  binaries) and records `source: 'detected'`. A user toggle records
-  `source: 'user'`. Reset clears the entry back to detection.
-- Detection never overrides a `user` value — a user with Grok installed but
-  unwanted keeps it hidden after reinstalls.
+- Stored as main-owned setup state (additive fields on `setup.json`'s
+  `PersistedSetupState`, defensively coerced at load — the established
+  no-version-bump pattern); the settings rows front it via the existing
+  `storage: 'setup'` metadata pattern (settingsRegistry.ts).
+- Effective enablement resolves as: user override wins; otherwise enabled
+  iff detected installed. Detection reuses `checkPrerequisites()`'s
+  `usableProviders` (PATH + well-known dirs + bundled OpenCode).
+- A user toggle persists an override; Reset deletes it, restoring
+  detection. Detection never overrides a user value — a user with Grok
+  installed but unwanted keeps it hidden after reinstalls.
 
 ### Why main-owned, not renderer Settings
 
@@ -85,7 +92,9 @@ New **Providers** category:
   running agents; copy must say so.
 - The OpenCode row gains a **usage source** dropdown: `none | z.ai`
   (extensible registry; greyed out with an explanatory hint when OpenCode is
-  disabled or no `zai-coding-plan` credential exists).
+  disabled or no `zai-coding-plan` credential exists). The dropdown UI ships
+  with Phase 3 — Phase 1 persists only the `opencodeUsageSource` value
+  (default `none`).
 
 Surfaces that must filter on enablement (exhaustive list to verify in the
 plan against `AGENT_PROVIDER_KINDS` consumers): new-agent provider pickers,
