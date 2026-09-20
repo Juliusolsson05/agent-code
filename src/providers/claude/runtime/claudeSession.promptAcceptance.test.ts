@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ClaudeSession } from './claudeSession.js'
@@ -281,6 +283,90 @@ describe('ClaudeSession prompt acceptance', () => {
       .resolvePromptAcceptance({
         type: 'user',
         message: { role: 'user', content: FIXTURE_ACCEPTED + ' extra' },
+      }, 1)
+    await expect(waiter.promise).resolves.toMatchObject({ kind: 'timeout' })
+  })
+
+  // ---------------------------------------------------------------------------
+  // REAL-DATA FIXTURE — the 2026-09-19 02:26:56 false acceptance-timeout
+  // (#1052), recorded end to end in
+  // testing/fixtures/prompt-acceptance/pasted-content-envelope-2026-09-19.json.
+  //
+  // Claude Code 2.1.278 wraps anything it treats as a PASTE in an envelope of
+  // its own before committing it:
+  //
+  //   \n\n<pasted_content id="cade">\n<what we wrote>\n</pasted_content id="cade">\n
+  //
+  // — note the closing tag repeats the id, which is the detail an invented
+  // fixture gets wrong. The envelope is not whitespace, so canonicalization
+  // cannot reconcile it and the waiter starved on its own accepted prompt: the
+  // app wrote 2649 bytes at 02:26:56.986Z, the composer went `ready` 781 ms
+  // later (Claude had taken it and started the turn), and 19.9 s after that the
+  // delivery was reported `acceptance-timeout` with `retrySafe: false`. That is
+  // the harshest branch in the system — `do-not-retry`, no backoff — so the
+  // goal loop paused at continuation 1 with `continuationsDelivered: 0` while
+  // the agent was already working on it.
+  //
+  // The fixture's `deliveredPrompt` was verified byte-identical to
+  // buildGoalLoopContinuationPrompt rebuilt from the persisted loop record, so
+  // the envelope is provably the ONLY difference between the two sides.
+  // ---------------------------------------------------------------------------
+  const pastedEnvelope = JSON.parse(readFileSync(
+    resolve(__dirname, '../../../../testing/fixtures/prompt-acceptance/pasted-content-envelope-2026-09-19.json'),
+    'utf8',
+  )) as { deliveredPrompt: string; transcriptEntry: Record<string, unknown> }
+
+  it('accepts the recorded <pasted_content> envelope Claude commits for a pasted prompt (#1052)', async () => {
+    // The clock is moved to just before the recording, not because the test
+    // needs a fake clock but because the entry carries its REAL 2026-09-19
+    // timestamp and the matcher rightly refuses any record stamped before the
+    // waiter armed (that filter is what stops an already-durable, unread entry
+    // from acknowledging a new prompt). Arming "now" against a recording from
+    // the past would fail on that rule and prove nothing about the envelope.
+    vi.useFakeTimers()
+    vi.setSystemTime(Date.parse(pastedEnvelope.transcriptEntry.timestamp as string) - 1_000)
+    const session = new ClaudeSession()
+    const waiter = session.armPromptAcceptance(pastedEnvelope.deliveredPrompt, { timeoutMs: 200 })
+    ;(session as unknown as { resolvePromptAcceptance(value: unknown, cursor: number): void })
+      .resolvePromptAcceptance(pastedEnvelope.transcriptEntry, 1)
+    await expect(waiter.promise).resolves.toMatchObject({ kind: 'user' })
+  })
+
+  it('accepts the same envelope in the mid-turn queue-operation shape (#1052)', async () => {
+    // A delivery into a busy session is enqueued first, and the queue entry
+    // carries the composer's ingested text — envelope included.
+    const session = new ClaudeSession()
+    const message = pastedEnvelope.transcriptEntry.message as { content: string }
+    const waiter = session.armPromptAcceptance(pastedEnvelope.deliveredPrompt, { timeoutMs: 200 })
+    ;(session as unknown as { resolvePromptAcceptance(value: unknown, cursor: number): void })
+      .resolvePromptAcceptance({
+        type: 'queue-operation', operation: 'enqueue', content: message.content,
+      }, 1)
+    await expect(waiter.promise).resolves.toMatchObject({ kind: 'queue' })
+  })
+
+  it('refuses an envelope whose inner text is not the prompt we sent (#1052)', async () => {
+    // Unwrapping must not become a way to accept a different prompt: it only
+    // removes Claude's own wrapper, and the inner text still has to match.
+    const session = new ClaudeSession()
+    const waiter = session.armPromptAcceptance(pastedEnvelope.deliveredPrompt, { timeoutMs: 30 })
+    ;(session as unknown as { resolvePromptAcceptance(value: unknown, cursor: number): void })
+      .resolvePromptAcceptance({
+        type: 'user',
+        message: { role: 'user', content: `\n\n<pasted_content id="cade">\n${pastedEnvelope.deliveredPrompt} and one more thing\n</pasted_content id="cade">\n` },
+      }, 1)
+    await expect(waiter.promise).resolves.toMatchObject({ kind: 'timeout' })
+  })
+
+  it('refuses an envelope whose opening and closing ids disagree (#1052)', async () => {
+    // Mismatched ids mean the text is not one whole wrapped paste — it is
+    // content that merely looks like one, and the app must not unwrap it.
+    const session = new ClaudeSession()
+    const waiter = session.armPromptAcceptance(pastedEnvelope.deliveredPrompt, { timeoutMs: 30 })
+    ;(session as unknown as { resolvePromptAcceptance(value: unknown, cursor: number): void })
+      .resolvePromptAcceptance({
+        type: 'user',
+        message: { role: 'user', content: `\n\n<pasted_content id="cade">\n${pastedEnvelope.deliveredPrompt}\n</pasted_content id="beef">\n` },
       }, 1)
     await expect(waiter.promise).resolves.toMatchObject({ kind: 'timeout' })
   })

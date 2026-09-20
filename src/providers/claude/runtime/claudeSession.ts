@@ -1059,10 +1059,19 @@ export class ClaudeSession extends EventEmitter {
       const withoutImagePills = imageCountForEntry > 0
         ? stripTrailingClaudeImagePills(content, imageCountForEntry)
         : null
-      const matches = waiter.prompts.has(canonicalContent) || (
-        withoutImagePills !== null &&
-        waiter.prompts.has(canonicalizeAcceptedPrompt(withoutImagePills))
-      )
+      // Every witness Claude could have committed for THIS delivery: the entry
+      // as written, the same text with Claude's generated image pills removed,
+      // and either of those with Claude's own paste envelope unwrapped. A
+      // candidate that matches proves acceptance; one that does not is tallied
+      // and dropped. Order is irrelevant — they are alternatives, not a
+      // pipeline — but the pill strip runs BEFORE the unwrap because pills are
+      // appended after the envelope's closing tag.
+      const matches = waiter.prompts.has(canonicalContent) || [content, withoutImagePills].some(candidate => {
+        if (candidate === null) return false
+        if (candidate !== content && waiter.prompts.has(canonicalizeAcceptedPrompt(candidate))) return true
+        const unwrapped = unwrapClaudePastedContent(candidate)
+        return unwrapped !== null && waiter.prompts.has(canonicalizeAcceptedPrompt(unwrapped))
+      })
       if (!matches) { waiter.misses.exact += 1; continue }
       waiter.finish(kind === 'queue'
         ? { kind: 'queue', acceptedAt: Date.now() }
@@ -1302,6 +1311,42 @@ function conditionBlocksPromptInput(condition: ClaudeCondition): boolean {
     return condition.state.phase === 'running'
   }
   return true
+}
+
+/**
+ * Claude's own envelope around a PASTED prompt, as committed by Claude Code
+ * 2.1.278 (#1052):
+ *
+ *   \n\n<pasted_content id="cade">\n<what the app wrote>\n</pasted_content id="cade">\n
+ *
+ * WHY this cannot be handled by canonicalization: the envelope is CONTENT, not
+ * whitespace, so the NFC + whitespace-collapse rule above cannot reconcile the
+ * two sides. Agent Code delivers every long prompt as a paste, so this affected
+ * every large delivery — a goal-loop continuation, an orchestration
+ * send_prompt, a remote prompt — and each one was reported
+ * `acceptance-timeout, retrySafe: false` for a prompt Claude had accepted and
+ * was already answering. Recorded end to end in
+ * testing/fixtures/prompt-acceptance/pasted-content-envelope-2026-09-19.json.
+ *
+ * WHY the whole string must be one envelope, with the SAME id in both tags:
+ * unwrapping is a loosening of the match, and the guard it must not break is
+ * "a different prompt can never be acknowledged". Requiring the envelope to
+ * span the entire entry (modulo surrounding whitespace) means a prompt that
+ * merely CONTAINS the tag — this file's own comments would, in a transcript —
+ * cannot be laundered into a match, and the backreference means a nested or
+ * truncated block is not mistaken for the outer one. The closing tag really
+ * does repeat the id; that is Claude's shape, not a typo.
+ *
+ * WHY no attempt to be clever about several blocks: a human who pastes twice
+ * produces content this returns null for, and null simply means "no extra
+ * candidate" — the delivery then falls back to the exact comparison, which is
+ * where it was before this existed. Nothing the app itself composes has that
+ * shape.
+ */
+const CLAUDE_PASTED_CONTENT_ENVELOPE = /^\s*<pasted_content id="([^"\n]+)">\n([\s\S]*)\n<\/pasted_content id="\1">\s*$/u
+
+function unwrapClaudePastedContent(value: string): string | null {
+  return CLAUDE_PASTED_CONTENT_ENVELOPE.exec(value)?.[2] ?? null
 }
 
 function stripTrailingClaudeImagePills(value: string, count: number): string | null {
