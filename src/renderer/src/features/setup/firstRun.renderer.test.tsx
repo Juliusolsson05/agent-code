@@ -94,8 +94,9 @@ describe('first run on a Mac with no provider (#995)', () => {
     // Before #995 bootstrap spawned Claude here, underneath the gate, and
     // the failure left no project and autosave off.
     expect(spawnSession).not.toHaveBeenCalled()
-    // The acknowledgment is the button; a stray Escape decides nothing.
-    fireEvent.keyDown(window, { key: 'Escape' })
+    // The acknowledgment is the button; a stray Escape decides nothing while
+    // the bootstrap is parked on this answer.
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' })
     expect(screen.getByRole('dialog')).toBeTruthy()
     expect(spawnSession).not.toHaveBeenCalled()
     // Answer it before the test ends: the waiting bootstrap is subscribed to
@@ -153,7 +154,67 @@ describe('Setup can be reopened (#995 finding 2)', () => {
     })
     expect(await screen.findByText('Agent Code Setup')).toBeTruthy()
     await waitFor(() => expect(setupCheck.mock.calls.length).toBeGreaterThan(probesBefore))
-    fireEvent.keyDown(window, { key: 'Escape' })
-    expect(screen.queryByRole('dialog')).toBeNull()
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  })
+
+  it('takes focus, so keystrokes cannot reach the agent pane underneath (#1047 review)', async () => {
+    // The first version stamped the interaction-owner marker and said
+    // aria-modal but never moved focus. The keyboard router's ownership branch
+    // does not stop propagation and a terminal pane forwards keys to its PTY,
+    // so typing — and Enter — reached the live shell under a panel that looked
+    // modal.
+    const { setupCheck } = mountMachine([loadFirstRunCheck('developer-machine')])
+    await waitFor(() => expect(projects()).toBe(1))
+    const outside = document.createElement('textarea')
+    document.body.appendChild(outside)
+    outside.focus()
+    expect(setupCheck).toHaveBeenCalled()
+    await act(async () => {
+      setupCommands.find(command => command.id === 'open-setup')!.run({ ui: { closePalette: vi.fn() } } as unknown as CommandContext)
+    })
+    const dialog = await screen.findByRole('dialog')
+    await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true))
+    expect(document.activeElement).not.toBe(outside)
+    // Radix marks the rest of the document inert while the dialog is open.
+    expect(outside.closest('[aria-hidden="true"]') ?? document.body.getAttribute('aria-hidden')).toBeTruthy()
+    outside.remove()
+  })
+})
+
+describe('the setup panel never strands the first run (#1047 review)', () => {
+  it('answers the panel even when recording the skipped helper fails', async () => {
+    // setup.json is best effort (a full disk, a read-only state dir). The
+    // acknowledgment is not: before this, the failure left the panel up with
+    // no Escape and the bootstrap waiting on a decision that could not arrive.
+    const check = withoutMachineWideInstalls(loadFirstRunCheck('clean-machine'))
+    const withMissingHelper: SetupCheckResult = {
+      ...check,
+      tools: { ...check.tools, mitmdump: { ...check.tools.mitmdump, found: false, path: null, source: undefined, installable: true, skipped: false } },
+    }
+    const { spawnSession } = mountMachine([withMissingHelper])
+    window.api.setupSkipOptional = vi.fn(async () => { throw new Error('ENOSPC: no space left on device') })
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue with a terminal' }))
+    await waitFor(() => expect(projects()).toBe(1))
+    expect(spawnedKinds(spawnSession)).toEqual(['terminal'])
+  })
+
+  it('says Close, not "Continue with a terminal", when no bootstrap is waiting', async () => {
+    // A returning user whose workspace restored, on a machine with no
+    // provider: the panel still explains, but pressing the button dismisses
+    // it — it does not open a terminal project.
+    const check = withoutMachineWideInstalls(loadFirstRunCheck('clean-machine'))
+    const { spawnSession } = mountMachine([check])
+    await screen.findByRole('dialog')
+    fireEvent.click(screen.getByRole('button', { name: 'Continue with a terminal' }))
+    await waitFor(() => expect(projects()).toBe(1))
+    // Now nothing is waiting: reopen it and the button reads Close.
+    await act(async () => {
+      setupCommands.find(command => command.id === 'open-setup')!.run({ ui: { closePalette: vi.fn() } } as unknown as CommandContext)
+    })
+    await screen.findByRole('dialog')
+    expect(screen.getByRole('button', { name: 'Close' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Continue with a terminal' })).toBeNull()
+    expect(spawnedKinds(spawnSession)).toEqual(['terminal'])
   })
 })

@@ -25,6 +25,15 @@ type SetupStore = {
   requested: boolean
   /** The automatic first-run panel was answered for this run. */
   dismissed: boolean
+  /**
+   * A fresh-install bootstrap is parked on this panel's answer.
+   *
+   * WHY the panel needs to know (#1047 review): "Continue with a terminal"
+   * promises something only the waiting bootstrap can deliver. A returning
+   * user with a restored workspace, or a panel the user opened whose re-probe
+   * happens to find no provider, would read that label and get a dismissal.
+   */
+  firstRunWaiting: boolean
   setCheck: (check: SetupCheckResult) => void
   setError: (error: string | null) => void
   open: () => void
@@ -36,6 +45,7 @@ export const useSetupStore = create<SetupStore>(set => ({
   error: null,
   requested: false,
   dismissed: false,
+  firstRunWaiting: false,
   setCheck: check => set({ check, error: null }),
   setError: error => set({ error }),
   open: () => set({ requested: true }),
@@ -96,11 +106,13 @@ export async function awaitFirstRunDecision(): Promise<SetupCheckResult | null> 
   const first = await ensureSetupCheck()
   if (!first) return null
   if (first.usableProviders.length > 0 || useSetupStore.getState().dismissed) return first
+  useSetupStore.setState({ firstRunWaiting: true })
   return await new Promise(resolve => {
     const unsubscribe = useSetupStore.subscribe(state => {
       const decided = state.dismissed || (state.check?.usableProviders.length ?? 0) > 0
       if (!decided) return
       unsubscribe()
+      useSetupStore.setState({ firstRunWaiting: false })
       resolve(state.check)
     })
   })
@@ -138,5 +150,5 @@ export const MISSING_PROVIDER_HINT = 'Not installed · File › Setup…'
 /** Test seam: the module-level in-flight promise outlives a store reset. */
 export function resetSetupStoreForTests(): void {
   inFlight = null
-  useSetupStore.setState({ check: null, error: null, requested: false, dismissed: false })
+  useSetupStore.setState({ check: null, error: null, requested: false, dismissed: false, firstRunWaiting: false })
 }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import type {
   SetupInstallTarget,
@@ -6,6 +6,12 @@ import type {
   SetupToolStatus,
 } from '@shared/types/setup'
 import { refreshSetupCheck, useSetupStore } from '@renderer/features/setup/store'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from '@renderer/components/ui/dialog'
 
 // tmux is no longer listed in the SetupGate because it ships as a
 // bundled runtime artifact (#120). mitmdump will follow when its
@@ -36,6 +42,8 @@ export function SetupGate() {
   const error = useSetupStore(state => state.error)
   const requested = useSetupStore(state => state.requested)
   const dismissed = useSetupStore(state => state.dismissed)
+  const firstRunWaiting = useSetupStore(state => state.firstRunWaiting)
+  const panelRef = useRef<HTMLDivElement>(null)
   const [busy, setBusy] = useState<SetupInstallTarget | 'check' | null>('check')
   const [actionError, setActionError] = useState<string | null>(null)
 
@@ -75,6 +83,11 @@ export function SetupGate() {
       (noProvider || missingOptional.some(tool => tool.installable && !tool.skipped)),
   )
   const shouldShow = Boolean(check && (requested || automatic))
+  // The one state that may not be dismissed by a stray key or click: a fresh
+  // install with nothing to run, whose bootstrap is parked on this answer.
+  // Everything else — a returning user, an optional helper, a panel the user
+  // opened — closes like any other dialog.
+  const mustAnswer = automatic && noProvider && firstRunWaiting
 
   const install = useCallback(async (target: SetupInstallTarget) => {
     setBusy(target)
@@ -114,6 +127,14 @@ export function SetupGate() {
   // not install are recorded as skipped (the pre-#995 behavior), so they
   // stop reopening it on every launch. With no provider, this is the
   // explicit "yes, just a terminal for now" acknowledgment.
+  //
+  // WHY the close is in `finally` (#1047 review): it used to sit after the
+  // skip loop inside the `try`, so a setup.json write failure (a full disk,
+  // a read-only state dir) left the panel up with no way to answer it — the
+  // automatic panel takes no Escape — and the fresh-install bootstrap waited
+  // on a decision that could never arrive, which is the lockout class #995
+  // exists to remove. Recording a skip is best effort; the user's
+  // acknowledgment is not.
   const continueOn = useCallback(async () => {
     const skippedTools = missingOptional.filter(tool => tool.installable && !tool.skipped)
     setBusy('check')
@@ -121,29 +142,13 @@ export function SetupGate() {
       for (const tool of skippedTools) {
         useSetupStore.getState().setCheck(await window.api.setupSkipOptional(tool.id))
       }
-      useSetupStore.getState().close()
     } catch (err) {
       setActionError(err instanceof Error ? err.message : String(err))
     } finally {
       setBusy(null)
-    }
-  }, [missingOptional])
-
-  // Escape closes a panel the user opened. The automatic zero-provider panel
-  // is answered only by its button: the acknowledgment is the point of it,
-  // and an Escape pressed for something else must not silently decide that
-  // the first project is a terminal.
-  useEffect(() => {
-    if (!shouldShow || !requested) return
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return
-      event.preventDefault()
-      event.stopPropagation()
       useSetupStore.getState().close()
     }
-    window.addEventListener('keydown', onKeyDown, true)
-    return () => window.removeEventListener('keydown', onKeyDown, true)
-  }, [shouldShow, requested])
+  }, [missingOptional])
 
   if (!shouldShow || !check) return null
 
@@ -151,24 +156,45 @@ export function SetupGate() {
   const helpers = Object.values(check.tools).filter(tool => !tool.provider)
   const shownError = actionError ?? error
 
+  // WHY the shared Dialog primitive and not a bare overlay div (#1047
+  // review): the first version stamped the interaction-owner marker and said
+  // aria-modal, but never moved focus. The router's ownership branch
+  // deliberately does not stop propagation, and a terminal pane forwards
+  // keystrokes straight to its PTY, so with focus left in an agent pane the
+  // user could type — and press Enter — into the live shell underneath a
+  // panel that looked modal. Tab walked out into the background UI too.
+  // DialogContent owns focus containment, the inert background, the marker
+  // and Escape; components/ui/README.md makes that the primitive's job.
   return (
-    <div
-      data-agent-code-interaction-owner="app"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Agent Code Setup"
-      className="absolute inset-0 z-50 flex items-center justify-center bg-canvas/95 px-6"
-    >
-      <div className="rounded-slab flex max-h-[90vh] w-full max-w-3xl flex-col border border-border bg-surface">
+    <Dialog open onOpenChange={next => { if (!next) useSetupStore.getState().close() }}>
+      <DialogContent
+        ref={panelRef}
+        tabIndex={-1}
+        className="max-h-[90vh] w-[min(768px,92vw)] grid-rows-[auto_minmax(0,1fr)_auto]"
+        aria-describedby={undefined}
+        onOpenAutoFocus={event => {
+          // The panel itself, not the first row: the first focusable control
+          // is a provider's "Enter path manually…", and landing there reads
+          // as if that is what Setup is for.
+          event.preventDefault()
+          panelRef.current?.focus()
+        }}
+        // The automatic panel is answered only by its button: the
+        // acknowledgment is the point of it, and an Escape or a stray click
+        // pressed for something else must not silently decide that the first
+        // project is a terminal. A panel the user OPENED closes either way.
+        onEscapeKeyDown={event => { if (mustAnswer) event.preventDefault() }}
+        onInteractOutside={event => { if (mustAnswer) event.preventDefault() }}
+      >
         <div className="border-b border-border px-5 py-4">
-          <div className="text-[14px] text-ink">
+          <DialogTitle className="text-[14px] font-normal text-ink">
             {noProvider ? 'No agent provider is installed yet' : 'Agent Code Setup'}
-          </div>
-          <div className="mt-1 text-[11px] leading-5 text-muted">
+          </DialogTitle>
+          <DialogDescription className="mt-1 text-[11px] leading-5 text-muted">
             {noProvider
               ? 'Install one of the CLIs below in a terminal, then press Retry. Or continue with a terminal now and install from there. Setup stays available from the File menu and the command palette.'
               : 'The agent CLIs and helper tools on this Mac, and how to add the ones that are missing.'}
-          </div>
+          </DialogDescription>
         </div>
 
         <div className="min-h-0 overflow-y-auto">
@@ -187,7 +213,11 @@ export function SetupGate() {
         </div>
 
         {shownError ? (
-          <div className="border-t border-danger/50 bg-danger/10 px-5 py-3 text-[11px] leading-5 text-danger">
+          // Capped and scrollable: this can be the whole stdout+stderr of a
+          // failed `brew install` (homebrewInstaller's 8 MiB buffer). Unbounded,
+          // it pushed the footer — and the only button that answers the panel —
+          // past the bottom of the viewport (#1047 review).
+          <div className="max-h-40 overflow-y-auto whitespace-pre-wrap border-t border-danger/50 bg-danger/10 px-5 py-3 text-[11px] leading-5 text-danger">
             {shownError}
           </div>
         ) : null}
@@ -205,28 +235,21 @@ export function SetupGate() {
             >
               Retry
             </button>
-            {requested && !automatic ? (
-              <button
-                type="button"
-                onClick={() => useSetupStore.getState().close()}
-                className="rounded-control border border-accent bg-accent px-3 py-2 text-[11px] text-accent-fg"
-              >
-                Close
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={() => void continueOn()}
-                disabled={busy !== null}
-                className="rounded-control border border-accent bg-accent px-3 py-2 text-[11px] text-accent-fg disabled:opacity-50"
-              >
-                {noProvider ? 'Continue with a terminal' : 'Continue'}
-              </button>
-            )}
+            {/* One button, whose word is what pressing it actually does:
+                it opens the first project only while a fresh-install
+                bootstrap is waiting on this answer (#1047 review). */}
+            <button
+              type="button"
+              onClick={() => void continueOn()}
+              disabled={busy !== null}
+              className="rounded-control border border-accent bg-accent px-3 py-2 text-[11px] text-accent-fg disabled:opacity-50"
+            >
+              {mustAnswer ? 'Continue with a terminal' : automatic ? 'Continue' : 'Close'}
+            </button>
           </div>
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }
 
