@@ -11,6 +11,7 @@ import { conditionStateByKind } from '@shared/types/providerConditions'
 import type { ClaudeAskUserQuestionState } from '@shared/types/providerConditions'
 
 import { ConditionOutlet } from '@shared/conditions-core/ConditionOutlet'
+import { describeConditionRefusal, refusalOf } from '@shared/conditions-core/dispatch'
 import type { ConditionAction, ConditionSnapshot } from '@shared/conditions-core/contract'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 
@@ -318,7 +319,13 @@ export function SessionView({
         if (!r.ok) setError(r.error ?? 'Action failed — it may have expired.')
       } else {
         const r = await feed.resolveCondition(sessionId, action)
-        if (!r.ok) setError(r.failedAtStep ?? 'Action failed — it may have expired.')
+        // The shared description, so the phone and the app say the same thing
+        // about the same refusal (#1070). It was `failedAtStep` alone here,
+        // which names an internal step rather than telling the person what to
+        // do — and `failedAtStep` is absent for most reasons, so the common
+        // case was the generic fallback.
+        const refusal = refusalOf(action, r)
+        if (refusal) setError(describeConditionRefusal(refusal))
       }
     },
     [feed, sessionId],

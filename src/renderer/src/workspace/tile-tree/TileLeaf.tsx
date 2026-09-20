@@ -16,6 +16,7 @@ import { Feed } from '@renderer/features/feed/ui/Feed'
 import { StarterHintCard, starterCardVisibleForAgent } from '@renderer/features/workspace/ui/StarterHintCard'
 import type { ScrollInfo } from '@renderer/features/feed/ui/Feed'
 import { ProviderConditionOutlet } from '@providers/shared/renderer/conditions/ProviderConditionOutlet'
+import { describeConditionRefusal } from '@shared/conditions-core/dispatch'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import type { SessionRuntime, Workspace } from '@renderer/workspace/workspaceStore'
 import {
@@ -975,6 +976,15 @@ export function TileLeaf({
         conditions={normalizedConditions}
         onSend={sendConditionKey}
         onResolveCustom={(action) => feed.resolveCondition(sessionId, action)}
+        // #1070. The answer came back `{ ok: false }` and was discarded, so
+        // clicking an option that the agent had already replaced did nothing
+        // at all — no toast, no log, no state change. The pane toast is the
+        // right surface: it is the same one `sendConditionKey` right above
+        // uses for a key it could not write, and it appears beside the
+        // condition the user just clicked.
+        onConditionRefused={(refusal) => {
+          workspace.showPaneToast(sessionId, describeConditionRefusal(refusal))
+        }}
         interactionActive={interactive}
       />
 

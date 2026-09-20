@@ -26,6 +26,7 @@
 import type { ProviderConditionSnapshot } from '@shared/types/providerConditions'
 import { ConditionOutlet } from '@shared/conditions-core/ConditionOutlet'
 import { makeDispatchFromOnSend } from '@shared/conditions-core/dispatch'
+import type { ConditionRefusalReporter } from '@shared/conditions-core/dispatch'
 import type { ConditionCustomAction } from '@shared/conditions-core/contract'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { observeRenderShape } from '@renderer/features/feed/evidence/observer'
@@ -37,6 +38,10 @@ type Props = {
   conditions: ProviderConditionSnapshot | null
   onSend: (data: string) => Promise<void>
   onResolveCustom?: (action: ConditionCustomAction) => Promise<unknown>
+  /** Where a REFUSED custom action is told to the user (#1070). Optional so a
+   *  surface that has nowhere to put it still renders; without one the refusal
+   *  is silent, which is the bug. */
+  onConditionRefused?: ConditionRefusalReporter
   interactionActive: boolean
 }
 
@@ -73,13 +78,14 @@ export function ProviderConditionOutlet({
   conditions,
   onSend,
   onResolveCustom,
+  onConditionRefused,
   interactionActive,
 }: Props) {
   if (!conditions) return null
 
   const capabilities = getRendererProviderCapabilities(conditions.provider)
   const { conditionViews: registry, conditionPolicy } = capabilities
-  const dispatch = makeDispatchFromOnSend(onSend, onResolveCustom)
+  const dispatch = makeDispatchFromOnSend(onSend, onResolveCustom, onConditionRefused)
 
   for (const [kind, condition] of Object.entries(conditions.conditions)) {
     if (!condition) continue
