@@ -667,6 +667,60 @@ claude 2.1.143 / codex 0.130.0 are stale versus the 2.1.278 / 0.155.1 in daily u
   - **#1018 (orchestration hides API errors):** an evidence catalog from real feed-debug recordings is being built (research agent, worktree `.worktrees/fix-orchestration-api-error`). Implementation follows the catalog.
   - **Waiting on #1013's merge:** T7 (#1006), T8 (#1007), T2 (command promotion) and T1 (#995), all of which touch the catalog, keybindings or bootstrap.
   - **Nightly** run 35430444567: build-app is green, package-macos is running.
+- 2026-09-20 14:40Z — **#1079 merged; #1080 review round done; #910 items 1 and 4 opened.**
+
+  **MERGED**: **#1079** (`fix/dictation-retain`, Refs #916) — hidden-pane dictation.
+  Six review findings fixed first, the worst being that the `activeRef` guard
+  defeated the case #916 names first and stranded a live microphone.
+
+  **#1080** (#915, one last-active derivation) — the adversarial reviewer returned
+  REQUEST CHANGES with nine sections; all nine addressed in `13c022e6`, and the
+  reply on the PR answers each one:
+  - **HIGH**: `lastActivitySource` silently flipped `transcript` → `runtime`, and the
+    PR's own test PINNED the wrong label. The bridge sees one number and can only say
+    where it arrived from, so the SOURCE now travels with the value —
+    `sessionActivity` returns `{active, timestamp, source}`, the descriptor carries
+    `lastActiveSource`, a tie goes to `transcript`.
+  - **HIGH**: "kept because an existing caller may read them" was false — the
+    descriptor is renderer-private and nothing read `transcriptActivityAt` /
+    `runtimeActivityAt` once the bridge stopped recombining them. Both deleted, along
+    with `latestVisibleTimestamp` (the inventory's superseded text-only tail scan).
+  - The regression fixture was shaped like no entry that exists (`{type:'tool_use'}`
+    is not an entry type), so it passed without reproducing anything. Replaced with
+    the two REAL shapes; the `tool_result`-only user row — 20 of the 24 no-visible-text
+    tails in 500 transcripts — was missing entirely.
+  - Reachability is now a TEST against the real reducer (older-history paging leaves
+    `lastJsonlEntryAt` null while populating `entries`), not prose.
+  - Four false WHY claims corrected in place, each saying what it used to say.
+  - All **seven** surviving mutants killed, plus two more.
+  - `CloseOldAgentsModal`'s comment no longer tells the next reader that #915 is open.
+
+  **OPENED — #910's remaining items**, both fail-first and mutation-tested:
+  - **opencode-terminal-headless#5** (item 1): the exit drain is three transactions
+    and only the first retried, so a lock between the drain and the pending-user
+    flush lost the user's last prompt while reporting a 2 s wait that never happened.
+    All three now share the one bounded window, each retried only while it is the one
+    deferring; `detail` names the stuck step and the real elapsed time. The system
+    test takes a REAL `BEGIN EXCLUSIVE` in that gap with a positive control proving
+    the lock landed after the drain. One stated equivalent mutant (the drain-first
+    guard), documented in place.
+  - **#1082** (item 4): the host never reached the package's database-generation
+    selection — it cached the handle for the process lifetime, so a replaced
+    `opencode.db` was read from the unlinked inode until restart. Bounded 5 s
+    revalidation; a stat FAILURE keeps the handle; the superseded handle is released
+    on a macrotask (promise continuations are microtasks and all drain first).
+    Relocation stays out of scope, because `resolveOpencodeDbPath` memoises for the
+    process lifetime by design.
+
+  **Environment note worth keeping**: `.worktrees/last-active` reproduces a vitest
+  module-resolution failure (`Cannot find module '<root>/string_decoder'` and
+  `'<root>/stream'`) that the SAME commit does not show in three other checkouts of
+  byte-identical content. Verification for #1080 was done in a clean worktree:
+  350 files / 2510 tests. If a worktree starts failing to LOAD suites, copy the diff
+  to a fresh one before believing it.
+
+  **In review**: #1081 (#910 items 2/3), oth#5, #1082.
+
 - 2026-09-20 13:45Z — **eight merged. #1074 and #1077 in; #1078/#1079/#1080 open.**
 
   **MERGED**: **#1074** (control drain, Refs #943) and **#1077** (orchestration
