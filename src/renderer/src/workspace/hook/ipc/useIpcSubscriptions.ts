@@ -16,6 +16,7 @@ import type { TranscriptEntryMapper } from '@shared/types/providerConfig'
 import { emptyRuntime } from '@renderer/session-runtime/state'
 import { applyDecisionToWindow, decideHistoryBoundary, emptyHistoryWindow } from '@renderer/session-runtime/historyBoundary.js'
 import type { QueuedMessage, SessionRuntime } from '@renderer/session-runtime/state'
+import { applyConditionSnapshot } from '@renderer/session-runtime/conditions'
 import { withUnread } from '@renderer/session-runtime/unread'
 import { appendFeedDebugLog } from '@renderer/session-runtime/feedDebug'
 import type { FeedDebugInput } from '@renderer/session-runtime/feedDebug'
@@ -378,33 +379,6 @@ const QUEUE_IDLE_RECONCILE_MS = 2000
  *  provider-switch guard's usage-limit exception. Anything below the floor is
  *  treated as "not a wall clock" and replaced with the local one. */
 const WALL_CLOCK_MS_FLOOR = 1_000_000_000_000
-
-function applyConditionSnapshot(
-  runtime: SessionRuntime,
-  snapshot: ProviderConditionSnapshot,
-): SessionRuntime {
-  // WHY only the composer picker is projected out of the normalized snapshot:
-  // it is a distinct renderer-owned UI model consumed by the input composer.
-  // Prompt mirrors used to copy trust/permission/resume/approval into four
-  // additional runtime fields, but every real consumer now reads `conditions`
-  // through provider policy. Retaining those copies would recreate split
-  // authority whenever a new condition or field is added.
-  // The composer picker kind is provider policy (claude.slash-picker
-  // today; codex has none). Absence from the map means "not live" and
-  // must clear the composer picker — the legacy sticky fallback was
-  // deliberately removed.
-  const pickerKind = getRendererProviderCapabilities(snapshot.provider)
-    .conditionPolicy.composerPickerKind
-  const slashPicker = pickerKind
-    ? conditionStateByKind<ClaudeSlashPickerState>(snapshot, pickerKind)
-    : null
-
-  return {
-    ...runtime,
-    conditions: snapshot,
-    picker: slashPicker ?? { visible: false, items: [] },
-  }
-}
 
 // -----------------------------------------------------------------------------
 // useIpcSubscriptions — the one big side-effect that wires every

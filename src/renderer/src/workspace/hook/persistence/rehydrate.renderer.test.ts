@@ -137,6 +137,62 @@ describe('rehydrateWorkspace backend reconciliation', () => {
     expect(harness.state().sessions['stable-session']?.tldrIdentity).toBe('main-summary')
   })
 
+  it('asks main to re-emit blockers for the backends it restored (#895)', async () => {
+    // Providers publish conditions only when they CHANGE — the OpenCode
+    // Terminal package and claude-code-headless both deduplicate — so a
+    // session recovered onto a backend already sitting on a permission or a
+    // question came back with no blocker at all, while the raw TUI still
+    // showed it. A cold restore builds each runtime from `emptyRuntime()`,
+    // so the re-emit has to come after, on the ordinary event channel.
+    const persisted = makePersisted()
+    const harness = makeHarness()
+    const reseedSessionConditions = vi.fn(async () => 1)
+    const recoverSession = vi.fn(async () => ({
+      ok: true as const,
+      disposition: 'adopted' as const,
+      snapshot: {
+        sessionId: 'stable-session', kind: 'claude' as const, cwd: '/tmp/project',
+        lifecycle: 'live' as const, input: { ready: true, revision: 1, reason: 'ready' as const },
+      },
+    }))
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: {
+        recoverSession, reseedSessionConditions, defaultCwd: vi.fn(),
+        loadInitialHistory: vi.fn(async () => ({ entries: [], hasMore: false, totalEntries: 0 })),
+        gitWorktrees: vi.fn(async () => ({ ok: true, worktrees: [] })),
+      },
+    })
+
+    await rehydrateWorkspace(persisted, harness.refs, harness.setState, harness.setRuntimes, vi.fn())
+
+    // Only sessions with a live backend: a parked one has no process to be
+    // blocked by, and is re-seeded when it is woken.
+    expect(reseedSessionConditions).toHaveBeenCalledExactlyOnceWith(['stable-session'])
+  })
+
+  it('restores normally against a preload with no re-emit at all', async () => {
+    // The hint is not a step. A shell without it must still get the workspace
+    // back; the pane simply paints without its blocker until the next change.
+    const persisted = makePersisted()
+    const harness = makeHarness()
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: {
+        recoverSession: vi.fn(async () => ({
+          ok: true as const, disposition: 'adopted' as const,
+          snapshot: { sessionId: 'stable-session', kind: 'claude' as const, cwd: '/tmp/project', lifecycle: 'live' as const, input: { ready: true, revision: 1, reason: 'ready' as const } },
+        })),
+        defaultCwd: vi.fn(),
+        loadInitialHistory: vi.fn(async () => ({ entries: [], hasMore: false, totalEntries: 0 })),
+        gitWorktrees: vi.fn(async () => ({ ok: true, worktrees: [] })),
+      },
+    })
+
+    await expect(rehydrateWorkspace(persisted, harness.refs, harness.setState, harness.setRuntimes, vi.fn()))
+      .resolves.toMatchObject({ complete: true })
+  })
+
   it('recovers OpenCode Terminal with its runtime selector and durable provider id intact', async () => {
     const persisted = makePersisted()
     persisted.sessions['stable-session'] = {

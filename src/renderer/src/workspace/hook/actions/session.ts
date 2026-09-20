@@ -840,6 +840,12 @@ export function useSessionActions(
                 },
               }
             })
+            // The runtime exists and the backend is live, so main can re-emit
+            // what it is blocked on (#895). A parked agent woken onto a
+            // backend that is ALREADY sitting on a permission or a question
+            // hears nothing otherwise: providers publish conditions only when
+            // they CHANGE, and this renderer has never seen one for it.
+            void window.api.reseedSessionConditions?.([sessionId])
           }
         } catch {
           // WHY unexpected IPC errors use a fixed message: rejected invokes

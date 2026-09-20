@@ -60,6 +60,61 @@ afterEach(() => {
 // subscription test builds the same minimal workspace (imported as makeRefs).
 
 describe('useIpcSubscriptions with an injected SessionFeed', () => {
+  it('projects the composer picker out of a live conditions snapshot, not just the raw field', () => {
+    // #1083 review, finding 5. The picker and `conditions` are two projections
+    // of ONE snapshot and must never be written apart — a composer showing a
+    // slash picker the conditions say is gone keeps capturing the arrow keys.
+    // The fold had a direct test; its only CALL SITE, this handler, had none,
+    // so replacing it with `{ ...current, conditions: snapshot }` left the
+    // whole suite green.
+    const fake = createFakeSessionFeed()
+    const sessionId = 'live-conditions' as SessionId
+    let workspaceState = { sessions: { [sessionId]: { cwd: '/repo', kind: 'claude' } } } as unknown as WorkspaceState
+    let runtimes: Record<SessionId, SessionRuntime> = { [sessionId]: emptyRuntime() }
+    let refsForTest!: WorkspaceRefs
+    const commitRuntimes = (
+      updater: Record<SessionId, SessionRuntime> | ((current: Record<SessionId, SessionRuntime>) => Record<SessionId, SessionRuntime>),
+    ): void => {
+      runtimes = typeof updater === 'function' ? updater(runtimes) : updater
+      refsForTest.latestRuntimesRef.current = runtimes
+    }
+    Object.defineProperty(window, 'api', { configurable: true, value: { gitWorktrees: vi.fn(async () => ({ ok: false })) } })
+
+    function Harness(): React.JSX.Element {
+      const refs = useRef<WorkspaceRefs | null>(null)
+      if (refs.current === null) {
+        refs.current = makeRefs(workspaceState)
+        refs.current.latestRuntimesRef.current = runtimes
+        refsForTest = refs.current
+      }
+      useIpcSubscriptions(fake, refs.current, updater => {
+        workspaceState = typeof updater === 'function' ? updater(workspaceState) : updater
+        refs.current!.stateRef.current = workspaceState
+        refs.current!.latestStateRef.current = workspaceState
+      }, commitRuntimes, () => {}, () => {})
+      return <div />
+    }
+    render(<Harness />)
+
+    const items = [{ name: '/clear', description: 'clear', selected: true }]
+    act(() => {
+      fake.emitConditions({
+        sessionId,
+        snapshot: { provider: 'claude', ts: 1_000, conditions: { 'claude.slash-picker': { kind: 'claude.slash-picker', state: { visible: true, items }, actions: [] } } },
+      } as never)
+    })
+    expect(runtimes[sessionId]?.picker).toEqual({ visible: true, items })
+
+    // And absence CLEARS it: the legacy sticky fallback was deliberately
+    // removed, and a seeded-then-abandoned picker is the shape that brings it
+    // back by accident.
+    act(() => {
+      fake.emitConditions({ sessionId, snapshot: { provider: 'claude', ts: 2_000, conditions: {} } } as never)
+    })
+    expect(runtimes[sessionId]?.picker).toEqual({ visible: false, items: [] })
+    expect(runtimes[sessionId]?.conditions).toMatchObject({ ts: 2_000 })
+  })
+
   it('persists fresh Codex identity while handing a queued prompt to its rollout row', () => {
     const fake = createFakeSessionFeed()
     const sessionId = 'fresh-codex-identity-and-queue' as SessionId

@@ -205,6 +205,90 @@ describe('adopting a closed window', () => {
     expect(h.refs.latestRuntimesRef.current['grid-a']?.inputReadinessRevision).toBe(7)
   })
 
+  // #895. A permission or question pending when a window closes vanished from
+  // the adopting window: the adopted runtime is seeded from `emptyRuntime()`,
+  // whose `conditions` is null, and providers publish conditions only when
+  // they CHANGE — the OpenCode Terminal package and claude-code-headless both
+  // deduplicate — so nothing ever re-sent them. Dispatch lost ACTION/QUESTION
+  // and orchestration summaries stopped naming the blocker, while the raw TUI
+  // still showed the prompt. Found by review R4 of #882; generic, not
+  // OpenCode-specific.
+  //
+  // The fix does NOT carry the snapshot on this window's `getBackendSnapshot`
+  // reply. Conditions have no revision, so a reply raced against live events
+  // cannot be ordered against them — the first attempt compared `ts`, and 1 ms
+  // ties are genuinely unordered, so a prompt answered in the same millisecond
+  // it appeared could be restored onto the user's screen. Main re-emits on the
+  // ordinary event channel instead, which is ordered by construction.
+  it('asks main to re-emit blockers AFTER its runtimes exist, never before', async () => {
+    getBackendSnapshot.mockImplementation(async (sessionId: string) => (
+      sessionId === 'grid-a'
+        ? { sessionId, kind: 'claude', cwd: '/closed', lifecycle: 'live', input: { ready: true, reason: null, revision: 7 } }
+        : null
+    ))
+    // The ONE thing that makes this correct is the ORDER: a re-emit that
+    // landed before the seed would be overwritten by `emptyRuntime()`, which
+    // is the bug it exists to fix. So the assertion is what the runtime map
+    // looked like AT THE MOMENT the request went out, not afterwards.
+    let seededWhenAsked: string[] = []
+    let askedFor: string[] = []
+    const reseedSessionConditions = vi.fn(async (ids: string[]) => {
+      askedFor = ids
+      seededWhenAsked = Object.keys(h.refs.latestRuntimesRef.current)
+      return ids.length
+    })
+    ;(window as unknown as { api: Record<string, unknown> }).api.reseedSessionConditions = reseedSessionConditions
+
+    const h = harness(true)
+    h.fire({ windowId: 'closed-window', workspace: closedWindowPayload() })
+
+    await waitFor(() => expect(reseedSessionConditions).toHaveBeenCalled())
+    // Every adopted session is asked for, parked ones included: main answers
+    // only for the ones it actually holds a snapshot for.
+    expect(askedFor).toEqual(expect.arrayContaining(['grid-a', 'parked']))
+    expect(seededWhenAsked).toEqual(expect.arrayContaining(['grid-a', 'parked']))
+  })
+
+  it('adopts normally against a preload that has no re-emit at all', async () => {
+    // The hint is not a step. An older shell, or a test double that does not
+    // care, must still get its workspace back.
+    delete (window as unknown as { api: Record<string, unknown> }).api.reseedSessionConditions
+    const h = harness(true)
+    h.fire({ windowId: 'closed-window', workspace: closedWindowPayload() })
+    await waitFor(() => expect(h.refs.latestRuntimesRef.current.parked).toBeDefined())
+    expect(h.refs.pendingAdoptionWindowIdsRef.current).toEqual(['closed-window'])
+  })
+
+  it('keeps an exit observed while the snapshot was in flight (#1083 review, finding 2)', async () => {
+    // Routing moves to this window BEFORE the offer arrives, so the live
+    // channel can write `exited` while `getBackendSnapshot` is still in
+    // flight. The reply was computed while the backend was alive; applying it
+    // blindly repaints a dead agent as `started` with an enabled composer.
+    // Both sibling seed sites already guarded this; adoption did not.
+    let resolveSnapshot: (value: unknown) => void = () => {}
+    getBackendSnapshot.mockImplementation(async (sessionId: string) => {
+      if (sessionId !== 'grid-a') return null
+      return await new Promise(resolve => { resolveSnapshot = resolve })
+    })
+
+    const h = harness(true)
+    h.fire({ windowId: 'closed-window', workspace: closedWindowPayload() })
+    await waitFor(() => expect(getBackendSnapshot).toHaveBeenCalled())
+
+    // The PTY dies mid-fetch, exactly as `onSessionExit` writes it.
+    h.refs.latestRuntimesRef.current = {
+      ...h.refs.latestRuntimesRef.current,
+      'grid-a': { ...emptyRuntime(), processStatus: 'exited', exited: 0, recoveryFailureCode: null } as SessionRuntime,
+    }
+    resolveSnapshot({
+      sessionId: 'grid-a', kind: 'claude', cwd: '/closed', lifecycle: 'live',
+      input: { ready: true, reason: null, revision: 7 },
+    })
+
+    await waitFor(() => expect(h.refs.latestRuntimesRef.current.parked).toBeDefined())
+    expect(h.refs.latestRuntimesRef.current['grid-a']).toMatchObject({ processStatus: 'exited', exited: 0 })
+  })
+
   it('loads history only for adopted sessions that have a live backend', async () => {
     // Re-based with #992. The rule was "tile leaves load, detached rows do
     // not" — a structural stand-in for "has a backend", because the closed

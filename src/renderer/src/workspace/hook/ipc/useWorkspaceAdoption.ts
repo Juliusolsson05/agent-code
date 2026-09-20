@@ -64,7 +64,29 @@ function seedAdoptedRuntime(
   // Same authority rule as rehydrate: a snapshot older than what this runtime
   // has already observed must not roll readiness backwards.
   const snapshotIsAuthoritative = snapshot.input.revision >= base.inputReadinessRevision
-  return {
+  // WHY an exit observed during the fetch survives it (#1083 review, finding
+  // 2): routing moves to this window BEFORE the offer arrives, so the live
+  // channel can write `exited` while `getBackendSnapshot` is still in flight.
+  // The reply was computed while the backend was alive; applying it blindly
+  // repaints a dead agent as `started` with an enabled composer. Both sibling
+  // seed sites already guard this (`rehydrate.ts`, `session.ts`); adoption did
+  // not, and only `conditions` had been defended.
+  const observedTerminalProcess =
+    (previous?.processStatus === 'failed' || previous?.processStatus === 'exited') &&
+    previous.recoveryFailureCode === null
+  if (observedTerminalProcess) {
+    // `base` starts from `emptyRuntime()`, so returning it would erase the
+    // very thing being preserved. The observed end state is carried over
+    // whole; `recoveryFailureCode` is already null by the condition above.
+    return {
+      ...base,
+      processStatus: previous.processStatus,
+      processError: previous.processError,
+      exited: previous.exited,
+      recoveryFailureCode: null,
+    }
+  }
+  const seeded: SessionRuntime = {
     ...base,
     processStatus: snapshot.lifecycle === 'live' ? 'started' : 'spawning',
     processError: null,
@@ -79,6 +101,21 @@ function seedAdoptedRuntime(
         }
       : {}),
   }
+  // WHY conditions need their own ordering check rather than riding
+  // `snapshotIsAuthoritative` (#895): readiness and conditions are separate
+  // channels with separate counters, and `previous` here is not "what this
+  // window used to show" — it is whatever the LIVE channel has already written
+  // for a session whose routing moved here before the adoption offer arrived.
+  // `onSessionConditions` creates a runtime for a session it has never seen,
+  // so a prompt dismissed while this snapshot was in flight is already in the
+  // map, and seeding over it would put the dismissed prompt back in the
+  // surface the user acts on.
+  //
+  // Note `base` deliberately starts from `emptyRuntime()`, which is exactly
+  // the bug: without this the adopted pane began with `conditions: null`, and
+  // providers publish conditions only when they CHANGE, so nothing ever
+  // re-sent the blocker.
+  return seeded
 }
 
 export function useWorkspaceAdoption(
@@ -184,6 +221,19 @@ export function useWorkspaceAdoption(
       }
       return next
     })
+
+    // The runtimes exist now, so main can safely re-emit what these sessions
+    // are blocked on (#895). Providers publish conditions only when they
+    // CHANGE, so an agent already sitting on a permission or a question sends
+    // nothing to a renderer that just started watching it — the adopting
+    // window lost the blocker entirely, while the raw TUI still showed it.
+    //
+    // AFTER the seed, never before: `seedAdoptedRuntime` builds from
+    // `emptyRuntime()`, so anything delivered earlier is overwritten by it.
+    // Not awaited — it arrives on the event channel like any other condition
+    // change, and a pane painting one turn without its blocker is far better
+    // than holding up the whole adoption for it.
+    void window.api.reseedSessionConditions?.(adoption.adoptedSessionIds as string[])
 
     setState(prev => ({
       ...prev,

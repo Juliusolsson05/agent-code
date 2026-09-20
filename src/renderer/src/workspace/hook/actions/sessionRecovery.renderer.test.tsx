@@ -307,6 +307,37 @@ describe('useSessionActions recovery retry', () => {
     return { result, recoverSession, killOwnedSession, runtimes: () => runtimes, setRuntimes }
   }
 
+  it.each([
+    { what: 'asks main to re-emit what the woken backend is blocked on', present: true },
+    // The hint is not a step: a preload without it must still wake the pane.
+    { what: 'wakes normally against a preload that cannot re-emit', present: false },
+  ])('$what (#895)', async ({ present }) => {
+    // A parked session woken onto a backend that is ALREADY sitting on a
+    // permission or a question hears nothing otherwise: providers publish
+    // conditions only when they CHANGE, and this renderer has never seen one
+    // for it. The request goes out after the runtime is updated, on the
+    // ordinary event channel, so the wake itself cannot overwrite it.
+    const sessionId = present ? 'woken' : 'woken-bare'
+    const h = spawnedNotReadyHarness(sessionId)
+    const reseedSessionConditions = vi.fn(async () => 1)
+    h.recoverSession.mockResolvedValue({
+      ok: true,
+      disposition: 'adopted',
+      snapshot: {
+        sessionId, kind: 'claude', cwd: '/tmp/project', lifecycle: 'live',
+        input: { ready: true, revision: 2, reason: 'ready' }, builtInMcpDomains: [],
+      },
+    } as unknown as Awaited<ReturnType<typeof h.recoverSession>>)
+    const api = (window as unknown as { api: Record<string, unknown> }).api
+    if (present) api.reseedSessionConditions = reseedSessionConditions
+    else delete api.reseedSessionConditions
+
+    await act(async () => { await h.result.current.ensureSessionLive(sessionId, 'tile-leaf.send') })
+
+    expect(h.runtimes()[sessionId]).toMatchObject({ processStatus: 'started' })
+    if (present) expect(reseedSessionConditions).toHaveBeenCalledExactlyOnceWith([sessionId])
+  })
+
   it('does not kill a spawned backend that is alive but not ready when the deadline passes', async () => {
     vi.useFakeTimers()
     try {
