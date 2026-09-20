@@ -603,7 +603,9 @@ function TargetList({
     <div className="flex flex-col gap-1 text-[10px] text-muted">
       {skill.targets.map(target => (
         <div key={target.id} className="flex items-center justify-between gap-2 border border-control-border px-2 py-1">
-          <span className="min-w-0 break-all">{target.providers.join(' + ') || 'Historical'} · {target.state} · {target.displayPath || target.message}</span>
+          {/* The deployment path, beside the controls that reveal, remove or
+              forget it (#1049 re-review). */}
+          <span className="min-w-0 break-all">{target.providers.join(' + ') || 'Historical'} · {target.state} · {withVisibleControls(target.displayPath || target.message || '')}</span>
           {target.state === 'installed' || target.state === 'conflict' ? (
             <button type="button" className="shrink-0 border border-control-border px-2 py-0.5" onClick={() => {
               void window.api.revealAgentCodeInstalledSkillTarget(skill.id, target.id).then(result => {

@@ -14,6 +14,7 @@ import { deliverTextToSession } from '@renderer/features/session-text-delivery/d
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import { useWorkspaceLayoutContext } from '@renderer/workspace/WorkspaceContext'
 import type { KeyVaultKey, KeyVaultStatus } from '@shared/types/keyVault'
+import { withVisibleControls } from '@shared/text/visibleControls'
 
 // API Key Vault modal (#831). Revealed plaintext lives only in this
 // component's ephemeral state — the VAULT never persists it — and is
@@ -341,7 +342,13 @@ export function KeyVaultModal() {
                         <button
                           className="text-[11px] text-muted hover:text-ink"
                           onClick={() => {
-                            if (window.confirm(`Delete provider "${selectedProvider.name}" and all its keys?`)) {
+                            // Names are user-typed and the validator permits
+                            // invisible characters, so `production` and
+                            // `production<U+200B>` coexist and read the same
+                            // — in the list and in this confirmation, which
+                            // is where a whole provider's keys are destroyed
+                            // (#1049 re-review).
+                            if (window.confirm(`Delete provider "${withVisibleControls(selectedProvider.name)}" and all its keys?`)) {
                               void runVaultAction(() =>
                                 window.api.keyVaultDeleteProvider(selectedProvider.id),
                               )
@@ -441,7 +448,7 @@ export function KeyVaultModal() {
                           <button
                             className="shrink-0 text-[11px] text-muted hover:text-ink"
                             onClick={() => {
-                              if (window.confirm(`Delete key "${key.name}"?`)) {
+                              if (window.confirm(`Delete key "${withVisibleControls(key.name)}"?`)) {
                                 void runVaultAction(() =>
                                   window.api.keyVaultDeleteKey(key.providerId, key.id),
                                 )

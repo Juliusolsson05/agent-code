@@ -22,6 +22,7 @@ import type {
   AgentCodeCustomSkillsSnapshot,
 } from '@shared/types/agentCodeCustomSkills.js'
 import type { AgentCodeConventionsTargetStatus } from '@shared/types/agentCodeConventions.js'
+import { withVisibleControls } from '@shared/text/visibleControls'
 
 const HEALTH_LABELS: Record<AgentCodeCustomSkill['health'], string> = {
   disabled: 'Draft',
@@ -525,7 +526,7 @@ function TargetList({ skill, targets, onError }: {
         <div key={target.id} className="flex items-center justify-between gap-3">
           {/* An unsupported row names the provider, which is the one thing it
               is about; it has no path (#1037 review). */}
-          <span className="min-w-0 flex-1 truncate text-muted">{target.state === 'unsupported' ? target.providers.join(' + ') : (target.displayPath || target.id)} · {target.state}</span>
+          <span className="min-w-0 flex-1 truncate text-muted">{target.state === 'unsupported' ? target.providers.join(' + ') : withVisibleControls(target.displayPath || target.id)} · {target.state}</span>
           {target.state === 'installed' || target.state === 'conflict' || target.state === 'retired' ? (
             <button
               type="button"
