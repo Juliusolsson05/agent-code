@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 
+import type { RewindAttachment } from '@main/providerSwitch/rewindAttachments.js'
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
 import type {
   ListRewindPromptsRequest,
@@ -22,6 +23,22 @@ export type RewindSessionImage = {
   data: string
 }
 
+/**
+ * One attachment's fate, WITHOUT its bytes (#1073 review, finding 3).
+ *
+ * The restored images already cross this boundary once, in `promptImages`,
+ * and the corpus mean is 326k base64 characters with a real 12-image prompt
+ * at 2.8 MB. Shipping `promptAttachments` verbatim structured-cloned every one
+ * of those a SECOND time for a field the renderer reads only to explain
+ * losses. The report is what the renderer needs; the payload is not.
+ */
+export type RewindSessionAttachment = {
+  status: 'restored' | 'unavailable' | 'unsupported'
+  reason?: 'external-reference' | 'unreadable'
+  mediaType: string | null
+  name: string | null
+}
+
 export type RewindSessionResult = {
   provider: AgentProviderKind
   newProviderSessionId: string
@@ -29,7 +46,26 @@ export type RewindSessionResult = {
   promptText: string
   promptMode: 'prompt' | 'bash'
   promptImages: RewindSessionImage[]
+  /** Every attachment the rewound prompt had, bytes excluded — see above. */
+  promptAttachments: RewindSessionAttachment[]
   promptTimestamp: string | null
+}
+
+/**
+ * The loss report, with every payload stripped.
+ *
+ * Exported so the stripping is testable on its own: it is the one thing
+ * standing between a 2.8 MB prompt and a 5.6 MB IPC message.
+ */
+export function toRewindSessionAttachments(
+  attachments: readonly RewindAttachment[],
+): RewindSessionAttachment[] {
+  return attachments.map(attachment => ({
+    status: attachment.status,
+    ...(attachment.status === 'unavailable' ? { reason: attachment.reason } : {}),
+    mediaType: attachment.mediaType,
+    name: attachment.name,
+  }))
 }
 
 export async function listRewindPrompts(
@@ -101,7 +137,14 @@ export async function rewindSession(
     provider: request.provider,
     newProviderSessionId,
     newFilePath,
-    ...draft,
+    promptText: draft.promptText,
+    promptMode: draft.promptMode,
+    promptImages: draft.promptImages,
+    // Listed field by field rather than spread: a spread bypasses excess
+    // property checking, which is how `promptAttachments` crossed IPC
+    // undeclared in the first place, duplicating multi-megabyte payloads that
+    // nothing could read (#1073 review, finding 3).
+    promptAttachments: toRewindSessionAttachments(draft.promptAttachments),
     promptTimestamp: rewind.anchor.line >= 0
       ? conversation.entries.find(entry => (
         entry.kind === 'message' &&

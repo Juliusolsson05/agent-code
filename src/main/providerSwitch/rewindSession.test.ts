@@ -68,6 +68,7 @@ describe('rewindSession neutral integration', () => {
       promptText: 'second',
       promptMode: 'prompt',
       promptImages: [],
+      promptAttachments: [],
     })
     mocks.project.mockResolvedValue({ values: [{ type: 'session_meta' }] })
     mocks.sessionId.mockReturnValue('new-session')

@@ -9,6 +9,8 @@ import { opencodeTranscriptFile } from 'opencode-terminal-headless'
 
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
 import { unwrapClaudePastedContent } from '@shared/claude/pastedContent.js'
+import { attachmentOnlyLabel, rewindAttachments } from '@main/providerSwitch/rewindAttachments.js'
+import type { RewindAttachment } from '@main/providerSwitch/rewindAttachments.js'
 import type {
   RewindPrompt,
   RewindPromptAddress,
@@ -84,7 +86,20 @@ export interface TranscriptTargetProfile {
 export interface RewindDraft {
   promptText: string
   promptMode: 'prompt' | 'bash'
+  /**
+   * The images the composer will actually be prefilled with: exactly the
+   * `restored` image attachments below. Kept as its own field because that is
+   * what the renderer consumes, and derived rather than collected separately
+   * so the two can never disagree.
+   */
   promptImages: Array<{ mediaType: string; data: string }>
+  /**
+   * EVERY attachment the prompt had, including the ones that cannot come back
+   * (#929). A prompt that carried only an unavailable attachment is still a
+   * prompt, and reporting the loss is the difference between the picker saying
+   * so and the turn disappearing.
+   */
+  promptAttachments: RewindAttachment[]
 }
 
 interface TranscriptSnapshot {
@@ -641,11 +656,12 @@ function promptsFromSnapshot(
     if (!hasResumablePrefix) continue
 
     const promptDraft = draft(message.content)
+    // A prompt whose only content was an attachment still happened, and used
+    // to be dropped here — not just hiding the image, but removing the whole
+    // turn from the picker so it could not be rewound to (#929).
     const text = promptDraft.promptText.trim().length > 0
       ? promptDraft.promptText
-      : promptDraft.promptImages.length > 0
-        ? '[Image prompt]'
-        : ''
+      : attachmentOnlyLabel(promptDraft.promptAttachments) ?? ''
     if (text.length === 0) continue
     prompts.push({
       address: ipcPromptAddress(reference.address),
@@ -673,28 +689,39 @@ function ipcPromptAddress(address: PromptAddress): RewindPromptAddress {
 }
 
 function plainDraft(content: readonly ConversationContent[]): RewindDraft {
+  // WHY attachments are collected HERE and not per provider: this is the draft
+  // Codex, OpenCode and Grok all use, and it used to return `promptImages: []`
+  // unconditionally. Only Claude looked at attachments at all, and it did so
+  // with its own inline loop — so every Codex and OpenCode attachment was
+  // invisible to Rewind, and an image-only prompt vanished from the picker
+  // because `promptsFromSnapshot` drops a prompt with no text and no images.
+  const promptAttachments = rewindAttachments(content)
   return {
     promptText: content
       .filter((item): item is Extract<ConversationContent, { kind: 'text' }> => item.kind === 'text')
       .map(item => item.text)
       .join('\n'),
     promptMode: 'prompt',
-    promptImages: [],
+    promptImages: restoredImages(promptAttachments),
+    promptAttachments,
   }
+}
+
+/** The subset of attachments the composer can be prefilled with. */
+function restoredImages(attachments: readonly RewindAttachment[]): RewindDraft['promptImages'] {
+  return attachments
+    .filter((attachment): attachment is Extract<RewindAttachment, { status: 'restored' }> =>
+      attachment.status === 'restored')
+    .map(attachment => ({ mediaType: attachment.mediaType, data: attachment.data }))
 }
 
 function claudeDraft(content: readonly ConversationContent[]): RewindDraft {
   const plain = plainDraft(content)
-  const images: RewindDraft['promptImages'] = []
-  for (const item of content) {
-    if (item.kind !== 'image' || !isRecord(item.value)) continue
-    const source = isRecord(item.value.source) ? item.value.source : null
-    if (source?.type !== 'base64' || typeof source.data !== 'string') continue
-    images.push({
-      mediaType: typeof source.media_type === 'string' ? source.media_type : 'image/png',
-      data: source.data,
-    })
-  }
+  // The same extractor every other provider uses. It used to be a loop here
+  // that silently skipped anything that was not inline base64, which is why
+  // Claude's own url-sourced attachments were as invisible as Codex's (#929).
+  const attachments = plain.promptAttachments
+  const images = plain.promptImages
 
   // ── PROVENANCE: A WRAPPER MUST OPEN THE MESSAGE CLAUDE WROTE (#930) ──
   // `<bash-input>` and `<command-name>` are not content, they are Claude
@@ -737,7 +764,7 @@ function claudeDraft(content: readonly ConversationContent[]): RewindDraft {
     // envelope inside a real wrapper, and the composer must be prefilled with
     // the command, not with the scaffolding around it.
     if (bash !== null) {
-      return { promptText: unwrapClaudePastedContent(bash) ?? bash, promptMode: 'bash', promptImages: images }
+      return { promptText: unwrapClaudePastedContent(bash) ?? bash, promptMode: 'bash', promptImages: images, promptAttachments: attachments }
     }
   }
   // ── BOTH COMMAND BREADCRUMBS, NOT JUST ONE (#1071 review, finding 1) ──
@@ -769,6 +796,7 @@ function claudeDraft(content: readonly ConversationContent[]): RewindDraft {
         promptText: args.length > 0 ? `${command} ${args}` : command,
         promptMode: 'prompt',
         promptImages: images,
+        promptAttachments: attachments,
       }
     }
   }
@@ -786,6 +814,7 @@ function claudeDraft(content: readonly ConversationContent[]): RewindDraft {
     promptText: stripClaudeContext(plain.promptText),
     promptMode: 'prompt',
     promptImages: images,
+    promptAttachments: attachments,
   }
 }
 

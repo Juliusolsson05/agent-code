@@ -36,7 +36,7 @@ describe('TLDR identity through real session actions', () => {
     const saved = { text: 'The original work is complete. PR #123 is merged.', revision: 1, updatedAt: '2026-09-11T00:00:00.000Z' }
     window.api = {
       ...originalApi, spawnSession, killOwnedSession: vi.fn(async () => true), ghostRead: vi.fn(async () => []),
-      rewindToPrompt: vi.fn(async () => ({ provider: 'codex' as const, newProviderSessionId: 'native-rewound', newFilePath: '/recorded/rewound.jsonl', promptText: 'Earlier prompt', promptTimestamp: null, promptMode: 'prompt' as const, promptImages: [] })),
+      rewindToPrompt: vi.fn(async () => ({ provider: 'codex' as const, newProviderSessionId: 'native-rewound', newFilePath: '/recorded/rewound.jsonl', promptText: 'Earlier prompt', promptTimestamp: null, promptMode: 'prompt' as const, promptImages: [], promptAttachments: [] })),
       stripCodexCyberPolicy: vi.fn(async () => ({ provider: 'codex' as const, newProviderSessionId: 'native-rewound', newFilePath: '/recorded/rewound.jsonl' })),
       readTldrs: vi.fn(async (ids: string[]): Promise<Record<string, TldrRecord>> => ids.includes('summary-source') ? { 'summary-source': saved } : {}),
       onTldrChanged: () => () => {},
