@@ -15,21 +15,49 @@ The v3 shape differs from v2 in exactly the way the projections care about:
 | Membership | a leaf inside `tab.root`'s tile tree | the session's own `projectId` |
 | Layout | `tabs[].root` split tree | `stage` (lanes + pool) |
 
-So a reader that only understands `tabs`/`root` finds **no projects and no
-membership** in this file, while still seeing every session — which is the
-failure this fixture exists to catch. `src/main/remote/workspaceProjection.ts`
-reaches the phone through `agentActivity/workspaceProjection.ts`, and the phone
-had no v3 test at all (#1031 item 4).
+### What this fixture is for
 
-**Sanitization.** Structure and every value are unchanged, except three private
-string fields. Each is replaced through a stable one-to-one placeholder map, so
-equal values stay equal and distinct values stay distinct:
+`agentActivity/workspaceProjection.test.ts` already covers the shared decoder
+on v3 documents it builds by hand. What had **no** coverage was
+`RemoteWorkspaceProjection` — the phone's own read model — on a v3 document at
+all, and it is the class the phone's entire session list depends on. That is
+the narrow gap this closes; see `src/main/remote/workspaceProjectionV3.test.ts`.
 
-| Field | Replaced with |
-|---|---|
-| `cwd` | `/fixture/project-N` |
-| `title` | `Title N` |
-| `projectTabTitle` | `Project N` |
+## Sanitization
 
-Verified afterwards to contain no absolute home path, username or real
-directory name.
+Structure and every value are unchanged, except the private string fields
+below. Each is replaced through a **stable one-to-one** map, so equal values
+stay equal and distinct values stay distinct.
+
+| Field | Replaced with | Note |
+|---|---|---|
+| `sessions[].cwd` | `/fixture/dir-N` | **Directories, not projects.** Several directories can belong to one project, so the numbering deliberately does not track `Title N`. |
+| `sessions[].title` | `Title N` | shares the counter with the project titles below |
+| `projects[].title` | `Title N` | |
+
+### `drafts` — redact it, unconditionally
+
+`workspace.drafts` persists **raw composer text** (`workspaceShape.ts`,
+written by `useAutoSave.ts`), i.e. whatever the user had typed and not sent.
+
+This capture happened to contain no drafts, so the committed file is clean —
+but it is clean **by timing, not by process**. Anyone re-capturing this fixture
+must drop `drafts` explicitly rather than trusting it to be empty. The v2
+fixture redacted it deliberately for the same reason.
+
+### What is deliberately left verbatim
+
+UUID-shaped identifiers — `tldrIdentity`, `agentNameId`, `windowId`,
+`providerSessionId`, tmux session names — are kept, because the tests join on
+them and they are inert without the transcript files they key into. They are
+not credentials. If a debug bundle or proxy dump is ever published from the
+same machine, they would become a correlation key across those artifacts;
+that is the known trade, and the same one the existing v2 owner fixture makes.
+
+`extensionViewId` names a public repository on the same account that hosts this
+one, so it discloses nothing the repository itself does not.
+
+### Verified after sanitizing
+
+No absolute path, no `/Users/` fragment, no home directory, no worktree path,
+no branch name, no repository or client name, no prompt or goal text.

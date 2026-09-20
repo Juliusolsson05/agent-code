@@ -3,15 +3,24 @@ import { resolve } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 
 import type { PersistedWindow } from '@main/storage/workspaceFile.js'
-import type { WorkspaceFileStore } from '@main/storage/workspaceFileStore.js'
 import { RemoteWorkspaceProjection } from './workspaceProjection'
+import { fakeWorkspaceFileStore } from './workspaceProjection.testSupport'
 
 // ---------------------------------------------------------------------------
-// #1031 item 4. Every phone-projection test built a v2 document by hand —
-// `tabs[]` with a `root` tile tree — so nothing in the suite exercised the
-// shape the app has actually been persisting since #1013 migrated to the
-// unified stage. The projection DOES handle v3, but a regression in that half
-// would have been silent, and the phone's entire session list depends on it.
+// #1031 item 4.
+//
+// WHAT WAS ACTUALLY MISSING — and what was not. `agentActivity/
+// workspaceProjection.test.ts` already covers the SHARED decoder on v3
+// documents (`projectWorkspace — v3 documents (#992)`), built by hand; delete
+// the v3 `projects` parsing and two of its tests fail. So a decoder regression
+// was never silent, and an earlier version of this comment claiming otherwise
+// was wrong.
+//
+// The real gap is narrower and specific to the phone: nothing drove
+// `RemoteWorkspaceProjection` — the phone's own read model, and the class its
+// entire session list depends on — with a v3 document at all. Every test here
+// built a v2 `tabs[]`/`root` tile tree by hand, which is not what the app has
+// persisted since #1013.
 //
 // The input is the REAL v3 file the app wrote on 2026-09-20, sanitized
 // (testing/fixtures/workspace-v3/README.md): one window, three projects, 13
@@ -34,36 +43,13 @@ const WINDOW = RECORDED.windows[0]!
 const WORKSPACE = (WINDOW as unknown as {
   workspace: {
     projects: { id: string; title: string }[]
-    sessions: Record<string, { kind?: string; projectId?: string; title?: string; cwd?: string }>
+    sessions: Record<string, { kind?: string; projectId?: string; title?: string; cwd?: string; tldrIdentity?: string }>
   }
 }).workspace
 
-/** Mirrors the v2 file's store seam: the real store notifies only after bytes
- *  reach disk, and exposes the current windows synchronously. */
-function fakeStore(saves: PersistedWindow[][]) {
-  let windows: readonly PersistedWindow[] = saves[0] ?? []
-  let cursor = 1
-  const observers = new Set<(w: readonly PersistedWindow[]) => void>()
-  return {
-    windows: () => windows,
-    observe(listener: (w: readonly PersistedWindow[]) => void) {
-      observers.add(listener)
-      return () => observers.delete(listener)
-    },
-    commitNext() {
-      windows = saves[cursor] ?? windows
-      cursor += 1
-      for (const observer of observers) observer(windows)
-    },
-  }
-}
-
 function project(saves: PersistedWindow[][]) {
-  const store = fakeStore(saves)
-  const projection = new RemoteWorkspaceProjection(
-    store as unknown as WorkspaceFileStore,
-    () => Promise.resolve({}),
-  )
+  const store = fakeWorkspaceFileStore(saves)
+  const projection = new RemoteWorkspaceProjection(store.asStore(), () => Promise.resolve({}))
   return { projection, commitNext: () => store.commitNext() }
 }
 
@@ -119,15 +105,23 @@ describe('the phone projection on a REAL v3 workspace (#1031 item 4)', () => {
     try {
       const snapshot = projection.snapshot()
       const kinds = new Set<string>()
+      let joined = 0
       for (const [sessionId, meta] of Object.entries(WORKSPACE.sessions)) {
         const identity = snapshot.get(sessionId)!
         expect(identity.kind).toBe(meta.kind)
         expect(identity.cwd).toBe(meta.cwd ?? null)
+        // `tldrIdentity` is the phone's JOIN KEY: the remote server keys every
+        // TLDR and Goal frame by it, so dropping it silently empties both on
+        // the phone while the session list still looks correct. kind and cwd
+        // are pass-throughs and would not catch that.
+        expect(identity.tldrIdentity).toBe(meta.tldrIdentity ?? null)
+        if (meta.tldrIdentity) joined += 1
         kinds.add(identity.kind)
       }
-      // claude, opencode, codex, terminal and extension-view all present, so
-      // a kind-specific break cannot hide.
-      expect(kinds.size).toBeGreaterThanOrEqual(4)
+      expect(joined).toBeGreaterThan(0)
+      // claude, opencode, codex, terminal and extension-view are all present,
+      // so a kind-specific break cannot hide.
+      expect(kinds.size).toBeGreaterThanOrEqual(5)
     } finally {
       projection.dispose()
     }
@@ -136,10 +130,15 @@ describe('the phone projection on a REAL v3 workspace (#1031 item 4)', () => {
   it('re-projects a v3 save the same way it re-projects a v2 one', () => {
     // The freshness contract, on the shape that is actually being written.
     const onChange = vi.fn()
+    // Changing the TLDR identity rather than the title, deliberately: the
+    // projection's change detection compares identities field by field, and
+    // the tldrIdentity comparison was unpinned by any test — deleting it left
+    // all 74 remote tests green.
     const renamed = JSON.parse(JSON.stringify(WINDOW)) as typeof WINDOW
-    const sessionId = Object.keys(WORKSPACE.sessions)[0]!
-    ;(renamed as unknown as { workspace: { sessions: Record<string, { title?: string }> } })
-      .workspace.sessions[sessionId]!.title = 'Renamed on the stage'
+    const sessionId = Object.keys(WORKSPACE.sessions)
+      .find(id => WORKSPACE.sessions[id]!.tldrIdentity)!
+    ;(renamed as unknown as { workspace: { sessions: Record<string, { tldrIdentity?: string }> } })
+      .workspace.sessions[sessionId]!.tldrIdentity = '11111111-2222-4333-8444-999999999999'
 
     const { projection, commitNext } = project([[WINDOW], [renamed]])
     try {
@@ -147,7 +146,7 @@ describe('the phone projection on a REAL v3 workspace (#1031 item 4)', () => {
       onChange.mockClear()
       commitNext()
       expect(onChange).toHaveBeenCalled()
-      expect(projection.snapshot().get(sessionId)?.title).toBe('Renamed on the stage')
+      expect(projection.snapshot().get(sessionId)?.tldrIdentity).toBe('11111111-2222-4333-8444-999999999999')
     } finally {
       projection.dispose()
     }
