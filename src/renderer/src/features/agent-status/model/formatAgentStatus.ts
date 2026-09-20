@@ -16,14 +16,16 @@ export function formatProviderSession(model: AgentStatusModel): string {
 }
 
 export function formatPlacement(model: AgentStatusModel): string {
-  const base =
-    model.placement.bucket === 'pinned-dispatch'
-      ? `Pinned Dispatch · ${formatPhysicalPlacement(model.placement.physical)}`
-      : model.placement.bucket === 'detached-dispatch'
-        ? 'Detached Dispatch'
-        : model.placement.bucket === 'grid'
-          ? 'Grid'
-          : 'unknown'
+  // "Where is this agent?" in the words the stage uses: which lane(s) show it,
+  // or that it is parked. (Until #992 this read 'Grid', 'Detached Dispatch' or
+  // 'Pinned Dispatch · grid|detached' — which v2 owner structure held it.)
+  if (model.placement.bucket === 'unknown') return 'unknown'
+  const lanes = model.placement.lanes
+  const where = lanes.length === 0
+    ? 'Parked'
+    // 1-based: lanes are counted the way the user counts them on screen.
+    : `Lane ${lanes.map(index => index + 1).join(', ')}`
+  const base = model.placement.bucket === 'pinned' ? `Pinned · ${where}` : where
   return model.placement.dispatchLabel
     ? `${base} · ${model.placement.dispatchLabel}`
     : base
@@ -134,12 +136,6 @@ function formatOwnerTab(model: AgentStatusModel): string {
   if (!model.placement.tabTitle) return 'unknown'
   const index = model.placement.tabIndex === null ? '?' : String(model.placement.tabIndex + 1)
   return `${model.placement.tabTitle} · ${index}`
-}
-
-function formatPhysicalPlacement(value: AgentStatusModel['placement']['physical']): string {
-  if (value === 'detached') return 'detached'
-  if (value === 'grid') return 'grid'
-  return 'unknown'
 }
 
 function statusTone(value: string): AgentStatusField['tone'] {

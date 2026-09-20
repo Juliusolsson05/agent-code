@@ -1,3 +1,4 @@
+import { measureMainOperation } from '@main/performance/operations.js'
 import { app, ipcMain, type IpcMainInvokeEvent } from 'electron'
 import { createHash, randomUUID } from 'node:crypto'
 import { appendFileSync, writeFileSync } from 'node:fs'
@@ -526,13 +527,16 @@ export function registerDictationIpc(deps: {
           mimeType: session.mimeType ?? null,
         })
         const startedAt = Date.now()
-        const outcome = await transcribeBatch({
+        // Both sides of the merge: main's operation measurement (#958) around
+        // the provider call, and this branch's owned abort signal so a
+        // committed quit cancels the upload (#942).
+        const outcome = await measureMainOperation('dictation.provider', () => transcribeBatch({
           signal: batchAbort.signal,
           provider: session.provider,
           apiKey: session.apiKey,
           audio,
           ...(session.mimeType ? { mimeType: session.mimeType } : {}),
-        })
+        }))
         void streamingStop
         if (outcome.kind === 'no-speech') {
           emit(session.debugSessionId, 'OUTCOME', 'no-speech', {

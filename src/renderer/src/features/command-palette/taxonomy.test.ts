@@ -16,13 +16,11 @@ import { coerceSettings } from '@renderer/app-state/settings/persistence'
 // having been declared in a document.
 // ---------------------------------------------------------------------------
 
+// Unified layout (#992): nav-left/right/up/down died with the tile tree;
+// the group keeps tab navigation.
 const NAVIGATION_GROUP_IDS = [
   'next-tab',
   'prev-tab',
-  'nav-left',
-  'nav-right',
-  'nav-up',
-  'nav-down',
 ] as const
 
 const byId = (id: string) => {
@@ -96,7 +94,14 @@ describe('tier classification', () => {
   })
 
   it('keeps daily reversible actions in the default tier', () => {
-    for (const id of ['new-tab', 'close-tab', 'toggle-git-bar', 'reload-agent']) {
+    for (const id of [
+      'new-tab', 'close-tab', 'toggle-git-bar', 'reload-agent',
+      // Promoted from `advanced` for the public release (#973): every one of
+      // these was un-hidden by hand on the owner's install, which is the
+      // strongest signal available that they are daily rather than niche.
+      'search-conversation-prompts', 'duplicate-agent', 'rewind-to-prompt', 'close-old-agents',
+      'copy-code-block', 'copy-assistant-message', 'copy-resume-command', 'switch-provider',
+    ]) {
       expect(byId(id).pickerVisibility ?? 'default').toBe('default')
     }
   })
@@ -104,14 +109,14 @@ describe('tier classification', () => {
   it('marks niche supported operations advanced rather than hiding them entirely', () => {
     // `advanced` is not `debug`: these are supported operations a power user
     // wants, just not ones that should crowd a fuzzy search.
-    for (const id of ['rewind-to-prompt', 'remove-cybersecurity-block', 'duplicate-agent', 'normalize-layout', 'bury-pane']) {
+    for (const id of ['remove-cybersecurity-block', 'soft-reload-agent', 'switch-agents-provider']) {
       expect(byId(id).pickerVisibility).toBe('advanced')
     }
   })
 })
 
 describe('Navigation Commands group', () => {
-  it('has exactly the six recorded members', () => {
+  it('has exactly the two recorded members', () => {
     const members = builtInCommandCatalog
       .filter(c => c.commandGroup === 'navigation')
       .map(c => c.id)
@@ -128,7 +133,6 @@ describe('Navigation Commands group', () => {
       'jump-latest-message',
       'toggle-spotlight',
       'toggle-reader-mode',
-      'tiled-tabs',
       'reorder-tabs',
     ]) {
       expect(byId(id).category).toBe('navigate')
@@ -136,17 +140,16 @@ describe('Navigation Commands group', () => {
     }
   })
 
-  it('removes all six from the picker when the group is off', () => {
+  it('removes both members from the picker when the group is off', () => {
     const ctx = makeTestCommandContext({ flags: { navigationCommandsEnabled: false } })
     const visible = new Set(buildCommandRegistry(ctx).map(c => c.id))
     for (const id of NAVIGATION_GROUP_IDS) expect(visible.has(id)).toBe(false)
   })
 
   it('restores them when the group is on', () => {
-    // nav-* are grid-surface, so Dispatch must be off for them to be
-    // applicable at all — otherwise this would pass for the wrong reason.
+    // #992: no mode flags anymore — group membership is the only variable.
     const ctx = makeTestCommandContext({
-      flags: { navigationCommandsEnabled: true, dispatchModeEnabled: false },
+      flags: { navigationCommandsEnabled: true },
     })
     const visible = new Set(buildCommandRegistry(ctx).map(c => c.id))
     for (const id of NAVIGATION_GROUP_IDS) expect(visible.has(id)).toBe(true)
@@ -156,8 +159,8 @@ describe('Navigation Commands group', () => {
     // Documented precedence. If an override could pull one member back while
     // the family is off, Settings would show six switches that appear able to
     // contradict their own parent.
-    const hidden = isVisibleInPicker(byId('nav-left'), {
-      overrides: { 'nav-left': true },
+    const hidden = isVisibleInPicker(byId('next-tab'), {
+      overrides: { 'next-tab': true },
       showHiddenCommands: false,
       navigationCommandsEnabled: false,
     })
@@ -165,8 +168,8 @@ describe('Navigation Commands group', () => {
   })
 
   it('yields to a per-command override once the group is on', () => {
-    const shown = isVisibleInPicker(byId('nav-left'), {
-      overrides: { 'nav-left': false },
+    const shown = isVisibleInPicker(byId('next-tab'), {
+      overrides: { 'next-tab': false },
       showHiddenCommands: false,
       navigationCommandsEnabled: true,
     })

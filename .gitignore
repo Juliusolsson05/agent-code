@@ -2,7 +2,12 @@ src.zip
 node_modules
 out
 dist
-release
+# electron-builder's packaged output. ANCHORED on purpose: the old
+# unanchored `release` also matched every directory named "release" at any
+# depth, so scripts/release/ and testing/system/release/ (the nightly
+# workflow's tested logic, #1011) were silently ignored. The workflow would
+# have shipped without the script it runs.
+/release/
 .DS_Store
 *.log
 .vite

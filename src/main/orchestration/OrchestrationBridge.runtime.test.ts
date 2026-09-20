@@ -16,7 +16,7 @@ vi.mock('@main/window/windowRegistry.js', () => ({
 }))
 vi.mock('@providers/registry.main.js', () => ({
   getMainProvider: (kind: AgentProviderKind) => ({
-    name: { claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode' }[kind],
+    name: { claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', grok: 'Grok' }[kind],
     createTerminalSession: seam.terminalProviders.has(kind) ? () => undefined : undefined,
   }),
 }))

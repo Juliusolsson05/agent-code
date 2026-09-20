@@ -31,14 +31,25 @@ export class TldrStore extends EventEmitter {
 
   private readonly maxHistoryFiles: number
 
+  private readonly label: string
+
+  /**
+   * The Goal capability (#936) is a second instance rather than a second store
+   * class: goals need exactly these guarantees — one serialized atomic writer,
+   * revocation re-checked after I/O, bounded per-identity history — and a copy
+   * would drift the first time one of them is fixed. `historyDirectoryName`
+   * keeps the two histories apart on disk; `label` names the capability in the
+   * errors an agent reads.
+   */
   constructor(
     private readonly file: string,
     private readonly now = () => new Date(),
-    options: { maxHistoryFiles?: number } = {},
+    options: { maxHistoryFiles?: number; historyDirectoryName?: string; label?: string } = {},
   ) {
     super()
-    this.historyDirectory = join(dirname(file), 'tldr-history')
+    this.historyDirectory = join(dirname(file), options.historyDirectoryName ?? 'tldr-history')
     this.maxHistoryFiles = options.maxHistoryFiles ?? MAX_HISTORY_FILES
+    this.label = options.label ?? 'TLDR'
   }
 
   private serialize<T>(operation: () => Promise<T>): Promise<T> {
@@ -175,9 +186,9 @@ export class TldrStore extends EventEmitter {
   update(identity: string, value: string, authorized: () => boolean): Promise<TldrRecord> {
     return this.serialize(async () => {
       if (!validTldrIdentity(identity)) throw new Error('Invalid TLDR identity.')
-      const text = normalizeTldrText(value)
+      const text = normalizeTldrText(value, this.label)
       const records = await this.load()
-      if (!authorized()) throw new Error('This TLDR session is no longer active.')
+      if (!authorized()) throw new Error(`This ${this.label} session is no longer active.`)
       if (!records[identity] && Object.keys(records).length >= MAX_RECORDS) throw new Error('TLDR storage is full.')
       const record = { text, updatedAt: this.now().toISOString(), revision: (records[identity]?.revision ?? 0) + 1 }
       // Preserve the null prototype after every write, not just initial load.
@@ -190,7 +201,7 @@ export class TldrStore extends EventEmitter {
         await writeFile(temporary, JSON.stringify({ version: 1, records: next }), { mode: 0o600, flag: 'wx' })
         // Recheck after disk I/O: a queued old-provider request may outlive a
         // reload. Revocation is the boundary, not possession of an old token.
-        if (!authorized()) throw new Error('This TLDR session is no longer active.')
+        if (!authorized()) throw new Error(`This ${this.label} session is no longer active.`)
         await rename(temporary, this.file)
       } finally {
         await unlink(temporary).catch(() => {})

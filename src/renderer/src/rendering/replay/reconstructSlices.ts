@@ -98,6 +98,7 @@ export type FeedChannel =
   | 'session:screen'
   | 'session:jsonl-entries'
   | 'session:jsonl-error'
+  | 'session:history-boundary'
   | 'session:semantic-event'
   | 'session:conditions'
   | 'session:process-state'
@@ -107,7 +108,15 @@ export type FeedChannel =
 /** Running reconstruction state for ONE session's replay. Mutated in place by
  *  `applyFeedEvent`; each field's reference is replaced only when its reducer
  *  changed it, so `slicesFromState` composes with the adapter's D11 caches. */
+import { applyDecisionToWindow, decideHistoryBoundary, emptyHistoryWindow, type HistoryWindow } from '../../session-runtime/historyBoundary.js'
 export type ReplayFoldState = {
+  /** History-boundary window identity (grok Stage 5). Owned by the pure
+   *  decisions in session-runtime/historyBoundary.ts; replay applies the same
+   *  decisions the live clients do or recordings diverge from production. */
+  historyWindow: HistoryWindow
+  /** True after an applied reset until a fresh turn_started arrives — the
+   *  semantic fold drops suffixes meanwhile (the phone's gate, shared). */
+  awaitingSemanticStart: boolean
   readonly provider: AgentProviderKind
   readonly sessionId: string
   /** Persistent per session so the (Codex) rolling turn cursor survives across
@@ -162,6 +171,8 @@ export function createReplayFoldState(
     phase: IDLE_PHASE,
     lastJsonlEntryAt: null,
     processActive: false,
+    historyWindow: emptyHistoryWindow(),
+    awaitingSemanticStart: false,
   }
 }
 
@@ -180,6 +191,28 @@ export function applyFeedEvent(
 ): void {
   const p = asRecord(payload) ?? {}
   switch (channel) {
+    case 'session:history-boundary': {
+      // Replay must consume boundaries exactly like production: the shared
+      // pure owner decides, the fold state applies (wipe window, await a fresh
+      // turn). Without this case a recorded reset would replay as a no-op and
+      // the snapshot rows would dedup against pre-reset seen uuids.
+      const decision = decideHistoryBoundary(state.historyWindow ?? emptyHistoryWindow(), {
+        type: p.type === 'caught-up' ? 'caught-up' : 'reset',
+        generation: typeof p.generation === 'number' ? p.generation : 0,
+        snapshotByteLength: typeof p.snapshotByteLength === 'number' ? p.snapshotByteLength : 0,
+        ...(p.byteOffset !== undefined ? { byteOffset: p.byteOffset as number } : {}),
+        ...(p.complete !== undefined ? { complete: p.complete as boolean } : {}),
+        file: typeof p.file === 'string' ? p.file : '',
+      })
+      if (decision.kind === 'apply-reset') {
+        state.entries.length = 0
+        state.seenUuids.clear()
+        state.semantic = emptySemanticRuntime()
+        state.awaitingSemanticStart = true
+      }
+      state.historyWindow = applyDecisionToWindow(state.historyWindow ?? emptyHistoryWindow(), decision)
+      return
+    }
     case 'session:jsonl-entries': {
       // Mirror of useIpcSubscriptions Pass B (lines 1300-1620), reduced to the
       // render-slice essentials: map each raw line through the provider mapper,
@@ -240,6 +273,15 @@ export function applyFeedEvent(
       // never touch semantic state (the #174 leak). Handled out-of-band by the
       // fold; here it is simply a no-op for every ledger slice.
       if (ev.type === 'prompt_suggestion') break
+
+      // The shared history-boundary gate: after an applied reset the window
+      // was wiped; stale semantic suffixes from the superseded generation
+      // must not repaint it. A fresh turn_started reopens the fold (api_error
+      // still passes — it is diagnostic, not turn state).
+      if (state.awaitingSemanticStart) {
+        if (ev.type === 'turn_started') state.awaitingSemanticStart = false
+        else if (ev.type !== 'api_error') break
+      }
 
       // Three real reducers, in the fold's exact order and composition:
       const nextSemantic = foldSemanticEvent(state.semantic, ev, state.provider)

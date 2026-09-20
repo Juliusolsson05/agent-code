@@ -33,7 +33,7 @@ describe('provider feature matrix', () => {
         transcriptDuplicate: true,
         promptHistoryExtraction: true,
         inAppResume: true,
-        switchTargets: ['codex', 'opencode'],
+        switchTargets: ['codex', 'opencode', 'grok'],
         verifiedExternalResumeCommand: true,
       },
       codex: {
@@ -41,7 +41,15 @@ describe('provider feature matrix', () => {
         transcriptDuplicate: true,
         promptHistoryExtraction: true,
         inAppResume: true,
-        switchTargets: ['claude', 'opencode'],
+        switchTargets: ['claude', 'opencode', 'grok'],
+        verifiedExternalResumeCommand: true,
+      },
+      grok: {
+        transcriptRewind: true,
+        transcriptDuplicate: true,
+        promptHistoryExtraction: true,
+        inAppResume: true,
+        switchTargets: ['claude', 'codex', 'opencode'],
         verifiedExternalResumeCommand: true,
       },
       opencode: {
@@ -53,7 +61,7 @@ describe('provider feature matrix', () => {
         // shell-command flag, and this row is what makes that regression
         // visible if anyone re-conflates the two.
         inAppResume: true,
-        switchTargets: ['claude', 'codex'],
+        switchTargets: ['claude', 'codex', 'grok'],
         verifiedExternalResumeCommand: true,
       },
     })
@@ -82,7 +90,7 @@ describe('provider feature matrix', () => {
     expect(opencode.transcriptDuplicate).toBe(true)
     expect(opencode.promptHistoryExtraction).toBe(true)
     expect(opencode.verifiedExternalResumeCommand).toBe(true)
-    expect(opencode.switchTargets).toEqual(['claude', 'codex'])
+    expect(opencode.switchTargets).toEqual(['claude', 'codex', 'grok'])
     expect(opencode.inAppResume).toBe(true)
   })
 

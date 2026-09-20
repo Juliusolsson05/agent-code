@@ -29,11 +29,15 @@ function workspaceFixture(): Workspace {
       tabs: [{
         id: 'project-tab',
         title: 'Project tab',
-        focusedSessionId: 'agent',
-        root: { type: 'leaf', sessionId: 'agent' },
       }],
-      sessions: { agent: { cwd: '/projects/terminal-perf', kind: 'codex' } },
-      detachedSessions: {},
+      sessions: { agent: { cwd: '/projects/terminal-perf', kind: 'codex', projectId: 'project-tab', joinedAt: 0 } },
+      // A WHOLE workspace, not just tabs + sessions. The Activity modal's Focus
+      // action and lane column read the stage and pins since #992 (they used to
+      // read the tile tree, which this fixture faked with a `root`). The
+      // `as unknown as Workspace` below means the compiler will not say when
+      // the next field goes missing — the runtime TypeError will.
+      pinnedSessionIds: [],
+      stage: { lanes: [{ selectedSessionId: 'agent' }], rows: [{ length: 1 }], focusedLane: 0 },
     },
     runtimes: {},
     focusSessionInTab: vi.fn(),

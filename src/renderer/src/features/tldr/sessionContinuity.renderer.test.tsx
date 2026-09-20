@@ -10,6 +10,7 @@ import type { SessionSpawnOptions } from '@preload/api/types'
 import type { TldrRecord } from '@shared/types/tldr'
 import { TldrPane } from './TldrOverlay'
 import { dismissTldr, toggleTldr } from './viewState'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 vi.mock('@renderer/workspace/hook/actions/initialHistory', () => ({ loadInitialHistoryForSession: vi.fn(async () => undefined) }))
 const originalApi = window.api
@@ -19,10 +20,10 @@ describe('TLDR identity through real session actions', () => {
   it.each(['rewind', 'remove cyber block'] as const)('restores the saved summary after undoing %s', async operation => {
     vi.useFakeTimers()
     const state = {
-      tabs: [{ id: 'project', title: 'Project', root: { type: 'leaf', sessionId: 'source' }, focusedSessionId: 'source' }],
+      tabs: [{ id: 'project', title: 'Project' }],
       activeTabId: 'project', sessions: {
-        source: { cwd: '/project', kind: 'codex', providerSessionId: 'native-source', tldrIdentity: 'summary-source', builtInMcpDomains: ['tldr'] },
-      }, detachedSessions: {}, buried: [], pinnedSessionIds: [], dispatchMode: null,
+        source: { cwd: '/project', kind: 'codex', providerSessionId: 'native-source', tldrIdentity: 'summary-source', builtInMcpDomains: ['tldr'], projectId: 'project', joinedAt: 0 },
+      },   pinnedSessionIds: [], stage: oneLaneStage('source'),
     } as WorkspaceState
     const refs = makeRefs(state)
     const writer = stateWriter(state, refs)
@@ -74,13 +75,18 @@ describe('TLDR identity through real session actions', () => {
     { operation: 'provider translation', kind: 'codex', resumeSessionId: 'native-translated', preserveTldr: true, carry: true },
     { operation: 'rewind', kind: 'claude', resumeSessionId: 'native-rewound', carry: false },
     { operation: 'unrelated resume', kind: 'codex', resumeSessionId: 'native-other', carry: false },
+    { operation: 'Goal-only reload', kind: 'claude', resumeSessionId: 'native-source', carry: true, domains: ['goal'] },
+    { operation: 'Goal-only rewind', kind: 'claude', resumeSessionId: 'native-rewound', carry: false, domains: ['goal'] },
   ] as const)('persists the correct summary identity after $operation', async scenario => {
     vi.useFakeTimers()
+    // Goal shares the conversation identity, so a Goal-only agent must carry,
+    // mint and refuse to donate it exactly like a TLDR agent.
+    const domains = 'domains' in scenario && scenario.domains ? [...scenario.domains] : ['tldr' as const]
     const state = {
-      tabs: [{ id: 'project', title: 'Project', root: { type: 'leaf', sessionId: 'source' }, focusedSessionId: 'source' }],
+      tabs: [{ id: 'project', title: 'Project' }],
       activeTabId: 'project', sessions: {
-        source: { cwd: '/project', kind: 'claude', providerSessionId: 'native-source', tldrIdentity: 'summary-source', builtInMcpDomains: ['tldr'] },
-      }, detachedSessions: {}, buried: [], pinnedSessionIds: [], dispatchMode: null,
+        source: { cwd: '/project', kind: 'claude', providerSessionId: 'native-source', tldrIdentity: 'summary-source', builtInMcpDomains: domains, projectId: 'project', joinedAt: 0 },
+      },   pinnedSessionIds: [], stage: oneLaneStage('source'),
     } as WorkspaceState
     const refs = makeRefs(state)
     const writer = stateWriter(state, refs)
@@ -102,13 +108,17 @@ describe('TLDR identity through real session actions', () => {
     expect(spawnedIdentity).toEqual(expect.any(String))
     expect(spawnedIdentity === 'summary-source').toBe(scenario.carry)
     expect(writer.getState().sessions.successor?.tldrIdentity).toBe(spawnedIdentity)
-    expect(writer.getState().tabs[0]?.focusedSessionId).toBe('successor')
+    // The successor takes over the row: same project, same place in its index,
+    // and the lane that showed the source now shows it. (Tree era: the tab's
+    // focus followed.)
+    expect(writer.getState().sessions.successor).toMatchObject({ projectId: 'project', joinedAt: 0 })
+    expect(writer.getState().stage.lanes[0]?.selectedSessionId).toBe('successor')
 
     // A duplicate uses spawn with a cloned transcript. Neither the source's
     // metadata nor the last replacement may donate its completion statement.
     spawnSession.mockResolvedValueOnce({ sessionId: 'duplicate' })
     await act(async () => {
-      await hook.result.current.spawn('/project', { kind: scenario.kind, resumeSessionId: 'native-clone', builtInMcpDomains: ['tldr'] })
+      await hook.result.current.spawn('/project', { kind: scenario.kind, resumeSessionId: 'native-clone', builtInMcpDomains: domains })
       await vi.runAllTimersAsync()
     })
     const duplicateIdentity = writer.getState().sessions.duplicate?.tldrIdentity

@@ -3,6 +3,7 @@ import { ControlError, defineCapability, paginate } from '@control-sdk'
 import { useAppStore } from '@renderer/app-state/store'
 import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { Workspace } from '@renderer/workspace/hook'
+import { isAgentSessionKind } from '@shared/types/providerKind'
 
 const identity = { sessionId: z.string().min(1).describe('Stable agent sessionId from agents.search/list.') }
 const imageReference = z.object({ id: z.string(), filename: z.string(), mediaType: z.string() })
@@ -11,8 +12,11 @@ const summary = z.object({ sessionId: z.string(), revision: z.string(), totalCha
 export const inspectAgentDraft = (sessionId: string) => {
   const store = useAppStore.getState()
   const meta = store.workspaceState.sessions[sessionId]
-  if (!meta || meta.kind === 'terminal' || store.workspaceState.buried.some(item => item.sessionId === sessionId)) {
-    throw new ControlError('unavailable', 'Choose a current, non-buried agent')
+  // Positive agent check: an extension pane has no composer either, and the old
+  // terminal-only guard let a control caller write an invisible draft into one
+  // that autosave would then persist.
+  if (!meta || !isAgentSessionKind(meta.kind)) {
+    throw new ControlError('unavailable', 'Choose a current agent')
   }
   const runtime = store.workspaceRuntimes[sessionId] ?? emptyRuntime()
   const images = runtime.draftImages.map(({ id, filename, mediaType }) => ({ id, filename, mediaType }))

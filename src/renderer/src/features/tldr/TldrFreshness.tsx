@@ -8,7 +8,7 @@ function Timestamp({ label, timestamp, now }: { label: string; timestamp: number
     aria-label={`${label} ${value.text}${value.exact ? ` (${value.exact})` : ''}`}>{value.text}</time></span>
 }
 
-export function TldrFreshness({ runtime, writtenAt, enforcementInactive = false }: { runtime?: SessionRuntime; writtenAt?: string; enforcementInactive?: boolean }) {
+export function TldrFreshness({ runtime, writtenAt, writtenLabel = 'Note written', enforcementInactive = false }: { runtime?: SessionRuntime; writtenAt?: string; writtenLabel?: string; enforcementInactive?: boolean }) {
   const [now, setNow] = useState(Date.now)
   const activity = useMemo(() => tldrActivity(runtime), [runtime])
   useEffect(() => {
@@ -17,9 +17,9 @@ export function TldrFreshness({ runtime, writtenAt, enforcementInactive = false 
     const timer = window.setInterval(() => setNow(Date.now()), 30_000)
     return () => window.clearInterval(timer)
   }, [])
-  return <div data-tldr-freshness="" className="absolute inset-x-4 bottom-4 flex flex-wrap justify-center gap-x-4 gap-y-1 text-[11px] leading-4 text-white/60">
+  return <div data-tldr-freshness="" className="absolute inset-x-4 bottom-4 flex flex-wrap justify-center gap-x-4 gap-y-1 text-[11px] leading-4 text-muted">
     {activity.active ? <span>Last active <span>now</span></span> : <Timestamp label="Last active" timestamp={activity.timestamp} now={now} />}
-    <Timestamp label="Note written" timestamp={writtenAt ? Date.parse(writtenAt) : null} now={now} />
+    <Timestamp label={writtenLabel} timestamp={writtenAt ? Date.parse(writtenAt) : null} now={now} />
     {enforcementInactive && <span data-tldr-enforcement-inactive="">Reporting check inactive</span>}
   </div>
 }

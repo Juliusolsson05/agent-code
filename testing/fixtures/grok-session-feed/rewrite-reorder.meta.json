@@ -1,0 +1,10 @@
+{
+  "scenario": "rewrite-reorder",
+  "source": "session-level script modeled on the grok corpus text-load-repeat generation-1 rewrite; frames captured through the real wireSessionForwarder",
+  "channels": [
+    "session:jsonl-entries",
+    "session:semantic-event",
+    "session:history-boundary",
+    "session:process-state"
+  ]
+}

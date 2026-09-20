@@ -55,6 +55,12 @@ export function currentCloseConfirmation(): PendingCloseConfirmation | null {
 export function requestCloseConfirmation(
   request: PendingCloseConfirmation['request'],
 ): Promise<boolean> {
+  // (`requestRootCloseConfirmation` sat beside this until #992, resolving a
+  // third answer — 'agent' — for the root-tile dialog. See the note on
+  // CloseConfirmationRequest for why that choice no longer exists. One slot,
+  // one boolean: a second close still cancels the first, so two destructive
+  // grants can never be open at once.)
+  //
   // Resolve the superseded request BEFORE clearing the slot, then install the
   // new resolver BEFORE notifying listeners. The earlier order emitted while
   // `resolver` still pointed at the already-resolved function, so a listener

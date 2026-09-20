@@ -115,7 +115,11 @@ function describe(event: JournalEvent): string {
   // `unresolvedSessionIds` is here because a restore that never completes is
   // the failure this summarizer exists to make readable, and the count alone
   // ('3 of 4') does not tell you which pane to go look at.
-  for (const key of ['caller', 'kind', 'gate', 'reason', 'code', 'disposition', 'status', 'cause', 'unresolvedSessionIds']) {
+  // `acceptance` is here because #889's stuck `Sending` was a `queue`
+  // acceptance: a summary that cannot print `acceptance=queue` on submit.result
+  // sends the reader back to the paste-debug journal to learn whether a turn
+  // ever started.
+  for (const key of ['caller', 'kind', 'gate', 'reason', 'code', 'disposition', 'status', 'cause', 'acceptance', 'unresolvedSessionIds']) {
     const value = data[key]
     if (value !== undefined && value !== null && value !== '') parts.push(`${key}=${String(value)}`)
   }

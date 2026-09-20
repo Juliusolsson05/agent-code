@@ -1,47 +1,37 @@
 import { describe, expect, it } from 'vitest'
 
 import { buildNewAgentInModel } from '@renderer/features/workspace/lib/newAgentInProjects'
-import type { DispatchModeState, TileNode, WorkspaceState } from '@renderer/workspace/types'
+import type { TiledDispatchState, WorkspaceState } from '@renderer/workspace/types'
 
 // Three projects, each with one grid agent, so labels A/B/C are all in play and
 // a filtered list can prove it keeps the GLOBAL letter rather than re-lettering.
-function leaf(sessionId: string): TileNode {
-  return { type: 'leaf', sessionId }
-}
-
-function makeState(dispatchMode: DispatchModeState | null): WorkspaceState {
+function makeState(stage: TiledDispatchState): WorkspaceState {
   return {
     tabs: [
-      { id: 'tabA', title: 'project-a', root: leaf('a1'), focusedSessionId: 'a1' },
-      { id: 'tabB', title: 'project-b', root: leaf('b1'), focusedSessionId: 'b1' },
-      { id: 'tabC', title: 'project-c', root: leaf('c1'), focusedSessionId: 'c1' },
+      { id: 'tabA', title: 'project-a' },
+      { id: 'tabB', title: 'project-b' },
+      { id: 'tabC', title: 'project-c' },
     ],
     activeTabId: 'tabA',
-    dispatchMode,
+    stage,
     sessions: {
-      a1: { cwd: '/work/project-a', kind: 'claude' },
-      b1: { cwd: '/work/project-b', kind: 'codex' },
-      c1: { cwd: '/work/project-c', kind: 'claude' },
+      a1: { cwd: '/work/project-a', kind: 'claude', projectId: 'tabA', joinedAt: 0 },
+      b1: { cwd: '/work/project-b', kind: 'codex', projectId: 'tabB', joinedAt: 0 },
+      c1: { cwd: '/work/project-c', kind: 'claude', projectId: 'tabC', joinedAt: 0 },
     },
-    detachedSessions: {},
-    buried: [],
     pinnedSessionIds: [],
   }
 }
 
-/** Grid Dispatch with two rows of two lanes; lane 2 (row 1) focused and empty. */
-function gridWithFocusedEmptyLane(rowOneProjects?: string[]): DispatchModeState {
+/** A stage with two rows of two lanes; lane 2 (row 1) focused and empty. */
+function gridWithFocusedEmptyLane(rowOneProjects?: string[]): TiledDispatchState {
   return {
-    scope: 'global',
-    focusedSessionId: 'a1',
-    tiled: {
-      focusedLane: 2,
-      lanes: [{ selectedSessionId: 'a1' }, {}, {}, {}],
-      rows: [
-        { length: 2 },
-        rowOneProjects ? { length: 2, projectTabIds: rowOneProjects } : { length: 2 },
-      ],
-    },
+    focusedLane: 2,
+    lanes: [{ selectedSessionId: 'a1' }, {}, {}, {}],
+    rows: [
+      { length: 2 },
+      rowOneProjects ? { length: 2, projectTabIds: rowOneProjects } : { length: 2 },
+    ],
   }
 }
 
@@ -69,15 +59,7 @@ describe('buildNewAgentInModel', () => {
 
   it('anchors a project on its first session with a directory, grid leaf before detached rows', () => {
     const state = makeState(gridWithFocusedEmptyLane())
-    state.sessions.b2 = { cwd: '/work/project-b/.worktrees/task', kind: 'codex' }
-    state.detachedSessions.b2 = {
-      sessionId: 'b2',
-      surface: 'dispatch',
-      projectTabId: 'tabB',
-      projectTabTitle: 'project-b',
-      projectTabIndex: 1,
-      detachedAt: 10,
-    }
+    state.sessions.b2 = { cwd: '/work/project-b/.worktrees/task', kind: 'codex', projectId: 'tabB', joinedAt: 10 }
 
     const projectB = buildNewAgentInModel(state).projects.find(p => p.tabId === 'tabB')
 
@@ -89,15 +71,7 @@ describe('buildNewAgentInModel', () => {
   it('falls back to a detached row when the grid leaf has no live session behind it', () => {
     const state = makeState(gridWithFocusedEmptyLane())
     delete state.sessions.b1
-    state.sessions.b2 = { cwd: '/work/project-b', kind: 'codex' }
-    state.detachedSessions.b2 = {
-      sessionId: 'b2',
-      surface: 'dispatch',
-      projectTabId: 'tabB',
-      projectTabTitle: 'project-b',
-      projectTabIndex: 1,
-      detachedAt: 10,
-    }
+    state.sessions.b2 = { cwd: '/work/project-b', kind: 'codex', projectId: 'tabB', joinedAt: 10 }
 
     const projectB = buildNewAgentInModel(state).projects.find(p => p.tabId === 'tabB')
 
@@ -118,32 +92,38 @@ describe('buildNewAgentInModel', () => {
   })
 
   it('first highlights the project plain New Agent would have used', () => {
-    // Classic focus b1 + unbound empty lane => the spawn resolver picks tabB.
-    const dispatchMode = gridWithFocusedEmptyLane()
-    dispatchMode.focusedSessionId = 'b1'
+    // Active project B + unbound empty lane => the spawn resolver picks tabB.
+    // (Until #992 a classic-Dispatch focus on b1 produced the same answer by
+    // a different road; the active project is the only fallback now.)
+    const state = makeState(gridWithFocusedEmptyLane())
+    state.activeTabId = 'tabB'
 
-    expect(buildNewAgentInModel(makeState(dispatchMode)).initialTabId).toBe('tabB')
+    expect(buildNewAgentInModel(state).initialTabId).toBe('tabB')
   })
 
   it('first highlights the first enabled project when the spawn target is not on offer', () => {
     // A row bound to C whose focused lane still shows A's agent (binding
     // filters, it never evicts), so plain New Agent would target A — which
     // this row does not offer.
-    const dispatchMode = gridWithFocusedEmptyLane(['tabC'])
-    dispatchMode.tiled!.lanes[2] = { selectedSessionId: 'a1' }
+    const stage = gridWithFocusedEmptyLane(['tabC'])
+    stage.lanes[2] = { selectedSessionId: 'a1' }
 
-    expect(buildNewAgentInModel(makeState(dispatchMode)).initialTabId).toBe('tabC')
+    expect(buildNewAgentInModel(makeState(stage)).initialTabId).toBe('tabC')
   })
 
   it('never highlights a disabled project', () => {
-    // b1 still exists (so the spawn resolver still targets tabB) but has no
-    // directory, so tabB cannot be anchored. Active tab is C so the expected A
-    // can only come from the "first enabled project" rule, not from activeTabId.
-    const dispatchMode = gridWithFocusedEmptyLane()
-    dispatchMode.focusedSessionId = 'b1'
-    const state = makeState(dispatchMode)
+    // The focused lane shows b1, so the spawn resolver targets tabB — but b1
+    // has no directory, so tabB cannot be anchored. Active tab is C so the
+    // expected A can only come from the "first enabled project" rule, not from
+    // activeTabId.
+    const stage = gridWithFocusedEmptyLane()
+    stage.lanes[2] = { selectedSessionId: 'b1' }
+    const state = makeState(stage)
     state.activeTabId = 'tabC'
-    state.sessions.b1 = { cwd: '', kind: 'codex' }
+    // Spread: the row's `projectId` is what files it under tabB (#992). A bare
+    // replacement un-files it, tabB becomes EMPTY rather than un-anchorable,
+    // and the case stops testing the disabled-project rule at all.
+    state.sessions.b1 = { ...state.sessions.b1!, cwd: '' }
 
     expect(buildNewAgentInModel(state).initialTabId).toBe('tabA')
   })

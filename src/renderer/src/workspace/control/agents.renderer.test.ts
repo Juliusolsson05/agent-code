@@ -3,6 +3,7 @@ import { agentControlCapabilities } from './agents'
 import { useAppStore } from '@renderer/app-state/store'
 import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { Workspace } from '@renderer/workspace/hook'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 const original = useAppStore.getState()
 const originalApi = window.api
@@ -11,9 +12,9 @@ const context = { requestId: 'trial', caller: { kind: 'external' as const, id: '
   owner: { kind: 'window' as const, windowId: 'left', generation: 'one' } }
 function setup(wake: () => Promise<unknown> = async () => undefined) {
   useAppStore.setState({ workspaceState: {
-    tabs: [{ id: 'project', title: 'Project', root: { type: 'leaf', sessionId: 'agent' }, focusedSessionId: 'agent' }],
-    activeTabId: 'project', sessions: { agent: { cwd: '/trial', kind: 'claude' } },
-    detachedSessions: {}, buried: [], pinnedSessionIds: [], dispatchMode: null,
+    tabs: [{ id: 'project', title: 'Project' }],
+    activeTabId: 'project', sessions: { agent: { cwd: '/trial', kind: 'claude', projectId: 'project', joinedAt: 0 } },
+      pinnedSessionIds: [], stage: oneLaneStage('agent'),
   }, workspaceRuntimes: { agent: { ...emptyRuntime(), draftInput: 'unfinished human draft' } } })
   const deliverPrompt = vi.fn().mockResolvedValue({ ok: true, acceptance: { kind: 'queue', acceptedAt: 1 } })
   window.api = { ...originalApi, deliverPrompt }
@@ -109,8 +110,7 @@ it('treats a terminal as a session for metadata and navigation, but never as a p
   useAppStore.getState().setWorkspaceState(state => ({
     ...state,
     sessions: { ...state.sessions, shell: { cwd: '/trial', kind: 'terminal' } },
-    tabs: [{ ...state.tabs[0], root: { type: 'split', direction: 'vertical', ratio: 0.5,
-      a: { type: 'leaf', sessionId: 'agent' }, b: { type: 'leaf', sessionId: 'shell' } } }],
+    tabs: [{ ...state.tabs[0], }],
   }))
 
   expect(await invoke('agents.titleSet', { sessionId: 'shell', title: 'dev server' }))
@@ -139,8 +139,7 @@ it('refuses to show a terminal while Reader Mode owns the screen, before any nav
   useAppStore.getState().setWorkspaceState(state => ({
     ...state,
     sessions: { ...state.sessions, shell: { cwd: '/trial', kind: 'terminal' } },
-    tabs: [{ ...state.tabs[0], root: { type: 'split', direction: 'vertical', ratio: 0.5,
-      a: { type: 'leaf', sessionId: 'agent' }, b: { type: 'leaf', sessionId: 'shell' } } }],
+    tabs: [{ ...state.tabs[0], }],
   }))
   useAppStore.setState({ workspaceReaderMode: { tabId: 'project', focusedSessionId: 'agent' } })
 

@@ -14,6 +14,7 @@ import {
   unregisterCodeBlock,
 } from '@renderer/features/copy-code-block/lib/codeBlockRegistry'
 import { CodeRenderContext } from '@renderer/features/feed/context'
+import { feedDisclosureClass } from '@renderer/features/feed/ui/rows/primitives'
 import {
   clearPendingSelection,
   setPendingSelection,
@@ -435,7 +436,7 @@ export const CodeBlock = memo(function CodeBlock({
       {!largeContentOpen ? (
         <button
           type="button"
-          className="hover:text-ink cursor-pointer"
+          className={feedDisclosureClass}
           onClick={() => setLargeContentOpen(true)}
         >
           view paged content
@@ -445,7 +446,7 @@ export const CodeBlock = memo(function CodeBlock({
           {visiblePage.hasPrevious ? (
             <button
               type="button"
-              className="hover:text-ink cursor-pointer"
+              className={feedDisclosureClass}
               onClick={() =>
                 setPageStarts(current => (current.length > 1 ? current.slice(0, -1) : current))
               }
@@ -456,7 +457,7 @@ export const CodeBlock = memo(function CodeBlock({
           {visiblePage.hasNext ? (
             <button
               type="button"
-              className="hover:text-ink cursor-pointer"
+              className={feedDisclosureClass}
               onClick={() => setPageStarts(current => [...current, visiblePage.end])}
             >
               next
@@ -464,7 +465,7 @@ export const CodeBlock = memo(function CodeBlock({
           ) : null}
           <button
             type="button"
-            className="hover:text-ink cursor-pointer"
+            className={feedDisclosureClass}
             onClick={() => {
               setLargeContentOpen(false)
               setPageStarts([0])
@@ -474,7 +475,7 @@ export const CodeBlock = memo(function CodeBlock({
           </button>
           <button
             type="button"
-            className="hover:text-ink cursor-pointer"
+            className={feedDisclosureClass}
             onClick={() => {
               // Full source is touched only after explicit user intent. Keeping it out of the
               // registry avoids a second long-lived owner; direct clipboard access preserves the

@@ -85,6 +85,24 @@ export type DispatchCommandOptions = {
    * test that wants to assert "a keybinding cannot bypass a capability gate".
    */
   reportError?: (message: string, error: unknown) => void
+  /**
+   * Commands that exist but are not in the compile-time catalog — today, the ones
+   * derived from installed extension manifests.
+   *
+   * ── WHY THE GATEWAY CANNOT JUST IMPORT THEM ──
+   * `builtInCommandCatalog` is a frozen module-scope array, and extension commands
+   * are derived per render from the installed set, so they cannot be in it. Without
+   * this parameter `findCommand` returned undefined for every contributed id and
+   * `dispatchCommand` answered `status: 'unknown'` — which the keybinding path does
+   * not inspect. The result was that every manifest-declared shortcut was a silent
+   * no-op that also swallowed whatever the chord would otherwise have done, while
+   * clicking the same command in the palette worked, because that path runs an
+   * already-resolved row and never consults the catalog.
+   *
+   * Injected rather than imported so this module stays React-free and pure: the
+   * palette already holds the derived list and is the only caller that needs it.
+   */
+  extraCommands?: readonly CommandDef[]
 }
 
 /**
@@ -131,12 +149,12 @@ export function __resetInFlightForTests(): void {
 export async function dispatchCommand(
   options: DispatchCommandOptions,
 ): Promise<CommandDispatchOutcome> {
-  const { id, source, ctx, reportError } = options
+  const { id, source, ctx, reportError, extraCommands } = options
 
   // Resolve against the FULL catalog, never the picker-filtered registry.
   // This one line is the fix for the native-menu defect: hiding a command from
   // the palette can no longer make its menu item unresolvable.
-  const command = findCommand(id)
+  const command = findCommand(id, extraCommands)
   if (!command) {
     return { status: 'unknown', id, source }
   }
@@ -274,13 +292,24 @@ function isTransientRowId(id: string): boolean {
  *
  * Deliberately ignores picker visibility, for the same reason dispatch does.
  */
-export function canDispatchCommand(id: string, ctx: CommandContext): boolean {
-  const command = findCommand(id)
+export function canDispatchCommand(
+  id: string,
+  ctx: CommandContext,
+  extraCommands?: readonly CommandDef[],
+): boolean {
+  const command = findCommand(id, extraCommands)
   return command ? resolveCommandAvailability(command, ctx).available : false
 }
 
-function findCommand(id: string): CommandDef | undefined {
-  return builtInCommandCatalog.find(candidate => candidate.id === id)
+function findCommand(id: string, extraCommands?: readonly CommandDef[]): CommandDef | undefined {
+  // Built-ins first. A contributed id is namespaced `<extensionId>.` and cannot
+  // collide with a first-party one, but resolving the app's own commands from the
+  // app's own catalog first makes that a property of this lookup rather than
+  // something inherited from the manifest validator.
+  return (
+    builtInCommandCatalog.find(candidate => candidate.id === id) ??
+    extraCommands?.find(candidate => candidate.id === id)
+  )
 }
 
 /** Human-readable label for an error message. Function titles need the context

@@ -18,20 +18,23 @@ describe('provider switch choices', () => {
       'Codex',
       'OpenCode',
       'OpenCode Terminal',
+      'Grok',
     ])
     expect(keys('claude')).toEqual([
       'codex:structured',
       'opencode:structured',
       'opencode:terminal',
+      'grok:structured',
     ])
     expect(keys('codex')).toEqual([
       'claude:structured',
       'opencode:structured',
       'opencode:terminal',
+      'grok:structured',
     ])
   })
 
   it('omits both OpenCode runtimes when OpenCode is already the source provider', () => {
-    expect(keys('opencode')).toEqual(['claude:structured', 'codex:structured'])
+    expect(keys('opencode')).toEqual(['claude:structured', 'codex:structured', 'grok:structured'])
   })
 })

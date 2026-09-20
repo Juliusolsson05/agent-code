@@ -1,3 +1,4 @@
+import { installMonitorInvokes } from './monitorOperations.js'
 import { contextBridge } from 'electron'
 
 import { api } from '@preload/api/index.js'
@@ -20,6 +21,7 @@ import type { Api } from '@preload/api/index.js'
 // sessions, ghost, git, system). This file stays tiny: bind to the
 // global and re-export the types that the renderer imports.
 
+installMonitorInvokes()
 contextBridge.exposeInMainWorld('api', api)
 
 export type { Api }

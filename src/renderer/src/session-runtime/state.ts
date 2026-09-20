@@ -284,6 +284,12 @@ export type SemanticLiveTurn = {
    *  same turn don't carry it (it's a turn-scope attribute, not an
    *  event attribute). */
   isCompactionSynthesis?: boolean
+  /** Set when the proxy adapter, not upstream, stopped this turn because the
+   *  machine slept and its stream died with the connection (#963; the adapter's
+   *  `turn_stopped.interruption`). The feed shows "Interrupted while asleep"
+   *  while this is the newest turn and the pane is idle. Absent for every
+   *  upstream-terminated turn. */
+  interruption?: 'system-suspended'
 }
 
 export type SemanticFlow = {
@@ -494,6 +500,23 @@ export type SessionRuntime = {
    *  receive user-visible output or action-required prompts. */
   unreadSince: number | null
   unreadKind: 'output' | 'attention' | null
+  /** Transient "new in the pool" marker for the agent index (#992 §4.3).
+   *
+   *  Set when a spawn lands in the pool WITHOUT taking a lane — under
+   *  context-places that is every spawn from an occupied lane, the palette,
+   *  ⌘N, MCP and orchestration — because "nothing on screen moves" makes a
+   *  successful spawn look like a no-op. The index row wears a small "new"
+   *  chip until the session is placed, and placing it into any lane
+   *  (setTiledLaneSession) clears the field. In-memory only: runtimes are
+   *  rebuilt at boot, so a badge never survives a restart — which is the
+   *  right lifetime for "you have not looked at this yet".
+   *
+   *  WHY the runtime and not workspace state: the badge is presentation, not
+   *  truth about the workspace. Autosave must not write it, undo must not
+   *  restore it, and a row can read it through the same useShallow selector
+   *  it already uses for activity — a workspace-state field would re-render
+   *  the whole index on every spawn instead of one row. */
+  pooledSpawnAt: number | null
   paneToast: string | null
   historyOldestMarker: string | null
   /** Byte offset of the transcript line `historyOldestMarker` came from,
@@ -854,6 +877,7 @@ export function emptyRuntime(): SessionRuntime {
     terminalForeground: null,
     unreadSince: null,
     unreadKind: null,
+    pooledSpawnAt: null,
     paneToast: null,
     historyOldestMarker: null,
     historyOldestOffset: null,

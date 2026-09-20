@@ -1,4 +1,7 @@
+import { mainOperations } from '@main/performance/operations.js'
+import { ResponseTracker } from '@shared/performance/responseTracker.js'
 import { randomUUID } from 'crypto'
+import { hasReportingDomain } from '@shared/types/tldr.js'
 import { EventEmitter } from 'events'
 import path from 'node:path'
 import { performance } from 'perf_hooks'
@@ -43,7 +46,7 @@ import { getToolPath, refreshToolchainFromState } from '@main/setup/toolchain.js
 import { resolveToolPath } from '@main/setup/binaryResolver.js'
 import { updateToolPaths } from '@main/setup/setupState.js'
 import { forgetFeedDebugSession } from '@main/storage/feedDebugLog.js'
-import { CappedTextBuffer } from '@main/sessions/cappedTextBuffer.js'
+import { TerminalReplayBuffer } from '@main/sessions/terminalReplayBuffer.js'
 import { ScreenFrameGate } from '@main/sessions/screenFrameGate.js'
 import type {
   ConditionCustomAction,
@@ -53,6 +56,7 @@ import {
   DEFAULT_PROVIDER,
   isAgentProviderRuntime,
   isAgentProviderKind,
+  isAgentSessionKind,
   isSessionKind,
 } from '@shared/types/providerKind.js'
 import type {
@@ -166,6 +170,9 @@ type ManagerEvents = {
     observation?: AgentTranscriptObservationMetadata
   }]
   'jsonl-error': [{ sessionId: string; error: Error }]
+  /** Durable-history generation boundary (grok). Never completion or idle;
+   *  consumers apply renderer/session-runtime/historyBoundary.ts decisions. */
+  'history-boundary': [{ sessionId: string; type: 'reset' | 'caught-up'; generation: number; snapshotByteLength: number; byteOffset?: number; complete?: boolean; file: string }]
   'transcript-diagnostic': [{ sessionId: string; diagnostic: unknown }]
   'process-state': [{ sessionId: string; active: boolean; status?: string }]
   'terminal-foreground': [TerminalForegroundEvent]
@@ -434,6 +441,7 @@ export type ResolveConditionResult =
     }
 
 export class SessionManager extends EventEmitter {
+  private readonly monitorResponses = new ResponseTracker(mainOperations)
   private readonly sessions = new Map<string, RegistryEntry>()
   private readonly spawningSessionGenerations = new Map<string, symbol>()
   private readonly sessionStateGenerations = new Map<string, symbol>()
@@ -633,7 +641,7 @@ export class SessionManager extends EventEmitter {
   // WHY CappedTextBuffer and not a string: see src/main/sessions/
   // cappedTextBuffer.ts — the string version copied the whole cap on every
   // chunk and retained sliced-string parents (#726).
-  private readonly terminalBuffers = new Map<string, CappedTextBuffer>()
+  private readonly terminalBuffers = new Map<string, TerminalReplayBuffer>()
   private readonly terminalAttached = new Set<string>()
 
   // Shell activity producer (#865). Emits on a channel of its own, NOT
@@ -668,7 +676,7 @@ export class SessionManager extends EventEmitter {
   // terminal, and agent PTYs can be noisy. Buffer in main, broadcast
   // only after an attach, and let the renderer replay the buffer before
   // draining live bytes.
-  private readonly agentPtyBuffers = new Map<string, CappedTextBuffer>()
+  private readonly agentPtyBuffers = new Map<string, TerminalReplayBuffer>()
   private readonly agentPtyAttachCounts = new Map<string, number>()
   private readonly agentPtyRestoreSizes = new Map<string, PtySize>()
 
@@ -834,7 +842,7 @@ export class SessionManager extends EventEmitter {
     sessionId: string,
     kind: SessionKind,
     expectedEntry?: RegistryEntry,
-    revokeAgentMcp = kind !== 'terminal',
+    revokeAgentMcp = isAgentSessionKind(kind),
     expectedGeneration = expectedEntry?.lifecycle.generation,
   ): boolean {
     // WHY this helper exists even before the larger SessionState consolidation:
@@ -858,6 +866,10 @@ export class SessionManager extends EventEmitter {
     ) {
       return false
     }
+    // Provider output can no longer arrive after the generation-owned entry is
+    // retired. End its bounded wait here so dead sessions do not occupy the
+    // first-output tracker until the ten-minute safety expiry.
+    this.monitorResponses.cancel(sessionId)
     const retiringEntry = expectedEntry ?? this.sessions.get(sessionId)
     if (kind === 'codex' && retiringEntry?.kind === 'codex') {
       // Record retirement before deleting the authoritative row. A synchronous
@@ -1460,6 +1472,18 @@ export class SessionManager extends EventEmitter {
         code: 'start-failed',
         retryable: false,
         message: 'This Agent Code version does not support the requested provider.',
+      })
+    }
+    // Same fence as spawnWithId: an extension-view leaf is process-less and is
+    // excluded from the rehydrate live-process set (collectLiveProcessIds), so a
+    // recover for one should never be issued. If a stale renderer does, refuse
+    // rather than fall through and spawn a terminal shell for it.
+    if (requestedKind === 'extension-view') {
+      return Promise.resolve({
+        ok: false,
+        code: 'start-failed',
+        retryable: false,
+        message: 'extension-view panes have no process to recover.',
       })
     }
     const kind = options.kind ?? DEFAULT_PROVIDER
@@ -2454,6 +2478,14 @@ export class SessionManager extends EventEmitter {
     if (requestedKind !== undefined && !isSessionKind(requestedKind)) {
       throw new Error('Unsupported session provider')
     }
+    // Extension-view "sessions" are renderer-only tile leaves with NO process; they
+    // are created directly in the workspace store (openExtensionViewInPane) and must
+    // never reach main. isSessionKind now accepts 'extension-view', so without this
+    // it would fall through to the terminal-spawn branch below and start a stray
+    // shell. A spawn request for one is a stale or hostile caller — refuse it.
+    if (requestedKind === 'extension-view') {
+      throw new Error('extension-view panes have no process and cannot be spawned')
+    }
     const kind: SessionKind = options.kind ?? DEFAULT_PROVIDER
     const providerRuntime = resolveProviderRuntime(kind, options.providerRuntime)
     // Fail here rather than in the forked child. See
@@ -2503,6 +2535,7 @@ export class SessionManager extends EventEmitter {
     let entry: RegistryEntry | null = null
     let mcpRegistered = false
     let createdTmuxName: string | null = null
+    const finishSpawn = mainOperations.begin('session.spawn', sessionId)
     try {
     this.throwIfSpawnCancelled(recoveryClaim, codexReplacementHandoff)
     const spawnStartedAt = performance.now()
@@ -2583,9 +2616,9 @@ export class SessionManager extends EventEmitter {
           await this.beforeAgentSessionStart(options)
         } catch (error) {
           this.journal?.recordError('conventions.pre_spawn_reconcile.error', error)
-          // TLDR explicitly promises a managed reporting skill. Do not launch
-          // an enabled session while silently omitting that requested contract.
-          if (options.builtInMcpDomains?.includes('tldr')) throw error
+          // TLDR and Goal each promise a managed skill. Do not launch an
+          // enabled session while silently omitting that requested contract.
+          if (hasReportingDomain(options.builtInMcpDomains)) throw error
         }
         this.throwIfSpawnCancelled(recoveryClaim, codexReplacementHandoff)
       }
@@ -2680,7 +2713,7 @@ export class SessionManager extends EventEmitter {
       })
 
       this.sessionSizes.set(sessionId, initialSize)
-      this.agentPtyBuffers.set(sessionId, new CappedTextBuffer(AGENT_PTY_BUFFER_CAP))
+      this.agentPtyBuffers.set(sessionId, new TerminalReplayBuffer(AGENT_PTY_BUFFER_CAP))
       session.on('started', ({ projectDir }) => {
         if (!ownsEntry()) return
         this.markActivity(sessionId)
@@ -2719,7 +2752,7 @@ export class SessionManager extends EventEmitter {
         this.markActivity(sessionId)
         let replay = this.agentPtyBuffers.get(sessionId)
         if (!replay) {
-          replay = new CappedTextBuffer(AGENT_PTY_BUFFER_CAP)
+          replay = new TerminalReplayBuffer(AGENT_PTY_BUFFER_CAP)
           this.agentPtyBuffers.set(sessionId, replay)
         }
         replay.append(data)
@@ -2751,6 +2784,11 @@ export class SessionManager extends EventEmitter {
           })
         }
         this.emit('screen', { sessionId, ...snap })
+      })
+      session.on('history-boundary', boundary => {
+        if (!ownsEntry()) return
+        this.markActivity(sessionId)
+        this.emit('history-boundary', { sessionId, ...boundary })
       })
       session.on('jsonl-entry', (
         entry: AgentTranscriptEntry,
@@ -2868,6 +2906,7 @@ export class SessionManager extends EventEmitter {
       })
       session.on('semantic-event', (event: unknown) => {
         if (!ownsEntry()) return
+        this.monitorResponses.output(sessionId, event)
         this.markActivity(sessionId)
         if (kind === 'codex') {
           this.observeCodexSemanticEvent(sessionId, event, agentEntry.lifecycle.runId)
@@ -2921,7 +2960,8 @@ export class SessionManager extends EventEmitter {
         // measurement attached to it. This pair is always on. The perf span
         // stays for its richer sampling when someone deliberately enables it.
         this.lifecycle.session('provider.start.begin', sessionId, { kind })
-        await session.start()
+        const finishReady = mainOperations.begin('session.ready', sessionId)
+        try { await session.start(); finishReady() } catch (error) { finishReady('error'); throw error }
         await this.settleEntryStart(sessionId, agentEntry)
         this.throwIfSpawnCancelled(recoveryClaim, codexReplacementHandoff)
         if (!ownsEntry()) throw new RecoveryCancelledError()
@@ -2961,6 +3001,7 @@ export class SessionManager extends EventEmitter {
         sessionId,
         provider: kind,
       })
+      finishSpawn()
       const providerSessionId = session.getProviderSessionId?.() ?? null
       return {
         sessionId,
@@ -3061,7 +3102,7 @@ export class SessionManager extends EventEmitter {
     // and is replayed to the renderer on attach — see the block
     // comment on terminalBuffers above for the full reasoning.
     this.sessionSizes.set(sessionId, initialSize)
-    this.terminalBuffers.set(sessionId, new CappedTextBuffer(TERMINAL_BUFFER_CAP))
+    this.terminalBuffers.set(sessionId, new TerminalReplayBuffer(TERMINAL_BUFFER_CAP))
 
     // Terminal sessions only emit started / data / exit. The 'data'
     // event carries raw PTY bytes for xterm.js on the renderer side;
@@ -3089,7 +3130,7 @@ export class SessionManager extends EventEmitter {
       // standard terminal scrollback behavior.
       let replay = this.terminalBuffers.get(sessionId)
       if (!replay) {
-        replay = new CappedTextBuffer(TERMINAL_BUFFER_CAP)
+        replay = new TerminalReplayBuffer(TERMINAL_BUFFER_CAP)
         this.terminalBuffers.set(sessionId, replay)
       }
       replay.append(data)
@@ -3120,7 +3161,8 @@ export class SessionManager extends EventEmitter {
     this.throwIfSpawnCancelled(recoveryClaim, codexReplacementHandoff)
     try {
       const terminalStartStartedAt = performance.now()
-      await session.start()
+      const finishReady = mainOperations.begin('session.ready', sessionId)
+      try { await session.start(); finishReady() } catch (error) { finishReady('error'); throw error }
       await this.settleEntryStart(sessionId, terminalEntry)
       this.throwIfSpawnCancelled(recoveryClaim, codexReplacementHandoff)
       if (!ownsEntry()) throw new RecoveryCancelledError()
@@ -3165,8 +3207,10 @@ export class SessionManager extends EventEmitter {
       sessionId,
       provider: 'terminal',
     })
+    finishSpawn()
     return { sessionId, tmuxName: tmuxSessionName ?? undefined }
     } catch (error) {
+      finishSpawn(error instanceof RecoveryCancelledError ? 'cancelled' : 'error')
       // WHY spawn is one transaction across provider construction, MCP
       // registration, registry publication, and start(): failures can occur at
       // every boundary, including cancellation while start() is still pending.
@@ -3261,7 +3305,8 @@ export class SessionManager extends EventEmitter {
       )
       return ''
     }
-    const buffer = this.terminalBuffers.get(sessionId)?.read() ?? ''
+    // replay(), not read(): the modes the evicted bytes set come first (#843).
+    const buffer = this.terminalBuffers.get(sessionId)?.replay() ?? ''
     // Flip the attach flag in the SAME synchronous block as reading
     // the buffer. JavaScript is single-threaded and event emission
     // can only happen on a later tick, so nothing can sneak in.
@@ -3309,7 +3354,8 @@ export class SessionManager extends EventEmitter {
       )
       return null
     }
-    const buffer = this.agentPtyBuffers.get(sessionId)?.read() ?? ''
+    // replay(), not read(): the modes the evicted bytes set come first (#843).
+    const buffer = this.agentPtyBuffers.get(sessionId)?.replay() ?? ''
     const attachCount = this.agentPtyAttachCounts.get(sessionId) ?? 0
     if (attachCount === 0) {
       const currentSize = this.sessionSizes.get(sessionId)
@@ -3960,6 +4006,20 @@ export class SessionManager extends EventEmitter {
     return session.awaitPastePlaceholder(opts)
   }
 
+  /**
+   * Ask the provider to scroll its own transcript view to the newest message
+   * (#843). Only providers whose TUI pages its transcript on the alternate
+   * screen need this; for every other session the renderer's xterm
+   * scrollToBottom already does the job, so 'unsupported' is a normal answer,
+   * not an error.
+   */
+  async jumpToLatest(sessionId: string): Promise<{ ok: true } | { ok: false; reason: string }> {
+    const entry = this.sessions.get(sessionId)
+    if (!entry || entry.kind === 'terminal') return { ok: false, reason: 'no-session' }
+    if (typeof entry.session.jumpToLatest !== 'function') return { ok: false, reason: 'unsupported' }
+    return entry.session.jumpToLatest()
+  }
+
   async resolveCondition(
     sessionId: string,
     action: ConditionCustomAction,
@@ -4038,6 +4098,7 @@ export class SessionManager extends EventEmitter {
     prompt: string,
     imagePaths?: string[],
     record?: (event: string, data?: Record<string, unknown>) => void,
+    operationId?: string,
   ): Promise<PromptDeliveryResult> {
     if (this.promptDeliveriesInFlight.has(sessionId)) {
       record?.('duplicate-blocked')
@@ -4095,8 +4156,15 @@ export class SessionManager extends EventEmitter {
     record?.('reserved')
     let promptWritten = false
     let enterWritten = false
+    const finishDelivery = mainOperations.begin('prompt.delivery', sessionId, operationId)
+    this.monitorResponses.sweep()
+    // Start unarmed: the clock begins at delivery, but only the acceptance
+    // below knows whether this prompt starts a turn or waits in the provider
+    // queue. This covers every main-delivered source (composer, remote and
+    // agent management), not only renderer submits that can cancel over IPC.
+    this.monitorResponses.begin(sessionId, operationId, false)
     try {
-      return await getMainProvider(entry.kind).deliverPrompt({
+      const delivery = await getMainProvider(entry.kind).deliverPrompt({
         session: entry.session,
         // WHY identity-check every delayed write: provider protocols await
         // absorption/readiness. A same-ID wake must never receive Enter from a
@@ -4113,7 +4181,19 @@ export class SessionManager extends EventEmitter {
         imagePaths,
         record,
       })
+      finishDelivery(delivery.ok ? 'success' : 'error')
+      // Instrumentation must never change a delivery outcome. `acceptance` is
+      // read defensively because a provider result without it made
+      // `acceptance.kind` throw, and the catch below then reported a delivery
+      // that had SUCCEEDED as transport-failed (caught by
+      // sessionManager.recover.test's in-flight adoption case).
+      const queued = delivery.ok && delivery.acceptance?.kind === 'queue'
+      if (!delivery.ok || queued) this.monitorResponses.cancel(sessionId)
+      else this.monitorResponses.arm(sessionId, operationId)
+      return delivery
     } catch (err) {
+      finishDelivery('error')
+      this.monitorResponses.cancel(sessionId)
       record?.('uncertain', { reason: 'provider-threw' })
       return {
         ok: false,
@@ -4132,9 +4212,26 @@ export class SessionManager extends EventEmitter {
         enterWritten,
       }
     } finally {
+      // A successful delivery only means the prompt reached the provider. The
+      // response tracker must survive this method and finish on the first
+      // semantic provider event; cancelling it here would reduce every normal
+      // first-output measurement to the prompt-write duration.
       this.promptDeliveriesInFlight.delete(sessionId)
       record?.('released')
     }
+  }
+
+  beginMonitorResponse(sessionId: string, operationId?: string): void {
+    // Main owns live session identity. A renderer may request timing for a
+    // stable pane ID, but a stale/foreign ID cannot allocate baseline state.
+    // Renderer submits begin unarmed at Enter. deliverPromptToAgent joins the
+    // same operation ID, and acceptance arms or cancels it exactly once.
+    if (this.sessions.has(sessionId)) this.monitorResponses.begin(sessionId, operationId, false)
+  }
+
+  settleMonitorResponse(sessionId: string, operationId: string | undefined, started: boolean): void {
+    if (started) this.monitorResponses.arm(sessionId, operationId)
+    else this.monitorResponses.cancelOperation(sessionId, operationId)
   }
 
   /** Submit staged composer content only when no finished-prompt transaction
@@ -4293,7 +4390,7 @@ export class SessionManager extends EventEmitter {
         sessionId,
         recovery.kind,
         undefined,
-        recovery.kind !== 'terminal',
+        isAgentSessionKind(recovery.kind),
         generation,
       )
     }
@@ -4351,6 +4448,13 @@ export class SessionManager extends EventEmitter {
   ): Promise<boolean> {
     const requestedKind: unknown = options.kind
     if (requestedKind !== undefined && !isSessionKind(requestedKind)) return false
+    // The THIRD renderer→main path that can carry an extension-view kind, after
+    // spawnWithId and recover. Every close path in the renderer sends the pane's
+    // kind here, and this returned false for an extension pane already — but by
+    // accident of the ownership tables being empty for it, not by a decision.
+    // Stating it makes the boundary three-for-three and stops a future ownership
+    // change from turning "nothing to kill" into "kill something".
+    if (requestedKind === 'extension-view') return false
     const kind = options.kind ?? DEFAULT_PROVIDER
     let providerRuntime: AgentProviderRuntime | undefined
     try {
@@ -4473,7 +4577,7 @@ export class SessionManager extends EventEmitter {
         sessionId,
         claim.kind,
         undefined,
-        claim.kind !== 'terminal',
+        isAgentSessionKind(claim.kind),
         claim.spawnGeneration,
       )
     }
@@ -4555,6 +4659,7 @@ export class SessionManager extends EventEmitter {
   }
 
   getProcessTelemetryTargets(sessionIds?: string[]): Array<{
+    generation?: string
     sessionId: string
     kind: SessionKind
     pid: number | null
@@ -4578,6 +4683,7 @@ export class SessionManager extends EventEmitter {
       const s = entry.session
       return {
         sessionId,
+        generation: entry.lifecycle.runId,
         kind: entry.kind,
         pid: s.getProcessPid?.() ?? null,
         exited: s.isExited?.() === true,
@@ -4587,6 +4693,25 @@ export class SessionManager extends EventEmitter {
   }
 
   /** List all live session ids. Used for state save / debug. */
+  /**
+   * Tell every live agent runtime the machine was suspended (#963).
+   *
+   * Terminals are skipped: a shell has no model stream to seal, and its
+   * foreground monitor already re-reads process state on its next poll. A
+   * runtime that throws must not stop the rest from hearing about the sleep,
+   * because each one's stuck stream is independent of the others.
+   */
+  noteSystemSuspension(suspension: import('@shared/types/systemSuspension.js').SystemSuspension): void {
+    for (const [sessionId, entry] of this.sessions) {
+      if (entry.kind === 'terminal') continue
+      try {
+        entry.session.noteSystemSuspension?.(suspension)
+      } catch (err) {
+        console.warn(`[session-manager] ${sessionId} failed to handle a system suspension:`, err)
+      }
+    }
+  }
+
   list(): string[] {
     return Array.from(this.sessions.keys())
   }
@@ -4680,7 +4805,7 @@ export class SessionManager extends EventEmitter {
     if (observed) return observed
     const info = this.spawnInfo.get(sessionId)
     const kind = this.getSessionKind(sessionId)
-    if (!info?.resumeSessionId || !kind || kind === 'terminal') return null
+    if (!info?.resumeSessionId || !isAgentProviderKind(kind)) return null
     try {
       // Resume metadata is available before any new committed entry. Providers
       // with their own history mint the durable locator from that identity;
@@ -4725,6 +4850,14 @@ export class SessionManager extends EventEmitter {
    */
   getSpawnKind(sessionId: string): SessionKind | null {
     return this.spawnInfo.get(sessionId)?.kind ?? null
+  }
+
+  /** Provider execution runtime captured at spawn (OpenCode TUI vs
+   *  structured). Same spawnInfo freshness story as getSpawnKind; absent
+   *  means the provider's normal structured runtime, which is the type's
+   *  own semantics for a missing value. */
+  getSpawnProviderRuntime(sessionId: string): AgentProviderRuntime | null {
+    return this.spawnInfo.get(sessionId)?.providerRuntime ?? null
   }
 
   /** Epoch ms of the last observed activity (any relayed session event). */

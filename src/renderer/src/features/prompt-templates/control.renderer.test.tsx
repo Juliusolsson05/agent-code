@@ -11,9 +11,9 @@ afterEach(() => { cleanup(); useAppStore.setState(initial, true); window.api = o
 it('inserts dynamic project context into the named agent without following focus and refuses an edit during collection', async () => {
   const sessionId = 'target'
   useAppStore.setState({ workspaceState: { ...initial.workspaceState, activeTabId: 'other-project',
-    tabs: [{ id: 'target-project', title: 'Target project', root: { type: 'leaf', sessionId }, focusedSessionId: sessionId },
-      { id: 'other-project', title: 'Other project', root: { type: 'leaf', sessionId: 'other' }, focusedSessionId: 'other' }],
-    sessions: { target: { kind: 'claude', cwd: '/target', providerSessionId: 'native-target' }, other: { kind: 'codex', cwd: '/other', providerSessionId: 'native-other' } }, detachedSessions: {}, buried: [],
+    tabs: [{ id: 'target-project', title: 'Target project' },
+      { id: 'other-project', title: 'Other project' }],
+    sessions: { target: { kind: 'claude', cwd: '/target', providerSessionId: 'native-target', projectId: 'target-project', joinedAt: 0 }, other: { kind: 'codex', cwd: '/other', providerSessionId: 'native-other', projectId: 'other-project', joinedAt: 0 } },  
   }, workspaceRuntimes: { target: emptyRuntime(), other: { ...emptyRuntime(), draftInput: 'Other human draft' } } })
   const mounted = renderHook(() => {
     const setRuntimes = useAppStore.getState().setWorkspaceRuntimes

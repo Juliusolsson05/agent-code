@@ -202,7 +202,7 @@ export function invalidateEditorFsCache(root: string, path: string): void {
   editorFsCache.invalidatePath(root, path)
 }
 
-async function resolveThroughExistingParent(root: string, target: string): Promise<string> {
+export async function resolveThroughExistingParent(root: string, target: string): Promise<string> {
   const canonicalParent = await realpath(dirname(target))
   if (!isContained(root, canonicalParent)) {
     throw new Error('path escapes project root through a symbolic link')

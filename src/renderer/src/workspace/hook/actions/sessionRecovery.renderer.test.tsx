@@ -8,6 +8,8 @@ import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
 
 import { killSessionBackendIfOwned, useSessionActions } from './session'
+import { freshStage } from '@renderer/workspace/dispatch/gridShape'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 const originalApiDescriptor = Object.getOwnPropertyDescriptor(window, 'api')
 
@@ -39,10 +41,8 @@ describe('useSessionActions recovery retry', () => {
       tabs: [],
       activeTabId: '',
       sessions: {},
-      detachedSessions: {},
-      buried: [],
       pinnedSessionIds: [],
-      dispatchMode: null,
+      stage: freshStage(),
     } as unknown as WorkspaceState
     let runtimes: Record<SessionId, SessionRuntime> = {}
     const refs = {
@@ -146,17 +146,13 @@ describe('useSessionActions recovery retry', () => {
       tabs: [{
         id: 'tab-1',
         title: 'Project',
-        focusedSessionId: sessionId,
-        root: { type: 'leaf' as const, sessionId },
       }],
       activeTabId: 'tab-1',
       sessions: {
         [sessionId]: { cwd: '/tmp/project', kind: 'claude' as const },
       },
-      detachedSessions: {},
-      buried: [],
       pinnedSessionIds: [],
-      dispatchMode: null,
+      stage: oneLaneStage(sessionId),
     } as WorkspaceState
     let runtimes: Record<SessionId, SessionRuntime> = {
       [sessionId]: {
@@ -253,8 +249,6 @@ describe('useSessionActions recovery retry', () => {
       tabs: [{
         id: 'tab-1',
         title: 'Project',
-        focusedSessionId: sessionId,
-        root: { type: 'leaf' as const, sessionId },
       }],
       activeTabId: 'tab-1',
       sessions: {
@@ -264,10 +258,8 @@ describe('useSessionActions recovery retry', () => {
           ...(providerRuntime ? { providerRuntime } : {}),
         },
       },
-      detachedSessions: {},
-      buried: [],
       pinnedSessionIds: [],
-      dispatchMode: null,
+      stage: oneLaneStage(sessionId),
     } as WorkspaceState
     let runtimes: Record<SessionId, SessionRuntime> = {
       [sessionId]: { ...emptyRuntime(), processStatus: 'spawning', inputReady: false },
@@ -376,8 +368,6 @@ describe('useSessionActions recovery retry', () => {
       tabs: [{
         id: 'tab-1',
         title: 'Project',
-        focusedSessionId: sessionId,
-        root: { type: 'leaf' as const, sessionId },
       }],
       activeTabId: 'tab-1',
       sessions: {
@@ -385,13 +375,12 @@ describe('useSessionActions recovery retry', () => {
           cwd: '/tmp/project',
           kind: 'claude' as const,
           title: 'Initial title',
+          projectId: 'tab-1',
+          joinedAt: 0,
         },
       },
-      detachedSessions: {},
-      gridRelatedSelections: {},
-      buried: [],
       pinnedSessionIds: [],
-      dispatchMode: null,
+      stage: oneLaneStage(sessionId),
     } as WorkspaceState
     let runtimes: Record<SessionId, SessionRuntime> = {
       [sessionId]: emptyRuntime(),

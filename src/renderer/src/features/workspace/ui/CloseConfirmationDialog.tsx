@@ -23,6 +23,13 @@ import type { PendingCloseConfirmation } from '@renderer/workspace/closeConfirma
  * that a close expanding from one row to four looked identical to closing one;
  * a bare "close 4 sessions?" fixes the count but still leaves the user unable
  * to check whether the four are the four they meant.
+ *
+ * Keyboard contract (#867): there is deliberately NO Enter handler on this
+ * dialog. Radix focuses the first tabbable control, which is Cancel, so Enter
+ * on open cancels, and Enter on any Tab-focused button activates that button
+ * natively. A dialog-level Enter handler would call preventDefault and could
+ * turn Enter-on-Cancel into a close — the exact bug #867 found in three other
+ * dialogs. The renderer test pins this.
  */
 export function CloseConfirmationDialog() {
   const [pending, setPending] = useState<PendingCloseConfirmation | null>(
@@ -33,6 +40,11 @@ export function CloseConfirmationDialog() {
 
   const request = pending?.request
   const live = request?.targets.filter(target => target.live) ?? []
+  // A third, "scoped" presentation lived here until #992 — "Close the agent or
+  // the tab?", with Close Agent / Close Tab (N) buttons — for the one session
+  // whose close used to take its project with it (the tab's root tile leaf).
+  // No session is special like that any more, so this dialog only ever asks
+  // one question about one list: end these, or don't.
 
   return (
     <Dialog

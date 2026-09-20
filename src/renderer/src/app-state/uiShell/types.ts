@@ -1,10 +1,8 @@
 import type { PaletteMode } from '@renderer/features/command-palette/paletteMode'
 import type { TabId, SessionId } from '@renderer/workspace/types'
+import type { ExtensionListEntry } from '@shared/types/extensions'
+import type { ExtensionFailure } from '@renderer/apps/types'
 
-export type DispatchAttachIntent = {
-  sessionId: SessionId
-  targetTabId: TabId
-}
 
 /**
  * A command waiting to be dispatched through the shared execution gateway.
@@ -61,8 +59,6 @@ export type UiShellState = {
   pendingCommandInvocation: PendingCommandInvocation | null
   pathPickerOpen: boolean
   pathPickerDefault: string
-  tileTabsModalOpen: boolean
-  tileTabsInitialSelectedIds: TabId[]
   /** When true, the Reorder Tabs modal is open.
    *
    * WHY this lives in uiShell instead of WorkspaceState: the modal is
@@ -95,10 +91,9 @@ export type UiShellState = {
    * not whichever lane happens to be focused after the prompt appears.
    */
   agentTitlePromptSessionId: SessionId | null
-  buryPromptSessionId: SessionId | null
   /**
    * Session awaiting the Root Agent Code Management confirmation (#906), or
-   * null. Stored like the bury and title prompts: the grant must land on the
+   * null. Stored like the title prompt: the grant must land on the
    * agent the command was invoked for, not whichever Dispatch lane is focused
    * by the time the user finishes reading the warning.
    */
@@ -120,28 +115,6 @@ export type UiShellState = {
   viewPromptsSessionId: SessionId | null
   tldrHistorySessionId: SessionId | null
   newAgentPlacementOpen: boolean
-  /**
-   * Non-null when the placement overlay is open in "attach detached
-   * session to grid" mode. The overlay reads this to skip the kind
-   * picker (the session already exists, we don't spawn a new one), which
-   * detached sessionId to insert, and which tab owns the placement target.
-   *
-   * WHY a separate field instead of overloading newAgentPlacementOpen:
-   * the two flows commit through different actions
-   * (commitNewAgentPlacement spawns a new session;
-   * attachDetachedToGrid moves an existing one), and conflating them
-   * forces every overlay code path to disambiguate at the bottom of
-   * the call stack instead of at the top.
-   *
-   * WHY the target tab is part of the intent:
-   * Tiled Dispatch lane selection does not mutate activeTabId. Deferring tab
-   * lookup until overlay render or reducer commit would make "attach the
-   * focused lane's row" depend on whichever tab happened to be active before
-   * the user entered global Tiled Dispatch. The visible row already carries
-   * the correct tab id, so the command captures it once and every later step
-   * treats it as the source of truth.
-   */
-  dispatchAttachIntent: DispatchAttachIntent | null
   /**
    * Non-null when the placement overlay is open in "Linked Agent"
    * mode. The value is the PARENT session id — the agent that was
@@ -166,11 +139,12 @@ export type UiShellState = {
    * WHY the target is captured up front rather than resolved at commit time:
    * exactly the reason `dispatchAttachIntent` documents above. Tiled Dispatch
    * lane selection does not mutate `activeTabId`, and
-   * `resolveDispatchSpawnTarget`'s tiled branch reads the focused LANE, never
-   * `dispatchMode.focusedSessionId`. So the tempting cheap version — focus the
-   * project, then open the normal flow — works in classic Dispatch and
-   * silently spawns into whatever project lane 0 happens to show in Tiled
-   * Dispatch. The visible header already knows its own tab; capture it once.
+   * `resolveDispatchSpawnTarget` reads the focused LANE, never the active
+   * project. So the tempting cheap version — activate the project, then open
+   * the normal flow — silently spawns into whatever project the focused lane
+   * happens to show. (It did work in classic Dispatch, which had a single
+   * focus the header click could move; #992 removed that layout.) The visible
+   * header already knows its own tab; capture it once.
    *
    * NOTE this does NOT make clicking "+" selection-neutral: the spawn still
    * sets `activeTabId` to the target project unconditionally, so the active
@@ -255,6 +229,11 @@ export type UiShellState = {
    *  Deliberately NOT persisted, matching per-session `tailMode`: waking up to
    *  every feed pinned to the bottom with no visible cause is confusing. */
   tailAllMode: boolean
+  /** Auto-follow agents while they are busy, using the same transient lifetime
+   *  and visibility ownership as tailAllMode. Enabling either bulk mode clears
+   *  the other: selecting Working must narrow an already-enabled All Visible
+   *  policy immediately. Neither mode writes individual tail preferences. */
+  tailWorkingMode: boolean
   /** When true, the .env-gated Dev Debug Panel is mounted. Unlike the
    *  stable debug panels above, this is a temporary module host for
    *  one-off investigations. Its modules are intentionally freeform:
@@ -269,6 +248,10 @@ export type UiShellState = {
    *  persisting an extra "inspected session" source of truth. */
   agentStatusPanelOpen: boolean
   performancePanelOpen: boolean
+  /** One-shot intent from a palette command (save a report, start a trace).
+   *  The monitor performs it so the result, file location and Reveal action
+   *  stay visible; a bare fire-and-forget command hid failures entirely. */
+  performancePanelRequest: PerformancePanelRequest | null
   remotePanelOpen: boolean
   /** When true, the Global Editor overlay is mounted. Splits the
    *  workspace area: left half is a file tree + Monaco editor rooted
@@ -329,6 +312,10 @@ export type UiShellState = {
    * and persisting it in WorkspaceState would make a quota inspection look
    * like durable workspace data. */
   usageModalOpen: boolean
+  /** When true, the Agent Analytics modal is open (#964). App chrome, not
+   *  workspace data: it summarizes every tab and window, so no pane owns it and
+   *  persisting it would make a report look like durable workspace state. */
+  agentAnalyticsOpen: boolean
   /** When true, the API Key Vault modal is open (#831). Transient command
    *  chrome, not workspace data — same rationale as usageModalOpen above. */
   keyVaultOpen: boolean
@@ -356,6 +343,50 @@ export type UiShellState = {
    * session.
    */
   agentViewModePickerSessionId: SessionId | null
+  /**
+   * Non-null when a built-in app is open; the value is its `AppDefinition` id.
+   *
+   * WHY one nullable id rather than one boolean per app: apps are mutually
+   * exclusive by construction — a single host surface renders one at a time — and
+   * N booleans would permit two to be true, a state the host physically cannot
+   * express. Same shape and same reasoning as `rewindPromptSessionId` above.
+   *
+   * WHY this is a plain string and not a branded id like SessionId: the value comes
+   * from a compile-time registry today but from a manifest on disk in Stage 2, and
+   * a brand would have to be cast away at exactly the boundary where validation
+   * actually matters. `AppHostSurface` resolves it through `APP_BY_ID` and treats a
+   * miss as closed, which is the real check.
+   *
+   * WHY uiShell (in-memory) and never persisted Settings: an app left open across a
+   * restart is not desirable, and more importantly extension-adjacent data must not
+   * enter the zustand-persist blob — app-state/store.ts records that a forgotten
+   * version bump there black-screened launch twice (#249).
+   */
+  openAppId: string | null
+  /**
+   * Installed extensions, as reported by main's ledger.
+   *
+   * WHY the store and not a module-scope array: the palette, Settings and the
+   * view host must all re-render when an extension is installed or removed, and
+   * a module variable cannot notify them. The previous static `APPS` array was
+   * exactly that mistake — an adversarial audit found it, along with the stale
+   * `APP_BY_ID` map built beside it.
+   *
+   * Holds the MANIFESTS, not loaded modules. Contributions are declared, so this
+   * is enough to populate the palette and Settings without importing a single
+   * extension bundle.
+   */
+  installedExtensions: ExtensionListEntry[]
+  /** True once extensionsList() has succeeded at least once. */
+  installedExtensionsLoaded: boolean
+  /** A failed load is different from both an empty catalog and a pending load. */
+  installedExtensionsError: string | null
+  /** Extensions whose frame failed to boot, or whose module threw during import
+   *  or activate(). Reported BY THE FRAME over postMessage and collected by
+   *  viewBridge — the extension does not run in this realm, so the host cannot
+   *  observe the throw directly. Surfaced in Settings rather than hidden, because
+   *  a silently-missing extension is undiagnosable for whoever installed it. */
+  extensionFailures: ExtensionFailure[]
   /** Session whose Dispatch color-flag picker modal is open, or null. */
   colorFlagPickerSessionId: SessionId | null
   /** Splitter ratio between the dispatch agent list and the active
@@ -393,4 +424,11 @@ export type UiShellState = {
    * take an explicit lane index rather than re-reading focusedLane.
    */
   dispatchRowProjectPickerRow: number | null
+}
+
+export type PerformancePanelRequest = {
+  /** Monotonic, so a handled request can never be replayed by a re-render. */
+  id: number
+  view: 'recordings'
+  action: 'save-report' | 'record-chromium'
 }

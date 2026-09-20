@@ -5,10 +5,20 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { useKeybinds } from './useKeybinds'
+import { coerceSettings } from '@renderer/app-state/settings/persistence'
 
 const harness = vi.hoisted(() => ({
   appState: {} as Record<string, unknown>,
+  editorFullscreen: false,
 }))
+
+// useKeybinds reads the extension slice to fold contributed chords into the
+// binding index. The harness builds `appState` by hand, so every slice the hook
+// touches has to be present here or the mock stops resembling the real store —
+// which is how this file started failing the moment extension keybindings landed.
+// Empty is the honest value: these assertions are about first-party focus-mode
+// ownership, and a contributed chord would be a different test.
+const EXTENSION_SLICE = { installedExtensions: [], installedExtensionsLoaded: true }
 
 vi.mock('@renderer/app-state/hooks', () => {
   const useAppStore = Object.assign(
@@ -21,7 +31,7 @@ vi.mock('@renderer/app-state/hooks', () => {
 vi.mock('@renderer/features/global-editor/store', () => ({
   useGlobalEditorStore: Object.assign(
     () => undefined,
-    { getState: () => ({ editorFullscreen: false }) },
+    { getState: () => ({ editorFullscreen: harness.editorFullscreen }) },
   ),
 }))
 
@@ -30,65 +40,48 @@ function KeyboardHarness({ workspace }: { workspace: Workspace }): ReactElement 
   return <div data-testid="visible-focus-surface" tabIndex={-1} />
 }
 
+// The harness took a `layout` argument ('grid' | 'dispatch' | 'tiled-dispatch')
+// until #992, and every ownership claim was asserted once per layout: a
+// takeover must not move the hidden grid's focus, the hidden classic Dispatch
+// selection, or a hidden tiled lane. There is one layout — the stage — so
+// there is one hidden surface a takeover could leak keys into, and one set of
+// cases.
 function makeWorkspace(
   focusMode: 'reader' | 'spotlight',
-  layout: 'grid' | 'dispatch' | 'tiled-dispatch',
 ): {
   workspace: Workspace
-  focusDispatchSession: ReturnType<typeof vi.fn>
   selectTiledLaneSession: ReturnType<typeof vi.fn>
 } {
   const runtime = emptyRuntime()
-  const activeTab = {
-    id: 'tab-1',
-    title: 'Project',
-    focusedSessionId: 'session-1',
-    root: {
-      type: 'split' as const,
-      direction: 'horizontal' as const,
-      ratio: 0.5,
-      a: { type: 'leaf' as const, sessionId: 'session-1' },
-      b: { type: 'leaf' as const, sessionId: 'session-2' },
-    },
+  // A project is `{ id, title }` (#992). This fixture carried a two-leaf tile
+  // tree and a tree focus until the tree was deleted; the `as unknown as
+  // Workspace` below is why it kept compiling with them. Nothing here ever
+  // read them — the two sessions reach the keyboard through the LANES.
+  const activeTab = { id: 'tab-1', title: 'Project' }
+  const stage = {
+    lanes: [
+      { selectedSessionId: 'session-1' },
+      { selectedSessionId: 'session-2' },
+    ],
+    rows: [{ length: 2 }],
+    focusedLane: 0,
   }
-  const dispatchMode = layout === 'grid'
-    ? null
-    : {
-        scope: 'global' as const,
-        focusedSessionId: 'session-1',
-        ...(layout === 'tiled-dispatch'
-          ? {
-              tiled: {
-                lanes: [
-                  { selectedSessionId: 'session-1' },
-                  { selectedSessionId: 'session-2' },
-                ],
-                focusedLane: 0,
-              },
-            }
-          : {}),
-      }
-  const focusDispatchSession = vi.fn()
   const selectTiledLaneSession = vi.fn()
   const state = {
     activeTabId: activeTab.id,
     tabs: [activeTab],
     sessions: {
-      'session-1': { cwd: '/project', kind: 'claude' as const },
-      'session-2': { cwd: '/project', kind: 'codex' as const },
+      'session-1': { cwd: '/project', kind: 'claude' as const, projectId: 'tab-1', joinedAt: 0 },
+      'session-2': { cwd: '/project', kind: 'codex' as const, projectId: 'tab-1', joinedAt: 1 },
     },
-    detachedSessions: {},
-    buried: [],
     pinnedSessionIds: [],
-    gridRelatedSelections: {},
-    dispatchMode,
+    stage,
   }
 
   const workspace = {
     state,
     activeTab,
-    dispatchMode,
-    tileTabs: null,
+    stage,
     readerMode: focusMode === 'reader'
       ? { tabId: activeTab.id, focusedSessionId: 'session-1' }
       : null,
@@ -100,14 +93,13 @@ function makeWorkspace(
       'session-2': runtime,
     },
     getRuntime: () => runtime,
-    focusDispatchSession,
     selectTiledLaneSession,
     navigate: vi.fn(),
     toggleReaderMode: vi.fn(),
     toggleSpotlight: vi.fn(),
   } as unknown as Workspace
 
-  return { workspace, focusDispatchSession, selectTiledLaneSession }
+  return { workspace, selectTiledLaneSession }
 }
 
 function pressOptionArrow(key: 'ArrowUp' | 'ArrowDown'): void {
@@ -117,6 +109,7 @@ function pressOptionArrow(key: 'ArrowUp' | 'ArrowDown'): void {
 describe('focus-mode keyboard ownership', () => {
   beforeEach(() => {
     harness.appState = {
+      ...EXTENSION_SLICE,
       settingsPageOpen: false,
       requestCommandInvocation: vi.fn(),
       settings: {
@@ -140,26 +133,180 @@ describe('focus-mode keyboard ownership', () => {
     }
   })
 
-  it('does not move the hidden classic Dispatch selection while Reader navigates history', () => {
-    const { workspace, focusDispatchSession } = makeWorkspace('reader', 'dispatch')
-    render(<KeyboardHarness workspace={workspace} />)
+  it('routes the bare lane arrows to the registered commands on the plain stage', () => {
+    // #992 stage 5: the ⌥ grammar became commands. This is the end-to-end
+    // proof the router (not a resurrected inline branch) delivers them.
+    const { workspace } = makeWorkspace('reader' as const)
+    const plain = { ...workspace, readerMode: null, spotlight: null } as typeof workspace
+    const view = render(<KeyboardHarness workspace={plain} />)
 
-    pressOptionArrow('ArrowDown')
+    fireEvent.keyDown(document, { altKey: true, code: 'ArrowDown', key: 'ArrowDown' })
+    fireEvent.keyDown(document, { altKey: true, code: 'ArrowLeft', key: 'ArrowLeft' })
+    fireEvent.keyDown(document, { altKey: true, code: 'KeyK', key: '˚' })
 
-    expect(focusDispatchSession).not.toHaveBeenCalled()
+    const invoked = (harness.appState.requestCommandInvocation as ReturnType<typeof vi.fn>).mock.calls
+      .map(call => call[0])
+    expect(invoked).toContain('dispatch-select-next-agent')
+    expect(invoked).toContain('dispatch-focus-lane-left')
+    expect(invoked).toContain('dispatch-select-previous-agent')
+    view.unmount()
   })
 
-  it('does not route Reader navigation into the hidden Grid command context', () => {
-    const { workspace } = makeWorkspace('reader', 'grid')
-    render(<KeyboardHarness workspace={workspace} />)
+  it('a saved override for a retired grid command no longer swallows the lane chords', () => {
+    // #1013 review B, MAJOR. A user who once rebound grid navigation has
+    // `nav-left: ['Alt+H', 'Alt+Left']` in their saved settings. The binding
+    // index puts customized entries first and gives an unknown id the global
+    // context, so that stale override won ⌥H/⌥← over Focus Lane Left, and the
+    // gateway then answered `unknown`: the chord did nothing at all. The saved
+    // blob goes through the real settings decoder, as on every launch.
+    const saved = { commandKeybindingOverrides: { 'nav-left': ['Alt+H', 'Alt+Left'], 'dispatch-mode': ['Cmd+Shift+M'] } }
+    harness.appState = {
+      ...harness.appState,
+      settings: { agentViewMode: 'agent', commandKeybindingOverrides: coerceSettings(saved).commandKeybindingOverrides },
+    }
+    const { workspace } = makeWorkspace('reader' as const)
+    const plain = { ...workspace, readerMode: null, spotlight: null } as typeof workspace
+    const view = render(<KeyboardHarness workspace={plain} />)
 
-    pressOptionArrow('ArrowUp')
+    fireEvent.keyDown(document, { altKey: true, code: 'ArrowLeft', key: 'ArrowLeft' })
+    fireEvent.keyDown(document, { altKey: true, code: 'KeyH', key: '˙' })
+
+    const invoked = (harness.appState.requestCommandInvocation as ReturnType<typeof vi.fn>).mock.calls
+      .map(call => call[0])
+    expect(invoked).toEqual(['dispatch-focus-lane-left', 'dispatch-focus-lane-left'])
+    view.unmount()
+  })
+
+  it('never clears the hidden lane on ⌥⌫ while the fullscreen Global Editor owns the window', () => {
+    // #1013 review B. Fullscreen hides the stage, but the capture router stays
+    // mounted. ⌥⌫ was missing from the owned-chord list the fullscreen guard
+    // uses, so with focus in app chrome it fell through and emptied the
+    // focused lane the user could not see.
+    harness.editorFullscreen = true
+    harness.appState = { ...harness.appState, globalEditorOpen: true }
+    const { workspace } = makeWorkspace('reader' as const)
+    const plain = { ...workspace, readerMode: null, spotlight: null } as typeof workspace
+    const view = render(<KeyboardHarness workspace={plain} />)
+    const event = new KeyboardEvent('keydown', { altKey: true, code: 'Backspace', key: 'Backspace', bubbles: true, cancelable: true })
+    document.body.dispatchEvent(event)
+    expect(harness.appState.requestCommandInvocation).not.toHaveBeenCalled()
+    expect(event.defaultPrevented).toBe(true)
+    view.unmount()
+    harness.editorFullscreen = false
+  })
+
+  it('does not ask main to capture OS text-editing chords inside extension frames', async () => {
+    // #1013 review B. A forwarded chord is captured natively and re-dispatched
+    // with the <iframe> as its target, so the text-field yield cannot apply.
+    // ⌥⌫ in an extension's input cleared the lane instead of deleting a word.
+    const setInputBindings = vi.fn(async () => undefined)
+    const originalApi = Object.getOwnPropertyDescriptor(window, 'api')
+    Object.defineProperty(window, 'api', { configurable: true, value: { extensionsSetInputBindings: setInputBindings } })
+    harness.appState = { ...harness.appState, installedExtensions: [{ manifest: { id: 'timer' }, present: true }] }
+    const { workspace } = makeWorkspace('reader' as const)
+    const plain = { ...workspace, readerMode: null, spotlight: null } as typeof workspace
+    const view = render(<KeyboardHarness workspace={plain} />)
+    const [config] = setInputBindings.mock.calls[0] as unknown as [{ pane: string[] }]
+    // The lane arrows are still forwarded (they are not text chords).
+    expect(config.pane).toContain('Alt+Left')
+    expect(config.pane).not.toContain('Alt+Backspace')
+    view.unmount()
+    if (originalApi) Object.defineProperty(window, 'api', originalApi)
+    else Reflect.deleteProperty(window, 'api')
+  })
+
+  it('⌘ digits fill the focused lane by row label, and a second held digit reaches rows 10–99', () => {
+    // The two-digit grammar had no behavioural test (#1013 review B, finding
+    // 14). ⌘1 places row 1 and remembers the 1; ⌘2 inside the window makes
+    // it row 12, in digit order; ⌘0 only continues a pending digit.
+    const ids = Array.from({ length: 12 }, (_, i) => `s${i + 1}`)
+    const selectTiledLaneSession = vi.fn()
+    const stage = { lanes: [{ selectedSessionId: 's1' }], rows: [{ length: 1 }], focusedLane: 0 }
+    const state = {
+      activeTabId: 'p', tabs: [{ id: 'p', title: 'Project' }], pinnedSessionIds: [], stage,
+      sessions: Object.fromEntries(ids.map((id, i) => [id, { cwd: '/p', kind: 'claude' as const, projectId: 'p', joinedAt: i }])),
+    }
+    const workspace = {
+      state, stage, readerMode: null, spotlight: null, runtimes: {},
+      getRuntime: () => emptyRuntime(), selectTiledLaneSession, navigate: vi.fn(),
+      toggleReaderMode: vi.fn(), toggleSpotlight: vi.fn(),
+    } as unknown as Workspace
+    const view = render(<KeyboardHarness workspace={workspace} />)
+    const press = (digit: number) => fireEvent.keyDown(document, { metaKey: true, code: `Digit${digit}`, key: String(digit) })
+
+    press(1)
+    press(2)
+    expect(selectTiledLaneSession.mock.calls).toEqual([[0, 's1'], [0, 's12']])
+
+    selectTiledLaneSession.mockClear()
+    press(1)
+    press(0)
+    expect(selectTiledLaneSession.mock.calls).toEqual([[0, 's1'], [0, 's10']])
+
+    // With no pending digit, ⌘0 addresses nothing.
+    selectTiledLaneSession.mockClear()
+    press(0)
+    expect(selectTiledLaneSession).not.toHaveBeenCalled()
+    view.unmount()
+  })
+
+  it('yields Alt+Shift+Arrow to the OS instead of treating it as a lane arrow', () => {
+    // The inline branch this grammar replaced tested `alt && !cmd` without a
+    // shift check, so ⌥⇧↓ ran the index walk while the user was trying to
+    // select by word (#992 stage 5 record, useKeybinds). The binding grammar
+    // is exact-match, so the shifted chord matches nothing and stays native.
+    const { workspace } = makeWorkspace('reader' as const)
+    const plain = { ...workspace, readerMode: null, spotlight: null } as typeof workspace
+    const view = render(<KeyboardHarness workspace={plain} />)
+
+    fireEvent.keyDown(document, { altKey: true, shiftKey: true, code: 'ArrowDown', key: 'ArrowDown' })
+    fireEvent.keyDown(document, { altKey: true, shiftKey: true, code: 'ArrowLeft', key: 'ArrowLeft' })
 
     expect(harness.appState.requestCommandInvocation).not.toHaveBeenCalled()
+    view.unmount()
   })
 
-  it('does not change a hidden Tiled Dispatch lane while Reader navigates history', () => {
-    const { workspace, selectTiledLaneSession } = makeWorkspace('reader', 'tiled-dispatch')
+  it('routes Alt+Backspace to Clear Lane when no text field owns the target', () => {
+    // Clear Lane ships on ⌥⌫ (#992 §4.4). Outside text editing the chord is
+    // the stage's to claim, and it must arrive as a COMMAND invocation —
+    // rebindable, visible in the shortcuts surface — not as an inline branch.
+    const { workspace } = makeWorkspace('reader' as const)
+    // Reader/Spotlight would swallow the chord into their own admission
+    // (above); Clear Lane is a workspace verb, so exercise the plain stage.
+    const plain = { ...workspace, readerMode: null, spotlight: null } as typeof workspace
+    const view = render(<KeyboardHarness workspace={plain} />)
+
+    fireEvent.keyDown(document, { altKey: true, code: 'Backspace', key: 'Backspace' })
+
+    expect(harness.appState.requestCommandInvocation).toHaveBeenCalledWith(
+      'clear-focused-lane',
+      'keybinding',
+    )
+    view.unmount()
+  })
+
+  it('yields Alt+Backspace to the text field instead of Clear Lane', () => {
+    // The other half of the pairing (reservations.ts APPROVED_OVERLAPS):
+    // ⌥⌫ is the OS's delete-word in every text field. A Clear Lane firing
+    // from inside a composer would empty the pane mid-sentence — the exact
+    // "command appears bound, breaks editing" failure the reservation table
+    // exists to prevent, enforced at runtime by isMacosTextEditingChord.
+    const { workspace } = makeWorkspace('reader' as const)
+    const plain = { ...workspace, readerMode: null, spotlight: null } as typeof workspace
+    const view = render(<KeyboardHarness workspace={plain} />)
+
+    const composer = document.createElement('textarea')
+    document.body.appendChild(composer)
+    composer.focus()
+    fireEvent.keyDown(composer, { altKey: true, code: 'Backspace', key: 'Backspace' })
+
+    expect(harness.appState.requestCommandInvocation).not.toHaveBeenCalled()
+    composer.remove()
+    view.unmount()
+  })
+
+  it('does not change a hidden lane while Reader navigates history', () => {
+    const { workspace, selectTiledLaneSession } = makeWorkspace('reader')
     render(<KeyboardHarness workspace={workspace} />)
 
     pressOptionArrow('ArrowDown')
@@ -167,21 +314,30 @@ describe('focus-mode keyboard ownership', () => {
     expect(selectTiledLaneSession).not.toHaveBeenCalled()
   })
 
-  it('does not move hidden Grid or Dispatch focus while Spotlight owns the screen', () => {
-    const dispatch = makeWorkspace('spotlight', 'dispatch')
-    const view = render(<KeyboardHarness workspace={dispatch.workspace} />)
+  it('does not route Reader navigation into a hidden workspace command', () => {
+    // ⌥↑ is Focus Row Above on the stage. Reader owns the screen, so the chord
+    // must not reach the command router at all.
+    const { workspace } = makeWorkspace('reader')
+    render(<KeyboardHarness workspace={workspace} />)
+
+    pressOptionArrow('ArrowUp')
+
+    expect(harness.appState.requestCommandInvocation).not.toHaveBeenCalled()
+  })
+
+  it('does not move hidden lane selection or focus while Spotlight owns the screen', () => {
+    const { workspace, selectTiledLaneSession } = makeWorkspace('spotlight')
+    render(<KeyboardHarness workspace={workspace} />)
 
     pressOptionArrow('ArrowDown')
-    expect(dispatch.focusDispatchSession).not.toHaveBeenCalled()
+    expect(selectTiledLaneSession).not.toHaveBeenCalled()
 
-    const grid = makeWorkspace('spotlight', 'grid')
-    view.rerender(<KeyboardHarness workspace={grid.workspace} />)
     pressOptionArrow('ArrowUp')
     expect(harness.appState.requestCommandInvocation).not.toHaveBeenCalled()
   })
 
   it('keeps the Command Palette reachable from Reader, including through an override', () => {
-    const reader = makeWorkspace('reader', 'dispatch')
+    const reader = makeWorkspace('reader')
     const view = render(<KeyboardHarness workspace={reader.workspace} />)
 
     fireEvent.keyDown(document, {
@@ -222,7 +378,7 @@ describe('focus-mode keyboard ownership', () => {
   })
 
   it('keeps commands owned by the visible Spotlight session and feed available', () => {
-    const spotlight = makeWorkspace('spotlight', 'dispatch')
+    const spotlight = makeWorkspace('spotlight')
     const view = render(<KeyboardHarness workspace={spotlight.workspace} />)
 
     fireEvent.keyDown(document, {
@@ -251,11 +407,11 @@ describe('focus-mode keyboard ownership', () => {
       'open-command-palette',
       'keybinding',
     )
-    expect(spotlight.focusDispatchSession).not.toHaveBeenCalled()
+    expect(spotlight.selectTiledLaneSession).not.toHaveBeenCalled()
   })
 
   it('still admits Escape and the configured toggle owned by each active focus mode', () => {
-    const reader = makeWorkspace('reader', 'dispatch')
+    const reader = makeWorkspace('reader')
     const view = render(<KeyboardHarness workspace={reader.workspace} />)
 
     fireEvent.keyDown(document, { code: 'Escape', key: 'Escape' })
@@ -267,7 +423,7 @@ describe('focus-mode keyboard ownership', () => {
       'keybinding',
     )
 
-    const spotlight = makeWorkspace('spotlight', 'grid')
+    const spotlight = makeWorkspace('spotlight')
     view.rerender(<KeyboardHarness workspace={spotlight.workspace} />)
 
     fireEvent.keyDown(document, { code: 'Escape', key: 'Escape' })

@@ -68,6 +68,19 @@ export const LANE_MIN_FRACTION = 0.08
 /** Smallest share of the grid a single row may be dragged to. */
 export const ROW_MIN_FRACTION = 0.12
 
+/**
+ * The stage a brand-new workspace starts with: one row, one lane, focused.
+ *
+ * WHY one lane and not the migration's two (#992 plan §4.5): a first run has
+ * nothing to explain yet. One focused lane means the first agent the user
+ * creates fills the screen, and New Lane adds space the moment they want it.
+ * A factory rather than a constant so no two workspaces ever share a lane
+ * array by reference.
+ */
+export function freshStage(): TiledDispatchState {
+  return { lanes: [{}], rows: [{ length: 1 }], focusedLane: 0 }
+}
+
 export function clampIndexFraction(value: number): number {
   if (!Number.isFinite(value)) return DEFAULT_INDEX_FRACTION
   return Math.max(INDEX_FRACTION_MIN, Math.min(INDEX_FRACTION_MAX, value))

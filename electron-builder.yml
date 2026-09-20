@@ -72,6 +72,18 @@ mac:
   # regenerates one from build/icon.png at pack time via sips/iconutil —
   # fine on a provisioned Mac, non-deterministic and host-dependent
   # everywhere else. The committed artifact makes the icon reproducible.
+  #
+  # PAIRING RULE: build/icon.png and build/icon.icns change TOGETHER, always.
+  # The PNG is the owner's Icon Composer export, copied byte-for-byte. README.md
+  # renders the PNG and the packaged app uses the .icns, so updating only one
+  # silently makes the repo and the product show different icons.
+  # Recipe (byte-reproducible on macOS; verified 2026-09-19): for each size in
+  # 16 32 128 256 512, `sips -z` icon.png to that size as icon_NxN.png AND to
+  # double that size as icon_NxN@2x.png, all in AppIcon.iconset/, then
+  # `iconutil -c icns -o build/icon.icns AppIcon.iconset`.
+  # Why not ship the Icon Composer `.icon` document instead: electron-builder
+  # would compile it with `actool`, which needs Xcode 26 on the build host.
+  # That is the host dependence this committed file exists to avoid.
   icon: build/icon.icns
   # Electron 38+ follows Chromium in requiring Monterey. Stating the floor in
   # the bundle prevents an older Mac from downloading a build that the embedded

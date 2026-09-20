@@ -52,7 +52,7 @@ function mutationMessage(result: AgentCodeCustomSkillsMutationResult): string {
   if (result.ok) return ''
   if ('message' in result) return result.message
   if (result.code === 'revision-conflict') return 'Custom skills changed elsewhere. Reload and retry.'
-  if (result.code === 'unsupported') return 'A registered provider does not support personal skills.'
+  if (result.code === 'unsupported') return 'No registered provider supports personal skills.'
   return 'Managed skill state needs recovery before it can be changed.'
 }
 
@@ -454,7 +454,7 @@ function AgentCodeCustomSkillsModal({
                             <div className="mt-1 text-[10px] text-muted">{HEALTH_LABELS[skill.health]}</div>
                           </div>
                           <div className="flex flex-wrap justify-end gap-2">
-                            {skill.managedBy && <span className="text-[10px] text-muted">Managed by TLDR MCP</span>}
+                            {skill.managedBy && <span className="text-[10px] text-muted">Managed by {skill.managedBy === 'goal' ? 'Goal' : 'TLDR'} MCP</span>}
                             <Button aria-label={`Edit ${skill.name}`} variant="outline" size="sm" disabled={busy || Boolean(skill.managedBy)} onClick={() => edit(draftFromSkill(skill))}>Edit</Button>
                             <Button aria-label={`${skill.enabled ? 'Disable' : 'Enable'} ${skill.name}`} variant="outline" size="sm" disabled={busy || Boolean(skill.managedBy) || skill.health === 'recovery-required' || skill.health === 'unsupported'} onClick={() => void toggle(skill)}>
                               {skill.enabled ? 'Disable' : 'Enable'}
@@ -523,7 +523,9 @@ function TargetList({ skill, targets, onError }: {
     <div className="flex flex-col gap-1 border-t border-panel-border pt-2 text-[10px]">
       {targets.map(target => (
         <div key={target.id} className="flex items-center justify-between gap-3">
-          <span className="min-w-0 flex-1 truncate text-muted">{target.displayPath || target.id} · {target.state}</span>
+          {/* An unsupported row names the provider, which is the one thing it
+              is about; it has no path (#1037 review). */}
+          <span className="min-w-0 flex-1 truncate text-muted">{target.state === 'unsupported' ? target.providers.join(' + ') : (target.displayPath || target.id)} · {target.state}</span>
           {target.state === 'installed' || target.state === 'conflict' || target.state === 'retired' ? (
             <button
               type="button"

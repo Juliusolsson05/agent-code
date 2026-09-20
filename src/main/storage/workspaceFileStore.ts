@@ -1,3 +1,4 @@
+import { mainOperations } from '@main/performance/operations.js'
 import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, unlink, writeFile } from 'fs/promises'
 
@@ -10,6 +11,7 @@ import {
   serializeWorkspaceFile,
   withoutWindow,
   withWindowSlice,
+  WORKSPACE_FILE_VERSION,
 } from '@main/storage/workspaceFile.js'
 import type {
   PersistedWindow,
@@ -51,6 +53,18 @@ export class WorkspaceFileStore {
    * path, so the user is not silently working in a workspace that cannot save.
    */
   private readOnlyReason: string | null = null
+
+  /**
+   * The exact bytes of an older-version file this store loaded, held until
+   * the first write upgrades it.
+   *
+   * WHY a one-time backup (#992 review): writing version 3 is one-way. Older
+   * builds refuse the result by design, and the renderer's v2→v3 migration
+   * drops v2-only layout (tile trees, ghost records). The only way back to a
+   * pre-stage build's workspace is the untouched original, so it is written
+   * once, beside the file, before it is replaced, and never again.
+   */
+  private preUpgradeOriginal: { text: string, fromVersion: number } | null = null
 
   // WHY the whole save transaction is queued, not just writeFile: unique temp
   // names prevent scratch-path ENOENT races, but they do not order the final
@@ -116,6 +130,7 @@ export class WorkspaceFileStore {
       return
     }
     this.file = parsed.file
+    if (parsed.sourceVersion < WORKSPACE_FILE_VERSION) this.preUpgradeOriginal = { text, fromVersion: parsed.sourceVersion }
     if (parsed.migratedFromV1) {
       // eslint-disable-next-line no-console
       console.info('[workspace] migrated single-window workspace.json to the window format')
@@ -264,10 +279,40 @@ export class WorkspaceFileStore {
       const tmp = `${STATE_FILE}.${process.pid}.${Date.now()}.${Math.random()
         .toString(36)
         .slice(2)}.tmp`
+      const serializeStartedAt = performance.now()
+      const json = serializeWorkspaceFile(next)
+      mainOperations.observe('persistence.serialize', performance.now() - serializeStartedAt)
+      if (this.preUpgradeOriginal) {
+        const backup = `${STATE_FILE}.pre-v${WORKSPACE_FILE_VERSION}-${Date.now()}.bak`
+        try {
+          // `wx`: never overwrite an existing backup, even a same-millisecond one.
+          await writeFile(backup, this.preUpgradeOriginal.text, { encoding: 'utf8', flag: 'wx' })
+          // eslint-disable-next-line no-console
+          console.info(`[workspace] kept the v${this.preUpgradeOriginal.fromVersion} original at ${backup} before upgrading`)
+          this.preUpgradeOriginal = null
+        } catch (error) {
+          // A failed backup must not block saving. That would cost the
+          // user's current session to protect a copy. It retries on the next
+          // save and is warned about here, so it is not silently skipped.
+          //
+          // The partial file goes (#1013 verification review): a full disk
+          // fails the write AFTER `wx` created it, and each retry uses a new
+          // timestamp. The earliest "backup", the one a user would take as
+          // the original, was a 0-byte file. EEXIST is the exception: `wx`
+          // refused a file that already existed, which is someone's real
+          // backup and must stay.
+          if ((error as NodeJS.ErrnoException).code !== 'EEXIST') await unlink(backup).catch(() => undefined)
+          // eslint-disable-next-line no-console
+          console.warn('[workspace] could not write the pre-upgrade backup; will retry on next save', error)
+        }
+      }
+      const finishWrite = mainOperations.begin('persistence.write')
       try {
-        await writeFile(tmp, serializeWorkspaceFile(next), 'utf8')
+        await writeFile(tmp, json, 'utf8')
         await rename(tmp, STATE_FILE)
+        finishWrite()
       } catch (error) {
+        finishWrite('error')
         // WHY cleanup is scoped to this exact nonce path: a rename failure can
         // leave a complete scratch file behind, and durability retry creates a
         // new nonce on every attempt. Without unlink, a persistent destination

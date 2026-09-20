@@ -1,4 +1,5 @@
 import { tldrCommands } from '@renderer/features/tldr/commands'
+import { goalLoopCommands } from '@renderer/features/goal-loop/commands'
 import { layoutCommands } from '@renderer/features/workspace/commands/layoutCommands'
 import { globalEditorCommands } from '@renderer/features/global-editor/commands/globalEditorCommands'
 import { paneCommands } from '@renderer/features/workspace/commands/paneCommands'
@@ -7,7 +8,6 @@ import { tabCommands } from '@renderer/features/workspace/commands/tabCommands'
 import { windowCommands } from '@renderer/features/workspace/commands/windowCommands'
 import { settingsCommands } from '@renderer/features/settings/commands/settingsCommands'
 import { spotlightCommands } from '@renderer/features/spotlight/commands/spotlightCommands'
-import { tileTabsCommands } from '@renderer/features/tile-tabs/commands/tileTabsCommands'
 import { readerCommands } from '@renderer/features/reader/commands/readerCommands'
 import { copyAssistantCommands } from '@renderer/features/copy-assistant/commands/copyAssistantCommands'
 import { copyCodeBlockCommands } from '@renderer/features/copy-code-block/commands/copyCodeBlockCommands'
@@ -19,6 +19,7 @@ import { dispatchColorFlagCommands } from '@renderer/features/workspace/commands
 import { agentTitleCommands } from '@renderer/features/workspace/commands/agentTitleCommands'
 import { remoteCommands } from '@renderer/features/remote/commands/remoteCommands'
 import { usageCommands } from '@renderer/features/usage/commands/usageCommands'
+import { agentAnalyticsCommands } from '@renderer/features/agent-analytics/commands/agentAnalyticsCommands'
 import { paletteCommands } from '@renderer/features/command-palette/commands/paletteCommands'
 import type { CommandDef } from '@renderer/features/command-palette/types'
 
@@ -75,8 +76,8 @@ export const builtInCommandCatalog: readonly CommandDef[] = Object.freeze([
   ...dispatchColorFlagCommands,
   ...spotlightCommands,
   ...tldrCommands,
+  ...goalLoopCommands,
   ...readerCommands,
-  ...tileTabsCommands,
   ...settingsCommands,
   ...copyAssistantCommands,
   ...copyCodeBlockCommands,
@@ -89,6 +90,8 @@ export const builtInCommandCatalog: readonly CommandDef[] = Object.freeze([
   ...agentStatusCommands,
   ...remoteCommands,
   ...usageCommands,
+  // Beside Usage: both are app-wide "how much went where" reports (#964).
+  ...agentAnalyticsCommands,
   // Last: it is never rendered as a palette row (see
   // PALETTE_SELF_EXCLUDED_COMMAND_IDS), so its position cannot shift anything
   // the user browses. Appending also keeps every existing row's index stable.
@@ -153,5 +156,8 @@ export function findCatalogDefects(commands: readonly CommandDef[]): string[] {
 // the catalog is the boundary a future extension-contributed or
 // provider-generated command crosses, and those are built from strings that
 // TypeScript cannot check at the point of construction.
-const VALID_SURFACES = new Set(['app', 'grid', 'dispatch', 'session', 'editor', 'debug'])
+// Unified layout (#992): grid/dispatch merged into 'workspace'. Kept in
+// sync with CommandSurface by hand — this runtime set exists precisely
+// because generated provider commands escape the compile-time union check.
+const VALID_SURFACES = new Set(['app', 'workspace', 'session', 'editor', 'debug'])
 const VALID_TIERS = new Set(['default', 'advanced', 'experimental', 'debug'])

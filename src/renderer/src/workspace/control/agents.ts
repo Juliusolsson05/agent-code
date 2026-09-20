@@ -7,13 +7,12 @@ import { findTabsHoldingDirectory, resolveTabSessions } from '@renderer/workspac
 import { observeWorkspace, workspaceObservationSchema } from '@renderer/workspace/control'
 import type { Workspace } from '@renderer/workspace/hook'
 import { AGENT_PROVIDER_RUNTIMES } from '@shared/types/providerKind'
-import { buildPlacementTargets } from '@renderer/features/workspace/lib/newAgentPlacement'
 import { setAgentTitleInWorkspace } from '@renderer/workspace/agentTitle'
 import { sessionHasTranscript } from '@renderer/workspace/transcriptAvailability'
 
 const sessionInput = z.object({ sessionId: z.string().min(1).describe('Stable agent sessionId from agents.search/list; not a provider-native transcript ID or numbered tile.') }).strict()
 const sessionReference = workspaceObservationSchema.shape.sessions.element
-const provider = z.enum(['claude', 'codex', 'opencode']).describe('Provider for the new agent; its CLI must already be configured in Agent Code.')
+const provider = z.enum(['claude', 'codex', 'opencode', 'grok']).describe('Provider for the new agent; its CLI must already be configured in Agent Code.')
 
 export function agentControlCapabilities(getWorkspace: () => Workspace) {
   const observe = () => observeWorkspace(getWorkspace)
@@ -24,12 +23,13 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
   // pinSet act on metadata and placement, which a shell has exactly like an
   // agent. The single capability that must refuse a shell, agents.prompt,
   // checks provider itself because its refusal has to name the right route.
-  const requireSession = (sessionId: string, allowBuried = false) => {
+  // (An `allowBuried` flag and a "restore it explicitly first" refusal lived
+  // here until #992. A buried session was one the user had hidden on purpose,
+  // so acting on it needed an explicit restore. There is no hidden state now:
+  // a parked session is an ordinary row in its project's index.)
+  const requireSession = (sessionId: string) => {
     const current = observe().sessions.find(session => session.sessionId === sessionId)
     if (!current) throw new ControlError('unavailable', 'Agent does not exist in this window')
-    if (!allowBuried && current.placements.some(placement => placement.kind === 'buried')) {
-      throw new ControlError('unavailable', 'Agent is buried; restore it explicitly before acting')
-    }
     return current
   }
   const requireReady = () => {
@@ -39,15 +39,22 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
     requireReady()
     if (hasAppInteractionOwner()) throw new ControlError('unavailable', 'A surface owns input. Inspect or close it before changing the workspace')
   }
-  const placements = (tabId: string, anchorSessionId: string) => {
-    const tab = useAppStore.getState().workspaceState.tabs.find(tab => tab.id === tabId)
-    if (!tab) throw new ControlError('unavailable', 'Project no longer exists')
-    return buildPlacementTargets(tab.root, anchorSessionId, { x: 0, y: 0, width: 1, height: 1 })
-  }
+  // placement.list / placement.attach / agents.restore lived here until the
+  // unified layout (#992): they placed pool sessions into a grid tree or
+  // restored archived ones. There is no grid and no archive now — a session
+  // is shown by selecting it into a lane (dispatch.configure lane-select, or
+  // agents.show with open-in-focused-tiled-dispatch-lane).
   return [
     defineCapability({
       id: 'agents.close', target: { kind: 'session', field: 'sessionId' }, title: 'Close an agent', execution: 'window', effect: 'mutation', completion: 'accepted',
-      description: 'Request the normal close of an exact agent, including the app’s existing child-cascade confirmation. Returns an accepted callId immediately; finish any confirmation with computer use and read operations.read for the eventual closed result. Does not bypass confirmation or force-kill a process.',
+      // WHY the root-dialog sentence (#886 review m5): this capability calls
+      // closeSession with no options, i.e. the HUMAN path. For a project's root
+      // with other sessions that path asks Close Agent (Close Terminal for a
+      // terminal root) vs Close Tab, and operations.read reports `closed: true`
+      // either way — so an operator that picks the prominent destructive button
+      // silently ends the whole project. The description is the only place an
+      // operator learns which button matches "close agent X".
+      description: 'Request the normal close of an exact agent, including the app’s existing child-cascade confirmation. Closing a project’s root agent while other sessions exist asks whether to close only that agent (Close Agent, or Close Terminal for a terminal) or the whole tab (Close Tab); choose Close Agent unless the user asked to close the whole project. Returns an accepted callId immediately; finish any confirmation with computer use and read operations.read for the eventual closed result. Does not bypass confirmation or force-kill a process.',
       input: sessionInput, output: z.object({ callId: z.string(), accepted: z.literal(true) }),
       handler: ({ sessionId }, context) => {
         requireUi(); requireSession(sessionId)
@@ -61,40 +68,8 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
       },
     }),
     defineCapability({
-      id: 'placement.list', target: { kind: 'project', field: 'tabId' }, title: 'List grid placement choices', execution: 'window', effect: 'read',
-      description: 'List actual placement-overlay targets around an explicit grid anchor, including root wrapping. Coordinates are normalized to the project grid.',
-      input: z.object({ tabId: z.string().describe('Project tab ID from app.observe in the target window.'), anchorSessionId: z.string().describe('Existing agent in this project that supplies the working directory or grid placement anchor.') }).strict(),
-      output: z.object({ revision: z.string().describe('Revision returned by placement.list; prevents applying an outdated layout target.'), targets: z.array(z.object({ id: z.string(), label: z.string(), kind: z.string(),
-        direction: z.string(), side: z.string(), scope: z.string(), rect: z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() }) })) }),
-      handler: ({ tabId, anchorSessionId }) => {
-        const targets = placements(tabId, anchorSessionId)
-        return { revision: paginate(targets, { limit: 200 }, `placement:${tabId}:${anchorSessionId}`).revision, targets }
-      },
-    }),
-    defineCapability({
-      id: 'placement.attach', target: { kind: 'session', field: 'sessionId' }, title: 'Attach an agent to the grid', execution: 'window', effect: 'mutation',
-      description: 'Attach an existing detached agent or terminal using a target and revision from placement.list. Uses the existing placement operation and revalidates the anchor after wake.',
-      input: sessionInput.extend({ tabId: z.string().describe('Project tab ID from app.observe in the target window.'), anchorSessionId: z.string().describe('Existing agent in this project that supplies the working directory or grid placement anchor.'), targetId: z.string().describe('Exact target ID returned by placement.list for this anchor.'), revision: z.string().describe('Revision returned by placement.list; prevents applying an outdated layout target.') }),
-      output: sessionReference,
-      handler: async ({ sessionId, tabId, anchorSessionId, targetId, revision }) => {
-        requireUi()
-        const session = requireSession(sessionId)
-        if (!session.placements.some(placement => placement.kind === 'detached')) throw new ControlError('unavailable', 'Agent is already attached')
-        const targets = placements(tabId, anchorSessionId)
-        if (paginate(targets, { limit: 200 }, `placement:${tabId}:${anchorSessionId}`).revision !== revision) throw new ControlError('stale_cursor', 'Placement changed; list targets again')
-        const target = targets.find(target => target.id === targetId)
-        if (!target) throw new ControlError('unavailable', 'Placement target no longer exists')
-        await getWorkspace().attachDetachedToGrid(sessionId, tabId, target)
-        const placed = requireSession(sessionId)
-        if (!placed.placements.some(placement => placement.kind === 'grid' && placement.tabId === tabId)) {
-          throw new ControlError('failed', 'Attachment was not observed; inspect current placement', 'unknown')
-        }
-        return placed
-      },
-    }),
-    defineCapability({
       id: 'agents.list', title: 'Find agents', execution: 'window', effect: 'read',
-      description: 'Search all agents and terminals in this window by stable ID, visible label, spoken agent name, title, directory and provider, including detached and buried records. Reading never wakes an agent.',
+      description: 'Search all agents and terminals in this window by stable ID, visible label, spoken agent name, title, directory and provider, including sessions not currently shown in any lane. Reading never wakes an agent.',
       input: z.object({ query: z.string().default('').describe('Case-insensitive substring of session ID, visible label, spoken agent name, title, working directory or provider. Empty lists every agent and terminal in this window.'), tabId: z.string().describe('Project tab ID from app.observe in the target window.').optional(), ...pageInput }).strict(),
       output: pageSchema(sessionReference),
       handler: input => {
@@ -119,11 +94,11 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
     defineCapability({
       id: 'agents.locate', target: { kind: 'session', field: 'sessionId' }, title: 'Locate an agent', execution: 'window', effect: 'read', input: sessionInput,
       description: 'Get every placement of one stable agent, including mirrored lanes and hidden records, without focusing or waking it.',
-      output: sessionReference, handler: ({ sessionId }) => requireSession(sessionId, true),
+      output: sessionReference, handler: ({ sessionId }) => requireSession(sessionId),
     }),
     defineCapability({
       id: 'agents.show', target: { kind: 'session', field: 'sessionId' }, title: 'Show an existing agent', execution: 'window', effect: 'ui',
-      description: 'Focus this exact agent through the existing Grid, Dispatch, tiled-tab or related-child route. May wake a detached agent under the same ID. Never creates a replacement agent; buried records require agents.restore first.',
+      description: 'Focus this exact agent through the existing lane or related-child route. May wake a parked agent under the same ID. Never creates a replacement agent.',
       input: sessionInput.extend({ intent: z.enum(['reuse-existing-view', 'open-in-focused-tiled-dispatch-lane']).default('reuse-existing-view').describe('Reuse the existing agent view, or explicitly place it into the currently focused tiled Dispatch lane.') }),
       output: z.object({ session: sessionReference, mode: workspaceObservationSchema.shape.mode,
         bounds: z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() }) }),
@@ -143,14 +118,15 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
         // independent layer in case some other caller reaches it directly.
         //
         // WHY sessionHasTranscript instead of `session.provider === 'terminal'`
-        // (M5): a plain terminal is not the only kind Reader can't render.
-        // OpenCode Terminal (provider 'opencode', providerRuntime 'terminal')
-        // is agent-provider-kind but also never loads a transcript — see
-        // transcriptAvailability.ts. readerCommands.ts and reader.ts's own
-        // setReaderModeSession guard already use sessionHasTranscript; this
-        // refusal has to agree with them or an OpenCode Terminal could slip
-        // past this check and hit the exact same "can't render" failure one
-        // layer down. Read from raw workspace state (not the sessionReference
+        // (M5): a plain terminal is the only kind Reader can't render — it has
+        // no assistant-message model at all. OpenCode Terminal (provider
+        // 'opencode', providerRuntime 'terminal') DOES carry entries since #882
+        // and Reader pages them as an overlay (see transcriptAvailability.ts's
+        // WHY, revised for #971), so it must pass here. readerCommands.ts and
+        // reader.ts's own setReaderModeSession guard use sessionHasTranscript;
+        // this refusal has to agree with them or a session could slip past
+        // this check and hit the exact same "can't render" failure one layer
+        // down. Read from raw workspace state (not the sessionReference
         // `session` above) because sessionHasTranscript's shape is keyed on
         // SessionMeta's `kind`/`providerRuntime` fields, not the observation
         // schema's renamed `provider` field.
@@ -181,18 +157,6 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
         if (!pane || hasAppInteractionOwner()) throw new ControlError('failed', 'The target view was not observed or another surface took input; inspect the UI', 'unknown')
         const { x, y, width, height } = pane.getBoundingClientRect()
         return { session: refreshed, mode: state.mode, bounds: { x, y, width, height } }
-      },
-    }),
-    defineCapability({
-      id: 'agents.restore', target: { kind: 'session', field: 'sessionId' }, title: 'Restore a buried agent', execution: 'window', effect: 'mutation',
-      description: 'Explicitly restore one buried record through the UI restore policy, waking the same session ID if needed. Returns the resulting placement.',
-      input: sessionInput, output: sessionReference,
-      handler: async ({ sessionId }) => {
-        requireUi(); requireSession(sessionId, true)
-        const buried = useAppStore.getState().workspaceState.buried.find(record => record.sessionId === sessionId)
-        if (!buried) throw new ControlError('unavailable', 'This agent is not buried')
-        await getWorkspace().reviveBuried(buried.id)
-        return requireSession(sessionId)
       },
     }),
     defineCapability({
@@ -236,14 +200,16 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
         if (!createDuplicate && matches.length === 1) {
           const tab = matches[0]
           getWorkspace().activateTab(tab.id)
-          return { tabId: tab.id, sessionId: tab.focusedSessionId, created: false }
+          // The project's first session in index order. (Was the tab's
+          // tile-tree focus until #992.)
+          return { tabId: tab.id, sessionId: resolveTabSessions(state, tab.id)[0] ?? '', created: false }
         }
         return { ...await getWorkspace().newTab(cwd, undefined, kind), created: true }
       },
     }),
     defineCapability({
       id: 'agents.create', target: { kind: 'project', field: 'tabId' }, title: 'Create a project agent', execution: 'window', effect: 'mutation',
-      description: 'Create an ordinary detached agent in the explicit project, anchored to an existing agent directory. Detached means outside the project grid, not hidden: selectCreated defaults true, activates the project and selects the new agent in the Dispatch lane focused when creation began, replacing that view without closing its agent. Set selectCreated:false to preserve tabs and lane assignments, then use layout.read and dispatch.configure (lane-select) to place the returned ID in an explicit lane. readiness is a cached observation, not admission to send; agents.prompt performs provider checks.',
+      description: 'Create an ordinary pool agent in the explicit project, anchored to an existing agent directory. selectCreated defaults true: it activates the project and, when the lane focused at creation began is EMPTY, places the new agent in it — an occupied lane is never displaced, so the agent usually lands in the pool wearing a new badge in the agent index instead. Set selectCreated:false to preserve the active project and every lane, then use dispatch.configure (lane-select) to place the returned ID in an explicit lane. readiness is a cached observation, not admission to send; agents.prompt performs provider checks.',
       input: z.object({ tabId: z.string().describe('Project tab ID from app.observe in the target window.'), anchorSessionId: z.string().describe('Existing agent in this project that supplies the working directory or grid placement anchor.'), provider,
         selectCreated: z.boolean().default(true).describe('False preserves the current tab and every Dispatch lane; true selects the created agent using normal UI creation behavior.'), providerRuntime: z.enum(AGENT_PROVIDER_RUNTIMES).optional().describe('Omit for the normal structured agent view. terminal requests the provider-native terminal runtime.'), title: z.string().describe('Agent display title; empty clears a custom title. Normal UI normalization applies.').optional() }).strict(),
       output: sessionReference.extend({ readiness: z.object({ inputReady: z.boolean().nullable(), sessionRunId: z.string().nullable() }) }),
@@ -273,6 +239,12 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
         // Point at the route that exists instead of a bare "unavailable".
         if (session.provider === 'terminal') {
           throw new ControlError('unavailable', 'This session is a terminal. Send text with terminals.input; agents.prompt only drives provider agents')
+        }
+        // Extension panes are processless sessions with no provider at all. Main
+        // has no delivery entry for them and logs that miss as registry
+        // split-brain, which misled both the calling agent and diagnostics.
+        if (session.provider === 'extension-view') {
+          throw new ControlError('unavailable', 'This session is an extension view, not an agent; agents.prompt only drives provider agents')
         }
         // Codex's text-only delivery currently ignores imagePaths. Refuse
         // unsupported attachments BEFORE wake/write instead of silently sending

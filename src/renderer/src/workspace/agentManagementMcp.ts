@@ -9,7 +9,7 @@ import type {
 } from '@mcp/shared/agentManagementTypes'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
 import { entryTextContent } from '@renderer/session-runtime/entries'
-import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
+import { projectIdOf, resolveTabSessions } from '@renderer/workspace/queries'
 import { visibleMessageSummary } from '@renderer/workspace/orchestrationMcp'
 import type { SessionId, SessionMeta, Tab, WorkspaceState } from '@renderer/workspace/types'
 
@@ -31,28 +31,24 @@ function projectForSession(
   state: WorkspaceState,
   sessionId: SessionId,
 ): ProjectMembership | null {
-  const matches: ProjectMembership[] = []
-  state.tabs.forEach((tab, tabIndex) => {
-    if (collectLeaves(tab.root).includes(sessionId)) {
-      matches.push({ tab, tabIndex, placement: 'grid' })
-    }
-  })
-  const detached = state.detachedSessions[sessionId]
-  if (detached) {
-    const tabIndex = state.tabs.findIndex(tab => tab.id === detached.projectTabId)
-    const tab = state.tabs[tabIndex]
-    if (tab) matches.push({ tab, tabIndex, placement: 'dispatch' })
-  }
-  for (const buried of state.buried) {
-    if (buried.sessionId !== sessionId) continue
-    const tabIndex = state.tabs.findIndex(tab => tab.id === buried.sourceTabId)
-    const tab = state.tabs[tabIndex]
-    if (tab) matches.push({ tab, tabIndex, placement: 'buried' })
-  }
-  // WHY ambiguous ownership fails closed: a corrupt save can put one local id
-  // in more than one placement bucket. Choosing the first would make project
-  // scope depend on iteration order and could authorize a cross-project target.
-  return matches.length === 1 ? matches[0]! : null
+  // The row says which project it belongs to. A session whose project is gone
+  // (or that was never filed) has no project scope and is refused — scope
+  // must never be guessed, because it is what authorizes a cross-agent read.
+  //
+  // Until #992 membership was searched across three owner structures (tile
+  // leaves, detached records, buried records) and a session found in more than
+  // one FAILED CLOSED: a corrupt save could make project scope depend on
+  // iteration order. One field cannot be ambiguous.
+  //
+  // `placement` stays 'dispatch' for every session: in this contract that
+  // value has always meant "a row in the project's agent index", which is what
+  // every pool session is. 'grid' and 'buried' named v2 owners that no longer
+  // exist; the enum is narrowed with the rest of the MCP surface in stage 7.
+  const projectId = projectIdOf(state, sessionId)
+  if (projectId === undefined) return null
+  const tabIndex = state.tabs.findIndex(tab => tab.id === projectId)
+  const tab = state.tabs[tabIndex]
+  return tab ? { tab, tabIndex, placement: 'dispatch' } : null
 }
 
 function managedProject(membership: ProjectMembership): ManagedAgentProject {
@@ -67,16 +63,9 @@ function orderedProjectSessionIds(
   state: WorkspaceState,
   tabId: string,
 ): SessionId[] {
-  const tab = state.tabs.find(candidate => candidate.id === tabId)
-  if (!tab) return []
-  const detached = Object.values(state.detachedSessions)
-    .filter(item => item.projectTabId === tabId)
-    .sort((a, b) => a.detachedAt - b.detachedAt)
-    .map(item => item.sessionId)
-  const buried = state.buried
-    .filter(item => item.sourceTabId === tabId)
-    .map(item => item.sessionId)
-  return [...new Set([...collectLeaves(tab.root), ...detached, ...buried])]
+  // Index order, from the one membership query. (Until #992 this concatenated
+  // tile leaves, detached rows by detachedAt, then buried panes.)
+  return resolveTabSessions(state, tabId)
 }
 
 function conditionSummary(runtime: SessionRuntime | undefined): {
@@ -398,7 +387,7 @@ export function additionalCloseImpact(params: {
   callerSessionId: string
   sessionId: string
 }): SessionId[] {
-  const membership = assertManagedTarget(params)
+  assertManagedTarget(params)
   const affected = new Set<SessionId>()
   const visitLinked = (parentId: SessionId): void => {
     for (const [sessionId, meta] of Object.entries(params.state.sessions)) {
@@ -408,14 +397,14 @@ export function additionalCloseImpact(params: {
     }
   }
   visitLinked(params.sessionId)
-  if (membership.placement === 'grid') {
-    const leaves = collectLeaves(membership.tab.root)
-    if (leaves.length === 1) {
-      for (const sessionId of orderedProjectSessionIds(params.state, membership.tab.id)) {
-        if (sessionId !== params.sessionId) affected.add(sessionId)
-      }
-    }
-  }
+  // WHY a project's last grid leaf no longer reports its siblings (#886 review
+  // M1): it used to, because closing that leaf removed the tab and killed every
+  // detached session in it. This tool closes with `requireConfirmation`, which
+  // never offers the human-only Close Tab choice, so the close is session-scoped
+  // and promotes the next Dispatch row into the grid instead. Reporting the
+  // siblings would refuse a close that affects exactly one agent AND tell the
+  // calling model that sessions would die which would not — data it acts on.
+  // Linked descendants still count: the session-scoped close still ends them.
   return [...affected]
 }
 

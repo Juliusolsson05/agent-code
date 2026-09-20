@@ -1,10 +1,10 @@
 import { cleanup, render } from '@testing-library/react'
-import { readFileSync } from 'node:fs'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { DispatchLayout } from '@renderer/workspace/dispatch/DispatchLayout'
 import type { SessionId, TiledDispatchState, WorkspaceState } from '@renderer/workspace/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
+import { loadRecordedDispatchWorkspace } from '@renderer/workspace/testing/recordedDispatchWorkspace'
 
 // The grid actually rendering as a grid.
 //
@@ -115,9 +115,10 @@ vi.mock('@providers/registry.renderer', () => ({
   }),
 }))
 
-const FIXTURE = JSON.parse(
-  readFileSync('testing/fixtures/worktree-context/dispatch-global-d23.json', 'utf8'),
-) as { state: WorkspaceState }
+// Loaded through the shared lift: the file on disk is a v2 workspace whose lane
+// grid sits at `dispatchMode.tiled`; the loader moves it to `state.stage`
+// verbatim (see recordedDispatchWorkspace.ts for why it is not re-recorded).
+const FIXTURE = loadRecordedDispatchWorkspace()
 
 function renderGrid(tiled: TiledDispatchState) {
   const selectTiledLaneSession = vi.fn().mockResolvedValue(undefined)
@@ -125,7 +126,7 @@ function renderGrid(tiled: TiledDispatchState) {
   const toggleDispatchRowExpandedParent = vi.fn()
   const state: WorkspaceState = {
     ...FIXTURE.state,
-    dispatchMode: { ...FIXTURE.state.dispatchMode!, scope: 'global', tiled },
+    stage: tiled,
   }
   const workspace = {
     state,
@@ -168,7 +169,7 @@ function stripSelecting(strips: HTMLElement[], sessionId: string): HTMLElement {
   return matches[0]!
 }
 
-const laneIds = FIXTURE.state.dispatchMode!.tiled!.lanes.map(
+const laneIds = FIXTURE.state.stage.lanes.map(
   lane => lane.selectedSessionId,
 ) as SessionId[]
 
@@ -427,7 +428,7 @@ describe('Grid Dispatch layout', () => {
   it('still renders a pre-grid single-row workspace', () => {
     // The migration path, end to end: no `rows` at all means one row holding
     // every lane, and it must render rather than crash on a missing descriptor.
-    const { getAllByTestId } = renderGrid(FIXTURE.state.dispatchMode!.tiled!)
+    const { getAllByTestId } = renderGrid(FIXTURE.state.stage)
 
     expect(getAllByTestId('row-index')).toHaveLength(1)
     expect(getAllByTestId('lane-agent')).toHaveLength(laneIds.length)

@@ -16,8 +16,14 @@ import { refreshToolchainFromState } from '@main/setup/toolchain.js'
 // land. Whitelisting the IDs that participate in the runtime-bundling
 // pipeline makes the relationship explicit and keeps `prerequisites`
 // from importing the resolver for irrelevant tools.
+//
+// 'opencode' is the one PROVIDER entry: when the packaged app ships the
+// CLI (third_party/opencode, #994), the row must clear as found with
+// source 'bundled' instead of nagging a fresh install for a PATH binary
+// a Finder-launched app would never see anyway.
 const BUNDLED_TOOL_IDS: ReadonlySet<SetupToolId> = new Set<SetupToolId>([
   'mitmdump',
+  'opencode',
 ])
 
 // Provider SetupGate rows derived from the plain-data setup registry

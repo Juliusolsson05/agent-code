@@ -9,6 +9,7 @@ import { useSessionActions } from './session'
 import { useProviderActions } from './provider'
 import { makeRefs, stateWriter } from './testing/paneActionsHarness'
 import type { SessionMeta, WorkspaceState } from '@renderer/workspace/types'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 vi.mock('./initialHistory', () => ({ loadInitialHistoryForSession: vi.fn(async () => undefined) }))
 const originalApi = window.api
@@ -17,12 +18,17 @@ afterEach(() => { cleanup(); window.api = originalApi; vi.useRealTimers() })
 function setup(meta: Partial<SessionMeta> = { builtInMcpDomains: [], builtInMcpOverrides: {} }) {
   vi.useFakeTimers()
   const state = {
-    tabs: [{ id: 'project', title: 'Project', root: { type: 'leaf', sessionId: 'original' }, focusedSessionId: 'original' }],
-    activeTabId: 'project', sessions: { original: { cwd: '/project', kind: 'codex', providerSessionId: 'native-original', ...meta } },
-    detachedSessions: {}, buried: [], pinnedSessionIds: [], dispatchMode: null,
+    tabs: [{ id: 'project', title: 'Project' }],
+    activeTabId: 'project', sessions: { original: { cwd: '/project', kind: 'codex', providerSessionId: 'native-original', ...meta, projectId: 'project', joinedAt: 0 } },
+      pinnedSessionIds: [], stage: oneLaneStage('original'),
   } as WorkspaceState
   const refs = makeRefs(state), writer = stateWriter(state, refs)
-  refs.latestRuntimesRef.current = { original: emptyRuntime() }
+  // `started`: the agent HAS a backend. Reload-all restarts only sessions with
+  // one (#992) — it asks the runtime, where it used to ask "is this a tile
+  // leaf". An `idle` runtime is a parked agent, which a reload deliberately
+  // leaves parked (that is the #258 fork-bomb guard), so with the default
+  // runtime the bulk-reload case below spawned nothing and read `undefined`.
+  refs.latestRuntimesRef.current = { original: { ...emptyRuntime(), processStatus: 'started' } }
   const setRuntimes = (update: Record<string, SessionRuntime> | ((prev: Record<string, SessionRuntime>) => Record<string, SessionRuntime>)) => {
     refs.latestRuntimesRef.current = typeof update === 'function' ? update(refs.latestRuntimesRef.current) : update
   }
@@ -33,7 +39,8 @@ function setup(meta: Partial<SessionMeta> = { builtInMcpDomains: [], builtInMcpO
     const sessions = useSessionActions(state, writer.setState, setRuntimes, refs)
     return { sessions, provider: useProviderActions(refs, setRuntimes, vi.fn(), sessions) }
   })
-  const focused = () => writer.getState().tabs[0]!.focusedSessionId!
+  // The commanded session: the focused lane's occupant. (Tree era: the tab's focus.)
+  const focused = () => writer.getState().stage.lanes[writer.getState().stage.focusedLane]!.selectedSessionId!
   const command = async (id: string) => {
     const run = sessionCommands.find(item => item.id === id)!.run
     await run({ workspace: {
@@ -65,16 +72,19 @@ describe('global MCP preferences at actual provider replacement', () => {
     expect(h.writer.getState().sessions[h.focused()]!.tldrIdentity).toBe(first.tldrIdentity)
   })
 
-  it('preserves a per-agent off override and lets the reset command restore inheritance', async () => {
-    const h = setup({ builtInMcpDomains: ['tldr'], builtInMcpOverrides: {} })
-    h.refs.defaultBuiltInMcpDomainsRef.current = ['tldr']
-    await perform(() => h.command('enable-tldr-mcp'))
-    expect(h.writer.getState().sessions[h.focused()]!.builtInMcpOverrides).toEqual({ tldr: false })
-    h.refs.defaultBuiltInMcpDomainsRef.current = ['tldr', 'orchestration']
+  it.each([
+    { domain: 'tldr', commandId: 'enable-tldr-mcp' },
+    { domain: 'goal', commandId: 'enable-goal-mcp' },
+  ] as const)('preserves a per-agent $domain off override and lets the reset command restore inheritance', async ({ domain, commandId }) => {
+    const h = setup({ builtInMcpDomains: [domain], builtInMcpOverrides: {} })
+    h.refs.defaultBuiltInMcpDomainsRef.current = [domain]
+    await perform(() => h.command(commandId))
+    expect(h.writer.getState().sessions[h.focused()]!.builtInMcpOverrides).toEqual({ [domain]: false })
+    h.refs.defaultBuiltInMcpDomainsRef.current = [domain, 'orchestration']
     await perform(() => h.hook.result.current.provider.reloadSessionAgent(h.focused()))
     expect(h.spawnSession.mock.calls.at(-1)![0].builtInMcpDomains).toEqual(['orchestration'])
     await perform(() => h.command('use-global-mcp-settings'))
-    expect(h.spawnSession.mock.calls.at(-1)![0].builtInMcpDomains).toEqual(['tldr', 'orchestration'])
+    expect(h.spawnSession.mock.calls.at(-1)![0].builtInMcpDomains).toEqual([domain, 'orchestration'])
     expect(h.writer.getState().sessions[h.focused()]!.builtInMcpOverrides).toEqual({})
   })
 

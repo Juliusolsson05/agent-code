@@ -74,3 +74,23 @@ describe('applyTheme corner radius', () => {
     }
   })
 })
+
+describe('applyTheme default appearance', () => {
+  // The public-release contract (#973): a fresh install paints Nord with the
+  // Frost accent, and nothing green. This asserts the values applyTheme writes
+  // rather than DEFAULT_SETTINGS itself, because the accent reaches the DOM
+  // through the ACCENTS table — a default id that resolves to no entry would
+  // silently fall back to ACCENTS[0], and that is the failure this catches.
+  it('paints Nord with the Frost accent for the shipped defaults', () => {
+    applyTheme(DEFAULT_SETTINGS)
+    const root = document.documentElement
+    expect(root.dataset.mode).toBe('dark-nord')
+    expect(root.style.getPropertyValue('--theme-accent')).toBe('#88c0d0')
+    expect(root.style.getPropertyValue('--theme-accent-fg')).toBe('#171b21')
+  })
+
+  it('uses the darker Frost pair on light themes', () => {
+    applyTheme({ ...DEFAULT_SETTINGS, mode: 'light' })
+    expect(document.documentElement.style.getPropertyValue('--theme-accent')).toBe('#5e81ac')
+  })
+})

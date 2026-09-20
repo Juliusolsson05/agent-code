@@ -1,0 +1,301 @@
+name: Reusable app build (macOS)
+
+# WHY this file exists: the nightly workflow (`.github/workflows/nightly.yml`,
+# #1011) needs the exact build+package pipeline that `release.yml` has proven
+# end to end. This is a VERBATIM extraction of `release.yml`'s `build-app` and
+# `package-macos` jobs with three deliberate behavioural deltas, each marked below
+# (plus one reworded comment on the upload step):
+#
+#   1. `on: workflow_call` instead of `workflow_dispatch` — callers are the
+#      versioned release (not yet; see 3) and the nightly.
+#   2. `build-app` no longer `needs: validate-release` — secret/tag validation
+#      is caller policy (the nightly validates secrets but has no tag).
+#   3. The "Create GitHub Release" step is GONE, and `package-macos` drops to
+#      `contents: read`: publishing is the caller's decision (versioned tag vs
+#      rolling nightly), and artifact upload needs no write permission. Called
+#      workflows cannot exceed the caller's permissions anyway, so keeping
+#      write here would force every caller to grant it for nothing.
+#
+# DRIFT WARNING: `release.yml` still carries its own copy of these jobs. Until
+# it adopts this reusable workflow (follow-up tracked in #1011, only after the
+# first green nightly), a change to one copy MUST be mirrored in the other.
+# When you edit this file, grep `release.yml` for the same step names.
+
+on:
+  workflow_call:
+
+jobs:
+  build-app:
+    runs-on: macos-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Configure submodule auth
+        env:
+          SUBMODULE_PAT: ${{ secrets.SUBMODULE_PAT }}
+          SUBMODULE_SSH_KEY: ${{ secrets.SUBMODULE_SSH_KEY }}
+        run: |
+          if [ -n "$SUBMODULE_PAT" ]; then
+            echo "::add-mask::$SUBMODULE_PAT"
+            git config --global url."https://x-access-token:${SUBMODULE_PAT}@github.com/Juliusolsson05/".insteadOf "https://github.com/Juliusolsson05/"
+            git config --global url."https://x-access-token:${SUBMODULE_PAT}@github.com/Juliusolsson05/".insteadOf "git@github-personal:Juliusolsson05/"
+            exit 0
+          fi
+
+          # WHY no hard-fail when both secrets are absent: every submodule
+          # repo (every Juliusolsson05 packages/* repo and openai/codex)
+          # is PUBLIC, so the plain HTTPS URLs in .gitmodules clone fine
+          # anonymously. The exit-1 here predated the repos going public and
+          # contradicted README.md's "no special access needed" (#506
+          # review). The PAT/SSH branches above are kept for private forks
+          # of the submodules — configure either secret and it takes over.
+          if [ -z "$SUBMODULE_SSH_KEY" ]; then
+            echo "No SUBMODULE_PAT/SUBMODULE_SSH_KEY configured; submodule repos are public, using anonymous HTTPS."
+            exit 0
+          fi
+
+          mkdir -p ~/.ssh
+          printf '%s' "$SUBMODULE_SSH_KEY" | perl -pe 's/\\n/\n/g' > ~/.ssh/submodule_key
+          printf '\n' >> ~/.ssh/submodule_key
+          chmod 600 ~/.ssh/submodule_key
+          ssh-keygen -y -f ~/.ssh/submodule_key > /dev/null
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          cat >> ~/.ssh/config <<'EOF'
+          Host github-personal
+            HostName github.com
+            User git
+            IdentityFile ~/.ssh/submodule_key
+            IdentitiesOnly yes
+          EOF
+          git config --global url."git@github-personal:Juliusolsson05/".insteadOf "https://github.com/Juliusolsson05/"
+
+      - name: Checkout submodules
+        # All submodules are public: anonymous HTTPS works with no secrets.
+        # SUBMODULE_PAT / SUBMODULE_SSH_KEY (previous step) only rewrite the
+        # URLs when configured, for private forks.
+        run: git submodule update --init --recursive
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --include=dev
+
+      - name: Type-check main and renderer
+        # electron-vite transpiles TypeScript but does not enforce the project references. This gate
+        # caught a real recovery_required count initializer that produced NaN in the shipped UI.
+        run: npm run typecheck
+
+      - name: Test Workflow MCP
+        run: npm --prefix packages/workflow-mcp test
+
+      - name: Test Agent Code workflow integration
+        run: |
+          npm run test:unit
+          npm run test:integration
+          npm run test:renderer
+
+      - name: Audit production dependencies
+        run: npm run audit:production
+
+      - name: Prepare bundled runtime tools
+        # WHY this belongs in build-app, not package-macos: `npm run build`
+        # runs scripts/copy-packaged-resources.mjs in this job, and that copy
+        # step reads third_party/<tool>/cache/ into `out/main/runtime`. The
+        # package-macos job packages the uploaded `out` tree verbatim, so
+        # preparing later would still ship manifest-only runtime folders.
+        run: npm run runtime:prepare:mac
+
+      - name: Build app
+        run: npm run build
+
+      - name: Archive app build
+        # WHY a tar instead of uploading `out/` directly: upload-artifact zips its
+        # input without file modes, so every file comes back 644 (its README,
+        # "Permission Loss"). `out/` carries executables that must stay
+        # executable inside the packaged app: the universal dictation hotkey
+        # helper from scripts/build-hotkey-helper.mjs and the bundled tmux,
+        # cloudflared and mitmproxy binaries under out/main/runtime. The
+        # package-macos job packages the downloaded tree verbatim, so release run
+        # 34739982565 shipped a non-executable helper and
+        # scripts/verify-packaged-mac.mjs rejected it (#965). tar records modes
+        # and symlinks, so the zip wrapped around the tar no longer matters.
+        run: tar -cf app-build.tar out
+
+      - name: Upload app build
+        uses: actions/upload-artifact@v7
+        with:
+          name: app-build
+          path: app-build.tar
+          if-no-files-found: error
+
+  package-macos:
+    needs: build-app
+    runs-on: macos-latest
+    permissions:
+      # Deliberate delta from release.yml (read, not write): the versioned
+      # release creation step lives in the CALLER here, and nothing in this
+      # job writes to the repository.
+      contents: read
+    env:
+      # GitHub intentionally disallows direct secrets.* reads in an `if:`
+      # expression. Materialize only the boolean here; the certificate itself
+      # remains available solely to the packaging step below.
+      HAS_SIGNING_IDENTITY: ${{ secrets.CSC_LINK != '' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Configure submodule auth
+        env:
+          SUBMODULE_PAT: ${{ secrets.SUBMODULE_PAT }}
+          SUBMODULE_SSH_KEY: ${{ secrets.SUBMODULE_SSH_KEY }}
+        run: |
+          if [ -n "$SUBMODULE_PAT" ]; then
+            echo "::add-mask::$SUBMODULE_PAT"
+            git config --global url."https://x-access-token:${SUBMODULE_PAT}@github.com/Juliusolsson05/".insteadOf "https://github.com/Juliusolsson05/"
+            git config --global url."https://x-access-token:${SUBMODULE_PAT}@github.com/Juliusolsson05/".insteadOf "git@github-personal:Juliusolsson05/"
+            exit 0
+          fi
+
+          # WHY no hard-fail when both secrets are absent: every submodule
+          # repo (every Juliusolsson05 packages/* repo and openai/codex)
+          # is PUBLIC, so the plain HTTPS URLs in .gitmodules clone fine
+          # anonymously. The exit-1 here predated the repos going public and
+          # contradicted README.md's "no special access needed" (#506
+          # review). The PAT/SSH branches above are kept for private forks
+          # of the submodules — configure either secret and it takes over.
+          if [ -z "$SUBMODULE_SSH_KEY" ]; then
+            echo "No SUBMODULE_PAT/SUBMODULE_SSH_KEY configured; submodule repos are public, using anonymous HTTPS."
+            exit 0
+          fi
+
+          mkdir -p ~/.ssh
+          printf '%s' "$SUBMODULE_SSH_KEY" | perl -pe 's/\\n/\n/g' > ~/.ssh/submodule_key
+          printf '\n' >> ~/.ssh/submodule_key
+          chmod 600 ~/.ssh/submodule_key
+          ssh-keygen -y -f ~/.ssh/submodule_key > /dev/null
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          cat >> ~/.ssh/config <<'EOF'
+          Host github-personal
+            HostName github.com
+            User git
+            IdentityFile ~/.ssh/submodule_key
+            IdentitiesOnly yes
+          EOF
+          git config --global url."git@github-personal:Juliusolsson05/".insteadOf "https://github.com/Juliusolsson05/"
+
+      - name: Checkout submodules
+        # All submodules are public: anonymous HTTPS works with no secrets.
+        # SUBMODULE_PAT / SUBMODULE_SSH_KEY (previous step) only rewrite the
+        # URLs when configured, for private forks.
+        run: git submodule update --init --recursive
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Cache Electron packages
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/Library/Caches/electron
+            ~/Library/Caches/electron-builder
+            ~/.cache/electron
+            ~/.cache/electron-builder
+          key: ${{ runner.os }}-electron-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-electron-
+
+      - name: Install dependencies
+        run: npm ci --include=dev
+
+      - name: Download app build
+        uses: actions/download-artifact@v8
+        with:
+          name: app-build
+
+      - name: Unpack app build
+        # Restores `out/` with the file modes recorded in build-app; see
+        # "Archive app build" there for why the tree travels as a tar.
+        run: tar -xf app-build.tar && rm app-build.tar
+
+      - name: Package macOS artifacts
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # The unsigned-fallback policy (no CSC_LINK/CSC_NAME → disable
+        # identity auto-discovery, strip APPLE_* notarization vars) lives
+        # in scripts/package-mac.mjs so local dev builds and CI share ONE
+        # implementation (#495 A6). This step used to carry its own inline
+        # copy of that logic, which is exactly how it drifted out of the
+        # npm scripts in the first place.
+        run: npm run package:mac
+
+      - name: Verify packaged app contents and architectures
+        run: |
+          npm run verify:package:mac
+          npm run smoke:package:mac
+
+      - name: Verify signed apps and notarization tickets
+        if: ${{ env.HAS_SIGNING_IDENTITY == 'true' }}
+        run: |
+          found_app=0
+          while IFS= read -r -d '' app_path; do
+            found_app=1
+            codesign --verify --deep --strict --verbose=2 "$app_path"
+            spctl --assess --type execute --verbose=2 "$app_path"
+            xcrun stapler validate "$app_path"
+          done < <(find release -type d -name 'Agent Code.app' -print0)
+          if [ "$found_app" -ne 1 ]; then
+            echo 'No packaged Agent Code.app bundles found for signature verification'
+            exit 1
+          fi
+
+          found_dmg=0
+          while IFS= read -r -d '' dmg_path; do
+            found_dmg=1
+            hdiutil verify "$dmg_path"
+          done < <(find release -maxdepth 1 -type f -name '*.dmg' -print0)
+          if [ "$found_dmg" -ne 1 ]; then
+            echo 'No DMGs found for notarization-ticket validation'
+            exit 1
+          fi
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          # WHY the conditional name: without CSC_LINK the packaging step
+          # builds UNSIGNED dev artifacts (scripts/package-mac.mjs fallback),
+          # and an unsigned build parked under a name like "macos-release"
+          # is exactly the artifact someone grabs and ships by mistake. The
+          # artifact name tracks what the build actually IS (signed vs not),
+          # not what the run intended: callers that publish validate the
+          # signing secrets up front, so every published artifact came from
+          # "macos-release", and everything unsigned is unmistakably
+          # macos-unsigned-dev.
+          name: ${{ env.HAS_SIGNING_IDENTITY == 'true' && 'macos-release' || 'macos-unsigned-dev' }}
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/*.blockmap
+            release/*.yml
+          if-no-files-found: error

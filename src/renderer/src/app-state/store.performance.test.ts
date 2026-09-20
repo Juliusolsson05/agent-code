@@ -76,12 +76,16 @@ describe('settings persistence work budget', () => {
 
   it('writes changed settings immediately with the existing storage envelope and version', async () => {
     const store = await persistedStore()
+    // Read the live configured version rather than pinning a literal: the
+    // envelope contract is "the version the store runs", and every persist
+    // bump (v11 was #973) would otherwise silently break this suite.
+    const persistVersion = store.persist.getOptions().version
     store.getState().setSettings({ showStatusMode: true })
 
     expect(storage.setItem).toHaveBeenCalledTimes(1)
     const [name, raw] = storage.setItem.mock.calls[0]!
     expect(name).toBe(APP_STORE_STORAGE_KEY)
-    expect(JSON.parse(raw)).toEqual({ state: { settings: store.getState().settings }, version: 10 })
+    expect(JSON.parse(raw)).toEqual({ state: { settings: store.getState().settings }, version: persistVersion })
     store.getState().openCommandPalette()
     expect(storage.setItem).toHaveBeenCalledTimes(1)
   })
@@ -115,13 +119,14 @@ describe('settings persistence work budget', () => {
   it('persists unchanged settings again after clearStorage removes the durable copy', async () => {
     const store = await persistedStore()
     const settings = store.getState().settings
+    const persistVersion = store.persist.getOptions().version
     store.persist.clearStorage()
     expect(storage.getItem(APP_STORE_STORAGE_KEY)).toBeNull()
     store.getState().openCommandPalette()
     expect(store.getState().settings).toBe(settings)
     expect(storage.setItem).toHaveBeenCalledTimes(1)
     expect(JSON.parse(storage.getItem(APP_STORE_STORAGE_KEY)!)).toEqual({
-      state: { settings }, version: 10,
+      state: { settings }, version: persistVersion,
     })
   })
 
@@ -143,8 +148,9 @@ describe('settings persistence work budget', () => {
 
   it('rehydrates externally changed settings and persists the hydrated state on the next update', async () => {
     const store = await persistedStore()
+    const persistVersion = store.persist.getOptions().version
     storage.setItem(APP_STORE_STORAGE_KEY, JSON.stringify({
-      state: { settings: { ...store.getState().settings, showStatusMode: true } }, version: 10,
+      state: { settings: { ...store.getState().settings, showStatusMode: true } }, version: persistVersion,
     }))
     storage.setItem.mockClear()
     await store.persist.rehydrate()
@@ -152,22 +158,26 @@ describe('settings persistence work budget', () => {
     store.getState().openCommandPalette()
     expect(storage.setItem).toHaveBeenCalledTimes(1)
     expect(JSON.parse(storage.getItem(APP_STORE_STORAGE_KEY)!)).toMatchObject({
-      state: { settings: { showStatusMode: true } }, version: 10,
+      state: { settings: { showStatusMode: true } }, version: persistVersion,
     })
   })
 
   it('does not reuse a settings cache across a storage key or schema version change', async () => {
     const store = await persistedStore()
     const settings = store.getState().settings
+    const persistVersion = store.persist.getOptions().version as number
     const nextKey = `${APP_STORE_STORAGE_KEY}:alternate`
     store.persist.setOptions({ name: nextKey })
     store.getState().openCommandPalette()
     expect(storage.setItem).toHaveBeenCalledTimes(1)
-    expect(JSON.parse(storage.getItem(nextKey)!)).toEqual({ state: { settings }, version: 10 })
-    store.persist.setOptions({ version: 11 })
+    expect(JSON.parse(storage.getItem(nextKey)!)).toEqual({ state: { settings }, version: persistVersion })
+    // Bump RELATIVE to the live version: pinning the next literal would break
+    // on every real persist bump (v11 was #973) for no contract reason.
+    const nextVersion = persistVersion + 1
+    store.persist.setOptions({ version: nextVersion })
     store.getState().closeCommandPalette()
     expect(storage.setItem).toHaveBeenCalledTimes(2)
-    expect(JSON.parse(storage.getItem(nextKey)!)).toEqual({ state: { settings }, version: 11 })
+    expect(JSON.parse(storage.getItem(nextKey)!)).toEqual({ state: { settings }, version: nextVersion })
   })
 })
 
@@ -207,15 +217,6 @@ const workspaceCases: WorkspaceUpdateCase[] = [
     updaterNoop: state => state.setWorkspaceReaderMode(previous => previous),
     change: state => state.setWorkspaceReaderMode({ tabId: 'tab', focusedSessionId: 'session' }),
     value: state => state.workspaceReaderMode,
-  },
-  {
-    name: 'tileTabs',
-    directNoop: state => state.setWorkspaceTileTabs(state.workspaceTileTabs),
-    updaterNoop: state => state.setWorkspaceTileTabs(previous => previous),
-    change: state => state.setWorkspaceTileTabs({
-      tabIds: ['tab-a', 'tab-b'], focusedTabId: 'tab-a', direction: 'horizontal', ratios: [0.5, 0.5],
-    }),
-    value: state => state.workspaceTileTabs,
   },
 ]
 
