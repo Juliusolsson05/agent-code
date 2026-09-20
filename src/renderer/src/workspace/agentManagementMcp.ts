@@ -3,6 +3,7 @@ import type {
   ManagedAgentMessage,
   ManagedAgentProject,
   ManagedAgentRecord,
+  ManagedAgentRendererActivitySource,
   ManagedAgentRendererDescriptor,
   ManagedAgentRendererOutput,
   ManagedAgentTranscriptOutput,
@@ -12,6 +13,7 @@ import { entryTextContent } from '@renderer/session-runtime/entries'
 import { projectIdOf, resolveTabSessions } from '@renderer/workspace/queries'
 import { visibleMessageSummary } from '@renderer/workspace/orchestrationMcp'
 import type { SessionId, SessionMeta, Tab, WorkspaceState } from '@renderer/workspace/types'
+import { sessionActivity } from '@renderer/session-runtime/activity'
 
 type RuntimeMap = Record<SessionId, SessionRuntime>
 
@@ -79,14 +81,28 @@ function conditionSummary(runtime: SessionRuntime | undefined): {
   }
 }
 
-function runtimeActivityAt(runtime: SessionRuntime | undefined): number | undefined {
-  if (!runtime) return undefined
-  const values = [
-    runtime.phaseChangedAt,
-    runtime.turnStartedAt,
-    runtime.submittedAt,
-  ].filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
-  return values.length > 0 ? Math.max(...values) : undefined
+/**
+ * The UNIFIED answer to "when was this agent last active" (#915), and which
+ * class of evidence produced it.
+ *
+ * Shared with the TLDR peek footer on purpose — see `sessionActivity`. The
+ * source travels WITH the value because only this side knows it: the bridge
+ * receives one number and, when it labelled that number by where it arrived
+ * from, published a JSONL watermark as `lastActivitySource: 'runtime'`.
+ *
+ * This replaces the raw `transcriptActivityAt`/`runtimeActivityAt` pair the
+ * descriptor used to carry. They were justified as evidence "an existing
+ * caller may read" — the descriptor is renderer-private and never reaches an
+ * MCP caller, and once the bridge stopped recombining them nothing read them
+ * at all.
+ */
+function lastActive(runtime: SessionRuntime | undefined): {
+  lastActiveAt?: number
+  lastActiveSource?: ManagedAgentRendererActivitySource
+} {
+  const { timestamp, source } = sessionActivity(runtime)
+  if (timestamp === null || source === null) return {}
+  return { lastActiveAt: timestamp, lastActiveSource: source }
 }
 
 function latestVisibleConversationRole(
@@ -169,8 +185,7 @@ function descriptorForSession(params: {
   const kind = meta?.kind ?? DEFAULT_PROVIDER
   if (!meta || !isAgentProviderKind(kind)) return null
   const runtime = params.runtimes[params.sessionId]
-  const runtimeAt = runtimeActivityAt(runtime)
-  const transcriptAt = runtime?.lastJsonlEntryAt ?? latestVisibleTimestamp(runtime)
+  const activity = lastActive(runtime)
   const summary = statusSummary(runtime)
   return {
     agent: {
@@ -205,8 +220,7 @@ function descriptorForSession(params: {
       ...(meta.orchestrationRole ? { orchestrationRole: meta.orchestrationRole } : {}),
     },
     ...(meta.providerSessionId ? { providerSessionId: meta.providerSessionId } : {}),
-    ...(transcriptAt ? { transcriptActivityAt: transcriptAt } : {}),
-    ...(runtimeAt ? { runtimeActivityAt: runtimeAt } : {}),
+    ...activity,
   }
 }
 
@@ -280,10 +294,24 @@ export function readManagedAgentOutput(params: {
   return {
     output,
     ...(descriptor.providerSessionId ? { providerSessionId: descriptor.providerSessionId } : {}),
-    ...(descriptor.transcriptActivityAt
-      ? { transcriptActivityAt: descriptor.transcriptActivityAt }
-      : {}),
-    ...(descriptor.runtimeActivityAt ? { runtimeActivityAt: descriptor.runtimeActivityAt } : {}),
+    ...forwardedActivity(descriptor),
+  }
+}
+
+/**
+ * Carry the descriptor's activity answer onto an output record.
+ *
+ * WHY a helper rather than two spreads at each site: both read paths forward
+ * it, and a site that forgets is invisible — the bridge just falls back to the
+ * weakest candidate it has and the agent still gets A number.
+ */
+function forwardedActivity(descriptor: ManagedAgentRendererDescriptor): {
+  lastActiveAt?: number
+  lastActiveSource?: ManagedAgentRendererActivitySource
+} {
+  return {
+    ...(descriptor.lastActiveAt ? { lastActiveAt: descriptor.lastActiveAt } : {}),
+    ...(descriptor.lastActiveSource ? { lastActiveSource: descriptor.lastActiveSource } : {}),
   }
 }
 
@@ -349,12 +377,7 @@ export function readManagedAgentOutputs(params: {
         ...(descriptor.providerSessionId
           ? { providerSessionId: descriptor.providerSessionId }
           : {}),
-        ...(descriptor.transcriptActivityAt
-          ? { transcriptActivityAt: descriptor.transcriptActivityAt }
-          : {}),
-        ...(descriptor.runtimeActivityAt
-          ? { runtimeActivityAt: descriptor.runtimeActivityAt }
-          : {}),
+        ...forwardedActivity(descriptor),
       })
       truncated = true
       return
@@ -406,20 +429,6 @@ export function additionalCloseImpact(params: {
   // calling model that sessions would die which would not — data it acts on.
   // Linked descendants still count: the session-scoped close still ends them.
   return [...affected]
-}
-
-function latestVisibleTimestamp(runtime: SessionRuntime | undefined): number | undefined {
-  if (!runtime) return undefined
-  for (let index = runtime.entries.length - 1; index >= 0; index -= 1) {
-    const entry = runtime.entries[index]
-    if (entry.type !== 'user' && entry.type !== 'assistant') continue
-    if (!entryTextContent(entry)?.trim()) continue
-    const raw = (entry as { timestamp?: unknown }).timestamp
-    if (typeof raw !== 'string') continue
-    const parsed = Date.parse(raw)
-    if (Number.isFinite(parsed)) return parsed
-  }
-  return undefined
 }
 
 function bounded(

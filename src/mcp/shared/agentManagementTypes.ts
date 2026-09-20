@@ -30,6 +30,17 @@ export type ManagedAgentTranscriptAvailability =
   | 'not_created'
   | 'unavailable'
 
+/**
+ * Which class of evidence a published `lastActivityAt` rests on. An auditing
+ * agent cites it, and the design doc ranks these deliberately: a real
+ * transcript record outranks a clock that a screen repaint can move
+ * (docs/superpowers/plans/2026-07-23-open-agent-mcp-control.md).
+ */
+export type ManagedAgentActivitySource = 'transcript' | 'runtime' | 'backend'
+
+/** The subset the RENDERER can decide: it has no view of the backend's clock. */
+export type ManagedAgentRendererActivitySource = Exclude<ManagedAgentActivitySource, 'backend'>
+
 export type ManagedAgentProject = {
   tabId: string
   title: string
@@ -52,7 +63,7 @@ export type ManagedAgentRecord = {
     lastModifiedAt?: number
   }
   lastActivityAt?: number
-  lastActivitySource?: 'transcript' | 'runtime' | 'backend'
+  lastActivitySource?: ManagedAgentActivitySource
   idleForMs?: number
   processActive: boolean
   awaitingAssistant: boolean
@@ -91,15 +102,35 @@ export type ManagedAgentTranscriptOutput = {
 export type ManagedAgentRendererDescriptor = {
   agent: ManagedAgentRecord
   providerSessionId?: string
-  transcriptActivityAt?: number
-  runtimeActivityAt?: number
+  /**
+   * The ONE answer to "when was this agent last active" (#915), shared with
+   * the TLDR peek footer via `sessionActivity`, plus which class of evidence
+   * produced it.
+   *
+   * WHY the renderer decides the source and the bridge does not: the bridge
+   * sees this as a single number and would have to label it by where it
+   * arrived from, which is how a JSONL watermark came to be published as
+   * `lastActivitySource: 'runtime'` — the value right, the citation wrong
+   * (review of #1080). Only the renderer knows whether a transcript record or
+   * a runtime clock won.
+   *
+   * This type is renderer-private and never serialised to an MCP caller (see
+   * `providerSessionId` above); its sole consumer is `AgentManagementBridge`,
+   * in the same binary. An earlier version also carried the raw
+   * `transcriptActivityAt`/`runtimeActivityAt` components "because an existing
+   * caller may read them" — there is no such caller, and once the bridge
+   * stopped recombining them nothing read them at all, so they are gone.
+   */
+  lastActiveAt?: number
+  lastActiveSource?: ManagedAgentRendererActivitySource
 }
 
 export type ManagedAgentRendererOutput = {
   output: ManagedAgentTranscriptOutput
   providerSessionId?: string
-  transcriptActivityAt?: number
-  runtimeActivityAt?: number
+  /** See `ManagedAgentRendererDescriptor.lastActiveAt` (#915). */
+  lastActiveAt?: number
+  lastActiveSource?: ManagedAgentRendererActivitySource
 }
 
 type AgentManagementRequestBase = {
