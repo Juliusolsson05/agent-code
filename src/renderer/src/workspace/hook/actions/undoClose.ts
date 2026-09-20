@@ -1,3 +1,4 @@
+import { carriedRelationships } from '@renderer/workspace/idRemap'
 import { sessionMcpOverrides } from '@renderer/workspace/mcpDomains'
 import { DEFAULT_PROVIDER, isAgentSessionKind } from '@shared/types/providerKind'
 import { useCallback, useState } from 'react'
@@ -80,16 +81,22 @@ function carryDurableMeta(spawned: SessionMeta | undefined, closed: SessionMeta)
     // unnamed agent (the setting off, or a name never allocated) is restored
     // without an empty identity that the reconciler would then have to heal.
     ...(closed.agentNameId ? { agentNameId: closed.agentNameId } : {}),
-    ...(closed.linkedParentId ? { linkedParentId: closed.linkedParentId } : {}),
-    ...(closed.orchestrationParentId ? { orchestrationParentId: closed.orchestrationParentId } : {}),
-    ...(closed.orchestrationRootId ? { orchestrationRootId: closed.orchestrationRootId } : {}),
-    ...(closed.orchestrationRunId ? { orchestrationRunId: closed.orchestrationRunId } : {}),
-    ...(closed.orchestrationRole ? { orchestrationRole: closed.orchestrationRole } : {}),
+    // The relationship fields, from the ONE list that decides what a
+    // relationship is (#1090 review). This function's own header complains
+    // that "three answers meant a field could survive one kind of undo and be
+    // lost by another" — and it had become the second answer itself: it
+    // listed six of the nine fields, so an undone orchestration child came
+    // back without `inheritedParentContext` and its parent then read its own
+    // pre-handoff commentary as the child's latest answer. Sharing the list
+    // is also what makes the type-level guard in
+    // successorRelationships.renderer.test.tsx mean what it claims: a new
+    // relationship field is now classified once, for every restore path.
+    //
+    // `carriedRelationships` omits absent fields rather than writing
+    // `undefined`, which is the same conditional-spread discipline as every
+    // other line here.
+    ...carriedRelationships(closed),
     ...(closed.agentViewModeOverride ? { agentViewModeOverride: closed.agentViewModeOverride } : {}),
-    // Its own doc comment says this "must survive with the child". spawn never
-    // sets it, so without carrying it an undone orchestration child would
-    // re-run its bootstrap handoff.
-    ...(closed.orchestrationBootstrapPromptDelivered ? { orchestrationBootstrapPromptDelivered: true } : {}),
     // Pool membership (#992). `spawn` writes an UN-FILED row — no project, no
     // position — so without these the restored session would be unowned
     // metadata that no index lists and the next autosave drops. `joinedAt` is

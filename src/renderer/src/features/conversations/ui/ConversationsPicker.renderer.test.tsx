@@ -70,8 +70,34 @@ describe('ConversationsPicker', () => {
     await screen.findByText('break down this project')
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'ArrowDown' })
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Enter' })
-    await waitFor(() => expect(ws.replaceSession).toHaveBeenCalledWith('/fixture/repo/.worktrees/extension-platform', { resumeSessionId: '01a08ddd-6327-7482-bd79-d1ade559677c', kind: 'codex' }))
+    // `newConversation` is part of this call's meaning, not a detail (#1090):
+    // the picker swaps a STRANGER's conversation into the pane, so the
+    // successor must not inherit the pane's orchestration parentage. Every
+    // other caller of replaceSession continues the same agent and omits it.
+    await waitFor(() => expect(ws.replaceSession).toHaveBeenCalledWith('/fixture/repo/.worktrees/extension-platform', { resumeSessionId: '01a08ddd-6327-7482-bd79-d1ade559677c', kind: 'codex', newConversation: true }))
     expect(onClose).toHaveBeenCalled()
+  })
+
+  it('does not resume the highlighted row when Enter presses a filter chip (#867)', async () => {
+    // The picker handles Enter on `DialogContent` and `preventDefault`s it, so
+    // the chips inside that content — ordinary tabbable buttons — never got
+    // their native click. Tab to "everywhere" and press Enter and the chip did
+    // not toggle: the picker RESUMED the highlighted conversation instead,
+    // replacing what was running in the focused pane. The #867 audit called
+    // this consumer safe for having no footer; the rule is about the focused
+    // CONTROL, not the footer slot.
+    install()
+    const ws = workspace()
+    render(<ConversationsPicker open focusSearch={false} workspace={ws} onClose={vi.fn()} />)
+    await screen.findByText('break down this project')
+    const chip = screen.getByRole('button', { name: 'everywhere' })
+
+    // `true` = the default survived, which is what lets a real browser deliver
+    // the chip's own click.
+    expect(fireEvent.keyDown(chip, { key: 'Enter' })).toBe(true)
+
+    expect(ws.replaceSession).not.toHaveBeenCalled()
+    expect(chip.getAttribute('aria-pressed')).toBe('false')
   })
 
   it('re-queries with the toggled scope, provider and children filters, and with the typed query', async () => {

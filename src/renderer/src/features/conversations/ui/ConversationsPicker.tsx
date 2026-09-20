@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { focusedControlOwnsEnter } from '@renderer/components/ui/dialog-actions'
 
 import type { Conversation, ConversationScope } from '@shared/conversations/types'
 import { AGENT_PROVIDER_KINDS, type AgentProviderKind } from '@shared/types/providerKind'
@@ -93,7 +94,14 @@ export function ConversationsPicker({ open, focusSearch, workspace, onClose }: P
     onClose()
     if (workspace.activeTab) {
       // In-place swap: the pane stays where it is, what runs in it changes.
-      await workspace.replaceSession(row.cwd, { resumeSessionId: row.nativeId, kind: row.provider })
+      //
+      // `newConversation` is what says that out loud (#1090 review). Every
+      // other caller of `replaceSession` continues the SAME agent, so the
+      // successor inherits the pane's orchestration parentage; this one pulls
+      // a stranger's conversation in, and inheriting parentage here would file
+      // it as somebody's orchestration child — reported to that parent as its
+      // worker's answer, and killed by `close_run`.
+      await workspace.replaceSession(row.cwd, { resumeSessionId: row.nativeId, kind: row.provider, newConversation: true })
     } else {
       // Fresh launch with nothing to replace: a new tab in the row's cwd.
       await workspace.newTab(row.cwd, row.nativeId, row.provider)
@@ -109,6 +117,14 @@ export function ConversationsPicker({ open, focusSearch, workspace, onClose }: P
       e.preventDefault()
       setSelected(i => Math.max(0, i - 1))
     } else if (e.key === 'Enter') {
+      // A focused control owns its own Enter (#867). This handler sits on
+      // `DialogContent`, and the scope and provider chips below are ordinary
+      // tabbable buttons inside it — so without this, Tab to the "everywhere"
+      // chip and Enter did not toggle the chip: it RESUMED the highlighted
+      // conversation, replacing what was running in the focused pane. The
+      // #867 audit called this picker safe because it has no footer; the rule
+      // is about the focused CONTROL, not the footer slot.
+      if (focusedControlOwnsEnter(e.target)) return
       e.preventDefault()
       const row = rows[selected]
       if (row) void resume(row)
