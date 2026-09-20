@@ -24,6 +24,7 @@ import type {
   PromptGateState,
   PromptReadinessOutcome,
 } from '@shared/types/session.js'
+import { unwrapClaudePastedContent } from '@shared/claude/pastedContent.js'
 import { ClaudeCodeHeadless, createProxyServer } from 'claude-code-headless'
 import type {
   ClaudeCondition,
@@ -1059,10 +1060,19 @@ export class ClaudeSession extends EventEmitter {
       const withoutImagePills = imageCountForEntry > 0
         ? stripTrailingClaudeImagePills(content, imageCountForEntry)
         : null
-      const matches = waiter.prompts.has(canonicalContent) || (
-        withoutImagePills !== null &&
-        waiter.prompts.has(canonicalizeAcceptedPrompt(withoutImagePills))
-      )
+      // Every witness Claude could have committed for THIS delivery: the entry
+      // as written, the same text with Claude's generated image pills removed,
+      // and either of those with Claude's own paste envelope unwrapped. A
+      // candidate that matches proves acceptance; one that does not is tallied
+      // and dropped. Order is irrelevant — they are alternatives, not a
+      // pipeline — but the pill strip runs BEFORE the unwrap because pills are
+      // appended after the envelope's closing tag.
+      const matches = waiter.prompts.has(canonicalContent) || [content, withoutImagePills].some(candidate => {
+        if (candidate === null) return false
+        if (candidate !== content && waiter.prompts.has(canonicalizeAcceptedPrompt(candidate))) return true
+        const unwrapped = unwrapClaudePastedContent(candidate)
+        return unwrapped !== null && waiter.prompts.has(canonicalizeAcceptedPrompt(unwrapped))
+      })
       if (!matches) { waiter.misses.exact += 1; continue }
       waiter.finish(kind === 'queue'
         ? { kind: 'queue', acceptedAt: Date.now() }

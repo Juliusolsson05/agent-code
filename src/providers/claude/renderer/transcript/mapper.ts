@@ -29,6 +29,7 @@ import {
   extractEmbeddedClaudeProgressEntry,
 } from './history'
 import { classifyClaudeDurableEntry } from '@providers/claude/renderer/entries/classify'
+import { unwrapClaudePastedContent } from '@shared/claude/pastedContent.js'
 
 export function createClaudeTranscriptEntryMapper(): TranscriptEntryMapper {
   return {
@@ -80,7 +81,16 @@ export function extractClaudeProviderSessionId(
  * or local-command markers. The `<` guard is belt and braces for the marker
  * family: a `<command-…>`/`<local-command-…>` row is excluded even if it ever
  * carries the stamp (latestUserPrompts.test.ts pins that case).
+ *
+ * The envelope is unwrapped BEFORE that guard (#1052 review). Claude Code
+ * 2.1.278 wraps every pasted prompt in `<pasted_content id="…">`, which makes
+ * the text start with `<` — so the guard, written for Claude's own markers,
+ * silently deleted the user's longest prompts from composer history
+ * (usePromptHistory reads this predicate). Unwrapping only accepts a whole,
+ * unambiguous envelope, so arbitrary provider scaffolding still cannot pass
+ * itself off as something the user typed.
  */
 export function isClaudeTypedUserPrompt(entry: Entry, text: string): boolean {
-  return (entry as { permissionMode?: string }).permissionMode !== undefined && !text.startsWith('<')
+  if ((entry as { permissionMode?: string }).permissionMode === undefined) return false
+  return !(unwrapClaudePastedContent(text) ?? text).startsWith('<')
 }
