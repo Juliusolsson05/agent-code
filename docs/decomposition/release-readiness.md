@@ -667,6 +667,54 @@ claude 2.1.143 / codex 0.130.0 are stale versus the 2.1.278 / 0.155.1 in daily u
   - **#1018 (orchestration hides API errors):** an evidence catalog from real feed-debug recordings is being built (research agent, worktree `.worktrees/fix-orchestration-api-error`). Implementation follows the catalog.
   - **Waiting on #1013's merge:** T7 (#1006), T8 (#1007), T2 (command promotion) and T1 (#995), all of which touch the catalog, keybindings or bootstrap.
   - **Nightly** run 35430444567: build-app is green, package-macos is running.
+- 2026-09-20 19:00Z — **Five merged (#1087, #1088, #1089, #1090, #1092). Four PRs open, all reviewed at least once. Three new bugs found BY the reviews and filed.**
+
+  **MERGED**: **#1087** (#863), **#1088** (#867), **#1089** (#827), **#1090** (#879),
+  **#1092** (a main-branch CI flake). Issues closed: #863, #867, #827, #879.
+  **#896 reopened deliberately** — #879 unblocked half of it; the composer half remains.
+
+  **The reviews are finding real defects in my fixes, not nits.** Four of the
+  five merges needed a second pass, and two needed a redesign:
+
+  - **#1089** (wait_agents cap) was reworked TWICE. Round 1: the 90 s cap was
+    derived from a threshold that does not exist in the vendored Claude source,
+    and sat ABOVE the MCP SDK's own 60 s default request timeout — the cap made
+    the reported loss *deterministic* for any client on defaults. Round 2: the
+    clamp I added bounded the sleep and left the `listAgents` await in the same
+    loop unbounded; the reviewer measured one call at **87,250 ms** against a
+    30 s promise. Now every bridge read is raced against one deadline, the poll
+    loop reserves the measured cost of a round trip for the final read, and a
+    cut-short reply says `outputsUnavailable` rather than holding the transport
+    open.
+  - **#1095** (state-lock TOCTOU) was reworked after a **cross-process syscall
+    trace** showed my "residual" was a 6-in-80 real race, plus a macOS
+    `ENOTSUP` bug that would have crashed startup on any non-APFS home. The
+    steal-and-restore design is gone: a stale lock is now REPLACED atomically,
+    nothing is ever deleted by a non-owner, the path is never empty, and the
+    remaining double-belief window is made DETECTABLE by `revalidate()`, which
+    `index.ts` calls before writing any state.
+  - **#1093** (OpenCode port conflict) converted a recoverable state into a
+    permanent lie: a server that was merely late left a "reload this agent"
+    banner forever and reported `transcript_unavailable` to every parent. The
+    feed now carries channel-health diagnostics so the renderer can clear it.
+
+  **New bugs found by reviewers and filed**: **#1091** (built-in MCP replies
+  ride a silent, non-resumable SSE stream — the real mechanism behind #827),
+  **#1094** → fixed in #1095, **#1097** (an OpenCode terminal whose server dies
+  MID-session reports nothing), **#1098** (the residual lock window, with the
+  reason a breaker lock may not be worth its own staleness problem).
+
+  **OPEN**: #1093 (review fixed, CI running), #1095 (review fixed, CI running),
+  #1096 (**#854**, in review), and #1094 is closed by #1095.
+
+  **#854 is evidence-driven**: the app's own run journal had 134 recorded
+  delivery failures across 11 app runs. 47 of 55 `create_agent` bootstrap
+  failures were "not ready YET" — 26 Claude trust-dialog, 21
+  composer-unpainted — and only 5 ever reached the absorption stage, which
+  settles the issue's paste-folding hypothesis as NOT the cause. The fix holds
+  the prompt until the gate opens instead of returning an error that invites
+  the retry that orphans a half-written draft.
+
 - 2026-09-20 17:30Z — **#1087 merged. #1090 opened (#879). Three reviews landed; a main-branch CI flake root-caused and fixed (#1092).**
 
   **MERGED**: **#1087** (closes #863, row bindings left pointing at a closed project).
