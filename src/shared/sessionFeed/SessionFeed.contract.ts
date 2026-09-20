@@ -18,6 +18,7 @@ const noop: SessionFeed = {
   onSessionScreen: () => () => {},
   onSessionJsonlEntries: () => () => {},
   onSessionJsonlError: () => () => {},
+  onSessionTranscriptDiagnostic: () => () => {},
   onSessionHistoryBoundary: () => () => {},
   onSessionSemanticEvent: () => () => {},
   onSessionConditions: () => () => {},

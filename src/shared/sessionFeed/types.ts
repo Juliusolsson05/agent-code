@@ -113,6 +113,29 @@ export type SessionHistoryBoundaryEvent = {
 
 export type SessionJsonlErrorEvent = { sessionId: string; message: string }
 
+/**
+ * A provider adapter's report about the HEALTH OF A CHANNEL, as opposed to the
+ * content flowing through it (#881).
+ *
+ * WHY this is on the feed at all, when it was main-only until now: main has
+ * always forwarded `session:transcript-diagnostic` to the window, and nothing
+ * on the other side listened — a renderer test harness even documents that
+ * ("no SessionFeed method reads them"). That was tolerable while diagnostics
+ * were only for recordings. It stopped being tolerable when a diagnostic
+ * became the only evidence that a fault the renderer is DISPLAYING has healed:
+ * an OpenCode terminal whose server was merely late reports
+ * `{ connected: true }` here, and without it the pane keeps a permanent
+ * "reload this agent" banner over a conversation that is working.
+ *
+ * `diagnostic` is deliberately unshaped: every provider's diagnostics are its
+ * own, consumers narrow on `kind`, and a union here would make adding one a
+ * cross-boundary change.
+ */
+export type SessionTranscriptDiagnosticEvent = {
+  sessionId: string
+  diagnostic: unknown
+}
+
 export type SessionConditionsEvent = {
   sessionId: string
   snapshot: ProviderConditionSnapshot
