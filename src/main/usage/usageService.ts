@@ -85,3 +85,11 @@ export function getUsageSnapshot(request: UsageSnapshotRequest = {}): Promise<Us
   })
   return fetchPromise
 }
+
+/** Called by providerEnablement mutations (#1102): the active source set is
+ * derived from enablement, so a toggle must not leave the 30s TTL serving
+ * the old provider list. In-flight fetches still complete; new callers
+ * fetch fresh. */
+export function invalidateUsageSnapshotCache(): void {
+  cachedSnapshot = null
+}
