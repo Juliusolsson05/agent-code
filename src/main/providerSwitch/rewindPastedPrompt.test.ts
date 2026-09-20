@@ -50,12 +50,19 @@ describe('Rewind draft and Claude\'s paste envelope (#1059)', () => {
   // behaviour being mistaken for a requirement.
   //
   // It is not one. Claude Code writes `<bash-input>` around what the user
-  // TYPED, at the top level of the message; it never puts one inside a paste
-  // envelope. An envelope containing that markup means the user pasted the
-  // text of a wrapper — and arming the composer to EXECUTE it is precisely
-  // the harm #930 is about. Typing `!` and then pasting produces the opposite
-  // nesting (envelope inside wrapper), which is covered below and in
-  // rewindLiteralMarkup.test.ts.
+  // TYPED, at the top level of the message: `processBashCommand.tsx` wraps the
+  // whole input string. An envelope containing that markup therefore means the
+  // user pasted the TEXT of a wrapper — and arming the composer to EXECUTE it
+  // is precisely the harm #930 is about.
+  //
+  // Honest about the limit of the evidence: `pasted_content` does not appear
+  // anywhere in `vendor/claude-code-src/`, so the envelope is composed by a
+  // component that is not vendored here. That it is created BEFORE
+  // `processUserInput` sees the input string — and so nests inside a wrapper
+  // rather than around one — is an inference from where the wrapping happens,
+  // not something read off the producer. It is supported by the corpus: across
+  // 1941 local transcripts, `pasted_content` never co-occurs with
+  // `<bash-input>` or `<command-name>`.
   it('treats a pasted slash command as the text that was pasted', () => {
     const command = '<pasted_content id="x">\n<command-name>/compact</command-name>\n<command-args>keep the plan</command-args>\n</pasted_content id="x">'
     const draft = claude.draft(text(command))

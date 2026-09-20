@@ -114,7 +114,59 @@ describe('a genuine wrapper is still believed', () => {
       'Does <command-name>/compact</command-name> get written into the transcript too, and what about <command-args>?',
       '<system-reminder>what does this mean when it shows up in my own prompt?</system-reminder>',
       'now ship it',
+      '/llm-prep Please include the two full headless ones.',
+      '/simplify',
+      '/compact',
+      // No row for the `<local-command-stdout>` turn: it is provider output,
+      // not a prompt, so it is absent from this list by design.
     ])
+  })
+})
+
+describe('both command breadcrumbs, because upstream writes two (#1071 review, 1)', () => {
+  // Prompt-type slash commands (/loop, /simplify, plugin and user-invocable
+  // skills) go through a DIFFERENT formatter that opens with
+  // `<command-message>`, and in the local corpus that shape is the majority —
+  // 136 turns against 105. A rule that only knew `<command-name>` turned every
+  // one of those picker rows into raw XML and prefilled the composer with the
+  // breadcrumb.
+  it('reads a prompt-type command that opens with <command-message>', async () => {
+    const draft = await decodedPrompt('<command-message>llm-prep')
+    expect(draft.promptText).toBe('/llm-prep Please include the two full headless ones.')
+    expect(draft.promptMode).toBe('prompt')
+  })
+
+  it('reads one with no <command-args> at all', async () => {
+    const draft = await decodedPrompt('<command-message>simplify')
+    expect(draft.promptText).toBe('/simplify')
+  })
+
+  it('leaves no trailing space when the args are present but EMPTY', async () => {
+    // 7 of the 8 distinct recorded `<command-name>`-first shapes have
+    // `<command-args></command-args>`; the composer would be prefilled with a
+    // stray space on every one of them.
+    const draft = await decodedPrompt('<command-name>/compact</command-name>\n            ')
+    expect(draft.promptText).toBe('/compact')
+  })
+})
+
+describe('provider command OUTPUT is not a prompt', () => {
+  it('keeps a stdout breadcrumb out of the picker', async () => {
+    // Claude Code composes the whole message
+    // (`createUserMessage({content: '<local-command-stdout>…'})`); no user
+    // types one, and 87 visible turns of this form exist locally, several with
+    // raw ANSI escapes. The never-strip-to-nothing rule must not resurrect
+    // them as picker rows.
+    const draft = await decodedPrompt('<local-command-stdout>')
+    expect(draft.promptText).toBe('')
+    expect(await rows()).not.toContain('<local-command-stdout>Set model to `Fable 5.1`</local-command-stdout>')
+  })
+
+  it('still drops output that is wrapped around injected context', async () => {
+    expect(claude.draft([{
+      kind: 'text',
+      text: '<local-command-stdout>done</local-command-stdout><system-reminder>a file opened</system-reminder>',
+    }] as never).promptText).toBe('')
   })
 })
 
@@ -139,6 +191,78 @@ describe('provenance is read before the paste envelope comes off', () => {
     const draft = claude.draft(text(nested) as never)
     expect(draft.promptMode).toBe('bash')
     expect(draft.promptText).toBe('npm run build')
+  })
+
+  it('reads the wrapper BODY from the anchored block, not the joined text', async () => {
+    // The whole rule is "the anchored block's raw bytes". Reading the body
+    // from the joined prompt text would let an earlier block supply the
+    // command, the args or the bash body for a wrapper it does not own.
+    const smuggled = claude.draft([
+      { kind: 'text', text: '<command-args>--force --yes</command-args><bash-input>rm -rf /</bash-input>' },
+      { kind: 'text', text: '<command-name>/compact</command-name>' },
+    ] as never)
+    expect(smuggled.promptText).toBe('/compact')
+    expect(smuggled.promptMode).toBe('prompt')
+  })
+
+  it('reads the COMMAND from the anchored block when an earlier one names another', async () => {
+    // `extractTagBody` returns the FIRST match, so reading the joined text
+    // would run the command an earlier block names instead of the one Claude
+    // Code actually wrapped.
+    const smuggled = claude.draft([
+      { kind: 'text', text: '<command-name>/clear</command-name>' },
+      { kind: 'text', text: '<command-name>/compact</command-name>' },
+    ] as never)
+    expect(smuggled.promptText).toBe('/compact')
+  })
+
+  it('reads the BASH BODY from the anchored block, not an earlier one', async () => {
+    const smuggled = claude.draft([
+      { kind: 'text', text: '<bash-input>rm -rf /</bash-input>' },
+      { kind: 'text', text: '<bash-input>ls</bash-input>' },
+    ] as never)
+    expect(smuggled.promptText).toBe('ls')
+    expect(smuggled.promptMode).toBe('bash')
+  })
+
+  it('requires the whole opening tag, not a prefix of it', async () => {
+    // `<bash-inputs-explained>` is not `<bash-input>`.
+    const draft = claude.draft([{
+      kind: 'text',
+      text: '<bash-inputs-explained>the tag is <bash-input>ls</bash-input></bash-inputs-explained>',
+    }] as never)
+    expect(draft.promptMode).toBe('prompt')
+    expect(draft.promptText).toContain('bash-inputs-explained')
+  })
+
+  it('does not let leading whitespace launder provenance', async () => {
+    // Claude Code's own check is `startsWith` with no trim, and a message that
+    // begins with a newline is one the user typed.
+    const draft = claude.draft([{ kind: 'text', text: '\n<bash-input>ls</bash-input>' }] as never)
+    expect(draft.promptMode).toBe('prompt')
+  })
+
+  it('carries pasted images through both wrapper branches', async () => {
+    // A wrapper branch returns early, so it has to pass the images on itself.
+    const image = {
+      kind: 'image',
+      value: { source: { type: 'base64', media_type: 'image/png', data: 'AAAA' } },
+    }
+    for (const text of ['<bash-input>ls</bash-input>', '<command-name>/compact</command-name>']) {
+      const draft = claude.draft([image, { kind: 'text', text }] as never)
+      expect(draft.promptImages, text).toEqual([{ mediaType: 'image/png', data: 'AAAA' }])
+    }
+  })
+
+  it('believes no wrapper when the message does not END in text', async () => {
+    // `processUserInput` only treats the LAST block as the turn's input when
+    // that block is text; otherwise there is no wrapped input at all.
+    const draft = claude.draft([
+      { kind: 'text', text: '<bash-input>ls</bash-input>' },
+      { kind: 'image', value: { source: { type: 'base64', media_type: 'image/png', data: 'AAAA' } } },
+    ] as never)
+    expect(draft.promptMode).toBe('prompt')
+    expect(draft.promptText).toBe('<bash-input>ls</bash-input>')
   })
 
   it('believes a wrapper only in the block Claude Code wraps', async () => {
