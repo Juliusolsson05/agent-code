@@ -516,7 +516,13 @@ export class WebSocketSessionFeed implements SessionFeed {
         const activeId = (frame.payload as { sessionId?: string })?.sessionId
         if (activeId) {
           const current = this.lastSessionList.find(s => s.sessionId === activeId)
-          if (current && Date.now() - (current.lastActivityAt ?? 0) >= ACTIVITY_REFRESH_MS) {
+          // `Math.abs`, so a stamp in the FUTURE is refreshed on the next
+          // event rather than waiting for a list publication (#1055 review):
+          // the elapsed time is negative there, and the plain comparison
+          // never fired, so a phone whose clock was corrected kept an
+          // inflated stamp until an unrelated workspace change happened to
+          // re-list. Any activity now retires it.
+          if (current && Math.abs(Date.now() - (current.lastActivityAt ?? 0)) >= ACTIVITY_REFRESH_MS) {
             this.lastSessionList = this.lastSessionList.map(s =>
               s.sessionId === activeId ? { ...s, lastActivityAt: Date.now() } : s,
             )

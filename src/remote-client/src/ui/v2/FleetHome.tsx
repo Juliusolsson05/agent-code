@@ -28,6 +28,10 @@ const HOLD_SLOP_PX = 10
 
 type PeekTarget = { sessionId: string; kind: PeekKind }
 
+/** How far ahead of this device's clock a recency stamp may sit and still be
+ *  treated as real: ordinary skew between two machines, not an artefact. */
+const FUTURE_STAMP_TOLERANCE_MS = 60_000
+
 export function FleetHome({
   feed,
   connection,
@@ -65,6 +69,9 @@ export function FleetHome({
   }, [feed])
 
   const groups = useMemo(() => {
+    // Re-read per recompute, and the 30 s clock tick already re-renders this
+    // list, so a clamped row recovers its true place within one tick.
+    const now = Date.now()
     // Every comparison ends in the session id, and the groups are ordered by a
     // rule rather than by arrival.
     //
@@ -77,8 +84,22 @@ export function FleetHome({
     // sections jumped. The feed's own rate limit stops most of the churn; this
     // makes the remaining updates land on the same arrangement instead of a
     // reshuffled one.
+    // A stamp cannot describe activity that has not happened yet (#1055
+    // review). A phone that was fast when a row last emitted carries an
+    // inflated stamp, and a QUIET row has no further event to retire it.
+    //
+    // Small overshoot is ordinary skew between two machines' clocks, and it
+    // clamps to now. A gross one is a clock artefact carrying no information
+    // about when that agent last worked, so the row is ranked as UNKNOWN
+    // rather than as the most recent thing on the phone — which is what an
+    // hour-fast clock made it, above everything genuinely newer.
+    const seenAt = (row: RemoteSessionSummary): number => {
+      const at = row.lastActivityAt ?? 0
+      if (at <= now) return at
+      return at - now <= FUTURE_STAMP_TOLERANCE_MS ? now : 0
+    }
     const byRecency = (a: RemoteSessionSummary, b: RemoteSessionSummary) =>
-      (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0)
+      seenAt(b) - seenAt(a)
       || a.sessionId.localeCompare(b.sessionId)
     const live = sessions.filter(s => s.alive)
     const exited = sessions.filter(s => !s.alive)
@@ -100,8 +121,8 @@ export function FleetHome({
     // The group with the most recent work first, ties broken by name. A group
     // keeps its place while its rows do.
     const groupOrder = [...grouped.entries()].sort(([nameA, rowsA], [nameB, rowsB]) => {
-      const recencyA = Math.max(...rowsA.map(row => row.lastActivityAt ?? 0))
-      const recencyB = Math.max(...rowsB.map(row => row.lastActivityAt ?? 0))
+      const recencyA = Math.max(...rowsA.map(seenAt))
+      const recencyB = Math.max(...rowsB.map(seenAt))
       // localeCompare is not a TOTAL order: two distinct strings can compare
       // equal (composed `café` and decomposed `café` do), and they stay
       // separate groups, so the arrangement would again depend on arrival

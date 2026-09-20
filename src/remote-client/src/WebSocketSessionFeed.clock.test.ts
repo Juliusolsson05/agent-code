@@ -36,6 +36,26 @@ const list = (lastActivityAt: number) => ({
 afterEach(() => vi.useRealTimers())
 
 describe('recency across two clocks', () => {
+  it('retires an inflated stamp on the next EVENT, with no list publication', () => {
+    // The server only re-lists on a workspace change, which may never come.
+    // Recovery cannot depend on it: a corrected clock must be able to fix the
+    // ordering from ordinary traffic (#1055 review).
+    const { feed, deliver } = mount()
+    vi.useFakeTimers()
+    const serverStamp = Date.parse('2026-09-20T04:00:00.000Z')
+
+    vi.setSystemTime(serverStamp + 3_600_000)
+    deliver(list(serverStamp))
+    deliver({ type: 'session-event', channel: 'screen', payload: { sessionId: 's1', plain: 'working' } })
+    const inflated = feed.getSessionList()[0]?.lastActivityAt ?? 0
+    expect(inflated).toBeGreaterThan(serverStamp + 3_000_000)
+
+    vi.setSystemTime(serverStamp + 60_000)
+    deliver({ type: 'session-event', channel: 'screen', payload: { sessionId: 's1', plain: 'still working' } })
+    expect(feed.getSessionList()[0]?.lastActivityAt).toBe(serverStamp + 60_000)
+  })
+
+
   it('keeps the client stamp while it is plausible, and retires it once the clock is corrected', () => {
     const { feed, deliver } = mount()
     vi.useFakeTimers()

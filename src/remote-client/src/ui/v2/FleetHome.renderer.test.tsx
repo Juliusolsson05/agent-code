@@ -116,6 +116,22 @@ describe('FleetHome', () => {
     expect(arrangement(rows)).toBe(arrangement([...rows].reverse()))
   })
 
+  it('does not let a stamp from the future outrank real activity (#1055 review)', () => {
+    // A QUIET row carrying an inflated stamp — the phone's clock was fast
+    // when it last emitted, and it has emitted nothing since, so no event can
+    // retire it. The list must still not put it above work that is genuinely
+    // newer.
+    const now = Date.now()
+    const rows = [
+      { ...BASE, sessionId: 's-future', kind: 'claude', title: 'Quiet', tabTitle: 'p', lastActivityAt: now + 3_600_000 },
+      { ...BASE, sessionId: 's-now', kind: 'claude', title: 'Working', tabTitle: 'p', lastActivityAt: now - 1_000 },
+    ]
+    const { container } = render(<FleetHome feed={fakeFeed({ summaries: rows })} connection="open" onSelect={() => {}} onUnpair={() => {}} />)
+    const titles = [...container.querySelectorAll('.session-row')].map(row => row.textContent ?? '')
+    expect(titles[0]).toContain('Working')
+    expect(titles[1]).toContain('Quiet')
+  })
+
   it('opens the TLDR peek on long-press and navigates on tap', () => {
     vi.useFakeTimers()
     const onSelect = vi.fn()
