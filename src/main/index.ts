@@ -1078,7 +1078,7 @@ async function startApp(): Promise<void> {
     console.warn('[tldr] stale hook file sweep failed:', error)
   })
   assertStartupOpen()
-  registerTldrIpc(tldrStore, tldrEnforcement)
+  registerTldrIpc(tldrStore, tldrEnforcement, appRunJournal)
   registerGoalIpc(goalStore)
   // Goal Loop (#1001): constructed before setDependencies for the same
   // one-shot reason as every other built-in dependency — the MCP handlers

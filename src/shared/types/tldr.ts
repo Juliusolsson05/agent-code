@@ -84,3 +84,20 @@ Only set your own goal through the available tool. If this session has no Goal M
 export function hasReportingDomain(domains: readonly string[] | undefined): boolean {
   return Boolean(domains?.includes('tldr') || domains?.includes('goal'))
 }
+
+/**
+ * Why a hold-to-peek gesture ended, as far as main can tell (#1066).
+ *
+ * `released` — the native watcher saw the key come up, or the hold ended for
+ *   a reason that says nothing about the keyboard (blur, navigation, a helper
+ *   or packaging failure). The overlay comes down.
+ * `unobservable` — the watcher could not see the keyboard at all. It proves
+ *   this by asking about Command, which is physically down whenever a watcher
+ *   starts, so a negative answer is a fact about the API rather than about the
+ *   user's fingers. Treating it as a release is what made the peek flash and
+ *   vanish with no explanation on every freshly signed build.
+ *
+ * Lives in shared/ because three processes touch it: main decides it, preload
+ * forwards it, the renderer renders it.
+ */
+export type HoldEndReason = 'released' | 'unobservable'

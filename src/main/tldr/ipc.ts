@@ -7,6 +7,8 @@ import type { TldrEnforcement } from './enforcement.js'
 import { broadcastToWindows, getBrowserWindow, windowIdFor } from '@main/window/windowRegistry.js'
 import { ensureMacHotkeyHelperBinary } from '@main/dictation/macHotkeyHelper.js'
 import { watchMacTldrRelease } from './holdRelease.js'
+import type { HoldEndReason } from '@shared/types/tldr.js'
+import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 
 function assertApplicationWindow(event: Electron.IpcMainInvokeEvent): void {
   const windowId = windowIdFor(event.sender)
@@ -18,7 +20,45 @@ function assertApplicationWindow(event: Electron.IpcMainInvokeEvent): void {
 const identityList = z.array(z.string().refine(validTldrIdentity)).max(10_000)
 const singleIdentity = z.string().refine(validTldrIdentity)
 
-export function registerTldrIpc(store: TldrStore, enforcement: Pick<TldrEnforcement, 'status'>): void {
+/**
+ * Record an unobservable hold ONCE per app run.
+ *
+ * WHY once: the cause is a machine-wide permission state, not a per-gesture
+ * fault, so every subsequent peek would report the identical thing. The
+ * dictation hotkey's `dictation.hotkey.unavailable` breadcrumb set this
+ * precedent, and it is what made #1066 diagnosable at all — the peek's silence
+ * is exactly what left the user with no way to tell a missing permission from
+ * a broken feature.
+ */
+let reportedUnobservableHold = false
+function noteHoldUnobservable(journal: AppRunJournal | null): void {
+  if (reportedUnobservableHold || !journal) return
+  reportedUnobservableHold = true
+  // The APP-RUN JOURNAL, not performanceService: the journal is what lands in
+  // a debug bundle and is exactly where #1066's diagnosis eventually came
+  // from — the dictation breadcrumb sitting in `incidents/runs/*/events.jsonl`.
+  // Severity 'warn', not 'error': the app is fine, one affordance degraded.
+  journal.record({
+    area: 'app.tldr',
+    name: 'tldr.hold.unobservable',
+    severity: 'warn',
+    data: {
+      message: 'the hold-to-peek release watcher cannot observe the keyboard, so '
+        + 'the peek latches instead of following the key — grant Agent Code '
+        + 'Accessibility permission in System Settings → Privacy & Security → '
+        + 'Accessibility. A newly signed build starts without the grants the '
+        + 'previous one had, because macOS keys them to the code signature.',
+    },
+  })
+}
+
+export function registerTldrIpc(
+  store: TldrStore,
+  enforcement: Pick<TldrEnforcement, 'status'>,
+  // Optional so the many tests that register this IPC keep compiling; main
+  // always passes it. A missing journal loses a breadcrumb, never behaviour.
+  appRunJournal: AppRunJournal | null = null,
+): void {
   // Warm the development build without delaying the first peek. This only
   // resolves/builds our bundled executable; it starts no keyboard observer.
   const helper = process.platform === 'darwin' ? ensureMacHotkeyHelperBinary() : null
@@ -34,23 +74,33 @@ export function registerTldrIpc(store: TldrStore, enforcement: Pick<TldrEnforcem
     const { code, token } = parsed.data
     const senderId = event.sender.id
     holds.get(senderId)?.cancel()
-    const finish = () => {
+    const finish = (reason: HoldEndReason = 'released') => {
       if (holds.get(senderId)?.token !== token) return
       holds.get(senderId)?.cancel()
-      if (!event.sender.isDestroyed()) event.sender.send('tldr:hold-released', token)
+      if (reason === 'unobservable') noteHoldUnobservable(appRunJournal)
+      if (!event.sender.isDestroyed()) {
+        // The renderer is told WHICH it was so it can explain itself instead of
+        // flashing (#1066). It never learns the exit code; main translates.
+        event.sender.send('tldr:hold-released', token, reason)
+      }
     }
+    // Declared before `cancel` references it: these three end the hold for
+    // reasons that say nothing about the keyboard, so they take the default
+    // 'released'. Passing `finish` directly would hand Electron's event object
+    // in as `reason`.
+    const finishNormally = () => finish()
     const stop = watchMacTldrRelease(helper, code, finish)
     const cancel = () => {
       stop()
-      window.removeListener('blur', finish)
-      window.removeListener('closed', finish)
-      event.sender.removeListener('did-start-navigation', finish)
+      window.removeListener('blur', finishNormally)
+      window.removeListener('closed', finishNormally)
+      event.sender.removeListener('did-start-navigation', finishNormally)
       if (holds.get(senderId)?.token === token) holds.delete(senderId)
     }
     holds.set(senderId, { token, cancel })
-    window.once('blur', finish)
-    window.once('closed', finish)
-    event.sender.once('did-start-navigation', finish)
+    window.once('blur', finishNormally)
+    window.once('closed', finishNormally)
+    event.sender.once('did-start-navigation', finishNormally)
   })
   ipcMain.on('tldr:hold-stop', (event, token: unknown) => {
     const hold = holds.get(event.sender.id)

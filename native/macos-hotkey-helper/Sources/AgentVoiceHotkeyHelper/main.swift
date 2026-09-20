@@ -5,11 +5,38 @@ import Foundation
 // Cmd-letter keyUp is swallowed by AppKit before Electron's before-input-event
 // and the renderer both see it. TLDR therefore asks this existing bundled
 // helper to watch ONE physical key, only for a hold already accepted by the
-// focused renderer. Querying key state needs no event tap, global shortcut or
-// Accessibility prompt. Keep this branch before the dictation permission code:
-// a read-only pane preview must never acquire dictation's system permissions.
+// focused renderer. This branch installs NO event tap and registers no global
+// shortcut, and it stays before the dictation permission code so a read-only
+// pane preview never acquires dictation's system permissions.
+//
+// It is NOT permission-free, which an earlier version of this comment claimed
+// and #1066 disproved: `keyState` answers `false` both for "that key is up"
+// and for "this process cannot see the keyboard at all". A build whose
+// Accessibility trust is missing — every freshly signed release, because macOS
+// keys TCC to the code signature — therefore reported an instant release, and
+// the peek flashed and vanished with nothing explaining why.
+//
+// ── HOW THE TWO CASES ARE TOLD APART ──
+// By asking about a key we KNOW is down. The renderer only starts this watcher
+// from a chord it just accepted with Command held, so Command is physically
+// down at spawn time. If `keyState` cannot see Command either, that is a fact
+// about the API's blindness, not about the user's fingers.
+//
+// Timing was the obvious alternative and is the wrong tool: "exited too fast to
+// be human" guesses, and the spawn itself already costs tens of milliseconds.
 if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--watch-release" {
   guard let code = UInt16(CommandLine.arguments[2]), code < 128 else { exit(65) }
+  // kVK_Command / kVK_RightCommand. Either side satisfies the chord.
+  //
+  // 67, not 66: this binary's exit codes are ONE vocabulary shared by both
+  // modes (64 empty binding, 65 unsupported key, 66 CGEventTap creation
+  // failed), and `macHotkeyHelper.ts` documents them. 66's dominant cause is
+  // the same missing Accessibility trust, but it is reported by a different
+  // mode to a different reader, so giving this its own code keeps each
+  // reader's contract unambiguous.
+  let commandObservable = CGEventSource.keyState(.combinedSessionState, key: 0x37)
+    || CGEventSource.keyState(.combinedSessionState, key: 0x36)
+  if !commandObservable { exit(67) }
   let deadline = Date().addingTimeInterval(300)
   while CGEventSource.keyState(.combinedSessionState, key: code) && Date() < deadline {
     Thread.sleep(forTimeInterval: 0.025)
