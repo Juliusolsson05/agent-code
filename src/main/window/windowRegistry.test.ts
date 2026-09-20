@@ -46,6 +46,18 @@ describe('window registry routing', () => {
     built.length = 0
   })
 
+  it('rejects every window factory call after committed shutdown before allocating native chrome', () => {
+    let committed = false
+    registry.setWindowCreationAdmission(() => !committed)
+    registry.createAppWindow()
+    expect(built).toHaveLength(1)
+    committed = true
+    expect(registry.isWindowCreationAllowed()).toBe(false)
+    expect(() => registry.createAppWindow()).toThrow('shutting down')
+    expect(() => registry.createAppWindow({ windowId: 'restored' })).toThrow('shutting down')
+    expect(built).toHaveLength(1)
+  })
+
   it('sends a session event only to the window that owns the session', () => {
     const left = registry.createAppWindow()
     const right = registry.createAppWindow()

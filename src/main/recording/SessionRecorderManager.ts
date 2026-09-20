@@ -504,7 +504,7 @@ export class SessionRecorderManager {
     return this.stop(sessionId)
   }
 
-  /** Drain + finalize every recording. Called on before-quit (mirrors
+  /** Drain + finalize every recording. Called after committed producer shutdown (mirrors
    *  ghostJournals.flushAll). */
   async flushAll(): Promise<void> {
     for (const { timer } of this.pendingStops.values()) clearTimeout(timer)

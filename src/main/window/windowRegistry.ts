@@ -343,11 +343,22 @@ function copyStringLength(
 // Lifecycle
 // ---------------------------------------------------------------------------
 
+let windowCreationAdmission = (): boolean => true
+
+export function setWindowCreationAdmission(admit: () => boolean): void {
+  windowCreationAdmission = admit
+}
+
+export function isWindowCreationAllowed(): boolean {
+  return windowCreationAdmission()
+}
+
 export function createAppWindow(options?: {
   windowId?: WindowId
   bounds?: WindowBounds | null
   fullScreen?: boolean
 }): WindowId {
+  if (!windowCreationAdmission()) throw new Error('Agent Code is shutting down; new windows are unavailable')
   const id = options?.windowId ?? randomUUID()
   const window = buildAppWindow({
     bounds: options?.bounds ?? null,
@@ -607,6 +618,7 @@ export function sendToSessionWindow(
 
 /** Test-only reset. Vitest module state persists across files in a worker. */
 export function resetWindowRegistryForTests(): void {
+  windowCreationAdmission = () => true
   windows.clear()
   focusOrder.length = 0
   sessionOwners.clear()

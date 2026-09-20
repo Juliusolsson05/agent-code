@@ -1434,13 +1434,13 @@ Diagnostic setup is interleaved with these steps. The tmux format discrepancy at
 
 Toolchain setup stores resolved executable paths and checks them again when necessary. A captured original `PATH` prevents repeated setup from continually prepending duplicate directories. Provider startup uses a validated absolute CLI path; a missing CLI is an explicit launch error rather than an accidental shell lookup. CLI updates coordinate with active sessions and workflow admission, especially Codex, so new work is not admitted into a binary replacement window. See [setup services](src/main/setup).
 
-Shutdown has vetoes. An unsaved editor can refuse a window close. Workflow shutdown can fail if it cannot establish a safe terminal state. Session teardown waits for owned resources instead of assuming that requesting termination proves termination.
+Shutdown has vetoes, and their order matters. An unsaved editor can refuse a window close, and nothing has been stopped before that decision: Electron's `before-quit` runs before the renderer's unload vote, so only reversible preparation happens there (the extension runtime's pause is resumed on Keep Editing). Once the quit is committed, one composition stops sessions, workflows and extensions together, then support services, then drains admitted writes. A workflow or session stop that cannot establish a safe terminal state keeps the application and its process lock for an explicit retry. See [application shutdown](src/main/applicationShutdown.ts).
 
 <!-- architecture-diagram: shutdown -->
 
 [![What can stop the application from quitting?](docs/architecture/diagrams/shutdown.svg)](docs/architecture/diagrams/shutdown.svg)
 
-Quit proceeds through workflow, editor and process checks. A failed check keeps the application available instead of pretending shutdown completed.
+The editor decides first, and Keep Editing leaves every service running. Only a committed quit stops sessions, workflows and extensions; a failed stop keeps the application and its process lock instead of pretending shutdown completed.
 
 <details>
 <summary>Mermaid source</summary>
@@ -1448,24 +1448,27 @@ Quit proceeds through workflow, editor and process checks. A failed check keeps 
 ```text
 flowchart TB
 accTitle: What can stop the application from quitting?
-accDescr: Quit proceeds through workflow, editor and process checks. A failed check keeps the application available instead of pretending shutdown completed.
-%% scope: Application quit · required gates; auxiliary hooks may overlap
-Quit["User requests quit"] -->|attempt stop| Workflow{"Workflows<br/>safely stopped?"}
-    Workflow -->|yes| Editor{"Editor close<br/>allowed?"}
-    Editor -->|yes| Processes{"Processes<br/>torn down?"}
-    Workflow -->|no| Stay["Keep app open<br/>Report failure / preserve user work"]
-    Editor -->|no, unsaved work| Stay
-    Processes -->|no| Stay
-    Processes -->|yes| Cleanup["Finish lifecycle cleanup<br/>Mark clean run and release lock"]
-    Cleanup -->|complete| Exit["Application exits"]
-    class Workflow,Editor,Processes caution
+accDescr: The editor decides first, and Keep Editing leaves every service running. Only a committed quit stops sessions, workflows and extensions; a failed stop keeps the application and its process lock instead of pretending shutdown completed.
+%% scope: Application quit · required gates; diagnostic flushes report failures but never block exit
+Quit["User requests quit<br/>reversible preparation only"] -->|close windows| Editor{"Editor close<br/>allowed?"}
+    Editor -->|no, unsaved work| Keep["Keep Editing<br/>every service stays live"]
+    Editor -->|yes| Commit["Commit quit<br/>no new windows or work admitted"]
+    Commit -->|stop execution| Stops{"Sessions, workflows<br/>and extensions stopped?"}
+    Stops -->|no| Retain["Keep app open<br/>retain failed owner and lock / quit again to retry"]
+    Stops -->|yes| Support["Stop support services<br/>drain admitted writes"]
+    Support -->|complete| Exit["Mark clean run, release lock<br/>Application exits"]
+    class Editor,Stops caution
 classDef external fill:#f1f4f6,stroke:#526477,color:#172b3a,stroke-dasharray:5 3
 classDef caution fill:#fff4d6,stroke:#886116,color:#432f10
 ```
 
 </details>
 
-Some auxiliary shutdown hooks run earlier or concurrently with these gates. Diagnostic flushes are not all awaited with the same durability guarantee as workflow state and owned-process shutdown. “Clean exit” is a lifecycle result, not proof that every optional debug record reached disk.
+[Application shutdown composition](src/main/applicationShutdown.ts) keeps irreversible disposal out of `before-quit`. The existing [terminal gate](src/main/sessionShutdownGate.ts) holds `will-quit` until the complete application drain resolves. Repeated quit requests join one attempt; retries retain completed-stage receipts and invoke only failed stages. Startup publishes workflow ownership before initialization and checks committed admission after asynchronous acquisition. All window creation routes share a committed-shutdown guard.
+
+Required execution stops retain their native ownership contracts. Workspace and dictation history tails establish settlement of admitted writes; they do not retry failed saves or establish fsync durability. Dictation aborts owned batch HTTP and joins admitted handlers/hotkey work before capturing its history tail. It cancels active/stopping previews and fences late optional observations; the pinned preview cancellation API can abandon a pending stop promise, which shutdown must not await. Diagnostic queues are awaited, with failures reported separately. A failed boot retains its process lock through cleanup and does not receive a clean-run marker.
+
+This is the application disposal repair in B02/#919. It does not yet introduce revision-bound editor approvals, a cross-window preparation generation, or a final persistence acknowledgement frontier. The native per-window close decision UX remains in use. “Clean exit” remains a lifecycle result rather than proof that every optional record reached disk.
 
 ### 6.2 Windows, workspace, and restoration
 

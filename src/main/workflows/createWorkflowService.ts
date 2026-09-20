@@ -16,6 +16,7 @@ import { WorkflowSourceApprovalStore } from '@main/workflows/WorkflowSourceAppro
 
 export async function createWorkflowService(options: {
   isCodexCliUpdateReserved?: () => boolean
+  onCreated?: (service: WorkflowService) => void
 } = {}): Promise<WorkflowService> {
   const workflowStateRoot = join(app.getPath('userData'), 'workflows')
   const store = new FileWorkflowStore(workflowStateRoot)
@@ -106,6 +107,10 @@ export async function createWorkflowService(options: {
       network: false,
     },
   })
+  // Publish ownership before initialize can recover work or fail halfway.
+  // WorkflowService.stop() already joins its initializer and fences recovery;
+  // main must be able to reach that owner during a partial-startup quit.
+  options.onCreated?.(service)
   await service.initialize()
   return service
 }
