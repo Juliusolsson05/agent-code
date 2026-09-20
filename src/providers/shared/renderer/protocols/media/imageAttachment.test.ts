@@ -253,12 +253,14 @@ describe('corpus-wide invariants', () => {
     expect(malformedCitations(allFixtures())).toEqual([])
   })
 
-  it('the reachability check it replaced is still a real check', () => {
-    // The negative control. Without it, "no malformed citations" would also
-    // hold for a provenance check that had quietly stopped checking anything —
-    // and the live suite would be theatre. Every fixture in this corpus was
-    // extracted from one of the two roots, so a resolver that finds nothing
-    // must flag every one of them.
+  it('every fixture cites a session inside a provider corpus, so the live check has something to check', () => {
+    // Machine-INDEPENDENT, which the first version of this control was not:
+    // it matched against `CORPUS_ROOTS`, which embed `homedir()`, so on CI —
+    // and on any second developer's machine — nothing matched, every fixture
+    // was skipped, and the assertion read `expected [] to have a length of 7`.
+    // A live suite that passes vacuously everywhere but one laptop is worse
+    // than no live suite, so `unreachableCitations` now matches on the
+    // provider directory SEGMENTS and this pins the property it relies on.
     const missingEverything = unreachableCitations(allFixtures(), () => false)
     expect(missingEverything).toHaveLength(allFixtures().length)
     expect(missingEverything.every(problem => problem.reason.includes('missing session'))).toBe(true)
@@ -299,10 +301,19 @@ describe('corpus-wide invariants', () => {
       expect(problems[0]!.reason).toContain(reason)
     })
 
-    it('ignores a citation outside the corpus roots, which was never this machine\'s to hold', () => {
+    it('ignores a citation outside any provider corpus, which was never a corpus session', () => {
       const elsewhere = broken({ source: '/somewhere/else/session.jsonl:7' })
       expect(malformedCitations([elsewhere])).toEqual([])
       expect(unreachableCitations([elsewhere], () => false)).toEqual([])
+    })
+
+    it('flags a missing session under ANY home directory, not just the extractor\'s', () => {
+      // The direct statement of what CI caught: the check keys on the
+      // provider's directory names, which are the same everywhere, not on the
+      // absolute path of whoever happened to record the fixtures.
+      const foreign = broken({ source: '/home/someone-else/.codex/sessions/2026/s.jsonl:3' })
+      expect(unreachableCitations([foreign], () => false)).toHaveLength(1)
+      expect(unreachableCitations([foreign], () => true)).toEqual([])
     })
   })
 

@@ -38,11 +38,27 @@ export type ImageFixture = {
 
 export type ProvenanceProblem = { id: string; reason: string }
 
-/** The developer-local corpora the fixtures were extracted from. */
+/**
+ * The developer-local corpora the fixtures were extracted from, on THIS
+ * machine. Only the live suite uses them, to check the roots are there at all
+ * before reporting what is missing under them.
+ */
 export const CORPUS_ROOTS = {
   claude: join(homedir(), '.claude', 'projects'),
   codex: join(homedir(), '.codex', 'sessions'),
 }
+
+/**
+ * What makes a citation the corpus's, independent of whose machine is asking.
+ *
+ * WHY segments and not `CORPUS_ROOTS` (CI caught this): the roots embed
+ * `homedir()`, so a second developer — or a runner — matches nothing, and
+ * `unreachableCitations` skips every fixture and reports a clean result
+ * without checking anything. A live suite that passes vacuously on every
+ * machine but one is worse than no live suite. The provider directory names
+ * are the stable part; the home directory is not.
+ */
+const CORPUS_SEGMENTS = [join('.claude', 'projects'), join('.codex', 'sessions')]
 
 export const FIXTURE_DIR = join(process.cwd(), 'testing/fixtures/image-reads')
 
@@ -86,12 +102,12 @@ export function malformedCitations(fixtures: readonly ImageFixture[]): Provenanc
 }
 
 /**
- * Fixtures whose cited session is no longer on THIS machine.
+ * Fixtures whose cited session is no longer reachable.
  *
  * Only meaningful to whoever extracted them, and only as a second opinion: a
  * missing file here means the transcript was rotated or deleted, not that the
- * fixture is wrong. Citations outside the corpus roots are skipped — they
- * were never this machine's to hold.
+ * fixture is wrong. Citations outside a provider corpus are skipped — they
+ * were never a corpus session to begin with.
  */
 export function unreachableCitations(
   fixtures: readonly ImageFixture[],
@@ -101,8 +117,7 @@ export function unreachableCitations(
   for (const fixture of fixtures) {
     const parsed = parseCitation(fixture.$fixture.source)
     if (!parsed) continue
-    const rooted = parsed.path.startsWith(CORPUS_ROOTS.claude) || parsed.path.startsWith(CORPUS_ROOTS.codex)
-    if (!rooted) continue
+    if (!CORPUS_SEGMENTS.some(segment => parsed.path.includes(segment))) continue
     if (!exists(parsed.path)) problems.push({ id: fixture.$fixture.id, reason: `cites a missing session: ${parsed.path}` })
   }
   return problems
