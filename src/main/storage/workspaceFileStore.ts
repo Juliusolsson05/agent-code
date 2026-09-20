@@ -1,6 +1,7 @@
 import { mainOperations } from '@main/performance/operations.js'
 import { randomUUID } from 'node:crypto'
-import { mkdir, readFile, rename, unlink, writeFile } from 'fs/promises'
+import { basename, dirname } from 'node:path'
+import { mkdir, readdir, readFile, rename, unlink, writeFile } from 'fs/promises'
 
 import { STATE_DIR, STATE_FILE } from '@main/storage/paths.js'
 import {
@@ -37,6 +38,67 @@ export type WindowGeometry = {
   bounds: WindowBounds | null
   displayId: number | null
   fullScreen: boolean
+}
+
+/**
+ * The scratch-file name `commit()` writes: `<state file>.<pid>.<ms>.<nonce>.tmp`.
+ *
+ * Anchored and fully specified on purpose. A sweep that matched
+ * `workspace.json.*` would take the one-way pre-upgrade `.bak` with it, and
+ * one that matched `*.tmp` would reach files this store never wrote. The pid
+ * group is what makes the decision below possible at all.
+ */
+const SCRATCH_NAME = /^\.(\d+)\.\d+\.[a-z0-9]+\.tmp$/
+
+/** Is a process with this pid running? Unknown counts as running. */
+function writerIsAlive(pid: number): boolean {
+  try {
+    // Signal 0 performs the permission and existence check without delivering
+    // anything. EPERM means the process EXISTS and is not ours, which is the
+    // one answer that must not be read as "gone".
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== 'ESRCH'
+  }
+}
+
+/**
+ * Remove scratch files left behind by a run that died mid-save (#826).
+ *
+ * WHY this is safe despite `commit()`'s rule that a save must NEVER infer
+ * ownership of a sibling name: it does not infer it, it proves the opposite.
+ * The writer's pid is in the name, and a dead pid cannot own an in-flight
+ * save — the write and the rename both happen inside one live process. Our own
+ * pid, another Agent Code instance's, and any pid we cannot ask about are all
+ * treated as alive and left alone. A reused pid therefore only DELAYS
+ * cleanup, which is the harmless direction; the harmful one is unreachable.
+ *
+ * WHY at open and not on a timer: this is inode hygiene, not correctness. One
+ * `readdir` of a directory that holds a handful of files, once per launch, is
+ * the cheapest place it can live, and it runs before `load()` so a profile
+ * carrying years of leftovers is clean by the time anything reads it.
+ *
+ * Best-effort throughout. A sweep must never be the reason the app cannot open
+ * its workspace: the file it would have removed is inert either way.
+ */
+async function sweepAbandonedScratch(): Promise<void> {
+  const prefix = basename(STATE_FILE)
+  let names: string[]
+  try {
+    names = await readdir(dirname(STATE_FILE))
+  } catch {
+    // A fresh install has no directory yet, and an unreadable one is the
+    // load path's problem to report, not this one's.
+    return
+  }
+  for (const name of names) {
+    if (!name.startsWith(prefix)) continue
+    const match = SCRATCH_NAME.exec(name.slice(prefix.length))
+    if (!match) continue
+    if (writerIsAlive(Number(match[1]))) continue
+    await unlink(`${dirname(STATE_FILE)}/${name}`).catch(() => undefined)
+  }
 }
 
 export class WorkspaceFileStore {
@@ -97,6 +159,7 @@ export class WorkspaceFileStore {
 
   static async open(): Promise<WorkspaceFileStore> {
     const store = new WorkspaceFileStore()
+    await sweepAbandonedScratch()
     await store.load()
     return store
   }
