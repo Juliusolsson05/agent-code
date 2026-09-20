@@ -30,9 +30,14 @@ type PeekTarget = { sessionId: string; kind: PeekKind }
 
 
 /** How far ahead of this device's clock a stamp may sit and still be treated
- *  as real. Everything here is already in this device's time base, so this
- *  covers transit and rounding, not the gap between two machines. */
-const FUTURE_STAMP_TOLERANCE_MS = 5_000
+ *  as real, when the feed CONVERTED it — everything is then in one time base,
+ *  so this covers transit and rounding only. */
+const CONVERTED_STAMP_TOLERANCE_MS = 5_000
+/** The same, for a desktop too old to send its clock (`serverNow`). Its
+ *  stamps arrive unconverted, so an overshoot here really can be the gap
+ *  between two machines, and the tighter cutoff would rank a just-finished
+ *  turn below one from three minutes ago (#1055 review). */
+const UNCONVERTED_STAMP_TOLERANCE_MS = 60_000
 
 export function FleetHome({
   feed,
@@ -100,10 +105,13 @@ export function FleetHome({
     // so it ranks as unknown rather than as the most recent thing on the
     // phone — which is what an hour-fast clock had made it, above everything
     // genuinely newer.
+    const tolerance = feed.serverClockKnown()
+      ? CONVERTED_STAMP_TOLERANCE_MS
+      : UNCONVERTED_STAMP_TOLERANCE_MS
     const seenAt = (row: RemoteSessionSummary): number => {
       const at = row.lastActivityAt ?? 0
       if (at <= now) return at
-      return at - now <= FUTURE_STAMP_TOLERANCE_MS ? now : 0
+      return at - now <= tolerance ? now : 0
     }
     const byRecency = (a: RemoteSessionSummary, b: RemoteSessionSummary) =>
       seenAt(b) - seenAt(a)
@@ -138,7 +146,7 @@ export function FleetHome({
       return recencyB - recencyA || nameA.localeCompare(nameB) || (nameA < nameB ? -1 : nameA > nameB ? 1 : 0)
     })
     return { grouped: groupOrder, exited: exited.sort(byRecency) }
-  }, [sessions, clockTick])
+  }, [sessions, clockTick, feed])
 
   const peekSession = peek ? sessions.find(s => s.sessionId === peek.sessionId) ?? null : null
   const peekRecord: RemoteNoteRecord | null =

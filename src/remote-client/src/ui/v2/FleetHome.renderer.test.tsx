@@ -15,6 +15,7 @@ void (undefined as Summary as never)
 
 function fakeFeed(options: {
   summaries?: Array<Record<string, unknown>>
+  serverClockKnown?: boolean
   tldr?: Record<string, { text: string; updatedAt: string; revision: number }>
   usage?: UsageSnapshot | null
 }) {
@@ -28,6 +29,10 @@ function fakeFeed(options: {
   }
   return {
     getSessionList: () => summaries,
+    // The real feed learns this from a `session-list` frame; a modern desktop
+    // always sends its clock, so the converted-stamp tolerance is the default
+    // these tests run under.
+    serverClockKnown: () => options.serverClockKnown ?? true,
     onSessionList: on('onSessionList'),
     onSessionProcessState: on('onSessionProcessState'),
     onUsage: on('onUsage'),
@@ -153,6 +158,23 @@ describe('FleetHome', () => {
       act(() => { vi.setSystemTime(base + 25_000); vi.advanceTimersByTime(30_000) })
       expect(order()[0]).toContain('Quiet')
     } finally { vi.useRealTimers() }
+  })
+
+  it('keeps the wider tolerance against a desktop that sends no clock (#1055 review)', () => {
+    // An older desktop cannot be converted, so its stamps arrive in ITS time
+    // base: a machine twenty seconds ahead reports work from a second ago as
+    // `phoneNow + 19s`. Under the converted tolerance that would rank as
+    // unknown — below work from three minutes ago — which is a regression for
+    // exactly the pairing that cannot be fixed at the source.
+    const now = Date.now()
+    const rows = [
+      { ...BASE, sessionId: 's-fresh', kind: 'claude', title: 'Fresh', tabTitle: 'p', lastActivityAt: now + 19_000 },
+      { ...BASE, sessionId: 's-older', kind: 'claude', title: 'Older', tabTitle: 'p', lastActivityAt: now - 180_000 },
+    ]
+    const { container } = render(
+      <FleetHome feed={fakeFeed({ summaries: rows, serverClockKnown: false })} connection="open" onSelect={() => {}} onUnpair={() => {}} />,
+    )
+    expect([...container.querySelectorAll('.session-row')][0]?.textContent ?? '').toContain('Fresh')
   })
 
   it('opens the TLDR peek on long-press and navigates on tap', () => {
