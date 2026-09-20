@@ -1,4 +1,4 @@
-import { ControlError, defineCapability, nativeInputOutput, conditionTargetInput, conditionReadOutput, conditionReplyInput, conditionReplyOutput } from '@control-sdk'
+import { ControlError, defineCapability, nativeInputOutput, conditionTargetInput, conditionReadOutput, conditionReplyInput, conditionReplyOutput, interruptOutput } from '@control-sdk'
 import { useAppStore } from '@renderer/app-state/store'
 import { isAgentSessionKind } from '@shared/types/providerKind'
 import { z } from 'zod'
@@ -23,11 +23,11 @@ export function conditionControlCapabilities() {
       id: 'agents.interrupt', title: 'Request Stop for an exact agent', execution: 'window', effect: 'mutation', completion: 'accepted', target: { kind: 'session', field: 'sessionId' },
       description: 'Send the same Escape signal as the composer Stop button to an active agent, preserving its process and draft. First call agents.conditionsRead and supply its revision; changed backend identity or any current condition refuses the write. Acceptance means the signal was delivered, not that the turn stopped. Read agents.read afterward. Does not wake or force-kill anything.',
       input: conditionTargetInput.extend({ revision: z.string().describe('Fresh revision from agents.conditionsRead.') }),
-      output: z.object({ sessionId: z.string(), sessionRunId: z.string(), accepted: z.literal(true) }),
+      output: interruptOutput,
       handler: async input => {
         const runtime = useAppStore.getState().workspaceRuntimes[input.sessionId]
         if (!runtime?.processActive && !runtime?.semantic.currentTurn) throw new ControlError('unavailable', 'No active turn was observed')
-        return z.object({ sessionId: z.string(), sessionRunId: z.string(), accepted: z.literal(true) }).parse(await invoke('sessions.interrupt', input))
+        return interruptOutput.parse(await invoke('sessions.interrupt', input))
       },
     }),
     defineCapability({

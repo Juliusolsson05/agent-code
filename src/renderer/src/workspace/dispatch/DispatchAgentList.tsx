@@ -7,6 +7,8 @@ import {
 import { memo, useCallback, useLayoutEffect, useMemo, useRef } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 
+import { sessionIsWorking } from '@renderer/session-runtime/working'
+import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { useAppStore } from '@renderer/app-state/hooks'
 import { goalLoopChipLabel, goalLoopChipTitle, isShownGoalLoop, useGoalLoops } from '@renderer/features/goal-loop/useGoalLoops'
@@ -298,6 +300,25 @@ export const DispatchAgentList = memo(function DispatchAgentList({
   )
 })
 
+/**
+ * How many of these sessions are working, for the group header's
+ * `running/total`.
+ *
+ * Exported so the COUNT can be tested without rendering the header (#1085
+ * review, finding 1). It was inline in a `useAppStore` selector, and #880's
+ * acceptance — "a row with no runtime counts as not running in both places" —
+ * was met in neither: a mutation replacing the whole condition with `true`
+ * left the entire renderer suite green.
+ */
+export function countWorkingSessions(
+  runtimes: Record<SessionId, SessionRuntime>,
+  sessionIds: readonly SessionId[],
+): number {
+  let count = 0
+  for (const sessionId of sessionIds) if (sessionIsWorking(runtimes[sessionId])) count += 1
+  return count
+}
+
 const EMPTY_SESSION_IDS: SessionId[] = []
 
 /**
@@ -385,14 +406,7 @@ const DispatchGroupHeader = memo(function DispatchGroupHeader({
   onCreateAgent?: ((tabId: TabId, anchorSessionId: SessionId) => void) | undefined
 }) {
   const sessionIds = useMemo(() => rows.map(row => row.sessionId), [rows])
-  const runningCount = useAppStore(useShallow(state => {
-    let count = 0
-    for (const sessionId of sessionIds) {
-      const runtime = state.workspaceRuntimes[sessionId]
-      if (runtime?.sessionStatus === 'running' || runtime?.streamPhase !== 'idle') count += 1
-    }
-    return count
-  }))
+  const runningCount = useAppStore(useShallow(state => countWorkingSessions(state.workspaceRuntimes, sessionIds)))
 
   return (
     <div className="flex items-center justify-between gap-2 px-2.5 py-1 text-[10px] text-ink bg-canvas">

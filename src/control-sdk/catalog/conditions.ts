@@ -16,3 +16,15 @@ export const conditionReplyInput = conditionTargetInput.extend({
 // latest condition, immediately before dispatch rather than across two IPCs.
 export const conditionBackendIdentity = z.object({ cwd: z.string(), provider: z.string() })
 export const conditionReplyOutput = z.object({ sessionId: z.string(), sessionRunId: z.string(), actionId: z.string(), accepted: z.literal(true) })
+
+/**
+ * `sessions.interrupt`'s result.
+ *
+ * Named and exported for the same reason as `agentStatusSchema` (#1086 review,
+ * finding 7): the window capability that forwards it had declared the shape
+ * TWICE more — once as its own `output:` and once as an inline `.parse()` —
+ * while every sibling in that file already imported its schema from here.
+ * A consumer that re-declares a producer's shape is a drift waiting to happen,
+ * and this file is where the one declaration lives.
+ */
+export const interruptOutput = z.object({ sessionId: z.string(), sessionRunId: z.string(), accepted: z.literal(true) })

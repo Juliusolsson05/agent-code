@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, unlink, writeFile } from 'fs/promises'
 
 import { STATE_DIR, STATE_FILE } from '@main/storage/paths.js'
+import { sweepAbandonedScratch } from '@main/storage/scratchSweep.js'
 import {
   collectSessionIds,
   emptyWorkspaceFile,
@@ -97,6 +98,26 @@ export class WorkspaceFileStore {
 
   static async open(): Promise<WorkspaceFileStore> {
     const store = new WorkspaceFileStore()
+    // WHY here rather than a timer, and WHY awaited: this is the one place in
+    // app startup that already owns the state directory, and it runs once
+    // before any window exists. It is NOT ordered against `load()` — nothing
+    // reads a scratch file, and an earlier version of this comment claimed
+    // otherwise (#1085 review, finding 7). It is awaited because it is cheap
+    // at the size this can reach: measured at 3–22 ms cold and ~0.3 ms warm on
+    // a real 48-file profile, against a leak of "a few a week". If a profile
+    // ever reaches thousands it should become fire-and-forget, the way
+    // `performanceTraceController.sweep()` already is.
+    //
+    // All four of the app's atomic-save writers are swept in one `readdir`,
+    // because all four share the directory and the defect (#1085 review,
+    // finding 5) — two clean up only in a `catch`, and AiWorkspaceRegistry not
+    // at all.
+    await sweepAbandonedScratch([
+      STATE_FILE,
+      `${STATE_DIR}/setup.json`,
+      `${STATE_DIR}/worktree-activity-index.json`,
+      `${STATE_DIR}/ai-workspaces.json`,
+    ])
     await store.load()
     return store
   }

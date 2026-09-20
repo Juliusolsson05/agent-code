@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { z } from 'zod'
-import { ControlError, controlOwnerSchema, controlResultSchema, defineCapability,
-  type ControlCaller, type ControlRequest, type ControlResult } from '@control-sdk'
+import { agentStatusSchema, ControlError, controlOwnerSchema, controlResultSchema, defineCapability,
+  type AgentStatus, type ControlCaller, type ControlRequest, type ControlResult } from '@control-sdk'
 
 const targetSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('agent'), sessionId: z.string().min(1), owner: controlOwnerSchema.optional() }).strict(),
@@ -71,9 +71,66 @@ export function createWaitControl(invoke: Invoke) {
             cursors.set(cursor, { scope, identity: currentIdentity, hash: currentHash, expires: Date.now() + 300000 })
             if ((input.after && (!previous || previous.scope !== scope || previous.expires < Date.now())) || (identity && identity !== currentIdentity)) return finish('cursor_expired')
             identity = currentIdentity
-            const agent = z.object({ activity: z.string().nullable(), exited: z.boolean(), conditions: z.array(z.string()), queuedCount: z.number(), inputReady: z.boolean().nullable() }).safeParse(value.status)
-            const attention = target.kind === 'agent' ? agent.success && (agent.data.exited || agent.data.conditions.length > 0) : ['failed', 'outcome_unknown'].includes(String(value.status))
-            const settled = target.kind === 'agent' ? agent.success && !agent.data.exited && agent.data.inputReady === true && agent.data.activity === 'idle' && agent.data.queuedCount === 0 && agent.data.conditions.length === 0 : ['completed', 'failed', 'outcome_unknown'].includes(String(value.status))
+            // WHY the PRODUCER's schema and not a copy (#875): this used to
+            // re-declare the shape here, with `exited: z.boolean()` against a
+            // producer that sends the exit CODE or null. Every parse failed,
+            // `agent.success` was always false, and both predicates below were
+            // unreachable — so `until: 'settled'` and `until: 'attention'` ran
+            // to their timeout for an agent that was plainly idle, or plainly
+            // exited, or plainly blocked on a permission. `until: 'change'`
+            // worked, which is why it went unnoticed.
+            //
+            // WHY the parse is scoped to the two predicates that NEED it
+            // (#1086 review, finding 3): `change` only hashes the status, so
+            // it never needed it — and making an unparseable status an error
+            // for `change` too would have turned the one mode that always
+            // worked into one that can now hard-fail. That is the single place
+            // this change would not have been a strict improvement.
+            //
+            // A local re-declaration of this schema, even a CORRECT one, is an
+            // equivalent mutant no test can kill (#1086 review, mutation I):
+            // it behaves identically until the producer changes, which is the
+            // entire failure this file just paid for. The import is the
+            // guard, and it is a review concern rather than a testable one.
+            //
+            // WHY it is an error at all, given it is unreachable today
+            // (finding 4): `defineCapability` already validates the producer's
+            // return against this same schema, so a drifting producer fails
+            // there and this wait reports `unavailable`. This branch is the
+            // belt to that brace, and it exists so the failure can never be
+            // SILENT — a status the predicates cannot read must not look like
+            // an agent that is simply never ready. The zod issues ride along,
+            // because a diagnostic that does not name the field is not one.
+            const needsAgentStatus = target.kind === 'agent' && input.until !== 'change'
+            let agent: AgentStatus | null = null
+            if (needsAgentStatus) {
+              const parsedAgent = agentStatusSchema.safeParse(value.status)
+              if (!parsedAgent.success) {
+                throw new ControlError('invalid_output', 'Status owner returned an agent status this wait cannot read', 'not_started', parsedAgent.error.issues)
+              }
+              agent = parsedAgent.data
+            }
+            // `exited` is the exit CODE, so a clean exit is 0 — falsy, and the
+            // reason this has to be an explicit null check.
+            const hasExited = agent !== null && agent.exited !== null
+            // WHY a backend that FAILED TO START raises attention (#1086
+            // review, finding 6): it has `exited: null` and no conditions, so
+            // both predicates used to be false and the wait ran its whole
+            // timeout — the same silent never-ready this change set out to
+            // remove, for the case an operator most needs to hear about. It is
+            // the ordinary "could not re-adopt the backend after a restart"
+            // state, not an exotic one.
+            // `agent` rather than `agent !== null` as the discriminator would
+            // read as though a null status were possible for an agent target;
+            // the throw above guarantees it is not, and a future third target
+            // kind would silently fall into the operation branch (#1086
+            // review, nit 9). The target's own kind is the real condition.
+            const attention = agent
+              ? hasExited || agent.process === 'failed' || agent.conditions.length > 0
+              : target.kind === 'operation' && ['failed', 'outcome_unknown'].includes(String(value.status))
+            const settled = agent
+              ? !hasExited && agent.process !== 'failed' && agent.inputReady && agent.activity === 'idle' && agent.queuedCount === 0 && agent.conditions.length === 0
+              : target.kind === 'operation' && ['completed', 'failed', 'outcome_unknown'].includes(String(value.status))
             if (input.until === 'attention' && attention) return finish('attention')
             if (input.until === 'settled' && settled) return finish('settled')
             if (input.until === 'change' && baseline !== undefined && baseline !== currentHash) return finish('changed')

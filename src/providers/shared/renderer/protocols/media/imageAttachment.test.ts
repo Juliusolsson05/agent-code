@@ -1,7 +1,3 @@
-import { existsSync, readFileSync, readdirSync } from 'node:fs'
-import { homedir } from 'node:os'
-import { join } from 'node:path'
-
 import { describe, expect, it } from 'vitest'
 
 import {
@@ -9,6 +5,15 @@ import {
   recognizeResultParts,
   sidecarImageMetadata,
 } from '@providers/shared/renderer/protocols/media/imageAttachment'
+import {
+  CENSUS_ROW_COUNT,
+  IMAGE_FIXTURE_COUNT,
+  loadImageFixture as fixture,
+  loadImageFixtures as allFixtures,
+  malformedCitations,
+  unreachableCitations,
+  type ImageFixture as Fixture,
+} from '@providers/shared/renderer/protocols/media/imageFixtureProvenance'
 
 // Stage D of docs/decomposition/image-read-base64-dump.md.
 //
@@ -28,37 +33,6 @@ import {
 // If one of these fails, the fixture is right and the code is wrong. Do not
 // adjust an expectation to match new behaviour without first confirming against
 // the source record named in the fixture's `$fixture.source`.
-
-const FIXTURE_DIR = join(process.cwd(), 'testing/fixtures/image-reads')
-
-// The developer-local corpora the fixtures were extracted from. Absent on CI by
-// definition — see the provenance note below.
-const CORPUS_ROOTS = {
-  claude: join(homedir(), '.claude', 'projects'),
-  codex: join(homedir(), '.codex', 'sessions'),
-}
-
-type Fixture = {
-  $fixture: {
-    id: string
-    censusRows: number[]
-    source: string
-    proves: string
-    substitutions: { path: string; originalChars: number; mime: string }[]
-    totalOriginalPayloadChars: number
-  }
-  entry: Record<string, unknown>
-}
-
-function fixture(id: string): Fixture {
-  return JSON.parse(readFileSync(join(FIXTURE_DIR, `${id}.json`), 'utf8')) as Fixture
-}
-
-function allFixtures(): Fixture[] {
-  return readdirSync(FIXTURE_DIR)
-    .filter(name => name.endsWith('.json'))
-    .map(name => JSON.parse(readFileSync(join(FIXTURE_DIR, name), 'utf8')) as Fixture)
-}
 
 describe('recognizeResultParts — Codex exec output (the reported bug)', () => {
   it('preserves the text/image interleaving verbatim', () => {
@@ -266,40 +240,122 @@ describe('recognizeImageNode — what must NOT be recognized', () => {
 })
 
 describe('corpus-wide invariants', () => {
-  it('every fixture is traceable to a census row and a real session', () => {
-    for (const f of allFixtures()) {
-      expect(f.$fixture.censusRows.length).toBeGreaterThan(0)
-      expect(f.$fixture.proves.length).toBeGreaterThan(0)
+  it('every fixture cites a census row and a well-formed session line', () => {
+    // #901. This used to assert that every cited session still EXISTED, as
+    // soon as either corpus root did — so a developer whose old transcripts
+    // had rotated away could not get a green `npm test`, and `npm run check`
+    // was blocked for work that had nothing to do with these fixtures. Nothing
+    // was wrong with the fixtures; the gate was reading the machine.
+    //
+    // `docs/testing/standard.md`: reading a developer's home directory is LIVE
+    // behaviour and needs an explicit opt-in variable on top of `test:live`.
+    // "The directory happens to be there" is not an opt-in. The reachability
+    // half now lives in imageAttachment.live.test.ts.
+    expect(malformedCitations(allFixtures())).toEqual([])
+  })
 
-      const path = f.$fixture.source.slice(0, f.$fixture.source.lastIndexOf(':'))
-      const line = Number(f.$fixture.source.slice(f.$fixture.source.lastIndexOf(':') + 1))
-      expect(path).toMatch(/\.jsonl$/)
-      expect(line).toBeGreaterThan(0)
+  it('has the corpus it thinks it has', () => {
+    // Every corpus-wide assertion below compares its result to
+    // `allFixtures().length`, which `0 === 0` satisfies. A loader that found
+    // NOTHING kept this suite green AND flipped the live suite from reporting
+    // three genuinely missing sessions to reporting none (#1084 review,
+    // finding 2). Pinning the count is what makes the other two mean anything.
+    expect(allFixtures()).toHaveLength(IMAGE_FIXTURE_COUNT)
+  })
 
-      // WHY provenance is only asserted when the corpus is present:
-      //
-      // Review correctly objected that the original check — a regex on the
-      // citation string — proved the citation was well-FORMED, not that it
-      // pointed at anything. The obvious repair was to `existsSync` the cited
-      // file. That repair was wrong, and CI caught it: the source corpora are
-      // the developer's own `~/.claude/projects` and `~/.codex/sessions`. They
-      // are machine-local by nature and cannot exist on a runner, so asserting
-      // their presence turned a portable test into one that only passed on one
-      // laptop.
-      //
-      // The real provenance gate is GENERATION, not assertion: a fixture cannot
-      // exist unless scripts/extract-image-fixtures.mts opened that exact file
-      // at that exact line and read a parseable record. This check adds a second
-      // opinion where the evidence is available, and says nothing where it is
-      // not — which is honest, rather than pretending to verify what it cannot
-      // reach.
-      if (existsSync(CORPUS_ROOTS.claude) || existsSync(CORPUS_ROOTS.codex)) {
-        const rooted = path.startsWith(CORPUS_ROOTS.claude) || path.startsWith(CORPUS_ROOTS.codex)
-        if (rooted) {
-          expect(existsSync(path), `${f.$fixture.id} cites a missing session: ${path}`).toBe(true)
-        }
-      }
-    }
+  it('every fixture cites a session inside a provider corpus, so the live check has something to check', () => {
+    // Machine-INDEPENDENT, which the first version of this control was not:
+    // it matched against `CORPUS_ROOTS`, which embed `homedir()`, so on CI —
+    // and on any second developer's machine — nothing matched, every fixture
+    // was skipped, and the assertion read `expected [] to have a length of 7`.
+    // A live suite that passes vacuously everywhere but one laptop is worse
+    // than no live suite, so `unreachableCitations` now matches on the
+    // provider directory SEGMENTS and this pins the property it relies on.
+    const missingEverything = unreachableCitations(allFixtures(), () => false)
+    expect(missingEverything).toHaveLength(allFixtures().length)
+    expect(missingEverything.every(problem => problem.reason.includes('missing session'))).toBe(true)
+  })
+
+  // The positive controls. "No problems reported" is also what a check that
+  // reports nothing would say, and five mutations proved exactly that: the
+  // assertions above passed with the census-row rule deleted, the `proves`
+  // rule deleted, the line number no longer parsed, and the whole function
+  // returning an empty list.
+  //
+  // These inputs are hand-built on purpose, for the same reason the negative
+  // assertions at the top of this file are: they describe fixtures the check
+  // must REJECT, which by definition are not in a corpus of ones it accepted.
+  describe('what the provenance check must reject', () => {
+    // A plain literal, not `CORPUS_ROOTS`: that was the last `homedir()`
+    // thread into `npm test`, and the PR's whole thesis is that the
+    // deterministic suite must not read the machine (#1084 review, nit 7).
+    // Harmless today, structurally incapable of regressing now.
+    const broken = (over: Partial<Fixture['$fixture']>): Fixture => ({
+      $fixture: {
+        id: 'synthetic',
+        censusRows: [1],
+        source: '/corpus/.claude/projects/p/session.jsonl:42',
+        proves: 'something',
+        substitutions: [],
+        totalOriginalPayloadChars: 0,
+        ...over,
+      },
+      entry: {},
+    })
+
+    it.each([
+      { what: 'no census row', over: { censusRows: [] }, reason: 'cites no census row' },
+      { what: 'nothing claimed proved', over: { proves: '' }, reason: 'claims to prove nothing' },
+      { what: 'a citation with no line', over: { source: '/corpus/.claude/projects/p/session.jsonl' }, reason: 'source is not' },
+      { what: 'a citation with a zero line', over: { source: '/corpus/.claude/projects/p/session.jsonl:0' }, reason: 'source is not' },
+      { what: 'a citation that is not a transcript', over: { source: '/corpus/.claude/projects/p/session.txt:1' }, reason: 'source is not' },
+      // `Number('abc')` is NaN and `NaN <= 0` is FALSE, so the bound check
+      // alone lets a non-numeric line through. `Number.isInteger` is what
+      // catches it, and nothing tested that.
+      { what: 'a citation whose line is not a number', over: { source: '/corpus/.claude/projects/p/session.jsonl:abc' }, reason: 'source is not' },
+      { what: 'a citation whose line has whitespace', over: { source: '/corpus/.claude/projects/p/session.jsonl: 42' }, reason: 'source is not' },
+      { what: 'a census row outside the recorded census', over: { censusRows: [CENSUS_ROW_COUNT + 1] }, reason: 'which is not one of the' },
+      { what: 'a census row of zero', over: { censusRows: [0] }, reason: 'which is not one of the' },
+    ])('rejects $what', ({ over, reason }) => {
+      const problems = malformedCitations([broken(over)])
+      expect(problems).toHaveLength(1)
+      expect(problems[0]!.reason).toContain(reason)
+    })
+
+    it('ignores a citation outside any provider corpus, which was never a corpus session', () => {
+      const elsewhere = broken({ source: '/somewhere/else/session.jsonl:7' })
+      expect(malformedCitations([elsewhere])).toEqual([])
+      expect(unreachableCitations([elsewhere], () => false)).toEqual([])
+    })
+
+    it('flags a missing session under ANY home directory, not just the extractor\'s', () => {
+      // The direct statement of what CI caught: the check keys on the
+      // provider's directory names, which are the same everywhere, not on the
+      // absolute path of whoever happened to record the fixtures.
+      const foreign = broken({ source: '/home/someone-else/.codex/sessions/2026/s.jsonl:3' })
+      expect(unreachableCitations([foreign], () => false)).toHaveLength(1)
+      expect(unreachableCitations([foreign], () => true)).toEqual([])
+    })
+
+    it.each([
+      // The SEGMENT is the provider's directory pair, not just the dotfile.
+      // `.claude` alone would claim `~/.claude/todos/*.jsonl` — a real
+      // directory holding real `.jsonl` files that are not sessions.
+      '/home/x/.claude/todos/s.jsonl:1',
+      '/home/x/.codex/history/s.jsonl:1',
+      // And not a directory that merely CONTAINS the words.
+      '/home/x/my.claude/projects-backup/s.jsonl:1',
+    ])('ignores %s, which is not a corpus session', source => {
+      expect(unreachableCitations([broken({ source })], () => false)).toEqual([])
+    })
+
+    it('matches a corpus path recorded on a machine with the other separator', () => {
+      // The live suite is the only consumer, and it currently only runs on
+      // macOS — so a Windows-recorded citation would otherwise make it skip
+      // everything and report a clean result.
+      const windows = broken({ source: 'C:\\Users\\x\\.codex\\sessions\\2026\\s.jsonl:3' })
+      expect(unreachableCitations([windows], () => false)).toHaveLength(1)
+    })
   })
 
   it('records the real payload size that was substituted away', () => {

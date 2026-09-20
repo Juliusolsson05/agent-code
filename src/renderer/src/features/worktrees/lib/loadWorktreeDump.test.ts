@@ -163,6 +163,31 @@ describe('collectLiveAgentsByWorktree recorded context', () => {
     expect(liveByWorktree.get(MAIN_CHECKOUT) ?? []).toEqual([])
   })
 
+  it('does not call a session LIVE when this renderer has no runtime for it (#880)', () => {
+    // `runtime?.sessionStatus === 'running' || runtime?.streamPhase !== 'idle'`
+    // was true for a MISSING runtime, because `undefined !== 'idle'` is. The
+    // row still lists the session — "an agent is in here" is what the panel is
+    // for — but `live` buckets it into the panel's live section, away from the
+    // categories its own copy calls "Safe to delete".
+    const worktrees = [
+      status(MAIN_CHECKOUT, 'fixture/branch-1', 'main'),
+      status(LINKED_WORKTREE, 'fixture/worktree-branch', 'active-unmerged'),
+    ]
+    const state = {
+      tabs: [{ id: 'tab', title: 'Project' }],
+      activeTabId: 'tab', stage: oneLaneStage('unobserved'),
+      sessions: { unobserved: { cwd: LINKED_WORKTREE, kind: 'terminal', projectId: 'tab', joinedAt: 0 } },
+      pinnedSessionIds: [],
+    } as WorkspaceState
+    // No entry at all for `unobserved`: the state this renderer is in before a
+    // runtime exists, which is what #880 is about.
+    const workspace = { state, runtimes: {} } as unknown as Workspace
+
+    expect(collectLiveAgentsByWorktree(workspace, worktrees).get(LINKED_WORKTREE)).toEqual([
+      expect.objectContaining({ sessionId: 'unobserved', live: false }),
+    ])
+  })
+
   it('lists a shell working inside a worktree (#865)', () => {
     // A shell has no transcript, so it has no workActivity; its cwd is the
     // only evidence and is exact for where it was started.
