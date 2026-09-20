@@ -4533,24 +4533,6 @@ export class SessionManager extends EventEmitter {
       // this close reached it. Report the cancellation as handled so renderer
       // close does not mistake an idempotent joined stop for a stale miss.
       return true
-    } else if (
-      kind === 'terminal' &&
-      typeof options.tmuxName === 'string' &&
-      this.tmuxRegistry?.ownsSessionName(options.tmuxName) === true
-    ) {
-      // A HIBERNATED terminal (#1030 item 4): boot hibernates every pane but
-      // the focused lane, so main has no row for it, yet its tmux session is
-      // alive and holds the user's shell. Closing the pane used to return
-      // false here and leave that session running until the next launch's
-      // reconciliation swept it — with more hibernated terminals than ever,
-      // that is a growing pile of orphaned shells.
-      //
-      // The name is renderer-supplied, so the registry's prefix is the
-      // ownership proof: it is the same filter listManagedSessions applies,
-      // and nothing else can mint one. killSession is a no-op when the name
-      // is already gone, which makes a double close harmless.
-      await this.tmuxRegistry.killSession(options.tmuxName)
-      return true
     } else {
       // During destructive handoff the predecessor row is intentionally gone,
       // and during compensation preflight the recovery claim is the owner. The

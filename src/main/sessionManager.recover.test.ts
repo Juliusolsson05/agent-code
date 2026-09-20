@@ -704,33 +704,6 @@ describe('SessionManager recover', () => {
     expect(manager.getBackendSnapshot(owner.sessionId)).toBeNull()
   })
 
-  it('closes a HIBERNATED terminal by killing the tmux session its pane still names (#1030 item 4)', async () => {
-    // Boot hibernates every pane but the focused lane, so main holds no row
-    // for this terminal. The close used to find nothing, return false, and
-    // leave the shell running until the next launch's reconciliation swept
-    // it. The renderer's persisted metadata is the only place the name still
-    // exists, so main takes it — but only when the registry minted it.
-    const { SessionManager } = await import('./sessionManager')
-    const killed: string[] = []
-    const registry = {
-      ownsSessionName: (name: string) => name.startsWith('agentcode-'),
-      killSession: async (name: string) => { killed.push(name) },
-      isAvailable: () => true,
-    }
-    const manager = new SessionManager(registry as never)
-    const hibernated = { sessionId: 'hibernated-terminal', kind: 'terminal' as const, cwd: '/tmp/project' }
-
-    await expect(manager.killOwned({ ...hibernated, tmuxName: 'agentcode-abc123' })).resolves.toBe(true)
-    expect(killed).toEqual(['agentcode-abc123'])
-
-    // A name this registry did not mint is not ours to kill, whatever a
-    // renderer says.
-    await expect(manager.killOwned({ ...hibernated, tmuxName: 'someone-elses-session' })).resolves.toBe(false)
-    // And with no name at all there is still nothing to tear down.
-    await expect(manager.killOwned(hibernated)).resolves.toBe(false)
-    expect(killed).toEqual(['agentcode-abc123'])
-  })
-
   it('keeps readiness revisions monotonic after the bounded known-id cache evicts old ids', async () => {
     const { SessionManager } = await import('./sessionManager')
     const manager = new SessionManager()

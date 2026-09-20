@@ -129,7 +129,7 @@ export type SessionWakeOptions = {
 export async function killSessionBackendIfOwned(
   refs: WorkspaceRefs,
   sessionId: SessionId,
-  capturedOwner?: Pick<SessionMeta, 'cwd' | 'kind' | 'providerRuntime' | 'tmuxName'>,
+  capturedOwner?: Pick<SessionMeta, 'cwd' | 'kind' | 'providerRuntime'>,
 ): Promise<boolean> {
   // Spawn cleanup may run before React refreshes stateRef. Its caller already
   // knows the exact scope it just created; main still performs the atomic
@@ -145,10 +145,6 @@ export async function killSessionBackendIfOwned(
     kind: meta.kind,
     providerRuntime: meta.providerRuntime,
     cwd: meta.cwd,
-    // Only a terminal has one, and main only acts on it when the pane has no
-    // live backend to tear down instead (#1030 item 4): a hibernated
-    // terminal's tmux session is otherwise orphaned until the next launch.
-    ...(meta.tmuxName ? { tmuxName: meta.tmuxName } : {}),
   })
 }
 

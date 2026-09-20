@@ -189,19 +189,6 @@ export class TmuxRegistry {
     }
   }
 
-  /**
-   * Is this a name THIS registry mints?
-   *
-   * WHY a caller needs to ask (#1030 item 4): closing a hibernated terminal
-   * hands main a tmux name from persisted renderer metadata, with no live
-   * session row to prove ownership. The prefix is the proof that the name is
-   * ours to kill: `listManagedSessions` filters on exactly this, and
-   * `createSession` mints exactly this.
-   */
-  ownsSessionName(name: string): boolean {
-    return name.startsWith(this.namePrefix)
-  }
-
   /** Kill a session by name. No-op if it doesn't exist. */
   async killSession(name: string): Promise<void> {
     if (!(await this.sessionExists(name))) return

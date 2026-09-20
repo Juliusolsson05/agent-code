@@ -603,4 +603,23 @@ describe('migrateWorkspaceToStage — a corrupt container is never an empty work
     expect(migrated.projects).toEqual([expect.objectContaining({ id: 'recovered-project' })])
     expect(migrated.sessions[sessionId as SessionId]).toMatchObject({ projectId: 'recovered-project' })
   })
+
+  it('keeps them when the buried row is ALSO still listed in sessions (#1048 review)', () => {
+    // The common shape, and the one the first fix missed: v2 buries a pane
+    // without removing its `sessions` row, so the buried record carries no
+    // metadata copy — and keying the recovery on that copy dropped exactly
+    // these rows.
+    const recorded = recordedLiveWorkspace()
+    const [sessionId, meta] = Object.entries(recorded.sessions)[0]!
+    const migrated = migrateWorkspaceToStage({
+      ...recorded,
+      tabs: [],
+      sessions: { [sessionId]: meta },
+      buried: [{
+        id: 'buried-1', sessionId: sessionId as SessionId, sessionMeta: meta, buriedAt: 1,
+        sourceTabId: recorded.tabs![0]!.id, sourceTabTitle: 'gone', sourceTabIndex: 0,
+      } as never],
+    }, () => 'recovered-project' as TabId)
+    expect(migrated.sessions[sessionId as SessionId]).toMatchObject({ projectId: 'recovered-project' })
+  })
 })

@@ -171,10 +171,21 @@ export function migrateWorkspaceToStage(
   // existed, deleted on upgrade. Mint one project to receive them instead.
   // Only for files that genuinely have parked rows; an empty file stays empty.
   if (projects.length === 0) {
-    const rehomed = [...legacy.values()].find(membership => membership.restoredMeta)
+    // WHY membership rather than `restoredMeta` (#1048 Codex review):
+    // `restoredMeta` is set ONLY when the metadata is missing from `sessions`,
+    // because it exists to carry the copy a buried record holds. The common
+    // case is the opposite — the row is buried AND still listed in `sessions`
+    // — and keying the mint on `restoredMeta` dropped exactly those rows,
+    // which is the bug this clause exists to fix. Any parked membership at
+    // all is enough; the metadata is then resolved from either source, as the
+    // loop below already does.
+    const rehomed = [...legacy.entries()].find(([sessionId, membership]) =>
+      membership.restoredMeta !== undefined || hasSessionMeta(persisted.sessions ?? {}, sessionId))
     if (rehomed) {
+      const [sessionId, membership] = rehomed
+      const meta = membership.restoredMeta ?? (persisted.sessions ?? {})[sessionId]
       const id = mintProjectId()
-      const cwd = rehomed.restoredMeta?.cwd
+      const cwd = meta?.cwd
       projects.push({ id, title: typeof cwd === 'string' ? titleFromCwd(cwd) : '', ...(typeof cwd === 'string' ? { cwd } : {}) })
       projectIds.add(id)
       activeProjectId = id
