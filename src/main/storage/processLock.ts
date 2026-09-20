@@ -86,9 +86,36 @@ function defaultIsLockOwnerActive(owner: StateProcessLockOwner): LockOwnerActivi
   // boundary, but it is a practical stale-lock discriminator: a live Agent
   // Code/Electron owner still advertises the executable that wrote the lock,
   // while a recycled PID almost certainly does not.
-  return ownerExecutable.length === 0 || commandLine.includes(owner.argv0) || commandLine.includes(ownerExecutable)
-    ? 'active'
-    : 'inactive'
+  if (
+    ownerExecutable.length === 0 ||
+    commandLine.includes(owner.argv0) ||
+    commandLine.includes(ownerExecutable)
+  ) {
+    return 'active'
+  }
+  // ── A LIVE PID WE CANNOT CONFIRM IS 'inconclusive', NEVER 'inactive' (#993) ──
+  //
+  // This used to answer 'inactive' here, which sends acquisition down the
+  // stale-lock path: delete the file and take over. But the only thing that
+  // failed is a STRING MATCH against a command line — and there are ordinary
+  // reasons for that to fail while the owner is very much alive and writing:
+  // the bundle was replaced in place by an update, the app was renamed or
+  // moved, a dev binary lives at a path that has since changed, or `ps`
+  // rendered the argv differently than `process.argv[0]` spelled it.
+  //
+  // Acting on that guess is what #993 looks like from the inside. Two mains
+  // ran against ~/.config/agent-code at once, and then the lock file was gone
+  // ENTIRELY — because once the incumbent's lock has been overwritten, its own
+  // release no longer matches the token, so whichever process exits first
+  // deletes the file and leaves the other running unprotected and invisible.
+  //
+  // The asymmetry decides it. Refusing to steal costs a bounded wait: the
+  // grace window below expires and the lock is cleaned up anyway, so PID reuse
+  // after a reboot still cannot lock anyone out. Stealing costs two main
+  // processes writing one state directory, which is the corruption this whole
+  // file exists to prevent. So 'inactive' is now reserved for the one case we
+  // actually KNOW: the pid is gone.
+  return 'inconclusive'
 }
 
 function normalizeLockOwnerActivity(value: boolean | LockOwnerActivity): LockOwnerActivity {
@@ -230,15 +257,17 @@ export async function acquireStateProcessLock(
         ) {
           // WHY inconclusive valid locks get a short grace window:
           //
-          // `ps` can fail for platform/permission reasons even while the
-          // recorded PID is alive. Deleting that lock immediately would reopen
-          // the multi-main-process corruption window. But treating an old
-          // inconclusive PID as active forever is just as bad after a crash or
-          // reboot: PID reuse can make Agent Code refuse to launch until the
-          // user manually deletes a JSON file in STATE_DIR. Valid locks have a
-          // real `startedAt`, so we use the same bounded-race policy as
-          // malformed locks: fail closed briefly, then let acquisition clean up
-          // the stale file and retry.
+          // Two things land here, and both mean "that pid is alive but I
+          // cannot prove it is ours": `ps` failed for platform or permission
+          // reasons, and — since #993 — `ps` succeeded but its command line
+          // did not match the recorded argv0. Deleting either immediately
+          // would reopen the multi-main-process corruption window. But
+          // treating an old inconclusive PID as active forever is just as bad
+          // after a crash or reboot: PID reuse can make Agent Code refuse to
+          // launch until the user manually deletes a JSON file in STATE_DIR.
+          // Valid locks have a real `startedAt`, so we use the same
+          // bounded-race policy as malformed locks: fail closed briefly, then
+          // let acquisition clean up the stale file and retry.
           return {
             acquired: false,
             path: lockPath,
