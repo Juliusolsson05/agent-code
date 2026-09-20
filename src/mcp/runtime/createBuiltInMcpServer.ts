@@ -26,6 +26,7 @@ import type {
 } from '@mcp/shared/orchestrationTypes.js'
 import { buildOrchestrationBootstrapPrompt } from '@mcp/shared/orchestrationPrompt.js'
 import type { BuiltInMcpDependencies } from '@mcp/runtime/BuiltInMcpHttpHost.js'
+import type { PromptDeliveryResult } from '@shared/types/providerConfig.js'
 import { BUILT_IN_MCP_DOMAINS } from '@mcp/shared/types.js'
 import type { BuiltInMcpDomain, McpSessionScope } from '@mcp/shared/types.js'
 import type { SessionKind } from '@main/sessionManager.js'
@@ -921,6 +922,78 @@ function orchestrationCreateAgentCallKey(
             task: args.prompt,
           })
           const delivery = await manager.deliverPromptToAgent(agent.sessionId, prompt)
+          // A child that is not ready YET is not a failed child (#854).
+          //
+          // The run journal is unambiguous about which failure this is: of 55
+          // recorded bootstrap failures, 26 were "blocked by
+          // claude.trust-dialog" — the first-launch prompt an orchestration
+          // child in a fresh worktree hits every time, answered by a human in
+          // their own time — and 21 were "still warming
+          // (composer-unpainted)". Both clear on their own. Only 5 ever
+          // reached the absorption stage, so the large prompts this was blamed
+          // on were not the cause.
+          //
+          // Reporting those as an error made the caller's situation strictly
+          // worse: the disposition said `retry-same-session`, the parent
+          // retried immediately into the same not-ready window, and THAT
+          // attempt is the one that writes prompt bytes without Enter and
+          // leaves an orphaned draft the parent can only escape by closing the
+          // child. So instead the prompt waits for the composer, and the reply
+          // says so — the child is created, the brief is coming, and the
+          // parent is told not to send it again.
+          // `canWaitForPromptReadiness` decides BEFORE the reply promises
+          // anything (#854 review). Only Claude and Codex have a readiness
+          // gate to subscribe to; OpenCode and Grok report not-readiness as an
+          // ordinary failure, so promising a wait there replaced a retry the
+          // parent could act on with a silent loss it could not.
+          if (
+            !delivery.ok
+            && isNotReadyYet(delivery)
+            && typeof manager.deliverPromptWhenReady === 'function'
+            && manager.canWaitForPromptReadiness?.(agent.sessionId) === true
+          ) {
+            const pending = manager.deliverPromptWhenReady(agent.sessionId, prompt)
+            // Deliberately not awaited: the wait outlives this MCP call by
+            // design, and its whole purpose is that the caller does not have
+            // to hold a transport open for it. What IS awaited, later, is the
+            // bookkeeping — the child is only marked as having received its
+            // bootstrap once it actually has.
+            void pending.then(async result => {
+              if (result.ok) {
+                bridge.notePromptSubmitted(agent.sessionId)
+                await bridge.markBootstrapPromptDelivered({
+                  parentSessionId: scope.sessionId,
+                  sessionId: agent.sessionId,
+                }).catch(() => undefined)
+                return
+              }
+              dependencies.appRunJournal?.recordIncident({
+                kind: 'orchestration.prompt_delivery_failed',
+                severity: 'error',
+                reason: 'create_agent_bootstrap_pending',
+                context: {
+                  sessionId: agent.sessionId,
+                  message: result.message,
+                  stage: result.stage,
+                  code: result.code,
+                  retrySafe: result.retrySafe,
+                  disposition: result.disposition,
+                  promptWritten: result.promptWritten,
+                  enterWritten: result.enterWritten,
+                },
+              })
+            })
+            return toolText({
+              ok: true,
+              agent,
+              // Not submitted, and not lost: the distinction the old reply
+              // could not make.
+              promptSubmitted: false,
+              promptPending: true,
+              promptPendingReason: delivery.message,
+              message: `The child was created and its prompt is waiting for its composer (${delivery.message}). It will be delivered as soon as the child can accept it — do not send it again; use orchestration_read_agent to see when it lands.`,
+            })
+          }
           if (!delivery.ok) {
             let cleanupAttempted = false
             let agentClosed = false
@@ -1105,7 +1178,15 @@ function orchestrationCreateAgentCallKey(
             task: args.prompt.trim(),
           })
         : args.prompt.trim()
-      const delivery = await manager.deliverPromptToAgent(args.sessionId, prompt)
+      // `supersedesPendingPrompt` (#854 review): THIS caller is sending the
+      // child's brief by hand, so a brief still waiting for the composer is
+      // the same task and must not arrive twice. Every other delivery path —
+      // a human typing in the pane, the phone, the goal loop, compaction — is
+      // writing something else and leaves the waiting brief alone.
+      const delivery = await manager.deliverPromptToAgent(
+        args.sessionId, prompt, undefined, undefined, undefined,
+        { supersedesPendingPrompt: true },
+      )
       if (!delivery.ok) {
         dependencies.appRunJournal?.recordIncident({
           kind: 'orchestration.prompt_delivery_failed',
@@ -1588,6 +1669,32 @@ const MIN_WAIT_AGENTS_TIMEOUT_MS = 1_000
  * `done`.
  */
 const EXPIRED = Symbol('wait-agents-expired')
+
+/**
+ * Is this delivery failure "not ready YET" — a state that clears without
+ * anyone acting on the orchestration side (#854)?
+ *
+ * `retry-same-session` is a warming composer; `retry-after-resolve` is a gate
+ * something else has to clear, which in the recorded corpus is almost always
+ * Claude's first-launch trust dialog. Both are the prompt arriving early.
+ *
+ * Everything else — a session the provider calls unusable, an absorption or
+ * acceptance failure — is a real failure about a real attempt and must keep
+ * failing loudly. The `stage` check is what excludes those.
+ *
+ * The bytes check in front of it is DEFENCE IN DEPTH and unreachable today:
+ * review enumerated every `ok: false` shape the four provider paths can
+ * produce and none carries `stage: 'before-write'` together with written
+ * bytes. It stays because the consequence of the two ever meeting is a second
+ * copy of the same prompt — the orphaned-draft half of #854 rather than a fix
+ * for it — and a future provider that writes before it decides it is not ready
+ * would otherwise inherit that silently.
+ */
+function isNotReadyYet(delivery: Extract<PromptDeliveryResult, { ok: false }>): boolean {
+  if (delivery.promptWritten || delivery.enterWritten) return false
+  if (delivery.stage !== 'before-write') return false
+  return delivery.disposition === 'retry-same-session' || delivery.disposition === 'retry-after-resolve'
+}
 
 // Cross-agent total budget for read_run_outputs / wait_agents (#373).
 //

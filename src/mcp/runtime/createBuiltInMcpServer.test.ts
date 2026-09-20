@@ -73,6 +73,15 @@ async function createAgentWithDelivery(delivery: PromptDeliveryResult): Promise<
       } as never,
       sessionManager: {
         deliverPromptToAgent: vi.fn(async () => delivery),
+        // A not-ready child now keeps its prompt and waits for its composer
+        // (#854). Never resolving models the honest case for these tests: the
+        // wait outlives the tool call, so the call's answer cannot depend on
+        // it.
+        deliverPromptWhenReady: vi.fn(() => new Promise<never>(() => {})),
+        // Claude-shaped: it has a readiness gate to wait on. Providers without
+        // one keep the old failure reply instead (#854 review), which has its
+        // own case in orchestrationBootstrapPending.system.test.ts.
+        canWaitForPromptReadiness: vi.fn(() => true),
       } as never,
     },
   )
@@ -216,7 +225,16 @@ describe('createBuiltInMcpServer Agent Management domain', () => {
 })
 
 describe('orchestration create-agent delivery disposition', () => {
-  it('preserves a healthy child when readiness merely needs more time', async () => {
+  it('keeps a healthy child AND its prompt when readiness merely needs more time', async () => {
+    // This case used to assert the failure reply — `ok: false` with
+    // `disposition: retry-same-session`, the child preserved. Preserving the
+    // child was right; telling the caller to retry was not (#854). The journal
+    // says 47 of 55 recorded bootstrap failures were states like this one that
+    // clear on their own, and the invited retry is what writes prompt bytes
+    // without Enter and orphans a draft.
+    //
+    // So the assertion moves with the behaviour: the call succeeds, the child
+    // comes back, and the prompt is reported as pending rather than failed.
     const { value, closeAgent } = await createAgentWithDelivery({
       ok: false,
       stage: 'before-write',
@@ -229,12 +247,12 @@ describe('orchestration create-agent delivery disposition', () => {
     })
 
     expect(value).toMatchObject({
-      ok: false,
-      sessionId: 'child-1',
-      disposition: 'retry-same-session',
-      cleanupAttempted: false,
-      agentClosed: false,
+      ok: true,
+      promptSubmitted: false,
+      promptPending: true,
+      promptPendingReason: 'composer still warming',
     })
+    expect((value.agent as { sessionId: string }).sessionId).toBe('child-1')
     expect(closeAgent).not.toHaveBeenCalled()
   })
 
