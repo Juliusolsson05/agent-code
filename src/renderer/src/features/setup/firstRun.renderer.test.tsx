@@ -67,6 +67,10 @@ function mountMachine(checks: SetupCheckResult[], options: { failKinds?: string[
     defaultCwd: async () => '/Users/someone',
     setupCheck,
     setupSkipOptional: vi.fn(async () => current),
+    setupAcknowledgeNoProviders: vi.fn(async () => {
+      current = { ...current, noProvidersAcknowledged: true }
+      return current
+    }),
     spawnSession,
     onOrchestrationRequest: () => () => undefined,
     onAgentManagementRequest: () => () => undefined,
@@ -76,7 +80,7 @@ function mountMachine(checks: SetupCheckResult[], options: { failKinds?: string[
   } })
   const hook = renderHook(() => useWorkspace())
   render(<SetupGate />)
-  return { hook, spawnSession, setupCheck }
+  return { hook, spawnSession, setupCheck, api: window.api }
 }
 
 const spawnedKinds = (spawnSession: ReturnType<typeof mountMachine>['spawnSession']) =>
@@ -197,6 +201,56 @@ describe('the setup panel never strands the first run (#1047 review)', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Continue with a terminal' }))
     await waitFor(() => expect(projects()).toBe(1))
     expect(spawnedKinds(spawnSession)).toEqual(['terminal'])
+  })
+
+  it('records the provider-less answer, so the panel stops opening by itself', async () => {
+    // A deliberate terminal-only install answered this once. An in-memory
+    // flag made the modal reappear on every launch and in every window, each
+    // of which is its own renderer process with its own store.
+    const { api } = mountMachine([withoutMachineWideInstalls(loadFirstRunCheck('clean-machine'))])
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue with a terminal' }))
+    await waitFor(() => expect(projects()).toBe(1))
+    expect(api.setupAcknowledgeNoProviders).toHaveBeenCalledOnce()
+  })
+
+  it('does not record an answer for a panel the user merely opened', async () => {
+    // Close on a panel opened from the menu used to durably skip mitmproxy,
+    // while Escape in the same panel recorded nothing.
+    const check = loadFirstRunCheck('developer-machine')
+    const { api } = mountMachine([{
+      ...check,
+      tools: { ...check.tools, mitmdump: { ...check.tools.mitmdump, found: false, path: null, source: undefined, installable: true, skipped: false } },
+    }])
+    await waitFor(() => expect(projects()).toBe(1))
+    // The automatic panel is up for the missing helper: answering it records.
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(api.setupSkipOptional).toHaveBeenCalled()
+    vi.mocked(api.setupSkipOptional).mockClear()
+    // Reopening it by hand and closing records nothing.
+    await act(async () => {
+      setupCommands.find(command => command.id === 'open-setup')!.run({ ui: { closePalette: vi.fn() } } as unknown as CommandContext)
+    })
+    fireEvent.click(await screen.findByRole('button', { name: 'Close' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(api.setupSkipOptional).not.toHaveBeenCalled()
+  })
+
+  it('Open Setup cannot answer the panel a parked bootstrap is waiting on', async () => {
+    // Running the command twice used to close the panel, which resolved the
+    // parked bootstrap into a terminal project — from a menu item called
+    // Setup…, while Escape and click-outside are refused on purpose.
+    const { spawnSession } = mountMachine([withoutMachineWideInstalls(loadFirstRunCheck('clean-machine'))])
+    await screen.findByRole('dialog')
+    const run = () => act(async () => {
+      setupCommands.find(command => command.id === 'open-setup')!.run({ ui: { closePalette: vi.fn() } } as unknown as CommandContext)
+    })
+    await run()
+    await run()
+    expect(screen.getByRole('dialog')).toBeTruthy()
+    expect(spawnSession).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Continue with a terminal' }))
+    await waitFor(() => expect(projects()).toBe(1))
   })
 
   it('says Close, not "Continue with a terminal", when no bootstrap is waiting', async () => {

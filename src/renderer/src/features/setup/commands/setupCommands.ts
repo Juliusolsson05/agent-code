@@ -22,7 +22,11 @@ export const setupCommands: CommandDef[] = [{
   run: ({ ui }) => {
     ui.closePalette()
     const store = useSetupStore.getState()
-    if (store.requested) store.close()
+    // Never let the command ANSWER the panel (#995 Codex review): while a
+    // fresh-install bootstrap is parked on it, Escape and click-outside are
+    // refused on purpose, and closing through this toggle would silently
+    // decide "continue with a terminal" from a menu item called Setup….
+    if (store.requested && !store.firstRunWaiting) store.close()
     else store.open()
   },
 }]

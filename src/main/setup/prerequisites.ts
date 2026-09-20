@@ -172,6 +172,7 @@ export async function checkPrerequisites(): Promise<SetupCheckResult> {
   return {
     checkedAt: Date.now(),
     tools,
+    noProvidersAcknowledged: state.acknowledgedNoProviders,
     ...deriveReadiness(tools),
   }
 }

@@ -161,6 +161,36 @@ is what the gate, the bootstrap and the pickers read.
 - **Unknown 1 (#994)** had already merged as #1002: a bundled OpenCode is
   `found` with `source:'bundled'` and counts as a usable provider.
 
+### Review findings resolved after the first implementation
+
+Two adversarial reviews (UI/keyboard, then policy/bootstrap) found these, all
+fixed on the branch:
+
+- **The install command pointed where the resolver never looked.** OpenCode's
+  installer writes `~/.opencode/bin` and exports it from `~/.zshrc`, which
+  `zsh -lc` does not source — so "install, press Retry" still said "Not
+  installed". `WELL_KNOWN_BIN_DIRS` now includes that directory and `~/.grok/bin`,
+  with a system test that installs a stub there and fails without the change.
+- **The panel claimed modality without focus.** It is a real `Dialog` now.
+- **The acknowledgment could be lost or repeated.** It closes in `finally`, and
+  "continue without a provider" is persisted in `setup.json` beside the skipped
+  helpers, so it does not reopen every launch and in every window.
+- **Only the panel that asked records an answer**, so Close and Escape no longer
+  differ in durable effect.
+- **`open-setup` can no longer answer a parked panel.**
+- **The test seam settles a parked waiter**, so one test's bootstrap cannot
+  resolve into the next.
+- **The live policy assertion is concrete per environment** instead of restating
+  the policy function.
+
+### Accepted, with reasons
+
+- The first project waits on the prerequisites probe with no independent
+  deadline (worst case two login-shell layers at 10 s each; measured 0.02–0.03 s
+  here). A deadline would have to invent a verdict for a slow machine, which is
+  what the lockout did; if this ever bites, bound the PROBE rather than the
+  wait.
+
 ### Still open
 
 - Login detection (#995 finding 7) is out of scope here, as planned.

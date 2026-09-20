@@ -111,12 +111,22 @@ export async function awaitFirstRunDecision(): Promise<SetupCheckResult | null> 
     const unsubscribe = useSetupStore.subscribe(state => {
       const decided = state.dismissed || (state.check?.usableProviders.length ?? 0) > 0
       if (!decided) return
-      unsubscribe()
-      useSetupStore.setState({ firstRunWaiting: false })
-      resolve(state.check)
+      settleFirstRunWaiter(state.check)
     })
+    // Held at module scope so resetSetupStoreForTests can settle a parked
+    // waiter (#995 Codex review). Without it a waiter from one test outlived
+    // the reset, unsubscribed from nothing, and resolved on the NEXT test's
+    // first check — spawning a second project there.
+    settleFirstRunWaiter = check => {
+      unsubscribe()
+      settleFirstRunWaiter = () => undefined
+      useSetupStore.setState({ firstRunWaiting: false })
+      resolve(check ?? null)
+    }
   })
 }
+
+let settleFirstRunWaiter: (check: SetupCheckResult | null | undefined) => void = () => undefined
 
 /**
  * Providers the last check did not find, for the pickers' "not installed"
@@ -150,5 +160,6 @@ export const MISSING_PROVIDER_HINT = 'Not installed · File › Setup…'
 /** Test seam: the module-level in-flight promise outlives a store reset. */
 export function resetSetupStoreForTests(): void {
   inFlight = null
+  settleFirstRunWaiter(null)
   useSetupStore.setState({ check: null, error: null, requested: false, dismissed: false, firstRunWaiting: false })
 }

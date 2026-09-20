@@ -80,7 +80,10 @@ export function SetupGate() {
   const automatic = Boolean(
     !dismissed &&
       check &&
-      (noProvider || missingOptional.some(tool => tool.installable && !tool.skipped)),
+      // A provider-less machine whose owner already answered is a DELIBERATE
+      // terminal-only install, not an unfinished setup (#995 Codex review).
+      ((noProvider && !check.noProvidersAcknowledged)
+        || missingOptional.some(tool => tool.installable && !tool.skipped)),
   )
   const shouldShow = Boolean(check && (requested || automatic))
   // The one state that may not be dismissed by a stray key or click: a fresh
@@ -136,11 +139,23 @@ export function SetupGate() {
   // exists to remove. Recording a skip is best effort; the user's
   // acknowledgment is not.
   const continueOn = useCallback(async () => {
-    const skippedTools = missingOptional.filter(tool => tool.installable && !tool.skipped)
+    // Only the panel that ASKED records an answer (#995 Codex review). A user
+    // who opened Setup from the menu to look around and pressed Close used to
+    // durably skip mitmproxy on their way out, while pressing Escape in the
+    // same panel recorded nothing — two exits from one dialog with different
+    // lasting effects.
+    const skippedTools = automatic
+      ? missingOptional.filter(tool => tool.installable && !tool.skipped)
+      : []
     setBusy('check')
     try {
       for (const tool of skippedTools) {
         useSetupStore.getState().setCheck(await window.api.setupSkipOptional(tool.id))
+      }
+      // The provider-less answer is durable too, or the panel reopens on every
+      // launch and in every window for someone who has already answered it.
+      if (automatic && noProvider) {
+        useSetupStore.getState().setCheck(await window.api.setupAcknowledgeNoProviders())
       }
     } catch (err) {
       setActionError(err instanceof Error ? err.message : String(err))
@@ -148,7 +163,7 @@ export function SetupGate() {
       setBusy(null)
       useSetupStore.getState().close()
     }
-  }, [missingOptional])
+  }, [automatic, missingOptional, noProvider])
 
   if (!shouldShow || !check) return null
 

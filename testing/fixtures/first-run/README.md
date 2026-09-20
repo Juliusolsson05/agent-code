@@ -45,3 +45,10 @@ RECORD_FIRST_RUN=1 npx vitest run --project system testing/system/first-run
     unsets those rows and re-derives readiness with the real policy.
 
 Paths under the recording HOME are written as `~`, so the files carry no username.
+
+**Recording touches your real setup state.** The `developer-machine` environment
+deliberately keeps the real `HOME`, and `STATE_DIR` follows it, so
+`checkPrerequisites` writes its resolved paths back to your own
+`~/.config/agent-code/setup.json` (and a probe that transiently misses clears
+that tool's cached path). The two clean environments use a temp `HOME` and
+cannot touch it.

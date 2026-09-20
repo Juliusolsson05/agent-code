@@ -164,6 +164,33 @@ const DESCRIPTIONS: Record<Environment, string> = {
     "The recording developer's real HOME, PATH and SHELL, with every provider CLI installed. Machine-specific; replayed only as policy input.",
 }
 
+describe.skipIf(process.platform !== 'darwin')('a provider installed by the command the panel shows is found (#995)', () => {
+  // The loop this feature exists to close: the panel says "Not installed",
+  // the user runs the command it gave them, presses Retry. OpenCode's
+  // installer writes ~/.opencode/bin and appends its PATH export to ~/.zshrc,
+  // which `zsh -lc` never sources — so the probe can only see it if the
+  // resolver knows that directory. Reproduced by Codex review of this PR.
+  it.each([
+    { provider: 'opencode', dir: '.opencode' },
+    { provider: 'grok', dir: '.grok' },
+  ] as const)('$provider installed under ~/$dir/bin', async ({ provider, dir }) => {
+    appRoot.path = await temp('first-run-app-')
+    const home = await temp('first-run-home-')
+    process.env.HOME = home
+    process.env.PATH = '/usr/bin:/bin:/usr/sbin:/sbin'
+    process.env.SHELL = '/bin/sh'
+    const bin = join(home, dir, 'bin')
+    await mkdir(bin, { recursive: true })
+    await writeFile(join(bin, provider), '#!/bin/sh\nexit 0\n')
+    await chmod(join(bin, provider), 0o755)
+    vi.resetModules()
+    const { checkPrerequisites } = await import('@main/setup/prerequisites.js')
+    const result = await checkPrerequisites()
+    expect(result.tools[provider]).toMatchObject({ found: true, source: 'system', path: join(bin, provider) })
+    expect(result.usableProviders).toContain(provider)
+  }, 60_000)
+})
+
 describe.skipIf(process.platform !== 'darwin')('first-run prerequisites on a simulated clean Mac (#995)', () => {
   it.skipIf(!RECORD)('records every environment', async () => {
     await mkdir(FIXTURES, { recursive: true })
@@ -200,12 +227,20 @@ describe.skipIf(process.platform !== 'darwin')('first-run prerequisites on a sim
       // project is always something this machine can run. On the macOS CI
       // runner, which has no provider CLI, the unbundled case is the genuine
       // zero-provider Mac and must come out as a terminal.
-      const usable = live.usableProviders
-      expect(live.firstSessionKind).toBe(usable.includes('claude') ? 'claude' : usable[0] ?? 'terminal')
       expect(live).not.toHaveProperty('blocking')
+      // Concrete per environment, not a re-implementation of the policy
+      // (#995 Codex review): restating `firstSessionKindFor` here could only
+      // ever fail for a stamping mismatch, never for a policy change.
       if (environment === 'clean-machine-packaged') {
-        expect(usable).toContain('opencode')
-        expect(live.firstSessionKind).not.toBe('terminal')
+        // The packaged app ships OpenCode, so this holds on any machine.
+        expect(live.usableProviders).toContain('opencode')
+        expect(live.firstSessionKind).toBe('opencode')
+      } else if (live.usableProviders.length === 0) {
+        // The CI runner: a genuinely provider-less Mac.
+        expect(live.firstSessionKind).toBe('terminal')
+      } else {
+        // This developer's machine keeps a machine-wide Grok outside HOME.
+        expect(live.firstSessionKind).toBe(live.usableProviders[0])
       }
     },
     60_000,

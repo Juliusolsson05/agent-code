@@ -73,6 +73,13 @@ export type SetupCheckResult = {
    * when it is usable, otherwise the first usable one, otherwise a terminal.
    */
   firstSessionKind: AgentProviderKind | 'terminal'
+  /**
+   * The user has already answered "continue without a provider" on this
+   * machine. The panel stops opening by itself for that reason; it is still
+   * one command away. Without this, a terminal-only user met the modal on
+   * every launch and in every new window.
+   */
+  noProvidersAcknowledged: boolean
 }
 
 // Targets the SetupGate's "Install via Homebrew" button can hand to
