@@ -1,10 +1,10 @@
-import { mkdir, mkdtemp, readdir, readFile, rm, utimes, writeFile } from 'node:fs/promises'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdir, mkdtemp, readdir, readFile, rm, symlink, utimes, writeFile } from 'node:fs/promises'
+import { existsSync, lstatSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { acquireStateProcessLock, classifyLockOwner } from './processLock.js'
+import { acquireStateProcessLock, classifyLockOwner, LINK_UNSUPPORTED_CODES } from './processLock.js'
 import type { LockOwnerProbe, StateProcessLockOwner } from './processLock.js'
 
 // ---------------------------------------------------------------------------
@@ -252,17 +252,64 @@ describe('two launches over ONE stale lock (#1094)', () => {
     isLockOwnerActive: owner => (owner.pid === DEAD_PID ? 'inactive' : 'active'),
   })
 
-  it.each([2, 4, 8])('lets exactly ONE of %d concurrent launches acquire it', async racers => {
+  it.each([2, 4, 8])('leaves exactly ONE of %d concurrent launches holding it', async racers => {
+    // The contract acquisition can actually promise, stated as it is rather
+    // than as one would like it:
+    //
+    // Two launches that condemn the same corpse BOTH replace it — `rename` is
+    // atomic but it is not create-if-absent — and each can read back its own
+    // token if it reads before the other's rename lands. So the answer
+    // `acquired: true` is provisional for exactly this case, and the file
+    // settles on one of them a moment later. `revalidate()` is what turns that
+    // into something a caller can act on, and `index.ts` calls it before this
+    // process writes anything.
+    //
+    // What is NOT provisional, and is the whole point: nobody's file is ever
+    // deleted, the path is never empty, and the survivor is whoever the
+    // filesystem says it is.
     await writeStaleOwner()
 
     const results = await Promise.all(Array.from({ length: racers }, () => acquire()))
 
-    const winners = results.filter(result => result.acquired)
-    expect(winners).toHaveLength(1)
-    // And the file on disk belongs to that winner, not to a loser that
-    // overwrote it on the way out.
+    const held = results.filter(result => result.acquired)
+    expect(held.length).toBeGreaterThan(0)
+    const survivors = held.filter(result => result.acquired && result.revalidate())
+    expect(survivors).toHaveLength(1)
+    // Every launch that lost can TELL it lost. Before this, a loser's handle
+    // was indistinguishable from a winner's and its release was a silent
+    // no-op, so the end state was a live writer and no lock file at all.
+    for (const result of held) {
+      if (result === survivors[0]) continue
+      expect(result.acquired && result.revalidate()).toBe(false)
+    }
     const onDisk = JSON.parse(await readFile(lockPath, 'utf8')) as StateProcessLockOwner
-    expect(onDisk.token).toBe((winners[0] as { token: string }).token)
+    expect(onDisk.token).toBe((survivors[0] as { token: string }).token)
+  })
+
+  it('never leaves the lock path empty, even mid-takeover', async () => {
+    // The property that made the previous design's three-way race possible: a
+    // steal that moved the corpse aside left a hole for two syscalls, and a
+    // third launch published into it. A replace has no hole — so a watcher
+    // that reads continuously sees a valid lock at every instant from the
+    // first publish onward.
+    await writeStaleOwner()
+    const observed: Array<string | null> = []
+    let watching = true
+    const watch = (): void => {
+      if (!watching) return
+      try { observed.push(readFileSync(lockPath, 'utf8')) } catch { observed.push(null) }
+      setImmediate(watch)
+    }
+    setImmediate(watch)
+
+    await Promise.all([acquire(), acquire(), acquire(), acquire()])
+    watching = false
+
+    expect(observed.length).toBeGreaterThan(0)
+    expect(observed.filter(content => content === null)).toEqual([])
+    for (const content of observed) {
+      expect(() => JSON.parse(content!) as unknown).not.toThrow()
+    }
   })
 
   it('refuses, and leaves the file alone, when another launch wins while this one is classifying', async () => {
@@ -322,6 +369,10 @@ describe('two launches over ONE stale lock (#1094)', () => {
     watching = false
 
     expect(lock.acquired).toBe(true)
+    // And the staging file it published through is gone. `link` leaves the
+    // source behind (two names, one inode), so unlike the replace path this
+    // one has something to clean up — one corpse per launch otherwise.
+    expect((await readdir(stateDir)).filter(name => name !== 'agent-code.process-lock.json')).toEqual([])
     // The watcher has to have run during the acquisition, or this proves
     // nothing at all.
     expect(observed.length).toBeGreaterThan(0)
@@ -365,17 +416,122 @@ describe('two launches over ONE stale lock (#1094)', () => {
     expect(leftovers).toEqual([])
   })
 
-  it('does not let a racer delete a lock it never inspected', async () => {
-    // Run repeatedly because one pass of a race proves nothing.
+  it('never deletes a lock it did not write, over many rounds', async () => {
+    // One pass of a race proves nothing. What is asserted is the invariant
+    // that survives every ordering — the file is always there, always valid,
+    // and always names exactly one live holder.
     for (let round = 0; round < 25; round += 1) {
       await rm(lockPath, { force: true })
       await writeStaleOwner()
 
       const results = await Promise.all([acquire(), acquire()])
 
-      expect(results.filter(result => result.acquired)).toHaveLength(1)
       expect(existsSync(lockPath)).toBe(true)
+      const survivors = results.filter(result => result.acquired && result.revalidate())
+      expect(survivors).toHaveLength(1)
     }
+  })
+
+  it('reports the lock LOST when its file is gone', async () => {
+    // `revalidate` answering "still ours" for a missing file would make the
+    // one safety check this handle offers lie in the exact case it exists for:
+    // nothing that participates correctly removes somebody else's lock, so a
+    // vanished file means the assumption underneath this process is broken.
+    const lock = await acquireStateProcessLock({ stateDir, pid: 100 })
+    if (!lock.acquired) throw new Error('expected the lock')
+    expect(lock.revalidate()).toBe(true)
+
+    await rm(lockPath, { force: true })
+
+    expect(lock.revalidate()).toBe(false)
+  })
+
+  it('reports the lock LOST when another launch has replaced it', async () => {
+    const lock = await acquireStateProcessLock({ stateDir, pid: 100 })
+    if (!lock.acquired) throw new Error('expected the lock')
+
+    await writeOwner({ token: 'someone-else', pid: 200 })
+
+    expect(lock.revalidate()).toBe(false)
+  })
+
+  it('knows the errno macOS actually returns when a filesystem has no hard links', () => {
+    // The branch itself needs a FAT volume to exercise, so what is pinned is
+    // the LIST, which is the part that was wrong: on Darwin `ENOTSUP` (45) and
+    // `EOPNOTSUPP` (102) are different values and `ENOTSUP` is the one that
+    // happens. Without it the fallback never fired, the error escaped
+    // `index.ts`'s startup guard, and the app died with no dialog on any home
+    // directory that is not on APFS or ext4.
+    expect(LINK_UNSUPPORTED_CODES).toContain('ENOTSUP')
+    expect(LINK_UNSUPPORTED_CODES).toContain('EOPNOTSUPP')
+    // Linux vfat.
+    expect(LINK_UNSUPPORTED_CODES).toContain('EPERM')
+    // EEXIST must NOT be here: that is a lock somebody else holds, and
+    // treating it as "no hard links" would fall back into creating one on top.
+    expect(LINK_UNSUPPORTED_CODES).not.toContain('EEXIST')
+  })
+
+  it('gives up after a bounded number of losses instead of spinning', async () => {
+    // A launch that keeps losing the replace must stop. The bound is what
+    // makes that true, and nothing exercised it: the suite pinned "at least
+    // one retry", so the value itself was free to change.
+    //
+    // The probe writes a fresh foreign lock every time it is asked — a rival
+    // that wins every round — so every attempt condemns a corpse, replaces it,
+    // and reads back somebody else's token.
+    let classifications = 0
+    await writeStaleOwner()
+
+    const lock = await acquireStateProcessLock({
+      stateDir,
+      pid: 101,
+      isLockOwnerActive: () => {
+        classifications += 1
+        writeFileSync(lockPath, `${JSON.stringify({
+          token: `rival-${classifications}`, pid: 900 + classifications,
+          startedAt: '2020-01-01T00:00:00.000Z', argv0: '/rival/Electron',
+        }, null, 2)}\n`, 'utf8')
+        return 'inactive'
+      },
+    })
+
+    expect(lock.acquired).toBe(false)
+    // Three attempts: the first plus MAX_STALE_RETRIES.
+    expect(classifications).toBe(3)
+  })
+
+  it('refuses a lock file it can read but not date, and says where it is', async () => {
+    // A lock whose bytes are unreadable can never be dated, so a refusal that
+    // waits for it to age out waits forever. Review found the first version of
+    // this guard turned that into a PERMANENT "Agent Code is already running"
+    // with the path only in a console warning — worse than the behaviour it
+    // replaced. The refusal is right; it just has to be the kind the caller
+    // can explain, which is why `reason` carries it.
+    await writeFile(lockPath, 'not json at all\n', 'utf8')
+
+    // No `now` override: the file's age is what it really is (about zero), so
+    // this is the "fresh and malformed" case the guard is for, not a
+    // future-dated one.
+    const lock = await acquireStateProcessLock({ stateDir, pid: 100 })
+
+    expect(lock).toMatchObject({ acquired: false, reason: 'unreadable-lock', path: lockPath })
+  })
+
+  it('refuses a lock path that is a dangling symlink, rather than writing through it', async () => {
+    // Not the vanished-mid-read case — that one is a genuine race I cannot
+    // construct in-process, and it is handled by going round rather than
+    // refusing (an ordinary release landing in that gap must not fail a
+    // launch). This is its observable cousin: a path that EXISTS to the atomic
+    // create and reads as nothing at all.
+    //
+    // It refuses, which is the right answer: following or replacing a symlink
+    // somebody put there would write the lock somewhere else entirely.
+    await symlink(join(stateDir, 'nowhere.json'), lockPath)
+
+    const lock = await acquireStateProcessLock({ stateDir, pid: 100 })
+
+    expect(lock.acquired).toBe(false)
+    expect(lstatSync(lockPath).isSymbolicLink()).toBe(true)
   })
 })
 

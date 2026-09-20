@@ -10,6 +10,21 @@ const LOCK_FILE_NAME = 'agent-code.process-lock.json'
 const INVALID_LOCK_STALE_MS = 5 * 60 * 1000
 const INCONCLUSIVE_OWNER_STALE_MS = 5 * 60 * 1000
 const MAX_STALE_RETRIES = 2
+
+/**
+ * The errno values that mean "this filesystem has no hard links", so the
+ * `link` publish must fall back to create-then-write.
+ *
+ * Exported because the LIST is the thing that was wrong and the branch itself
+ * cannot be exercised without mounting a FAT volume: on Darwin `ENOTSUP` (45)
+ * and `EOPNOTSUPP` (102) are different errno values, and `ENOTSUP` is the one
+ * macOS actually returns — review proved it on a real FAT32 image. The first
+ * version of this list caught the one that never happens, so the fallback
+ * never fired, the error escaped `index.ts`'s EACCES/EROFS/EPERM/ENOSPC/EDQUOT
+ * guard, and the app died at startup with no dialog. Linux vfat returns
+ * `EPERM`, which is why that entry was right by luck.
+ */
+export const LINK_UNSUPPORTED_CODES = ['EPERM', 'ENOSYS', 'EXDEV', 'EOPNOTSUPP', 'ENOTSUP'] as const
 const CLOCK_JITTER_TOLERANCE_MS = 60 * 1000
 
 export type StateProcessLockOwner = {
@@ -34,6 +49,21 @@ export type StateProcessLock =
       acquired: true
       path: string
       token: string
+      /**
+       * Does this process STILL hold the lock it was given (#1094)?
+       *
+       * Acquisition cannot promise a single winner in every ordering: two
+       * launches that condemn the same stale lock both replace it, and each
+       * can read back its own token if it reads before the other's rename
+       * lands. The file settles on one of them a moment later, and the loser
+       * has no idea — it was told `acquired: true` and never looks again.
+       *
+       * This is that second look. Cheap (one read, one comparison), and the
+       * caller decides what to do: refusing to write state and quitting is a
+       * recoverable inconvenience, while two mains writing one state directory
+       * is the corruption this whole file exists to prevent (#993).
+       */
+      revalidate: () => boolean
       release: () => Promise<void>
       releaseSync: () => void
     }
@@ -265,12 +295,28 @@ async function readExistingLock(
   owner: StateProcessLockOwner | null
   ownerAgeMs: number | null
   invalidAgeMs: number | null
+  /**
+   * The path holds something we could not read (#1094 review).
+   *
+   * Distinguished from "gone" because the two need opposite answers and used
+   * to share one: a lock that VANISHED between the failed create and this read
+   * is nobody's, and the next atomic create settles it; a lock that is present
+   * and unreadable — wrong ownership after a migration or a restore, the
+   * scenario `index.ts` already names — must be refused, and its age can never
+   * be established, so a refusal that waits for it to "age out" waits forever.
+   */
+  unreadable: boolean
+  /** Exactly what was read, so the caller can prove the file has not changed
+   *  since it was classified. */
+  raw: string | null
 }> {
   const [raw, fileStat] = await Promise.all([
     readFile(lockPath, 'utf8').catch(() => null),
     stat(lockPath).catch(() => null),
   ])
-  if (raw === null) return { owner: null, ownerAgeMs: null, invalidAgeMs: null }
+  if (raw === null) {
+    return { owner: null, ownerAgeMs: null, invalidAgeMs: null, unreadable: fileStat !== null, raw: null }
+  }
   const owner = parseLock(raw)
   if (owner) {
     const startedAtMs = Date.parse(owner.startedAt)
@@ -281,25 +327,40 @@ async function readExistingLock(
       owner,
       ownerAgeMs: ageBaseMs === undefined ? null : ageFrom(ageBaseMs, now),
       invalidAgeMs: null,
+      unreadable: false,
+      raw,
     }
   }
-  if (!fileStat) return { owner: null, ownerAgeMs: null, invalidAgeMs: null }
-  return { owner: null, ownerAgeMs: null, invalidAgeMs: ageFrom(fileStat.mtimeMs, now) }
+  if (!fileStat) return { owner: null, ownerAgeMs: null, invalidAgeMs: null, unreadable: false, raw }
+  return { owner: null, ownerAgeMs: null, invalidAgeMs: ageFrom(fileStat.mtimeMs, now), unreadable: false, raw }
 }
 
 /**
  * The handle a successful acquisition returns.
  *
- * Extracted because there are now TWO ways to take the lock — creating it with
- * `open(..., 'wx')`, and replacing a stale one by rename — and a release that
- * differed between them would be a lock whose safety depended on how it was
- * acquired.
+ * Extracted because there are now three ways to end up holding it — the
+ * `link` publish, the `open(..., 'wx')` fallback for filesystems without hard
+ * links, and replacing a stale lock by rename — and a release or a
+ * revalidation that differed between them would be a lock whose safety
+ * depended on how it was acquired.
  */
 function heldLock(lockPath: string, token: string): StateProcessLock {
   return {
     acquired: true,
     path: lockPath,
     token,
+    revalidate: () => {
+      try {
+        return parseLock(readFileSync(lockPath, 'utf8'))?.token === token
+      } catch {
+        // Unreadable or gone. Gone is the interesting one: it means something
+        // removed our lock, which no correct participant does — so this is NOT
+        // treated as "still ours". Answering false makes a caller act on a
+        // state it can act on; answering true would make the one safety check
+        // this handle offers lie in the exact case it exists for.
+        return false
+      }
+    },
     releaseSync: () => {
       try {
         const existing = parseLock(readFileSync(lockPath, 'utf8'))
@@ -368,10 +429,19 @@ export async function acquireStateProcessLock(
         await link(staging, lockPath)
       } catch (linkErr) {
         const code = (linkErr as NodeJS.ErrnoException).code
-        // Filesystems without hard links (some network and FAT-family mounts).
-        // Fall back to the create-then-write shape: the empty window returns,
-        // and the age guard below is what covers it.
-        if (code === 'EPERM' || code === 'ENOSYS' || code === 'EXDEV' || code === 'EOPNOTSUPP') {
+        // Filesystems without hard links: FAT-family volumes, and some network
+        // and roaming mounts. Reachable in production wherever the state
+        // directory is not on APFS/ext4 — a home on an external exFAT drive,
+        // for instance.
+        //
+        // `ENOTSUP` is the one macOS actually returns, and review proved it on
+        // a real FAT32 volume: on Darwin `ENOTSUP` (45) and `EOPNOTSUPP` (102)
+        // are DIFFERENT errno values, so the first version of this list caught
+        // the one that never happens and let the real one through — out of the
+        // catch, past `index.ts`'s EACCES/EROFS/EPERM/ENOSPC/EDQUOT guard, and
+        // into a fatal startup crash with no dialog. Linux vfat returns
+        // `EPERM`, which is why that one was right by luck.
+        if ((LINK_UNSUPPORTED_CODES as readonly string[]).includes(code ?? '')) {
           const handle = await open(lockPath, 'wx', 0o600)
           try {
             await handle.writeFile(`${JSON.stringify(payload, null, 2)}\n`, 'utf8')
@@ -387,6 +457,7 @@ export async function acquireStateProcessLock(
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
 
       const existing = await readExistingLock(lockPath, now)
+      const existingRaw = existing.raw
       if (existing.owner) {
         const activity = normalizeLockOwnerActivity(isLockOwnerActive(existing.owner))
         if (activity === 'active') {
@@ -426,9 +497,17 @@ export async function acquireStateProcessLock(
         }
       }
 
+      if (!existing.owner && existing.invalidAgeMs === null && !existing.unreadable) {
+        // The lock VANISHED between our failed create and this read — the
+        // previous owner released, or another launch replaced it mid-read.
+        // Nobody holds it and nothing here has an opinion about it; go round
+        // and let the atomic create settle who gets it. Refusing here would
+        // turn a perfectly ordinary release into a launch failure.
+        continue
+      }
       if (
         !existing.owner &&
-        (existing.invalidAgeMs === null || existing.invalidAgeMs < INVALID_LOCK_STALE_MS)
+        (existing.unreadable || existing.invalidAgeMs === null || existing.invalidAgeMs < INVALID_LOCK_STALE_MS)
       ) {
         // WHY invalid recent locks block instead of being deleted:
         //
@@ -439,14 +518,21 @@ export async function acquireStateProcessLock(
         // mains start during exactly the startup race the lock is meant to
         // prevent.
         //
-        // WHY an UNKNOWN age blocks too (#1094): `invalidAgeMs` is null when
-        // the stat failed or the file vanished under us — which is most likely
-        // precisely when another launch is mid-publish. It used to fall
-        // through to the break-the-lock path below, so "I could not tell how
-        // old this is" was treated as "it is old". Breaking a lock we cannot
-        // date is the one thing this function must never do; refusing costs a
-        // relaunch, and the malformed file is cleaned up by the next attempt
-        // once it IS provably old.
+        // WHY an unreadable lock blocks (#1094): breaking a lock we cannot
+        // read is the one thing this function must never do — we cannot tell
+        // whether it names a live owner.
+        //
+        // WHY it is NOT the same as "the file is gone", which the branch above
+        // now handles separately: an unreadable file's age can never be
+        // established (`readExistingLock` cannot date what it cannot read), so
+        // a refusal that waits for it to age out waits forever. The first
+        // version of this guard collapsed both into "unknown age blocks", and
+        // review showed the consequence: a lock file with no read permission —
+        // the migration/restore case `index.ts` names — turned into a
+        // PERMANENT "Agent Code is already running" dialog with the path only
+        // in a console warning. That is worse than the behaviour it replaced,
+        // and it is why this refusal now carries its own reason so the caller
+        // can say what to delete.
         return {
           acquired: false,
           path: lockPath,
@@ -455,64 +541,59 @@ export async function acquireStateProcessLock(
         }
       }
 
-      // Take the stale lock out of the way with ONE atomic operation on the
-      // corpse itself, then let `open(..., 'wx')` decide the winner (#1094).
+      // Take over the stale lock by REPLACING it, atomically, and then asking
+      // the file who actually ended up holding it (#1094).
       //
-      // WHY not `rm(lockPath)` — which is what stood here, and what two
-      // launches could both do to one corpse:
+      // WHY not `rm(lockPath)` — which is what stood here originally, and what
+      // two launches could both do to one corpse:
       //
-      //   P1 rm (the corpse goes) → P1 open 'wx' (creates its lock) →
+      //   P1 rm (the corpse goes) → P1 creates its lock →
       //   P2 rm (deletes P1'S LIVE LOCK, because the delete never looked at
-      //   what it was deleting) → P2 open 'wx' succeeds → both hold it.
+      //   what it was deleting) → P2 creates → both hold it.
       //
-      // Measured at 10 in 200 concurrent acquisitions before this change. Two
-      // mains on one state directory is exactly the corruption this file
-      // exists to prevent (#993), reached through the cleanup path rather than
-      // through the lock.
+      // Measured at 19 in 40 concurrent four-launch rounds before any of this.
       //
-      // WHY a rename and not a compare-then-delete: `rename` of a given path
-      // succeeds for exactly ONE caller — the others get ENOENT — so the
-      // question "who is allowed to break this lock" is answered by the
-      // filesystem instead of by a read whose answer can go stale one line
-      // later. Afterwards nobody holds a special claim: every racer goes
-      // through the same atomic create, which is the only mutual exclusion a
-      // filesystem actually offers.
+      // WHY not the rename-the-corpse-away version either, which is what this
+      // branch tried next: moving the corpse out of the way leaves the path
+      // EMPTY for the two syscalls it takes to check what was moved, and
+      // review caught a third launch publishing into that hole with a
+      // cross-process syscall trace — after which the restore's `link` failed
+      // EEXIST and the cleanup deleted the victim's only copy. 6 rounds in 80
+      // at four launches, 13 in 30 at eight, ending in "a live writer and no
+      // lock file", which is #993 exactly.
       //
-      // WHY it reads back what it moved: the file at the path may no longer be
-      // the corpse we classified. Classification runs `ps`, synchronously, and
-      // a sibling can finish acquiring inside that window — so the thing this
-      // rename moved may be somebody's LIVE lock. That is the case the old
-      // code destroyed silently.
-      const stolenPath = `${lockPath}.stale-${token}`
-      try {
-        await rename(lockPath, stolenPath)
-      } catch (stealErr) {
-        // Another launch broke the same corpse first. Go round: the create
-        // below decides between us.
-        if ((stealErr as NodeJS.ErrnoException).code === 'ENOENT') continue
-        throw stealErr
-      }
-      const stolen = parseLock(await readFile(stolenPath, 'utf8').catch(() => ''))
-      const isTheCorpseWeClassified = existing.owner
-        ? stolen?.token === existing.owner.token
-        : stolen === null
-      if (!isTheCorpseWeClassified) {
-        // We moved a lock that was not the one we condemned. Put it back and
-        // stand down — the next pass meets it at the path, classifies its live
-        // owner as active, and refuses.
-        //
-        // `link` rather than `rename` for the restore: if a third launch
-        // created a lock in the moment the path was empty, link fails EEXIST
-        // and we leave THEIR file alone, which is the same rule that got us
-        // here. The residual — a third launch creating in that two-syscall
-        // window, leaving the restored owner and the newcomer both believing
-        // they hold it — is narrower than the one this replaces and needs
-        // three simultaneous launches to reach.
-        await link(stolenPath, lockPath).catch(() => undefined)
-        await rm(stolenPath, { force: true }).catch(() => undefined)
-        continue
-      }
-      await rm(stolenPath, { force: true }).catch(() => undefined)
+      // A REPLACE has neither problem: `rename` onto an existing path is
+      // atomic, there is never a moment where the lock is absent, and NOTHING
+      // IS EVER DELETED — a launch that loses simply leaves the winner's file
+      // alone. It also needs no hard links, so it behaves the same on the
+      // filesystems where `link` is unavailable.
+      //
+      // What it does not give is a single winner: two launches that both
+      // condemn the same corpse both succeed at replacing it, and each can
+      // read back its own token if it reads before the other's rename lands.
+      // The read below catches the common ordering, and `revalidate()` on the
+      // returned handle is what makes the rest detectable rather than silent —
+      // see the note there. Eliminating it needs a second lock to serialise
+      // breaking, which has its own staleness problem; that is #1098.
+      // Re-read immediately before replacing, and require the SAME BYTES we
+      // classified.
+      //
+      // Classification runs `ps`, synchronously, and takes milliseconds — long
+      // enough for a sibling to finish acquiring. Without this check the
+      // replace would overwrite that sibling's live lock, which is a different
+      // way to lose one. Review measured the window this closes at ~14 ms and
+      // what is left at ~0.3 ms: the file cannot be re-read and renamed in one
+      // operation, so a check this close to the rename is the best a
+      // filesystem offers without a second lock (#1098).
+      const stillTheCorpse = await readFile(lockPath, 'utf8').catch(() => null)
+      if (stillTheCorpse !== existingRaw) continue
+      await rename(staging, lockPath)
+      const settled = parseLock(await readFile(lockPath, 'utf8').catch(() => ''))
+      if (settled?.token === token) return heldLock(lockPath, token)
+      // Another launch replaced the same corpse after us. Go round: the next
+      // attempt meets THEIR lock, classifies its live owner as active, and
+      // refuses — the right answer, reached without either of us deleting the
+      // other's file.
     } finally {
       // The staging file is this attempt's own (it carries the token), so
       // removing it can never touch another launch's work. Unlinking it after
