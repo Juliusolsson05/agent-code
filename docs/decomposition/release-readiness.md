@@ -667,6 +667,61 @@ claude 2.1.143 / codex 0.130.0 are stale versus the 2.1.278 / 0.155.1 in daily u
   - **#1018 (orchestration hides API errors):** an evidence catalog from real feed-debug recordings is being built (research agent, worktree `.worktrees/fix-orchestration-api-error`). Implementation follows the catalog.
   - **Waiting on #1013's merge:** T7 (#1006), T8 (#1007), T2 (command promotion) and T1 (#995), all of which touch the catalog, keybindings or bootstrap.
   - **Nightly** run 35430444567: build-app is green, package-macos is running.
+- 2026-09-20 13:05Z — **sweep continues: six merged, four in review.**
+
+  **MERGED since the last entry**: **#1073** (#929, rewind attachments) and
+  **#1076** (#928, atomic transcript publication), plus
+  **agent-transcript-parser#35**.
+
+  **#1076 REOPENED #928 deliberately.** The atomic/no-clobber half shipped;
+  the recovery receipt did not, because every entry point mints a fresh
+  `randomUUID()` before projecting, so a retry yields a NEW filename and the
+  `already-published` path has no caller that can reach it. Closing it needs a
+  stable retry identity threaded from whatever would retry, and there is no
+  retry wrapper between the IPC handler and the writer to hang one on.
+
+  **OPEN, round done, fixes pushed**: **#1074** (#943 control drain),
+  **#1077** (#926 orchestration timeout), **#1078** (#921 LSP generation,
+  reviewer still running).
+
+  **THE REVIEWS ARE DOING THE HEAVY LIFTING, and two were near-catastrophes:**
+  - **#1077** was REJECTED DOWN TO A THIRD OF ITSELF and is better for it. Its
+    retry guard keyed on the renderer request shape — which has NO PROMPT
+    FIELD, because the prompt is delivered separately — so two different
+    fan-out jobs shared a key and the second was refused FOREVER. Same
+    catastrophe #1069 fixed, reintroduced one layer down. Worse, nothing could
+    clear a reservation: the reviewer drove a parent through list-agents and
+    close-run and it still looped on the same refusal, which told it to list
+    its agents. Guard deleted; what survives is the genuinely true half —
+    `sendToWindow` now REPORTS DELIVERY, so an undelivered request fails
+    immediately as safe to retry (`windowForSession` ignores `closing` while
+    delivery skips it). The "orphan" justification was also disproven:
+    visibility is decided in the RENDERER from session metadata.
+  - **#1074**'s `dispose()` destroyed the registry BEFORE draining, and the
+    gate resolves declared effects against that registry — so during the drain
+    EVERYTHING was refused, including reads and `operations.*` ("No owner").
+    Three of my own WHY comments were false. Also found: `completion:'accepted'`
+    operations were not drained at all (every `agents.prompt`, `commands.run`,
+    `workflows.start`), and the drain was unbounded while holding the exit AND
+    the state-process lock.
+  - **#1076**'s reviewer built a REAL FAT32 VOLUME and measured `link` →
+    ENOTSUP, proving the PR regressed external drives, which `CODEX_HOME` can
+    point at. Also measured a 577 MB RSS spike from the whole-file identity
+    compare on a real 325 MB rollout.
+
+  **TWO TRAPS WORTH REMEMBERING** (both now in memory):
+  - `npm install --package-lock-only` after a SOURCE-ONLY submodule bump
+    deleted 474 lines of per-platform esbuild entries and broke the Node 22
+    fixture gate. Only resync when the submodule's own package.json changes.
+  - `npx tsc -b` does NOT cover `src/control-sdk` the way CI does — it is
+    platform-neutral with no timer in its lib. A `setTimeout` there passed
+    locally and failed CI. Run `npx tsc -p tsconfig.control-sdk.json --noEmit`.
+
+  **FILED**: #1075 (rewind never tells the user an attachment was lost).
+
+  **NEXT**: merge #1074/#1077/#1078 on green, then #925 (pending-read dedupe),
+  #924/#923/#922 (the remaining LSP ordering trio), #919, #918.
+
 - 2026-09-20 11:55Z — **issue sweep: four merged, two in review, two filed.**
   Reviewers are CLAUDE orchestration children from 2026-09-20 (owner reversed
   the earlier Codex call). One reviewer per PR, one round, fix, merge on green.
