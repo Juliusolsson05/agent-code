@@ -12,7 +12,7 @@ export { placementSchema, workspaceObservationSchema } from './catalog/workspace
 export { agentReadInput, agentReadOutput, agentStatusSchema, conversationMessageSchema } from './catalog/conversation'
 export type { AgentReadInput, AgentReadOutput, AgentStatus, ReadDepth } from './catalog/conversation'
 export { transcriptPageInput, transcriptPageOutput } from './catalog/transcripts'
-export { conditionTargetInput, conditionReadOutput, conditionReplyInput, conditionBackendIdentity, conditionReplyOutput } from './catalog/conditions'
+export { conditionTargetInput, conditionReadOutput, conditionReplyInput, conditionBackendIdentity, conditionReplyOutput, interruptOutput } from './catalog/conditions'
 export { terminalReadInput, terminalReadOutput, terminalInput, terminalInputOutput } from './catalog/terminals'
 export { historyEventSchema } from './history'
 export type { ControlHistory, HistoryEvent, HistoryWrite } from './history'

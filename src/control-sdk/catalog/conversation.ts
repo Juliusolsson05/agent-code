@@ -32,8 +32,22 @@ export const conversationMessageSchema = z.object({
  * is 0, which is falsy.
  */
 export const agentStatusSchema = z.object({
-  process: z.string(), activity: z.string(), transcript: z.string(), inputReady: z.boolean(),
-  exited: z.number().nullable(), conditions: z.array(z.string()), queuedCount: z.number(), draftPresent: z.boolean(),
+  // WHY closed enums and not `z.string()` (#1086 review, finding 5): the
+  // producer's three fields are closed unions (`ProcessStatus`,
+  // `SessionStatus`, `TranscriptStatus`), and declaring them as bare strings
+  // let the CONSUMER'S FIXTURE keep a value the producer cannot emit —
+  // `process: 'running'`, which is not a `ProcessStatus` — even after the
+  // fixture was routed through this schema to stop exactly that. A closed
+  // enum also makes the published MCP JSON Schema say what the values are,
+  // rather than "string".
+  process: z.enum(['idle', 'spawning', 'started', 'failed', 'exited']),
+  activity: z.enum(['idle', 'running', 'exited']),
+  transcript: z.enum(['idle', 'loading', 'ready', 'error', 'disconnected']),
+  inputReady: z.boolean(),
+  // The exit CODE or null, never a boolean. A union with `z.boolean()` would
+  // re-admit the exact historical mis-shape this schema exists to reject.
+  exited: z.number().nullable(),
+  conditions: z.array(z.string()), queuedCount: z.number(), draftPresent: z.boolean(),
 })
 export type AgentStatus = z.infer<typeof agentStatusSchema>
 
