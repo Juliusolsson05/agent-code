@@ -1,5 +1,5 @@
 import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
-import { AGENT_PROVIDER_CHOICES } from '@renderer/workspace/providerChoices'
+import { enabledAgentProviderChoices } from '@renderer/workspace/providerChoices'
 import {
   expandSessionCloseTargets,
   expandTabCloseTargets,
@@ -1259,7 +1259,9 @@ export function usePaneActions(
       // without the MCP bridge. Reuse the picker's supported combinations so
       // direct calls cannot silently launch a structured child after the user
       // requested a TUI. Main separately validates the actual factory.
-      if (!AGENT_PROVIDER_CHOICES.some(choice => choice.kind === params.kind && choice.providerRuntime === params.providerRuntime)) {
+      // #1102: enablement also gates orchestration children — a disabled
+      // provider must not come back through the MCP create_agent door.
+      if (!enabledAgentProviderChoices().some(choice => choice.kind === params.kind && choice.providerRuntime === params.providerRuntime)) {
         throw new Error(`${params.kind} does not support the requested ${params.providerRuntime ?? 'structured'} runtime`)
       }
       const snapshot = refs.stateRef.current

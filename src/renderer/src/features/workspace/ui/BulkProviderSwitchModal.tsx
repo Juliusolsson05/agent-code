@@ -24,6 +24,7 @@ import { AGENT_PROVIDER_KINDS, DEFAULT_PROVIDER } from '@shared/types/providerKi
 import type { AgentProviderKind } from '@shared/types/providerKind'
 import type { UsageProviderKind } from '@shared/types/usage'
 import { useUsageHeaderSnapshot } from '@renderer/features/usage/hooks/useUsageHeaderSnapshot'
+import { useEnabledAgentProviderKinds } from '@renderer/features/providers/store'
 import { formatReset, providerLabel as usageProviderLabel } from '@renderer/features/usage/model/formatUsage'
 import { deriveProviderExhaustion } from '@shared/usage/exhaustion'
 import { estimateLiveEntriesBytes } from '@renderer/session-runtime/liveEntryWindow'
@@ -213,14 +214,22 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
   // reason this modal was opened. Two exhausted providers deliberately fall
   // back: moving agents from one full provider to another full one helps
   // nobody, so the user has to say what they want.
+  // #1102: a disabled provider is absent from BOTH sides of every offered
+  // direction — it cannot be a switch source (its agents can still exist)
+  // nor a target (it would sneak back into the workspace).
+  const enabledKinds = useEnabledAgentProviderKinds()
+  const directions = useMemo(
+    () => SWITCH_DIRECTIONS.filter(d => enabledKinds.has(d.source) && enabledKinds.has(d.target)),
+    [enabledKinds],
+  )
   const defaultDirectionKey = useMemo(() => {
     if (exhaustedProviders.length !== 1) return 'codex:claude'
     const exhaustedSource = exhaustedProviders[0].provider
-    return SWITCH_DIRECTIONS.find(item => item.source === exhaustedSource)?.key ?? 'codex:claude'
-  }, [exhaustedProviders])
+    return directions.find(item => item.source === exhaustedSource)?.key ?? 'codex:claude'
+  }, [exhaustedProviders, directions])
   const directionKey = directionChoice ?? defaultDirectionKey
 
-  const direction = SWITCH_DIRECTIONS.find(item => item.key === directionKey) ?? {
+  const direction = directions.find(item => item.key === directionKey) ?? {
     key: 'codex:claude',
     source: 'codex' as const,
     target: 'claude' as const,
@@ -702,7 +711,7 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
                   }}
                   className="rounded-control px-2 py-1.5 bg-canvas border border-border text-[12px] text-ink outline-none focus:border-accent"
                 >
-                  {SWITCH_DIRECTIONS.map(item => (
+                  {directions.map(item => (
                     <option key={item.key} value={item.key}>
                       {providerLabel(item.source)} → {providerLabel(item.target)}
                     </option>
