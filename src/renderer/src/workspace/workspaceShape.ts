@@ -179,8 +179,20 @@ export function migrateWorkspaceToStage(
     // which is the bug this clause exists to fix. Any parked membership at
     // all is enough; the metadata is then resolved from either source, as the
     // loop below already does.
+    //
+    // WHY `projectId === null` and not "any membership" (#1048 re-review): a
+    // minted project only ever receives rows that RE-PARENT into it, and only
+    // a membership whose own project is gone does that (`null` is exactly that
+    // state; a membership naming a live v2 tab keeps that name and is dropped
+    // below when the name is not a project). A hybrid file — `projects: []`
+    // beside stale v2 tabs — satisfied the looser test, so migration minted a
+    // project, then dropped every session because their tab ids still were not
+    // project ids. The result was an empty phantom project, which also hid the
+    // file from bootstrap's empty-workspace fallback: the user got a nameless
+    // project instead of the first-run path.
     const rehomed = [...legacy.entries()].find(([sessionId, membership]) =>
-      membership.restoredMeta !== undefined || hasSessionMeta(persisted.sessions ?? {}, sessionId))
+      (membership.projectId ?? null) === null
+      && (membership.restoredMeta !== undefined || hasSessionMeta(persisted.sessions ?? {}, sessionId)))
     if (rehomed) {
       const [sessionId, membership] = rehomed
       const meta = membership.restoredMeta ?? (persisted.sessions ?? {})[sessionId]

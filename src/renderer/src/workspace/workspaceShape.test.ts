@@ -622,4 +622,20 @@ describe('migrateWorkspaceToStage — a corrupt container is never an empty work
     }, () => 'recovered-project' as TabId)
     expect(migrated.sessions[sessionId as SessionId]).toMatchObject({ projectId: 'recovered-project' })
   })
+
+  it('mints nothing for rows that cannot be re-homed into it (#1048 re-review)', () => {
+    // A hybrid file: `projects: []` (so nothing is derived from the v2 tabs)
+    // beside those tabs and their sessions. Those memberships still name their
+    // old TAB ids, which are not project ids, so every one of them is dropped
+    // further down whatever we mint. Minting anyway left an empty, nameless
+    // phantom project — and, worse, a file with one project no longer looks
+    // empty to bootstrap, so the user lost the first-run path too.
+    const recorded = recordedLiveWorkspace()
+    const migrated = migrateWorkspaceToStage(
+      { ...recorded, projects: [] } as PersistedWorkspace,
+      () => 'phantom-project' as TabId,
+    )
+    expect(migrated.projects).toEqual([])
+    expect(Object.keys(migrated.sessions)).toEqual([])
+  })
 })
