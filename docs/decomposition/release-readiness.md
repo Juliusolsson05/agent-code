@@ -667,6 +667,70 @@ claude 2.1.143 / codex 0.130.0 are stale versus the 2.1.278 / 0.155.1 in daily u
   - **#1018 (orchestration hides API errors):** an evidence catalog from real feed-debug recordings is being built (research agent, worktree `.worktrees/fix-orchestration-api-error`). Implementation follows the catalog.
   - **Waiting on #1013's merge:** T7 (#1006), T8 (#1007), T2 (command promotion) and T1 (#995), all of which touch the catalog, keybindings or bootstrap.
   - **Nightly** run 35430444567: build-app is green, package-macos is running.
+- 2026-09-20 17:30Z — **#1087 merged. #1090 opened (#879). Three reviews landed; a main-branch CI flake root-caused and fixed (#1092).**
+
+  **MERGED**: **#1087** (closes #863, row bindings left pointing at a closed project).
+  The review found a **regression I introduced**: the scrub re-allocated EVERY row
+  whenever any row changed, and row object identity is load-bearing — the
+  lane-selection race check in `dispatch.ts` compares rows across a wake to decide
+  whether the grid moved under the user. An unrelated close during a cold wake
+  (up to 30 s) therefore read as "the grid changed", and an agent that had just
+  been woken was never placed, with no toast. Each row now keeps its original
+  object unless that row changed, pinned in `laneSelectionWake.renderer.test.tsx`
+  with a control close that scrubs nothing. Also: the legacy `projectTabId` is
+  folded rather than deleted, the creation failure path closes the placement
+  overlay instead of leaving it up and latched, and two WHY comments that claimed
+  properties the code did not have were corrected.
+
+  **#1090 (closes #879)**: reload / switch provider / resume / rewind stripped an
+  orchestration child's relationship metadata, so the parent's
+  `wait_agents({runId})` returned `done: true, agents: []` **while the child was
+  still working**. `replaceSession` builds the successor from spawn's fresh
+  metadata on purpose, so every field it keeps has to be named — and the
+  orchestration fields never were. Fixed with an explicit
+  `SUCCESSOR_RELATIONSHIP_FIELDS` keep-list in `idRemap.ts`, which also covers
+  `orchestrationBootstrapPromptDelivered` and the inherited-context trio (dropping
+  `inheritedParentContext` makes the parent read its own pre-handoff commentary
+  back as the worker's answer). The guard against the next omission is
+  **type-level**: every SessionMeta key named like a relationship must be carried
+  or listed as deliberately dropped, or `tsc` fails.
+
+  **#1088 (#867) reworked after review**: `tabIndex={-1}` is half of the
+  roving-focus pattern and the PR had shipped only that half. Pin Sessions had no
+  `onOpenAutoFocus`, so Radix focused **Cancel** and the first Enter discarded the
+  pins; a CLICKED row keeps focus in Chromium whatever its tabindex, so the
+  dialog's own Enter bowed out permanently after one click; Space had the same bug
+  untouched; and the audit had missed `ConversationsPicker` (Enter on a filter chip
+  resumed a conversation) and `AgentActivityModal` (an `opacity-0` per-row button
+  was a tab stop, so Delete closed the wrong row). All three lists are now proper
+  listboxes with `aria-activedescendant` — taking rows out of the tab order without
+  it was an accessibility regression of my own making.
+
+  **#1089 (#827) redesigned after review.** The reviewer showed the 90 s cap (a)
+  did not bound the call — the sleep was not clamped, measured 90_010 ms — and
+  (b) was derived from a number that **does not exist**: "Claude Code backgrounds
+  a tool call at 120 s" is contradicted by the vendored source
+  (`DEFAULT_MCP_TOOL_TIMEOUT_MS = 100_000_000`). Worse, 90 s sat **above** the MCP
+  SDK's own `DEFAULT_REQUEST_TIMEOUT_MSEC = 60000`, so for any client on defaults
+  the cap turned an occasional loss into a guaranteed one. The cap is now **30 s**
+  — this repo's existing bound for the same class of problem — the sleep is
+  clamped, and `waitCappedMs` became `remainingMs` computed from real elapsed
+  time. The real mechanism (SSE replies with no event store and no keep-alive, so
+  a dropped connection loses the reply permanently) is filed as **#1091**.
+
+  **#1092 (new)**: `processLock.test.ts > refuses while the window is open` failed
+  CI on #1088 and #1090, neither of which touches locking. It is the only case in
+  that file that starts the acquisition **before** awaiting the incumbent write,
+  so two filesystem writes race and the winner decides the assertion. Reproduced
+  deterministically on `origin/main` by delaying the owner write one macrotask.
+  A main-branch flake, not a rerun candidate.
+
+  **Method note worth keeping**: three of my own tests this session passed on
+  broken code — an overshoot case whose poll interval divided the cap evenly, an
+  elapsed-time case that read the clock after `advanceTimersByTimeAsync`, and a
+  focus case where `fireEvent.click` never moved focus. Each is documented in
+  place. A mutation table is a claim about the test suite, not about the code.
+
 - 2026-09-20 16:35Z — **Nine merged this session. #1084/#1085/#1086 in; #901, #839, #826, #880, #875 closed.**
 
   **MERGED**: **#1084** (#901 + #839), **#1085** (#826 + #880), **#1086** (#875).
