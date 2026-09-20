@@ -1,20 +1,23 @@
 import type {
-  UsageProviderKind,
   UsageProviderSnapshot,
   UsageSnapshot,
   UsageSnapshotRequest,
+  UsageSourceId,
 } from '@shared/types/usage.js'
 
-import { readClaudeUsage } from '@main/usage/claudeUsage.js'
-import { readCodexUsage } from '@main/usage/codexUsage.js'
 import { sanitizeUsageError } from '@main/usage/normalize.js'
+import {
+  getCachedProviderEnablement,
+  enabledAgentProviderKindsSync,
+} from '@main/setup/providerEnablement.js'
+import { USAGE_SOURCES, listActiveUsageSourceIds } from '@main/usage/sources.js'
 
 const USAGE_CACHE_TTL_MS = 30_000
 
 let cachedSnapshot: UsageSnapshot | null = null
 
 async function readProvider(
-  provider: UsageProviderKind,
+  provider: UsageSourceId,
   sourceLabel: string,
   loader: () => Promise<UsageProviderSnapshot>,
 ): Promise<UsageProviderSnapshot> {
@@ -58,16 +61,31 @@ export function getUsageSnapshot(request: UsageSnapshotRequest = {}): Promise<Us
   }
 
   const fetchPromise = (async (): Promise<UsageSnapshot> => {
-    // WHY the providers are fetched independently:
+    // WHY the sources are fetched independently:
     //
-    // Claude and Codex have different auth stores, network hosts, and outage
-    // modes. A stale Codex token should not hide a perfectly valid Claude quota
-    // row, and vice versa. Promise.all here returns a single modal snapshot while
-    // preserving per-provider failure boundaries for the renderer.
-    const providers = await Promise.all([
-      readProvider('claude', 'Claude Code Keychain', readClaudeUsage),
-      readProvider('codex', '~/.codex/auth.json', readCodexUsage),
-    ])
+    // Sources have different auth stores, network hosts, and outage modes. A
+    // stale Codex token should not hide a perfectly valid Claude quota row,
+    // and vice versa. Promise.all here returns a single modal snapshot while
+    // preserving per-source failure boundaries for the renderer.
+    //
+    // WHY composed per fetch and not cached with the snapshot: enablement can
+    // change under a live cache (invalidateUsageSnapshotCache runs on every
+    // toggle), and the ACTIVE SET must still be re-derived here so a fetch
+    // started before a toggle cannot resurrect a disabled provider on its
+    // next refresh.
+    const activeIds = listActiveUsageSourceIds({
+      enabledKinds: enabledAgentProviderKindsSync(),
+      opencodeUsageSource: getCachedProviderEnablement()?.opencodeUsageSource ?? 'none',
+    })
+    const providers = await Promise.all(
+      activeIds.map(id => {
+        const descriptor = USAGE_SOURCES[id]
+        // listActiveUsageSourceIds already excludes null descriptors; the
+        // guard keeps this closure honest if that invariant ever drifts.
+        if (!descriptor) return Promise.resolve(null)
+        return readProvider(id, descriptor.sourceLabel, descriptor.read)
+      }),
+    ).then(list => list.filter((entry): entry is UsageProviderSnapshot => entry !== null))
 
     cachedSnapshot = {
       fetchedAt: new Date(now).toISOString(),
