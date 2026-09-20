@@ -3,6 +3,7 @@ import { useState } from 'react'
 import type { AiWorkspaceFileEntry } from '@mcp/shared/aiWorkspaceTypes'
 import { FileIcon } from '@renderer/features/editor/lib/fileIcon'
 import { basename } from '@renderer/features/editor/lib/path'
+import { withVisibleControls } from '@shared/text/visibleControls'
 
 type AiWorkspaceFileListProps = {
   title: string
@@ -51,7 +52,9 @@ export function AiWorkspaceFileList({
   return (
     <aside className="flex h-full min-h-0 w-full flex-col border-r border-border bg-surface font-code text-[12px]">
       <div className="flex h-8 flex-shrink-0 items-center justify-between gap-2 border-b border-border px-2 text-[10px] uppercase tracking-wider text-muted">
-        <span className="min-w-0 flex-1 truncate">{title}</span>
+        {/* Model-authored, and the header's two-click Delete acts on it
+            (#1049 re-review). */}
+        <span className="min-w-0 flex-1 truncate">{withVisibleControls(title)}</span>
         <div className="flex flex-shrink-0 items-center gap-2">
           <button
             type="button"
@@ -137,7 +140,7 @@ export function AiWorkspaceFileList({
                     <FileIcon name={entry.path} />
                   </span>
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate">{fileTitle(entry)}</span>
+                    <span className="block truncate">{withVisibleControls(fileTitle(entry))}</span>
                     <span className="block truncate text-[10px] text-muted">
                       {stale ? staleReason : workspaceLabel(entry)}
                     </span>

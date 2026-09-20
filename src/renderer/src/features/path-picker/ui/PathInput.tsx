@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
+import { withVisibleControls } from '@shared/text/visibleControls'
 
 // PathInput — the path picker's path-with-completion input.
 //
@@ -290,7 +291,12 @@ export function PathInput({
                   {s.isDirectory ? '▸' : '·'}
                 </span>
                 <span className="flex-1 truncate">
-                  {s.name}
+                  {/* Choosing the working directory IS the trust decision for
+                      Codex (ensureCodexProjectTrust runs on it before spawn),
+                      so `project` and `project<U+200B>` must not read the same
+                      here (#1049 re-review). The completion still inserts the
+                      real name. */}
+                  {withVisibleControls(s.name)}
                   {s.isDirectory ? '/' : ''}
                 </span>
               </div>

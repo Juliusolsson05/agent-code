@@ -4,6 +4,7 @@ import type { SavedTheme } from '@renderer/app-state/settings/savedThemes'
 import { useAppStore } from '@renderer/app-state/hooks'
 import { installedThemeContributions } from '@renderer/app-state/settings/extensionThemes'
 import { isExtensionThemeMode } from '@shared/types/extensionThemes'
+import { withVisibleControls } from '@shared/text/visibleControls'
 
 type Props = {
   settings: Settings
@@ -81,7 +82,7 @@ export function ThemePickerRow({ settings, onSelect, onCreate, onEdit, onDelete 
             onClick={() => onSelect(theme.id)}
             className="min-w-0 flex-1 truncate text-left"
           >
-            {theme.name}
+            {withVisibleControls(theme.name)}
           </button>
           {/* Actions replace the CUSTOM tag on hover so the resting grid stays
               quiet. group-hover alone would strand keyboard users, so

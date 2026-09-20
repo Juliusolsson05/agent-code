@@ -310,7 +310,10 @@ export function KeyVaultModal() {
                     onClick={() => { setSelectedProviderId(provider.id); setKeyForm(null); setProviderRename(null) }}
                     title={provider.name}
                   >
-                    {provider.name}
+                    {/* The row the Delete below acts on: escaped here too, so
+                        the list and the confirmation agree (#1049
+                        re-review). */}
+                    {withVisibleControls(provider.name)}
                   </button>
                 ))}
                 <input
@@ -402,7 +405,7 @@ export function KeyVaultModal() {
                     {selectedKeys.map(key => (
                       <div key={key.id} className="flex flex-col gap-1 rounded-slab border border-border bg-canvas p-2">
                         <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs">
-                          <span className="truncate text-ink">{key.name}</span>
+                          <span className="truncate text-ink">{withVisibleControls(key.name)}</span>
                           <span className="shrink-0 text-[10px] text-muted">••••{key.hint}</span>
                           {revealed.has(key.id) && (
                             // WHY no `title` attribute here, and why it wraps

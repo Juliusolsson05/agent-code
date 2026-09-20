@@ -118,7 +118,15 @@ export function RewindToPromptModal({
   // The list renders text and time; the address stays in `prompts` at the
   // same index, which is what confirm() reads.
   const rows = useMemo(
-    () => prompts.map(prompt => ({ text: prompt.text, timestamp: prompt.timestamp ? Date.parse(prompt.timestamp) : null })),
+    // Escaped HERE rather than in PromptList, because the same component is
+    // also the read-only View Prompts surface where the raw text is the
+    // point. In this modal a click rewinds the live pane to that prompt, so
+    // two rows that read alike are two different destinations (#1049
+    // re-review). The address dispatched below is untouched.
+    () => prompts.map(prompt => ({
+      text: withVisibleControls(prompt.text),
+      timestamp: prompt.timestamp ? Date.parse(prompt.timestamp) : null,
+    })),
     [prompts],
   )
 

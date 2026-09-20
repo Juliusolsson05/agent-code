@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, type ReactNode } from 'react'
 import type { EditorFileBuffer } from '@renderer/features/editor/types'
 import { basename } from '@renderer/features/editor/lib/path'
 import { FileIcon } from '@renderer/features/editor/lib/fileIcon'
+import { withVisibleControls } from '@shared/text/visibleControls'
 
 type Props = {
   fileOrder: string[]
@@ -183,7 +184,11 @@ export function EditorTabs({
                 <span className="flex h-4 w-4 flex-shrink-0 items-center justify-center">
                   <FileIcon name={file.absolutePath} />
                 </span>
-                <span className="truncate">{name}</span>
+                {/* The conflict strip's Overwrite / Reload from disk /
+                    Recreate act on the ACTIVE TAB and show no name of their
+                    own, so this is the identity behind those buttons (#1049
+                    re-review). */}
+                <span className="truncate">{withVisibleControls(name)}</span>
                 {file.dirty && (
                   <span
                     className="ml-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-tab-accent"

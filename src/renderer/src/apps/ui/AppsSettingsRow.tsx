@@ -4,6 +4,7 @@ import { useAppStore } from '@renderer/app-state/hooks'
 import { forgetRemovedExtension, refreshInstalledExtensions } from '@renderer/apps/host/installedExtensionsState'
 
 import type { ExtensionListEntry } from '@shared/types/extensions'
+import { withVisibleControls } from '@shared/text/visibleControls'
 
 /**
  * Settings → Extensions. Install from a GitHub repository, list what is installed,
@@ -219,7 +220,12 @@ export function AppsSettingsRow() {
             >
               <div className="min-w-0">
                 <div className="flex items-baseline gap-2">
-                  <span className="text-[13px] text-ink">{entry.manifest.name}</span>
+                  {/* Manifest text and the source path are repository-authored
+                      and only length-bounded, and a tier-0 install or reload
+                      never reaches the native consent dialog — so this row IS
+                      the approval surface for Reload, Update and Remove
+                      (#1049 re-review). */}
+                  <span className="text-[13px] text-ink">{withVisibleControls(entry.manifest.name)}</span>
                   <span className="text-[11px] text-muted">{entry.manifest.version}</span>
                   {/* A ledger row whose bundle is gone. Shown rather than filtered:
                       the fix is reinstalling from the recorded repo, and hiding it
@@ -235,11 +241,13 @@ export function AppsSettingsRow() {
                     <span className="text-[11px] text-ink-dim">· failed to start</span>
                   ) : null}
                 </div>
-                <div className="truncate text-[12px] text-muted">{entry.manifest.description}</div>
+                <div className="truncate text-[12px] text-muted">{withVisibleControls(entry.manifest.description)}</div>
                 <div className="truncate text-[11px] text-ink-dim">
                   {/* A local install's `repo` is a folder path, and "…@ local" read
                       as a broken ref. Say which kind of install it is instead. */}
-                  {entry.origin === 'local' ? `local folder · ${entry.repo}` : `${entry.repo} @ ${entry.ref}`}
+                  {entry.origin === 'local'
+                    ? `local folder · ${withVisibleControls(entry.repo)}`
+                    : `${withVisibleControls(entry.repo)} @ ${withVisibleControls(entry.ref)}`}
                 </div>
                 {failures.find(failure => failure.id === entry.manifest.id) ? (
                   <div className="mt-1 text-[11px] text-ink">

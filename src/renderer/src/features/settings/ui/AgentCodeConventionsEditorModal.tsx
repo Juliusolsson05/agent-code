@@ -217,7 +217,10 @@ export function AgentCodeConventionsEditorModal({
                 <span>Generated SKILL.md preview</span>
                 <button type="button" className="rounded-control border border-control-border px-2 py-1" onClick={() => setPreview(null)}>Back to editor</button>
               </div>
-              <pre className="rounded-slab max-h-[420px] overflow-auto whitespace-pre-wrap border border-input-border bg-input-bg p-3 text-[11px] text-ink">{preview}</pre>
+              {/* Same as the custom-skill preview: this is what Save & Enable
+                  writes into every provider's skills directory (#1049
+                  re-review). */}
+              <pre className="rounded-slab max-h-[420px] overflow-auto whitespace-pre-wrap border border-input-border bg-input-bg p-3 text-[11px] text-ink">{withVisibleControls(preview)}</pre>
             </div>
           ) : (
             <>

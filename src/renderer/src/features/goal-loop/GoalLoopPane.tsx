@@ -4,6 +4,7 @@ import { GOAL_LOOP_MAX_CONTINUATIONS_CEILING } from '@shared/types/goalLoop'
 import { useAgentTerminalOwnerVisible } from '@renderer/workspace/terminal/AgentTerminalOwnership'
 import type { GoalLoopControlAction, GoalLoopState } from '@shared/types/goalLoop'
 import { dismissGoalLoop, useGoalLoopView } from './viewState'
+import { withVisibleControls } from '@shared/text/visibleControls'
 
 const PHASE_LABEL: Record<GoalLoopState['phase'], string> = {
   active: 'active', paused: 'paused', ended: 'ended',
@@ -120,7 +121,9 @@ export function GoalLoopPane({ sessionId }: { sessionId: string }) {
     onMouseDown={event => event.stopPropagation()}
     onClick={event => event.stopPropagation()}
   >
-    <span className="truncate">Goal loop · {PHASE_LABEL[loop.phase]} · {describe(loop)} · {loop.goal}</span>
+    {/* The goal is agent-authored and sits beside Resume, Raise cap and Stop
+        — the controls that grant it more turns (#1049 re-review). */}
+    <span className="truncate">Goal loop · {PHASE_LABEL[loop.phase]} · {describe(loop)} · {withVisibleControls(loop.goal)}</span>
     <span className="flex shrink-0 gap-2">
       {loop.phase === 'active' && <button type="button" onClick={control('pause')}>Pause</button>}
       {loop.phase === 'paused' && <button type="button" onClick={control('resume')}>Resume</button>}
@@ -138,9 +141,9 @@ export function GoalLoopPane({ sessionId }: { sessionId: string }) {
     {strip}
     <GoalLoopOverlay>
         <p className="text-sm sm:text-base">Goal loop · {PHASE_LABEL[loop.phase]}{loop.phase === 'paused' ? ` · ${loop.pauseReason}` : ''}</p>
-        <p className="max-w-xl whitespace-pre-wrap break-words text-sm leading-relaxed [overflow-wrap:anywhere]">{loop.goal}</p>
+        <p className="max-w-xl whitespace-pre-wrap break-words text-sm leading-relaxed [overflow-wrap:anywhere]">{withVisibleControls(loop.goal)}</p>
         <p className="text-xs">{describe(loop)} continuations · started {loop.startedAt}</p>
-        {loop.completionSummary && <p className="max-w-xl text-xs">{loop.endReason}: {loop.completionSummary}</p>}
+        {loop.completionSummary && <p className="max-w-xl text-xs">{loop.endReason}: {withVisibleControls(loop.completionSummary)}</p>}
         <div className="flex gap-3 text-sm">
           {loop.phase === 'active' && <button type="button" onClick={control('pause')}>Pause</button>}
           {loop.phase === 'paused' && <button type="button" onClick={control('resume')}>Resume</button>}

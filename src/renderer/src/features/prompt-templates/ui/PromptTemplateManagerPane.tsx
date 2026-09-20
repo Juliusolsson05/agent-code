@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 
 import { Button } from '@renderer/components/ui/button'
 import type { PromptTemplate } from '@renderer/features/prompt-templates/types'
+import { withVisibleControls } from '@shared/text/visibleControls'
 
 type Props = {
   templates: PromptTemplate[]
@@ -125,7 +126,7 @@ function TemplateRow({
       <div className="flex items-start justify-between gap-3">
         <button type="button" className="min-w-0 flex-1 text-left" onClick={onUse}>
           <div className="flex items-center gap-2">
-            <span className="truncate text-[12px] text-ink">{template.title}</span>
+            <span className="truncate text-[12px] text-ink">{withVisibleControls(template.title)}</span>
             <span className="flex-shrink-0 text-[9px] uppercase tracking-wider text-muted">
               {template.scope}
             </span>

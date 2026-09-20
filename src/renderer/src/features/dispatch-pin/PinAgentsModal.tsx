@@ -9,6 +9,7 @@ import { tabIndexLabel } from '@renderer/workspace/tile-tree/paneLabels'
 import type { SessionId } from '@renderer/workspace/types'
 
 import { usePinAgentsKeybinds } from './usePinAgentsKeybinds'
+import { withVisibleControls } from '@shared/text/visibleControls'
 
 // Modal for the `Pin Sessions…` command. Multi-select: Space toggles
 // the focused row, Enter commits, Escape cancels. Mouse click also
@@ -121,7 +122,7 @@ export function PinAgentsModal({
                     {tabIndexLabel(row.tabIndex)}
                   </span>
                   <span className="min-w-0 flex-1 truncate text-[12px]">
-                    {row.title}
+                    {withVisibleControls(row.title)}
                   </span>
                   <span
                     className="rounded-control

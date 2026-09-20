@@ -11,6 +11,7 @@ import type {
   RemotePairingIssue,
   RemoteStatus,
 } from '@preload/api/remote'
+import { withVisibleControls } from '@shared/text/visibleControls'
 
 // Desktop control panel for the remote mobile companion: enable/disable the
 // server, pair a phone via QR, list + revoke devices.
@@ -275,7 +276,13 @@ export function RemotePanel({ onClose }: { onClose: () => void }): React.JSX.Ele
                 <div key={device.deviceId} className="flex items-center justify-between gap-2">
                   <div className="min-w-0">
                     <div className="truncate">
-                      {device.name}
+                      {/* The pairing request supplies this name and the
+                          registry stores it unchanged, so `Phone<U+200B>` and
+                          `Phone` sit side by side beside Revoke — and
+                          revoking the wrong one leaves the other free to read
+                          sessions and answer permission prompts (#1049
+                          re-review). */}
+                      {withVisibleControls(device.name)}
                       {connected.has(device.deviceId) && (
                         <span className="ml-2 text-[10px] uppercase tracking-wide text-success">
                           connected

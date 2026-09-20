@@ -7,6 +7,7 @@ import { useWorkflowClient } from '../client/WorkflowClientContext'
 import { mergeWorkflowLineage } from '../model/workflowLineage'
 import { useWorkflowRun } from '../model/workflowRunStore'
 import { WorkflowPhaseSection } from './WorkflowPhaseSection'
+import { withVisibleControls } from '@shared/text/visibleControls'
 
 function runStatusLabel(status: string): string {
   return status.replace(/_/g, ' ').replace(/^./, first => first.toUpperCase())
@@ -154,7 +155,10 @@ export function WorkflowRunView({
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
               <span className="truncate text-[13px] font-semibold text-ink">
-                {workflow?.title ?? workflow?.name ?? 'Workflow'}
+                {/* Repository-authored, beside Resume and Cancel — and a
+                    resume needs no fresh source approval (#1049
+                    re-review). */}
+                {withVisibleControls(workflow?.title ?? workflow?.name ?? 'Workflow')}
               </span>
               <span className="text-[10px] uppercase tracking-wider text-muted">
                 {runStatusLabel(status)}
@@ -162,7 +166,7 @@ export function WorkflowRunView({
             </div>
             {workflow?.description ? (
               <div className="mt-0.5 line-clamp-2 text-[11px] leading-[1.45] text-ink-dim">
-                {workflow.description}
+                {withVisibleControls(workflow.description)}
               </div>
             ) : null}
             <div className="mt-1 flex flex-wrap gap-x-2 text-[10px] text-muted">
