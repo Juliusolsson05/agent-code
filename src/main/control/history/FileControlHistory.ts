@@ -47,6 +47,24 @@ export class FileControlHistory implements ControlHistory {
     })()
   }
 
+  /**
+   * Wait for every queued append to finish writing (#943).
+   *
+   * `append` returns the caller's own promise but installs `this.tail` as the
+   * serialization point, so a caller that has its result does NOT mean the
+   * file is quiet: later appends from other callers are still chained behind
+   * it. Committed shutdown has to await the tail itself, or the process exits
+   * with a result recorded in memory and absent from disk.
+   *
+   * Swallows a failure deliberately: `this.tail` already absorbs rejections
+   * into `poisoned`, and a write that failed is reported to the caller that
+   * issued it. Re-throwing here would turn one caller's failed append into a
+   * blocked application exit for everyone.
+   */
+  async drain(): Promise<void> {
+    await this.tail.catch(() => undefined)
+  }
+
   async events(): Promise<HistoryEvent[]> {
     await this.tail
     return (await this.load()).map(event => ({ ...event }))

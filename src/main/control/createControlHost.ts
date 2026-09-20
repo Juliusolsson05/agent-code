@@ -54,7 +54,9 @@ export function createControlHost(windowAccess: {
       await focusWindow(window)
     },
     dispatch: (request, context) => registry.invoke(request, context) })
-  const waits = createWaitControl((request, caller) => executor.invoke(request, caller))
+  // Nested: a wait's inner read belongs to the wait that was already
+  // admitted, and refusing it mid-shutdown would strand the parent.
+  const waits = createWaitControl((request, caller) => executor.invoke(request, caller, { nested: true }))
   const bridge = new ControlRendererBridge((windowId, message) => {
     const window = getBrowserWindow(windowId)
     if (!window || window.isDestroyed() || window.webContents.isDestroyed()) throw new Error('Window unavailable')
@@ -75,7 +77,7 @@ export function createControlHost(windowAccess: {
   // external request never gets this application identity from tool input.
   const additional = typeof additionalCapabilities === 'function' ? additionalCapabilities({ invokeTask: (context, request) => {
     if (JSON.stringify(context.owner) !== JSON.stringify(mainOwner) || !['operations.start', 'operations.finish'].includes(request.capabilityId)) throw new ControlError('unavailable', 'Main task port only records its own lifecycle')
-    return executor.invoke(request, { kind: 'application', id: `control-main:${mainOwner.generation}` })
+    return executor.invoke(request, { kind: 'application', id: `control-main:${mainOwner.generation}` }, { nested: true })
   } }) : additionalCapabilities
   const unregisterMain = registry.register(mainOwner, [...windowControlCapabilities(() =>
     listWindowIds().map((windowId, index) => ({
@@ -86,7 +88,7 @@ export function createControlHost(windowAccess: {
       generation: windows.get(windowId)?.generation ?? null,
     })),
   ), ...historyCapabilities(history), ...taskHistoryCapabilities(history, owner => registry.list().some(row => JSON.stringify(row.owner) === JSON.stringify(owner))),
-  ...globalControlCapabilities(observeWindows), ...waits.capabilities, ...batchControlCapabilities((request, caller) => executor.invoke(request, caller)), ...additional])
+  ...globalControlCapabilities(observeWindows), ...waits.capabilities, ...batchControlCapabilities((request, caller) => executor.invoke(request, caller, { nested: true })), ...additional])
 
   ipcMain.handle('control:register', (event, raw: unknown) => {
     const windowId = senderWindow(event)
@@ -154,10 +156,49 @@ export function createControlHost(windowAccess: {
         },
       }
     },
-    dispose() {
+    /**
+     * Committed shutdown for the control surface (#943).
+     *
+     * ── WHY THIS IS ASYNC NOW, AND ORDERED ──
+     * It used to retire waits, window registrations and IPC handlers and
+     * return. None of that is evidence that anything STOPPED: an admitted
+     * operation was still running, and its durable result was still queued
+     * behind `FileControlHistory`'s append tail. The caller
+     * (`applicationShutdown`'s `control` stage) then went on to release the
+     * exit and the state-process lock, so the process could die between an
+     * effect happening and the record of it reaching disk — the one state
+     * that makes a retry after restart unanswerable.
+     *
+     * The order that IS load-bearing is the last step: everything before the
+     * first `await` is synchronous, so nothing can enter between closing
+     * admission and retiring the surface — their relative order reads better
+     * this way but is not observable, and a comment should not claim
+     * otherwise.
+     *
+     *  1. Close admission. Reads keep answering; they change nothing and
+     *     refusing them would blind the tooling used to diagnose a stuck quit.
+     *  2. Retire the renderer-facing surface. Window registrations and waits
+     *     go now because an admitted operation that still needs a window
+     *     would be stalled anyway — the renderer is already going away.
+     *  3. AWAIT what was already admitted, THEN the history tail. This order
+     *     is real: an operation finishing appends its own result, so draining
+     *     the file first would leave the very last one behind. And the tail
+     *     covers what the executor cannot — `recordTransport` appends
+     *     straight to the history, outside any call.
+     *
+     * IPC handlers are removed LAST. `operations.start`/`operations.finish`
+     * travel the private main port, not IPC, so the main process can still
+     * record its own receipts throughout — but leaving `control:invoke`
+     * registered until the end costs nothing, since admission is already shut
+     * and the gate answers a structured refusal instead of a dead channel.
+     */
+    async dispose() {
+      executor.closeAdmission()
       waits.dispose()
       for (const window of [...windows.values()]) window.dispose()
       unregisterMain()
+      await executor.settled()
+      await history.drain?.()
       for (const name of ['register', 'unregister', 'response', 'catalog', 'invoke']) ipcMain.removeHandler(`control:${name}`)
     },
   }

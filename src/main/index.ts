@@ -291,7 +291,13 @@ let codexCliUpdateReserved = false
 let startupTask: Promise<void> | null = null
 let startupFailed = false
 let disposeExternalControl: (() => Promise<void>) | null = null
-let disposeControlHost: (() => void) | null = null
+// Returns a PROMISE since #943: control shutdown awaits admitted operations
+// and the history append tail. Typed as such deliberately — a `() => void`
+// here still COMPILES when assigned an async function, and the shutdown stage
+// would then resolve immediately and release the exit and the state-process
+// lock while the drain was still running. The type is the only thing standing
+// between that and a silent regression.
+let disposeControlHost: (() => Promise<void>) | null = null
 let shutdownWorkspaceStore: WorkspaceFileStore | null = null
 
 class StartupInterruptedByQuit extends Error {}
