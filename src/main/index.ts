@@ -490,7 +490,30 @@ async function startApp(): Promise<void> {
     )
     dialog.showErrorBox(
       'Agent Code is already running',
-      'Another Agent Code process appears to own the shared app state. Close the existing app window before starting a second copy.',
+      lock.reason === 'unreadable-lock'
+        // The path, because this one the user has to act on: a lock file that
+        // cannot be read does not age out, and nothing here can safely remove
+        // it (#1094 review). Without the path in the dialog it was a permanent
+        // failure whose only clue was a console warning nobody sees.
+        ? `Agent Code cannot read its lock file, so it cannot tell whether another copy is running.\n\nCheck or remove:\n${lock.path}`
+        : 'Another Agent Code process appears to own the shared app state. Close the existing app window before starting a second copy.',
+    )
+    app.quit()
+    return
+  }
+  // A second look before this process writes anything (#1094).
+  //
+  // Acquisition cannot promise a single winner in every ordering: two launches
+  // that condemn the same stale lock both replace it, and each can read back
+  // its own token if it reads before the other's rename lands. The file
+  // settles on one of them a moment later. This is the moment to notice — the
+  // cost of being wrong here is two mains writing one state directory, and the
+  // cost of the check is one file read.
+  if (!lock.revalidate()) {
+    console.warn('[app] lost the shared-state lock immediately after acquiring it', { lockPath: lock.path })
+    dialog.showErrorBox(
+      'Agent Code is already running',
+      'Another Agent Code process took ownership of the shared app state while this one was starting. Close the existing app window before starting a second copy.',
     )
     app.quit()
     return
