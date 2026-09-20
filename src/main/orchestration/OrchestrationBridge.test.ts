@@ -17,6 +17,23 @@ vi.mock('@main/window/windowRegistry.js', () => ({
 
 const { OrchestrationBridge } = await import('@main/orchestration/OrchestrationBridge.js')
 
+/**
+ * Requests for ONE parent session.
+ *
+ * `sentRendererRequests` is module-global and every test pushes into it — and
+ * the bridge dispatches from a queue, so a request another test enqueued can
+ * land after that test reset the array. Counting by parent is what makes an
+ * assertion about "how many reads did THIS poll produce" mean that, rather
+ * than "how many requests exist in this file's shared array right now". A
+ * cross-test leak made a mutation look dead once already.
+ */
+function requestsFor(parentSessionId: string): Array<{ requestId: string; type: string }> {
+  return sentRendererRequests.filter(
+    (request): request is { requestId: string; type: string; parentSessionId: string } =>
+      (request as { parentSessionId?: string }).parentSessionId === parentSessionId,
+  )
+}
+
 describe('OrchestrationBridge status cache', () => {
   afterEach(() => {
     vi.useRealTimers()
@@ -51,6 +68,109 @@ describe('OrchestrationBridge status cache', () => {
 
     await expect(first).resolves.toHaveLength(1)
     await expect(second).resolves.toHaveLength(1)
+  })
+
+  it('keeps joining a read that is still IN FLIGHT past the freshness window (#925)', async () => {
+    // The defect: `expiresAt` was set when the request was CREATED, so a read
+    // still waiting on the renderer was "expired" 250 ms later and pruned —
+    // and the next identical poll enqueued a DUPLICATE.
+    //
+    // That is not a rare case. The bridge serialises every orchestration
+    // request behind ONE in-flight slot with no timer on the queue, and
+    // `wait_agents` polls this key every 250 ms–1 s by design. So a read that
+    // queues behind other traffic collects one duplicate per poll, each of
+    // which queues behind the last: the cache built to prevent a thundering
+    // herd produced one.
+    //
+    // In-flight dedup must last until SETTLEMENT; freshness starts there.
+    vi.useFakeTimers()
+    sentRendererRequests.length = 0
+    const bridge = new OrchestrationBridge()
+
+    const first = bridge.listAgents({ parentSessionId: 'parent-slow', runId: 'run-a' })
+    // Four polling intervals with no answer from the renderer.
+    await vi.advanceTimersByTimeAsync(1_000)
+    const second = bridge.listAgents({ parentSessionId: 'parent-slow', runId: 'run-a' })
+    await vi.advanceTimersByTimeAsync(1_000)
+    const third = bridge.listAgents({ parentSessionId: 'parent-slow', runId: 'run-a' })
+
+    // Only one was SENT either way — `MAX_ACTIVE_RENDERER_REQUESTS = 1` means
+    // the duplicates queue rather than fly, which is exactly why the defect is
+    // invisible until the first read settles and the queue drains into them.
+    expect(requestsFor('parent-slow')).toHaveLength(1)
+
+    const request = requestsFor('parent-slow')[0]!
+    bridge.resolve({ requestId: request.requestId, ok: true, type: 'list-agents', agents: [] } as never)
+    await vi.advanceTimersByTimeAsync(0)
+
+    // THE assertion: the queue had nothing else in it. With the bug, the
+    // duplicates dispatch here — and nobody ever answers them, so the joined
+    // callers hang on a renderer round trip that should never have existed.
+    expect(requestsFor('parent-slow')).toHaveLength(1)
+    await expect(first).resolves.toEqual([])
+    await expect(second).resolves.toEqual([])
+    await expect(third).resolves.toEqual([])
+  })
+
+  it('starts the freshness window at SETTLEMENT, not at request time (#925)', async () => {
+    // The other half of the same confusion. A read that took 900 ms to settle
+    // used to be stale the instant it arrived — its 250 ms window had expired
+    // 650 ms before the value existed — so the very next poll re-read it.
+    vi.useFakeTimers()
+    sentRendererRequests.length = 0
+    const bridge = new OrchestrationBridge()
+
+    const slow = bridge.listAgents({ parentSessionId: 'parent-settle', runId: 'run-a' })
+    await vi.advanceTimersByTimeAsync(900)
+    const request = requestsFor('parent-settle')[0]!
+    bridge.resolve({ requestId: request.requestId, ok: true, type: 'list-agents', agents: [] } as never)
+    await slow
+
+    // Inside the window measured FROM the answer: joined, and no second
+    // request was created to be drained later.
+    await vi.advanceTimersByTimeAsync(100)
+    const joined = bridge.listAgents({ parentSessionId: 'parent-settle', runId: 'run-a' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(requestsFor('parent-settle')).toHaveLength(1)
+    await expect(joined).resolves.toEqual([])
+
+    // Past it: a fresh read, because the value is now genuinely old.
+    await vi.advanceTimersByTimeAsync(300)
+    void bridge.listAgents({ parentSessionId: 'parent-settle', runId: 'run-a' })
+    expect(requestsFor('parent-settle')).toHaveLength(2)
+  })
+
+  it('does not let a mutation-invalidated in-flight read be joined or published (#925)', () => {
+    // A mutation lands while a read is STILL IN FLIGHT. The read was admitted
+    // before it, so its answer describes the world before the change: a later
+    // poll must not join it, and — the half that is easy to get wrong — its
+    // settlement must not put that answer back into the cache for whoever
+    // polls next.
+    vi.useFakeTimers()
+    sentRendererRequests.length = 0
+    const bridge = new OrchestrationBridge()
+
+    const stale = bridge.listAgents({ parentSessionId: 'parent-inv', runId: 'run-a' })
+    const readRequest = requestsFor('parent-inv')[0]!
+
+    // The mutation invalidates while the read is unanswered.
+    // `notePromptSubmitted` is a real one that does NOT itself queue a
+    // renderer round trip, so the read stays the only thing in flight — with
+    // an unknown child it takes the conservative global clear, which is the
+    // path its own comment argues for.
+    bridge.notePromptSubmitted('child-of-parent-inv')
+
+    // Now the read answers. With an unconditional republish, this value —
+    // computed before the mutation — becomes the cached answer for everyone
+    // who polls in the next 250 ms.
+    bridge.resolve({ requestId: readRequest.requestId, ok: true, type: 'list-agents', agents: [] } as never)
+
+    return stale.then(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+      const before = requestsFor('parent-inv').length
+      void bridge.listAgents({ parentSessionId: 'parent-inv', runId: 'run-a' })
+      expect(requestsFor('parent-inv').length).toBe(before + 1)
+    })
   })
 
   it('invalidates only the known parent status cache after prompt submission metadata changes', async () => {

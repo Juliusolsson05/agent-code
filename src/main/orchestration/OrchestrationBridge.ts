@@ -124,7 +124,17 @@ type ClosedAgentRecord = {
 }
 
 type CachedValue<T> = {
-  expiresAt: number
+  /**
+   * When this value stops being fresh — or `null` while the read is still IN
+   * FLIGHT (#925).
+   *
+   * WHY the two states share one field: they are the same question asked at
+   * two moments. A pending entry is a DEDUP handle and has no freshness to
+   * lose; a settled one is a VALUE and starts ageing from the moment it
+   * arrived. Combining them as "expires 250 ms after the request was created"
+   * conflated the two and expired reads that had not answered yet.
+   */
+  expiresAt: number | null
   promise: Promise<T>
 }
 
@@ -538,7 +548,7 @@ export class OrchestrationBridge {
     const now = Date.now()
     this.pruneStatusCaches(now)
     const cached = this.listAgentsCache.get(key)
-    if (cached && cached.expiresAt > now) return await cached.promise
+    if (cached && (cached.expiresAt === null || cached.expiresAt > now)) return await cached.promise
 
     // WHY cache renderer-backed status reads at all:
     //
@@ -570,11 +580,8 @@ export class OrchestrationBridge {
       }
       throw err
     })
-    this.listAgentsCache.set(key, {
-      expiresAt: now + STATUS_CACHE_TTL_MS,
-      promise,
-    })
-    return await promise
+    this.listAgentsCache.set(key, { expiresAt: null, promise })
+    return await this.startFreshnessOnSettle(this.listAgentsCache, key, promise)
   }
 
   private async cachedReadRunOutputs(params: {
@@ -597,7 +604,7 @@ export class OrchestrationBridge {
     const now = Date.now()
     this.pruneStatusCaches(now)
     const cached = this.readRunOutputsCache.get(key)
-    if (cached && cached.expiresAt > now) return await cached.promise
+    if (cached && (cached.expiresAt === null || cached.expiresAt > now)) return await cached.promise
 
     const promise = this.request({
       requestId: randomUUID(),
@@ -622,11 +629,38 @@ export class OrchestrationBridge {
       }
       throw err
     })
-    this.readRunOutputsCache.set(key, {
-      expiresAt: now + STATUS_CACHE_TTL_MS,
-      promise,
+    this.readRunOutputsCache.set(key, { expiresAt: null, promise })
+    return await this.startFreshnessOnSettle(this.readRunOutputsCache, key, promise)
+  }
+
+  /**
+   * Start a cached read's freshness window when its VALUE arrives (#925).
+   *
+   * The window used to start when the request was created, which made every
+   * read that took longer than 250 ms stale before it existed. That is not an
+   * edge case: the bridge serialises every orchestration request behind one
+   * in-flight slot with no timer on the queue, and `wait_agents` polls these
+   * keys every 250 ms–1 s by design. So a read waiting its turn was pruned,
+   * the next identical poll enqueued a DUPLICATE behind it, and the cache
+   * built to prevent a thundering herd produced one.
+   *
+   * Republishing is deliberately conditional. If a mutation invalidated this
+   * key while the read was in flight, the entry is gone and MUST NOT come
+   * back: its answer describes the world before the change, and a caller that
+   * polls after the mutation has to see the renderer, not this.
+   */
+  private startFreshnessOnSettle<T>(
+    cache: Map<string, CachedValue<T>>,
+    key: string,
+    promise: Promise<T>,
+  ): Promise<T> {
+    return promise.then(value => {
+      const current = cache.get(key)
+      if (current?.promise === promise) {
+        cache.set(key, { expiresAt: Date.now() + STATUS_CACHE_TTL_MS, promise })
+      }
+      return value
     })
-    return await promise
   }
 
   private statusCacheKey(params: { parentSessionId: string; runId?: string }): string {
@@ -674,11 +708,16 @@ export class OrchestrationBridge {
     // hold its last fulfilled output forever. Status reads are already the only
     // place these caches matter, so opportunistic pruning gives bounded growth
     // without a timer that wakes the desktop app just to clean a 250 ms cache.
+    // A PENDING entry (`expiresAt === null`) is never pruned: it is the dedup
+    // handle for a read that has not answered yet, and deleting it is what let
+    // the next poll enqueue a duplicate (#925). It leaves on settlement — as a
+    // value with a real window — or on failure, where the `.catch` above
+    // removes it so the next caller retries rather than joining a rejection.
     for (const [key, cached] of this.listAgentsCache) {
-      if (cached.expiresAt <= now) this.listAgentsCache.delete(key)
+      if (cached.expiresAt !== null && cached.expiresAt <= now) this.listAgentsCache.delete(key)
     }
     for (const [key, cached] of this.readRunOutputsCache) {
-      if (cached.expiresAt <= now) this.readRunOutputsCache.delete(key)
+      if (cached.expiresAt !== null && cached.expiresAt <= now) this.readRunOutputsCache.delete(key)
     }
   }
 
