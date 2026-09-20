@@ -42,6 +42,7 @@ import { conditionBackendCapabilities } from '@main/sessions/conditionControl.js
 import { terminalBackendCapabilities } from '@main/sessions/terminalControl.js'
 import { windowLifecycleControlCapabilities } from '@main/window/lifecycleControl.js'
 import { installApplicationShutdown } from '@main/applicationShutdown.js'
+import { presentQuitFailure } from '@main/quitFailureDialog.js'
 import { LspManager } from '@main/lspManager.js'
 import { compactAllGhostLogs, GhostJournalRegistry } from '@main/ghostJournal.js'
 import {
@@ -1460,14 +1461,12 @@ const sessionShutdownGate = installApplicationShutdown({
     console.error('[app] graceful shutdown blocked:', error)
     appRunJournal?.recordError('app.shutdown.error', error)
     if (!app.isReady()) return
-    void dialog.showMessageBox({
-      type: 'error', title: 'Agent work is still shutting down',
-      message: 'Agent Code could not safely quit yet.',
-      detail: 'Shutdown is incomplete. Quit again to retry.\n\n' + (error instanceof AggregateError
-        ? error.errors.map(cause => cause instanceof Error ? cause.message : String(cause)).join('\n')
-        : error instanceof Error ? error.message : String(error)),
-      buttons: ['Keep Agent Code Open'], defaultId: 0, cancelId: 0, noLink: true,
-    }).catch(reportError => console.error('[app] could not show shutdown error:', reportError))
+    // Every window is gone by now, so this dialog is the only reachable
+    // control the application still has; quitFailureDialog.ts owns what it
+    // offers and acts on the answer (#945 Codex review).
+    // A lambda, not `dialog` itself: Electron's showMessageBox is overloaded
+    // (with and without a parent window), and this call has no window left.
+    void presentQuitFailure({ showMessageBox: options => dialog.showMessageBox(options) }, app, error)
   },
   onDiagnosticError: (stage, error) => appRunJournal?.recordError(`app.shutdown.${stage}.error`, error),
 })
