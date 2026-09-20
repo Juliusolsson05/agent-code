@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { EventEmitter } from 'events'
 import { spawn } from 'child_process'
 import type { ChildProcessWithoutNullStreams } from 'child_process'
@@ -57,6 +58,8 @@ type OpenDocumentParams = {
 type OpenDocumentRecord = {
   clientUri: string
   serverKey: string
+  /** The server GENERATION that owns this document (#921). */
+  serverGeneration: string
   serverUri: string
   serverDocumentKey: string
   version: number
@@ -69,6 +72,8 @@ type OpenDocumentRecord = {
 type ServerDocumentRecord = {
   key: string
   serverKey: string
+  /** The server GENERATION that owns this document (#921). */
+  serverGeneration: string
   serverUri: string
   language: string
   version: number
@@ -79,6 +84,15 @@ type ServerDocumentRecord = {
 
 type ServerRecord = {
   key: string
+  /**
+   * Identity of THIS server process, distinct from `key` (#921).
+   *
+   * `key` is derived from the language spec and workspace root, so a
+   * replacement server spawned after a crash reuses it. Anything that fences
+   * cleanup on `key` alone cannot tell the dead server from the live one that
+   * took its place — see `discardServer`.
+   */
+  generation: string
   specId: string
   workspaceRoot: string
   process: ChildProcessWithoutNullStreams
@@ -86,6 +100,20 @@ type ServerRecord = {
   initialized: Promise<InitializeResult>
   legendPromise: Promise<SemanticTokensLegend | null>
   closed: boolean
+}
+
+/**
+ * A fresh identity for one server PROCESS (#921).
+ *
+ * Named and exported rather than inlined at the single call site so the one
+ * property the fence depends on — that a replacement never shares its
+ * predecessor's value — is reachable by a test. The suite cannot drive
+ * `createServer` without spawning a real language server, so without this the
+ * only thing standing between a working fence and a useless one would be that
+ * nobody replaced `randomUUID()` with a constant.
+ */
+export function nextServerGeneration(): string {
+  return randomUUID()
 }
 
 const LSP_DOCUMENT_REQUEST_TIMEOUT_MS = 15_000
@@ -412,6 +440,7 @@ export class LspManager extends EventEmitter {
         const created: ServerDocumentRecord = {
           key,
           serverKey: server.key,
+          serverGeneration: server.generation,
           serverUri,
           language,
           version: 1,
@@ -423,6 +452,7 @@ export class LspManager extends EventEmitter {
         this.docs.set(params.clientUri, {
           clientUri: params.clientUri,
           serverKey: server.key,
+          serverGeneration: server.generation,
           serverUri,
           serverDocumentKey: key,
           version: 1,
@@ -438,6 +468,7 @@ export class LspManager extends EventEmitter {
       const doc: OpenDocumentRecord = {
         clientUri: params.clientUri,
         serverKey: server.key,
+        serverGeneration: server.generation,
         serverUri,
         serverDocumentKey: key,
         version: shared.version,
@@ -1028,6 +1059,7 @@ export class LspManager extends EventEmitter {
 
     const record: ServerRecord = {
       key,
+      generation: nextServerGeneration(),
       specId: spec.id,
       workspaceRoot: rootAbs,
       process: child,
@@ -1084,6 +1116,9 @@ export class LspManager extends EventEmitter {
 
   private discardServer(server: ServerRecord, kill = true): void {
     if (this.servers.get(server.key) === server) this.servers.delete(server.key)
+    // THIS server's own resources are always disposed. It is dead either way,
+    // and leaving its connection or process around is a leak regardless of who
+    // currently holds its key.
     if (!server.closed) {
       server.closed = true
       try {
@@ -1093,14 +1128,27 @@ export class LspManager extends EventEmitter {
       }
       if (kill && !server.process.killed) server.process.kill()
     }
+    // ── SHARED RECORDS ARE FENCED ON THE GENERATION, NOT THE KEY (#921) ──
+    // `key` comes from the language spec plus the workspace root, so a
+    // replacement server spawned after a crash REUSES it. The registry
+    // deletion above already knew that and compared object identity — but
+    // these two loops matched on `key`, so a late callback from the dead
+    // server (`exit`, a destroyed-stream error, a rejected `initialized`)
+    // deleted the REPLACEMENT server's documents.
+    //
+    // What that looks like: the editor is attached to a healthy new server,
+    // and its documents vanish from `docs`/`serverDocuments` with diagnostics
+    // cleared, while the server still holds them open. Nothing re-opens them
+    // until the editor remounts, so completions and diagnostics stop for a
+    // file that is on screen and fine.
     for (const doc of [...this.docs.values()]) {
-      if (doc.serverKey !== server.key) continue
+      if (doc.serverGeneration !== server.generation) continue
       this.docs.delete(doc.clientUri)
       this.documentIntentEpochs.delete(doc.clientUri)
       this.emit('diagnostics', { clientUri: doc.clientUri, diagnostics: [] })
     }
     for (const [key, doc] of this.serverDocuments) {
-      if (doc.serverKey === server.key) this.serverDocuments.delete(key)
+      if (doc.serverGeneration === server.generation) this.serverDocuments.delete(key)
     }
   }
 
