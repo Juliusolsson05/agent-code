@@ -1,7 +1,6 @@
 import { ipcRenderer } from 'electron'
 import { subscribeShared } from '@preload/api/ipc.js'
-import type { TldrEnforcementStatus, TldrHistoryEntry, TldrRecord, TldrUpdate } from '@shared/types/tldr.js'
-import type { HoldEndReason } from '@shared/types/tldr.js'
+import type { HoldEndReason, TldrEnforcementStatus, TldrHistoryEntry, TldrRecord, TldrUpdate } from '@shared/types/tldr.js'
 
 export const tldrApi = {
   startTldrHold: (code: string, token: string): void => { ipcRenderer.send('tldr:hold-start', { code, token }) },

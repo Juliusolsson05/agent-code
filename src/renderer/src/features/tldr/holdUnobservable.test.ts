@@ -1,6 +1,6 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { createTldrHoldController } from './viewState'
+import { createTldrHoldController, useTldrView } from './viewState'
 import type { HoldEndReason } from '@shared/types/tldr'
 
 // ---------------------------------------------------------------------------
@@ -18,97 +18,100 @@ import type { HoldEndReason } from '@shared/types/tldr'
 
 type Controller = ReturnType<typeof createTldrHoldController>
 
-function controller() {
+function controller(options: { real?: boolean } = {}) {
   const setHeld = vi.fn()
-  const setLatched = vi.fn()
+  const onUnobservable = vi.fn()
   let signal: ((reason: HoldEndReason) => void) | null = null
   const observeRelease = vi.fn((_event: unknown, release: (reason: HoldEndReason) => void) => {
     signal = release
     return () => { signal = null }
   })
+  // `real: true` uses the PRODUCTION setHeld, so the store transition itself is
+  // exercised rather than a spy (review finding 3: injecting both collaborators
+  // meant the shipped default was asserted by nothing).
   const instance: Controller = createTldrHoldController(
-    setHeld,
+    options.real ? undefined : setHeld,
     observeRelease as never,
-    setLatched,
+    onUnobservable,
   )
   return {
     instance,
     setHeld,
-    setLatched,
+    onUnobservable,
     native: (reason: HoldEndReason) => signal?.(reason),
     observing: () => signal !== null,
   }
 }
 
 const chord = { code: 'KeyL', metaKey: true, ctrlKey: false, altKey: false, shiftKey: false, repeat: false }
+const commandUp = { code: 'MetaLeft', metaKey: false, ctrlKey: false, altKey: false, shiftKey: false }
+
+beforeEach(() => { useTldrView.setState({ held: false, latched: false, preview: 'tldr' }) })
 
 describe('a hold whose key cannot be observed (#1066)', () => {
-  it('latches the peek instead of closing it', () => {
-    const { instance, setHeld, setLatched, native } = controller()
+  it('KEEPS holding, because the Command keyup still works', () => {
+    // Only the Cmd-LETTER keyup is swallowed by AppKit; the Command keyup
+    // reaches the renderer. An earlier version latched here instead, which
+    // threw that signal away AND handed the overlay every keystroke but
+    // Escape — the #1021 trap, re-created for exactly the users this fixes.
+    const { instance, setHeld, native } = controller()
     instance.start(chord, 'tldr')
-    expect(setHeld).toHaveBeenCalledWith(true, 'tldr')
     setHeld.mockClear()
 
     native('unobservable')
-    // The bug: this used to clear, so the overlay appeared and vanished in the
-    // same frame. Latched is the state the Goal/TLDR command produces every
-    // day — Escape dismisses it — so the peek stays readable without ever
-    // becoming an overlay with no way out.
-    expect(setLatched).toHaveBeenCalledExactlyOnceWith('tldr')
     expect(setHeld).not.toHaveBeenCalled()
+
+    instance.keyUp(commandUp)
+    expect(setHeld).toHaveBeenCalledExactlyOnceWith(false)
   })
 
-  it('latches the preview that was actually being held, not a default', () => {
-    // ⌘G and ⌘L share one gesture and one store; latching the wrong one would
-    // answer a question the user did not ask.
-    const { instance, setLatched, native } = controller()
+  it('leaves the store held, not latched, through the production path', () => {
+    // The shipped setHeld/latched transition, not a spy. A latched overlay
+    // owns input; a held one does not.
+    const { instance, native } = controller({ real: true })
     instance.start(chord, 'goal')
     native('unobservable')
-    expect(setLatched).toHaveBeenCalledExactlyOnceWith('goal')
+    expect(useTldrView.getState()).toMatchObject({ held: true, latched: false, preview: 'goal' })
+
+    instance.keyUp(commandUp)
+    expect(useTldrView.getState()).toMatchObject({ held: false, latched: false })
+  })
+
+  it('tells the app once so the user can be shown why', () => {
+    const { instance, onUnobservable, native } = controller()
+    instance.start(chord, 'tldr')
+    native('unobservable')
+    expect(onUnobservable).toHaveBeenCalledTimes(1)
+  })
+
+  it('stops observing, since nothing more will come from the watcher', () => {
+    const { instance, native, observing } = controller()
+    instance.start(chord, 'tldr')
+    native('unobservable')
+    expect(observing()).toBe(false)
   })
 
   it('still closes normally on a real release', () => {
-    const { instance, setHeld, setLatched, native } = controller()
+    const { instance, setHeld, onUnobservable, native } = controller()
     instance.start(chord, 'tldr')
     setHeld.mockClear()
     native('released')
     expect(setHeld).toHaveBeenCalledExactlyOnceWith(false)
-    expect(setLatched).not.toHaveBeenCalled()
-  })
-
-  it('closes normally when the renderer sees the modifier come up first', () => {
-    // A fast tap releases Command, whose keyup is NOT swallowed the way a
-    // Cmd-letter keyup is. That path must stay a plain close: it is the reason
-    // a late 'unobservable' signal can never strand a peek the user finished.
-    const { instance, setHeld, setLatched } = controller()
-    instance.start(chord, 'tldr')
-    setHeld.mockClear()
-    instance.keyUp({ code: 'KeyL', metaKey: false, ctrlKey: false, altKey: false, shiftKey: false })
-    expect(setHeld).toHaveBeenCalledExactlyOnceWith(false)
-    expect(setLatched).not.toHaveBeenCalled()
+    expect(onUnobservable).not.toHaveBeenCalled()
   })
 
   it('ignores a native signal that arrives after the gesture already ended', () => {
-    // Exactly the fast-tap race: the renderer released on the Command keyup,
-    // then the helper reports it could not observe anything. Acting on it would
-    // latch a peek the user had already dismissed.
-    const { instance, setHeld, setLatched, native } = controller()
+    const { instance, setHeld, onUnobservable } = controller()
     instance.start(chord, 'tldr')
-    instance.keyUp({ code: 'KeyL', metaKey: false, ctrlKey: false, altKey: false, shiftKey: false })
+    instance.keyUp(commandUp)
     setHeld.mockClear()
-
-    native('unobservable')
-    expect(setLatched).not.toHaveBeenCalled()
+    controllerNative(instance)
     expect(setHeld).not.toHaveBeenCalled()
-  })
-
-  it('stops observing once a hold has ended either way', () => {
-    for (const reason of ['released', 'unobservable'] as const) {
-      const { instance, native, observing } = controller()
-      instance.start(chord, 'tldr')
-      expect(observing()).toBe(true)
-      native(reason)
-      expect(observing(), reason).toBe(false)
-    }
+    expect(onUnobservable).not.toHaveBeenCalled()
   })
 })
+
+/** A late signal for a gesture that is already over must do nothing. */
+function controllerNative(instance: Controller): void {
+  instance.release('unobservable')
+}

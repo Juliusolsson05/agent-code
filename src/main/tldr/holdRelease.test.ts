@@ -85,6 +85,30 @@ describe('macOS TLDR release observation', () => {
     }
   })
 
+  it('a spawn error is a release, never a keyboard verdict', async () => {
+    // ENOENT/EACCES on the helper is the packaging failure the code's own
+    // comment names. Reporting it as 'unobservable' would change how the peek
+    // behaves on every machine merely missing the binary.
+    const { child, start } = processHarness()
+    const release = vi.fn()
+    const stop = watchMacTldrRelease(Promise.resolve('/helper'), 'KeyL', release, start)
+    await Promise.resolve()
+    child.emit('error', Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT' }))
+    expect(release).toHaveBeenCalledExactlyOnceWith('released')
+    stop()
+  })
+
+  it('an unmappable keycode is a release, never a keyboard verdict', async () => {
+    // A chord rebound outside `macKeyCodes` never reaches the helper at all,
+    // so it says nothing about whether the keyboard can be seen.
+    const { start } = processHarness()
+    const release = vi.fn()
+    watchMacTldrRelease(Promise.resolve('/helper'), 'F13', release, start)
+    await vi.waitFor(() => expect(release).toHaveBeenCalledTimes(1))
+    expect(release).toHaveBeenCalledWith('released')
+    expect(start).not.toHaveBeenCalled()
+  })
+
   it('still ends the hold exactly once when an unobservable exit races teardown', async () => {
     // The never-stuck invariant is unchanged by the new reason.
     const { child, start } = processHarness()

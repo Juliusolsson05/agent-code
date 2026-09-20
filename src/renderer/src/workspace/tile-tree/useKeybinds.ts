@@ -1,4 +1,5 @@
 import { createTldrHoldController, dismissTldr, observeTldrHoldRelease, useTldrView } from '@renderer/features/tldr/viewState'
+import { useGlobalToast } from '@renderer/ui/GlobalToast'
 import { dismissGoalLoop, useGoalLoopView } from '@renderer/features/goal-loop/viewState'
 import { useEffect, useMemo, useRef } from 'react'
 
@@ -417,7 +418,30 @@ export function useKeybinds(
   }, [bindingIndex, installedExtensions?.length])
 
   const tldrHoldRef = useRef<ReturnType<typeof createTldrHoldController> | null>(null)
-  if (!tldrHoldRef.current) tldrHoldRef.current = createTldrHoldController(undefined, observeTldrHoldRelease)
+  // WHY the blind-watcher case reaches a TOAST and not just the journal
+  // (#1066 review finding 1): a packaged user never reads a console line or a
+  // debug bundle, and the peek quietly changing which key releases it is
+  // exactly the kind of thing that reads as "broken" with no explanation.
+  // `useDictationHotkeySync` set this precedent for the sibling failure —
+  // main journals it, the toast is the surface the user actually looks at —
+  // and the first version of this fix copied only main's half.
+  //
+  // Fired at most once per hook instance, from a signal main only sends after
+  // corroborating the permission, so a fast tap cannot toast.
+  const { showToast } = useGlobalToast()
+  const warnedUnobservableRef = useRef(false)
+  if (!tldrHoldRef.current) {
+    tldrHoldRef.current = createTldrHoldController(undefined, observeTldrHoldRelease, () => {
+      if (warnedUnobservableRef.current) return
+      warnedUnobservableRef.current = true
+      showToast(
+        'Hold-to-peek cannot watch the keyboard, so the peek now follows the Command key '
+        + 'instead of the letter. Grant Agent Code Accessibility permission in System '
+        + 'Settings → Privacy & Security → Accessibility to restore it.',
+        12000,
+      )
+    })
+  }
   // Workspace membership/focus can change during a hold. Keep the gesture
   // alive across handler re-registration; only actual key release, blur or
   // hook unmount ends it.

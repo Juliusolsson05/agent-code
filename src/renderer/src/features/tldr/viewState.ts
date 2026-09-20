@@ -44,38 +44,45 @@ export function createTldrHoldController(
   setHeld = (held: boolean, preview: PreviewKind = 'tldr') =>
     useTldrView.setState(held ? { held, latched: false, preview } : { held, latched: false }),
   observeRelease: (event: HoldEvent, release: (reason: HoldEndReason) => void) => () => void = () => () => {},
-  // Keep the peek up and dismissible when the key cannot be watched (#1066).
-  setLatched = (preview: PreviewKind) => useTldrView.setState({ held: false, latched: true, preview }),
+  /** Told once when the native watcher turns out to be blind, so the user can
+   *  be shown WHY the letter-release stopped working (#1066 review finding 1:
+   *  journalling it and saying nothing to the user is half a fix). */
+  onUnobservable?: () => void,
 ) {
   let gesture: HoldEvent | null = null
   let stopObserving: (() => void) | null = null
-  let preview: PreviewKind = 'tldr'
   const release = (reason: HoldEndReason = 'released') => {
     if (!gesture) return
+    // ── WHY AN UNOBSERVABLE HOLD KEEPS HOLDING (#1066, review finding 2) ──
+    // Only the Cmd-LETTER keyup is swallowed by AppKit. The COMMAND keyup
+    // still reaches the renderer, and `keyUp` below already ends the hold on
+    // it. So on a machine where the native watcher is blind, the peek can
+    // still behave as a real hold — it simply ends when the user lets go of
+    // Command rather than of the letter.
+    //
+    // The first version of this fix LATCHED here instead, which threw that
+    // signal away and was worse than the bug: a latched overlay owns every
+    // keystroke but Escape (useKeybinds' input gate), so the exact users this
+    // fix targets would have had typing swallowed after every ⌘L — the #1021
+    // trap, re-created. Keeping the gesture alive costs nothing and needs no
+    // escape hatch, because the Command keyup always comes, and main's
+    // blur/close/navigation handlers still end the hold if it does not.
+    if (reason === 'unobservable') {
+      stopObserving?.()
+      stopObserving = null
+      onUnobservable?.()
+      return
+    }
     gesture = null
     stopObserving?.()
     stopObserving = null
-    // ── WHY AN UNOBSERVABLE HOLD LATCHES INSTEAD OF CLOSING (#1066) ──
-    // The native watcher cannot see the keyboard, so nothing will ever tell us
-    // the key came up. Clearing here is what produced the reported bug: the
-    // peek flashed and vanished the instant it opened, indistinguishable from
-    // a broken feature.
-    //
-    // Latching is safe where hanging would not be. This is the SAME state the
-    // Goal/TLDR command produces every day: Escape dismisses it, the command
-    // toggles it, and the overlay's input gate is unchanged. The invariant
-    // holdRelease.ts protects — never leave an opaque overlay with no way out
-    // — still holds, which is why the fix lives here rather than in the
-    // watcher's "every exit ends the hold" rule.
-    if (reason === 'unobservable') setLatched(preview)
-    else setHeld(false)
+    setHeld(false)
   }
   return {
-    start(event: HoldEvent, nextPreview: PreviewKind = 'tldr') {
+    start(event: HoldEvent, preview: PreviewKind = 'tldr') {
       if (event.repeat || gesture) return
       gesture = { code: event.code, metaKey: event.metaKey, ctrlKey: event.ctrlKey, altKey: event.altKey, shiftKey: event.shiftKey, repeat: false }
-      preview = nextPreview
-      setHeld(true, nextPreview)
+      setHeld(true, preview)
       stopObserving = observeRelease(gesture, release)
     },
     keyUp(event: Pick<KeyboardEvent, 'code' | 'metaKey' | 'ctrlKey' | 'altKey' | 'shiftKey'>) {

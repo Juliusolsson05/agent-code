@@ -36,10 +36,23 @@ verifies clean, and returns 0/65 correctly when run directly.
 > hold. Never leave an opaque overlay stuck on a helper/packaging failure.
 
 That is the right instinct (#1021's invisible-trap history), and it is why the
-bug is invisible: the two cases were deliberately collapsed. So the fix must
-separate them **without** reintroducing a stuck overlay. Latching is acceptable
-where hanging is not: the latched state is the one `toggleTldr` produces every
-day, Escape dismisses it, and the command toggles it off.
+bug is invisible: the two cases were deliberately collapsed.
+
+**The first attempt at this fix latched the peek instead, and was worse than
+the bug.** A latched overlay owns every keystroke but Escape (useKeybinds'
+input gate), so on exactly the machines #1066 is about, every ⌘L would have
+swallowed all typing until Escape — the #1021 report, re-created.
+
+The way out came from re-reading what is actually broken: **only the Cmd-LETTER
+keyup is swallowed. The COMMAND keyup still reaches the renderer**, and the
+controller already ends a hold on it. So a blind machine can still have a real
+hold; it simply ends when the user releases Command rather than the letter.
+Nothing latches, nothing owns input, and no escape hatch is needed.
+
+What the user is owed on top of that is an EXPLANATION, which is the half of
+the `dictation.hotkey.unavailable` precedent the first attempt missed:
+`useDictationHotkeySync` journals in main *and* toasts in the renderer,
+because "a packaged user never sees a console.warn".
 
 ## The hard part: telling the two cases apart
 
@@ -65,7 +78,7 @@ late signal finds no gesture to act on.
 ## Stages
 
 ### Stage 1 — the helper reports which case it saw
-- **Produces:** `exit(66)` from `--watch-release` when Command is not observable
+- **Produces:** `exit(67)` from `--watch-release` when Command is not observable
   at the first poll; `exit(0)` unchanged for a real release.
 - **Verified by:** running the packaged binary directly — 0 with no key held
   today, 65 on a bad code, 66 when Command reads as up.
@@ -80,25 +93,29 @@ late signal finds no gesture to act on.
 - **Verified by:** unit tests over `watchMacTldrRelease` with a fake spawn.
 - **Why separate:** the renderer must not learn exit codes; main translates.
 
-### Stage 3 — the renderer latches instead of flashing
-- **Produces:** the controller's `unobservable()` path — latch the preview
-  rather than clear it, so it stays readable and Escape closes it.
-- **Verified by:** controller tests; a real-router test already exists for the
-  hold gesture (`tldr.renderer.test.tsx`).
-- **Why separate:** it is the only user-visible half, and it must keep the
-  never-stuck invariant.
+### Stage 3 — the renderer keeps holding, and says why
+- **Produces:** the controller's unobservable path — keep the gesture alive so
+  the Command keyup ends it, and tell the app once so it can toast.
+- **Verified by:** controller tests driving the PRODUCTION store transition,
+  not an injected spy; a real-router test for the gesture already exists.
+- **Why separate:** it is the only user-visible half, and it is where the
+  never-stuck invariant is either kept or lost.
 
 ## Unknowns
 
 - Whether `keyState` requires **Accessibility** specifically or **Input
-  Monitoring**. The web evidence points at Accessibility trust, and the owner's
-  journal shows Accessibility denied for 0.1.0, but I could not proveethe exact
-  TCC key from a shell. This does not change the fix: the code distinguishes
-  *observable* from *not observable* and never names a permission it has not
-  verified. The user-facing string says what to try, not what is certain.
-- Whether a future macOS makes `keyState` require a grant it does not today.
-  The same discriminator keeps working, because it asks the API about a key it
-  knows is down.
+  Monitoring**. This is no longer inferred: main corroborates the probe with
+  `systemPreferences.isTrustedAccessibilityClient(false)`, which is prompt-free
+  (a read-only pane preview must never raise a permission dialog) and answers
+  the real question. Only a 67 the system agrees with is journalled or shown.
+- Whether `keyState` blinds uniformly across keycodes. If modifiers stayed
+  readable while letters did not, the probe would exit 0 and say nothing — the
+  corroboration above is what keeps that from being silent, because the
+  Accessibility state is observable on its own.
+- A tap faster than the helper's own spawn (~20 ms measured) releases Command
+  before the first poll and reports 67 on a healthy machine. The corroboration
+  demotes that to an ordinary release, so it neither toasts nor writes a false
+  permission claim into the debug bundle.
 
 ## Fixture plan
 
