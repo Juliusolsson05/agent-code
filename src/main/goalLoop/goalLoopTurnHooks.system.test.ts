@@ -43,7 +43,21 @@ async function setup() {
   const store = new TldrStore(join(directory, 'tldr.json'))
   const goalStore = new TldrStore(join(directory, 'goal.json'), undefined, { historyDirectoryName: 'goal-history', label: 'Goal' })
   const deliver = vi.fn(async () => ({ ok: true } as PromptDeliveryResult))
-  const manager = Object.assign(new EventEmitter(), { deliverPromptToAgent: deliver })
+  // The provider's own activity level, which #1033's delivery gate consults.
+  // It starts idle: every case except that one is about the hook boundary.
+  const processState = { active: false }
+  // `getBackendSnapshot` is deliberately still here, reporting input that is
+  // NOT ready, and deliberately unused by the service. It is the regression
+  // guard for the second half of #1033's re-review: UI input readiness is a
+  // composer question (a PTY paint grace period on the terminal runtimes, a
+  // latch on Codex) and must never gate a programmatic delivery. If a future
+  // change reinstates a readiness gate, every test in this file stops
+  // delivering and says so.
+  const manager = Object.assign(new EventEmitter(), {
+    deliverPromptToAgent: deliver,
+    getProcessStateSnapshot: () => processState,
+    getBackendSnapshot: () => ({ input: { ready: false, revision: 1, reason: 'provider-not-ready' } } as never),
+  })
   const loops = new GoalLoopService({ manager, store: new GoalLoopStore(join(directory, 'goal-loop.json')) })
   await loops.start()
   const host = new BuiltInMcpHttpHost()
@@ -65,7 +79,7 @@ async function setup() {
     await client.callTool({ name: 'tldr_update', arguments: { text } })
     await settle()
   }
-  return { host, loops, deliver, hook, report }
+  return { host, loops, deliver, hook, report, manager, processState }
 }
 
 describe('goal loop turn boundary through the real MCP host (#1024)', () => {
@@ -86,6 +100,34 @@ describe('goal loop turn boundary through the real MCP host (#1024)', () => {
     await settle()
     expect(deliver).not.toHaveBeenCalled()
     await hook(config!, 'stop', { stop_hook_active: false })
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1))
+    await settle()
+    expect(deliver).toHaveBeenCalledTimes(1)
+  })
+
+  it('holds the continuation while ANOTHER configured Stop hook keeps the turn going, and delivers on the provider\'s quiet edge (#1033)', async () => {
+    // Our hook allowing the stop says nothing about the user's own hooks:
+    // Claude runs them all in parallel and Codex aggregates, so either keeps
+    // the turn going when any of them blocks ("run the tests before
+    // stopping"). We are told the turn ended, the turn has not ended, and the
+    // continuation used to land mid-turn as a queued command — #1024's
+    // symptom. The provider reports that as a live spinner (process-state
+    // active), NOT as unavailable input: the composer happily takes text
+    // mid-turn, which is precisely how the prompt got queued.
+    const { host, loops, deliver, hook, manager, processState } = await setup()
+    const [config] = host.registerSession({ sessionId: 's-other-hook', cwd: '/project', providerKind: 'claude', domains: ['goal_loop'] })
+    await loops.startLoop('s-other-hook', { goal: 'G.', loopPrompt: 'P.' })
+    processState.active = true
+    expect((await hook(config!, 'stop', { stop_hook_active: false })).status).toBe(200)
+    await settle()
+    expect(deliver).not.toHaveBeenCalled()
+
+    // The blocking hook's work finishes and the turn really ends. NO second
+    // Stop hook fires — nothing restarted the agent — so the provider's own
+    // active→idle edge is the only trigger left. A skipped continuation would
+    // die here; a HELD one is delivered, exactly once.
+    processState.active = false
+    manager.emit('process-state', { sessionId: 's-other-hook', active: false })
     await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1))
     await settle()
     expect(deliver).toHaveBeenCalledTimes(1)

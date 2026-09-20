@@ -117,6 +117,19 @@ export interface HostTranscriptAdapter {
   listPrompts(cwd: string, providerSessionId: string): Promise<RewindPrompt[]>
   draft(content: readonly ConversationContent[]): RewindDraft
   targetProfile(cwd?: string): Promise<TranscriptTargetProfile>
+  /**
+   * The profile the SOURCE session actually ran on, when the provider records
+   * it on its own messages (#1038).
+   *
+   * WHY Duplicate and Rewind need this and a provider SWITCH does not: a
+   * switch is a move to another provider, so the destination's own default is
+   * the only sensible model. A duplicate or a rewind is the same conversation
+   * continuing, and stamping the machine's current default on it silently
+   * moves that conversation to whatever model the user picked most recently
+   * somewhere else. Absent (or null) means "the provider does not record it",
+   * and the caller falls back to `targetProfile`.
+   */
+  sourceProfile?(cwd: string, providerSessionId: string): Promise<TranscriptTargetProfile | null>
   projectNativeResume(
     conversation: ConversationDocument,
     context: TranscriptProjectionContext,
@@ -221,6 +234,22 @@ const opencodeAdapter: HostTranscriptAdapter = {
   },
   draft: plainDraft,
   targetProfile: resolveOpencodeTargetProfile,
+  async sourceProfile(cwd, providerSessionId) {
+    const binary = getToolPath('opencode', 'opencode')
+    const exported = await exportOpencodeSession(
+      { binary, cwd, timeoutMs: OPENCODE_TRANSFORM_TIMEOUT_MS },
+      providerSessionId,
+    )
+    const recorded = opencodeProfileFromExport(exported)
+    if (!recorded) return null
+    // The budget is a property of THIS machine's catalog, not of the recorded
+    // conversation, so it still comes from the target profile. Only the model
+    // identity is inherited.
+    const target = await resolveOpencodeTargetProfile(cwd).catch(() => null)
+    // 128k matches every other OpenCode budget in this file: it is the
+    // conservative floor used when the catalog cannot be probed.
+    return { ...recorded, budgetCharacters: target?.budgetCharacters ?? budgetCharactersForContextTokens(128_000) }
+  },
   async projectNativeResume(conversation, context) {
     const targetProfile = context.targetProfile ?? await resolveOpencodeTargetProfile(context.cwd)
     return opencodeNativeResumeProjector.projectNativeResume(conversation, {
@@ -291,6 +320,36 @@ function opencodeDefaultAgentModel(config: Record<string, unknown>): string | nu
   const agents = config.agent && typeof config.agent === 'object' ? config.agent as Record<string, unknown> : {}
   const agent = agents[agentName] && typeof agents[agentName] === 'object' ? agents[agentName] as Record<string, unknown> : {}
   return typeof agent.model === 'string' && agent.model.length > 0 ? agent.model : null
+}
+
+/**
+ * The model an OpenCode export was last run with, read from its LAST user
+ * message (#1038).
+ *
+ * WHY the last user message and not the session row or the first message: the
+ * session row carries the selection OpenCode would use next, which a later
+ * switch elsewhere can move; each user message carries the model that
+ * message actually ran under, and the last one is what the conversation was
+ * on when it stopped. It is also exactly the field the projector stamps, so
+ * this reads back what a previous duplicate wrote.
+ */
+export function opencodeProfileFromExport(
+  exported: Record<string, unknown>,
+): Omit<TranscriptTargetProfile, 'budgetCharacters'> | null {
+  const messages = Array.isArray(exported.messages) ? exported.messages : []
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    const info = isRecord(message) && isRecord(message.info) ? message.info : null
+    if (!info || info.role !== 'user' || !isRecord(info.model)) continue
+    const { providerID, modelID, variant } = info.model
+    if (typeof modelID !== 'string' || modelID.length === 0) continue
+    return {
+      model: modelID,
+      ...(typeof providerID === 'string' && providerID.length > 0 ? { modelProvider: providerID } : {}),
+      ...(typeof variant === 'string' && variant.length > 0 ? { modelVariant: variant } : {}),
+    }
+  }
+  return null
 }
 
 async function resolveOpencodeTargetProfile(cwd = process.cwd()): Promise<TranscriptTargetProfile> {
