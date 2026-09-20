@@ -105,10 +105,11 @@ describe('tier classification', () => {
       // "every ON command except the debug and remote ones"). The pick named
       // 14; five of them (rotate/normalize/hard-normalize layout and the two
       // attach-detached commands) were retired by the unified stage (#1013)
-      // before this landed, so these nine are the survivors. The per-agent MCP
-      // toggles belong here because the MCP stack is now a headline feature:
-      // hiding the only per-agent switch behind "show hidden commands" meant
-      // users found the Settings default and never the override.
+      // before this landed, so these nine are the survivors.
+      //
+      // The operative rule is the owner's pick, not a class-wide claim about
+      // MCP toggles: `enable-orchestration-mcp` and `enable-workflow-mcp` were
+      // NOT in it and stay advanced (pinned four lines below).
       'toggle-tail-all', 'set-agent-view-mode', 'soft-reload-agent', 'switch-agents-provider',
       'remove-cybersecurity-block', 'enable-agent-transcripts-mcp', 'enable-agent-management-mcp',
       'enable-ai-workspace-mcp', 'enable-root-agent-code-management',

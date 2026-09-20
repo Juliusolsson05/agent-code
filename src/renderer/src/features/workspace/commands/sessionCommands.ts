@@ -423,7 +423,7 @@ export const sessionCommands: CommandDef[] = [
     category: 'session',
     surface: 'app',
     title: 'Switch Agents to Another Provider…',
-    description: '**What it does:** Opens a modal to move a batch of agents between **Claude, Codex, and OpenCode**, and to return the most recent batch.\n\n**Use when:** You hit a usage limit on one provider and want to move agents elsewhere (then back later).\n\n**Notes:** History is translated; the most recent batch is remembered so you can send it back from the same modal.',
+    description: '**What it does:** Opens a modal to move a batch of agents between **providers** — the destinations each provider declares, which today include Claude, Codex, OpenCode and Grok — and to return the most recent batch.\n\n**Use when:** You hit a usage limit on one provider and want to move agents elsewhere (then back later).\n\n**Notes:** History is translated; the most recent batch is remembered so you can send it back from the same modal.',
     keywords: [
       'switch',
       'provider',
