@@ -57,6 +57,11 @@ function Harness({ model }: { model: Workspace }) {
       <div data-global-editor-input-owner data-global-editor-monaco>
         <textarea aria-label="Editor" />
       </div>
+      {/* A transcript code block: a real Monaco instance with NO global-editor
+          marker, which is what lib/code/CodeBlock.tsx mounts in the feed. */}
+      <div className="monaco-editor">
+        <textarea aria-label="Code block" />
+      </div>
     </>
   )
 }
@@ -215,6 +220,19 @@ describe('goal loop command with no loop on the session (#1021)', () => {
     const editor = screen.getByLabelText('Editor')
     editor.focus()
     expect(fireEvent.keyDown(editor, { key: 'g', code: 'KeyG', metaKey: true, shiftKey: true })).toBe(true)
+    expect(harness.appState.requestCommandInvocation).not.toHaveBeenCalled()
+    expect(useGoalLoopView.getState().latched).toBe(false)
+  })
+
+  it('yields Cmd+Shift+G to a transcript code block too (#1045 Codex review)', () => {
+    // Code blocks in the ordinary feed are Monaco editors without the global
+    // editor's marker, and Monaco binds Find Previous on read-only editors.
+    // A guard that knew only the global editor let the overlay latch over a
+    // code block and swallow every key after it.
+    render(<Harness model={workspace()} />)
+    const code = screen.getByLabelText('Code block')
+    code.focus()
+    expect(fireEvent.keyDown(code, { key: 'g', code: 'KeyG', metaKey: true, shiftKey: true })).toBe(true)
     expect(harness.appState.requestCommandInvocation).not.toHaveBeenCalled()
     expect(useGoalLoopView.getState().latched).toBe(false)
   })

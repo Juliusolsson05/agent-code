@@ -308,6 +308,20 @@ function buildBindingIndex(
   return index
 }
 
+/**
+ * Any Monaco editor, not just the global editor's.
+ *
+ * WHY the class and not only `[data-global-editor-input-owner]` (#1045 Codex
+ * review): a transcript code block is a real Monaco instance created by
+ * lib/code/CodeBlock.tsx, and it carries no global-editor marker. It still
+ * owns Cmd+Shift+G as Find Previous — Monaco binds that action on read-only
+ * editors too — so a guard that only knew the global editor let the goal-loop
+ * overlay latch over a code block in the ordinary feed and swallow every key
+ * after it. `.monaco-editor` is Monaco's own root class, so this covers every
+ * instance the app mounts, present and future.
+ */
+const MONACO_TARGET_SELECTOR = '[data-global-editor-input-owner], .monaco-editor'
+
 export function useKeybinds(
   workspace: Workspace,
 ): void {
@@ -494,7 +508,7 @@ export function useKeybinds(
           // nothing. Falling through leaves it to the editor, which is what
           // the routed path below does for the same reason.
           const editorOwnsStaleChord =
-            e.target instanceof Element && e.target.closest('[data-global-editor-input-owner]') !== null
+            e.target instanceof Element && e.target.closest(MONACO_TARGET_SELECTOR) !== null
           if (!editorOwnsStaleChord && routedCommandForEvent(e, bindingIndex, GLOBAL_CONTEXT_ONLY) === 'goal-loop-preview') {
             e.preventDefault()
             e.stopPropagation()
@@ -782,7 +796,8 @@ export function useKeybinds(
       // Yielding means returning WITHOUT preventDefault, so the editor's own
       // handler still runs.
       const editorOwnsRoutedCommand = (commandId: string | null): boolean =>
-        commandId === 'goal-loop-preview' && (editorOwnsTarget || fullscreenEditorOwnsWorkspace)
+        commandId === 'goal-loop-preview'
+        && (fullscreenEditorOwnsWorkspace || (eventElement?.closest(MONACO_TARGET_SELECTOR) ?? null) !== null)
 
       const handleTldrHold = (commandId: string | null): boolean => {
         // Goal (#936) shares TLDR's synchronous hold path, including the
