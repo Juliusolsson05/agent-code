@@ -119,6 +119,8 @@ export class OpencodeSession extends EventEmitter implements AgentSession {
   private readonly binary: string | undefined
   private readonly extraEnv: Record<string, string | undefined>
   private readonly resumeSessionId: string | null
+  /** See the assignment in start(). */
+  private liveSessionId: string | null = null
   private readonly builtInMcpServers: NonNullable<SessionOptions['builtInMcpServers']>
 
   constructor(options: SessionOptions) {
@@ -164,6 +166,18 @@ export class OpencodeSession extends EventEmitter implements AgentSession {
       sessionID: this.resumeSessionId ?? undefined,
     })
     this.headless = headless
+
+    // The live conversation's id. The package keeps its own copy private, and
+    // this is the only thing that can name the session row a prompt's model
+    // selection is read from (conversationSelection). A resume knows it up
+    // front; a fresh pane learns it when the server creates one.
+    this.liveSessionId = this.resumeSessionId ?? null
+    headless.on('ready', ({ sessionID }: { sessionID: string | null }) => {
+      if (sessionID) this.liveSessionId = sessionID
+    })
+    headless.on('session', (sessionID: string) => {
+      this.liveSessionId = sessionID
+    })
 
     headless.on('exit', ({ exitCode }) => {
       this.exited = true
@@ -491,7 +505,7 @@ export class OpencodeSession extends EventEmitter implements AgentSession {
     modelID?: string
     variant?: string
   }> {
-    const sessionID = this.headless?.sessionID
+    const sessionID = this.liveSessionId
     if (!this.headless || !sessionID) return {}
     const row = await this.headless.client.getSession(sessionID).catch(() => null)
     if (!isRecord(row)) return {}

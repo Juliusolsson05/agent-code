@@ -25,7 +25,11 @@ vi.mock('opencode-headless', async () => {
       readonly screen = new EventEmitter()
       readonly committed = new EventEmitter()
       readonly semantic = new EventEmitter()
-      readonly sessionID = 'ses_live'
+      async start(): Promise<void> {
+        // The real package announces the live session id this way; the app
+        // tracks it because the package's own copy is private.
+        this.emit('ready', { url: 'http://127.0.0.1:1', sessionID: 'ses_live' })
+      }
       readonly client = {
         getSession: async (): Promise<unknown> => {
           control.getSessionCalls += 1
@@ -33,7 +37,6 @@ vi.mock('opencode-headless', async () => {
           return control.session
         },
       }
-      async start(): Promise<void> {}
       async stop(): Promise<void> {}
       async prompt(input: Record<string, unknown>): Promise<unknown> {
         control.prompts.push(input)
