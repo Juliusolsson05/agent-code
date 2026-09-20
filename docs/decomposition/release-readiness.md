@@ -513,6 +513,18 @@ claude 2.1.143 / codex 0.130.0 are stale versus the 2.1.278 / 0.155.1 in daily u
   (one per composer). Optional follow-up: a single app-level subscription.
 
 ### Progress log
+- 2026-09-19 18:45Z (session resumed after an interrupt; the goal loop is re-armed):
+  - **MERGED:** #1044 (`ef8219d0`, #1018 orchestration failures, APPROVE on the delta re-review) and #931 (session-ownership plan doc, with a comment that it predates #1013).
+  - **Reviews landed:**
+    - #1046 APPROVE. Its three description nits are fixed (`060bc1ff`).
+    - #1045 CHANGES REQUESTED, now fixed (`aa57a8cb`): ⌘⇧G is Monaco's Find Previous. The router yields the chord while editor chrome owns the target, the stale-latch branch yields too, reservations.ts records Monaco's claim (14 reserved, 9 approved overlaps), and turning Goal Loop MCP off now ends a running loop. Two of the new tests fail without the yield.
+    - #1047 UI lens CHANGES REQUESTED, now fixed (`159176d3`): the panel is a real Dialog (focus trap, inert background), the acknowledgment closes in `finally` so a failed optional-skip cannot strand the first run, the button says Close unless a bootstrap is actually waiting, and a failed install's output is capped. Three new tests fail against the previous gate.
+  - **Stage 6 rebases done:** #945 (`0c0ce8cc` + `ff0b9a0b`) and #935 (`3af56e83`) merged onto main.
+    - #945 placed main's three new quit-time owners into the committed composition: the extension runtime (pause stays reversible on before-quit, disposal is a new `stopExtensions` stage after startup settles), the performance drain, and tmux recovery's canonical decoder. The shutdown diagram was rewritten in main's accTitle/accDescr/scope convention and re-rendered.
+    - #935 resolved #1013's deletion of the related-agent strip and the ARCHITECTURE 8.2.1 rewrite.
+  - **Trap recorded in memory:** a conflicted merge commits only the index, and `tsc -b` is incremental — an unstaged fix passed locally and failed CI on #945.
+  - **Reviews now run on CODEX orchestration children** (owner's call): #1045, #876, #945, #935 under runId `codex-review-round-1`. A Claude reviewer covers #1047's policy/bootstrap lens.
+  - Owner housekeeping: the old `/Applications/Agent Code.app` (0.0.2-beta.1) is in the Trash and its stale Dock tile is removed; `~/.config/agent-code` (5.6 GB) and `~/Library/Application Support/agent-code` (4.2 GB) are untouched.
 - 2026-09-19 13:40Z:
   - **MERGED:** #1039 (`fe2b3bfc`, T9 shared IPC) and #1043 (`479df7a7`, T5 part 2: Jump to Latest; merged main in, resolving a screenGate test conflict). #843 CLOSED with evidence (#1041 + #1043).
   - **#1044 (#1018):** CHANGES REQUESTED, then fixed, then APPROVE on the delta review.
