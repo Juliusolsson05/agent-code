@@ -18,10 +18,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const sent: Array<Record<string, unknown>> = []
 const windowOwner = vi.fn((_sessionId: string): string | null => 'window-1')
+/** Whether the renderer actually received the send. `windowForSession` can
+ *  hand back a window that delivery then skips — see the undelivered case. */
+let delivers = true
 
 vi.mock('@main/window/windowRegistry.js', () => ({
   sendToWindow: (_windowId: string, _channel: string, request: Record<string, unknown>) => {
+    if (!delivers) return false
     sent.push(request)
+    return true
   },
   windowForSession: (sessionId: string) => windowOwner(sessionId),
 }))
@@ -45,6 +50,7 @@ function child(sessionId: string, parentSessionId = 'parent-1') {
 beforeEach(() => {
   vi.useFakeTimers()
   sent.length = 0
+  delivers = true
   incidents = []
   bridge = new OrchestrationBridge()
   bridge.setJournal({ recordIncident: (incident: Incident) => { incidents.push(incident) } } as never)
@@ -76,51 +82,68 @@ describe('a timed-out mutation reports an UNKNOWN outcome, not a failure (#926)'
   })
 })
 
-describe('an identical retry is refused while the outcome is unknown', () => {
-  it('does not dispatch a second create', async () => {
+describe('a request nobody received is SAFE to retry (#926)', () => {
+  // `windowForSession` resolves through a lease check that deliberately
+  // ignores `closing`, while delivery skips a closing window. So a request
+  // could be dropped, waited on for the full 30 s, and then reported as an
+  // UNKNOWN outcome — the worst possible answer for the one case we can be
+  // certain about. A ⌘W whose close is then vetoed reaches exactly this state.
+  it('fails immediately, and says retrying is safe', async () => {
+    delivers = false
+    const create = bridge.createAgent({ parentSessionId: 'parent-1', kind: 'claude' })
+    const error = await create.catch((reason: unknown) => reason)
+
+    expect(error).not.toBeInstanceOf(OrchestrationOutcomeUnknownError)
+    expect(String(error)).toMatch(/nothing was dispatched/)
+    expect(String(error)).toMatch(/safe to retry/)
+  })
+
+  it('does not wait for the deadline to say so', async () => {
+    // Waiting 30 s to report something knowable immediately is its own bug:
+    // the caller is blocked, and the queue slot with it.
+    delivers = false
+    let settled = false
+    void bridge.createAgent({ parentSessionId: 'parent-1', kind: 'claude' })
+      .catch(() => { settled = true })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(settled).toBe(true)
+  })
+
+  it('records it as undispatched, not as a renderer hang', async () => {
+    delivers = false
+    await bridge.createAgent({ parentSessionId: 'parent-1', kind: 'claude' }).catch(() => {})
+    expect(incidents.map(incident => incident.context?.dispatched)).toEqual([false])
+  })
+
+  it('frees the queue so the next request proceeds', async () => {
+    delivers = false
+    await bridge.createAgent({ parentSessionId: 'parent-1', kind: 'claude' }).catch(() => {})
+    delivers = true
+    const next = bridge.createAgent({ parentSessionId: 'parent-1', kind: 'claude' })
+    const request = lastSent('create-agent') as { requestId: string }
+    bridge.resolve({ requestId: request.requestId, ok: true, type: 'create-agent', agent: child('child-1') } as never)
+    await expect(next).resolves.toMatchObject({ sessionId: 'child-1' })
+  })
+})
+
+describe('a timed-out mutation does not block the next one', () => {
+  it('lets an identical create through, because refusing it had no legal exit', async () => {
+    // A first version held a reservation and refused any matching retry.
+    // Review proved that unsound: the renderer request has no `prompt` field,
+    // so two different fan-out jobs share a shape and the second was refused
+    // FOREVER — and nothing could clear it, so a parent that followed the
+    // error's own instruction looped. Refusing here is worse than the
+    // duplicate it was trying to prevent; `createAgentCallOnce` at the MCP
+    // layer is where a sound guard belongs, because it can see the prompt.
     const first = bridge.createAgent({ parentSessionId: 'parent-1', kind: 'claude', title: 'worker' })
-    const firstSettled = first.catch((error: unknown) => error)
+    const settled = first.catch((error: unknown) => error)
     await vi.advanceTimersByTimeAsync(30_000)
-    await firstSettled
-    const dispatched = sent.filter(request => request.type === 'create-agent').length
+    await settled
 
-    const retry = await bridge.createAgent({ parentSessionId: 'parent-1', kind: 'claude', title: 'worker' })
-      .catch((error: unknown) => error)
-
-    expect(retry).toBeInstanceOf(OrchestrationOutcomeUnknownError)
-    expect(sent.filter(request => request.type === 'create-agent')).toHaveLength(dispatched)
-  })
-
-  it('does not block a DIFFERENT create, or another parent', async () => {
-    // The reservation is scoped to the request shape. An unreconciled create
-    // for one worker must not stop the fleet.
-    const stuck = bridge.createAgent({ parentSessionId: 'parent-1', kind: 'claude', title: 'worker' })
-    const stuckSettled = stuck.catch((error: unknown) => error)
-    await vi.advanceTimersByTimeAsync(30_000)
-    await stuckSettled
-
-    for (const params of [
-      { parentSessionId: 'parent-1', kind: 'claude' as const, title: 'other worker' },
-      { parentSessionId: 'parent-2', kind: 'claude' as const, title: 'worker' },
-    ]) {
-      const pending = bridge.createAgent(params)
-      const request = lastSent('create-agent') as { requestId: string; title?: string }
-      expect(request.title, JSON.stringify(params)).toBe(params.title)
-      bridge.resolve({ requestId: request.requestId, ok: true, type: 'create-agent', agent: child(`child-${params.title}`, params.parentSessionId) } as never)
-      await expect(pending).resolves.toMatchObject({ sessionId: `child-${params.title}` })
-    }
-  })
-
-  it('does not block a READ for the same parent', async () => {
-    const stuck = bridge.createAgent({ parentSessionId: 'parent-1', kind: 'claude' })
-    const stuckSettled = stuck.catch((error: unknown) => error)
-    await vi.advanceTimersByTimeAsync(30_000)
-    await stuckSettled
-
-    const list = bridge.listAgents({ parentSessionId: 'parent-1' })
-    const request = lastSent('list-agents') as { requestId: string }
-    bridge.resolve({ requestId: request.requestId, ok: true, type: 'list-agents', agents: [] } as never)
-    await expect(list).resolves.toEqual([])
+    const retry = bridge.createAgent({ parentSessionId: 'parent-1', kind: 'claude', title: 'worker' })
+    const request = lastSent('create-agent') as { requestId: string }
+    bridge.resolve({ requestId: request.requestId, ok: true, type: 'create-agent', agent: child('child-2') } as never)
+    await expect(retry).resolves.toMatchObject({ sessionId: 'child-2' })
   })
 })
 
@@ -141,35 +164,6 @@ describe('a late answer is reconciled, never dropped', () => {
     expect(incidents.map(incident => incident.kind)).toContain('orchestration.late_response_adopted')
     const adopted = incidents.find(incident => incident.kind === 'orchestration.late_response_adopted')
     expect(adopted?.context).toMatchObject({ sessionId: 'child-late', parentSessionId: 'parent-1' })
-  })
-
-  it('releases the reservation once reconciled, so a new create may proceed', async () => {
-    const create = bridge.createAgent({ parentSessionId: 'parent-1', kind: 'claude', title: 'worker' })
-    const settled = create.catch((error: unknown) => error)
-    const first = lastSent('create-agent') as { requestId: string }
-    await vi.advanceTimersByTimeAsync(30_000)
-    await settled
-    bridge.resolve({ requestId: first.requestId, ok: true, type: 'create-agent', agent: child('child-late') } as never)
-
-    const next = bridge.createAgent({ parentSessionId: 'parent-1', kind: 'claude', title: 'worker' })
-    const second = lastSent('create-agent') as { requestId: string }
-    expect(second.requestId).not.toBe(first.requestId)
-    bridge.resolve({ requestId: second.requestId, ok: true, type: 'create-agent', agent: child('child-2') } as never)
-    await expect(next).resolves.toMatchObject({ sessionId: 'child-2' })
-  })
-
-  it('keeps refusing while the answer never comes', async () => {
-    // Deliberate: nothing about the passage of time proves the effect did not
-    // happen, so the reservation is released by reconciliation and by nothing
-    // else. A caller that wants to proceed must look at what exists.
-    const create = bridge.createAgent({ parentSessionId: 'parent-1', kind: 'claude', title: 'worker' })
-    const settled = create.catch((error: unknown) => error)
-    await vi.advanceTimersByTimeAsync(30_000)
-    await settled
-
-    await vi.advanceTimersByTimeAsync(60 * 60_000)
-    await expect(bridge.createAgent({ parentSessionId: 'parent-1', kind: 'claude', title: 'worker' }))
-      .rejects.toBeInstanceOf(OrchestrationOutcomeUnknownError)
   })
 
   it('does not adopt a child from a FAILED late answer', async () => {

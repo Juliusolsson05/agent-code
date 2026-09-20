@@ -12,7 +12,7 @@ const seam = vi.hoisted(() => ({
 }))
 vi.mock('@main/window/windowRegistry.js', () => ({
   windowForSession: () => 'parent-window',
-  sendToWindow: (...args: unknown[]) => seam.send(...args),
+  sendToWindow: (...args: unknown[]) => { seam.send(...args); return true },
 }))
 vi.mock('@providers/registry.main.js', () => ({
   getMainProvider: (kind: AgentProviderKind) => ({
