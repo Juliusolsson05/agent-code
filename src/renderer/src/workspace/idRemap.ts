@@ -90,6 +90,84 @@ export function remapSessionsRelationships(
 }
 
 /**
+ * The relationship fields a SUCCESSOR inherits from the session it replaces.
+ *
+ * WHY this is an explicit list and not a spread of the predecessor (#879):
+ * `replaceSession` builds the successor from spawn's FRESH metadata, on
+ * purpose — cwd, kind, provider runtime and MCP scope are all properties of
+ * the new backend, and inheriting them wholesale is how a provider switch
+ * would keep pointing at the old provider. So each field the successor should
+ * keep has to be named, and until this list existed the orchestration fields
+ * simply were not.
+ *
+ * What that cost: a reloaded, switched, resumed or rewound orchestration child
+ * became invisible to its parent, and `orchestration_wait_agents` computes
+ * `done` over the parent-visible list — so the parent was told EVERY CHILD HAD
+ * FINISHED while one was still working. `read_agent` failed, `close_run`
+ * missed it, and Dispatch showed it top-level.
+ *
+ * `satisfies` so a typo is a compile error. What makes ADDING a relationship
+ * field a decision rather than a silent omission is the type-level
+ * completeness guard in successorRelationships.renderer.test.tsx: every
+ * SessionMeta key named like a relationship must appear either here or in that
+ * file's documented drop-list, or the build fails.
+ */
+export const SUCCESSOR_RELATIONSHIP_FIELDS = [
+  'linkedParentId',
+  'orchestrationParentId',
+  'orchestrationRootId',
+  'orchestrationRunId',
+  'orchestrationRole',
+  // Not a pointer, but it belongs to the same relationship: losing it makes
+  // the create path re-deliver a bootstrap prompt to an agent that already
+  // has one, on top of whatever it is doing.
+  'orchestrationBootstrapPromptDelivered',
+  // The inherited-context trio, kept as ONE unit because that is how creation
+  // writes it and how `list_agents` projects it — carrying the flag without
+  // the ids would read as "inherited from nowhere".
+  //
+  // `inheritedParentContext` is not decoration: together with the bootstrap
+  // flag it is what makes `orchestrationVisibleEntries` cut the duplicated
+  // parent history off the child's transcript. Drop it across a reload and the
+  // parent's own old commentary becomes the child's "latest answer" in
+  // read_agent and list_agents.
+  //
+  // That harm is real but not CURRENT: nothing in `src/` writes the trio any
+  // more, because agent creation disables inherited context (the DORMANT note
+  // at `orchestrationVisibleEntries` in orchestrationMcp.ts). It applies to
+  // sessions persisted before that change, and to whatever the inheritance
+  // redesign brings back — which is why the field is carried rather than
+  // dropped as dead.
+  //
+  // Known residual, accepted: after a PROVIDER SWITCH the new backend mints a
+  // different native id, so `inheritedProviderSessionId` then names a session
+  // on the provider we left. That is tolerable because these ids are
+  // provenance, never routing — nothing resumes, reads or mutates a transcript
+  // through them (the only consumer is the read-only MCP projection), and the
+  // historical fact they record ("this history was cloned from that parent")
+  // stays true. If anything ever tries to OPEN one of them, it has to handle
+  // the switch case itself.
+  'inheritedParentContext',
+  'inheritedParentProviderSessionId',
+  'inheritedProviderSessionId',
+] as const satisfies readonly (keyof SessionMeta)[]
+
+/**
+ * The subset of `meta` a successor must carry, with absent fields omitted
+ * rather than set to undefined — an ordinary reloaded pane must not come back
+ * looking like somebody's orchestration child.
+ */
+export function carriedRelationships(meta: SessionMeta | undefined): Partial<SessionMeta> {
+  if (!meta) return {}
+  const carried: Record<string, unknown> = {}
+  for (const field of SUCCESSOR_RELATIONSHIP_FIELDS) {
+    const value = meta[field]
+    if (value !== undefined) carried[field] = value
+  }
+  return carried as Partial<SessionMeta>
+}
+
+/**
  * Remap a pinned-session list through an old->new idMap. Ids not in the map
  * (other sessions, unchanged) are kept as-is, so a pinned agent that gets a
  * fresh id (reload / provider-switch) stays pinned and follows to the new id

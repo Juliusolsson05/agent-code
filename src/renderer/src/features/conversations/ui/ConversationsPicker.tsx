@@ -93,7 +93,14 @@ export function ConversationsPicker({ open, focusSearch, workspace, onClose }: P
     onClose()
     if (workspace.activeTab) {
       // In-place swap: the pane stays where it is, what runs in it changes.
-      await workspace.replaceSession(row.cwd, { resumeSessionId: row.nativeId, kind: row.provider })
+      //
+      // `newConversation` is what says that out loud (#1090 review). Every
+      // other caller of `replaceSession` continues the SAME agent, so the
+      // successor inherits the pane's orchestration parentage; this one pulls
+      // a stranger's conversation in, and inheriting parentage here would file
+      // it as somebody's orchestration child — reported to that parent as its
+      // worker's answer, and killed by `close_run`.
+      await workspace.replaceSession(row.cwd, { resumeSessionId: row.nativeId, kind: row.provider, newConversation: true })
     } else {
       // Fresh launch with nothing to replace: a new tab in the row's cwd.
       await workspace.newTab(row.cwd, row.nativeId, row.provider)
