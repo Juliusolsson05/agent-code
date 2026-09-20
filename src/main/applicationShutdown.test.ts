@@ -42,6 +42,7 @@ function harness() {
     flushDictationDebug: vi.fn(async (): Promise<void> => undefined),
     flushPasteDebug: vi.fn(async (): Promise<void> => undefined),
     stopPerformance: vi.fn(async (): Promise<void> => undefined),
+    stopExtensions: vi.fn(async (): Promise<void> => undefined),
   } satisfies ApplicationShutdownServices
   const prepare = vi.fn()
   const onQuitAllowed = vi.fn()
@@ -164,6 +165,27 @@ describe('application shutdown composition', () => {
     await vi.waitFor(() => expect(h.onQuitAllowed).toHaveBeenCalledOnce())
     expect(h.workflowStop).toHaveBeenCalledOnce()
     expect(h.sessionStop).not.toHaveBeenCalled()
+  })
+
+  it('stops extensions only after startup settles, and before any support service (merge with #577)', async () => {
+    // Startup creates the extension runtime. A stop issued before startup
+    // settled would complete against nothing, keep that receipt, and let the
+    // runtime startup publishes later escape disposal.
+    const h = harness()
+    const startup = deferred()
+    const extensions = deferred()
+    h.services.startupSettled.mockImplementation(() => startup.promise)
+    h.services.stopExtensions.mockImplementation(() => extensions.promise)
+    h.install()
+    h.app.quit()
+    expect(h.services.stopExtensions).not.toHaveBeenCalled()
+    startup.resolve()
+    await vi.waitFor(() => expect(h.services.stopExtensions).toHaveBeenCalledOnce())
+    // Extensions run user code; support services stay up until they stop.
+    expect(h.services.stopBuiltInMcp).not.toHaveBeenCalled()
+    extensions.resolve()
+    await vi.waitFor(() => expect(h.onQuitAllowed).toHaveBeenCalledOnce())
+    expect(h.services.stopBuiltInMcp).toHaveBeenCalledOnce()
   })
 
   it('closes an initializing workflow immediately, while startup settlement still gates support disposal', async () => {

@@ -38,7 +38,7 @@ it('keeps the real editor veto ahead of all application service disposal', async
     disposeWorkflowBridge: supportStop, disposeCaffeinate: supportStop, stopHeapWatchdog: supportStop,
     drainWorkspace: supportStop, drainDictationHistory: supportStop,
     flushGhosts: supportStop, flushRecordings: supportStop, flushDictationDebug: supportStop,
-    flushPasteDebug: supportStop, stopPerformance: supportStop,
+    flushPasteDebug: supportStop, stopPerformance: supportStop, stopExtensions: supportStop,
   }
   const onQuitAllowed = vi.fn()
   const gate = installApplicationShutdown({ app, services, prepare: vi.fn(), onQuitAllowed,

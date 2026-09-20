@@ -28,6 +28,10 @@ export interface ApplicationShutdownServices {
   flushDictationDebug: Stop
   flushPasteDebug: Stop
   stopPerformance: Stop
+  /** Background extension runtimes (#577). An execution owner like sessions
+   *  and workflows: extensions run user code in hidden windows, so they stop
+   *  in the first wave, beside them, and gate the support services after. */
+  stopExtensions: Stop
 }
 
 interface Stage {
@@ -106,7 +110,10 @@ export function installApplicationShutdown(options: {
     // settlement closes the resource inventory; a missing SessionManager alone
     // is not evidence that workflow/MCP/other startup resources never existed.
     await services.startupSettled()
-    await join([...earlyStops, ...stopExecution(), dictationStop])
+    // Extensions stop only after startup settles: startup creates the
+    // runtime, and `run` keeps the first receipt, so an early stop against a
+    // not-yet-published runtime would complete and let the real one escape.
+    await join([...earlyStops, ...stopExecution(), dictationStop, run('extensions', services.stopExtensions)])
     await run('observations', services.flushObservations)
     await run('proxy-sweep', services.sweepOwnedProxies)
 
