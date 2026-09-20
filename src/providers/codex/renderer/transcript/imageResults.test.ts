@@ -1,6 +1,5 @@
-import { readFileSync, readdirSync } from 'node:fs'
-import { join } from 'node:path'
 
+import { IMAGE_FIXTURE_COUNT, loadImageFixture, loadImageFixtures, type ImageFixture as Fixture } from '@providers/shared/renderer/protocols/media/imageFixtureProvenance'
 import { describe, expect, it } from 'vitest'
 
 import { codexOutputText, codexResultContent } from '@providers/codex/renderer/transcript/entries'
@@ -20,29 +19,18 @@ import { toolResultContentText } from '@providers/shared/renderer/rows/toolResul
 // that this codebase does not recognize will still be caught the moment its
 // payload reaches a string.
 
-const FIXTURE_DIR = join(process.cwd(), 'testing/fixtures/image-reads')
-
 // Matches a run of base64-alphabet characters long enough to be a payload rather
 // than an id, a hash, or a path segment. 200 is comfortably above the longest
 // incidental run in the corpora (uuids, call_ids, git sha values) and far below
 // the shortest real image (the smallest recorded payload is 22,124 chars).
 const BASE64_RUN = /[A-Za-z0-9+/=]{200,}/
 
-type Fixture = {
-  $fixture: {
-    id: string
-    source: string
-    substitutions: { path: string; originalChars: number; mime: string }[]
-    totalOriginalPayloadChars: number
-  }
-  entry: Record<string, unknown>
-}
-
-function fixtures(): Fixture[] {
-  return readdirSync(FIXTURE_DIR)
-    .filter(name => name.endsWith('.json'))
-    .map(name => JSON.parse(readFileSync(join(FIXTURE_DIR, name), 'utf8')) as Fixture)
-}
+// The loader and the fixture type come from the shared module rather than
+// being declared again here (#1084 review, nit 8). They were byte-identical
+// copies, and the whole point of that module is that one reader decides what
+// the corpus IS — including how many fixtures there are, which this file's
+// "every fixture" sweep silently depends on.
+const fixtures = loadImageFixtures
 
 /**
  * Restore each payload to the LENGTH it really had, in memory, for this test only.
@@ -161,6 +149,14 @@ function textProjections(fixture: Fixture): string[] {
 }
 
 describe('no base64 escapes into feed text', () => {
+  // The guard that makes the sweep below a sweep. A loader that returned
+  // nothing would turn this whole describe into zero tests and report green
+  // (#1084 review, finding 2 — the same hole the shared module's own suite
+  // had, and the reason the count is pinned in one place).
+  it('sweeps the whole corpus', () => {
+    expect(fixtures()).toHaveLength(IMAGE_FIXTURE_COUNT)
+  })
+
   for (const fixture of fixtures()) {
     it(`${fixture.$fixture.id}: every text projection is payload-free`, () => {
       // Inflated to real recorded sizes — see inflate() for why the committed
@@ -190,9 +186,7 @@ describe('no base64 escapes into feed text', () => {
 
 describe('codexResultContent — structure survives the mapping boundary', () => {
   it('returns ordered blocks for the interleaved exec result', () => {
-    const fixture = JSON.parse(
-      readFileSync(join(FIXTURE_DIR, 'codex-exec-interleaved-three-images.json'), 'utf8'),
-    ) as Fixture
+    const fixture = loadImageFixture('codex-exec-interleaved-three-images')
     const payload = fixture.entry.payload as Record<string, unknown>
 
     const content = codexResultContent(payload.output)
@@ -220,9 +214,7 @@ describe('codexResultContent — structure survives the mapping boundary', () =>
 
 describe('rollout mapping — the reported bug end to end', () => {
   it('maps an exec image result to a tool_result carrying image blocks', () => {
-    const fixture = JSON.parse(
-      readFileSync(join(FIXTURE_DIR, 'codex-exec-interleaved-three-images.json'), 'utf8'),
-    ) as Fixture
+    const fixture = loadImageFixture('codex-exec-interleaved-three-images')
 
     const entries = mapCodexRolloutToFeedEntries(fixture.entry)
     const message = entries[0]?.message as Record<string, unknown>
@@ -237,9 +229,7 @@ describe('rollout mapping — the reported bug end to end', () => {
   it('no longer drops a Codex user attachment', () => {
     // Census row 19. Before this change `input_image` in message content hit the
     // mapper's `return null` and the user's attachment vanished silently.
-    const fixture = JSON.parse(
-      readFileSync(join(FIXTURE_DIR, 'codex-user-attachment-no-detail.json'), 'utf8'),
-    ) as Fixture
+    const fixture = loadImageFixture('codex-user-attachment-no-detail')
 
     const entries = mapCodexRolloutToFeedEntries(fixture.entry)
     const message = entries[0]?.message as Record<string, unknown>
