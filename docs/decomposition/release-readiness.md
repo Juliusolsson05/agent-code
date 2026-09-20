@@ -667,6 +667,54 @@ claude 2.1.143 / codex 0.130.0 are stale versus the 2.1.278 / 0.155.1 in daily u
   - **#1018 (orchestration hides API errors):** an evidence catalog from real feed-debug recordings is being built (research agent, worktree `.worktrees/fix-orchestration-api-error`). Implementation follows the catalog.
   - **Waiting on #1013's merge:** T7 (#1006), T8 (#1007), T2 (command promotion) and T1 (#995), all of which touch the catalog, keybindings or bootstrap.
   - **Nightly** run 35430444567: build-app is green, package-macos is running.
+- 2026-09-20 13:45Z — **eight merged. #1074 and #1077 in; #1078/#1079/#1080 open.**
+
+  **MERGED**: **#1074** (control drain, Refs #943) and **#1077** (orchestration
+  timeout, #926 REOPENED — see below).
+
+  **#926 AND #928 BOTH REOPENED, and the mechanism is worth remembering:** a
+  `Fixes #N` trailer in ANY commit on the branch closes the issue on merge,
+  even when the final commit and the PR body say `Refs`. Both PRs had been
+  NARROWED by review so only part of each issue shipped. Now in memory: when a
+  round narrows scope, rewrite the trailer in the FIRST commit.
+
+  **#1077 was cut down to a third of itself and is better for it.** Its retry
+  guard keyed on the renderer request shape, which has NO PROMPT FIELD — so two
+  different fan-out jobs shared a key and the second was refused forever, the
+  same catastrophe #1069 fixed, one layer down. Nothing could clear a
+  reservation either: the reviewer drove a parent through list-agents and
+  close-run and it still looped on a refusal that told it to list its agents.
+  What shipped is the sound half: `sendToWindow` REPORTS DELIVERY, so a request
+  a closing window never received fails immediately as safe to retry.
+
+  **#1074's reviewer found `dispose()` destroyed the registry BEFORE draining**,
+  and the admission gate resolves declared effects against that registry — so
+  during the drain everything was refused, reads and `operations.*` included,
+  and three of my own WHY comments were false. Also: `completion:'accepted'`
+  operations were never drained (every `agents.prompt`, `commands.run`,
+  `workflows.start`), and the drain was unbounded while holding the exit AND
+  the state-process lock. All fixed; the drain is now bounded at 10 s and
+  journals `control.drain_incomplete`.
+
+  **OPEN**
+  - **#1078** (#921 LSP generation) — round done. Its reviewer proved the PR's
+    CENTRAL CLAIM FALSE: `generation: key` at the call site reinstated the bug
+    with all 1243 main-process tests green, because only the exported
+    function's BODY was pinned, not its one call site. Now driven through the
+    real `createServer` with `spawn` faked as a pair of pipes and a real
+    vscode-jsonrpc peer answering `initialize`.
+  - **#1079** (#916 dictation) — reviewer already reports "a PTY write after
+    unmount", which is the terminal-sink case I flagged as least certain.
+  - **#1080** (#915 last-active) — one `sessionActivity` rule shared by the
+    TLDR footer and the agent_management inventory. The main bridge had to
+    change too, which the issue does not mention: it recombined the raw fields
+    itself, so publishing a unified field without touching it would have left
+    the divergence where it mattered.
+
+  **NEXT**: land those three, then #910, #901, #896, #895, #894 and down.
+  Still unstarted and owner-gated: T14 (Agent Activity redesign), #944
+  (always-on performance monitoring).
+
 - 2026-09-20 13:05Z — **sweep continues: six merged, four in review.**
 
   **MERGED since the last entry**: **#1073** (#929, rewind attachments) and
