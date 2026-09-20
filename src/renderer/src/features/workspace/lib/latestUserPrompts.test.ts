@@ -69,6 +69,21 @@ describe('latest user prompts', () => {
     expect(extractLatestUserPrompts(entries, undefined).map(prompt => prompt.text)).toEqual(['Rename the loader'])
   })
 
+  it('keeps a PASTED Claude prompt, which the envelope makes start with `<` (#1052)', () => {
+    // Claude Code 2.1.278 wraps a pasted prompt in `<pasted_content id="…">`,
+    // and the scaffolding guard rejects anything starting with `<` — so the
+    // user's longest prompts, the pasted ones, silently vanished from composer
+    // history. The row still has to be a real submission (permissionMode), and
+    // scaffolding must still be rejected.
+    const entries = [
+      userRow('<pasted_content id="cade">\nrefactor the loader\n</pasted_content id="cade">', { permissionMode: 'default' }),
+      userRow('<command-name>/clear</command-name>', { permissionMode: 'default' }),
+    ]
+    expect(extractLatestUserPrompts(entries, 'claude').map(prompt => prompt.text)).toEqual([
+      '<pasted_content id="cade">\nrefactor the loader\n</pasted_content id="cade">',
+    ])
+  })
+
   it('keeps Codex\'s rule: no permissionMode needed, context blocks skipped', () => {
     const entries = [
       userRow('<environment_context><cwd>/repo</cwd></environment_context>'),
