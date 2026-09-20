@@ -22,6 +22,7 @@ import {
   remapTiledLanes,
 } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import {
+  carriedRelationships,
   remapPinnedSessionIds,
   remapSessionsRelationships,
 } from '@renderer/workspace/idRemap'
@@ -1312,6 +1313,15 @@ export function useSessionActions(
           // record that owned it, so position came for free. Ownership lives
           // on the row now, so it has to be carried like the title is.
           const carriedMembership = inheritedMembership(prev.sessions[oldId])
+          // The successor is the same CHILD of the same parent in the same run
+          // (#879). `remapSessionsRelationships` below fixes every OTHER
+          // session that points AT the old id; it cannot restore the swapped
+          // row's own outbound pointers, because spawn never gave it any. An
+          // orchestration child that lost them went invisible to its parent,
+          // and `orchestration_wait_agents` computes `done` over the
+          // parent-visible list — so the parent was told every child had
+          // finished while this one was still working.
+          const carriedRelationshipFields = carriedRelationships(prev.sessions[oldId])
           delete sessions[oldId]
           // Persist the replacement provider metadata immediately
           // instead of waiting for the first transcript line to
@@ -1356,9 +1366,16 @@ export function useSessionActions(
             // After the spread for the same reason: the successor's own row
             // was written by `spawn` and is un-filed.
             ...carriedMembership,
+            ...carriedRelationshipFields,
           }
           return {
             ...prev,
+            // The other half of the carry above (#879), and the reason the
+            // carry can hand over a pointer without checking it first: this
+            // pass drops any pointer whose target survived under neither a new
+            // nor an old id, so a predecessor that outlived its parent yields
+            // an orphan rather than a link into nothing.
+            //
             // Remap relationship pointers across ALL sessions: a linked /
             // orchestration CHILD of the swapped session carries oldId in its
             // linkedParentId/orchestrationParentId/orchestrationRootId, so the
