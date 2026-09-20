@@ -155,21 +155,27 @@ export class GoalLoopService extends EventEmitter {
    * Only Resume reads it; see control(). */
   private readonly lastHookSessionActivity = new Map<string, number>()
   /** Continuations HELD because something said the agent was still working,
-   * with the wall-clock instant each one started waiting. A held continuation
-   * is never a dropped one: it re-evaluates itself every HOLD_POLL_MS. */
+   * with the wall-clock instant each one last saw PROGRESS — the hold's start,
+   * then any hook or state-changing event after it (noteHeldProgress). Both
+   * deadlines measure from here, so they bound how long we wait on a SILENT
+   * signal, never how long an agent is allowed to keep working. A held
+   * continuation is never a dropped one: it re-evaluates itself every
+   * HOLD_POLL_MS. */
   private readonly heldSince = new Map<string, number>()
   /** The re-evaluation timer for each held session; see holdUntilQuiet. */
   private readonly holdPolls = new Map<string, ReturnType<typeof setTimeout>>()
-  /** Hook-driven sessions that have published a semantic event SINCE their
-   * last allowed Stop — the ones whose tracked phase is fresh enough to gate
-   * a delivery (see phaseIsFresh).
+  /** Sessions whose last continuation was QUEUED by the provider rather than
+   * started as a turn, and has not been seen to start yet.
    *
-   * WHY a set keyed on arrival order rather than two timestamps compared with
-   * `>`: the Stop hook and the events around it land in the same millisecond
-   * often enough to matter (it is one local process writing both), and under
-   * a test clock they always do. Ordering is what this question is actually
-   * about, and a set records it exactly. */
-  private readonly eventSinceStop = new Set<string>()
+   * WHY it has to be tracked separately from `hookTurnOpen` (#1033 round 3): a
+   * queued prompt owes a turn that has NOT BEGUN, and the turn that IS running
+   * belongs to someone else. Its Stop therefore closes `hookTurnOpen` while
+   * our continuation is still sitting in the provider's queue, and the loop
+   * cheerfully delivered a second one — the reviewer's probe measured two
+   * deliveries where the design promised at most one early. Cleared when the
+   * queued prompt is seen to start: a UserPromptSubmit hook, or (for a
+   * provider without hooks) the tracked phase going to work. */
+  private readonly queuedContinuation = new Set<string>()
 
   constructor(private readonly deps: {
     manager: GoalLoopManagerPort
@@ -243,6 +249,9 @@ export class GoalLoopService extends EventEmitter {
     this.hookSessions.add(sessionId)
     this.lastHookSessionActivity.set(sessionId, Date.now())
     if (hook !== 'stop') {
+      // A prompt entering the model is exactly the evidence a queued
+      // continuation was consumed; from here the turn itself holds delivery.
+      if (hook === 'user-prompt-submit') this.queuedContinuation.delete(sessionId)
       this.hookTurnOpen.add(sessionId)
       // New work has started (the same turn continuing past another hook's
       // block, or a prompt the user typed). A continuation held from before it
@@ -250,7 +259,7 @@ export class GoalLoopService extends EventEmitter {
       // its stall deadline must not keep running across work that is
       // legitimately ongoing, or the loop pauses itself for being patient
       // (second #1033 review). Restart the clock, keep the continuation.
-      if (this.heldSince.has(sessionId)) this.heldSince.set(sessionId, Date.now())
+      this.noteHeldProgress(sessionId)
       // A typed prompt STARTS a turn, and UserPromptSubmit publishes no
       // semantic event, so the tracked phase would still read the previous
       // turn's idle. Seed it busy, exactly as markOwedATurn does for our own
@@ -263,7 +272,20 @@ export class GoalLoopService extends EventEmitter {
     }
     if (outcome?.blocked) return
     this.hookTurnOpen.delete(sessionId)
-    this.eventSinceStop.delete(sessionId)
+    // The provider says this turn ENDED, so every phase reading that described
+    // it is now history — including the busy state we seeded for our own
+    // delivery (markOwedATurn), which nothing else would clear on a session
+    // whose semantic stream is absent or late.
+    //
+    // WHY resetting is safe (#1033 round 3): a turn that has ended owes no
+    // tool result and is not streaming. Anything the phase says after this
+    // point was published AFTER the Stop, which is precisely the evidence the
+    // gate wants — the case where another hook blocked ours and the model kept
+    // going. The previous version tried to express that with a
+    // "has an event arrived since the Stop" flag, and a late event about
+    // ALREADY-FINISHED work (a trailing tool_result) validated the stale seed
+    // and stalled the loop until the 30-minute pause.
+    this.working.delete(sessionId)
     if (this.loops.get(sessionId)?.phase !== 'active') return
     // Deferred one macrotask so the Stop hook's HTTP answer reaches the
     // provider first. Delivering inside the hook request would race the
@@ -416,13 +438,8 @@ export class GoalLoopService extends EventEmitter {
 
   private signal(sessionId: string, event: unknown): void {
     // Any event at all, deltas included, means the provider is still doing
-    // something; both the quiet-turn check (Resume) and the settle window
-    // (the delivery gate) measure silence from here. Stamped for EVERY
-    // session, not only hook-driven ones: the settle window is what covers
-    // Claude streaming visible text with its spinner hidden, and that is not
-    // a hook-session-only shape.
+    // something; the quiet-turn check (Resume) measures silence from here.
     this.lastHookSessionActivity.set(sessionId, Date.now())
-    this.eventSinceStop.add(sessionId)
     // Reduce for every session, in every loop phase (see the class comment):
     // only the DECISION to continue is gated on an active loop. The reducer
     // returns the same object for the high-volume delta events, so the common
@@ -431,6 +448,16 @@ export class GoalLoopService extends EventEmitter {
     const next = reduceWorkingState(state, { type: 'semantic', event })
     if (next === state) return
     this.working.set(sessionId, next)
+    // Progress. A held continuation's deadlines measure how long we have
+    // waited with NOTHING happening, not how long we have waited (#1033
+    // round 3): an agent that keeps working past the stall deadline is the
+    // one case where pausing the loop is plainly wrong, and it was reachable
+    // — a reopened turn streaming every minute for thirty minutes paused
+    // itself. Restart the clock on anything that changed the tracked state.
+    this.noteHeldProgress(sessionId)
+    // A queued continuation that has begun: for a provider without hooks this
+    // phase edge is the only signal that the queue drained.
+    if (isWorking(next) && !isWorking(state)) this.queuedContinuation.delete(sessionId)
     // Hook-driven sessions take their turn boundary from the provider's Stop
     // hook only (observeProviderHook). Their phase edges are exactly the
     // false positives #1024 recorded, so they never schedule a continuation.
@@ -479,7 +506,7 @@ export class GoalLoopService extends EventEmitter {
     this.hookSessions.delete(sessionId)
     this.hookTurnOpen.delete(sessionId)
     this.lastHookSessionActivity.delete(sessionId)
-    this.eventSinceStop.delete(sessionId)
+    this.queuedContinuation.delete(sessionId)
     const loop = this.loops.get(sessionId)
     if (!loop || loop.phase !== 'active') return
     this.loops.set(sessionId, { ...loop, phase: 'paused', pauseReason: 'interrupted', updatedAt: this.now().toISOString() })
@@ -565,41 +592,21 @@ export class GoalLoopService extends EventEmitter {
    * process state for is one it is not tracking (a fake in a test, a backend
    * row that lives elsewhere). "I cannot tell" must not hold a loop.
    */
-  private deliveryHold(sessionId: string): 'turn-open' | 'phase-working' | 'screen-busy' | null {
+  private deliveryHold(sessionId: string): 'turn-open' | 'queued' | 'phase-working' | 'screen-busy' | null {
     if (this.hookSessions.has(sessionId) && this.hookTurnOpen.has(sessionId)) return 'turn-open'
+    if (this.queuedContinuation.has(sessionId)) return 'queued'
     const tracked = this.working.get(sessionId)
-    if (tracked && this.phaseIsFresh(sessionId) && (isWorking(tracked) || tracked.pendingTools.length > 0)) {
-      return 'phase-working'
-    }
+    if (tracked && (isWorking(tracked) || tracked.pendingTools.length > 0)) return 'phase-working'
     const active = this.deps.manager.getProcessStateSnapshot(sessionId)?.active === true
     if (active && this.heldForMs(sessionId) < GOAL_LOOP_ACTIVITY_GRACE_MS) return 'screen-busy'
     return null
   }
 
-  /**
-   * May the tracked phase gate a delivery for this session?
-   *
-   * For a session without hooks, always: its working→idle transition IS the
-   * turn boundary, so the same state cannot be too stale to read.
-   *
-   * For a hook-driven session, only when an event has arrived SINCE the
-   * allowed Stop. Two things make that condition load-bearing, in opposite
-   * directions:
-   *
-   *  - Without it, a loop stalls. `markOwedATurn` seeds the state busy when we
-   *    deliver, and only a provider event clears it. A hook session that
-   *    publishes no semantic stream (or whose stream is late) would sit on
-   *    that seed forever and never receive a continuation — the #1028 failure
-   *    this file already documents, where phases were rightly distrusted for
-   *    hook sessions.
-   *  - With it, the phase becomes the thing that catches ANOTHER Stop hook
-   *    blocking ours: the model keeps going, its proxy publishes `requesting`
-   *    and pending tools, and those events are by construction newer than the
-   *    Stop we observed. That is the one case where the phase knows something
-   *    the Stop boundary cannot.
-   */
-  private phaseIsFresh(sessionId: string): boolean {
-    return !this.hookSessions.has(sessionId) || this.eventSinceStop.has(sessionId)
+  /** Something happened, so a held continuation has not been waiting on a
+   * stuck signal. Both deadlines (the 45 s screen grace and the 30 min stall
+   * pause) hang off this instant. */
+  private noteHeldProgress(sessionId: string): void {
+    if (this.heldSince.has(sessionId)) this.heldSince.set(sessionId, Date.now())
   }
 
   private heldForMs(sessionId: string): number {
@@ -696,6 +703,11 @@ export class GoalLoopService extends EventEmitter {
       this.releaseHold(sessionId)
       let result = await this.deps.manager.deliverPromptToAgent(sessionId, prompt)
       if (!result.ok && result.retrySafe) result = await this.deps.manager.deliverPromptToAgent(sessionId, prompt)
+      // The provider took the prompt into its QUEUE instead of starting a turn
+      // with it, which is what happens when the delivery lands mid-turn. It
+      // will run, but not yet, and until it does nothing else may be sent:
+      // the running turn's own Stop must not be mistaken for ours.
+      if (result.ok && result.acceptance?.kind === 'queue') this.queuedContinuation.add(sessionId)
       const current = this.loops.get(sessionId)
       if (!current || current.phase !== 'active') return
       if (result.ok) {

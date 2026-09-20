@@ -174,6 +174,79 @@ describe('GoalLoopService', () => {
     } finally { vi.useRealTimers() }
   })
 
+  it('does not deliver again while a continuation sits in the provider QUEUE (#1033 round 3)', async () => {
+    // A delivery that lands mid-turn is queued rather than started. The turn
+    // that IS running belongs to someone else, so its Stop closes our
+    // turn-open guard while our continuation has not begun — and the loop
+    // sent a second one. Measured: two deliveries where the design promises
+    // at most one early.
+    //
+    // Real timers here, unlike its neighbours: two deliveries in one test
+    // means waiting for the store write BETWEEN them, and a faked clock does
+    // not turn the event loop for real file IO.
+    const queued = vi.fn(async () => ({ ok: true, acceptance: { kind: 'queue', acceptedAt: 1 } } as unknown as PromptDeliveryResult))
+    const { svc, deliver } = await service(queued)
+    await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+    svc.observeProviderHook('s1', 'post-tool-use')
+    svc.observeProviderHook('s1', 'stop', { blocked: false })
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1))
+
+    // The turn that was already running now ends. Our continuation is still
+    // in the queue, so this Stop is not ours to answer.
+    svc.observeProviderHook('s1', 'stop', { blocked: false })
+    await new Promise(resolve => setTimeout(resolve, 300))
+    expect(deliver).toHaveBeenCalledTimes(1)
+
+    // The queue drains: the provider submits our prompt, which is a new turn,
+    // and the end of THAT turn is the next boundary.
+    svc.observeProviderHook('s1', 'user-prompt-submit')
+    svc.observeProviderHook('s1', 'stop', { blocked: false })
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(2))
+  })
+
+  it('a trailing event about the FINISHED turn cannot resurrect a busy phase (#1033 round 3)', async () => {
+    // The seeded busy state (markOwedATurn) is only ever cleared by a provider
+    // event, and a hook session whose semantic stream is absent or late never
+    // sends one. Any event at all used to mark that stale seed trustworthy —
+    // including one about work that had already finished — and the loop then
+    // held its continuation until the 30-minute pause.
+    const { svc, manager, deliver } = await service()
+    vi.useFakeTimers()
+    try {
+      await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+      svc.observeProviderHook('s1', 'post-tool-use')
+      svc.observeProviderHook('s1', 'stop', { blocked: false })
+      // A late event that says nothing about the phase.
+      manager.emit('semantic-event', { sessionId: 's1', event: { type: 'tool_result', toolUseId: 'gone' } })
+      await vi.advanceTimersByTimeAsync(2_000)
+      expect(deliver).toHaveBeenCalledTimes(1)
+    } finally { vi.useRealTimers() }
+  })
+
+  it('an agent that keeps working past the stall deadline is not paused for it (#1033 round 3)', async () => {
+    // The deadline bounds how long we wait on a SILENT signal, never how long
+    // an agent may work. A reopened turn that streams every minute used to
+    // pause its own loop after thirty.
+    const { svc, manager, deliver } = await service()
+    vi.useFakeTimers()
+    try {
+      await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+      svc.observeProviderHook('s1', 'user-prompt-submit')
+      svc.control('s1', { action: 'pause' })
+      svc.control('s1', { action: 'resume' })
+      for (let minute = 0; minute < 40; minute += 1) {
+        manager.emit('semantic-event', { sessionId: 's1', event: { type: 'stream_phase', phase: minute % 2 ? 'responding' : 'thinking' } })
+        await vi.advanceTimersByTimeAsync(60_000)
+      }
+      expect(svc.snapshot()['s1']).toMatchObject({ phase: 'active' })
+      expect(deliver).not.toHaveBeenCalled()
+      // And when that long turn finally ends, the held continuation lands.
+      svc.observeProviderHook('s1', 'stop', { blocked: false })
+      await vi.advanceTimersByTimeAsync(2_000)
+      expect(deliver).toHaveBeenCalledTimes(1)
+    } finally { vi.useRealTimers() }
+  })
+
   it('does not continue while tools are pending (awaiting-tool)', async () => {
     const { svc, manager, deliver } = await service()
     await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
