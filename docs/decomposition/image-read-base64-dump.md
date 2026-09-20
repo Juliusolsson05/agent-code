@@ -566,7 +566,7 @@ and looks for media. Verified to fail on the half-fix (2 of 3 tests red) before 
 | `inflate()` matched substitutions positionally with a `>32` threshold vs the extractor's `>256`, so an unrelated short `data` field could consume the recorded size and disarm the guard | Keyed by recorded path, with a hard failure if any path does not resolve |
 | Three fixtures produced **zero** projections — their guard tests asserted nothing and passed vacuously | `textProjections` now walks `_atp.source` and the Claude sidecar; an explicit assertion fails a fixture that yields no projections |
 | Header claimed "every input here is loaded from disk" while the negative tests use literals | Comment corrected to state why negative cases are necessarily handwritten |
-| "traceable to a real session" only regex-matched the citation string | Now opens the cited file |
+| "traceable to a real session" only regex-matched the citation string | Opened the cited file — then that was undone; see "A fix that was worse than the flaw", twice |
 | `ImageBlockRow` stamped the assistant marker `⏺`, reading as `⎿ path / ⏺ image` | `ResultParts` uses `Base64MediaView` directly, no marker |
 
 **Also caught during the fix, by tsc:** the first version of the `CodexToolResultRow` branch
@@ -594,13 +594,38 @@ right there.
 
 The resolution is to be honest about where provenance is actually enforced: **at generation,
 not at assertion.** A fixture cannot exist unless `extract-image-fixtures.mts` opened that
-exact file at that exact line and read a parseable record. The test now asserts
-well-formedness always, and existence only when a corpus root is present — a second opinion
-where the evidence is reachable, and silence where it is not.
+exact file at that exact line and read a parseable record.
 
 Verified by re-running the whole suite under a `HOME` with no corpora, which is the
 condition CI runs in. That check is now the standard before pushing anything that touches
 these fixtures.
+
+### The same flaw again, from the other side (#901 / #839, rev 6)
+
+"Existence only when a corpus root is present" was still reading the machine. Rotating one
+old transcript — ordinary housekeeping, and what the providers themselves do — made
+`npm test` fail with nothing wrong in the checkout, and blocked `npm run check` for
+unrelated work. `docs/testing/standard.md:37` already named the rule being broken: reading a
+developer's home directory is LIVE behaviour needing an explicit opt-in variable. *"The
+directory happens to be there"* is not an opt-in.
+
+The two checks are now separate, because they have different preconditions:
+
+- `malformedCitations` reads nothing outside `testing/fixtures/` and is what `npm test`
+  runs. It checks the census rows against the committed census
+  (`evidence/image-reads/shape-census.md`), that something is claimed proved, and that the
+  citation is a `<file>.jsonl:<line>` pair.
+- `unreachableCitations` is the second opinion for whoever still holds the corpus, in
+  `imageAttachment.live.test.ts` behind `AGENT_CODE_LIVE_IMAGE_CORPUS=1`
+  (`npm run test:live:image-corpus`). A failure there means a transcript was rotated away
+  from THIS machine — information, not a defect.
+
+**And the pre-push standard above was skipped, which cost a CI failure.** The first push
+keyed the new control on `CORPUS_ROOTS`, which embed `homedir()`, so on any machine but the
+author's it matched nothing, the control asserted on an empty list, and the reachability
+check would have passed vacuously forever. It matches the provider directory SEGMENTS now.
+Run the suite under a foreign `HOME` before pushing anything in this area; it is one
+command, it is written here, and it has now caught the same class of defect three times.
 
 ### Standing caveat
 

@@ -6,7 +6,8 @@ import {
   sidecarImageMetadata,
 } from '@providers/shared/renderer/protocols/media/imageAttachment'
 import {
-  CORPUS_ROOTS,
+  CENSUS_ROW_COUNT,
+  IMAGE_FIXTURE_COUNT,
   loadImageFixture as fixture,
   loadImageFixtures as allFixtures,
   malformedCitations,
@@ -253,6 +254,15 @@ describe('corpus-wide invariants', () => {
     expect(malformedCitations(allFixtures())).toEqual([])
   })
 
+  it('has the corpus it thinks it has', () => {
+    // Every corpus-wide assertion below compares its result to
+    // `allFixtures().length`, which `0 === 0` satisfies. A loader that found
+    // NOTHING kept this suite green AND flipped the live suite from reporting
+    // three genuinely missing sessions to reporting none (#1084 review,
+    // finding 2). Pinning the count is what makes the other two mean anything.
+    expect(allFixtures()).toHaveLength(IMAGE_FIXTURE_COUNT)
+  })
+
   it('every fixture cites a session inside a provider corpus, so the live check has something to check', () => {
     // Machine-INDEPENDENT, which the first version of this control was not:
     // it matched against `CORPUS_ROOTS`, which embed `homedir()`, so on CI —
@@ -276,11 +286,15 @@ describe('corpus-wide invariants', () => {
   // assertions at the top of this file are: they describe fixtures the check
   // must REJECT, which by definition are not in a corpus of ones it accepted.
   describe('what the provenance check must reject', () => {
+    // A plain literal, not `CORPUS_ROOTS`: that was the last `homedir()`
+    // thread into `npm test`, and the PR's whole thesis is that the
+    // deterministic suite must not read the machine (#1084 review, nit 7).
+    // Harmless today, structurally incapable of regressing now.
     const broken = (over: Partial<Fixture['$fixture']>): Fixture => ({
       $fixture: {
         id: 'synthetic',
         censusRows: [1],
-        source: `${CORPUS_ROOTS.claude}/p/session.jsonl:42`,
+        source: '/corpus/.claude/projects/p/session.jsonl:42',
         proves: 'something',
         substitutions: [],
         totalOriginalPayloadChars: 0,
@@ -292,9 +306,16 @@ describe('corpus-wide invariants', () => {
     it.each([
       { what: 'no census row', over: { censusRows: [] }, reason: 'cites no census row' },
       { what: 'nothing claimed proved', over: { proves: '' }, reason: 'claims to prove nothing' },
-      { what: 'a citation with no line', over: { source: `${CORPUS_ROOTS.claude}/p/session.jsonl` }, reason: 'source is not' },
-      { what: 'a citation with a zero line', over: { source: `${CORPUS_ROOTS.claude}/p/session.jsonl:0` }, reason: 'source is not' },
-      { what: 'a citation that is not a transcript', over: { source: `${CORPUS_ROOTS.claude}/p/session.txt:1` }, reason: 'source is not' },
+      { what: 'a citation with no line', over: { source: '/corpus/.claude/projects/p/session.jsonl' }, reason: 'source is not' },
+      { what: 'a citation with a zero line', over: { source: '/corpus/.claude/projects/p/session.jsonl:0' }, reason: 'source is not' },
+      { what: 'a citation that is not a transcript', over: { source: '/corpus/.claude/projects/p/session.txt:1' }, reason: 'source is not' },
+      // `Number('abc')` is NaN and `NaN <= 0` is FALSE, so the bound check
+      // alone lets a non-numeric line through. `Number.isInteger` is what
+      // catches it, and nothing tested that.
+      { what: 'a citation whose line is not a number', over: { source: '/corpus/.claude/projects/p/session.jsonl:abc' }, reason: 'source is not' },
+      { what: 'a citation whose line has whitespace', over: { source: '/corpus/.claude/projects/p/session.jsonl: 42' }, reason: 'source is not' },
+      { what: 'a census row outside the recorded census', over: { censusRows: [CENSUS_ROW_COUNT + 1] }, reason: 'which is not one of the' },
+      { what: 'a census row of zero', over: { censusRows: [0] }, reason: 'which is not one of the' },
     ])('rejects $what', ({ over, reason }) => {
       const problems = malformedCitations([broken(over)])
       expect(problems).toHaveLength(1)
@@ -314,6 +335,26 @@ describe('corpus-wide invariants', () => {
       const foreign = broken({ source: '/home/someone-else/.codex/sessions/2026/s.jsonl:3' })
       expect(unreachableCitations([foreign], () => false)).toHaveLength(1)
       expect(unreachableCitations([foreign], () => true)).toEqual([])
+    })
+
+    it.each([
+      // The SEGMENT is the provider's directory pair, not just the dotfile.
+      // `.claude` alone would claim `~/.claude/todos/*.jsonl` — a real
+      // directory holding real `.jsonl` files that are not sessions.
+      '/home/x/.claude/todos/s.jsonl:1',
+      '/home/x/.codex/history/s.jsonl:1',
+      // And not a directory that merely CONTAINS the words.
+      '/home/x/my.claude/projects-backup/s.jsonl:1',
+    ])('ignores %s, which is not a corpus session', source => {
+      expect(unreachableCitations([broken({ source })], () => false)).toEqual([])
+    })
+
+    it('matches a corpus path recorded on a machine with the other separator', () => {
+      // The live suite is the only consumer, and it currently only runs on
+      // macOS — so a Windows-recorded citation would otherwise make it skip
+      // everything and report a clean result.
+      const windows = broken({ source: 'C:\\Users\\x\\.codex\\sessions\\2026\\s.jsonl:3' })
+      expect(unreachableCitations([windows], () => false)).toHaveLength(1)
     })
   })
 
