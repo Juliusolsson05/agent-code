@@ -479,9 +479,18 @@ export class WebSocketSessionFeed implements SessionFeed {
         // which is what a picker's ordering needs: rows move when something
         // newer happened, never because two clocks disagree.
         const previous = new Map(this.lastSessionList.map(row => [row.sessionId, row.lastActivityAt ?? 0]))
+        const now = Date.now()
         this.lastSessionList = frame.sessions.map(row => {
           const local = previous.get(row.sessionId) ?? 0
-          return local > (row.lastActivityAt ?? 0) ? { ...row, lastActivityAt: local } : row
+          // A local stamp in the FUTURE is a clock artefact, not activity, and
+          // dropping it is the recovery path an unconditional maximum across
+          // two independent clocks cannot have (#1055 review): a phone that
+          // was an hour fast when a session emitted would otherwise keep that
+          // row pinned above genuinely newer ones — reading "now" the whole
+          // time — long after its clock was corrected. Here the correction
+          // itself retires the stamp and the server's value takes over.
+          const usable = local <= now ? local : 0
+          return usable > (row.lastActivityAt ?? 0) ? { ...row, lastActivityAt: usable } : row
         })
         for (const cb of [...this.sessionListListeners]) cb(this.lastSessionList)
         return

@@ -254,9 +254,13 @@ describe('WebSocketSessionFeed against a live RemoteServer', () => {
     // A workspace projection change is what re-sends the whole list, so the
     // server is rebuilt here with one whose onChange this test can fire.
     let republish = (): void => {}
+    // The projection also carries identity, so this test can tell WHICH
+    // publication the client has processed: waiting on a sleep instead let it
+    // pass with `broadcastSessionList` doing nothing at all (#1055 review).
+    let title = 'before the refresh'
     await restartWithDeps({
       workspace: {
-        snapshot: () => new Map(),
+        snapshot: () => new Map([['s1', { sessionId: 's1', title, agentName: null, tabTitle: null, pinned: false, tldrIdentity: null, cwd: '/repo', kind: 'claude' }]]),
         onChange: (listener: () => void) => { republish = listener; return () => {} },
       },
     })
@@ -276,9 +280,10 @@ describe('WebSocketSessionFeed against a live RemoteServer', () => {
     expect(local).toBeGreaterThan(0)
 
     ;(manager.getLastActivityAt as ReturnType<typeof vi.fn>).mockReturnValue(local - 60_000)
+    title = 'after the refresh'
     republish()
-    await vi.waitFor(() => expect(manager.getLastActivityAt).toHaveBeenCalled())
-    await new Promise(resolve => setTimeout(resolve, 50))
+    // The identity change proves this exact publication arrived.
+    await vi.waitFor(() => expect(f.getSessionList()[0]?.title).toBe('after the refresh'))
     expect(f.getSessionList()[0]?.lastActivityAt ?? 0).toBeGreaterThanOrEqual(local)
   })
 
