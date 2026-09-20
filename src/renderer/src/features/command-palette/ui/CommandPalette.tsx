@@ -1976,7 +1976,7 @@ function OpenCommandPalette({
                               ? 'Press Enter or click again to confirm metadata deletion'
                               : `${workspace.fileCount} files${
                                   workspace.staleCount > 0 ? ` · ${workspace.staleCount} stale` : ''
-                                }${workspace.description ? ` · ${workspace.description}` : ''}`}
+                                }${workspace.description ? ` · ${withVisibleControls(workspace.description)}` : ''}`}
                         </div>
                       </button>
                     )

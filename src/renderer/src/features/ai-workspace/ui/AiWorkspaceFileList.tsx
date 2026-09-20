@@ -132,9 +132,13 @@ export function AiWorkspaceFileList({
                   disabled={stale}
                   onClick={() => onOpenEntry(entry)}
                   className="flex min-w-0 flex-1 items-start gap-2 px-2 py-1.5 text-left transition-colors disabled:cursor-not-allowed"
-                  title={[entry.path, stale ? staleReason : null, details || null]
+                  // Path, provenance and staleness are what distinguish two
+                  // attachments with the same ordinary title — and the ×
+                  // beside them detaches immediately, with no confirmation
+                  // (#1049 re-review).
+                  title={withVisibleControls([entry.path, stale ? staleReason : null, details || null]
                     .filter(Boolean)
-                    .join('\n')}
+                    .join('\n'))}
                 >
                   <span className="mt-0.5 flex h-4 w-4 flex-shrink-0 items-center justify-center">
                     <FileIcon name={entry.path} />
@@ -142,10 +146,10 @@ export function AiWorkspaceFileList({
                   <span className="min-w-0 flex-1">
                     <span className="block truncate">{withVisibleControls(fileTitle(entry))}</span>
                     <span className="block truncate text-[10px] text-muted">
-                      {stale ? staleReason : workspaceLabel(entry)}
+                      {withVisibleControls(stale ? staleReason : workspaceLabel(entry))}
                     </span>
                     {details ? (
-                      <span className="block truncate text-[10px] text-muted/80">{details}</span>
+                      <span className="block truncate text-[10px] text-muted/80">{withVisibleControls(details)}</span>
                     ) : null}
                   </span>
                 </button>

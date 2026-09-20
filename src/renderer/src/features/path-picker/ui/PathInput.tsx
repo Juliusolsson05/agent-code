@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
-import { withVisibleControls } from '@shared/text/visibleControls'
+import { containsInvisibleControls, withVisibleControls } from '@shared/text/visibleControls'
 
 // PathInput — the path picker's path-with-completion input.
 //
@@ -248,6 +248,18 @@ export function PathInput({
         disabled={disabled}
         autoFocus={autoFocus}
       />
+      {/* An escaped READ-ONLY echo of what is actually in the box (#1049
+          re-review). The input itself must stay raw — it is the user's text,
+          and rewriting it while they type would be its own bug — but a pasted
+          `/tmp/project<U+200B>` would otherwise reach "open and trust this
+          directory" with its identity shown nowhere. Only rendered when the
+          path contains something invisible, so the ordinary case gains no
+          chrome. */}
+      {containsInvisibleControls(value) && (
+        <div className="mt-1 break-all font-code text-[10px] text-warning">
+          {withVisibleControls(value)}
+        </div>
+      )}
       {dropdownOpen && (
         <div
           className={`

@@ -137,7 +137,7 @@ function TemplateRow({
               vars:{template.variables.length}
             </span>
           </div>
-          <div className="mt-1 truncate text-[10px] text-muted">{template.description}</div>
+          <div className="mt-1 truncate text-[10px] text-muted">{withVisibleControls(template.description)}</div>
         </button>
         <div className="flex flex-shrink-0 items-center gap-1">{actions}</div>
       </div>

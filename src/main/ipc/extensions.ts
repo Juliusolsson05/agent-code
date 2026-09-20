@@ -56,6 +56,30 @@ function consentPromptFor(evt: IpcMainInvokeEvent, source: string): ConsentPromp
   return async manifest => {
     const win = BrowserWindow.fromWebContents(evt.sender)
     const permissions = manifest.permissions ?? []
+    // A manifest that asks for NOTHING still gets a dialog (#1049 re-review).
+    // Tier 0 used to install in silence, so nothing ever showed the user which
+    // folder or repository they were about to run code from — and the
+    // extension row that does show it appears only afterwards. The wording
+    // drops the capability paragraph, because there is nothing to grant; the
+    // decision is the source.
+    if (permissions.length === 0) {
+      const plain = {
+        type: 'question' as const,
+        buttons: ['Cancel', 'Install'],
+        defaultId: 0,
+        cancelId: 0,
+        title: 'Install extension',
+        message: `Install ${withVisibleControls(manifest.id)} from ${withVisibleControls(source)}?`,
+        detail:
+          `"${withVisibleControls(manifest.name)}" requests no capabilities: it cannot read or change `
+          + `project files and has no network access.\n\n`
+          + `Install it only if you trust ${withVisibleControls(source)}.`,
+      }
+      const plainResult = win
+        ? await dialog.showMessageBox(win, plain)
+        : await dialog.showMessageBox(plain)
+      return plainResult.response === 1
+    }
     const detail = permissions.map(cap => `  • ${CAPABILITY_DISCLOSURE[cap]}`).join('\n')
     const canWrite = permissions.includes('fs.write')
 
@@ -167,9 +191,11 @@ export function registerExtensionsIpc(): void {
     // credential upgrade without knowing it exists.
     async (evt, repo: string, useGithubCliAuth?: boolean): Promise<ExtensionInstallResult> => {
       try {
+        // firstInstall: `owner/repo` typed (or pasted) just now. A pasted one
+        // can carry invisible characters, and this dialog is where they show.
         const record = await installExtension(repo, consentPromptFor(evt, repo.trim()), {
           githubCliAuth: useGithubCliAuth !== false,
-        })
+        }, true)
         return { ok: true, entry: { ...record, present: true } }
       } catch (error) {
         return { ok: false, error: error instanceof Error ? error.message : String(error) }
@@ -194,7 +220,9 @@ export function registerExtensionsIpc(): void {
     const dir = picked.filePaths[0]
     if (picked.canceled || !dir) return { ok: false, error: 'No folder selected.' }
     try {
-      const record = await installExtensionFromPath(dir, consentPromptFor(evt, dir))
+      // firstInstall: the user picked this folder just now, and nothing has
+      // shown them its name in a form that reveals invisible characters.
+      const record = await installExtensionFromPath(dir, consentPromptFor(evt, dir), true)
       return { ok: true, entry: { ...record, present: true } }
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : String(error) }

@@ -179,7 +179,7 @@ export function EditorTabs({
                   tabs?.[nextIndex]?.focus()
                 }}
                 className="flex min-w-0 flex-1 items-center gap-2 px-3 text-left"
-                title={`${fileTitle}${attentionLabel ? ` — ${attentionLabel}` : ''}`}
+                title={`${withVisibleControls(fileTitle)}${attentionLabel ? ` — ${attentionLabel}` : ''}`}
               >
                 <span className="flex h-4 w-4 flex-shrink-0 items-center justify-center">
                   <FileIcon name={file.absolutePath} />

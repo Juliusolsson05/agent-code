@@ -226,7 +226,7 @@ export function AppsSettingsRow() {
                       the approval surface for Reload, Update and Remove
                       (#1049 re-review). */}
                   <span className="text-[13px] text-ink">{withVisibleControls(entry.manifest.name)}</span>
-                  <span className="text-[11px] text-muted">{entry.manifest.version}</span>
+                  <span className="text-[11px] text-muted">{withVisibleControls(entry.manifest.version)}</span>
                   {/* A ledger row whose bundle is gone. Shown rather than filtered:
                       the fix is reinstalling from the recorded repo, and hiding it
                       would leave the user wondering where the extension went. */}
