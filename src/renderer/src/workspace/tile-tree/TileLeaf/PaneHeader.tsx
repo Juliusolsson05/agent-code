@@ -1,5 +1,10 @@
+import { requestSessionRoutingRefresh } from '@renderer/session-runtime/routingGap'
 import type { ReactNode } from 'react'
 import { shortenCwd } from '@renderer/workspace/tile-tree/TileLeaf/labels'
+// Still needed after the unified stage (#1013) deleted the related-agent
+// strip that used to be this header's only store read: the routing-gap notice
+// below subscribes to exactly one rare object on the displayed session.
+import { useAppStore } from '@renderer/app-state/hooks'
 import { PaneHeaderColorFlag } from '@renderer/workspace/tile-tree/TileLeaf/PaneHeaderColorFlag'
 import type { SessionId } from '@renderer/workspace/types'
 import { AgentTitleHeader } from '@renderer/workspace/tile-tree/AgentTitleHeader'
@@ -62,6 +67,9 @@ export function PaneHeader({
 }) {
   // Drives the fill and the `data-status-lit` hook together, so tests and
   // debug tooling read exactly what the user sees.
+  // sessionId is the displayed target, not the physical leaf's grouping id.
+  // Subscribe only to this rare gap object, never every feed/PTY update.
+  const routingGap = useAppStore(state => state.workspaceRuntimes?.[sessionId]?.routingGap)
   const statusLit = paneHeaderStatusLit(statusMode, isSessionLive)
   return (
     <div className="border-b border-border bg-surface text-muted font-code select-none">
@@ -160,6 +168,30 @@ export function PaneHeader({
           keeps five narrow Tiled Dispatch lanes legible without weakening the
           existing header contract. Untitled agents render no row at all. */}
       <AgentTitleHeader sessionId={sessionId} title={agentTitle} />
+      {routingGap && (
+        <div role="status" className="flex items-center gap-2 border-t border-border px-3 py-1 text-[11px] text-warning">
+          <span className="min-w-0 flex-1">
+            {routingGap.phase === 'refreshing' ? 'Refreshing available observations…' :
+              routingGap.phase === 'refreshed' ? 'View refreshed. Some earlier live output may be missing.' :
+                'Some live output may be missing. Refresh is unavailable right now.'}
+          </span>
+          {/* WHY the button disappears once a refresh has completed (#935
+              Codex review): the main-process gap ticket is acknowledged and
+              DELETED by that refresh, so a second press can only ever come
+              back `stale` — a dead control under a warning that is otherwise
+              correct. The warning stays, because some live output really was
+              lost for good; there is simply nothing left to re-seed. A
+              refresh that FAILED keeps its button: that ticket still exists
+              and the failure may be transient. */}
+          {routingGap.phase === 'refreshed' ? null : (
+            <button type="button" disabled={routingGap.phase === 'refreshing'}
+              className="flex-shrink-0 underline disabled:opacity-50"
+              onClick={event => { event.stopPropagation(); requestSessionRoutingRefresh(sessionId) }}>
+              Refresh view
+            </button>
+          )}
+        </div>
+      )}
     </div>
   )
 }
