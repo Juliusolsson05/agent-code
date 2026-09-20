@@ -91,3 +91,28 @@ describe('a prompt that was only an attachment stays rewindable (#929)', () => {
     ])
   })
 })
+
+describe('the loss report crosses IPC without the bytes', () => {
+  // #1073 review, finding 3. `rewindSession` used to SPREAD the draft into its
+  // result, and a spread bypasses excess-property checking — so
+  // `promptAttachments` shipped undeclared, structured-cloned verbatim. The
+  // corpus mean attachment is 326k base64 characters and the largest real
+  // prompt is 2.8 MB across twelve images, every one of which crossed twice:
+  // once in `promptImages`, once again inside `promptAttachments`.
+  it('reports each attachment\'s fate and carries no base64 twice', async () => {
+    const { toRewindSessionAttachments } = await import('./rewindSession.js')
+    const report = toRewindSessionAttachments([
+      { status: 'restored', mediaType: 'image/png', data: 'AAAA', name: 'clipboard' },
+      { status: 'unavailable', reason: 'external-reference', mediaType: null, name: null },
+      { status: 'unsupported', mediaType: 'application/pdf', name: 'spec.pdf' },
+    ])
+    expect(report).toEqual([
+      { status: 'restored', mediaType: 'image/png', name: 'clipboard' },
+      { status: 'unavailable', reason: 'external-reference', mediaType: null, name: null },
+      { status: 'unsupported', mediaType: 'application/pdf', name: 'spec.pdf' },
+    ])
+    // The bytes are gone from the report — they already cross in promptImages.
+    expect(JSON.stringify(report)).not.toContain('AAAA')
+    expect(report.every(entry => !('data' in entry))).toBe(true)
+  })
+})

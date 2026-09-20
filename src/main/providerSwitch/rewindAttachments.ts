@@ -1,3 +1,4 @@
+import { parseBase64DataUrl } from 'agent-transcript-parser'
 import type { ConversationContent } from 'agent-transcript-parser'
 
 /**
@@ -50,26 +51,39 @@ function stringField(record: Record<string, unknown>, key: string): string | nul
   return typeof value === 'string' && value.length > 0 ? value : null
 }
 
-/**
- * Split a `data:` URL into its media type and base64 payload.
- *
- * Only base64 data URLs count. A `data:` URL can also be percent-encoded
- * text, which is not an attachment anyone pasted, and treating one as image
- * bytes would hand the composer a payload it cannot decode.
- */
-function decodeDataUrl(url: string): { mediaType: string; data: string } | null {
-  const match = /^data:([^;,]+);base64,(.+)$/s.exec(url)
-  if (!match) return null
-  return { mediaType: match[1]!, data: match[2]! }
-}
-
 function classify(mediaType: string, data: string, name: string | null): RewindAttachment {
+  // An empty payload is not content. `restored` with no bytes produces a
+  // broken preview and an attachment the composer cannot send, which is worse
+  // than saying plainly that nothing came back.
+  if (data.length === 0) {
+    return { status: 'unavailable', reason: 'unreadable', mediaType: mediaType || null, name }
+  }
   // A document may be perfectly readable and still not be something the
   // composer can carry. Reporting it as unsupported is what lets the picker
   // say so rather than pretend the prompt had nothing attached.
   return mediaType.startsWith('image/')
     ? { status: 'restored', mediaType, data, name }
     : { status: 'unsupported', mediaType, name }
+}
+
+/**
+ * The media type of a data URL, with the part's own declaration as fallback.
+ *
+ * ── WHY THE URL WINS AND `mime` ONLY FILLS IN (#1073 review, finding 1) ──
+ * This used to be the other way round, "trust the declaration over the data
+ * URL's own label" — and the parser's `claudeAttachmentBlock`, projecting the
+ * SAME bytes in the SAME rewind, did the opposite with a comment asserting the
+ * opposite reason. Review drove one OpenCode part through both: the projected
+ * transcript contained the image AS AN IMAGE while the picker row said the
+ * attachment was unavailable and the composer got nothing.
+ *
+ * The parser's rule is the right one and is now the only one: the data URL's
+ * own media type is what the bytes ARE, and `mime` is the part's claim about
+ * them, which matters only when the URL declares nothing (`data:;base64,…` is
+ * legal RFC 2397).
+ */
+function mediaTypeOf(parsed: { mediaType: string }, declared: string | null): string {
+  return parsed.mediaType || declared || 'application/octet-stream'
 }
 
 /**
@@ -109,10 +123,13 @@ export function rewindAttachments(content: readonly ConversationContent[]): Rewi
     if (isRecord(value.source) && typeof value.source.type === 'string') {
       const source = value.source
       if (source.type === 'base64' && typeof source.data === 'string') {
+        // The media type comes from the SOURCE, which is where Claude records
+        // it — never from the block, which may carry a stale sibling. It is
+        // the one field the composer acts on (#1073 review, finding 6).
         attachments.push(classify(stringField(source, 'media_type') ?? 'image/png', source.data, name))
         continue
       }
-      // `source.type === 'url'` and anything else: a pointer, not the bytes.
+      // `source.type === 'url'` is a pointer rather than the bytes.
       if (source.type === 'url') {
         attachments.push({
           status: 'unavailable',
@@ -122,18 +139,28 @@ export function rewindAttachments(content: readonly ConversationContent[]): Rewi
         })
         continue
       }
+      // Any other `source.type` is a shape this does not know how to decode —
+      // and it is reported as such even when it carries a `data` field,
+      // because "there is a string called data" is not evidence that the
+      // string is inline base64 of the declared type.
+      attachments.push({
+        status: 'unavailable',
+        reason: 'unreadable',
+        mediaType: stringField(source, 'media_type'),
+        name,
+      })
+      continue
     }
 
     // Codex (`image_url`) and OpenCode (`url`) both record a URL string; only
-    // a data URL carries the content.
+    // a data URL carries the content. `parseBase64DataUrl` comes from the
+    // parser rather than being written again here — see `mediaTypeOf` for what
+    // a second copy of this rule cost.
     const url = stringField(value, 'image_url') ?? stringField(value, 'url')
     if (url !== null) {
-      const decoded = decodeDataUrl(url)
-      if (decoded) {
-        // OpenCode declares the type separately; trust the declaration over
-        // the data URL's own label, because the declaration is what the
-        // provider routed the part on.
-        attachments.push(classify(stringField(value, 'mime') ?? decoded.mediaType, decoded.data, name))
+      const parsed = parseBase64DataUrl(url)
+      if (parsed) {
+        attachments.push(classify(mediaTypeOf(parsed, stringField(value, 'mime')), parsed.data, name))
       } else {
         attachments.push({
           status: 'unavailable',
@@ -165,17 +192,32 @@ export function rewindAttachments(content: readonly ConversationContent[]): Rewi
  * no text and no images, so it vanished from the picker and the user could not
  * rewind to it — not even to the turn before it.
  *
+ * ── WHY THE THREE STATUSES ARE NOT COLLAPSED (#1073 review, finding 5) ──
+ * A first version said "[Attachment unavailable]" for everything that was not
+ * a restored image, so a PDF whose bytes are sitting in the transcript was
+ * described to the user as unavailable — the opposite of the truth — and the
+ * filename this function went to the trouble of capturing was thrown away.
+ * The label now says which of the three things happened, and names the file
+ * when the provider recorded a name.
+ *
  * Returns null when there is genuinely nothing to show.
  */
 export function attachmentOnlyLabel(attachments: readonly RewindAttachment[]): string | null {
   if (attachments.length === 0) return null
-  const restored = attachments.filter(attachment => attachment.status === 'restored').length
+  const restored = attachments.filter(attachment => attachment.status === 'restored')
   // The existing label for the case that already worked; kept verbatim so the
   // Claude path's picker rows do not change wording.
-  if (restored > 0) return '[Image prompt]'
-  // Everything else is a loss, and the row says so rather than implying the
-  // attachment is coming back with the prompt.
-  return attachments.length === 1
-    ? '[Attachment unavailable]'
-    : `[${attachments.length} attachments unavailable]`
+  if (restored.length > 0) return '[Image prompt]'
+
+  const only = attachments.length === 1 ? attachments[0]! : null
+  if (only?.status === 'unsupported') {
+    // The bytes ARE here; what is missing is a composer that can carry them.
+    return only.name !== null
+      ? `[Attachment not supported: ${only.name}]`
+      : `[${only.mediaType ?? 'Attachment'} not supported]`
+  }
+  if (only?.status === 'unavailable') {
+    return only.name !== null ? `[Attachment unavailable: ${only.name}]` : '[Attachment unavailable]'
+  }
+  return `[${attachments.length} attachments could not be restored]`
 }

@@ -66,7 +66,7 @@ it('reports a domain refusal instead of treating a resolved void transaction as 
 
 it('keeps draft edits made during native rewind recoverable by undo', async () => {
   const { invoke, revision, replaceSession, report, refs } = setup()
-  window.api.rewindToPrompt = vi.fn<typeof window.api.rewindToPrompt>().mockResolvedValue({ provider: 'codex', newProviderSessionId: 'rewound-native', newFilePath: '/recorded/rewound.jsonl', promptText: 'Historical prompt', promptImages: [], promptMode: 'prompt', promptTimestamp: null })
+  window.api.rewindToPrompt = vi.fn<typeof window.api.rewindToPrompt>().mockResolvedValue({ provider: 'codex', newProviderSessionId: 'rewound-native', newFilePath: '/recorded/rewound.jsonl', promptText: 'Historical prompt', promptImages: [], promptAttachments: [], promptMode: 'prompt', promptTimestamp: null })
   // The actual replacement contract is independently exercised in
   // sessionReplacementHandoff: this boundary returns its latest carried draft,
   // including edits made after the original lifecycle inspection.

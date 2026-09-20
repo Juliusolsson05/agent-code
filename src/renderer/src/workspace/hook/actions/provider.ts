@@ -243,8 +243,13 @@ export function useProviderActions(
             ? `!${result.promptText}`
             : result.promptText
 
+        // WHY the registry capability and not `kind === 'claude'`: the
+        // hardcode predates the provider registry and was already stale —
+        // `supportsImageAttachments` is the field every other image path
+        // consults, so a provider that gains image support would have had to
+        // remember this line too (#1073 review, finding 2).
         const draftImages: ClaudeDraftImage[] =
-          kind === 'claude'
+          getRendererProviderCapabilities(kind).supportsImageAttachments
             ? result.promptImages.map((image, index) => ({
                 id: `rewind-${Date.now()}-${index}`,
                 mediaType: image.mediaType,

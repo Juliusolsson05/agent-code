@@ -108,7 +108,26 @@ describe('a reference is reported, never followed', () => {
       { kind: 'image', value: { type: 'input_image', image_url: '/tmp/a.png' } },
       { kind: 'image', value: { type: 'input_image', image_url: '/tmp/b.png' } },
     ] as never)
-    expect(attachmentOnlyLabel(two)).toBe('[2 attachments unavailable]')
+    expect(attachmentOnlyLabel(two)).toBe('[2 attachments could not be restored]')
+  })
+
+  it('does not describe a READABLE attachment as unavailable', () => {
+    // The three statuses mean different things and the label used to collapse
+    // them: a PDF whose bytes are sitting in the transcript was described to
+    // the user as unavailable — the opposite of the truth — and the filename
+    // the extractor captured was thrown away.
+    const pdf = rewindAttachments([
+      { kind: 'document', value: { type: 'file', mime: 'application/pdf', filename: 'spec.pdf', url: 'data:application/pdf;base64,DDDD' } },
+    ] as never)
+    expect(pdf[0]!.status).toBe('unsupported')
+    expect(attachmentOnlyLabel(pdf)).toBe('[Attachment not supported: spec.pdf]')
+  })
+
+  it('names the file when a reference has one', () => {
+    const named = rewindAttachments([
+      { kind: 'image', value: { type: 'file', mime: 'image/png', filename: 'shot.png', url: '/tmp/shot.png' } },
+    ] as never)
+    expect(attachmentOnlyLabel(named)).toBe('[Attachment unavailable: shot.png]')
   })
 
   it('reports a shape it cannot read rather than dropping it', () => {
@@ -165,12 +184,67 @@ describe('OpenCode file parts, through the real decoder', () => {
     ])
   })
 
-  it('trusts the declared mime over the data URL\'s own label', () => {
-    // OpenCode routes the part on `mime`; the data URL's label is whatever
-    // the writer put there.
+  it('takes the media type from the data URL, with `mime` only filling in', () => {
+    // The data URL's own media type is what the bytes ARE; `mime` is the
+    // part's CLAIM about them. Inverting this made the parser's projector and
+    // this extractor disagree about the same bytes in the same rewind: the
+    // projected transcript carried the image as an image while the picker
+    // said the attachment was unavailable (#1073 review, finding 1).
     expect(rewindAttachments([
       { kind: 'document', value: { type: 'file', mime: 'application/pdf', url: 'data:image/png;base64,AAAA', filename: 'x' } },
-    ] as never)).toEqual([{ status: 'unsupported', mediaType: 'application/pdf', name: 'x' }])
+    ] as never)).toEqual([{ status: 'restored', mediaType: 'image/png', data: 'AAAA', name: 'x' }])
+  })
+
+  it('falls back to `mime` when the data URL declares no type', () => {
+    // `data:;base64,…` is legal RFC 2397, and an earlier, stricter regex here
+    // called it an external REFERENCE — "the provider recorded a path instead
+    // of the bytes" — with the bytes sitting in the string.
+    expect(rewindAttachments([
+      { kind: 'image', value: { type: 'file', mime: 'image/jpeg', url: 'data:;base64,/9j/4AAQ', filename: 'p.jpg' } },
+    ] as never)).toEqual([{ status: 'restored', mediaType: 'image/jpeg', data: '/9j/4AAQ', name: 'p.jpg' }])
+  })
+
+  it('reads the media type from the SOURCE for Claude, not from the block', () => {
+    // The one field the composer acts on. Every fixture being image/png meant
+    // nothing pinned where it comes from, so a jpeg silently arriving as png
+    // was invisible to the suite (#1073 review, finding 6).
+    expect(rewindAttachments([
+      { kind: 'image', value: { media_type: 'image/png', source: { type: 'base64', media_type: 'image/jpeg', data: '/9j/4AAQ' } } },
+    ] as never)).toEqual([{ status: 'restored', mediaType: 'image/jpeg', data: '/9j/4AAQ', name: null }])
+  })
+
+  it('defaults a Claude source with no media_type to png rather than dropping it', () => {
+    // The default is load-bearing, not cosmetic: anything that is not an
+    // `image/*` type is classified `unsupported`, so a neutral fallback like
+    // application/octet-stream would silently remove the image from
+    // `promptImages` and the composer would come back empty.
+    expect(rewindAttachments([
+      { kind: 'image', value: { source: { type: 'base64', data: 'AAAA' } } },
+    ] as never)).toEqual([{ status: 'restored', mediaType: 'image/png', data: 'AAAA', name: null }])
+  })
+
+  it('reads the media type from the data URL for Codex, which has no mime field', () => {
+    expect(rewindAttachments([
+      { kind: 'image', value: { type: 'input_image', image_url: 'data:image/jpeg;base64,/9j/4AAQ' } },
+    ] as never)).toEqual([{ status: 'restored', mediaType: 'image/jpeg', data: '/9j/4AAQ', name: null }])
+  })
+
+  it('refuses a data URL whose payload is empty', () => {
+    // `restored` with no bytes produces a broken preview and an attachment the
+    // composer cannot send.
+    expect(rewindAttachments([
+      { kind: 'image', value: { type: 'input_image', image_url: 'data:image/png;base64,' } },
+    ] as never)).toEqual([
+      { status: 'unavailable', reason: 'unreadable', mediaType: 'image/png', name: null },
+    ])
+  })
+
+  it('refuses a Claude source that is not base64, even when it carries data', () => {
+    expect(rewindAttachments([
+      { kind: 'image', value: { source: { type: 'file', data: 'AAAA', media_type: 'image/png' } } },
+    ] as never)).toEqual([
+      { status: 'unavailable', reason: 'unreadable', mediaType: 'image/png', name: null },
+    ])
   })
 })
 
