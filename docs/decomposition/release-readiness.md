@@ -667,6 +667,47 @@ claude 2.1.143 / codex 0.130.0 are stale versus the 2.1.278 / 0.155.1 in daily u
   - **#1018 (orchestration hides API errors):** an evidence catalog from real feed-debug recordings is being built (research agent, worktree `.worktrees/fix-orchestration-api-error`). Implementation follows the catalog.
   - **Waiting on #1013's merge:** T7 (#1006), T8 (#1007), T2 (command promotion) and T1 (#995), all of which touch the catalog, keybindings or bootstrap.
   - **Nightly** run 35430444567: build-app is green, package-macos is running.
+- 2026-09-20 20:05Z — **Eight merged. Five PRs open, all reviewed; #1093/#1095/#1096 each needed a second design pass.**
+
+  **MERGED since the last entry**: **#1093** (#881 opencode port), **#1095** (#1094
+  state-lock TOCTOU). Closed: #881, #1094.
+
+  **OPEN**: #1096 (#854, review fixed), #1099 (#1070, in review), #1100 (#1075, in
+  review), #1101 (#925, in review).
+
+  **The reviews keep paying for themselves.** Every one of the last four found a
+  defect that source-reading did not:
+
+  - **#1096 (#854)**: my pending-prompt design was right for Claude and Codex and a
+    STRICT REGRESSION for OpenCode and Grok — they have no readiness gate, so the
+    "wait" was one instant retry and the prompt was lost while the reply said "do
+    not send it again". The justifying corpus contains zero rows from either. Also
+    a measured ~40 MB/day/child heap growth (a `Promise.race` reaction on a
+    never-settling promise, retained per iteration), and a cancel that fired from
+    all seven delivery callers — so a human typing in the child's pane silently ate
+    the brief.
+  - **#1095 (#1094)**: a cross-process syscall trace showed my "residual" was a
+    6-in-80 real race, plus a macOS `ENOTSUP` bug that would crash startup on any
+    non-APFS home. Redesigned: a stale lock is REPLACED atomically, nothing is ever
+    deleted by a non-owner, and the remaining window is made detectable by
+    `revalidate()`.
+  - **#1093 (#881)**: my fix turned a recoverable state into a permanent lie — a
+    server that was merely late kept a "reload this agent" banner forever and
+    reported `transcript_unavailable` to every parent.
+
+  **New issues from reviews**: #1097 (mid-session OpenCode server death is silent),
+  #1098 (the residual lock window, with the case against a breaker lock).
+
+  **#925 (PR #1101)** came out of #918's planning findings and is the other half of
+  the contention that made #1089's measurements bad: the bridge's status cache set
+  `expiresAt` at REQUEST time, so any read slower than 250 ms was pruned before it
+  answered and the next poll queued a duplicate behind it — a cache built to
+  prevent a thundering herd producing one.
+
+  **Method note worth keeping**: a batched mutation harness reported two mutations
+  DEAD that were alive when re-run individually. Every table in these PRs is now
+  measured one mutation at a time against a tree verified clean between runs.
+
 - 2026-09-20 19:00Z — **Five merged (#1087, #1088, #1089, #1090, #1092). Four PRs open, all reviewed at least once. Three new bugs found BY the reviews and filed.**
 
   **MERGED**: **#1087** (#863), **#1088** (#867), **#1089** (#827), **#1090** (#879),
