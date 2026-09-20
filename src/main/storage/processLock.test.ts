@@ -181,15 +181,26 @@ describe('classifying the recorded owner (#993)', () => {
 })
 
 describe('an unconfirmable live owner gets a bounded window, and only a bounded one', () => {
-  it('refuses while the window is open', () => {
+  it('refuses while the window is open', async () => {
     // The guard itself. Nothing else pins this from BELOW: shrinking the
     // window to a second would otherwise ship green.
-    const lock = acquireStateProcessLock({
+    //
+    // The incumbent is written and AWAITED before the acquisition starts, like
+    // every other case in this file. It was not, once: the acquisition was
+    // kicked off first and the owner written into the same tick, so which one
+    // reached the lock path first was a race between two filesystem writes.
+    // It won on a warm local FS and lost on CI, where it failed two unrelated
+    // PRs with `expected { acquired: true } to match { acquired: false }` —
+    // the contradiction of the thing the test is named after. Injecting a
+    // 5 ms delay before the owner write reproduces it every time, which is all
+    // a slower disk is.
+    await writeOwner({ startedAt: '2026-09-18T10:00:00.000Z' })
+
+    const lock = await acquireStateProcessLock({
       stateDir, pid: 100, now: at('2026-09-18T10:04:00Z'), isLockOwnerActive: () => 'inconclusive',
     })
-    return writeOwner({ startedAt: '2026-09-18T10:00:00.000Z' })
-      .then(() => lock)
-      .then(result => expect(result).toMatchObject({ acquired: false, reason: 'active-owner' }))
+
+    expect(lock).toMatchObject({ acquired: false, reason: 'active-owner' })
   })
 
   it('takes over once it has expired', async () => {

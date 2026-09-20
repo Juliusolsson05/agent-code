@@ -7,6 +7,7 @@ import {
   insertRowBelowInGrid,
   removeRowFromGrid,
 } from '@renderer/workspace/dispatch/gridShape'
+import { workspaceWithoutSessions } from '@renderer/workspace/pool'
 import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
@@ -35,11 +36,12 @@ import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 
 const LIVE = 'live-session' as SessionId
 const HIBERNATED = 'hibernated-session' as SessionId
+const EXPANDED_PARENT = 'expanded-parent' as SessionId
 
 function harness(options: {
   wakeRejects?: boolean
   duringWake?: (ref: { current: WorkspaceState }) => void
-  rows?: { length: number }[]
+  rows?: NonNullable<WorkspaceState['stage']['rows']>
   lanes?: number
   /** Override the runtime map, e.g. to model a session whose backend died. */
   runtimes?: Record<SessionId, SessionRuntime>
@@ -61,6 +63,7 @@ function harness(options: {
     sessions: {
       [LIVE]: { cwd: '/work/a', kind: 'claude' as const, projectId: 'tab-a', joinedAt: 0 },
       [HIBERNATED]: { cwd: '/work/b', kind: 'claude' as const, projectId: 'tab-b', joinedAt: 0 },
+      [EXPANDED_PARENT]: { cwd: '/work/a', kind: 'claude' as const, projectId: 'tab-a', joinedAt: 0 },
     },
   } satisfies WorkspaceState
   const stateRef = { current: state as WorkspaceState }
@@ -131,6 +134,40 @@ describe('selecting an agent into a lane', () => {
     // `order` alone would pass on a write the reducer's bounds check rejected,
     // because the harness records the setState CALL. Assert the lane actually
     // took the session.
+    expect(written).toEqual([1])
+  })
+
+  it.each([
+    { name: 'a close that prunes ANOTHER row', removed: EXPANDED_PARENT, expanded: [EXPANDED_PARENT] },
+    { name: 'a close that prunes nothing (control)', removed: EXPANDED_PARENT, expanded: [] },
+  ])('still places the woken agent through $name', async ({ removed, expanded }) => {
+    // The regression this pins is not in this file's code at all, which is why
+    // it survived review the first time: `workspaceWithoutSessions` prunes row
+    // METADATA on every close, and a version of `scrubGridRowMetadata` that
+    // rebuilt every row — including the rows it changed nothing about — made
+    // the identity check below read "the grid moved" for a close that touched
+    // a different row entirely.
+    //
+    // The user-visible result is the worst kind of silent failure: the agent
+    // IS woken, a provider process starts, and then nothing is placed and no
+    // toast is shown. The window is wide — a cold wake can hold it open for
+    // 30s — and every close path reaches it (Close Agent, Close Old Agents,
+    // Close Idle Orchestration Agents, MCP agents.close).
+    //
+    // The control row is what makes this a test rather than a coincidence: a
+    // close that scrubs nothing has always been safe, because the helper
+    // returns the same stage object.
+    const { hook, written } = harness({
+      rows: [{ length: 1, ...(expanded.length > 0 ? { expandedParents: expanded } : {}) }, { length: 2 }],
+      duringWake: ref => {
+        ref.current = workspaceWithoutSessions(ref.current, [removed])
+      },
+    })
+
+    await act(async () => {
+      await hook.result.current.selectTiledLaneSession(1, HIBERNATED)
+    })
+
     expect(written).toEqual([1])
   })
 
