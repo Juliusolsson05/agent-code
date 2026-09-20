@@ -80,6 +80,21 @@ type PreparedTranscript = {
   ok: true
   source: TranscriptSource
   provider: AgentTranscriptProvider
+  /**
+   * Releases the OpenCode store lease this preparation took, if any.
+   *
+   * WHY a lease and not the shared borrow (#1082 review, finding 1):
+   * `transcriptRecords` walks an OpenCode session page by page and
+   * deliberately yields with `setImmediate` between pages, so the handle is
+   * held across awaits for the whole walk. The facade may retire that handle
+   * when it notices `opencode.db` was replaced, and a retired handle throws on
+   * its next read — mid-walk, as `transcript_read_failed`. Counting this
+   * holder keeps the old connection alive until the walk finishes.
+   *
+   * Every entry point must call it in a `finally`, or the replaced database's
+   * connection stays open for the life of the process.
+   */
+  release?: () => void
 }
 
 const DEFAULT_MAX_ITEMS = 100
@@ -103,28 +118,35 @@ export async function readAgentTranscriptFile(
 ): Promise<AgentTranscriptReadResult | AgentTranscriptErrorResult> {
   const prepared = await prepareTranscript(options.path, options.provider ?? 'auto', deps)
   if (!prepared.ok) return prepared
-  const streamed = await streamReadTranscript(prepared, options)
-  if (!streamed.ok) return streamed
-  const bounded = options.tail && options.tail > 0
-    ? boundItems(streamed.items, {
-    tail: options.tail,
-    maxItems: options.maxItems ?? DEFAULT_MAX_ITEMS,
-    maxChars: options.maxChars ?? DEFAULT_MAX_CHARS,
-    maxCharsPerItem: options.maxCharsPerItem ?? DEFAULT_MAX_CHARS_PER_ITEM,
+  // `finally`, not a call on each path: the OpenCode lease keeps a connection
+  // to a replaced database open until it is dropped, and a `return` added
+  // later must not be able to skip it.
+  try {
+    const streamed = await streamReadTranscript(prepared, options)
+    if (!streamed.ok) return streamed
+    const bounded = options.tail && options.tail > 0
+      ? boundItems(streamed.items, {
+        tail: options.tail,
+        maxItems: options.maxItems ?? DEFAULT_MAX_ITEMS,
+        maxChars: options.maxChars ?? DEFAULT_MAX_CHARS,
+        maxCharsPerItem: options.maxCharsPerItem ?? DEFAULT_MAX_CHARS_PER_ITEM,
       })
-    : { items: streamed.items, truncated: streamed.truncated }
+      : { items: streamed.items, truncated: streamed.truncated }
 
-  return {
-    ok: true,
-    path: prepared.source.path,
-    provider: prepared.provider,
-    projection: options.projection,
-    items: bounded.items,
-    truncated: streamed.truncated || bounded.truncated,
-    stats: {
-      ...streamed.stats,
-      returnedItems: bounded.items.length,
-    },
+    return {
+      ok: true,
+      path: prepared.source.path,
+      provider: prepared.provider,
+      projection: options.projection,
+      items: bounded.items,
+      truncated: streamed.truncated || bounded.truncated,
+      stats: {
+        ...streamed.stats,
+        returnedItems: bounded.items.length,
+      },
+    }
+  } finally {
+    prepared.release?.()
   }
 }
 
@@ -134,15 +156,19 @@ export async function inspectAgentTranscriptFile(
 ): Promise<AgentTranscriptInspectResult | AgentTranscriptErrorResult> {
   const prepared = await prepareTranscript(options.path, options.provider ?? 'auto', deps)
   if (!prepared.ok) return prepared
-  const parsed = await inspectTranscript(prepared)
-  if (!parsed.ok) return parsed
-  return {
-    ok: true,
-    path: prepared.source.path,
-    provider: prepared.provider,
-    firstTimestamp: parsed.firstTimestamp,
-    lastTimestamp: parsed.lastTimestamp,
-    stats: parsed.stats,
+  try {
+    const parsed = await inspectTranscript(prepared)
+    if (!parsed.ok) return parsed
+    return {
+      ok: true,
+      path: prepared.source.path,
+      provider: prepared.provider,
+      firstTimestamp: parsed.firstTimestamp,
+      lastTimestamp: parsed.lastTimestamp,
+      stats: parsed.stats,
+    }
+  } finally {
+    prepared.release?.()
   }
 }
 
@@ -152,20 +178,24 @@ export async function searchAgentTranscriptFile(
 ): Promise<AgentTranscriptSearchResult | AgentTranscriptErrorResult> {
   const prepared = await prepareTranscript(options.path, options.provider ?? 'auto', deps)
   if (!prepared.ok) return prepared
-  const searched = await streamSearchTranscript(prepared, options)
-  if (!searched.ok) return searched
+  try {
+    const searched = await streamSearchTranscript(prepared, options)
+    if (!searched.ok) return searched
 
-  return {
-    ok: true,
-    path: prepared.source.path,
-    provider: prepared.provider,
-    query: options.query,
-    matches: searched.matches,
-    truncated: searched.truncated,
-    stats: {
-      ...searched.stats,
-      returnedItems: searched.matches.length,
-    },
+    return {
+      ok: true,
+      path: prepared.source.path,
+      provider: prepared.provider,
+      query: options.query,
+      matches: searched.matches,
+      truncated: searched.truncated,
+      stats: {
+        ...searched.stats,
+        returnedItems: searched.matches.length,
+      },
+    }
+  } finally {
+    prepared.release?.()
   }
 }
 
@@ -187,9 +217,9 @@ async function prepareTranscript(
 
   const opencodeSessionID = parseOpencodeTranscriptFile(path)
   if (opencodeSessionID) {
-    let store: OpencodeStore
+    let lease: { store: OpencodeStore; release(): void }
     try {
-      store = await deps.opencode.store()
+      lease = await deps.opencode.lease()
     } catch (err) {
       return {
         ok: false,
@@ -197,10 +227,13 @@ async function prepareTranscript(
         message: `OpenCode's database is not readable: ${err instanceof Error ? err.message : String(err)}`,
       }
     }
+    // Every early return from here on releases the lease: only the successful
+    // one hands it to the caller.
     let exists: boolean
     try {
-      exists = store.readSessionInfo(opencodeSessionID) !== null
+      exists = lease.store.readSessionInfo(opencodeSessionID) !== null
     } catch (err) {
+      lease.release()
       return {
         ok: false,
         error: 'transcript_read_failed',
@@ -208,6 +241,7 @@ async function prepareTranscript(
       }
     }
     if (!exists) {
+      lease.release()
       return {
         ok: false,
         error: 'file_not_found',
@@ -215,6 +249,7 @@ async function prepareTranscript(
       }
     }
     if (requestedProvider !== 'auto' && requestedProvider !== 'opencode') {
+      lease.release()
       return {
         ok: false,
         error: 'unsupported_provider',
@@ -223,8 +258,9 @@ async function prepareTranscript(
     }
     return {
       ok: true,
-      source: { kind: 'opencode', path, sessionID: opencodeSessionID, store },
+      source: { kind: 'opencode', path, sessionID: opencodeSessionID, store: lease.store },
       provider: 'opencode',
+      release: () => lease.release(),
     }
   }
 
