@@ -1,3 +1,4 @@
+import { sessionIsWorking } from '@renderer/session-runtime/working'
 import { useMonitorCommit } from '@renderer/performance/useMonitorCommit'
 import { useUsageLimitActions } from '@renderer/features/usage-limit/useUsageLimitActions'
 import { conditionStateByKind } from '@shared/types/providerConditions'
@@ -1042,14 +1043,15 @@ export function TileLeaf({
           deliveryUncertain={runtime.promptDelivery.kind === 'uncertain'}
           providerSwitching={runtime.providerSwitch !== null}
           slashMode={slashMode}
-          // Same predicate the Dispatch list uses for its running count. NOT
+          // `sessionIsWorking`, the same rule the Dispatch running count and the
+          // worktree panel use — it lives in session-runtime/working.ts now,
+          // and this comment used to say "same predicate the Dispatch list
+          // uses" while keeping its own copy of it. NOT
           // `streamPhase !== 'idle'` alone: between clicking Send and the first
           // token, streamPhase is still idle while the session is already
           // running, so a stream-only test hid Stop during precisely the
           // interval where "I just sent the wrong thing" is most likely.
-          working={
-            runtime.sessionStatus === 'running' || runtime.streamPhase !== 'idle'
-          }
+          working={sessionIsWorking(runtime)}
           dictationStatus={dictation.status}
           onSend={() => void submitCurrentDraft('button')}
           // Same escape byte the keyboard interrupt sends, and the same one the

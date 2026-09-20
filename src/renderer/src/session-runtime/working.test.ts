@@ -13,10 +13,14 @@ import { sessionIsWorking } from '@renderer/session-runtime/working'
 // `undefined !== 'idle'`. The row beside the count rendered `starting` from
 // the same state, so one session was described two ways at once.
 //
-// Latent today — spawn and rehydrate always create a runtime, and close
-// removes it with the session — which is why it is worth a test rather than a
-// bug report: the next path that lists a session before its runtime exists
-// would have reintroduced it silently.
+// Latent today, but by React's batching and not by construction (#1085
+// review, finding 8): spawn, rehydrate and `killSession` each write the
+// session and the runtime as two CONSECUTIVE synchronous updates, which React
+// batches into one render — and `killSession` deletes the runtime FIRST and
+// the session second, so the window where a listed session has no runtime is
+// real, just never rendered. That is why this is worth a test rather than a
+// bug report: the next path that lists a session across an await would have
+// reintroduced it silently.
 
 const working = (over: Partial<SessionRuntime>): SessionRuntime => ({ ...emptyRuntime(), ...over })
 

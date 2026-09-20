@@ -1,4 +1,5 @@
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
+import { sessionIsWorking } from '@renderer/session-runtime/working'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
 import { isSessionExited } from '@renderer/workspace/providerSessionIdentity'
 import { conditionRequiresAttention } from '@renderer/workspace/conditions/selectors'
@@ -7,7 +8,8 @@ type FollowRuntime = Pick<SessionRuntime, 'tailMode' | 'sessionStatus' | 'stream
 type FollowModes = { tailAllMode: boolean; tailWorkingMode: boolean }
 
 export function isWorkingAgent(kind: string | undefined, runtime: FollowRuntime): boolean {
-  // Match the composer Stop/running-count signals: a submitted prompt is busy
+  // `sessionIsWorking` is the composer Stop / running-count rule, shared
+  // rather than restated: a submitted prompt is busy
   // before its first semantic token, and a pending tool can keep the stream
   // busy between provider requests. Process existence alone is not work.
   // Exit/failure wins over stale stream state, and a shell never qualifies just
@@ -22,7 +24,7 @@ export function isWorkingAgent(kind: string | undefined, runtime: FollowRuntime)
     && runtime.processStatus !== 'failed'
     && runtime.sessionStatus !== 'exited'
     && !conditionRequiresAttention(runtime.conditions)
-    && (runtime.sessionStatus === 'running' || runtime.streamPhase !== 'idle')
+    && sessionIsWorking(runtime)
 }
 
 export function agentFollowEnabled(kind: string | undefined, runtime: FollowRuntime, modes: FollowModes): boolean {

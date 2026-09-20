@@ -28,8 +28,8 @@ const { WorkspaceFileStore } = await import('@main/storage/workspaceFileStore.js
 // number the issue's own reproduction used.
 const DEAD_PID = 999_999
 
-const scratch = (pid: number, at: number, nonce: string) =>
-  `${h.dir}/workspace.json.${pid}.${at}.${nonce}.tmp`
+const scratch = (pid: number, at: number, nonce: string, file = 'workspace.json') =>
+  `${h.dir}/${file}.${pid}.${at}.${nonce}.tmp`
 
 beforeEach(async () => {
   await mkdir(h.dir, { recursive: true })
@@ -64,6 +64,46 @@ describe('scratch files left by an interrupted save (#826)', () => {
     ].sort())
   })
 
+  it('sweeps the OTHER three atomic-save writers that share this directory', async () => {
+    // #1085 review, finding 5. `setup.json`, `worktree-activity-index.json`
+    // and `ai-workspaces.json` are written with the identical name shape into
+    // the identical directory, and all three have the same defect — two clean
+    // up only in a `catch`, and AiWorkspaceRegistry not at all. The sweep
+    // already pays for this `readdir`; walking past them was arbitrary.
+    const siblings = ['setup.json', 'worktree-activity-index.json', 'ai-workspaces.json']
+    for (const file of siblings) {
+      await writeFile(scratch(DEAD_PID, 1_747_000_000_000, 'aaa', file), '', 'utf8')
+      await writeFile(`${h.dir}/${file}`, '{}', 'utf8')
+    }
+
+    await WorkspaceFileStore.open()
+
+    expect((await readdir(h.dir)).sort()).toEqual(siblings.slice().sort())
+  })
+
+  it.each([
+    // The one error code that proves absence. Everything else means "we could
+    // not ask", and deleting a file we cannot prove is abandoned is the only
+    // harmful direction this sweep has.
+    { code: 'EPERM', what: 'another user owns the process' },
+    // libuv reports an access-denied `OpenProcess` as EACCES on Windows, so an
+    // EPERM-only reading would sweep a live foreign writer's file there.
+    { code: 'EACCES', what: 'the platform denies access' },
+    { code: undefined, what: 'the error is not an errno at all' },
+  ])('keeps a scratch file when $what', async ({ code }) => {
+    const foreign = scratch(4242, 1_747_000_000_000, 'ddd')
+    await writeFile(foreign, '', 'utf8')
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw code === undefined ? new TypeError('pid out of range') : Object.assign(new Error(`kill ${code}`), { code })
+    })
+    try {
+      await WorkspaceFileStore.open()
+    } finally {
+      kill.mockRestore()
+    }
+    expect(await readdir(h.dir)).toContain(foreign.slice(h.dir.length + 1))
+  })
+
   it('keeps a file whose name is not the scratch shape at all', async () => {
     // Only `<file>.<pid>.<ms>.<nonce>.tmp` is ours. Anything else in the
     // config directory belongs to someone, and a sweep is not the place to
@@ -73,6 +113,11 @@ describe('scratch files left by an interrupted save (#826)', () => {
       'workspace.json.notapid.1747000000000.aaa.tmp',
       'workspace.json.999999.aaa.tmp',
       'workspace.json.999999.1747000000000.aaa.tmp.bak',
+      // An empty nonce and a non-numeric millisecond field: the pattern is
+      // fully specified, and each part of it is a real constraint.
+      'workspace.json.999999.1747000000000..tmp',
+      'workspace.json.999999.not-a-time.aaa.tmp',
+      'workspace.json.999999.1747000000000.AAA.tmp',
       'extensions.json',
       // Exactly as long as `workspace.json`, so a sweep that skipped the
       // prefix check and sliced by LENGTH alone would read this as one of
@@ -84,24 +129,6 @@ describe('scratch files left by an interrupted save (#826)', () => {
     await WorkspaceFileStore.open()
 
     expect((await readdir(h.dir)).sort()).toEqual(strangers.slice().sort())
-  })
-
-  it('keeps a scratch file whose writer exists but is not ours', async () => {
-    // `process.kill(pid, 0)` answers EPERM when the process EXISTS and belongs
-    // to someone else — a second user account running Agent Code against a
-    // shared home, say. That is the one error code that must not be read as
-    // "gone", and no filesystem fixture can produce it.
-    const foreign = scratch(4242, 1_747_000_000_000, 'ddd')
-    await writeFile(foreign, '', 'utf8')
-    const kill = vi.spyOn(process, 'kill').mockImplementation(() => {
-      throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' })
-    })
-    try {
-      await WorkspaceFileStore.open()
-    } finally {
-      kill.mockRestore()
-    }
-    expect(await readdir(h.dir)).toContain(foreign.slice(h.dir.length + 1))
   })
 
   it('opens normally when the directory cannot be scanned', async () => {
