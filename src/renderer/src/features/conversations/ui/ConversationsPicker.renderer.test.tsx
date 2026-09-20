@@ -70,7 +70,11 @@ describe('ConversationsPicker', () => {
     await screen.findByText('break down this project')
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'ArrowDown' })
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Enter' })
-    await waitFor(() => expect(ws.replaceSession).toHaveBeenCalledWith('/fixture/repo/.worktrees/extension-platform', { resumeSessionId: '01a08ddd-6327-7482-bd79-d1ade559677c', kind: 'codex' }))
+    // `newConversation` is part of this call's meaning, not a detail (#1090):
+    // the picker swaps a STRANGER's conversation into the pane, so the
+    // successor must not inherit the pane's orchestration parentage. Every
+    // other caller of replaceSession continues the same agent and omits it.
+    await waitFor(() => expect(ws.replaceSession).toHaveBeenCalledWith('/fixture/repo/.worktrees/extension-platform', { resumeSessionId: '01a08ddd-6327-7482-bd79-d1ade559677c', kind: 'codex', newConversation: true }))
     expect(onClose).toHaveBeenCalled()
   })
 

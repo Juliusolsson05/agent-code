@@ -54,6 +54,15 @@ const CHILD: Partial<SessionMeta> = {
 // here. A runtime assertion could not do this: the keys of a TYPE do not
 // exist at runtime, so a test could only re-list them, which is the same
 // omission one file over.
+//
+// WHAT IT CANNOT CATCH, so nobody mistakes it for more than it is: the guard
+// is NAME-shaped. A relationship pointer called something else —
+// `supervisorSessionId`, say — is silently unprotected, and a reviewer
+// verified that by adding one. A type-shaped guard is not available: `SessionId`
+// is a bare `string` alias, so `SessionMeta[K] extends SessionId` matches every
+// string field on the type and protects nothing. Prefixes are the only
+// mechanism the type system offers here; the naming convention is therefore
+// part of the contract, not a style preference.
 // ---------------------------------------------------------------------------
 type RelationshipField = Extract<
   keyof SessionMeta,
@@ -212,6 +221,52 @@ describe('a successor keeps the relationships that make it a child (#879)', () =
     // The run and role are not ids and have no target to outlive, so they
     // stay: an orphaned worker is still a worker of run r1.
     expect(successor.orchestrationRunId).toBe('r1')
+  })
+
+  it('does NOT carry them when an unrelated conversation is swapped into the pane', async () => {
+    // `replaceSession` is not only reload / switch / resume / rewind: the
+    // Conversations picker uses it to pull some past conversation into the
+    // pane the user is looking at. Inheriting parentage there files a stranger
+    // as somebody's orchestration child — `wait_agents` polls its activity,
+    // `read_agent` reports its last message as the child's answer to a task it
+    // never saw, `close_run` kills the user's resumed conversation, and the
+    // bootstrap flag claims a brief it never received.
+    //
+    // Only the caller can tell the two apart, which is why this is an option
+    // and not a test of some inference inside the callee.
+    const h = setup()
+
+    await act(async () => {
+      await h.hook.result.current.replaceSession('/project', {
+        kind: 'codex', targetSessionId: 'child' as never, resumeSessionId: 'a-strangers-conversation', newConversation: true,
+      })
+      await vi.runAllTimersAsync()
+    })
+
+    const successor = h.writer.getState().sessions.successor!
+    expect(successor).not.toHaveProperty('orchestrationParentId')
+    expect(successor).not.toHaveProperty('orchestrationRunId')
+    expect(successor).not.toHaveProperty('orchestrationBootstrapPromptDelivered')
+    expect(successor).not.toHaveProperty('linkedParentId')
+    // And the parent stops seeing it, which is the point: it is not that
+    // parent's worker any more.
+    const listed = listOrchestrationAgents({
+      state: h.writer.getState(), runtimes: {}, parentSessionId: 'parent' as never, runId: 'r1',
+    } as never)
+    expect(listed).toEqual([])
+  })
+
+  it('keeps the view mode the user pinned to this pane', async () => {
+    // Not a relationship, and found in the same literal during review (#1090):
+    // `agentViewModeOverride` is the user saying "show THIS pane as a terminal
+    // (or as an agent) whatever the global default is". Undo-close carries it;
+    // replacement dropped it, so every reload silently reverted the choice and
+    // the pane the user had pinned came back as something else.
+    const h = setup({ ...CHILD, agentViewModeOverride: 'terminal' as never })
+
+    await replaceChild(h.hook)
+
+    expect(h.writer.getState().sessions.successor?.agentViewModeOverride).toBe('terminal')
   })
 
   it('carries nothing when the predecessor had no relationships', async () => {

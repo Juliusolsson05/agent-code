@@ -172,8 +172,12 @@ export const sessionCommands: CommandDef[] = [
       // no composer; the TUI owns its own input box. The rewound prompt would
       // land in a runtime field nothing shows. Supporting it means delivering
       // that draft into the TUI's input, and respawning the TUI on the
-      // rewritten session through replaceSession, which still drops
-      // orchestration metadata (#879). A follow-up feature, not a gate to lift.
+      // rewritten session through replaceSession. That second half USED to be
+      // a blocker of its own — replaceSession dropped a child's orchestration
+      // metadata, so a rewound terminal child fell out of its run — and #879
+      // closed it: the successor now carries its relationships. What remains
+      // is the composer half above. A follow-up feature (#896), not a gate to
+      // lift.
       return (
         getProviderFeatures(kind).transcriptRewind &&
         meta?.providerRuntime !== 'terminal' &&

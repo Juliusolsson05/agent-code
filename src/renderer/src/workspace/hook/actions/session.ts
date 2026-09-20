@@ -109,6 +109,11 @@ export type SessionActions = {
       preserveTldr?: boolean
       restoreTldrIdentity?: string
       targetSessionId?: SessionId
+      /** The Conversations picker's in-place swap: an UNRELATED conversation
+       *  moves into this pane, so the successor must not inherit its
+       *  orchestration parentage. See the implementation for why only the
+       *  caller can tell. */
+      newConversation?: boolean
     },
   ) => Promise<SessionId | undefined>
   reloadAgentSessions: (dangerousMode?: boolean) => Promise<void>
@@ -1179,6 +1184,30 @@ export function useSessionActions(
         preserveTldr?: boolean
         restoreTldrIdentity?: string
         targetSessionId?: SessionId
+        /**
+         * True when what runs in the pane becomes an UNRELATED conversation —
+         * the Conversations picker's in-place swap, where the user pulls some
+         * past conversation into the pane they are looking at.
+         *
+         * WHY the callee cannot work this out for itself (#1090 review): every
+         * other caller continues the SAME agent (reload, provider switch,
+         * resume, rewind, undo-rewind, an MCP-domain reload), and from inside
+         * `replaceSession` they are indistinguishable from the picker — all of
+         * them pass a `resumeSessionId` that differs from the pane's current
+         * `providerSessionId`, and a provider switch changes `kind` too, so
+         * neither "same id" nor "same provider" separates them. Only the
+         * caller knows which of the two things it is doing.
+         *
+         * What it turns off is the relationship carry below. Without it, the
+         * picker made an unrelated conversation inherit the pane's
+         * orchestration parentage: `wait_agents` would poll a stranger's
+         * activity, `read_agent` would report its last message as the child's
+         * answer to a task it never saw, `close_run` would kill the user's
+         * resumed conversation, and the bootstrap-delivered flag would claim a
+         * brief that conversation never received. Position, project membership
+         * and the pane's MCP choices still carry — it is still that pane.
+         */
+        newConversation?: boolean
       },
     ): Promise<SessionId | undefined> => {
       const snapshot = refs.stateRef.current
@@ -1321,7 +1350,9 @@ export function useSessionActions(
           // and `orchestration_wait_agents` computes `done` over the
           // parent-visible list — so the parent was told every child had
           // finished while this one was still working.
-          const carriedRelationshipFields = carriedRelationships(prev.sessions[oldId])
+          const carriedRelationshipFields = opts?.newConversation
+            ? {}
+            : carriedRelationships(prev.sessions[oldId])
           delete sessions[oldId]
           // Persist the replacement provider metadata immediately
           // instead of waiting for the first transcript line to
@@ -1367,6 +1398,15 @@ export function useSessionActions(
             // was written by `spawn` and is un-filed.
             ...carriedMembership,
             ...carriedRelationshipFields,
+            // The user's per-pane view choice, which this literal dropped
+            // (found in the #1090 review). It is not a relationship, so the
+            // keep-list above deliberately does not cover it — but it is the
+            // same class of loss: `agentViewModeOverride` is the user saying
+            // "show THIS pane as a terminal whatever the global default is",
+            // `undoClose` restores it, and every reload silently reverted it.
+            ...(prev.sessions[oldId]?.agentViewModeOverride
+              ? { agentViewModeOverride: prev.sessions[oldId]!.agentViewModeOverride }
+              : {}),
           }
           return {
             ...prev,

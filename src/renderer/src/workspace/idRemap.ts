@@ -132,6 +132,13 @@ export const SUCCESSOR_RELATIONSHIP_FIELDS = [
   // parent's own old commentary becomes the child's "latest answer" in
   // read_agent and list_agents.
   //
+  // That harm is real but not CURRENT: nothing in `src/` writes the trio any
+  // more, because agent creation disables inherited context (the DORMANT note
+  // at `orchestrationVisibleEntries` in orchestrationMcp.ts). It applies to
+  // sessions persisted before that change, and to whatever the inheritance
+  // redesign brings back — which is why the field is carried rather than
+  // dropped as dead.
+  //
   // Known residual, accepted: after a PROVIDER SWITCH the new backend mints a
   // different native id, so `inheritedProviderSessionId` then names a session
   // on the provider we left. That is tolerable because these ids are
