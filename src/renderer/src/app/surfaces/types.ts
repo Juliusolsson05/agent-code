@@ -24,4 +24,30 @@ export type SurfaceEntry = {
    * props by design — props would put App back in the wiring business.
    */
   Component: ComponentType
+  /**
+   * Paint band. Entries are stably sorted by `layer` (default 0) before render,
+   * so within a band the array order still decides sibling/paint order exactly as
+   * before — every first-party entry omits `layer` and keeps its documented
+   * position. The field exists so a NON-first-party surface (an extension one,
+   * WS7) can be given a distinct band it cannot escape: it can never tie-break
+   * into the first-party z-50 stack and silently reorder it, which is the exact
+   * class of bug PR #505 hit. First-party entries should not set it.
+   */
+  layer?: number
+}
+
+/**
+ * The band all extension-contributed surfaces sit in — above the first-party stack,
+ * so an extension surface always paints over app chrome (it is user-initiated and
+ * awaiting input) but cannot reorder first-party surfaces among themselves.
+ */
+export const EXTENSION_SURFACE_LAYER = 100
+
+/** Stable sort by layer. First-party entries (layer undefined → 0) keep their exact
+ *  authored order; only cross-band ordering is imposed. */
+export function sortSurfacesByLayer(entries: readonly SurfaceEntry[]): SurfaceEntry[] {
+  return entries
+    .map((entry, index) => ({ entry, index }))
+    .sort((a, b) => (a.entry.layer ?? 0) - (b.entry.layer ?? 0) || a.index - b.index)
+    .map(({ entry }) => entry)
 }

@@ -1,7 +1,12 @@
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
 
+// `goal_loop` is harness-driven (main observes turn boundaries and re-prompts
+// through its own send interface), so unlike `workflows` it duplicates no
+// provider-native control plane and is safe on every provider (#1001).
 export type BuiltInMcpDomain =
   | 'tldr'
+  | 'goal'
+  | 'goal_loop'
   | 'ping'
   | 'orchestration'
   | 'ai_workspace'
@@ -12,6 +17,8 @@ export type BuiltInMcpDomain =
 
 export const BUILT_IN_MCP_DOMAINS = [
   'tldr',
+  'goal',
+  'goal_loop',
   'ping',
   'orchestration',
   'ai_workspace',
@@ -41,6 +48,8 @@ export const BUILT_IN_MCP_DOMAINS = [
  */
 export const CONFIGURABLE_BUILT_IN_MCP_DOMAINS = [
   'tldr',
+  'goal',
+  'goal_loop',
   'orchestration',
   'ai_workspace',
   'agent_transcripts',
@@ -97,6 +106,8 @@ export const CONFIRMATION_GATED_BUILT_IN_MCP_DOMAINS = [
 const BUILT_IN_MCP_DOMAINS_BY_PROVIDER = {
   claude: [
     'tldr',
+    'goal',
+    'goal_loop',
     'ping',
     'orchestration',
     'ai_workspace',
@@ -106,6 +117,10 @@ const BUILT_IN_MCP_DOMAINS_BY_PROVIDER = {
   ],
   codex: [...BUILT_IN_MCP_DOMAINS],
   opencode: [...BUILT_IN_MCP_DOMAINS],
+  // Seeded over the owned control connection at session creation and re-seeded
+  // on the terminal's load answer (the recorded tool.mcp path); the app offers
+  // Grok the same built-in domain set as the other terminal providers.
+  grok: [...BUILT_IN_MCP_DOMAINS],
 } as const satisfies Record<AgentProviderKind, readonly BuiltInMcpDomain[]>
 
 const BUILT_IN_MCP_DOMAIN_SET = new Set<string>(BUILT_IN_MCP_DOMAINS)
@@ -123,6 +138,15 @@ export type BuiltInMcpServerConfig = {
    */
   bearerToken?: string
   headers: Record<string, string>
+  /**
+   * Present only on a TLDR-enabled registration's own launch config. Provider launchers inject
+   * turn hooks that post to `${baseUrl}/<event>` with this same bearer, so a hook can only ever
+   * read or change its own session's reporting state and is revoked with it.
+   *
+   * WHY it is absent from `sessionServers()`: workflow subagents reuse the parent's token, and
+   * enforcing the parent's TLDR on each subagent's turns would block work that owns no summary.
+   */
+  tldrHooks?: { baseUrl: string }
 }
 
 export type McpSessionScope = {

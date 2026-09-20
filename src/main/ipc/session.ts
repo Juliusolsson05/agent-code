@@ -2,6 +2,7 @@ import { ipcMain } from 'electron'
 import { createHash } from 'node:crypto'
 
 import type { SessionManager } from '@main/sessionManager.js'
+import { mainOperations } from '@main/performance/operations.js'
 import type { PasteDebugJournalRegistry } from '@main/pasteDebugJournal.js'
 import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import { sha8FromDigestBytes } from '@shared/code/sha8.js'
@@ -214,11 +215,13 @@ export function registerSessionIpc(
       const attributedPasteId = typeof pasteId === 'string' && pasteId.length > 0
         ? pasteId
         : null
+      const finishDelivery = attributedPasteId ? mainOperations.begin('prompt.delivery', sessionId, attributedPasteId) : null
       const ok = manager.write(
         sessionId,
         data,
         attributedPasteId ? 'renderer-paste' : 'renderer',
       )
+      finishDelivery?.(ok ? 'success' : 'error')
       if (attributedPasteId) {
         // WHY the combined phase exists: Codex's zero-delay bracketed-paste
         // path writes `body + paste-end + Enter` in ONE PTY call, while Claude
@@ -262,6 +265,13 @@ export function registerSessionIpc(
     },
   )
 
+  // Jump to Latest for a provider whose TUI owns its transcript scrollback
+  // (#843). A fixed request, never a command string from the renderer: the
+  // route beneath it can run any TUI command, including destructive ones.
+  ipcMain.handle('session:jumpToLatest', async (_evt, sessionId: string) => {
+    return await manager.jumpToLatest(sessionId)
+  })
+
   ipcMain.handle(
     'session:resolveCondition',
     async (_evt, sessionId: string, action: ConditionCustomAction) => {
@@ -295,7 +305,7 @@ export function registerSessionIpc(
             })
           }
         : undefined
-      return await manager.deliverPromptToAgent(sessionId, prompt, imagePaths, record)
+      return await manager.deliverPromptToAgent(sessionId, prompt, imagePaths, record, deliveryId)
     },
   )
 

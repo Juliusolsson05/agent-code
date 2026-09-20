@@ -51,7 +51,7 @@ type Props = {
 }
 
 export function GridDispatchShapeOverlay({ workspace, onClose }: Props) {
-  const tiled = workspace.state.dispatchMode?.tiled
+  const stage = workspace.state.stage
   // Rows carry their SOURCE index, not just a length. A bare number[] cannot
   // express which row was removed: deleting the middle of three shifts every
   // later row up a slot, and a positional apply then re-points row 1's binding
@@ -62,14 +62,16 @@ export function GridDispatchShapeOverlay({ workspace, onClose }: Props) {
   // true rather than a second trip through per-row header controls.
   type DraftRow = GridShapeRow & Pick<DispatchGridRow, 'projectTabIds' | 'capChildren'>
   const [rows, setRows] = useState<DraftRow[]>(() =>
-    tiled
-      ? normalizeGridShape(tiled).rows.map((row, index) => ({
-        length: row.length,
-        sourceRow: index,
-        projectTabIds: row.projectTabIds,
-        capChildren: row.capChildren,
-      }))
-      : [{ length: 2, sourceRow: null }],
+    // The draft always starts from the CURRENT shape. It used to fall back to
+    // a fresh `[2]` draft when no lane grid existed, because this dialog was
+    // also how Grid Dispatch was ENTERED; the stage always exists now (#992),
+    // so the editor only ever reshapes.
+    normalizeGridShape(stage).rows.map((row, index) => ({
+      length: row.length,
+      sourceRow: index,
+      projectTabIds: row.projectTabIds,
+      capChildren: row.capChildren,
+    })),
   )
   // Opens in the mode that can REPRESENT the current grid. Derived rather than
   // persisted: no new settings key, and the editor can never open in a mode
@@ -136,28 +138,20 @@ export function GridDispatchShapeOverlay({ workspace, onClose }: Props) {
     // Only close when the reshape was actually accepted. The controls constrain
     // input to what setGridShape allows, so a refusal should be unreachable —
     // but closing on a refusal would silently discard the user's edit.
-    if (tiled) {
-      if (!workspace.setDispatchGridShape(rows)) return
-      // Config is applied AFTER the shape, by output position: setGridShape may
-      // have added or removed rows, so a row's config can only be addressed
-      // once the new shape exists.
-      rows.forEach((row, index) => {
-        workspace.setDispatchRowProjects(index, row.projectTabIds ?? [])
-        workspace.setDispatchRowCapChildren(index, row.capChildren !== false)
-      })
-    } else {
-      // Await the entry before applying config: the rows do not exist until it
-      // resolves, so a synchronous loop would write onto a grid that is not
-      // there yet and the user's Advanced choices would vanish with no error.
-      void workspace.enterTiledDispatch(rows.map(row => row.length)).then(() => {
-        rows.forEach((row, index) => {
-          workspace.setDispatchRowProjects(index, row.projectTabIds ?? [])
-          workspace.setDispatchRowCapChildren(index, row.capChildren !== false)
-        })
-      })
-    }
+    if (!workspace.setDispatchGridShape(rows)) return
+    // Config is applied AFTER the shape, by output position: setGridShape may
+    // have added or removed rows, so a row's config can only be addressed
+    // once the new shape exists.
+    //
+    // (An `else` branch entered Grid Dispatch asynchronously and applied the
+    // config in its `.then` until #992. Reshape is synchronous, so the whole
+    // commit is now one tick and cannot be observed half-applied.)
+    rows.forEach((row, index) => {
+      workspace.setDispatchRowProjects(index, row.projectTabIds ?? [])
+      workspace.setDispatchRowCapChildren(index, row.capChildren !== false)
+    })
     onClose()
-  }, [tiled, workspace, rows, onClose])
+  }, [workspace, rows, onClose])
 
   // Enter commits ONLY from a number field. Scoped to the inputs rather than
   // the whole body because a body-level handler swallows Enter on the row-remove
@@ -333,7 +327,7 @@ export function GridDispatchShapeOverlay({ workspace, onClose }: Props) {
             Cancel
           </Button>
           <Button type="button" onClick={commit}>
-            {tiled ? 'Apply' : 'Open'}
+            Apply
           </Button>
         </DialogFooter>
       </DialogContent>

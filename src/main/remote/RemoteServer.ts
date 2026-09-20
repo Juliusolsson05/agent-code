@@ -14,15 +14,18 @@ import type { WebSocket } from 'ws'
 import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import type { ResolveConditionResult } from '@shared/sessionFeed/types.js'
 import type { ConditionCustomAction } from '@shared/conditions-core/contract.js'
-import type { SessionKind } from '@shared/types/providerKind.js'
+import type { SessionKind, AgentProviderRuntime } from '@shared/types/providerKind.js'
 import { isAgentProviderKind } from '@shared/types/providerKind.js'
 import type { PromptDeliveryResult } from '@shared/types/providerConfig.js'
 import type { SessionBackendSnapshot } from '@shared/types/session.js'
+import type { RemoteSessionIdentity } from './workspaceProjection.js'
+import type { TldrRecord, TldrUpdate } from '@shared/types/tldr.js'
+import type { UsageSnapshot } from '@shared/types/usage.js'
 
 import { DevicePairing } from '@main/remote/auth/DevicePairing.js'
 import type { DeviceRegistry } from '@main/remote/auth/deviceRegistry.js'
 import { parseInboundFrame } from '@main/remote/protocol/scope.js'
-import type { InboundFrame, OutboundFrame } from '@main/remote/protocol/messages.js'
+import type { InboundFrame, OutboundFrame, OutboundSessionSummary } from '@main/remote/protocol/messages.js'
 import type { FeedChannel, SessionFeedSource } from '@main/remote/SessionFeedSource.js'
 import {
   loadInitialHistoryChunk,
@@ -90,6 +93,35 @@ export type RemoteSessionControl = {
     prompt: string,
   ): Promise<PromptDeliveryResult>
   getSessionKind(sessionId: string): SessionKind | null
+  // v2 overlay source: OpenCode execution runtime at spawn. OPTIONAL so the
+  // structural fakes in tests stay valid; absent = no runtime field on the
+  // summary, which reads as the structured runtime on the phone.
+  getSpawnProviderRuntime?(sessionId: string): AgentProviderRuntime | null
+}
+
+/**
+ * v2 identity read model (see workspaceProjection.ts). Stated structurally
+ * for the same reason as RemoteSessionControl: the server's true blast
+ * radius stays inspectable and tests inject a bare map + emitter. OPTIONAL
+ * on deps — absent degrades every summary to the v1 shape.
+ */
+export type RemoteWorkspaceReadModel = {
+  snapshot(): ReadonlyMap<string, RemoteSessionIdentity>
+  onChange(listener: () => void): () => void
+}
+
+/**
+ * The slice of a TldrStore (or the Goal store, which is a second instance
+ * of the same class) the remote subsystem consumes. Structural for the same
+ * reason as every other dep here: tests inject an EventEmitter + read spy,
+ * and the server's blast radius stays inspectable. The stores themselves
+ * are main-resident and shared with the desktop's IPC — remote only READS
+ * and subscribes; the MCP tools remain the only writers.
+ */
+export type RemoteNoteStore = {
+  read(identities: string[]): Promise<Record<string, TldrRecord>>
+  on(event: 'changed', listener: (update: TldrUpdate) => void): unknown
+  off(event: 'changed', listener: (update: TldrUpdate) => void): unknown
 }
 
 export type RemoteServerDeps = {
@@ -129,6 +161,15 @@ export type RemoteServerDeps = {
    * is then the only gate).
    */
   isSttAvailable?: () => boolean
+  /** v2 identity projection (titles, agent names, tabs, pins). See
+   *  RemoteWorkspaceReadModel above; absent = v1 summaries. */
+  workspace?: RemoteWorkspaceReadModel | null
+  /** v2 TLDR/Goal stores for the note frames. Absent = no note frames at
+   *  all (the phone's peek surfaces show their "unavailable" state). */
+  notes?: { tldr: RemoteNoteStore; goal: RemoteNoteStore } | null
+  /** v2 account usage snapshot source (the shared usage service's cached
+   *  getter). Absent = no usage frames; a null return skips that push. */
+  getUsageSnapshot?: () => Promise<UsageSnapshot | null>
 }
 
 const INTERRUPT_BYTES = '\x1b'
@@ -162,6 +203,12 @@ export class RemoteServer extends EventEmitter {
   private url: string | null = null
   private readonly sockets = new Set<ClientSocket>()
   private feedUnsub: (() => void) | null = null
+  private workspaceUnsub: (() => void) | null = null
+  private readonly noteUnsubs: Array<() => void> = []
+  /** v2: slow usage push interval while phones are connected. The service
+   *  caches (30–60s TTL), so this tick is a cache read, not a provider API
+   *  call. Only runs while at least one socket exists. */
+  private usageTimer: ReturnType<typeof setInterval> | null = null
 
   // Late-joiner bootstrap caches. A phone that connects while every agent is
   // idle would otherwise stare at blank panes until the next event happens
@@ -174,6 +221,10 @@ export class RemoteServer extends EventEmitter {
   private readonly lastConditions = new Map<string, unknown>()
   private readonly lastProcessState = new Map<string, unknown>()
   private readonly lastInputReadiness = new Map<string, unknown>()
+  // v2: last sub-agent fleet per parent session — replayed to late joiners
+  // (a phone connecting mid-orchestration must see the live fleet) and the
+  // source of subAgentCount on summaries.
+  private readonly lastSubAgents = new Map<string, unknown>()
 
   constructor(private readonly deps: RemoteServerDeps) {
     super()
@@ -194,6 +245,55 @@ export class RemoteServer extends EventEmitter {
       this.cacheForLateJoiners(channel, payload)
       this.broadcast({ type: 'session-event', channel, payload })
     })
+
+    // v2: a committed workspace save can rename, retitle, re-pin, or move a
+    // session between projects without any manager event firing — the
+    // session-list summaries would go stale until the next connect. One
+    // resend per projection change keeps every connected phone honest, and
+    // the projection itself stays silent on no-op saves.
+    this.workspaceUnsub = this.deps.workspace?.onChange(() => {
+      this.broadcastSessionList()
+    }) ?? null
+
+    // v2: TLDR/Goal notes. The stores emit identity-keyed updates; the
+    // workspace projection owns identity→sessionId, so the JOIN lives here
+    // — the phone only ever hears session-scoped frames. One update can map
+    // to several sessions (a provider switch briefly keeps both panes), so
+    // fan out per matched session rather than picking one.
+    const notes = this.deps.notes
+    if (notes) {
+      const forward =
+        (kind: 'tldr-updated' | 'goal-updated', store: RemoteNoteStore) =>
+        (update: TldrUpdate) => {
+          for (const sessionId of this.sessionIdsForIdentity(update.identity)) {
+            this.broadcast({
+              type: kind,
+              sessionId,
+              text: update.record.text,
+              updatedAt: update.record.updatedAt,
+              revision: update.record.revision,
+            })
+          }
+        }
+      const onTldr = forward('tldr-updated', notes.tldr)
+      const onGoal = forward('goal-updated', notes.goal)
+      notes.tldr.on('changed', onTldr)
+      notes.goal.on('changed', onGoal)
+      this.noteUnsubs.push(
+        () => notes.tldr.off('changed', onTldr),
+        () => notes.goal.off('changed', onGoal),
+      )
+    }
+
+    // v2: usage snapshots — one push per connected minute. Started here (not
+    // per socket) because the frame is identical for every phone; the
+    // per-connection push happens in handleConnection so a freshly connected
+    // phone doesn't wait out the interval.
+    if (this.deps.getUsageSnapshot) {
+      this.usageTimer = setInterval(() => {
+        void this.broadcastUsageSnapshot()
+      }, 60_000)
+    }
 
     // Prime the late-joiner caches from the manager's own snapshot caches.
     // The feed tap only observes events AFTER enable; without this, an agent
@@ -248,6 +348,13 @@ export class RemoteServer extends EventEmitter {
   async stop(): Promise<void> {
     this.feedUnsub?.()
     this.feedUnsub = null
+    this.workspaceUnsub?.()
+    this.workspaceUnsub = null
+    if (this.usageTimer) {
+      clearInterval(this.usageTimer)
+      this.usageTimer = null
+    }
+    for (const unsub of this.noteUnsubs.splice(0)) unsub()
     for (const client of this.sockets) {
       client.ws.close(1001, 'server stopping')
     }
@@ -261,6 +368,7 @@ export class RemoteServer extends EventEmitter {
     this.lastConditions.clear()
     this.lastProcessState.clear()
     this.lastInputReadiness.clear()
+    this.lastSubAgents.clear()
     this.deps.journal?.record({ area: 'remote.server', name: 'remote_server.stopped' })
   }
 
@@ -548,7 +656,17 @@ export class RemoteServer extends EventEmitter {
       // recording (see the sttAvailable WHY in protocol/messages.ts).
       sttAvailable: Boolean(this.deps.transcribeAudio) && (this.deps.isSttAvailable?.() ?? true),
     })
-    this.send(ws, { type: 'session-list', sessions: this.deps.feedSource.listSessions() })
+    this.send(ws, { type: 'session-list', sessions: this.summarizeSessions() })
+    // v2: current TLDR/Goal records for the listed sessions, so a freshly
+    // connected phone's peek surfaces are instantly correct instead of
+    // blank until an agent happens to update. Per-socket (bootstrap, not
+    // broadcast) and fire-and-forget: a slow store read must not delay the
+    // socket's hello path, and a failed read degrades to the peek's
+    // "unavailable" state — never an error frame.
+    void this.sendNoteBootstrap(ws)
+    // v2: current usage snapshot for THIS phone (see the interval note in
+    // start()).
+    void this.broadcastUsageSnapshot()
     ws.on('error', () => ws.terminate())
     ws.on('message', data => {
       void this.onMessage(ws, String(data))
@@ -577,6 +695,7 @@ export class RemoteServer extends EventEmitter {
       ['conditions', this.lastConditions],
       ['process-state', this.lastProcessState],
       ['input-readiness', this.lastInputReadiness],
+      ['sub-agents', this.lastSubAgents],
     ] as const
     for (const [channel, cache] of caches) {
       for (const [sessionId] of cache) {
@@ -696,7 +815,7 @@ export class RemoteServer extends EventEmitter {
           return { ok: false, error: 'no transcript on disk yet for this session' }
         }
         const kind = this.deps.manager.getSessionKind(msg.sessionId)
-        if (!kind || kind === 'terminal') {
+        if (!isAgentProviderKind(kind)) {
           return { ok: false, error: 'not an agent session' }
         }
         // Routing belongs to the registry capability, not a URI prefix. The
@@ -787,6 +906,7 @@ export class RemoteServer extends EventEmitter {
     else if (channel === 'conditions') this.lastConditions.set(sessionId, payload)
     else if (channel === 'process-state') this.lastProcessState.set(sessionId, payload)
     else if (channel === 'input-readiness') this.lastInputReadiness.set(sessionId, payload)
+    else if (channel === 'sub-agents') this.lastSubAgents.set(sessionId, payload)
     else if (channel === 'exit' || channel === 'removed') {
       // A dead session's stale screen must not greet the next connection as
       // if it were live; the event itself still broadcast normally.
@@ -796,6 +916,7 @@ export class RemoteServer extends EventEmitter {
       this.lastConditions.delete(sessionId)
       this.lastProcessState.delete(sessionId)
       this.lastInputReadiness.delete(sessionId)
+      this.lastSubAgents.delete(sessionId)
     }
   }
 
@@ -806,6 +927,113 @@ export class RemoteServer extends EventEmitter {
     const encoded = JSON.stringify(frame)
     for (const client of this.sockets) {
       sendBoundedRemoteOutput(client.ws, encoded)
+    }
+  }
+
+  /** Session summaries with the v2 identity overlays: projection-provided
+   *  title/agentName/tabTitle/pinned, plus the OpenCode runtime so the phone
+   *  can label the TUI runtime honestly. Every overlay is additive — a
+   *  missing projection or an old manager interface degrades field-by-field
+   *  to the v1 summary, never to an error. */
+  private summarizeSessions(): OutboundSessionSummary[] {
+    const identities = this.deps.workspace?.snapshot()
+    return this.deps.feedSource.listSessions().map(summary => {
+      const identity = identities?.get(summary.sessionId)
+      const runtime = this.deps.manager.getSpawnProviderRuntime?.(summary.sessionId) ?? null
+      const subAgentCount = this.subAgentCountFor(summary.sessionId)
+      return {
+        ...summary,
+        ...(identity
+          ? {
+              title: identity.title,
+              agentName: identity.agentName,
+              tabTitle: identity.tabTitle,
+              pinned: identity.pinned,
+            }
+          : {}),
+        // Runtime only means something for the provider that HAS two
+        // runtimes; stamping 'terminal'-vs-null onto claude/codex rows
+        // would conflate OpenCode's discriminator with the plain-shell
+        // session kind and confuse future readers of the wire.
+        ...(summary.kind === 'opencode' ? { providerRuntime: runtime } : {}),
+        ...(subAgentCount !== null ? { subAgentCount } : {}),
+      }
+    })
+  }
+
+  /** Live sub-agent count for a summary row, from the late-joiner cache.
+   *  Null when no fleet has ever been observed for the session (the field
+   *  then stays absent rather than asserting a misleading zero). */
+  private subAgentCountFor(sessionId: string): number | null {
+    const cached = this.lastSubAgents.get(sessionId) as
+      | { subAgents?: Record<string, unknown> }
+      | undefined
+    if (!cached?.subAgents) return null
+    return Object.keys(cached.subAgents).length
+  }
+
+  /** Resend the session list to every connected phone. Used by projection
+   *  changes (rename/retitle/re-pin/tab move) which produce no manager
+   *  events of their own. */
+  private broadcastSessionList(): void {
+    if (!this.server) return
+    this.broadcast({ type: 'session-list', sessions: this.summarizeSessions() })
+  }
+
+  /** Reverse join: which live sessions carry this TLDR/Goal identity. */
+  private sessionIdsForIdentity(identity: string): string[] {
+    const identities = this.deps.workspace?.snapshot()
+    if (!identities) return []
+    const out: string[] = []
+    for (const [sessionId, record] of identities) {
+      if (record.tldrIdentity === identity) out.push(sessionId)
+    }
+    return out
+  }
+
+  private async broadcastUsageSnapshot(): Promise<void> {
+    if (!this.server || this.sockets.size === 0) return
+    const snapshot = await this.deps.getUsageSnapshot?.().catch(() => null)
+    // Stopped while the (cached) read was in flight, or no source wired.
+    if (!snapshot || !this.server || this.sockets.size === 0) return
+    this.broadcast({ type: 'usage-snapshot', snapshot })
+  }
+
+  /** Send the CURRENT tldr/goal records for every listed session that has
+   *  an identity, to one socket. Batched store reads (one per store, not
+   *  per session) keep this one file read's worth of work at connect. */
+  private async sendNoteBootstrap(ws: WebSocket): Promise<void> {
+    const notes = this.deps.notes
+    const identitiesBySession = new Map<string, string>()
+    for (const [sessionId, record] of this.deps.workspace?.snapshot() ?? []) {
+      if (record.tldrIdentity) identitiesBySession.set(sessionId, record.tldrIdentity)
+    }
+    if (!notes || identitiesBySession.size === 0) return
+    const identities = [...new Set(identitiesBySession.values())]
+    const [tldr, goal] = await Promise.all([
+      notes.tldr.read(identities).catch(() => ({})),
+      notes.goal.read(identities).catch(() => ({})),
+    ])
+    if (ws.readyState !== 1 /* WebSocket.OPEN */) {
+      // Socket died while the store read was in flight; nothing to send.
+      return
+    }
+    for (const [sessionId, identity] of identitiesBySession) {
+      for (const [kind, records] of [
+        ['tldr-updated', tldr],
+        ['goal-updated', goal],
+      ] as const) {
+        const record = (records as Record<string, TldrRecord>)[identity]
+        if (record) {
+          this.send(ws, {
+            type: kind,
+            sessionId,
+            text: record.text,
+            updatedAt: record.updatedAt,
+            revision: record.revision,
+          })
+        }
+      }
     }
   }
 

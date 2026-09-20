@@ -1,4 +1,5 @@
 import { tldrApi } from '@preload/api/tldr.js'
+import { goalLoopApi } from '@preload/api/goalLoop.js'
 import { sessionApi } from '@preload/api/session.js'
 import { controlApi } from '@preload/api/control.js'
 import { providerApi } from '@preload/api/provider.js'
@@ -32,9 +33,12 @@ import { remoteApi } from '@preload/api/remote.js'
 import { usageApi } from '@preload/api/usage.js'
 import { cliUpdatesApi } from '@preload/api/cliUpdates.js'
 import { workflowsApi } from '@preload/api/workflows.js'
+import { extensionsApi } from '@preload/api/extensions.js'
 import { agentCodeConventionsApi } from '@preload/api/agentCodeConventions.js'
 import { agentCodeCustomSkillsApi } from '@preload/api/agentCodeCustomSkills.js'
 import { agentCodeInstalledSkillsApi } from '@preload/api/agentCodeInstalledSkills.js'
+import { agentSkillsApi } from '@preload/api/agentSkills.js'
+import { agentActivityApi } from '@preload/api/agentActivity.js'
 
 // Composed preload API surface.
 //
@@ -61,6 +65,7 @@ import { agentCodeInstalledSkillsApi } from '@preload/api/agentCodeInstalledSkil
 
 export const api = {
   ...tldrApi,
+  ...goalLoopApi,
   ...controlApi,
   ...sessionApi,
   ...providerApi,
@@ -94,9 +99,12 @@ export const api = {
   ...usageApi,
   ...cliUpdatesApi,
   ...workflowsApi,
+  ...extensionsApi,
   ...agentCodeConventionsApi,
   ...agentCodeCustomSkillsApi,
   ...agentCodeInstalledSkillsApi,
+  ...agentSkillsApi,
+  ...agentActivityApi,
 }
 
 export type Api = typeof api

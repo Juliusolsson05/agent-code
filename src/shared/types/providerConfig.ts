@@ -108,15 +108,6 @@ export type ProviderTaskNotification = {
   usage: string | null
 }
 
-export type TileLeafRelatedAgentTab = {
-  sessionId: string
-  relation: 'parent' | 'linked' | 'orchestration'
-  label: string
-  title: string
-  kind: AgentProviderKind | 'terminal' | undefined
-  placement: 'grid' | 'detached'
-}
-
 // Props the shell passes to every provider's TileLeaf.
 export type TileLeafProps = {
   sessionId: string
@@ -127,23 +118,10 @@ export type TileLeafProps = {
   workspace: unknown
   showStatusMode?: boolean
   showWorktreeBadges?: boolean
-  /**
-   * WHY these shell-chrome props live in the provider contract now:
-   * TileTree has always passed them to the concrete in-repo TileLeaf, but the
-   * public type claimed providers only received the bare pane identity/runtime
-   * fields. That mismatch forced TileTree to widen the component with a local
-   * cast, which hid the real call surface from any future provider pane.
-   *
-   * Keep the shapes structural and renderer-free here on purpose. Importing
-   * `Workspace`, `SessionId`, or `GridRelatedAgentTab` from the renderer would
-   * make this shared type drag renderer files into the node project again, the
-   * exact boundary leak this file exists to prevent. The concrete renderer
-   * types are assignable to these strings/records without coupling the halves.
-   */
-  ownerSessionId?: string
-  relatedAgentTabs?: TileLeafRelatedAgentTab[]
-  selectedRelatedSessionId?: string
-  onSelectRelatedSession?: (sessionId: string) => void
+  // `ownerSessionId`, `relatedAgentTabs`, `selectedRelatedSessionId` and
+  // `onSelectRelatedSession` (the related-agent chip row in the pane header)
+  // lived here until #992. The index nests children under their parent now,
+  // so no pane renders related agents and nothing passed these.
 }
 
 /**
@@ -348,6 +326,10 @@ export type MainProviderConfig = {
   /** Provider identity — see RendererProviderConfig.id. */
   id: AgentProviderKind
   name: string
+  /** Read-only native skill discovery; never grants installation ownership. */
+  discoverSkillRoots?: (
+    context: import('./agentSkills.js').AgentSkillDiscoveryContext,
+  ) => Promise<import('./agentSkills.js').AgentSkillDiscovery>
   /**
    * Provider-owned discovery capability for native personal Agent Skills.
    *

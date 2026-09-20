@@ -6,11 +6,19 @@ import type { StreamPhaseState } from '@renderer/session-runtime/semantic/stream
 import { historyMarkerOf, stampHistoryMarker, planLiveEntryTrim, OLDER_PREPEND_TRIM_GRACE_MS } from '@renderer/session-runtime/liveEntryWindow'
 import { indexEntryIntoMaps } from '@renderer/session-runtime/entries'
 import { emptySemanticRuntime } from '@renderer/session-runtime/state'
+import {
+  applyDecisionToWindow,
+  decideHistoryBoundary,
+  emptyHistoryWindow,
+  isStaleHistoryChunk,
+  type HistoryWindow,
+} from '@renderer/session-runtime/historyBoundary'
 import type { SemanticLiveTurn, SemanticRuntimeState } from '@renderer/session-runtime/state'
 import { isAgentProviderKind } from '@shared/types/providerKind'
 import type { AgentProviderKind } from '@shared/types/providerKind'
 import type { Entry, ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 import type { ProviderConditionSnapshot } from '@shared/types/providerConditions'
+import type { SubAgentState } from '@shared/sessionFeed/types'
 import { asRecord } from '@shared/lib/asRecord'
 
 import type { WebSocketSessionFeed } from '../WebSocketSessionFeed'
@@ -58,6 +66,11 @@ export type SessionTranscript = {
   toolIndexVersion: number
   conditions: ProviderConditionSnapshot | null
   workingStatus: string | null
+  /** Live sub-agent fleet under this session (v2 sub-agents channel).
+   *  Null until the server has emitted one — Feed treats null and {} the
+   *  same for rendering, but null keeps the transcript reference-stable
+   *  for sessions that never spawn children. */
+  subAgents: Record<string, SubAgentState> | null
   /** Latest TUI text (`recent` window). The feed does NOT render this in
    *  normal operation — it is the fallback for pre-transcript states
    *  (trust dialog body, login errors, provider crashes) that never reach
@@ -71,9 +84,23 @@ export type SessionTranscript = {
    *  the phone was actually talking to an outdated backend. Benign
    *  no-transcript-yet failures are not recorded. */
   historyError: string | null
+  /** Why the live transcript channels last failed (jsonl-error), or null.
+   *  Distinct from historyError (a backfill failure): a session can have a
+   *  healthy loaded window AND a dead live channel, or vice versa. */
+  statusError: string | null
   exited: boolean
   hasOlderHistory: boolean
   loadingOlderHistory: boolean
+  /** True while the INITIAL history backfill burst is being applied —
+   *  the phone-side mirror of the desktop's bootstrapping concept. Feed
+   *  accepts a `bootstrapping` prop that suspends per-append auto-scroll
+   *  and the lazy-mount cascade during bulk replay; without it, the
+   *  initial 120-entry burst paints per-append and the IntersectionObserver
+   *  cascade fires for rows about to be superseded — visible jank exactly
+   *  when the user first opens a session. Older-page pagination (user-
+   *  initiated, scroll-position-preserved) deliberately does NOT set it:
+   *  bootstrapping is for replay bursts, not interactive paging. */
+  bootstrapping: boolean
   totalEntries: number
 }
 
@@ -95,6 +122,10 @@ type SessionState = {
   /** Durable transcript file identity, from live frames / history chunks.
    *  Disagreement between the two = the provider rolled the transcript. */
   transcriptFile: string | null
+  /** History-boundary window identity (grok). Decisions come from the shared
+   *  pure owner (session-runtime/historyBoundary.ts); this store only applies
+   *  them — the desktop and replay apply the same ones. */
+  historyWindow: HistoryWindow
   historyOldestMarker: string | null
   historyOldestOffset: number | undefined
   historyLoaded: boolean
@@ -129,11 +160,14 @@ function emptyTranscript(): SessionTranscript {
     toolIndexVersion: 0,
     conditions: null,
     workingStatus: null,
+    subAgents: null,
     screenText: '',
     historyError: null,
+    statusError: null,
     exited: false,
     hasOlderHistory: false,
     loadingOlderHistory: false,
+    bootstrapping: false,
     totalEntries: 0,
   }
 }
@@ -165,11 +199,31 @@ export class TranscriptStore {
       feed.onSessionJsonlEntries(e => {
         this.ingestLiveEntries(e.sessionId, e.entries as Array<{ entry: unknown; file: string }>)
       }),
+      feed.onSessionHistoryBoundary(e => {
+        this.ingestHistoryBoundary(e.sessionId, e)
+      }),
       feed.onSessionSemanticEvent(e => {
         this.ingestSemanticEvent(e.sessionId, e.event)
       }),
+      feed.onSessionJsonlError(e => {
+        // v2: the durable/live transcript channels FAILED — OpenCode's
+        // provider_session_switched notice and SSE/SQLite failures ride
+        // here. Previously the phone dropped these entirely and a session
+        // just silently stopped updating; now the status surface shows why.
+        // Kept raw (the message string): filtering benign variants is a
+        // presentation decision that belongs to the UI, not the store.
+        this.mutate(e.sessionId, t => ({ ...t, statusError: e.message }))
+      }),
       feed.onSessionConditions(e => {
         this.mutate(e.sessionId, t => ({ ...t, conditions: e.snapshot }))
+      }),
+      feed.onSessionSubAgents(e => {
+        // v2: the parent's live sub-agent fleet. Reference-equality check in
+        // the mutate keeps an unchanged map from repainting the feed — the
+        // server re-emits the whole map on every member change.
+        this.mutate(e.sessionId, t =>
+          t.subAgents === e.subAgents ? t : { ...t, subAgents: e.subAgents },
+        )
       }),
       feed.onSessionProcessState(e => {
         this.mutate(e.sessionId, t => ({
@@ -196,6 +250,9 @@ export class TranscriptStore {
           semanticTurn: null,
           semantic: clearedSemantic,
           conditions: null,
+          // A dead process owns no live channel either; a session-switched
+          // or channel-failure notice about it is stale by definition.
+          statusError: null,
         }))
       }),
       // Eviction + backfill retry both key off the session list, which the
@@ -308,7 +365,7 @@ export class TranscriptStore {
     const state = this.state(sessionId)
     if (state.historyLoaded || state.historyLoading || state.transcript.historyError === REMOTE_HISTORY_TOO_LARGE) return
     state.historyLoading = true
-    this.mutate(sessionId, t => ({ ...t, loadingOlderHistory: true }))
+    this.mutate(sessionId, t => ({ ...t, loadingOlderHistory: true, bootstrapping: true }))
     const result = await this.feed.getHistory(sessionId, { limit: 120 })
     // Disconnect, transcript roll, removal or disposal may replace this state
     // while the network request is pending. Its reply has no authority over
@@ -324,6 +381,7 @@ export class TranscriptStore {
       this.mutate(sessionId, t => ({
         ...t,
         loadingOlderHistory: false,
+        bootstrapping: false,
         historyError: benign ? null : result.error,
       }))
       return
@@ -332,7 +390,7 @@ export class TranscriptStore {
       // The server's transcript-file cache was stale (post-/clear window):
       // the chunk is the PREVIOUS conversation. Discard it; live frames own
       // the file identity and a later retry will read the right file.
-      this.mutate(sessionId, t => ({ ...t, loadingOlderHistory: false }))
+      this.mutate(sessionId, t => ({ ...t, loadingOlderHistory: false, bootstrapping: false }))
       return
     }
     state.historyLoaded = true
@@ -352,6 +410,7 @@ export class TranscriptStore {
     this.mutate(sessionId, t => ({
       ...t,
       loadingOlderHistory: false,
+      bootstrapping: false,
       historyError: null,
       // Desktop guard (history.ts): a chunk with more history but NO usable
       // marker cannot be paged — advertising the affordance would render a
@@ -426,6 +485,7 @@ export class TranscriptStore {
         liveMapper: null,
         kind: null,
         transcriptFile: null,
+        historyWindow: emptyHistoryWindow(),
         historyOldestMarker: null,
         historyOldestOffset: undefined,
         historyLoaded: false,
@@ -476,11 +536,30 @@ export class TranscriptStore {
   }
 
   private chunkFileConflicts(state: SessionState, chunkFile: unknown): boolean {
-    return (
-      typeof chunkFile === 'string' &&
-      state.transcriptFile !== null &&
-      chunkFile !== state.transcriptFile
-    )
+    // The shared pure owner owns the decision (grok Stage 5): a stale chunk is
+    // one that names a different file than the window, or an older generation
+    // once a boundary established one. History chunks carry no generation
+    // today, so that branch stays dormant until they do — same decision
+    // either way, made once.
+    if (typeof chunkFile !== 'string') return false
+    return isStaleHistoryChunk(state.historyWindow, { file: chunkFile }) ||
+      (state.transcriptFile !== null && chunkFile !== state.transcriptFile)
+  }
+
+  private ingestHistoryBoundary(
+    sessionId: string,
+    boundary: { type: 'reset' | 'caught-up'; generation: number; snapshotByteLength: number; byteOffset?: number; complete?: boolean; file: string },
+  ): void {
+    const state = this.state(sessionId)
+    const decision = decideHistoryBoundary(state.historyWindow, boundary)
+    state.historyWindow = applyDecisionToWindow(state.historyWindow, decision)
+    if (decision.kind !== 'apply-reset') return
+    // The reset itself reuses the existing transcript reset (which preserves
+    // conditions, working status, screen and exit state — the shared preserve
+    // list) and re-arms the awaiting-turn-start gate so suffixes from the
+    // superseded generation cannot repaint the wiped window.
+    this.resetTranscript(sessionId)
+    this.state(sessionId).awaitingSemanticStart = true
   }
 
   private ingestLiveEntries(
@@ -559,6 +638,14 @@ export class TranscriptStore {
       liveMapper: null,
       kind: prev.kind,
       transcriptFile: null,
+      // The boundary window SURVIVES a transcript reset: the reset may be the
+      // application of a boundary decision itself (ingestHistoryBoundary), and
+      // wiping it would forget the generation we just armed against — a
+      // re-delivered duplicate boundary would then re-reset, and a stale one
+      // would pass. It also survives the heuristic file-roll reset for the
+      // same reason: whatever roll happened, the window only ever moves
+      // forward through the pure owner's decisions.
+      historyWindow: prev.historyWindow,
       historyOldestMarker: null,
       historyOldestOffset: undefined,
       historyLoaded: false,

@@ -1,7 +1,12 @@
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
 import type { PromptDeliveryResult } from '@shared/types/providerConfig.js'
 
-export type ManagedAgentPlacement = 'grid' | 'dispatch' | 'buried'
+// One value since the unified layout (#992): every managed agent is a row in
+// its project's agent index. The union kept 'grid' and 'buried' for one
+// release after nothing produced them (they named v2 owner structures that
+// no longer exist) and narrows here — stage 7 — so a caller still switching
+// on the removed values fails to compile instead of silently never matching.
+export type ManagedAgentPlacement = 'dispatch'
 
 export type ManagedAgentBackendState =
   | 'live'

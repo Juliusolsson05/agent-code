@@ -2,9 +2,9 @@ import { z } from 'zod'
 import { ControlError, defineCapability, paginate } from '@control-sdk'
 import { useAppStore } from '@renderer/app-state/store'
 import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
-import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 import { normalizeGridShape, MAX_DISPATCH_ROWS, MAX_DISPATCH_TILES, MAX_DISPATCH_LANES, INDEX_FRACTION_MIN, INDEX_FRACTION_MAX } from '@renderer/workspace/dispatch/gridShape'
 import { observeWorkspace } from '@renderer/workspace/control'
+import { resolveTabSessions } from '@renderer/workspace/queries'
 import type { Workspace } from '@renderer/workspace/hook'
 
 const tabId = z.string().describe('Stable project tab ID from app.observe in this window.')
@@ -15,21 +15,26 @@ const rows = z.array(z.object({ length: z.number().int().min(1).max(MAX_DISPATCH
   .describe('Complete desired rows in output order. Each names its prior row or null; at most 16 total lanes.')
 const rowIndex = z.number().int().min(0).describe('Zero-based row index from layout.read; protected by the layout revision.')
 const laneIndex = z.number().int().min(0).describe('Zero-based flat lane index from layout.read; rows are laid out in row-major order.')
-const scope = z.enum(['project', 'global']).describe('Project uses the active project; global includes every project in this window.')
-const layoutOutput = z.object({ revision: z.string(), activeTabId: z.string(), tabs: z.array(z.object({ id: z.string(), root: z.json() })),
-  dispatch: z.json().nullable(), effectiveFocusedSessionId: z.string().nullable() })
+const layoutOutput = z.object({ revision: z.string(), activeTabId: z.string(), tabs: z.array(z.object({ id: z.string(), title: z.string(), sessionIds: z.array(z.string()) })),
+  dispatch: z.json(), effectiveFocusedSessionId: z.string().nullable() })
 
 export function layoutControlCapabilities(getWorkspace: () => Workspace) {
   const read = () => {
     const { workspaceState: state } = useAppStore.getState()
-    const dispatch = state.dispatchMode ? { ...state.dispatchMode,
-      // Stored focusedSessionId remembers classic Dispatch selection. Tiled
-      // command targeting follows its focused lane instead (#798). Preserve
-      // that memory under an honest name and expose the effective target.
-      classicFocusedSessionId: state.dispatchMode.focusedSessionId,
+    // WHY the output keeps the `dispatch: { focusedSessionId, tiled }` envelope
+    // although the state field is now a flat `stage` (#992): this is a
+    // published control-plane shape that agents and extensions already parse.
+    // `scope` and `classicFocusedSessionId` are gone because the things they
+    // described are gone — a layout-wide project/global scope and a remembered
+    // classic single selection. `focusedSessionId` is the focused lane's
+    // occupant (#798), the same value as effectiveFocusedSessionId; it stays
+    // so a reader that only knew the old field keeps resolving the target.
+    // The envelope is renamed with the rest of the public surface in stage 7.
+    const dispatch = {
       focusedSessionId: observeWorkspace(getWorkspace).focusedSessionId,
-      ...(state.dispatchMode.tiled ? { tiled: normalizeGridShape(state.dispatchMode.tiled) } : {}) } : null
-    const value = { effectiveFocusedSessionId: observeWorkspace(getWorkspace).focusedSessionId, activeTabId: state.activeTabId, tabs: state.tabs.map(({ id, root }) => ({ id, root })), dispatch }
+      tiled: normalizeGridShape(state.stage),
+    }
+    const value = { effectiveFocusedSessionId: observeWorkspace(getWorkspace).focusedSessionId, activeTabId: state.activeTabId, tabs: state.tabs.map(({ id, title }) => ({ id, title, sessionIds: resolveTabSessions(state, id) })), dispatch }
     return { ...JSON.parse(JSON.stringify(value)), revision: paginate([value], { limit: 1 }, 'workspace-layout').revision }
   }
   const admit = (expected: string) => {
@@ -44,31 +49,13 @@ export function layoutControlCapabilities(getWorkspace: () => Workspace) {
   }
   return [
     defineCapability({
-      id: 'layout.read', title: 'Read project trees and Dispatch layout', execution: 'window', effect: 'read', input: z.object({}).strict(), output: layoutOutput,
-      description: 'Read exact project tile trees, active tab and normalized Dispatch rows/lanes with a revision for edits. Tree split direction vertical means left/right; horizontal means top/bottom; ratio is the a-child share. Dispatch lanes are flat row-major indices, rows specify their lengths. effectiveFocusedSessionId is the current command target; dispatch.classicFocusedSessionId is only remembered classic selection. Reading does not focus or wake agents.',
+      id: 'layout.read', title: 'Read projects and the lane layout', execution: 'window', effect: 'read', input: z.object({}).strict(), output: layoutOutput,
+      description: 'Read the projects (each with its agents in index order), the active project and the normalized rows/lanes with a revision for edits. A project owns no layout: it is a group of agents, and lanes show agents from any project. Lanes are flat row-major indices, rows specify their lengths. The lane grid always exists; there is no mode to enter. effectiveFocusedSessionId is the current command target: the agent in the focused lane. Reading does not focus or wake agents.',
       handler: read,
     }),
-    defineCapability({
-      id: 'layout.adjust', title: 'Adjust a project grid', execution: 'window', effect: 'ui', target: { kind: 'project', field: 'tabId' },
-      description: 'Adjust an explicit project using the existing layout operations. Equalize preserves the tree, balance rebuilds equal-sized cells, rotate swaps rows/columns, and divider sets the shared split between two leaves (and activates that tab). Never creates or closes sessions. For new panes, use agents.create then placement.list/attach.',
-      input: z.object({ tabId, revision, change: z.discriminatedUnion('action', [
-        z.object({ action: z.enum(['equalize', 'balance', 'rotate']) }).strict(),
-        z.object({ action: z.literal('divider'), fromSessionId: z.string().describe('Leaf on the a side of the intended divider.'), toSessionId: z.string().describe('Leaf on its b side.'), ratio: z.number().min(0.1).max(0.9).describe('Share of the split allocated to its a child; between 0.1 and 0.9.') }).strict(),
-      ]) }).strict(), output: layoutOutput,
-      handler: input => {
-        admit(input.revision)
-        const tab = project(input.tabId)
-        const change = input.change
-        if (change.action === 'divider') {
-          const leaves = collectLeaves(tab.root)
-          if (change.fromSessionId === change.toSessionId || !leaves.includes(change.fromSessionId) || !leaves.includes(change.toSessionId)) throw new ControlError('unavailable', 'Choose two different leaves in the target grid')
-          getWorkspace().setSplitRatioInTab(input.tabId, change.fromSessionId, change.toSessionId, change.ratio)
-        } else if (change.action === 'equalize') getWorkspace().normalizeLayout(input.tabId)
-        else if (change.action === 'balance') getWorkspace().hardNormalizeLayout(input.tabId)
-        else getWorkspace().rotateLayout(input.tabId)
-        return read()
-      },
-    }),
+    // layout.adjust (equalize / balance / rotate / divider) died with the tile
+    // tree (#992). Lane and row sizing is dispatch.configure's lane-weights,
+    // row-heights and row-index-width actions.
     defineCapability({
       id: 'tabs.reorder', title: 'Reorder project tabs', execution: 'window', effect: 'ui',
       description: 'Set the complete project tab order in this window. Requires every current tab ID exactly once and a fresh layout revision. Uses normal tab ordering without moving sessions between projects.',
@@ -82,12 +69,14 @@ export function layoutControlCapabilities(getWorkspace: () => Workspace) {
       },
     }),
     defineCapability({
-      id: 'dispatch.configure', title: 'Configure Dispatch rows and lanes', execution: 'window', effect: 'ui',
-      description: 'Change one explicit Dispatch setting through normal workspace actions, then return the resulting layout. Requires layout.read revision; refresh it between actions. Enter/scope resets tiled lanes to ordinary Dispatch. Grid sets row lengths, preserving existing lane assignments where the domain permits. Row project filters promote scope to global. Lane selection may wake the chosen existing agent; it never creates one. Exiting Dispatch returns to the project grid.',
+      id: 'dispatch.configure', title: 'Configure stage rows and lanes', execution: 'window', effect: 'ui',
+      description: 'Change one explicit stage setting through normal workspace actions, then return the resulting layout. Requires layout.read revision; refresh it between actions. Grid sets row lengths (preserving existing lane assignments where the domain permits). Every row lists every project unless a row project filter narrows it. Lane selection may wake the chosen existing agent; it never creates one.',
       input: z.object({ revision, change: z.discriminatedUnion('action', [
-        z.object({ action: z.literal('enter'), scope }).strict(),
-        z.object({ action: z.literal('exit') }).strict(),
-        z.object({ action: z.literal('scope'), scope }).strict(),
+        // 'enter', 'exit' and 'scope' were actions here until #992. The lane
+        // grid is the only layout, so there is nothing to enter or leave, and
+        // the project/global scope they switched no longer exists. A caller
+        // still sending them gets zod's invalid-union error, which names the
+        // surviving actions — more useful than a silent no-op success.
         z.object({ action: z.literal('grid'), rows }).strict(),
         z.object({ action: z.literal('lane-select'), laneIndex, sessionId: z.string().describe('Existing, non-buried session ID to show in this lane.') }).strict(),
         z.object({ action: z.literal('lane-focus'), laneIndex }).strict(),
@@ -102,33 +91,28 @@ export function layoutControlCapabilities(getWorkspace: () => Workspace) {
         const change = input.change
         const workspace = getWorkspace()
         const state = useAppStore.getState().workspaceState
-        const tiled = state.dispatchMode?.tiled ? normalizeGridShape(state.dispatchMode.tiled) : null
-        if ('rowIndex' in change && (!tiled || change.rowIndex >= tiled.rows.length)) throw new ControlError('invalid_input', 'Row is outside the current grid')
-        if ('laneIndex' in change && (!tiled || change.laneIndex >= tiled.lanes.length)) throw new ControlError('invalid_input', 'Lane is outside the current grid')
+        const tiled = normalizeGridShape(state.stage)
+        if ('rowIndex' in change && change.rowIndex >= tiled.rows.length) throw new ControlError('invalid_input', 'Row is outside the current grid')
+        if ('laneIndex' in change && change.laneIndex >= tiled.lanes.length) throw new ControlError('invalid_input', 'Lane is outside the current grid')
         switch (change.action) {
-          case 'enter': await workspace.enterDispatchMode(change.scope); break
-          case 'exit': workspace.exitDispatchMode(); break
-          case 'scope': await workspace.setDispatchScope(change.scope); break
           case 'grid':
-            if (!state.dispatchMode) throw new ControlError('unavailable', 'Enter Dispatch first')
-            if (change.rows.some(row => row.sourceRow !== null && (!tiled || row.sourceRow >= tiled.rows.length))) throw new ControlError('invalid_input', 'A sourceRow does not exist; new rows use null')
-            if (tiled) { if (!workspace.setDispatchGridShape(change.rows)) throw new ControlError('unavailable', 'Grid shape was refused') }
-            else await workspace.enterTiledDispatch(change.rows.map(row => row.length))
+            if (change.rows.some(row => row.sourceRow !== null && row.sourceRow >= tiled.rows.length)) throw new ControlError('invalid_input', 'A sourceRow does not exist; new rows use null')
+            if (!workspace.setDispatchGridShape(change.rows)) throw new ControlError('unavailable', 'Grid shape was refused')
             break
           case 'lane-select':
-            if (!state.sessions[change.sessionId] || state.buried.some(item => item.sessionId === change.sessionId)) throw new ControlError('unavailable', 'Agent is absent or buried')
+            if (!state.sessions[change.sessionId]) throw new ControlError('unavailable', 'Agent is absent')
             await workspace.selectTiledLaneSession(change.laneIndex, change.sessionId)
-            if (useAppStore.getState().workspaceState.dispatchMode?.tiled?.lanes[change.laneIndex]?.selectedSessionId !== change.sessionId) throw new ControlError('failed', 'Requested lane selection was not observed; read the layout', 'unknown')
+            if (useAppStore.getState().workspaceState.stage.lanes[change.laneIndex]?.selectedSessionId !== change.sessionId) throw new ControlError('failed', 'Requested lane selection was not observed; read the layout', 'unknown')
             break
           case 'lane-focus': workspace.setTiledFocusedLane(change.laneIndex); break
           case 'row-projects': change.tabIds.forEach(project); workspace.setDispatchRowProjects(change.rowIndex, [...new Set(change.tabIds)]); break
           case 'row-cap-children': workspace.setDispatchRowCapChildren(change.rowIndex, change.enabled); break
           case 'row-index-width': workspace.setDispatchRowIndexFraction(change.rowIndex, change.fraction); break
           case 'lane-weights':
-            if (!tiled || change.weights.length !== tiled.lanes.length) throw new ControlError('invalid_input', 'Supply one weight per lane')
+            if (change.weights.length !== tiled.lanes.length) throw new ControlError('invalid_input', 'Supply one weight per lane')
             workspace.setDispatchLaneWeights(change.weights); break
           case 'row-heights':
-            if (!tiled || change.weights.length !== tiled.rows.length) throw new ControlError('invalid_input', 'Supply one weight per row')
+            if (change.weights.length !== tiled.rows.length) throw new ControlError('invalid_input', 'Supply one weight per row')
             workspace.setDispatchRowHeights(change.weights); break
         }
         return read()

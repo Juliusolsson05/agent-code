@@ -1,4 +1,12 @@
-import { TLDR_INSTRUCTIONS, TLDR_MAX_CHARACTERS } from '@shared/types/tldr.js'
+import { GOAL_INSTRUCTIONS, TLDR_INSTRUCTIONS, TLDR_MAX_CHARACTERS } from '@shared/types/tldr.js'
+import {
+  GOAL_LOOP_DEFAULT_MAX_CONTINUATIONS,
+  GOAL_LOOP_INSTRUCTIONS,
+  GOAL_LOOP_MAX_CONTINUATIONS_CEILING,
+  GOAL_LOOP_MAX_GOAL_CHARACTERS,
+  GOAL_LOOP_MAX_PROMPT_CHARACTERS,
+  GOAL_LOOP_MAX_SUMMARY_CHARACTERS,
+} from '@shared/types/goalLoop.js'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 
@@ -35,14 +43,14 @@ export const AGENT_MANAGEMENT_MCP_INSTRUCTIONS = `Agent Management controls Agen
  * Instructions for a session whose user enabled Root Agent Code Management.
  *
  * WHY the caller's own session ID is spelled out: the `ac_*` catalog can
- * close, bury, detach, reload and provider-switch ANY session, and the model
+ * close, reload and provider-switch ANY session, and the model
  * only knows itself as "this conversation". Naming the ID is the one fact
  * that lets it keep its own pane out of a reorganization. The authorization
  * language mirrors Agent Management's, with a wider allowed surface (placement
  * and focus) because reorganizing the workspace is the feature's purpose.
  */
 export function rootManagementInstructions(sessionId: string): string {
-  return `Root Agent Code Management is enabled for this agent by an explicit user action confirmed in a dialog; it is off for every other agent. The ac_* tools are the application-wide operator control surface: every window, project tab, agent, terminal and layout in Agent Code, not only the caller's project. Start with ac_app_describe, then ac_app_observe or ac_app_windows for identities; use stable session and tab IDs, never pane labels. Your own Agent Code session ID is ${sessionId}: never close, bury, detach, reload, rewind or switch the provider of that session. Prefer reads, make the smallest layout change that satisfies the user's current request, and re-read the layout revision after every mutation. Never close, kill, bury, restore, switch providers for, or prompt another agent unless the user's current request names that agent or that outcome; a request to organize, tidy or focus the workspace authorizes placement, focus, pin and title changes only. The app's own confirmation dialogs still apply, and a declined dialog is a refusal, not a reason to retry. When you finish, say exactly what you changed and where.`
+  return `Root Agent Code Management is enabled for this agent by an explicit user action confirmed in a dialog; it is off for every other agent. The ac_* tools are the application-wide operator control surface: every window, project tab, agent, terminal and layout in Agent Code, not only the caller's project. Start with ac_app_describe, then ac_app_observe or ac_app_windows for identities; use stable session and tab IDs, never pane labels. Your own Agent Code session ID is ${sessionId}: never close, reload, rewind or switch the provider of that session. Prefer reads, make the smallest layout change that satisfies the user's current request, and re-read the layout revision after every mutation. Never close, kill, switch providers for, or prompt another agent unless the user's current request names that agent or that outcome; a request to organize, tidy or focus the workspace authorizes placement, focus, pin and title changes only. The app's own confirmation dialogs still apply, and a declined dialog is a refusal, not a reason to retry. When you finish, say exactly what you changed and where.`
 }
 
 export function createBuiltInMcpServer(
@@ -87,6 +95,34 @@ export function createBuiltInMcpServer(
         return { ...toolText({ ok: false, message: error instanceof Error ? error.message : 'TLDR update failed.' }), isError: true }
       }
     })
+  }
+
+  if (scope.domains.includes('goal')) {
+    // Same authority model as tldr_update: the target is the authenticated
+    // scope's identity, never a model-supplied id, and a revoked process's
+    // queued write fails after the store's I/O instead of overwriting its
+    // successor's goal.
+    server.registerTool('goal_set', {
+      title: 'Set goal',
+      description: 'Record what your work is trying to achieve, in one plain sentence. Set it once you understand a new task; update it only when the user changes direction, never to report progress.',
+      inputSchema: { text: z.string().min(1).max(TLDR_MAX_CHARACTERS * 2) },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    }, async ({ text }) => {
+      try {
+        if (!dependencies.goalStore) throw new Error('Goal is unavailable.')
+        const record = await dependencies.goalStore.update(
+          scope.tldrIdentity ?? scope.sessionId, text,
+          dependencies.isTldrWriteAuthorized ?? (() => false),
+        )
+        return toolText({ ok: true, ...record })
+      } catch (error) {
+        return { ...toolText({ ok: false, message: error instanceof Error ? error.message : 'Goal update failed.' }), isError: true }
+      }
+    })
+  }
+
+  if (scope.domains.includes('goal_loop')) {
+    registerGoalLoopTools(server, scope, dependencies)
   }
 
   if (scope.domains.includes('ping')) {
@@ -186,6 +222,8 @@ function builtInInstructions(
   dependencies: BuiltInMcpDependencies,
 ): string {
   return [
+    ...(scope.domains.includes('goal') ? [GOAL_INSTRUCTIONS] : []),
+    ...(scope.domains.includes('goal_loop') ? [GOAL_LOOP_INSTRUCTIONS] : []),
     ...(scope.domains.includes('tldr') ? [TLDR_INSTRUCTIONS] : []),
     ...(scope.domains.includes('workflows') ? [WORKFLOW_MCP_INSTRUCTIONS] : []),
     ...(scope.domains.includes('agent_management') ? [AGENT_MANAGEMENT_MCP_INSTRUCTIONS] : []),
@@ -193,6 +231,54 @@ function builtInInstructions(
       ? [rootManagementInstructions(scope.sessionId)]
       : []),
   ].join('\n\n')
+}
+
+function registerGoalLoopTools(
+  server: McpServer,
+  scope: McpSessionScope,
+  dependencies: BuiltInMcpDependencies,
+): void {
+  const service = dependencies.goalLoopService
+  // Same authority model as goal_set: the loop targeted is always the
+  // authenticated scope's own session, never a model-supplied id, so one
+  // agent can neither start nor break another agent's loop.
+  const failure = (error: unknown) => ({
+    ...toolText({ ok: false, message: error instanceof Error ? error.message : 'Goal Loop call failed.' }),
+    isError: true,
+  })
+  server.registerTool('goal_loop_start', {
+    title: 'Start goal loop',
+    description: `Start a harness-owned loop that keeps re-prompting this session until the goal is completely done. Write loopPrompt yourself as a self-contained continuation instruction; it is re-sent every time you stop. Call goal_loop_complete only when utterly done, or with outcome "blocked" when you need the user. Budget defaults to ${GOAL_LOOP_DEFAULT_MAX_CONTINUATIONS} continuations.`,
+    inputSchema: {
+      goal: z.string().min(1).max(GOAL_LOOP_MAX_GOAL_CHARACTERS),
+      loopPrompt: z.string().min(1).max(GOAL_LOOP_MAX_PROMPT_CHARACTERS),
+      maxContinuations: z.number().int().min(1).max(GOAL_LOOP_MAX_CONTINUATIONS_CEILING).optional(),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  }, async ({ goal, loopPrompt, maxContinuations }) => {
+    try {
+      if (!service) throw new Error('Goal Loop is unavailable.')
+      return toolText({ ok: true, loop: await service.startLoop(scope.sessionId, { goal, loopPrompt, maxContinuations }) })
+    } catch (error) {
+      return failure(error)
+    }
+  })
+  server.registerTool('goal_loop_complete', {
+    title: 'Complete goal loop',
+    description: 'End this session\'s goal loop. Call with outcome "done" ONLY when the goal is completely and utterly satisfied and verified — never to exit early. Call with outcome "blocked" when you genuinely need the user, and say exactly what you need in the summary.',
+    inputSchema: {
+      outcome: z.enum(['done', 'blocked']),
+      summary: z.string().min(1).max(GOAL_LOOP_MAX_SUMMARY_CHARACTERS),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  }, async ({ outcome, summary }) => {
+    try {
+      if (!service) throw new Error('Goal Loop is unavailable.')
+      return toolText({ ok: true, loop: await service.complete(scope.sessionId, outcome, summary) })
+    } catch (error) {
+      return failure(error)
+    }
+  })
 }
 
 function registerAgentManagementTools(
@@ -235,7 +321,7 @@ function registerAgentManagementTools(
     {
       title: 'List Project Agents',
       description:
-        'Lists every Agent Code agent in the caller\'s exact project tab, including visible panes, detached Dispatch agents, and buried agents. Returns transcript paths/availability, backend and activity state, last activity, idle duration, conditions, and relationships. This read-only audit does not wake agents.',
+        'Lists every Agent Code agent in the caller\'s exact project, including the ones that are not in a lane. Returns transcript paths/availability, backend and activity state, last activity, idle duration, conditions, and relationships. This read-only audit does not wake agents.',
       inputSchema: {},
       annotations: {
         readOnlyHint: true,

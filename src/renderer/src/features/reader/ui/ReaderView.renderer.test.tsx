@@ -9,6 +9,7 @@ import type { Entry } from '@shared/types/transcript'
 import type { AgentProviderKind } from '@shared/types/providerKind'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { ReaderView } from './ReaderView'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 function assistantEntry(uuid: string, text: string): Entry {
   return {
@@ -152,27 +153,19 @@ function makeReaderWorkspace(runtime: SessionRuntime = {
     assistantEntry('newer-message', 'Newer answer'),
   ],
 }, kind: AgentProviderKind = 'claude'): Workspace {
-  const tab = {
-    id: 'tab-1',
-    title: 'Project',
-    focusedSessionId: 'session-1',
-    root: { type: 'leaf' as const, sessionId: 'session-1' },
-  }
+  const tab = { id: 'tab-1', title: 'Project' }
   return {
     state: {
       activeTabId: tab.id,
       tabs: [tab],
       sessions: {
-        'session-1': { cwd: '/project', title: 'Agent', kind },
+        'session-1': { cwd: '/project', title: 'Agent', kind, projectId: 'tab-1', joinedAt: 0 },
       },
-      detachedSessions: {},
-      buried: [],
       pinnedSessionIds: [],
-      gridRelatedSelections: {},
-      dispatchMode: null,
+      stage: oneLaneStage('session-1'),
     },
     activeTab: tab,
-    dispatchMode: null,
+    stage: oneLaneStage('session-1'),
     readerMode: { tabId: tab.id, focusedSessionId: 'session-1' },
     getRuntime: () => runtime,
     setReaderModeSession: vi.fn(),

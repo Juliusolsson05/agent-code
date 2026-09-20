@@ -84,7 +84,7 @@ common case, not the exotic one: 211 of 230 single-compaction Codex rollouts
 
 Lossy suffix truncation still exists as an explicit parser operation
 (`fitConversationToCharacterBudget`) for diagnostics and emergency tooling, and
-the ladder's fourth rung reuses its boundary rules. Neither is ever implicit. A
+the ladder's fifth rung reuses its boundary rules. Neither is ever implicit. A
 switch that loses anything reports what it lost.
 
 Character estimates intentionally exclude `source.raw`, because raw provenance
@@ -118,20 +118,38 @@ over budget loses a few old tool outputs, not a third of its history.
    the report is the host's only evidence of what the switch cost. Tool-call
    inputs are never touched here; edit diffs live in them. Report:
    `clearedResults`, `clearedChars` (net).
-3. **Trim long tool-call inputs,** oldest first, above `maxInputChars`. Objects
+3. **Clear message attachments, oldest first,** replacing `image`, `document`
+   and `opaque` content items inside messages with
+   `[<image|document|attachment> omitted during provider switch]`, one item at
+   a time and only as far as needed: the rung stops the moment the estimate
+   fits, and the same net-savings floor as rung 2 skips an item shorter than its
+   placeholder. Text items
+   are never touched: they are the user's or the model's own words, and the
+   line this rung draws is the same one rung 2 draws — consumed input before
+   authored content. The rung exists because of a recorded 2026-09-18 switch
+   (#998, agent-transcript-parser#28): the newest turn was a 15-character
+   prompt with a 549,526-character base64 screenshot, two turns after a prompt
+   carrying a 713,997-character `opaque` OpenCode `file` part, and no rung read
+   message content, so after dropping every earlier turn the ladder threw. An
+   `opaque` item counts as payload because every cross-provider projector drops
+   it on arrival; leaving it in place charges budget for bytes the target never
+   sees. The placeholder carries no character count, unlike rung 2's, because a
+   base64 length tells the model nothing; the numbers are in the report.
+   Report: `clearedAttachments` (per item), `clearedAttachmentChars` (net).
+4. **Trim long tool-call inputs,** oldest first, above `maxInputChars`. Objects
    are trimmed member by member rather than stringified, because a Claude
    historical `tool_use.input` must be an object: replacing
    `{ file_path, content }` with a string forces the projector's
    `input-object-repaired` path and the target then sees a `Write` whose
    `file_path` has vanished. Only the record's own top-level string members are
-   trimmed — strings nested inside a member object or array are left to rung 4,
+   trimmed — strings nested inside a member object or array are left to rung 5,
    because recursing would mean deciding which nested key is safe to gut without
    knowing any tool's schema, which is exactly the provider knowledge this
    module does not have. The cap applies to the *serialized* result including
    the truncation marker and is found by binary search, so this arithmetic and
    the budget arithmetic cannot disagree. Report: `trimmedInputs`,
    `trimmedChars` (net).
-4. **Drop the oldest complete turns,** cutting only at a safe resume boundary
+5. **Drop the oldest complete turns,** cutting only at a safe resume boundary
    and explaining the loss in a synthetic compaction marker that indexes the
    dropped user prompts. The marker is budget-aware: its prompt index is trimmed
    oldest-first to fit the room left, and a carried-over plaintext summary is
@@ -140,7 +158,44 @@ over budget loses a few old tool outputs, not a third of its history.
    `droppedEntries`, `droppedTurns`, `retainedDeveloperMessages`,
    `promptIndexLength`.
 
-Recent-turn protection on rungs 2 and 3 is narrower than "never inside the most
+The rungs run in **two passes**. The first honours the recent-turn protection
+below on rungs 2–4 and then drops. If the drop rung cannot fit *any* complete
+turn — the protected suffix alone exceeds the budget — the protection is lifted
+on the conversation as it stood before the drop attempt, and the drop rung runs
+again. Only if that still leaves the newest turn over budget does the ladder
+throw. Re-running on the pre-drop conversation rather than on the failed cut
+matters: once recent payload is on the table, clearing it may make room for
+older turns the first attempt would have discarded, so the drop rung removes
+only what is still necessary.
+
+The lift does **not** simply run all three clearing rungs. Each rung stops only
+when the *whole* conversation fits, which inside the lifted range it rarely can
+— the range was entered because one thing in it is enormous — so the first
+version cleared every recent tool output on its way to the pasted image that was
+the actual cause (256 → 262 cleared outputs on the recorded transcript, with
+97.6 % of the budget unused and no extra history retained). `liftProtection`
+measures the full lift first, to learn how much history is achievable, then
+tries the cheaper rung subsets in ladder-cost order (outputs; attachments;
+both) and keeps the first that fits **and** drops no more entries than the full
+lift. "Keep as much history as possible" outranks "touch as little recent
+payload as possible", because clearing payload is cheaper than dropping turns
+everywhere else on the ladder; the subset search only removes loss that bought
+nothing. Known residual: *within* a rung the walk is still oldest-first to
+exhaustion. Rungs 2 and 4 treat their own placeholder and marker as terminal, so
+a second visit can never count one loss twice. The
+protection is a preference for keeping "what I was just doing" intact; it was
+never meant to be the reason a switch is refused, and the design had already
+relaxed it for single-turn conversations on exactly that argument. Report:
+`liftedRecentTurnProtection`, true only when the second pass removed something —
+a newest turn that is 300k characters of the user's own prose still throws,
+with the flag false, because there was nothing the lift could legitimately take.
+The host puts "newest turns trimmed" near the front of the toast when it is
+set, because the protection is a promise this feature has made to users, and
+lossy switch toasts stay up for `LOSSY_SWITCH_TOAST_MS` (10 s) instead of the
+two-second default: the disclosure is worthless if nobody can read it, and the
+pane toast clamps to three lines, so what the user must act on leads.
+
+Recent-turn protection on rungs 2 to 4 is narrower than "never inside the most
 recent `keepRecentTurns` user turns":
 
 - more than `keepRecentTurns` user turns — the original rule;
@@ -156,7 +211,7 @@ recent `keepRecentTurns` user turns":
   tenths of it is stale tool output would be a worse answer than the evidence
   supports.
 
-`keepDeveloperMessages` decides whether rung 4 lifts developer-role messages out
+`keepDeveloperMessages` decides whether rung 5 lifts developer-role messages out
 of the dropped range and keeps them after the marker. It defaults to `true`,
 which is what the census supports about a source thread: Codex developer
 messages are 36.9 % of the repeatedly-compacted fixture's characters and are the
@@ -168,7 +223,7 @@ many developer messages existed, so a deletion is never silent.
 Thresholds are `keepRecentTurns: 3`, `maxInputChars: 8,000`,
 `maxIndexedPrompts: 40`, `promptIndexChars: 200`. The first two are
 **placeholders chosen by argument, not by measurement** — the census reports no
-per-turn size distribution and no tool-call input-size percentiles, and rung 3
+per-turn size distribution and no tool-call input-size percentiles, and rung 4
 did not fire at all in the committed ladder runs. The Stage 7 live probe is what
 replaces them with observed numbers; until it reports, treat both as
 unvalidated. The last two only bound a courtesy list (8,208 characters worst
@@ -177,7 +232,8 @@ become the thing that overflows the window.
 
 ### Provider knowledge
 
-The ladder knows entry kinds and character budgets. It never names a provider,
+The ladder knows entry kinds, message content kinds (text versus everything
+else) and character budgets. It never names a provider,
 its single consumer is `operations/contextBudget.ts`, and no projector, decoder
 or host file may import it. Sizing policy has exactly one home, so the host
 cannot arbitrate sizes itself and a projector cannot grow a second opinion.
@@ -515,7 +571,8 @@ because this modal is a permanently mounted surface.
 - A successful switch reports `strategy: 'native' | 'raw' | 'shrunk'` and, for a
   shrunk one, a one-line `shrinkSummary`. `truncatedBeforeSwitch` means "the
   ladder removed anything at all", not only "it dropped entries" — clearing an
-  output or trimming an input is just as lossy from the target's point of view.
+  output, omitting an attachment or trimming an input is just as lossy from the
+  target's point of view.
   Prose is formatted by the host, never by the parser, which reports numbers.
 - `overflowPolicy` still works for existing callers: `truncate` now routes to
   the ladder (a strict upgrade on the whole-turn fitter it replaces, which
@@ -538,8 +595,10 @@ The switch aborts without replacing the pane when any of these occur:
 - source session kind or workspace no longer matches the request;
 - the source transcript cannot be decoded;
 - target model or context profile cannot be resolved;
-- the shrink ladder cannot fit the last complete user turn
-  (`ConversationUnfittableError`);
+- the shrink ladder cannot fit the last complete user turn even after clearing
+  its payload with the recent-turn protection lifted
+  (`ConversationUnfittableError`) — in practice, the newest turn's own text is
+  larger than the target's budget;
 - projected native transcript validation, file write, or OpenCode import fails;
 - the source process exits during orchestration.
 
@@ -627,6 +686,22 @@ transcript. Until a `raw` and a `shrunk` probe run against real sessions, those
 are open questions, and the ladder's `keepRecentTurns` and `maxInputChars`
 defaults remain placeholders.
 
+The same is true of attachments. When the target is Claude, the projector
+re-encodes a foreign image part — an OpenCode `file` part's `url`, a Codex
+`input_image`'s `image_url` — as the observed Claude block
+`{type:'image'|'document', source:{type:'base64', media_type, data}}`, for
+png/jpeg/gif/webp images and PDFs whose payload is plain base64 within the API's
+5 MB limit; anything else, including remote URLs, is dropped with a change
+record, and an `opaque` item carrying such a data URL is re-encoded too so a
+transcript the pre-fix projector poisoned can be healed by a Claude → Claude
+duplicate or rewind (#999, agent-transcript-parser#29). The block shape is
+pinned to the `claude-message-block-image` fixture, but **no live probe has
+shown the Claude API accepting a re-encoded block on the next turn** — and the
+failure this replaced was exactly of the kind a structural test cannot see: the
+TUI loaded the transcript and the API rejected it on the next prompt. The Codex
+and OpenCode projectors still drop each other's image shapes (with a change
+record, never an invalid block).
+
 OpenCode currently adds a separate isolated CLI contract probe: import the
 projected envelope into temporary XDG state, export the resulting `ses_…`, and
 decode it again. This proves native schema/load compatibility without reading
@@ -640,7 +715,8 @@ They share a planning concept, not persistence semantics. Never copy encrypted
 provider payloads across providers, never treat Claude's boundary placeholder
 as its summary, never accept a rate-limit message as a summary, never project a
 provider's API-error record as assistant text, never invent an OpenCode
-compaction record, and never make truncation an implicit recovery path. Any
+compaction record, never copy a foreign attachment part verbatim into a target
+transcript, and never make truncation an implicit recovery path. Any
 change to these rules requires both structural tests and a real semantic resume
 probe.
 

@@ -177,7 +177,10 @@ export function buildAppWindow(options: {
     ...(bounds ?? { width: DEFAULT_WIDTH, height: DEFAULT_HEIGHT }),
     show: false,
     titleBarStyle: 'hiddenInset',
-    backgroundColor: '#0a0a0a',
+    // The Nord canvas (#973). This is what the window paints before the
+    // renderer's first frame, so it must match the default theme's canvas or
+    // every launch flashes a different colour for a frame.
+    backgroundColor: '#171b21',
     webPreferences: {
       // WHY the renderer is NOT told its own window id: it never needs one.
       // Every window-scoped IPC handler resolves the window from

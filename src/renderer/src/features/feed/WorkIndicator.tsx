@@ -28,6 +28,8 @@ import { memo, useEffect, useState } from 'react'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import type { StreamPhase } from '@renderer/session-runtime/state'
 import { useElapsedSeconds } from '@renderer/lib/useElapsedSeconds'
+import { useSystemSuspensions } from '@renderer/lib/systemSuspensions'
+import { suspendedMsWithin } from '@shared/agentActivity/workingSeconds'
 
 type Props = {
   phase: StreamPhase
@@ -54,7 +56,18 @@ export const WorkIndicator = memo(function WorkIndicator({
   // enough at 1Hz that we don't bother with requestAnimationFrame or
   // a shared clock; the re-render is also scoped to this memoed
   // component via React.memo on the parent wrapper.
-  const elapsedSeconds = useElapsedSeconds(turnStartedAt)
+  const wallSeconds = useElapsedSeconds(turnStartedAt)
+  // #963: the counter is WORKING time. A turn that was live when the lid closed
+  // used to read `Thinking · 11h04m` on wake; subtract every machine suspension
+  // inside the turn, using the same rule the analytics recorder uses
+  // (workingSeconds.ts). Derived from the ticked wall seconds so the value only
+  // changes on the hook's 1 Hz tick.
+  const suspensions = useSystemSuspensions()
+  const elapsedSeconds = wallSeconds === null || turnStartedAt === null
+    ? null
+    : Math.max(0, wallSeconds - Math.floor(
+      suspendedMsWithin(suspensions, turnStartedAt, turnStartedAt + wallSeconds * 1000) / 1000,
+    ))
 
   if (phase === 'idle') return null
 

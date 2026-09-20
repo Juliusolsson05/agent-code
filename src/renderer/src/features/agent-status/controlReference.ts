@@ -7,7 +7,7 @@ export const controlReference = [
     "id": "agent-status",
     "title": "Agent status and activity",
     "purpose": "Find sessions that are working, waiting or need attention.",
-    "ui": "Agent Status panel and agent activity UI.",
+    "ui": "Agent Status panel, installed skills inventory with refresh, and agent activity UI.",
     "prerequisites": "Existing workspace sessions.",
     "workflow": [
       "Open status",
@@ -15,7 +15,7 @@ export const controlReference = [
       "reveal the agent needing attention."
     ],
     "outcome": "The operator reaches the existing agent with its status context.",
-    "cautions": "Status is evidence about activity, not proof that the requested coding task is complete.",
+    "cautions": "Status is evidence about activity, not proof that the requested coding task is complete. Installed skills include Agent Code deployments and provider discovery directories; the panel reports unexposed sources and does not claim a running agent has loaded a skill.",
     "commandIds": [
       "show-agent-status"
     ]

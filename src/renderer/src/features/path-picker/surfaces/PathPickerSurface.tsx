@@ -5,6 +5,7 @@ import { useAppStore } from '@renderer/app-state/hooks'
 import { useWorkspaceContext } from '@renderer/workspace/WorkspaceContext'
 import { findTabsHoldingDirectory, resolveTabSessions } from '@renderer/workspace/queries'
 import { tabIndexLabel } from '@renderer/workspace/tile-tree/paneLabelFormat'
+import { commandTargetSessionIdForState } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 
 // Registry wrapper (#494): owns the store + workspace wiring App.tsx
 // used to inline for the new-tab / resume path picker. Always mounted
@@ -38,14 +39,20 @@ export function PathPickerSurface() {
     // inserted session across ALL tabs — once Dispatch Mode landed,
     // that's frequently a background detached agent in a different
     // project, and the user opens the new-tab picker pre-filled with
-    // a directory they aren't standing in. Prefer (a) the active
-    // tab's focused session, (b) the first session resolved for the
-    // active tab by the canonical resolver. Falls through to
+    // a directory they aren't standing in. Prefer (a) the commanded
+    // session when it is in the active project, (b) the first session
+    // resolved for the active project by the canonical resolver. Falls through to
     // window.api.defaultCwd() when the active tab has no sessions.
     const activeTabId = workspace.activeTab?.id
     let fallbackCwd: string | undefined
     if (activeTabId) {
-      const focusedId = workspace.activeTab?.focusedSessionId ?? null
+      // The agent under the cursor when it belongs to the active project,
+      // else that project's first session. (The first half was the active
+      // tab's tile-tree focus until #992.)
+      const commanded = commandTargetSessionIdForState(workspace.state)
+      const focusedId = commanded && workspace.state.sessions[commanded]?.projectId === activeTabId
+        ? commanded
+        : null
       const candidateId = focusedId ?? resolveTabSessions(workspace.state, activeTabId)[0] ?? null
       if (candidateId) {
         fallbackCwd = workspace.state.sessions[candidateId]?.cwd

@@ -13,10 +13,8 @@ import { RemotePanelSurface } from '@renderer/features/remote/surfaces/RemotePan
 import { DebugSurfaces } from '@renderer/features/debug/surfaces/DebugSurfaces'
 import { CommandPaletteSurface } from '@renderer/features/command-palette/surfaces/CommandPaletteSurface'
 import { PathPickerSurface } from '@renderer/features/path-picker/surfaces/PathPickerSurface'
-import { TileTabsModalSurface } from '@renderer/features/workspace/surfaces/TileTabsModalSurface'
 import { ReorderTabsSurface } from '@renderer/features/workspace/surfaces/ReorderTabsSurface'
 import { PinAgentsSurface } from '@renderer/features/dispatch-pin/surfaces/PinAgentsSurface'
-import { BuryPanePromptSurface } from '@renderer/features/workspace/surfaces/BuryPanePromptSurface'
 import { RootManagementConfirmSurface } from '@renderer/features/workspace/surfaces/RootManagementConfirmSurface'
 import { MergeProjectTabsSurface } from '@renderer/features/workspace/surfaces/MergeProjectTabsSurface'
 import { CloseConfirmationSurface } from '@renderer/features/workspace/surfaces/CloseConfirmationSurface'
@@ -30,9 +28,12 @@ import { ColorFlagPickerSurface } from '@renderer/features/workspace/surfaces/Co
 import { KeyboardShortcutsSurface } from '@renderer/features/settings/surfaces/KeyboardShortcutsSurface'
 import { RewindToPromptSurface } from '@renderer/features/workspace/surfaces/RewindToPromptSurface'
 import { AgentTitlePromptSurface } from '@renderer/features/workspace/surfaces/AgentTitlePromptSurface'
+import { AppHostSurface } from '@renderer/apps/surfaces/AppHostSurface'
 import { ProviderSwitchPickerSurface } from '@renderer/features/workspace/surfaces/ProviderSwitchPickerSurface'
 import { KeyVaultModalSurface } from '@renderer/features/key-vault/surfaces/KeyVaultModalSurface'
 import { NewAgentInSurface } from '@renderer/features/workspace/surfaces/NewAgentInSurface'
+import { TldrHistorySurface } from '@renderer/features/tldr/surfaces/TldrHistorySurface'
+import { AgentAnalyticsSurface } from '@renderer/features/agent-analytics/surfaces/AgentAnalyticsSurface'
 
 // The surface registry (issue #494). Adding a surface = write a wrapper
 // in the owning feature's surfaces/ folder + add ONE import + ONE array
@@ -71,10 +72,8 @@ export const modalSurfaces: SurfaceEntry[] = [
   { id: 'dispatch-row-project', Component: DispatchRowProjectSurface },
   { id: 'caffeinate-toast', Component: CaffeinateToastSurface },
   { id: 'keyboard-shortcuts', Component: KeyboardShortcutsSurface },
-  { id: 'tile-tabs', Component: TileTabsModalSurface },
   { id: 'reorder-tabs', Component: ReorderTabsSurface },
   { id: 'pin-agents', Component: PinAgentsSurface },
-  { id: 'bury-pane', Component: BuryPanePromptSurface },
   { id: 'close-confirmation', Component: CloseConfirmationSurface },
   { id: 'debug-bundle-note', Component: DebugBundleNoteSurface },
   { id: 'recording-note', Component: RecordingNoteSurface },
@@ -103,6 +102,19 @@ export const modalSurfaces: SurfaceEntry[] = [
   // Appended per the contract above; opened only from a command that closes
   // the palette first (#913).
   { id: 'merge-project-tabs', Component: MergeProjectTabsSurface },
+  // Appended per the contract above. Opened only from a session command that
+  // closes the palette first, so it stacks over established modals by order.
+  { id: 'tldr-history', Component: TldrHistorySurface },
+  // Appended per the contract above (#964). Opened only from a command that
+  // closes the palette first, so it stacks over established modals by order.
+  { id: 'agent-analytics', Component: AgentAnalyticsSurface },
+  // Built-in apps host. Last in the array, which per the paint-order contract
+  // above means it paints above every modal already mounted. That placement is
+  // reasoned, not defaulted: an app is always user-initiated from the palette and
+  // is the thing awaiting input for as long as it is open, so nothing already on
+  // screen has a claim to cover it. No app has a reason to sit *under* another
+  // modal — if one ever does, that is a signal it should not be an app.
+  { id: 'app-host', Component: AppHostSurface },
 ]
 
 /**

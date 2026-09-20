@@ -1,13 +1,12 @@
 import { requestSessionRoutingRefresh } from '@renderer/session-runtime/routingGap'
 import type { ReactNode } from 'react'
 import { shortenCwd } from '@renderer/workspace/tile-tree/TileLeaf/labels'
+// Still needed after the unified stage (#1013) deleted the related-agent
+// strip that used to be this header's only store read: the routing-gap notice
+// below subscribes to exactly one rare object on the displayed session.
 import { useAppStore } from '@renderer/app-state/hooks'
-import { useShallow } from 'zustand/react/shallow'
 import { PaneHeaderColorFlag } from '@renderer/workspace/tile-tree/TileLeaf/PaneHeaderColorFlag'
-import type { GridRelatedAgentTab } from '@renderer/workspace/gridRelatedAgents'
-import { dispatchAttentionLabelFromConditions } from '@renderer/workspace/conditions/selectors'
 import type { SessionId } from '@renderer/workspace/types'
-import type { SessionRuntime } from '@renderer/workspace/workspaceStore'
 import { AgentTitleHeader } from '@renderer/workspace/tile-tree/AgentTitleHeader'
 import { paneHeaderStatusLit } from '@renderer/workspace/tile-tree/TileLeaf/paneHeaderStatus'
 
@@ -51,11 +50,6 @@ export function PaneHeader({
   projectDir,
   statusMode,
   isSessionLive,
-  relatedAgentTabs = [],
-  selectedRelatedSessionId,
-  runtimes,
-  ownerSessionId,
-  onSelectRelatedSession,
   badge,
   trailing,
 }: {
@@ -65,11 +59,6 @@ export function PaneHeader({
   projectDir: string | null
   statusMode: boolean
   isSessionLive: boolean
-  relatedAgentTabs?: GridRelatedAgentTab[]
-  selectedRelatedSessionId?: string
-  runtimes?: Record<string, SessionRuntime>
-  ownerSessionId?: string
-  onSelectRelatedSession?: (sessionId: string) => void
   /** Surface identity shown right after the pane label (e.g. `raw claude`). */
   badge?: ReactNode
   /** Surface state pinned to the right end of the status row, left of the
@@ -82,25 +71,6 @@ export function PaneHeader({
   // Subscribe only to this rare gap object, never every feed/PTY update.
   const routingGap = useAppStore(state => state.workspaceRuntimes?.[sessionId]?.routingGap)
   const statusLit = paneHeaderStatusLit(statusMode, isSessionLive)
-  // Related agents can change without rerendering this session. Only the two
-  // painted status values are dependencies; subscribing to their entire
-  // runtimes would couple every related transcript delta back to this header.
-  //
-  // WHY the store read is optional-chained instead of a bare index: the phone
-  // shares this header, and the phone bundle stubs @renderer/app-state/hooks
-  // to a `{ settings }`-only store
-  // (src/remote-client/src/stubs/appStateHooks.ts) that has NO
-  // `workspaceRuntimes` key. SessionView passes `relatedAgentTabs={[]}`, so
-  // today the flatMap body never runs and the key is never touched; the `?.`
-  // keeps a hypothetical future phone caller that passes chips from throwing
-  // on the missing key, degrading to the `runtimes` prop and then to
-  // "unknown" instead. Un-optional-chained, this whole header is sound on the
-  // phone only by the empty-array accident of one call site.
-  const relatedStatus = useAppStore(useShallow(state => relatedAgentTabs.flatMap(tab => {
-    const runtime = state.workspaceRuntimes?.[tab.sessionId] ?? runtimes?.[tab.sessionId]
-    return [runtime?.sessionStatus === 'running',
-      dispatchAttentionLabelFromConditions(runtime?.conditions ?? null) ?? (runtime?.processError ? 'ERROR' : null)]
-  })))
   return (
     <div className="border-b border-border bg-surface text-muted font-code select-none">
       <div
@@ -198,61 +168,6 @@ export function PaneHeader({
           keeps five narrow Tiled Dispatch lanes legible without weakening the
           existing header contract. Untitled agents render no row at all. */}
       <AgentTitleHeader sessionId={sessionId} title={agentTitle} />
-      {relatedAgentTabs.length > 0 && (
-        <div className="flex items-center gap-1 overflow-x-auto border-t border-border/70 px-2 py-1 text-[10px]">
-          {relatedAgentTabs.map((tab, index) => {
-            const active = tab.sessionId === selectedRelatedSessionId
-            const running = relatedStatus[index * 2]
-            const attention = relatedStatus[index * 2 + 1]
-            const title = `${tab.relation}: ${tab.title}${tab.placement === 'detached' ? ' (detached)' : ''}`
-            return (
-              <button
-                key={tab.sessionId}
-                type="button"
-                title={title}
-                aria-pressed={active}
-                onMouseDown={event => event.preventDefault()}
-                onClick={event => {
-                  event.stopPropagation()
-                  onSelectRelatedSession?.(tab.sessionId)
-                }}
-                className={[
-                  'flex h-5 max-w-[160px] flex-shrink-0 items-center gap-1 rounded-control border px-1.5',
-                  'leading-none transition-colors',
-                  active
-                    ? 'border-accent bg-accent text-accent-fg'
-                    : 'border-border bg-canvas text-muted hover:border-accent/70 hover:text-ink',
-                ].join(' ')}
-              >
-                <span
-                  // WHY a data attribute and not a role or aria-label: the dot
-                  // is decorative (the chip's `title` already carries the
-                  // relation and name for assistive tech), but tests need a
-                  // hook that does not depend on Tailwind class names. The
-                  // header row already uses `data-pane-header-row` for the
-                  // same reason, so this follows that precedent.
-                  data-related-status={
-                    attention === 'ERROR' ? 'error' : attention ? 'attention' : running ? 'running' : 'idle'
-                  }
-                  className={[
-                    'h-1.5 w-1.5 flex-shrink-0 rounded-full',
-                    attention === 'ERROR'
-                      ? 'bg-danger'
-                      : attention
-                        ? 'bg-warning'
-                        : running
-                          ? 'bg-accent'
-                          : 'bg-muted',
-                  ].join(' ')}
-                />
-                <span className="truncate">
-                  {tab.sessionId === ownerSessionId ? 'parent' : tab.label}
-                </span>
-              </button>
-            )
-          })}
-        </div>
-      )}
       {routingGap && (
         <div role="status" className="flex items-center gap-2 border-t border-border px-3 py-1 text-[11px] text-warning">
           <span className="min-w-0 flex-1">

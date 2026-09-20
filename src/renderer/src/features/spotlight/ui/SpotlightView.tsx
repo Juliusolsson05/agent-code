@@ -1,6 +1,5 @@
 import { renderWorkspaceLeaf } from '@renderer/workspace/tile-tree/TileTree'
 import type { AgentViewMode } from '@renderer/app-state/settings/types'
-import { resolveTabSessions } from '@renderer/workspace/queries'
 import { dispatchSessionIdsForTab } from '@renderer/workspace/dispatch/dispatchSelectors'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 
@@ -19,15 +18,15 @@ export function SpotlightView({ workspace, agentViewMode, showStatusMode, showWo
   const tab = workspace.state.tabs.find(item => item.id === spotlight.tabId)
   if (!tab) return null
 
-  // Dispatch mode uses the visible-row selector rather than the raw project
-  // groups. Pinned rows render in their own Dispatch section, but focus
-  // takeovers must still let the user read/watch the pinned agent that command
-  // targeting selected. The non-Dispatch path uses the canonical resolver so
-  // Spotlight covers detached agents owned by this tab whenever Dispatch mode
-  // is off.
-  const sessionIds = workspace.dispatchMode
-    ? dispatchSessionIdsForTab(workspace.state, tab.id)
-    : resolveTabSessions(workspace.state, tab.id)
+  // The pill list is the index's visible rows, not the raw project members.
+  // Pinned rows render in their own index section, but a focus takeover must
+  // still let the user read and watch the pinned agent that command targeting
+  // selected.
+  //
+  // (A `resolveTabSessions` branch covered "Dispatch is off" until #992; the
+  // index is always the membership model now. usePaneFocusSanity's validator
+  // in hook/invalidation/effects.ts must list exactly this set.)
+  const sessionIds = dispatchSessionIdsForTab(workspace.state, tab.id)
   if (sessionIds.length === 0) return null
 
   const focusedSessionId = sessionIds.includes(spotlight.focusedSessionId)

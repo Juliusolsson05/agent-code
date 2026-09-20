@@ -3,6 +3,13 @@
 // sessionManager and IPC handlers import from HERE.
 
 import { join } from 'path'
+import { GrokSession } from '@providers/grok/runtime/grokSession.js'
+import { discoverGrokSkillRoots } from '@providers/grok/runtime/skillDiscovery.js'
+import { deliverGrokPrompt } from '@providers/grok/runtime/promptDelivery.js'
+import { resolveGrokTranscriptPath } from 'grok-code-headless'
+import { discoverClaudeSkillRoots } from '@providers/claude/runtime/skillDiscovery'
+import { discoverCodexSkillRoots } from '@providers/codex/runtime/skillDiscovery'
+import { discoverOpencodeSkillRoots } from '@providers/opencode/runtime/skillDiscovery'
 import { opencodeTranscriptFile, parseOpencodeTranscriptFile } from 'opencode-terminal-headless'
 import { readOpencodeSessionInfo } from '@providers/opencode/runtime/opencodeDatabase'
 
@@ -26,6 +33,7 @@ import {
 const claudeMain: MainProviderConfig = {
   id: 'claude',
   name: 'Claude Code',
+  discoverSkillRoots: discoverClaudeSkillRoots,
   personalAgentSkills: {
     supported: true,
     locations: [
@@ -54,6 +62,7 @@ const claudeMain: MainProviderConfig = {
 const codexMain: MainProviderConfig = {
   id: 'codex',
   name: 'Codex',
+  discoverSkillRoots: discoverCodexSkillRoots,
   personalAgentSkills: {
     supported: true,
     locations: [
@@ -86,6 +95,7 @@ const codexMain: MainProviderConfig = {
 const opencodeMain: MainProviderConfig = {
   id: 'opencode',
   name: 'OpenCode',
+  discoverSkillRoots: discoverOpencodeSkillRoots,
   personalAgentSkills: {
     supported: true,
     locations: [
@@ -131,6 +141,32 @@ const opencodeMain: MainProviderConfig = {
   deliverPrompt: deliverOpencodePrompt,
 }
 
+const grokMain: MainProviderConfig = {
+  id: 'grok',
+  name: 'Grok',
+  // Native Grok skill locations are unrecorded (see skillDiscovery.ts); the
+  // adapter returns an empty root list with a visible notice rather than
+  // inventing a layout.
+  discoverSkillRoots: discoverGrokSkillRoots,
+  // supported:false for the same reason: nothing observed says native Grok
+  // reads the personal-agent skill folders, and the type demands a reason.
+  personalAgentSkills: { supported: false, reason: 'Native Grok skill discovery is not yet recorded; personal agent skills are not claimed for Grok panes.' },
+  // Grok has exactly one runtime shape — the native terminal — so both
+  // factories are the same session (unlike OpenCode's two runtimes).
+  createSession: (opts) => new GrokSession(opts),
+  createTerminalSession: (opts) => new GrokSession(opts),
+  // The native terminal runs in the pane's cwd, like Claude's and Codex's.
+  getProjectDir: async (cwd) => cwd,
+  // Grok history is a file the package resolves from cwd + session id; the
+  // generic file readers (reload, preview, switching) consume this path.
+  resolveTranscriptPath: async (cwd, providerSessionId) => resolveGrokTranscriptPath(cwd, providerSessionId),
+  // No transcriptLocator: the file path is the identity, and the catalog's
+  // stat fallback covers last-modified (a hand-rolled mtime here was dead
+  // code — only locator providers get transcriptLastModifiedAt — and would
+  // have resolved against the wrong cwd).
+  deliverPrompt: deliverGrokPrompt,
+}
+
 // Typed as Record<AgentProviderKind, …> (not Record<string, …>) so that
 // adding a kind to AGENT_PROVIDER_KINDS without registering a config here
 // is a COMPILE error, not a runtime "Unknown provider" surprise. That is
@@ -139,6 +175,7 @@ const mainProviders: Record<AgentProviderKind, MainProviderConfig> = {
   claude: claudeMain,
   codex: codexMain,
   opencode: opencodeMain,
+  grok: grokMain,
 }
 
 // Accepts a bare string (callers pass IPC args / persisted `kind` values)

@@ -2,6 +2,7 @@ import { ipcRenderer } from 'electron'
 
 import type { DevDebugConfig, PasteDebugSession } from '@preload/api/types.js'
 import type { RenderShapeAppendResult } from '@shared/types/renderShapes.js'
+import { subscribeShared } from '@preload/api/ipc.js'
 
 export const devDebugApi = {
   getDevDebugConfig: (): Promise<DevDebugConfig> =>
@@ -55,16 +56,11 @@ export const devDebugApi = {
   // event — for an idle restored pane that is whenever the user first
   // prompts it, unboundedly after Feed mount, so every renderer-side poll
   // schedule loses the race. Same subscribe shape as lsp:diagnostics.
+  // Shared (#1015/#1039 review): every Feed mounts a RenderShapeCaptureProvider
+  // that subscribes, so 11 rendered panes crossed MaxListeners.
   onSessionRecordingStarted: (
     cb: (payload: { sessionId: string; generation: string }) => void,
-  ): (() => void) => {
-    const listener = (
-      _evt: unknown,
-      payload: { sessionId: string; generation: string },
-    ): void => cb(payload)
-    ipcRenderer.on('record-session:started', listener)
-    return () => ipcRenderer.removeListener('record-session:started', listener)
-  },
+  ): (() => void) => subscribeShared('record-session:started', cb),
   // Natural provider exit is a two-step close: main keeps the recorder open
   // for a short grace window and asks the renderer to flush its coalesced
   // shape counters. The renderer acknowledges by calling finish below; main's
@@ -76,12 +72,7 @@ export const devDebugApi = {
   // closing fresh state.
   onSessionRecordingStopping: (
     cb: (payload: { sessionId: string; generation?: string }) => void,
-  ): (() => void) => {
-    const listener = (_evt: unknown, payload: { sessionId: string; generation?: string }): void =>
-      cb(payload)
-    ipcRenderer.on('record-session:stopping', listener)
-    return () => ipcRenderer.removeListener('record-session:stopping', listener)
-  },
+  ): (() => void) => subscribeShared('record-session:stopping', cb),
   finishSessionRecordingStop: (sessionId: string, generation?: string): Promise<void> =>
     ipcRenderer.invoke('record-session:finish-stop', sessionId, generation),
   readRenderShapeSightings: (): Promise<{

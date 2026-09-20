@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useAppStore } from '@renderer/app-state/store'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { SessionRoutingGap, SessionRoutingHistoryResult, SessionRoutingResyncResult } from '@shared/types/sessionRouting'
 import type { WorkspaceState } from '@renderer/workspace/types'
@@ -22,7 +23,9 @@ let list: ReturnType<typeof vi.fn<() => Promise<SessionRoutingGap[]>>>
 let setRuntimes: WorkspaceSetRuntimes
 
 beforeEach(() => {
-  state = { tabs: [], activeTabId: '', dispatchMode: null, detachedSessions: {}, buried: [], pinnedSessionIds: [], sessions: { pane: { kind: 'claude', cwd: '/fixture', providerSessionId: 'native-a', providerSessionIdSource: 'runtime-start' } } }
+  // `dispatchMode` left WorkspaceState with the unified stage (#1013), which
+  // made `stage` a required field; the pane is this fixture's one occupant.
+  state = { tabs: [], activeTabId: '', stage: oneLaneStage('pane'), pinnedSessionIds: [], sessions: { pane: { kind: 'claude', cwd: '/fixture', providerSessionId: 'native-a', providerSessionIdSource: 'runtime-start' } } }
   refs = makeWorkspaceRefsForTest(state)
   const runtime = { ...emptyRuntime(), sessionRunId: 'run-a', transcriptStatus: 'ready' as const, draftInput: 'keep this draft' }
   useAppStore.setState({ workspaceState: state, workspaceRuntimes: { pane: runtime } })

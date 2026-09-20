@@ -1,4 +1,4 @@
-import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
+import { DEFAULT_PROVIDER, isAgentSessionKind } from '@shared/types/providerKind'
 import type { SessionKind } from '@shared/types/providerKind'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
@@ -15,6 +15,7 @@ import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { Entry } from '@shared/types/transcript'
 import { relativeTime } from '@renderer/lib/relativeTime'
 import { cwdBasename, providerGlyph } from '@renderer/features/workspace/lib/sessionDisplay'
+import { commandTargetSessionIdForState } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 
 // AgentActivityModal — overview of every visible pane grouped by tab
 // with a last-activity indicator per row.
@@ -105,12 +106,6 @@ export function AgentActivityModal({ open, workspace, onClose }: Props) {
   const [nowTick, setNowTick] = useState(0)
   const inputRef = useRef<HTMLDivElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
-  // Used by the bury action — we need to open the note-prompt modal
-  // targeting a specific session id without touching whatever pane
-  // is currently focused. openBuryPrompt takes a sessionId directly,
-  // which is exactly the handle we have here.
-  const openBuryPrompt = useAppStore(s => s.openBuryPrompt)
-
   // Re-render on a timer so relative-time strings ("3m ago") don't
   // get visually stale while the modal is open. 10s is fine-grained
   // enough to feel live without churning the DOM excessively.
@@ -131,11 +126,20 @@ export function AgentActivityModal({ open, workspace, onClose }: Props) {
     void nowTick
 
     const built: Row[] = []
+    const focusedSessionId = commandTargetSessionIdForState(workspace.state)
     workspace.state.tabs.forEach((tab: Tab, tabIndex: number) => {
       const leaves = resolveTabSessions(workspace.state, tab.id)
       for (const sessionId of leaves) {
         const meta = workspace.state.sessions[sessionId]
         if (!meta) continue
+        // Extension-view panes are tile leaves with no process and no
+        // transcript, so they have no activity to report and every column here
+        // ("last active", "live", status tone, bury) is meaningless for them.
+        // Skipping is right rather than rendering an empty row: this modal is a
+        // triage list, and a permanently-blank entry per open extension pane is
+        // pure noise in the one view meant to answer "what is my fleet doing".
+        // Terminals stay because a PTY genuinely has running/exited state.
+        if (meta.kind === 'extension-view') continue
         const kind = (meta.kind ?? DEFAULT_PROVIDER) as SessionKind
         const runtime = workspace.runtimes[sessionId]
 
@@ -192,7 +196,9 @@ export function AgentActivityModal({ open, workspace, onClose }: Props) {
           kind,
           cwd: meta.cwd,
           cwdBase: cwdBasename(meta.cwd),
-          isFocused: tab.focusedSessionId === sessionId,
+          // The agent the user is commanding: the focused lane's occupant.
+          // (Each tab's tile-tree focus until #992.)
+          isFocused: focusedSessionId === sessionId,
           isLive,
           lastActiveAt,
           statusLabel,
@@ -277,7 +283,11 @@ export function AgentActivityModal({ open, workspace, onClose }: Props) {
 
   const focusRow = useCallback(
     (row: Row) => {
-      workspace.focusSessionInTab(row.tabId, row.sessionId)
+      // Show the agent: its existing lane if it has one, else the focused
+      // lane, waking it first. Until #992 this called focusSessionInTab, which
+      // moved the tile tree's focus — a no-op on the stage, so for a lane user
+      // "Focus" closed the modal and changed nothing.
+      void workspace.focusAgentBySessionId(row.sessionId)
       onClose()
     },
     [onClose, workspace],
@@ -293,20 +303,9 @@ export function AgentActivityModal({ open, workspace, onClose }: Props) {
     [workspace],
   )
 
-  const buryRow = useCallback(
-    (row: Row) => {
-      // Any session can be buried (#865). Bury keeps the process alive, and a
-      // terminal revives by re-attaching its tmux session. The old comment
-      // ("no notion of a resumable conversation") confused bury with resume.
-      // Close our modal before the bury-note prompt opens so the
-      // two dialogs don't stack visually. buryFocused(note, id)
-      // already accepts an explicit target id, so the note prompt
-      // does the right thing even after we close here.
-      onClose()
-      openBuryPrompt(row.sessionId)
-    },
-    [onClose, openBuryPrompt],
-  )
+  // The row-level Bury action lived here until #992. In the pool-first
+  // workspace "hide but keep alive" is what an unplaced session already is,
+  // so the modal keeps Focus and Close only.
 
   const switchSortMode = useCallback((mode: SortMode) => {
     setSortMode(mode)
@@ -355,16 +354,8 @@ export function AgentActivityModal({ open, workspace, onClose }: Props) {
         if (row) void closeRow(row)
         return
       }
-      // Lowercase b = bury. Uppercase treated the same — the user
-      // may hold shift out of muscle memory, shouldn't punish them.
-      if (e.key === 'b' || e.key === 'B') {
-        e.preventDefault()
-        const row = rows[selectedIdx]
-        if (row) buryRow(row)
-        return
-      }
     },
-    [rows, selectedIdx, onClose, focusRow, closeRow, buryRow],
+    [rows, selectedIdx, onClose, focusRow, closeRow],
   )
 
   function renderRow(row: Row, idx: number) {
@@ -444,14 +435,6 @@ export function AgentActivityModal({ open, workspace, onClose }: Props) {
         >
           <button
             type="button"
-            onClick={() => buryRow(row)}
-            className="rounded-control px-2 py-0.5 text-[10px] border border-border text-ink-dim hover:border-border-hi hover:text-ink"
-            title="Bury (b)"
-          >
-            bury
-          </button>
-          <button
-            type="button"
             onClick={() => void closeRow(row)}
             className="rounded-control px-2 py-0.5 text-[10px] border border-danger-border text-danger hover:bg-danger-soft"
             title="Close (del)"
@@ -482,7 +465,7 @@ export function AgentActivityModal({ open, workspace, onClose }: Props) {
               </DialogDescription>
             </div>
             <div className="text-[10px] uppercase tracking-wider text-muted">
-              Enter focus · Del close · B bury · Esc dismiss
+              Enter focus · Del close · Esc dismiss
             </div>
           </div>
           <div className="mt-3 flex items-center gap-2">

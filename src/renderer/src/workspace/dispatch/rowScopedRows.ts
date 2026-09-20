@@ -35,7 +35,14 @@ export const ORCHESTRATION_CHILD_CAP = 3
 
 export type RowScopedItem =
   | { kind: 'agent'; row: DispatchAgentRow; hidden?: undefined }
-  | { kind: 'more'; parentSessionId: SessionId; hidden: number }
+  | {
+      kind: 'more'
+      parentSessionId: SessionId
+      hidden: number
+      /** Which children the collapse hides, so the "+N more" row can carry
+       *  their "new" badge (#1013 review B: a 5-worker run showed only 3). */
+      hiddenSessionIds: SessionId[]
+    }
   | { kind: 'fewer'; parentSessionId: SessionId; hidden?: undefined }
 
 /**
@@ -107,6 +114,7 @@ export function rowScopedRows(
       kind: 'more',
       parentSessionId: row.sessionId,
       hidden: children.length - ORCHESTRATION_CHILD_CAP,
+      hiddenSessionIds: children.slice(ORCHESTRATION_CHILD_CAP).map(child => child.sessionId),
     })
   }
 

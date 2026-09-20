@@ -47,7 +47,6 @@ function setup(options: { runtime?: Partial<SessionRuntime>; input?: string; pro
     ...options.runtime,
   } as SessionRuntime
   const workspace = {
-    dispatchMode: false,
     updateRuntime,
     showPaneToast,
     clearPendingRewindUndo: vi.fn(),

@@ -1,73 +1,64 @@
 import type {
-  DetachedSessionRecord,
   SessionId,
+  SessionMeta,
   TabId,
-  TileTabsState,
   WorkspaceState,
 } from '@renderer/workspace/types'
-import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
-import { sanitizeTileTabsState } from '@renderer/workspace/layout/helpers'
-import { hasSessionMeta } from '@renderer/workspace/sessionOwnership'
+import { resolveTabSessions } from '@renderer/workspace/queries'
 
-// Merge Project Tabs (#913): fold source tabs into a target tab WITHOUT
+// Merge Project Tabs (#913): fold source projects into a target project WITHOUT
 // touching any process.
 //
 // WHY a pure planner over WorkspaceState instead of a sequence of existing
-// actions (detach, close tab): `closeTab` kills every session it owns, which
-// is the one thing a merge must never do, and `detachSession` refuses the last
-// grid pane of a tab because a tab cannot exist without a tile tree. A merge
-// removes the tab itself, so that guard does not apply; the leaf simply
-// becomes a detached record of the target. Doing the whole re-pointing in one
-// pure function makes the invariant testable in isolation: the owned-session
-// set (`collectOwnedSessionIds`) is identical before and after, so no session
-// can be orphaned and then deleted by the next autosave.
+// actions: `closeTab` kills every session it owns, which is the one thing a
+// merge must never do. Doing the whole re-pointing in one pure function makes
+// the invariant testable in isolation: the owned-session set
+// (`collectOwnedSessionIds`) is identical before and after, so no session can
+// be orphaned and then deleted by the next autosave.
 //
-// WHY source grid panes go to Dispatch rather than into the target's grid:
-// `Tab.root` is a tile tree the user built. Attaching every source pane would
-// turn one tab into a wall of splits, and `buildDispatchGroups` already lists
-// detached sessions under their tab, so nothing is hidden. The user attaches
-// what they want afterwards.
+// WHAT a merge is now (#992): every session of a source project is re-filed
+// under the target — `projectId` changes, nothing else — and the emptied
+// source projects are removed. Until the unified layout this was three
+// re-pointings over three owner structures (source tile leaves became detached
+// records of the target, because attaching them would have turned the target's
+// tree into a wall of splits; source detached records got a new
+// `projectTabId`; buried records a new `sourceTabId`), plus a refresh of the
+// display-index snapshots each record carried.
+//
+// WHY moved sessions are APPENDED to the target's index, in the order they
+// were listed: a merge is "put these in here too". Keeping each session's old
+// `joinedAt` would interleave them with the target's own rows by creation
+// time — and a migrated v2 tree leaf holds a tiny ordinal, so it would jump
+// ABOVE everything the target already had. Appending is predictable and
+// leaves the target's existing labels where they were.
 //
 // WHY there is no undo entry: undo-close exists to bring back sessions that
 // were KILLED, by re-spawning them from a captured SessionMeta. A merge kills
-// nothing, so there is nothing to re-spawn; reversing it would mean rebuilding
-// the removed tabs' tile trees from a snapshot while the sessions inside them
-// have kept running and may since have been attached, buried or closed. Every
-// moved agent stays reachable in the target's Dispatch list, so the manual
-// reverse (new tab, attach) is always available and never lossy.
-//
-// A consequence worth knowing before relying on "nothing restarts": it is true
-// for the running app only. Grid panes are the only sessions rehydrate spawns
-// at launch (`collectLiveProcessIds`); a merged pane is now a detached record,
-// so after the next launch it is hibernated like every other Dispatch agent
-// and wakes on its first use instead of being live from the start.
+// nothing, so there is nothing to re-spawn, and the sessions have kept running
+// and may since have been moved or closed. Every moved agent stays reachable
+// in the target's index.
 //
 // What is deliberately left alone, because every session survives and these
-// are keyed by session, not tab: Dispatch lanes, lane focus, pins, expanded
-// parents, `gridRelatedSelections` (only read for grid panes, and
-// `detachSessionToDispatch` leaves them too), and pane-close undo entries
-// anchored on a source pane (they resolve as stale, exactly as after a
-// detach).
+// are keyed by session, not project: lanes, lane focus, pins, expanded
+// parents, and undo entries anchored on a source project (they resolve as
+// stale — see UndoLineage for why a merge never publishes lineage).
 
 export type MergeProjectTabsInput = {
   targetTabId: TabId
   sourceTabIds: readonly TabId[]
-  /** Stamp for the new detached records; injected so tests are deterministic. */
+  /** Base stamp for the moved sessions' new index positions; injected so
+   *  tests are deterministic. */
   now: number
 }
 
 export type MergeProjectTabsSummary = {
   targetTabId: TabId
   targetTitle: string
-  /** Index of the target in the merged tab array (the letter Dispatch shows). */
+  /** Index of the target in the merged project array (the letter it shows). */
   targetIndex: number
   removedTabIds: TabId[]
-  /** Source grid panes that became detached records of the target. */
-  detachedFromGrid: SessionId[]
-  /** Source detached records re-pointed at the target. */
-  repointedDetached: SessionId[]
-  /** Buried records re-pointed at the target. */
-  repointedBuried: SessionId[]
+  /** Every session re-filed under the target, in its new index order. */
+  movedSessionIds: SessionId[]
 }
 
 export type MergeProjectTabsResult =
@@ -90,98 +81,43 @@ export function mergeProjectTabs(
   const tabs = state.tabs.filter(tab => !sourceSet.has(tab.id))
   const targetIndex = tabs.findIndex(tab => tab.id === input.targetTabId)
   const target = tabs[targetIndex]!
-  const affinity = {
-    projectTabId: target.id,
-    projectTabTitle: target.title,
-    projectTabIndex: targetIndex,
-  }
-  // Removing tabs shifts the index of every tab after them, and the records
-  // of SURVIVING tabs carry that index as a snapshot (`projectTabIndex`,
-  // `sourceTabIndex`). `buildDispatchGroups` recomputes it at render, but the
-  // agent-status model reads the raw value, and a merge that leaves the
-  // target's own records one letter behind the ones it just received would
-  // show two letters for one tab. `closeTab` leaves these stale and relies on
-  // the recompute; here the whole state is in hand, so refreshing is free.
-  const indexOf = new Map(tabs.map((tab, index) => [tab.id, index] as const))
 
-  const detachedSessions: Record<SessionId, DetachedSessionRecord> = {}
-  const repointedDetached: SessionId[] = []
-  for (const [sessionId, record] of Object.entries(state.detachedSessions)) {
-    if (sourceSet.has(record.projectTabId)) {
-      detachedSessions[sessionId] = { ...record, ...affinity }
-      repointedDetached.push(sessionId)
-      continue
-    }
-    const index = indexOf.get(record.projectTabId)
-    detachedSessions[sessionId] = index === undefined || index === record.projectTabIndex
-      ? record
-      : { ...record, projectTabIndex: index }
-  }
-  const detachedFromGrid: SessionId[] = []
-  for (const tab of state.tabs) {
-    if (!sourceSet.has(tab.id)) continue
-    for (const sessionId of collectLeaves(tab.root)) {
-      // A leaf with no SessionMeta is already an orphan the ownership rules
-      // would drop; carrying it as a detached record would only resurrect it.
-      // Same own-property test as ownership, so the two never disagree about
-      // what counts as metadata.
-      if (!hasSessionMeta(state.sessions, sessionId)) continue
-      // A pane that already has a detached record is a pre-existing
-      // ownership violation (a session cannot be both a grid leaf and
-      // detached). The merge ends it: the pane is no longer a leaf, so the
-      // record becomes its only owner. Keep the record's own stamp and count
-      // the session once, under whichever list already claimed it.
-      const existing = detachedSessions[sessionId]
-      if (existing) {
-        detachedSessions[sessionId] = { ...existing, ...affinity }
-        if (!repointedDetached.includes(sessionId)) repointedDetached.push(sessionId)
-        continue
-      }
-      detachedSessions[sessionId] = {
-        sessionId,
-        surface: 'dispatch',
-        ...affinity,
-        detachedAt: input.now,
-      }
-      detachedFromGrid.push(sessionId)
-    }
-  }
-
-  const repointedBuried: SessionId[] = []
-  const buried = state.buried.map(record => {
-    if (sourceSet.has(record.sourceTabId)) {
-      repointedBuried.push(record.sessionId)
-      return {
-        ...record,
-        sourceTabId: target.id,
-        sourceTabTitle: target.title,
-        sourceTabIndex: targetIndex,
-      }
-    }
-    const index = indexOf.get(record.sourceTabId)
-    return index === undefined || index === record.sourceTabIndex
-      ? record
-      : { ...record, sourceTabIndex: index }
+  // Source projects in PROJECT order (not the order the caller named them),
+  // each in its own index order: the merged list reads top-to-bottom the way
+  // the separate lists did.
+  const movedSessionIds = state.tabs
+    .filter(tab => sourceSet.has(tab.id))
+    .flatMap(tab => resolveTabSessions(state, tab.id))
+  // Strictly after everything the target already lists, whatever clock those
+  // rows were stamped with.
+  const lastTargetPosition = resolveTabSessions(state, target.id)
+    .reduce((max, id) => Math.max(max, state.sessions[id]?.joinedAt ?? 0), 0)
+  const base = Math.max(input.now, lastTargetPosition + 1)
+  const sessions: Record<SessionId, SessionMeta> = { ...state.sessions }
+  movedSessionIds.forEach((sessionId, offset) => {
+    sessions[sessionId] = { ...sessions[sessionId]!, projectId: target.id, joinedAt: base + offset }
   })
 
   // Row project filters name tabs; a filter that named a source now names the
   // target once. Lanes are session-keyed and need nothing.
-  const tiledRows = state.dispatchMode?.tiled?.rows
-  const dispatchMode = state.dispatchMode?.tiled && tiledRows
+  //
+  // `rows` is optional on a stage that predates the grid (a flat lane list);
+  // such a stage has no row metadata to re-point, so it is passed through
+  // untouched rather than normalized here — normalizing is the reducers' job
+  // and doing it as a side effect of a merge would hide the write.
+  const stageRows = state.stage.rows
+  const stage = stageRows
     ? {
-        ...state.dispatchMode,
-        tiled: {
-          ...state.dispatchMode.tiled,
-          rows: tiledRows.map(row => {
-            const bound = row.projectTabIds ?? (row.projectTabId ? [row.projectTabId] : undefined)
-            if (!bound || !bound.some(id => sourceSet.has(id))) return row
-            const { projectTabId: _legacy, ...rest } = row
-            const projectTabIds = [...new Set(bound.map(id => (sourceSet.has(id) ? target.id : id)))]
-            return { ...rest, projectTabIds }
-          }),
-        },
+        ...state.stage,
+        rows: stageRows.map(row => {
+          const bound = row.projectTabIds ?? (row.projectTabId ? [row.projectTabId] : undefined)
+          if (!bound || !bound.some(id => sourceSet.has(id))) return row
+          const { projectTabId: _legacy, ...rest } = row
+          const projectTabIds = [...new Set(bound.map(id => (sourceSet.has(id) ? target.id : id)))]
+          return { ...rest, projectTabIds }
+        }),
       }
-    : state.dispatchMode
+    : state.stage
 
   return {
     ok: true,
@@ -189,60 +125,16 @@ export function mergeProjectTabs(
       ...state,
       tabs,
       activeTabId: sourceSet.has(state.activeTabId) ? target.id : state.activeTabId,
-      detachedSessions,
-      buried,
-      dispatchMode,
+      sessions,
+      stage,
     },
     summary: {
       targetTabId: target.id,
       targetTitle: target.title,
       targetIndex,
       removedTabIds: sources,
-      detachedFromGrid,
-      repointedDetached,
-      repointedBuried,
+      movedSessionIds,
     },
   }
 }
 
-/**
- * The tiled-tabs half of a merge, shaped as a functional update so the hook
- * can apply it through `setTileTabs(prev => ...)` against the live value
- * rather than a render-time snapshot.
- *
- * WHY a tiled source is REPLACED by the target rather than dropped when the
- * target is not itself tiled: the user was looking at that source's tile, and
- * after the merge its agents belong to the target. Dropping the slot would
- * leave `activeTabId` on the target while `MainSurface` keeps rendering the
- * tiled set (it renders tiled tabs whenever the layout is set), so the tab the
- * user just kept would be the one tab not on screen. Only the first tiled
- * source takes the slot; the rest leave, and `sanitizeTileTabsState` exits
- * tiled tabs below two. Focus follows the same rule, so a focus that sat on a
- * source always lands on the target, which is tiled in either branch.
- */
-export function retargetTileTabsAfterMerge(
-  tileTabs: TileTabsState | null,
-  sourceTabIds: readonly TabId[],
-  targetTabId: TabId,
-): TileTabsState | null {
-  if (!tileTabs) return null
-  const sourceSet = new Set(sourceTabIds)
-  let slotTaken = tileTabs.tabIds.includes(targetTabId)
-  const kept = tileTabs.tabIds
-    .map((id, index) => ({ id, ratio: tileTabs.ratios[index] }))
-    .flatMap(item => {
-      if (!sourceSet.has(item.id)) return [item]
-      if (slotTaken) return []
-      slotTaken = true
-      return [{ id: targetTabId, ratio: item.ratio }]
-    })
-  const tabIds = kept.map(item => item.id)
-  const ratios = kept.map(item => item.ratio).filter((ratio): ratio is number => typeof ratio === 'number')
-  const focusedTabId = sourceSet.has(tileTabs.focusedTabId) ? targetTabId : tileTabs.focusedTabId
-  return sanitizeTileTabsState({
-    ...tileTabs,
-    tabIds,
-    focusedTabId,
-    ratios: ratios.length === tabIds.length ? ratios : [],
-  })
-}

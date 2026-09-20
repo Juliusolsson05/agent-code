@@ -357,6 +357,19 @@ export type AgentPermissionPromptState = {
  * no runtime cost, and forces provider authors to make an explicit
  * choice.
  */
+/**
+ * Durable-history generation boundary payload (grok catalog history.replacement).
+ * Provider-neutral on purpose: Codex already has file generations, and any
+ * provider whose transcript can be rewritten in place needs the same signal.
+ */
+export type ProviderHistoryBoundaryEvent = {
+  type: 'reset' | 'caught-up'
+  generation: number
+  snapshotByteLength: number
+  byteOffset?: number
+  complete?: boolean
+}
+
 export type AgentSessionEvents = {
   started: [{ projectDir?: string; proxyUrl?: string }]
   'input-readiness': [AgentInputReadiness]
@@ -391,6 +404,14 @@ export type AgentSessionEvents = {
   'process-state': [AgentProcessState]
   'trust-dialog': [AgentTrustDialogState]
   conditions: [ProviderConditionSnapshot]
+  // A durable-history generation boundary (grok: reset when native rewrote the transcript
+  // file, caught-up when the rewrite snapshot is fully delivered; catalog
+  // history.replacement). Never turn completion or idle. A rewrite re-delivers
+  // many rows under one boundary, so the boundary is its own ordering point
+  // rather than a per-entry flag. Sessions emit it from Stage 4; delivery
+  // through preload and both SessionFeeds is Stage 5 of the grok plan.
+  'history-boundary': [ProviderHistoryBoundaryEvent & { file: string }]
+
   'semantic-event': [unknown]
   exit: [{ exitCode: number; signal?: number }]
 } & AgentLegacyClaudeConditionEvents
@@ -467,6 +488,17 @@ export interface AgentSession extends AgentSessionEmitter {
   /** Optional: has the underlying process exited? Same rationale. */
   isExited?(): boolean
   /**
+   * Optional (proxy-streaming providers): the machine was suspended between
+   * `suspendedAt` and `resumedAt` (#963).
+   *
+   * WHY on the session contract: a stream whose socket died while the lid was
+   * closed never receives a transport end, and only the provider's adapter knows
+   * which of its flows were silent since before the suspension. The manager fans
+   * this out; each runtime decides what "sealing a severed stream" means for its
+   * transport. Providers without such state simply do not implement it.
+   */
+  noteSystemSuspension?(suspension: import('@shared/types/systemSuspension.js').SystemSuspension): void
+  /**
    * Optional startup-time durable provider identity.
    *
    * Most providers discover this later from transcript traffic. A native
@@ -491,6 +523,13 @@ export interface AgentSession extends AgentSessionEmitter {
     | { ok: true; state?: unknown }
     | { ok: false; reason: string; lastState?: unknown; failedAtStep?: string }
   >
+
+  /** Optional (OpenCode Terminal today): scroll the provider's OWN transcript
+   *  view to its newest message. For a TUI that pages its transcript on the
+   *  alternate screen, xterm's scrollToBottom cannot move anything (#843). The
+   *  provider must use a rebinding-proof route; a user-configurable chord is
+   *  not one. Never throws. */
+  jumpToLatest?(): Promise<{ ok: true } | { ok: false; reason: string }>
 
   /** Optional (Claude today): wait for the bracketed-paste placeholder
    *  to appear before firing Enter. See sessionManager.ts:952. */

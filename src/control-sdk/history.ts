@@ -12,6 +12,11 @@ export type HistoryWrite = Omit<HistoryEvent, 'sequence'>
 // Storage is an injected port, never a Node import in the SDK. An append only
 // resolves after both its payload and index are durable. Implementations must
 // reject writes after a damaged journal rather than manufacture a fresh past.
+// Implementations must also cache exactly the JSON-serializable shape of what
+// they write: JSON.parse never yields undefined own-properties, so accepting
+// an event with one (zod preserves explicit-undefined optionals) would make
+// the in-memory and durable views diverge and fail every JSON output guard
+// until a restart (#975).
 export interface ControlHistory {
   append(event: HistoryWrite, payload?: unknown): Promise<HistoryEvent>
   events(): Promise<HistoryEvent[]>

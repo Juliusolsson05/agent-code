@@ -159,6 +159,7 @@ const REAL_CHANNELS = new Set<FeedChannel>([
   'session:screen',
   'session:jsonl-entries',
   'session:jsonl-error',
+  'session:history-boundary',
   'session:semantic-event',
   'session:conditions',
   'session:process-state',

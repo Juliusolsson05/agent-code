@@ -114,6 +114,16 @@ export function wireSessionForwarder(
       message: String(error.message ?? error),
     })
   })
+  manager.on('history-boundary', payload => {
+    // Same ordering discipline as jsonl-error: a rewrite supersedes every
+    // buffered record of the old generation, so both the 100 ms semantic
+    // window and the pending jsonl batch must land BEFORE the boundary, and
+    // the boundary itself crosses directly (never coalesced — it is an
+    // ordering fact, not state to keep current).
+    semanticEvents.flush(payload.sessionId)
+    flushJsonl(payload.sessionId)
+    sendToSessionWindow(payload.sessionId, 'session:history-boundary', payload)
+  })
   manager.on('transcript-diagnostic', payload =>
     sendToSessionWindow(payload.sessionId, 'session:transcript-diagnostic', payload),
   )

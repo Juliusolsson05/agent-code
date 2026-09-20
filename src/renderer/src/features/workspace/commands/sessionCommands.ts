@@ -15,6 +15,7 @@ import { buildProviderResumeCommand } from '@renderer/workspace/providerResumeCo
 import { providerSupportsBuiltInMcpDomain } from '@mcp/shared/types'
 import type { BuiltInMcpDomain, BuiltInMcpOverrides } from '@mcp/shared/types'
 import { clearAgentComposer } from '@renderer/workspace/tile-tree/TileLeaf/clearAgentComposer'
+import { hasOrchestrationAgents } from '@renderer/workspace/idleOrchestrationAgents'
 import { sessionHasTranscript } from '@renderer/workspace/transcriptAvailability'
 import {
   reloadSessionWithBuiltInMcpChoice,
@@ -105,10 +106,10 @@ export const sessionCommands: CommandDef[] = [
       // the moment a switch edge was added for a provider whose prompts we
       // cannot parse, or an adapter for one with no switch edge.
       //
-      // sessionHasTranscript additionally excludes OpenCode Terminal (kind
-      // 'opencode', providerRuntime 'terminal'): its history loaders never
-      // populate `runtime.entries`, so prompt extraction had nothing to read
-      // even though promptHistoryExtraction is true for plain OpenCode.
+      // sessionHasTranscript keeps plain terminals out (no entries to extract
+      // from). OpenCode Terminal passes it since #971: #882's Stage 6 loads
+      // its history into `runtime.entries`, so prompt extraction reads real
+      // prompts — the modal opens over the TUI pane and mounts nothing on it.
       return getProviderFeatures(kind).promptHistoryExtraction && sessionHasTranscript(meta)
     },
     run: ({ workspace, ui }) => {
@@ -133,7 +134,9 @@ export const sessionCommands: CommandDef[] = [
     // mid-stream.
     id: 'rewind-to-prompt',
     category: 'session',
-    pickerVisibility: 'advanced',
+    // Default tier since the public-release audit (#973): un-hidden by hand
+    // on the owner's install, i.e. a daily action, not a niche one.
+
     surface: 'session',
     title: 'Rewind to Prompt…',
     description: '**What it does:** Rewinds the focused **agent session** to an earlier prompt.\n\n**Use when:** You want to branch from a previous point.\n\n**Notes:** The original transcript file is not edited.',
@@ -334,7 +337,9 @@ export const sessionCommands: CommandDef[] = [
     // handles the empty workspace case with a preview empty state.
     id: 'close-old-agents',
     category: 'workspace-tools',
-    pickerVisibility: 'advanced',
+    // Default tier since the public-release audit (#973): un-hidden by hand
+    // on the owner's install, i.e. a daily action, not a niche one.
+
     surface: 'app',
     title: 'Close Old Agents…',
     description: '**What it does:** Opens a batch cleanup modal for **agents and terminals** inactive longer than a chosen time.\n\n**Use when:** You want to close stale agents and terminals across all projects or selected projects.\n\n**Notes:** Defaults to 4 hours and excludes currently-running sessions unless you opt in.',
@@ -358,6 +363,49 @@ export const sessionCommands: CommandDef[] = [
       }
       ui.openCloseOldAgents()
       ui.closePalette()
+    },
+  },
+  {
+    // Close Idle Orchestration Agents (#960) — the end of an orchestration run
+    // whose parent never called close_run: every worker that has finished and
+    // is idle, across the window, after one confirmation listing them.
+    //
+    // WHY app-surface: like Close Old Agents, this cleans the workspace rather
+    // than acting on the focused pane, and the workers are usually Dispatch
+    // rows the user is not looking at.
+    //
+    // WHY no ellipsis although a dialog opens: the dialog confirms, it asks for
+    // no further input (docs/command-style.md rule 8), the same shape as Close
+    // Tab.
+    //
+    // WHY the default picker tier while Close Old Agents is `advanced`:
+    // `advanced` hides a command from the palette until the user reveals hidden
+    // commands, and this is the everyday end of an orchestration run rather
+    // than niche maintenance.
+    id: 'close-idle-orchestration-agents',
+    category: 'workspace-tools',
+    surface: 'app',
+    title: 'Close Idle Orchestration Agents',
+    description: '**What it does:** Closes every **orchestration agent** that has finished its work and is idle, after confirming the list.\n\n**Use when:** An orchestration run left finished workers parked in the pool.\n\n**Notes:** Working, starting, exited and failed agents stay open, and so do the agents that started them.',
+    keywords: [
+      'close',
+      'idle',
+      'orchestration',
+      'orchestrated',
+      'workers',
+      'children',
+      'finished',
+      'done',
+      'cleanup',
+      'dispatch',
+      'batch',
+    ],
+    when: ({ workspace }) => hasOrchestrationAgents(workspace.state),
+    run: async ({ workspace, ui }) => {
+      // Before the dialog opens, so the confirmation is not layered under the
+      // palette.
+      ui.closePalette()
+      await workspace.closeIdleOrchestrationAgents()
     },
   },
   {
@@ -413,7 +461,9 @@ export const sessionCommands: CommandDef[] = [
     // pane to focus first.
     id: 'search-conversation-prompts',
     category: 'workspace-tools',
-    pickerVisibility: 'advanced',
+    // Default tier since the public-release audit (#973): un-hidden by hand
+    // on the owner's install, i.e. a daily action, not a niche one.
+
     surface: 'app',
     title: 'Search Conversations…',
     description: '**What it does:** Finds a past conversation by **title, name or prompt text** across every worktree of this repository and all providers.\n\n**Use when:** You remember what you asked or what it was called, but not where it was.\n\n**Notes:** Same picker as Resume Session…, opened with the search field focused.',
@@ -583,7 +633,7 @@ export const sessionCommands: CommandDef[] = [
     pickerVisibility: 'advanced',
     surface: 'session',
     title: 'Agent Management MCP',
-    description: '**What it does:** Reloads the focused **agent** with project-wide Agent Code management tools on or off.\n\n**Use when:** You want this agent to inventory, inspect, prompt, or close other agents in its project.\n\n**Notes:** Read operations include visible, detached, and buried agents without waking them. Every close it attempts asks **you** to confirm first, and cascades are refused outright.',
+    description: '**What it does:** Reloads the focused **agent** with project-wide Agent Code management tools on or off.\n\n**Use when:** You want this agent to inventory, inspect, prompt, or close other agents in its project.\n\n**Notes:** Read operations include agents that are not in a lane, without waking them. Every close it attempts asks **you** to confirm first, and cascades are refused outright.',
     keywords: ['mcp', 'agent management', 'agents', 'project', 'transcripts', 'cleanup', 'prompt', 'close', 'enable', 'disable', 'reload', 'claude', 'codex', 'opencode'],
     when: ({ workspace }) => {
       return targetSupportsBuiltInMcpDomain(workspace, 'agent_management')
@@ -690,6 +740,38 @@ export const sessionCommands: CommandDef[] = [
       await reloadSessionWithBuiltInMcpChoice(workspace, sessionId, 'tldr', enable, {
         reloaded: enable ? 'Reloaded with TLDR MCP' : 'Reloaded without TLDR MCP',
         failed: 'TLDR MCP reload failed',
+      })
+    },
+  },
+  {
+    id: 'enable-goal-mcp',
+    category: 'session',
+    surface: 'session',
+    title: 'Goal MCP',
+    description: '**What it does:** Reloads the focused agent with goal recording on or off.\n\n**Use when:** You want this agent to record what its work is for, so you can see its purpose at a glance.\n\n**Notes:** Deploys the managed goal skill. Hold the Goal shortcut to read goals across visible agents. Works with or without TLDR.',
+    keywords: ['goal', 'purpose', 'objective', 'intent', 'mcp', 'why'],
+    when: ({ workspace }) => {
+      return targetSupportsBuiltInMcpDomain(workspace, 'goal')
+    },
+    getState: ctx => builtInMcpDomainState(ctx, 'goal'),
+    run: async ({ workspace, ui }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return
+      const meta = workspace.state.sessions[sessionId]
+      const kind = meta?.kind ?? DEFAULT_PROVIDER
+      // Provider policy is repeated at the mutation boundary: visibility is
+      // advisory and the command stays reachable from keybindings and control.
+      if (
+        !isAgentProviderKind(kind) ||
+        !providerSupportsBuiltInMcpDomain(kind, 'goal') ||
+        !meta
+      ) return
+
+      ui.closePalette()
+      const enable = !meta.builtInMcpDomains?.includes('goal')
+      await reloadSessionWithBuiltInMcpChoice(workspace, sessionId, 'goal', enable, {
+        reloaded: enable ? 'Reloaded with Goal MCP' : 'Reloaded without Goal MCP',
+        failed: 'Goal MCP reload failed',
       })
     },
   },
@@ -840,7 +922,9 @@ export const sessionCommands: CommandDef[] = [
   {
     id: 'copy-resume-command',
     category: 'session',
-    pickerVisibility: 'advanced',
+    // Default tier since the public-release audit (#973): un-hidden by hand
+    // on the owner's install, i.e. a daily action, not a niche one.
+
     surface: 'session',
     title: 'Copy Resume Command',
     description: '**What it does:** Copies a shell command to **resume this session**.\n\n**Use when:** You want to continue the agent outside the app.\n\n**Notes:** Produces the current provider’s verified CLI command.',
@@ -895,10 +979,12 @@ export const sessionCommands: CommandDef[] = [
   {
     id: 'duplicate-agent',
     category: 'create',
-    pickerVisibility: 'advanced',
+    // Default tier since the public-release audit (#973): un-hidden by hand
+    // on the owner's install, i.e. a daily action, not a niche one.
+
     surface: 'session',
     title: 'Duplicate Agent',
-    description: '**What it does:** Clones the focused **agent session** into a new pane.\n\n**Use when:** You want a parallel branch of the same conversation.\n\n**Notes:** In **Dispatch**, the clone is created as a detached agent.',
+    description: '**What it does:** Clones the focused **agent session** into a new pane.\n\n**Use when:** You want a parallel branch of the same conversation.\n\n**Notes:** The clone lands in the pool with a **new** badge; place it in any lane.',
     keywords: ['duplicate', 'clone', 'fork', 'copy', 'session', 'agent'],
     when: ({ workspace }) => {
       // Needs a providerSessionId (something on disk to duplicate) AND a
@@ -945,8 +1031,11 @@ export const sessionCommands: CommandDef[] = [
         // restart, then rehydrate had no domain names from which to mint a fresh project-scoped
         // token. The clone inherits CHOICES, never the source session's bearer token, and resolves
         // them against current Settings the way every other new provider process does.
+        // The comment below still explains WHY this routes through the spawn
+        // flow rather than newTab; the 'vertical' direction argument it used
+        // to pass died with the tile tree (#992) — placement is context-places
+        // now (fills the focused lane when empty, else pools).
         await workspace.splitFocused(
-          'vertical',
           kind,
           {
             resumeSessionId: newProviderSessionId,
@@ -981,7 +1070,9 @@ export const sessionCommands: CommandDef[] = [
   {
     id: 'switch-provider',
     category: 'session',
-    pickerVisibility: 'advanced',
+    // Default tier since the public-release audit (#973): un-hidden by hand
+    // on the owner's install, i.e. a daily action, not a niche one.
+
     surface: 'session',
     title: 'Switch Provider',
     description: '**What it does:** Opens a destination picker for continuing the focused agent with Claude, Codex, OpenCode, or OpenCode Terminal.\n\n**Use when:** You want to continue the same work with a different provider.\n\n**Notes:** Saved sessions are translated; empty panes are replaced with a fresh pane.',

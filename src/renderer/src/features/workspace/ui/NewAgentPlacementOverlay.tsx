@@ -1,58 +1,50 @@
-import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
-import type { AgentProviderRuntime } from '@shared/types/providerKind'
+import { isAgentProviderKind } from '@shared/types/providerKind'
 import { Button } from '@renderer/components/ui/button'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
-import {
-  buildPlacementTargets,
-  defaultPlacementTargetId,
-  placementTargetIdForArrow,
-} from '@renderer/features/workspace/lib/newAgentPlacement'
-import type { PlacementTarget } from '@renderer/features/workspace/lib/newAgentPlacement'
 import type {
   SessionId,
-  SessionKind,
   SessionSpawnSelection,
   TabId,
 } from '@renderer/workspace/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
-import type { DispatchAttachIntent } from '@renderer/app-state/uiShell/types'
 import {
   SESSION_SPAWN_CHOICES,
   type AgentProviderChoice,
 } from '@renderer/workspace/providerChoices'
+
+// New Agent… — a kind picker. Pick what to create; it lands in the pool.
+//
+// WHY there is no placement step any more (#992): this overlay used to be two
+// screens. After the kind picker came a geometric placement step — arrows
+// chose "left of the focused pane" or "new outer column" and Enter split the
+// tile tree there — plus a third "attach a detached session to the grid" mode
+// that reused the same step. All of that was tree geometry. The stage has no
+// tree: a new session joins its project's pool, and where it shows is the
+// lane the creator resolves from current focus (see
+// `createDetachedDispatchAgent` / `resolveDispatchSpawnTarget`). So the
+// overlay is exactly what Dispatch already used: one screen, one Enter.
+//
+// The file keeps its historical name because MainSurface, the uiShell flags
+// (`newAgentPlacementOpen`), the command (`new-agent`) and tests all speak
+// it; renaming is cleanup-stage work, not a behavior change.
 
 type Props = {
   open: boolean
   workspace: Workspace
   onClose: () => void
   /**
-   * Non-null = "attach detached session to grid" mode. The overlay
-   * skips the kind picker (the session already exists) and goes
-   * straight to placement-target selection. On Enter the chosen target
-   * is fed to attachDetachedToGrid instead of commitNewAgentPlacement.
-   *
-   * WHY this is a prop and not internal overlay state: opening the
-   * overlay in attach mode is a workspace-level intent (driven by a
-   * command palette entry), so the source of truth lives in the
-   * uiShell store and gets passed in. That keeps the close handler in
-   * App.tsx — same place that closes the create-mode overlay — so
-   * Escape, click-outside, and post-commit close all converge there.
-   */
-  attachIntent: DispatchAttachIntent | null
-  /**
    * Non-null = "Linked Agent" mode. The value is the parent session
    * id. The overlay shows only agent choices — including the separate
-   * OpenCode/OpenCode Terminal runtime choices — with no
-   * placement step — and on pick calls
-   * `createLinkedAgent(kind, parentId)`. Like attach mode this is a
-   * uiShell-level intent passed in, so App.tsx owns the close path.
+   * OpenCode/OpenCode Terminal runtime choices — and on pick calls
+   * `createLinkedAgent(kind, parentId)`. This is a uiShell-level intent
+   * passed in, so the caller owns the close path.
    */
   linkedAgentParentId: SessionId | null
   /**
-   * Non-null = the Dispatch project header's "+" opened this, and the new
-   * agent must land in that project rather than the focused one. Carries a
-   * session from the clicked group as a cwd anchor — see the field's WHY in
+   * Non-null = a project header's "+" opened this, and the new agent must
+   * land in that project rather than the focused one. Carries a session from
+   * the clicked group as a cwd anchor — see the field's WHY in
    * uiShell/types.ts for why both halves are needed.
    */
   projectIntent: { tabId: TabId; anchorSessionId: SessionId } | null
@@ -63,63 +55,27 @@ type Props = {
 // metadata rather than a hand-written fourth provider kind.
 const KIND_OPTIONS = SESSION_SPAWN_CHOICES
 
-const ARROW_TO_DIRECTION = {
-  ArrowLeft: 'left',
-  ArrowRight: 'right',
-  ArrowUp: 'up',
-  ArrowDown: 'down',
-} as const
-
 export function NewAgentPlacementOverlay({
   open,
   workspace,
   onClose,
-  attachIntent,
   linkedAgentParentId,
   projectIntent,
 }: Props) {
-  // Attach mode is "user wants to move this existing detached session
-  // into the grid." The overlay still does placement, just no spawn.
-  // We compute it once at the top so every downstream branch reads
-  // from the same value rather than null-checking the prop everywhere.
-  const attachMode = attachIntent !== null
-  // Linked mode is "spawn a new agent linked to a parent." Kind-only:
-  // no placement step at all (the linked agent is always a detached
-  // dispatch agent in the parent's tab — see createLinkedAgent).
   const linkedMode = linkedAgentParentId !== null
-  const overlayRef = useRef<HTMLDivElement>(null)
   const [selectedIndex, setSelectedIndex] = useState(0)
-  const [selectedKind, setSelectedKind] = useState<SessionKind | null>(null)
-  const [selectedProviderRuntime, setSelectedProviderRuntime] = useState<AgentProviderRuntime | undefined>()
-  const [selectedTargetId, setSelectedTargetId] = useState<string | null>(null)
-  const [bounds, setBounds] = useState({ width: 0, height: 0 })
-  // One-shot latch around commitNewAgentPlacement. The commit is async
-  // (spawns a session, awaits an IPC round-trip, then calls
-  // closeNewAgentPlacement()). Until the close fires, this overlay
-  // keeps its `open` prop true and its keydown listener registered —
-  // so a user that hits Enter twice in quick succession would fire
-  // commit twice, spawning a second unwanted agent. A ref (not state)
-  // because the latch needs to gate the synchronous keydown handler
-  // path, not trigger a re-render.
+  // One-shot latch around the spawn. Creation is async (spawns a session,
+  // awaits an IPC round-trip, then closes the overlay). Until the close fires,
+  // this overlay keeps its `open` prop true and its keydown listener
+  // registered — so a user that hits Enter twice in quick succession would
+  // spawn a second unwanted agent. A ref (not state) because the latch needs
+  // to gate the synchronous keydown handler path, not trigger a re-render.
   const committingRef = useRef(false)
 
-  const activeTab = workspace.activeTab
-  const placementTab = attachIntent
-    ? workspace.state.tabs.find(tab => tab.id === attachIntent.targetTabId) ?? null
-    : activeTab
-  const anchorSessionId = placementTab?.focusedSessionId ?? null
-  const dispatchMode = workspace.dispatchMode !== null
-  // Both dispatch mode and linked mode are "kind only": pick a kind and spawn
-  // immediately off the picker, no placement step — see the `dispatchMode` /
-  // `linkedMode` branches inside commitKind below, which is where that
-  // behavior actually lives (there is no single merged flag left to read it
-  // off of; see the option-filter comment just below for why one kind-only
-  // mode now differs from the other).
-  //
   // Linked mode offers agent providers only: createLinkedAgent's signature
   // refuses 'terminal' (a shell cannot be an orchestration/linked child).
-  // Dispatch offers Terminal too (#865): Dispatch terminals have been full
-  // detached rows since #671, and the old "no terminal option" note predated it.
+  // Ordinary creation offers Terminal too (#865): terminals are full pool
+  // sessions since #671.
   const kindOptions = useMemo(
     () => linkedMode
       ? KIND_OPTIONS.filter((option): option is AgentProviderChoice =>
@@ -129,25 +85,19 @@ export function NewAgentPlacementOverlay({
     [linkedMode],
   )
 
-  // Commit a chosen kind. In kind-only modes this spawns immediately;
-  // in ordinary create mode it advances to the placement step. Shared
-  // by the Enter keybind and the click handler so both paths behave
-  // identically (the click path used to just `setSelectedKind`, which
-  // silently did nothing in dispatch mode).
+  // Shared by the Enter keybind and the click handler so both paths behave
+  // identically.
   const commitKind = (selection: SessionSpawnSelection) => {
     const { kind, providerRuntime } = selection
+    if (committingRef.current) return
     if (linkedMode && linkedAgentParentId) {
       // WHY the runtime narrow: `SessionKind` includes 'terminal', which
-      // createLinkedAgent's signature refuses. The kind picker filters options
-      // to `AgentProviderKind` whenever `linkedMode` is true (see kindOptions
-      // above — Dispatch stopped filtering this way when it gained a Terminal
-      // option, #865, but linked mode still does), so in practice this branch
-      // only fires with an agent provider — but the event handler is typed
+      // createLinkedAgent's signature refuses. kindOptions is already filtered
+      // to agent providers in linked mode, but the event handler is typed
       // against the broader union. Route through the registry predicate
       // instead of a hand-written pair so adding a provider does not silently
       // drop it here again (#394 phase 4).
       if (!isAgentProviderKind(kind)) return
-      if (committingRef.current) return
       committingRef.current = true
       void workspace.createLinkedAgent({ kind, providerRuntime }, linkedAgentParentId)
       // createLinkedAgent does not own the overlay lifecycle (the
@@ -155,371 +105,118 @@ export function NewAgentPlacementOverlay({
       onClose()
       return
     }
-    if (dispatchMode) {
-      if (committingRef.current) return
-      committingRef.current = true
-      // Every kind goes through the detached-Dispatch creator, terminals
-      // included (#865): it accepts SessionSpawnSelection (control's
-      // terminals.create already uses it for shells) and, unlike splitFocused,
-      // honors projectIntent, so "+" on a project header files the shell there.
-      void workspace.createDetachedDispatchAgent({ kind, providerRuntime }, projectIntent ?? undefined)
-      return
-    }
-    setSelectedKind(kind)
-    setSelectedProviderRuntime(providerRuntime)
+    committingRef.current = true
+    // Every kind goes through the one pool creator, terminals included
+    // (#865). It honors projectIntent, so "+" on a project header files the
+    // session there, and it closes this overlay itself once the session is
+    // placed (closeNewAgentPlacement) — which is why onClose is NOT called.
+    void workspace.createDetachedDispatchAgent({ kind, providerRuntime }, projectIntent ?? undefined)
   }
 
   useEffect(() => {
     if (!open) return
     setSelectedIndex(0)
-    // In attach mode there is no kind picker — the session already
-    // exists. Pre-fill selectedKind with the detached session's kind
-    // so the overlay starts on the placement-target step. We pick a
-    // sentinel kind for the rendering branch below; it is never read
-    // for the attach commit path because attach goes through
-    // attachDetachedToGrid which doesn't take a kind argument.
-    if (attachMode) {
-      const kind = attachIntent
-        ? workspace.state.sessions[attachIntent.sessionId]?.kind ?? DEFAULT_PROVIDER
-        : 'claude'
-      setSelectedKind(kind)
-      setSelectedProviderRuntime(
-        attachIntent
-          ? workspace.state.sessions[attachIntent.sessionId]?.providerRuntime
-          : undefined,
-      )
-    } else {
-      setSelectedKind(null)
-      setSelectedProviderRuntime(undefined)
-    }
-    setSelectedTargetId(null)
     // Reset the commit latch whenever the overlay re-opens. Otherwise
     // a user could open → commit → close → reopen and the second
     // session would be suppressed.
     committingRef.current = false
-  }, [attachIntent, attachMode, open, workspace.state.sessions])
-
-  useEffect(() => {
-    if (!open) return
-    const element = overlayRef.current
-    if (!element) return
-    const update = () => {
-      setBounds({ width: element.clientWidth, height: element.clientHeight })
-    }
-    update()
-    const observer = new ResizeObserver(update)
-    observer.observe(element)
-    return () => observer.disconnect()
   }, [open])
 
-  const placementTargets = useMemo<PlacementTarget[]>(() => {
-    if (!open || !placementTab || !anchorSessionId || !selectedKind) return []
-    if (bounds.width <= 0 || bounds.height <= 0) return []
-    return buildPlacementTargets(
-      placementTab.root,
-      anchorSessionId,
-      { x: 0, y: 0, width: bounds.width, height: bounds.height },
-    )
-  }, [anchorSessionId, bounds.height, bounds.width, open, placementTab, selectedKind])
-
-  useEffect(() => {
-    if (!selectedKind || !anchorSessionId) return
-    if (placementTargets.length === 0) {
-      setSelectedTargetId(null)
-      return
-    }
-    setSelectedTargetId(prev => (
-      prev && placementTargets.some(target => target.id === prev)
-        ? prev
-        : defaultPlacementTargetId(placementTargets, anchorSessionId)
-    ))
-  }, [anchorSessionId, placementTargets, selectedKind])
-
-  const placementTarget = useMemo(
-    () => placementTargets.find(target => target.id === selectedTargetId) ?? null,
-    [placementTargets, selectedTargetId],
-  )
-
   useEffect(() => {
     if (!open) return
-    const handledPickerKeys = new Set(['Escape', 'ArrowUp', 'ArrowDown', 'Enter'])
-    const handledPlacementKeys = new Set([
-      'Escape', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Backspace', 'Enter',
-    ])
-
+    const handled = new Set(['Escape', 'ArrowUp', 'ArrowDown', 'Enter'])
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!selectedKind) {
-        if (!handledPickerKeys.has(event.key)) return
-        event.stopPropagation()
-        if (event.key === 'Escape') {
-          event.preventDefault()
-          onClose()
-          return
-        }
-        if (event.key === 'ArrowUp') {
-          event.preventDefault()
-          setSelectedIndex(prev => (prev + kindOptions.length - 1) % kindOptions.length)
-          return
-        }
-        if (event.key === 'ArrowDown') {
-          event.preventDefault()
-          setSelectedIndex(prev => (prev + 1) % kindOptions.length)
-          return
-        }
-        if (event.key === 'Enter') {
-          event.preventDefault()
-          const option = kindOptions[selectedIndex]
-          if (!option) return
-          commitKind(option)
-        }
-        return
-      }
-
-      if (!handledPlacementKeys.has(event.key)) return
-      if (event.key === 'Enter' && !placementTarget) return
+      if (!handled.has(event.key)) return
       event.stopPropagation()
-
+      event.preventDefault()
       if (event.key === 'Escape') {
-        event.preventDefault()
         onClose()
         return
       }
-      if (event.key === 'Backspace') {
-        event.preventDefault()
-        if (anchorSessionId) {
-          setSelectedTargetId(defaultPlacementTargetId(placementTargets, anchorSessionId))
-        }
+      if (event.key === 'ArrowUp') {
+        setSelectedIndex(prev => (prev + kindOptions.length - 1) % kindOptions.length)
         return
       }
-      if (
-        event.key === 'ArrowLeft' ||
-        event.key === 'ArrowRight' ||
-        event.key === 'ArrowUp' ||
-        event.key === 'ArrowDown'
-      ) {
-        event.preventDefault()
-        // WHY direct arrow mapping instead of nearest-rectangle navigation:
-        //
-        // The target set intentionally contains two different operations:
-        // split the focused pane, or wrap the whole root. Rendering every
-        // target as a clickable rectangle made those operations overlap, and
-        // center-distance navigation could jump from a local split to an
-        // unrelated outer row because a large half-screen target happened to
-        // be closer. Plain arrows now mean "place relative to the focused
-        // pane"; Shift+arrow means "place relative to the whole tab." That
-        // keeps the operations explicit and makes the preview the only visual
-        // source of truth.
-        const arrow = ARROW_TO_DIRECTION[event.key]
-        const scope = event.shiftKey ? 'global' : 'local'
-        // Arrow placement is anchor-relative; without an anchor in the
-        // active tab there is nothing to place beside. The visibility
-        // guard at the bottom of the component already prevents render
-        // in that case, but the keydown handler is wired at document
-        // level so this branch can still fire while we're in a
-        // transient state — null-guard explicitly so the typechecker
-        // is happy and the runtime is safe.
-        if (!anchorSessionId) return
-        setSelectedTargetId(placementTargetIdForArrow(
-          placementTargets,
-          anchorSessionId,
-          arrow,
-          scope,
-        ))
+      if (event.key === 'ArrowDown') {
+        setSelectedIndex(prev => (prev + 1) % kindOptions.length)
         return
       }
-      if (event.key === 'Enter' && placementTarget) {
-        event.preventDefault()
-        // Latch against double-commit. commitNewAgentPlacement is a
-        // multi-step async: spawn() → setState → closeNewAgentPlacement.
-        // The overlay stays mounted/open until close fires, so a rapid
-        // second Enter would commit again and spawn a second session
-        // the user didn't ask for. Skipping here keeps the first commit
-        // the authoritative one; the reset in the `open` effect clears
-        // the latch the next time the overlay opens.
-        if (committingRef.current) return
-        committingRef.current = true
-        if (attachMode && attachIntent) {
-          // Attach may wake a post-restart parked backend before the state move.
-          // Fire-and-forget here because the action owns failure toasts and
-          // refuses to insert a dead leaf if wake fails.
-          // We close the overlay ourselves because attachDetachedToGrid
-          // doesn't own that lifecycle (closeNewAgentPlacement is the
-          // create-mode close; the parent owns onClose for both modes).
-          void workspace.attachDetachedToGrid(
-            attachIntent.sessionId,
-            attachIntent.targetTabId,
-            placementTarget,
-          )
-          onClose()
-          return
-        }
-        void workspace.commitNewAgentPlacement({
-          kind: selectedKind,
-          providerRuntime: selectedProviderRuntime,
-        }, placementTarget)
-      }
+      const option = kindOptions[selectedIndex]
+      if (option) commitKind(option)
     }
-
     document.addEventListener('keydown', onKeyDown, true)
     return () => document.removeEventListener('keydown', onKeyDown, true)
-  }, [
-    anchorSessionId,
-    attachIntent,
-    attachMode,
-    dispatchMode,
-    kindOptions,
-    onClose,
-    open,
-    placementTarget,
-    placementTargets,
-    selectedIndex,
-    selectedKind,
-    selectedProviderRuntime,
-    workspace,
-  ])
+    // commitKind closes over props already listed here; listing the function
+    // itself would re-register the listener on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kindOptions, linkedAgentParentId, onClose, open, projectIntent, selectedIndex, workspace])
 
-  // Visibility rules:
-  //   - create mode in grid: needs an anchor (focused leaf to place beside)
-  //   - create mode in dispatch: no placement, just kind picker
-  //   - attach mode: needs an anchor too (placement targets are computed
-  //     relative to the focused grid pane). If the active tab has no
-  //     leaves, the user has to add a pane first — refused at the
-  //     command-palette `when` check, but guarded here as well.
-  if (!open || !placementTab) return null
-  if (attachMode && !anchorSessionId) return null
-  if (!attachMode && !dispatchMode && !anchorSessionId) return null
+  // A project must exist to own the new session; WelcomeEmpty covers the
+  // no-project boot, so this overlay simply does not render there.
+  if (!open || !workspace.activeTab) return null
 
   return (
     <div
-      ref={overlayRef}
       data-agent-code-interaction-owner="app"
       className="absolute inset-0 z-40 bg-black/20"
-      // WHY the backdrop is now clickable: during the placement step this
-      // overlay rendered ZERO interactive elements — the preview rect is
-      // pointer-events-none, targets move on arrows, commit is Enter, and
-      // cancel was Escape. A mouse-only user who picked an agent kind was
-      // trapped in a modal they could neither commit nor dismiss. This does
-      // not make placement itself clickable (see the WHY further up on why
-      // clickable target rectangles were removed and should stay removed) —
-      // it just guarantees a way out, which is the part that was harmful.
+      // The backdrop is the mouse exit. Only a click on the backdrop ITSELF
+      // dismisses: a click that bubbled up from the picker must not.
       onClick={event => {
-        // Only a click on the backdrop ITSELF. A click that bubbled up from
-        // the kind picker must not also dismiss the overlay.
         if (event.target !== event.currentTarget) return
         onClose()
       }}
     >
-      {selectedKind && placementTarget && (
-        <div
-          className={`
-            absolute pointer-events-none border-2
-            ${placementTarget.scope === 'global'
-              ? 'border-warning bg-warning-soft'
-              : 'border-danger bg-danger-soft'
-            }
-          `}
-          style={{
-            left: placementTarget.rect.x,
-            top: placementTarget.rect.y,
-            width: placementTarget.rect.width,
-            height: placementTarget.rect.height,
-          }}
-          aria-label={placementTarget.label}
-        />
-      )}
-
       <div className="absolute left-4 top-4 pointer-events-none">
         <div className="rounded-float border border-border bg-surface/95 px-3 py-2 text-[11px] text-ink-dim shadow-lg shadow-black/30">
-              {!selectedKind ? (
-                <div>{dispatchMode ? 'Choose dispatch agent type with ↑/↓ and press Enter' : 'Choose agent type with ↑/↓ and press Enter'}</div>
-          ) : (
-            <div className="space-y-1">
-              <div>
-                {attachMode
-                  ? 'Attach detached agent to grid'
-                  : `${KIND_OPTIONS.find(option => option.kind === selectedKind)?.label} placement`}
-              </div>
-              <div className="text-muted">
-                Arrows split the focused pane. Shift+arrows add an outer row or column.
-              </div>
-              <div className="text-muted">
-                Target: {placementTarget?.label ?? 'none'}
-              </div>
-            </div>
-          )}
+          Choose agent type with ↑/↓ and press Enter
         </div>
-        {/* The hint box is pointer-events-none so it never blocks the grid
-            underneath, so the Cancel has to re-enable pointer events on
-            itself. Placed here rather than in the kind picker because the
-            placement step is exactly the state that had no way out. */}
-        {selectedKind ? (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={onClose}
-            // pointer-events-auto: the overlay root is pointer-events-none so
-            // clicks reach the tiles being placed into; this escape hatch has
-            // to opt back in.
-            className="pointer-events-auto mt-2"
-          >
-            Cancel
-          </Button>
-        ) : null}
       </div>
 
-      {!selectedKind && (
-        // pointer-events-none on the CENTERING layer, re-enabled on the card
-        // itself. Without this the layer is `absolute inset-0` and covers the
-        // whole backdrop, so the backdrop's click-to-dismiss could never fire
-        // (event.target was always this div, never the backdrop). In Dispatch
-        // and linked-agent mode that was fatal rather than annoying: those are
-        // kind-only, so `selectedKind` never becomes truthy, the Cancel button
-        // below never renders, and the overlay had ZERO mouse exits — the only
-        // way out with a mouse was to create an agent you did not want. The
-        // Dispatch "+" leads straight here, so it would have shipped a button
-        // whose only destination is a trap.
-        <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-          <div className="rounded-float pointer-events-auto w-[340px] border border-border bg-surface shadow-lg shadow-black/30">
-            <div className="border-b border-border px-4 py-3 text-[12px] uppercase tracking-wider text-muted">
-              New Agent
-            </div>
-            <div className="p-2">
-              {kindOptions.map((option, index) => {
-                const active = index === selectedIndex
-                return (
-                  <button
-                    key={`${option.kind}:${option.providerRuntime ?? 'default'}`}
-                    type="button"
-                    onClick={() => {
-                      setSelectedIndex(index)
-                      commitKind(option)
-                    }}
-                    className={`flex w-full items-center justify-between border px-3 py-2 text-left ${
-                      active
-                        ? 'border-accent bg-accent text-accent-fg'
-                        : 'border-border bg-canvas text-ink-dim hover:border-border-hi hover:text-ink'
-                    }`}
-                  >
-                    <span className="text-[12px]">{option.label}</span>
-                    <span className={`text-[10px] ${active ? 'text-accent-fg/80' : 'text-muted'}`}>
-                      {option.description}
-                    </span>
-                  </button>
-                )
-              })}
-            </div>
-            {/* An explicit Cancel on the kind step too. The backdrop click
-                above is now reachable, but a visible control is what a
-                mouse-first user actually looks for — and this is the only step
-                Dispatch and linked-agent mode ever show. */}
-            <div className="flex justify-end border-t border-border px-3 py-2">
-              <Button variant="outline" size="sm" onClick={onClose}>
-                Cancel
-              </Button>
-            </div>
+      {/* pointer-events-none on the CENTERING layer, re-enabled on the card
+          itself. Without this the layer is `absolute inset-0` and covers the
+          whole backdrop, so the backdrop's click-to-dismiss could never fire
+          (event.target was always this div, never the backdrop) and the
+          overlay had ZERO mouse exits — the only way out with a mouse was to
+          create an agent you did not want. */}
+      <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+        <div className="rounded-float pointer-events-auto w-[340px] border border-border bg-surface shadow-lg shadow-black/30">
+          <div className="border-b border-border px-4 py-3 text-[12px] uppercase tracking-wider text-muted">
+            New Agent
+          </div>
+          <div className="p-2">
+            {kindOptions.map((option, index) => {
+              const active = index === selectedIndex
+              return (
+                <button
+                  key={`${option.kind}:${option.providerRuntime ?? 'default'}`}
+                  type="button"
+                  onClick={() => {
+                    setSelectedIndex(index)
+                    commitKind(option)
+                  }}
+                  className={`flex w-full items-center justify-between border px-3 py-2 text-left ${
+                    active
+                      ? 'border-accent bg-accent text-accent-fg'
+                      : 'border-border bg-canvas text-ink-dim hover:border-border-hi hover:text-ink'
+                  }`}
+                >
+                  <span className="text-[12px]">{option.label}</span>
+                  <span className={`text-[10px] ${active ? 'text-accent-fg/80' : 'text-muted'}`}>
+                    {option.description}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+          {/* A visible Cancel: the backdrop click is reachable, but a control
+              is what a mouse-first user actually looks for. */}
+          <div className="flex justify-end border-t border-border px-3 py-2">
+            <Button variant="outline" size="sm" onClick={onClose}>
+              Cancel
+            </Button>
           </div>
         </div>
-      )}
+      </div>
     </div>
   )
 }

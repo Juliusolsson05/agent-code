@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { CommandContext } from '@renderer/features/command-palette/types'
 import { agentTitleCommands } from '@renderer/features/workspace/commands/agentTitleCommands'
 import type { WorkspaceState } from '@renderer/workspace/types'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 const command = agentTitleCommands[0]
 if (!command) throw new Error('Set Agent Title command is missing')
@@ -22,24 +23,23 @@ function context(state: WorkspaceState) {
 function baseState(): WorkspaceState {
   return {
     tabs: [
-      { id: 'tab-a', title: 'A', root: { type: 'leaf', sessionId: 'a' }, focusedSessionId: 'a' },
-      { id: 'tab-b', title: 'B', root: { type: 'leaf', sessionId: 'b' }, focusedSessionId: 'b' },
+      { id: 'tab-a', title: 'A' },
+      { id: 'tab-b', title: 'B' },
     ],
     activeTabId: 'tab-a',
-    gridRelatedSelections: {},
-    dispatchMode: null,
+    // The user is commanding `a`: one lane showing it. (This used to be said
+    // by tab-a's tree focus alone, with Dispatch off; #992.)
+    stage: oneLaneStage('a'),
     sessions: {
-      a: { cwd: '/work/a', kind: 'claude' },
-      b: { cwd: '/work/b', kind: 'codex' },
+      a: { cwd: '/work/a', kind: 'claude', projectId: 'tab-a', joinedAt: 0 },
+      b: { cwd: '/work/b', kind: 'codex', projectId: 'tab-b', joinedAt: 0 },
     },
-    detachedSessions: {},
-    buried: [],
     pinnedSessionIds: [],
   }
 }
 
 describe('Set Title command targeting', () => {
-  it('captures the focused Grid agent', () => {
+  it('captures the agent in the focused lane', () => {
     const harness = context(baseState())
 
     expect(command.when?.(harness.value)).toBe(true)
@@ -47,24 +47,21 @@ describe('Set Title command targeting', () => {
     expect(harness.openAgentTitlePrompt).toHaveBeenCalledWith('a')
   })
 
-  it('captures the selected classic Dispatch agent instead of stale Grid focus', () => {
+  it('follows the lane to another project instead of the stale active project', () => {
+    // activeTabId is still tab-a; the lane shows b. The lane wins (U3).
     const state = baseState()
-    state.dispatchMode = { scope: 'global', focusedSessionId: 'b' }
+    state.stage = oneLaneStage('b')
     const harness = context(state)
 
     command.run(harness.value)
     expect(harness.openAgentTitlePrompt).toHaveBeenCalledWith('b')
   })
 
-  it('captures the focused Tiled Dispatch lane instead of stale Grid focus', () => {
+  it('captures the FOCUSED lane when several lanes show agents', () => {
     const state = baseState()
-    state.dispatchMode = {
-      scope: 'global',
-      focusedSessionId: 'a',
-      tiled: {
-        focusedLane: 1,
-        lanes: [{ selectedSessionId: 'a' }, { selectedSessionId: 'b' }],
-      },
+    state.stage = {
+      focusedLane: 1,
+      lanes: [{ selectedSessionId: 'a' }, { selectedSessionId: 'b' }],
     }
     const harness = context(state)
 
@@ -74,7 +71,10 @@ describe('Set Title command targeting', () => {
 
   it('offers titles for a plain terminal target too (#865)', () => {
     const state = baseState()
-    state.sessions.a = { cwd: '/work/a', kind: 'terminal' }
+    // Spread, not replaced: the row carries its own membership (#992), so a
+    // bare `{ cwd, kind }` here would un-file it from its project and the lane
+    // would resolve no target — failing for a reason unrelated to terminals.
+    state.sessions.a = { ...state.sessions.a!, kind: 'terminal' }
     const harness = context(state)
 
     expect(command.when?.(harness.value)).toBe(true)

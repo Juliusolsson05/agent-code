@@ -365,6 +365,13 @@ export class OpencodeTerminalSession extends EventEmitter implements AgentSessio
     return result
   }
 
+  /** See AgentSession.jumpToLatest and the package's LiveServerClient. */
+  async jumpToLatest(): Promise<{ ok: true } | { ok: false; reason: string }> {
+    const headless = this.headless
+    if (!headless) return { ok: false, reason: 'no-headless' }
+    return headless.jumpToLatest()
+  }
+
   resize(cols: number, rows: number): void {
     try {
       this.pty?.resize(cols, rows)

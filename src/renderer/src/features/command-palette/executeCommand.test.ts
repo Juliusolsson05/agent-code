@@ -20,7 +20,7 @@ import {
 import { buildCommandRegistry } from '@renderer/features/command-palette/registry'
 import { recordCommandUse } from '@renderer/features/command-palette/lib/recentCommandHistory'
 import { makeTestCommandContext } from '@renderer/features/command-palette/testing/commandContextHarness'
-import type { CommandContext } from '@renderer/features/command-palette/types'
+import type { CommandContext, CommandDef } from '@renderer/features/command-palette/types'
 
 // ---------------------------------------------------------------------------
 // Phase 1: the command execution gateway.
@@ -102,26 +102,11 @@ describe('admission cannot be bypassed by source', () => {
     expect(uiCalls).toEqual([])
   })
 
-  it('refuses a grid command while Dispatch Mode owns the layout', async () => {
-    // The #228 class: a grid-only command is a silent no-op in Dispatch, and
-    // the explicit outcome is what replaces the silence.
-    //
-    // `nav-left`, not `split-vertical`. This case used the latter until the
-    // create commands were found to work in BOTH modes — `splitFocused` spawns
-    // a detached agent in Dispatch — and their `surface: 'grid'` was refusing a
-    // mode their own action implements. `nav-left` is genuinely grid-only:
-    // Dispatch focus is `dispatchMode.focusedSessionId` while grid navigation
-    // walks the tile tree, so asking the grid for a neighbour of a detached
-    // session really does nothing.
-    const ctx = makeContext({ flags: { dispatchModeEnabled: true } })
-    const outcome = await dispatchCommand({ id: 'nav-left', source: 'keybinding', ctx })
-    expect(outcome.status).toBe('unavailable')
-  })
-
-  it('admits that same grid command outside Dispatch Mode', async () => {
-    const ctx = makeContext({ flags: { dispatchModeEnabled: false } })
-    expect(canDispatchCommand('nav-left', ctx)).toBe(true)
-  })
+  // DELETED (#992): 'refuses a grid command while Dispatch Mode owns the
+  // layout' + its inverse — the #228 mode gate died with the modes. nav-left
+  // itself died with the tile tree; no surviving command is mode-gated, so
+  // the admission seam is exercised by the unknown-id and when-guard cases
+  // below and the availability tests in resolveInvocation.test.ts.
 
   it('distinguishes an unknown id from an unavailable one', async () => {
     // A menu or caller bug and a contextual refusal are different problems and
@@ -337,17 +322,71 @@ describe('create commands in Dispatch Mode', () => {
     'codex-horizontal',
   ]
 
-  it('admits every create command while Dispatch owns the layout', () => {
-    const ctx = makeContext({ flags: { dispatchModeEnabled: true } })
+  // Two cases lived here ("while Dispatch owns the layout" / "in the grid"),
+  // toggling a `dispatchModeEnabled` flag. There is one layout (#992) and the
+  // flag is gone, so there is one case. The property it pins is unchanged and
+  // still worth pinning: no create command is ever surface-gated away.
+  it('admits every create command on the stage', () => {
+    const ctx = makeContext()
     for (const id of CREATE_IDS) {
-      expect(canDispatchCommand(id, ctx), `${id} refused in Dispatch`).toBe(true)
+      expect(canDispatchCommand(id, ctx), `${id} refused`).toBe(true)
     }
   })
+})
 
-  it('still admits them in the grid', () => {
-    const ctx = makeContext({ flags: { dispatchModeEnabled: false } })
-    for (const id of CREATE_IDS) {
-      expect(canDispatchCommand(id, ctx), `${id} refused in the grid`).toBe(true)
+describe('resolving commands that are not in the compile-time catalog', () => {
+  // ── THE REGRESSION THIS PINS ──
+  // Extension commands are derived per render from the installed manifests, so they
+  // cannot live in the frozen `builtInCommandCatalog`. The gateway resolved only
+  // against that catalog, so every contributed id answered `status: 'unknown'` — and
+  // the keybinding path does not inspect the outcome. The effect was that every
+  // manifest-declared shortcut silently did nothing AND swallowed whatever the chord
+  // would otherwise have done, while the same command clicked in the palette worked,
+  // because that path runs an already-resolved row.
+  function contributedCommand(run: () => void): CommandDef {
+    return {
+      id: 'timer.start',
+      title: 'Start Timer',
+      description: 'Starts the timer.',
+      surface: 'app',
+      category: 'extensions',
+      run,
     }
+  }
+
+  it('does not resolve a contributed id without extraCommands', async () => {
+    const ctx = makeContext()
+    const outcome = await dispatchCommand({ id: 'timer.start', source: 'keybinding', ctx })
+    expect(outcome.status).toBe('unknown')
+  })
+
+  it('resolves and RUNS a contributed id when extraCommands is supplied', async () => {
+    const ctx = makeContext()
+    let ran = false
+    const outcome = await dispatchCommand({
+      id: 'timer.start',
+      source: 'keybinding',
+      ctx,
+      extraCommands: [contributedCommand(() => { ran = true })],
+    })
+    expect(outcome.status).toBe('ran')
+    expect(ran).toBe(true)
+  })
+
+  it('never lets a contributed command shadow a first-party id', async () => {
+    // Contributed ids are namespaced at install, so a collision should be
+    // impossible — but the lookup must not DEPEND on that validator being correct.
+    const ctx = makeContext()
+    let contributedRan = false
+    const outcome = await dispatchCommand({
+      id: 'new-tab',
+      source: 'keybinding',
+      ctx,
+      extraCommands: [
+        { ...contributedCommand(() => { contributedRan = true }), id: 'new-tab' },
+      ],
+    })
+    expect(contributedRan).toBe(false)
+    expect(outcome.status).not.toBe('unknown')
   })
 })

@@ -82,6 +82,7 @@ type BooleanUiShellFlag = {
  */
 export const SURFACE_OWNER_FLAGS = {
   'usage.open': 'usageModalOpen',
+  'agent-analytics.open': 'agentAnalyticsOpen',
   'open-keyboard-shortcuts': 'keyboardShortcutsOpen',
   'open-agent-activity': 'agentActivityOpen',
   'close-old-agents': 'closeOldAgentsOpen',
@@ -113,8 +114,6 @@ export type SurfaceOwningCommandId = keyof typeof SURFACE_OWNER_FLAGS
  * decides whether it gets the chance.
  */
 export const PALETTE_MODE_COMMANDS = {
-  'revive-pane': 'buried',
-  'kill-buried-pane': 'kill-buried',
   'prompt-template': 'prompt-template',
   'manage-prompt-templates': 'manage-prompt-template',
   'save-composer-as-prompt-template': 'save-prompt-template',

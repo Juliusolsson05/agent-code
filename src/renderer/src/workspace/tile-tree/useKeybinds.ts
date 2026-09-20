@@ -1,29 +1,23 @@
 import { createTldrHoldController, dismissTldr, observeTldrHoldRelease, useTldrView } from '@renderer/features/tldr/viewState'
+import { dismissGoalLoop, useGoalLoopView } from '@renderer/features/goal-loop/viewState'
 import { useEffect, useMemo, useRef } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
-import { buildDefaultKeybindings } from '@renderer/features/command-keybindings/defaults'
-import type { BindingContext } from '@renderer/features/command-keybindings/defaults'
+import { deriveExtensionKeybindings } from '@renderer/apps/host/derive'
+import type { BindingContext, CommandBindingDefault } from '@renderer/features/command-keybindings/defaults'
 import { keybindingFromEvent } from '@renderer/features/command-keybindings/normalize'
 import { commandOwnsOpenSurface } from '@renderer/features/command-palette/surfaceOwnership'
 import { resolveEffectiveKeybindings } from '@renderer/features/command-keybindings/resolve'
 import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { getEffectiveAgentSurface, isAgentKind } from '@renderer/workspace/agentDisplayMode'
-import {
-  buildVisibleDispatchRows,
-  selectVisibleDispatchRow,
-} from '@renderer/workspace/dispatch/dispatchSelectors'
-import { nextTiledRowIndex } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
-import {
-  normalizeGridShape,
-  rowIndexForLane,
-  rowStartIndex,
-} from '@renderer/workspace/dispatch/gridShape'
-import { rowScopedRows } from '@renderer/workspace/dispatch/rowScopedRows'
+import { selectVisibleDispatchRow } from '@renderer/workspace/dispatch/dispatchSelectors'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import { enumerateCodeBlockIds } from '@renderer/features/copy-code-block/lib/enumerateCodeBlocks'
 import { getCodeBlockCode } from '@renderer/features/copy-code-block/lib/codeBlockRegistry'
+import { isMacosTextEditingChord } from '@renderer/features/command-keybindings/reservations'
+import { focusRowByLabel } from '@renderer/workspace/dispatch/laneKeyboard'
+import { buildDefaultKeybindings } from '@renderer/features/command-keybindings/defaults'
 import { useGlobalEditorStore } from '@renderer/features/global-editor/store'
 
 // Keybinds: global window-level listeners. The handler is attached to
@@ -32,55 +26,29 @@ import { useGlobalEditorStore } from '@renderer/features/global-editor/store'
 // because all the keybinds fire while an input is focused — without
 // capture, the input would swallow them.
 //
-// Keybind scheme (user-approved in brainstorming, section 4):
-//   cmd-t           new tab (prompts for cwd)
-//   cmd-shift-r     resume: open the path modal with the focused tab's
-//                   cwd pre-filled, so the resume list for that cwd is
-//                   visible instantly. Same modal as cmd-t — one path
-//                   to both flows — just with a different default
-//                   value and intent.
-//   cmd-w           close focused pane (collapses tree; closes tab if last)
-//   cmd-shift-w     close active tab outright
-//   cmd-1..9        activate Nth tab
-//                   In Dispatch Mode this selects the Nth visible session row.
-//                   Press a second digit while cmd is still held to select
-//                   rows 10..99, preserving digit order (cmd-1 then 2 → 12).
-//   cmd-alt-1..9    activate Nth tab, including while Dispatch Mode owns cmd-N.
-//   cmd-[           previous tab
-//   cmd-]           next tab
-//   cmd-shift-p     command palette
-//   cmd-shift-e     Global Editor overlay toggle
-//   cmd-alt-e       Global Editor fullscreen (opens the editor first if
-//                   needed; Esc exits fullscreen)
-//   cmd-p           Quick Open file in the Global Editor (opens the
-//                   editor first if needed)
-//   cmd-shift-f     Search in files (Global Editor; opens it if needed)
-//   alt-d           split current pane vertically (new pane to the right)
-//   alt-shift-d     split current pane horizontally (new pane below)
-//   alt-t           split with a TERMINAL below (new row, horizontal split)
-//   alt-shift-t     split with a TERMINAL to the right (new column, vertical)
-//   alt-c           split with CODEX below (new row, horizontal split)
-//   alt-shift-c     split with CODEX to the right (new column, vertical)
-//   alt-h/j/k/l     navigate panes (vim: left/down/up/right)
-//   alt-ArrowLeft/Right/Up/Down  same, for non-vim users
-//   alt-w           close focused pane (same as cmd-w but alt-keyed)
-//   alt-=           grow focused split (direction-agnostic, nearest split)
-//   alt--           shrink focused split (direction-agnostic, nearest split)
-//   fn-alt-Arrow    directional resize — grow focused pane toward that
-//                   direction. tmux-style semantics: finds the nearest
-//                   split in the matching axis containing the focused
-//                   pane on the correct side and adjusts its ratio.
+// Keybind scheme. The DEFAULT chords live in
+// features/command-keybindings/defaults.ts, which is the source of truth; this
+// header records only what the table cannot say. Until #992 it listed the
+// tile-tree chords (pane navigation, split resize, fn-alt directional resize,
+// cmd-w collapsing the tree). Those commands are gone, and so is their list.
 //
-//                   Why fn-alt and not alt-shift: on macOS, Option+Shift
-//                   +Arrow is the system shortcut for word-by-word text
-//                   selection, which is load-bearing for every text
-//                   field in the app (including our composer). Fn+Arrow
-//                   is the OS-level translation to Home/End/PageUp/
-//                   PageDown, so "fn+option+arrow" arrives in JS as
-//                   altKey=true with e.key === 'Home' / 'End' /
-//                   'PageUp' / 'PageDown'. That combo has no conflicting
-//                   system meaning, and we never have to touch the
-//                   actual Fn modifier (which isn't exposed to JS).
+//   cmd-1..9        fill the focused lane from the index (row N). Press a
+//                   second digit while cmd is still held to reach rows
+//                   10..99, preserving digit order (cmd-1 then 2 → 12).
+//   alt-arrows, alt-h/j/k/l
+//                   the lane grammar: ⌥↑/↓ walk the index, ⌥←/→ move lane
+//                   focus. Registered, rebindable commands, not an inline
+//                   branch.
+//   alt-backspace   Clear Lane. Yields to any text field that owns the target,
+//                   so delete-word keeps working in the composer.
+//
+// RESERVED: Option+Shift+Arrow. On macOS it is the system shortcut for
+// word-by-word text selection, which every text field in the app relies on,
+// the composer included. No default may bind it, and the router must never
+// treat ⌥⇧-arrows as a lane arrow (the old inline Dispatch branch did, and
+// swallowed word selection). check:keybindings only knows this app's own
+// bindings, so a green run does NOT prove a chord is free of an OS meaning;
+// this note is the record.
 
 
 function isTextEditingTarget(target: EventTarget | null): boolean {
@@ -105,6 +73,12 @@ const BLOCKED_META_CODES = new Set([
 ])
 
 const BLOCKED_ALT_CODES = new Set([
+  // Clear Lane (⌥⌫, #992). Listed so a modal surface and the fullscreen
+  // Global Editor swallow it outside text fields, the same as every other
+  // Option chord this router owns. Without it, ⌥⌫ in fullscreen editor
+  // chrome fell through and emptied the HIDDEN focused lane (#1013 review B).
+  // A text field is exempt below, so delete-word keeps working in inputs.
+  'Backspace',
   'ArrowDown',
   'ArrowLeft',
   'ArrowRight',
@@ -227,12 +201,15 @@ const SURFACE_OWNED_COMMAND_IDS: ReadonlySet<string> = new Set([
  * navigation, and a user typing in a file still expects them to work.
  */
 export function activeBindingContexts(input: {
-  dispatchMode: boolean
   editorOwnsTarget: boolean
   feedFocused: boolean
 }): ReadonlySet<BindingContext> {
+  // `dispatchMode` was a parameter until #992 stage 5: it chose between the
+  // 'grid' and 'dispatch' contexts, and both the parameter and 'grid' died
+  // with the tile grid. The stage is the workspace, so the layout context is
+  // simply live whenever the global editor does not own the target.
   const contexts = new Set<BindingContext>(['global'])
-  if (!input.editorOwnsTarget) contexts.add(input.dispatchMode ? 'dispatch' : 'grid')
+  if (!input.editorOwnsTarget) contexts.add('dispatch')
   if (input.editorOwnsTarget) contexts.add('editor')
   if (input.feedFocused) contexts.add('feed')
   return contexts
@@ -253,9 +230,18 @@ function routedCommandForEvent(
   event: KeyboardEvent,
   bindingIndex: ReadonlyMap<string, { commandId: string; context: BindingContext }[]>,
   activeContexts: ReadonlySet<BindingContext>,
+  options: { textEditingTarget: boolean } = { textEditingTarget: false },
 ): string | null {
   const binding = keybindingFromEvent(event)
   if (!binding) return null
+  // The runtime half of the macOS text-editing reservation (#992): these
+  // chords belong to the OS wherever text is editable, so a binding — any
+  // binding, in any context — must not receive them while a text field owns
+  // the target. Clear Lane on ⌥⌫ is why this exists (delete-word is the most
+  // load-bearing Option chord in a composer); the static table alone claimed
+  // OS ownership without enforcing it, which is how Alt+Shift+Arrow broke
+  // composer selection for years while the checker stayed green.
+  if (options.textEditingTarget && isMacosTextEditingChord(binding)) return null
   for (const entry of bindingIndex.get(binding) ?? []) {
     if (SURFACE_OWNED_COMMAND_IDS.has(entry.commandId)) continue
     if (!activeContexts.has(entry.context)) continue
@@ -296,9 +282,23 @@ const SPOTLIGHT_FOCUS_MODE_COMMAND_IDS: ReadonlySet<string> = new Set([
 /** Chord -> candidate commands, built once per override change. */
 function buildBindingIndex(
   overrides: Record<string, string[]>,
+  // Extension-contributed defaults, concatenated onto the shipped table. A user
+  // override still wins (resolveEffectiveKeybindings applies overrides on top of
+  // whatever defaults it is handed), so this is the ONE site that actually makes
+  // an extension's declared chord fire — the editor/sheet/palette only display it.
+  extensionDefaults: CommandBindingDefault[],
 ): Map<string, { commandId: string; context: BindingContext }[]> {
   const index = new Map<string, { commandId: string; context: BindingContext }[]>()
-  for (const entry of resolveEffectiveKeybindings(overrides, buildDefaultKeybindings())) {
+  // Extension declarations join the shipped defaults before resolution, so a
+  // user's persisted override can replace either source through one contract.
+  // Customized entries then lead the candidate list: a later Agent Code release
+  // may ship a default on a chord the user already assigned (#936), and install
+  // order must not silently take that explicit choice away.
+  const effective = resolveEffectiveKeybindings(overrides, [
+    ...buildDefaultKeybindings(),
+    ...extensionDefaults,
+  ])
+  for (const entry of [...effective.filter(item => item.customized), ...effective.filter(item => !item.customized)]) {
     for (const binding of entry.bindings) {
       const list = index.get(binding) ?? []
       list.push({ commandId: entry.commandId, context: entry.context })
@@ -316,24 +316,20 @@ export function useKeybinds(
   const commandKeybindingOverrides = useAppStore(
     state => state.settings.commandKeybindingOverrides,
   )
+  const installedExtensions = useAppStore(state => state.installedExtensions)
   const agentViewMode = useAppStore(state => state.settings.agentViewMode)
   const closeSettingsPage = useAppStore(state => state.closeSettingsPage)
-  const buryPromptSessionId = useAppStore(state => state.buryPromptSessionId)
-  const closeBuryPrompt = useAppStore(state => state.closeBuryPrompt)
   const newAgentPlacementOpen = useAppStore(state => state.newAgentPlacementOpen)
   const closeNewAgentPlacement = useAppStore(state => state.closeNewAgentPlacement)
   // The placement overlay is opened from TWO independent flows:
-  // - newAgentPlacementOpen: the cmd+T / new-agent-placement flow
-  // - dispatchAttachIntent: attach-detached-to-grid
+  // - newAgentPlacementOpen: the new-agent kind picker
   // - linkedAgentParentId: linked-agent kind picker
-  // App.tsx already unifies them as `placementOverlayOpen` and
-  // closes them together via `closePlacementOverlay`. We must
-  // subscribe to all three here — an earlier revision only checked
+  // usePlacementOverlay unifies them and closes them together. We must
+  // subscribe to both here — an earlier revision only checked
   // newAgentPlacementOpen, so cmd+W / cmd+1..9 / alt+d still
-  // mutated the workspace under sibling overlay modes before the
+  // mutated the workspace under the sibling overlay mode before the
   // overlay's own listener could stop propagation. See PR #75 review.
-  const dispatchAttachIntent = useAppStore(state => state.dispatchAttachIntent)
-  const closeDispatchAttach = useAppStore(state => state.closeDispatchAttach)
+  // (A third flow, attach-detached-to-grid, died with the tile tree in #992.)
   const linkedAgentParentId = useAppStore(state => state.linkedAgentParentId)
   const closeLinkedAgent = useAppStore(state => state.closeLinkedAgent)
   // Reorder Tabs and Pin Agents are modal overlays with their own
@@ -348,13 +344,63 @@ export function useKeybinds(
   const pinAgentsOpen = useAppStore(state => state.pinAgentsOpen)
   const closePinAgents = useAppStore(state => state.closePinAgents)
 
+  // Extension keybinding defaults, derived from installed manifests (no bundle
+  // import). Recomputed only when the installed set changes, so an install/remove
+  // makes a contributed chord start/stop firing without a reload.
+  //
+  // ── THE `?? []` IS NOT DEFENSIVE NOISE ──
+  // This hook owns the global keydown router: if it throws during render, the
+  // application has no keyboard at all, and it throws before anything can catch
+  // it usefully. That is the same shape as the persist-version bug that
+  // black-screened launch twice (#249) — a store slice that was expected to exist
+  // and did not. Extension state is the newest slice and the one most likely to be
+  // absent from a partially-restored or partially-mocked store, so the core
+  // keyboard path degrades to "no contributed chords" instead of taking the app
+  // down with it. Nothing else in this hook has an opinion about extensions.
+  const extensionKeybindings = useMemo(
+    () => deriveExtensionKeybindings(installedExtensions ?? []),
+    [installedExtensions],
+  )
+
   // Built once per override change, not per keystroke. Resolving inside the
   // handler meant rebuilding the default table and re-normalizing ~30 strings
   // on every keydown, including ordinary typing.
   const bindingIndex = useMemo(
-    () => buildBindingIndex(commandKeybindingOverrides),
-    [commandKeybindingOverrides],
+    () => buildBindingIndex(commandKeybindingOverrides, extensionKeybindings),
+    [commandKeybindingOverrides, extensionKeybindings],
   )
+
+  useEffect(() => {
+    if (!installedExtensions?.length) return
+    // Main must suppress Chromium/menu defaults synchronously for owned chords
+    // inside extension documents. Mirror the existing resolver's grammar, while
+    // command/context admission still runs through this hook after forwarding.
+    // Feed/editor-only bindings are not meaningful in an extension document.
+    //
+    // OS text-editing chords (⌥⌫, the Shift-selection chords) are NEVER
+    // forwarded (#1013 review B). Main captures a forwarded chord natively,
+    // and the event re-dispatched to this document targets the <iframe>, so
+    // isTextEditingTarget cannot see that an input inside the extension had
+    // focus. ⌥⌫ in an extension's text field then cleared the lane instead of
+    // deleting a word. The host yields these chords to text fields
+    // (routedCommandForEvent), and an extension frame cannot say whether it
+    // has one, so it keeps them.
+    // ('grid' was a context here until the tile tree died with #992.)
+    const bindings = [...bindingIndex].filter(([binding, entries]) => !isMacosTextEditingChord(binding) && entries.some(entry =>
+      !SURFACE_OWNED_COMMAND_IDS.has(entry.commandId) && ['global', 'dispatch'].includes(entry.context),
+    )).map(([binding]) => binding)
+    // These are the fixed workspace interactions below, not palette commands.
+    // The number-row continuation includes zero (two-digit index rows).
+    for (let digit = 0; digit <= 9; digit++) bindings.push(`Cmd+${digit}`, `Cmd+Alt+${digit}`)
+    // The fn+alt+arrow / alt+= / alt+- resize chords were forwarded here until
+    // the tile tree died (#992); nothing resizes splits any more.
+    const modal = [...bindingIndex].filter(([, entries]) => entries.some(entry => ['open-command-palette', 'close-pane'].includes(entry.commandId))).map(([binding]) => binding)
+    // Suppress native window-close defaults even when the user unbinds pane
+    // close. The existing modal gate decides whether there is an app action.
+    modal.push('Cmd+W', 'Cmd+Shift+W')
+    void window.api.extensionsSetInputBindings({ pane: [...new Set(bindings)], modal: [...new Set(modal)] }).catch(error => console.warn('[extensions] native input configuration failed:', error))
+    return () => { void window.api.extensionsSetInputBindings({ pane: [], modal: [] }).catch(() => {}) }
+  }, [bindingIndex, installedExtensions?.length])
 
   const tldrHoldRef = useRef<ReturnType<typeof createTldrHoldController> | null>(null)
   if (!tldrHoldRef.current) tldrHoldRef.current = createTldrHoldController(undefined, observeTldrHoldRelease)
@@ -363,7 +409,6 @@ export function useKeybinds(
   // hook unmount ends it.
   useEffect(() => () => { tldrHoldRef.current?.release(); dismissTldr() }, [])
   useEffect(() => {
-    let pendingTiledResizeIndex: number | null = null
     let pendingDispatchDigit: number | null = null
     let pendingDispatchDigitTimer: number | null = null
 
@@ -388,7 +433,22 @@ export function useKeybinds(
 
     const tldrHold = tldrHoldRef.current!
     const handler = (e: KeyboardEvent) => {
-      if (useTldrView.getState().held || useTldrView.getState().latched) {
+      const tldrView = useTldrView.getState()
+      // WHY a latch needs a MOUNTED overlay to own input (#1027), exactly like
+      // the goal-loop latch below (#1021): the latch is one app-wide flag, but
+      // an overlay exists only inside a visible TldrPane. There is none in a
+      // terminal-only tab or in Spotlight on a shell, and TldrOverlay renders
+      // nothing in a pane hidden by Reader, Settings or the fullscreen editor.
+      // Running TLDR or Goal from the palette there showed nothing and froze
+      // all typing until Escape. Input ownership follows the mounted DOM
+      // (lib/interaction-ownership.ts). A latch with nothing mounted is
+      // stale: drop it and route this key normally.
+      //
+      // A HELD peek is exempt: it lasts only while the key is physically
+      // down, and the keyup listener ends it however the gate behaves.
+      if (tldrView.latched && !tldrView.held && document.querySelector('[data-tldr-overlay],[data-goal-overlay]') == null) {
+        dismissTldr()
+      } else if (tldrView.held || tldrView.latched) {
         // The dimmed composer must never receive typing, including repeated
         // Option-letter chords after a user rebinds this command. Release is
         // handled by the independent keyup listener, even while this gate owns
@@ -400,6 +460,53 @@ export function useKeybinds(
           dismissTldr()
         }
         return
+      }
+      // The goal loop overlay is a latched blocking surface that stamps the
+      // interaction-owner marker, so the router's ownership branch below would
+      // swallow every chord — including goal-loop-preview itself, which is not
+      // in SURFACE_OWNER_FLAGS (its latch lives in a feature store, not
+      // uiShell). Dismiss here instead, before that gate, exactly like the
+      // TLDR latch above: Escape and the toggle chord are the exits.
+      //
+      // WHY the gate requires the overlay to be MOUNTED, not just the latch
+      // (#1021): the latch is one app-wide store flag, but an overlay exists
+      // only where a GoalLoopPane is mounted, and none is mounted in a
+      // terminal-only or empty tab. Gating on the flag alone swallowed every
+      // key with nothing on screen, including the palette chord, the composer
+      // and the terminal. The owner hit exactly that: "I cannot type anything,
+      // I can basically do nothing." lib/interaction-ownership.ts is the
+      // contract: input ownership follows the mounted DOM, never store state.
+      // A latch with no mounted overlay is stale by definition, so drop it and
+      // route this key normally rather than leave it armed for the next
+      // surface to trip over.
+      if (useGoalLoopView.getState().latched) {
+        if (document.querySelector('[data-goal-loop-overlay]') == null) {
+          dismissGoalLoop()
+          // The toggle chord on a stale latch means "turn it off". Letting it
+          // fall through would run goal-loop-preview again and RE-arm the
+          // latch with nothing to show, so every press in a terminal-only tab
+          // flipped an invisible flag that a later mouse tab switch then
+          // turned into an overlay out of nowhere (#1021 review).
+          if (routedCommandForEvent(e, bindingIndex, GLOBAL_CONTEXT_ONLY) === 'goal-loop-preview') {
+            e.preventDefault()
+            e.stopPropagation()
+            return
+          }
+        } else {
+          e.preventDefault()
+          e.stopPropagation()
+          // The toggle chord comes from the binding index rather than a
+          // hardcoded Meta+Shift+KeyY. Otherwise rebinding goal-loop-preview
+          // (#1007 plans to move it off a macOS-reserved chord) would silently
+          // remove the chord exit and leave Escape as the only way out.
+          // GLOBAL_CONTEXT_ONLY for the same reason as the ownership branch
+          // below: an overlay owns the screen, so only an app-wide chord can
+          // mean "dismiss the thing in front of me".
+          if (e.key === 'Escape' || routedCommandForEvent(e, bindingIndex, GLOBAL_CONTEXT_ONLY) === 'goal-loop-preview') {
+            dismissGoalLoop()
+          }
+          return
+        }
       }
       const cmd = e.metaKey
       const alt = e.altKey
@@ -431,6 +538,19 @@ export function useKeybinds(
         // it; only an app-wide chord can mean "dismiss the thing in front of
         // me".
         const dismissCommandId = routedCommandForEvent(e, bindingIndex, GLOBAL_CONTEXT_ONLY)
+        const extensionModal = e.target instanceof HTMLIFrameElement && e.target.dataset.extensionShell === 'modal'
+        if (extensionModal && dismissCommandId === 'close-pane') {
+          e.preventDefault()
+          // This is a host DOM event on the owned iframe element. It closes the
+          // modal surface, never the workspace pane hidden underneath it.
+          e.target.dispatchEvent(new Event('agent-code-extension-close'))
+          return
+        }
+        if (extensionModal && dismissCommandId === 'open-command-palette') {
+          e.preventDefault()
+          requestCommandInvocation(dismissCommandId, 'keybinding')
+          return
+        }
         if (dismissCommandId && commandOwnsOpenSurface(dismissCommandId, useAppStore.getState())) {
           e.preventDefault()
           requestCommandInvocation(dismissCommandId, 'keybinding')
@@ -443,7 +563,7 @@ export function useKeybinds(
       // `placementOverlayOpen` so create, attach, and linked-agent
       // modes share one keyboard bailout.
       const placementOverlayOpen =
-        newAgentPlacementOpen || dispatchAttachIntent !== null || linkedAgentParentId !== null
+        newAgentPlacementOpen || linkedAgentParentId !== null
 
       // Placement overlay (create-new, attach-detached, or linked
       // agent) and the two draft modals (reorder / pin) all share
@@ -467,7 +587,6 @@ export function useKeybinds(
         if (k === 'Escape') {
           e.preventDefault()
           if (newAgentPlacementOpen) closeNewAgentPlacement()
-          if (dispatchAttachIntent !== null) closeDispatchAttach()
           if (linkedAgentParentId !== null) closeLinkedAgent()
           if (reorderTabsOpen) closeReorderTabs()
           if (pinAgentsOpen) closePinAgents()
@@ -645,21 +764,19 @@ export function useKeybinds(
         return
       }
 
-      if (k === 'Escape' && buryPromptSessionId) {
-        e.preventDefault()
-        closeBuryPrompt()
-        return
-      }
-
       const handleTldrHold = (commandId: string | null): boolean => {
-        if (commandId !== 'tldr-preview') return false
+        // Goal (#936) shares TLDR's synchronous hold path, including the
+        // Spotlight admission below and the editor yield: Monaco owns Cmd+G as
+        // Find Next exactly as it owns Cmd+L as Select Line.
+        const preview = commandId === 'tldr-preview' ? 'tldr' : commandId === 'goal-preview' ? 'goal' : null
+        if (!preview) return false
         // The editor owns Select Line, including after a rebind. Both ordinary
         // panes and Spotlight must start synchronously: queueing the palette
         // toggle could reopen the preview after keyup, leaving it latched.
         if (!editorOwnsTarget && !fullscreenEditorOwnsWorkspace) {
           e.preventDefault()
           e.stopPropagation()
-          tldrHold.start(e)
+          tldrHold.start(e, preview)
         }
         return true
       }
@@ -733,7 +850,9 @@ export function useKeybinds(
       // binding while Dispatch owns the layout, so ⌥J falls through to the
       // Dispatch handler instead of being swallowed and refused.
       const activeContexts = activeBindingContexts({
-        dispatchMode: Boolean(workspace.dispatchMode),
+        // The stage is the workspace (#992): the layout context is always
+        // 'dispatch' now — the 'grid' it alternated with and the
+        // `dispatchMode` flag that chose both died with the tile tree.
         editorOwnsTarget,
         // 'feed' is live only when a rendered feed is focused AND the user is
         // not typing — which is what keeps bare End as a caret key in every
@@ -744,7 +863,9 @@ export function useKeybinds(
           && !isTextEditingTarget(e.target),
         ),
       })
-      const routedCommandId = routedCommandForEvent(e, bindingIndex, activeContexts)
+      const routedCommandId = routedCommandForEvent(e, bindingIndex, activeContexts, {
+        textEditingTarget: isTextEditingTarget(e.target),
+      })
       if (handleTldrHold(routedCommandId)) return
       if (routedCommandId) {
         e.preventDefault()
@@ -764,48 +885,22 @@ export function useKeybinds(
 
       // --- CMD: tab management ---
       if (cmd && !alt) {
-        if (workspace.tileTabs && pendingTiledResizeIndex !== null) {
-          if (k === 'ArrowLeft') {
-            e.preventDefault()
-            workspace.resizeTiledTabByIndex(pendingTiledResizeIndex, -0.03)
-            return
-          }
-          if (k === 'ArrowRight') {
-            e.preventDefault()
-            workspace.resizeTiledTabByIndex(pendingTiledResizeIndex, 0.03)
-            return
-          }
-          if (workspace.tileTabs.direction === 'horizontal') {
-            if (k === 'ArrowUp') {
-              e.preventDefault()
-              workspace.resizeTiledTabByIndex(pendingTiledResizeIndex, -0.03)
-              return
-            }
-            if (k === 'ArrowDown') {
-              e.preventDefault()
-              workspace.resizeTiledTabByIndex(pendingTiledResizeIndex, 0.03)
-              return
-            }
-          }
-        }
-        // In Dispatch Mode, the numbered command grammar moves from
-        // "tab N" to "session row N" because the left list is the primary
-        // control surface. Tab switching remains available via cmd-[ / ].
-        // The row labels keep their tab letter (A/B/C) for orientation,
-        // but the numeric suffix is global in the visible dispatch list.
-        if (workspace.dispatchMode) {
+        // In the unified layout the numbered command grammar is always
+        // "session row N" — the lane grid is the only workspace. Tab
+        // switching remains available via cmd-[ / ]. The row labels keep
+        // their project letter (A/B/C) for orientation, but the numeric
+        // suffix is global in the visible index.
+        {
           const digit = digitFromKeyboardEvent(e, {
             includeZero: pendingDispatchDigit !== null,
           })
           if (digit !== null) {
             e.preventDefault()
             if (!e.repeat) {
-              // In a tiled layout cmd-N fills the FOCUSED LANE; in classic
-              // Dispatch it moves the single dispatch focus. Same row index
-              // semantics (buildVisibleDispatchRows) either way.
-              const selectRow = workspace.dispatchMode?.tiled
-                ? (index: number) => focusTiledRowByIndex(workspace, index)
-                : (index: number) => focusDispatchRowByIndex(workspace, index)
+              // cmd-N fills the FOCUSED LANE. Row index semantics come from
+              // buildVisibleDispatchRows via focusedLaneRowScopedRows, exactly as
+              // the visible chips do.
+              const selectRow = (index: number) => focusRowByLabel(workspace, index)
               const combined =
                 pendingDispatchDigit !== null ? pendingDispatchDigit * 10 + digit : null
               if (combined !== null && combined >= 10 && combined <= 99) {
@@ -819,148 +914,39 @@ export function useKeybinds(
             return
           }
         }
-        // cmd-1..9 → tab index
-        const digit = digitFromKeyboardEvent(e)
-        if (digit !== null) {
-          e.preventDefault()
-          if (workspace.tileTabs) {
-            pendingTiledResizeIndex = digit - 1
-            workspace.focusTiledTabByIndex(digit - 1)
-          } else {
-            workspace.activateTabByIndex(digit - 1)
-          }
-          return
-        }
+        // A plain "cmd-1..9 → tab index" branch used to follow. It became
+        // unreachable the day the lane grid became the only workspace: the row
+        // grammar above consumes every digit. Projects keep ⌘⌥1..9.
       }
 
-      // --- ALT: pane management ---
+      // The lane arrows (⌥↑/↓ index walk, ⌥←/→ lane focus, ⌥H/J/K/L
+      // aliases) lived here as an inline `alt && !cmd` branch from #687 until
+      // the unified layout re-homed keyboard (#992 stage 5, the debt #681
+      // §7.1 filed). They are registered commands now — rebindable, visible
+      // in the shortcuts surface, routed by the binding table above — so the
+      // branch is gone. Two things the branch used to do are worth recording:
       //
-      // Important: on macOS, alt+letter produces Unicode symbols
-      // (alt+d → ∂, alt+h → ˙, alt+l → ¬). That means e.key is the
-      // produced symbol, NOT the letter. Use e.code ("KeyD", "KeyH",
-      // …) for reliable detection of alt combos. Arrow keys and
-      // punctuation still use e.key because their codes are verbose
-      // and the key values ARE what we want.
-      if (alt && !cmd) {
-        const code = e.code
-
-        if (workspace.dispatchMode) {
-          // WHY Dispatch steals these before normal pane navigation:
-          // Dispatch focus is `dispatchMode.focusedSessionId`, while grid
-          // navigation below walks `activeTab.focusedSessionId` through
-          // `tab.root`. Those are deliberately different invariants. Once a
-          // Dispatch row points at a detached session, falling through to
-          // `workspace.navigate()` asks the grid to find a neighbor for a
-          // session that is not in the grid and silently does nothing. The
-          // command-palette side of this fix hides `Focus Pane *` in Dispatch;
-          // the keybind side must also stop grid navigation from running
-          // underneath Dispatch.
-          //
-          // Dispatch is a vertical list, so only up/down and vim k/j have
-          // movement semantics. Left/right/h/l are consumed because letting
-          // them fall through would mutate or probe the hidden grid and make
-          // keyboard behavior depend on stale grid focus instead of the row
-          // the user actually sees highlighted.
-          // In a tiled layout the same up/down keys move the FOCUSED LANE's
-          // selection, and left/right — which are swallowed in classic
-          // Dispatch (a vertical list) — gain meaning: they switch which
-          // lane has keyboard focus. Switching lanes never changes any
-          // lane's selection, keeping lanes independent.
-          const tiled = workspace.dispatchMode?.tiled
-          if (k === 'ArrowUp' || code === 'KeyK') {
-            e.preventDefault()
-            if (tiled) moveTiledLaneSelection(workspace, -1)
-            else moveDispatchSelection(workspace, -1)
-            return
-          }
-          if (k === 'ArrowDown' || code === 'KeyJ') {
-            e.preventDefault()
-            if (tiled) moveTiledLaneSelection(workspace, 1)
-            else moveDispatchSelection(workspace, 1)
-            return
-          }
-          if (k === 'ArrowLeft' || code === 'KeyH') {
-            e.preventDefault()
-            if (tiled) moveTiledFocusWithinRow(workspace, -1)
-            return
-          }
-          if (k === 'ArrowRight' || code === 'KeyL') {
-            e.preventDefault()
-            if (tiled) moveTiledFocusWithinRow(workspace, 1)
-            return
-          }
-        }
-
-        // --- Directional resize: fn+alt+arrow ---
-        //
-        // On macOS, holding Fn while pressing an arrow is translated by
-        // the OS to Home/End/PageUp/PageDown BEFORE the event reaches
-        // the app — so what the user types as "fn+option+←" arrives
-        // here as altKey=true, e.key==='Home'. We never see the Fn
-        // modifier directly (it isn't exposed to the browser), and we
-        // don't need to: the translated key is unambiguous.
-        //
-        // Must come BEFORE plain alt+arrow navigation so the two
-        // handlers don't collide (they're disjoint by key name, but
-        // keeping the directional block first matches how the old
-        // shift-gated version was ordered and makes the precedence
-        // obvious).
-        //
-        // Why not alt+shift+arrow like before: Option+Shift+Arrow is
-        // the macOS system shortcut for word-by-word text selection.
-        // Stealing it broke selection inside the composer and any
-        // other text field. Fn+Option+Arrow has no system meaning so
-        // we can claim it cleanly.
-        //
-        // Semantics unchanged: the arrow moves the divider of the
-        // nearest matching split. Whether the focused pane grows or
-        // shrinks is determined by which side of the divider it's on.
-        //
-        // 0.02 delta per press gives about 45 keystrokes across the
-        // clamp range, which is fine-grained enough to land on exact
-        // 50/50 or 25/75 ratios without overshooting. Hold the key
-        // for coarse moves.
-        if (k === 'Home') {
-          e.preventDefault()
-          workspace.resizeFocusedDirectional('left', 0.02)
-          return
-        }
-        if (k === 'End') {
-          e.preventDefault()
-          workspace.resizeFocusedDirectional('right', 0.02)
-          return
-        }
-        if (k === 'PageUp') {
-          e.preventDefault()
-          workspace.resizeFocusedDirectional('up', 0.02)
-          return
-        }
-        if (k === 'PageDown') {
-          e.preventDefault()
-          workspace.resizeFocusedDirectional('down', 0.02)
-          return
-        }
-
-        // Vim navigation (e.code) + arrow keys (e.key)
-        // Resize — use physical codes for punctuation too
-        if (code === 'Equal' || k === '=' || k === '+') {
-          e.preventDefault()
-          workspace.resizeFocused(+0.05)
-          return
-        }
-        if (code === 'Minus' || k === '-' || k === '_') {
-          e.preventDefault()
-          workspace.resizeFocused(-0.05)
-          return
-        }
-      }
-
+      // 1. It consumed Alt+Shift+Arrow as if it were the bare arrow (the
+      //    `alt && !cmd` test never checked shift), silently breaking macOS
+      //    word-selection in every composer. The binding grammar is
+      //    exact-match, so registering the BARE chords fixed that by accident
+      //    of correctness rather than by a guard someone could remove.
+      //
+      // 2. Split resizing (fn+alt+arrow, alt+= / alt+-) lived under the same
+      //    branch until the tile tree died. RESERVED-CHORD RECORD, kept
+      //    because it is the only place the fact is written down and
+      //    check:keybindings cannot see it: Option+Shift+Arrow is the macOS
+      //    system shortcut for word-by-word text selection and is load-bearing
+      //    for every text field in the app (including our composer). It was
+      //    tried for directional resize, broke selection, and was replaced by
+      //    fn+alt+arrow. Never bind it. (The runtime yield in
+      //    routedCommandForEvent enforces this family for registered chords
+      //    too — see isMacosTextEditingChord.)
     }
 
     const onKeyUp = (e: KeyboardEvent) => {
       tldrHold.keyUp(e)
       if (e.key === 'Meta') {
-        pendingTiledResizeIndex = null
         clearPendingDispatchDigit()
       }
     }
@@ -968,7 +954,10 @@ export function useKeybinds(
     const onBlur = () => {
       tldrHold.release()
       dismissTldr()
-      pendingTiledResizeIndex = null
+      // Same as the TLDR latch: a blocking overlay must not survive the
+      // user leaving the window. Switching apps and coming back is a common
+      // way to try to "unstick" an app, and before #1021 it did nothing here.
+      dismissGoalLoop()
       clearPendingDispatchDigit()
     }
 
@@ -990,14 +979,10 @@ export function useKeybinds(
   }, [
     agentViewMode,
     closeSettingsPage,
-    closeBuryPrompt,
     closeNewAgentPlacement,
-    closeDispatchAttach,
     closeLinkedAgent,
     closeReorderTabs,
     closePinAgents,
-    buryPromptSessionId,
-    dispatchAttachIntent,
     linkedAgentParentId,
     newAgentPlacementOpen,
     pinAgentsOpen,
@@ -1020,131 +1005,17 @@ function digitFromKeyboardEvent(
   return !Number.isNaN(digit) && digit >= 1 && digit <= 9 ? digit : null
 }
 
-function dispatchRows(workspace: Workspace) {
-  // WHY use the visible-row helper instead of flattening groups here:
-  // keyboard selection is the user's row-number contract. Once Dispatch rows
-  // include pinned agents and terminal sessions, "cmd-3" must resolve against
-  // the exact same list the user sees, not a convenient subset of project
-  // groups. The helper keeps this in lockstep with DispatchLayout and command
-  // targeting.
-  return buildVisibleDispatchRows(workspace.state)
-}
 
-function focusDispatchRowByIndex(workspace: Workspace, index: number) {
-  const row = dispatchRows(workspace)[index]
-  if (!row) return
-  workspace.focusDispatchSession(row.tabId, row.sessionId)
-}
-
-// ---- Tiled Dispatch keybind helpers (issue #248) ----
+// ---- Lane-grid keybind helpers ----
 //
-// When a tiled layout is active, dispatch selection targets the FOCUSED
-// LANE rather than the single dispatch focus. These mirror the classic
-// helpers above but write through selectTiledLaneSession, so cmd-N / arrows
-// fill the focused lane (duplicates across lanes are allowed) — and wake a
-// hibernated agent first, which the raw lane writer never did (#690).
+// Dispatch selection targets the FOCUSED LANE and writes through
+// selectTiledLaneSession, so cmd-N / arrows fill the focused lane
+// (duplicates across lanes are allowed) — and wake a hibernated agent
+// first, which the raw lane writer never did (#690).
+//
+// The classic-Dispatch companions (focusDispatchRowByIndex,
+// moveDispatchSelection — single-focus, no lanes) were deleted with the
+// classic layout: with the lane grid as the only workspace there is no
+// surface left for single-focus selection to act on.
 
-function focusedTiledLane(workspace: Workspace): number {
-  return workspace.dispatchMode?.tiled?.focusedLane ?? 0
-}
 
-/**
- * The rows the FOCUSED grid row actually offers.
- *
- * Keyboard selection has to see the same list the user does. The row's index
- * and strips are filtered by `rowScopedRows` (project binding + child cap), so
- * walking the unfiltered canonical set would let ⌥↓ drop a project-A agent into
- * a row bound to project B — one the row's own selector does not list. The
- * empty-lane hint points straight at this key, which makes that reachable
- * rather than theoretical.
- *
- * Labels are NOT renumbered: these are the canonical rows, filtered. A bound
- * row shows gaps, which is what keeps cmd-N and the visible chip in agreement.
- */
-function tiledRowScopedRows(workspace: Workspace) {
-  const all = dispatchRows(workspace)
-  const tiled = workspace.dispatchMode?.tiled
-  if (!tiled) return all
-  const grid = normalizeGridShape(tiled)
-  const rowIndex = rowIndexForLane(grid.rows, grid.focusedLane)
-  const gridRow = rowIndex >= 0 ? grid.rows[rowIndex] : undefined
-  if (!gridRow) return all
-  return rowScopedRows(all, gridRow).flatMap(item => (item.kind === 'agent' ? [item.row] : []))
-}
-
-function focusTiledRowByIndex(workspace: Workspace, index: number) {
-  // cmd-N addresses a LABEL, and labels are canonical (never renumbered), so a
-  // bound row shows gaps like B12, B15. Resolving by label rather than by
-  // position keeps the key and the visible chip naming the same agent; asking
-  // for a label this row does not offer simply does nothing, instead of pulling
-  // in an agent the row's own selector excludes.
-  const row = tiledRowScopedRows(workspace).find(candidate => candidate.globalIndex === index + 1)
-  if (!row) return
-  // Wakes a hibernated detached agent before placing it (#690).
-  void workspace.selectTiledLaneSession(focusedTiledLane(workspace), row.sessionId)
-}
-
-function moveTiledLaneSelection(workspace: Workspace, delta: number) {
-  const tiled = workspace.dispatchMode?.tiled
-  if (!tiled) return
-  const rows = tiledRowScopedRows(workspace)
-  if (rows.length === 0) return
-  const laneIndex = tiled.focusedLane
-  const currentId = tiled.lanes[laneIndex]?.selectedSessionId
-  const currentIndex = currentId ? rows.findIndex(row => row.sessionId === currentId) : -1
-  // Step one row in `delta` direction, wrapping. Duplicates are allowed, so
-  // we do NOT skip rows shown in other lanes — landing on one just mirrors
-  // that agent into this lane too.
-  const probe = nextTiledRowIndex(currentIndex, delta, rows.length)
-  const row = rows[probe]
-  if (row) void workspace.selectTiledLaneSession(laneIndex, row.sessionId)
-}
-
-/**
- * Move lane focus one step, STOPPING at the row's edges.
- *
- * Wrapping into the neighbouring row would make one keystroke move focus a
- * single lane or jump it across the layout depending on where you started —
- * fine when you are looking, wrong when you are typing fast. Crossing rows is
- * the deliberate job of Focus Row Above/Below.
- */
-function moveTiledFocusWithinRow(workspace: Workspace, delta: number) {
-  const tiled = workspace.dispatchMode?.tiled
-  if (!tiled) return
-  const grid = normalizeGridShape(tiled)
-  const rowIndex = rowIndexForLane(grid.rows, grid.focusedLane)
-  if (rowIndex < 0) return
-  const start = rowStartIndex(grid.rows, rowIndex)
-  const end = start + (grid.rows[rowIndex]?.length ?? 0) - 1
-  const next = grid.focusedLane + delta
-  if (next < start || next > end) return
-  workspace.setTiledFocusedLane(next)
-}
-
-function moveDispatchSelection(workspace: Workspace, delta: number) {
-  const rows = dispatchRows(workspace)
-  if (rows.length === 0) return
-  // Resolve the current row through the same row-derived selector that the
-  // visible UI uses. Reading raw dispatchMode.focusedSessionId here (the
-  // previous shape) yields ids that aren't always in the visible list:
-  // stale persisted focus right after rehydrate, scope toggles, or the
-  // tiny gap right after a close. findIndex would then return -1 and the
-  // wrap-around math `(currentIndex + delta + len) % len` produces a
-  // deterministic-but-confusing jump — Down lands on row 0, Up lands on
-  // the second-to-last row — neither matches the row the user sees
-  // highlighted. selectVisibleDispatchRow always returns a row when the
-  // list is non-empty (rows[0] fallback), so currentIndex is always in
-  // range and the visible cursor is the cursor we move from.
-  const currentRow = selectVisibleDispatchRow(
-    rows,
-    workspace.dispatchMode?.focusedSessionId,
-    workspace.activeTab?.focusedSessionId,
-  )
-  const currentIndex = currentRow
-    ? rows.findIndex(row => row.sessionId === currentRow.sessionId)
-    : 0
-  const nextIndex = (currentIndex + delta + rows.length) % rows.length
-  const row = rows[nextIndex]
-  if (!row) return
-  workspace.focusDispatchSession(row.tabId, row.sessionId)
-}

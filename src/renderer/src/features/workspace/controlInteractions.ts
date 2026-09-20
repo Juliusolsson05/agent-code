@@ -1,9 +1,11 @@
 import type { InteractionReference } from '@control-sdk'
 export const workspaceInteractions: InteractionReference[] = [
-  { id: 'placement.choose', bindings: ['Up', 'Down', 'Left', 'Right'], context: 'agent placement preview', description: 'Choose placement relative to the anchor pane.' },
-  { id: 'placement.global', bindings: ['Shift+Up', 'Shift+Down', 'Shift+Left', 'Shift+Right'], context: 'agent placement preview', description: 'Choose placement relative to the whole project tab rather than its anchor pane.' },
-  { id: 'placement.reset', bindings: ['Backspace'], context: 'agent placement preview', description: 'Return selection to the default placement for the anchor.' },
-  { id: 'placement.confirm', bindings: ['Enter', 'Escape'], context: 'agent placement or Dispatch shape dialog', description: 'Enter confirms a valid selected placement/shape; Escape dismisses the owning dialog.' },
+  // The New Agent picker's geometric placement step (arrows, Shift+arrows,
+  // Backspace relative to an anchor pane) was deleted with the tile tree
+  // (#992). The picker is one screen now, and an external agent reading this
+  // reference must not be told to press keys that do nothing (#1013 review B).
+  { id: 'new-agent.select', bindings: ['Up', 'Down', 'Enter', 'Escape'], context: 'New Agent picker', description: 'Choose the agent type; Enter creates it. It fills the focused lane when that lane is empty, and otherwise waits in the project index. Escape dismisses.' },
+  { id: 'placement.confirm', bindings: ['Enter', 'Escape'], context: 'lane grid shape dialog', description: 'Enter confirms a valid shape; Escape dismisses the dialog.' },
   { id: 'provider.select', bindings: ['Up', 'Down', 'Ctrl+P', 'Ctrl+N', 'Enter'], context: 'provider switch picker', description: 'Navigate provider choices and confirm the selected provider.' },
   { id: 'new-agent-in.select', bindings: ['Up', 'Down', 'Ctrl+P', 'Ctrl+N', 'Enter', 'Backspace'], context: 'New Agent In dialog', description: 'Choose the agent, then the project; Enter advances, then creates the agent in the focused Dispatch lane (or as a new Dispatch row); Backspace returns to the agent step.' },
   { id: 'agent-view.select', bindings: ['Up', 'Down', 'Enter'], context: 'agent view-mode picker', description: 'Select and confirm the rendered/terminal view choice.' },

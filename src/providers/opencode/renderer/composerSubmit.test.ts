@@ -30,3 +30,23 @@ describe('opencodeComposerSubmit', () => {
     })
   })
 })
+
+describe('opencodeComposerSubmit acceptance', () => {
+  it('returns the acceptance so the composer can tell a queued prompt from a started turn', async () => {
+    // #889: the composer needs the acceptance kind to settle its optimistic
+    // `submitting` phase when the provider queued the prompt instead of
+    // starting a turn. Swallowing the result here would hide that signal.
+    const acceptance = { kind: 'queue' as const, acceptedAt: 1_000 }
+    const io: ComposerSubmitIo = {
+      sessionId: 's1',
+      input: 'hello',
+      draftImages: [],
+      send: vi.fn(),
+      deliverPrompt: vi.fn(async () => ({ ok: true as const, acceptance })),
+      pasteId: 'paste-1',
+      getScreen: () => undefined,
+    }
+
+    await expect(opencodeComposerSubmit(io)).resolves.toEqual(acceptance)
+  })
+})
