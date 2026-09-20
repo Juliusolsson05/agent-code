@@ -66,6 +66,7 @@ import { ExtensionRuntimeService } from '@main/extensions/runtimeService.js'
 import { ExtensionCapabilityService } from '@main/extensions/capabilityService.js'
 import { registerExtensionRuntimeIpc } from '@main/extensions/runtimeIpc.js'
 import { ExtensionServiceHost } from '@main/extensions/serviceHost.js'
+import { clearServiceTransport, configureServiceTransport } from '@main/extensions/serviceTransport.js'
 import { registerExtensionInputIpc } from '@main/extensions/nativeInput.js'
 import { sweepAbandonedInstallDirectories } from '@main/extensions/install.js'
 import { STATE_DIR, STATE_FILE, TLDR_HOOK_RUNTIME_DIR } from '@main/storage/paths.js'
@@ -710,6 +711,13 @@ async function startApp(): Promise<void> {
       broadcastToWindows('extensions:notification', { extensionId, message })
     },
     services: extensionServiceHost,
+  })
+  // The scheme handler is registered on every extension session long before
+  // this composition runs; the proxy module is its late-bound lookup. Wiring
+  // here (not in scheme.ts) keeps the handler testable with no main singleton.
+  configureServiceTransport({
+    hasCapability: (extensionId, revision, capability) => extensionCapabilities!.hasCapability(extensionId, revision, capability),
+    serviceEndpoint: (extensionId, serviceId) => extensionServiceHost!.serviceEndpoint(extensionId, serviceId),
   })
   extensionRuntime = new ExtensionRuntimeService({
     preload: join(__dirname, '../preload/extensionRuntime.js'),
@@ -1546,6 +1554,7 @@ const sessionShutdownGate = installApplicationShutdown({
       extensionRuntime = null
       extensionCapabilities?.dispose()
       extensionCapabilities = null
+      clearServiceTransport()
       extensionServiceHost?.dispose()
       extensionServiceHost = null
     },

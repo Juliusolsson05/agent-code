@@ -127,6 +127,12 @@ export type ExtensionCapability =
   // Consent copy must state that a service is native code running with the
   // user's privileges — the grant is trust, not a sandbox.
   | 'service.run'
+  // Tier 2 — own-service messaging. A frame/runtime may fetch
+  // `agent-code-ext://<extId>/__bundle/<rev>/__service/<serviceId>/<path>`;
+  // the host proxies to that service's loopback endpoint. The child CSP stays
+  // connect-src 'self' — this is a namespace right over the extension's own
+  // origin, never arbitrary network (enforced in serviceTransport.ts).
+  | 'service.transport'
 
 export const EXTENSION_CAPABILITIES: readonly ExtensionCapability[] = [
   'workspace.observe',
@@ -136,6 +142,7 @@ export const EXTENSION_CAPABILITIES: readonly ExtensionCapability[] = [
   'fs.write',
   'notifications.show',
   'service.run',
+  'service.transport',
 ]
 
 /**

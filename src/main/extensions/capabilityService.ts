@@ -122,6 +122,22 @@ export class ExtensionCapabilityService {
     this.pending.clear()
   }
 
+  /**
+   * Boolean grant probe sharing the per-generation cache with invoke(). Used by
+   * request surfaces that are not broker methods — the service.transport proxy
+   * gates a raw fetch, so there is no ExtensionServiceRequest to route. Keeps
+   * one grant implementation: a second cache here could drift from the one the
+   * broker enforces, which is precisely how a proxy outlives its revocation.
+   */
+  async hasCapability(extensionId: string, revision: string, capability: ExtensionCapability): Promise<boolean> {
+    try {
+      await this.requireCapability(extensionId, revision, capability)
+      return true
+    } catch {
+      return false
+    }
+  }
+
   private async requireCapability(
     extensionId: string,
     revision: string,

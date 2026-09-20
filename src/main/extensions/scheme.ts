@@ -9,6 +9,7 @@ import { extensionRevision } from '@shared/types/extensions.js'
 import { buildFrameDocument, childFrameCsp } from '@main/extensions/frameDocument.js'
 import { extensionBundleDirectory, readLedger, withLedgerLock } from '@main/extensions/ledger.js'
 import { buildRuntimeDocument, RUNTIME_DOCUMENT } from './runtimeDocument.js'
+import { proxyServiceTransportRequest, isServiceTransportPath } from './serviceTransport.js'
 
 export const EXTENSION_SCHEME = 'agent-code-ext'
 
@@ -166,6 +167,17 @@ export function handleExtensionScheme(target: Protocol = protocol): void {
     // specifiers, without a <base> tag that would weaken the child's CSP.
     if (!relative.startsWith(assetPrefix)) return new Response('not found', { status: 404 })
     relative = relative.slice(assetPrefix.length)
+
+    // The service.transport proxy lives INSIDE the immutable bundle prefix, so
+    // transport URLs are generation-pinned exactly like module imports: the
+    // startsWith(assetPrefix) check above has already rejected a stale frame's
+    // URL by the time this runs, and the grant check below binds to that same
+    // revision. Only this extension's own origin can issue the fetch (child CSP
+    // is connect-src 'self'); the handler re-checks grant + running state on
+    // every request, so nothing here outlives a revoke.
+    if (isServiceTransportPath(relative)) {
+      return proxyServiceTransportRequest(extensionId, extensionRevision(record), relative, request)
+    }
 
     if (relative === RUNTIME_DOCUMENT) {
       const nonce = randomBytes(16).toString('base64')

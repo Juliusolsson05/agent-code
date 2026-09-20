@@ -60,6 +60,8 @@ const CAPABILITY_DISCLOSURE: Record<ExtensionCapability, string> = {
   // made once, per extension, here.
   'service.run':
     'Run bundled native programs as child processes with this user’s privileges — only when you use the extension’s start control. Native code is not sandboxed.',
+  'service.transport':
+    'Exchange requests with its own running service on this machine (the host proxies them; the extension cannot reach anything else on the network).',
 }
 
 function consentPromptFor(evt: IpcMainInvokeEvent, source: string): ConsentPrompt {

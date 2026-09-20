@@ -228,6 +228,14 @@ export class ExtensionServiceHost {
     })
   }
 
+  /** First reported loopback port of a RUNNING service, or null. The transport
+   *  proxy dials 127.0.0.1:<port> in main — never the child — so loopback-ness
+   *  holds by construction here. */
+  serviceEndpoint(extensionId: string, serviceId: string): number | null {
+    const service = this.running.get(this.key(extensionId, serviceId))
+    return service && !service.stopping && service.endpoints.length > 0 ? service.endpoints[0].port : null
+  }
+
   /** App-quit drain: kill every service; no graceful per-service ceremony. */
   pause(): void {
     this.closed = true
