@@ -667,6 +667,76 @@ claude 2.1.143 / codex 0.130.0 are stale versus the 2.1.278 / 0.155.1 in daily u
   - **#1018 (orchestration hides API errors):** an evidence catalog from real feed-debug recordings is being built (research agent, worktree `.worktrees/fix-orchestration-api-error`). Implementation follows the catalog.
   - **Waiting on #1013's merge:** T7 (#1006), T8 (#1007), T2 (command promotion) and T1 (#995), all of which touch the catalog, keybindings or bootstrap.
   - **Nightly** run 35430444567: build-app is green, package-macos is running.
+- 2026-09-20 11:55Z — **issue sweep: four merged, two in review, two filed.**
+  Reviewers are CLAUDE orchestration children from 2026-09-20 (owner reversed
+  the earlier Codex call). One reviewer per PR, one round, fix, merge on green.
+
+  **MERGED**
+  - **#1068** (`fd5af...`) — an OpenCode question modal was reject-only, so a
+    user could read "red or blue?" and not answer it. Closes **#1025**. Round
+    found three blockers, all one bug seen from two sides: a question can be
+    REPLACED mid-answer, and the view kept the previous question's selection
+    (same component instance — the outlet keys on `condition.kind`) while the
+    runtime validated against the LIVE question and replied to the PAYLOAD's,
+    then deleted the modal unconditionally.
+  - **#1069** (`5e3ac419`) — duplicate `orchestration_create_agent`. Closes
+    **#952**. The round caught a regression *worse than the bug*: keyed on the
+    child's shape with the prompt excluded, a concurrent FAN-OUT of N workers
+    differing only by prompt collapsed to one child and N-1 tasks were silently
+    never run. `MAX_ACTIVE_RENDERER_REQUESTS = 1` makes a burst overlap by
+    construction, so a fan-out was the MOST exposed shape. Now the whole TOOL
+    CALL is the unit, keyed on every argument including the prompt, deduped on
+    `OrchestrationBridge` because `BuiltInMcpHttpHost` builds a fresh server
+    per POST.
+  - **#1071** (`04990cac`) — Claude wrapper provenance. Closes **#930**. Round
+    caught a second regression: I anchored on `<command-name>` after reading
+    `processBashCommand.tsx`, and never found `formatSlashCommandLoadingMetadata`,
+    which opens with `<command-message>` — **136 real turns against 105**, so
+    every `/loop` and `/simplify` row in the picker would have become raw XML.
+    Also: the never-strip-to-nothing guard was resurrecting 87 real
+    `<local-command-stdout>` turns, which are provider OUTPUT, not prompts.
+  - **#1072** (`4f5c4a03`) — the state lock. **#993 STAYS OPEN** (see below).
+    Round showed my first fix protected only incumbents younger than five
+    minutes, because the grace window is measured from the lock's `startedAt`
+    — the incumbent's UPTIME — and every reason for an argv0 mismatch is
+    permanent. Replaced the heuristic with the kernel: `ps -o lstart=` against
+    the lock's `startedAt`. A process cannot have started AFTER the lock its
+    own acquisition wrote, so later = a reused pid, at-or-before = the genuine
+    owner at any age.
+
+  **OPEN, round done, findings fixed**
+  - **#1073** (#929, rewind attachments). Blocked on
+    **agent-transcript-parser#35**: the round found my extractor was a THIRD
+    copy of the data-URL rule that CONTRADICTED the parser's own projector —
+    same bytes, same rewind, one produced an image in the transcript while the
+    other told the picker the attachment was unavailable. Fixed by exporting
+    `parseBase64DataUrl` from the parser and adopting its precedence. The
+    submodule pointer currently references the branch commit, and
+    `minimum-node-fixture-gate` is RED because of it; a review of #35 is
+    running, then merge #35, re-bump the pointer to `main`, then #1073.
+  - **#1074** (#943, control drain). `createControlHost.dispose()` was
+    synchronous and joined nothing, so the exit and the state-process lock were
+    released while an admitted mutation was in flight and its durable result
+    was still queued. Reviewer running.
+
+  **FILED** — **#1070** (a refused condition action is completely invisible;
+  pre-existing shared `conditions-core`), **#1075** (rewind never tells the
+  user an attachment could not be restored; the report now crosses IPC but no
+  consumer reads it).
+
+  **THE TECHNIQUE THAT FOUND ALL OF THIS**, worth keeping: every brief tells
+  the reviewer to *mutate the implementation itself and report which mutations
+  SURVIVE*. Four for four, that instruction produced the blocking finding —
+  three of them regressions I had just introduced. A reviewer that only reads
+  the diff finds far less. Second-best instruction: *count the real corpus
+  rather than reasoning about it* (`~/.claude/projects/**/*.jsonl`, 1941 files;
+  `~/.codex/sessions/**/rollout-*.jsonl`, 2146 files).
+
+  **NEXT**: merge #35 → re-bump → #1073; #1074 on its round; then **#944**
+  (always-on performance monitoring — large, and its acceptance needs owner
+  product calls) and **#934** (extensions deferred items). T14 is still blocked
+  on two owner product calls.
+
 - 2026-09-20 09:45Z — **v0.1.0 IS PUBLISHED.** Signed, notarized, both
   architectures, `releases/latest` returns it, and the landing page's download
   buttons + status line resolve to the real DMGs (verified in a browser, not
