@@ -83,8 +83,8 @@ async function rewind(kind: AgentProviderKind, promptAttachments: Array<Record<s
   await act(async () => {
     await mounted.result.current.rewindSessionToPrompt('source' as never, anchorFor(kind))
   })
-  const toasts = showPaneToast.mock.calls.map(([, message]) => String(message))
-  return toasts.find(message => message.startsWith('Rewound to prompt')) ?? ''
+  const call = showPaneToast.mock.calls.find(([, message]) => String(message).startsWith('Rewound to prompt'))
+  return { message: String(call?.[1] ?? ''), durationMs: call?.[2] as number | undefined }
 }
 
 describe('a rewind says what it could not bring back (#1075)', () => {
@@ -92,10 +92,15 @@ describe('a rewind says what it could not bring back (#1075)', () => {
     // The issue's headline case. The rewind WORKED and the attachment was
     // restored perfectly; it is the composer that cannot carry it, and before
     // this the user got an empty composer and the ordinary success toast.
-    const message = await rewind('codex', [{ status: 'restored', mediaType: 'image/png', name: 'shot.png' }])
+    const { message, durationMs } = await rewind('codex', [{ status: 'restored', mediaType: 'image/png', name: 'shot.png' }])
 
     expect(message).toContain('1 attachment')
-    expect(message).toMatch(/cannot carry images/)
+    expect(message).toMatch(/cannot carry attachments/)
+    // Long enough to READ (#1100 review). The default is 2 s and `PaneToast`
+    // clamps to three lines, so a sentence naming files and reasons was pulled
+    // off screen before it could be finished — the house numbers for a toast
+    // carrying something to act on are 5-6 s.
+    expect(durationMs).toBe(6000)
     // The undo affordance is still advertised: the loss note is added to that
     // sentence, not substituted for it.
     expect(message).toContain('Undo Rewind')
@@ -104,19 +109,21 @@ describe('a rewind says what it could not bring back (#1075)', () => {
   it('says the ordinary thing when the composer really did get everything', async () => {
     // The control. "Always warn" would satisfy the case above and put a
     // warning on every Claude image rewind that worked perfectly.
-    const message = await rewind('claude', [{ status: 'restored', mediaType: 'image/png', name: 'shot.png' }])
+    const { message, durationMs } = await rewind('claude', [{ status: 'restored', mediaType: 'image/png', name: 'shot.png' }])
 
     expect(message).toBe('Rewound to prompt - Undo Rewind available until next submit')
+    // "It worked" needs no reading time, so it keeps the default.
+    expect(durationMs).toBeUndefined()
   })
 
   it('says the ordinary thing when there were no attachments at all', async () => {
-    const message = await rewind('codex', [])
+    const { message } = await rewind('codex', [])
 
     expect(message).toBe('Rewound to prompt - Undo Rewind available until next submit')
   })
 
   it('names what was unavailable even on a provider that carries images', async () => {
-    const message = await rewind('claude', [
+    const { message } = await rewind('claude', [
       { status: 'unavailable', reason: 'external-reference', mediaType: null, name: 'design.png' },
     ])
 

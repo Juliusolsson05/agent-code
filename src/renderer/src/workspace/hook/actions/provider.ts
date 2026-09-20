@@ -313,6 +313,14 @@ export function useProviderActions(
           attachmentLoss
             ? `Rewound to prompt, but ${attachmentLoss} Undo Rewind available until next submit`
             : 'Rewound to prompt - Undo Rewind available until next submit',
+          // WHY a longer toast for the loss case (#1100 review): the default is
+          // 2000 ms and `PaneToast` clamps to three lines, which for a sentence
+          // naming two files and two reasons is a message nobody finishes
+          // reading. The house numbers for a toast carrying something to act on
+          // are 5-6 s (a copied command, a saved path), and this is the same
+          // kind of thing. The ordinary success toast keeps the default,
+          // because "it worked" needs no reading time.
+          attachmentLoss ? 6000 : undefined,
         )
         return { status: 'completed', sourceSessionId, newSessionId }
       } catch (err) {
