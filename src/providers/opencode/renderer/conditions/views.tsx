@@ -259,7 +259,10 @@ export const opencodeQuestionView = defineView<
           // height, and Escape and outside-click are disabled, so a long
           // question must never push the only button (Reject) off-screen.
           <pre className="bg-code-bg rounded-slab text-code-ink px-3 py-2 mb-1 max-h-[40vh] overflow-auto whitespace-pre-wrap break-words text-[11.5px]">
-            {state.text}
+            {/* Reject-only today, so no affirmative grant hangs off it — but
+                it is still a provider-authored question the user answers, and
+                the escape costs nothing (#1049 re-review). */}
+            {withVisibleControls(state.text)}
           </pre>
         ) : (
           <p className="mb-2">OpenCode is waiting for a response.</p>

@@ -23,6 +23,7 @@ import type {
   AgentCodeInstalledSkillsSnapshot,
   AgentCodeInstalledSkillUpdateResult,
 } from '@shared/types/agentCodeInstalledSkills.js'
+import { withVisibleControls } from '@shared/text/visibleControls'
 
 const HEALTH_LABELS: Record<AgentCodeInstalledSkill['health'], string> = {
   disabled: 'Disabled',
@@ -463,10 +464,15 @@ function DiscoveryReview({
 function CandidateDetails({ candidate }: { candidate: AgentCodeInstalledSkillCandidate }) {
   return (
     <div className="min-w-0 flex-1 text-[10px]">
+      {/* The skill NAME is validated ASCII, but nothing else here is: the
+          description, the source path and the file list all come from the
+          repository being installed, and this panel is the review the user
+          approves. `scripts/check.sh<U+FE0F>` and `scripts/check.sh` are
+          different files that render identically (#1049 re-review). */}
       <div className="text-[12px] text-ink">{candidate.name}</div>
-      <div className="mt-1 text-muted">{candidate.description}</div>
+      <div className="mt-1 text-muted">{withVisibleControls(candidate.description)}</div>
       <div className="mt-1 text-muted">
-        {candidate.source.path || 'repository root'} · {candidate.files.length} files · {formatBytes(candidate.totalBytes)}
+        {withVisibleControls(candidate.source.path) || 'repository root'} · {candidate.files.length} files · {formatBytes(candidate.totalBytes)}
       </div>
       {candidate.warnings.length > 0 ? (
         <ul className="mt-2 list-disc space-y-1 pl-4 text-warning">
@@ -477,7 +483,7 @@ function CandidateDetails({ candidate }: { candidate: AgentCodeInstalledSkillCan
         <summary className="cursor-pointer text-muted">Review package files</summary>
         <ul className="mt-1 max-h-40 overflow-auto border border-panel-border p-2 text-muted">
           {candidate.files.map(file => (
-            <li key={file.path}>{file.executable ? 'executable · ' : ''}{file.path} · {formatBytes(file.bytes)}</li>
+            <li key={file.path}>{file.executable ? 'executable · ' : ''}{withVisibleControls(file.path)} · {formatBytes(file.bytes)}</li>
           ))}
         </ul>
       </details>
@@ -489,7 +495,7 @@ function UpdateReviewPanel({ review }: { review: UpdateReview }) {
   return (
     <>
       <div className="border border-panel-border p-3 text-[10px] text-muted">
-        <div>{review.candidate.source.repositoryUrl}</div>
+        <div>{withVisibleControls(review.candidate.source.repositoryUrl)}</div>
         <div className="mt-1">New commit {review.candidate.source.resolvedCommit.slice(0, 12)}</div>
       </div>
       <div className="grid grid-cols-1 gap-2 text-[10px] md:grid-cols-3">
@@ -506,7 +512,7 @@ function ChangeList({ title, paths }: { title: string; paths: string[] }) {
   return (
     <div className="border border-panel-border p-2">
       <div className="text-ink">{title} · {paths.length}</div>
-      {paths.length > 0 ? <ul className="mt-1 space-y-1 text-muted">{paths.map(path => <li key={path}>{path}</li>)}</ul> : null}
+      {paths.length > 0 ? <ul className="mt-1 space-y-1 text-muted">{paths.map(path => <li key={path}>{withVisibleControls(path)}</li>)}</ul> : null}
     </div>
   )
 }

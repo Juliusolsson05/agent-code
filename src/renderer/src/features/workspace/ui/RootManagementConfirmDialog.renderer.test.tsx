@@ -33,6 +33,26 @@ describe('Root Agent Code Management confirmation', () => {
     expect(onConfirm).toHaveBeenCalledOnce()
   })
 
+  it('escapes the recipient identity, the broadest grant in the app (#1049 re-review)', () => {
+    // This dialog hands ONE agent authority over the whole application. The
+    // label and directory are its own title and cwd, which an agent can set:
+    // `Trusted auditor\u200B` renders exactly like a different, trusted agent.
+    render(
+      <RootManagementConfirmDialog
+        open
+        agentLabel={'Trusted auditor\u200B · claude · agent-code'}
+        description={'/work/\u202Eagent-code'}
+        onCancel={vi.fn()}
+        onConfirm={vi.fn()}
+      />,
+    )
+    const dialog = screen.getByRole('dialog')
+    expect(dialog.textContent).not.toContain('\u200B')
+    expect(dialog.textContent).not.toContain('\u202E')
+    expect(dialog.textContent).toContain('U+200B ZWSP')
+    expect(dialog.textContent).toContain('U+202E RLO')
+  })
+
   it('treats cancel as a decline that grants nothing', () => {
     const onCancel = vi.fn()
     const onConfirm = vi.fn()

@@ -18,6 +18,7 @@ import {
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { SessionId } from '@renderer/workspace/types'
 import { isAgentProviderKind } from '@shared/types/providerKind'
+import { withVisibleControls } from '@shared/text/visibleControls'
 
 type Props = {
   open: boolean
@@ -121,7 +122,9 @@ export function ProviderSwitchPickerModal({
           <DialogTitle>Switch Provider</DialogTitle>
           <DialogDescription asChild>
             <div>
-              <div>Current: {currentLabel}{cwdBase ? ` · ${cwdBase}` : ''}</div>
+              {/* Names the conversation being moved to another provider
+                  (#1049 re-review). */}
+              <div>Current: {withVisibleControls(currentLabel)}{cwdBase ? ` · ${withVisibleControls(cwdBase)}` : ''}</div>
               <div className="mt-0.5 text-[10px]">
                 Choose where this conversation should continue.
               </div>

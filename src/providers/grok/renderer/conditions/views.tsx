@@ -160,7 +160,7 @@ export const grokQuestionView = defineView<
       <ConditionShell heading="Grok is asking" actions={actions} dispatch={dispatch}>
         {state.text ? (
           <pre className="bg-code-bg rounded-slab text-code-ink px-3 py-2 mb-1 overflow-x-auto whitespace-pre-wrap text-[11.5px]">
-            {state.text}
+            {withVisibleControls(state.text)}
           </pre>
         ) : (
           <p className="mb-2">Grok is waiting for a response.</p>

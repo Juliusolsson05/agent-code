@@ -9,6 +9,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
+import { withVisibleControls } from '@shared/text/visibleControls'
 
 type Props = {
   open: boolean
@@ -62,8 +63,13 @@ export function RootManagementConfirmDialog({
           <DialogTitle>Enable Root Agent Code Management?</DialogTitle>
           <DialogDescription asChild>
             <div>
-              <div>{agentLabel}</div>
-              <div className="mt-0.5 truncate text-[10px]">{description}</div>
+              {/* The label and directory of the agent about to be granted
+                  application-wide management authority. A zero-width
+                  character in a session title hides a different identity
+                  behind a familiar-looking one, immediately before the
+                  broadest grant this app offers (#1049 re-review). */}
+              <div>{withVisibleControls(agentLabel)}</div>
+              <div className="mt-0.5 truncate text-[10px]">{withVisibleControls(description)}</div>
             </div>
           </DialogDescription>
         </DialogHeader>
