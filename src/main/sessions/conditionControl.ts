@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
-import { ControlError, defineCapability, conditionTargetInput, conditionReadOutput, conditionReplyInput, conditionBackendIdentity, conditionReplyOutput } from '@control-sdk'
+import { ControlError, defineCapability, conditionTargetInput, conditionReadOutput, conditionReplyInput, conditionBackendIdentity, conditionReplyOutput, interruptOutput } from '@control-sdk'
 import { makeDispatch } from '@shared/conditions-core/dispatch'
 import type { SessionManager } from '@main/sessionManager'
 
@@ -24,7 +24,7 @@ export function conditionBackendCapabilities(manager: Pick<SessionManager, 'getB
       id: 'sessions.interrupt', visibility: 'application', title: 'Request backend Stop', execution: 'main', effect: 'mutation', completion: 'accepted',
       description: 'Backing Stop operation; validates the observed backend and condition revision before sending the ordinary composer Escape signal.',
       input: conditionTargetInput.extend(conditionBackendIdentity.shape).extend({ revision: z.string() }),
-      output: z.object({ sessionId: z.string(), sessionRunId: z.string(), accepted: z.literal(true) }),
+      output: interruptOutput,
       handler: input => {
         const { backend, conditions, revision } = observe(input)
         if (!backend.sessionRunId || input.revision !== revision) throw new ControlError('stale_cursor', 'Backend or conditions changed; inspect again')
