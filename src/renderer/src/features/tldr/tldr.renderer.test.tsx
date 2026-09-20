@@ -5,8 +5,10 @@ import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { useKeybinds } from '@renderer/workspace/tile-tree/useKeybinds'
 import { TldrPane } from './TldrOverlay'
+import { AgentTerminalOwnerVisibilityProvider } from '@renderer/workspace/terminal/AgentTerminalOwnership'
 import { dismissTldr, toggleTldr, useTldrView } from './viewState'
 import type { TldrRecord, TldrUpdate } from '@shared/types/tldr'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 const harness = vi.hoisted(() => ({ appState: {} as Record<string, unknown> }))
 vi.mock('@renderer/app-state/hooks', () => ({
@@ -32,10 +34,10 @@ const api = {
 
 function workspace(): Workspace {
   const runtime = emptyRuntime()
-  const tab = { id: 'tab', title: 'Project', focusedSessionId: 'a', root: { type: 'leaf', sessionId: 'a' } }
+  const tab = { id: 'tab', title: 'Project' }
   return {
-    state: { activeTabId: 'tab', tabs: [tab], sessions: { a: { kind: 'claude', cwd: '/project' } }, detachedSessions: {}, buried: [], pinnedSessionIds: [] },
-    activeTab: tab, dispatchMode: null, tileTabs: null, spotlight: null, readerMode: null,
+    state: { activeTabId: 'tab', tabs: [tab], sessions: { a: { kind: 'claude', cwd: '/project', projectId: 'tab', joinedAt: 0 } },   pinnedSessionIds: [], stage: oneLaneStage('a') },
+    activeTab: tab, stage: oneLaneStage('a'), spotlight: null, readerMode: null,
     runtimes: { a: runtime }, getRuntime: () => runtime,
   } as unknown as Workspace
 }
@@ -146,11 +148,39 @@ describe('TLDR hold input', () => {
   })
 
   it('supports a latched palette preview and Escape without forwarding input', () => {
-    render(<Harness />)
+    // A visible overlay owns input while it is up. (This case used to render
+    // no pane at all and still expect the key to be swallowed, which pinned
+    // the #1027 trap as the contract.)
+    render(<><Harness /><TldrPane identity="agent" enabled><div>Feed</div></TldrPane></>)
     act(toggleTldr)
     expect(fireEvent.keyDown(screen.getByLabelText('Composer'), { key: 'x', code: 'KeyX' })).toBe(false)
     fireEvent.keyDown(document, { key: 'Escape', code: 'Escape' })
     expect(useTldrView.getState()).toMatchObject({ held: false, latched: false })
+  })
+
+  it('a latch with no TLDR overlay on screen never swallows input (#1027)', () => {
+    // A terminal-only tab has no TldrPane, so running TLDR from the palette
+    // shows nothing. Every key used to die until Escape or a window blur:
+    // #1021's trap, one gate earlier. A latch with nothing mounted is stale.
+    render(<Harness />)
+    act(toggleTldr)
+    expect(fireEvent.keyDown(screen.getByLabelText('Composer'), { key: 'x', code: 'KeyX' })).toBe(true)
+    expect(useTldrView.getState().latched).toBe(false)
+  })
+
+  it('a pane hidden by Reader, Settings or the fullscreen editor renders no overlay, so it cannot own input (#1027)', () => {
+    // Those shells keep the workspace MOUNTED under display:none. An overlay
+    // rendered there would pass a DOM check with nobody able to see it.
+    render(<>
+      <Harness />
+      <AgentTerminalOwnerVisibilityProvider visible={false}>
+        <TldrPane identity="agent" enabled goalEnabled><div>Feed</div></TldrPane>
+      </AgentTerminalOwnerVisibilityProvider>
+    </>)
+    act(() => toggleTldr('goal'))
+    expect(document.querySelector('[data-goal-overlay]')).toBeNull()
+    expect(fireEvent.keyDown(screen.getByLabelText('Composer'), { key: 'x', code: 'KeyX' })).toBe(true)
+    expect(useTldrView.getState().latched).toBe(false)
   })
 })
 

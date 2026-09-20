@@ -137,6 +137,9 @@ export const sessionApi = {
   ): Promise<ResolveConditionResult> =>
     ipcRenderer.invoke('session:resolveCondition', sessionId, action),
 
+  jumpToLatest: (sessionId: string): Promise<{ ok: true } | { ok: false; reason: string }> =>
+    ipcRenderer.invoke('session:jumpToLatest', sessionId),
+
   resize: (sessionId: string, cols: number, rows: number): Promise<void> =>
     ipcRenderer.invoke('session:resize', sessionId, cols, rows),
 

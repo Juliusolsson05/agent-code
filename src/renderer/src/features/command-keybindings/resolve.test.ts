@@ -12,7 +12,7 @@ import type { CommandBindingDefault } from '@renderer/features/command-keybindin
 
 const DEFAULTS: CommandBindingDefault[] = [
   { commandId: 'a', bindings: ['Cmd+A'], context: 'global' },
-  { commandId: 'b', bindings: ['Cmd+B', 'Alt+B'], context: 'grid' },
+  { commandId: 'b', bindings: ['Cmd+B', 'Alt+B'], context: 'dispatch' },
 ]
 
 describe('sparse override semantics', () => {

@@ -510,7 +510,6 @@ export function useComposerKeybinds({
     if (e.defaultPrevented) return
 
     if (
-      workspace.dispatchMode &&
       e.altKey &&
       !e.metaKey &&
       !e.ctrlKey &&

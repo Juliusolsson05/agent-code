@@ -152,15 +152,12 @@ describe('coerceSettings retired keys', () => {
   })
 })
 
-describe('coerceSettings default workspace mode (#973)', () => {
-  it('opens a fresh install in Dispatch', () => {
-    expect(coerceSettings({}).defaultWorkspaceMode).toBe('dispatch')
-  })
-
-  it('keeps an explicit Grid preference', () => {
-    expect(coerceSettings({ defaultWorkspaceMode: 'grid' }).defaultWorkspaceMode).toBe('grid')
-  })
-})
+// 'coerceSettings default workspace mode (#973)' lived here until the
+// unified layout (#992 stage 8) deleted the setting: it chose between grid
+// and Dispatch for a fresh install, and there is one layout now. A stale
+// persisted `defaultWorkspaceMode` is dropped on read — which the generic
+// "drops %s instead of carrying it forever" cases above now cover by listing
+// the key among the dropped ones if it is ever reintroduced.
 
 describe('coerceSettings public-release defaults (#973)', () => {
   // Each pair: an absent key resolves to the new default; an explicit value

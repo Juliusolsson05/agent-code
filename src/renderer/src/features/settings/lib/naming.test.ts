@@ -21,10 +21,10 @@ describe('command naming corrections', () => {
     ['toggle-tail-all', 'Auto-follow All Visible Agents'],
     ['toggle-tail-working', 'Auto-follow All Working Agents'],
     ['close-pane', 'Close Focused Session'],
-    ['bury-pane', 'Bury Session'],
-    ['revive-pane', 'Revive Buried Session…'],
-    ['kill-buried-pane', 'Kill Buried Session…'],
-    ['global-dispatch', 'Dispatch Scope'],
+    // bury-pane, revive-pane, kill-buried-pane and global-dispatch had rows
+    // here. #992 deleted the commands (burial folded into the pool; the
+    // layout-wide scope died with the two-mode layout), so their renames have
+    // nothing left to assert. Their ids live in RETIRED_COMMAND_IDS.
     ['toggle-session-recording', 'Session Recording'],
     ['set-agent-view-mode', 'Agent View for This Session…'],
     ['dispatch.color-flag.set', 'Set Color Flag…'],
@@ -38,8 +38,7 @@ describe('command naming corrections', () => {
     // Renaming an id would silently discard a user's settings.
     const ids = new Set(builtInCommandCatalog.map(c => c.id))
     for (const id of [
-      'toggle-tail', 'toggle-tail-all', 'close-pane', 'bury-pane',
-      'revive-pane', 'kill-buried-pane', 'global-dispatch',
+      'toggle-tail', 'toggle-tail-all', 'close-pane',
       'toggle-session-recording', 'set-agent-view-mode', 'dispatch.color-flag.set',
     ]) {
       expect(ids.has(id)).toBe(true)
@@ -52,7 +51,6 @@ describe('command naming corrections', () => {
     expect(keywordsOf('toggle-tail')).toContain('tail')
     expect(keywordsOf('toggle-tail-all')).toContain('tail')
     expect(keywordsOf('close-pane')).toContain('pane')
-    expect(keywordsOf('global-dispatch')).toContain('global dispatch')
   })
 
   it('uses a typographic ellipsis, never three periods', () => {
@@ -63,9 +61,10 @@ describe('command naming corrections', () => {
   })
 
   it('stops using Pane for things that outlive their pane', () => {
-    // Bury/Revive/Kill act on SESSIONS. The live object persists without a
-    // pane, so "Pane" named the wrong noun.
-    for (const id of ['bury-pane', 'revive-pane', 'kill-buried-pane', 'close-pane']) {
+    // Close acts on a SESSION. The live object persists without a pane, so
+    // "Pane" named the wrong noun. (Bury/Revive/Kill Buried were checked here
+    // too until #992 deleted them.)
+    for (const id of ['close-pane']) {
       expect(titleOf(id)).not.toMatch(/\bPane\b/)
     }
   })
@@ -103,10 +102,9 @@ describe('settings metadata', () => {
     expect(cli && settingMetadata(cli).storage).toBe('setup')
   })
 
-  it('marks the fresh-install-only scope', () => {
-    const row = getSettingsRegistry().find(r => r.id === 'default-workspace-mode')
-    expect(row && settingMetadata(row).scope).toBe('fresh-install')
-  })
+  // 'marks the fresh-install-only scope' pinned default-workspace-mode until
+  // #992 stage 8 deleted the setting (one layout, nothing to choose). No
+  // other setting claims the scope, so the case went with its subject.
 
   it('marks both managed personal-skill surfaces as app-wide and new-session', () => {
     const conventions = getSettingsRegistry().find(row => row.id === 'agent-code-conventions')

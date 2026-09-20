@@ -524,6 +524,13 @@ export interface AgentSession extends AgentSessionEmitter {
     | { ok: false; reason: string; lastState?: unknown; failedAtStep?: string }
   >
 
+  /** Optional (OpenCode Terminal today): scroll the provider's OWN transcript
+   *  view to its newest message. For a TUI that pages its transcript on the
+   *  alternate screen, xterm's scrollToBottom cannot move anything (#843). The
+   *  provider must use a rebinding-proof route; a user-configurable chord is
+   *  not one. Never throws. */
+  jumpToLatest?(): Promise<{ ok: true } | { ok: false; reason: string }>
+
   /** Optional (Claude today): wait for the bracketed-paste placeholder
    *  to appear before firing Enter. See sessionManager.ts:952. */
   awaitPastePlaceholder?(

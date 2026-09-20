@@ -57,7 +57,6 @@ export default function App() {
   // everything else is consumed by the shell pieces / surfaces directly.
   const dangerousAgentsEnabled = useAppStore(state => state.settings.dangerousAgentsEnabled)
   const useProxyStreaming = useAppStore(state => state.settings.useProxyStreaming)
-  const defaultWorkspaceMode = useAppStore(state => state.settings.defaultWorkspaceMode)
   const defaultBuiltInMcpDomains = useAppStore(
     state => state.settings.defaultBuiltInMcpDomains,
   )
@@ -88,7 +87,6 @@ export default function App() {
   const workspace = useWorkspace(
     dangerousAgentsEnabled,
     useProxyStreaming,
-    defaultWorkspaceMode,
     defaultBuiltInMcpDomains,
   )
   useRenderedLeaseHygiene(workspace)

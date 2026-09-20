@@ -3,7 +3,6 @@ import {
   AGENT_VIEW_MODES,
   CORNER_STYLES,
   FONT_FAMILIES,
-  WORKSPACE_MODES,
 } from '@renderer/app-state/settings/types'
 import type {
   AccentId,
@@ -11,7 +10,6 @@ import type {
   CornerStyleId,
   FontFamilyId,
   Settings,
-  WorkspaceModeId,
 } from '@renderer/app-state/settings/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { SETTING_CATEGORIES } from '@renderer/features/settings/lib/settingsCategories'
@@ -340,15 +338,6 @@ const FONT_FAMILY_OPTIONS: ChoiceOption<FontFamilyId>[] = FONT_FAMILIES.map(font
   description: font.description,
 }))
 
-const WORKSPACE_MODE_OPTIONS: ChoiceOption<WorkspaceModeId>[] = WORKSPACE_MODES.map(mode => ({
-  value: mode.id,
-  label: mode.label,
-  description:
-    mode.id === 'dispatch'
-      ? 'Open with the dispatch sidebar + main pane.'
-      : 'Open with the classic tiled grid.',
-}))
-
 const AGENT_VIEW_MODE_OPTIONS: ChoiceOption<AgentViewMode>[] = AGENT_VIEW_MODES.map(mode => ({
   value: mode.id,
   label: mode.label,
@@ -555,31 +544,10 @@ export function getSettingsRegistry(
         onSelect: (ctx, value) => ctx.onChange({ cornerStyle: value as CornerStyleId }),
       },
     },
-    {
-      // WHY this entry's copy is so explicit about "first launch":
-      // existing users will flip it expecting an immediate effect, and
-      // the setting deliberately doesn't behave that way. The friction
-      // of a confused user reporting "the setting doesn't work" is
-      // worse than verbose UI text. If this ever proves too narrow we
-      // can add a "Reset workspace to default mode" action later.
-      id: 'default-workspace-mode',
-      category: 'workspace',
-      title: 'Default Workspace Mode',
-      description:
-        'Mode the app opens in on first launch. Existing workspaces keep their last-used mode — flipping this later only affects a fresh install.',
-      keywords: ['default', 'mode', 'dispatch', 'grid', 'startup', 'launch', 'workspace'],
-      // Only affects a fresh install — existing workspaces keep their last-used
-      // mode, which the description says but the row could not show.
-      metadata: { scope: 'fresh-install', apply: 'new-session', storage: 'settings' },
-      control: {
-        type: 'select',
-        getValue: settings => settings.defaultWorkspaceMode,
-        options: WORKSPACE_MODE_OPTIONS,
-        columns: 2,
-        onSelect: (ctx, value) =>
-          ctx.onChange({ defaultWorkspaceMode: value as WorkspaceModeId }),
-      },
-    },
+    // 'default-workspace-mode' (Default Workspace Mode) was a Settings row
+    // until #992 stage 8: it chose between grid and Dispatch for a fresh
+    // install, and there is one layout now. Its persisted value is ignored
+    // on read; a stale localStorage key selects nothing.
     {
       // WHY this setting belongs in Workspace rather than Commands:
       // terminal/agent/hybrid is the pane surface contract that commands must

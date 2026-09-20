@@ -3,10 +3,6 @@ import type { TabId, SessionId } from '@renderer/workspace/types'
 import type { ExtensionListEntry } from '@shared/types/extensions'
 import type { ExtensionFailure } from '@renderer/apps/types'
 
-export type DispatchAttachIntent = {
-  sessionId: SessionId
-  targetTabId: TabId
-}
 
 /**
  * A command waiting to be dispatched through the shared execution gateway.
@@ -63,8 +59,6 @@ export type UiShellState = {
   pendingCommandInvocation: PendingCommandInvocation | null
   pathPickerOpen: boolean
   pathPickerDefault: string
-  tileTabsModalOpen: boolean
-  tileTabsInitialSelectedIds: TabId[]
   /** When true, the Reorder Tabs modal is open.
    *
    * WHY this lives in uiShell instead of WorkspaceState: the modal is
@@ -97,10 +91,9 @@ export type UiShellState = {
    * not whichever lane happens to be focused after the prompt appears.
    */
   agentTitlePromptSessionId: SessionId | null
-  buryPromptSessionId: SessionId | null
   /**
    * Session awaiting the Root Agent Code Management confirmation (#906), or
-   * null. Stored like the bury and title prompts: the grant must land on the
+   * null. Stored like the title prompt: the grant must land on the
    * agent the command was invoked for, not whichever Dispatch lane is focused
    * by the time the user finishes reading the warning.
    */
@@ -122,28 +115,6 @@ export type UiShellState = {
   viewPromptsSessionId: SessionId | null
   tldrHistorySessionId: SessionId | null
   newAgentPlacementOpen: boolean
-  /**
-   * Non-null when the placement overlay is open in "attach detached
-   * session to grid" mode. The overlay reads this to skip the kind
-   * picker (the session already exists, we don't spawn a new one), which
-   * detached sessionId to insert, and which tab owns the placement target.
-   *
-   * WHY a separate field instead of overloading newAgentPlacementOpen:
-   * the two flows commit through different actions
-   * (commitNewAgentPlacement spawns a new session;
-   * attachDetachedToGrid moves an existing one), and conflating them
-   * forces every overlay code path to disambiguate at the bottom of
-   * the call stack instead of at the top.
-   *
-   * WHY the target tab is part of the intent:
-   * Tiled Dispatch lane selection does not mutate activeTabId. Deferring tab
-   * lookup until overlay render or reducer commit would make "attach the
-   * focused lane's row" depend on whichever tab happened to be active before
-   * the user entered global Tiled Dispatch. The visible row already carries
-   * the correct tab id, so the command captures it once and every later step
-   * treats it as the source of truth.
-   */
-  dispatchAttachIntent: DispatchAttachIntent | null
   /**
    * Non-null when the placement overlay is open in "Linked Agent"
    * mode. The value is the PARENT session id — the agent that was
@@ -168,11 +139,12 @@ export type UiShellState = {
    * WHY the target is captured up front rather than resolved at commit time:
    * exactly the reason `dispatchAttachIntent` documents above. Tiled Dispatch
    * lane selection does not mutate `activeTabId`, and
-   * `resolveDispatchSpawnTarget`'s tiled branch reads the focused LANE, never
-   * `dispatchMode.focusedSessionId`. So the tempting cheap version — focus the
-   * project, then open the normal flow — works in classic Dispatch and
-   * silently spawns into whatever project lane 0 happens to show in Tiled
-   * Dispatch. The visible header already knows its own tab; capture it once.
+   * `resolveDispatchSpawnTarget` reads the focused LANE, never the active
+   * project. So the tempting cheap version — activate the project, then open
+   * the normal flow — silently spawns into whatever project the focused lane
+   * happens to show. (It did work in classic Dispatch, which had a single
+   * focus the header click could move; #992 removed that layout.) The visible
+   * header already knows its own tab; capture it once.
    *
    * NOTE this does NOT make clicking "+" selection-neutral: the spawn still
    * sets `activeTabId` to the target project unconditionally, so the active

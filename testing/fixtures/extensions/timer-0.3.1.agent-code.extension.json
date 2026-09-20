@@ -1,0 +1,61 @@
+{
+  "id": "timer",
+  "name": "Timer",
+  "description": "Focus timer with interval reminders. Keeps running when the window is closed.",
+  "version": "0.3.1",
+  "apiVersion": 1,
+  "entry": "dist/index.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "id": "timer.open",
+        "title": "Open Timer",
+        "keywords": [
+          "focus",
+          "pomodoro",
+          "countdown",
+          "clock"
+        ]
+      },
+      {
+        "id": "timer.start",
+        "title": "Start Timer"
+      },
+      {
+        "id": "timer.pause",
+        "title": "Pause Timer"
+      },
+      {
+        "id": "timer.reset",
+        "title": "Reset Timer"
+      }
+    ],
+    "views": [
+      {
+        "id": "timer.main",
+        "title": "Timer",
+        "mount": "panel"
+      }
+    ],
+    "settings": [
+      {
+        "id": "timer.inheritTheme",
+        "title": "Inherit Agent Code theme",
+        "type": "boolean",
+        "default": false
+      },
+      {
+        "id": "timer.defaultMinutes",
+        "title": "Default duration (minutes)",
+        "type": "number",
+        "default": 30
+      }
+    ]
+  },
+  "permissions": [
+    "sessions.observe"
+  ]
+}

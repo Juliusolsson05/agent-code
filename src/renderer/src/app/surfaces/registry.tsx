@@ -13,10 +13,8 @@ import { RemotePanelSurface } from '@renderer/features/remote/surfaces/RemotePan
 import { DebugSurfaces } from '@renderer/features/debug/surfaces/DebugSurfaces'
 import { CommandPaletteSurface } from '@renderer/features/command-palette/surfaces/CommandPaletteSurface'
 import { PathPickerSurface } from '@renderer/features/path-picker/surfaces/PathPickerSurface'
-import { TileTabsModalSurface } from '@renderer/features/workspace/surfaces/TileTabsModalSurface'
 import { ReorderTabsSurface } from '@renderer/features/workspace/surfaces/ReorderTabsSurface'
 import { PinAgentsSurface } from '@renderer/features/dispatch-pin/surfaces/PinAgentsSurface'
-import { BuryPanePromptSurface } from '@renderer/features/workspace/surfaces/BuryPanePromptSurface'
 import { RootManagementConfirmSurface } from '@renderer/features/workspace/surfaces/RootManagementConfirmSurface'
 import { MergeProjectTabsSurface } from '@renderer/features/workspace/surfaces/MergeProjectTabsSurface'
 import { CloseConfirmationSurface } from '@renderer/features/workspace/surfaces/CloseConfirmationSurface'
@@ -74,10 +72,8 @@ export const modalSurfaces: SurfaceEntry[] = [
   { id: 'dispatch-row-project', Component: DispatchRowProjectSurface },
   { id: 'caffeinate-toast', Component: CaffeinateToastSurface },
   { id: 'keyboard-shortcuts', Component: KeyboardShortcutsSurface },
-  { id: 'tile-tabs', Component: TileTabsModalSurface },
   { id: 'reorder-tabs', Component: ReorderTabsSurface },
   { id: 'pin-agents', Component: PinAgentsSurface },
-  { id: 'bury-pane', Component: BuryPanePromptSurface },
   { id: 'close-confirmation', Component: CloseConfirmationSurface },
   { id: 'debug-bundle-note', Component: DebugBundleNoteSurface },
   { id: 'recording-note', Component: RecordingNoteSurface },

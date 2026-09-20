@@ -1,5 +1,3 @@
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
 
 import { cleanup, render } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -9,7 +7,7 @@ import { buildVisibleDispatchRows } from '@renderer/workspace/dispatch/dispatchS
 import { paneLabelForSession } from '@renderer/workspace/tile-tree/paneLabels'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { WorkspaceState } from '@renderer/workspace/types'
-import { asRecord } from '@shared/lib/asRecord'
+import { loadRecordedDispatchWorkspace } from '@renderer/workspace/testing/recordedDispatchWorkspace'
 
 const appState = vi.hoisted(() => ({
   workspaceRuntimes: {},
@@ -81,19 +79,10 @@ type DispatchRecording = {
 }
 
 function loadDispatchRecording(): DispatchRecording {
-  const path = resolve(
-    process.cwd(),
-    'testing/fixtures/worktree-context/dispatch-global-d23.json',
-  )
-  const fixture = asRecord(JSON.parse(readFileSync(path, 'utf8')))
-  const metadata = asRecord(fixture?.$fixture)
-  const observed = asRecord(metadata?.observed)
-  const state = asRecord(fixture?.state)
-  if (!observed || !state) throw new Error('dispatch-global-d23 fixture is malformed')
-  return {
-    state: state as unknown as WorkspaceState,
-    observed: observed as DispatchRecording['observed'],
-  }
+  // Through the shared lift: the recording is a v2 workspace whose lane grid
+  // sits at `dispatchMode.tiled`, and the loader moves it to `state.stage`.
+  const { state, observed } = loadRecordedDispatchWorkspace()
+  return { state, observed }
 }
 
 function workspaceFor(state: WorkspaceState): Workspace {
@@ -136,13 +125,14 @@ afterEach(() => {
 })
 
 describe('recorded Dispatch pane-label ownership', () => {
-  it('[dispatch-global-d23] Classic Dispatch repeats the selected visible D23 label', () => {
+  // Named "Classic Dispatch repeats…" until #992. Classic Dispatch was the
+  // single-agent view; its stage equivalent is one row of one lane, which is
+  // what a fresh install looks like, so the case stays — it is the smallest
+  // stage that can show the recorded label.
+  it('[dispatch-global-d23] a one-lane stage repeats the selected visible D23 label', () => {
     const recording = loadDispatchRecording()
     const state = structuredClone(recording.state)
-    state.dispatchMode = {
-      scope: 'global',
-      focusedSessionId: recording.observed.targetSessionId,
-    }
+    state.stage = { lanes: [{ selectedSessionId: recording.observed.targetSessionId }], rows: [{ length: 1 }], focusedLane: 0 }
     assertRecordedCoordinate(state, recording)
 
     const { container } = render(
@@ -158,24 +148,18 @@ describe('recorded Dispatch pane-label ownership', () => {
       .toHaveAttribute('data-pane-label', recording.observed.targetVisibleLabel)
   })
 
-  it('[dispatch-global-d23] Tiled Dispatch repeats the selected visible D23 label', () => {
+  it('[dispatch-global-d23] the recorded multi-lane stage repeats the selected visible D23 label', () => {
     const recording = loadDispatchRecording()
     const state = structuredClone(recording.state)
-    const tiled = state.dispatchMode?.tiled
-    if (!tiled || tiled.lanes.length === 0) {
-      throw new Error('recorded Dispatch fixture lost its tiled lanes')
-    }
-    state.dispatchMode = {
-      ...state.dispatchMode,
-      scope: 'global',
-      focusedSessionId: recording.observed.targetSessionId,
-      tiled: {
-        ...tiled,
-        focusedLane: 0,
-        lanes: tiled.lanes.map((lane, index) => index === 0
-          ? { selectedSessionId: recording.observed.targetSessionId }
-          : lane),
-      },
+    // (The "fixture lost its lanes" guard that lived here moved into the
+    // shared loader, where it protects every suite built on this recording.)
+    const tiled = state.stage
+    state.stage = {
+      ...tiled,
+      focusedLane: 0,
+      lanes: tiled.lanes.map((lane, index) => index === 0
+        ? { selectedSessionId: recording.observed.targetSessionId }
+        : lane),
     }
     assertRecordedCoordinate(state, recording)
 

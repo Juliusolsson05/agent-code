@@ -37,13 +37,13 @@ export function DispatchRowProjectModal({
   workspace: Workspace
   onClose: () => void
 }) {
-  const tiled = workspace.state.dispatchMode?.tiled
+  const stage = workspace.state.stage
   // Read the CURRENT bindings so the right rows are checked. Guard the null
   // rowIndex: the surface stays mounted-but-closed between opens.
   const selected = useMemo<TabId[]>(() => {
-    if (rowIndex === null || !tiled) return []
-    return normalizeGridShape(tiled).rows[rowIndex]?.projectTabIds ?? []
-  }, [rowIndex, tiled])
+    if (rowIndex === null) return []
+    return normalizeGridShape(stage).rows[rowIndex]?.projectTabIds ?? []
+  }, [rowIndex, stage])
 
   const commit = useCallback(
     (next: TabId[]) => {

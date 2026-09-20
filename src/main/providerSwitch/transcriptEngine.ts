@@ -2,7 +2,7 @@
 // that projection model metadata must match capacity planning metadata.
 import { readFile } from 'fs/promises'
 import { homedir } from 'node:os'
-import { join , dirname } from 'node:path'
+import { dirname, join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 
 import { opencodeTranscriptFile } from 'opencode-terminal-headless'
@@ -44,6 +44,8 @@ import {
   exportOpencodeSession,
   importOpencodeSession,
   listOpencodeModels,
+  readOpencodeModelState,
+  selectOpencodeTargetModel,
   opencodeExportSessionId,
   readResolvedOpencodeConfig,
 } from '@providers/opencode/runtime/opencodeCliSessions.js'
@@ -72,6 +74,9 @@ export interface TranscriptProjectionContext {
 export interface TranscriptTargetProfile {
   model: string
   modelProvider?: string
+  /** OpenCode only: the reasoning variant saved for this model, stamped on
+   *  the projected session so opening it does not reset the user's effort. */
+  modelVariant?: string
   budgetCharacters: number
 }
 
@@ -223,6 +228,7 @@ const opencodeAdapter: HostTranscriptAdapter = {
       cliVersion: await installedVersion('opencode'),
       modelProvider: targetProfile.modelProvider ?? 'opencode',
       model: targetProfile.model,
+      modelVariant: targetProfile.modelVariant,
     })
   },
   async write(cwd, { values }) {
@@ -276,18 +282,40 @@ async function resolveCodexTargetProfile(): Promise<TranscriptTargetProfile> {
   }
 }
 
+/** The default agent's own `model` from the resolved config. OpenCode ranks
+ *  it above the global `model` (server `input.model ?? agent.model ?? …`, TUI
+ *  agent model before config). Imported sessions run as `build` unless the
+ *  config names another default agent. */
+function opencodeDefaultAgentModel(config: Record<string, unknown>): string | null {
+  const agentName = typeof config.default_agent === 'string' && config.default_agent.length > 0 ? config.default_agent : 'build'
+  const agents = config.agent && typeof config.agent === 'object' ? config.agent as Record<string, unknown> : {}
+  const agent = agents[agentName] && typeof agents[agentName] === 'object' ? agents[agentName] as Record<string, unknown> : {}
+  return typeof agent.model === 'string' && agent.model.length > 0 ? agent.model : null
+}
+
 async function resolveOpencodeTargetProfile(cwd = process.cwd()): Promise<TranscriptTargetProfile> {
   const binary = getToolPath('opencode', 'opencode')
   const options = { binary, cwd }
-  const configuredModel = await readResolvedOpencodeConfig(options)
-    .then(config => typeof config.model === 'string' ? config.model : null)
-    .catch(() => null)
-  const selectedModel = configuredModel ?? await listOpencodeModels(options)
-    .then(models => models[0] ?? null)
-    .catch(() => null)
+  const config = await readResolvedOpencodeConfig(options).catch(() => ({} as Record<string, unknown>))
+  const [state, available] = await Promise.all([
+    readOpencodeModelState(),
+    listOpencodeModels(options).catch(() => null),
+  ])
+  // B18: the fallback used to be `listOpencodeModels()[0]` whenever config
+  // had no model, i.e. the catalog's first row (`opencode/big-pickle` here),
+  // even for a user who had picked another model many times. The projector
+  // stamps the model on EVERY imported message, and OpenCode's lastModel()
+  // keeps it, so the switched agent ran on a model the user never chose.
+  // selectOpencodeTargetModel follows OpenCode's own order instead.
+  const selectedModel = selectOpencodeTargetModel({
+    agentModel: opencodeDefaultAgentModel(config),
+    configuredModel: typeof config.model === 'string' ? config.model : null,
+    recent: state.recent,
+    available,
+  })
   if (!selectedModel) {
     throw new Error(
-      'OpenCode did not report a configured or available model; select a model in OpenCode before switching.',
+      'OpenCode did not report a configured or available model; select a model in OpenCode first.',
     )
   }
   const separator = selectedModel.indexOf('/')
@@ -299,6 +327,7 @@ async function resolveOpencodeTargetProfile(cwd = process.cwd()): Promise<Transc
   return {
     modelProvider: selectedModel.slice(0, separator),
     model: selectedModel.slice(separator + 1),
+    modelVariant: state.variants[selectedModel],
     // OpenCode can front models with very different windows and its resolved
     // config does not expose a reliable context size. A conservative 128k
     // window prevents an imported session from failing only after the source

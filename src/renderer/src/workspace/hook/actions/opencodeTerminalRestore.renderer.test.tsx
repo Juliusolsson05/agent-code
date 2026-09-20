@@ -15,6 +15,7 @@ import type { SessionId, SessionMeta, WorkspaceState } from '@renderer/workspace
 
 import { useSessionActions } from './session'
 import { makeRefs, stateWriter } from './testing/paneActionsHarness'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 // The two restore paths that bring an OpenCode Terminal pane back without a
 // rehydrate: adopting a closed window's workspace, and "restart every agent"
@@ -84,12 +85,10 @@ describe('an OpenCode Terminal pane restored without a rehydrate', () => {
       refuseWorkspaceAdoption: vi.fn(async () => undefined),
     })
     const survivor: WorkspaceState = {
-      tabs: [{ id: 'own-tab', title: 'own', root: { type: 'leaf', sessionId: 'own-agent' }, focusedSessionId: 'own-agent' }],
+      tabs: [{ id: 'own-tab', title: 'own' }],
       activeTabId: 'own-tab',
-      dispatchMode: null,
-      sessions: { 'own-agent': { cwd: '/own', kind: 'claude' } },
-      detachedSessions: {},
-      buried: [],
+      stage: oneLaneStage('own-agent'),
+      sessions: { 'own-agent': { cwd: '/own', kind: 'claude', projectId: 'own-tab', joinedAt: 0 } },
       pinnedSessionIds: [],
     }
     const refs = makeRefs(survivor)
@@ -98,12 +97,10 @@ describe('an OpenCode Terminal pane restored without a rehydrate', () => {
     renderHook(() => useWorkspaceAdoption(refs, writer.setState, runtimes.set, true))
 
     const closedWindow = {
-      tabs: [{ id: 'closed-tab', title: 'closed', root: { type: 'leaf', sessionId: SESSION_ID }, focusedSessionId: SESSION_ID }],
+      tabs: [{ id: 'closed-tab', title: 'closed' }],
       activeTabId: 'closed-tab',
-      dispatchMode: null,
-      sessions: { [SESSION_ID]: terminalMeta(fixture.meta.sessionID) },
-      detachedSessions: {},
-      buried: [],
+      stage: oneLaneStage(SESSION_ID),
+      sessions: { [SESSION_ID]: { ...terminalMeta(fixture.meta.sessionID), projectId: 'closed-tab', joinedAt: 0 }},
       tileTabs: null,
     }
     await act(async () => {
@@ -131,10 +128,10 @@ describe('an OpenCode Terminal pane restored without a rehydrate', () => {
     const ghostRead = vi.fn(async () => [])
     scope.extendApi({ spawnSession, killOwnedSession, ghostRead })
     const state: WorkspaceState = {
-      tabs: [{ id: 'project', title: 'project', root: { type: 'leaf', sessionId: SESSION_ID }, focusedSessionId: SESSION_ID }],
-      activeTabId: 'project', dispatchMode: null,
-      sessions: { [SESSION_ID]: terminalMeta('ses_previous') },
-      detachedSessions: {}, buried: [], pinnedSessionIds: [],
+      tabs: [{ id: 'project', title: 'project' }],
+      activeTabId: 'project', stage: oneLaneStage(SESSION_ID),
+      sessions: { [SESSION_ID]: { ...terminalMeta('ses_previous'), projectId: 'project', joinedAt: 0 }},
+        pinnedSessionIds: [],
     }
     const refs = makeRefs(state)
     const writer = stateWriter(state, refs)
@@ -161,10 +158,10 @@ describe('an OpenCode Terminal pane restored without a rehydrate', () => {
   it('soft-reloading the view preserves a stopped channel after readable history loads', async () => {
     const { fixture } = recordedSession()
     const state: WorkspaceState = {
-      tabs: [{ id: 'project', title: 'project', root: { type: 'leaf', sessionId: SESSION_ID }, focusedSessionId: SESSION_ID }],
-      activeTabId: 'project', dispatchMode: null,
-      sessions: { [SESSION_ID]: terminalMeta(fixture.meta.sessionID) },
-      detachedSessions: {}, buried: [], pinnedSessionIds: [],
+      tabs: [{ id: 'project', title: 'project' }],
+      activeTabId: 'project', stage: oneLaneStage(SESSION_ID),
+      sessions: { [SESSION_ID]: { ...terminalMeta(fixture.meta.sessionID), projectId: 'project', joinedAt: 0 }},
+        pinnedSessionIds: [],
     }
     const refs = makeRefs(state)
     const writer = stateWriter(state, refs)
@@ -188,17 +185,20 @@ describe('an OpenCode Terminal pane restored without a rehydrate', () => {
     scope.extendApi({ spawnSession, killOwnedSession })
     const meta = terminalMeta(fixture.meta.sessionID)
     const state: WorkspaceState = {
-      tabs: [{ id: 'project', title: 'project', root: { type: 'leaf', sessionId: SESSION_ID }, focusedSessionId: SESSION_ID }],
+      tabs: [{ id: 'project', title: 'project' }],
       activeTabId: 'project',
-      dispatchMode: null,
-      sessions: { [SESSION_ID]: meta },
-      detachedSessions: {},
-      buried: [],
+      stage: oneLaneStage(SESSION_ID),
+      sessions: { [SESSION_ID]: { ...meta, projectId: 'project', joinedAt: 0 }},
       pinnedSessionIds: [],
     }
     const refs = makeRefs(state)
     const writer = stateWriter(state, refs)
-    const runtimes = runtimeStore({ [SESSION_ID]: emptyRuntime() }, refs)
+    // `started`: reload-all restarts sessions that HAVE a backend (#992: it
+    // reads the runtime, where it used to read tile-leaf membership). The pane
+    // under test is a running TUI; seeded `idle` it would be a parked agent,
+    // which a reload leaves parked on purpose — and this case would wait
+    // forever for a respawn that was correctly never attempted.
+    const runtimes = runtimeStore({ [SESSION_ID]: { ...emptyRuntime(), processStatus: 'started' } }, refs)
     const { result } = renderHook(() => useSessionActions(
       { activeTabId: state.activeTabId, sessions: state.sessions, tabs: state.tabs },
       writer.setState,
@@ -217,7 +217,9 @@ describe('an OpenCode Terminal pane restored without a rehydrate', () => {
       kind: 'opencode', providerRuntime: 'terminal', cwd: PANE_CWD, resumeSessionId: fixture.meta.sessionID, dangerousMode: false,
     }))
     expect(writer.getState().sessions['reloaded-pane']).toMatchObject({ providerRuntime: 'terminal', providerSessionId: fixture.meta.sessionID })
-    expect(writer.getState().tabs[0]!.root).toEqual({ type: 'leaf', sessionId: 'reloaded-pane' })
+    // The reloaded session takes over the row and the lane. (Tree era: the
+    // tab's tile leaf was remapped to it.)
+    expect(writer.getState().stage.lanes[0]?.selectedSessionId).toBe('reloaded-pane')
 
     expect(history.loadInitialHistory).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ kind: 'opencode', providerSessionId: fixture.meta.sessionID }))
     const runtime = runtimes.get()['reloaded-pane']!

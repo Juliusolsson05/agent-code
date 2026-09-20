@@ -6,21 +6,23 @@ import { globalControlCapabilities } from '@main/control/globalCapabilities'
 import { buildVisibleDispatchRows } from '@renderer/workspace/dispatch/dispatchSelectors'
 import { dispatchRowTitle } from '@renderer/workspace/dispatch/rowTitle'
 import { emptyRuntime } from '@renderer/session-runtime/state'
-import type { WorkspaceState } from '@renderer/workspace/types'
+import { loadRecordedDispatchWorkspace } from '@renderer/workspace/testing/recordedDispatchWorkspace'
 
 const initial = useAppStore.getState()
 afterEach(() => useAppStore.setState(initial, true))
 it('resolves the recorded visible Dispatch label instead of its different project-local coordinate, retaining cross-window ambiguity', async () => {
-  const fixture = JSON.parse(readFileSync('testing/fixtures/worktree-context/dispatch-global-d23.json', 'utf8'))
+  // The recorded v2 workspace, lifted onto the live shape (its lane grid moves
+  // from `dispatchMode.tiled` to `stage`; see recordedDispatchWorkspace.ts).
+  const fixture = loadRecordedDispatchWorkspace()
   const bundle = JSON.parse(readFileSync('testing/fixtures/rendering-bundles/2026-05-20T19-11-51-193-d4a44a16.json', 'utf8'))
-  const id = fixture.$fixture.observed.targetSessionId
-  useAppStore.setState({ workspaceState: fixture.state as WorkspaceState, workspaceTileTabs: null, workspaceReaderMode: null, workspaceSpotlight: null,
+  const id = fixture.observed.targetSessionId
+  useAppStore.setState({ workspaceState: fixture.state, workspaceReaderMode: null, workspaceSpotlight: null,
     workspaceRuntimes: { [id]: { ...emptyRuntime(), entries: bundle.input.entries } } })
   const observed = observeWorkspace(() => ({ restoreStatus: 'fresh' }))
   const target = observed.sessions.find(session => session.sessionId === id)!
   const visible = buildVisibleDispatchRows(fixture.state).find(row => row.sessionId === id)!
-  expect(target.displayLabel).toBe(fixture.$fixture.observed.targetVisibleLabel)
-  expect(target.displayLabel).not.toBe(fixture.$fixture.observed.targetLocalLabel)
+  expect(target.displayLabel).toBe(fixture.observed.targetVisibleLabel)
+  expect(target.displayLabel).not.toBe(fixture.observed.targetLocalLabel)
   expect(target.displayedTitle).toBe(dispatchRowTitle(visible, bundle.input.entries))
   const owners = ['left', 'right'].map(windowId => ({ kind: 'window' as const, windowId, generation: 'current' }))
   const caps = globalControlCapabilities(async () => owners.map(owner => ({ windowId: owner.windowId, owner, workspace: observed })))

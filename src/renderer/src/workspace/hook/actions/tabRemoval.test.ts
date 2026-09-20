@@ -4,13 +4,11 @@ import { clearRemovedTabTakeovers, workspaceWithoutTab } from './tabRemoval'
 import type {
   WorkspaceSetReaderMode,
   WorkspaceSetSpotlight,
-  WorkspaceSetTileTabs,
 } from '@renderer/workspace/hook/context'
 import type {
   ReaderModeState,
   SpotlightState,
   Tab,
-  TileTabsState,
   WorkspaceState,
 } from '@renderer/workspace/types'
 
@@ -20,7 +18,7 @@ import type {
 // per caller.
 
 const tab = (id: string): Tab => ({
-  id, title: id.toUpperCase(), root: { type: 'leaf', sessionId: `${id}-root` }, focusedSessionId: `${id}-root`,
+  id, title: id.toUpperCase(),
 })
 
 function workspace(activeTabId: string): WorkspaceState {
@@ -30,19 +28,12 @@ function workspace(activeTabId: string): WorkspaceState {
     sessions: {
       'a-root': { cwd: '/a', kind: 'claude' },
       'b-root': { cwd: '/b', kind: 'claude' },
-      'b-row': { cwd: '/b', kind: 'codex' },
+      'b-row': { cwd: '/b', kind: 'codex', projectId: 'b', joinedAt: 1 },
       'c-root': { cwd: '/c', kind: 'claude' },
       'd-root': { cwd: '/d', kind: 'claude' },
     },
-    detachedSessions: {
-      'b-row': { sessionId: 'b-row', surface: 'dispatch', projectTabId: 'b', projectTabTitle: 'B', projectTabIndex: 1, detachedAt: 1 },
-    },
-    dispatchMode: {
-      scope: 'global',
-      focusedSessionId: 'b-row',
-      tiled: { lanes: [{ selectedSessionId: 'b-row' }, { selectedSessionId: 'a-root' }], focusedLane: 0 },
-    },
-    gridRelatedSelections: {}, buried: [], pinnedSessionIds: [],
+    stage: { lanes: [{ selectedSessionId: 'b-row' }, { selectedSessionId: 'a-root' }], focusedLane: 0 },
+      pinnedSessionIds: [],
   }
 }
 
@@ -65,53 +56,48 @@ describe('workspaceWithoutTab', () => {
     expect(workspaceWithoutTab(workspace('c'), 'b', ['b-root', 'b-row']).activeTabId).toBe('c')
   })
 
-  it('removes the sessions and rows it is given and clears their Dispatch lanes and focus', () => {
+  it('removes the sessions and rows it is given and empties the lanes that showed them', () => {
     const next = workspaceWithoutTab(workspace('b'), 'b', ['b-root', 'b-row'])
     expect(Object.keys(next.sessions).sort()).toEqual(['a-root', 'c-root', 'd-root'])
-    expect(next.detachedSessions).toEqual({})
-    expect(next.dispatchMode?.focusedSessionId).toBeUndefined()
-    expect(next.dispatchMode?.tiled?.lanes.map(lane => lane.selectedSessionId)).toEqual([undefined, 'a-root'])
+    // The lane goes EMPTY — it is neither refilled with a neighbour (#681) nor
+    // removed, and the lane beside it is untouched. The user shaped the stage;
+    // closing a project must not reshape it. (A classic-Dispatch focus was
+    // cleared here too until #992 removed the field.)
+    expect(next.stage.lanes.map(lane => lane.selectedSessionId)).toEqual([undefined, 'a-root'])
+    expect(next.stage.focusedLane).toBe(0)
   })
 })
 
 describe('clearRemovedTabTakeovers', () => {
   function takeovers(initial: {
-    tileTabs: TileTabsState | null
     spotlight: SpotlightState | null
     readerMode: ReaderModeState | null
   }) {
     const current = { ...initial }
     const apply = <T,>(value: T | ((prev: T) => T), prev: T): T =>
       typeof value === 'function' ? (value as (prev: T) => T)(prev) : value
-    const setTileTabs: WorkspaceSetTileTabs = next => { current.tileTabs = apply(next, current.tileTabs) }
     const setSpotlight: WorkspaceSetSpotlight = next => { current.spotlight = apply(next, current.spotlight) }
     const setReaderMode: WorkspaceSetReaderMode = next => { current.readerMode = apply(next, current.readerMode) }
-    return { current, setters: { setTileTabs, setSpotlight, setReaderMode } }
+    return { current, setters: { setSpotlight, setReaderMode } }
   }
 
-  it('drops the removed tab from Tiled Tabs and clears Spotlight and Reader that framed it', () => {
+  // Tile Tabs was the third takeover cleared here until #992 deleted it.
+
+  it('clears Spotlight and Reader that framed the removed tab', () => {
     const { current, setters } = takeovers({
-      tileTabs: { tabIds: ['a', 'b', 'c'], focusedTabId: 'b', direction: 'vertical', ratios: [1, 1, 1] },
       spotlight: { tabId: 'b', focusedSessionId: 'b-root' },
       readerMode: { tabId: 'b', focusedSessionId: 'b-root' },
     })
     clearRemovedTabTakeovers(setters, 'b')
-    expect(current.tileTabs).toMatchObject({ tabIds: ['a', 'c'], focusedTabId: 'a' })
-    expect(current.tileTabs?.ratios).toHaveLength(2)
     expect(current.spotlight).toBeNull()
     expect(current.readerMode).toBeNull()
   })
 
-  it('exits Tiled Tabs below two tabs and leaves takeovers of other tabs alone', () => {
+  it('leaves takeovers of other tabs alone', () => {
     const spotlight = { tabId: 'a', focusedSessionId: 'a-root' }
     const readerMode = { tabId: 'c', focusedSessionId: 'c-root' }
-    const { current, setters } = takeovers({
-      tileTabs: { tabIds: ['a', 'b'], focusedTabId: 'a', direction: 'horizontal', ratios: [1, 1] },
-      spotlight,
-      readerMode,
-    })
+    const { current, setters } = takeovers({ spotlight, readerMode })
     clearRemovedTabTakeovers(setters, 'b')
-    expect(current.tileTabs).toBeNull()
     expect(current.spotlight).toBe(spotlight)
     expect(current.readerMode).toBe(readerMode)
   })

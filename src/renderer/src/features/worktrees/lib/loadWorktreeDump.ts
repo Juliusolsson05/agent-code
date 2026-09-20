@@ -6,6 +6,7 @@ import { matchWorktree } from '@shared/work-context/matching'
 import { resolveTabSessions } from '@renderer/workspace/queries'
 import type { SessionId, Tab } from '@renderer/workspace/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
+import { commandTargetSessionIdForState } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 
 export type WorktreeLiveAgent = {
   sessionId: SessionId
@@ -121,12 +122,13 @@ export function collectLiveAgentsByWorktree(
     detached: w.detached,
   }))
   const byPath = new Map<string, WorktreeLiveAgent[]>()
-  // resolveTabSessions covers BOTH grid leaves and detached Dispatch
-  // agents for the tab. The previous implementation walked grid only,
-  // so a Claude/Codex agent running in a worktree but parked in
-  // Dispatch was missing from this tab's row — even though it was
-  // genuinely live and consuming the worktree. The "live agents per
-  // worktree" view needs the union, not the visible-grid subset.
+  // resolveTabSessions is every session of the project, on a lane or parked.
+  // An agent running in a worktree with no lane showing it is genuinely live
+  // and consuming that worktree, so this view needs all of them.
+  // "Focused" is the agent the user is commanding: the focused lane's
+  // occupant. (It was each tab's tile-tree focus until #992, so one row per
+  // project could claim it at once.)
+  const focusedSessionId = commandTargetSessionIdForState(workspace.state)
   workspace.state.tabs.forEach((tab: Tab) => {
     for (const sessionId of resolveTabSessions(workspace.state, tab.id)) {
       const meta = workspace.state.sessions[sessionId]
@@ -152,7 +154,7 @@ export function collectLiveAgentsByWorktree(
         kind,
         tabTitle: tab.title,
         live: Boolean(runtime?.sessionStatus === 'running' || runtime?.streamPhase !== 'idle'),
-        focused: tab.focusedSessionId === sessionId,
+        focused: focusedSessionId === sessionId,
       })
       byPath.set(matched.path, rows)
     }

@@ -9,6 +9,9 @@ import { GOAL_LOOP_STORE_LIMIT, GoalLoopStore } from './GoalLoopStore.js'
 
 const MAX_DELIVERY_FAILURES = 3
 const DELIVERY_RETRY_DELAY_MS = 250
+/** How long a hook-driven turn must have been silent (no hook, no semantic
+ * event) before Resume may treat it as over without a Stop. See control(). */
+export const GOAL_LOOP_QUIET_TURN_MS = 60_000
 
 // WHY structural instead of Pick<SessionManager, 'on'>: SessionManager's
 // typed event map is not satisfied by a plain EventEmitter test double, and
@@ -23,16 +26,24 @@ type GoalLoopManagerPort = {
 
 /** The harness-owned goal loop (#1001).
  *
- * WHY main-process and not a provider Stop hook: Claude Code force-stops
- * after 9 consecutive Stop-hook blocks, so hook-driven persistence modes die
- * young (oh-my-claudecode #3138), and OpenCode has no block-capable Stop hook
- * at all. We own deliverPromptToAgent and observe every turn boundary here,
- * so the loop is provider-agnostic and unbounded by provider overrides.
+ * WHY the loop lives in main and does not BLOCK a provider Stop hook: Claude
+ * Code force-stops after 9 consecutive Stop-hook blocks, so hook-driven
+ * persistence modes die young (oh-my-claudecode #3138), and OpenCode has no
+ * block-capable Stop hook at all. We own deliverPromptToAgent and deliver
+ * each continuation as a fresh prompt, so the loop is provider-agnostic and
+ * unbounded by provider overrides.
+ *
+ * WHERE the turn boundary comes from (#1024): Claude and Codex sessions that
+ * call Agent Code's turn hooks end a turn on their allowed Stop hook, OBSERVED
+ * here (observeProviderHook), never blocked. Every other session (OpenCode,
+ * Grok) ends a turn on a semantic working→idle transition. The phase signal
+ * is not trusted for hook sessions: a Claude subagent's flow publishes idle
+ * in the middle of a turn.
  *
  * WHY attention/conditions are NOT subscribed: a permission prompt parks the
  * agent on the USER's decision; delivering a continuation behind that dialog
- * would queue a prompt the user never saw. The loop continues only after a
- * semantic working→idle transition.
+ * would queue a prompt the user never saw. The pending tool behind that
+ * prompt holds both boundaries back.
  *
  * WHY the working state is tracked for EVERY session, loop or not (review of
  * #1003): the first version reduced events only while a loop was active and
@@ -83,6 +94,17 @@ export class GoalLoopService extends EventEmitter {
    * in-flight run picks it up in its finally block, so neither a control
    * action nor a turn boundary can be silently dropped. */
   private readonly pendingContinue = new Set<string>()
+  /** Sessions whose provider has proven it calls turn hooks (#1024). For
+   * these, the provider's own Stop hook is the ONLY turn boundary; see
+   * observeProviderHook. */
+  private readonly hookSessions = new Set<string>()
+  /** Hook-driven sessions whose current turn has started and not yet had an
+   * allowed Stop. Replaces the phase-derived working state for those
+   * sessions: that state cannot tell a tool gap from a turn end. */
+  private readonly hookTurnOpen = new Set<string>()
+  /** Last hook, semantic event or delivery per hook-driven session, in ms.
+   * Only Resume reads it; see control(). */
+  private readonly lastHookSessionActivity = new Map<string, number>()
 
   constructor(private readonly deps: {
     manager: GoalLoopManagerPort
@@ -111,6 +133,63 @@ export class GoalLoopService extends EventEmitter {
     manager.on('removed', ({ sessionId }: { sessionId: string }) => this.interrupt(sessionId))
     manager.on('exit', ({ sessionId }: { sessionId: string }) => this.interrupt(sessionId))
     await this.persist()
+  }
+
+  /**
+   * A provider turn hook fired for this session. Agent Code receives Claude
+   * and Codex hooks at /hooks/tldr/*, and BuiltInMcpHttpHost forwards every
+   * one here.
+   *
+   * WHY a hook and not the stream phase (#1024): for Claude, phase `idle`
+   * means "no main API request is streaming", and inside one turn that is
+   * true at every local tool gap. A Task subagent's API flow can take phase
+   * ownership during such a gap, publish `requesting`, then be demoted with
+   * `idle` as `cc_is_subagent`. That edge is never retracted. One recorded
+   * session delivered 37 continuations mid-turn that way, including pairs
+   * 0.4 s apart. The Stop hook fires only when the MAIN agent ends its turn
+   * (subagents have SubagentStop), so it is the boundary a loop needs.
+   *
+   * The first hook of any kind proves the session's hooks work.
+   * goal_loop_start is a tool call, so PostToolUse always arrives before the
+   * turn that started the loop can end. From then on stream phases no longer
+   * trigger continuations for this session. A provider that never calls hooks
+   * (OpenCode, Grok) never enters this mode and keeps the phase fallback.
+   *
+   * `blocked`: a Stop that TLDR enforcement answered with `decision: block`
+   * does not end the turn. The model keeps going, so it is not a boundary.
+   *
+   * KNOWN GAP (#1028 review): "allowed" means only that OUR hook allowed it.
+   * Claude runs every Stop hook in parallel and keeps the turn going if any
+   * of them blocks, and Codex aggregates the same way. A user, project or
+   * plugin Stop hook that blocks ("run the tests before stopping") therefore
+   * still gets a continuation queued into a turn that goes on. This predates
+   * the hook boundary: the phase trigger did the same. The fix is on the
+   * delivery side (never deliver into input that is busy), tracked in
+   * #1033.
+   */
+  observeProviderHook(sessionId: string, hook: 'user-prompt-submit' | 'post-tool-use' | 'stop', outcome?: { blocked: boolean }): void {
+    this.hookSessions.add(sessionId)
+    this.lastHookSessionActivity.set(sessionId, Date.now())
+    if (hook !== 'stop') {
+      this.hookTurnOpen.add(sessionId)
+      // A typed prompt STARTS a turn, and UserPromptSubmit publishes no
+      // semantic event, so the tracked phase would still read the previous
+      // turn's idle. Seed it busy, exactly as markOwedATurn does for our own
+      // delivery: only a real event can make it idle again. Otherwise a
+      // Resume during that turn's silent first request (a 529 retry backoff,
+      // a long time-to-first-token) found idle + nothing pending + 60 s of
+      // silence and delivered into the live turn (#1028 re-review, probe G).
+      if (hook === 'user-prompt-submit') this.seedBusy(sessionId)
+      return
+    }
+    if (outcome?.blocked) return
+    this.hookTurnOpen.delete(sessionId)
+    if (this.loops.get(sessionId)?.phase !== 'active') return
+    // Deferred one macrotask so the Stop hook's HTTP answer reaches the
+    // provider first. Delivering inside the hook request would race the
+    // provider's own turn close.
+    const timer = setTimeout(() => this.requestContinue(sessionId), 0)
+    timer.unref?.()
   }
 
   snapshot(): Record<string, GoalLoopState> {
@@ -173,10 +252,58 @@ export class GoalLoopService extends EventEmitter {
       // fresh failure budget; otherwise a loop resumed from paused(error)
       // would re-pause on its first hiccup with no backoff at all.
       this.loops.set(sessionId, { ...loop, phase: 'active', pauseReason: null, consecutiveDeliveryFailures: 0, updatedAt: now })
-      // Resuming an already-idle agent must not wait for a turn_completed
-      // that already happened — deliver the next continuation now. A working
-      // agent is left alone: its turn end is the trigger, and that state is
-      // truthful because signal() keeps tracking while the loop is paused.
+      // A hook-driven turn can end with NO Stop hook (#1028 review). Claude
+      // skips Stop on an Esc interrupt, a model or API error (it runs
+      // StopFailure, which Agent Code does not register, see below), and
+      // prompt-too-long. Codex skips it on interrupt and on turn errors. The
+      // turn then stays open here until the next turn boundary. Any user
+      // prompt is one (UserPromptSubmit, then that turn's Stop). Resume is
+      // the other, but ONLY when the phase has gone idle.
+      //
+      // KNOWN LIMIT (#1040): after an Esc during a Claude stream the phase
+      // never goes idle. mitmproxy reports a client disconnect only through
+      // its `error` hook, which the proxy addon does not implement, so no
+      // response-end reaches the adapter. For that case only a typed prompt
+      // recovers the loop, and Resume delivers nothing. That is safe but
+      // unhelpful, and the fix belongs in claude-code-headless.
+      //
+      // Resume closes such a turn only when every signal agrees it is over:
+      // - no tool pending;
+      // - the phase state idle;
+      // - nothing heard for GOAL_LOOP_QUIET_TURN_MS.
+      // Each one alone is wrong somewhere. Phase idle happens mid-turn on
+      // Claude's subagent flows (#1024). Silence happens mid-turn during
+      // Codex reasoning that streams no summary and during Claude's API retry
+      // backoff; there the phase is thinking or requesting. A pending tool
+      // can run for minutes (a build, a test suite). A Resume that finds the
+      // turn still open delivers nothing, and the turn's own Stop continues
+      // the loop.
+      //
+      // WHY there is no automatic "quiet turn" pause: the first review fix
+      // paused the loop after 60 s of silence. The re-review showed that it
+      // paused turns that were still working, and unattended loops then
+      // stopped for good. A turn that ended without a Stop costs one user
+      // prompt; a false pause costs the whole loop.
+      //
+      // WHY Claude's StopFailure is not registered as a turn end: the hook
+      // JSON shares one --settings argument with the external-control
+      // exclusion, and Claude validates hook keys against a fixed enum. A CLI
+      // older than the event would reject that argument, exclusion included,
+      // and nothing gates on the CLI version.
+      const tracked = this.working.get(sessionId)
+      if (
+        this.hookTurnOpen.has(sessionId)
+        && this.quietForMs(sessionId) >= GOAL_LOOP_QUIET_TURN_MS
+        && (!tracked || (!isWorking(tracked) && tracked.pendingTools.length === 0))
+      ) {
+        this.hookTurnOpen.delete(sessionId)
+      }
+      // Resuming an already-idle agent must not wait for a turn end that
+      // already happened, so deliver the next continuation now. A working
+      // agent is left alone and its turn end is the trigger. For a session
+      // without hooks, "working" is the tracked phase state, which signal()
+      // keeps updating while the loop is paused. For a hook session it is an
+      // open turn.
       this.requestContinue(sessionId)
     }
     const next = this.loops.get(sessionId)!
@@ -187,6 +314,9 @@ export class GoalLoopService extends EventEmitter {
   private now(): Date { return this.deps.now?.() ?? new Date() }
 
   private signal(sessionId: string, event: unknown): void {
+    // Any event at all, deltas included, means the provider is still doing
+    // something; the quiet-turn check measures silence from here.
+    if (this.hookSessions.has(sessionId)) this.lastHookSessionActivity.set(sessionId, Date.now())
     // Reduce for every session, in every loop phase (see the class comment):
     // only the DECISION to continue is gated on an active loop. The reducer
     // returns the same object for the high-volume delta events, so the common
@@ -195,6 +325,10 @@ export class GoalLoopService extends EventEmitter {
     const next = reduceWorkingState(state, { type: 'semantic', event })
     if (next === state) return
     this.working.set(sessionId, next)
+    // Hook-driven sessions take their turn boundary from the provider's Stop
+    // hook only (observeProviderHook). Their phase edges are exactly the
+    // false positives #1024 recorded, so they never schedule a continuation.
+    if (this.hookSessions.has(sessionId)) return
     if (isWorking(state) && !isWorking(next) && this.loops.get(sessionId)?.phase === 'active') {
       this.scheduleContinueCheck(sessionId)
     }
@@ -229,6 +363,11 @@ export class GoalLoopService extends EventEmitter {
     // Dropped unconditionally: a same-id wake starts a fresh process whose
     // events must not be folded onto the dead one's pending tools.
     this.working.delete(sessionId)
+    // A fresh process must prove its hooks again. A reload can change
+    // providers or MCP domains, and a turn open in the dead process is gone.
+    this.hookSessions.delete(sessionId)
+    this.hookTurnOpen.delete(sessionId)
+    this.lastHookSessionActivity.delete(sessionId)
     const loop = this.loops.get(sessionId)
     if (!loop || loop.phase !== 'active') return
     this.loops.set(sessionId, { ...loop, phase: 'paused', pauseReason: 'interrupted', updatedAt: this.now().toISOString() })
@@ -248,8 +387,26 @@ export class GoalLoopService extends EventEmitter {
    * pending tools are what hold a per-message `turn_completed` back. The
    * first version overwrote it with a blank state and lost exactly that. */
   private markOwedATurn(sessionId: string): void {
+    // Our delivery starts a turn. For a hook-driven session that turn is
+    // open until its Stop, so traffic in between can never re-deliver. That
+    // is the recorded 0.4 s double.
+    // No activity stamp is needed here for Resume's quiet window: the seed
+    // below leaves the tracked phase busy, and only an event (which stamps)
+    // can make it idle again.
+    if (this.hookSessions.has(sessionId)) this.hookTurnOpen.add(sessionId)
+    this.seedBusy(sessionId)
+  }
+
+  private seedBusy(sessionId: string): void {
     const tracked = this.working.get(sessionId) ?? INITIAL_WORKING_STATE
     if (!isWorking(tracked)) this.working.set(sessionId, { ...tracked, phase: 'responding' })
+  }
+
+  /** Wall-clock silence, not the injected `now()`: that clock stamps loop
+   * records and tests pin it to a fixed instant, which would make every turn
+   * look silent forever. */
+  private quietForMs(sessionId: string): number {
+    return Date.now() - (this.lastHookSessionActivity.get(sessionId) ?? 0)
   }
 
   /** Every trigger (turn boundary, resume, backoff retry) funnels through
@@ -270,7 +427,13 @@ export class GoalLoopService extends EventEmitter {
     // an in-flight delivery delivered the same continuation twice. Skipping is
     // safe: a working agent's turn end re-triggers us.
     const tracked = this.working.get(sessionId)
-    if (tracked && isWorking(tracked)) return
+    // Hook-driven sessions: an open turn (started, no allowed Stop yet) is
+    // the truth, and the phase-derived state is not consulted. It reads
+    // `requesting` whenever a subagent flow streams, which would stall a loop
+    // whose Stop just arrived.
+    if (this.hookSessions.has(sessionId)) {
+      if (this.hookTurnOpen.has(sessionId)) return
+    } else if (tracked && isWorking(tracked)) return
     this.continuing.add(sessionId)
     try {
       // The cap pauses BEFORE delivering past the budget: a confused agent

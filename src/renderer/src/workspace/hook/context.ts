@@ -4,7 +4,6 @@ import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type {
   ReaderModeState,
   SpotlightState,
-  TileTabsState,
 } from '@renderer/workspace/types'
 import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
 
@@ -23,13 +22,6 @@ export type WorkspaceSetSpotlight = (
     | SpotlightState
     | null
     | ((prev: SpotlightState | null) => SpotlightState | null),
-) => void
-
-export type WorkspaceSetTileTabs = (
-  next:
-    | TileTabsState
-    | null
-    | ((prev: TileTabsState | null) => TileTabsState | null),
 ) => void
 
 export type WorkspaceSetReaderMode = (

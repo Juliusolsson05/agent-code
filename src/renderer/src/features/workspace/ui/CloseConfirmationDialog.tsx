@@ -40,11 +40,11 @@ export function CloseConfirmationDialog() {
 
   const request = pending?.request
   const live = request?.targets.filter(target => target.live) ?? []
-  const scoped = request?.agentOnly
-  // "Close Agent" / "Close Terminal": the button names what the root actually
-  // is. The request carries the noun because only the close action knows the
-  // session kind; the dialog stays a renderer of plain data.
-  const Noun = scoped?.noun === 'terminal' ? 'Terminal' : 'Agent'
+  // A third, "scoped" presentation lived here until #992 — "Close the agent or
+  // the tab?", with Close Agent / Close Tab (N) buttons — for the one session
+  // whose close used to take its project with it (the tab's root tile leaf).
+  // No session is special like that any more, so this dialog only ever asks
+  // one question about one list: end these, or don't.
 
   return (
     <Dialog
@@ -59,7 +59,7 @@ export function CloseConfirmationDialog() {
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle>
-            {scoped ? `Close the ${scoped.noun} or the tab?` : request?.reason === 'running'
+            {request?.reason === 'running'
               // "session" not "agent": a shell running a job reaches this
               // dialog too now that terminal foreground state counts as
               // working (#865), and it isn't an agent.
@@ -70,14 +70,6 @@ export function CloseConfirmationDialog() {
           </DialogTitle>
           <DialogDescription>{request?.summary}</DialogDescription>
         </DialogHeader>
-
-        {scoped ? (
-          <p className="text-xs text-ink-dim">
-            Close {Noun} ends {scoped.title}
-            {scoped.targets.length > 1 ? ` and ${scoped.targets.length - 1} linked session(s)` : ''}.
-            {' '}Other sessions in the tab stay open. Close Tab ends every session listed below.
-          </p>
-        ) : null}
 
         {request && request.targets.length > 1 ? (
           <div className="rounded-slab max-h-56 overflow-auto border border-border">
@@ -107,24 +99,8 @@ export function CloseConfirmationDialog() {
           <Button variant="ghost" onClick={() => resolveCloseConfirmation(false)}>
             Cancel
           </Button>
-          {scoped ? (
-            // WHY `secondary`, not `destructive`, even though this button can
-            // end a working session (#886 review n3): the dialog offers two
-            // destructive scopes and exists to steer toward the NARROWER one.
-            // Painting both red erases the only visual difference between
-            // "end one session, keep the project, undo restores the root" and
-            // "end every listed session" — and the review's m5 finding is
-            // precisely that an operator reaching for the most prominent
-            // destructive button closes a whole project. The danger cue for a
-            // working root is not lost: the list marks it "working" and the
-            // Undo note above appears. The house rule's intent (a destructive
-            // confirmation looks destructive) is kept by Close Tab.
-            <Button variant="secondary" onClick={() => resolveCloseConfirmation('agent')}>
-              Close {Noun}
-            </Button>
-          ) : null}
           <Button variant="destructive" onClick={() => resolveCloseConfirmation(true)}>
-            {scoped ? `Close Tab (${request!.targets.length})` : request && request.targets.length > 1
+            {request && request.targets.length > 1
               ? `Close ${request.targets.length}`
               : 'Close'}
           </Button>

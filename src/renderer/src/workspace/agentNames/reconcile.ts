@@ -78,19 +78,18 @@ export function claimMissingIdentities(state: WorkspaceState): WorkspaceState {
 /**
  * Every identity whose name this window needs.
  *
- * WHY buried records are included: their SessionMeta lives outside
- * `state.sessions` and outlives it, and workspace.observe deliberately reports
- * them. A buried agent that resolved to no name would be re-addressed on
- * restore, which is exactly the silent re-targeting #816 forbids.
+ * Every session counts, on a lane or parked: a parked agent that resolved to no
+ * name would be re-addressed the moment it was woken, which is exactly the
+ * silent re-targeting #816 forbids.
+ *
+ * (Until #992 this also walked `state.buried`, whose records carried their own
+ * SessionMeta outside `state.sessions`. Burial folded into the pool, so a
+ * formerly buried agent is an ordinary row and is covered by the loop below.)
  */
 export function agentNameIdentities(state: WorkspaceState): string[] {
   const identities = new Set<string>()
   for (const meta of Object.values(state.sessions)) {
     const identity = identityOf(meta)
-    if (identity) identities.add(identity)
-  }
-  for (const record of state.buried) {
-    const identity = identityOf(record.sessionMeta)
     if (identity) identities.add(identity)
   }
   return [...identities]

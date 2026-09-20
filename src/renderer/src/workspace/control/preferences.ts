@@ -13,7 +13,7 @@ export function preferenceControlCapabilities(getWorkspace: () => Workspace) {
   const read = (sessionId: string) => {
     const state = useAppStore.getState()
     const meta = state.workspaceState.sessions[sessionId]
-    if (!meta || !isAgentKind(meta.kind ?? 'claude') || state.workspaceState.buried.some(row => row.sessionId === sessionId)) throw new ControlError('unavailable', 'Choose an existing non-buried agent')
+    if (!meta || !isAgentKind(meta.kind ?? 'claude')) throw new ControlError('unavailable', 'Choose an existing agent')
     const runtime = state.workspaceRuntimes[sessionId] ?? emptyRuntime()
     // Revisions cover the observation, including effective surface/follow, not
     // only stored preferences. Working activity can invalidate a read without

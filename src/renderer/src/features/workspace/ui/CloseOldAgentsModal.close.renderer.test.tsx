@@ -31,16 +31,13 @@ afterEach(() => {
 
 function mountCleanup(options: { working?: boolean; linked?: boolean } = {}) {
   const state: WorkspaceState = {
-    tabs: [{ id: 'tab', title: 'Project', root: { type: 'leaf', sessionId: 'root' }, focusedSessionId: 'root' }],
-    activeTabId: 'tab', dispatchMode: { scope: 'project', focusedSessionId: 'root' },
+    tabs: [{ id: 'tab', title: 'Project' }],
+    activeTabId: 'tab', stage: { lanes: [{ selectedSessionId: 'root' }], rows: [{ length: 1 }], focusedLane: 0 },
     sessions: {
-      root: { cwd: '/project', kind: 'claude' },
-      worker: { cwd: '/project', kind: 'codex', ...(options.linked ? { linkedParentId: 'root' } : {}) },
+      root: { cwd: '/project', kind: 'claude', projectId: 'tab', joinedAt: 0 },
+      worker: { cwd: '/project', kind: 'codex', ...(options.linked ? { linkedParentId: 'root' } : {}), projectId: 'tab', joinedAt: 1 },
     },
-    detachedSessions: {
-      worker: { sessionId: 'worker', surface: 'dispatch', projectTabId: 'tab', projectTabTitle: 'Project', projectTabIndex: 0, detachedAt: 1 },
-    },
-    gridRelatedSelections: {}, buried: [], pinnedSessionIds: [],
+      pinnedSessionIds: [],
   }
   const refs = makeRefs(state)
   // Cleanup only reads timestamps; provider payloads do not determine age.
@@ -69,7 +66,7 @@ describe('Close Old Agents destructive scope (#886)', () => {
     await waitFor(() => expect(onClose).toHaveBeenCalledOnce())
     expect(killOwnedSession.mock.calls.map(([owner]) => owner.sessionId)).toEqual(['root'])
     expect(harness.getState().sessions.worker).toBeDefined()
-    expect(harness.getState().tabs[0].root).toEqual({ type: 'leaf', sessionId: 'worker' })
+    expect(harness.getState().tabs).toHaveLength(1)
     expect(showToast).toHaveBeenLastCalledWith('Closed 1 session.', 6000)
   })
 

@@ -9,7 +9,7 @@ export function terminalControlCapabilities(getWorkspace: () => Workspace) {
   const invoke = async (capabilityId: string, input: { sessionId: string }) => {
     const state = useAppStore.getState().workspaceState
     const meta = state.sessions[input.sessionId]
-    if (!meta || state.buried.some(item => item.sessionId === input.sessionId)) throw new ControlError('unavailable', 'Session is absent or buried')
+    if (!meta) throw new ControlError('unavailable', 'Session is absent')
     const result = await window.api.controlInvoke({ capabilityId, input: { ...input, cwd: meta.cwd, provider: meta.kind ?? 'claude' } })
     if (!result.ok) throw new ControlError(result.error.code, result.error.message, result.error.outcome)
     return result.value
@@ -17,7 +17,7 @@ export function terminalControlCapabilities(getWorkspace: () => Workspace) {
   return [
     defineCapability({
       id: 'terminals.create', title: 'Create a project terminal', execution: 'window', effect: 'mutation', target: { kind: 'project', field: 'tabId' },
-      description: 'Create a new shell as a detached session in an explicit project, using the named anchor session directory. Uses the normal spawn/placement transaction and returns the exact new ID. Existing tiled Dispatch may select its lane. Use dispatch.configure or placement.list/attach to place the terminal; this does not send a shell command.',
+      description: 'Create a new shell in an explicit project, using the named anchor session directory. Uses the normal spawn/placement transaction and returns the exact new ID. It fills the focused lane only when that lane is empty; otherwise it waits in the project index. Use dispatch.configure (lane-select) or agents.show to put it in a lane; this does not send a shell command.',
       input: z.object({ tabId: z.string().describe('Project tab ID from app.observe.'), anchorSessionId: z.string().describe('Existing session in that project whose cwd the new shell should use.') }).strict(),
       output: z.object({ sessionId: z.string(), tabId: z.string(), cwd: z.string() }),
       handler: async input => {

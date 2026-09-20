@@ -5,16 +5,17 @@ import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { buildAgentRows } from './CloseOldAgentsModal'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type { Entry } from '@shared/types/transcript'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 // Close Old Agents aged sessions by transcript timestamps, which shells do not
 // have, so terminals were excluded outright. The foreground monitor (#865) gives
 // them an age: the last time a command started, finished or the shell cd'd.
 it('ages an idle terminal from its last foreground change', () => {
   const state: Workspace['state'] = {
-    tabs: [{ id: 'tab', title: 'project', root: { type: 'leaf', sessionId: 'shell' }, focusedSessionId: 'shell' }],
-    activeTabId: 'tab', dispatchMode: null, gridRelatedSelections: {},
-    sessions: { shell: { cwd: '/work/api', kind: 'terminal' } },
-    detachedSessions: {}, buried: [], pinnedSessionIds: [],
+    tabs: [{ id: 'tab', title: 'project' }],
+    activeTabId: 'tab', stage: oneLaneStage('shell'), 
+    sessions: { shell: { cwd: '/work/api', kind: 'terminal', projectId: 'tab', joinedAt: 0 } },
+      pinnedSessionIds: [],
   }
   const runtimes = {
     shell: { ...emptyRuntime(), terminalForeground: { busy: false, command: 'zsh', cwd: '/work/api', changedAt: 1_000 } },
@@ -30,9 +31,9 @@ describe('cleanup activity evidence (#886)', () => {
   const old = now - 8 * 60 * 60 * 1000
   const recent = now - 60_000
   const state: Workspace['state'] = {
-    activeTabId: 'tab', dispatchMode: null, buried: [], pinnedSessionIds: [],
-    tabs: [{ id: 'tab', title: 'project', root: { type: 'leaf', sessionId: 'agent' }, focusedSessionId: 'agent' }],
-    sessions: { agent: { cwd: '/project', kind: 'claude' } }, detachedSessions: {},
+    activeTabId: 'tab', stage: oneLaneStage('agent'),  pinnedSessionIds: [],
+    tabs: [{ id: 'tab', title: 'project' }],
+    sessions: { agent: { cwd: '/project', kind: 'claude', projectId: 'tab', joinedAt: 0 } }, 
   }
   // Timestamps are the public transcript fields cleanup reads. The provider's
   // content is deliberately irrelevant to whether the session is old.

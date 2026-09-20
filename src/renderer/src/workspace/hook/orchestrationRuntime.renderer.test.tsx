@@ -4,6 +4,7 @@ import { useAppStore } from '@renderer/app-state/hooks'
 import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { OrchestrationRendererRequest, OrchestrationRendererResponse } from '@mcp/shared/orchestrationTypes'
 import { useWorkspace } from './index'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 // Mount the real renderer create handler, pane action, session spawn action,
 // and workspace store. Boot/history subscriptions are unrelated ingress;
@@ -28,13 +29,12 @@ beforeEach(() => {
   useAppStore.setState({
     workspaceState: {
       ...originalStore.workspaceState,
-      activeTabId: 'project', dispatchMode: null, pinnedSessionIds: [], buried: [],
-      tabs: [{ id: 'project', title: 'Project', focusedSessionId: 'root', root: { type: 'leaf', sessionId: 'root' } }],
+      activeTabId: 'project', stage: oneLaneStage('root'), pinnedSessionIds: [], 
+      tabs: [{ id: 'project', title: 'Project' }],
       sessions: {
-        root: { kind: 'claude', cwd: '/repo' },
-        parent: { kind: 'opencode', providerRuntime: 'terminal', cwd: '/repo/subdir', orchestrationParentId: 'root', orchestrationRootId: 'root' },
+        root: { kind: 'claude', cwd: '/repo', projectId: 'project', joinedAt: 0 },
+        parent: { kind: 'opencode', providerRuntime: 'terminal', cwd: '/repo/subdir', orchestrationParentId: 'root', orchestrationRootId: 'root', projectId: 'project', joinedAt: 1 },
       },
-      detachedSessions: { parent: { sessionId: 'parent', surface: 'dispatch', projectTabId: 'project', projectTabTitle: 'Project', projectTabIndex: 0, detachedAt: 1 } },
     },
     workspaceRuntimes: { root: emptyRuntime(), parent: emptyRuntime() },
   })
@@ -68,6 +68,7 @@ async function dispatch(request: OrchestrationRendererRequest): Promise<void> {
 describe('renderer orchestration runtime creation', () => {
   it.each([true, false])('carries the selected runtime and ownership through real spawn; terminal=%s', async terminal => {
     renderHook(() => useWorkspace())
+    const stageBefore = useAppStore.getState().workspaceState.stage
     await dispatch({
       requestId: 'create', type: 'create-agent', parentSessionId: 'parent', kind: 'opencode',
       ...(terminal ? { providerRuntime: 'terminal' as const } : {}),
@@ -82,8 +83,10 @@ describe('renderer orchestration runtime creation', () => {
     }
     const state = useAppStore.getState().workspaceState
     expect(state.sessions.child).toMatchObject({ kind: 'opencode', providerRuntime: terminal ? 'terminal' : undefined, cwd: '/repo/child', title: 'Parser review', ...ownership })
-    expect(state.detachedSessions.child).toMatchObject({ sessionId: 'child', surface: 'dispatch', projectTabId: 'project' })
-    expect(state.tabs[0]!.focusedSessionId).toBe('root')
+    // Filed in the root parent's project, and it does NOT steal the stage:
+    // one prompt can create many workers, so no lane is re-aimed at it.
+    expect(state.sessions.child).toMatchObject({ projectId: 'project', joinedAt: expect.any(Number) })
+    expect(state.stage).toBe(stageBefore)
     expect(resolved).toHaveBeenCalledWith({ requestId: 'create', ok: true, type: 'create-agent', agent: {
       sessionId: 'child', kind: 'opencode', cwd: '/repo/child', title: 'Parser review', ...ownership,
     } })
