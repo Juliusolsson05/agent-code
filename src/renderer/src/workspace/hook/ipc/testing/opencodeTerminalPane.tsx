@@ -165,6 +165,11 @@ function deliverToFeed(feed: FakeSessionFeed, channel: string, payload: unknown)
     case 'session:input-readiness': feed.emitInputReadiness(payload as Parameters<FakeSessionFeed['emitInputReadiness']>[0]); return true
     case 'session:jsonl-entries': feed.emitJsonlEntries(payload as Parameters<FakeSessionFeed['emitJsonlEntries']>[0]); return true
     case 'session:jsonl-error': feed.emitJsonlError(payload as Parameters<FakeSessionFeed['emitJsonlError']>[0]); return true
+    // Delivered to the feed since #881: the renderer now acts on one of these
+    // (a live channel that connects after an unreachable verdict clears the
+    // banner it raised). The recording below still keeps every diagnostic,
+    // because tests assert on the whole sequence.
+    case 'session:transcript-diagnostic': feed.emitTranscriptDiagnostic(payload as Parameters<FakeSessionFeed['emitTranscriptDiagnostic']>[0]); return true
     case 'session:process-state': feed.emitProcessState(payload as Parameters<FakeSessionFeed['emitProcessState']>[0]); return true
     case 'session:conditions': feed.emitConditions(payload as Parameters<FakeSessionFeed['emitConditions']>[0]); return true
     case 'session:semantic-event': feed.emitSemantic(payload as Parameters<FakeSessionFeed['emitSemantic']>[0]); return true
@@ -175,6 +180,9 @@ function deliverToFeed(feed: FakeSessionFeed, channel: string, payload: unknown)
 }
 
 export type MountedPane = {
+  /** The feed the subscriptions are mounted on, for a test that needs to put
+   *  an event in directly rather than through a real backend. */
+  feed: FakeSessionFeed
   meta: SessionMeta
   refs: WorkspaceRefs
   state: () => WorkspaceState
@@ -186,7 +194,9 @@ export type MountedPane = {
   timeline: PaneSurfaces[]
   /** Every window message main sent for the pane, by channel, in order. */
   channels: string[]
-  /** `session:transcript-diagnostic` payloads (no SessionFeed method reads them). */
+  /** `session:transcript-diagnostic` payloads, in order. The renderer reads
+   *  one of them (#881); the rest are here because tests assert on the whole
+   *  sequence a pane produced. */
   diagnostics: Array<Record<string, unknown>>
 }
 
@@ -228,6 +238,12 @@ export type RecordedPaneOptions = {
 }
 
 export type RecordedPane = MountedPane & {
+  /**
+   * End the port conflict: the stranger releases the port (or the TUI's server
+   * was simply late) and the live channel connects after the verdict. #881's
+   * recovery case.
+   */
+  endPortConflict: () => void
   manager: SessionManager
   pty: AdapterPty
   server: ReplayServer
@@ -257,6 +273,7 @@ export function opencodeTerminalPanes(scope: OpencodeTerminalScope) {
       refs.latestRuntimesRef.current = runtimes
     }
     const pane: MountedPane = {
+      feed,
       meta,
       refs,
       state: () => state,
@@ -275,7 +292,7 @@ export function opencodeTerminalPanes(scope: OpencodeTerminalScope) {
       act(() => {
         delivered = deliverToFeed(feed, channel, cloned)
       })
-      if (!delivered && channel === 'session:transcript-diagnostic') {
+      if (channel === 'session:transcript-diagnostic') {
         pane.diagnostics.push((cloned as { diagnostic: Record<string, unknown> }).diagnostic)
       }
       pane.timeline.push(pane.surfaces())
@@ -308,10 +325,14 @@ export function opencodeTerminalPanes(scope: OpencodeTerminalScope) {
     const server = new ReplayServer({ username: USERNAME, password: PASSWORD })
     await server.listen()
     scope.onCleanup(() => server.close())
-    // 418 is what the recording captured from the process that had taken the
-    // port. Any non-SSE answer does the same thing to the client; the status
-    // is kept faithful so the fixture and the harness say the same thing.
-    if (options.portConflict) server.setFailing('/event', true, 418)
+    // `setBlocking` rather than failing one route: in the recording a stranger
+    // owns the WHOLE port, and this helper exists for exactly that fixture —
+    // its own comment names it ("EVERY request answers 418 before auth is
+    // checked: the unrelated process that won the TUI's port in
+    // port-conflict.json"). Failing only `/event` leaves every other endpoint
+    // answering as OpenCode, which is a stranger that somehow speaks our
+    // protocol.
+    if (options.portConflict) server.setBlocking(true)
 
     const pty = new AdapterPty()
     mainStandIns.createTerminalSession = sessionOptions => new OpencodeTerminalSession(sessionOptions, {
@@ -374,6 +395,12 @@ export function opencodeTerminalPanes(scope: OpencodeTerminalScope) {
       ...pane,
       manager,
       pty,
+      endPortConflict: () => {
+        server.setBlocking(false)
+        // The TUI paints its first frame, the way it would have if its server
+        // had come up on time.
+        pty.paint('\u001b[?1049h')
+      },
       server,
       writer,
       dbPath,

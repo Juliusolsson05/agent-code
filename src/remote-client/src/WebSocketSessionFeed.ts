@@ -6,6 +6,7 @@ import type {
   SessionExitEvent,
   SessionJsonlEntriesEvent,
   SessionJsonlErrorEvent,
+  SessionTranscriptDiagnosticEvent,
   SessionInputReadinessEvent,
   SessionProcessStateEvent,
   SessionScreenEvent,
@@ -263,6 +264,20 @@ export class WebSocketSessionFeed implements SessionFeed {
   }
   onSessionJsonlError(cb: (e: SessionJsonlErrorEvent) => void): Unsub {
     return this.sub('jsonl-error', cb)
+  }
+  /**
+   * Channel-health diagnostics are not relayed to remote clients yet.
+   *
+   * WHY a no-op rather than a `sub(...)`: the host does not forward this
+   * channel over the websocket, so subscribing would wait for frames that
+   * never arrive and look wired when it is not. The one consumer today (#881,
+   * clearing an OpenCode terminal's "server never answered" banner when the
+   * server turns out to be merely late) concerns a pane the phone does not
+   * render. When the phone does need it, the frame has to be added at the host
+   * first, and this is where it lands.
+   */
+  onSessionTranscriptDiagnostic(_cb: (e: SessionTranscriptDiagnosticEvent) => void): Unsub {
+    return () => {}
   }
   onSessionHistoryBoundary(cb: (e: SessionHistoryBoundaryEvent) => void): Unsub {
     return this.sub('history-boundary', cb)

@@ -874,6 +874,38 @@ export function useIpcSubscriptions(
       })
     })
 
+    // #881. The one diagnostic the renderer acts on, and the reason the
+    // channel is subscribed at all.
+    //
+    // `server-unreachable` is a DEADLINE verdict, not a death certificate: the
+    // package keeps reconnecting for the life of the instance, so a TUI whose
+    // server was merely late — a cold start, a restore herd, a sleep/wake
+    // straddling the 30 s connect deadline — connects afterwards and works.
+    // The banner that says otherwise is a lifetime banner by design, and
+    // nothing else ever clears one: a pane that recovered kept telling the
+    // user to reload it, and `managedTranscriptUnavailableReason` kept
+    // answering `transcript_unavailable` to every parent agent reading that
+    // child, over a conversation that was intact.
+    //
+    // Narrow on purpose: only a live-state that says CONNECTED, and only over
+    // an error this same fault raised. Any other transcript error is somebody
+    // else's to clear.
+    const offDiagnostic = feed.onSessionTranscriptDiagnostic(({ sessionId, diagnostic }) => {
+      if (quarantinesSessionFeed(sessionId)) return
+      const live = diagnostic as { kind?: string; connected?: boolean } | null
+      if (live?.kind !== 'opencode-terminal-live-state' || live.connected !== true) return
+      const current = refs.latestRuntimesRef.current[sessionId]
+      if (!current?.transcriptChannelError?.includes('(provider_server_unreachable)')) return
+      updateRuntime(sessionId, {
+        transcriptChannelError: null,
+        transcriptError: null,
+        // Back to the state a pane with no transcript fault has. The next
+        // history load or record batch decides `ready` vs `loading` as usual;
+        // what matters here is that the sticky override is gone.
+        transcriptStatus: 'ready',
+      })
+    })
+
     const offHistoryBoundary = feed.onSessionHistoryBoundary(({ sessionId, ...boundary }) => {
       if (quarantinesSessionFeed(sessionId)) return
       // Same ordering discipline as the jsonl bulk and exit boundaries: a
@@ -2705,6 +2737,7 @@ export function useIpcSubscriptions(
       offEntries()
       offHistoryBoundary()
       offErr()
+      offDiagnostic()
       offProcessState()
       offSemantic()
       offConditions()

@@ -61,6 +61,7 @@ export type {
   SessionScreenEvent,
   SessionJsonlEntriesEvent,
   SessionJsonlErrorEvent,
+  SessionTranscriptDiagnosticEvent,
   SessionConditionsEvent,
   SessionProcessStateEvent,
   SubAgentToolCall,

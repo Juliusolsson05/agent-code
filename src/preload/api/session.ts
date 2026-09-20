@@ -13,6 +13,7 @@ import type {
   SessionKind,
   SessionJsonlEntriesEvent,
   SessionJsonlErrorEvent,
+  SessionTranscriptDiagnosticEvent,
   SessionAgentPtyDataEvent,
   SessionScreenEvent,
   SessionSemanticEvent,
@@ -235,6 +236,12 @@ export const sessionApi = {
 
   onSessionJsonlError: (cb: (e: SessionJsonlErrorEvent) => void): Unsub =>
     subscribe('session:jsonl-error', cb),
+
+  /** Channel HEALTH reports from provider adapters. Main has always sent
+   *  these; until #881 nothing subscribed, so a fault that healed could not
+   *  say so. */
+  onSessionTranscriptDiagnostic: (cb: (e: SessionTranscriptDiagnosticEvent) => void): Unsub =>
+    subscribe('session:transcript-diagnostic', cb),
 
   /** Raw PTY bytes for terminal sessions. Claude sessions do NOT
    *  emit on this channel — they use screen/jsonl-entry instead. */

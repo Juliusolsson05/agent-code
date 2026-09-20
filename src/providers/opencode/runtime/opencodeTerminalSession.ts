@@ -313,6 +313,13 @@ export class OpencodeTerminalSession extends EventEmitter implements AgentSessio
       // FIRST PTY BYTE, while programmatic delivery goes through this server
       // (#877) — so a TUI that painted and then lost its server would sit
       // there looking ready while every delivery failed.
+      // `state.connected ||` is redundant against today's package and kept
+      // deliberately: `server-unreachable` is emitted from exactly one site,
+      // with a literal `connected: false`, while every `connected: true` site
+      // carries a different reason or none — so no test can distinguish this
+      // from the reason check alone. It says what the condition MEANS ("the
+      // channel is down AND it never came up") rather than relying on a
+      // one-site coincidence in another package.
       if (state.connected || state.reason !== 'server-unreachable') return
       if (this.serverUnreachableReported) return
       this.serverUnreachableReported = true
