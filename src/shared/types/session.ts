@@ -119,7 +119,20 @@ export type SessionRecoverOptions = {
 export type SessionOwnershipOptions = Pick<
   SessionRecoverOptions,
   'sessionId' | 'kind' | 'providerRuntime' | 'cwd'
->
+> & {
+  /**
+   * The tmux session this pane owns, for a TERMINAL the caller may be closing
+   * while it is hibernated (#1030 item 4).
+   *
+   * WHY the caller has to supply it: a hibernated terminal has no row in main
+   * — boot hibernates everything but the focused lane — so a close finds
+   * nothing to tear down and the tmux session survived until the next
+   * launch's sweep. The renderer's persisted metadata is the only place that
+   * name still exists. Main does not trust it blindly: it kills the name only
+   * when the registry minted it (`ownsSessionName`).
+   */
+  tmuxName?: string
+}
 
 export type SessionRecoveryCancellationOptions = SessionOwnershipOptions & {
   recoveryToken: string

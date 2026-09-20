@@ -5,11 +5,14 @@ import type { SessionId, TabId } from '@renderer/workspace/types'
 import {
   isStageWorkspace,
   liveWorkspaceFromPersisted,
+  MalformedWorkspaceContainerError,
   migrateWorkspaceToStage,
 } from '@renderer/workspace/workspaceShape'
 import { resolveTabSessions } from '@renderer/workspace/queries'
 import { collectOwnedSessionIds } from '@renderer/workspace/sessionOwnership'
 import { ownerV2Workspace } from '@renderer/workspace/workspaceShape.ownerV2Fixture'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 
 // The migration contract (plan 2026-09-17-unified-stage-layout.md §6, §10).
 // Every fixture class here is either recorded from a real workspace.json or
@@ -545,5 +548,59 @@ describe('migrateWorkspaceToStage — v3 and hybrid files', () => {
     expect(migrated.sessions[S('a1')]?.projectId).toBe(TAB_B)
     // No `joinedAt` was stamped, so its v2 position (first tile leaf) is kept.
     expect(migrated.sessions[S('a1')]?.joinedAt).toBe(0)
+  })
+})
+
+// #1030 items 2 and 3, against the RECORDED live workspace
+// (testing/fixtures/workspace-v2/2026-09-19-live-workspace.sanitized.json:
+// one window, 3 tabs, 27 sessions) rather than an invented shape. Each case
+// below is that file with exactly one field degraded, which is how both
+// states arise in the wild: a hand-edited file, or a writer that emptied the
+// tabs while parked rows remained.
+function recordedLiveWorkspace(): PersistedWorkspace {
+  const file = JSON.parse(readFileSync(
+    resolve(__dirname, '../../../../testing/fixtures/workspace-v2/2026-09-19-live-workspace.sanitized.json'),
+    'utf8',
+  )) as { windows: Array<{ workspace: PersistedWorkspace }> }
+  return file.windows[0]!.workspace
+}
+
+describe('migrateWorkspaceToStage — a corrupt container is never an empty workspace (#1030)', () => {
+  it.each(['tabs', 'projects'] as const)('refuses a %s field that is present but not a list', field => {
+    // Migrating this to an empty pool let rehydrate mint a fresh tab and
+    // report `complete`, which unlocks autosave — so the next tick wrote an
+    // empty workspace over the real file. Throwing is what puts bootstrap in
+    // its locked fallback, which is what v2 did.
+    const degraded = { ...recordedLiveWorkspace(), [field]: null } as unknown as PersistedWorkspace
+    expect(() => migrateWorkspaceToStage(degraded)).toThrow(MalformedWorkspaceContainerError)
+  })
+
+  it('still migrates the recording itself, and a file that is simply empty', () => {
+    expect(migrateWorkspaceToStage(recordedLiveWorkspace()).projects).toHaveLength(3)
+    // `tabs: []` is a writer's empty workspace, not corruption.
+    expect(migrateWorkspaceToStage({ tabs: [], sessions: {} }).projects).toEqual([])
+  })
+
+  it('keeps buried rows when the file has no tabs left, instead of dropping them', () => {
+    // v2 kept buried panes whether or not a tab survived; here every session
+    // needs a project, so with none left the re-parent target was '' and the
+    // rows — sometimes the only copy of that session's metadata — were
+    // dropped on upgrade.
+    const recorded = recordedLiveWorkspace()
+    const [sessionId, meta] = Object.entries(recorded.sessions)[0]!
+    const buriedOnly: PersistedWorkspace = {
+      ...recorded,
+      tabs: [],
+      sessions: {},
+      // A v2 buried record carries its own copy of the meta (`sessionMeta`),
+      // which is exactly why dropping it can lose the only copy.
+      buried: [{
+        id: 'buried-1', sessionId: sessionId as SessionId, sessionMeta: meta, buriedAt: 1,
+        sourceTabId: recorded.tabs![0]!.id, sourceTabTitle: 'gone', sourceTabIndex: 0,
+      } as never],
+    }
+    const migrated = migrateWorkspaceToStage(buriedOnly, () => 'recovered-project' as TabId)
+    expect(migrated.projects).toEqual([expect.objectContaining({ id: 'recovered-project' })])
+    expect(migrated.sessions[sessionId as SessionId]).toMatchObject({ projectId: 'recovered-project' })
   })
 })

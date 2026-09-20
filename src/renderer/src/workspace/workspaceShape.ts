@@ -18,6 +18,7 @@ import {
   scrubGridRowMetadata,
 } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import { normalizeGridShape } from '@renderer/workspace/dispatch/gridShape'
+import { titleFromCwd } from '@renderer/workspace/layout/helpers'
 
 // ---------------------------------------------------------------------------
 // Read-time normalization of workspace.json into the unified shape (#992).
@@ -120,7 +121,28 @@ export function defaultSeededStage(seed: SessionId | null): TiledDispatchState {
  *     migration can never resurrect a row into a backend process (the #258
  *     fork-bomb shape).
  */
-export function migrateWorkspaceToStage(persisted: PersistedWorkspace): StageWorkspace {
+export class MalformedWorkspaceContainerError extends Error {}
+
+export function migrateWorkspaceToStage(
+  persisted: PersistedWorkspace,
+  // Only a file with zero projects AND parked sessions to rehome needs this;
+  // injected so the test does not have to match a random id.
+  mintProjectId: () => TabId = () => crypto.randomUUID(),
+): StageWorkspace {
+  // Rule 8 (#1030 item 3): a container that is PRESENT but not a list is
+  // corruption, not an empty workspace. Migrating it to an empty pool let
+  // rehydrate mint a fresh tab and report `complete`, which unlocks autosave —
+  // so the next 400 ms tick overwrote whatever the real file held. v2 threw
+  // here, and the throw is what put bootstrap into its locked fallback with
+  // the disk file untouched. `undefined` is not corruption: a v2 file has no
+  // `projects`, and a v3 file has no `tabs`.
+  for (const [field, value] of [['projects', persisted.projects], ['tabs', persisted.tabs]] as const) {
+    if (value !== undefined && !Array.isArray(value)) {
+      throw new MalformedWorkspaceContainerError(
+        `workspace.json has a malformed \`${field}\`; refusing to migrate it to an empty pool`,
+      )
+    }
+  }
   // --- Rule 1.
   const projects: ProjectRef[] = Array.isArray(persisted.projects)
     ? persisted.projects
@@ -136,12 +158,28 @@ export function migrateWorkspaceToStage(persisted: PersistedWorkspace): StageWor
   // a hand-emptied file must still migrate to something renderable. '' is
   // never a project id; readers treat it as "no active project".
   const recordedActive = persisted.activeProjectId ?? persisted.activeTabId ?? ''
-  const activeProjectId = projectIds.has(recordedActive)
+  let activeProjectId = projectIds.has(recordedActive)
     ? recordedActive
     : (projects[0]?.id ?? '')
 
   // --- Rules 2, 3, 7.
   const legacy = legacyMemberships(persisted)
+  // Rule 9 (#1030 item 2): a v2 file with zero tabs still carried its buried
+  // panes — burial was independent of tabs there. Here every session needs a
+  // project to live in, so with none left the re-parent target was '' and
+  // every buried row was dropped: the one place some sessions' metadata
+  // existed, deleted on upgrade. Mint one project to receive them instead.
+  // Only for files that genuinely have parked rows; an empty file stays empty.
+  if (projects.length === 0) {
+    const rehomed = [...legacy.values()].find(membership => membership.restoredMeta)
+    if (rehomed) {
+      const id = mintProjectId()
+      const cwd = rehomed.restoredMeta?.cwd
+      projects.push({ id, title: typeof cwd === 'string' ? titleFromCwd(cwd) : '', ...(typeof cwd === 'string' ? { cwd } : {}) })
+      projectIds.add(id)
+      activeProjectId = id
+    }
+  }
   const sessions: Record<SessionId, PoolSession> = {}
   const candidateIds = new Set<SessionId>([
     ...Object.keys(persisted.sessions ?? {}),
