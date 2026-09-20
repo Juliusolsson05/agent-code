@@ -14,7 +14,7 @@ import type { WorkspaceFileStore } from '@main/storage/workspaceFileStore.js'
  * `commitNext()` advances to the next prepared document and notifies, exactly
  * as a committed autosave does.
  */
-export function fakeWorkspaceFileStore(saves: readonly PersistedWindow[][]) {
+export function fakeWorkspaceFileStore(saves: readonly (readonly PersistedWindow[])[]) {
   let windows: readonly PersistedWindow[] = saves[0] ?? []
   let cursor = 1
   const observers = new Set<(next: readonly PersistedWindow[]) => void>()
