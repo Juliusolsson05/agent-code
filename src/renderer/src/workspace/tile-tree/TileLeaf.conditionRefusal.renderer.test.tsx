@@ -28,15 +28,26 @@ import { TileLeaf } from './TileLeaf'
 // src/providers/shared/renderer/conditions/dispatchRefusal.renderer.test.tsx.
 
 let reporter: ConditionRefusalReporter | undefined
+/** The pty arm TileLeaf passes as `onSend` — `sendConditionKey`. */
+let sendKey: ((data: string) => Promise<void>) | undefined
 vi.mock('@providers/shared/renderer/conditions/ProviderConditionOutlet', () => ({
-  ProviderConditionOutlet: (props: { onConditionRefused?: ConditionRefusalReporter }) => {
+  ProviderConditionOutlet: (props: {
+    onConditionRefused?: ConditionRefusalReporter
+    onSend?: (data: string) => Promise<void>
+  }) => {
     reporter = props.onConditionRefused
+    sendKey = props.onSend
     return <div data-testid="outlet" />
   },
 }))
 
 vi.mock('@renderer/features/feed/ui/Feed', () => ({ Feed: () => <div data-testid="feed" /> }))
-vi.mock('@renderer/features/sessionFeed/SessionFeedContext', () => ({ useSessionFeed: () => ({}) }))
+// `sendInput` is what main's refusal comes back through; the tests that care
+// set `sendInputResult` before clicking.
+let sendInputResult = true
+vi.mock('@renderer/features/sessionFeed/SessionFeedContext', () => ({
+  useSessionFeed: () => ({ sendInput: async () => sendInputResult }),
+}))
 vi.mock('@renderer/features/feed/ledger/useLedgerFeedItems', () => ({ useLedgerFeedItems: () => ({ items: [] }) }))
 vi.mock('@renderer/features/usage-limit/useUsageLimitActions', () => ({ useUsageLimitActions: () => ({}) }))
 vi.mock('@renderer/features/workflows/model/useSessionWorkflowViews', () => ({
@@ -54,6 +65,9 @@ const originalApi = window.api
 
 beforeEach(() => {
   reporter = undefined
+  sendKey = undefined
+  sendInputResult = true
+  paneToasts.length = 0
   window.api = {
     ...(originalApi ?? {}),
     onExtensionNotification: vi.fn().mockReturnValue(() => {}),
@@ -75,15 +89,19 @@ const refusal = (over: Partial<ConditionRefusal> = {}): ConditionRefusal => ({
   ...over,
 })
 
-function mount(): void {
+/** Every message TileLeaf tried to put in the PANE toast. */
+const paneToasts: Array<{ sessionId: string; message: string }> = []
+
+function mount(options?: { conditions?: SessionRuntime['conditions'] }): void {
   const workspace = {
     state: { sessions: { agent: { kind: 'claude', cwd: '/trial' } } },
     acknowledgeSession: vi.fn(),
     setDraftInput: vi.fn(),
+    showPaneToast: (sessionId: string, message: string) => { paneToasts.push({ sessionId, message }) },
   } as unknown as Workspace
   const runtime: SessionRuntime = {
     ...emptyRuntime(),
-    conditions: {
+    conditions: options?.conditions !== undefined ? options.conditions : {
       provider: 'claude',
       ts: 1,
       conditions: {
@@ -98,8 +116,10 @@ function mount(): void {
       </AgentTerminalOwnerVisibilityProvider>
     </GlobalToastProvider>,
   )
-  // A reporter TileLeaf never passed would make every assertion below vacuous.
+  // A reporter or send TileLeaf never passed would make every assertion below
+  // vacuous.
   expect(reporter).toBeTypeOf('function')
+  expect(sendKey).toBeTypeOf('function')
 }
 
 it('tells the user in words what the refusal was, on the surface a modal cannot cover', () => {
@@ -162,4 +182,51 @@ it('leaves the toast dismissable so it cannot sit over the question it is about'
   fireEvent.click(screen.getByText(message))
 
   expect(screen.queryByText(message)).toBeNull()
+})
+
+// ---------------------------------------------------------------------------
+// The pty arm (#711 item 1)
+//
+// #1070 moved the STRUCTURED refusal to the global toast because every
+// condition that can refuse is a modal, and the pane toast is an in-flow
+// sibling with no z-index sitting under a 1100-z scrim. The keystroke arm was
+// left behind, so the same click produced a readable message or an invisible
+// one depending on which arm handled it — and the keystroke arm is the one a
+// TRUST DIALOG uses, i.e. the case where the modal is guaranteed to be up.
+// ---------------------------------------------------------------------------
+
+it('shows a refused keystroke where a modal cannot cover it', async () => {
+  mount()
+  sendInputResult = false
+
+  await act(async () => { await sendKey?.('1') })
+
+  const toast = screen.getByText(
+    'That keystroke did not reach the agent. If it stays stuck, retry the pane.',
+  )
+  expect(toast.closest('[class*="z-[1200]"]')).not.toBeNull()
+  // The pane toast is the surface this message used to go to, and it is under
+  // the scrim. Asserting the text moved is not enough — a message sent to BOTH
+  // would still pass that.
+  expect(paneToasts).toEqual([])
+})
+
+it('says a vanished prompt is gone on the same surface as every other refusal', async () => {
+  // The other early return of the same click. A single click must not land on
+  // two different surfaces depending on which check failed first.
+  mount({ conditions: null })
+
+  await act(async () => { await sendKey?.('1') })
+
+  expect(screen.getByText('That prompt is no longer live.')).toBeInTheDocument()
+  expect(paneToasts).toEqual([])
+})
+
+it('stays silent when the keystroke landed', async () => {
+  mount()
+
+  await act(async () => { await sendKey?.('1') })
+
+  expect(screen.queryByText(/did not reach the agent/)).toBeNull()
+  expect(paneToasts).toEqual([])
 })

@@ -411,10 +411,37 @@ export function TileLeaf({
   // precisely what the quarantine exists to prevent. Requiring a live
   // snapshot mirrors what `RemoteServer.applyPermissionReply` already does
   // before it writes.
+  //
+  // WHY BOTH REFUSALS GO TO THE GLOBAL TOAST (#711 item 1)
+  //
+  // These messages answer a click the user made inside a condition view, and
+  // every condition that reaches this arm is a Radix modal: the trust dialogs
+  // and the permission prompt. A modal is therefore up — or was a moment ago —
+  // whenever either branch fires.
+  //
+  // `showPaneToast` renders `PaneToast`, an in-flow sibling inside the pane
+  // with no z-index. The dialog overlay is z-[1100] and 85% opaque, and Radix
+  // marks the rest of the subtree `aria-hidden`. So the message was painted
+  // under the scrim, inside the region screen readers are told to ignore, for
+  // exactly the conditions that can produce it. `GlobalToast` is z-[1200] and
+  // its own header records this trap.
+  //
+  // #1070 moved the STRUCTURED refusal here for that reason and left the
+  // keystroke arm behind, which was worse than either surface on its own: one
+  // click produced a readable message or an invisible one depending on which
+  // arm handled it, and the keystroke arm is the one a trust dialog uses.
+  //
+  // The vanished-prompt branch moves too. The modal has usually unmounted by
+  // then, so the pane toast would often have been visible — but a single click
+  // landing on two different surfaces depending on which check failed first is
+  // the inconsistency, not a saving.
+  //
+  // Duration matches the refusal reporter's: these ask the user to look at
+  // something and decide, which the 2.5s default does not allow.
   const sendConditionKey = useCallback(async (data: string) => {
     acknowledgeSession()
     if (!runtime.conditions) {
-      workspace.showPaneToast(sessionId, 'That prompt is no longer live.')
+      showToast('That prompt is no longer live.', 6000)
       return
     }
     const ok = await feed.sendInput(sessionId, data)
@@ -424,12 +451,9 @@ export function TileLeaf({
       // Only the first is worth retrying, and we cannot tell them apart from
       // here; the message stays honest about that rather than promising a
       // retry that can never work.
-      workspace.showPaneToast(
-        sessionId,
-        'That keystroke did not reach the agent. If it stays stuck, retry the pane.',
-      )
+      showToast('That keystroke did not reach the agent. If it stays stuck, retry the pane.', 6000)
     }
-  }, [acknowledgeSession, feed, runtime.conditions, sessionId, workspace.showPaneToast])
+  }, [acknowledgeSession, feed, runtime.conditions, sessionId, showToast])
 
   const loadOlderHistory = useCallback(async () => {
     await workspace.loadOlderHistory(sessionId)
