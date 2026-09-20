@@ -73,7 +73,15 @@ describe('desktop observation repair with the real history mapper and shared pan
     expect(runtime.routingGap?.phase).toBe('refreshed')
     expect(runtime.exited).toBeNull()
     expect(screen.getByRole('status').textContent).toContain('may be missing')
-    fireEvent.click(screen.getByRole('button', { name: 'Refresh view' }))
+    // The repair control is gone: main acknowledged and DELETED this ticket
+    // when the refresh succeeded, so pressing it again could only come back
+    // `stale` — and permanently so once an ordinary recovery mints a new
+    // ownership revision (#935 Codex review). The warning stays, because that
+    // output really is gone.
+    expect(screen.queryByRole('button', { name: 'Refresh view' })).toBeNull()
+    // A LATER incident issues a new ticket, and the control comes back with
+    // it. Replaying the repair must not duplicate what it already seeded.
+    act(() => live({ ...gap, gapRevision: gap.gapRevision + 1 }))
     await waitFor(() => expect(resync).toHaveBeenCalledTimes(2))
     await waitFor(() => expect(refs.latestRuntimesRef.current.pane!.routingGap?.phase).toBe('refreshed'))
     expect(refs.latestRuntimesRef.current.pane!.entries.filter(entry => entry.uuid === 'durable-answer')).toHaveLength(1)

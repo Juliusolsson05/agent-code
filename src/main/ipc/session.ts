@@ -138,7 +138,17 @@ export function registerSessionIpc(
     // custody cleanup retain their direct manager authority.
     if (lease && (lease.windowId !== windowIdFor(evt.sender) || !isSessionWindowLeaseCurrent(lease))) return false
     const killed = await manager.killOwned(options)
-    releaseSession(lease)
+    // WHY the release is conditional (#935 Codex review): killOwned returns
+    // false for two different situations. One is "there was nothing to close"
+    // — an already-exited pane being cleaned up, where releasing the claim is
+    // exactly right. The other is "this request does not own that backend":
+    // a stale pane whose saved cwd or provider no longer matches the live
+    // session. Releasing there revoked the display claim of a session that is
+    // still running, and since this branch removes the broadcast fallback its
+    // output was then quarantined with no owner left to show the gap — the
+    // pane simply went quiet. The backend snapshot is the same evidence
+    // killOwned itself checks: absent means nothing is left to display.
+    if (killed || manager.getBackendSnapshot(options.sessionId) === null) releaseSession(lease)
     return killed
   })
 

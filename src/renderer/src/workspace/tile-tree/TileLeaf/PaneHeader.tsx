@@ -175,11 +175,21 @@ export function PaneHeader({
               routingGap.phase === 'refreshed' ? 'View refreshed. Some earlier live output may be missing.' :
                 'Some live output may be missing. Refresh is unavailable right now.'}
           </span>
-          <button type="button" disabled={routingGap.phase === 'refreshing'}
-            className="flex-shrink-0 underline disabled:opacity-50"
-            onClick={event => { event.stopPropagation(); requestSessionRoutingRefresh(sessionId) }}>
-            Refresh view
-          </button>
+          {/* WHY the button disappears once a refresh has completed (#935
+              Codex review): the main-process gap ticket is acknowledged and
+              DELETED by that refresh, so a second press can only ever come
+              back `stale` — a dead control under a warning that is otherwise
+              correct. The warning stays, because some live output really was
+              lost for good; there is simply nothing left to re-seed. A
+              refresh that FAILED keeps its button: that ticket still exists
+              and the failure may be transient. */}
+          {routingGap.phase === 'refreshed' ? null : (
+            <button type="button" disabled={routingGap.phase === 'refreshing'}
+              className="flex-shrink-0 underline disabled:opacity-50"
+              onClick={event => { event.stopPropagation(); requestSessionRoutingRefresh(sessionId) }}>
+              Refresh view
+            </button>
+          )}
         </div>
       )}
     </div>

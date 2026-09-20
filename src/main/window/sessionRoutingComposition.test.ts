@@ -227,6 +227,42 @@ describe('read-only gap repair through the registry, forwarder and IPC', () => {
     expect(harness.history).toHaveBeenCalledTimes(1)
   })
 
+  it('keeps a live session displayable when its close is REFUSED (#935 Codex review)', async () => {
+    // killOwned returns false for two different situations: nothing left to
+    // close, and "you do not own that backend". Releasing the display claim
+    // for the second revoked a running session's only owner, and with the
+    // broadcast fallback gone its output was quarantined — the pane went
+    // quiet, with no owner left to even show the gap.
+    const { SessionManager: RealManager } = await import('@main/sessionManager.js')
+    const agent = Object.assign(new EventEmitter(), {
+      start: vi.fn(async () => {}), stop: vi.fn(async () => {}), write: vi.fn(), resize: vi.fn(),
+    })
+    harness.createAgent.mockReturnValue(agent)
+    const real = new RealManager()
+    const realForwarder = wireSessionForwarder(real, new EventEmitter() as LspManager)
+    const options = { sessionId: 'refused-close', kind: 'claude' as const, cwd: '/fixture' }
+    await real.recover(options)
+    registry.createAppWindow()
+    const event = { sender: harness.built[0]!.webContents }
+    registerSessionIpc(real, {} as never)
+    expect(await harness.handlers.get('session:recover')!(event, options)).toMatchObject({ ok: true })
+    harness.built[0]!.sent.length = 0
+
+    // A stale pane asks to close it with the WRONG cwd: refused by the
+    // manager's own ownership proof.
+    expect(await harness.handlers.get('session:kill-owned')!(event, { ...options, cwd: '/somewhere-else' })).toBe(false)
+    expect(registry.windowForSession(options.sessionId)).not.toBeNull()
+    real.emit('screen', { sessionId: options.sessionId, plain: 'still here', markdown: 'still here', recent: 'still here', recentMarkdown: 'still here' })
+    realForwarder.flush()
+    expect(harness.built[0]!.sent.map(entry => entry.channel)).toContain('session:screen')
+
+    // The real close still releases it.
+    expect(await harness.handlers.get('session:kill-owned')!(event, options)).toBe(true)
+    expect(registry.windowForSession(options.sessionId)).toBeNull()
+    realForwarder.flush()
+    real.removeAllListeners()
+  })
+
   it('admits display ownership through the real manager only after its kind/cwd checks', async () => {
     const { SessionManager: RealManager } = await import('@main/sessionManager.js')
     const agent = Object.assign(new EventEmitter(), {
