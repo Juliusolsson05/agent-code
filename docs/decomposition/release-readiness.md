@@ -667,6 +667,61 @@ claude 2.1.143 / codex 0.130.0 are stale versus the 2.1.278 / 0.155.1 in daily u
   - **#1018 (orchestration hides API errors):** an evidence catalog from real feed-debug recordings is being built (research agent, worktree `.worktrees/fix-orchestration-api-error`). Implementation follows the catalog.
   - **Waiting on #1013's merge:** T7 (#1006), T8 (#1007), T2 (command promotion) and T1 (#995), all of which touch the catalog, keybindings or bootstrap.
   - **Nightly** run 35430444567: build-app is green, package-macos is running.
+- 2026-09-20 16:20Z — **#1083 merged (closes #895). Four PRs in their review round.**
+
+  **MERGED**: **#1083** — and it shipped a REDESIGN, not the reviewed change.
+  See the previous entry; the reviewer's parenthetical named the mechanism
+  already in the codebase (`session:resync-routing` re-emits main's cached
+  snapshot on the ordinary event channel) and that removed five of seven
+  findings instead of fixing them.
+
+  **Every review this round found something real, and the same class four
+  times.** Recorded as a memory (feedback_mutation_claims_are_about_tests):
+  - a mutation table is a claim about the TEST SUITE, not the code — reviewers
+    ran 17–25 mutations against these PRs and found 5–7 survivors EVERY time,
+    against my own "no survivors";
+  - "equivalent mutant" written into a comment was WRONG three times out of
+    four;
+  - a stand-in that refuses everything cannot prove a guard that only matters
+    when something gets through;
+  - `expect(problems).toEqual([])` is also what a check that stopped checking
+    says — #1084's control was satisfied by an EMPTY corpus, and a loader
+    finding nothing kept the unit suite green while SILENCING the live suite
+    about three genuinely missing sessions;
+  - #1086's body claimed "11 tests red"; the real number was 5, because 6 of
+    the new tests passed vacuously against the buggy code.
+
+  **#1084** (#901 + #839) reworked: corpus size pinned, census rows checked
+  against the committed census (repo-deterministic provenance that never had to
+  move to the live suite), the citation line matched as digits, the corpus
+  match at segment granularity and separator-agnostic, the decomposition doc
+  corrected — including that its OWN recorded pre-push standard ("run the suite
+  under a HOME with no corpora") was skipped, which is what cost the CI failure.
+
+  **#1085** (#826 + #880) reworked: #880's acceptance says "in BOTH places" and
+  neither call site was tested — `if (true) count += 1` passed 318 tests. The
+  count is an exported selector now. "ONE owner" was false: the composer's Stop
+  button kept its own copy with a comment pointing at the rule it had
+  duplicated. The sweep covers all FOUR atomic-save writers (two clean up only
+  in a `catch`, AiWorkspaceRegistry not at all), and `writerIsAlive` now says
+  why it does NOT reuse `processLock.isPidRunning` — the two want opposite
+  defaults because they fail in opposite directions.
+
+  **#1086** (#875) reworked: the three status fields are closed `z.enum`s (the
+  rebuilt fixture STILL carried `process: 'running'`, which is not a
+  `ProcessStatus`), a backend that FAILED TO START now raises attention instead
+  of timing out silently, the throw is scoped away from `until: 'change'` — the
+  one mode that always worked — and carries the zod issues.
+
+  **OPENED — #1087** (#863): a Grid row stayed bound to a closed project, so
+  its index went blank and New Agent from its empty lane failed with no toast
+  and an overlay that only Escape closed. The scrub moved from the persistence
+  boundary into `workspaceWithoutSessions`. A mutation showed my first guard
+  silently suppressed the helper's SECOND prune (`expandedParents`), so it runs
+  on every commit.
+
+  **In review**: #1084, #1085, #1086, #1087.
+
 - 2026-09-20 15:55Z — **#910 CLOSED. All four items merged; five PRs open.**
 
   **MERGED**: **oth#5** (item 1) and **#1082** (item 4, plus the submodule bump).
