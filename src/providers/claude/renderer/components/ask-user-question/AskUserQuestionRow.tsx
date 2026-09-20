@@ -22,6 +22,7 @@ import {
   useAnswerSubmissionStore,
   useAnsweredViaMessageStore,
 } from '@providers/claude/renderer/components/ask-user-question/answeredViaMessageStore'
+import { withVisibleControls } from '@shared/text/visibleControls'
 
 // Native in-feed renderer for Claude Code's `AskUserQuestion` tool.
 //
@@ -408,12 +409,18 @@ export function AskUserQuestionRow({
             <div key={qi} className="flex flex-col gap-1.5">
               {q.header ? (
                 <span className="self-start text-[10px] uppercase tracking-wider text-muted bg-surface-hi rounded-chip px-1.5 py-0.5">
-                  {q.header}
+                  {/* DISPLAY only — the resolver still sends the option's own
+                      bytes, and the transcript keeps the original text. What
+                      is escaped is what the user READS before clicking, which
+                      an agent authors: `Run ./check.sh<U+FE0F>` and
+                      `Run ./check.sh` are different commands that render
+                      identically (#1049 re-review). */}
+                  {withVisibleControls(q.header)}
                 </span>
               ) : null}
               {q.question ? (
                 <div className="text-[13px] leading-[1.65] text-ink font-semibold">
-                  {q.question}
+                  {withVisibleControls(q.question)}
                 </div>
               ) : null}
               <div className="flex flex-col gap-1">
@@ -453,9 +460,9 @@ export function AskUserQuestionRow({
                         {q.multiSelect ? (isSelected ? '[x]' : '[ ]') : isSelected ? '(*)' : `${oi + 1}.`}
                       </span>
                       <span className="flex flex-col gap-0.5">
-                        <span className="text-ink">{opt.label}</span>
+                        <span className="text-ink">{withVisibleControls(opt.label)}</span>
                         {opt.description ? (
-                          <span className="text-[12px] text-muted">{opt.description}</span>
+                          <span className="text-[12px] text-muted">{withVisibleControls(opt.description)}</span>
                         ) : null}
                       </span>
                     </button>

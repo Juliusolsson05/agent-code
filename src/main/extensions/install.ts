@@ -610,18 +610,32 @@ async function finalizeInstall(
   bundleDir: string,
   provenance: { origin: 'github' | 'local'; repo: string; ref: string; sha256: string },
   promptConsent?: ConsentPrompt,
+  firstInstall = false,
 ): Promise<InstalledExtension> {
-  // Consent gate. If the extension requests capabilities beyond Tier 0, the user
-  // must approve them BEFORE the bundle moves into place — declining aborts the
-  // install, so nothing is left behind. A Tier-0-only extension installs with no
-  // prompt, matching the "repo name is the trust decision" stance.
+  // Consent gate. The user must approve BEFORE the bundle moves into place —
+  // declining aborts the install, so nothing is left behind.
+  //
+  // Two reasons to prompt, and Tier 0 needs the second one (#1049 re-review):
+  //
+  //  1. The manifest asks for capabilities. Always prompted, always was.
+  //  2. This is a FIRST install — the user just typed a repo or picked a
+  //     folder. Tier 0 used to install in silence here, on the stance that
+  //     "the repo name is the trust decision"; the stance is right and the
+  //     silence contradicted it, because nothing ever rendered that name where
+  //     the user could compare it. `owner/repo` copied from a page can carry
+  //     invisible characters, and the extension row that shows the source
+  //     appears only after the code is installed.
+  //
+  // A RELOAD or UPDATE re-runs a source already recorded in the ledger, so it
+  // stays silent for Tier 0: the choice was made, and prompting on every
+  // rebuild would make extension development miserable for no new information.
   const permissions = manifest.permissions ?? []
-  if (permissions.length > 0) {
+  if (permissions.length > 0 || firstInstall) {
     const approved = promptConsent ? await promptConsent(manifest) : false
     if (!approved) {
-      throw new InstallError(
-        `Installation of ${manifest.name} was declined — its requested capabilities were not granted.`,
-      )
+      throw new InstallError(permissions.length > 0
+        ? `Installation of ${manifest.name} was declined — its requested capabilities were not granted.`
+        : `Installation of ${manifest.name} was declined.`)
     }
   }
 
@@ -733,6 +747,9 @@ export async function installExtension(
   repoInput: string,
   promptConsent?: ConsentPrompt,
   options?: InstallOptions,
+  /** True when the user just typed this repo; false for an Update that
+   *  re-runs the one already recorded. See finalizeInstall. */
+  firstInstall = false,
 ): Promise<InstalledExtension> {
   const repo = normalizeRepo(repoInput)
   // Credential first, before any network: the disabled path must call NOTHING
@@ -765,6 +782,7 @@ export async function installExtension(
       staging,
       { origin: 'github', repo, ref: source.ref, sha256 },
       promptConsent,
+      firstInstall,
     )
   } finally {
     // .catch: `force` only suppresses ENOENT. A staging tree containing a
@@ -790,6 +808,9 @@ export async function installExtension(
 export async function installExtensionFromPath(
   sourceDir: string,
   promptConsent?: ConsentPrompt,
+  /** True when the user just picked this folder; false when reinstalling the
+   *  path already recorded in the ledger. See finalizeInstall. */
+  firstInstall = false,
 ): Promise<InstalledExtension> {
   let sourceReal: string
   try {
@@ -866,6 +887,7 @@ export async function installExtensionFromPath(
       staging,
       { origin: 'local', repo: sourceReal, ref: 'local', sha256 },
       promptConsent,
+      firstInstall,
     )
   } finally {
     // .catch: `force` only suppresses ENOENT. A staging tree containing a

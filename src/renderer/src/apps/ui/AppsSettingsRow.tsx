@@ -4,6 +4,7 @@ import { useAppStore } from '@renderer/app-state/hooks'
 import { forgetRemovedExtension, refreshInstalledExtensions } from '@renderer/apps/host/installedExtensionsState'
 
 import type { ExtensionListEntry } from '@shared/types/extensions'
+import { withVisibleControls } from '@shared/text/visibleControls'
 
 /**
  * Settings → Extensions. Install from a GitHub repository, list what is installed,
@@ -35,14 +36,21 @@ export function AppsSettingsRow() {
     void refresh()
   }, [refresh])
 
-  // `target` is explicit rather than always read from `repo` so the Update button
-  // can install a specific entry's repo. The previous version did
-  // `setRepo(entry.repo); void install()`, but `setRepo` is async and `install`
-  // closed over the OLD `repo`, so Update installed the empty/last-typed value —
-  // the no-op bug. Passing the target directly removes the closure dependency.
+  // FIRST install only — the repo comes from the text box, i.e. a string the
+  // user just typed or pasted. That is the whole distinction main's
+  // `extensions:install` handler acts on: it treats its argument as unseen and
+  // always shows the consent dialog, so the name gets rendered (with invisible
+  // characters made visible) before any of that repo's code runs. Update no
+  // longer routes through here for exactly that reason — it re-runs a source
+  // already in the ledger, via extensions:update-github.
+  //
+  // It used to take a `target` so Update could pass `entry.repo`; an earlier
+  // version did `setRepo(entry.repo); void install()` and, because `setRepo` is
+  // async while `install` closed over the OLD `repo`, installed the
+  // empty/last-typed value. Neither shape is needed now that Update names an id.
   const install = useCallback(
-    async (target?: string) => {
-      const repoTarget = (target ?? repo).trim()
+    async () => {
+      const repoTarget = repo.trim()
       if (!repoTarget || busy) return
 
       setBusy(true)
@@ -57,7 +65,7 @@ export function AppsSettingsRow() {
           useAppStore.getState().settings.extensionsGithubCliAuth,
         )
         if (result.ok) {
-          if (target === undefined) setRepo('')
+          setRepo('')
           setNotice(`Installed ${result.entry.manifest.name} ${result.entry.manifest.version}`)
         } else {
           setError(result.error)
@@ -80,32 +88,45 @@ export function AppsSettingsRow() {
   const update = useCallback(
     async (entry: ExtensionListEntry) => {
       if (busy) return
-      // Dispatch on how it was installed. A local extension's `repo` is an absolute
-      // folder path, so feeding it to the GitHub installer failed normalizeRepo every
-      // single time — and "rebuild, click Update" is the entire dev loop this install
-      // path exists for, so Update was broken for exactly the users who need it most.
-      if (entry.origin === 'local') {
-        setBusy(true)
-        setError(null)
-        setNotice(null)
-        try {
-          const result = await window.api.extensionsUpdateLocal(entry.manifest.id)
-          if (result.ok) {
-            setNotice(`Reloaded ${result.entry.manifest.name} ${result.entry.manifest.version}`)
-          } else {
-            setError(result.error)
-          }
-        } catch (updateError) {
-          setError(updateError instanceof Error ? updateError.message : String(updateError))
-        } finally {
-          setBusy(false)
-          await refresh()
+      setBusy(true)
+      setError(null)
+      setNotice(null)
+      try {
+        // Dispatch on how it was installed, but BOTH branches hand main only the
+        // extension id and let it read the recorded source back out of its own
+        // ledger.
+        //
+        // The local branch has to: a local extension's `repo` is an absolute
+        // folder path, so feeding it to the GitHub installer failed normalizeRepo
+        // every single time — and "rebuild, click Update" is the entire dev loop
+        // that install path exists for.
+        //
+        // The GitHub branch used to call install(entry.repo) instead, which works
+        // but arrives at a handler that treats everything as a first install and
+        // therefore prompts for consent on every update, even for a Tier-0
+        // manifest (#1049 round 9). Going through the ledger keeps the split the
+        // consent gate is built on: a typed repo prompts, a recorded one does not.
+        const result =
+          entry.origin === 'local'
+            ? await window.api.extensionsUpdateLocal(entry.manifest.id)
+            : await window.api.extensionsUpdateGithub(
+                entry.manifest.id,
+                useAppStore.getState().settings.extensionsGithubCliAuth,
+              )
+        if (result.ok) {
+          const verb = entry.origin === 'local' ? 'Reloaded' : 'Installed'
+          setNotice(`${verb} ${result.entry.manifest.name} ${result.entry.manifest.version}`)
+        } else {
+          setError(result.error)
         }
-        return
+      } catch (updateError) {
+        setError(updateError instanceof Error ? updateError.message : String(updateError))
+      } finally {
+        setBusy(false)
+        await refresh()
       }
-      await install(entry.repo)
     },
-    [busy, install, refresh],
+    [busy, refresh],
   )
 
   const remove = useCallback(
@@ -219,8 +240,13 @@ export function AppsSettingsRow() {
             >
               <div className="min-w-0">
                 <div className="flex items-baseline gap-2">
-                  <span className="text-[13px] text-ink">{entry.manifest.name}</span>
-                  <span className="text-[11px] text-muted">{entry.manifest.version}</span>
+                  {/* Manifest text and the source path are repository-authored
+                      and only length-bounded, and a tier-0 install or reload
+                      never reaches the native consent dialog — so this row IS
+                      the approval surface for Reload, Update and Remove
+                      (#1049 re-review). */}
+                  <span className="text-[13px] text-ink">{withVisibleControls(entry.manifest.name)}</span>
+                  <span className="text-[11px] text-muted">{withVisibleControls(entry.manifest.version)}</span>
                   {/* A ledger row whose bundle is gone. Shown rather than filtered:
                       the fix is reinstalling from the recorded repo, and hiding it
                       would leave the user wondering where the extension went. */}
@@ -235,11 +261,13 @@ export function AppsSettingsRow() {
                     <span className="text-[11px] text-ink-dim">· failed to start</span>
                   ) : null}
                 </div>
-                <div className="truncate text-[12px] text-muted">{entry.manifest.description}</div>
+                <div className="truncate text-[12px] text-muted">{withVisibleControls(entry.manifest.description)}</div>
                 <div className="truncate text-[11px] text-ink-dim">
                   {/* A local install's `repo` is a folder path, and "…@ local" read
                       as a broken ref. Say which kind of install it is instead. */}
-                  {entry.origin === 'local' ? `local folder · ${entry.repo}` : `${entry.repo} @ ${entry.ref}`}
+                  {entry.origin === 'local'
+                    ? `local folder · ${withVisibleControls(entry.repo)}`
+                    : `${withVisibleControls(entry.repo)} @ ${withVisibleControls(entry.ref)}`}
                 </div>
                 {failures.find(failure => failure.id === entry.manifest.id) ? (
                   <div className="mt-1 text-[11px] text-ink">

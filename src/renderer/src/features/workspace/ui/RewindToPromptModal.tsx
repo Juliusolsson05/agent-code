@@ -15,6 +15,7 @@ import { PromptList } from '@renderer/features/conversations/ui/PromptList'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { SessionId } from '@renderer/workspace/types'
 import { resumableProviderSessionId } from '@renderer/workspace/providerSessionIdentity'
+import { withVisibleControls } from '@shared/text/visibleControls'
 
 // RewindToPromptModal — picker for the rewind-to-prompt flow.
 //
@@ -117,7 +118,15 @@ export function RewindToPromptModal({
   // The list renders text and time; the address stays in `prompts` at the
   // same index, which is what confirm() reads.
   const rows = useMemo(
-    () => prompts.map(prompt => ({ text: prompt.text, timestamp: prompt.timestamp ? Date.parse(prompt.timestamp) : null })),
+    // Escaped HERE rather than in PromptList, because the same component is
+    // also the read-only View Prompts surface where the raw text is the
+    // point. In this modal a click rewinds the live pane to that prompt, so
+    // two rows that read alike are two different destinations (#1049
+    // re-review). The address dispatched below is untouched.
+    () => prompts.map(prompt => ({
+      text: withVisibleControls(prompt.text),
+      timestamp: prompt.timestamp ? Date.parse(prompt.timestamp) : null,
+    })),
     [prompts],
   )
 
@@ -153,8 +162,10 @@ export function RewindToPromptModal({
           <DialogTitle>Rewind to Prompt</DialogTitle>
           <DialogDescription asChild>
             <div>
-              <div>{meta.kind ?? DEFAULT_PROVIDER} · {cwdBase}</div>
-              <div className="mt-0.5 truncate text-[10px]">{meta.cwd}</div>
+              {/* Names the session whose history is about to be discarded
+                  back to a chosen prompt (#1049 re-review). */}
+              <div>{meta.kind ?? DEFAULT_PROVIDER} · {withVisibleControls(cwdBase)}</div>
+              <div className="mt-0.5 truncate text-[10px]">{withVisibleControls(meta.cwd)}</div>
             </div>
           </DialogDescription>
         </DialogHeader>

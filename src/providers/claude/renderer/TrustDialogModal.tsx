@@ -5,6 +5,7 @@ import {
   DialogDescription,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
+import { withVisibleControls } from '@shared/text/visibleControls'
 
 // WHY the modal takes intent callbacks instead of an onSend(bytes) writer:
 // this component used to write a bare '\r' for accept, assuming Claude Code
@@ -48,7 +49,7 @@ export function TrustDialogModal({ state, onAccept, onDecline }: Props) {
           <p className="mb-3">Claude Code is about to access:</p>
           {state.workspace && (
             <pre className="bg-code-bg rounded-slab text-accent px-3 py-2 mb-3 overflow-x-auto whitespace-nowrap text-[11.5px]">
-              {state.workspace}
+              {withVisibleControls(state.workspace)}
             </pre>
           )}
           <p className="text-[11.5px] text-muted">

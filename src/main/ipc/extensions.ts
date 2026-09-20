@@ -17,6 +17,7 @@ import type {
   ExtensionInstallResult,
   ExtensionListEntry,
 } from '@shared/types/extensions.js'
+import { withVisibleControls } from '@shared/text/visibleControls.js'
 
 // The capability-consent dialog, shared by both install paths (GitHub + local
 // folder). A blocking, OS-native dialog on purpose: granting an extension
@@ -55,6 +56,30 @@ function consentPromptFor(evt: IpcMainInvokeEvent, source: string): ConsentPromp
   return async manifest => {
     const win = BrowserWindow.fromWebContents(evt.sender)
     const permissions = manifest.permissions ?? []
+    // A manifest that asks for NOTHING still gets a dialog (#1049 re-review).
+    // Tier 0 used to install in silence, so nothing ever showed the user which
+    // folder or repository they were about to run code from — and the
+    // extension row that does show it appears only afterwards. The wording
+    // drops the capability paragraph, because there is nothing to grant; the
+    // decision is the source.
+    if (permissions.length === 0) {
+      const plain = {
+        type: 'question' as const,
+        buttons: ['Cancel', 'Install'],
+        defaultId: 0,
+        cancelId: 0,
+        title: 'Install extension',
+        message: `Install ${withVisibleControls(manifest.id)} from ${withVisibleControls(source)}?`,
+        detail:
+          `"${withVisibleControls(manifest.name)}" requests no capabilities: it cannot read or change `
+          + `project files and has no network access.\n\n`
+          + `Install it only if you trust ${withVisibleControls(source)}.`,
+      }
+      const plainResult = win
+        ? await dialog.showMessageBox(win, plain)
+        : await dialog.showMessageBox(plain)
+      return plainResult.response === 1
+    }
     const detail = permissions.map(cap => `  • ${CAPABILITY_DISCLOSURE[cap]}`).join('\n')
     const canWrite = permissions.includes('fs.write')
 
@@ -73,12 +98,16 @@ function consentPromptFor(evt: IpcMainInvokeEvent, source: string): ConsentPromp
       // one thing the dialog did not show. `manifest.name` is attacker-chosen and
       // only length-bounded, so it is presented as a claim about an identity
       // (`id`), never as the identity itself.
-      message: `Install ${manifest.id} from ${source}?`,
+      // Every interpolated field here is attacker-chosen (#1049 review).
+      message: `Install ${withVisibleControls(manifest.id)} from ${withVisibleControls(source)}?`,
       detail:
-        `"${manifest.name}" wants these capabilities:\n\n${detail}\n\n` +
+        `"${withVisibleControls(manifest.name)}" wants these capabilities:\n\n${withVisibleControls(detail)}\n\n` +
         `${canWrite ? 'It can change project files.' : 'It cannot change project files.'} ` +
         `It has no network access. ` +
-        `Install it only if you trust ${source}.`,
+        // The same value, twice, and the second one was raw: a source string
+        // with a bidi override could therefore spoof the sentence that carries
+        // the whole trust decision (#1049 re-review).
+        `Install it only if you trust ${withVisibleControls(source)}.`,
     }
     const result = win
       ? await dialog.showMessageBox(win, options)
@@ -162,9 +191,11 @@ export function registerExtensionsIpc(): void {
     // credential upgrade without knowing it exists.
     async (evt, repo: string, useGithubCliAuth?: boolean): Promise<ExtensionInstallResult> => {
       try {
+        // firstInstall: `owner/repo` typed (or pasted) just now. A pasted one
+        // can carry invisible characters, and this dialog is where they show.
         const record = await installExtension(repo, consentPromptFor(evt, repo.trim()), {
           githubCliAuth: useGithubCliAuth !== false,
-        })
+        }, true)
         return { ok: true, entry: { ...record, present: true } }
       } catch (error) {
         return { ok: false, error: error instanceof Error ? error.message : String(error) }
@@ -189,7 +220,9 @@ export function registerExtensionsIpc(): void {
     const dir = picked.filePaths[0]
     if (picked.canceled || !dir) return { ok: false, error: 'No folder selected.' }
     try {
-      const record = await installExtensionFromPath(dir, consentPromptFor(evt, dir))
+      // firstInstall: the user picked this folder just now, and nothing has
+      // shown them its name in a form that reveals invisible characters.
+      const record = await installExtensionFromPath(dir, consentPromptFor(evt, dir), true)
       return { ok: true, entry: { ...record, present: true } }
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : String(error) }
@@ -227,6 +260,43 @@ export function registerExtensionsIpc(): void {
       return { ok: false, error: error instanceof Error ? error.message : String(error) }
     }
   })
+
+  // Re-install a GITHUB extension from the `owner/repo` already recorded in its
+  // ledger row — the counterpart of update-local, and for the same reason.
+  //
+  // WHY this exists instead of the Update button re-calling `extensions:install`
+  // with `entry.repo` (#1049 round 9): that handler hardcodes `firstInstall=true`,
+  // because everything reaching it IS a first install — a string the user just
+  // typed or pasted into the box, which is exactly when an invisible-character
+  // repo name has to be shown before code runs. Routing Update through it made
+  // every Tier-0 update prompt again, which is the noise the firstInstall split
+  // was introduced to avoid: the source was chosen once, approved once, and is
+  // now read back from OUR ledger, not from the renderer.
+  //
+  // The renderer names an id, never a repo, so this cannot be turned into
+  // "install any repository on the renderer's say-so". Everything else is
+  // unchanged: normalizeRepo, download, tree/entry containment, and an
+  // unconditional consent prompt for any manifest that requests capabilities.
+  ipcMain.handle(
+    'extensions:update-github',
+    async (evt, id: string, useGithubCliAuth?: boolean): Promise<ExtensionInstallResult> => {
+      if (!isValidExtensionId(id)) return { ok: false, error: 'Unknown extension.' }
+      const installed = await listInstalledExtensions()
+      const entry = installed.find(candidate => candidate.manifest.id === id)
+      if (!entry) return { ok: false, error: 'Extension is no longer installed.' }
+      if (entry.origin !== 'github') {
+        return { ok: false, error: 'This extension was loaded from a folder; use Reload.' }
+      }
+      try {
+        const record = await installExtension(entry.repo, consentPromptFor(evt, entry.repo), {
+          githubCliAuth: useGithubCliAuth !== false,
+        })
+        return { ok: true, entry: { ...record, present: true } }
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) }
+      }
+    },
+  )
 
   ipcMain.handle('extensions:remove', async (_evt, id: string): Promise<void> => {
     await removeExtension(id)

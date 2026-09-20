@@ -17,6 +17,7 @@ import { ConversationRow } from '@renderer/features/conversations/ui/Conversatio
 // picker renders, so a session looks the same in both places and the label,
 // provenance and ordering decisions live in main, not here.
 import type { Conversation } from '@shared/conversations/types'
+import { withVisibleControls } from '@shared/text/visibleControls'
 
 // PathPickerModal — modal that asks the user for a working directory
 // when they press ⌘T (or click the + button in the tab bar).
@@ -386,7 +387,8 @@ export function PathPickerModal({
           ) : pendingCreatePath ? (
             <span className="text-accent">
               Will create:{' '}
-              <span className="text-ink">{pendingCreatePath}</span>
+              {/* The directory this is about to make and then trust. */}
+              <span className="text-ink">{withVisibleControls(pendingCreatePath)}</span>
             </span>
           ) : (
             <span className="text-muted">

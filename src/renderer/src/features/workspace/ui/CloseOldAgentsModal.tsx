@@ -29,6 +29,7 @@ import { resolveTabSessions } from '@renderer/workspace/queries'
 import type { SessionId, Tab } from '@renderer/workspace/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { Entry } from '@shared/types/transcript'
+import { withVisibleControls } from '@shared/text/visibleControls'
 
 type Props = {
   open: boolean
@@ -585,11 +586,16 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
                         {/* The Dispatch vocabulary (A · title), so this picker
                             names projects the way the index does. Worktrees
                             appear below as directories inside the project. */}
+                        {/* Escaped like the session rows below: these two
+                            lines are what the user reads to decide WHICH
+                            project they are ticking for a bulk close, and both
+                            come from titles and paths an agent can influence
+                            (#1049 re-review). */}
                         <span className="block text-[11px] text-ink truncate">
-                          {project.label}
+                          {withVisibleControls(project.label)}
                         </span>
                         <span className="block text-[10px] text-muted truncate">
-                          {project.directories.join(' · ')}
+                          {withVisibleControls(project.directories.join(' · '))}
                         </span>
                       </span>
                       <span className="flex-shrink-0 text-[10px] text-muted tabular-nums">
@@ -641,11 +647,13 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
                       </span>
                     </div>
                     <div className="min-w-0 flex-1">
+                      {/* Same rule as the close confirmation: these identify
+                          what a bulk close is about to terminate (#1049). */}
                       <div className="text-[12px] text-ink truncate">
-                        {row.title}
+                        {withVisibleControls(row.title)}
                       </div>
                       <div className="mt-0.5 text-[10px] text-muted truncate">
-                        {tabIndexLabel(row.tabIndex)} · {row.tabTitle} · {row.cwd}
+                        {tabIndexLabel(row.tabIndex)} · {withVisibleControls(row.tabTitle)} · {withVisibleControls(row.cwd)}
                       </div>
                     </div>
                     <div className="flex-shrink-0 w-[150px] text-right">

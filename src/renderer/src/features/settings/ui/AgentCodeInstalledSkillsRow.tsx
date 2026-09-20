@@ -23,6 +23,7 @@ import type {
   AgentCodeInstalledSkillsSnapshot,
   AgentCodeInstalledSkillUpdateResult,
 } from '@shared/types/agentCodeInstalledSkills.js'
+import { withVisibleControls } from '@shared/text/visibleControls'
 
 const HEALTH_LABELS: Record<AgentCodeInstalledSkill['health'], string> = {
   disabled: 'Disabled',
@@ -435,14 +436,18 @@ function DiscoveryReview({
   return (
     <>
       <div className="border border-panel-border p-3 text-[10px] text-muted">
-        <div>{discovery.repositoryUrl}</div>
+        {/* The repository, the ref and the notices are all attacker-chosen:
+            a default branch named `main<U+200B>` reads as `main` in the line
+            the user approves an installation from (#1049 re-review). Only the
+            resolved commit is a hash we computed. */}
+        <div>{withVisibleControls(discovery.repositoryUrl)}</div>
         <div className="mt-1">
-          {discovery.requestedRefType === 'branch' ? 'Branch' : 'Tag'} {discovery.requestedRef}
+          {discovery.requestedRefType === 'branch' ? 'Branch' : 'Tag'} {withVisibleControls(discovery.requestedRef)}
           {' · '}commit {discovery.resolvedCommit.slice(0, 12)}
         </div>
       </div>
       {discovery.notices.map(notice => (
-        <div key={notice} className="border border-warning p-2 text-[10px] text-warning">{notice}</div>
+        <div key={notice} className="border border-warning p-2 text-[10px] text-warning">{withVisibleControls(notice)}</div>
       ))}
       {discovery.candidates.map(candidate => (
         <div key={candidate.candidateId} className="flex items-start gap-3 border border-panel-border p-3">
@@ -463,21 +468,30 @@ function DiscoveryReview({
 function CandidateDetails({ candidate }: { candidate: AgentCodeInstalledSkillCandidate }) {
   return (
     <div className="min-w-0 flex-1 text-[10px]">
+      {/* The skill NAME is validated ASCII, but nothing else here is: the
+          description, the source path and the file list all come from the
+          repository being installed, and this panel is the review the user
+          approves. `scripts/check.sh<U+FE0F>` and `scripts/check.sh` are
+          different files that render identically (#1049 re-review). */}
       <div className="text-[12px] text-ink">{candidate.name}</div>
-      <div className="mt-1 text-muted">{candidate.description}</div>
+      <div className="mt-1 text-muted">{withVisibleControls(candidate.description)}</div>
       <div className="mt-1 text-muted">
-        {candidate.source.path || 'repository root'} · {candidate.files.length} files · {formatBytes(candidate.totalBytes)}
+        {withVisibleControls(candidate.source.path) || 'repository root'} · {candidate.files.length} files · {formatBytes(candidate.totalBytes)}
       </div>
       {candidate.warnings.length > 0 ? (
         <ul className="mt-2 list-disc space-y-1 pl-4 text-warning">
-          {candidate.warnings.map(warning => <li key={warning}>{warning}</li>)}
+          {/* A warning names the file it is warning ABOUT, so an unescaped
+              one can describe `scripts/check.sh` while meaning a different
+              file — the collapsed list below escapes it, this line did not
+              (#1049 re-review). */}
+          {candidate.warnings.map(warning => <li key={warning}>{withVisibleControls(warning)}</li>)}
         </ul>
       ) : null}
       <details className="mt-2">
         <summary className="cursor-pointer text-muted">Review package files</summary>
         <ul className="mt-1 max-h-40 overflow-auto border border-panel-border p-2 text-muted">
           {candidate.files.map(file => (
-            <li key={file.path}>{file.executable ? 'executable · ' : ''}{file.path} · {formatBytes(file.bytes)}</li>
+            <li key={file.path}>{file.executable ? 'executable · ' : ''}{withVisibleControls(file.path)} · {formatBytes(file.bytes)}</li>
           ))}
         </ul>
       </details>
@@ -489,7 +503,7 @@ function UpdateReviewPanel({ review }: { review: UpdateReview }) {
   return (
     <>
       <div className="border border-panel-border p-3 text-[10px] text-muted">
-        <div>{review.candidate.source.repositoryUrl}</div>
+        <div>{withVisibleControls(review.candidate.source.repositoryUrl)}</div>
         <div className="mt-1">New commit {review.candidate.source.resolvedCommit.slice(0, 12)}</div>
       </div>
       <div className="grid grid-cols-1 gap-2 text-[10px] md:grid-cols-3">
@@ -506,7 +520,7 @@ function ChangeList({ title, paths }: { title: string; paths: string[] }) {
   return (
     <div className="border border-panel-border p-2">
       <div className="text-ink">{title} · {paths.length}</div>
-      {paths.length > 0 ? <ul className="mt-1 space-y-1 text-muted">{paths.map(path => <li key={path}>{path}</li>)}</ul> : null}
+      {paths.length > 0 ? <ul className="mt-1 space-y-1 text-muted">{paths.map(path => <li key={path}>{withVisibleControls(path)}</li>)}</ul> : null}
     </div>
   )
 }
@@ -536,8 +550,10 @@ function InstalledSkillRow({
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 text-[10px]">
           <div className="text-[12px] text-ink">{skill.name}</div>
-          <div className="mt-1 text-muted">{skill.description}</div>
-          <div className="mt-1 break-all text-muted">{skill.source.skillUrl}</div>
+          {/* Beside Enable / Disable / Remove: the identity the user acts on
+              (#1049 re-review). */}
+          <div className="mt-1 text-muted">{withVisibleControls(skill.description)}</div>
+          <div className="mt-1 break-all text-muted">{withVisibleControls(skill.source.skillUrl)}</div>
           <div className="mt-1 text-muted">
             {HEALTH_LABELS[skill.health]} · commit {skill.source.resolvedCommit.slice(0, 12)} · {skill.files.length} files · {formatBytes(skill.totalBytes)}
           </div>
@@ -557,7 +573,7 @@ function InstalledSkillRow({
       </div>
       {skill.warnings.length > 0 ? (
         <ul className="list-disc space-y-1 pl-4 text-[10px] text-warning">
-          {skill.warnings.map(warning => <li key={warning}>{warning}</li>)}
+          {skill.warnings.map(warning => <li key={warning}>{withVisibleControls(warning)}</li>)}
         </ul>
       ) : null}
       <TargetList skill={skill} onError={onError} />
@@ -587,7 +603,9 @@ function TargetList({
     <div className="flex flex-col gap-1 text-[10px] text-muted">
       {skill.targets.map(target => (
         <div key={target.id} className="flex items-center justify-between gap-2 border border-control-border px-2 py-1">
-          <span className="min-w-0 break-all">{target.providers.join(' + ') || 'Historical'} · {target.state} · {target.displayPath || target.message}</span>
+          {/* The deployment path, beside the controls that reveal, remove or
+              forget it (#1049 re-review). */}
+          <span className="min-w-0 break-all">{target.providers.join(' + ') || 'Historical'} · {target.state} · {withVisibleControls(target.displayPath || target.message || '')}</span>
           {target.state === 'installed' || target.state === 'conflict' ? (
             <button type="button" className="shrink-0 border border-control-border px-2 py-0.5" onClick={() => {
               void window.api.revealAgentCodeInstalledSkillTarget(skill.id, target.id).then(result => {

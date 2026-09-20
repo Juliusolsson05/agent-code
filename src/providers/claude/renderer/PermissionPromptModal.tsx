@@ -5,6 +5,7 @@ import {
   DialogDescription,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
+import { withVisibleControls } from '@shared/text/visibleControls'
 
 type PermissionPromptState = {
   title?: string
@@ -46,7 +47,7 @@ export function PermissionPromptModal({ state, onSend }: Props) {
           <div className="text-accent text-[18px] leading-none select-none pt-0.5">!</div>
           <div>
             <DialogTitle className="text-[14px] font-semibold leading-[1.3]">
-              {title}
+              {withVisibleControls(title)}
             </DialogTitle>
             <DialogDescription className="sr-only">
               Review the requested tool and choose whether Claude may continue.
@@ -62,7 +63,7 @@ export function PermissionPromptModal({ state, onSend }: Props) {
         <div className="text-[12px] leading-[1.65] text-ink-dim pl-6">
           {state.command && (
             <pre className="bg-code-bg rounded-slab text-accent px-3 py-2 mb-3 overflow-x-auto whitespace-pre-wrap text-[11.5px]">
-              {state.command}
+              {withVisibleControls(state.command)}
             </pre>
           )}
           {state.options && state.options.length > 0 && (
@@ -72,7 +73,7 @@ export function PermissionPromptModal({ state, onSend }: Props) {
                   key={`${option.key}:${option.label}`}
                   className={index === state.selectedIndex ? 'text-ink' : undefined}
                 >
-                  {option.key}. {option.label}
+                  {option.key}. {withVisibleControls(option.label)}
                 </div>
               ))}
             </div>

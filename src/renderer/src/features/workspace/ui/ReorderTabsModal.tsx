@@ -8,6 +8,7 @@ import {
   DialogTitle,
 } from '@renderer/components/ui/dialog'
 import type { TabId } from '@renderer/workspace/types'
+import { withVisibleControls } from '@shared/text/visibleControls'
 
 type ReorderTabOption = {
   id: TabId
@@ -243,7 +244,7 @@ export function ReorderTabsModal({
                   {index + 1}
                 </span>
                 <span className="min-w-0 flex-1 truncate text-[12px]">
-                  {tab.title}
+                  {withVisibleControls(tab.title)}
                 </span>
                 {active && (
                   <span

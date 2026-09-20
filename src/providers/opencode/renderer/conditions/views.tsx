@@ -30,6 +30,7 @@ import {
   DialogDescription,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
+import { withVisibleControls } from '@shared/text/visibleControls'
 
 // Per-provider kind→state binding (see CodexStateByKind for the rationale
 // — eraseRegistry checks the registry literal against this, so filing a
@@ -167,7 +168,7 @@ export const opencodePermissionView = defineView<
                 `python3 -c` legible; the height cap keeps the buttons on
                 screen. */}
             <pre className="bg-code-bg rounded-slab text-code-ink px-3 py-2 mb-2 max-h-[40vh] overflow-auto whitespace-pre-wrap break-words text-[11.5px]">
-              {state.title}
+              {withVisibleControls(state.title)}
             </pre>
           </>
         ) : (
@@ -187,7 +188,7 @@ export const opencodePermissionView = defineView<
             <>
               <p className="mb-1">Command:</p>
               <pre className="bg-code-bg rounded-slab text-code-ink px-3 py-2 mb-2 max-h-[40vh] overflow-auto whitespace-pre-wrap break-words text-[11.5px]">
-                {command}
+                {withVisibleControls(command)}
               </pre>
             </>
           )
@@ -214,16 +215,20 @@ export const opencodePermissionView = defineView<
               {always.includes('*') ? (
                 <>
                   Allow always covers{' '}
-                  <strong>every {permission ? <code className="text-accent">{permission}</code> : 'such'} request</strong>{' '}
+                  {/* The wildcard branch names the SCOPE the grant will cover,
+                      so it is the one a spoofed permission name would misstate
+                      most profitably — `*` is the broadest grant we offer
+                      (#1049 re-review found this branch unescaped). */}
+                  <strong>every {permission ? <code className="text-accent">{withVisibleControls(permission)}</code> : 'such'} request</strong>{' '}
                   from this agent and its subagents until this agent restarts.
                 </>
               ) : (
                 <>
-                  Allow always covers {permission ? <>{permission}{' '}</> : null}
+                  Allow always covers {permission ? <>{withVisibleControls(permission)}{' '}</> : null}
                   {always.map((pattern, index) => (
                     <span key={pattern}>
                       {index > 0 ? ', ' : ''}
-                      <code className="text-accent">{pattern}</code>
+                      <code className="text-accent">{withVisibleControls(pattern)}</code>
                     </span>
                   ))}{' '}
                   for this agent and its subagents until this agent restarts.
@@ -254,7 +259,10 @@ export const opencodeQuestionView = defineView<
           // height, and Escape and outside-click are disabled, so a long
           // question must never push the only button (Reject) off-screen.
           <pre className="bg-code-bg rounded-slab text-code-ink px-3 py-2 mb-1 max-h-[40vh] overflow-auto whitespace-pre-wrap break-words text-[11.5px]">
-            {state.text}
+            {/* Reject-only today, so no affirmative grant hangs off it — but
+                it is still a provider-authored question the user answers, and
+                the escape costs nothing (#1049 re-review). */}
+            {withVisibleControls(state.text)}
           </pre>
         ) : (
           <p className="mb-2">OpenCode is waiting for a response.</p>

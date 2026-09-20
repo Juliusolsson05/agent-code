@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { withVisibleControls } from '@shared/text/visibleControls'
 
 type Props = {
   prompt: {
@@ -104,7 +105,11 @@ export function ResumePromptModal({ prompt, onSend, interactionActive }: Props) 
       outline-none
     ">
       <div className="text-ink font-semibold mb-2">
-        This session is {prompt.sessionAgeText ?? 'older'} old and {prompt.tokenCountText ?? 'many'} tokens.
+        {/* Scraped from Claude's own screen between two anchors, so the
+            parser accepts whatever sits there — including controls that
+            reorder the size and age this decision is made on (#1049
+            re-review). */}
+        This session is {withVisibleControls(prompt.sessionAgeText ?? 'older')} old and {withVisibleControls(prompt.tokenCountText ?? 'many')} tokens.
       </div>
 
       <div className="text-ink-dim mb-2">

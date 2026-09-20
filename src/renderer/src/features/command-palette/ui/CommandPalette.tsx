@@ -92,6 +92,7 @@ import { dirtyAiWorkspacePaths } from '@renderer/features/ai-workspace/lib/aiWor
 import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
 import { SafeMarkdownLink } from '@renderer/features/rendered-content/SafeMarkdownLink'
 import type { AiWorkspaceSummary } from '@mcp/shared/aiWorkspaceTypes'
+import { withVisibleControls } from '@shared/text/visibleControls'
 
 // CommandPalette — VS Code-style ⌘⇧P command menu.
 //
@@ -1963,7 +1964,11 @@ function OpenCommandPalette({
                           else openAiWorkspace(workspace.workspaceId)
                         }}
                       >
-                        <div className="text-[12px] truncate">{workspace.name}</div>
+                        {/* MCP accepts any name, so `Review` and
+                            `Review<U+200B>` are two workspaces that read the
+                            same — in this picker and in its armed "confirm
+                            metadata deletion" state (#1049 re-review). */}
+                        <div className="text-[12px] truncate">{withVisibleControls(workspace.name)}</div>
                         <div className="text-[10px] text-muted mt-0.5 truncate">
                           {pending
                             ? 'Clearing…'
@@ -1971,7 +1976,7 @@ function OpenCommandPalette({
                               ? 'Press Enter or click again to confirm metadata deletion'
                               : `${workspace.fileCount} files${
                                   workspace.staleCount > 0 ? ` · ${workspace.staleCount} stale` : ''
-                                }${workspace.description ? ` · ${workspace.description}` : ''}`}
+                                }${workspace.description ? ` · ${withVisibleControls(workspace.description)}` : ''}`}
                         </div>
                       </button>
                     )
@@ -2044,7 +2049,7 @@ function OpenCommandPalette({
                     onClick={() => void executePromptTemplate(template)}
                   >
                     <div className="flex items-center gap-2 min-w-0">
-                      <div className="min-w-0 flex-1 text-[12px] truncate">{template.title}</div>
+                      <div className="min-w-0 flex-1 text-[12px] truncate">{withVisibleControls(template.title)}</div>
                       {template.scope === 'custom' && (
                         <div className="flex flex-shrink-0 items-center gap-1">
                           <button

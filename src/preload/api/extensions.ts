@@ -94,6 +94,13 @@ export const extensionsApi = {
   extensionsUpdateLocal: (id: string): Promise<ExtensionInstallResult> =>
     ipcRenderer.invoke('extensions:update-local', id),
 
+  // Re-install a GitHub extension from the `owner/repo` recorded at install
+  // time. Same shape as update-local — id in, main reads the source — so that
+  // Update re-runs an approved choice instead of arriving as a fresh repo
+  // string, which is what makes the first-install consent prompt skippable here.
+  extensionsUpdateGithub: (id: string, useGithubCliAuth?: boolean): Promise<ExtensionInstallResult> =>
+    ipcRenderer.invoke('extensions:update-github', id, useGithubCliAuth),
+
   extensionsRemove: (id: string): Promise<void> => ipcRenderer.invoke('extensions:remove', id),
 
   // Reads the set of capabilities a user granted an extension, for the frame broker

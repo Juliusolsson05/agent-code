@@ -29,6 +29,7 @@ import { deriveProviderExhaustion } from '@shared/usage/exhaustion'
 import { estimateLiveEntriesBytes } from '@renderer/session-runtime/liveEntryWindow'
 import { isLimitIdle } from '@renderer/workspace/hook/actions/providerSwitchCore'
 import { useGlobalToast } from '@renderer/ui/GlobalToast'
+import { withVisibleControls } from '@shared/text/visibleControls'
 
 // Switch Agents modal — bulk provider switch + remembered-batch return.
 //
@@ -881,11 +882,13 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
                         {/* The Dispatch vocabulary (A · title), so this picker
                             names projects the way the index does. Worktrees
                             appear below as directories inside the project. */}
+                        {/* Which projects the batch switch or compact will
+                            touch (#1049 re-review). */}
                         <span className="block text-[11px] text-ink truncate">
-                          {project.label}
+                          {withVisibleControls(project.label)}
                         </span>
                         <span className="block text-[10px] text-muted truncate">
-                          {project.directories.join(' · ')}
+                          {withVisibleControls(project.directories.join(' · '))}
                         </span>
                       </span>
                       <span className="flex-shrink-0 text-[10px] text-muted tabular-nums">
@@ -935,9 +938,9 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
                       </span>
                     </div>
                     <div className="min-w-0 flex-1">
-                      <div className="text-[12px] text-ink truncate">{row.cwdBase}</div>
+                      <div className="text-[12px] text-ink truncate">{withVisibleControls(row.cwdBase)}</div>
                       <div className="mt-0.5 text-[10px] text-muted truncate">
-                        {tabIndexLabel(row.tabIndex)} · {row.tabTitle} · {row.cwd}
+                        {tabIndexLabel(row.tabIndex)} · {withVisibleControls(row.tabTitle)} · {withVisibleControls(row.cwd)}
                       </div>
                     </div>
                     <div className="flex-shrink-0 w-[110px] text-right">

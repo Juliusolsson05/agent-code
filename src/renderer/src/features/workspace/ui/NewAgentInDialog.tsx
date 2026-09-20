@@ -18,6 +18,7 @@ import {
 import { AGENT_PROVIDER_CHOICES } from '@renderer/workspace/providerChoices'
 import type { TabId } from '@renderer/workspace/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
+import { withVisibleControls } from '@shared/text/visibleControls'
 import { MISSING_PROVIDER_HINT, useMissingProviders } from '@renderer/features/setup/store'
 
 type Props = {
@@ -279,7 +280,7 @@ export function NewAgentInDialog({ open, workspace, onClose }: Props) {
                   {/* Same "A · title" vocabulary as the Dispatch index and the
                       row-project picker, so a project has one name everywhere. */}
                   <div className="text-[12px] font-semibold text-ink">
-                    {`${project.label} · ${project.title}`}
+                    {withVisibleControls(`${project.label} · ${project.title}`)}
                   </div>
                   {project.disabledReason ? (
                     <div className="mt-0.5 text-[11px] text-muted">{project.disabledReason}</div>

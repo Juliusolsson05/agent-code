@@ -31,6 +31,7 @@ import {
   DialogDescription,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
+import { withVisibleControls } from '@shared/text/visibleControls'
 
 // Per-provider kind→state binding: eraseRegistry checks the registry literal
 // against this, so filing a view under the wrong kind is a compile error.
@@ -72,7 +73,9 @@ function ConditionButtons({
             }}
             variant={reject ? 'outline' : 'default'}
           >
-            {action.label}
+            {/* Provider-supplied, and it is the text the user reads to decide
+                WHICH grant they are giving (#1049 re-review). */}
+            {withVisibleControls(action.label)}
           </Button>
         )
       })}
@@ -134,7 +137,7 @@ export const grokPermissionView = defineView<
           Grok is requesting permission
           {state.title ? (
             <>
-              {' '}for <span className="text-accent">{state.title}</span>
+              {' '}for <span className="text-accent">{withVisibleControls(state.title)}</span>
             </>
           ) : null}
           .
@@ -157,7 +160,7 @@ export const grokQuestionView = defineView<
       <ConditionShell heading="Grok is asking" actions={actions} dispatch={dispatch}>
         {state.text ? (
           <pre className="bg-code-bg rounded-slab text-code-ink px-3 py-2 mb-1 overflow-x-auto whitespace-pre-wrap text-[11.5px]">
-            {state.text}
+            {withVisibleControls(state.text)}
           </pre>
         ) : (
           <p className="mb-2">Grok is waiting for a response.</p>
@@ -183,7 +186,10 @@ export const grokPlanApprovalView = defineView<
       <ConditionShell heading="Grok proposes a plan" actions={actions} dispatch={dispatch}>
         {state.planContent ? (
           <pre className="bg-code-bg rounded-slab text-code-ink px-3 py-2 mb-1 overflow-x-auto whitespace-pre-wrap text-[11.5px]">
-            {state.planContent}
+            {/* The plan is the thing being approved; a reordering override in
+                it misrepresents what the user is authorising (#1049
+                re-review). */}
+            {withVisibleControls(state.planContent)}
           </pre>
         ) : (
           <p className="mb-2">Grok is waiting for plan approval.</p>

@@ -10,6 +10,7 @@ import {
   DialogTitle,
 } from '@renderer/components/ui/dialog'
 import type { TabId } from '@renderer/workspace/types'
+import { withVisibleControls } from '@shared/text/visibleControls'
 
 export type MergeTabOption = {
   id: TabId
@@ -119,8 +120,10 @@ function MergeDraft({ tabs, initialTargetId, onCancel, onConfirm }: Omit<Props, 
           }}
           className="rounded-control mt-1 w-full border border-border bg-canvas px-2 py-1 text-[12px] text-ink"
         >
+          {/* Source and destination of a merge that moves every agent
+              (#1049 re-review). */}
           {tabs.map(tab => (
-            <option key={tab.id} value={tab.id}>{tab.label}</option>
+            <option key={tab.id} value={tab.id}>{withVisibleControls(tab.label)}</option>
           ))}
         </select>
       </div>
@@ -148,8 +151,8 @@ function MergeDraft({ tabs, initialTargetId, onCancel, onConfirm }: Omit<Props, 
                 }}
               />
               <span className="min-w-0 flex-1">
-                <span className="block truncate text-[12px] text-ink">{tab.label}</span>
-                <span className="block truncate text-[10px] text-muted">{tab.directories.join(' · ')}</span>
+                <span className="block truncate text-[12px] text-ink">{withVisibleControls(tab.label)}</span>
+                <span className="block truncate text-[10px] text-muted">{withVisibleControls(tab.directories.join(' · '))}</span>
               </span>
               <span className="flex-shrink-0 text-[10px] tabular-nums text-muted">{tab.sessionCount}</span>
             </label>
@@ -160,7 +163,7 @@ function MergeDraft({ tabs, initialTargetId, onCancel, onConfirm }: Omit<Props, 
       <div className="mx-4 mb-2 flex-shrink-0 text-[11px] text-muted" role="status">
         {sources.length === 0 || !target
           ? 'Tick at least one tab to merge.'
-          : `${sources.length} tab${sources.length === 1 ? '' : 's'}, ${movedCount} agent${movedCount === 1 ? '' : 's'} move to ${target.label}.`}
+          : `${sources.length} tab${sources.length === 1 ? '' : 's'}, ${movedCount} agent${movedCount === 1 ? '' : 's'} move to ${withVisibleControls(target.label)}.`}
       </div>
 
       <DialogFooter>

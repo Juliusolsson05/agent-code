@@ -77,6 +77,36 @@ describe('one ordered extension catalog per window', () => {
     expect(useAppStore.getState().installedExtensions).toHaveLength(1)
   })
 
+  // Update must name an ID, never a repo string. The handler behind
+  // `extensionsInstall` treats its argument as a repo the user just typed and
+  // therefore always shows the consent dialog — routing Update through it made
+  // every Tier-0 update prompt again (#1049 round 9). Both origins now hand
+  // main an id and let it read the recorded source out of its own ledger.
+  it('updates through the ledger-backed path for each origin, never through install', async () => {
+    const github: ExtensionListEntry = { ...entry(), origin: 'github', repo: 'owner/timer' }
+    window.api.extensionsList = vi.fn().mockResolvedValue([github])
+    window.api.extensionsInstall = vi.fn()
+    window.api.extensionsUpdateGithub = vi.fn().mockResolvedValue({ ok: true, entry: github })
+    const githubView = render(<AppsSettingsRow />)
+    await screen.findByText('Timer')
+    fireEvent.click(screen.getByRole('button', { name: 'Update' }))
+    // The gh-credential setting rides along (see the install call); the ID is
+    // what this pins — main resolves the repo itself.
+    await waitFor(() => { expect(window.api.extensionsUpdateGithub).toHaveBeenCalled() })
+    expect(vi.mocked(window.api.extensionsUpdateGithub).mock.calls[0]![0]).toBe('timer')
+    expect(window.api.extensionsInstall).not.toHaveBeenCalled()
+
+    githubView.unmount()
+
+    const local = entry()
+    window.api.extensionsList = vi.fn().mockResolvedValue([local])
+    window.api.extensionsUpdateLocal = vi.fn().mockResolvedValue({ ok: true, entry: local })
+    render(<AppsSettingsRow />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Reload' }))
+    await waitFor(() => { expect(window.api.extensionsUpdateLocal).toHaveBeenCalledWith('timer') })
+    expect(window.api.extensionsInstall).not.toHaveBeenCalled()
+  })
+
   it('a delayed removal acknowledgement cannot discard a later reinstall', () => {
     acceptExtensionPublication([entry('new-generation')])
     forgetRemovedExtension(entry('old-generation'))

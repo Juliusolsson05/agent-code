@@ -7,6 +7,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
+import { withVisibleControls } from '@shared/text/visibleControls'
 
 type Props = {
   path: string
@@ -26,7 +27,10 @@ export function ConfirmDeleteDialog({ path, dirtyPaths, onCancel, onConfirm }: P
         <DialogHeader>
           <DialogTitle>Delete from disk?</DialogTitle>
           <DialogDescription>
-            “{path}” will be permanently deleted.
+            {/* `report.txt<U+200B>` and `report.txt` are different files and
+                render identically; this dialog authorises deleting one of
+                them (#1049 re-review). */}
+            “{withVisibleControls(path)}” will be permanently deleted.
             {dirtyCount > 0
               ? ` ${dirtyCount} open unsaved ${dirtyCount === 1 ? 'file is' : 'files are'} inside it; confirming will discard those edits.`
               : ' This action cannot be undone in Agent Code.'}
@@ -36,7 +40,7 @@ export function ConfirmDeleteDialog({ path, dirtyPaths, onCancel, onConfirm }: P
           <div className="max-h-28 overflow-auto px-4 pb-3 font-code text-[10px] text-danger">
             {dirtyPaths.map(dirtyPath => (
               <div key={dirtyPath} className="truncate" title={dirtyPath}>
-                {dirtyPath}
+                {withVisibleControls(dirtyPath)}
               </div>
             ))}
           </div>

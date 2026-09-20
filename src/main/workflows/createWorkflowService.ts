@@ -13,6 +13,7 @@ import { ElectronWorkflowWorkerLauncher } from '@main/workflows/ElectronWorkflow
 import { resolveClaudeAgentType } from '@main/workflows/ClaudeAgentTypeResolver.js'
 import { prepareGitWorkflowWorktree } from '@main/workflows/GitWorkflowWorktree.js'
 import { WorkflowSourceApprovalStore } from '@main/workflows/WorkflowSourceApprovalStore.js'
+import { withVisibleControls } from '@shared/text/visibleControls.js'
 
 export async function createWorkflowService(options: {
   isCodexCliUpdateReserved?: () => boolean
@@ -69,9 +70,13 @@ export async function createWorkflowService(options: {
       const result = await dialog.showMessageBox({
         type: 'warning',
         title: 'Approve workflow source',
-        message: `Allow ${source.workflowName} to run agents?`,
+        // Repository-controlled, so it is escaped (#1049 review): the hash
+        // binds the grant to exact bytes, but the IDENTITY beside it is what
+        // the user reads, and a reordered one can describe a different source
+        // than the bytes being approved.
+        message: `Allow ${withVisibleControls(source.workflowName)} to run agents?`,
         detail: [
-          `Source: ${source.canonicalIdentity}`,
+          `Source: ${withVisibleControls(source.canonicalIdentity)}`,
           `SHA-256: ${source.sourceHash}`,
           '',
           'This approval applies only to these exact bytes. Editing the workflow will ask again.',

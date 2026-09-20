@@ -13,6 +13,7 @@ import {
 } from '@renderer/components/ui/dialog'
 import { PagedTextViewer } from '@renderer/lib/text/PagedTextViewer'
 import { useEffect, useId, useMemo, useState } from 'react'
+import { withVisibleControls } from '@shared/text/visibleControls'
 import { unwrapClaudePastedContent } from '@shared/claude/pastedContent.js'
 
 // The browsing surface must stay cheap even when somebody pastes a whole
@@ -24,11 +25,18 @@ const PREVIEW_SCAN_CHARACTERS = 320
 const PREVIEW_CHARACTERS = 180
 
 function queuedPromptPreview(content: string): string {
-  // Claude stores a queued PASTE wrapped in its own envelope (#1052), so the
-  // first 26 characters of a long queued prompt were `<pasted_content id="…"`
-  // — the two lines the lane can show, spent on provider scaffolding. The
-  // dialog behind it shows the exact stored text either way.
-  const scanned = (unwrapClaudePastedContent(content) ?? content).slice(0, PREVIEW_SCAN_CHARACTERS)
+  // Unwrap, then escape, then truncate — in that order.
+  //
+  // Claude stores a queued PASTE inside its own envelope (#1052), so the first
+  // 26 characters of a long queued prompt were `<pasted_content id="…"`: the
+  // two lines the lane can show, spent on provider scaffolding.
+  //
+  // Escaping BEFORE the slice (#1029, #1049 review): a queued prompt is text
+  // the user is about to send on their own authority, and a reordering control
+  // in it misrepresents what that is. Escaping first also means a marker
+  // cannot be cut in half by the slice.
+  const source = unwrapClaudePastedContent(content) ?? content
+  const scanned = withVisibleControls(source.slice(0, PREVIEW_SCAN_CHARACTERS))
   // Preserve line boundaries because they are the only cheap hint that a
   // queued item contains pasted instructions or code. Horizontal whitespace
   // is normalized so an indented block cannot make the compact lane look
@@ -43,7 +51,11 @@ function queuedPromptPreview(content: string): string {
     // in PagedTextViewer.
     .replace(/\n{2,}/g, '\n')
     .trim()
-  const scanContainsAllSource = scanned.length === content.length
+  // Measured on the SOURCE, not on `scanned`: escaping makes a marker longer
+  // than the character it replaces, so comparing the escaped length to the
+  // original always said "truncated" and added an ellipsis to previews that
+  // were complete.
+  const scanContainsAllSource = source.length <= PREVIEW_SCAN_CHARACTERS
   if (scanContainsAllSource && compact.length <= PREVIEW_CHARACTERS) {
     return compact
   }
@@ -101,7 +113,7 @@ function QueuedPromptDialog({
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
           {message ? (
             <PagedTextViewer
-              source={message.content}
+              source={withVisibleControls(message.content)}
               className="text-ink [overflow-wrap:anywhere]"
             />
           ) : null}

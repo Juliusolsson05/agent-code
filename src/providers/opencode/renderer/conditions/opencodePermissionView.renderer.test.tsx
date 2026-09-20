@@ -81,6 +81,64 @@ describe('opencode permission modal on a recorded 1.18.30 ask', () => {
     expect(subject.className).toMatch(/max-h-/)
   })
 
+  it('renders a bidi override as a visible escape, so the command cannot lie about itself (#1029)', () => {
+    // Trojan Source, CVE-2021-42574: U+202E reorders the glyphs a browser
+    // draws without changing the bytes the shell runs, so a prompt-injected
+    // model can make a destructive command read as a harmless one. This modal
+    // is frequently the only place the command is shown, so what it renders
+    // IS the user's evidence. DERIVED from the recording: only the command
+    // changes, to the canonical attack shape.
+    const rec = recording()
+    const spoofed = 'rm -rf ~/work \u202E# this is fine\u202C'
+    for (const { event } of rec.sse) {
+      if (event.type === 'permission.asked') event.properties = { ...event.properties, metadata: { command: spoofed } }
+    }
+    mount(permissionStateFrom(rec))
+    const rendered = screen.getByText((_, element) => element?.tagName === 'PRE' && (element.textContent ?? '').includes('rm -rf'))
+    expect(rendered.textContent).toContain('⟨U+202E RLO⟩')
+    expect(rendered.textContent).toContain('⟨U+202C PDF⟩')
+    // The override itself must not survive into the DOM, or the browser
+    // reorders the line exactly as the attack intends.
+    expect(rendered.textContent).not.toContain('\u202E')
+  })
+
+  it('escapes the persistent grant\'s scope too, since that is what "Allow always" authorises (#1049 review)', () => {
+    // The command is only half of the decision: "Allow always covers <pattern>"
+    // describes what the grant will keep allowing, for this agent and its
+    // subagents. A reordered pattern misdescribes that scope.
+    const rec = recording()
+    for (const { event } of rec.sse) {
+      if (event.type === 'permission.asked') {
+        event.properties = { ...event.properties, metadata: { command: 'ls -1' }, pattern: ['ls \u202E rm -rf *'] }
+      }
+    }
+    mount(permissionStateFrom(rec))
+    const always = screen.getByText(/Allow always covers/)
+    expect(always.textContent).not.toContain('\u202E')
+  })
+
+  it('escapes the WILDCARD grant scope, the broadest one we offer (#1049 re-review)', () => {
+    // `always: ['*']` renders a different branch — "every <permission>
+    // request" — and that branch was left unescaped while the pattern branch
+    // beside it was fixed. It is also the worst one to lose: the wildcard is
+    // the broadest grant in the modal, so the permission name is the only
+    // thing telling the user what they are signing away.
+    const rec = recording()
+    for (const { event } of rec.sse) {
+      if (event.type === 'permission.asked') {
+        // The recorded payload's own field names: `permission` and `always`
+        // sit beside `metadata`, and the dispatcher folds the whole payload
+        // into the state's metadata. `always: ['*']` is the wildcard shape
+        // OpenCode really sends for edit/write/MCP asks.
+        event.properties = { ...event.properties, permission: 'bash \u202E harmless', always: ['*'] }
+      }
+    }
+    mount(permissionStateFrom(rec))
+    const always = screen.getByText(/Allow always covers/)
+    expect(always.textContent).not.toContain('\u202E')
+    expect(always.textContent).toContain('U+202E')
+  })
+
   it('shows the command behind a default-permission external_directory ask, not just the directory', () => {
     // #1026 review: OpenCode's DEFAULT rules allow bash and ask only for
     // external_directory, so for most users this is THE shell-command

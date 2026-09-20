@@ -7,6 +7,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
+import { withVisibleControls } from '@shared/text/visibleControls'
 
 type Props = {
   fileName: string
@@ -45,9 +46,12 @@ export function ConfirmCloseDialog({
         <DialogHeader>
           <DialogTitle>{deleted ? 'File deleted on disk' : 'Unsaved changes'}</DialogTitle>
           <DialogDescription>
+            {/* Which file is saved, discarded or recreated is the whole
+                decision, and an invisible character makes two names identical
+                (#1049 re-review). */}
             {deleted
-              ? `“${fileName}” no longer exists on disk. Its in-memory copy is still safe here. Recreate it before closing?`
-              : `“${fileName}” has unsaved changes. Save before closing?`}
+              ? `“${withVisibleControls(fileName)}” no longer exists on disk. Its in-memory copy is still safe here. Recreate it before closing?`
+              : `“${withVisibleControls(fileName)}” has unsaved changes. Save before closing?`}
           </DialogDescription>
           {error ? (
             <p role="alert" className="mt-2 text-[11px] text-danger">
