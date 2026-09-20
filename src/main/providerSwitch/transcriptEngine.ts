@@ -8,6 +8,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { opencodeTranscriptFile } from 'opencode-terminal-headless'
 
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
+import { unwrapClaudePastedContent } from '@shared/claude/pastedContent.js'
 import type {
   RewindPrompt,
   RewindPromptAddress,
@@ -694,6 +695,23 @@ function claudeDraft(content: readonly ConversationContent[]): RewindDraft {
       data: source.data,
     })
   }
+
+  // Claude's PASTE envelope comes off first, and it is the same kind of
+  // scaffolding as the tags below: a wrapper Claude Code put around what the
+  // user typed (#1059). This draft is used TWICE — as the Rewind picker's row
+  // text and as the composer prefill of the rewound session — so leaving it on
+  // both showed the user `<pasted_content id="…">` in the picker and, worse,
+  // RE-SENT the envelope when they rewound and hit enter, which makes Claude
+  // wrap the already-wrapped text.
+  //
+  // Placed before the tag extraction so ONE value flows through every branch
+  // below. It is not load-bearing for the tag branches — `extractTagBody` is
+  // unanchored and finds `<bash-input>` inside the envelope either way — but
+  // putting it here means the fallback and the tag branches cannot disagree
+  // about what the prompt text is, which is how the second copy of an
+  // unwrapping rule usually starts.
+  const unwrapped = unwrapClaudePastedContent(plain.promptText)
+  if (unwrapped !== null) plain.promptText = unwrapped
 
   const bash = extractTagBody(plain.promptText, 'bash-input')
   if (bash !== null) {

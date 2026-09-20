@@ -18,3 +18,21 @@ bisected against the CLI that produced it.
 | file | what it records |
 |---|---|
 | `pasted-content-envelope-2026-09-19.json` | #1052. A goal-loop continuation (2637 chars) delivered at 02:26:56.986Z and accepted 117 ms later, committed inside `<pasted_content id="cade">` … `</pasted_content id="cade">`. The matcher starved on it, timed out after 20 s, and reported `retrySafe: false` for a prompt the agent was already answering — which paused the goal loop at continuation 1 with `continuationsDelivered: 0`. `deliveredPrompt` was verified byte-identical to `buildGoalLoopContinuationPrompt` rebuilt from the persisted loop record, so the envelope is provably the only difference. |
+
+## `pasted-typed-prompt-2026-09-20.json`
+
+A prompt the **owner pasted** into Agent Code's composer, lifted verbatim from
+`~/.claude/projects/-Users-juliusolsson-Desktop-Development-agent-code/83a02301-2e9a-42a6-98cb-38cffc008e25.jsonl`
+(uuid `9981e169-2b30-4d9f-9e31-50f6bd21d64a`), Claude Code 2.1.278.
+
+Two details matter and are exactly why this is a recording rather than a
+literal:
+
+- the closing tag **repeats the id** — `</pasted_content id="cade">`;
+- it carries `permissionMode: "bypassPermissions"`, which is how Agent Code
+  recognises a row the user submitted rather than provider scaffolding.
+
+Unlike `pasted-content-envelope-2026-09-19.json`, which records a goal-loop
+CONTINUATION (no `permissionMode`, correctly not treated as typed), this one is
+a prompt the user typed, so it is the input for #1059's display path:
+`src/renderer/src/features/feed/pastedPromptDisplay.renderer.test.tsx`.

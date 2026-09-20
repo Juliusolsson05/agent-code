@@ -1,0 +1,31 @@
+{
+  "recordedAt": "2026-09-20T03:11:32.081Z",
+  "source": "~/.claude/projects/-Users-juliusolsson-Desktop-Development-agent-code/83a02301-2e9a-42a6-98cb-38cffc008e25.jsonl, uuid 9981e169-2b30-4d9f-9e31-50f6bd21d64a",
+  "claudeCodeVersion": "2.1.278",
+  "note": "A prompt the OWNER pasted into Agent Code's composer. Claude Code committed it wrapped in its own <pasted_content id=\"...\"> envelope, and it carries permissionMode, which is how Agent Code recognises a row the user submitted.",
+  "transcriptEntry": {
+    "parentUuid": "84dcb26b-507d-4775-816c-ade0f8fb8d94",
+    "isSidechain": false,
+    "promptId": "a8deb48c-e35e-4138-a771-a27b94ff9899",
+    "type": "user",
+    "message": {
+      "role": "user",
+      "content": "<pasted_content id=\"cade\">\nAdd to the list of things to resolve pre launch that the phone menu is compoletley fucekd up for remote control, it is flashing swithcing positions for the agent index like a million times.\n</pasted_content id=\"cade\">"
+    },
+    "uuid": "9981e169-2b30-4d9f-9e31-50f6bd21d64a",
+    "timestamp": "2026-09-20T03:11:32.081Z",
+    "permissionMode": "bypassPermissions",
+    "origin": {
+      "kind": "human"
+    },
+    "promptSource": "queued",
+    "turnOrigin": "human",
+    "userType": "external",
+    "entrypoint": "claude-desktop",
+    "cwd": "/Users/juliusolsson/Desktop/Development/agent-code",
+    "sessionId": "83a02301-2e9a-42a6-98cb-38cffc008e25",
+    "version": "2.1.278",
+    "gitBranch": "fix/goal-loop-delivery-guard",
+    "slug": "cryptic-roaming-duckling"
+  }
+}

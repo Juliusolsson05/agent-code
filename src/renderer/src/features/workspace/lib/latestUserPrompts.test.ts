@@ -75,12 +75,19 @@ describe('latest user prompts', () => {
     // user's longest prompts, the pasted ones, silently vanished from composer
     // history. The row still has to be a real submission (permissionMode), and
     // scaffolding must still be rejected.
+    //
+    // The EXPECTED TEXT changed in #1059, deliberately: this used to assert
+    // the raw envelope, because that is what #1052 left behind. Everything
+    // downstream of this extractor shows or replays the result — pane titles,
+    // ⌘↑ history, View Prompts, Rewind — and ⌘↑ fed the envelope back to
+    // Claude, which wrapped the already-wrapped text. What this test is ABOUT
+    // is unchanged: the pasted row is kept and the scaffolding row is not.
     const entries = [
       userRow('<pasted_content id="cade">\nrefactor the loader\n</pasted_content id="cade">', { permissionMode: 'default' }),
       userRow('<command-name>/clear</command-name>', { permissionMode: 'default' }),
     ]
     expect(extractLatestUserPrompts(entries, 'claude').map(prompt => prompt.text)).toEqual([
-      '<pasted_content id="cade">\nrefactor the loader\n</pasted_content id="cade">',
+      'refactor the loader',
     ])
   })
 

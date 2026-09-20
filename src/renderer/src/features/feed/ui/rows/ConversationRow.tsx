@@ -11,6 +11,7 @@ import { TextProse } from '@renderer/features/feed/ui/markdown'
 import { isAgentSpawnTool } from '@providers/registry.renderer.capabilities'
 import type { AgentProviderKind } from '@shared/types/providerKind'
 import { ProviderContext } from '@renderer/features/feed/context'
+import { UserPromptProse } from '@renderer/features/feed/ui/rows/UserPromptProse'
 
 import { Block } from '@renderer/features/feed/ui/rows/Block'
 import { SubagentGroupHeader } from '@renderer/features/feed/ui/rows/SubagentGroupHeader'
@@ -58,7 +59,8 @@ export const ConversationRow = memo(function ConversationRow({
       return (
         <UserBand>
           <MarkerRow marker="❯">
-            <TextProse text={content} />
+            {/* The user's own words, not the provider's wrapper (#1059). */}
+            <UserPromptProse text={content} />
           </MarkerRow>
         </UserBand>
       )
