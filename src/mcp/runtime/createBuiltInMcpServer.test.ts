@@ -66,6 +66,10 @@ async function createAgentWithDelivery(delivery: PromptDeliveryResult): Promise<
       orchestrationBridge: {
         createAgent: vi.fn(async () => agent),
         closeAgent,
+        // The tool handler runs its whole body through this (#952). Pass it
+        // straight through: these cases are about bootstrap-delivery failure
+        // handling, and deduplication has its own suite.
+        createAgentCallOnce: async (_key: string, run: () => Promise<unknown>) => await run(),
       } as never,
       sessionManager: {
         deliverPromptToAgent: vi.fn(async () => delivery),

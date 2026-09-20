@@ -792,6 +792,80 @@ function registerOrchestrationTools(
   scope: McpSessionScope,
   dependencies: BuiltInMcpDependencies,
 ): void {
+/**
+ * The `orchestration_create_agent` argument schema, named so the duplicate-call
+ * key below can be made exhaustive over it at compile time (#952 review, 6).
+ */
+const ORCHESTRATION_CREATE_AGENT_INPUT = {
+  kind: z.enum(AGENT_PROVIDER_KINDS).default(DEFAULT_PROVIDER),
+  providerRuntime: z.enum(AGENT_PROVIDER_RUNTIMES).optional(),
+  prompt: z.string().optional(),
+  cwd: z.string().optional(),
+  title: z.string().optional(),
+  role: z.string().optional(),
+  runId: z.string().optional(),
+  inheritParentContext: z.boolean().optional().describe(
+    [
+      'Temporarily ignored.',
+      'Agent Code currently disables orchestration context inheritance because transcript duplication/translation was not stable enough for production child-agent work.',
+      'Pass all required context in the prompt until the inheritance path is redesigned.',
+    ].join(' '),
+  ),
+  // WHY derive this from the registry: child capability grants are an
+  // authority boundary. A hand-maintained schema can silently reject a
+  // newly registered domain or keep accepting one the runtime removed.
+  builtInMcpDomains: z.array(z.enum(BUILT_IN_MCP_DOMAINS)).optional(),
+}
+
+type OrchestrationCreateAgentArgs = {
+  [K in keyof typeof ORCHESTRATION_CREATE_AGENT_INPUT]?:
+    z.infer<(typeof ORCHESTRATION_CREATE_AGENT_INPUT)[K]>
+}
+
+/**
+ * Identity of one `orchestration_create_agent` call: two calls with the same
+ * key ask for the same thing and only one of them should happen (#952).
+ *
+ * ── WHY THE `Record<keyof …>` ──
+ * The key must cover EVERY argument. A field left out does not fail loudly;
+ * it silently collapses two calls that differ only in that field, and the
+ * caller never learns their job was dropped. Review found five such fields in
+ * the first version (`cwd`, `providerRuntime`, `runId`, `role`,
+ * `builtInMcpDomains`) — dropping `cwd` from the key would have handed a
+ * caller a child working in the wrong repository. Typing the object as
+ * `Record<keyof OrchestrationCreateAgentArgs, unknown>` turns the next added
+ * schema field into a compile error here instead.
+ *
+ * ── NORMALIZATION ──
+ * `builtInMcpDomains` is a SET on the wire but an array in JSON, so it is
+ * sorted: `['orchestration','tldr']` and `['tldr','orchestration']` request
+ * the same child. Absent and `[]` both mean "no domains" downstream
+ * (`sessionManager` gates on `length > 0`), so they normalize together.
+ * `inheritParentContext` is keyed at the value actually USED — the handler
+ * forces `false` — because the key names the child that will be built, and
+ * two calls that differ only there build identical children.
+ */
+function orchestrationCreateAgentCallKey(
+  parentSessionId: string,
+  args: OrchestrationCreateAgentArgs,
+): string {
+  const fields: Record<keyof OrchestrationCreateAgentArgs, unknown> = {
+    kind: args.kind ?? null,
+    providerRuntime: args.providerRuntime ?? null,
+    prompt: args.prompt ?? null,
+    cwd: args.cwd ?? null,
+    title: args.title ?? null,
+    role: args.role ?? null,
+    runId: args.runId ?? null,
+    inheritParentContext: false,
+    builtInMcpDomains: [...(args.builtInMcpDomains ?? [])].sort(),
+  }
+  return JSON.stringify([
+    parentSessionId,
+    ...Object.keys(fields).sort().map(name => fields[name as keyof typeof fields]),
+  ])
+}
+
   server.registerTool(
     'orchestration_create_agent',
     {
@@ -803,26 +877,7 @@ function registerOrchestrationTools(
           'The child currently starts from a clean provider conversation; include any necessary parent context directly in the prompt.',
           'Choose providerRuntime: "terminal" when the owner or user wants the provider\'s native TUI in the pane; the provider must support that runtime. Omit providerRuntime for the default structured runtime.',
         ].join(' '),
-      inputSchema: {
-        kind: z.enum(AGENT_PROVIDER_KINDS).default(DEFAULT_PROVIDER),
-        providerRuntime: z.enum(AGENT_PROVIDER_RUNTIMES).optional(),
-        prompt: z.string().optional(),
-        cwd: z.string().optional(),
-        title: z.string().optional(),
-        role: z.string().optional(),
-        runId: z.string().optional(),
-        inheritParentContext: z.boolean().optional().describe(
-          [
-            'Temporarily ignored.',
-            'Agent Code currently disables orchestration context inheritance because transcript duplication/translation was not stable enough for production child-agent work.',
-            'Pass all required context in the prompt until the inheritance path is redesigned.',
-          ].join(' '),
-        ),
-        // WHY derive this from the registry: child capability grants are an
-        // authority boundary. A hand-maintained schema can silently reject a
-        // newly registered domain or keep accepting one the runtime removed.
-        builtInMcpDomains: z.array(z.enum(BUILT_IN_MCP_DOMAINS)).optional(),
-      },
+      inputSchema: ORCHESTRATION_CREATE_AGENT_INPUT,
     },
     async args => {
       const bridge = dependencies.orchestrationBridge
@@ -835,128 +890,139 @@ function registerOrchestrationTools(
         })
       }
 
-      const agent = await bridge.createAgent({
-        parentSessionId: scope.sessionId,
-        kind: args.kind as OrchestrationAgentKind,
-        ...(args.providerRuntime ? { providerRuntime: args.providerRuntime } : {}),
-        cwd: args.cwd,
-        title: args.title,
-        role: args.role,
-        runId: args.runId,
-        // WHY force clean children even if an older tool caller passes true:
-        // the inheritance implementation is intentionally disabled in this PR.
-        // Keeping the schema field avoids breaking stale provider tool caches,
-        // but honoring it would re-enable the broken clone/translate path.
-        inheritParentContext: false,
-        builtInMcpDomains: args.builtInMcpDomains as BuiltInMcpDomain[] | undefined,
-      })
-
-      if (args.prompt && args.prompt.trim().length > 0) {
-        const prompt = buildOrchestrationBootstrapPrompt({
-          task: args.prompt,
+      // One identical call at a time (#952). The whole invocation is the unit:
+      // create, deliver the bootstrap prompt and mark it delivered are one
+      // operation from the caller's side, and a duplicate must receive this
+      // call's RESULT rather than start a second child or collide with the
+      // first one's prompt delivery. `OrchestrationBridge.createCallsInFlight`
+      // carries the full reasoning, including why the prompt is in the key.
+      return await bridge.createAgentCallOnce(
+        orchestrationCreateAgentCallKey(scope.sessionId, args),
+        async () => {
+        const agent = await bridge.createAgent({
+          parentSessionId: scope.sessionId,
+          kind: args.kind as OrchestrationAgentKind,
+          ...(args.providerRuntime ? { providerRuntime: args.providerRuntime } : {}),
+          cwd: args.cwd,
+          title: args.title,
+          role: args.role,
+          runId: args.runId,
+          // WHY force clean children even if an older tool caller passes true:
+          // the inheritance implementation is intentionally disabled in this PR.
+          // Keeping the schema field avoids breaking stale provider tool caches,
+          // but honoring it would re-enable the broken clone/translate path.
+          inheritParentContext: false,
+          builtInMcpDomains: args.builtInMcpDomains as BuiltInMcpDomain[] | undefined,
         })
-        const delivery = await manager.deliverPromptToAgent(agent.sessionId, prompt)
-        if (!delivery.ok) {
-          let cleanupAttempted = false
-          let agentClosed = false
-          let cleanupError: string | undefined
-          // Duplicate safety and child health are independent. A warming
-          // timeout or trust dialog is safe to retry after recovery but the
-          // child is still valuable; deleting every retry-safe child turned a
-          // transient startup delay into permanent session loss. Only an
-          // explicit provider verdict that this session cannot be used again
-          // authorizes cleanup.
-          if (delivery.disposition === 'session-unusable') {
-            try {
-              cleanupAttempted = true
-              const cleanup = await bridge.closeAgent({
-                parentSessionId: scope.sessionId,
-                sessionId: agent.sessionId,
-              })
-              agentClosed = cleanup.closedSessionIds.includes(agent.sessionId)
-            } catch (err) {
-              cleanupError = err instanceof Error && err.message.length > 0
-                ? err.message
-                : 'Unknown orchestration cleanup failure.'
+
+        if (args.prompt && args.prompt.trim().length > 0) {
+          const prompt = buildOrchestrationBootstrapPrompt({
+            task: args.prompt,
+          })
+          const delivery = await manager.deliverPromptToAgent(agent.sessionId, prompt)
+          if (!delivery.ok) {
+            let cleanupAttempted = false
+            let agentClosed = false
+            let cleanupError: string | undefined
+            // Duplicate safety and child health are independent. A warming
+            // timeout or trust dialog is safe to retry after recovery but the
+            // child is still valuable; deleting every retry-safe child turned a
+            // transient startup delay into permanent session loss. Only an
+            // explicit provider verdict that this session cannot be used again
+            // authorizes cleanup.
+            if (delivery.disposition === 'session-unusable') {
+              try {
+                cleanupAttempted = true
+                const cleanup = await bridge.closeAgent({
+                  parentSessionId: scope.sessionId,
+                  sessionId: agent.sessionId,
+                })
+                agentClosed = cleanup.closedSessionIds.includes(agent.sessionId)
+              } catch (err) {
+                cleanupError = err instanceof Error && err.message.length > 0
+                  ? err.message
+                  : 'Unknown orchestration cleanup failure.'
+              }
             }
-          }
-          dependencies.appRunJournal?.recordIncident({
-            kind: 'orchestration.prompt_delivery_failed',
-            severity: 'error',
-            reason: 'create_agent_bootstrap',
-            context: {
-              sessionId: agent.sessionId,
+            dependencies.appRunJournal?.recordIncident({
+              kind: 'orchestration.prompt_delivery_failed',
+              severity: 'error',
+              reason: 'create_agent_bootstrap',
+              context: {
+                sessionId: agent.sessionId,
+                message: delivery.message,
+                stage: delivery.stage,
+                code: delivery.code,
+                retrySafe: delivery.retrySafe,
+                disposition: delivery.disposition,
+                promptWritten: delivery.promptWritten,
+                enterWritten: delivery.enterWritten,
+                cleanupAttempted,
+                agentClosed,
+                cleanupError,
+              },
+            })
+            return toolText({
+              ok: false,
+              error: 'prompt_delivery_failed',
               message: delivery.message,
-              stage: delivery.stage,
-              code: delivery.code,
               retrySafe: delivery.retrySafe,
               disposition: delivery.disposition,
-              promptWritten: delivery.promptWritten,
-              enterWritten: delivery.enterWritten,
+              // WHY omit the live agent object on bootstrap failure:
+              // `create_agent` is a two-step operation. By this point the
+              // renderer has already created a real provider session with PTY,
+              // proxy, JSONL watchers, and scoped MCP registration, but the
+              // caller receives an error and usually abandons the handle. Returning
+              // the full agent here made that half-created child look usable while
+              // leaving cleanup to memory and luck. The failure result now reports
+              // the session id plus cleanup outcome, and the child is best-effort
+              // closed before the error crosses the MCP boundary only when no
+              // bytes were written and the provider explicitly says the session
+              // itself is unusable. Retry safety alone intentionally preserves
+              // warming and user-resolvable children.
+              sessionId: agent.sessionId,
               cleanupAttempted,
               agentClosed,
               cleanupError,
-            },
-          })
-          return toolText({
-            ok: false,
-            error: 'prompt_delivery_failed',
-            message: delivery.message,
-            retrySafe: delivery.retrySafe,
-            disposition: delivery.disposition,
-            // WHY omit the live agent object on bootstrap failure:
-            // `create_agent` is a two-step operation. By this point the
-            // renderer has already created a real provider session with PTY,
-            // proxy, JSONL watchers, and scoped MCP registration, but the
-            // caller receives an error and usually abandons the handle. Returning
-            // the full agent here made that half-created child look usable while
-            // leaving cleanup to memory and luck. The failure result now reports
-            // the session id plus cleanup outcome, and the child is best-effort
-            // closed before the error crosses the MCP boundary only when no
-            // bytes were written and the provider explicitly says the session
-            // itself is unusable. Retry safety alone intentionally preserves
-            // warming and user-resolvable children.
-            sessionId: agent.sessionId,
-            cleanupAttempted,
-            agentClosed,
-            cleanupError,
-            // `false` is only truthful when no bytes crossed the boundary.
-            // Omit it for uncertainty so an orchestrator cannot interpret a
-            // late acknowledgement as permission to duplicate the task.
-            ...(delivery.retrySafe
-              ? { promptSubmitted: false }
-              : { promptSubmission: 'uncertain' as const }),
-          })
+              // `false` is only truthful when no bytes crossed the boundary.
+              // Omit it for uncertainty so an orchestrator cannot interpret a
+              // late acknowledgement as permission to duplicate the task.
+              ...(delivery.retrySafe
+                ? { promptSubmitted: false }
+                : { promptSubmission: 'uncertain' as const }),
+            })
+          }
+          bridge.notePromptSubmitted(agent.sessionId)
+          try {
+            return toolText({
+              ok: true,
+              agent: await bridge.markBootstrapPromptDelivered({
+                parentSessionId: scope.sessionId,
+                sessionId: agent.sessionId,
+              }),
+              promptSubmitted: true,
+            })
+          } catch (err) {
+            return toolText({
+              ok: true,
+              agent,
+              promptSubmitted: true,
+              bootstrapPromptDelivered: true,
+              bootstrapPromptPersistenceWarning: err instanceof Error && err.message.length > 0
+                ? err.message
+                : 'Could not persist orchestration bootstrap delivery state.',
+            })
+          }
         }
-        bridge.notePromptSubmitted(agent.sessionId)
-        try {
-          return toolText({
-            ok: true,
-            agent: await bridge.markBootstrapPromptDelivered({
-              parentSessionId: scope.sessionId,
-              sessionId: agent.sessionId,
-            }),
-            promptSubmitted: true,
-          })
-        } catch (err) {
-          return toolText({
-            ok: true,
-            agent,
-            promptSubmitted: true,
-            bootstrapPromptDelivered: true,
-            bootstrapPromptPersistenceWarning: err instanceof Error && err.message.length > 0
-              ? err.message
-              : 'Could not persist orchestration bootstrap delivery state.',
-          })
-        }
-      }
 
-      return toolText({
-        ok: true,
-        agent: (await bridge.listAgents({ parentSessionId: scope.sessionId, runId: args.runId }).catch(() => [agent]))
-          .find(item => item.sessionId === agent.sessionId) ?? agent,
-        promptSubmitted: Boolean(args.prompt && args.prompt.trim().length > 0),
-      })
+        return toolText({
+          ok: true,
+          agent: (await bridge.listAgents({ parentSessionId: scope.sessionId, runId: args.runId }).catch(() => [agent]))
+            .find(item => item.sessionId === agent.sessionId) ?? agent,
+          promptSubmitted: Boolean(args.prompt && args.prompt.trim().length > 0),
+        })
+        },
+      )
     },
   )
 

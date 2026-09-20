@@ -76,36 +76,69 @@ export class OrchestrationBridge {
   private activeRendererRequests = 0
   private readonly promptDeliveries = new Map<string, PromptDeliveryMetadata>()
   /**
-   * Identical create calls that are still in flight, keyed by their request
-   * shape (#952).
+   * Whole `orchestration_create_agent` TOOL CALLS that are still running,
+   * keyed by the call's arguments (#952).
    *
-   * WHY THIS EXISTS: on 2026-09-12 one `orchestration_create_agent` call
-   * produced TWO children 0.9 s apart, with the same title, cwd, role and
-   * prompt, both bootstrapped, both working in the same worktree and writing
-   * the same report. Only one was returned, so the parent could not see or
-   * close the other and it ran unobserved.
+   * ── THE INCIDENT ──
+   * On 2026-09-12 one `orchestration_create_agent` call produced TWO children
+   * 0.9 s apart, with the same title, cwd, role and prompt, both bootstrapped,
+   * both working in the same worktree and writing the same report. Only one
+   * was returned, so the parent could not see or close the other and it ran
+   * unobserved.
    *
-   * Nothing in this process retries: `request`/`dispatchRendererRequest` send
-   * once, the 30 s timeout does not match a 0.9 s gap, and the renderer
-   * request is addressed to ONE window (broadcasting was considered and
-   * rejected here in #992). Both children were bootstrapped, which means two
-   * complete tool invocations ran — the duplicate arrived from the MCP client,
-   * above anything this codebase controls.
+   * ── WHAT WAS RULED OUT, AND WHAT WAS NOT ──
+   * Not our retry: `request`/`dispatchRendererRequest` send exactly once,
+   * the only timeout is 30 s (which does not match a 0.9 s gap), and the
+   * renderer request is addressed to ONE window rather than broadcast — a
+   * decision made in `f7b4408a` (Refs #688) because answering an MCP mutation
+   * from the wrong window's workspace model is worse than not answering.
+   * Not a double renderer handling either: a second `resolveOrchestrationRequest`
+   * for an already-resolved requestId is dropped, so the extra child would
+   * carry no promptDeliveries entry and no delivered bootstrap prompt — and
+   * both children WERE bootstrapped.
    *
-   * So the fix is not to find our retry; there isn't one. It is to make the
-   * operation IDEMPOTENT, because the damage is real whatever the cause:
-   * duplicate paid agent work, two writers racing on the same files, and
-   * side effects (commits, pushes) performed twice.
+   * What that leaves is a second complete tool invocation, which points above
+   * this process. It is not, however, something anyone observed, so this does
+   * not claim a root cause. It makes the operation idempotent, because the
+   * damage is real whatever the cause: duplicate paid agent work, two writers
+   * racing on the same files, and side effects performed twice.
    *
-   * WHY IN-FLIGHT ONLY, and not a time window over completed creates: two
-   * identical creates overlapping IN FLIGHT is never something a caller
-   * intends — nobody asks for two identical workers and needs the second
-   * started before the first has finished starting. A completed-create window,
-   * by contrast, would silently collapse a deliberate "spawn another one just
-   * like that", which is a legitimate thing to ask for. This refuses to guess
-   * about anything the caller could plausibly mean.
+   * ── WHY THE KEY IS THE WHOLE CALL, PROMPT INCLUDED ──
+   * A first version keyed on the child's SHAPE and deliberately left the
+   * prompt out, reasoning that the prompt is delivered after the child exists.
+   * Review found that catastrophic: every field but `kind` is optional, so a
+   * concurrent FAN-OUT of N workers differing only by prompt — which is the
+   * normal way this tool is used, and what "two reviewers per PR" does — all
+   * collapsed into one child, and N-1 tasks were silently never run.
+   * `MAX_ACTIVE_RENDERER_REQUESTS = 1` makes a burst of creates overlap by
+   * construction, so a fan-out was maximally exposed, not least.
+   *
+   * Two creates that differ by prompt are two different jobs. Only an
+   * identical call — same parent, same child shape, same prompt — is a
+   * duplicate, and that is what this collapses.
+   *
+   * ── WHY IT WRAPS THE WHOLE CALL AND NOT `createAgent` ──
+   * One invocation is create → deliver the bootstrap prompt → mark delivered,
+   * and the delivery is the slow, failure-prone part. Deduping only the create
+   * left a duplicate arriving during delivery to spawn a second child, and it
+   * handed the duplicate caller a `prompt_delivery_failed` from
+   * `deliverPromptToAgent`'s in-flight guard — complete with
+   * `retrySafe: true, disposition: 'retry-same-session'`, an instruction to
+   * re-send the prompt into the child already running it, plus a false
+   * incident in the always-on journal. Deduping the whole call means the
+   * duplicate waits and receives the first call's RESULT, which is the only
+   * answer that is true for it.
+   *
+   * ── WHY IN FLIGHT ONLY ──
+   * A window over COMPLETED calls would collapse a deliberate "run that exact
+   * task again", which is legitimate. Two identical calls overlapping in
+   * flight is not something a caller means.
+   *
+   * It lives on the bridge, not beside the tool handler, because
+   * `BuiltInMcpHttpHost` builds a FRESH server with a stateless transport for
+   * every POST — a map owned by the server would never see the duplicate.
    */
-  private readonly createsInFlight = new Map<string, Promise<OrchestrationAgentRecord>>()
+  private readonly createCallsInFlight = new Map<string, Promise<unknown>>()
   private readonly closedAgents = new Map<string, ClosedAgentRecord>()
   private readonly parentSessionByChildSession = new Map<string, string>()
   private readonly listAgentsCache = new Map<string, CachedValue<OrchestrationAgentRecord[]>>()
@@ -138,47 +171,47 @@ export class OrchestrationBridge {
     if (params.providerRuntime === 'terminal' && !getMainProvider(params.kind).createTerminalSession) {
       throw new Error(`${getMainProvider(params.kind).name} does not support a terminal runtime`)
     }
-    // Everything that distinguishes one requested child from another. The
-    // prompt is deliberately NOT part of it: it is delivered after this
-    // returns, so two calls that differ only by prompt still describe the same
-    // child being created twice.
-    const shape = JSON.stringify([
-      params.parentSessionId, params.kind, params.providerRuntime ?? null,
-      params.cwd ?? null, params.title ?? null, params.role ?? null,
-      params.runId ?? null, params.builtInMcpDomains ?? null,
-    ])
-    const inFlight = this.createsInFlight.get(shape)
-    // The duplicate gets the FIRST call's child rather than an error: the
-    // caller asked for a child and there is one, so failing would turn a
-    // duplicate delivery into a visible failure for work that succeeded.
-    if (inFlight) return await inFlight
+    const response = await this.request({
+      requestId: randomUUID(),
+      type: 'create-agent',
+      ...params,
+    })
+    if (!response.ok) throw new Error(response.message)
+    if (response.type !== 'create-agent') {
+      throw new Error(`Unexpected orchestration response: ${response.type}`)
+    }
+    this.promptDeliveries.set(response.agent.sessionId, {
+      createdAt: Date.now(),
+      promptSubmissionCount: 0,
+    })
+    this.parentSessionByChildSession.set(response.agent.sessionId, params.parentSessionId)
+    this.closedAgents.delete(response.agent.sessionId)
+    this.invalidateStatusCache(params.parentSessionId)
+    return this.enrichAgent(response.agent)
+  }
 
-    const creation = (async () => {
-      const response = await this.request({
-        requestId: randomUUID(),
-        type: 'create-agent',
-        ...params,
-      })
-      if (!response.ok) throw new Error(response.message)
-      if (response.type !== 'create-agent') {
-        throw new Error(`Unexpected orchestration response: ${response.type}`)
-      }
-      this.promptDeliveries.set(response.agent.sessionId, {
-        createdAt: Date.now(),
-        promptSubmissionCount: 0,
-      })
-      this.parentSessionByChildSession.set(response.agent.sessionId, params.parentSessionId)
-      this.closedAgents.delete(response.agent.sessionId)
-      this.invalidateStatusCache(params.parentSessionId)
-      return this.enrichAgent(response.agent)
-    })()
-    this.createsInFlight.set(shape, creation)
+  /**
+   * Run one `orchestration_create_agent` tool call, or join an identical one
+   * that is already running and return ITS result. See `createCallsInFlight`
+   * for why this is the unit of deduplication.
+   *
+   * `key` is the caller's business: the tool handler owns the argument schema
+   * and is the only place that can be made to break the build when a new field
+   * appears. The bridge owns only the map, because it is the one object that
+   * outlives a per-POST MCP server.
+   */
+  async createAgentCallOnce<T>(key: string, run: () => Promise<T>): Promise<T> {
+    const inFlight = this.createCallsInFlight.get(key)
+    if (inFlight) return await inFlight as T
+
+    const call = run()
+    this.createCallsInFlight.set(key, call)
     try {
-      return await creation
+      return await call
     } finally {
-      // Cleared on failure too: a create that threw left no child, so the next
-      // identical call must really create one rather than inherit the error.
-      this.createsInFlight.delete(shape)
+      // Cleared on rejection too: a call that threw left nothing behind, so
+      // the next identical one must really run rather than inherit the error.
+      this.createCallsInFlight.delete(key)
     }
   }
 
