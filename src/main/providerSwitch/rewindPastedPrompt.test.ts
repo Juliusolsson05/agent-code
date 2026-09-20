@@ -43,20 +43,37 @@ describe('Rewind draft and Claude\'s paste envelope (#1059)', () => {
     expect(draft.promptMode).toBe('prompt')
   })
 
-  it('still recognises a pasted slash command as a command', () => {
-    // A `/command` or `!bash` prompt the user PASTED must still land in the
-    // right mode rather than being prefilled as prose. (`extractTagBody` is
-    // unanchored, so this held before the unwrap was added too — it is pinned
-    // because the unwrap is new code on the same path, not because it was
-    // broken.)
+  // ── THESE TWO TESTS USED TO ASSERT THE #930 BUG ──
+  // They pinned a PASTED `<command-name>`/`<bash-input>` as a real command,
+  // and their own comment admitted why: `extractTagBody` was unanchored, so
+  // "this held before the unwrap was added too". That was incidental
+  // behaviour being mistaken for a requirement.
+  //
+  // It is not one. Claude Code writes `<bash-input>` around what the user
+  // TYPED, at the top level of the message; it never puts one inside a paste
+  // envelope. An envelope containing that markup means the user pasted the
+  // text of a wrapper — and arming the composer to EXECUTE it is precisely
+  // the harm #930 is about. Typing `!` and then pasting produces the opposite
+  // nesting (envelope inside wrapper), which is covered below and in
+  // rewindLiteralMarkup.test.ts.
+  it('treats a pasted slash command as the text that was pasted', () => {
     const command = '<pasted_content id="x">\n<command-name>/compact</command-name>\n<command-args>keep the plan</command-args>\n</pasted_content id="x">'
     const draft = claude.draft(text(command))
-    expect(draft.promptText).toBe('/compact keep the plan')
+    expect(draft.promptText).toBe('<command-name>/compact</command-name>\n<command-args>keep the plan</command-args>')
+    expect(draft.promptMode).toBe('prompt')
   })
 
-  it('still recognises a pasted bash prompt as bash', () => {
+  it('treats a pasted bash wrapper as the text that was pasted', () => {
     const bash = '<pasted_content id="x">\n<bash-input>npm run build</bash-input>\n</pasted_content id="x">'
     const draft = claude.draft(text(bash))
+    expect(draft.promptText).toBe('<bash-input>npm run build</bash-input>')
+    expect(draft.promptMode).toBe('prompt')
+  })
+
+  it('unwraps a paste made inside a real bash entry', () => {
+    // The nesting that DOES mean bash mode: the wrapper opens the message and
+    // the envelope is inside it. The composer is prefilled with the command.
+    const draft = claude.draft(text('<bash-input><pasted_content id="x">\nnpm run build\n</pasted_content id="x"></bash-input>'))
     expect(draft.promptText).toBe('npm run build')
     expect(draft.promptMode).toBe('bash')
   })
