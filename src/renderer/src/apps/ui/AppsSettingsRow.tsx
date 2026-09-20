@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useAppStore } from '@renderer/app-state/hooks'
 import { forgetRemovedExtension, refreshInstalledExtensions } from '@renderer/apps/host/installedExtensionsState'
 
-import type { ExtensionListEntry } from '@shared/types/extensions'
+import type { ExtensionListEntry, QuarantinedExtensionEntry } from '@shared/types/extensions'
 import { withVisibleControls } from '@shared/text/visibleControls'
 
 /**
@@ -28,13 +28,25 @@ export function AppsSettingsRow() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  // Ledger rows this build set aside (#959). Local state, not the shared
+  // catalog: the catalog is the list of RUNNABLE extensions and every consumer
+  // of it (commands, panes, the frame broker) would have to learn to skip
+  // these. They exist for one screen, so they live on that screen.
+  const [quarantined, setQuarantined] = useState<QuarantinedExtensionEntry[]>([])
 
   const failures = useAppStore(state => state.extensionFailures)
   const refresh = refreshInstalledExtensions
 
+  const refreshQuarantined = useCallback(async () => {
+    // A failure here must not take the page down with it: the quarantine list
+    // is diagnostic, and the installed list above is the part the user came for.
+    try { setQuarantined(await window.api.extensionsListQuarantined()) } catch { setQuarantined([]) }
+  }, [])
+
   useEffect(() => {
     void refresh()
-  }, [refresh])
+    void refreshQuarantined()
+  }, [refresh, refreshQuarantined])
 
   // FIRST install only — the repo comes from the text box, i.e. a string the
   // user just typed or pasted. That is the whole distinction main's
@@ -146,9 +158,37 @@ export function AppsSettingsRow() {
         // Failure leaves the existing row visible. Success already removed
         // exactly the acknowledged generation, independently of this refresh.
         await refresh()
+        await refreshQuarantined()
       }
     },
-    [busy, refresh],
+    [busy, refresh, refreshQuarantined],
+  )
+
+  // Uninstall a row this build set aside. Same IPC as any other remove — main
+  // drops the preserved row by id — but it takes an ID rather than an entry,
+  // because a quarantined row HAS no validated entry to pass.
+  const removeQuarantined = useCallback(
+    async (id: string) => {
+      if (busy) return
+      setBusy(true)
+      setError(null)
+      setNotice(null)
+      try {
+        // The quarantine-specific call: `extensionsRemove` uninstalls the
+        // RUNNABLE extension of that id, and a ledger can hold both.
+        await window.api.extensionsRemoveQuarantined(id)
+        setNotice(`Removed ${id}`)
+      } catch (removeError) {
+        setError(removeError instanceof Error ? removeError.message : String(removeError))
+      } finally {
+        setBusy(false)
+        // Both lists: removing the last quarantined row is also what un-breaks
+        // the installed list on an older build.
+        await refresh()
+        await refreshQuarantined()
+      }
+    },
+    [busy, refresh, refreshQuarantined],
   )
 
   // "Load unpacked" — install from a local folder via the native picker (main
@@ -298,6 +338,51 @@ export function AppsSettingsRow() {
                   Remove
                 </button>
               </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Rows this build set aside (#959). Rendered BELOW the installed list
+          and visually distinct, because the honest message is "this is not
+          running" — showing it beside working extensions would read as though
+          it were one. Before quarantine, a single such row threw for the whole
+          ledger: every extension stopped loading and Remove rejected too, so
+          the only way out was editing JSON in ~/.config. */}
+      {quarantined.length === 0 ? null : (
+        <div className="flex flex-col gap-1">
+          <div className="text-[12px] text-muted">
+            Set aside — not loaded by this version of Agent Code:
+          </div>
+          {quarantined.map((row, index) => (
+            <div
+              key={row.id ?? `unnamed-${index}`}
+              className="flex items-center justify-between gap-4 border border-border bg-row-bg px-3 py-2 opacity-70"
+            >
+              <div className="min-w-0">
+                {/* The id is the only field of an unvalidated row we are
+                    entitled to show, and only because it independently passed
+                    isValidExtensionId. Escaped like every other repository-
+                    authored string on an action surface (#1049). */}
+                <div className="truncate text-[13px] text-ink">
+                  {row.id === null ? 'Unreadable extension record' : withVisibleControls(row.id)}
+                </div>
+                <div className="truncate text-[12px] text-muted">{withVisibleControls(row.reason)}</div>
+              </div>
+              {row.id === null ? (
+                // Nothing safe to name in a Remove call. Saying so is better
+                // than a button that cannot work.
+                <div className="shrink-0 text-[12px] text-muted">Edit extensions.json to remove</div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => void removeQuarantined(row.id!)}
+                  disabled={busy}
+                  className="shrink-0 border border-control-border px-3 py-1 text-[12px] text-ink-dim outline-none hover:border-control-border-hover hover:text-ink disabled:opacity-40"
+                >
+                  Remove
+                </button>
+              )}
             </div>
           ))}
         </div>
