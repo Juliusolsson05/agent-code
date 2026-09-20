@@ -14,7 +14,7 @@ import {
 import { PagedTextViewer } from '@renderer/lib/text/PagedTextViewer'
 import { useEffect, useId, useMemo, useState } from 'react'
 import { withVisibleControls } from '@shared/text/visibleControls'
-import { unwrapClaudePastedContent } from '@shared/claude/pastedContent.js'
+import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 
 // The browsing surface must stay cheap even when somebody pastes a whole
 // design document as their next prompt. CSS clipping alone still leaves the
@@ -24,7 +24,7 @@ import { unwrapClaudePastedContent } from '@shared/claude/pastedContent.js'
 const PREVIEW_SCAN_CHARACTERS = 320
 const PREVIEW_CHARACTERS = 180
 
-function queuedPromptPreview(content: string): string {
+function queuedPromptPreview(content: string, provider: AgentProviderKind): string {
   // Unwrap, then escape, then truncate — in that order.
   //
   // Claude stores a queued PASTE inside its own envelope (#1052), so the first
@@ -35,7 +35,11 @@ function queuedPromptPreview(content: string): string {
   // the user is about to send on their own authority, and a reordering control
   // in it misrepresents what that is. Escaping first also means a marker
   // cannot be cut in half by the slice.
-  const source = unwrapClaudePastedContent(content) ?? content
+  // Through the provider capability, like every other display surface
+  // (#1059): the envelope is Claude's, and a direct call here would apply
+  // Claude's rule to a Codex or OpenCode prompt. Harmless today — the pattern
+  // is exact — but it is the copy that drifts.
+  const source = getRendererProviderCapabilities(provider).typedUserPromptText(content)
   const scanned = withVisibleControls(source.slice(0, PREVIEW_SCAN_CHARACTERS))
   // Preserve line boundaries because they are the only cheap hint that a
   // queued item contains pasted instructions or code. Horizontal whitespace
@@ -192,7 +196,7 @@ export function QueueStrip({
     return {
       message,
       notification,
-      preview: notification ? null : queuedPromptPreview(message.content),
+      preview: notification ? null : queuedPromptPreview(message.content, provider),
     }
   }), [provider, queuedMessages])
   const staleCount = useMemo(

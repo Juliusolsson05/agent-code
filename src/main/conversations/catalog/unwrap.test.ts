@@ -12,6 +12,46 @@ describe('unwrapUserText', () => {
     expect(unwrapUserText(raw)).toEqual({ text: 'We have a lot of things to do', wrapper: 'stt' })
   })
 
+  it('returns a PASTED prompt without Claude\'s envelope, instead of dropping it (#1059)', () => {
+    // The real shape Claude Code 2.1.278 commits, closing tag id included.
+    // Left off the closed list it fell to the generic `<`-prefix rule and was
+    // DROPPED, so View Prompts said "No visible user prompts found for this
+    // session" while the feed above it showed them, and the conversations
+    // picker labelled the session from a later, shorter prompt — or not at all.
+    const raw = '<pasted_content id="cade">\nAdd to the list of things to resolve pre launch\n</pasted_content id="cade">'
+    expect(unwrapUserText(raw)).toEqual({
+      text: 'Add to the list of things to resolve pre launch',
+      wrapper: 'pasted-content',
+    })
+  })
+
+  it('labels a conversation from a pasted FIRST prompt (#1059)', () => {
+    // firstUnwrappedPrompt walks until something unwraps. With the envelope
+    // dropped it skipped past the opening prompt — the longest one, the one
+    // worth labelling by — and took a later line instead.
+    const pasted = '<pasted_content id="cade">\nPort the renderer to the new pipeline\n</pasted_content id="cade">'
+    expect(firstUnwrappedPrompt([pasted, 'and then run the tests'])).toEqual({
+      text: 'Port the renderer to the new pipeline',
+      wrapper: 'pasted-content',
+    })
+  })
+
+  it('still drops an EMPTY envelope rather than labelling with a blank', () => {
+    expect(unwrapUserText('<pasted_content id="cade">\n\n</pasted_content id="cade">')).toBeNull()
+  })
+
+  it('does not unwrap an ambiguous or partial envelope', () => {
+    // unwrapClaudePastedContent refuses to guess: two sibling blocks sharing
+    // an id, and a prompt that merely CONTAINS the tag, both stay wrapped —
+    // and therefore stay excluded by the `<` rule, as before.
+    const siblings = '<pasted_content id="x">\na\n</pasted_content id="x"><pasted_content id="x">\nb\n</pasted_content id="x">'
+    expect(unwrapUserText(siblings)).toBeNull()
+    expect(unwrapUserText('see <pasted_content id="x">\na\n</pasted_content id="x">')).toEqual({
+      text: 'see <pasted_content id="x"> a </pasted_content id="x">',
+      wrapper: null,
+    })
+  })
+
   it('returns the task inside an orchestration handoff', () => {
     // claude 54e5b227 / codex 01a08ddd first prompt
     const raw = '<orchestration-handoff>\nYou are now an orchestrated child agent in Agent Code.\nFollow only the new task and instructions below.\n</orchestration-handoff>\n\n<task>\nReview the Grok lifecycle.\n</task>'

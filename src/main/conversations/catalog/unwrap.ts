@@ -9,9 +9,11 @@
 // listed is treated as "not a prompt", and the fixture that surfaces it is
 // the signal to extend the list, never a heuristic.
 
+import { unwrapClaudePastedContent } from '@shared/claude/pastedContent.js'
+
 export type UnwrappedUserText = {
   text: string
-  wrapper: 'stt' | 'orchestration-handoff' | 'projected-handoff' | null
+  wrapper: 'stt' | 'orchestration-handoff' | 'projected-handoff' | 'pasted-content' | null
 }
 
 /** Injected by a provider or by Agent Code; never something the user meant as a prompt. */
@@ -68,6 +70,26 @@ export function unwrapUserText(raw: string): UnwrappedUserText | null {
       const heading = trimmed.split('\n').map(l => l.trim()).find(l => /^##+\s+\S/.test(l))
       return { text: heading ? collapse(heading.replace(/^#+\s+/, '')) : 'Continued conversation', wrapper: 'projected-handoff' }
     }
+  }
+
+  // Claude Code 2.1.278 wraps a PASTED prompt in its own envelope (#1052,
+  // #1059). This is the `<stt …>` case exactly: a wrapper around something the
+  // user really did mean as a prompt — and the longest prompts are the pasted
+  // ones. Left off the list it fell to the `<`-prefix rule below and was
+  // DROPPED, so View Prompts said "No visible user prompts found for this
+  // session" while the feed above it showed them, and the conversations
+  // picker labelled the session from a later, shorter prompt or not at all.
+  //
+  // Unwrapped through the shared definition rather than a second regex here:
+  // that one refuses to guess (whole string, backreferenced id, no inner
+  // boundary), and a copy that guessed differently would make the catalog and
+  // the feed disagree about what the user wrote.
+  const pasted = unwrapClaudePastedContent(trimmed)
+  if (pasted !== null) {
+    const text = collapse(pasted)
+    // An empty envelope is not a prompt; fall through to null rather than
+    // labelling a conversation with a blank line.
+    return text ? { text, wrapper: 'pasted-content' } : null
   }
 
   for (const prefix of NOT_A_PROMPT_PREFIXES) {
