@@ -187,12 +187,27 @@ Known now:
   DONE in #1035 (merged). The workflow takes `release_channel`
   (prerelease|stable), validates it against package.json's version, and sets
   `make_latest` explicitly.
-- [ ] Version bump. Default **0.1.0** unless the owner says otherwise.
-  Release notes cover everything since beta.1, including #1013's retired commands.
+- [x] Version bump to **0.1.0** — staged on branch `release/0.1.0`
+  (worktree `.worktrees/release-0-1-0`): package.json + package-lock.json, and
+  `docs/decomposition/release-0.1.0-notes.md` finalized with every PENDING
+  marker resolved. `CHANNEL=stable node scripts/release/identity.mjs` dry-run
+  returns `tag=v0.1.0 / prerelease=false / make_latest=true`, and the prerelease
+  channel correctly REFUSES a stable version. Owner asked for the release on
+  2026-09-20; it is held only until #1060 (the paste-envelope display fix) merges,
+  so the shipped build contains it.
 - [ ] README screenshots refreshed (pre-Nord, Jul 4); check them for privacy too
-- [ ] Landing: a replacement hero screenshot (OWNER, or an approved redaction), the
-  Cloudflare connect and domain (OWNER), and a status line that handles the stable
-  release and the nightly
+- [x] Landing: **the code needs no change — verified 2026-09-20.** The page
+  resolves `releases/latest`, which GitHub defines as the newest release that is
+  neither a draft nor a prerelease, so the rolling nightly can never win it.
+  That endpoint 404s TODAY (no non-prerelease release exists), which is exactly
+  why the status line is silent and the buttons fall back to the Releases page.
+  Publishing v0.1.0 with `make_latest=true` flips both automatically:
+  `findDiskImage` suffix-matches `-arm64.dmg` / `-x64.dmg`, and the real beta
+  assets are named `Agent.Code-0.0.2-beta.1-arm64.dmg`, so `Agent.Code-0.1.0-arm64.dmg`
+  matches. The `published_at`-frozen nightly concern does not apply for the same
+  reason: a prerelease never reaches this code.
+  - [ ] **OWNER**: a replacement hero screenshot (or an approved redaction).
+  - [ ] **OWNER**: the Cloudflare Pages connect and the domain.
 - [ ] Dispatch the stable release; verify the artifacts; publish
 
 ### Stage 10: Issue sweep, newest → oldest (owner, 2026-09-19)
@@ -652,6 +667,39 @@ claude 2.1.143 / codex 0.130.0 are stale versus the 2.1.278 / 0.155.1 in daily u
   - **#1018 (orchestration hides API errors):** an evidence catalog from real feed-debug recordings is being built (research agent, worktree `.worktrees/fix-orchestration-api-error`). Implementation follows the catalog.
   - **Waiting on #1013's merge:** T7 (#1006), T8 (#1007), T2 (command promotion) and T1 (#995), all of which touch the catalog, keybindings or bootstrap.
   - **Nightly** run 35430444567: build-app is green, package-macos is running.
+- 2026-09-20 07:15Z — **#1049, #1056, #1057 and #1058 MERGED.** Release 0.1.0 is
+  staged and blocked only on #1060.
+  - **Two standing rules changed, on the owner's word.** (1) **ONE review round
+    per PR**, then merge on green — "do not fucking do 10 rounds, that is just
+    crazy, just merge it after one review round so that we can get somewhere".
+    #1049 took ten rounds; the marginal findings were not worth the stall.
+    Anything a second round would have caught becomes a follow-up issue.
+    (2) **Reviewers are CLAUDE orchestration children, never Codex.** Both are in
+    auto-memory (feedback_one_review_round, feedback_pr_review_template).
+  - **#1058** (new, #1030 item 4): closing a terminal deliberately leaves its tmux
+    session alive for Undo Close, and NOTHING ever killed it — `killSession` had
+    two callers, failed-spawn rollback and startup reconcile. A five-minute sweep
+    now reaps a session absent from BOTH authorities (the persisted workspace file,
+    decoded by the same function startup uses, and main's live registry) for longer
+    than the undo window plus a grace. The review found three real kill races and
+    all three are fixed: an undo-then-close between sweeps kept the ORIGINAL
+    deadline; every authority was a snapshot taken before an await; and `stop()`
+    only cleared the interval, so a run awaiting tmux could still kill during quit.
+  - **#1059/#1060** (new, from the owner's screenshot): #1053 taught prompt
+    ACCEPTANCE about Claude's `<pasted_content id="…">` envelope and nothing else.
+    Every surface that SHOWS or REPLAYS a prompt still had it — the feed painted
+    `❯ <pasted_content id="cade"> …`, and ⌘↑ replayed the envelope into the
+    composer, where sending it again made Claude wrap the already-wrapped text.
+    **The review earned its keep:** two of the surfaces the PR claimed fixed were
+    not. View Prompts and the conversations picker read from the CATALOG
+    unwrapper, whose closed wrapper list never learned the envelope — so the
+    prompt was DROPPED, not shown wrapped, and a session of pasted prompts read
+    "No visible user prompts found" while the feed above showed them. Rewind's
+    draft feeds both the picker row and the composer prefill, so it RE-SENT the
+    envelope. Fixed at both, plus the queue strip routed through the capability.
+  - **Landing page verified: no code change needed** (see Stage 8). `releases/latest`
+    404s today because no non-prerelease release exists; publishing the stable flips
+    the buttons and the status line on its own.
 - 2026-09-20 06:00Z — **#1050 MERGED** (`15183819`) and **claude-code-headless#61 MERGED** (`93f5a54`). Open: #1049 (round 7), #1056 (round 5 fix pushed), #1057 (the #1040 app half, round 1 fix pushed).
   - **#1049's seventh round produced the thing this PR needed most: a full inventory.** Rounds 3–6 each found more surfaces because I was patching reactively; the reviewer has now enumerated every renderer dialog, strip, picker and action row AND every main-process dialog call site, marking each escaped / fixed / partial. Ten more surfaces came out of it — the explorer's own two-click delete (which never reaches the escaped dialog when the file is clean), the editor conflict strip's Overwrite/Reload (identified only by its tab), AI Workspace clear/delete, extension Reload/Update/Remove (tier-0 skips the native consent dialog entirely), remote device Revoke, the generated skill/conventions previews read before Save & Enable, the directory picker (choosing a cwd IS the Codex trust decision), rewind's interactive prompt list, goal-loop and workflow continuation controls, and the local template/theme/tab/pin pickers. That inventory is the artefact to keep: it is in the PR thread and the scratchpad.
   - **#1057** review found that the fold dropped the new `transport-error` interruption, so a stream that died mid-answer left an unexplained half-response on desktop AND phone. The feed now paints "Interrupted before the response finished", and #1040's KNOWN LIMIT comment and test in the goal loop are retired with the limit itself.
