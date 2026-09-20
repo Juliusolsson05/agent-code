@@ -1276,12 +1276,12 @@ function orchestrationCreateAgentCallKey(
     {
       title: 'Wait For Orchestration Agents',
       description:
-        `Waits for all matching orchestration-created child agents to leave active states, then returns their statuses and latest outputs. ONE CALL WAITS AT MOST ${WAIT_AGENTS_MAX_WAIT_MS / 1000} SECONDS whatever timeoutMs asks for; when it is cut short the reply carries done=false and waitCappedMs, and you call this again to keep waiting. Outputs are byte-capped per message/agent and share a cross-agent total budget; over-budget agents degrade to status summaries with short excerpts and truncated=true. To recover a truncated agent, re-read it with orchestration_read_agent and explicit larger caps, or use agent_transcript_read_file on its transcript.`,
+        `Waits for all matching orchestration-created child agents to leave active states, then returns their statuses and latest outputs. ONE CALL STOPS WAITING AFTER ${WAIT_AGENTS_MAX_WAIT_MS / 1000} SECONDS whatever timeoutMs asks for, then reads outputs once and replies; when it is cut short the reply carries done=false and remainingMs, and you call this again with remainingMs to keep waiting. Outputs are byte-capped per message/agent and share a cross-agent total budget; over-budget agents degrade to status summaries with short excerpts and truncated=true. To recover a truncated agent, re-read it with orchestration_read_agent and explicit larger caps, or use agent_transcript_read_file on its transcript.`,
       inputSchema: {
         runId: z.string().optional(),
         sessionIds: z.array(z.string()).optional(),
         timeoutMs: z.number().int().min(1000).max(600000).default(30000)
-          .describe(`How long you want to wait. One call waits at most ${WAIT_AGENTS_MAX_WAIT_MS / 1000} s; a larger value returns done=false with waitCappedMs, to be called again.`),
+          .describe(`How long you want to wait in total. One call stops waiting after ${WAIT_AGENTS_MAX_WAIT_MS / 1000} s; a larger value returns done=false with remainingMs, which is what you pass to the next call.`),
         pollIntervalMs: z.number().int().min(250).max(10000).default(1000),
         maxMessagesPerAgent: z.number().int().min(1).max(100).optional(),
         maxCharsPerMessage: z.number().int().min(50).max(100_000).optional(),
@@ -1298,26 +1298,39 @@ function orchestrationCreateAgentCallKey(
           message: 'Agent Code orchestration services are not available.',
         })
       }
-      // WHY one call never waits the full requested timeout (#827): a harness
-      // that backgrounds a foreground tool call — Claude Code does it at
-      // 120 s — drops the MCP transport mid-call, and the reply is LOST. The
-      // children are unaffected, so the work is fine; what is gone is the
-      // caller's only record of it, and the flow falls back to polling
-      // `orchestration_list_agents` with no idea that is what happened.
+      // WHY one call never waits the full requested timeout (#827): a
+      // foreground MCP tool call whose transport stops listening loses its
+      // reply outright. The children are unaffected, so the work is fine; what
+      // is gone is the caller's only record of it, and the flow falls back to
+      // polling `orchestration_list_agents` with no idea that is what
+      // happened. See WAIT_AGENTS_MAX_WAIT_MS for which numbers here are
+      // measured and which hazard this does NOT close.
       //
       // The reply already carried `done`, so the polling shape existed. This
       // keeps the reply inside a window it can still be received in, and says
-      // `waitCappedMs` so the caller knows to call again rather than
-      // concluding the children are stuck.
+      // `remainingMs` so the caller knows to call again — with a budget it does
+      // not have to compute — rather than concluding the children are stuck.
+      const startedAt = Date.now()
       const cappedTimeoutMs = Math.min(args.timeoutMs, WAIT_AGENTS_MAX_WAIT_MS)
-      const deadline = Date.now() + cappedTimeoutMs
+      // Before the first `listAgents`, deliberately: that call is a round trip
+      // through the bridge, which serializes every orchestration request
+      // app-wide behind one in-flight slot. Starting the clock after it would
+      // let an unbounded queue wait be added to the cap rather than spent
+      // inside it.
+      const deadline = startedAt + cappedTimeoutMs
       let agents = await bridge.listAgents({ parentSessionId: scope.sessionId, runId: args.runId })
       if (args.sessionIds && args.sessionIds.length > 0) {
         const wanted = new Set(args.sessionIds)
         agents = agents.filter(agent => wanted.has(agent.sessionId))
       }
       while (Date.now() < deadline && agents.some(agent => isOrchestrationAgentActive(agent.lifecycleState))) {
-        await sleep(args.pollIntervalMs)
+        // Clamped to what is LEFT, not the raw interval. `pollIntervalMs` is
+        // schema-legal up to 10 s, so an unclamped sleep let one call overshoot
+        // the cap by a whole interval — the deadline is checked before the
+        // sleep, never during it. Measured at 90_010 ms against a 90_000 ms
+        // cap before this clamp existed; a promise that is off by an argument
+        // the caller chooses is not a promise.
+        await sleep(Math.min(args.pollIntervalMs, Math.max(0, deadline - Date.now())))
         agents = await bridge.listAgents({ parentSessionId: scope.sessionId, runId: args.runId })
         if (args.sessionIds && args.sessionIds.length > 0) {
           const wanted = new Set(args.sessionIds)
@@ -1352,7 +1365,16 @@ function orchestrationCreateAgentCallKey(
         // Only when the cap actually cut the wait short AND there is still
         // something to wait for. Reporting it on a completed run would tell
         // the caller to call again for children that are already done.
-        ...(!done && cappedTimeoutMs < args.timeoutMs ? { waitCappedMs: cappedTimeoutMs } : {}),
+        //
+        // The caller's UNSPENT budget, not the cap. Reporting the cap made the
+        // caller reconstruct "how much of what I asked for is left" from an
+        // argument it had to remember; `remainingMs` is the number it passes
+        // straight back as the next `timeoutMs`. It is computed from real
+        // elapsed time rather than from the cap, so the final read's cost is
+        // charged to the caller's budget instead of quietly vanishing from it.
+        ...(!done && cappedTimeoutMs < args.timeoutMs
+          ? { remainingMs: Math.max(0, args.timeoutMs - (Date.now() - startedAt)) }
+          : {}),
         ...(bounded.truncated ? { truncated: true } : {}),
       })
     },
@@ -1413,18 +1435,55 @@ function orchestrationCreateAgentCallKey(
   )
 }
 
-// WHY 90 s and not the schema's 600 s maximum (#827): a foreground MCP tool
-// call has to return while its transport is still listening. Claude Code
-// backgrounds one at 120 s and the reply is then lost outright — the reported
-// failure. 90 s leaves room under that threshold for the final
-// `readRunOutputs` and serialization, and is long enough that an ordinary
-// two-child run settles well inside one call.
+// WHY 30 s and not the schema's 600 s maximum (#827): a foreground MCP tool
+// call has to return while its transport is still listening.
+//
+// WHAT IS MEASURED, and what is not. The first version of this cap was 90 s,
+// justified by "Claude Code backgrounds a tool call at 120 s". Review could
+// not find that threshold anywhere, and the vendored source says the opposite:
+// `vendor/claude-code-src/full/services/mcp/client.ts:211` sets
+// `DEFAULT_MCP_TOOL_TIMEOUT_MS = 100_000_000` (~27.8 h) and passes it at the
+// `callTool` site; backgrounding there belongs to shell and agent tasks, not
+// to MCPTool. So that number was invented, and a cap derived from it was a
+// guess wearing a fact's clothing.
+//
+// These are the numbers that are real, each checked in the tree:
+//
+//   - `@modelcontextprotocol/sdk` … /shared/protocol.js:8 —
+//     `DEFAULT_REQUEST_TIMEOUT_MSEC = 60000`, applied as
+//     `options?.timeout ?? DEFAULT_REQUEST_TIMEOUT_MSEC`. ANY client that does
+//     not override it kills the request at 60 s. This is the binding
+//     constraint, and the 90 s cap sat ABOVE it: the old cap turned an
+//     occasional loss into a guaranteed one for such a client. Claude Code
+//     overrides (above) and Codex uses 300 s
+//     (`vendor/codex-src/codex-rs/codex-mcp/src/rmcp_client.rs`), but
+//     `opencode` and `grok` also receive the `orchestration` domain and their
+//     client timeouts are NOT known — a compiled binary, not readable source.
+//     So the cap has to assume the default.
+//   - This repo already bounds its other long-poll at 30 s
+//     (`workflow_run_events`' `waitMs: …max(30_000)`), and the control
+//     capability `observations.wait` at 10 s. 30 s is the house number for
+//     "a tool call that blocks while a transport listens".
+//
+// 30 s therefore leaves half the SDK's default budget for the final
+// `readRunOutputs` round trip, which the bridge bounds at its own 30 s
+// (`OrchestrationBridge` TIMEOUT_MS).
+//
+// WHAT THIS DOES NOT FIX, stated so nobody mistakes the cap for a cure: the
+// reported drop is not clock-triggered. Our POST replies are SSE streams
+// (`BuiltInMcpHttpHost` builds `StreamableHTTPServerTransport` with no
+// `eventStore` and no `enableJsonResponse`), that stream carries ZERO bytes
+// for the whole call, and with no event store it is not resumable — so when a
+// client's SSE reconnects are exhausted the reply is gone for good. A shorter
+// wait shortens the exposure window; it does not close it. The mechanism fixes
+// are progress notifications (the SDK resets its request timer on progress) or
+// `enableJsonResponse: true`, neither verified here — see #1091.
 //
 // It is a CAP, not a new maximum: `timeoutMs` still accepts up to 600 s
 // because the number the caller passes is what it wants in total, and the
 // reply says when a call was cut short. Lowering the schema bound instead
 // would make every existing caller's request invalid rather than shorter.
-const WAIT_AGENTS_MAX_WAIT_MS = 90_000
+const WAIT_AGENTS_MAX_WAIT_MS = 30_000
 
 // Cross-agent total budget for read_run_outputs / wait_agents (#373).
 //
