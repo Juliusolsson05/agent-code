@@ -9,6 +9,7 @@ import type {
   ExtensionInstallResult,
   ExtensionListEntry,
   InstalledExtension,
+  QuarantinedExtensionEntry,
 } from '@shared/types/extensions.js'
 
 // Extension-app storage and management bridge.
@@ -76,6 +77,10 @@ export const extensionsApi = {
   // extension must never be able to install or remove another extension. They are
   // called only by the Settings UI.
   extensionsList: (): Promise<ExtensionListEntry[]> => ipcRenderer.invoke('extensions:list'),
+
+  // Ledger rows this build could not use. Never runnable — see the type.
+  extensionsListQuarantined: (): Promise<QuarantinedExtensionEntry[]> =>
+    ipcRenderer.invoke('extensions:list-quarantined'),
   onExtensionsChanged: (handler: (rows: InstalledExtension[]) => void): (() => void) =>
     subscribe('extensions:changed', handler),
 

@@ -22,7 +22,7 @@ import { computeBundleHash } from '@main/extensions/bundleHash.js'
 import { BUNDLE_MAX_BYTES, BUNDLE_MAX_DEPTH, BUNDLE_MAX_ENTRIES } from './bundleLimits.js'
 import { githubApiHeaders, resolveGitHubCliToken } from './githubCli.js'
 import { ManifestError, parseExtensionManifest } from '@main/extensions/manifest.js'
-import { discardExtensionBundle, extensionBundleDirectory, readLedger, withLedgerLock, writeLedger } from '@main/extensions/ledger.js'
+import { discardExtensionBundle, extensionBundleDirectory, preservedBundleDirectories, readLedger, readLedgerContents, withLedgerLock, writeLedger } from '@main/extensions/ledger.js'
 import type { ExtensionManifest, InstalledExtension } from '@shared/types/extensions.js'
 
 /**
@@ -713,7 +713,19 @@ export async function sweepAbandonedInstallDirectories(): Promise<void> {
         await removeAbandoned(path)
       }
     }
-    const referenced = new Set((await readLedger()).map(extensionBundleDirectory))
+    // Preserved rows count as referenced (#959). A row this build cannot read
+    // still names a bundle on disk, and the build that CAN read it will need
+    // that bundle. Reclaiming it would turn "your extension is set aside until
+    // you roll forward" into "your extension is gone" — and the sweep runs at
+    // startup, so a single rollback-and-relaunch would do it.
+    //
+    // Their directories are computed from the RAW row rather than a validated
+    // one, so this deliberately protects both possible layouts for an id it
+    // cannot fully trust; a preserved row's bundle is only ever protected from
+    // deletion here, never served or executed.
+    const { rows, preserved } = await readLedgerContents()
+    const referenced = new Set(rows.map(extensionBundleDirectory))
+    for (const path of preserved.flatMap(preservedBundleDirectories)) referenced.add(path)
     const bundlesRoot = join(EXTENSIONS_DIR, '.bundles')
     let extensionDirs
     try { extensionDirs = await readdir(bundlesRoot, { withFileTypes: true }) } catch (error) {

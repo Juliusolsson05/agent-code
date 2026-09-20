@@ -9,13 +9,14 @@ import {
 } from '@main/extensions/storage.js'
 import { installExtension, installExtensionFromPath } from '@main/extensions/install.js'
 import type { ConsentPrompt } from '@main/extensions/install.js'
-import { listInstalledExtensions, onExtensionPublication, removeExtension } from '@main/extensions/ledger.js'
+import { listInstalledExtensions, listQuarantinedExtensions, onExtensionPublication, removeExtension } from '@main/extensions/ledger.js'
 import { installedExtensionCapabilities } from '@main/extensions/grants.js'
 import { isValidExtensionId } from '@shared/types/extensionId.js'
 import type {
   ExtensionCapability,
   ExtensionInstallResult,
   ExtensionListEntry,
+  QuarantinedExtensionEntry,
 } from '@shared/types/extensions.js'
 import { withVisibleControls } from '@shared/text/visibleControls.js'
 
@@ -175,6 +176,15 @@ export function registerExtensionsIpc(): void {
 
   ipcMain.handle('extensions:list', async (): Promise<ExtensionListEntry[]> =>
     listInstalledExtensions(),
+  )
+
+  // Rows this build set aside (#959). Separate from `extensions:list` because
+  // they are NOT installed extensions: nothing here is loaded, activated or
+  // granted anything, and giving them the same shape would invite a caller to
+  // treat one as runnable. Settings shows them so the user can see why an
+  // extension is missing and remove it, which is the whole recovery path.
+  ipcMain.handle('extensions:list-quarantined', async (): Promise<QuarantinedExtensionEntry[]> =>
+    listQuarantinedExtensions(),
   )
 
   // WHY install returns a result object instead of rejecting: every failure here is

@@ -197,6 +197,27 @@ export type ExtensionListEntry = InstalledExtension & {
   present: boolean
 }
 
+/**
+ * A ledger row this build set aside instead of running (#959).
+ *
+ * WHY it reaches the renderer at all, when its whole point is that it is NOT
+ * loaded: the user needs to know why an extension they installed is not there,
+ * and needs a way to remove it. Before quarantine, one such row threw for the
+ * entire ledger — every extension stopped loading and Remove rejected too, so
+ * the only recovery was hand-editing `~/.config/agent-code/extensions.json`.
+ *
+ * It carries NO manifest, deliberately. The row failed validation, so nothing
+ * on it may be treated as a name, a path or a version; `id` is present only
+ * when it independently passes `isValidExtensionId`, and it is used for one
+ * thing — naming the row in a Remove call.
+ */
+export type QuarantinedExtensionEntry = {
+  /** `manifest.id` when it is a valid id, else null (the row can only be reported). */
+  id: string | null
+  /** Why this build rejected the row, in the user's terms. */
+  reason: string
+}
+
 /** Runtime identity is a committed generation, never just the entry-file hash.
  *  The fallback lets pre-generation installations keep loading until updated. */
 export function extensionRevision(entry: InstalledExtension): string {
