@@ -9,6 +9,7 @@ import {
   type ConditionRefusalReason,
 } from '@shared/conditions-core/dispatch'
 import type { ConditionAction } from '@shared/conditions-core/contract'
+import { makeDispatch } from '@shared/conditions-core/dispatch'
 import { opencodeQuestionView } from '@providers/opencode/renderer/conditions/views'
 import { ProviderConditionOutlet } from './ProviderConditionOutlet'
 import type { OpencodeQuestionState } from '@shared/types/providerConditions'
@@ -60,30 +61,70 @@ describe('reading a resolver’s answer (#1070)', () => {
     expect(refusalOf(action, result)).toBeNull()
   })
 
-  it('says something the person can act on for every reason', () => {
-    // Exhaustiveness is the compiler's job (the switch has no default); this
-    // pins that each reason says what happened AND what to do, and that no two
-    // read the same — a refusal the user cannot act on is barely better than
-    // the silence it replaces.
-    const reasons: ConditionRefusalReason[] = [
-      'timeout', 'aborted', 'invalid-payload', 'option-not-found',
-      'no-session', 'no-headless', 'no-resolver', 'dispatch-failed',
-    ]
-    const messages = reasons.map(reason => describeConditionRefusal({ action, reason }))
-    for (const message of messages) {
-      expect(message.length).toBeGreaterThan(20)
-      expect(message).toMatch(/\.$/)
+  it.each([
+    { reason: 'option-not-found', expect: /no longer matches/ },
+    { reason: 'invalid-payload', expect: /no longer matches/ },
+    { reason: 'timeout', expect: /did not accept that answer in time/ },
+    { reason: 'no-session', expect: /no longer running/ },
+    { reason: 'no-headless', expect: /no longer running/ },
+    { reason: 'no-resolver', expect: /cannot receive that kind of answer/ },
+    { reason: 'aborted', expect: /could not be delivered/ },
+    { reason: 'dispatch-failed', expect: /could not be delivered/ },
+  ] as Array<{ reason: ConditionRefusalReason; expect: RegExp }>)('maps $reason to the message that belongs to it', ({ reason, expect: pattern }) => {
+    // Pinned PER REASON, because the first version only checked that each
+    // message was long enough, ended in a full stop, and that there were five
+    // distinct ones — so swapping `timeout`'s message with `no-session`'s left
+    // the suite green while the app told a user to reload a running agent
+    // (#1099 review).
+    expect(describeConditionRefusal({ action, reason, rawReason: reason })).toMatch(pattern)
+  })
+
+  it('still says something when the provider sends a reason this list does not know', () => {
+    // Grok and OpenCode Terminal really do emit `stale`, `closed`,
+    // `cancelled`, `no-live-channel` and `request-failed` — both headless
+    // packages type the field as a plain string. Casting those into the union
+    // made the exhaustive switch fall through and return `undefined`, and
+    // `PaneToast`/`GlobalToast` render nothing for an empty message. So the
+    // providers with the MOST reachable refusal path stayed exactly as silent
+    // as before the fix.
+    for (const raw of ['stale', 'closed', 'cancelled', 'no-live-channel', 'request-failed']) {
+      const refusal = refusalOf(action, { ok: false, reason: raw })!
+      expect(refusal.reason).toBe('unrecognised')
+      expect(refusal.rawReason).toBe(raw)
+      const message = describeConditionRefusal(refusal)
+      expect(message).toBeTruthy()
+      // The provider's own word survives, because it is the only information
+      // there is.
+      expect(message).toContain(raw)
     }
-    // Three pairs share wording ON PURPOSE, because they are the same thing to
-    // the person reading it: option-not-found / invalid-payload both mean the
-    // question moved on, no-session / no-headless both mean the agent is gone,
-    // and aborted / dispatch-failed are both "it did not get there". Eight
-    // reasons, five messages.
-    expect(new Set(messages).size).toBe(5)
-    // `failedAtStep` is the useful half of an aborted message and used to be
-    // thrown away with the rest.
-    expect(describeConditionRefusal({ action, reason: 'aborted', failedAtStep: 'permission.reply' }))
-      .toContain('permission.reply')
+  })
+
+  it('carries failedAtStep out of the ANSWER, not just when a test hands it over', () => {
+    // The "useful half" this fix set out to rescue. The only assertion about
+    // it hand-built the refusal instead of going through `refusalOf`, so
+    // dropping the capture entirely left the suite green.
+    const refusal = refusalOf(action, { ok: false, reason: 'aborted', failedAtStep: 'permission.reply' })!
+
+    expect(refusal.failedAtStep).toBe('permission.reply')
+    expect(describeConditionRefusal(refusal)).toContain('permission.reply')
+  })
+
+  it.each([
+    { name: 'an object', failedAtStep: { step: 'permission.reply' } },
+    { name: 'a number', failedAtStep: 42 },
+  ])('ignores a failedAtStep that is not a string: $name', ({ failedAtStep }) => {
+    // Otherwise it is interpolated into user copy as `([object Object])`.
+    const refusal = refusalOf(action, { ok: false, reason: 'aborted', failedAtStep })!
+
+    expect(refusal.failedAtStep).toBeUndefined()
+    expect(describeConditionRefusal(refusal)).not.toContain('object')
+  })
+
+  it('does not let a non-string reason reach the switch', () => {
+    const refusal = refusalOf(action, { ok: false, reason: { code: 42 } })!
+
+    expect(refusal.reason).toBe('aborted')
+    expect(describeConditionRefusal(refusal)).toBeTruthy()
   })
 })
 
@@ -126,7 +167,25 @@ describe('the dispatcher reports what it used to discard (#1070)', () => {
 
     await expect(dispatch(action)).resolves.toBeUndefined()
 
-    expect(refusals).toMatchObject([{ reason: 'dispatch-failed' }])
+    // A surface with no resolver is a KNOWN refusal with its own message —
+    // telling the user to "try again" at something that can never work was the
+    // worse of the two mappings (#1099 review).
+    expect(refusals).toMatchObject([{ reason: resolver ? 'dispatch-failed' : 'no-resolver' }])
+  })
+
+  it('journals the cause of a swallowed throw, because the toast cannot carry it', async () => {
+    // The view form deliberately does not rethrow. Without this line the only
+    // record of an IPC failure is a toast saying "could not be delivered" — no
+    // message, no stack, nothing to debug from (#1099 review). The user-facing
+    // half goes to the reporter; the cause goes to the console.
+    const journal = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const cause = new Error('ipc died')
+    const dispatch = makeDispatchFromOnSend(async () => {}, async () => { throw cause }, vi.fn())
+
+    await dispatch(action)
+
+    expect(journal).toHaveBeenCalledWith(expect.any(String), action.name, cause)
+    journal.mockRestore()
   })
 
   it('leaves the pty arm alone, because its caller already answers for it', async () => {
@@ -211,3 +270,54 @@ describe('a refused answer reaches the user through the real view (#1070)', () =
   })
 
 })
+
+describe('the control plane must still FAIL on a refusal (#1099 review)', () => {
+  it('rejects, so `sessions.conditionsReply` cannot answer accepted:true', async () => {
+    // `main/sessions/conditionControl.ts` is the one caller that is not a
+    // `void dispatch(action)` view: it injects a resolver that throws a
+    // `ControlError` on `{ok:false}` and relies on that rejection to fail the
+    // capability. Swallowing it made a refused trust-dialog reply answer
+    // `accepted: true` — so a root-management agent was told a folder had been
+    // trusted when it had not.
+    const refusals: ConditionRefusal[] = []
+    const dispatch = makeDispatch(
+      's1',
+      async () => true,
+      async () => { throw new Error('ControlError: failed') },
+      refusal => refusals.push(refusal),
+    )
+
+    await expect(dispatch(action)).rejects.toThrow(/ControlError/)
+    // And it is still reported, so a surface that wires a reporter sees it too.
+    expect(refusals).toMatchObject([{ reason: 'dispatch-failed' }])
+  })
+
+  it('rejects for a refusal ANSWER as well, not only a thrown one', async () => {
+    // The shape the control resolver actually produces for most refusals is a
+    // throw, but a resolver that ANSWERS `{ok:false}` must not read as success
+    // either.
+    const dispatch = makeDispatch(
+      's1',
+      async () => true,
+      async () => ({ ok: false, reason: 'option-not-found' }),
+      undefined,
+    )
+
+    await expect(dispatch(action)).rejects.toThrow(/no longer matches/)
+  })
+
+  it('reports through the reporter the sessionId-bound form was given', async () => {
+    const refusals: ConditionRefusal[] = []
+    const dispatch = makeDispatch(
+      's1',
+      async () => true,
+      async () => ({ ok: false, reason: 'timeout' }),
+      refusal => refusals.push(refusal),
+    )
+
+    await expect(dispatch(action)).rejects.toThrow()
+
+    expect(refusals).toMatchObject([{ reason: 'timeout' }])
+  })
+})
+

@@ -106,8 +106,25 @@ graceful-old-client posture the wire format already assumes).
 
 The **dispatch driver** (`dispatch.ts`) turns a chosen action into a side
 effect. The `pty` arm calls `sendInput`/`onSend` with the action's raw `data`.
-The `custom` arm calls the resolver callback passed by the host surface; if no
-resolver is provided it throws rather than silently dropping the action.
+The `custom` arm calls the resolver callback passed by the host surface and
+**reports every refusal** (#1070): the resolver's `{ ok: false, reason }` answer
+is narrowed by `refusalOf`, turned into a sentence by `describeConditionRefusal`,
+and handed to the `onRefused` reporter the host surface passes in. The driver
+never picks a surface itself — it is shared by the app and the phone.
+
+The two builders differ in ONE respect, and it is load-bearing:
+
+- `makeDispatchFromOnSend` (views) **reports and returns**. Views call
+  `void dispatch(action)`, so a rejection would be an unhandled promise
+  rejection on top of a failure the user can already see in a toast. A missing
+  resolver here is the ordinary refusal `no-resolver`, with its own message
+  ("answer it in the terminal instead") rather than a throw.
+- `makeDispatch` (the sessionId-bound control-plane form) reports **and
+  rejects**. `sessions.conditionsReply` injects a resolver that turns
+  `{ ok: false }` into a `ControlError` and relies on that rejection to fail the
+  capability; swallowing it made a refused trust-dialog reply answer
+  `accepted: true` to an agent that then believed a folder was trusted when it
+  was not. A missing resolver there is still a throw.
 
 Type-safety guardrail: the core stores **erased** views
 (`ConditionView<string, unknown>`) in `Record<string, ConditionView>`. That
@@ -217,9 +234,12 @@ AskUserQuestionRow
   → claude.askUserQuestion.answer module resolver
 ```
 
-The dispatch `custom` arm still throws if a surface does not pass a resolver.
-That is intentional: a custom action without its named resolver would otherwise
-look clickable while doing nothing.
+A surface that does not pass a resolver never silently drops the action. On the
+control plane (`makeDispatch`) that is a throw; in a view
+(`makeDispatchFromOnSend`) it is the reported refusal `no-resolver`, which the
+user sees as "This agent cannot receive that kind of answer. Answer it in the
+terminal instead." Either way the click accounts for itself — a custom action
+without its named resolver would otherwise look clickable while doing nothing.
 
 ## CRITICAL DESIGN NOTE — `detect()` is free-form
 

@@ -866,7 +866,7 @@ export class RemoteServer extends EventEmitter {
     action:
       | { kind: 'pty'; id: string; label: string; data: string }
       | ConditionCustomAction,
-  ): Promise<{ ok: boolean; error?: string; result?: unknown }> {
+  ): Promise<{ ok: boolean; error?: string; result?: unknown; reason?: string; failedAtStep?: string }> {
     if (action.kind === 'custom') {
       // Custom actions go through the provider's own resolver, which
       // reparses the live terminal and fails closed — the safety property
@@ -874,7 +874,12 @@ export class RemoteServer extends EventEmitter {
       const result = await this.deps.manager.resolveCondition(sessionId, action)
       return result.ok
         ? { ok: true, result: result.state }
-        : { ok: false, error: `resolver: ${result.reason}` }
+        // The REASON travels as itself, not folded into an error string
+        // (#1099 review). The phone rebuilds a `ResolveConditionResult` from
+        // this reply and shares the app's wording for it; with only
+        // `resolver: <reason>` to work from it could reach exactly one of the
+        // five messages, and printed the internal token while doing it.
+        : { ok: false, error: `resolver: ${result.reason}`, reason: result.reason, ...(result.failedAtStep ? { failedAtStep: result.failedAtStep } : {}) }
     }
 
     // pty actions ARE raw keystrokes, so schema validation alone would be

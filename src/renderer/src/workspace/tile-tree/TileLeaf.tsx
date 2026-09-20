@@ -978,12 +978,23 @@ export function TileLeaf({
         onResolveCustom={(action) => feed.resolveCondition(sessionId, action)}
         // #1070. The answer came back `{ ok: false }` and was discarded, so
         // clicking an option that the agent had already replaced did nothing
-        // at all — no toast, no log, no state change. The pane toast is the
-        // right surface: it is the same one `sendConditionKey` right above
-        // uses for a key it could not write, and it appears beside the
-        // condition the user just clicked.
+        // at all — no toast, no log, no state change.
+        //
+        // WHY the GLOBAL toast and not the pane toast (#1099 review): every
+        // condition that can refuse a custom action is a Radix modal, and a
+        // refusal does not clear it — so the modal is ALWAYS up when this
+        // fires. The pane toast is an in-flow sibling with no z-index, sitting
+        // under a 1100-z, 85%-opaque scrim and inside the subtree Radix marks
+        // `aria-hidden`. `GlobalToast`'s own header records this exact trap
+        // and is why it is z-[1200]. The first version of this fix put the one
+        // message it produced where nobody could read it.
+        //
+        // The duration is long because the message asks the user to re-read a
+        // question; the default is two seconds.
         onConditionRefused={(refusal) => {
-          workspace.showPaneToast(sessionId, describeConditionRefusal(refusal))
+          // eslint-disable-next-line no-console
+          console.warn(`[condition ${sessionId.slice(0, 8)}] refused`, refusal.rawReason, refusal.failedAtStep ?? '')
+          showToast(describeConditionRefusal(refusal), 6000)
         }}
         interactionActive={interactive}
       />

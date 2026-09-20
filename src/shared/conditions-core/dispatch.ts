@@ -36,6 +36,10 @@ export function makeDispatch(
         return await resolveCustom(sessionId, action)
       },
       onRefused,
+      // The sessionId-bound form is the control plane's, and a control caller
+      // that cannot tell a refusal from an acceptance is worse than one that
+      // says nothing.
+      true,
     )
   }
 }
@@ -63,10 +67,17 @@ export function makeDispatchFromOnSend(
     await dispatchCustom(
       action,
       async () => {
-        if (!resolveCustom) throw new Error('custom condition action resolver missing')
+        // `no-resolver` rather than a throw (#1099 review): a surface with no
+        // resolver is a KNOWN refusal with its own message, and mapping it to
+        // `dispatch-failed` told the user to "try again" at something that can
+        // never work.
+        if (!resolveCustom) return { ok: false, reason: 'no-resolver' }
         return await resolveCustom(action)
       },
       onRefused,
+      // Views call `void dispatch(action)`; a rejection here is an unhandled
+      // rejection on top of a silent failure.
+      false,
     )
   }
 }
@@ -101,13 +112,30 @@ export type ConditionRefusalReason =
    *  wired at all. Named separately because it is OUR fault, not the
    *  provider's, and it reads differently in a bug report. */
   | 'dispatch-failed'
+  /** The provider refused with a reason this list does not know. */
+  | 'unrecognised'
 
 export type ConditionRefusal = {
   action: ConditionAction
+  /**
+   * The known reason, or `'unrecognised'` when the provider sent something
+   * this list does not have (#1099 review).
+   *
+   * WHY that case is not hypothetical: `ConditionActionResult.reason` is typed
+   * as a plain `string` in both headless packages, and Grok and OpenCode
+   * Terminal really do emit `stale`, `closed`, `cancelled`, `no-live-channel`
+   * and `request-failed`. Casting those into this union made the describer's
+   * exhaustive switch fall through and return `undefined`, and `PaneToast`
+   * renders nothing for an empty message — so the providers with the most
+   * reachable refusal path stayed exactly as silent as before the fix.
+   */
   reason: ConditionRefusalReason
   /** From an `aborted` resolver: which step of the resolve sequence failed.
    *  The useful half of a message, and previously thrown away with the rest. */
   failedAtStep?: string
+  /** Exactly what the provider said, kept whether or not it is a known reason,
+   *  so an unrecognised one can still be shown and reported. */
+  rawReason: string
 }
 
 export type ConditionRefusalReporter = (refusal: ConditionRefusal) => void
@@ -120,14 +148,24 @@ export type ConditionRefusalReporter = (refusal: ConditionRefusal) => void
  * is deliberate — a resolver that answers something new must not make every
  * click look refused.
  */
+const KNOWN_REASONS: readonly ConditionRefusalReason[] = [
+  'timeout', 'aborted', 'invalid-payload', 'option-not-found',
+  'no-session', 'no-headless', 'no-resolver', 'dispatch-failed', 'unrecognised',
+]
+
 export function refusalOf(action: ConditionAction, result: unknown): ConditionRefusal | null {
   if (typeof result !== 'object' || result === null) return null
   const answer = result as { ok?: unknown; reason?: unknown; failedAtStep?: unknown }
   if (answer.ok !== false) return null
-  const reason = typeof answer.reason === 'string' ? answer.reason : 'aborted'
+  const rawReason = typeof answer.reason === 'string' ? answer.reason : 'aborted'
   return {
     action,
-    reason: reason as ConditionRefusalReason,
+    // Narrowed by MEMBERSHIP, not by a cast: a provider reason that is not on
+    // the list becomes `unrecognised` and keeps its own words in `rawReason`.
+    reason: KNOWN_REASONS.includes(rawReason as ConditionRefusalReason)
+      ? rawReason as ConditionRefusalReason
+      : 'unrecognised',
+    rawReason,
     ...(typeof answer.failedAtStep === 'string' ? { failedAtStep: answer.failedAtStep } : {}),
   }
 }
@@ -159,24 +197,48 @@ export function describeConditionRefusal(refusal: ConditionRefusal): string {
       return refusal.failedAtStep
         ? `That answer could not be delivered (${refusal.failedAtStep}). Try again.`
         : 'That answer could not be delivered. Try again.'
+    case 'unrecognised':
+      // The provider's own word, because it is the only information there is —
+      // and saying it is strictly better than the empty string this used to
+      // return, which rendered no toast at all.
+      return `The agent refused that answer (${refusal.rawReason}). Read the question again and answer it.`
   }
 }
 
 async function dispatchCustom(
   action: ConditionCustomAction,
   resolve: () => Promise<unknown>,
-  onRefused?: ConditionRefusalReporter,
+  onRefused: ConditionRefusalReporter | undefined,
+  /**
+   * Let a refusal REJECT rather than only be reported (#1099 review).
+   *
+   * The two callers need opposite things. Views call `void dispatch(action)`,
+   * so a rejection there is an unhandled promise rejection on top of a silent
+   * failure — they want the report. `sessions.conditionsReply` in
+   * `main/sessions/conditionControl.ts` is not a view: it injects a resolver
+   * that THROWS a `ControlError` on `{ok:false}` and relies on that rejection
+   * to fail the capability. Swallowing it made a refused trust-dialog reply
+   * answer `accepted: true` to an agent that then believed a folder was
+   * trusted when it was not.
+   */
+  rethrow: boolean,
 ): Promise<void> {
   let result: unknown
   try {
     result = await resolve()
-  } catch {
-    // Never rejects: every view calls `void dispatch(action)`, so a rejection
-    // here is an unhandled promise rejection AND a silent failure at the same
-    // time. Reporting it is strictly better than both.
-    onRefused?.({ action, reason: 'dispatch-failed' })
+  } catch (err) {
+    onRefused?.({ action, reason: 'dispatch-failed', rawReason: 'dispatch-failed' })
+    if (rethrow) throw err
+    // The view form deliberately does not rethrow (its callers do
+    // `void dispatch(action)`), so without this line the ONLY record of an IPC
+    // failure would be a toast saying "could not be delivered" — no stack, no
+    // message, nothing to debug from (#1099 review). The reporter gets the
+    // user-facing half; the console gets the cause.
+    console.error('[conditions] custom action dispatch threw', action.name, err)
     return
   }
   const refusal = refusalOf(action, result)
-  if (refusal) onRefused?.(refusal)
+  if (!refusal) return
+  onRefused?.(refusal)
+  if (rethrow) throw new Error(describeConditionRefusal(refusal))
 }
