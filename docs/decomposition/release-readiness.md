@@ -667,6 +667,66 @@ claude 2.1.143 / codex 0.130.0 are stale versus the 2.1.278 / 0.155.1 in daily u
   - **#1018 (orchestration hides API errors):** an evidence catalog from real feed-debug recordings is being built (research agent, worktree `.worktrees/fix-orchestration-api-error`). Implementation follows the catalog.
   - **Waiting on #1013's merge:** T7 (#1006), T8 (#1007), T2 (command promotion) and T1 (#995), all of which touch the catalog, keybindings or bootstrap.
   - **Nightly** run 35430444567: build-app is green, package-macos is running.
+- 2026-09-20 15:20Z — **#1080 and #1081 merged. Two review blockers found and fixed.**
+
+  **MERGED**: **#1080** (#915, one last-active derivation — closes #915) and
+  **#1081** (#910 items 2/3). Both after a full round; the reply on each PR
+  answers every finding point by point.
+
+  **#1081's reviewer found a regression I introduced** (high): item 2's prefix
+  flush changed which row lands at `merged[0]`, and the cursor rule did not
+  follow — so the pagination marker named a row the pane holds in the MIDDLE,
+  and the next older page prepended above a row that precedes it. Permanently,
+  because uuid dedup fixes the order. **The fix to item 2 recreated item 3 from
+  the other side.** `placeHistoryEntries` now returns `keptWindowHead`,
+  observed rather than inferred, which subsumes both old signals. It also
+  refuted my "equivalent mutant" claim about `index < next` (skipping a stale
+  anchor lets the scan CONTINUE to one that flushes) and showed the item-2 rule
+  was a guess: the window can hold a row the chunk skips on EITHER side of the
+  fresh one, so the flush is now bounded by TIME as well as by the anchor.
+
+  **oth#5 (item 1) reworked after review** — the change had made its own target
+  worse. The stuck list was rebuilt every attempt, so a flush that deferred on
+  attempt 1 followed by a `failed` drain on attempt 2 reported
+  `{complete: true}` with the prompt gone, where the PRE-PR code reported it
+  correctly. Each step now carries `pending`/`owed`/`settled`. Also: the frozen
+  degraded partial could contradict a completion row that landed mid-window
+  (orchestration reads `turn_completed.fullText`), and my "equivalent mutant"
+  claim about the drain-first guard was FALSE — `OpencodeStore.read` opens a
+  DEFERRED transaction, so a statement-free settle never meets the lock,
+  reports complete and latches itself off. **The thrown `refuseReads`
+  stand-in cannot express that finding at all; only a real `BEGIN EXCLUSIVE`
+  can.** 314 tests, 10 mutations, no survivors.
+
+  **#1082 (item 4) reworked after review** — blocker: the macrotask release was
+  a rationalisation. `AgentTranscriptReader.transcriptRecords` walks a session
+  page by page and yields with `setImmediate`, so it DOES hold the handle
+  across awaits — and a timer callback runs in the TIMERS phase, ahead of the
+  CHECK phase where `setImmediate` resumes. The facade now **counts lease
+  holders**: `lease()` for callers that hold across awaits, `store()` unchanged
+  for synchronous ones. Also fixed: a failed stat at open time wedged
+  revalidation off for the process lifetime, the identity was observed AFTER
+  the open (recording the NEW identity against the OLD inode, unrecoverable),
+  and a working handle was released before the reopen was known to succeed.
+  12 mutations, no survivors.
+
+  **OPENED — #1083 (#895)**: a permission or question pending when a window
+  closes vanished from the adopting window. Three seeding sites had the same
+  hole (adoption, cold rehydrate, waking a parked session); `conditions` now
+  rides the backend snapshot, a live-channel snapshot wins on `ts`, and the
+  seed uses the same projection as the live channel so the composer picker
+  cannot disagree. The main-side test matters most: every renderer test seeds
+  a STUBBED snapshot, so a production snapshot omitting the field would leave
+  them all green.
+
+  **Lesson worth keeping**: three separate reviews this round refuted an
+  "equivalent mutant" claim I had written into a comment. Two were wrong. The
+  rule to apply: a surviving mutant is a claim about the TEST SUITE, never
+  about the code — and a stand-in that refuses everything cannot prove a guard
+  that only matters when something gets through.
+
+  **In review**: oth#5, #1082, #1083.
+
 - 2026-09-20 14:40Z — **#1079 merged; #1080 review round done; #910 items 1 and 4 opened.**
 
   **MERGED**: **#1079** (`fix/dictation-retain`, Refs #916) — hidden-pane dictation.
