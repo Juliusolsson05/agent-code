@@ -173,3 +173,107 @@ describe('the fence is only as good as the generation', () => {
     expect(seen.size).toBe(64)
   })
 })
+
+
+describe('the records are stamped with the OPENING server (#1078 review, 2)', () => {
+  // Nothing drove the code that writes `serverGeneration` — both test files
+  // poked `discardServer` with hand-built records. Review proved the gap:
+  // changing all three stamping sites to `server.key` left 16/16 green,
+  // because the live doc then carried the key while the dead record carried
+  // 'gen-1', so "the replacement's documents survive" still held. The tests
+  // agreed with themselves.
+  //
+  // `getOrCreateServer` is stubbed the way `lspManager.test.ts` already stubs
+  // it, so the REAL `openDocument` runs and builds the real records.
+  it('stamps both records with the generation that opened them', async () => {
+    const manager = new LspManager()
+    const internal = manager as unknown as Internals & {
+      getOrCreateServer: () => Promise<unknown>
+      sendNotificationIfOpen: (...args: unknown[]) => Promise<void>
+    }
+    const server = {
+      key: 'server', generation: 'gen-1', closed: false,
+      initialized: Promise.resolve({}),
+      connection: { dispose: () => {} },
+      process: Object.assign(new EventEmitter(), { killed: false, kill: () => {} }),
+    }
+    internal.servers.set('server', server)
+    internal.getOrCreateServer = async () => server
+    internal.sendNotificationIfOpen = async () => {}
+
+    await manager.openDocument({
+      clientUri: 'cc-file://global/x.ts?buffer=1',
+      content: 'text',
+      language: 'typescript',
+      workspaceRoot: '/repo',
+      filePath: 'x.ts',
+    })
+
+    expect(internal.docs.get('cc-file://global/x.ts?buffer=1')?.serverGeneration).toBe('gen-1')
+    expect([...internal.serverDocuments.values()].map(doc => doc.serverGeneration)).toEqual(['gen-1'])
+    // And the key is still the key — the two are different facts, and a
+    // stamping site that wrote one into the other would pass on either alone.
+    expect(internal.docs.get('cc-file://global/x.ts?buffer=1')?.serverKey).toBe('server')
+  })
+})
+
+
+describe('a record is never stamped with a generation that is already gone', () => {
+  // The invariant the fence depends on: under the old key-based sweep a stale
+  // record was collected by the next same-key server to die, and the fence
+  // deliberately removes that. So a record created against an ALREADY
+  // DISCARDED server could never be reclaimed — it would be adopted into every
+  // later generation (the key is shared) without ever being re-stamped.
+  //
+  // Review could not construct a production sequence that reaches this, and
+  // neither could I; `connection.dispose` rejects pending responses and the
+  // rejection path is guarded. This pins the guard anyway, because an
+  // invariant this load-bearing should not rest on that reasoning being
+  // exhaustive.
+  it('refuses to open against a server that closed while we awaited it', async () => {
+    const manager = new LspManager()
+    const internal = manager as unknown as Internals & {
+      getOrCreateServer: () => Promise<unknown>
+      sendNotificationIfOpen: (...args: unknown[]) => Promise<void>
+    }
+    let markClosed: () => void = () => {}
+    const server = {
+      key: 'server', generation: 'gen-1', closed: false,
+      // The window the guard exists for: the server dies while `openDocument`
+      // is awaiting its initialization.
+      initialized: new Promise(resolve => {
+        markClosed = () => { server.closed = true; resolve({}) }
+      }),
+      connection: { dispose: () => {} },
+      process: Object.assign(new EventEmitter(), { killed: false, kill: () => {} }),
+    }
+    internal.servers.set('server', server)
+    internal.getOrCreateServer = async () => server
+    internal.sendNotificationIfOpen = async () => {}
+
+    // A shared record already exists, which is what routes this to the branch
+    // that had no guard.
+    const serverUri = 'file:///repo/x.ts'
+    const sharedKey = `server\0${serverUri}`
+    internal.serverDocuments.set(sharedKey, {
+      key: sharedKey, serverKey: 'server', serverGeneration: 'gen-1',
+      serverUri, language: 'typescript', version: 1, refs: 1,
+      content: 'text', activeClientUri: 'other',
+    })
+
+    const opening = manager.openDocument({
+      clientUri: 'cc-file://global/x.ts?buffer=1',
+      content: 'text',
+      language: 'typescript',
+      workspaceRoot: '/repo',
+      filePath: 'x.ts',
+    })
+    markClosed()
+    await opening
+
+    expect(internal.docs.has('cc-file://global/x.ts?buffer=1')).toBe(false)
+    // …and the incumbent shared record is untouched, so nothing was
+    // half-adopted on the way out.
+    expect(internal.serverDocuments.get(sharedKey)?.refs).toBe(1)
+  })
+})

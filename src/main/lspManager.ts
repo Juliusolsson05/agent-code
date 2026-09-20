@@ -464,6 +464,23 @@ export class LspManager extends EventEmitter {
         return
       }
 
+      // ── THE INVARIANT THE FENCE DEPENDS ON (#1078 review, 3) ──
+      // Every document record's generation must belong to a server whose
+      // `discardServer` has NOT already run — otherwise nothing will ever
+      // reclaim it. Under the old key-based sweep a stale record was collected
+      // by the next same-key server to die; the generation fence deliberately
+      // removed that, which is the whole point, so the record must not be
+      // created against a dead server in the first place.
+      //
+      // Branch A above checks this after its own await. This branch is
+      // reachable after TWO (`getOrCreateServer`, `await server.initialized`)
+      // and can then sit in the shared-URI queue behind a language-feature
+      // request for up to `LSP_DOCUMENT_REQUEST_TIMEOUT_MS`, which is exactly
+      // the stall #924 describes. Review could not construct a production
+      // sequence that reaches here with a closed server — `connection.dispose`
+      // rejects pending responses, and the rejection path is guarded — but an
+      // invariant this load-bearing should not rest on that being exhaustive.
+      if (server.closed) return
       shared.refs += 1
       const doc: OpenDocumentRecord = {
         clientUri: params.clientUri,
@@ -1047,9 +1064,12 @@ export class LspManager extends EventEmitter {
     })
     initialized
       .then(() => {
-        const server = this.servers.get(key)
-        if (!server) return
-        void this.sendNotificationIfOpen(server, 'initialized', {})
+        // `record`, not `this.servers.get(key)` (#1078 review, 4). The key is
+        // reused by a replacement, so the lookup could hand `initialized` to a
+        // DIFFERENT server process than the one that just initialised — and
+        // `sendNotificationIfOpen` already refuses a closed record, so this is
+        // both more correct and no less safe.
+        void this.sendNotificationIfOpen(record, 'initialized', {})
       })
       .catch(() => {})
 
@@ -1132,9 +1152,17 @@ export class LspManager extends EventEmitter {
     // `key` comes from the language spec plus the workspace root, so a
     // replacement server spawned after a crash REUSES it. The registry
     // deletion above already knew that and compared object identity — but
-    // these two loops matched on `key`, so a late callback from the dead
-    // server (`exit`, a destroyed-stream error, a rejected `initialized`)
-    // deleted the REPLACEMENT server's documents.
+    // these two loops matched on `key`, so a SECOND `discardServer` for an
+    // already-discarded server deleted the REPLACEMENT's documents.
+    //
+    // Being precise about when that happens, because the first version of this
+    // comment was not (#1078 review, 6): the FIRST discard is never late — it
+    // is what removes the server from the registry and lets a replacement be
+    // created. The danger is a second call for the same record afterwards, and
+    // `process.on('exit')` is the one that reliably arrives that way: `error`
+    // and a rejected `initialized` both discard synchronously enough to be the
+    // first, but `exit` fires whenever the child finally dies, which can be
+    // long after a replacement is serving.
     //
     // What that looks like: the editor is attached to a healthy new server,
     // and its documents vanish from `docs`/`serverDocuments` with diagnostics
