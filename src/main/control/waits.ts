@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { z } from 'zod'
-import { ControlError, controlOwnerSchema, controlResultSchema, defineCapability,
-  type ControlCaller, type ControlRequest, type ControlResult } from '@control-sdk'
+import { agentStatusSchema, ControlError, controlOwnerSchema, controlResultSchema, defineCapability,
+  type AgentStatus, type ControlCaller, type ControlRequest, type ControlResult } from '@control-sdk'
 
 const targetSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('agent'), sessionId: z.string().min(1), owner: controlOwnerSchema.optional() }).strict(),
@@ -71,9 +71,29 @@ export function createWaitControl(invoke: Invoke) {
             cursors.set(cursor, { scope, identity: currentIdentity, hash: currentHash, expires: Date.now() + 300000 })
             if ((input.after && (!previous || previous.scope !== scope || previous.expires < Date.now())) || (identity && identity !== currentIdentity)) return finish('cursor_expired')
             identity = currentIdentity
-            const agent = z.object({ activity: z.string().nullable(), exited: z.boolean(), conditions: z.array(z.string()), queuedCount: z.number(), inputReady: z.boolean().nullable() }).safeParse(value.status)
-            const attention = target.kind === 'agent' ? agent.success && (agent.data.exited || agent.data.conditions.length > 0) : ['failed', 'outcome_unknown'].includes(String(value.status))
-            const settled = target.kind === 'agent' ? agent.success && !agent.data.exited && agent.data.inputReady === true && agent.data.activity === 'idle' && agent.data.queuedCount === 0 && agent.data.conditions.length === 0 : ['completed', 'failed', 'outcome_unknown'].includes(String(value.status))
+            // WHY the PRODUCER's schema and not a copy (#875): this used to
+            // re-declare the shape here, with `exited: z.boolean()` against a
+            // producer that sends the exit CODE or null. Every parse failed,
+            // `agent.success` was always false, and both predicates below were
+            // unreachable — so `until: 'settled'` and `until: 'attention'` ran
+            // to their timeout for an agent that was plainly idle, or plainly
+            // exited, or plainly blocked on a permission. `until: 'change'`
+            // worked, which is why it went unnoticed.
+            //
+            // A status this cannot parse is now an ERROR rather than a wait
+            // that never ends. Schema drift between two halves of one contract
+            // must be loud: silence is what cost this one months.
+            let agent: AgentStatus | null = null
+            if (target.kind === 'agent') {
+              const parsedAgent = agentStatusSchema.safeParse(value.status)
+              if (!parsedAgent.success) throw new ControlError('invalid_output', 'Status owner returned an agent status this wait cannot read')
+              agent = parsedAgent.data
+            }
+            // `exited` is the exit CODE, so a clean exit is 0 — falsy, and the
+            // reason this has to be an explicit null check.
+            const hasExited = agent !== null && agent.exited !== null
+            const attention = agent !== null ? hasExited || agent.conditions.length > 0 : ['failed', 'outcome_unknown'].includes(String(value.status))
+            const settled = agent !== null ? !hasExited && agent.inputReady && agent.activity === 'idle' && agent.queuedCount === 0 && agent.conditions.length === 0 : ['completed', 'failed', 'outcome_unknown'].includes(String(value.status))
             if (input.until === 'attention' && attention) return finish('attention')
             if (input.until === 'settled' && settled) return finish('settled')
             if (input.until === 'change' && baseline !== undefined && baseline !== currentHash) return finish('changed')
