@@ -42,6 +42,10 @@ type LspManagerInternals = {
     clientUri: string,
     method: string,
     params: Record<string, unknown>,
+    // #923: the real function hands back the revision it synchronized at.
+    // A stub that ignores this is not a faithful stand-in — its caller
+    // validates the result against the ticket and would discard everything.
+    onSynchronized?: (ticket: { doc: unknown; clientVersion: number; serverVersion: number }) => void,
   ) => Promise<unknown>
   handlePublishDiagnostics: (
     serverKey: string,
@@ -118,6 +122,7 @@ describe('LspManager document ownership', () => {
       key: 'server',
       initialized: Promise.resolve({}),
       closed: false,
+      abandonedRequests: 0,
     }
     internal.servers.set('server', server)
     internal.getOrCreateServer = async () => server
@@ -176,6 +181,7 @@ describe('LspManager document ownership', () => {
       key: 'server',
       initialized: Promise.resolve({}),
       closed: false,
+      abandonedRequests: 0,
     }
     internal.servers.set('server', server)
     internal.getOrCreateServer = async () => server
@@ -227,6 +233,7 @@ describe('LspManager document ownership', () => {
       key: 'server',
       initialized: Promise.resolve({}),
       closed: false,
+      abandonedRequests: 0,
       connection: {
         sendRequest: () => {
           markRequestStarted()
@@ -303,6 +310,7 @@ describe('LspManager document ownership', () => {
         key: 'server',
         initialized: Promise.resolve({}),
         closed: false,
+        abandonedRequests: 0,
         connection: {
           sendRequest: () => {
             markRequestStarted()
@@ -421,6 +429,7 @@ describe('LspManager document ownership', () => {
     const requests: Array<{ method: string; params: unknown }> = []
     const server = {
       closed: false,
+      abandonedRequests: 0,
       initialized: Promise.resolve({
         capabilities: { completionProvider: { resolveProvider: true } },
       }),
@@ -483,6 +492,7 @@ describe('LspManager document ownership', () => {
       const rawItem = { label: 'value', kind: 6, insertText: 'value' }
       internal.servers.set('server', {
         closed: false,
+        abandonedRequests: 0,
         initialized: Promise.resolve({
           capabilities: { completionProvider: { resolveProvider: true } },
         }),
@@ -533,8 +543,11 @@ describe('LspManager document ownership', () => {
     }
     internal.docs.set(doc.clientUri, doc)
     const requests: Array<{ method: string; params: Record<string, unknown> }> = []
-    internal.sendDocRequest = async (_clientUri, method, params) => {
+    internal.sendDocRequest = async (_clientUri, method, params, onSynchronized) => {
       requests.push({ method, params })
+      // What the real one does after restoring this alias's draft: nothing
+      // moved the version here, so the ticket is the document as it stands.
+      onSynchronized?.({ doc, clientVersion: doc.version, serverVersion: doc.version })
       return {
         isIncomplete: true,
         items: [{ label: 'value', kind: 6, insertText: 'value' }],

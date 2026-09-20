@@ -249,7 +249,25 @@ export function registerLspIpc(
     if (Buffer.byteLength(content, 'utf8') > MAX_LSP_CONTENT_BYTES) {
       throw new Error('LSP document is too large')
     }
-    await lspManager.changeDocument(clientUri, content)
+    // Through the SAME queue the open holds, not around it (#922).
+    //
+    // Ownership is registered synchronously by `lsp:open-document`, before its
+    // queued entry awaits authorization and a server spawn. A change arriving
+    // in that window therefore passed `isOwned` while LspManager still had no
+    // document for the URI: it hit `if (!doc) return`, resolved successfully,
+    // and the open then installed the ORIGINAL text. The renderer was told its
+    // edit landed and the server never saw it.
+    //
+    // Queueing makes the ordering the obvious one — open with the text the
+    // open carried, then didChange to what the user has since typed — and the
+    // boolean makes the failing case loud instead of silent. The cost is that
+    // this IPC call now resolves only once the open ahead of it finishes,
+    // which during a cold server spawn is seconds; that is the right trade
+    // against acknowledging a write that never happened.
+    const applied = await serializeDocument(clientUri, () =>
+      lspManager.changeDocument(clientUri, content),
+    )
+    if (!applied) throw new Error('LSP document is not open')
   })
 
   ipcMain.handle('lsp:close-document', async (evt, clientUri: string) => {
