@@ -11,29 +11,24 @@ import { GOAL_LOOP_STORE_LIMIT, GoalLoopStore } from './GoalLoopStore.js'
  * Is this event evidence that the AGENT is doing work, as opposed to the
  * proxy talking about itself?
  *
- * The excluded set is the flow-selection machinery: `flow_selected` and
+ * Only the flow-selection machinery is excluded: `flow_selected` and
  * `flow_ignored` name which upstream /v1/messages call is being rendered
- * from, and the `stream_phase` transitions that bracket them belong to the
- * same bookkeeping. Promoting a sidecar or subagent flow on its first chunk
- * and demoting it as `cc_is_subagent` publishes
- * `flow_selected → requesting → idle → flow_ignored` (#1024's recorded
- * sequence) — four events, none of them this agent making progress. Filtering
- * only the two by name left the two phases renewing a stale hold, and the
- * reviewer kept one alive for forty minutes by replaying that sequence once a
- * minute (#1033 round 6).
+ * from — title generation, a retry, a subagent's stream — so they are
+ * published about work this agent is not doing.
  *
- * WHY excluding ALL phase transitions rather than only bracketed ones: a
- * phase says what the stream is doing, and the stream can be somebody else's.
- * Everything that survives this filter carries content or tool activity —
- * text, thinking, tool input, a tool result, a completed message — and those
- * are published only for the flow the adapter actually renders. Holding on a
- * phase was never the point; the phase's VALUE is already read directly by
- * the delivery gate.
+ * PHASES COUNT, after a round of getting this wrong in both directions
+ * (#1033 rounds 6 and 7). Excluding them caught Claude's sidecar churn
+ * (`flow_selected → requesting → idle → flow_ignored`, #1024's recorded
+ * sequence) — and also threw away the only progress signal Grok and managed
+ * OpenCode Terminal publish during a turn, which paused a working loop after
+ * thirty minutes. No classification of an event type can separate those two,
+ * because they are the same type. What separates them is TIME, which is why
+ * the hold has an absolute deadline as well as a silence one.
  */
 function isAgentProgress(event: unknown): boolean {
   const type = (event as { type?: unknown } | null)?.type
   if (typeof type !== 'string') return false
-  return type !== 'flow_selected' && type !== 'flow_ignored' && type !== 'stream_phase'
+  return type !== 'flow_selected' && type !== 'flow_ignored'
 }
 
 const MAX_DELIVERY_FAILURES = 3
@@ -73,11 +68,29 @@ export const GOAL_LOOP_QUIET_TURN_MS = 60_000
  * has gone quiet. This is the bound on the latched-tool-label failure: after
  * it, the screen is simply outvoted. */
 export const GOAL_LOOP_ACTIVITY_GRACE_MS = 45_000
-/** A hold this old is not a long turn — a turn that long has not sent its Stop
- * yet, so nothing is held for it. It means a signal is stuck (a severed stream
- * left `Thinking`, a turn that ended without a Stop). Pause visibly: the strip
- * shows paused · error and Resume re-runs the whole gate. */
+/** A hold that has seen NOTHING for this long is waiting on a stuck signal (a
+ * severed stream left `Thinking`, a turn that ended without a Stop). Pause
+ * visibly: the strip shows paused · error and Resume re-runs the whole gate.
+ * A dispatched tool with a live process behind it is exempt — that is a build
+ * or a test suite, not a stuck signal — which is what the absolute limit
+ * below exists to bound. */
 export const GOAL_LOOP_HOLD_STALL_MS = 30 * 60_000
+/**
+ * The outside edge of any hold, exempt from nothing.
+ *
+ * WHY a second deadline (#1033 round 7): the silence deadline can be renewed
+ * by traffic, and the tool exemption suspends it entirely, so between them a
+ * loop could wait forever — a six-hour silent tool, or a session whose proxy
+ * publishes flow bookkeeping every minute. Perfect classification of "is this
+ * event real work" is not available (the same event type means work on one
+ * provider and bookkeeping on another), so the guarantee is made with time
+ * instead: whatever is happening, a held continuation either lands or the
+ * loop pauses where the user can see it.
+ *
+ * Two hours: longer than any real tool run recorded in this project, and
+ * short enough that an unattended loop does not sit dead overnight.
+ */
+export const GOAL_LOOP_HOLD_LIMIT_MS = 2 * 60 * 60_000
 /** How often a held continuation re-evaluates itself. A poll, deliberately:
  * every edge-driven version of this lost the continuation when the edge did
  * not arrive (a provider that stops emitting, a turn that ends without a
@@ -722,8 +735,9 @@ export class GoalLoopService extends EventEmitter {
       this.heldSince.set(sessionId, Date.now())
       this.progressSince.set(sessionId, Date.now())
     }
-    if (this.quietWhileHeldMs(sessionId) >= GOAL_LOOP_HOLD_STALL_MS && !this.toolIsRunning(sessionId)) {
-      this.pauseStalledHold(sessionId, reason)
+    const silent = this.quietWhileHeldMs(sessionId) >= GOAL_LOOP_HOLD_STALL_MS && !this.toolIsRunning(sessionId)
+    if (silent || this.heldForMs(sessionId) >= GOAL_LOOP_HOLD_LIMIT_MS) {
+      this.pauseStalledHold(sessionId, silent ? reason : `${reason} (held ${Math.round(this.heldForMs(sessionId) / 60_000)} min)`)
       return
     }
     if (this.holdPolls.has(sessionId)) return
@@ -764,7 +778,7 @@ export class GoalLoopService extends EventEmitter {
     this.queuedContinuation.delete(sessionId)
     const loop = this.loops.get(sessionId)
     if (!loop || loop.phase !== 'active') return
-    console.warn(`[goal-loop] ${sessionId}: held for ${Math.round(GOAL_LOOP_HOLD_STALL_MS / 60_000)} min on "${reason}" after its turn ended; pausing instead of typing into it`)
+    console.warn(`[goal-loop] ${sessionId}: held on "${reason}" after its turn ended; pausing instead of typing into it`)
     this.loops.set(sessionId, { ...loop, phase: 'paused', pauseReason: 'error', updatedAt: this.now().toISOString() })
     void this.persist()
   }

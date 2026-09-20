@@ -262,12 +262,33 @@ describe('GoalLoopService', () => {
     } finally { vi.useRealTimers(); warn.mockRestore() }
   })
 
-  it('the recorded subagent sequence is bookkeeping, not progress (#1033 round 6)', async () => {
-    // Promoting a sidecar flow on its first chunk and demoting it as
-    // `cc_is_subagent` publishes flow_selected → requesting → idle →
-    // flow_ignored. Filtering the two diagnostics by name left the two PHASES
-    // renewing the stall clock, and replaying the sequence once a minute kept
-    // a dead hold alive for forty.
+  it('a hold cannot outlive the absolute limit, whatever keeps arriving (#1033 round 7)', async () => {
+    // Claude's sidecar churn (flow_selected → requesting → idle →
+    // flow_ignored, #1024's recorded sequence) renews the silence clock,
+    // because the same phase events ARE the working signal on Grok and
+    // OpenCode Terminal and cannot be filtered by type. Time is what
+    // separates them: the hold has an outside edge that nothing exempts.
+    const { svc, manager, deliver } = await service()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.useFakeTimers()
+    try {
+      await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+      svc.observeProviderHook('s1', 'user-prompt-submit')
+      svc.control('s1', { action: 'pause' })
+      svc.control('s1', { action: 'resume' })
+      for (let minute = 0; minute < 200; minute += 1) {
+        subagentFlowInToolGap(manager)
+        await vi.advanceTimersByTimeAsync(60_000)
+      }
+      expect(deliver).not.toHaveBeenCalled()
+      expect(svc.snapshot()['s1']).toMatchObject({ phase: 'paused', pauseReason: 'error' })
+    } finally { vi.useRealTimers(); warn.mockRestore() }
+  })
+
+  it('a provider whose phases ARE its progress is not paused for silence (#1033 round 7)', async () => {
+    // Grok and managed OpenCode Terminal publish phase transitions during a
+    // turn and carry their content on a separate channel. Excluding phases
+    // from progress paused those loops after thirty minutes of real work.
     const { svc, manager, deliver } = await service()
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     vi.useFakeTimers()
@@ -277,11 +298,11 @@ describe('GoalLoopService', () => {
       svc.control('s1', { action: 'pause' })
       svc.control('s1', { action: 'resume' })
       for (let minute = 0; minute < 40; minute += 1) {
-        subagentFlowInToolGap(manager)
+        manager.emit('semantic-event', { sessionId: 's1', event: { type: 'stream_phase', phase: minute % 2 ? 'responding' : 'tool-input' } })
         await vi.advanceTimersByTimeAsync(60_000)
       }
+      expect(svc.snapshot()['s1']).toMatchObject({ phase: 'active' })
       expect(deliver).not.toHaveBeenCalled()
-      expect(svc.snapshot()['s1']).toMatchObject({ phase: 'paused', pauseReason: 'error' })
     } finally { vi.useRealTimers(); warn.mockRestore() }
   })
 
