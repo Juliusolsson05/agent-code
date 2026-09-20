@@ -16,6 +16,7 @@ const control = vi.hoisted(() => ({
   prompts: [] as Array<Record<string, unknown>>,
   session: null as unknown,
   getSessionCalls: 0,
+  onGetSession: undefined as (() => void) | undefined,
 }))
 
 vi.mock('opencode-headless', async () => {
@@ -33,6 +34,7 @@ vi.mock('opencode-headless', async () => {
       readonly client = {
         getSession: async (): Promise<unknown> => {
           control.getSessionCalls += 1
+          control.onGetSession?.()
           if (control.session instanceof Error) throw control.session
           return control.session
         },
@@ -67,6 +69,10 @@ describe('OpencodeSession prompt selection', () => {
     await session.deliverPromptText('continue')
     expect(control.prompts).toEqual([{
       prompt: 'continue',
+      // The destination is pinned WITH the selection: the row read is async,
+      // and a default destination would send this session's model to whatever
+      // session became current meanwhile.
+      sessionID: 'ses_live',
       agent: 'build',
       providerID: 'zai-coding-plan',
       modelID: 'glm-5.3',
@@ -84,12 +90,39 @@ describe('OpencodeSession prompt selection', () => {
     expect(control.prompts[1]).toMatchObject({ agent: 'plan', modelID: 'b', variant: 'max' })
   })
 
+  it('sends nothing when the session changed while its row was in flight', async () => {
+    // The row read is async. If the pane switches conversations while it is in
+    // flight — a reload, a resume, the TUI navigating — the default
+    // destination is now a DIFFERENT session, and submitting A's agent, model
+    // and variant there writes them onto B's row, permanently (#1038
+    // re-review reproduced this against the real package).
+    control.session = { agent: 'build', model: { id: 'a', providerID: 'p', variant: 'max' } }
+    const session = await started()
+    control.onGetSession = () => {
+      // B becomes the live session while A's row is being read.
+      ;(session as unknown as { liveSessionId: string }).liveSessionId = 'ses_other'
+    }
+    await session.deliverPromptText('continue')
+    control.onGetSession = undefined
+    expect(control.prompts).toEqual([{ prompt: 'continue' }])
+  })
+
   it('sends no selection at all when the row cannot be read or is incomplete', async () => {
     // Whatever shipped before this existed is the fallback: no selection, and
     // the server applies its own defaults. A HALF selection would be worse
     // than none — OpenCode persists what a prompt selects, so a model without
     // an agent re-homes the conversation to the default agent for good.
-    for (const row of [new Error('offline'), null, { agent: 'build' }, { model: { id: 'a' } }]) {
+    for (const row of [
+      new Error('offline'),
+      null,
+      { agent: 'build' },
+      { model: { id: 'a' } },
+      // A complete model and variant, but no agent: OpenCode would fill the
+      // agent in itself and persist that choice onto the row.
+      { model: { id: 'a', providerID: 'p', variant: 'max' } },
+      // An agent and a model, but no variant: same trap, the effort level.
+      { agent: 'build', model: { id: 'a', providerID: 'p' } },
+    ]) {
       control.session = row
       const session = await started()
       await session.deliverPromptText('hello')

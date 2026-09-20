@@ -471,7 +471,14 @@ export class OpencodeSession extends EventEmitter implements AgentSession {
     // prompt() defaults sessionID to the active/ensured session, so a
     // fresh pane that never resumed still gets a session created on the
     // first prompt.
-    await this.headless.prompt({ prompt: text, ...await this.conversationSelection() })
+    // The selection and the destination are ONE decision (#1038 re-review):
+    // the row read is async, and the live session can change while it is in
+    // flight — a reload, a switch, the TUI navigating away. Submitting with
+    // the default destination then sent session A's agent, model and variant
+    // to session B, which OpenCode persists onto B's row. Pin both together,
+    // or send neither.
+    const pinned = await this.conversationSelection()
+    await this.headless.prompt({ prompt: text, ...pinned })
   }
 
   /**
@@ -500,6 +507,7 @@ export class OpencodeSession extends EventEmitter implements AgentSession {
    * which is exactly the behaviour that shipped before this existed.
    */
   private async conversationSelection(): Promise<{
+    sessionID?: string
     agent?: string
     providerID?: string
     modelID?: string
@@ -508,17 +516,28 @@ export class OpencodeSession extends EventEmitter implements AgentSession {
     const sessionID = this.liveSessionId
     if (!this.headless || !sessionID) return {}
     const row = await this.headless.client.getSession(sessionID).catch(() => null)
+    // The session moved while the row was in flight. Its selection is not this
+    // session's to send, and sending it would write A's model onto B's row.
+    if (this.liveSessionId !== sessionID) return {}
     if (!isRecord(row)) return {}
     const model = isRecord(row.model) ? row.model : null
     // The session row spells the model `id`, not `modelID` as a message does.
-    const modelID = typeof model?.id === 'string' && model.id.length > 0 ? model.id : undefined
-    const providerID = typeof model?.providerID === 'string' && model.providerID.length > 0
-      ? model.providerID
-      : undefined
-    if (!modelID || !providerID) return {}
-    const variant = typeof model?.variant === 'string' && model.variant.length > 0 ? model.variant : undefined
-    const agent = typeof row.agent === 'string' && row.agent.length > 0 ? row.agent : undefined
-    return { modelID, providerID, ...(variant ? { variant } : {}), ...(agent ? { agent } : {}) }
+    const text = (value: unknown): string | undefined =>
+      typeof value === 'string' && value.length > 0 ? value : undefined
+    const modelID = text(model?.id)
+    const providerID = text(model?.providerID)
+    const variant = text(model?.variant)
+    const agent = text(row.agent)
+    // ALL FOUR or nothing (#1038 re-review found model+variant going without
+    // an agent, and agent+model going without a variant). OpenCode persists
+    // what a prompt selects back onto the row, so a partial selection does
+    // not merely under-specify this one submission — it REWRITES the
+    // conversation's own selection, permanently, to whatever the server fills
+    // the gaps with. A row that cannot answer all four is a row we do not
+    // act on; the server's own defaults then apply, exactly as they did
+    // before any of this existed.
+    if (!modelID || !providerID || !variant || !agent) return {}
+    return { sessionID, agent, modelID, providerID, variant }
   }
 
   async stop(): Promise<void> {
