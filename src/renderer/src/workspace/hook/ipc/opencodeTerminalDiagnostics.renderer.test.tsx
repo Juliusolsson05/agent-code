@@ -77,6 +77,65 @@ function recordedStatus(recording: LiveFixture, type: 'busy' | 'idle') {
   return found.event
 }
 
+describe('an OpenCode Terminal pane whose server never came up (#881)', () => {
+  // Recorded in `port-conflict.json`. Agent Code launches the TUI with a port
+  // from a loopback probe that RELEASES it before the TUI binds; another
+  // process took it in that window and answered 418. The TUI then neither
+  // painted nor exited — it was still running 25 s later, when the recorder
+  // killed it.
+  //
+  // The package detects this and says `live-state { connected: false, reason:
+  // 'server-unreachable' }`. Before #881 the adapter forwarded that as a
+  // transcript-diagnostic and NOTHING read it: the pane was blank, the process
+  // looked alive, and the composer would take text and silently fail, because
+  // programmatic delivery goes through the server that never came up.
+  it('shows the failure on the pane and keeps showing it', async () => {
+    const recording = loadLiveFixture('port-conflict.json')
+    const pane = await panes.startRecordedPane(recording, { portConflict: true })
+
+    await waitFor(() => pane.surfaces().transcriptStatus === 'error', 'the unreachable error')
+    const message = pane.runtime().transcriptError!
+    expect(message).toContain('provider_server_unreachable')
+    // What the user can act on: which port, and that the remedy is a reload
+    // (this pane cannot be pointed at a different one).
+    expect(message).toMatch(/127\.0\.0\.1:\d+/)
+    expect(message.toLowerCase()).toContain('reload')
+
+    // The LIFETIME banner, not the transient one. `transcriptError` alone also
+    // carries diagnostics that clear themselves; this pane is dead until
+    // something real changes, and AgentTerminalLeaf renders this field over
+    // the terminal for exactly that case.
+    expect(pane.runtime().transcriptChannelError).toBe(message)
+
+    // Agent Status and Dispatch read the same failure — a parent asking about
+    // this agent must not be told the transcript is healthy.
+    expect(pane.surfaces().agentStatus).toMatchObject({
+      Transcript: 'error',
+      'Transcript error': expect.stringContaining('provider_server_unreachable'),
+    })
+    expect(managedTranscriptUnavailableReason(pane.runtime(), pane.meta)).toBe('transcript_unavailable')
+
+    // A history load is the thing that used to write `ready` over a failure
+    // (#864 AC8). There is no database read to rescue this pane either.
+    await act(async () => {
+      await loadInitialHistoryForSession({ sessionId: SESSION_ID, meta: pane.meta, refs: pane.refs, setRuntimes: pane.setRuntimes })
+    })
+    expect(pane.surfaces().transcriptStatus).toBe('error')
+    expect(pane.runtime().transcriptChannelError).toBe(message)
+  })
+
+  it('does not report an unreachable server for a pane whose server is fine', async () => {
+    // The control. "Always set the banner" would satisfy the case above and
+    // put a permanent warning over every healthy OpenCode terminal.
+    const recording = loadLiveFixture('plain.json')
+    const pane = await panes.startRecordedPane(recording)
+
+    expect(pane.surfaces().transcriptStatus).not.toBe('error')
+    expect(pane.runtime().transcriptChannelError).toBeFalsy()
+    expect(pane.diagnostics.some(diagnostic => diagnostic.reason === 'server-unreachable')).toBe(false)
+  })
+})
+
 describe('an OpenCode Terminal pane whose durable channel cannot run', () => {
   it.each(REFUSALS)('fails closed for $name, and no history load turns it ready', async ({ database, channelCode, historyCode }) => {
     const recording = loadLiveFixture('plain.json')

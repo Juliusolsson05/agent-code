@@ -95,6 +95,16 @@ export class OpencodeTerminalSession extends EventEmitter implements AgentSessio
   private pty: IPty | null = null
   private headless: OpencodeTerminalHeadless | null = null
   private exited = false
+  /**
+   * One error per backend generation for an unreachable server (#881).
+   *
+   * The package dedupes identical live states, but the adapter must not rely
+   * on that: a reconnect that fails again is a NEW state transition, and an
+   * error row per retry would bury the first one under its own repetitions.
+   * Reset in `start`, because a replacement backend gets a fresh port and
+   * deserves its own verdict.
+   */
+  private serverUnreachableReported = false
   private startGeneration = 0
   private importAbort: AbortController | null = null
   private ptyDataSubscription: { dispose(): void } | null = null
@@ -132,6 +142,7 @@ export class OpencodeTerminalSession extends EventEmitter implements AgentSessio
     if (this.pty) throw new Error('OpencodeTerminalSession already started')
     const generation = ++this.startGeneration
     this.exited = false
+    this.serverUnreachableReported = false
     this.emit('input-readiness', { ready: false, reason: 'starting' })
 
     // Start from the complete inherited environment: a GUI-launched app still
@@ -226,7 +237,7 @@ export class OpencodeTerminalSession extends EventEmitter implements AgentSessio
       launch,
     })
     this.headless = headless
-    this.forwardHeadless(headless, pty)
+    this.forwardHeadless(headless, pty, launch.server.url)
 
     // A terminal runtime renders no condition UI of its own. The headless
     // publishes an explicit empty snapshot during start(), which clears any
@@ -257,7 +268,7 @@ export class OpencodeTerminalSession extends EventEmitter implements AgentSessio
    * that was busy at the moment of death looking busy in every snapshot taken
    * from its last state.
    */
-  private forwardHeadless(headless: OpencodeTerminalHeadless, pty: IPty): void {
+  private forwardHeadless(headless: OpencodeTerminalHeadless, pty: IPty, serverUrl: string): void {
     headless.on('activity', ({ active, status }) => {
       this.emit('process-state', status ? { active, status } : { active })
     })
@@ -282,7 +293,37 @@ export class OpencodeTerminalSession extends EventEmitter implements AgentSessio
     // This event reports transport health; activity and conditions still come
     // from the live channel and may be stale while disconnected. Durable
     // polling can continue, but it cannot prove the TUI's current busy state.
-    headless.on('live-state', state => this.emit('transcript-diagnostic', { kind: 'opencode-terminal-live-state', ...state }))
+    headless.on('live-state', state => {
+      this.emit('transcript-diagnostic', { kind: 'opencode-terminal-live-state', ...state })
+      // `server-unreachable` is the package's verdict that the TUI's server
+      // never came up at all — not a reconnect, not a flap. It is reported
+      // once, after the connect deadline, and only while `everConnected` is
+      // false.
+      //
+      // WHY it needs a second, user-facing route (#881): the diagnostic above
+      // reaches the renderer and NOTHING reads it. The recorded failure
+      // (`port-conflict.json`) is a TUI whose port was taken by another
+      // process between the loopback probe and the bind: it neither paints nor
+      // exits, so the pane is blank, the process looks alive, and the user is
+      // given no status, no condition and no error. Every other unrecoverable
+      // channel fault in this adapter travels as `jsonl-error`, which the
+      // renderer turns into a transcript error the pane shows.
+      //
+      // Readiness goes with it. The composer's ready hint is armed by the
+      // FIRST PTY BYTE, while programmatic delivery goes through this server
+      // (#877) — so a TUI that painted and then lost its server would sit
+      // there looking ready while every delivery failed.
+      if (state.connected || state.reason !== 'server-unreachable') return
+      if (this.serverUnreachableReported) return
+      this.serverUnreachableReported = true
+      this.emit('input-readiness', { ready: false, reason: 'provider-not-ready' })
+      // The code is in the MESSAGE as well as on the Error: Electron preserves
+      // `message` across IPC and drops custom Error properties, so the message
+      // is the only place a diagnosis survives the trip to the renderer.
+      this.emit('jsonl-error', Object.assign(new Error(
+        `OpenCode's terminal never answered on ${serverUrl}. Another process most likely took that port while the TUI was starting. This pane cannot be pointed at a new port — reload this agent to retry with a fresh one. (provider_server_unreachable)`,
+      ), { code: 'provider_server_unreachable' }))
+    })
     headless.on('exit', ({ exitCode, signal }) => {
       // Ignore a stale callback if this wrapper is ever restarted. Production
       // creates a new wrapper per backend generation, but identity fencing here

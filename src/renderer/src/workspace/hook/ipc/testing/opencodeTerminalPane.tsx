@@ -213,6 +213,18 @@ export type RecordedPaneOptions = {
    * is, which is how `prepareOpencodeTerminalLaunch` reports it.
    */
   database?: string | { error: string }
+  /**
+   * Launch the pane into the recorded PORT CONFLICT (#881): the TUI's port was
+   * taken between the loopback probe and the bind, so something that is not
+   * OpenCode answers on it. `port-conflict.json` recorded a 418, the TUI never
+   * painted (`pty.bytes === 0`) and it never exited on its own.
+   *
+   * The ReplayServer plays the stranger by refusing `/event` with that status:
+   * the socket is live and answers, and what it answers is not an event
+   * stream. The connect deadline is shortened because the package's timer is
+   * what is under test, not its 25 s duration.
+   */
+  portConflict?: true
 }
 
 export type RecordedPane = MountedPane & {
@@ -296,6 +308,10 @@ export function opencodeTerminalPanes(scope: OpencodeTerminalScope) {
     const server = new ReplayServer({ username: USERNAME, password: PASSWORD })
     await server.listen()
     scope.onCleanup(() => server.close())
+    // 418 is what the recording captured from the process that had taken the
+    // port. Any non-SSE answer does the same thing to the client; the status
+    // is kept faithful so the fixture and the harness say the same thing.
+    if (options.portConflict) server.setFailing('/event', true, 418)
 
     const pty = new AdapterPty()
     mainStandIns.createTerminalSession = sessionOptions => new OpencodeTerminalSession(sessionOptions, {
@@ -311,7 +327,10 @@ export function opencodeTerminalPanes(scope: OpencodeTerminalScope) {
       }),
       // Heartbeat off: its periodic activity re-publish is not in any
       // recording and would make the timeline depend on wall time.
-      headlessOptions: { fetch: nodeHttpFetch, heartbeatMs: 0, durablePollIntervalMs: 40, sseInitialBackoffMs: 20, sseMaxBackoffMs: 80 },
+      headlessOptions: {
+        fetch: nodeHttpFetch, heartbeatMs: 0, durablePollIntervalMs: 40, sseInitialBackoffMs: 20, sseMaxBackoffMs: 80,
+        ...(options.portConflict ? { liveConnectDeadlineMs: 250 } : {}),
+      },
     })
 
     const pane = mountPane(paneMeta(recording.sessionID))
@@ -335,14 +354,21 @@ export function opencodeTerminalPanes(scope: OpencodeTerminalScope) {
     })
     if (!recovered.ok) throw new Error(`recover failed: ${recovered.message}`)
 
-    // The TUI's first frame. The adapter treats first output plus a short
-    // grace as "composer ready"; nothing else in this harness paints.
-    pty.paint('\u001b[?1049h')
-    await waitFor(() => pane.diagnostics.some(diagnostic => diagnostic.connected === true), 'live channel connected')
-    // All three re-sync reads have reached the server. The package drops any
-    // part of a snapshot that live events overtook, so the replay may start
-    // while the answers are still in flight.
-    await waitFor(() => ['/session/status', '/permission', '/question'].every(path => server.calls.some(call => call.path === path)), 're-sync reads')
+    if (options.portConflict) {
+      // Nothing is painted, because the recorded TUI painted nothing: zero PTY
+      // bytes is the whole difficulty of this failure. Wait for the package's
+      // verdict instead of for a connection that never happens.
+      await waitFor(() => pane.diagnostics.some(diagnostic => diagnostic.reason === 'server-unreachable'), 'the unreachable verdict')
+    } else {
+      // The TUI's first frame. The adapter treats first output plus a short
+      // grace as "composer ready"; nothing else in this harness paints.
+      pty.paint('\u001b[?1049h')
+      await waitFor(() => pane.diagnostics.some(diagnostic => diagnostic.connected === true), 'live channel connected')
+      // All three re-sync reads have reached the server. The package drops any
+      // part of a snapshot that live events overtook, so the replay may start
+      // while the answers are still in flight.
+      await waitFor(() => ['/session/status', '/permission', '/question'].every(path => server.calls.some(call => call.path === path)), 're-sync reads')
+    }
 
     return {
       ...pane,

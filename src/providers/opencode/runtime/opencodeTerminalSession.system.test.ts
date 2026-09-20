@@ -1,3 +1,5 @@
+import { createServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { DatabaseSync } from './opencodeDatabase.testSupport.js'
 import { tmpdir } from 'node:os'
@@ -101,6 +103,69 @@ async function launchAdapter(recording: LiveFixture, seed?: (path: string) => vo
   await waitUntil(() => events.some(e => e.name === 'transcript-diagnostic' && (e.args[0] as { connected?: boolean }).connected === true), 5000, 'live channel')
   await waitUntil(() => server.calls.some(c => c.path === '/question'), 5000, 're-sync')
   return { session, events, writer, server, pty, script: buildReplayScript(recording) }
+}
+
+/**
+ * The port-conflict recording, launched the way it was recorded.
+ *
+ * `launchAdapter` above waits for a live connection before it returns, which is
+ * why this recording is excluded from the sweep: in it no connection ever
+ * happens. Its own notes are the spec —
+ *
+ *   [17.2ms]     spawn opencode … --hostname 127.0.0.1 --port 57497
+ *   [25076.7ms]  timeout waiting for exit on port conflict
+ *   [25105.6ms]  request to the contested port answered 418 (probe blocker)
+ *   [25105.7ms]  tui still running after conflict: true
+ *   [25336.4ms]  tui exited code=0 signal=15
+ *
+ * — and `pty.bytes === 0` with `firstOutputAt === null`. So the contested port
+ * ANSWERS, with something that is not OpenCode; the TUI neither paints nor
+ * exits; and the process only ended because the recorder killed it. A server
+ * that merely refuses connections would be a different, easier failure: the
+ * one that was actually observed is a live socket owned by a stranger.
+ */
+async function launchIntoPortConflict(recording: LiveFixture) {
+  const dbPath = join(dir, `${recording.scenario}-${cleanups.length}.db`)
+  const writer = new LiveFixtureWriter(dbPath, recording.sessionID, sessionRowFor(recording.sessionID))
+  cleanups.push(() => writer.close())
+  // The stranger on the port. 418 is what the recording captured; any non-SSE
+  // answer does the same thing to the client.
+  const stranger = createServer((_request, response) => {
+    response.writeHead(418, { 'content-type': 'text/plain' })
+    response.end("i'm a teapot")
+  })
+  await new Promise<void>(resolve => stranger.listen(0, '127.0.0.1', resolve))
+  cleanups.push(() => new Promise<void>(resolve => { stranger.closeAllConnections?.(); stranger.close(() => resolve()) }))
+  const port = (stranger.address() as AddressInfo).port
+  const url = `http://127.0.0.1:${port}`
+  // A fresh PTY per spawn: a reload is a second start, and the first PTY is
+  // dead by then.
+  const ptys: AdapterPty[] = []
+  const session = new OpencodeTerminalSession(
+    { cwd: '/sandbox/project', resumeSessionId: recording.sessionID },
+    {
+      spawnPty: (() => { const next = new AdapterPty(); ptys.push(next); return next }) as never,
+      prepareLaunch: async (opts): Promise<OpencodeTerminalLaunch> => ({
+        binary: opts.binary,
+        args: ['--session', opts.sessionID, '--hostname', '127.0.0.1', '--port', String(port)],
+        env: { ...opts.env, OPENCODE_SERVER_USERNAME: 'opencode', OPENCODE_SERVER_PASSWORD: PASSWORD },
+        sessionID: opts.sessionID,
+        server: { url, username: 'opencode', password: PASSWORD },
+        dbPath,
+      }),
+      // The recorded deadline is 25 s of real waiting. The package's timer is
+      // what is being exercised, not its duration, so it is shortened rather
+      // than faked — the adapter must react to the package's real event.
+      headlessOptions: { heartbeatMs: 0, durablePollIntervalMs: 40, sseInitialBackoffMs: 20, sseMaxBackoffMs: 40, liveConnectDeadlineMs: 250 },
+    },
+  )
+  const events: Event[] = []
+  for (const name of EVENT_NAMES) session.on(name as never, ((...args: unknown[]) => events.push({ name, args })) as never)
+  cleanups.push(() => session.stop())
+  await session.start()
+  // The recorded PTY produced ZERO bytes, so nothing is written here either.
+  // That is the whole difficulty: every other signal this pane has is silence.
+  return { session, events, ptys, port }
 }
 
 const semanticOf = (events: Event[]) => events.filter(e => e.name === 'semantic-event').map(e => e.args[0] as { type: string; turnId?: string; phase?: string; fullText?: string })
@@ -317,6 +382,123 @@ describe('OpencodeTerminalSession over recorded TUI sessions (real package, real
     await expect(session.resolveCondition({ kind: 'custom', id: 'invalid', label: 'invalid', name, payload }))
       .resolves.toMatchObject({ ok: false })
     expect(server.calls.filter(call => call.method === 'POST')).toEqual([])
+  })
+
+})
+
+describe('a TUI that never brings up its server says so (#881)', () => {
+  // Recorded in `port-conflict.json`: Agent Code launches the TUI with a port
+  // taken from a loopback probe that releases it before the TUI binds, another
+  // process takes it in that window, and the TUI then neither exits nor paints.
+  // The package detects this and reports `live-state { connected: false,
+  // reason: 'server-unreachable' }` after its connect deadline — and nothing in
+  // the app acted on it. The user got a blank pane: no status, no conditions,
+  // no error, and a composer that would accept text and silently fail, because
+  // programmatic delivery goes through the very server that never came up.
+  it('raises a transcript error the renderer will show, not just a diagnostic nobody reads', async () => {
+    const recording = loadLiveFixture('port-conflict.json')
+    const { events, port } = await launchIntoPortConflict(recording)
+
+    await waitUntil(
+      () => events.some(e => e.name === 'jsonl-error' && String((e.args[0] as Error).message).includes('provider_server_unreachable')),
+      5000,
+      'unreachable error',
+    )
+    const error = events.find(e => e.name === 'jsonl-error')!.args[0] as Error & { code?: string }
+    // The code travels in the MESSAGE as well as the property: Electron
+    // preserves `message` across IPC and drops custom Error fields, which is
+    // why every other adapter error in this file does the same.
+    expect(error.code).toBe('provider_server_unreachable')
+    expect(error.message).toContain(String(port))
+    // A user reading this has to know what to DO. The pane cannot be
+    // re-pointed at another port, so the remedy is a reload.
+    expect(error.message.toLowerCase()).toContain('reload')
+
+    // The diagnostic is still emitted: it is what recordings and the debug
+    // bundle read, and this fix adds a user-facing route rather than moving
+    // the existing one.
+    expect(events.some(e => e.name === 'transcript-diagnostic'
+      && (e.args[0] as { reason?: string }).reason === 'server-unreachable')).toBe(true)
+  })
+
+  it('withdraws input readiness, because prompts go through the server that never came up', async () => {
+    // The composer's ready hint comes from FIRST PTY OUTPUT, and this TUI
+    // never paints — so readiness was never granted here and withdrawing it
+    // looks redundant. It is not: the grace timer is armed by any byte, and a
+    // TUI that paints its frame and then loses its server (the same
+    // `server-unreachable` verdict) would otherwise keep a ready composer
+    // whose every programmatic delivery fails.
+    const recording = loadLiveFixture('port-conflict.json')
+    const { events } = await launchIntoPortConflict(recording)
+
+    await waitUntil(
+      () => events.some(e => e.name === 'input-readiness' && (e.args[0] as { ready: boolean }).ready === false
+        && (e.args[0] as { reason?: string }).reason === 'provider-not-ready'),
+      5000,
+      'readiness withdrawn',
+    )
+  })
+
+  it('gives a reload its own verdict, because a reload gets a fresh port', async () => {
+    // The latch is per BACKEND GENERATION, not per pane. The remedy this error
+    // tells the user about is a reload, and if the new port is contested too
+    // they have to be told again — a latch that outlived the backend would
+    // make the second failure silent, which is the bug this issue is about.
+    const recording = loadLiveFixture('port-conflict.json')
+    const { session, events } = await launchIntoPortConflict(recording)
+    await waitUntil(() => events.some(e => e.name === 'jsonl-error'), 5000, 'first verdict')
+
+    await session.stop()
+    const before = events.filter(e => e.name === 'jsonl-error').length
+    await session.start()
+
+    await waitUntil(() => events.filter(e => e.name === 'jsonl-error').length > before, 5000, 'second verdict')
+  })
+
+  it('says it once per generation however many times the package repeats itself', async () => {
+    // Today the package cannot repeat: `server-unreachable` comes from a
+    // one-shot deadline timer and `setLiveState` drops an identical state. So
+    // this drives the ADAPTER's own rule through the real headless emitter
+    // rather than pretending the package behaves differently — the guard is
+    // the adapter's, and it should hold whatever the package sends.
+    const recording = loadLiveFixture('port-conflict.json')
+    const { session, events } = await launchIntoPortConflict(recording)
+    await waitUntil(() => events.some(e => e.name === 'jsonl-error'), 5000, 'verdict')
+    const headless = (session as unknown as { headless: { emit: (name: string, payload: unknown) => void } }).headless
+
+    headless.emit('live-state', { connected: false, reason: 'server-unreachable' })
+    headless.emit('live-state', { connected: false, reason: 'server-unreachable' })
+
+    expect(events.filter(e => e.name === 'jsonl-error')).toHaveLength(1)
+    // The diagnostic is not latched: recordings want every transition.
+    expect(events.filter(e => e.name === 'transcript-diagnostic'
+      && (e.args[0] as { reason?: string }).reason === 'server-unreachable').length).toBeGreaterThan(1)
+  })
+
+  it('does not condemn a pane whose server came up and then flapped', async () => {
+    // The control, and the reason the adapter checks the REASON rather than
+    // just `connected === false`. An SSE stream that drops after a healthy
+    // connection is a transient the package reconnects from; treating it as a
+    // dead server would stand a permanent "reload this agent" banner over a
+    // pane that is about to be fine.
+    const recording = loadLiveFixture('plain.json')
+    const { session, events, server } = await launchAdapter(recording)
+
+    server.dropStreams()
+    await waitUntil(
+      () => events.some(e => e.name === 'transcript-diagnostic' && (e.args[0] as { connected?: boolean }).connected === false),
+      5000,
+      'the disconnect',
+    )
+
+    expect(events.filter(e => e.name === 'jsonl-error')).toEqual([])
+    // And it comes back on its own, which is what makes the distinction real.
+    await waitUntil(
+      () => events.filter(e => e.name === 'transcript-diagnostic' && (e.args[0] as { connected?: boolean }).connected === true).length > 1,
+      5000,
+      'the reconnect',
+    )
+    void session
   })
 
 })

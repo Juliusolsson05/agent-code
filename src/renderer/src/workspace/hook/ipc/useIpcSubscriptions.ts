@@ -861,10 +861,16 @@ export function useIpcSubscriptions(
         && !message.includes('(sink_failed)')
         && !message.includes('(final_drain_incomplete)')
       const sessionSwitched = message.includes('(provider_session_switched)')
+      // #881. The TUI's server never came up — its port was taken between our
+      // loopback probe and its bind. The pane cannot be re-pointed at another
+      // port, and the process neither paints nor exits, so this is as
+      // permanent as a stopped channel and belongs in the lifetime banner: the
+      // alternative is a blank pane with a warning that scrolled away.
+      const serverUnreachable = message.includes('(provider_server_unreachable)')
       updateRuntime(sessionId, {
         transcriptStatus: 'error',
         transcriptError: message,
-        ...((channelStopped || sessionSwitched) ? { transcriptChannelError: message } : {}),
+        ...((channelStopped || sessionSwitched || serverUnreachable) ? { transcriptChannelError: message } : {}),
       })
     })
 
