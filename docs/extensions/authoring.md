@@ -412,7 +412,7 @@ Declare what you need in `permissions`. The user approves them in a blocking
 dialog at install time, and the grant is bound to the exact bytes installed — if
 you ship new code, the user is asked again.
 
-**Six permissions are currently implemented:**
+**Ten permissions are currently implemented:**
 
 | Permission | Grants |
 |---|---|
@@ -422,13 +422,104 @@ you ship new code, the user is asked again.
 | `fs.read` | API v2 `api.files.readText({ sessionId, path })` in runtimes and views |
 | `fs.write` | API v2 atomic `api.files.writeText(...)` with create-only/version checks |
 | `notifications.show` | API v2 `api.notifications.show(message)` app toast, including from a background runtime |
+| `service.run` | API v2 `api.services.*` — start/stop/status/invoke of your bundled native services (see §6a) |
+| `service.transport` | Fetch your own running service through the host proxy (see §6b) |
+| `net.listen` | `api.services.expose(id, true)` — host-owned LAN exposure of a running service (see §6c) |
+| `net.connect` | API v2 `api.net.fetch(url, init)` — brokered outbound fetch to private addresses (see §6d) |
 
 Anything else fails the install with a message naming what this build supports.
-Transcript, git, prompt-sending and network capabilities **do
+Transcript, git and prompt-sending capabilities **do
 not exist** — they are unimplemented, and asking for one is an install error rather
-than a silent no-op. Scoped file and background notification services require API
+than a silent no-op. Scoped file, background notification, service and network
+permissions require API
 v2 because v1's per-view API is frozen.
 Omit `permissions` entirely to stay Tier 0, which installs with no prompt at all.
+
+### 6a. Services (`service.run`) — read this trust note
+
+A service is a **native Node program the host launches as a child process with
+this user's privileges**. That is the entire point — language servers, dev
+servers, device bridges, LAN game hosts are native code — and the install dialog
+says so plainly. The permission is the user's consent decision, not a sandbox:
+native code you ship can read and write what the user's account can. Keep that
+in mind before adding `service.run` to a manifest, and expect users to judge you
+for it.
+
+Declare services in the manifest (v2 only, entries must stay inside the bundle):
+
+```json
+"contributes": { "services": [{ "id": "myext.lan-host", "entry": "dist/host.js" }] }
+```
+
+The host never auto-starts anything. Your runtime or view starts a service
+explicitly, and only code the user installed can:
+
+```ts
+const handle = await api.services.start('myext.lan-host')   // → { pid, endpoints: [{ name, port }] }
+const reply  = await api.services.invoke('myext.lan-host', 'status', { deep: true })
+await api.services.stop('myext.lan-host')
+```
+
+The entry exports the service contract (`defineService` + `runService` from the
+SDK package) and speaks the host's message protocol over `process.parentPort`:
+
+```ts
+import { defineService, runService } from 'agent-code-extension-api'
+
+const service = defineService({
+  start(context) {
+    context.onRequest('status', () => ({ up: true }))
+    // Bind LOOPBACK only; exposure beyond this machine is a separate,
+    // host-owned decision (§6c).
+    context.ready([{ name: 'http', port: 5192 }])
+  },
+})
+runService(service)
+```
+
+One live instance per service id; `start` on a running service joins it.
+Update/uninstall/app-quit terminate the process. A request whose result is
+unknown (timeout) kills the process rather than replaying it.
+
+### 6b. Talking to your own service (`service.transport`)
+
+Views and runtimes have no network at all — their CSP permits only their own
+origin. With `service.transport`, a frame may fetch its **own** running service
+through a host proxy on that same origin:
+
+```ts
+// from a view frame — same origin, so CSP allows it
+const state = await fetch('./__service/myext.lan-host/api/state').then(r => r.json())
+```
+
+Plain HTTP methods only (WebSockets are not proxied). Ungranted or not-running
+answers 404. The proxy forwards only `accept` and `content-type`, caps request
+bodies at 1 MiB, and re-checks the grant and running state on every request.
+
+### 6c. LAN exposure (`net.listen`)
+
+`net.listen` does not let your service bind the network — it lets the **host**
+do it for you. Your service bound loopback at ready(); expose it and share the
+returned port on a trusted network:
+
+```ts
+const { port } = await api.services.expose('myext.lan-host', true)
+// friends open http://<your-lan-ip>:<port> in any normal browser
+await api.services.expose('myext.lan-host', false)  // close it
+```
+
+The host owns that listener: OS-chosen port, only private-source connections
+admitted, closed automatically when your service stops or the extension is
+updated/removed. Exposure can never outlive the thing it exposes.
+
+### 6d. Outbound fetch (`net.connect`)
+
+`api.net.fetch(url, init)` asks the host to fetch for you. The sandbox never
+opens a socket. v1 policy is deliberately narrow: **literal private/loopback IP
+hosts only** (`http://192.168.1.42:5192/...`) — no DNS names (they resolve
+anywhere), no public addresses. Bodies are capped at 64 KiB, text responses at
+256 KiB, and the whole call times out at 10s. Public-internet egress would be a
+separate future policy decision with its own consent copy.
 
 ---
 

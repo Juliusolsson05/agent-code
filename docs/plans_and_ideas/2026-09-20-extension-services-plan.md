@@ -18,7 +18,7 @@ public-address, escaping paths) are the point, not coverage padding.
 - [x] `docs/plans_and_ideas/2026-09-20-extension-services-plan.md`
 - Commit: `docs(extensions): design and staged plan for services + scoped network capabilities`
 
-## Stage 1 — `service.run`: process lifecycle + RPC
+## Stage 1 — `service.run`: process lifecycle + RPC — DONE
 
 **Files**
 
@@ -77,7 +77,7 @@ public-address, escaping paths) are the point, not coverage padding.
 
 - Commit: `feat(extensions): service.run capability with host-owned process lifecycle`
 
-## Stage 2 — `service.transport`: origin-scoped proxy
+## Stage 2 — `service.transport`: origin-scoped proxy — DONE (proxy landed under __bundle/<rev>/__service/… so transport URLs are generation-pinned)
 
 **Files**
 
@@ -96,7 +96,7 @@ public-address, escaping paths) are the point, not coverage padding.
 
 - Commit: `feat(extensions): service.transport origin-scoped service proxy`
 
-## Stage 3 — `net.listen`: host-owned LAN exposure
+## Stage 3 — `net.listen`: host-owned LAN exposure — DONE (one listener per extension, expose() recreates per call)
 
 **Files**
 
@@ -115,7 +115,7 @@ public-address, escaping paths) are the point, not coverage padding.
 
 - Commit: `feat(extensions): net.listen host-owned LAN exposure for services`
 
-## Stage 4 — `net.connect`: brokered outbound fetch
+## Stage 4 — `net.connect`: brokered outbound fetch — DONE (global fetch in main, no electron import needed)
 
 **Files**
 
