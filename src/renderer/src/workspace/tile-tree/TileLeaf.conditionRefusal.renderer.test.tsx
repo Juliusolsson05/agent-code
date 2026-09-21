@@ -222,6 +222,26 @@ it('says a vanished prompt is gone on the same surface as every other refusal', 
   expect(paneToasts).toEqual([])
 })
 
+it('holds a refused keystroke as long as the refusal it matches', async () => {
+  // The comment beside the fix calls the duration load-bearing — 2.5s is not
+  // enough to look at a trust dialog and decide. A mutation that drops both
+  // duration arguments passed all 1013 renderer tests (#1110 review), because
+  // the sibling reporter's duration test was never carried across to this arm.
+  vi.useFakeTimers()
+  mount()
+  sendInputResult = false
+
+  await act(async () => { await sendKey?.('1') })
+  const message = 'That keystroke did not reach the agent. If it stays stuck, retry the pane.'
+  expect(screen.getByText(message)).toBeInTheDocument()
+
+  act(() => { vi.advanceTimersByTime(4_000) })
+  expect(screen.getByText(message)).toBeInTheDocument()
+
+  act(() => { vi.advanceTimersByTime(2_100) })
+  expect(screen.queryByText(message)).toBeNull()
+})
+
 it('stays silent when the keystroke landed', async () => {
   mount()
 

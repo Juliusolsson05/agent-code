@@ -58,9 +58,10 @@ export function makeDispatchFromOnSend(
     if (action.kind === 'pty') {
       // The pty arm is NOT reported here. Its caller owns the answer: `onSend`
       // returns void because the app's own `sendConditionKey` already reads
-      // main's boolean and shows a pane toast for a write it could not make.
-      // Reporting it twice would double the message for the one arm that was
-      // never silent.
+      // main's boolean and surfaces a refusal itself — on the global toast
+      // since #711, the same surface this reporter's callers use. Reporting it
+      // here too would double the message for the one arm that was never
+      // silent.
       await onSend(action.data)
       return
     }

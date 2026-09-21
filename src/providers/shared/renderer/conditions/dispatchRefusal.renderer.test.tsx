@@ -189,9 +189,10 @@ describe('the dispatcher reports what it used to discard (#1070)', () => {
   })
 
   it('leaves the pty arm alone, because its caller already answers for it', async () => {
-    // `sendConditionKey` in TileLeaf reads main's boolean and shows a pane
-    // toast for a write it could not make. Reporting here too would double the
-    // message for the one arm that was never silent.
+    // `sendConditionKey` in TileLeaf reads main's boolean and surfaces the
+    // refusal itself — on the global toast since #711, the same surface this
+    // reporter's callers use. Reporting here too would double the message for
+    // the one arm that was never silent.
     const onRefused = vi.fn()
     const onSend = vi.fn(async () => {})
     const dispatch = makeDispatchFromOnSend(onSend, async () => ({ ok: false, reason: 'timeout' }), onRefused)

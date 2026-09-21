@@ -414,27 +414,47 @@ export function TileLeaf({
   //
   // WHY BOTH REFUSALS GO TO THE GLOBAL TOAST (#711 item 1)
   //
-  // These messages answer a click the user made inside a condition view, and
-  // every condition that reaches this arm is a Radix modal: the trust dialogs
-  // and the permission prompt. A modal is therefore up — or was a moment ago —
-  // whenever either branch fires.
+  // This arm is reached by FOUR condition kinds, not one shape (#1110 review
+  // corrected an earlier version of this comment that claimed they were all
+  // modals):
   //
-  // `showPaneToast` renders `PaneToast`, an in-flow sibling inside the pane
-  // with no z-index. The dialog overlay is z-[1100] and 85% opaque, and Radix
-  // marks the rest of the subtree `aria-hidden`. So the message was painted
-  // under the scrim, inside the region screen readers are told to ignore, for
-  // exactly the conditions that can produce it. `GlobalToast` is z-[1200] and
-  // its own header records this trap.
+  //   - `claude.trust-dialog` and `claude.permission-prompt` are Radix
+  //     modals;
+  //   - `codex.approval` and `claude.resume-prompt` are in-flow STRIPS
+  //     (`layout: 'strip'`, plain `role="group"` divs, no scrim);
   //
-  // #1070 moved the STRUCTURED refusal here for that reason and left the
-  // keystroke arm behind, which was worse than either surface on its own: one
-  // click produced a readable message or an invisible one depending on which
-  // arm handled it, and the keystroke arm is the one a trust dialog uses.
+  // and there is a fifth entry point with no condition surface at all:
+  // `useComposerKeybinds` routes composer ArrowUp/Down here whenever
+  // `hasActionCondition` is true.
   //
-  // The vanished-prompt branch moves too. The modal has usually unmounted by
-  // then, so the pane toast would often have been visible — but a single click
-  // landing on two different surfaces depending on which check failed first is
-  // the inconsistency, not a saving.
+  // The modal cases are what force the move. `showPaneToast` renders
+  // `PaneToast`, an in-flow sibling inside the pane with no z-index; the
+  // dialog overlay is z-[1100] and 85% opaque, and Radix marks the rest of the
+  // subtree `aria-hidden`. The message was painted under the scrim, inside the
+  // region screen readers are told to ignore. Worse, a modal from a RETAINED
+  // pane (Spotlight keeps the tile tree mounted under `display: none`) portals
+  // to `body` while its pane toast is inside the hidden subtree — invisible
+  // outright. `GlobalToast` is z-[1200], and its own header records this trap.
+  //
+  // For the strip cases the pane toast was readable, and the global toast is
+  // the lesser fit: it is not adjacent to the strip that was clicked. That
+  // cost is accepted because the alternative is branching the surface on the
+  // condition's layout, which would put the same click on two surfaces again —
+  // the exact inconsistency this fixes. Every path here is focus-safe (the
+  // pane root takes `onMouseDown={onFocusRequest}`, strip keyboard handling is
+  // gated on `interactionActive`, and the composer route needs the textarea
+  // focused), so the toast always describes the pane the user is looking at.
+  //
+  // #1070 moved the STRUCTURED refusal here and left this arm behind, which
+  // was worse than either surface on its own: one click produced a readable
+  // message or an invisible one depending on which arm handled it, and this is
+  // the arm a trust dialog uses.
+  //
+  // The vanished-prompt branch moves too. It is in fact not reachable today —
+  // the outlet is fed `normalizedConditions` and renders nothing for a null
+  // snapshot, and the composer route is gated by `hasActionCondition` — so
+  // moving it costs nothing and keeps one click on one surface if it ever
+  // becomes reachable again.
   //
   // Duration matches the refusal reporter's: these ask the user to look at
   // something and decide, which the 2.5s default does not allow.
@@ -446,6 +466,12 @@ export function TileLeaf({
     }
     const ok = await feed.sendInput(sessionId, data)
     if (!ok) {
+      // Parity with the structured reporter below: the toast tells the user,
+      // the console says which session, because the toast deliberately carries
+      // no session identity and a 4-pane grid gives it no context (#1110
+      // review).
+      // eslint-disable-next-line no-console
+      console.warn(`[condition ${sessionId.slice(0, 8)}] keystroke refused`)
       // main returns a bare boolean for two disjoint reasons — a prompt
       // delivery holds the write reservation, or there is no backend at all.
       // Only the first is worth retrying, and we cannot tell them apart from
