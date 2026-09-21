@@ -43,8 +43,16 @@ export function isPasteLike(text: string): boolean {
   return /[\r\n]/.test(text) || text.length > CLAUDE_PASTE_THRESHOLD
 }
 
-const PASTE_PLACEHOLDER_RE = /\[Pasted text #\d+/g
-const IMAGE_PLACEHOLDER_RE = /\[Image #\d+\]/g
+// Also matched against normalized text (see `placeholderCount`). No closing
+// bracket on purpose: Claude appends a size to the collapsed form
+// (`[Pasted text #1 +42 lines]`), so the index is where a reliable match ends.
+const PASTE_PLACEHOLDER_RE = /\[Pasted\s+text\s+#\d+/g
+// Matched against WHITESPACE-NORMALIZED text, never the raw screen — see
+// `imagePlaceholderCount`. `\s+` rather than a literal space so a pill that
+// survives normalization with an odd gap still counts; the index and both
+// brackets stay mandatory so a bare `[Image` in prompt content can never be
+// mistaken for an attachment that has not rendered yet.
+const IMAGE_PLACEHOLDER_RE = /\[Image\s+#\d+\]/g
 
 /**
  * Return only Claude's currently active composer region.
@@ -105,13 +113,48 @@ export function extractActiveClaudeComposer(screen: string): string {
   return lines.slice(start, end).join('\n')
 }
 
+/**
+ * How many collapsed-paste placeholders the given composer text holds.
+ *
+ * Normalized for the same reason as `imagePlaceholderCount` (#1113), and this
+ * one is worse: `[Pasted text #1]` has TWO internal spaces, so there are two
+ * columns at which a wrap can hide it. Unlike the image case this was not
+ * caught in a recording — it is fixed by analogy, because the failure mode is
+ * strictly nastier. When a COLLAPSED paste's placeholder goes unseen there is
+ * no second signal to fall back on: `pasteAbsorbedVia` then looks for the
+ * paste's tail inline, and a paste Claude collapsed has no tail on screen to
+ * find. Text delivery would hit its whole 5 s budget and strand the draft in
+ * the composer, exactly as the image path did.
+ */
 export function placeholderCount(screen: string): number {
-  const matches = screen.match(PASTE_PLACEHOLDER_RE)
+  const matches = normalizeWhitespace(screen).match(PASTE_PLACEHOLDER_RE)
   return matches ? matches.length : 0
 }
 
+/**
+ * How many rendered image attachments the given composer text holds.
+ *
+ * WHY the screen is normalized first (#1113): `[Image #1]` contains exactly one
+ * space, and a word wrap can only break a line at a space — so whenever the
+ * pill lands on the wrap column the TUI renders it as `[Image` / `  #1]` across
+ * two lines. Matching the raw text found neither half, the count never rose
+ * above its baseline, and `pollClaudeImagesAbsorbed` burned its whole 5 s
+ * budget before returning `absorption-timeout` with `retrySafe: false`. The
+ * user then saw "the prompt was never submitted" for a prompt sitting complete
+ * in Claude's composer, and had to clear it by hand. Recorded in
+ * testing/fixtures/image-absorption/, where the same pane at the same width
+ * failed one send and passed the next purely on where that space fell.
+ *
+ * WHY normalization is safe here rather than merely convenient: this count is
+ * only ever consumed as a DELTA against a baseline computed by this same
+ * function, so collapsing whitespace cannot manufacture a transition — it can
+ * only stop the detector from missing one. It is also exactly what the text
+ * half of this protocol (`pasteAbsorbedVia`) has always done, which is the
+ * reason wrapped TEXT sends never carried this bug; the two halves were
+ * inconsistent, and that inconsistency was the defect.
+ */
 export function imagePlaceholderCount(screen: string): number {
-  return screen.match(IMAGE_PLACEHOLDER_RE)?.length ?? 0
+  return normalizeWhitespace(screen).match(IMAGE_PLACEHOLDER_RE)?.length ?? 0
 }
 
 export async function pollClaudeImagesAbsorbed(

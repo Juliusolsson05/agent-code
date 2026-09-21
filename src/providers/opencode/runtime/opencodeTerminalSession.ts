@@ -5,6 +5,7 @@ import type { IPty } from 'node-pty'
 import {
   OpencodeTerminalHeadless,
   prepareOpencodeTerminalLaunch,
+  resolveOpencodeDbPath,
   type OpencodeTerminalHeadlessOptions,
 } from 'opencode-terminal-headless'
 
@@ -235,6 +236,13 @@ export class OpencodeTerminalSession extends EventEmitter implements AgentSessio
       pty,
       cwd: this.cwd,
       launch,
+      // The app owns every child process, so the package asks US to re-run
+      // `opencode db path` when the launch could not resolve one (#1114). The
+      // arguments are deliberately the same ones `prepareLaunch` used, so the
+      // retry hits the same memo key — a pane that lost a race to a restore
+      // storm gets whatever a sibling has since resolved for free, and only a
+      // genuinely unresolved path costs another process start.
+      resolveDbPath: () => resolveOpencodeDbPath({ binary: this.binary, env, cwd: this.cwd }),
     })
     this.headless = headless
     this.forwardHeadless(headless, pty, launch.server.url)

@@ -1,0 +1,61 @@
+{
+  "recordedAt": "2026-09-21T22:09:23.813Z",
+  "source": "debug bundle 2026-09-21T22-09-23-834-168b7a32 (note: \"Sending logic broke\"), trace/screen/tail-samples.jsonl",
+  "claudeCodeVersion": "2.1.278",
+  "appBuild": {
+    "gitSha": "3f0b71fe2732d22ff70d77aba79bd13d821b9a5a",
+    "branch": "main",
+    "packageVersion": "0.1.0"
+  },
+  "note": "Two image-attachment deliveries from ONE pane, ONE session, at the SAME terminal width, minutes apart. Each is a real baseline/after pair: `baseline` is the last frame before Agent Code wrote the prompt, `after` is the frame the absorption poll actually saw. The only difference between them is where the single internal space of the `[Image #N]` pill fell relative to the wrap column.",
+  "deliveries": {
+    "wrapped": {
+      "outcome": "absorption-timeout",
+      "imageCount": 1,
+      "submitBeginIso": "2026-09-21T22:06:59.341Z",
+      "submitResult": {
+        "ok": false,
+        "code": "absorption-timeout",
+        "stage": "absorption",
+        "bodyWritten": true,
+        "enterWritten": false,
+        "retryable": false,
+        "durationMs": 5027
+      },
+      "baseline": {
+        "seq": 20,
+        "tsIso": "2026-09-21T22:06:48.562Z",
+        "screenHash": "17ba992013988d",
+        "screen": "\n           Claude Code v2.1.278\n ▐▛███▛█   Opus 5 (1M context) with xhigh effort\n▝▜██████▀  Claude Max\n  ▝▝ ▝▝    ~/Desktop/Development/agent-code\n\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────\n❯\n────────────────────────────────────────────────────────────────\n  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents"
+      },
+      "after": {
+        "seq": 21,
+        "tsIso": "2026-09-21T22:06:59.563Z",
+        "screenHash": "178b69a64f1bc4",
+        "screen": "\n           Claude Code v2.1.278\n ▐▛███▛█   Opus 5 (1M context) with xhigh effort\n▝▜██████▀  Claude Max\n  ▝▝ ▝▝    ~/Desktop/Development/agent-code\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────\n❯ Lets figure out why this is happening wiht opencode [Image\n  #1]\n────────────────────────────────────────────────────────────────\n  ⏵⏵ bypass permissions on (shift+tab to cycle)"
+      }
+    },
+    "unwrapped": {
+      "outcome": "accepted",
+      "imageCount": 1,
+      "submitBeginIso": "2026-09-21T22:09:16.024Z",
+      "submitResult": {
+        "ok": true,
+        "acceptance": "queue",
+        "durationMs": 160
+      },
+      "baseline": {
+        "seq": 50,
+        "tsIso": "2026-09-21T22:09:15.466Z",
+        "screenHash": "576c61a12e0a0",
+        "screen": "\n\n  Searched for 4 patterns, read 2 files, ran 1 shell command\n\n⏺ Skill(superpowers:systematic-debugging)\n  ⎿  Successfully loaded skill\n\n⏺ Using superpowers:systematic-debugging to root-cause this\n  before proposing anything.\n\n⏺ Calling agent_code…\n\n· Baking… (24s · ↓ 1.6k tokens · thinking with xhigh effort)\n  ⎿  Tip: Use /memory to view and manage Claude memory\n\n────────────────────────────────────────────────────────────────\n❯\n────────────────────────────────────────────────────────────────\n  ⏵⏵ bypass permissions on (shift+tab to cycle) · esc to inte…"
+      },
+      "after": {
+        "seq": 51,
+        "tsIso": "2026-09-21T22:09:16.181Z",
+        "screenHash": "5571e07d02aa1",
+        "screen": "\n\n⏺ Skill(superpowers:systematic-debugging)\n  ⎿  Successfully loaded skill\n\n⏺ Using superpowers:systematic-debugging to root-cause this\n  before proposing anything.\n\n⏺ Calling agent_code…\n\n✶ Baking… (24s · ↓ 1.7k tokens · thinking with xhigh effort)\n  ⎿  Tip: Use /memory to view and manage Claude memory\n\n────────────────────────────────────────────────────────────────\n❯ Not only that ,t he send mechanic is now broken on claude...\n  we for sure need to figure that out with integration tests.\n  [Image #2]\n────────────────────────────────────────────────────────────────\n  ⏵⏵ bypass permissions on (shift+tab to cycle)"
+      }
+    }
+  }
+}
