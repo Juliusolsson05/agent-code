@@ -259,6 +259,14 @@ const api = {
     // returned port is the one to share on the local network.
     expose: (serviceId, lan) => request('service.expose', { serviceId, lan }),
   },
+  // net.connect: brokered outbound fetch. The frame's own CSP still allows no
+  // network at all — this call crosses through the host, which enforces the
+  // private-address policy before any socket opens.
+  net: {
+    fetch: (url, init) => request('net.fetch', {
+      url, httpMethod: init && init.method, headers: init && init.headers, body: init && init.body,
+    }),
+  },
 };
 
 // Listeners for host-pushed change nudges (Tier-1 observe live updates), keyed by

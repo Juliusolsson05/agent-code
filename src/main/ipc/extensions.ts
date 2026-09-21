@@ -64,6 +64,8 @@ const CAPABILITY_DISCLOSURE: Record<ExtensionCapability, string> = {
     'Exchange requests with its own running service on this machine (the host proxies them; the extension cannot reach anything else on the network).',
   'net.listen':
     'Make one of its running services reachable from this machine’s local network. The host owns that listener and closes it when the service stops. Use a trusted network only.',
+  'net.connect':
+    'Open web requests to addresses you or the extension enter on this local network (private addresses only in this release; the request goes through the host, not the sandbox).',
 }
 
 function consentPromptFor(evt: IpcMainInvokeEvent, source: string): ConsentPrompt {

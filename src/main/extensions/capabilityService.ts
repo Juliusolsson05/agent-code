@@ -23,6 +23,7 @@ import type {
 } from '@shared/types/extensionServices.js'
 import type { ExtensionJson } from '@shared/types/extensionRuntime.js'
 import { installedExtensionCapabilities } from './grants.js'
+import { netFetch } from './netFetch.js'
 import { onExtensionPublication } from './ledger.js'
 
 // The runtime transport permits 128 KiB of string data per message. Leave room
@@ -51,6 +52,9 @@ const REQUIRED_CAPABILITY: Record<ExtensionServiceRequest['method'], ExtensionCa
   // making it reachable from the network are different consent decisions, and
   // the host can genuinely gate the second one (the listener lives here).
   'service.expose': 'net.listen',
+  // Brokered outbound fetch. The child's sandbox never opens a socket; main
+  // owns the dial and the private-address policy.
+  'net.fetch': 'net.connect',
 }
 
 export type ExtensionServiceInvoker = {
@@ -209,6 +213,13 @@ export class ExtensionCapabilityService {
         return this.options.services.status(extensionId, revision, request.serviceId)
       case 'service.expose':
         return this.options.services.expose(extensionId, revision, request.serviceId, request.lan)
+      case 'net.fetch':
+        return netFetch({
+          url: request.url,
+          httpMethod: request.httpMethod,
+          headers: request.headers,
+          body: request.body,
+        })
       case 'service.invoke': {
         // A service RPC's value is author-defined bounded JSON, not one of the
         // host-shaped results this union describes. Both transports surface

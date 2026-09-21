@@ -139,6 +139,11 @@ export type ExtensionCapability =
   // network power the host can genuinely enforce (not just consent to), which
   // is why it is a separate capability from service.run.
   | 'net.listen'
+  // Tier 2 — brokered outbound fetch (net.fetch) from runtime/view to
+  // user-entered addresses. v1 policy: literal private/loopback IPs only; no
+  // DNS names, no public egress. Widening is a future policy decision with its
+  // own consent copy, never a silent change.
+  | 'net.connect'
 
 export const EXTENSION_CAPABILITIES: readonly ExtensionCapability[] = [
   'workspace.observe',
@@ -150,6 +155,7 @@ export const EXTENSION_CAPABILITIES: readonly ExtensionCapability[] = [
   'service.run',
   'service.transport',
   'net.listen',
+  'net.connect',
 ]
 
 /**

@@ -50,6 +50,10 @@ const api = {
     invoke: (serviceId, name, params) => transport.request({ method: 'service.invoke', serviceId, name, params }),
     expose: (serviceId, lan) => transport.request({ method: 'service.expose', serviceId, lan }),
   },
+  net: {
+    fetch: (url, init) => transport.request({ method: 'net.fetch', url,
+      httpMethod: init && init.method, headers: init && init.headers, body: init && init.body }),
+  },
 };
 function register(map, id, handler) {
   if (typeof handler !== 'function') throw new Error('A runtime handler must be a function.');

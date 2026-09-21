@@ -77,6 +77,20 @@ export const serviceExposeRequestSchema = z.object({
   lan: z.boolean(),
 }).strict()
 
+// --- Outbound fetch (capability: net.connect) ---------------------------------
+// `method` is the transport discriminator, so the HTTP verb gets its own field.
+// The URL/target policy lives in netFetch.ts and is enforced again in main
+// before any socket opens — the schema bounds shape, not reachability.
+const netHeader = z.object({ name: z.string().min(1).max(64), value: z.string().max(1024) }).strict()
+
+export const netFetchRequestSchema = z.object({
+  method: z.literal('net.fetch'),
+  url: z.string().max(2048),
+  httpMethod: z.enum(['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'PATCH']).optional(),
+  headers: z.array(netHeader).max(16).optional(),
+  body: z.string().max(64 * 1024).optional(),
+}).strict()
+
 export const extensionServiceRequestSchema = z.discriminatedUnion('method', [
   extensionFileReadRequestSchema,
   extensionFileWriteRequestSchema,
@@ -86,6 +100,7 @@ export const extensionServiceRequestSchema = z.discriminatedUnion('method', [
   serviceStatusRequestSchema,
   serviceInvokeRequestSchema,
   serviceExposeRequestSchema,
+  netFetchRequestSchema,
 ])
 
 export type ExtensionServiceRequest = z.infer<typeof extensionServiceRequestSchema>
@@ -113,7 +128,14 @@ export type ExtensionTextFileWrite = {
   version: string
 }
 
-export type ExtensionServiceResult = ExtensionTextFile | ExtensionTextFileWrite | ExtensionServiceHandle | ExtensionServiceStatus | ExtensionServiceExposure | void
+/** Result of net.fetch: text-bounded v1 (JSON/HTML bodies), one content type. */
+export type ExtensionNetFetchResult = {
+  status: number
+  contentType: string
+  body: string
+}
+
+export type ExtensionServiceResult = ExtensionTextFile | ExtensionTextFileWrite | ExtensionServiceHandle | ExtensionServiceStatus | ExtensionServiceExposure | ExtensionNetFetchResult | void
 
 /** Runtime status of one declared service, as returned by start/status. */
 export type ExtensionServiceHandle = {
