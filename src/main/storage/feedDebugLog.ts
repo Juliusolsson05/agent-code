@@ -101,6 +101,26 @@ export type FeedDebugPersistEntry = {
 
 const feedDebugWriteQueues = new Map<string, Promise<void>>()
 const lastWrittenFeedDebugId = new Map<string, number>()
+/**
+ * Which renderer GENERATION the id cursor above belongs to (#770).
+ *
+ * `lastWrittenFeedDebugId` is a de-duplication cursor: the renderer advances
+ * its own cursor only after an IPC resolves, so two effect passes can legally
+ * send the same window while the first write is still in flight, and main
+ * drops the repeat. That is correct — while the ids keep counting up.
+ *
+ * A SOFT RELOAD breaks that assumption. It rebuilds the runtime, so
+ * `feedDebugNextId` restarts at 1 and `feedDebugEpochMs` is minted fresh on
+ * the next entry — and main, still holding a cursor at (say) 4,812, filtered
+ * every entry of the new generation as already-written. The session's whole
+ * post-reload diagnostic trail vanished, silently, at exactly the moment
+ * someone was reloading BECAUSE the feed had gone weird.
+ *
+ * The epoch travels with the batch rather than being announced separately, so
+ * it cannot race an in-flight append: whatever generation produced these
+ * entries is the generation stated beside them.
+ */
+const lastWrittenFeedDebugEpoch = new Map<string, number>()
 
 // One shape for both the first tombstone and the doubling refreshes so
 // readers grep for a single `__feedDebugCapped` marker. `fileBytesAtCap` is
@@ -136,12 +156,27 @@ const sanitizeSessionIdForPath = sanitizeFilenameToken
 export function queueFeedDebugAppend(
   sessionId: string,
   entries: FeedDebugPersistEntry[],
+  /** The renderer generation these entries were numbered in (#770). Absent
+   *  from an older renderer, which is treated as "same generation as before"
+   *  — the pre-#770 behaviour, so a version skew degrades to the old bug
+   *  rather than to a new one. */
+  epochMs?: number,
 ): Promise<void> {
   const previous = feedDebugWriteQueues.get(sessionId) ?? Promise.resolve()
   const next = previous
     .catch(() => {})
     .then(async () => {
       if (entries.length === 0) return
+      if (epochMs !== undefined) {
+        const knownEpoch = lastWrittenFeedDebugEpoch.get(sessionId)
+        if (knownEpoch !== epochMs) {
+          // A new generation of ids. Reset the de-dup cursor, NOT the cap
+          // state: the file is the same file and its byte count is still
+          // true, so a reload must not re-open a capped log.
+          if (knownEpoch !== undefined) lastWrittenFeedDebugId.delete(sessionId)
+          lastWrittenFeedDebugEpoch.set(sessionId, epochMs)
+        }
+      }
       const lastWritten = lastWrittenFeedDebugId.get(sessionId) ?? 0
       // The renderer advances its persisted cursor only after IPC
       // success, so two React effect passes can legally send the
@@ -199,12 +234,21 @@ export function queueFeedDebugAppend(
           return
         }
         if (startingBytes === null) {
-          // Unknown on-disk size (stat failed, not-ENOENT). Fail CLOSED: un-
-          // prime so the next batch re-stats, and return WITHOUT advancing the
-          // cursor so the renderer resends these entries. Writing anyway on an
-          // unknown baseline is how a 300 MiB file gains another 128 MiB.
+          // Unknown on-disk size (stat failed, not-ENOENT). Fail CLOSED:
+          // un-prime so the next batch re-stats, and REJECT so the renderer
+          // keeps these entries. Writing anyway on an unknown baseline is how
+          // a 300 MiB file gains another 128 MiB.
+          //
+          // WHY throw and not return (#771): this used to `return`, which
+          // RESOLVES the IPC — and the renderer advances its durable cursor in
+          // `.then` and retains only in `.catch`. So the branch written to
+          // preserve entries was the branch that discarded them, and its own
+          // comment said the opposite. The renderer's existing retry path
+          // (`useFeedDebugPersist`'s catch, already covered by "retries
+          // rejected rows on the next tick") is what makes a throw the
+          // complete fix rather than half of one.
           feedDebugCapState.delete(sessionId)
-          return
+          throw new Error(`feed-debug: unknown size for ${sessionId}, refusing to append`)
         }
         capState.bytesWritten = startingBytes
       }
@@ -350,6 +394,7 @@ export function forgetFeedDebugSession(sessionId: string): void {
   // The settle-time reaper in queueFeedDebugAppend handles the queue
   // entry; what we own here is the cursor.
   lastWrittenFeedDebugId.delete(sessionId)
+  lastWrittenFeedDebugEpoch.delete(sessionId)
   // Drop the cap-state entry too. If the same sessionId is re-registered later
   // in this process, we'll re-stat the on-disk file and prime a fresh counter;
   // never carrying stale cap state across "session forgotten" boundaries keeps

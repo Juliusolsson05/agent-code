@@ -68,7 +68,12 @@ describe('feed debug persistence cadence and durability', () => {
     expect(append).not.toHaveBeenCalled()
     await advance(1)
     expect(append).toHaveBeenCalledExactlyOnceWith({
-      sessionId: 'a', entries: refs.latestRuntimesRef.current.a!.feedDebugLog,
+      sessionId: 'a',
+      // #770: main keys its de-dup cursor on the generation, so the batch has
+      // to say which one it came from. Named here rather than relaxed to
+      // toMatchObject — a payload that quietly stops carrying it is the bug.
+      epochMs: refs.latestRuntimesRef.current.a!.feedDebugEpochMs,
+      entries: refs.latestRuntimesRef.current.a!.feedDebugLog,
     })
     expect(refs.persistedFeedDebugIdRef.current.a).toBe(20)
   })
@@ -99,7 +104,9 @@ describe('feed debug persistence cadence and durability', () => {
     expect(append).toHaveBeenCalledTimes(3)
     await advance(1)
     expect(append).toHaveBeenLastCalledWith({
-      sessionId: 'a', entries: [refs.latestRuntimesRef.current.a!.feedDebugLog[1]],
+      sessionId: 'a',
+      epochMs: refs.latestRuntimesRef.current.a!.feedDebugEpochMs,
+      entries: [refs.latestRuntimesRef.current.a!.feedDebugLog[1]],
     })
   })
 
@@ -140,7 +147,9 @@ describe('feed debug persistence cadence and durability', () => {
     refs.latestRuntimesRef.current = { a: add(emptyRuntime(), 'last record') }
     unmount()
     expect(append).toHaveBeenCalledExactlyOnceWith({
-      sessionId: 'a', entries: refs.latestRuntimesRef.current.a!.feedDebugLog,
+      sessionId: 'a',
+      epochMs: refs.latestRuntimesRef.current.a!.feedDebugEpochMs,
+      entries: refs.latestRuntimesRef.current.a!.feedDebugLog,
     })
     // A ref update after teardown exposes leaked timer ownership even if the
     // previous final batch was acknowledged and would otherwise look quiet.

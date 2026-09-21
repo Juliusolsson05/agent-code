@@ -20,6 +20,10 @@ import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 export type FeedDebugAppendBatch = {
   entries: SessionRuntime['feedDebugLog']
   maxPendingId: number
+  /** Which generation of ids this batch belongs to (#770). Main keys its
+   *  de-dup cursor on it, so a soft reload's restart at id 1 is written
+   *  instead of being filtered as already-seen. */
+  epochMs: number | null
 }
 
 export const FEED_DEBUG_FLUSH_INTERVAL_MS = 1000
@@ -39,6 +43,7 @@ export function selectFeedDebugAppendBatch(
   return {
     entries: pending,
     maxPendingId: pending[pending.length - 1]?.id ?? lastPersistedId,
+    epochMs: runtime.feedDebugEpochMs,
   }
 }
 
@@ -50,7 +55,7 @@ export function useFeedDebugPersist(refs: WorkspaceRefs): void {
       const lastInFlightId = refs.inFlightFeedDebugIdRef.current[sessionId] ?? 0
       const batch = selectFeedDebugAppendBatch(runtime, lastPersistedId, lastInFlightId)
       if (!batch) return
-      const { entries: pending, maxPendingId } = batch
+      const { entries: pending, maxPendingId, epochMs } = batch
       refs.inFlightFeedDebugIdRef.current[sessionId] = maxPendingId
       // Advance the durable cursor ONLY after the IPC append actually
       // resolves. A previous version advanced optimistically before
@@ -75,6 +80,7 @@ export function useFeedDebugPersist(refs: WorkspaceRefs): void {
       void window.api
         .appendFeedDebugLog({
           sessionId,
+          ...(epochMs === null ? {} : { epochMs }),
           entries: pending.map(entry => ({
             id: entry.id,
             ts: entry.ts,
