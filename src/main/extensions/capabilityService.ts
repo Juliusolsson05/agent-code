@@ -14,6 +14,7 @@ import {
 } from '@main/ipc/editorFs.js'
 import { extensionRevision, type ExtensionCapability } from '@shared/types/extensions.js'
 import type {
+  ExtensionServiceExposure,
   ExtensionServiceRequest,
   ExtensionServiceResult,
   ExtensionServiceStatus,
@@ -46,6 +47,10 @@ const REQUIRED_CAPABILITY: Record<ExtensionServiceRequest['method'], ExtensionCa
   'service.stop': 'service.run',
   'service.status': 'service.run',
   'service.invoke': 'service.run',
+  // Exposure is its own power on purpose: running a local-only service and
+  // making it reachable from the network are different consent decisions, and
+  // the host can genuinely gate the second one (the listener lives here).
+  'service.expose': 'net.listen',
 }
 
 export type ExtensionServiceInvoker = {
@@ -53,6 +58,7 @@ export type ExtensionServiceInvoker = {
   stop(extensionId: string, revision: string, serviceId: string): Promise<void>
   status(extensionId: string, revision: string, serviceId: string): Promise<ExtensionServiceStatus>
   invoke(extensionId: string, revision: string, serviceId: string, name: string, params?: ExtensionJson): Promise<ExtensionJson | undefined>
+  expose(extensionId: string, revision: string, serviceId: string, lan: boolean): Promise<ExtensionServiceExposure>
 }
 
 export type ExtensionCapabilityServiceOptions = {
@@ -201,6 +207,8 @@ export class ExtensionCapabilityService {
         return undefined
       case 'service.status':
         return this.options.services.status(extensionId, revision, request.serviceId)
+      case 'service.expose':
+        return this.options.services.expose(extensionId, revision, request.serviceId, request.lan)
       case 'service.invoke': {
         // A service RPC's value is author-defined bounded JSON, not one of the
         // host-shaped results this union describes. Both transports surface

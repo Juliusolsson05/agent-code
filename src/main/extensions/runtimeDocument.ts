@@ -48,6 +48,7 @@ const api = {
     stop: (serviceId) => transport.request({ method: 'service.stop', serviceId }),
     status: (serviceId) => transport.request({ method: 'service.status', serviceId }),
     invoke: (serviceId, name, params) => transport.request({ method: 'service.invoke', serviceId, name, params }),
+    expose: (serviceId, lan) => transport.request({ method: 'service.expose', serviceId, lan }),
   },
 };
 function register(map, id, handler) {

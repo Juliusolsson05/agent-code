@@ -255,6 +255,9 @@ const api = {
     stop: (serviceId) => request('service.stop', { serviceId }),
     status: (serviceId) => request('service.status', { serviceId }),
     invoke: (serviceId, name, params) => request('service.invoke', { serviceId, name, params }),
+    // net.listen: the host binds the LAN listener and owns its lifetime; the
+    // returned port is the one to share on the local network.
+    expose: (serviceId, lan) => request('service.expose', { serviceId, lan }),
   },
 };
 

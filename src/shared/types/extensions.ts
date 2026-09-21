@@ -133,6 +133,12 @@ export type ExtensionCapability =
   // connect-src 'self' — this is a namespace right over the extension's own
   // origin, never arbitrary network (enforced in serviceTransport.ts).
   | 'service.transport'
+  // Tier 2 — host-owned LAN exposure (service.expose). The service itself binds
+  // loopback; only under this grant does the HOST bind the machine's interfaces
+  // and reverse-proxy, and the listener dies with the service. This is the one
+  // network power the host can genuinely enforce (not just consent to), which
+  // is why it is a separate capability from service.run.
+  | 'net.listen'
 
 export const EXTENSION_CAPABILITIES: readonly ExtensionCapability[] = [
   'workspace.observe',
@@ -143,6 +149,7 @@ export const EXTENSION_CAPABILITIES: readonly ExtensionCapability[] = [
   'notifications.show',
   'service.run',
   'service.transport',
+  'net.listen',
 ]
 
 /**

@@ -70,6 +70,13 @@ export const serviceInvokeRequestSchema = z.object({
   params: jsonPayload.optional(),
 }).strict()
 
+export const serviceExposeRequestSchema = z.object({
+  method: z.literal('service.expose'),
+  serviceId,
+  // lan:false closes an existing exposure without revoking anything else.
+  lan: z.boolean(),
+}).strict()
+
 export const extensionServiceRequestSchema = z.discriminatedUnion('method', [
   extensionFileReadRequestSchema,
   extensionFileWriteRequestSchema,
@@ -78,6 +85,7 @@ export const extensionServiceRequestSchema = z.discriminatedUnion('method', [
   serviceStopRequestSchema,
   serviceStatusRequestSchema,
   serviceInvokeRequestSchema,
+  serviceExposeRequestSchema,
 ])
 
 export type ExtensionServiceRequest = z.infer<typeof extensionServiceRequestSchema>
@@ -105,7 +113,7 @@ export type ExtensionTextFileWrite = {
   version: string
 }
 
-export type ExtensionServiceResult = ExtensionTextFile | ExtensionTextFileWrite | ExtensionServiceHandle | ExtensionServiceStatus | void
+export type ExtensionServiceResult = ExtensionTextFile | ExtensionTextFileWrite | ExtensionServiceHandle | ExtensionServiceStatus | ExtensionServiceExposure | void
 
 /** Runtime status of one declared service, as returned by start/status. */
 export type ExtensionServiceHandle = {
@@ -122,6 +130,12 @@ export type ExtensionServiceHandle = {
 export type ExtensionServiceStatus =
   | { state: 'stopped'; serviceId: string }
   | ExtensionServiceHandle
+
+/** Result of service.expose: the port the HOST bound on the machine's
+ *  interfaces (OS-chosen). The service's own loopback port stays private. */
+export type ExtensionServiceExposure =
+  | { serviceId: string; lan: false }
+  | { serviceId: string; lan: true; port: number }
 
 export type ExtensionNotification = {
   extensionId: string

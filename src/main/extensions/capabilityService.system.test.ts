@@ -69,6 +69,10 @@ async function fixture(grantServiceRun = false): Promise<{
           serviceCalls.push({ extensionId, revision, serviceId, name, params })
           return { ok: true }
         },
+        expose: async (extensionId, revision, serviceId, lan) => {
+          serviceCalls.push({ extensionId, revision, serviceId, name: 'expose' })
+          return lan ? { serviceId, lan: true, port: 45678 } : { serviceId, lan: false }
+        },
       },
     }),
   }

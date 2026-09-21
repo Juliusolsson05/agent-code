@@ -236,3 +236,63 @@ describe('ExtensionServiceHost', () => {
     host.dispose()
   })
 })
+
+describe('net.listen exposure', () => {
+  type Handle = { port: number; closed: boolean; close(): Promise<void> }
+  function listenerFactory() {
+    const handles: Handle[] = []
+    return {
+      handles,
+      targets: [] as number[],
+      factory: (targetPort: number) => {
+        const handle: Handle = { port: 41000 + handles.length, closed: false, async close() { handle.closed = true } }
+        handles.push(handle)
+        return Promise.resolve(handle)
+      },
+    }
+  }
+
+  async function exposedHost(endpoints: Array<{ name: string; port: number }>) {
+    const dir = await bundle()
+    ledgerWith(dir)
+    const child = new FakeServiceProcess()
+    const lan = listenerFactory()
+    const host = new ExtensionServiceHost({
+      spawn: spawnReportingReady(child, endpoints),
+      lanListener: lan.factory,
+      readyTimeoutMs: 200, invokeTimeoutMs: 200, shutdownGraceMs: 50,
+    })
+    return { host, lan, child }
+  }
+
+  it('expose points a host listener at the running endpoint; expose(false) closes it', async () => {
+    const { host, lan } = await exposedHost([{ name: 'http', port: 5192 }])
+    try {
+      await host.start('timer', REVISION, 'timer.worker')
+      const exposure = await host.expose('timer', REVISION, 'timer.worker', true)
+      expect(exposure).toEqual({ serviceId: 'timer.worker', lan: true, port: lan.handles[0].port })
+      await expect(host.expose('timer', REVISION, 'timer.worker', false)).resolves.toEqual({ serviceId: 'timer.worker', lan: false })
+      expect(lan.handles[0].closed).toBe(true)
+    } finally { host.dispose() }
+  })
+
+  it('exposing a service with no local endpoint rejects without binding', async () => {
+    const { host, lan } = await exposedHost([])
+    try {
+      await host.start('timer', REVISION, 'timer.worker')
+      await expect(host.expose('timer', REVISION, 'timer.worker', true)).rejects.toThrow('local endpoint')
+      expect(lan.handles).toEqual([])
+    } finally { host.dispose() }
+  })
+
+  it('the LAN listener dies with the service, never outlives it', async () => {
+    const { host, lan, child } = await exposedHost([{ name: 'http', port: 5192 }])
+    try {
+      await host.start('timer', REVISION, 'timer.worker')
+      await host.expose('timer', REVISION, 'timer.worker', true)
+      child.exit(0) // unexpected death must not leave a 502-ing listener
+      await new Promise(resolve => setImmediate(resolve))
+      expect(lan.handles[0].closed).toBe(true)
+    } finally { host.dispose() }
+  })
+})

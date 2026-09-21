@@ -5,6 +5,7 @@ import { relative as relativePath, resolve as resolvePath } from 'node:path'
 import { extensionRevision, type InstalledExtension } from '@shared/types/extensions.js'
 import type { ExtensionJson } from '@shared/types/extensionRuntime.js'
 import type {
+  ExtensionServiceExposure,
   ExtensionServiceHandle,
   ExtensionServiceStatus,
 } from '@shared/types/extensionServices.js'
@@ -13,6 +14,7 @@ import {
   type HostToServiceMessage,
 } from '@shared/types/extensionServiceProcess.js'
 import { extensionBundleDirectory, onExtensionPublication, readLedger, withLedgerLock } from './ledger.js'
+import { realLanListener, type LanListenerFactory, type LanListenerHandle } from './serviceLanListener.js'
 
 /**
  * The narrow process surface ExtensionServiceHost consumes. Exists so unit tests
@@ -55,6 +57,8 @@ async function defaultSpawn(entryPath: string, serviceName: string): Promise<Spa
 
 export type ExtensionServiceHostOptions = {
   spawn?: (entryPath: string, serviceName: string) => Promise<SpawnedServiceProcess> | SpawnedServiceProcess
+  /** Factory seam so lifecycle tests fake the listener without real sockets. */
+  lanListener?: LanListenerFactory
   /** Deadline injection keeps real-process failure tests short; production uses the defaults. */
   readyTimeoutMs?: number
   invokeTimeoutMs?: number
@@ -94,6 +98,10 @@ type RunningService = {
  */
 export class ExtensionServiceHost {
   private readonly running = new Map<string, RunningService>()
+  // One LAN listener per extension, not per service: exposure is an extension-
+  // scoped decision (the grant is), and swapping target services under one
+  // listener keeps "which port do I share with my friends" stable.
+  private readonly exposed = new Map<string, LanListenerHandle>()
   private readonly unsubscribe: () => void
   private closed = false
 
@@ -228,6 +236,39 @@ export class ExtensionServiceHost {
     })
   }
 
+  /**
+   * net.listen surface: expose(lan:true) points the host-owned LAN listener at
+   * the running service's loopback endpoint; lan:false closes it. The broker
+   * checked the grant before this runs; this method owns only mechanics — and
+   * the invariant that no listener outlives its service.
+   */
+  async expose(extensionId: string, revision: string, serviceId: string, lan: boolean): Promise<ExtensionServiceExposure> {
+    await this.assertCurrent(extensionId, revision)
+    if (!lan) {
+      await this.closeExposure(extensionId)
+      return { serviceId, lan: false }
+    }
+    const service = this.running.get(this.key(extensionId, serviceId))
+    if (!service || service.stopping || service.endpoints.length === 0) {
+      throw new Error('Service is not running with a local endpoint.')
+    }
+    // Re-create on every expose so a restarted service cannot keep a stale
+    // target port: close first, then bind fresh against today's endpoint.
+    await this.closeExposure(extensionId)
+    const listener = await (this.options.lanListener ?? realLanListener)(service.endpoints[0].port)
+    this.exposed.set(extensionId, listener)
+    return { serviceId, lan: true, port: listener.port }
+  }
+
+  private async closeExposure(extensionId: string): Promise<void> {
+    const listener = this.exposed.get(extensionId)
+    if (!listener) return
+    this.exposed.delete(extensionId)
+    // Close errors are logged, not thrown: an already-dead listener must not
+    // block a re-expose or a service stop.
+    await listener.close().catch(error => console.warn(`[extensions] LAN listener for ${extensionId} failed to close:`, error))
+  }
+
   /** First reported loopback port of a RUNNING service, or null. The transport
    *  proxy dials 127.0.0.1:<port> in main — never the child — so loopback-ness
    *  holds by construction here. */
@@ -236,9 +277,10 @@ export class ExtensionServiceHost {
     return service && !service.stopping && service.endpoints.length > 0 ? service.endpoints[0].port : null
   }
 
-  /** App-quit drain: kill every service; no graceful per-service ceremony. */
+  /** App-quit drain: kill every service and close every exposure; no ceremony. */
   pause(): void {
     this.closed = true
+    for (const extensionId of [...this.exposed.keys()]) void this.closeExposure(extensionId)
     for (const service of this.running.values()) this.terminate(service, 'Agent Code is closing.')
   }
 
@@ -293,11 +335,14 @@ export class ExtensionServiceHost {
     this.terminate(service, 'Service stopped.')
   }
 
-  /** Immediate teardown: reject waiters, clear state, kill the process. */
+  /** Immediate teardown: reject waiters, clear state, kill the process. The
+   *  extension's LAN listener dies with its last service — exposure must never
+   *  outlive the thing it exposes, and a dead target would 502 forever. */
   private terminate(service: RunningService, error: string): void {
     const key = this.key(service.extensionId, service.serviceId)
     if (this.running.get(key) !== service) return
     this.running.delete(key)
+    void this.closeExposure(service.extensionId)
     service.rejectReady(new Error(error))
     for (const pending of service.pending.values()) {
       clearTimeout(pending.timer)
