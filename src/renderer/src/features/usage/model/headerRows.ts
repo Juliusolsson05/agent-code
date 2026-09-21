@@ -1,9 +1,18 @@
 import type {
   UsageLimitRow,
-  UsageProviderKind,
   UsageSeverity,
   UsageSnapshot,
+  UsageSourceId,
 } from '@preload/index'
+
+// #1102: chip codes per usage source. A record (not a ternary) so adding a
+// source without a code is a type error here, not a mislabeled chip.
+const PROVIDER_CODES: Record<UsageSourceId, string> = {
+  claude: 'CL',
+  codex: 'CX',
+  grok: 'GR',
+  'opencode:zai': 'ZA',
+}
 
 import { formatPercent, formatReset, providerLabel } from '@renderer/features/usage/model/formatUsage'
 
@@ -19,7 +28,7 @@ export type HeaderRow = {
 }
 
 export type HeaderProvider = {
-  provider: UsageProviderKind
+  provider: UsageSourceId
   /** Two-letter chip prefix ("CL" / "CX") — fixed strings, not derived
    *  from providerLabel, because the header needs stable width. */
   code: string
@@ -90,7 +99,7 @@ export function toHeaderProviders(snapshot: UsageSnapshot): HeaderProvider[] {
     if (rows.length === 0) continue
     result.push({
       provider: provider.provider,
-      code: provider.provider === 'claude' ? 'CL' : 'CX',
+      code: PROVIDER_CODES[provider.provider],
       rows,
       worst: worstOf(rows),
     })
