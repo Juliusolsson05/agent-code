@@ -200,9 +200,13 @@ function buildViewComponent(
         if (!data) return
         if (data.kind === 'agent-code-ext:resize') {
           if (typeof data.height !== 'number' || !Number.isFinite(data.height)) return
+          // Width ceiling exists so a broken extension cannot demand a
+          // tab-sized modal; it is NOT a product cap on extension stages.
+          // 1920 keeps a full-HD game/table modal reportable while the
+          // viewport scale below still shrinks it onto small windows.
           setContentHeight(Math.min(Math.max(Math.round(data.height), 80), 1400))
           if (typeof data.width === 'number' && Number.isFinite(data.width)) {
-            setContentWidth(Math.min(Math.max(Math.round(data.width), 240), 1200))
+            setContentWidth(Math.min(Math.max(Math.round(data.width), 240), 1920))
           }
         } else if (data.kind === 'agent-code-ext:boot') {
           // iframe.load also fires for a 404 body. The bootstrap announcement is
