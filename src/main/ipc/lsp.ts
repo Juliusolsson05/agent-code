@@ -57,6 +57,25 @@ export function registerLspIpc(
   // await is guaranteed to close after the eventual open instead of racing
   // ahead as a no-op and leaving a document behind.
   const documentQueues = new Map<string, Promise<void>>()
+  /**
+   * Client URIs that really do have a server document behind them (#1108
+   * review, 3).
+   *
+   * `lsp:change-document` rejects when the manager has no document, so the
+   * renderer is told rather than silently losing a keystroke (#922). But
+   * "no document" is also the ORDINARY state for a language whose server is
+   * not installed, an unsupported language, or a spawn that failed — all of
+   * which the registry documents as fail-open: "the editor works without LSP
+   * for that language". Rejecting there turned a documented no-op into a
+   * rejection on every debounced change, and the renderer's coalescing gate
+   * never advanced its synced version, so every later hover and completion
+   * re-issued a doomed round trip instead of one no-op per version.
+   *
+   * This set is what makes the difference sayable: a URI in it was supposed
+   * to have a document, so a change that finds none is the loss. A URI not in
+   * it never had one, so a change is a no-op and resolves.
+   */
+  const lspBackedDocuments = new Set<string>()
 
   const serializeDocument = async <T>(clientUri: string, task: () => Promise<T>): Promise<T> => {
     const previous = documentQueues.get(clientUri) ?? Promise.resolve()
@@ -82,6 +101,7 @@ export function registerLspIpc(
       if (!documents) return
       for (const [clientUri, refs] of documents) {
         ownerByDocument.delete(clientUri)
+        lspBackedDocuments.delete(clientUri)
         for (let i = 0; i < refs; i++) {
           void serializeDocument(clientUri, () => lspManager.closeDocument(clientUri))
         }
@@ -219,13 +239,14 @@ export function registerLspIpc(
           try {
             const context = await authorizeContext(evt.sender, params)
             managerOpenStarted = true
-            await lspManager.openDocument({
+            const opened = await lspManager.openDocument({
               clientUri: params.clientUri,
               content: params.content,
               language: params.language,
               workspaceRoot: context.workspaceRoot,
               filePath: context.filePath,
             })
+            if (opened) lspBackedDocuments.add(params.clientUri)
           } catch (err) {
             // Keep rollback inside the same IPC queue entry. A renderer
             // navigation may already have queued its own cleanup behind this
@@ -239,6 +260,7 @@ export function registerLspIpc(
         })
       } catch (err) {
         removeOwnedDocument(evt.sender.id, params.clientUri)
+        if (!ownerByDocument.has(params.clientUri)) lspBackedDocuments.delete(params.clientUri)
         throw err
       }
     },
@@ -267,7 +289,12 @@ export function registerLspIpc(
     const applied = await serializeDocument(clientUri, () =>
       lspManager.changeDocument(clientUri, content),
     )
-    if (!applied) throw new Error('LSP document is not open')
+    // Only a URI that was actually backed by a server document can LOSE one.
+    // For every other URI this is the documented fail-open no-op — see
+    // `lspBackedDocuments`.
+    if (!applied && lspBackedDocuments.has(clientUri)) {
+      throw new Error('LSP document is not open')
+    }
   })
 
   ipcMain.handle('lsp:close-document', async (evt, clientUri: string) => {
@@ -277,6 +304,7 @@ export function registerLspIpc(
         await lspManager.closeDocument(clientUri)
       } finally {
         removeOwnedDocument(evt.sender.id, clientUri)
+        if (!ownerByDocument.has(clientUri)) lspBackedDocuments.delete(clientUri)
       }
     })
   })

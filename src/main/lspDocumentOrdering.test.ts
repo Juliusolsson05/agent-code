@@ -246,6 +246,169 @@ describe('#924 — a newer intent must not wait out an obsolete request', () => 
     }
   })
 
+  it('releases the queue for a SIBLING alias, not only for the one that typed', async () => {
+    // #1108 review, 1 — the case the whole of #923 is about, and the one the
+    // first fix missed. Monaco gives two surfaces on one disk file two
+    // different model URIs on purpose, and both map to ONE server document.
+    // The queue that blocks is keyed by that server document; the wake was
+    // keyed by client URI. So a request from alias A kept holding the shared
+    // queue while the user typed in alias B, and B's didChange waited out the
+    // full 15 s.
+    //
+    // Nothing is lost by abandoning A: when B's change lands,
+    // `changeSharedDocument` advances `version` on every alias including A, so
+    // A's answer would be rejected by the ticket check anyway. The 15 s bought
+    // nobody anything.
+    vi.useFakeTimers()
+    try {
+      const { manager, notifications } = managerWithServer({
+        sendRequest: async () => await new Promise(() => {}),
+      })
+      await manager.openDocument({ ...OPEN, clientUri: 'inmemory://a', content: 'draft A' })
+      await manager.openDocument({ ...OPEN, clientUri: 'inmemory://b', content: 'draft B' })
+      notifications.length = 0
+
+      const hover = manager.getHover('inmemory://a', { line: 0, character: 0 })
+      await vi.advanceTimersByTimeAsync(10)
+
+      // The user types in the OTHER surface.
+      const changed = manager.changeDocument('inmemory://b', 'draft B edited')
+      let changeSettled = false
+      void changed.then(() => { changeSettled = true })
+      await vi.advanceTimersByTimeAsync(1_000)
+
+      expect(changeSettled).toBe(true)
+      // B's TEXT is what has to have reached the server, not merely some
+      // didChange: A's request legitimately emits one of its own when it
+      // restores A's draft before asking. Asserting a count would pass on the
+      // wrong notification.
+      const texts = notifications
+        .filter(n => n.method === 'textDocument/didChange')
+        .map(n => (n.params as { contentChanges?: Array<{ text: string }> }).contentChanges?.[0]?.text)
+      expect(texts).toContain('draft B edited')
+
+      await vi.advanceTimersByTimeAsync(20_000)
+      await expect(hover).resolves.toBeNull()
+      await changed
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('releases the queue for a sibling alias being OPENED, not only one already open', async () => {
+    // The third way intent arrives on a shared document: a second surface
+    // opens the same file while a request from the first is in flight. That
+    // open rewrites the shared text (it pushes its own draft), so the answer
+    // in flight is doomed just as surely as after a change.
+    //
+    // `bumpDocumentIntent` cannot fan out for it — the opening URI has no
+    // record yet, so there is no `serverDocumentKey` to look up — which is why
+    // `openDocumentNow` announces explicitly once it knows the key.
+    vi.useFakeTimers()
+    try {
+      const { manager } = managerWithServer({
+        sendRequest: async () => await new Promise(() => {}),
+      })
+      await manager.openDocument({ ...OPEN, clientUri: 'inmemory://a', content: 'draft A' })
+
+      const hover = manager.getHover('inmemory://a', { line: 0, character: 0 })
+      await vi.advanceTimersByTimeAsync(10)
+
+      const opened = manager.openDocument({ ...OPEN, clientUri: 'inmemory://b', content: 'draft B' })
+      let openSettled = false
+      void opened.then(() => { openSettled = true })
+      await vi.advanceTimersByTimeAsync(1_000)
+
+      // Well inside the 15 s request timeout.
+      expect(openSettled).toBe(true)
+      const internal = manager as unknown as { docs: Map<string, unknown> }
+      expect(internal.docs.has('inmemory://b')).toBe(true)
+
+      await vi.advanceTimersByTimeAsync(20_000)
+      await expect(hover).resolves.toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('treats a cancelled request answered with an ERROR as a non-answer', async () => {
+    // #1108 review, 2. Cancelling an LSP request does not reject it locally —
+    // the client only sends `$/cancelRequest` — and the protocol ADVISES a
+    // server to answer a cancelled request with an error (`RequestCancelled`,
+    // `ContentModified`). With the raw promise in the race, that error became
+    // the race's result and was thrown out of `getHover` /
+    // `getSemanticTokens` / `getCompletions`. `provideDocumentSemanticTokens`
+    // has no catch, and semantic tokens are re-requested on every model
+    // change — the request most likely to be abandoned by the debounced
+    // didChange right behind it.
+    //
+    // No fake in this file honours the cancellation token, which is exactly
+    // why this was invisible. This one does.
+    vi.useFakeTimers()
+    try {
+      let rejectRequest: ((err: Error) => void) | undefined
+      const { manager } = managerWithServer({
+        sendRequest: async (_method, _params, token) => await new Promise((_resolve, reject) => {
+          rejectRequest = reject
+          ;(token as { onCancellationRequested?: (cb: () => void) => void } | undefined)
+            ?.onCancellationRequested?.(() => {
+              const err = new Error('Request cancelled') as Error & { code?: number }
+              err.code = -32800
+              reject(err)
+            })
+        }),
+      })
+      await manager.openDocument({ ...OPEN, clientUri: 'inmemory://a', content: 'first' })
+
+      const tokens = manager.getSemanticTokens('inmemory://a')
+      await vi.advanceTimersByTimeAsync(10)
+      expect(rejectRequest).toBeTypeOf('function')
+
+      void manager.changeDocument('inmemory://a', 'second')
+      await vi.advanceTimersByTimeAsync(1_000)
+
+      // Null, not a throw. A throw here reaches Monaco's semantic-tokens
+      // provider, which has no catch.
+      await expect(tokens).resolves.toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('rejects a completion a SIBLING alias invalidated, not only one the user typed past', async () => {
+    // #1108 review, 4. The ticket comparison in `getCompletions` was untested:
+    // removing it left both #923 tests green, because the "typed past" case is
+    // already rejected earlier by the epoch guard inside `sendDocRequest`.
+    //
+    // The ticket is the ONLY thing that rejects a list when a SIBLING's change
+    // advanced this document's version without touching this URI's epoch.
+    let release: (() => void) | undefined
+    const { manager } = managerWithServer({
+      sendRequest: async method => {
+        if (method !== 'textDocument/completion') return null
+        await new Promise<void>(resolve => { release = resolve })
+        return [{ label: 'stale', kind: 1 }]
+      },
+    })
+    await manager.openDocument({ ...OPEN, clientUri: 'inmemory://a', content: 'draft A' })
+    await manager.openDocument({ ...OPEN, clientUri: 'inmemory://b', content: 'draft B' })
+
+    const pending = manager.getCompletions('inmemory://a', { line: 0, character: 0 }, { triggerKind: 1 })
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'))
+
+    // The sibling's text is pushed onto the shared document directly, which is
+    // what `changeSharedDocument` does when B becomes active — it advances
+    // `version` on EVERY alias, including the one mid-request.
+    const internal = manager as unknown as {
+      docs: Map<string, { version: number }>
+      serverDocuments: Map<string, { version: number }>
+    }
+    for (const doc of internal.docs.values()) doc.version += 1
+    release?.()
+
+    await expect(pending).resolves.toEqual({ items: [], incomplete: false })
+  })
+
   it('retires a server that collects abandoned requests it never answers', async () => {
     // The bound (#924). Abandoning a request leaves one pending RPC alive on
     // the connection, with a response handler held for it. A server that
@@ -352,28 +515,17 @@ describe('#922 — text accepted during authorization must not vanish', () => {
     expect(text).toBe('second')
   })
 
-  it('rejects a change whose document never opened, instead of acknowledging it', async () => {
-    // The other half of #922: routing the change through the queue fixes the
-    // ordering, and the boolean is what stops the silent acknowledgement. When
-    // the open ahead of it FAILS, the queued change finds no document — and
-    // resolving successfully there is the same lie in a different shape.
+  it('rejects a change for a document that WAS open and is now gone', async () => {
+    // The other half of #922. Routing the change through the queue fixes the
+    // ordering; the boolean is what stops the silent acknowledgement when the
+    // document the renderer is editing has disappeared underneath it.
     ipcHandlers.clear()
-    const { manager } = managerWithServer()
-
-    let failAuthorization: ((err: Error) => void) | undefined
-    const authorizationPaused = new Promise<string>((_resolve, reject) => {
-      failAuthorization = reject
-    })
-    registerLspIpc(
-      manager,
-      { authorize: async () => await authorizationPaused } as never,
-      {} as never,
-    )
+    const { manager, server } = managerWithServer()
+    registerLspIpc(manager, { authorize: async () => '/repo' } as never, {} as never)
 
     const sender = { id: 1, once: () => {}, on: () => {}, isDestroyed: () => false }
     const evt = { sender }
-
-    const open = ipcHandlers.get('lsp:open-document')!(evt, {
+    await ipcHandlers.get('lsp:open-document')!(evt, {
       clientUri: 'inmemory://a',
       content: 'first',
       language: 'typescript',
@@ -381,10 +533,42 @@ describe('#922 — text accepted during authorization must not vanish', () => {
       filePath: null,
       authorization: { kind: 'editor-root' },
     })
-    const change = ipcHandlers.get('lsp:change-document')!(evt, 'inmemory://a', 'second')
 
-    failAuthorization?.(new Error('root is not authorized'))
-    await expect(open).rejects.toThrow('root is not authorized')
-    await expect(change).rejects.toThrow('LSP document is not open')
+    // The server dies, exactly as a crash does: its documents go with it.
+    ;(manager as unknown as { discardServer: (s: unknown, kill?: boolean) => void })
+      .discardServer(server, false)
+
+    await expect(ipcHandlers.get('lsp:change-document')!(evt, 'inmemory://a', 'second'))
+      .rejects.toThrow('LSP document is not open')
+  })
+
+  it('resolves a change for a language with no server, because that is fail open', async () => {
+    // #1108 review, 3. "No document" is also the ORDINARY state for a language
+    // whose server binary is not installed — the registry documents that as
+    // fail open: "the editor works without LSP for that language". Rejecting
+    // there turns a documented no-op into a rejection on every debounced
+    // change, and the renderer's coalescing gate never advances its synced
+    // version, so every later hover and completion re-issues a doomed round
+    // trip instead of one no-op per version.
+    ipcHandlers.clear()
+    const { manager } = managerWithServer()
+    // No server for this language: `getOrCreateServer` answers null, which is
+    // what a missing binary produces.
+    ;(manager as unknown as { getOrCreateServer: () => Promise<null> }).getOrCreateServer = async () => null
+    registerLspIpc(manager, { authorize: async () => '/repo' } as never, {} as never)
+
+    const sender = { id: 1, once: () => {}, on: () => {}, isDestroyed: () => false }
+    const evt = { sender }
+    await ipcHandlers.get('lsp:open-document')!(evt, {
+      clientUri: 'inmemory://none',
+      content: 'first',
+      language: 'typescript',
+      workspaceRoot: '/repo',
+      filePath: null,
+      authorization: { kind: 'editor-root' },
+    })
+
+    await expect(ipcHandlers.get('lsp:change-document')!(evt, 'inmemory://none', 'second'))
+      .resolves.toBeUndefined()
   })
 })

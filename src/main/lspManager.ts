@@ -157,13 +157,22 @@ const LSP_ABANDONED_REQUEST_GRACE_MS = 250
  */
 const LSP_MAX_ABANDONED_REQUESTS = 32
 
-/** See `sendDocRequest`'s header. */
+/**
+ * What a request was actually asked about, captured AFTER synchronization.
+ *
+ * WHY it cannot be captured before (#923): a request from an inactive client
+ * alias has to push that alias's draft onto the shared server document first,
+ * and `changeSharedDocument` advances `version` on EVERY alias of that URI —
+ * including the requesting one. `getCompletions` captured the version before
+ * `sendDocRequest` ran, so its final "did the text change under me?" check
+ * compared the pre-sync number against the post-sync one and threw away the
+ * result of its own synchronization. Deterministic, not a race: it happened on
+ * every completion from the inactive half of a split view.
+ */
 type DocRequestTicket = {
   doc: OpenDocumentRecord
   /** The requesting alias's revision AFTER its draft was restored. */
   clientVersion: number
-  /** What the server was told the document version is. */
-  serverVersion: number
 }
 const LSP_INITIALIZE_TIMEOUT_MS = 30_000
 const LSP_REQUEST_TIMED_OUT = Symbol('lsp-request-timed-out')
@@ -415,12 +424,28 @@ export class LspManager extends EventEmitter {
   // didChange is waiting behind the request's shared-server-URI lock.
   private readonly documentIntentEpochs = new Map<string, number>()
   /**
-   * Who to wake when a client URI's intent epoch advances (#924).
+   * Who to wake when someone intends to change a SERVER DOCUMENT (#924).
    *
    * The epoch map alone can only be POLLED, and the one place that needs to
    * react to it is blocked on a server that may never answer. This is the
    * push half: `bumpDocumentIntent` notifies, and an in-flight request stops
-   * waiting instead of holding both queues until its timeout.
+   * waiting instead of holding its queues until the 15 s timeout.
+   *
+   * WHY this is keyed by `serverDocumentKey` and not by client URI (#1108
+   * review, 1): the queue that actually blocks is the SERVER-document queue.
+   * Monaco gives two surfaces on one disk file two different model URIs on
+   * purpose (`editorModelRegistry`, so they never share text or undo state),
+   * and both map to one server document. Keyed by client URI, a request from
+   * alias A kept holding that queue while the user typed in alias B — B's
+   * didChange waited out the full 15 s, which is this issue's symptom verbatim
+   * in the exact split-view scenario #923 is about.
+   *
+   * Any intent on the shared document abandons the in-flight request, and
+   * nothing is lost by that: an open, a change or a close of ANY alias either
+   * rewrites the shared text or removes a document, and `changeSharedDocument`
+   * advances `version` on every alias — so the answer we are still waiting for
+   * would be rejected by the ticket check anyway. The 15 s bought nobody
+   * anything.
    */
   private readonly documentIntentWaiters = new Map<string, Set<() => void>>()
   private completionResolveSequence = 0
@@ -437,35 +462,51 @@ export class LspManager extends EventEmitter {
     return await server.legendPromise
   }
 
-  async openDocument(params: OpenDocumentParams): Promise<void> {
+  /**
+   * Open (or attach to) the server document for this client URI.
+   *
+   * Answers whether a document now EXISTS for it (#1108 review, 3). Several
+   * ordinary paths legitimately produce none — an unsupported language, a
+   * language whose server binary is not installed, a spawn or initialize
+   * failure — and every one of those is documented as FAIL OPEN: the editor
+   * works, just without LSP. The caller needs that apart from "the open
+   * failed", because a later change for a URI that was never LSP-backed is a
+   * no-op, while a change for one that WAS is the silent loss #922 is about.
+   */
+  async openDocument(params: OpenDocumentParams): Promise<boolean> {
     this.bumpDocumentIntent(params.clientUri)
     try {
-      await this.serializeDocument(params.clientUri, () => this.openDocumentNow(params))
+      return await this.serializeDocument(params.clientUri, () => this.openDocumentNow(params))
     } finally {
       this.clearOrphanedDocumentIntent(params.clientUri)
     }
   }
 
-  private async openDocumentNow(params: OpenDocumentParams): Promise<void> {
-    if (!supportsLsp(params.language)) return
+  private async openDocumentNow(params: OpenDocumentParams): Promise<boolean> {
+    if (!supportsLsp(params.language)) return false
     const spec = lspServerForLanguage(params.language)
-    if (!spec) return
+    if (!spec) return false
     const language = params.language
     const workspaceRoot = params.workspaceRoot || process.cwd()
     const server = await this.getOrCreateServer(workspaceRoot, spec)
-    if (!server) return
+    if (!server) return false
     try {
       await server.initialized
     } catch {
       this.discardServer(server)
-      return
+      return false
     }
 
     const serverUri = params.filePath
       ? pathToFileURL(resolveLspFileInsideRoot(workspaceRoot, params.filePath)).href
       : makeVirtualServerUri(workspaceRoot, params.clientUri, language)
     const key = serverDocumentKey(server.key, serverUri)
-    await this.serializeServerDocument(key, async () => {
+    // Announce before queueing: this open is about to rewrite the shared
+    // document, and a request from a sibling alias is holding that queue with
+    // an answer that is already doomed (#1108 review, 1). `bumpDocumentIntent`
+    // could not fan out for us — this URI had no record when it ran.
+    this.notifyDocumentIntent(key)
+    return await this.serializeServerDocument(key, async () => {
       const existing = this.docs.get(params.clientUri)
       if (existing) {
         if (existing.serverKey !== server.key || existing.serverUri !== serverUri) {
@@ -473,14 +514,14 @@ export class LspManager extends EventEmitter {
           // documents. The visible editor will retry on its next mount;
           // mutating the old record here would let its late close tear down the
           // new one.
-          return
+          return false
         }
         const shared = this.serverDocuments.get(key)
-        if (!shared) return
+        if (!shared) return false
         existing.refs += 1
         shared.refs += 1
         await this.changeSharedDocument(server, shared, existing, params.content)
-        return
+        return true
       }
 
       const shared = this.serverDocuments.get(key)
@@ -493,7 +534,7 @@ export class LspManager extends EventEmitter {
             text: params.content,
           },
         })
-        if (server.closed) return
+        if (server.closed) return false
         const created: ServerDocumentRecord = {
           key,
           serverKey: server.key,
@@ -518,7 +559,7 @@ export class LspManager extends EventEmitter {
           content: params.content,
           completionItems: new Map(),
         })
-        return
+        return true
       }
 
       // ── THE INVARIANT THE FENCE DEPENDS ON (#1078 review, 3) ──
@@ -537,7 +578,7 @@ export class LspManager extends EventEmitter {
       // sequence that reaches here with a closed server — `connection.dispose`
       // rejects pending responses, and the rejection path is guarded — but an
       // invariant this load-bearing should not rest on that being exhaustive.
-      if (server.closed) return
+      if (server.closed) return false
       shared.refs += 1
       const doc: OpenDocumentRecord = {
         clientUri: params.clientUri,
@@ -553,6 +594,7 @@ export class LspManager extends EventEmitter {
       }
       this.docs.set(params.clientUri, doc)
       await this.changeSharedDocument(server, shared, doc, params.content)
+      return true
     })
   }
 
@@ -714,9 +756,12 @@ export class LspManager extends EventEmitter {
    * documents are dropped, diagnostics cleared, and the next open spawns a
    * fresh process.
    */
-  private noteAbandonedRequest(server: ServerRecord, pending: Promise<unknown>): void {
+  private noteAbandonedRequest(server: ServerRecord, settles: Promise<unknown>): void {
     server.abandonedRequests += 1
-    void pending.then(
+    // `settles` is the rejection-safe wrapper, so a server that answers a
+    // cancelled request with an error still decrements — it answered, which is
+    // what this counter measures.
+    void settles.then(
       () => { server.abandonedRequests -= 1 },
       () => { server.abandonedRequests -= 1 },
     )
@@ -737,6 +782,12 @@ export class LspManager extends EventEmitter {
     // epoch. If a change arrives later, it advances the map immediately and
     // invalidates this response even though protocol ordering makes the
     // didChange wait for the request to release the server-URI queue.
+    //
+    // Only `openDocument`, `changeDocument` and `closeDocument` bump intent —
+    // a second REQUEST does not (#1108 review, 8). Two hovers with no edit
+    // between them still serialize, because nothing about the second one makes
+    // the first one's answer wrong. Intent means "the text is about to change
+    // or the document is going away", not "someone else asked something".
     const intentEpoch = this.documentIntentEpochs.get(clientUri) ?? 0
     try {
       return await this.serializeDocument(clientUri, async () => {
@@ -768,16 +819,17 @@ export class LspManager extends EventEmitter {
           // against the client revision it asked about, while the server
           // version is what the server was told and is the number to compare a
           // late `publishDiagnostics` against.
-          onSynchronized?.({
-            doc: ctx.doc,
-            clientVersion: ctx.doc.version,
-            serverVersion: shared.version,
-          })
+          // WHY only the client revision (#1108 review, 6): an earlier cut
+          // also carried the server version, described as "the number to
+          // compare a late publishDiagnostics against". `handlePublishDiagnostics`
+          // already does exactly that against `shared.version` and has no
+          // ticket in scope, so the field was never read. A field nobody reads
+          // is a claim nobody checks.
+          onSynchronized?.({ doc: ctx.doc, clientVersion: ctx.doc.version })
 
           const cancellation = new CancellationTokenSource()
           let timeout: ReturnType<typeof setTimeout> | undefined
-          let graceTimeout: ReturnType<typeof setTimeout> | undefined
-          const abandonment = this.onIntentPast(clientUri, intentEpoch)
+          const abandonment = this.onIntentPast(ctx.doc.serverDocumentKey, intentEpoch, clientUri)
           try {
             const pending = ctx.server.connection.sendRequest<T>(
               method,
@@ -787,8 +839,28 @@ export class LspManager extends EventEmitter {
               },
               cancellation.token,
             )
+            // WHY the raw `pending` is never a race entry (#1108 review, 2).
+            //
+            // Cancelling an LSP request does NOT reject it locally — the client
+            // only sends `$/cancelRequest` and the promise still settles on the
+            // server's reply. And the protocol ADVISES a server to answer a
+            // cancelled request with an ERROR (`RequestCancelled`, -32800;
+            // `ContentModified`, -32801 from gopls/rust-analyzer/pyright). With
+            // `pending` in the race, that error became the race's result, fell
+            // through the `isDestroyedStreamError`/`closed` catch, and was
+            // thrown out of `getCompletions`/`getSemanticTokens`/`getHover`.
+            // `provideDocumentSemanticTokens` has no catch, and semantic tokens
+            // are re-requested on every model change — the request most likely
+            // to be abandoned by the debounced didChange right behind it.
+            //
+            // So: one settled wrapper, used by every branch. A rejection is a
+            // non-answer, which is exactly what it means here.
+            const answered = pending.then(
+              value => ({ ok: true as const, value }),
+              () => ({ ok: false as const, value: undefined }),
+            )
             const response = await Promise.race([
-              pending,
+              answered,
               new Promise<typeof LSP_REQUEST_TIMED_OUT>(resolveTimeout => {
                 timeout = setTimeout(() => {
                   // Cancellation is advisory in LSP. The local timeout is what
@@ -806,33 +878,48 @@ export class LspManager extends EventEmitter {
               // then let go of both queues.
               abandonment.promise.then(async (): Promise<typeof LSP_REQUEST_TIMED_OUT> => {
                 cancellation.cancel()
-                const settled = await Promise.race([
-                  pending.then(() => true, () => true),
-                  new Promise<false>(resolveGrace => {
-                    graceTimeout = setTimeout(() => resolveGrace(false), LSP_ABANDONED_REQUEST_GRACE_MS)
-                  }),
-                ])
-                // Either way this request is over as far as we are concerned;
-                // `settled` only distinguishes a server that answered from one
-                // that did not, for the bound below.
-                if (!settled) this.noteAbandonedRequest(ctx.server, pending)
+                // WHY the grace period does not use `timeout`'s `finally`
+                // cleanup path (#1108 review, 5): if the first intent bump
+                // lands inside the last 250 ms of the 15 s budget, the timeout
+                // branch settles the outer race, the `finally` clears this
+                // timer, and this closure is left awaiting a promise that
+                // never settles — retaining `ctx.doc`, `ctx.server` and `this`
+                // for the process lifetime, AND never counting the abandonment
+                // that most deserved counting. The timer is cleared locally, on
+                // every exit from this branch, instead.
+                let graceTimer: ReturnType<typeof setTimeout> | undefined
+                try {
+                  const settled = await Promise.race([
+                    answered.then(() => true),
+                    new Promise<false>(resolveGrace => {
+                      graceTimer = setTimeout(() => resolveGrace(false), LSP_ABANDONED_REQUEST_GRACE_MS)
+                    }),
+                  ])
+                  // `settled` only distinguishes a server that answered from
+                  // one that did not, for the bound below; either way this
+                  // request is over as far as we are concerned.
+                  if (!settled) this.noteAbandonedRequest(ctx.server, answered)
+                } finally {
+                  if (graceTimer) clearTimeout(graceTimer)
+                }
                 return LSP_REQUEST_TIMED_OUT
               }),
             ])
             if (response === LSP_REQUEST_TIMED_OUT) return null
+            // A rejection reached us as a non-answer rather than as a throw.
+            if (!response.ok) return null
             if (
               this.docs.get(clientUri) !== ctx.doc ||
               (this.documentIntentEpochs.get(clientUri) ?? 0) !== intentEpoch
             ) {
               return null
             }
-            return response
+            return response.value
           } catch (err) {
             if (isDestroyedStreamError(err) || ctx.server.closed) return null
             throw err
           } finally {
             if (timeout) clearTimeout(timeout)
-            if (graceTimeout) clearTimeout(graceTimeout)
             abandonment.cancel()
             cancellation.dispose()
           }
@@ -1026,37 +1113,53 @@ export class LspManager extends EventEmitter {
   private bumpDocumentIntent(clientUri: string): number {
     const next = (this.documentIntentEpochs.get(clientUri) ?? 0) + 1
     this.documentIntentEpochs.set(clientUri, next)
-    // Copy before notifying: a woken waiter removes itself, and mutating the
-    // set we are iterating is how that becomes an intermittent skip.
-    const waiters = this.documentIntentWaiters.get(clientUri)
-    if (waiters) for (const wake of [...waiters]) wake()
+    // Wake every alias of the same server document, not just this URI — see
+    // the field's header. A URI with no record yet (an open still resolving
+    // its server) has no shared key to fan out on; `openDocumentNow` notifies
+    // explicitly once it knows the key.
+    const serverDocumentKey = this.docs.get(clientUri)?.serverDocumentKey
+    if (serverDocumentKey) this.notifyDocumentIntent(serverDocumentKey)
     return next
   }
 
+  private notifyDocumentIntent(serverDocumentKey: string): void {
+    // Copy before notifying: a woken waiter removes itself, and mutating the
+    // set we are iterating is how that becomes an intermittent skip.
+    const waiters = this.documentIntentWaiters.get(serverDocumentKey)
+    if (waiters) for (const wake of [...waiters]) wake()
+  }
+
   /**
-   * Resolve when this client URI's intent moves past `epoch`, or never.
+   * Resolve when anyone intends to touch this server document, or never.
+   *
+   * `clientUri` and `epoch` are used only for the already-moved check at
+   * subscription time: the epoch can advance between the caller reading it and
+   * this subscription existing, and a listener that only looks forward would
+   * sleep through that bump and hold both queues for the full timeout.
    *
    * Returns its own unsubscribe rather than taking an AbortSignal because the
    * only caller is a `Promise.race` that must not leak a listener on the two
    * branches it loses.
    */
-  private onIntentPast(clientUri: string, epoch: number): { promise: Promise<void>; cancel: () => void } {
+  private onIntentPast(
+    serverDocumentKey: string,
+    epoch: number,
+    clientUri: string,
+  ): { promise: Promise<void>; cancel: () => void } {
     let wake!: () => void
     const promise = new Promise<void>(resolve => { wake = resolve })
-    const check = (): void => {
-      if ((this.documentIntentEpochs.get(clientUri) ?? 0) !== epoch) wake()
-    }
-    const waiters = this.documentIntentWaiters.get(clientUri) ?? new Set<() => void>()
-    waiters.add(check)
-    this.documentIntentWaiters.set(clientUri, waiters)
+    const waiters = this.documentIntentWaiters.get(serverDocumentKey) ?? new Set<() => void>()
+    waiters.add(wake)
+    this.documentIntentWaiters.set(serverDocumentKey, waiters)
     const cancel = (): void => {
-      waiters.delete(check)
-      if (waiters.size === 0) this.documentIntentWaiters.delete(clientUri)
+      waiters.delete(wake)
+      // Only drop the set if it is still OURS: a replacement set with a live
+      // waiter in it must not be deleted by a late cancel (#1108 review, 9).
+      if (waiters.size === 0 && this.documentIntentWaiters.get(serverDocumentKey) === waiters) {
+        this.documentIntentWaiters.delete(serverDocumentKey)
+      }
     }
-    // The epoch may already have moved between the caller reading it and this
-    // subscription existing. Check once, after subscribing, so neither order
-    // loses the notification.
-    check()
+    if ((this.documentIntentEpochs.get(clientUri) ?? 0) !== epoch) wake()
     return { promise, cancel }
   }
 

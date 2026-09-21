@@ -45,7 +45,7 @@ type LspManagerInternals = {
     // #923: the real function hands back the revision it synchronized at.
     // A stub that ignores this is not a faithful stand-in — its caller
     // validates the result against the ticket and would discard everything.
-    onSynchronized?: (ticket: { doc: unknown; clientVersion: number; serverVersion: number }) => void,
+    onSynchronized?: (ticket: { doc: unknown; clientVersion: number }) => void,
   ) => Promise<unknown>
   handlePublishDiagnostics: (
     serverKey: string,
@@ -547,7 +547,7 @@ describe('LspManager document ownership', () => {
       requests.push({ method, params })
       // What the real one does after restoring this alias's draft: nothing
       // moved the version here, so the ticket is the document as it stands.
-      onSynchronized?.({ doc, clientVersion: doc.version, serverVersion: doc.version })
+      onSynchronized?.({ doc, clientVersion: doc.version })
       return {
         isIncomplete: true,
         items: [{ label: 'value', kind: 6, insertText: 'value' }],
