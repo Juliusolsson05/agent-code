@@ -11,6 +11,7 @@ import { MouseButtonInput } from '@renderer/features/settings/ui/MouseButtonInpu
 import { CommandKeybindingsRow } from '@renderer/features/settings/ui/CommandKeybindingsRow'
 import { settingMetadata } from '@renderer/features/settings/lib/settingsRegistry'
 import { CliUpdateBehaviorRow } from '@renderer/features/cli-updates/CliUpdateBehaviorRow'
+import { ProviderEnablementRow } from '@renderer/features/providers/ui/ProviderEnablementRow'
 import { DictationApiKeyRow } from '@renderer/features/voice-dictation/DictationApiKeyRow'
 import { DictationHistoryRow } from '@renderer/features/voice-dictation/DictationHistoryRow'
 import { DictationAudioInputRow } from '@renderer/features/voice-dictation/DictationAudioInputRow'
@@ -240,6 +241,7 @@ function SettingRow({
           ) : null}
 
           {control.type === 'cli-update-behavior' ? <CliUpdateBehaviorRow /> : null}
+          {control.type === 'providers-enablement' ? <ProviderEnablementRow /> : null}
 
           {/* Voice-dictation API key — same self-subscribing marker-row
               pattern as CLI updates: the ciphertext lives in
