@@ -51,6 +51,21 @@ const CAPABILITY_DISCLOSURE: Record<ExtensionCapability, string> = {
     'Create or replace text files it names inside projects belonging to active sessions.',
   'notifications.show':
     'Show short app-wide status notifications while it runs in the background.',
+  // The one disclosure that is about TRUST rather than data: a service is a
+  // bundled program the host launches as a real child process with this user's
+  // privileges. It can read and write what this account can, open network
+  // connections, and run for as long as Agent Code is open. The grant gates the
+  // host's lifecycle/proxy conveniences — it is not a sandbox. If that sounds
+  // alarming, it is meant to: this is the VS Code extension-host decision,
+  // made once, per extension, here.
+  'service.run':
+    'Run bundled native programs as child processes with this user’s privileges — only when you use the extension’s start control. Native code is not sandboxed.',
+  'service.transport':
+    'Exchange requests with its own running service on this machine (the host proxies them; the extension cannot reach anything else on the network).',
+  'net.listen':
+    'Make one of its running services reachable from this machine’s local network. The host owns that listener and closes it when the service stops. Use a trusted network only.',
+  'net.connect':
+    'Open web requests to addresses you or the extension enter on this local network (private addresses only in this release; the request goes through the host, not the sandbox).',
 }
 
 function consentPromptFor(evt: IpcMainInvokeEvent, source: string): ConsentPrompt {

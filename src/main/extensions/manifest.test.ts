@@ -230,3 +230,28 @@ it('requires a separately contained view module for API v2 while retaining v1 ma
   expect(parsed.contributes?.views?.[0]?.entry).toBe('dist/view.js')
   expect(parseExtensionManifest(manifest({ contributes: { views: [view] } })).apiVersion).toBe(1)
 })
+
+describe('contributes.services', () => {
+  const service = { id: 'timer.worker', entry: 'dist/worker.js' }
+  const v2 = { apiVersion: 2, entry: 'dist/index.js' }
+
+  it('accepts a declared v2 service and keeps the closed capability in lockstep', () => {
+    const parsed = parseExtensionManifest(manifest({ ...v2, contributes: { services: [service] }, permissions: ['service.run'] }))
+    expect(parsed.contributes?.services).toEqual([service])
+    // The union is load-bearing in both directions: a name in the schema that
+    // EXTENSION_CAPABILITIES does not know fails every future install.
+    expect(EXTENSION_CAPABILITIES).toContain('service.run')
+  })
+
+  it.each([
+    ['v1 manifest', { contributes: { services: [service] } }, /API v2/],
+    ['v1 permission', { apiVersion: 1, permissions: ['service.run'] }, /API v2/],
+    ['missing entry', { ...v2, contributes: { services: [{ id: 'timer.worker' }] } }, /entry/],
+    ['escaping entry', { ...v2, contributes: { services: [{ ...service, entry: '../../tool.js' }] } }, /..|entry/i],
+    ['foreign namespace', { ...v2, contributes: { services: [{ ...service, id: 'other.worker' }] } }, /namespace/],
+    ['duplicate ids', { ...v2, contributes: { services: [service, service] } }, /duplicate service/],
+    ['too many services', { ...v2, contributes: { services: Array.from({ length: 5 }, (_, i) => ({ id: `timer.s${i}`, entry: 'dist/s.js' })) } }, /services/],
+  ])('rejects %s before publication', (_label, overrides, pattern) => {
+    expect(() => parseExtensionManifest(manifest(overrides))).toThrow(pattern)
+  })
+})

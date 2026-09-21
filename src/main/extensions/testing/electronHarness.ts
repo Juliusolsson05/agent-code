@@ -11,6 +11,7 @@ import { ExtensionRuntimeService } from '../runtimeService.js'
 import { registerExtensionRuntimeIpc } from '../runtimeIpc.js'
 import { registerExtensionInputIpc } from '../nativeInput.js'
 import { ExtensionCapabilityService } from '../capabilityService.js'
+import { ExtensionServiceHost } from '../serviceHost.js'
 
 const root = process.env.AGENT_CODE_EXTENSION_TEST_ROOT
 if (!root) throw new Error('An isolated extension test root is required')
@@ -100,6 +101,7 @@ void (async () => {
   const capabilities = new ExtensionCapabilityService({
     resolveSessionRoot: sessionId => sessionId === 'fixture-session' ? projectRoot : null,
     notify: (extensionId, message) => extensionNotifications.push({ extensionId, message }),
+    services: new ExtensionServiceHost({ readyTimeoutMs: 3000, invokeTimeoutMs: 1500 }),
   })
   const service = new ExtensionRuntimeService({ preload: join(root!, 'runtime-preload.cjs'), capabilities, onStatus: status => {
     if (status.state === 'starting') runtimeStarts.push(status.extensionId)

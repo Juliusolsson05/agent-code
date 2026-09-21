@@ -246,6 +246,27 @@ const api = {
     writeText: ({ sessionId, path, text, expectedVersion }) => request('fs.writeText', { sessionId, path, text, expectedVersion }),
   },
   notifications: { show: (message) => request('notifications.show', { message }) },
+  // Native sidecar lifecycle, brokered in main under the service.run grant.
+  // start() is the ONLY thing that can make native code run, so it is explicit
+  // and returns the live handle (pid + reported loopback endpoints) — a caller
+  // never has to guess whether the process actually came up.
+  services: {
+    start: (serviceId) => request('service.start', { serviceId }),
+    stop: (serviceId) => request('service.stop', { serviceId }),
+    status: (serviceId) => request('service.status', { serviceId }),
+    invoke: (serviceId, name, params) => request('service.invoke', { serviceId, name, params }),
+    // net.listen: the host binds the LAN listener and owns its lifetime; the
+    // returned port is the one to share on the local network.
+    expose: (serviceId, lan) => request('service.expose', { serviceId, lan }),
+  },
+  // net.connect: brokered outbound fetch. The frame's own CSP still allows no
+  // network at all — this call crosses through the host, which enforces the
+  // private-address policy before any socket opens.
+  net: {
+    fetch: (url, init) => request('net.fetch', {
+      url, httpMethod: init && init.method, headers: init && init.headers, body: init && init.body,
+    }),
+  },
 };
 
 // Listeners for host-pushed change nudges (Tier-1 observe live updates), keyed by

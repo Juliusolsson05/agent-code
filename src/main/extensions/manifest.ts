@@ -114,6 +114,17 @@ const keybindingContribution = z.object({
   key: z.string().min(1).max(64),
 })
 
+// Services are native sidecar processes, so their entry is load-bearing in a way
+// view entries are not: a hostile path here is arbitrary code execution at the
+// user's privilege. The same ENTRY_PATH grammar plus install-time bundle
+// containment (verifyEntryInsideBundle) applies; requiring it in the schema (not
+// optionally like views) means a malformed service can never even parse.
+const serviceContribution = z.object({
+  id: CONTRIBUTION_ID,
+  title: z.string().trim().min(1).max(80).optional(),
+  entry: ENTRY_PATH,
+}).strict()
+
 // A closed capability set — like activationEvent, an unknown capability must fail
 // install with a message, not resolve to nothing. Kept in lockstep with
 // EXTENSION_CAPABILITIES in @shared/types/extensions (the schema wins on drift).
@@ -171,6 +182,9 @@ export const extensionManifestSchema = z.object({
         title: z.string().trim().min(1).max(80),
         colors: extensionThemeColorsSchema,
       }).strict()).max(16).optional(),
+      // Max four: each one is a native process the user consented to as a unit.
+      // A manifest needing more is a platform conversation, not a schema bump.
+      services: z.array(serviceContribution).max(4).optional(),
     })
     .optional(),
   permissions: z.array(capabilityName).max(16).optional(),
@@ -178,7 +192,8 @@ export const extensionManifestSchema = z.object({
   const v2OnlyPermission = manifest.permissions?.find(permission =>
     permission === 'fs.read'
     || permission === 'fs.write'
-    || permission === 'notifications.show')
+    || permission === 'notifications.show'
+    || permission === 'service.run')
   if (manifest.apiVersion === 1 && v2OnlyPermission) {
     // v1 owns one isolated view-local activation and its public API is frozen.
     // Advertising a capability that only the v2 runtime/view contract exposes
@@ -187,6 +202,16 @@ export const extensionManifestSchema = z.object({
       code: 'custom',
       path: ['permissions'],
       message: `${v2OnlyPermission} requires Agent Code API v2`,
+    })
+  }
+  if (manifest.apiVersion === 1 && manifest.contributes?.services?.length) {
+    // Services exist only in the managed v2 world (brokered lifecycle, no legacy
+    // closure ABI). A v1 service would be consent-with-no-call-path: the dialog
+    // would promise native processes a transport that cannot start them.
+    context.addIssue({
+      code: 'custom',
+      path: ['contributes', 'services'],
+      message: 'contributes.services requires Agent Code API v2',
     })
   }
   if (manifest.apiVersion !== 2) return
@@ -267,13 +292,14 @@ function assertContributionsAreCoherent(manifest: ExtensionManifest): void {
   const settings = manifest.contributes?.settings ?? []
   const keybindings = manifest.contributes?.keybindings ?? []
   const themes = manifest.contributes?.themes ?? []
+  const services = manifest.contributes?.services ?? []
 
   // WHY namespacing is ENFORCED and not merely conventional: contributed command
   // ids land in one global registry beside ~95 first-party commands. An
   // extension declaring `session.kill` would collide with a real one, and the
   // resolution would be arbitrary. Install is the only moment where the user can
   // still act on it, so it fails here rather than resolving oddly forever.
-  const namespaced = [...commands, ...views, ...settings, ...themes]
+  const namespaced = [...commands, ...views, ...settings, ...themes, ...services]
   for (const contribution of namespaced) {
     if (!contribution.id.startsWith(prefix)) {
       throw new ManifestError(
@@ -292,6 +318,7 @@ function assertContributionsAreCoherent(manifest: ExtensionManifest): void {
   assertUnique(views.map(v => v.id), 'view')
   assertUnique(settings.map(s => s.id), 'setting')
   assertUnique(themes.map(theme => theme.id), 'theme')
+  assertUnique(services.map(service => service.id), 'service')
 
   // A contributed keybinding is consulted app-wide, including while the user
   // types into an agent composer or a terminal. A bare key ("a", "Enter") or a

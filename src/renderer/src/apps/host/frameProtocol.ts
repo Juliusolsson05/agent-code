@@ -1,6 +1,14 @@
 import { z } from 'zod'
 import { extensionJsonSchema, type RuntimeViewSnapshot } from '@shared/types/extensionRuntime'
-import { extensionFileReadRequestSchema, extensionFileWriteRequestSchema, extensionNotificationRequestSchema } from '@shared/types/extensionServices'
+import {
+  extensionFileReadRequestSchema,
+  extensionFileWriteRequestSchema,
+  extensionNotificationRequestSchema,
+  serviceStartRequestSchema,
+  serviceStopRequestSchema,
+  serviceStatusRequestSchema,
+  serviceInvokeRequestSchema,
+} from '@shared/types/extensionServices'
 
 // The host <-> extension-frame message contract (WS4, sandbox substrate).
 //
@@ -75,6 +83,12 @@ export const frameRequestSchema = z.discriminatedUnion('method', [
   extensionFileReadRequestSchema,
   extensionFileWriteRequestSchema,
   extensionNotificationRequestSchema,
+  // Tier 2 services — same schema objects the runtime preload transport uses,
+  // so the two transports cannot drift on what a service call may contain.
+  serviceStartRequestSchema,
+  serviceStopRequestSchema,
+  serviceStatusRequestSchema,
+  serviceInvokeRequestSchema,
 ])
 
 /**

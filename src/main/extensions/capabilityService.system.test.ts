@@ -28,23 +28,52 @@ const {
 } = await import('./capabilityService.js')
 const roots: string[] = []
 
-async function fixture(): Promise<{
+type ServiceCall = { extensionId: string; revision: string; serviceId: string; name?: string; params?: unknown }
+
+async function fixture(grantServiceRun = false): Promise<{
   root: string
   notifications: Array<{ extensionId: string; message: string }>
+  serviceCalls: ServiceCall[]
   service: InstanceType<typeof ExtensionCapabilityService>
 }> {
   const root = await mkdtemp(join(tmpdir(), 'agent-code-extension-files-'))
   const notifications: Array<{ extensionId: string; message: string }> = []
+  const serviceCalls: ServiceCall[] = []
   roots.push(root)
   await mkdir(join(root, 'src'))
   await writeFile(join(root, 'src', 'note.txt'), 'hello extension\n')
-  authority.capabilities.mockResolvedValue(['fs.read', 'fs.write', 'notifications.show'])
+  authority.capabilities.mockResolvedValue([
+    'fs.read', 'fs.write', 'notifications.show', ...(grantServiceRun ? ['service.run' as const] : []),
+  ])
   return {
     root,
     notifications,
+    serviceCalls,
     service: new ExtensionCapabilityService({
       resolveSessionRoot: sessionId => sessionId === 'live-session' ? root : null,
       notify: (extensionId, message) => notifications.push({ extensionId, message }),
+      // A recording fake: the ExtensionServiceHost lifecycle itself is covered
+      // by serviceHost tests; here we verify the BROKER side — grant gate,
+      // id/revision propagation, and revocation race handling.
+      services: {
+        start: async (extensionId, revision, serviceId) => {
+          serviceCalls.push({ extensionId, revision, serviceId, name: 'start' })
+          return { state: 'running', serviceId, pid: 1, endpoints: [] }
+        },
+        stop: async (extensionId, revision, serviceId) => { serviceCalls.push({ extensionId, revision, serviceId, name: 'stop' }) },
+        status: async (extensionId, revision, serviceId) => {
+          serviceCalls.push({ extensionId, revision, serviceId, name: 'status' })
+          return { state: 'stopped', serviceId }
+        },
+        invoke: async (extensionId, revision, serviceId, name, params) => {
+          serviceCalls.push({ extensionId, revision, serviceId, name, params })
+          return { ok: true }
+        },
+        expose: async (extensionId, revision, serviceId, lan) => {
+          serviceCalls.push({ extensionId, revision, serviceId, name: 'expose' })
+          return lan ? { serviceId, lan: true, port: 45678 } : { serviceId, lan: false }
+        },
+      },
     }),
   }
 }
@@ -282,5 +311,29 @@ describe('permissioned extension services', () => {
     resolveGrant(['fs.read'])
     await expect(pending).rejects.toThrow('no longer active')
     service.dispose()
+  })
+})
+
+describe('service.run capability', () => {
+  it('blocks every lifecycle call without the grant and routes with it', async () => {
+    const { service, serviceCalls } = await fixture()
+    try {
+      await expect(service.invoke('timer', 'generation-one', {
+        method: 'service.start', serviceId: 'timer.worker',
+      })).rejects.toThrow('capability "service.run" is not granted')
+      expect(serviceCalls).toEqual([])
+    } finally { service.dispose() }
+
+    const granted = await fixture(true)
+    try {
+      await expect(granted.service.invoke('timer', 'generation-one', {
+        method: 'service.start', serviceId: 'timer.worker',
+      })).resolves.toEqual({ state: 'running', serviceId: 'timer.worker', pid: 1, endpoints: [] })
+      // The broker must forward ITS authenticated identity/revision, never
+      // accept one from the request — the payload schema has neither field.
+      expect(granted.serviceCalls).toEqual([
+        { extensionId: 'timer', revision: 'generation-one', serviceId: 'timer.worker', name: 'start' },
+      ])
+    } finally { granted.service.dispose() }
   })
 })
