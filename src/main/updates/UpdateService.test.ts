@@ -47,20 +47,26 @@ function fixture(overrides: Partial<ConstructorParameters<typeof UpdateService>[
   const updater = new FakeUpdater()
   const quits: number[] = []
   const notified: string[] = []
+  // Dialog messages are recorded apart from notifications on purpose: #1130
+  // is exactly that a manual check must reach the user even when OS
+  // notifications are off, so tests assert WHICH surface carried the copy.
+  const messages: string[] = []
+  const answers = { confirm: false }
   const storage = new Map<string, number>()
   let clock = 1_000
   const service = new UpdateService({
     updater,
-    app: { isPackaged: true },
+    app: { isPackaged: true, version: '0.1.1' },
     requestQuit: () => { quits.push(clock) },
     notify: message => { notified.push(message) },
+    showMessage: async message => { messages.push(message); return answers.confirm },
     readLastCheck: () => storage.get('lastCheck'),
     writeLastCheck: value => { storage.set('lastCheck', value) },
     now: () => clock,
     log: () => {},
     ...overrides,
   })
-  return { service, updater, quits, notified, advance: (ms: number) => { clock += ms } }
+  return { service, updater, quits, notified, messages, answers, advance: (ms: number) => { clock += ms } }
 }
 
 const available = (updater: FakeUpdater) => {
@@ -77,7 +83,7 @@ describe('UpdateService invariants', () => {
 
   it('is a silent no-op in unpackaged (dev) builds — one log line, no checks', () => {
     const log = vi.fn()
-    const { updater } = fixture({ app: { isPackaged: false }, log })
+    const { updater } = fixture({ app: { isPackaged: false, version: '0.1.1' }, log })
     expect(updater.checked).toBe(0)
     expect(log).toHaveBeenCalledTimes(1)
   })
@@ -89,7 +95,9 @@ describe('UpdateService invariants', () => {
     updater.emit('update-available', { version: '9.9.9' })
     updater.emit('update-downloaded', { version: '9.9.9' })
     expect(service.state).toBe('ready')
-    expect(notified).toEqual(['Agent Code 9.9.9 is ready to install. Use Restart to update when you are at a safe stopping point.'])
+    // Names the menu item that really restarts (#1130: the old copy named a
+    // "Restart to update" item that never existed).
+    expect(notified).toEqual(['Agent Code 9.9.9 is ready to install. Choose Check for Updates… in the File menu to restart when you are at a safe stopping point.'])
   })
 
   it('rate-limits unforced checks but always allows a manual one', () => {
@@ -102,12 +110,13 @@ describe('UpdateService invariants', () => {
     expect(updater.checked).toBe(2)
   })
 
-  it('no update available settles to none without noise', () => {
-    const { service, updater, notified } = fixture()
-    void service.checkForUpdates(true)
+  it('a background check with no update settles to none without noise', () => {
+    const { service, updater, notified, messages } = fixture()
+    void service.checkForUpdates()
     updater.emit('update-not-available')
     expect(service.state).toBe('none')
     expect(notified).toEqual([])
+    expect(messages).toEqual([])
   })
 
   it.each([
@@ -120,6 +129,94 @@ describe('UpdateService invariants', () => {
     updater.emit('error', error)
     expect(service.state).toBe('error')
     expect(notified.join(' ')).toMatch(pattern)
+  })
+})
+
+// #1130: choosing Check for Updates… used to say nothing unless a download
+// finished or failed. Every outcome of a MANUAL check must now answer the
+// user, in a dialog (visible even with notifications off). Background checks
+// keep their silence, apart from the ready/error notifications above.
+describe('manual check feedback', () => {
+  it('explains why a build run from source never updates, without touching the updater', async () => {
+    const { service, updater, messages } = fixture({ app: { isPackaged: false, version: '0.1.1' } })
+    await service.menuCheck()
+    expect(updater.checked).toBe(0)
+    expect(messages).toHaveLength(1)
+    expect(messages[0]).toMatch(/only available in the installed Agent Code app/)
+  })
+
+  it('says the user is up to date, naming the running version', async () => {
+    const { service, updater, messages, notified } = fixture()
+    const check = service.menuCheck()
+    updater.emit('update-not-available')
+    await check
+    expect(messages).toEqual(["You're up to date. Agent Code 0.1.1 is the latest version."])
+    expect(notified).toEqual([])
+  })
+
+  it('says which version was found and that it is downloading, exactly once', async () => {
+    const { service, updater, messages } = fixture()
+    const check = service.menuCheck()
+    updater.emit('update-available', { version: '0.1.3' })
+    updater.emit('download-progress', { percent: 10 })
+    updater.emit('download-progress', { percent: 60 })
+    await check
+    expect(messages).toEqual(["Agent Code 0.1.3 is available and is downloading. You'll get a notification when it's ready to install."])
+    expect(updater.downloaded).toBe(1)
+  })
+
+  it('reports a failed manual check in the dialog instead of a notification', async () => {
+    const { service, updater, messages, notified } = fixture()
+    const check = service.menuCheck()
+    updater.emit('error', new Error('HttpError: 404 Not Found'))
+    await check
+    expect(messages).toHaveLength(1)
+    expect(messages[0]).toMatch(/Update check failed/)
+    expect(notified).toEqual([])
+  })
+
+  it('a later background result is not reported as if the user had asked', async () => {
+    const { service, updater, messages, advance } = fixture()
+    const check = service.menuCheck()
+    updater.emit('update-not-available')
+    await check
+    advance(5 * 60 * 60 * 1000)
+    void service.checkForUpdates()
+    updater.emit('update-not-available')
+    expect(messages).toHaveLength(1)
+  })
+
+  it('while a download is in flight, says so instead of starting another check', async () => {
+    const { service, updater, messages } = fixture()
+    void service.checkForUpdates()
+    updater.emit('update-available', { version: '0.1.3' })
+    await service.menuCheck()
+    expect(updater.checked).toBe(1)
+    expect(messages).toEqual(["Agent Code 0.1.3 is available and is downloading. You'll get a notification when it's ready to install."])
+  })
+
+  it('when an update is ready, asks before restarting; Later leaves the app running', async () => {
+    const { service, updater, quits, messages, answers } = fixture()
+    void service.checkForUpdates(true)
+    available(updater)
+    answers.confirm = false
+    await service.menuCheck()
+    expect(messages.at(-1)).toMatch(/9\.9\.9 is ready to install/)
+    expect(quits).toEqual([])
+    expect(service.pendingInstall()).toBe(false)
+  })
+
+  it('when an update is ready and the user chooses Restart, takes the vetoable quit path', async () => {
+    const { service, updater, quits, answers } = fixture()
+    void service.checkForUpdates(true)
+    available(updater)
+    answers.confirm = true
+    await service.menuCheck()
+    expect(quits).toHaveLength(1)
+    // Still only a quit REQUEST: the shutdown gate installs after drain, so
+    // Keep Editing can cancel exactly as for a window close.
+    expect(updater.quitAndInstallCalls).toBe(0)
+    expect(service.pendingInstall()).toBe(true)
   })
 })
 
