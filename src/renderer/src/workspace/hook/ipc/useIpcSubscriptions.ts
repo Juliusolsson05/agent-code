@@ -855,11 +855,24 @@ export function useIpcSubscriptions(
       console.warn(`[jsonl ${sessionId.slice(0, 8)}]`, message)
       // These adapter diagnostics name a channel that cannot recover by
       // loading a snapshot. Electron preserves the message, not Error.code.
-      // The two nonfatal durable diagnostics deliberately remain transient:
+      // The nonfatal durable diagnostics deliberately remain transient:
       // sink delivery can recover, and exit-drain exhaustion ends the backend.
+      //
+      // #1114 adds two more, and they matter because NOTHING ever clears a
+      // lifetime banner (see the gate below, which only matches
+      // provider_server_unreachable). `db_path_retrying` names a lookup that is
+      // still being retried — a pane that then heals must not stay marked
+      // broken, in this banner, in Agent Status, and in the
+      // `transcript_unavailable` every orchestration parent reads. And
+      // `db_path_recovered_late` reports a channel that IS working, just with a
+      // hole in what it caught; calling that "stopped" would be false.
+      // `db_path_unavailable` keeps its #864 AC8 meaning — permanent — and is
+      // now only emitted when the retry ladder is spent and that is true.
       const channelStopped = message.startsWith('OpenCode durable channel (')
         && !message.includes('(sink_failed)')
         && !message.includes('(final_drain_incomplete)')
+        && !message.includes('(db_path_retrying)')
+        && !message.includes('(db_path_recovered_late)')
       const sessionSwitched = message.includes('(provider_session_switched)')
       // #881. The TUI's server never came up — its port was taken between our
       // loopback probe and its bind. The pane cannot be re-pointed at another
