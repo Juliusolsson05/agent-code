@@ -80,7 +80,9 @@ describe('listActiveUsageSourceIds', () => {
       enabledKinds: new Set<AgentProviderKind>(['grok']),
       opencodeUsageSource: 'none',
     })
-    // grok's reader landed with #1103; only the #1104 z.ai placeholder remains.
+    // Both #1103 (grok) and #1104 (z.ai) readers have landed; every
+    // contract id now resolves, so the null-placeholder guard has no live
+    // case — it remains for any future source added before its reader.
     expect(ids).toEqual(['grok'])
   })
 })
