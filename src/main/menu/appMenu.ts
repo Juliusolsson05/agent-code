@@ -55,7 +55,15 @@ function dispatchCommand(commandId: NativeMenuCommandId): void {
   sendToFocusedWindow('menu:command', commandId)
 }
 
-export function buildAppMenu(): Menu {
+export function buildAppMenu(options: {
+  /** Self-update surface: when omitted (tests, very early startup) the items
+   *  stay absent rather than clicking into nothing. The single item does dual
+   *  duty: no update downloaded → force a check; update ready → apply it. A
+   *  static menu cannot flip labels, and rebuilding the menu on updater events
+   *  would briefly detach every accelerator; the OS notification carries the
+   *  state change instead. */
+  onCheckForUpdates?: () => 'checking' | 'ready' | 'disabled'
+} = {}): Menu {
   const isMac = process.platform === 'darwin'
 
   const template: MenuItemConstructorOptions[] = [
@@ -170,6 +178,21 @@ export function buildAppMenu(): Menu {
     // Standard Window menu — minimize/zoom/front, plus the window list on mac.
     { role: 'windowMenu' },
   ]
+
+  if (options.onCheckForUpdates) {
+    // App menu (macOS) / File menu (elsewhere): updates are an application
+    // lifecycle concern, so they sit beside Quit, not among workspace commands.
+    const updatesItem: MenuItemConstructorOptions = {
+      label: 'Check for Updates…',
+      click: () => { options.onCheckForUpdates?.() },
+    }
+    // The macOS appMenu is a bare role (Electron generates its submenu), so a
+    // lifecycle item lives at the END of File, beside the other app-level
+    // entries (Setup…, Close Tab) rather than inside a generated role menu.
+    const file = template.find(item => item.label === 'File') as { submenu?: MenuItemConstructorOptions[] } | undefined
+    if (file?.submenu) file.submenu.push({ type: 'separator' }, updatesItem)
+    else template.unshift({ label: 'Help', submenu: [updatesItem] })
+  }
 
   return Menu.buildFromTemplate(template)
 }

@@ -55,6 +55,9 @@ interface Stage {
  * with their evidence-bearing lifecycle implementations.
  */
 export function installApplicationShutdown(options: {
+  /** Passed straight to the shutdown gate: a pending self-update REPLACES the
+   *  final quit so Squirrel's relaunch is armed before the process exits. */
+  update?: Parameters<typeof installSessionShutdownGate>[0]['update']
   app: QuitApp
   services: ApplicationShutdownServices
   prepare: () => void
@@ -175,6 +178,7 @@ export function installApplicationShutdown(options: {
     onQuitAllowed: options.onQuitAllowed,
     onShutdownError: options.onShutdownError,
     ...(options.platform ? { platform: options.platform } : {}),
+    ...(options.update ? { update: options.update } : {}),
   })
   return gate
 }

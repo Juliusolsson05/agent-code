@@ -20,7 +20,7 @@ import { createExternalControlSettings } from './settings/externalControl'
 import { createExternalCodexIntegration } from './settings/externalCodexIntegration'
 import operatorSkillSource from '../../operator-skills/agent-code-computer-execution/SKILL.md?raw'
 
-import { app, clipboard, crashReporter, dialog, Menu, powerMonitor, systemPreferences } from 'electron'
+import { app, clipboard, crashReporter, dialog, Menu, Notification, powerMonitor, systemPreferences } from 'electron'
 import { existsSync } from 'fs'
 import { readFile } from 'fs/promises'
 import { join } from 'path'
@@ -66,6 +66,7 @@ import { ExtensionRuntimeService } from '@main/extensions/runtimeService.js'
 import { ExtensionCapabilityService } from '@main/extensions/capabilityService.js'
 import { registerExtensionRuntimeIpc } from '@main/extensions/runtimeIpc.js'
 import { ExtensionServiceHost } from '@main/extensions/serviceHost.js'
+import { autoUpdater } from 'electron-updater'
 import { clearServiceTransport, configureServiceTransport } from '@main/extensions/serviceTransport.js'
 import { registerExtensionInputIpc } from '@main/extensions/nativeInput.js'
 import { sweepAbandonedInstallDirectories } from '@main/extensions/install.js'
@@ -139,6 +140,8 @@ import { createFileVaultStore } from '@main/keyVault/vaultStore.js'
 import { createSafeStorageCodec } from '@main/keyVault/safeStorageCodec.js'
 import { VaultService } from '@main/keyVault/VaultService.js'
 import { buildAppMenu } from '@main/menu/appMenu.js'
+import { UpdateService } from '@main/updates/UpdateService.js'
+import { UpdateCheckStore } from '@main/updates/updateCheckStore.js'
 import { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import { installProcessCrashHooks } from '@main/incident/installCrashHooks.js'
 import { installWindowIncidentHooks } from '@main/incident/installWindowIncidentHooks.js'
@@ -396,6 +399,27 @@ registerExtensionScheme()
 // wired in startApp). A committed drain failure must not resume window handoff.
 let quitting = false
 app.on('before-quit', () => { quitting = true })
+
+// Self-update (issue #1120). Everything safety-critical lives in
+// UpdateService; this wiring only supplies the real transport, the OS
+// notification surface, the persisted check clock, and the two shutdown
+// hooks: the gate swaps its final quit for quitAndInstall, and the
+// Keep-Editing veto resets the intent so a retry still works.
+const updateChecks = new UpdateCheckStore()
+const updateService = new UpdateService({
+  updater: autoUpdater,
+  app: { isPackaged: app.isPackaged },
+  requestQuit: () => { app.quit() },
+  notify: message => {
+    try {
+      if (Notification.isSupported()) new Notification({ title: 'Agent Code', body: message }).show()
+    } catch { /* a notification failure must never break the update flow */ }
+  },
+  readLastCheck: () => updateChecks.read(),
+  writeLastCheck: at => { void updateChecks.write(at) },
+  now: () => Date.now(),
+  log: line => { console.log(`[updates] ${line}`) },
+})
 
 const hasSingleInstanceLock = packagingSmoke || app.requestSingleInstanceLock()
 
@@ -1286,6 +1310,9 @@ async function startApp(): Promise<void> {
   setWindowCloseVetoedObserver(() => {
     quitting = false
     extensionQuitReady = false
+    // Keep Editing also cancels a pending update restart: the staged update
+    // stays on disk, only the intent resets (UpdateService.onQuitVetoed).
+    updateService.onQuitVetoed()
     // Announce the resume so v2 views closed by the quit's pause re-attach
     // (viewBridge retries only views that failed meanwhile). Without it every
     // open extension view stayed on "failed to start" after Keep Editing.
@@ -1440,7 +1467,15 @@ async function startApp(): Promise<void> {
   })
   // Install the application menu right after the window exists — the File
   // items dispatch command ids to THIS window's renderer (issue #148).
-  Menu.setApplicationMenu(buildAppMenu())
+  Menu.setApplicationMenu(buildAppMenu({
+    // Dual duty: not-ready → force a check; ready → apply the update. The
+    // OS notification tells the user which state they are in.
+    onCheckForUpdates: () => {
+      if (updateService.state === 'ready') { updateService.restartToUpdate(); return 'ready' }
+      void updateService.checkForUpdates(true)
+      return 'checking'
+    },
+  }))
   performanceService.mark('app.main.window.created')
   // Both belong at window creation. The startup timing is observed first so
   // `app.startup` keeps meaning "process start until the first window exists"
@@ -1489,7 +1524,20 @@ app.on('before-quit', (event) => {
 // precedes renderer unload decisions, so only reversible preparation belongs
 // there. In particular, Keep Editing must leave workflow/MCP/LSP/remote/voice
 // services intact. The gate holds will-quit until this inventory has settled.
+// Update cadence (consulted): first check at T+3min so it never competes with
+// startup; every 4h; once more on wake. Timers are unref'd — the app must
+// never be held alive by an update check. Dev builds short-circuit inside the
+// service ('disabled'), so the timers exist but do nothing.
+if (app.isPackaged) {
+  const firstUpdateCheck = setTimeout(() => { void updateService.checkForUpdates() }, 3 * 60 * 1000)
+  firstUpdateCheck.unref()
+  const updateCheckInterval = setInterval(() => { void updateService.checkForUpdates() }, 4 * 60 * 60 * 1000)
+  updateCheckInterval.unref()
+  powerMonitor.on('resume', () => { void updateService.checkForUpdates() })
+}
+
 const sessionShutdownGate = installApplicationShutdown({
+  update: { pending: () => updateService.pendingInstall(), install: () => updateService.installUpdate() },
   app,
   platform: process.platform,
   prepare: () => {

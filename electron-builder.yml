@@ -1,4 +1,13 @@
 appId: com.agentcode.app
+# The update feed declaration. electron-builder embeds resources/app-update.yml
+# from this, which is the ONLY thing electron-updater reads at runtime — the
+# GitHub workflow that actually uploads artifacts is separate and unchanged.
+# Publishing still requires an explicit --publish/-p flag, so local and CI
+# builds do not accidentally release anything.
+publish:
+  - provider: github
+    owner: Juliusolsson05
+    repo: agent-code
 productName: Agent Code
 copyright: "Copyright © 2026 Julius Olsson"
 artifactName: "${productName}-${version}-${arch}.${ext}"

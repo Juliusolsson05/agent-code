@@ -139,6 +139,7 @@
     "@vitest/coverage-v8": "^4.1.7",
     "electron": "^43.1.0",
     "electron-builder": "^26.16.1",
+    "electron-updater": "^6.6.2",
     "electron-vite": "^5.0.0",
     "esbuild": "0.25.12",
     "happy-dom": "^20.9.0",
