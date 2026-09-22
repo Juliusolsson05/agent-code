@@ -86,8 +86,10 @@ async function fetchGrokUsagePayload(credentials: GrokCredentials): Promise<unkn
       authorization: `Bearer ${credentials.key}`,
       // Required alongside the bearer token: without this proxy-auth header the
       // endpoint answers "no auth context" even for a valid key (spec, verified
-      // against the installed Grok Build 1.0.30 binary).
-      'x-ai-token-auth': 'xai-grok-cli',
+      // against the installed Grok Build 1.0.30 binary). Header names are
+      // case-insensitive on the wire (RFC 9110 §5.1) — the canonical casing is
+      // used purely to match the spec letter-for-letter and end reviewer debate.
+      'X-XAI-Token-Auth': 'xai-grok-cli',
       accept: 'application/json',
     },
   })
