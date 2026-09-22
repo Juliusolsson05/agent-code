@@ -32,10 +32,13 @@ import { fileURLToPath } from 'node:url'
 
 export const NIGHTLY_TAG = 'nightly'
 export const NIGHTLY_ARCHES = ['arm64', 'x64']
-// Fixed names, spelled the way GitHub stores them: an uploaded "Agent Code-…"
-// becomes "Agent.Code-…", and the landing page matches on the `-<arch>.dmg`
-// suffix. These four names are the rolling-release contract. Every other file
-// the build produces is deliberately not published.
+// Fixed names: the landing page links to these and matches on the
+// `-<arch>.dmg` suffix, so they are the rolling-release contract. They keep
+// the dotted "Agent.Code-" spelling that builds made before #1129 (a
+// "Agent Code-…" upload was stored by GitHub as "Agent.Code-…"), so existing
+// links still resolve even though builds are now named "Agent-Code-…".
+// commandRename finds each build file by its ending, so the build's own
+// prefix does not matter here. Every other file is deliberately not published.
 export const NIGHTLY_ASSET_NAMES = NIGHTLY_ARCHES.flatMap(arch => [
   `Agent.Code-nightly-${arch}.dmg`,
   `Agent.Code-nightly-${arch}.zip`,
