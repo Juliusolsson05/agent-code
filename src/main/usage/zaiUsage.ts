@@ -114,6 +114,21 @@ export function normalizeZaiUsagePayload(payload: unknown): UsageProviderOk {
   }
 }
 
+/** Settings hint support: does the OpenCode credential store hold a z.ai
+ *  coding-plan key? Read-only, no network, cheap enough for every snapshot
+ *  rebuild. The dropdown stays greyed until this is true — selecting z.ai
+ *  with no credential would render a permanently-erroring usage row. */
+export async function probeZaiCredential(): Promise<boolean> {
+  try {
+    const observed = await stat(OPENCODE_AUTH_PATH)
+    if (observed.size > MAX_OPENCODE_AUTH_BYTES) return false
+    const parsed = JSON.parse(await readFile(OPENCODE_AUTH_PATH, 'utf8')) as unknown
+    return Boolean(stringOrNull(readObject(readObject(parsed)['zai-coding-plan']).key))
+  } catch {
+    return false
+  }
+}
+
 export async function readZaiUsage(): Promise<UsageProviderOk> {
   const key = await readZaiKey()
   const payload = await fetchZaiUsagePayload(key)

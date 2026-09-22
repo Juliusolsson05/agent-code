@@ -23,6 +23,10 @@ export type ProviderEnablementEntry = {
 export type ProviderEnablementSnapshot = {
   entries: Array<ProviderEnablementEntry>
   opencodeUsageSource: OpencodeUsageSource
+  /** True when the OpenCode credential store holds a z.ai coding-plan key.
+   *  Drives the Settings dropdown's greyed state; recomputed on snapshot
+   *  rebuilds (a connect flow changes it on the next read). */
+  zaiCredentialPresent: boolean
 }
 
 export function coerceUserProviderOverrides(raw: unknown): UserProviderOverrides {

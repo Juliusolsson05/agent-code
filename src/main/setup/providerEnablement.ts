@@ -2,6 +2,7 @@
 // "which providers may appear in pickers and usage". Renderer reaches it
 // through IPC; usageService reads it in-process.
 
+import { probeZaiCredential } from '@main/usage/zaiUsage.js'
 import { AGENT_PROVIDER_KINDS, type AgentProviderKind } from '@shared/types/providerKind.js'
 import {
   enabledKindsFromEntries,
@@ -49,6 +50,7 @@ async function resolveAndCache(): Promise<ProviderEnablementSnapshot> {
   cachedSnapshot = {
     entries: resolveProviderEnablement(state.providerEnablementOverrides, detected),
     opencodeUsageSource: state.opencodeUsageSource,
+    zaiCredentialPresent: await probeZaiCredential(),
   }
   return cachedSnapshot
 }

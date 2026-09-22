@@ -3,7 +3,7 @@ import { useState } from 'react'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { useProviderEnablementStore } from '@renderer/features/providers/store'
 
-import type { ProviderEnablementEntry } from '@shared/types/providerEnablement'
+import { OPENCODE_USAGE_SOURCES, type OpencodeUsageSource, type ProviderEnablementEntry } from '@shared/types/providerEnablement'
 
 function hintFor(entry: ProviderEnablementEntry): string {
   if (entry.because === 'user') return 'set by you'
@@ -76,6 +76,52 @@ function EntryRow({ entry }: { entry: ProviderEnablementEntry }) {
   )
 }
 
+/** The OpenCode usage-source selector (#1104, Phase 3): which configured
+ *  provider's quota the usage surfaces should show. `none` is the honest
+ *  default — OpenCode itself is BYO-keys with no single quota — and z.ai is
+ *  the first real source. Greyed with a reason when it cannot be used: the
+ *  spec pins that a selectable-but-dead source is worse than a hint. */
+function OpencodeUsageSourceRow() {
+  const snapshot = useProviderEnablementStore(state => state.snapshot)
+  const [pending, setPending] = useState(false)
+  if (!snapshot) return null
+  const opencodeEnabled = snapshot.entries.some(entry => entry.kind === 'opencode' && entry.enabled)
+  const blocked = !opencodeEnabled || !snapshot.zaiCredentialPresent
+  const hint = !opencodeEnabled
+    ? 'Enable OpenCode to choose its usage source.'
+    : !snapshot.zaiCredentialPresent
+      ? 'Connect the z.ai Coding Plan in OpenCode (/connect) to select it.'
+      : 'Which quota the usage modal and header track.'
+
+  const choose = async (value: OpencodeUsageSource) => {
+    setPending(true)
+    try {
+      const next = await window.api.providerEnablementSetOpencodeUsageSource(value)
+      useProviderEnablementStore.getState().setSnapshot(next)
+    } finally { setPending(false) }
+  }
+
+  return (
+    <div className="flex items-center justify-between gap-3 border-b border-border px-3 py-2">
+      <div className="min-w-0">
+        <div className="text-[12px] font-semibold text-ink">OpenCode usage source</div>
+        <div className="mt-0.5 text-[10px] text-muted">{hint}</div>
+      </div>
+      <select
+        aria-label="OpenCode usage source"
+        disabled={pending || blocked}
+        value={snapshot.opencodeUsageSource}
+        onChange={event => { void choose(event.target.value as OpencodeUsageSource) }}
+        className="rounded-chip border border-border bg-surface-hi px-2 py-1 text-[10px] text-ink disabled:opacity-50"
+      >
+        {OPENCODE_USAGE_SOURCES.map(source => (
+          <option key={source} value={source}>{source === 'none' ? 'none' : 'z.ai'}</option>
+        ))}
+      </select>
+    </div>
+  )
+}
+
 /** Settings → Providers row (#1102). Self-subscribing marker row in the
  *  cli-updates shape: the value lives in main's setup.json, this component
  *  only mirrors the pushed snapshot and writes through the API. */
@@ -90,9 +136,9 @@ export function ProviderEnablementRow() {
       {snapshot.entries.map(entry => (
         <EntryRow key={entry.kind} entry={entry} />
       ))}
+      <OpencodeUsageSourceRow />
       <div className="px-3 py-2 text-[10px] text-muted">
         Turning a provider off hides it from pickers and usage. Running agents are never closed.
-        The OpenCode usage-source selector arrives with z.ai usage support.
       </div>
     </div>
   )
