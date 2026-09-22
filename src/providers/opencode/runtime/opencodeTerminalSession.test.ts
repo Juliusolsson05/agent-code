@@ -141,7 +141,7 @@ describe('OpencodeTerminalSession', () => {
     expect(pty.write).not.toHaveBeenCalled()
   })
 
-  it('reports a disabled durable channel instead of failing the pane', async () => {
+  it('reports a degraded durable channel instead of failing the pane', async () => {
     const pty = fakePty()
     ptyState.spawn.mockReturnValue(pty)
     const { session } = create({ cwd: '/workspace' })
@@ -151,8 +151,17 @@ describe('OpencodeTerminalSession', () => {
     session.on('started', started)
     await session.start()
     expect(started).toHaveBeenCalledOnce()
-    expect(errors.map(error => (error as Error & { code?: string }).code)).toEqual(['db_path_unavailable'])
-    expect(errors[0].message).toContain('db_path_unavailable')
+    // #1114: the adapter now wires a `resolveDbPath`, so an unresolved path is
+    // a RETRY, not a verdict. The code says so, because the renderer keys its
+    // never-retracted lifetime banner (and the `transcript_unavailable` every
+    // orchestration parent reads) off `db_path_unavailable` — reporting that
+    // for a pane about to heal marked it broken for the life of the app.
+    // The permanent code is emitted only when the ladder is spent; the package
+    // suite pins that transition.
+    expect(errors.map(error => (error as Error & { code?: string }).code)).toEqual(['db_path_retrying'])
+    expect(errors[0].message).toContain('db_path_retrying')
+    // The pane still starts, which is the property this test was written for.
+    expect(errors[0].message).toContain('no committed transcript')
   })
 
   it('forwards exit once, after the reader closed the turn, and makes repeated stop safe', async () => {

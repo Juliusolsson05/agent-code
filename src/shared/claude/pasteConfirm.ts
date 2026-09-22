@@ -43,15 +43,21 @@ export function isPasteLike(text: string): boolean {
   return /[\r\n]/.test(text) || text.length > CLAUDE_PASTE_THRESHOLD
 }
 
-// Also matched against normalized text (see `placeholderCount`). No closing
-// bracket on purpose: Claude appends a size to the collapsed form
-// (`[Pasted text #1 +42 lines]`), so the index is where a reliable match ends.
+// Both are matched against WHITESPACE-NORMALIZED text, never the raw screen —
+// see `placeholderCount` / `imagePlaceholderCount` for why.
+//
+// `\s+` rather than a literal space is cosmetic, not load-bearing: after
+// `normalizeWhitespace` no run of whitespace longer than one character can
+// exist, so the two are provably equivalent here (review R1-F2 corrected an
+// earlier comment claiming it caught "an odd gap that survives
+// normalization" — nothing does). It is kept because it states the intent at
+// the point of use.
+//
+// No closing bracket on the paste one, on purpose: Claude appends a size to
+// the collapsed form (`[Pasted text #1 +42 lines]`), so the index is where a
+// reliable match ends. The image one keeps both brackets and the index, so a
+// bare `[Image` in prompt content is never mistaken for a rendered attachment.
 const PASTE_PLACEHOLDER_RE = /\[Pasted\s+text\s+#\d+/g
-// Matched against WHITESPACE-NORMALIZED text, never the raw screen — see
-// `imagePlaceholderCount`. `\s+` rather than a literal space so a pill that
-// survives normalization with an odd gap still counts; the index and both
-// brackets stay mandatory so a bare `[Image` in prompt content can never be
-// mistaken for an attachment that has not rendered yet.
 const IMAGE_PLACEHOLDER_RE = /\[Image\s+#\d+\]/g
 
 /**
@@ -118,13 +124,20 @@ export function extractActiveClaudeComposer(screen: string): string {
  *
  * Normalized for the same reason as `imagePlaceholderCount` (#1113), and this
  * one is worse: `[Pasted text #1]` has TWO internal spaces, so there are two
- * columns at which a wrap can hide it. Unlike the image case this was not
+ * columns at which a soft wrap can hide it. Unlike the image case this was not
  * caught in a recording — it is fixed by analogy, because the failure mode is
  * strictly nastier. When a COLLAPSED paste's placeholder goes unseen there is
  * no second signal to fall back on: `pasteAbsorbedVia` then looks for the
  * paste's tail inline, and a paste Claude collapsed has no tail on screen to
  * find. Text delivery would hit its whole 5 s budget and strand the draft in
  * the composer, exactly as the image path did.
+ *
+ * This is a FIX, not a precaution, and an earlier comment here got that
+ * backwards (review R1-F1/R2-F1). Before #1113 `pasteAbsorbedVia` matched this
+ * counter against the RAW screen — only its inline-tail branch normalized — so
+ * a wrapped placeholder was missed on the text path exactly as it was on the
+ * image path. What was true is narrower: INLINED pastes were immune, because
+ * the tail branch normalized. Collapsed ones never were.
  */
 export function placeholderCount(screen: string): number {
   const matches = normalizeWhitespace(screen).match(PASTE_PLACEHOLDER_RE)
@@ -135,9 +148,19 @@ export function placeholderCount(screen: string): number {
  * How many rendered image attachments the given composer text holds.
  *
  * WHY the screen is normalized first (#1113): `[Image #1]` contains exactly one
- * space, and a word wrap can only break a line at a space — so whenever the
- * pill lands on the wrap column the TUI renders it as `[Image` / `  #1]` across
- * two lines. Matching the raw text found neither half, the count never rose
+ * space, and that space is the only place a SOFT wrap can break it — so
+ * whenever the pill lands on the wrap column the TUI renders it as `[Image` /
+ * `  #1]` across two lines.
+ *
+ * The bound on that claim, since it is the load-bearing premise (review
+ * R1-F4/R2-F1): Claude's Ink wraps with `hard: true`
+ * (vendor/claude-code-src/full/ink/wrap-text.ts), so a token LONGER than the
+ * pane is broken mid-token, and normalization cannot repair that — it turns the
+ * break into a space. For this pill that needs a composer under ~11 columns,
+ * which is why it holds in practice. It does NOT hold for the inline tail
+ * needle, whose payload routinely contains long paths; that is a separate,
+ * pre-existing defect tracked in #1118 rather than something this normalization
+ * fixes. Matching the raw text found neither half, the count never rose
  * above its baseline, and `pollClaudeImagesAbsorbed` burned its whole 5 s
  * budget before returning `absorption-timeout` with `retrySafe: false`. The
  * user then saw "the prompt was never submitted" for a prompt sitting complete
@@ -148,10 +171,17 @@ export function placeholderCount(screen: string): number {
  * WHY normalization is safe here rather than merely convenient: this count is
  * only ever consumed as a DELTA against a baseline computed by this same
  * function, so collapsing whitespace cannot manufacture a transition — it can
- * only stop the detector from missing one. It is also exactly what the text
- * half of this protocol (`pasteAbsorbedVia`) has always done, which is the
- * reason wrapped TEXT sends never carried this bug; the two halves were
- * inconsistent, and that inconsistency was the defect.
+ * only stop the detector from missing one. It also CLOSES a hole rather than
+ * opening one: a wrapped pill previously counted 0 at baseline, so a later
+ * unwrapped pill could confirm on a 0→1 delta that was not a transition at all.
+ *
+ * What the delta argument does NOT cover, because it is a different axis
+ * (review R2-F4): for a short, non-paste-like prompt `deliverClaudeImagePrompt`
+ * takes the image baseline immediately after writing the text, before the text
+ * has repainted. A prompt whose own TEXT contains `[Image #N]` then counts 1
+ * the moment it paints, and absorption confirms before any attachment exists.
+ * That predates this change, which widens it only in that a wrapped literal now
+ * counts too. Tracked in #1119.
  */
 export function imagePlaceholderCount(screen: string): number {
   return normalizeWhitespace(screen).match(IMAGE_PLACEHOLDER_RE)?.length ?? 0

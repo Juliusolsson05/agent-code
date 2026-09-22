@@ -48,10 +48,15 @@ const fixture = JSON.parse(
 // reconstructed here by deleting the recorded pill from the recorded `after`
 // frame — which is faithful precisely because Claude appends the pill at the
 // very end of the composer, so removing it cannot change how the text before it
-// wrapped. Reconstructing it matters: `deliverClaudeImagePrompt` takes the
-// image baseline AFTER the text has been absorbed, so replaying `after` for
-// both phases would hand the poll a baseline that already contains the pill and
-// quietly test nothing.
+// wrapped.
+//
+// Reconstructing it is REQUIRED, but not for the reason an earlier version of
+// this comment gave (review R1-F3, checked by actually doing it): replaying
+// `after` for both phases does not make these tests pass vacuously — it makes
+// them FAIL, because the baseline then counts one pill and the poll waits
+// forever for `1 >= 1 + 1`. The reason it is needed is the second test, whose
+// paste-like prompt must find its own text on screen, without the pill, before
+// the image paste is written.
 function withoutPill(screen: string): string {
   const stripped = screen.replace(/\s*\[Image\s*#\d+\]/gu, '')
   if (stripped === screen) throw new Error('fixture frame has no image pill to strip')
