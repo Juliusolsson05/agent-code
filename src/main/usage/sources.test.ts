@@ -80,7 +80,8 @@ describe('listActiveUsageSourceIds', () => {
       enabledKinds: new Set<AgentProviderKind>(['grok']),
       opencodeUsageSource: 'none',
     })
-    expect(ids).toEqual([])
+    // grok's reader landed with #1103; only the #1104 z.ai placeholder remains.
+    expect(ids).toEqual(['grok'])
   })
 })
 

@@ -3,6 +3,7 @@ import type { OpencodeUsageSource } from '@shared/types/providerEnablement.js'
 import type { UsageProviderOk, UsageSourceId } from '@shared/types/usage.js'
 import { readClaudeUsage } from '@main/usage/claudeUsage.js'
 import { readCodexUsage } from '@main/usage/codexUsage.js'
+import { readGrokUsage } from '@main/usage/grokUsage.js'
 
 export type UsageSourceDescriptor = {
   id: UsageSourceId
@@ -17,9 +18,9 @@ export type UsageEnablementInput = {
 }
 
 // null = the id is part of the contract but its reader has not landed
-// (#1103 grok, #1104 opencode:zai). A null entry is never listed active, so
-// the modal cannot show a permanently-erroring row for work still in
-// flight; those issues replace the nulls with descriptors.
+// (#1104 opencode:zai). A null entry is never listed active, so the modal
+// cannot show a permanently-erroring row for work still in flight; that
+// issue replaces the null with a descriptor.
 export const USAGE_SOURCES: Record<UsageSourceId, UsageSourceDescriptor | null> = {
   claude: {
     id: 'claude',
@@ -33,7 +34,13 @@ export const USAGE_SOURCES: Record<UsageSourceId, UsageSourceDescriptor | null> 
     sourceLabel: '~/.codex/auth.json',
     read: readCodexUsage,
   },
-  grok: null,
+  grok: {
+    id: 'grok',
+    label: 'Grok',
+    sourceLabel: '~/.grok/auth.json',
+    read: readGrokUsage,
+  },
+  // #1104: the z.ai reader lands with Phase 3.
   'opencode:zai': null,
 }
 
