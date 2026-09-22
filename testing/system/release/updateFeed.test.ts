@@ -66,6 +66,17 @@ describe('update feed verification', () => {
     expect(result.stderr).toContain('Agent-Code-0.1.2-x64.dmg')
   })
 
+  it('fails on a name GitHub would rewrite on upload, even when feed and file agree', () => {
+    // Exact-name matching alone cannot see this: if the feed and the file
+    // both said `Agent Code+1.zip`, they would match here and still diverge
+    // after upload. Only [A-Za-z0-9._-] survives GitHub unchanged.
+    const cwd = releaseDir(['Agent Code+1.zip'], null)
+    writeFileSync(join(cwd, 'release', 'latest-mac.yml'), 'version: 0.1.3\nfiles:\n  - url: Agent Code+1.zip\npath: Agent Code+1.zip\n')
+    const result = verify(cwd)
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain('Agent Code+1.zip')
+  })
+
   it('fails when there is no feed at all, since the updater then sees no release', () => {
     const result = verify(releaseDir(artifacts('Agent-Code'), null))
     expect(result.status).toBe(1)

@@ -13,9 +13,10 @@
 // the feed is an installed app in the field. Here the feed and the files sit
 // side by side, so a mismatch is visible before anything is published.
 //
-// Exact-name comparison is enough: GitHub keeps names made of letters,
-// digits, `.`, `-` and `_` unchanged, and electron-builder never writes a
-// space into the feed, so a name that exists here uploads under that name.
+// Two checks, because exact-name matching alone has a blind spot: GitHub
+// keeps only letters, digits, `.`, `-` and `_` unchanged on upload. A name
+// with any other character could match here and still be renamed on the
+// release, which is the #1129 bug again one step later.
 //
 // Only Node built-ins, like identity.mjs. The feed format is a small, stable
 // electron-builder output; the two fields read here (`url` entries under
@@ -46,6 +47,15 @@ for (const line of readFileSync(feedPath, 'utf8').split('\n')) {
   if (match) referenced.add(match[2].replace(/^(['"])(.*)\1$/, '$2'))
 }
 if (referenced.size === 0) fail(`${feedPath} names no files; the updater would have nothing to download.`)
+
+const rewritten = [...referenced].filter(name => !/^[A-Za-z0-9._-]+$/.test(name))
+if (rewritten.length > 0) {
+  fail(
+    `latest-mac.yml names files GitHub would rename on upload (only letters, digits, ".", "-" and "_" survive), so installed apps would get 404 when updating:\n`
+    + rewritten.map(name => `  - ${name}`).join('\n')
+    + '\nChange artifactName in electron-builder.yml to use only those characters.',
+  )
+}
 
 const missing = [...referenced].filter(name => !existsSync(join(releaseDir, name)))
 if (missing.length > 0) {
