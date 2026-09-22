@@ -159,14 +159,15 @@ describe('nightly decide: should this run build?', () => {
 })
 
 describe('nightly rename: versioned artifacts to fixed names', () => {
-  /** A release/ folder named exactly like the real beta artifacts, as
-   * electron-builder writes them locally (GitHub's "Agent.Code" upload
-   * spelling mapped back to "Agent Code"). Each file's content is its original
-   * name, so the test can prove which file went where. */
+  /** A release/ folder named like the real beta artifacts, spelled the way
+   * electron-builder writes them locally since #1129 ("Agent-Code-…"; before
+   * that it was "Agent Code-…", which GitHub stored as "Agent.Code-…"). Each
+   * file's content is its original name, so the test can prove which file
+   * went where. */
   function seedFromRecordedBeta(filter: (name: string) => boolean = () => true) {
     const dir = temp('nightly-rename-')
     for (const { name } of recordedBeta().assets) {
-      const local = name.replace(/^Agent\.Code-/, 'Agent Code-')
+      const local = name.replace(/^Agent\.Code-/, 'Agent-Code-')
       if (filter(local)) writeFileSync(join(dir, local), local)
     }
     return dir
@@ -179,7 +180,7 @@ describe('nightly rename: versioned artifacts to fixed names', () => {
     expect(result.status).toBe(0)
     for (const arch of ['arm64', 'x64']) {
       for (const ext of ['dmg', 'zip']) {
-        expect(readFileSync(join(dir, `Agent.Code-nightly-${arch}.${ext}`), 'utf8')).toBe(`Agent Code-0.0.2-beta.1-${arch}.${ext}`)
+        expect(readFileSync(join(dir, `Agent.Code-nightly-${arch}.${ext}`), 'utf8')).toBe(`Agent-Code-0.0.2-beta.1-${arch}.${ext}`)
       }
     }
     const left = readdirSync(dir)
@@ -187,7 +188,7 @@ describe('nightly rename: versioned artifacts to fixed names', () => {
   })
 
   it('refuses when an architecture is missing, naming what it found', () => {
-    const dir = seedFromRecordedBeta(name => name !== 'Agent Code-0.0.2-beta.1-x64.zip')
+    const dir = seedFromRecordedBeta(name => name !== 'Agent-Code-0.0.2-beta.1-x64.zip')
     const result = rename(dir)
     expect(result.status).not.toBe(0)
     // Name the missing kind precisely. The error also lists every file, and
@@ -198,7 +199,7 @@ describe('nightly rename: versioned artifacts to fixed names', () => {
 
   it('refuses when an architecture has two candidate dmgs rather than guessing', () => {
     const dir = seedFromRecordedBeta()
-    writeFileSync(join(dir, 'Agent Code-0.0.3-arm64.dmg'), 'second')
+    writeFileSync(join(dir, 'Agent-Code-0.0.3-arm64.dmg'), 'second')
     expect(rename(dir).status).not.toBe(0)
   })
 })
