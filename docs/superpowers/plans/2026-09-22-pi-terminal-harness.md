@@ -139,6 +139,7 @@ all test runs.
   also asked that development follow the agent-code-conventions skill (issue,
   plan-first branch, Conventional Commits, meaningful tests, PR without merge).
 - 2026-09-22 — Task 1: filed #1132 (no duplicates found). Commit footers use `Refs #1132`; the app PR will say `Fixes #1132`.
+- 2026-09-22 — Task 2: created public repo Juliusolsson05/pi-terminal-headless (MIT); scaffold on `feat/initial-runtime` at `f14951b`. The submodule is added in this worktree (`.gitmodules` + gitlink staged by `git submodule add`) but is deliberately left out of app commits until Task 5 wires the aliases. Deviations: CI floor is Node 22.12.0 (the app's floor, since the package runs in Agent Code's process), not Pi's 22.19; `passWithNoTests` is temporary at the root vitest config and is removed by the first Stage 0 test.
 
 ---
 
@@ -184,15 +185,15 @@ SHA the siblings pin), `.github/scripts/sync-upstream-issues.sh`,
 accepted `0.87.1`), `README.md` ("Should you use this package? Probably not.",
 channel-ownership table, requirements, usage), `docs/plans/2026-09-22-initial-runtime.md`.
 
-- [ ] **Step 1:** Confirm decision 2 is answered "yes". Create the public repo
+- [x] **Step 1:** Confirm decision 2 is answered "yes". Create the public repo
   (`gh repo create Juliusolsson05/pi-terminal-headless --public`), initial
   commit on `main` with only LICENSE + README stub so `feat/initial-runtime`
   has a base.
-- [ ] **Step 2:** Scaffold the files above on `feat/initial-runtime`; empty
+- [x] **Step 2:** Scaffold the files above on `feat/initial-runtime`; empty
   `src/index.ts`. `npm install` inside the package (its own lockfile).
-- [ ] **Step 3:** `npm run check` in the package — contract, typecheck, (empty)
+- [x] **Step 3:** `npm run check` in the package — contract, typecheck, (empty)
   tests, pack verification pass.
-- [ ] **Step 4:** Commit `build(package): scaffold pi-terminal-headless from the
+- [x] **Step 4:** Commit `build(package): scaffold pi-terminal-headless from the
   opencode-terminal-headless layout`; push the branch.
 
 ---
