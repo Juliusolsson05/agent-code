@@ -165,8 +165,13 @@ export class UpdateService {
     // Watchdog (consulted): if ShipIt never takes over, do NOT app.exit —
     // that races it. Say so, restore retryability, keep the app usable.
     this.installWatchdog = setTimeout(() => {
+      // Honest degraded-path copy (consulted review): the committed quit already
+      // drained every session and latched the gate, so an in-process retry
+      // cannot work — a second quit exits without consulting pending(). The
+      // staged download survives on disk; a relaunch + menu check re-reaches
+      // 'ready' from the fresh state.
       this.set('ready')
-      this.options.notify('The update did not finish installing. Nothing was lost — use Restart to update to retry.')
+      this.options.notify('The update did not finish installing. Quit and relaunch Agent Code, then use Check for Updates to retry.')
     }, this.options.installWatchdogMs ?? 10_000)
     this.installWatchdog?.unref?.()
   }

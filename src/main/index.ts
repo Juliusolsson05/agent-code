@@ -416,7 +416,9 @@ const updateService = new UpdateService({
     } catch { /* a notification failure must never break the update flow */ }
   },
   readLastCheck: () => updateChecks.read(),
-  writeLastCheck: at => { void updateChecks.write(at) },
+  // A failed clock write (full disk, read-only state) must never become an
+  // unhandledRejection incident report; the cost is one extra check later.
+  writeLastCheck: at => { void updateChecks.write(at).catch(() => {}) },
   now: () => Date.now(),
   log: line => { console.log(`[updates] ${line}`) },
 })

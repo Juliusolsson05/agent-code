@@ -177,7 +177,7 @@ describe('restartToUpdate safety', () => {
       expect(service.pendingInstall()).toBe(false)
       vi.advanceTimersByTime(1_001)
       expect(service.state).toBe('ready')
-      expect(notified.at(-1)).toMatch(/did not finish/i)
+      expect(notified.at(-1)).toMatch(/did not finish.*relaunch/i)
     } finally { vi.useRealTimers() }
   })
 })
