@@ -186,6 +186,18 @@ describe('manual check feedback', () => {
     expect(messages).toHaveLength(1)
   })
 
+  it('a click during an in-flight background check is answered by that check, without a second check', async () => {
+    // Both reviewers flagged this branch as untested: menuCheck adopts the
+    // running check instead of racing it, so its outcome must still reach
+    // the user who clicked.
+    const { service, updater, messages } = fixture()
+    void service.checkForUpdates()
+    await service.menuCheck()
+    updater.emit('update-not-available')
+    expect(updater.checked).toBe(1)
+    expect(messages).toEqual(["You're up to date. Agent Code 0.1.1 is the latest version."])
+  })
+
   it('while a download is in flight, says so instead of starting another check', async () => {
     const { service, updater, messages } = fixture()
     void service.checkForUpdates()
