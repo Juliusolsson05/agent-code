@@ -47,7 +47,7 @@ async function readGrokCredentials(): Promise<GrokCredentials> {
     const record = readObject(value)
     const key = stringOrNull(record.key)
     if (!key) continue
-    return { key, expiresAtMs: jwtExpiryMs(key), issuer }
+    return { key, expiresAtMs: jwtExpiryMs(key) }
   }
   throw new Error('Grok auth.json does not include a login key.')
 }

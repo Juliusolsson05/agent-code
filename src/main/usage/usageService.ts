@@ -6,15 +6,18 @@ import type {
 } from '@shared/types/usage.js'
 
 import { sanitizeUsageError } from '@main/usage/normalize.js'
-import {
-  getCachedProviderEnablement,
-  enabledAgentProviderKindsSync,
-} from '@main/setup/providerEnablement.js'
-import { USAGE_SOURCES, listActiveUsageSourceIds } from '@main/usage/sources.js'
+import { getProviderEnablementSnapshot } from '@main/setup/providerEnablement.js'
+import { USAGE_SOURCES, listActiveUsageSources, listActiveUsageSourceIds } from '@main/usage/sources.js'
 
 const USAGE_CACHE_TTL_MS = 30_000
 
 let cachedSnapshot: UsageSnapshot | null = null
+// Bumped by invalidateUsageSnapshotCache. A fetch captures the generation at
+// start; if a toggle lands mid-flight, its result belongs to a stale
+// enablement world and is discarded rather than written into the cache
+// (review finding #4 — clearing only cachedSnapshot let a pre-toggle fetch
+// resurrect a just-disabled provider for a full TTL).
+let cacheGeneration = 0
 
 async function readProvider(
   provider: UsageSourceId,
@@ -60,6 +63,7 @@ export function getUsageSnapshot(request: UsageSnapshotRequest = {}): Promise<Us
     return inFlightSnapshot
   }
 
+  const generationAtStart = cacheGeneration
   const fetchPromise = (async (): Promise<UsageSnapshot> => {
     // WHY the sources are fetched independently:
     //
@@ -73,9 +77,15 @@ export function getUsageSnapshot(request: UsageSnapshotRequest = {}): Promise<Us
     // toggle), and the ACTIVE SET must still be re-derived here so a fetch
     // started before a toggle cannot resurrect a disabled provider on its
     // next refresh.
+    // FAIL-CLOSED for credential reads (review finding #3): the sync kind set
+    // is fail-open (all four kinds) until the first enablement resolve — right
+    // for pickers, wrong here, because a fetch that wins that race would send
+    // a DISABLED provider's credentials to its endpoint. The spec's rule is
+    // "disabled ⇒ never fetched"; awaiting the resolved snapshot guarantees it.
+    const enablement = await getProviderEnablementSnapshot()
     const activeIds = listActiveUsageSourceIds({
-      enabledKinds: enabledAgentProviderKindsSync(),
-      opencodeUsageSource: getCachedProviderEnablement()?.opencodeUsageSource ?? 'none',
+      enabledKinds: new Set(enablement.entries.filter(entry => entry.enabled).map(entry => entry.kind)),
+      opencodeUsageSource: enablement.opencodeUsageSource,
     })
     const providers = await Promise.all(
       activeIds.map(id => {
@@ -87,14 +97,19 @@ export function getUsageSnapshot(request: UsageSnapshotRequest = {}): Promise<Us
       }),
     ).then(list => list.filter((entry): entry is UsageProviderSnapshot => entry !== null))
 
-    cachedSnapshot = {
+    const snapshot: UsageSnapshot = {
       fetchedAt: new Date(now).toISOString(),
       cache: { hit: false, ttlMs: USAGE_CACHE_TTL_MS },
       providers,
     }
-    return cachedSnapshot
+    // A toggle landed mid-flight: this provider list is stale by construction.
+    // The caller that started the fetch still gets its answer, but the cache
+    // must not serve a just-disabled provider for a full TTL (finding #4).
+    if (generationAtStart === cacheGeneration) cachedSnapshot = snapshot
+    return snapshot
   })()
 
+  const generation = cacheGeneration
   inFlightSnapshot = fetchPromise
   void fetchPromise.finally(() => {
     // Only clear if we're still the active fetch — a force refresh may have
@@ -104,10 +119,20 @@ export function getUsageSnapshot(request: UsageSnapshotRequest = {}): Promise<Us
   return fetchPromise
 }
 
+/** Resolved-enablement source list for the modal skeleton + empty state. */
+export async function listUsageSources(): Promise<Array<{ id: UsageSourceId; label: string }>> {
+  const enablement = await getProviderEnablementSnapshot()
+  return listActiveUsageSources({
+    enabledKinds: new Set(enablement.entries.filter(entry => entry.enabled).map(entry => entry.kind)),
+    opencodeUsageSource: enablement.opencodeUsageSource,
+  })
+}
+
 /** Called by providerEnablement mutations (#1102): the active source set is
  * derived from enablement, so a toggle must not leave the 30s TTL serving
  * the old provider list. In-flight fetches still complete; new callers
  * fetch fresh. */
 export function invalidateUsageSnapshotCache(): void {
+  cacheGeneration += 1
   cachedSnapshot = null
 }

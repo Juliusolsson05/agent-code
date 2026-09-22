@@ -11,7 +11,6 @@ const snapshot: ProviderEnablementSnapshot = {
     { kind: 'grok', enabled: false, because: 'not-detected', installed: false },
   ],
   opencodeUsageSource: 'none', zaiCredentialPresent: false,
-  zaiCredentialPresent: false,
 }
 
 describe('provider enablement store', () => {

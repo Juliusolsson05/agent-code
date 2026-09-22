@@ -78,11 +78,13 @@ function emit(snapshot: ProviderEnablementSnapshot): void {
 
 async function mutate(action: () => Promise<unknown>): Promise<ProviderEnablementSnapshot> {
   await action()
-  // The usage snapshot's provider set is derived from enablement; a stale
-  // 30s TTL after a toggle would show a just-hidden provider until it
-  // expired. Invalidate eagerly instead.
-  invalidateUsageSnapshotCache()
+  // Resolve the NEW enablement BEFORE invalidating the usage cache (review
+  // finding #4): the old order invalidated first, so a usage fetch landing
+  // in that window recomposed from the PREVIOUS snapshot and re-cached the
+  // just-disabled provider. Generation-guarded cache writes cover the fetch
+  // already in flight; this closes the window for the next one.
   const snapshot = await resolveAndCache()
+  invalidateUsageSnapshotCache()
   emit(snapshot)
   return snapshot
 }

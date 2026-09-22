@@ -59,6 +59,8 @@ import {
   type SessionActions,
 } from '@renderer/workspace/hook/actions/session'
 import type { AgentProviderKind } from '@shared/types/providerKind'
+import { AGENT_PROVIDER_KINDS } from '@shared/types/providerKind'
+import { enabledAgentProviderKindsSnapshot } from '@renderer/features/providers/store'
 import { clearPooledSpawnBadge, markPooledSpawn } from '@renderer/workspace/hook/actions/pooledSpawnBadge'
 
 // -----------------------------------------------------------------------------
@@ -831,6 +833,28 @@ export function usePaneActions(
       const builtInMcpOverrides = continuation?.builtInMcpOverrides
       const providerRuntime = continuation?.providerRuntime
       const dispatchSnapshot = refs.stateRef.current
+      // #1102 central guard (review finding #2): the DEFAULT kind bypassed
+      // every per-command enablement gate because per-kind commands are
+      // generated with the default filtered out. Resolve the effective spawn
+      // kind HERE — a disabled default falls back to the first enabled agent
+      // kind, and with none enabled the split declines instead of silently
+      // spawning a provider the user turned off. Callers that pass an explicit
+      // kind keep the per-command `when:` gates; an explicitly-passed disabled
+      // kind still declines (spawn validation covers it) rather than being
+      // silently redirected.
+      const enabledAgentKinds = enabledAgentProviderKindsSnapshot()
+      if (enabledAgentKinds.size === 0) {
+        throw new Error('No providers are enabled. Enable one in Settings → Providers.')
+      }
+      // The default kind resolves to the first ENABLED kind when the stored
+      // default is disabled — the honest behaviors are "spawn something the
+      // user allows" and "decline when nothing is allowed", never "spawn the
+      // disabled default because the gate generator filtered it out".
+      // `!` is safe here only because the size check above ran: with at least
+      // one enabled kind the find always resolves.
+      const effectiveKind: SessionKind = enabledAgentKinds.has(kind as AgentProviderKind)
+        ? kind
+        : [...AGENT_PROVIDER_KINDS].find(candidate => enabledAgentKinds.has(candidate))!
       // ONE Dispatch creation flow for every session kind.
       //
       // WHY terminals no longer take a separate path: they used to be inserted
@@ -914,7 +938,7 @@ export function usePaneActions(
         // actually own, which is exactly the kind of comment that outlives
         // the code it describes.
         sessionId = await sessionActions.spawn(cwd, {
-          kind,
+          kind: effectiveKind,
           ...(providerRuntime ? { providerRuntime } : {}),
           resumeSessionId,
           builtInMcpOverrides,
@@ -985,7 +1009,7 @@ export function usePaneActions(
         // ownership check may then find the backend already gone, harmlessly.
         await window.api.killOwnedSession({
           sessionId,
-          kind,
+          kind: effectiveKind,
           ...(providerRuntime ? { providerRuntime } : {}),
           cwd,
         })
