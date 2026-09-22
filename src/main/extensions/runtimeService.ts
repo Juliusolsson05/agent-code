@@ -364,6 +364,12 @@ export class ExtensionRuntimeService {
         case 'fs.readText':
         case 'fs.writeText':
         case 'notifications.show':
+        case 'service.start':
+        case 'service.stop':
+        case 'service.status':
+        case 'service.invoke':
+        case 'service.expose':
+        case 'net.fetch':
           result = await this.options.capabilities.invoke(id, runtime.revision, request)
           break
         case 'views.publish': {

@@ -42,7 +42,12 @@ async function defaultSpawn(entryPath: string, serviceName: string): Promise<Spa
     pid: child.pid ?? 0,
     postMessage: message => { child.postMessage(message) },
     onMessage(listener) {
-      const handler = (event: unknown) => listener((event as { data?: unknown }).data)
+      // utilityProcess delivers the posted VALUE directly on 'message' —
+      // unlike MessagePortMain, whose events carry {data}. Wrapping for the
+      // latter shape silently turned every service message into undefined
+      // here and terminated the service as "not understood" (caught by the
+      // poker harness against a REAL spawned service).
+      const handler = (message: unknown) => listener(message)
       child.on('message', handler)
       return () => child.off('message', handler)
     },
