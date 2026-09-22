@@ -6,6 +6,7 @@ import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
 import type { Workspace } from '@renderer/workspace/hook'
 import { resumableProviderSessionId } from '@renderer/workspace/providerSessionIdentity'
 import { providerSwitchChoices } from '@renderer/workspace/providerChoices'
+import { enabledAgentProviderKindsSnapshot } from '@renderer/features/providers/store'
 import { isAgentProviderKind } from '@shared/types/providerKind'
 import { getProviderFeatures } from '@providers/shared/featureCapabilities'
 import { resolveTabSessions } from '@renderer/workspace/queries'
@@ -39,7 +40,7 @@ export function lifecycleControlCapabilities(getWorkspace: () => Workspace) {
       rewindUndo: runtime?.pendingRewindUndo?.createdAt ?? null, providerSwitch: runtime?.providerSwitch ?? null }
     return { sessionId, provider, providerRuntime: meta.providerRuntime ?? null, nativeSessionId, cwd: meta.cwd, processActive,
       hasRewindUndo: Boolean(runtime?.pendingRewindUndo), revision: paginate([evidence], { limit: 1 }, `lifecycle:${sessionId}`).revision,
-      switchChoices: providerSwitchChoices(provider).map(choice => ({ provider: choice.kind, runtime: choice.providerRuntime ?? null, label: choice.label })) }
+      switchChoices: providerSwitchChoices(provider).filter(choice => enabledAgentProviderKindsSnapshot().has(choice.kind)).map(choice => ({ provider: choice.kind, runtime: choice.providerRuntime ?? null, label: choice.label })) }
   }
   const guard = (input: { sessionId: string; revision: string }) => {
     if (getWorkspace().restoreStatus === 'pending' || hasAppInteractionOwner()) throw new ControlError('unavailable', 'Wait for restoration or finish the input-owning surface')

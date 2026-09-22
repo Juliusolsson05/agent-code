@@ -29,6 +29,7 @@ import { SettingsBar } from '@renderer/app/shell/SettingsBar'
 import { SetupGate } from '@renderer/features/setup/ui/SetupGate'
 import { CliUpdateBanner } from '@renderer/features/cli-updates/CliUpdateBanner'
 import { useCliUpdateSync } from '@renderer/features/cli-updates/store'
+import { useProviderEnablementSync } from '@renderer/features/providers/store'
 
 // App — the composition root, and ONLY that (issue #494).
 //
@@ -81,6 +82,9 @@ export default function App() {
   // sync hooks above — installing this in more than one place would
   // leak IPC listeners and double every state change.
   useCliUpdateSync()
+  // Provider enablement mirror: initial fetch + push subscription, same
+  // mount-once contract as useCliUpdateSync above (#1102).
+  useProviderEnablementSync()
   // Captures feed text selections for "Reply to Selection". Mounted here
   // for the same reason as the sync hooks above: `selectionchange` only
   // fires on `document`, so one listener serves every pane and Reader

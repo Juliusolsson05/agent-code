@@ -30,6 +30,7 @@ import { menuApi } from '@preload/api/menu.js'
 import { incidentApi } from '@preload/api/incident.js'
 import { lifecycleApi } from '@preload/api/lifecycle.js'
 import { remoteApi } from '@preload/api/remote.js'
+import { providerEnablementApi } from '@preload/api/providerEnablement.js'
 import { usageApi } from '@preload/api/usage.js'
 import { cliUpdatesApi } from '@preload/api/cliUpdates.js'
 import { workflowsApi } from '@preload/api/workflows.js'
@@ -96,6 +97,7 @@ export const api = {
   ...incidentApi,
   ...lifecycleApi,
   ...remoteApi,
+  ...providerEnablementApi,
   ...usageApi,
   ...cliUpdatesApi,
   ...workflowsApi,

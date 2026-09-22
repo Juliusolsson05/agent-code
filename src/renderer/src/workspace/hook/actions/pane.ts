@@ -1,5 +1,5 @@
 import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
-import { AGENT_PROVIDER_CHOICES } from '@renderer/workspace/providerChoices'
+import { enabledAgentProviderChoices } from '@renderer/workspace/providerChoices'
 import {
   expandSessionCloseTargets,
   expandTabCloseTargets,
@@ -59,6 +59,8 @@ import {
   type SessionActions,
 } from '@renderer/workspace/hook/actions/session'
 import type { AgentProviderKind } from '@shared/types/providerKind'
+import { AGENT_PROVIDER_KINDS } from '@shared/types/providerKind'
+import { enabledAgentProviderKindsSnapshot } from '@renderer/features/providers/store'
 import { clearPooledSpawnBadge, markPooledSpawn } from '@renderer/workspace/hook/actions/pooledSpawnBadge'
 
 // -----------------------------------------------------------------------------
@@ -831,6 +833,34 @@ export function usePaneActions(
       const builtInMcpOverrides = continuation?.builtInMcpOverrides
       const providerRuntime = continuation?.providerRuntime
       const dispatchSnapshot = refs.stateRef.current
+      // #1102 central guard (review finding #2): the DEFAULT kind bypassed
+      // every per-command enablement gate because per-kind commands are
+      // generated with the default filtered out. Resolve the effective spawn
+      // kind HERE — a disabled default falls back to the first enabled agent
+      // kind, and with none enabled the split declines instead of silently
+      // spawning a provider the user turned off. Callers that pass an explicit
+      // kind keep the per-command `when:` gates; an explicitly-passed disabled
+      // kind still declines (spawn validation covers it) rather than being
+      // silently redirected.
+      // AGENT kinds only (final review, blockers 1+2): 'terminal' and
+      // 'extension-view' are SessionKinds but not providers — the guard used
+      // to swallow them into the first enabled agent, turning ⌥T into a
+      // Claude spawn, and its no-providers throw blocked terminal splits in a
+      // world this very PR makes reachable. Non-agent kinds pass through.
+      const effectiveKind: SessionKind = !AGENT_PROVIDER_KINDS.includes(kind as AgentProviderKind)
+        ? kind
+        : (() => {
+          const enabledAgentKinds = enabledAgentProviderKindsSnapshot()
+          if (enabledAgentKinds.size === 0) {
+            throw new Error('No providers are enabled. Enable one in Settings → Providers.')
+          }
+          // The default kind resolves to the first ENABLED kind when the
+          // stored default is disabled — spawn something the user allows, or
+          // decline when nothing is allowed; never the disabled default.
+          return enabledAgentKinds.has(kind as AgentProviderKind)
+            ? kind
+            : [...AGENT_PROVIDER_KINDS].find(candidate => enabledAgentKinds.has(candidate))!
+        })()
       // ONE Dispatch creation flow for every session kind.
       //
       // WHY terminals no longer take a separate path: they used to be inserted
@@ -914,7 +944,7 @@ export function usePaneActions(
         // actually own, which is exactly the kind of comment that outlives
         // the code it describes.
         sessionId = await sessionActions.spawn(cwd, {
-          kind,
+          kind: effectiveKind,
           ...(providerRuntime ? { providerRuntime } : {}),
           resumeSessionId,
           builtInMcpOverrides,
@@ -985,7 +1015,7 @@ export function usePaneActions(
         // ownership check may then find the backend already gone, harmlessly.
         await window.api.killOwnedSession({
           sessionId,
-          kind,
+          kind: effectiveKind,
           ...(providerRuntime ? { providerRuntime } : {}),
           cwd,
         })
@@ -1259,7 +1289,9 @@ export function usePaneActions(
       // without the MCP bridge. Reuse the picker's supported combinations so
       // direct calls cannot silently launch a structured child after the user
       // requested a TUI. Main separately validates the actual factory.
-      if (!AGENT_PROVIDER_CHOICES.some(choice => choice.kind === params.kind && choice.providerRuntime === params.providerRuntime)) {
+      // #1102: enablement also gates orchestration children — a disabled
+      // provider must not come back through the MCP create_agent door.
+      if (!enabledAgentProviderChoices().some(choice => choice.kind === params.kind && choice.providerRuntime === params.providerRuntime)) {
         throw new Error(`${params.kind} does not support the requested ${params.providerRuntime ?? 'structured'} runtime`)
       }
       const snapshot = refs.stateRef.current

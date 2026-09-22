@@ -92,6 +92,7 @@ export type SettingDefinition =
   | { id: string; category: SettingCategoryId; title: string; description: string; keywords: string[]; metadata?: SettingMetadata; control: { type: 'dictation-audio-input' } }
   | { id: string; category: SettingCategoryId; title: string; description: string; keywords: string[]; metadata?: SettingMetadata; control: { type: 'external-control' } }
   | { id: string; category: SettingCategoryId; title: string; description: string; keywords: string[]; metadata?: SettingMetadata; control: { type: 'performance-monitor' } }
+  | { id: string; category: SettingCategoryId; title: string; description: string; keywords: string[]; metadata?: SettingMetadata; control: { type: 'providers-enablement' } }
   | {
       id: string
       category: SettingCategoryId
@@ -1149,6 +1150,17 @@ export function getSettingsRegistry(
           await ctx.workspace.reloadAgentSessions(value)
         },
       },
+    },
+    {
+      id: 'providers-enablement',
+      category: 'providers',
+      title: 'Providers',
+      description:
+        'Choose which coding agents Agent Code offers. Detected CLIs start on; turning a provider off hides it from pickers, switching, and usage — running sessions keep running. Reset returns a provider to detection.',
+      keywords: ['provider', 'providers', 'enable', 'disable', 'claude', 'codex', 'opencode', 'grok', 'usage', 'hide'],
+      // Main's setup.json is the truth (storage: 'setup'); the row mirrors it.
+      metadata: { scope: 'app', apply: 'new-session', storage: 'setup' },
+      control: { type: 'providers-enablement' },
     },
     {
       // Kept in the experimental category alongside proxy-streaming for

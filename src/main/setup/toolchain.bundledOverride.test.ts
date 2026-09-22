@@ -47,6 +47,8 @@ function setupState(overrides: {
     acknowledgedNoProviders: false,
     cliUpdateBehavior: 'automatic' as const,
     cliUpdateCache: {},
+    providerEnablementOverrides: {},
+    opencodeUsageSource: 'none' as const,
     updatedAt: 0,
   }
 }

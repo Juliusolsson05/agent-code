@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, within } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 
 import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { UsageSnapshot } from '@shared/types/usage'
@@ -7,6 +7,15 @@ import type { Workspace } from '@renderer/workspace/workspaceStore'
 
 import { BulkProviderSwitchModal } from './BulkProviderSwitchModal'
 import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
+import { useProviderEnablementStore } from '@renderer/features/providers/store'
+import { AGENT_PROVIDER_KINDS } from '@shared/types/providerKind'
+
+// The bulk modal derives its directions from the shared enablement store;
+// without a reset, an earlier test file in this worker could leave a
+// restricted snapshot and empty every direction (fail-open = all kinds).
+beforeEach(() => {
+  useProviderEnablementStore.setState({ snapshot: null, enabledKinds: new Set(AGENT_PROVIDER_KINDS) })
+})
 
 // The selected-scope path is where #908 lived: the checkbox list was built
 // from working directories, so a worktree agent had its own checkbox and the

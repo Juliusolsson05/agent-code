@@ -25,6 +25,7 @@ import { controlReference as reference23 } from '@renderer/features/settings/con
 import { controlReference as reference24 } from '@renderer/features/setup/controlReference'
 import { controlReference as reference25 } from '@renderer/features/spotlight/controlReference'
 import { controlReference as reference28 } from '@renderer/features/usage/controlReference'
+import { controlReference as reference34 } from '@renderer/features/providers/controlReference'
 import { controlReference as reference29 } from '@renderer/features/voice-dictation/controlReference'
 import { controlReference as reference30 } from '@renderer/features/workflows/controlReference'
 import { controlReference as reference31 } from '@renderer/features/worktrees/controlReference'
@@ -63,6 +64,7 @@ export const featureReferences = [
   ...reference24,
   ...reference25,
   ...reference28,
+  ...reference34,
   ...reference29,
   ...reference30,
   ...reference31,
@@ -93,6 +95,7 @@ export const referenceOwnership = {
   "command-keybindings": "keybindings",
   "workflows": "workflows",
   "usage": "usage",
+  "providers": "providers",
   "agent-analytics": "agent-analytics",
   "usage-limit": "usage",
   "rendered-content": "rendered-content",

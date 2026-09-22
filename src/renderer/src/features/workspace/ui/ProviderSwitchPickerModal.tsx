@@ -12,9 +12,10 @@ import {
 import { focusedControlOwnsEnter } from '@renderer/components/ui/dialog-actions'
 import {
   providerChoiceLabel,
-  providerSwitchChoices,
+  enabledProviderSwitchChoices,
   type AgentProviderChoice,
 } from '@renderer/workspace/providerChoices'
+import { useEnabledAgentProviderKinds } from '@renderer/features/providers/store'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { SessionId } from '@renderer/workspace/types'
 import { isAgentProviderKind } from '@shared/types/providerKind'
@@ -39,9 +40,12 @@ export function ProviderSwitchPickerModal({
   const committingRef = useRef(false)
   const meta = sessionId ? workspace.state.sessions[sessionId] ?? null : null
   const sourceKind = isAgentProviderKind(meta?.kind) ? meta.kind : null
+  // #1102: enablement filter — a disabled provider is neither a valid
+  // destination nor (for a disabled source) worth offering escapes from.
+  const enabledKinds = useEnabledAgentProviderKinds()
   const choices = useMemo(
-    () => sourceKind ? providerSwitchChoices(sourceKind) : [],
-    [sourceKind],
+    () => sourceKind ? enabledProviderSwitchChoices(sourceKind, enabledKinds) : [],
+    [sourceKind, enabledKinds],
   )
   const [selectedIndex, setSelectedIndex] = useState(0)
   const missingProviders = useMissingProviders()

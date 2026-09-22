@@ -115,6 +115,11 @@ export function sanitizeUsageError(err: unknown, fallback: string): string {
   if (message.includes('429')) return 'Provider usage endpoint rate limited the request.'
   if (message.includes('Keychain')) return message
   if (message.includes('auth.json')) return message
+  // The Grok expiry row is only useful because its copy tells the user the
+  // actual fix (run any Grok session to refresh auth.json); the generic
+  // fallback would erase that. Exact-prefix match, not a loose substring, so
+  // provider noise cannot smuggle arbitrary text through this gate.
+  if (message.startsWith('Grok login expired')) return message
   return fallback
 }
 
