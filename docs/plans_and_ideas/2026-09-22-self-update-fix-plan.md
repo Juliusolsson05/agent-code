@@ -47,10 +47,13 @@ no feedback for most outcomes). Builds on the auto-update work in #1120 / PR #11
 
 - New `scripts/release/verify-update-feed.mjs`: reads `release/latest-mac.yml`
   and fails unless every `url`/`path` it names exists in `release/` with
-  exactly that name, no name contains characters GitHub rewrites on upload,
-  and every zip has its `.blockmap`. Runs in `release.yml` right after
-  packaging, before upload, so a mismatch fails the release instead of
-  shipping.
+  exactly that name, and uses only characters GitHub keeps on upload
+  (`[A-Za-z0-9._-]`). Runs in `release.yml` right after packaging, before
+  upload, so a mismatch fails the release instead of shipping.
+  - Blockmaps are deliberately not required: a missing one only turns a
+    differential download into a full one. Both reviews also found that the
+    first update from v0.1.1/v0.1.2 is a full download regardless, because
+    the old release's blockmap is stored under the dotted name.
 - Node built-ins only (a line parser for the two fields we need), matching
   `scripts/release/identity.mjs`.
 - Test: `testing/system/release/updateFeed.test.ts` runs the script as a real
@@ -87,7 +90,13 @@ no feedback for most outcomes). Builds on the auto-update work in #1120 / PR #11
 - manual check that errors reports the error through the dialog;
 - background check with no update stays silent (existing test kept);
 - menu while ready asks first; "Later" does not quit; "Restart" requests the
-  vetoable quit.
+  vetoable quit;
+- a background check while the Restart dialog is open cannot drop the
+  answer (review finding: checks used to reset 'ready' to 'checking');
+- a menu click during an in-flight background check is answered by that
+  check's outcome;
+- the feed check rejects names GitHub would rewrite, even when feed and file
+  agree.
 
 ## Verification
 
