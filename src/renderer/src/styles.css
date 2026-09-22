@@ -1226,3 +1226,19 @@ body,
   direction: rtl;
   text-align: left;
 }
+
+/* ---------- Extension view loading shell ---------- */
+/* Ring motion communicates liveness while the frame loads and activates.
+   The border colors ride theme variables so a custom theme is respected. */
+@keyframes cc-extension-spin { to { transform: rotate(360deg); } }
+.extension-loading-ring {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  animation: cc-extension-spin 0.9s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .extension-loading-ring { animation-duration: 6s; }
+}

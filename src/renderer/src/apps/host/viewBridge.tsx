@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useAppStore } from '@renderer/app-state/hooks'
 import type { AgentCodeApiV1 } from '@renderer/apps/api/types'
 import { createFrameHost } from '@renderer/apps/host/frameHost'
+import { ExtensionLoadingShell } from '@renderer/apps/host/extensionLoadingShell'
 import { clearFrameDispatch, discardPendingCommands, setFrameDispatch } from '@renderer/apps/host/frameRegistry'
 import { THEME_CHANGED_EVENT } from '@renderer/app-state/settings/theme'
 import type { ExtensionListEntry } from '@shared/types/extensions'
@@ -317,9 +318,7 @@ function buildViewComponent(
         className={fill ? 'relative h-full w-full' : 'relative min-h-[120px]'}
         style={scaledBox}
       >
-        {status === 'loading' ? (
-          <div className="px-6 py-8 text-[12px] text-muted">Loading {displayName}…</div>
-        ) : null}
+        {status === 'loading' ? <ExtensionLoadingShell displayName={displayName} /> : null}
         {status === 'failed' ? (
           // The host modal sizes to max-content (AppHostSurface, #969), so an
           // unconstrained error message would lay out on one line and stretch the
