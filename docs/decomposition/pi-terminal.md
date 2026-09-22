@@ -8,8 +8,8 @@ side and the order across repositories). The package-side tasks move into the
 new package's own `docs/plans/` once that repository exists, exactly as
 `opencode-terminal-headless` did.
 
-Issue: to be filed at the start of implementation (`feat(pi): add Pi as a
-terminal-only agent provider with transcript support`).
+Issue: #1132 (`feat(pi): add Pi as a terminal-only agent provider with
+transcript support`).
 
 Templates this document deliberately copies:
 - `docs/decomposition/opencode-terminal-headless.md` (the transcript-support

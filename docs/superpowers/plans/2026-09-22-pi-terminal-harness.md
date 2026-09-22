@@ -138,6 +138,7 @@ all test runs.
   `pi` was not installed, so expect faux-only and record the gap). The user
   also asked that development follow the agent-code-conventions skill (issue,
   plan-first branch, Conventional Commits, meaningful tests, PR without merge).
+- 2026-09-22 — Task 1: filed #1132 (no duplicates found). Commit footers use `Refs #1132`; the app PR will say `Fixes #1132`.
 
 ---
 
@@ -158,8 +159,8 @@ git commit -m "docs(pi): plan the Pi terminal harness and its transcript pipelin
 
 ### Task 1: Feature issue
 
-- [ ] **Step 1:** Search for duplicates (`gh issue list --search "pi" --state all`).
-- [ ] **Step 2:** File `feat(pi): add Pi as a terminal-only agent provider with
+- [x] **Step 1:** Search for duplicates (`gh issue list --search "pi" --state all`).
+- [x] **Step 2:** File `feat(pi): add Pi as a terminal-only agent provider with
   transcript support` — motivation (Pi as a fifth provider, keep its TUI, get
   status/transcript like OpenCode Terminal), intended behavior (spec §3 D1–D10),
   acceptance criteria (spec §3 as checkboxes), link to the spec path. Record
