@@ -424,7 +424,10 @@ const updateService = new UpdateService({
       type: 'info' as const,
       message,
       buttons: confirmLabel ? [confirmLabel, 'Later'] : ['OK'],
-      defaultId: 0,
+      // With a confirm button, Later is both the default (Enter) and the
+      // cancel (Esc): a stray keypress must not start a restart in an app
+      // full of live sessions. The user has to choose Restart on purpose.
+      defaultId: confirmLabel ? 1 : 0,
       cancelId: confirmLabel ? 1 : 0,
       noLink: true,
     }
