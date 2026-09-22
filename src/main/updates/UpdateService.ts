@@ -23,10 +23,17 @@ export type UpdateState = 'idle' | 'disabled' | 'checking' | 'available' | 'down
 
 export type UpdateServiceOptions = {
   readonly updater: AutoUpdaterLike
-  readonly app: { readonly isPackaged: boolean }
+  /** `version` is the running app's version, so "up to date" can say which. */
+  readonly app: { readonly isPackaged: boolean; readonly version: string }
   /** MUST route through the vetoable quit choreography (app.quit / close path). */
   requestQuit(): void
+  /** OS notification: for results nobody explicitly asked for (background). */
   notify(message: string): void
+  /** Modal answer to an explicit menu check (#1130). Resolves true only when
+   *  a `confirmLabel` was given and the user chose it. A dialog rather than a
+   *  notification because notifications can be switched off per app, and a
+   *  menu click that produces nothing reads as "updating is broken". */
+  showMessage(message: string, confirmLabel?: string): Promise<boolean>
   readLastCheck(): number | undefined
   writeLastCheck(at: number): void
   now(): number
@@ -56,9 +63,19 @@ function userFacingError(error: unknown): string {
   return 'Update check failed. Nothing was changed; try again from the menu later.'
 }
 
+function downloadingMessage(version: string | null): string {
+  return `Agent Code ${version ?? 'update'} is available and is downloading. You'll get a notification when it's ready to install.`
+}
+
 export class UpdateService {
   private current: UpdateState = 'idle'
   private lastVersion: string | null = null
+  // True from a menu check until that check's outcome has been shown. The
+  // outcome arrives as an updater EVENT, not as the checkForUpdates() result,
+  // so the flag carries "the user is waiting for an answer" across the gap.
+  // Cleared on the first outcome so a later background result is never shown
+  // as if the user had asked for it.
+  private manualCheckPending = false
   private pendingInstallOnQuit = false
   private installWatchdog: ReturnType<typeof setTimeout> | null = null
   private readonly minimumInterval: number
@@ -87,6 +104,7 @@ export class UpdateService {
         ? (info as { version: string }).version
         : null
       this.set('available')
+      this.answerManualCheck(downloadingMessage(this.lastVersion))
       // Download starts on its own: downloading is passive and cannot restart
       // anything; only installation is gated on the committed quit.
       void this.options.updater.downloadUpdate().catch(() => { /* error event reports it */ })
@@ -97,15 +115,31 @@ export class UpdateService {
         ? (info as { version: string }).version
         : this.lastVersion
       this.set('ready')
+      // Names the item that really restarts: an earlier copy pointed at a
+      // "Restart to update" item that never existed (#1130).
       this.options.notify(
-        `Agent Code ${this.lastVersion ?? 'update'} is ready to install. Use Restart to update when you are at a safe stopping point.`,
+        `Agent Code ${this.lastVersion ?? 'update'} is ready to install. Choose Check for Updates… in the File menu to restart when you are at a safe stopping point.`,
       )
     })
-    updater.on('update-not-available', () => { if (this.current === 'checking') this.set('none') })
+    updater.on('update-not-available', () => {
+      if (this.current === 'checking') this.set('none')
+      this.answerManualCheck(`You're up to date. Agent Code ${this.options.app.version} is the latest version.`)
+    })
     updater.on('error', (error: unknown) => {
       this.set('error')
-      this.options.notify(userFacingError(error))
+      // Someone waiting on a menu check gets the dialog; otherwise this is a
+      // background failure and a notification is the right weight.
+      if (!this.answerManualCheck(userFacingError(error))) this.options.notify(userFacingError(error))
     })
+  }
+
+  /** Shows `message` if a menu check is waiting for its answer. Returns
+   *  whether it did, so callers can fall back to their background surface. */
+  private answerManualCheck(message: string): boolean {
+    if (!this.manualCheckPending) return false
+    this.manualCheckPending = false
+    void this.options.showMessage(message)
+    return true
   }
 
   private set(state: UpdateState): void {
@@ -118,9 +152,18 @@ export class UpdateService {
     return this.current
   }
 
-  /** Manual checks bypass the rate limit (menu item is an explicit intent). */
+  /** `force` bypasses the rate limit; menuCheck() passes it, because a menu
+   *  click is an explicit intent. Background callers leave it off. */
   checkForUpdates(force = false): Promise<void> {
     if (this.current === 'disabled') return Promise.resolve()
+    // Nothing to learn once an update is found, downloading or ready: a new
+    // check would only reset the state to 'checking' and replay the same
+    // version. That reset used to drop a Restart the user had just confirmed
+    // (the startup, 4h and resume checks can fire while the dialog is open;
+    // review finding on #1131). menuCheck answers these states itself.
+    if (this.current === 'available' || this.current === 'downloading' || this.current === 'ready') {
+      return Promise.resolve()
+    }
     const last = this.options.readLastCheck()
     if (!force && last !== undefined && this.options.now() - last < this.minimumInterval) {
       return Promise.resolve()
@@ -135,6 +178,40 @@ export class UpdateService {
       () => undefined,
       () => undefined, // the error event carries reporting
     )
+  }
+
+  /** The File → Check for Updates… item. Every path ends in an answer to the
+   *  user (#1130); the actual outcome of a fresh check arrives through the
+   *  updater events and is shown by answerManualCheck. */
+  async menuCheck(): Promise<void> {
+    if (this.current === 'disabled') {
+      // Unpackaged builds (npm run dev, electron-vite preview) have no
+      // app-update.yml and are not the signed app Squirrel would replace.
+      await this.options.showMessage(
+        'Updates are only available in the installed Agent Code app. This copy runs from a local build, so it never updates itself.',
+      )
+      return
+    }
+    if (this.current === 'ready') {
+      // Ask first. The menu item used to restart on the spot, which is a bad
+      // surprise in an app hosting live agent sessions. Even after "Restart"
+      // this is only a quit REQUEST that Keep Editing can still cancel.
+      const restart = await this.options.showMessage(
+        `Agent Code ${this.lastVersion ?? 'update'} is ready to install. Restart now to finish updating?`,
+        'Restart',
+      )
+      if (restart) this.restartToUpdate()
+      return
+    }
+    if (this.current === 'available' || this.current === 'downloading') {
+      await this.options.showMessage(downloadingMessage(this.lastVersion))
+      return
+    }
+    this.manualCheckPending = true
+    // A background check already in flight will answer; starting a second
+    // one would only race it.
+    if (this.current === 'checking') return
+    await this.checkForUpdates(true)
   }
 
   /** True when the quit was requested. False when no update is ready. */

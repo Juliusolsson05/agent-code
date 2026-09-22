@@ -321,9 +321,13 @@ jobs:
         run: npm run package:mac
 
       - name: Verify packaged app contents and architectures
+        # verify-update-feed (#1129): every file latest-mac.yml names must exist
+        # here under exactly that name, or installed apps get 404 when they
+        # update. Checked before upload, while the feed and files sit together.
         run: |
           npm run verify:package:mac
           npm run smoke:package:mac
+          node scripts/release/verify-update-feed.mjs
 
       - name: Verify signed apps and notarization tickets
         if: ${{ env.HAS_SIGNING_IDENTITY == 'true' }}
@@ -367,7 +371,7 @@ jobs:
             release/*.dmg
             release/*.zip
             release/*.blockmap
-            release/*.yml
+            release/latest-mac.yml
           if-no-files-found: error
 
       - name: Create GitHub Release
@@ -388,8 +392,10 @@ jobs:
           # way: a beta must never become the fallback latest.
           prerelease: ${{ needs.validate-release.outputs.prerelease == 'true' }}
           make_latest: ${{ needs.validate-release.outputs.make_latest }}
+          # latest-mac.yml by name, not release/*.yml: the wildcard also
+          # published electron-builder's builder-debug.yml on every release.
           files: |
             release/*.dmg
             release/*.zip
             release/*.blockmap
-            release/*.yml
+            release/latest-mac.yml
