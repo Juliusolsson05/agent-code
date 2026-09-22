@@ -206,6 +206,25 @@ describe('manual check feedback', () => {
     expect(service.pendingInstall()).toBe(false)
   })
 
+  it('a background check while the Restart dialog is open cannot swallow the answer', async () => {
+    // Review finding on #1131: checkForUpdates used to reset 'ready' to
+    // 'checking', and the startup / 4h / resume checks call it. A Restart
+    // confirmed during that window reached restartToUpdate() in the wrong
+    // state and was silently dropped.
+    const { service, updater, quits, answers, advance } = fixture()
+    void service.checkForUpdates(true)
+    available(updater)
+    const checksBefore = updater.checked
+    answers.confirm = true
+    const dialog = service.menuCheck()
+    advance(5 * 60 * 60 * 1000)
+    void service.checkForUpdates()
+    await dialog
+    expect(updater.checked).toBe(checksBefore)
+    expect(quits).toHaveLength(1)
+    expect(service.pendingInstall()).toBe(true)
+  })
+
   it('when an update is ready and the user chooses Restart, takes the vetoable quit path', async () => {
     const { service, updater, quits, answers } = fixture()
     void service.checkForUpdates(true)

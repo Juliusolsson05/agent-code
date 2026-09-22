@@ -156,6 +156,14 @@ export class UpdateService {
    *  click is an explicit intent. Background callers leave it off. */
   checkForUpdates(force = false): Promise<void> {
     if (this.current === 'disabled') return Promise.resolve()
+    // Nothing to learn once an update is found, downloading or ready: a new
+    // check would only reset the state to 'checking' and replay the same
+    // version. That reset used to drop a Restart the user had just confirmed
+    // (the startup, 4h and resume checks can fire while the dialog is open;
+    // review finding on #1131). menuCheck answers these states itself.
+    if (this.current === 'available' || this.current === 'downloading' || this.current === 'ready') {
+      return Promise.resolve()
+    }
     const last = this.options.readLastCheck()
     if (!force && last !== undefined && this.options.now() - last < this.minimumInterval) {
       return Promise.resolve()
