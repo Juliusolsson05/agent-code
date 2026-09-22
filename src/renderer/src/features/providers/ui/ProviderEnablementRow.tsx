@@ -86,18 +86,28 @@ function OpencodeUsageSourceRow() {
   const [pending, setPending] = useState(false)
   if (!snapshot) return null
   const opencodeEnabled = snapshot.entries.some(entry => entry.kind === 'opencode' && entry.enabled)
-  const blocked = !opencodeEnabled || !snapshot.zaiCredentialPresent
+  // Not blocked when z.ai is ALREADY selected without a credential (final
+  // review #6): otherwise the user could never escape back to `none` and the
+  // usage row would error forever with no Settings remedy.
+  const zaiSelected = snapshot.opencodeUsageSource === 'zai'
+  const blocked = !opencodeEnabled || (!snapshot.zaiCredentialPresent && !zaiSelected)
   const hint = !opencodeEnabled
     ? 'Enable OpenCode to choose its usage source.'
     : !snapshot.zaiCredentialPresent
       ? 'Connect the z.ai Coding Plan in OpenCode (/connect) to select it.'
       : 'Which quota the usage modal and header track.'
 
+  const [choiceError, setChoiceError] = useState('')
   const choose = async (value: OpencodeUsageSource) => {
     setPending(true)
+    setChoiceError('')
     try {
       const next = await window.api.providerEnablementSetOpencodeUsageSource(value)
       useProviderEnablementStore.getState().setSnapshot(next)
+    } catch (error) {
+      // An IPC failure must surface, not become an unhandled renderer
+      // rejection with a silently unchanged dropdown (final review #7).
+      setChoiceError(error instanceof Error ? error.message : 'Could not save the usage source.')
     } finally { setPending(false) }
   }
 
@@ -105,7 +115,7 @@ function OpencodeUsageSourceRow() {
     <div className="flex items-center justify-between gap-3 border-b border-border px-3 py-2">
       <div className="min-w-0">
         <div className="text-[12px] font-semibold text-ink">OpenCode usage source</div>
-        <div className="mt-0.5 text-[10px] text-muted">{hint}</div>
+        <div className="mt-0.5 text-[10px] text-muted">{choiceError || hint}</div>
       </div>
       <select
         aria-label="OpenCode usage source"

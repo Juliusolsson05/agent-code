@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 
 import { emptyRuntime } from '@renderer/session-runtime/state'
 import * as workspaceQueries from '@renderer/workspace/queries'
@@ -8,6 +8,15 @@ import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { AgentActivityModal } from './AgentActivityModal'
 import { BulkProviderSwitchModal } from './BulkProviderSwitchModal'
 import { CloseOldAgentsModal } from './CloseOldAgentsModal'
+import { useProviderEnablementStore } from '@renderer/features/providers/store'
+import { AGENT_PROVIDER_KINDS } from '@shared/types/providerKind'
+
+// The bulk modal derives its directions from the shared enablement store;
+// without a reset, an earlier test file in this worker could leave a
+// restricted snapshot and empty every direction (fail-open = all kinds).
+beforeEach(() => {
+  useProviderEnablementStore.setState({ snapshot: null, enabledKinds: new Set(AGENT_PROVIDER_KINDS) })
+})
 
 const appActions = vi.hoisted(() => ({ openBuryPrompt: vi.fn() }))
 vi.mock('@renderer/app-state/hooks', () => ({

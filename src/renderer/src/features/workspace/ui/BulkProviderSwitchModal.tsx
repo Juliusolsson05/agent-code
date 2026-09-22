@@ -223,9 +223,14 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
     [enabledKinds],
   )
   const defaultDirectionKey = useMemo(() => {
-    if (exhaustedProviders.length !== 1) return 'codex:claude'
+    // Prefer the historical codex→claude default when both kinds are enabled;
+    // fall back to the first ENABLED direction when they are not (final
+    // review #3: the old unconditional hardcode painted a select with no
+    // matching option once enablement filtered that pair out).
+    const prefer = (key: string) => (directions.some(item => item.key === key) ? key : directions[0]?.key ?? '')
+    if (exhaustedProviders.length !== 1) return prefer('codex:claude')
     const exhaustedSource = exhaustedProviders[0].provider
-    return directions.find(item => item.source === exhaustedSource)?.key ?? 'codex:claude'
+    return prefer(directions.find(item => item.source === exhaustedSource)?.key ?? 'codex:claude')
   }, [exhaustedProviders, directions])
   const directionKey = directionChoice ?? defaultDirectionKey
 
@@ -990,7 +995,7 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
               // `locked`, matching the handler: with `busy` alone the button
               // stayed enabled during a /model fan-out while runSwitch refused
               // the click, so it looked available and did nothing.
-              disabled={locked || matchingRows.length === 0}
+              disabled={locked || matchingRows.length === 0 || !direction}
               className={`rounded-control
                 px-3 py-1.5 text-[11px] border
                 ${matchingRows.length > 0

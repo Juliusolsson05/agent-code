@@ -842,19 +842,25 @@ export function usePaneActions(
       // kind keep the per-command `when:` gates; an explicitly-passed disabled
       // kind still declines (spawn validation covers it) rather than being
       // silently redirected.
-      const enabledAgentKinds = enabledAgentProviderKindsSnapshot()
-      if (enabledAgentKinds.size === 0) {
-        throw new Error('No providers are enabled. Enable one in Settings → Providers.')
-      }
-      // The default kind resolves to the first ENABLED kind when the stored
-      // default is disabled — the honest behaviors are "spawn something the
-      // user allows" and "decline when nothing is allowed", never "spawn the
-      // disabled default because the gate generator filtered it out".
-      // `!` is safe here only because the size check above ran: with at least
-      // one enabled kind the find always resolves.
-      const effectiveKind: SessionKind = enabledAgentKinds.has(kind as AgentProviderKind)
+      // AGENT kinds only (final review, blockers 1+2): 'terminal' and
+      // 'extension-view' are SessionKinds but not providers — the guard used
+      // to swallow them into the first enabled agent, turning ⌥T into a
+      // Claude spawn, and its no-providers throw blocked terminal splits in a
+      // world this very PR makes reachable. Non-agent kinds pass through.
+      const effectiveKind: SessionKind = !AGENT_PROVIDER_KINDS.includes(kind as AgentProviderKind)
         ? kind
-        : [...AGENT_PROVIDER_KINDS].find(candidate => enabledAgentKinds.has(candidate))!
+        : (() => {
+          const enabledAgentKinds = enabledAgentProviderKindsSnapshot()
+          if (enabledAgentKinds.size === 0) {
+            throw new Error('No providers are enabled. Enable one in Settings → Providers.')
+          }
+          // The default kind resolves to the first ENABLED kind when the
+          // stored default is disabled — spawn something the user allows, or
+          // decline when nothing is allowed; never the disabled default.
+          return enabledAgentKinds.has(kind as AgentProviderKind)
+            ? kind
+            : [...AGENT_PROVIDER_KINDS].find(candidate => enabledAgentKinds.has(candidate))!
+        })()
       // ONE Dispatch creation flow for every session kind.
       //
       // WHY terminals no longer take a separate path: they used to be inserted

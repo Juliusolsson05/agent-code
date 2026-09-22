@@ -26,8 +26,9 @@ export const GROK_LOGIN_EXPIRED_COPY = 'Grok login expired — start any Grok se
 
 type GrokCredentials = {
   key: string
-  /** Null when the JWT carries no readable expiry claim: the precheck is a UX
-   *  nicety, and the server remains the real authority on stale credentials. */
+  /** Null when neither the login record nor the JWT carries a readable
+   *  expiry: the precheck is a UX nicety, and the server remains the real
+   *  authority on stale credentials. */
   expiresAtMs: number | null
 }
 
@@ -39,16 +40,29 @@ async function readGrokCredentials(): Promise<GrokCredentials> {
   const raw = await readFile(GROK_AUTH_PATH, 'utf8')
   const parsed = JSON.parse(raw) as unknown
   const root = readObject(parsed)
-  // The file is a map of `issuer::uuid` → login record. The CLI writes the
-  // most recent login LAST but iteration order is insertion order and we only
-  // need *a* live credential; the spec pinned "first non-empty key" so the
-  // behavior is deterministic across file rewrites.
-  for (const [issuer, value] of Object.entries(root)) {
+  // The file is a map of `issuer::uuid` → login record and can hold several
+  // logins. "First non-empty key" could pin a STALE record whose expiry
+  // precheck then throws forever while a valid login sits later in the file
+  // (final review #8). Latest-known expiry wins; ties keep the later entry —
+  // deterministic AND current.
+  let best: { key: string; expiresAtMs: number | null } | null = null
+  for (const value of Object.values(root)) {
     const record = readObject(value)
     const key = stringOrNull(record.key)
     if (!key) continue
-    return { key, expiresAtMs: jwtExpiryMs(key) }
+    // The login RECORD's expires_at (ISO) is the authoritative field; the
+    // JWT's exp claim is the fallback. (Final review #11: the earlier comment
+    // claimed expires_at was seen as a JWT claim — it is not; decoding a real
+    // token shows exp only, matching the record's expires_at to the second.)
+    const recordExpiry = stringOrNull(record.expires_at)
+    const expiresAtMs = recordExpiry !== null && Number.isFinite(Date.parse(recordExpiry))
+      ? Date.parse(recordExpiry)
+      : jwtExpiryMs(key)
+    if (expiresAtMs === null || best === null || expiresAtMs >= (best.expiresAtMs ?? -Infinity)) {
+      best = { key, expiresAtMs }
+    }
   }
+  if (best) return best
   throw new Error('Grok auth.json does not include a login key.')
 }
 
@@ -56,9 +70,9 @@ async function readGrokCredentials(): Promise<GrokCredentials> {
  * Read the expiry out of the login JWT without verifying it. Signature
  * verification needs the x.ai public keys and buys nothing here: we are only
  * deciding whether to save the user a doomed request — the billing endpoint
- * is the actual authority and rejects stale tokens itself. Claims seen in the
- * wild: `expires_at` as an ISO string (verified 2026-09-20) and the standard
- * `exp` epoch-seconds as a fallback for JWT libraries that set both.
+ * is the actual authority and rejects stale tokens itself. The real token
+ * carries the standard `exp` epoch-seconds claim; this stays as the fallback
+ * path behind the login record's authoritative expires_at field.
  */
 export function jwtExpiryMs(token: string): number | null {
   const segments = token.split('.')

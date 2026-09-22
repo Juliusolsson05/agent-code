@@ -7,6 +7,7 @@ import type {
 
 import { sanitizeUsageError } from '@main/usage/normalize.js'
 import { getProviderEnablementSnapshot } from '@main/setup/providerEnablement.js'
+import { enabledKindsFromEntries } from '@shared/types/providerEnablement.js'
 import { USAGE_SOURCES, listActiveUsageSources, listActiveUsageSourceIds } from '@main/usage/sources.js'
 
 const USAGE_CACHE_TTL_MS = 30_000
@@ -21,6 +22,7 @@ let cacheGeneration = 0
 
 async function readProvider(
   provider: UsageSourceId,
+  label: string,
   sourceLabel: string,
   loader: () => Promise<UsageProviderSnapshot>,
 ): Promise<UsageProviderSnapshot> {
@@ -31,7 +33,10 @@ async function readProvider(
       provider,
       status: 'error',
       sourceLabel,
-      message: sanitizeUsageError(err, `Could not load ${provider} usage.`),
+      // The label, never the raw id, in user-facing copy: "Could not load
+      // z.ai usage." reads; "Could not load opencode:zai usage." does not
+      // (final review #9).
+      message: sanitizeUsageError(err, `Could not load ${label} usage.`),
     }
   }
 }
@@ -84,7 +89,7 @@ export function getUsageSnapshot(request: UsageSnapshotRequest = {}): Promise<Us
     // "disabled ⇒ never fetched"; awaiting the resolved snapshot guarantees it.
     const enablement = await getProviderEnablementSnapshot()
     const activeIds = listActiveUsageSourceIds({
-      enabledKinds: new Set(enablement.entries.filter(entry => entry.enabled).map(entry => entry.kind)),
+      enabledKinds: enabledKindsFromEntries(enablement.entries),
       opencodeUsageSource: enablement.opencodeUsageSource,
     })
     const providers = await Promise.all(
@@ -93,7 +98,7 @@ export function getUsageSnapshot(request: UsageSnapshotRequest = {}): Promise<Us
         // listActiveUsageSourceIds already excludes null descriptors; the
         // guard keeps this closure honest if that invariant ever drifts.
         if (!descriptor) return Promise.resolve(null)
-        return readProvider(id, descriptor.sourceLabel, descriptor.read)
+        return readProvider(id, descriptor.label, descriptor.sourceLabel, descriptor.read)
       }),
     ).then(list => list.filter((entry): entry is UsageProviderSnapshot => entry !== null))
 
@@ -109,7 +114,6 @@ export function getUsageSnapshot(request: UsageSnapshotRequest = {}): Promise<Us
     return snapshot
   })()
 
-  const generation = cacheGeneration
   inFlightSnapshot = fetchPromise
   void fetchPromise.finally(() => {
     // Only clear if we're still the active fetch — a force refresh may have
@@ -123,7 +127,7 @@ export function getUsageSnapshot(request: UsageSnapshotRequest = {}): Promise<Us
 export async function listUsageSources(): Promise<Array<{ id: UsageSourceId; label: string }>> {
   const enablement = await getProviderEnablementSnapshot()
   return listActiveUsageSources({
-    enabledKinds: new Set(enablement.entries.filter(entry => entry.enabled).map(entry => entry.kind)),
+    enabledKinds: enabledKindsFromEntries(enablement.entries),
     opencodeUsageSource: enablement.opencodeUsageSource,
   })
 }
@@ -135,4 +139,10 @@ export async function listUsageSources(): Promise<Array<{ id: UsageSourceId; lab
 export function invalidateUsageSnapshotCache(): void {
   cacheGeneration += 1
   cachedSnapshot = null
+  // Also drop the in-flight pointer (final review #4): without this, a caller
+  // arriving between a toggle and the pre-toggle fetch's completion would
+  // JOIN that stale promise and render the just-disabled provider once more.
+  // Generation guards keep that fetch out of the cache; this keeps it out of
+  // the join path too, so "new callers fetch fresh" is true again.
+  inFlightSnapshot = null
 }
