@@ -24,10 +24,11 @@ describe('mapPiRowToFeedEntries', () => {
 
   it('assistant blocks keep Pi’s order: thinking, text, then tool_use carrying the call id and arguments', () => {
     const toolRow = allRows().find(row => row.type === 'message' && (row.message as { stopReason?: string }).stopReason === 'toolUse')!
-    const [entry] = mapPiRowToFeedEntries(toolRow).entries
-    expect((entry!.message.content as Array<{ type: string }>).map(block => block.type)).toEqual(['thinking', 'text', 'tool_use'])
+    // Entry is a union over every provider's row types; these are messages.
+    const entry = mapPiRowToFeedEntries(toolRow).entries[0] as unknown as { message: { content: unknown } }
+    expect((entry.message.content as Array<{ type: string }>).map(block => block.type)).toEqual(['thinking', 'text', 'tool_use'])
     const call = (toolRow.message as { content: Array<{ type: string; id: string; arguments: unknown }> }).content.find(block => block.type === 'toolCall')!
-    expect((entry!.message.content as Array<Record<string, unknown>>)[2]).toMatchObject({ type: 'tool_use', id: call.id, name: 'bash', input: call.arguments })
+    expect((entry.message.content as Array<Record<string, unknown>>)[2]).toMatchObject({ type: 'tool_use', id: call.id, name: 'bash', input: call.arguments })
   })
 
   it('a tool result is a separate user entry threaded to its call by toolCallId', () => {
