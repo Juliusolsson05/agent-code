@@ -176,6 +176,9 @@ type ManagerEvents = {
    *  consumers apply renderer/session-runtime/historyBoundary.ts decisions. */
   'history-boundary': [{ sessionId: string; type: 'reset' | 'caught-up'; generation: number; snapshotByteLength: number; byteOffset?: number; complete?: boolean; file: string }]
   'transcript-diagnostic': [{ sessionId: string; diagnostic: unknown }]
+  /** The provider session this pane runs changed without a respawn (Pi /new,
+   *  /resume, /fork). See AgentSessionEvents['provider-session-changed']. */
+  'provider-session-changed': [{ sessionId: string; providerSessionId: string; transcriptFile: string | null; reason: string }]
   'process-state': [{ sessionId: string; active: boolean; status?: string }]
   'terminal-foreground': [TerminalForegroundEvent]
   'trust-dialog': [{ sessionId: string; visible: boolean; workspace?: string }]
@@ -2862,6 +2865,15 @@ export class SessionManager extends EventEmitter {
         if (!ownsEntry()) return
         this.markActivity(sessionId)
         this.emit('history-boundary', { sessionId, ...boundary })
+      })
+      session.on('provider-session-changed', change => {
+        if (!ownsEntry()) return
+        // The pane now runs a different provider session. Main needs nothing
+        // else rewritten: backend snapshots read session.getProviderSessionId()
+        // live, and the next committed row updates lastTranscriptFile. The
+        // renderer owns the durable pane identity (workspace.json), so the
+        // fact goes there.
+        this.emit('provider-session-changed', { sessionId, ...change })
       })
       session.on('jsonl-entry', (
         entry: AgentTranscriptEntry,

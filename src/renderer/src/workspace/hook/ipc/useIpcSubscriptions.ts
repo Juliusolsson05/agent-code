@@ -103,6 +103,7 @@ import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import * as perf from '@renderer/performance/client'
 import {
   applyJsonlProviderSessionId,
+  applyProviderSessionSwitch,
   decideJsonlProviderBurst,
   resumableProviderSessionId,
   shouldMarkProviderSessionDisconnected,
@@ -926,6 +927,23 @@ export function useIpcSubscriptions(
         // what matters here is that the sticky override is gone.
         transcriptStatus: 'ready',
       })
+    })
+
+    const offProviderSessionChanged = feed.onSessionProviderSessionChanged(({ sessionId, providerSessionId }) => {
+      if (quarantinesSessionFeed(sessionId)) return
+      // The pane follows its runtime into another provider session (Pi /new,
+      // /resume, /fork). Rebind the durable identity, and forget the burst
+      // gate's expectation for the old id so the new session's rows are
+      // judged against the new one. The conversation itself is replaced by
+      // the history-boundary reset that follows this event.
+      setState(prev => {
+        const meta = prev.sessions[sessionId]
+        if (!meta) return prev
+        const next = applyProviderSessionSwitch(meta, providerSessionId)
+        if (!next) return prev
+        return { ...prev, sessions: { ...prev.sessions, [sessionId]: next } }
+      })
+      jsonlProviderStreamBySession.delete(sessionId)
     })
 
     const offHistoryBoundary = feed.onSessionHistoryBoundary(({ sessionId, ...boundary }) => {
@@ -2765,6 +2783,7 @@ export function useIpcSubscriptions(
       // above. The bulk path is the only one.
       offEntries()
       offHistoryBoundary()
+      offProviderSessionChanged()
       offErr()
       offDiagnostic()
       offProcessState()

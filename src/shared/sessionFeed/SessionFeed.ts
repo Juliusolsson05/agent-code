@@ -4,6 +4,7 @@ import type {
   SessionConditionsEvent,
   SessionExitEvent,
   SessionHistoryBoundaryEvent,
+  SessionProviderSessionChangedEvent,
   SessionJsonlEntriesEvent,
   SessionJsonlErrorEvent,
   SessionTranscriptDiagnosticEvent,
@@ -66,6 +67,7 @@ export interface SessionFeed {
   /** Channel HEALTH, not content: see SessionTranscriptDiagnosticEvent. */
   onSessionTranscriptDiagnostic(cb: (e: SessionTranscriptDiagnosticEvent) => void): Unsub
   onSessionHistoryBoundary(cb: (e: SessionHistoryBoundaryEvent) => void): Unsub
+  onSessionProviderSessionChanged(cb: (e: SessionProviderSessionChangedEvent) => void): Unsub
   onSessionSemanticEvent(cb: (e: SessionSemanticEvent) => void): Unsub
   onSessionConditions(cb: (e: SessionConditionsEvent) => void): Unsub
   onSessionProcessState(cb: (e: SessionProcessStateEvent) => void): Unsub

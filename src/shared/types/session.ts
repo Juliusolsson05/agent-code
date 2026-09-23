@@ -415,9 +415,9 @@ export type AgentSessionEvents = {
    * The provider session this pane runs changed WITHOUT a respawn: the user
    * started, resumed or forked a session inside a native TUI that Agent Code
    * follows (Pi: /new, /resume, /fork — decision D4 in
-   * docs/decomposition/pi-terminal.md). Emitted after the provider's own
-   * history-boundary reset for the new session, so consumers rebind identity
-   * for a window that already holds the new conversation.
+   * docs/decomposition/pi-terminal.md). Emitted BEFORE the provider's own
+   * history-boundary reset and the new session's rows, so a consumer has
+   * rebound the pane's identity by the time the new conversation arrives.
    *
    * WHY an explicit event and not a new id inside a transcript row: the
    * renderer quarantines any committed burst whose provider id conflicts with

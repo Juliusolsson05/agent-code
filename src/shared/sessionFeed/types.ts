@@ -111,6 +111,16 @@ export type SessionHistoryBoundaryEvent = {
   file: string
 }
 
+/** The pane's provider session changed without a respawn (Pi /new, /resume,
+ * /fork — see AgentSessionEvents['provider-session-changed']). Desktop pane
+ * identity only: the phone has no durable pane metadata to rebind. */
+export type SessionProviderSessionChangedEvent = {
+  sessionId: string
+  providerSessionId: string
+  transcriptFile: string | null
+  reason: string
+}
+
 export type SessionJsonlErrorEvent = { sessionId: string; message: string }
 
 /**

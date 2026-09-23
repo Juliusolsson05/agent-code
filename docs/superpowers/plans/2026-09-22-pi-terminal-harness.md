@@ -161,6 +161,11 @@ all test runs.
     - hand-written provider enums in control/native-history derived from AGENT_PROVIDER_KINDS (the control SDK keeps a literal, since it cannot import the registry);
     - a test now pins the subagents-dir guard for Grok and Pi (Grok's had none).
   - `~/.pi/agent/bin` was added to the resolver's known dirs (Pi's managed installer, read from pi.dev/install.sh).
+- 2026-09-22 — Task 7: PiSession adapter tests pass (19 system tests replaying every recording through the real package and adapter), plus the identity-follow contract.
+  - Following in-TUI switches needed a sanctioned identity-change path. The renderer quarantines any committed burst whose provider id conflicts with the pane's durable one (#290), and Pi rows carry no session id at all. Without the path, a pane would silently keep the old id while showing the new conversation.
+  - Added the `provider-session-changed` AgentSession event, carried through SessionManager, the forwarder (it flushes old rows first; test pinned), preload and the SessionFeed contract. The phone gets an explicit no-op with a WHY: it owns no durable pane identity and follows through the history reset.
+  - The renderer rebinds via `applyProviderSessionSwitch` under the new source `provider-follow`, and resets the burst gate's expectation.
+  - The step-2 "confirm red" was not observed before implementation; the replay sweep did catch real ordering (identity before reset) and exit behaviour.
 
 ---
 
@@ -453,14 +458,14 @@ mirror how `mitmAddon.py` is located).
   exclusion like the siblings (add `excludeExternalControlFromPi` in
   `src/providers/shared/runtime/externalControlExclusion.ts`).
 
-- [ ] **Step 1:** Failing adapter tests with fake headless + fake PTY spawner
+- [x] **Step 1:** Failing adapter tests with fake headless + fake PTY spawner
   (constructor-injected defaults), one per mapping line above.
-- [ ] **Step 2:** Confirm they fail.
-- [ ] **Step 3:** Implement.
-- [ ] **Step 4:** System test over the package replay rig (real socket, fake
+- [x] **Step 2:** Confirm they fail.
+- [x] **Step 3:** Implement.
+- [x] **Step 4:** System test over the package replay rig (real socket, fake
   `pi` peer, real file) — prompt delivered while idle and while busy;
   bridge-less spawn refuses delivery with the typed reason.
-- [ ] **Step 5:** Commit `feat(pi): run Pi's TUI through pi-terminal-headless`.
+- [x] **Step 5:** Commit `feat(pi): run Pi's TUI through pi-terminal-headless`.
 
 ---
 
