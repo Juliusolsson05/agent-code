@@ -63,6 +63,8 @@ export type ExtensionServiceInvoker = {
   status(extensionId: string, revision: string, serviceId: string): Promise<ExtensionServiceStatus>
   invoke(extensionId: string, revision: string, serviceId: string, name: string, params?: ExtensionJson): Promise<ExtensionJson | undefined>
   expose(extensionId: string, revision: string, serviceId: string, lan: boolean): Promise<ExtensionServiceExposure>
+  /** net.fetch refuses loopback targets on these ports (netFetch.ts). */
+  isHostOwnedLoopbackPort(port: number): boolean
 }
 
 export type ExtensionCapabilityServiceOptions = {
@@ -219,7 +221,7 @@ export class ExtensionCapabilityService {
           httpMethod: request.httpMethod,
           headers: request.headers,
           body: request.body,
-        })
+        }, fetch, { isHostOwnedLoopbackPort: port => this.options.services.isHostOwnedLoopbackPort(port) })
       case 'service.invoke': {
         // A service RPC's value is author-defined bounded JSON, not one of the
         // host-shaped results this union describes. Both transports surface

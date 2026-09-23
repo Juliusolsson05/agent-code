@@ -1,4 +1,5 @@
-import { isPrivateIpLiteral } from './netPolicy.js'
+import { isPrivateIpLiteral, normalizeIpLiteral } from './netPolicy.js'
+import { TRANSPORT_ATTESTATION_HEADER } from './serviceTransport.js'
 
 // The net.connect capability: a brokered, bounded, outbound HTTP fetch for
 // runtimes and views. The sandbox stays sealed — the CHILD never dials; it asks
@@ -31,10 +32,38 @@ export type NetFetchResult = {
 
 const ALLOWED_METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'PATCH'])
 
+/** Headers only the HOST may set (#1147). The service proxy and LAN listener
+ *  stamp these to tell a service who is calling; a service that trusts them on
+ *  a loopback socket would otherwise be one net.fetch away from believing a
+ *  different extension is its own frame (`service`) or a LAN guest of its
+ *  choosing (`lan` + forged x-forwarded-for). REFUSED, not silently dropped:
+ *  no honest caller sends them, and a silent drop would hide the attempt. */
+function isHostReservedHeader(name: string): boolean {
+  const lower = name.trim().toLowerCase()
+  return lower === TRANSPORT_ATTESTATION_HEADER || lower === 'forwarded' || lower.startsWith('x-forwarded-')
+}
+
+/** Loopback, including the unspecified address (dialing :: or 0.0.0.0 reaches
+ *  this machine too). Used only to decide whether a target might be one of the
+ *  host's own service ports. */
+function isThisMachine(host: string): boolean {
+  const literal = normalizeIpLiteral(host)
+  if (literal === null) return false
+  return literal.startsWith('127.') || literal === '::1' || literal === '::' || literal === '0.0.0.0'
+}
+
+/** Policy seams main supplies. Optional so the pure policy table stays
+ *  testable without a service host. */
+export type NetFetchGuards = {
+  /** Is this loopback port owned by the extension host: a running service's
+   *  endpoint or a LAN listener? */
+  isHostOwnedLoopbackPort?(port: number): boolean
+}
+
 /** Structural validation beyond the zod transport schema: everything here is
  *  what the policy needs before a socket is opened. Throws user-actionable
  *  errors — these strings surface in the extension's own console. */
-export function assertFetchableTarget(rawUrl: string, request: NetFetchRequest): URL {
+export function assertFetchableTarget(rawUrl: string, request: NetFetchRequest, guards: NetFetchGuards = {}): URL {
   let url: URL
   try {
     url = new URL(rawUrl)
@@ -54,6 +83,26 @@ export function assertFetchableTarget(rawUrl: string, request: NetFetchRequest):
         'Use a literal address like http://192.168.1.20:5192/ on a trusted network.',
     )
   }
+  // WHY THE HOST'S OWN SERVICE PORTS ARE OFF LIMITS: extension services bind
+  // loopback and are reached through the service proxy (own extension only,
+  // grant-checked) or the LAN listener (stamps who is calling). A brokered
+  // fetch straight to 127.0.0.1:<service port> skips both — it is how one
+  // extension with net.connect could drive ANOTHER extension's service as if
+  // it were local (e.g. take the Poker host seat by supplying its own Origin).
+  // Refusing the listener's loopback port too matters: the listener would
+  // stamp x-forwarded-for 127.0.0.1, which a service rightly treats as local.
+  // This closes the in-app path only; ordinary local processes (and service
+  // children, which are plain Node) can still dial loopback — see
+  // docs/extensions/authoring.md §6b.
+  const port = Number(url.port || (url.protocol === 'https:' ? 443 : 80))
+  if (isThisMachine(host) && guards.isHostOwnedLoopbackPort?.(port)) {
+    throw new Error('net.fetch cannot reach Agent Code extension services on this machine. Use your own service through service.transport.')
+  }
+  for (const header of request.headers ?? []) {
+    if (isHostReservedHeader(header.name)) {
+      throw new Error(`net.fetch cannot set "${header.name}": that header is reserved for the Agent Code host.`)
+    }
+  }
   const verb = request.httpMethod ?? 'GET'
   if (!ALLOWED_METHODS.has(verb)) {
     throw new Error('net.fetch does not support upgrades or tunnels.')
@@ -69,12 +118,12 @@ export function assertFetchableTarget(rawUrl: string, request: NetFetchRequest):
 
 /** Perform one brokered fetch. `perform` is injectable for tests; production
  *  uses the global fetch (Electron main's Chromium net stack). */
-export async function netFetch(request: NetFetchRequest, perform: typeof fetch = fetch): Promise<NetFetchResult> {
-  const url = assertFetchableTarget(request.url, request)
+export async function netFetch(request: NetFetchRequest, perform: typeof fetch = fetch, guards: NetFetchGuards = {}): Promise<NetFetchResult> {
+  const url = assertFetchableTarget(request.url, request, guards)
   const headers = new Headers()
   for (const header of request.headers ?? []) {
     // Header names are validated by Headers itself; duplicates append per fetch
-    // semantics. Nothing here can set forbidden headers like host.
+    // semantics. Host-reserved headers were refused above.
     headers.set(header.name.toLowerCase(), header.value)
   }
   const response = await perform(url.toString(), {
