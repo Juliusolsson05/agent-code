@@ -1,188 +1,119 @@
-# User MCP Servers: Implementation Plan
+# MCP Servers: Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task by task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Let users add any MCP server, set its secrets, and choose which providers get it (Claude Code, Codex). They can override it per agent and turn it on or off from Settings → MCP and the command palette. Servers are delivered at launch through the same path Agent Code's built-in MCP already uses, and provider config files are never written.
+**Goal:** One MCP interface for every MCP server. Users can:
+- add any MCP server by pasting its README snippet;
+- keep its secrets encrypted;
+- choose per provider which servers new agents get, for Agent Code's built-in servers and their own alike;
+- override those choices per agent with one staged reload;
+- see and copy in the servers the CLIs already load directly.
 
-**Architecture:**
-- Storage and secrets:
-  - A main-owned store (`STATE_DIR/mcp-servers.json`, 0600) holds entries in the de facto `mcpServers` shape. Entries use VS Code-style `${input:id}` secret references.
-  - Secret values live in `safeStorage` blobs and never reach the renderer.
-- IPC and renderer: IPC and a broadcast follow the provider-enablement pattern (#1126). A non-persisted zustand mirror sits in the renderer.
-- Launch flow:
-  - The renderer resolves attached server **ids** from the provider defaults plus the per-pane `userMcpOverrides`, and sends them with spawn/recover options.
-  - Main validates them, resolves secrets, and hands `ResolvedUserMcpServer[]` to the provider launchers.
-  - The Claude launcher adds them to the existing private `--mcp-config` file.
-  - The Codex launcher adds `-c mcp_servers.*` overrides, with secrets passed through the environment.
-  - A bad server is dropped with a notice. It never fails the launch.
+Agents receive user servers when they launch, through the path the built-in MCP servers already use. Provider config files are never written.
 
-**Spec:** `docs/superpowers/specs/2026-09-22-user-mcp-servers-design.md`. Read its Evidence and Decisions sections before starting any task; every "why" is there.
+**Spec:** `docs/superpowers/specs/2026-09-22-user-mcp-servers-design.md`. Its **Revision 2** section overrides anything in the rest of the spec that conflicts with it. Read Evidence, Decisions and Revision 2 before starting any task.
 
-**Issue:** #1143 (Refs #244).
+**Issue:** #1143 (Refs #244). **Status:** user-approved 2026-09-22, including auto-approval of this plan.
 
-**Working tree:** `.worktrees/user-mcp-servers`, branch `feat/user-mcp-servers`, based on `origin/main` `672d0941`. Setup: `git submodule update --init` and `ln -s ../../node_modules node_modules` (see the memory note on worktree setup).
+**Working tree:** `.worktrees/user-mcp-servers`, branch `feat/user-mcp-servers`, based on `origin/main` `672d0941`. Submodules are initialized and `node_modules` is symlinked. Use Node 24 for vitest, because Node 25 breaks happy-dom.
 
 **Conventions:**
-- Thick WHY comments (AGENTS.md); each non-obvious decision in the spec's Decisions table gets a comment at the code site that enforces it.
-- Commit messages use Conventional Commits with scope `mcp`.
-- Tests protect behavior. Fixtures are the **real** published Beeper snippets (quoted in the spec), not invented shapes.
-- Verification: `npx tsc -b` plus the `unit`/`renderer` vitest projects. Run the full suite once at the end, not per task.
+- Write thick WHY comments at every code site that enforces a decision.
+- Use Conventional Commits with scope `mcp`.
+- Test fixtures are the real published Beeper snippets.
+- Verify with `npx tsc -b` and vitest once at the end.
 - Never launch the app.
 
 ---
 
-### Task 1: Shared contracts and pure validation
+### Task 1: Shared model (`src/shared/userMcp/`)
+- [ ] `types.ts`:
+  - `UserMcpServer`, `UserMcpServerEntry`, `UserMcpInput` and `UserMcpDocument`.
+  - The view and problem types.
+  - `USER_MCP_PROVIDERS` (`claude`, `codex`) and the reserved names.
+  - `userMcpOverrideKey(id)` and `userMcpOverridesFrom(map)`.
+- [ ] `validate.ts`:
+  - Name rules, entry validation and type normalization.
+  - The rule that `${input:…}` may appear only in `env` and `headers` values.
+  - The support matrix (SSE is Claude-only).
+  - `coerceUserMcpDocument`, which keeps unknown keys and flags malformed servers instead of dropping them.
+- [ ] `inputs.ts`: scan and substitute `${input:id}`.
+- [ ] `importConfig.ts`:
+  - Accepts the `mcpServers`, VS Code `servers`/`inputs`, bare-map and bare-entry forms.
+  - Moves every literal env and header value into a secret input, returned as `pendingSecrets`.
+- [ ] Tests for each of the above, using the Beeper fixtures.
 
-**Files:**
-- Create: `src/shared/types/userMcp.ts` (types from the spec's Contracts section, `USER_MCP_PROVIDERS`, reserved names)
-- Create: `src/shared/userMcp/validate.ts` and `validate.test.ts`
-- Create: `src/shared/userMcp/inputs.ts` and `inputs.test.ts` (`${input:id}` scan and substitute)
+### Task 2: Launch translators (`src/providers/shared/runtime/userMcpLaunch.ts`)
+- [ ] `userMcpSecretVariable`: deterministic variable names (needed so Claude's OAuth key stays stable).
+- [ ] `claudeUserMcpEntries`: builds Claude's config entries.
+- [ ] `addCodexUserMcpLaunchConfig`: builds the Codex arguments, and drops a server whose `env_vars` collide with another's.
+- [ ] Widen `createPrivateClaudeMcpConfig(builtIns, userEntries)`.
+- [ ] Golden tests, including one asserting that no secret appears in argv.
 
-- [ ] Write failing tests:
-  - Name rules: `^[A-Za-z0-9_-]{1,64}$`; `agent_code`, `AGENT_CODE` and `agent-code-control` are rejected; a duplicate name among servers raises `duplicate-name`.
-  - Entry validation:
-    - stdio needs a `command`; http and sse need an absolute `http(s)` url.
-    - A `type`-less entry with a `url` normalizes to `http`.
-    - A mixed `command` + `url` entry is `invalid-entry`.
-  - `${input:x}` is allowed in `env` and `headers` values, and gives `secret-in-forbidden-field` in `command`, `args` or `url`. An undefined input id gives `unknown-input`.
-  - Support matrix: sse → `codex: { ok:false, reason: 'Codex does not support SSE MCP servers' }`.
-  - Unknown extra entry keys are preserved through `coerceUserMcpDocument`.
-  - Coercion: malformed servers are kept but flagged, never silently deleted; a non-object document becomes `{version:1, servers:[]}`.
-- [ ] Implement until the tests are green. The WHY comments cover the charset intersection, why names are not prefixed, and why only `env`/`headers` may carry secrets.
-- [ ] Commit `feat(mcp): add user MCP server contracts and validation`.
+### Task 3: Main service (`src/main/userMcp/`)
+- [ ] `store.ts`: an atomic write of `STATE_DIR/mcp-servers.json` with mode 0600. A corrupt file is preserved rather than overwritten.
+- [ ] `secrets.ts`: `safeStorage` blobs, with only a hint ever returned.
+- [ ] `nativeServers.ts`:
+  - Lists the CLIs' own user-scope servers for Claude and Codex.
+  - Collects the Codex names used for the collision check.
+  - Detects Claude's managed-policy lock.
+- [ ] `service.ts`:
+  - Snapshot and mutations, run through a serialized queue.
+  - `resolveForLaunch(provider, overrides, cwd)`, which returns `{ servers, attachedIds, dropped }`.
+  - A change emitter.
+- [ ] IPC in `src/main/ipc/userMcp.ts`, the preload API in `src/preload/api/userMcp.ts`, and wiring in `src/main/index.ts`.
+- [ ] Tests for the store, secrets, resolution and native parsing.
 
-### Task 2: Import parser
+### Task 4: Session wiring (main and providers)
+- [ ] Add `userMcpOverrides` to the spawn and recover options.
+- [ ] Add `userMcpServerIds` to the snapshot, spawn result and recover result.
+- [ ] `SessionManager` resolves user servers beside `builtInMcpServers` and records the attached ids per session.
+  - The Codex replacement restore reuses the recorded overrides.
+  - It emits `user-mcp-unavailable`, which the forwarder broadcasts.
+- [ ] Claude and Codex sessions accept `userMcpServers`.
+- [ ] Tests: a missing secret still spawns; the token is absent from argv.
 
-**Files:** `src/shared/userMcp/importConfig.ts` and `importConfig.test.ts`
+### Task 5: Renderer model
+- [ ] Per-provider `defaultBuiltInMcpDomains`, covering:
+  - type and coercion;
+  - the resolver picking the provider's list;
+  - the refs input type;
+  - the `store.ts` comment.
+- [ ] `normalizeBuiltInMcpOverrides` keeps `user:` keys.
+- [ ] `clonedMcpOverrides` keeps them too.
+- [ ] Every renderer spawn and recover call site sends `userMcpOverrides`, and the pane meta stores `userMcpServerIds`.
+- [ ] `features/mcp/store.ts`: a mirror of main's snapshot plus a sync hook, mounted in `App.tsx`.
+- [ ] Global toast for `user-mcp-unavailable`.
 
-- [ ] Fixtures (verbatim from developers.beeper.com, as quoted in the spec):
-  - `{"mcpServers":{"beeper":{"url":"http://localhost:23373/v0/mcp","headers":{"Authorization":"Bearer YOUR_TOKEN_HERE"}}}}`
-  - The `@beeper/mcp-remote` stdio snippet with `env.ACCESS_TOKEN`.
-  - The VS Code `{"servers":{"beeper":{"type":"http",…}}}` form.
-  - A VS Code form with `inputs:[{type:'promptString',id,password:true}]`.
-  - A bare `{name: entry}` map, and a single bare entry.
-- [ ] Assert that every literal env or header value becomes `${input:<name>-<key>}`, with its pasted value returned separately as `pendingSecrets`. The resulting entry must contain no literal token.
-- [ ] Assert that malformed JSON returns a typed error, not a throw.
-- [ ] Commit `feat(mcp): import MCP server configs from standard snippets`.
+### Task 6: Settings → MCP
+- [ ] Add the `mcp` category.
+- [ ] Add the `mcp-servers` marker row, which replaces the eight built-in default toggle rows.
+- [ ] Move `external-control` into the new category.
+- [ ] `McpServersRow`:
+  - The grid of built-in and user servers, with a column per enabled provider.
+  - Master switches, problem chips, and the ⋯ actions.
+  - The native section with Copy in.
+- [ ] `McpServerDialog`:
+  - Add and edit, with paste import and a JSON editor.
+  - Masked secret fields.
+  - Sign in… launches `codex mcp login` in a new terminal pane with the same `-c` URL, and shows Claude `/mcp` guidance.
+- [ ] `ui.openSettings(category?)`.
 
-### Task 3: Main store, secrets, IPC, broadcast
+### Task 7: Commands and the per-agent modal
+- [ ] `AgentMcpServersModal` and its surface: staged toggles, one reload, a reset row, and Root Management going through its confirmation dialog.
+- [ ] New commands: `mcp-servers`, `add-mcp-server` and `agent-mcp-servers`.
+- [ ] Retire `use-global-mcp-settings` and the eight `enable-*-mcp` toggles.
+- [ ] Update the control references, `catalog.test.ts`, `taxonomy.test.ts` and the affected renderer tests.
 
-**Files:**
-- Create: `src/main/userMcp/store.ts`, which loads and coerces `STATE_DIR/mcp-servers.json` and does atomic 0600 writes through a temp file plus rename. Mutations run through one serialized queue.
-- Create: `src/main/userMcp/secrets.ts`, a `safeStorage` blob per `<serverId>/<inputId>.bin` following the `src/main/dictation/apiKeyStore.ts` pattern. It returns only `{set, hint}`, and deleting a server deletes its secrets.
-- Create: `src/main/userMcp/service.ts`, which builds the snapshot (`UserMcpServerView[]` with problems and support), handles mutations (return snapshot + emit), and provides `resolveForLaunch(ids, provider, cwd)`. That resolver is called in Task 5.
-- Create: `src/main/ipc/userMcp.ts`, registered in `src/main/ipc/index.ts`, with channels per the spec and argument validation mirroring `ipc/providerEnablement.ts`.
-- Create: `src/preload/api/userMcp.ts`, and expose it in the preload API types.
-- Wire the service in `src/main/index.ts` next to the provider enablement construction.
-
-- [ ] Tests:
-  - Store round trip keeps unknown keys, and the file mode is 0600.
-  - A corrupt file is preserved (renamed `.corrupt-<ts>`), and the store starts empty with a visible problem. Silently resetting would lose the user's config.
-  - A secret set or clear never appears in the snapshot, only `hint`.
-  - Mocking `safeStorage` as unavailable surfaces a `secret-missing` problem, not a crash.
-- [ ] Commit `feat(mcp): persist user MCP servers and secrets in main`.
-
-### Task 4: Provider launch translators (pure)
-
-**Files:** `src/providers/shared/runtime/userMcpLaunch.ts` and `userMcpLaunch.test.ts`; modify `builtInMcpLaunch.ts`
-
-- [ ] `generatedSecretVar(serverName, key, taken)` is deterministic: `AGENT_CODE_USER_MCP_<NAME>_<KEY>`, sanitized, with a numeric suffix on collision. A test asserts it is stable when another server is added or removed. Comment the Claude OAuth-key reason (spec, "Secret variable naming").
-- [ ] `claudeUserMcpEntries(servers) → { entries, env }` and `codexUserMcpLaunchConfig(servers, args, env) → { dropped }`:
-  - Codex stdio:
-    - Emit `command`, `args` (TOML array), `cwd` and `env_vars=[…]`, with the values placed in `env`.
-    - If two attached stdio servers use the same env key with different values, drop the second with a reason.
-  - Codex http: every header goes through `env_http_headers`.
-  - Unknown keys:
-    - Claude: passed through verbatim.
-    - Codex: ignored, and their names are returned for the UI note.
-- [ ] Change `createPrivateClaudeMcpConfig(builtIns, userEntries)` so it writes one file when either list is non-empty. The existing callers (`claudeSession.ts:1189-1202`) keep a single `--mcp-config` as the last flag.
-- [ ] Golden tests using the Beeper fixtures:
-  - Claude file JSON.
-  - Codex argv, with the assertion **no token substring appears in args**.
-  - The stdio `mcp-remote` case on both providers.
-- [ ] Commit `feat(mcp): translate user MCP servers into Claude and Codex launch config`.
-
-### Task 5: Spawn and recover wiring in main
-
-**Files:**
-- `src/shared/types/session.ts`: add `userMcpServerIds?: string[]` to the spawn and recover options, and add the observed `userMcpServerIds` to `SessionInfo`. The comment makes the same "observed, not requested" point as `builtInMcpDomains`.
-- `src/main/sessionManager.ts`:
-  - At the `builtInMcpServers` assembly (~:2875), call `userMcp.resolveForLaunch`, which:
-    - drops unknown, disabled, unsupported, problem, missing-secret and native-collision servers;
-    - applies the Claude `managed-mcp.json` lock.
-  - Pass `userMcpServers` into `createSession`.
-  - Emit `user-mcp-unavailable` for dropped servers (mirror `reportSkillsUnavailable` at :2724), and forward it to the renderer the same way.
-  - Recovery that adopts an existing process keeps that process's recorded ids.
-- `src/providers/claude/runtime/claudeSession.ts` and `src/providers/codex/runtime/codexSession.ts`: accept `userMcpServers`, call the Task 4 translators, and put the generated variables into the spawn env.
-- Native collision check (Codex): `src/main/userMcp/nativeCodexServers.ts` parses the `mcp_servers` keys from `${CODEX_HOME:-~/.codex}/config.toml` and `<cwd>/.codex/config.toml` with `@iarna/toml`. It is read-only, and a parse failure means "no collisions known", which it logs.
-
-- [ ] Tests:
-  - A spawn with a missing secret still spawns, and emits unavailable.
-  - A Codex collision drops only Codex.
-  - `SessionInfo.userMcpServerIds` equals what was actually attached.
-  - The token is absent from the recorded argv (there is an existing spawn-args capture harness in the codex/claude session tests; reuse it).
-- [ ] Commit `feat(mcp): attach user MCP servers when agents launch`.
-
-### Task 6: Renderer mirror, resolution, per-pane overrides
-
-**Files:**
-- Create: `src/renderer/src/features/userMcp/store.ts`, a mirror plus `useUserMcpSync()`, mounted once in `App.tsx` next to `useProviderEnablementSync`.
-- Create: `src/renderer/src/workspace/userMcp.ts` with `resolveSessionUserMcpServerIds` and `normalizeUserMcpOverrides`. Test it in `userMcp.test.ts`, covering the master switch beating an override, provider default, override on/off, and an unsupported provider.
-- Modify `src/renderer/src/workspace/types.ts` to add `userMcpOverrides` and `userMcpServerIds` beside the built-in fields (:283-286).
-- Modify `workspace/mcpDomains.ts`: `clonedMcpOverrides` also copies `userMcpOverrides`.
-- Modify `workspace/hook/actions/session.ts` (the fresh spawn at ~:378 and the replacement/reload at ~:1258) to send `userMcpServerIds`.
-- Modify `workspace/builtInMcpReload.ts`, which gains the user-override variant through the same reload path. Don't fork a second reload implementation.
-- Modify the workspace persistence coercion so the new pane fields survive save and load.
-- Show the `user-mcp-unavailable` notice where `managed-skills-unavailable` is shown today.
-
-- [ ] Commit `feat(mcp): resolve user MCP servers per agent in the workspace`.
-
-### Task 7: Settings → MCP
-
-**Files:**
-- `settingsCategories.ts`: add category `mcp` ("MCP", "Servers your agents can use, and Agent Code's own MCP tools.").
-- `settingsRegistry.ts`:
-  - Add the `user-mcp-servers` marker row (`storage: 'external-files'`, `apply: 'new-session'`).
-  - Move the built-in default MCP rows and `external-control` into the new category, changing the category only.
-- `SettingsList.tsx`: dispatch the new row.
-- Create: `src/renderer/src/features/userMcp/ui/UserMcpServersRow.tsx` and `UserMcpServerDialog.tsx`:
-  - List, master switch, and per-provider checkboxes, showing only providers enabled in `useEnabledAgentProviderKinds()`.
-  - Problem and support chips, Edit, Delete, and Sign in… for HTTP servers.
-  - The dialog has a name field, a JSON entry editor, and masked secret fields derived from the `${input:*}` references. Validation comes from main.
-  - Paste-import supports multiple servers.
-- Sign in…:
-  - Codex: open a terminal pane running `codex mcp login <name>` with the same `-c` url override (the spec notes that login reads the effective config).
-  - Claude: show inline guidance to run `/mcp` in an agent that has the server attached.
-- `ui.openSettings(category?)`: add the optional argument (`command-palette/types.ts:202`) and its implementation.
-
-- [ ] Renderer tests:
-  - The row hides the Codex column when Codex is disabled in Providers.
-  - An SSE server's Codex checkbox is disabled, with the reason shown.
-  - The dialog never renders a secret value.
-- [ ] Commit `feat(mcp): add MCP settings with user server management`.
-
-### Task 8: Commands
-
-**Files:** a new `src/renderer/src/features/userMcp/commands.ts` registered in `command-palette/catalog.ts`; `sessionCommands.ts` (`use-global-mcp-settings` also clears user overrides); and `catalog.test.ts` (baseline ids, counts, approved-additions list), plus `taxonomy.test.ts` if tiers apply.
-
-- [ ] Add `user-mcp-servers` (`MCP Servers…`), `add-user-mcp-server` (`Add MCP Server…`) and `agent-user-mcp-servers` (`Agent MCP Servers…`) as the spec's command table describes. Follow `docs/command-style.md`: descriptions use the "What it does / Use when / Notes" format, and the session command re-checks the provider inside `run`.
-- [ ] Commit `feat(mcp): add MCP server commands`.
-
-### Task 9: Documentation and final verification
-
-- [ ] Update the README "What you can do with it" section with an **MCP servers** bullet, and update the `ARCHITECTURE.md` provider-integration section to cover user servers delivered at launch.
-- [ ] Run `npx tsc -b` and `npm test`, once, and compare any failures against the known local failures noted in memory.
-- [ ] Run a real-binary check, read-only and with no app launch:
-  - Codex: run `codex mcp list` with the generated `-c` overrides for the Beeper fixture, and confirm it parses and lists `beeper` with the header env var.
-  - Claude: run `claude mcp list --mcp-config <generated file>` if it honors the flag; if not, note that in the PR.
-- [ ] Open a PR with the title `feat(mcp): manage user MCP servers per provider and per agent`, with `Fixes #1143` and `Refs #244`. Do not merge.
-
----
+### Task 8: Documentation, verification and PR
+- [ ] Update README and ARCHITECTURE.
+- [ ] Run `npx tsc -b` and vitest.
+- [ ] Real-binary check of the generated Codex `-c` arguments with `codex mcp list`.
+- [ ] Open the PR `feat(mcp): manage MCP servers per provider and per agent` with `Fixes #1143` and `Refs #244`. Run two orchestrated reviewers, fix the valid findings, wait for CI, and do not merge.
 
 ## Out of scope (follow-up issues)
-
-- Read-only "Also loaded natively" list.
 - Add from MCP Registry.
-- OpenCode and Grok.
-- User servers in workflow subagents.
+- OpenCode and Grok user servers.
+- User servers for workflow subagents.
+- Project-scope native server listing.
 - #244 hosted extension servers.

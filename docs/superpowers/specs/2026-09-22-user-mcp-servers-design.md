@@ -3,6 +3,82 @@
 Status: draft for review · Date: 2026-09-22 · Branch: `feat/user-mcp-servers`
 Issue: #1143 (Refs #244)
 
+## Revision 2: one interface for every MCP server (user-approved 2026-09-22)
+
+The user reviewed ASCII mockups and approved a unified interface. It also
+covers Agent Code's own built-in MCP servers. Where this section conflicts
+with anything below, **this section wins**.
+
+1. **One grid for all servers.** Settings → MCP lists Agent Code's built-in
+   servers (TLDR, Goal, Goal Loop, Orchestration, Agent Transcripts, Agent
+   Management, AI Workspace, Workflows) and the user's servers in **one grid**
+   with the same per-provider columns.
+   - The rule for every cell is: *new agents of this provider get it*.
+   - `—` marks a server that provider can't use, with the reason shown.
+   - Root Management is listed as per-agent only; it is never a default.
+   - A provider column appears only when that provider is enabled in
+     Settings → Providers.
+   - Built-in cells cover all four providers, because every launcher carries
+     built-ins. User-server cells for OpenCode and Grok show `—` "Not
+     supported yet", which is honest and keeps the grid rectangular.
+2. **Per-provider built-in defaults.** `settings.defaultBuiltInMcpDomains`
+   changes from one flat list to
+   `Record<AgentProviderKind, ConfigurableBuiltInMcpDomain[]>`.
+   - Coercion copies a legacy flat list to every provider, so nobody's
+     current behavior changes on upgrade.
+   - The resolver still accepts a flat list, meaning "every provider". That
+     keeps orchestration, control and test callers that pass an explicit list
+     valid without a parallel API.
+3. **One per-agent override map.** Per-agent choices for user servers live in
+   the **same** `builtInMcpOverrides` map, under namespaced keys
+   `user:<serverId>`.
+   - That map already travels through spawn, replace, reload, recovery,
+     undo-close, provider switch, duplicate and the control API. Giving user
+     servers a second parallel map would mean re-threading every one of those
+     paths, and missing one silently drops a choice.
+   - The field name stays as it is, because renaming a persisted workspace
+     field needs a migration.
+   - The type is widened, and a WHY comment at the type explains it.
+4. **Main decides which user servers attach.** The renderer sends only the
+   `user:` subset of the pane's overrides (`userMcpOverrides`) with
+   spawn/recover. Main applies its own store's defaults (the master switch
+   and per-provider flags), overrides, readiness and support.
+   - This replaces the earlier "renderer resolves ids" contract. Main owns
+     the store and the secrets, so letting a stale renderer snapshot decide
+     would add a second authority for no benefit.
+   - Main records the attached ids per session and reports them as
+     `userMcpServerIds` on the session snapshot, spawn result and recover
+     result, exactly like `builtInMcpDomains`.
+5. **One `Agent MCP Servers…` modal.** It lists built-in and user servers for
+   the focused agent, **stages** the toggles, and applies them with **one**
+   reload. "Reset to MCP settings defaults" clears every override.
+   - Root Management in this modal still goes through its confirmation
+     dialog. Applying a staged Root Management grant opens that dialog, and
+     the dialog performs the reload with all the staged choices.
+   - It **retires** `use-global-mcp-settings` and the eight
+     `enable-*-mcp` toggles: AI Workspace, Orchestration, Agent Transcripts,
+     Agent Management, TLDR, Goal, Goal Loop and Workflow.
+   - `enable-root-agent-code-management` (a confirmation-gated command whose
+     id other code refers to) and the debug-only `enable-built-in-mcp-ping`
+     stay.
+6. **Other commands.**
+   - `MCP Servers` opens Settings on the MCP category. `ui.openSettings`
+     gains an optional category.
+   - `Add MCP Server…` opens the add dialog.
+7. **Read-only list of servers the CLIs load directly, now in v1.** It shows
+   user-scope `mcpServers` from `~/.claude.json` (honoring
+   `CLAUDE_CONFIG_DIR`) and `[mcp_servers]` from
+   `${CODEX_HOME:-~/.codex}/config.toml`, each with a **Copy in** action
+   that imports it as a managed server.
+   - Project-scope files depend on the cwd, so Settings (which has no cwd)
+     doesn't list them.
+   - The Codex collision check still reads both the user file and
+     `<cwd>/.codex/config.toml` at spawn.
+8. **Unavailable notice.** A user server that can't attach is broadcast as
+   `user-mcp-unavailable { servers: [{ name, reason }] }` and shown by the
+   global toast, with the same repeat window as `managed-skills-unavailable`.
+9. **External operator MCP** moves unchanged into the MCP category.
+
 ## Problem
 
 Agent Code cannot add, configure, or switch off a third-party MCP server. The
