@@ -17,6 +17,8 @@ import {
 // only has to be importable.
 vi.mock('node-pty', () => ({ spawn: vi.fn() }))
 
+import type { SessionOptions } from '@shared/types/session.js'
+
 import { PiSession } from './piSession.js'
 import { deliverPiPrompt } from './promptDelivery.js'
 
@@ -49,13 +51,13 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup()
 })
 
-async function launch(fixture: LiveFixture, options: { noBridge?: boolean; resumeExisting?: string } = {}) {
+async function launch(fixture: LiveFixture, options: { noBridge?: boolean; resumeExisting?: string; sessionOptions?: Partial<SessionOptions> } = {}) {
   const sandbox: ReplaySandbox = createReplaySandbox(fixture, options.resumeExisting ? { resumeExisting: options.resumeExisting } : {})
   cleanups.push(() => sandbox.cleanup())
   const pty = new AdapterPty()
   const prepareLaunch = vi.fn(async (): Promise<PiTerminalLaunch> => sandbox.launch)
   const session = new PiSession(
-    { cwd: sandbox.launch.cwd, ...(options.resumeExisting ? { resumeSessionId: fixture.sessionIdLaunched! } : {}) },
+    { cwd: sandbox.launch.cwd, ...(options.resumeExisting ? { resumeSessionId: fixture.sessionIdLaunched! } : {}), ...options.sessionOptions },
     {
       spawnPty: (() => pty) as never,
       prepareLaunch: prepareLaunch as never,
@@ -85,6 +87,17 @@ describe('PiSession over the recordings', () => {
     expect(session.getProviderSessionId()).toBe(fixture.sessionIdLaunched)
     const startedAt = events.findIndex(e => e.name === 'started')
     expect(startedAt).toBeGreaterThan(-1)
+  })
+
+  it('hands the built-in MCP endpoints to the bridge through the launch env, and a caller override cannot shadow the minted bearer', async () => {
+    const fixture = loadLiveFixture('plain')
+    const { prepareLaunch } = await launch(fixture, { sessionOptions: {
+      builtInMcpServers: [{ name: 'agent_code', url: 'http://127.0.0.1:1/mcp/pane', bearerToken: 'minted', headers: {} }],
+      env: { AGENT_CODE_MCP_0_0: 'stale-from-caller' },
+    } })
+    const env = (prepareLaunch.mock.calls[0] as unknown as [{ env: Record<string, string> }])[0].env
+    expect(JSON.parse(env.AGENT_CODE_PI_MCP_SERVERS!)).toEqual([{ name: 'agent_code', url: 'http://127.0.0.1:1/mcp/pane', headerEnv: { Authorization: 'AGENT_CODE_MCP_0_0' } }])
+    expect(env.AGENT_CODE_MCP_0_0).toBe('Bearer minted')
   })
 
   const sweep = listLiveFixtures().map(n => n.replace(/\.json$/, '')).filter(name => !['trust', 'resume', 'kill'].includes(name))

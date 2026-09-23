@@ -2,6 +2,8 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
+import { MCP_SERVERS_ENV, type McpServerLaunchSpec } from 'pi-terminal-headless'
+
 import type { BuiltInMcpServerConfig } from '@mcp/shared/types.js'
 
 export type PrivateMcpConfig = {
@@ -102,6 +104,41 @@ export function addOpencodeBuiltInMcpLaunchConfig(
       ...builtInMcp,
     },
   })
+}
+
+/**
+ * Hand Agent Code's per-session MCP endpoints to Pi's bridge extension.
+ *
+ * WHY the bridge and not a Pi config file: Pi has no MCP client. The bridge
+ * extension, already loaded into every Agent Code Pi pane, proxies each
+ * endpoint's tools as Pi tools (pi-terminal-headless bridge/extension.ts).
+ * It reads this launch-scoped description from its environment, the same
+ * process-inspection boundary as Codex and OpenCode: the JSON names the
+ * generated variables and the variables hold the values, so a bearer never
+ * reaches argv. The bridge deletes every one of these variables when it reads
+ * them, because Pi's bash tool inherits the environment.
+ */
+export function addPiBuiltInMcpLaunchConfig(
+  servers: readonly BuiltInMcpServerConfig[],
+  env: Record<string, string>,
+): void {
+  if (servers.length === 0) return
+  const specs: McpServerLaunchSpec[] = servers.map((server, serverIndex) => {
+    const headers = {
+      ...server.headers,
+      ...(server.bearerToken === undefined
+        ? {}
+        : { Authorization: `Bearer ${server.bearerToken}` }),
+    }
+    const headerEnv: Record<string, string> = {}
+    Object.entries(headers).forEach(([header, value], headerIndex) => {
+      const variable = `AGENT_CODE_MCP_${serverIndex}_${headerIndex}`
+      env[variable] = value
+      headerEnv[header] = variable
+    })
+    return { name: server.name, url: server.url, headerEnv }
+  })
+  env[MCP_SERVERS_ENV] = JSON.stringify(specs)
 }
 
 /**

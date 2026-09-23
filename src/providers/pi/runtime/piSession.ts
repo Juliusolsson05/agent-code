@@ -9,6 +9,7 @@ import {
 } from 'pi-terminal-headless'
 
 import type { AgentSession, AgentSessionEvents, SessionOptions } from '@shared/types/session.js'
+import { addPiBuiltInMcpLaunchConfig } from '@providers/shared/runtime/builtInMcpLaunch.js'
 
 /**
  * The bridge never came up, or pi is not running: nothing was sent. The
@@ -83,6 +84,7 @@ export class PiSession extends EventEmitter implements AgentSession {
   private readonly binary: string
   private readonly extraEnv: Record<string, string | undefined>
   private readonly resumeSessionId: string | null
+  private readonly builtInMcpServers: NonNullable<SessionOptions['builtInMcpServers']>
   private readonly deps: Required<Pick<PiSessionDeps, 'spawnPty' | 'prepareLaunch' | 'newSessionId'>> & Pick<PiSessionDeps, 'headlessOptions' | 'bridgeScriptPath'>
 
   constructor(options: SessionOptions, deps: PiSessionDeps) {
@@ -93,6 +95,7 @@ export class PiSession extends EventEmitter implements AgentSession {
     this.binary = options.binary ?? 'pi'
     this.extraEnv = options.env ?? {}
     this.resumeSessionId = options.resumeSessionId ?? null
+    this.builtInMcpServers = options.builtInMcpServers ?? []
     this.deps = {
       spawnPty: deps.spawnPty ?? ptySpawn,
       prepareLaunch: deps.prepareLaunch ?? preparePiTerminalLaunch,
@@ -122,6 +125,9 @@ export class PiSession extends EventEmitter implements AgentSession {
       if (value === undefined) delete env[key]
       else env[key] = value
     }
+    // After the caller's overrides: these endpoints and their token were
+    // minted for exactly this session, and nothing may shadow them.
+    addPiBuiltInMcpLaunchConfig(this.builtInMcpServers, env)
 
     const providerSessionId = this.resumeSessionId ?? this.deps.newSessionId()
     this.providerSessionId = providerSessionId
