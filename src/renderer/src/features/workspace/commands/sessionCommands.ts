@@ -774,6 +774,41 @@ export const sessionCommands: CommandDef[] = [
     },
   },
   {
+    // #1142: the per-agent toggle every sibling domain has. Without it, an
+    // agent created before Browser Pocket was turned on could only get its
+    // browser_* tools through the global default plus a reload by hand.
+    id: 'enable-browser-mcp',
+    category: 'session',
+    surface: 'session',
+    title: 'Browser Pocket MCP',
+    description: '**What it does:** Reloads the focused agent with browser_* tools on or off.\n\n**Use when:** You want this agent to open, read and click its own browser pocket.\n\n**Notes:** The tools only ever act on this agent\'s own pocket. Needs Browser Pocket on in Settings → Experimental.',
+    keywords: ['browser', 'pocket', 'preview', 'mcp', 'playwright', 'web'],
+    when: ({ workspace }) => {
+      return targetSupportsBuiltInMcpDomain(workspace, 'browser')
+    },
+    getState: ctx => builtInMcpDomainState(ctx, 'browser'),
+    run: async ({ workspace, ui }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return
+      const meta = workspace.state.sessions[sessionId]
+      const kind = meta?.kind ?? DEFAULT_PROVIDER
+      // Provider policy is repeated at the mutation boundary, as for the
+      // sibling domains: visibility is advisory.
+      if (
+        !isAgentProviderKind(kind) ||
+        !providerSupportsBuiltInMcpDomain(kind, 'browser') ||
+        !meta
+      ) return
+
+      ui.closePalette()
+      const enable = !meta.builtInMcpDomains?.includes('browser')
+      await reloadSessionWithBuiltInMcpChoice(workspace, sessionId, 'browser', enable, {
+        reloaded: enable ? 'Reloaded with Browser Pocket MCP' : 'Reloaded without Browser Pocket MCP',
+        failed: 'Browser Pocket MCP reload failed',
+      })
+    },
+  },
+  {
     // #1006: the per-agent toggle every sibling domain has (TLDR, Goal).
     // goal_loop already had the Settings row and the per-session override
     // plumbing, but no command, so "turn the loop on for just this agent"
