@@ -2,7 +2,8 @@ import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { assertFetchableTarget, MAX_NET_FETCH_RESPONSE_BYTES, netFetch, type NetFetchRequest } from './netFetch.js'
+import { assertFetchableTarget, assertFetchRequestShape, MAX_NET_FETCH_RESPONSE_BYTES, netFetch } from './netFetch.js'
+import { netOriginsFetch } from './netOrigins.js'
 
 // The policy table is the contract; one real loopback round-trip proves the
 // brokered path (headers, body, status, bounded response) end-to-end.
@@ -27,8 +28,8 @@ async function loopbackUpstream(): Promise<number> {
 
 describe('net.fetch target policy', () => {
   it('accepts a private literal with a port', () => {
-    expect(assertFetchableTarget('http://192.168.1.42:5192/api', {} as NetFetchRequest).hostname).toBe('192.168.1.42')
-    expect(assertFetchableTarget('http://[::1]:8080/', {} as NetFetchRequest).hostname).toBe('[::1]')
+    expect(assertFetchableTarget('http://192.168.1.42:5192/api').hostname).toBe('192.168.1.42')
+    expect(assertFetchableTarget('http://[::1]:8080/').hostname).toBe('[::1]')
   })
 
   it.each([
@@ -38,12 +39,23 @@ describe('net.fetch target policy', () => {
     ['non-http scheme', 'file:///etc/passwd'],
     ['relative path', 'api/state'],
   ])('rejects %s before any socket opens', (_label, url) => {
-    expect(() => assertFetchableTarget(url, {} as NetFetchRequest)).toThrow()
+    expect(() => assertFetchableTarget(url)).toThrow()
   })
 
   it('rejects CONNECT-shaped verbs and oversized declared bodies', () => {
-    expect(() => assertFetchableTarget('http://127.0.0.1/x', { httpMethod: 'CONNECT' } as NetFetchRequest)).toThrow(/upgrades|tunnels|httpMethod/i)
-    expect(() => assertFetchableTarget('http://127.0.0.1/x', { body: 'x'.repeat(65 * 1024) } as NetFetchRequest)).toThrow(/bytes/)
+    expect(() => assertFetchRequestShape({ httpMethod: 'CONNECT' })).toThrow(/upgrades|tunnels|httpMethod/i)
+    expect(() => assertFetchRequestShape({ body: 'x'.repeat(65 * 1024) })).toThrow(/bytes/)
+  })
+
+  // A literal private host does not exclude userinfo, and undici would send it
+  // as an Authorization: Basic header that no header rule ever saw.
+  it('refuses credentials in the URL before any socket opens, like the declared-origin route', async () => {
+    let dialed = false
+    const perform = (async () => { dialed = true; return new Response('{}') }) as typeof fetch
+    for (const url of ['http://user:pw@192.168.1.20:5192/api', 'http://user@192.168.1.20/', 'http://:pw@127.0.0.1:8080/']) {
+      await expect(netFetch({ url }, perform)).rejects.toThrow('net.fetch URLs must not contain credentials.')
+    }
+    expect(dialed).toBe(false)
   })
 })
 
@@ -65,7 +77,7 @@ describe('brokered net.fetch', () => {
   // x-forwarded-* on a loopback socket because only the host sets them. A
   // net.connect extension that could send them would pose as another
   // extension's own frame (`service`) or as any LAN guest (`lan` + forged
-  // peer), e.g. to take the Poker host seat.
+  // peer) and slip past a service's loopback-only rules.
   it.each([
     ['the service attestation', 'x-agent-code-transport', 'service'],
     ['the lan attestation', 'X-Agent-Code-Transport', 'lan'],
@@ -98,7 +110,7 @@ describe('brokered net.fetch', () => {
   it('the IPv4-mapped loopback form never gets as far as the port check', () => {
     // URL() rewrites [::ffff:127.0.0.1] to [::ffff:7f00:1], which the address
     // policy already refuses, so this spelling is not a way around the port rule.
-    expect(() => assertFetchableTarget('http://[::ffff:127.0.0.1]:5192/', {} as NetFetchRequest)).toThrow(/private local-network/)
+    expect(() => assertFetchableTarget('http://[::ffff:127.0.0.1]:5192/')).toThrow(/private local-network/)
   })
 
   it('still reaches other loopback ports and the same port on a LAN address', async () => {
@@ -107,7 +119,7 @@ describe('brokered net.fetch', () => {
     expect((await netFetch({ url: `http://127.0.0.1:${port}/ok` }, fetch, guards)).status).toBe(200)
     // A LAN-address target is a friend's host (or this machine's listener,
     // which stamps the caller) — not a way around the proxy.
-    expect(() => assertFetchableTarget(`http://192.168.1.42:${port + 1}/`, {} as NetFetchRequest, guards)).not.toThrow()
+    expect(() => assertFetchableTarget(`http://192.168.1.42:${port + 1}/`, guards)).not.toThrow()
   })
 
   it('caps the response before it crosses back into a sandboxed frame', async () => {
@@ -126,5 +138,32 @@ describe('brokered net.fetch', () => {
       expect(cancelled).toBe(true)
       expect(pulled).toBeLessThanOrEqual(MAX_NET_FETCH_RESPONSE_BYTES + 4 * chunk.byteLength)
     }
+  })
+
+  // Both routes must refuse a redirect the same way, whether fetch throws it
+  // (undici under redirect:'error') or hands it back as a 3xx response. The
+  // private route used to return a surfaced 3xx as data.
+  it('refuses a redirect with one message on both routes, however it surfaces', async () => {
+    const message = (origin: string) => `net.fetch to ${origin} was redirected; redirects are not followed.`
+    const asResponse = (async () => new Response(null, { status: 302, headers: { location: 'https://collector.example/steal' } })) as unknown as typeof fetch
+    const asThrow = (async () => { throw new TypeError('fetch failed', { cause: new Error('unexpected redirect') }) }) as unknown as typeof fetch
+    for (const perform of [asResponse, asThrow]) {
+      await expect(netFetch({ url: 'http://192.168.1.20:5192/x' }, perform)).rejects.toThrow(message('http://192.168.1.20:5192'))
+      await expect(netOriginsFetch({ url: 'https://api.example.com/x' }, ['https://api.example.com'], perform)).rejects.toThrow(message('https://api.example.com'))
+    }
+  })
+
+  it('returns a 304 as data: it answers the caller\'s own conditional request and goes nowhere', async () => {
+    const perform = (async () => new Response(null, { status: 304 })) as unknown as typeof fetch
+    await expect(netFetch({ url: 'http://192.168.1.20:5192/x', headers: [{ name: 'If-None-Match', value: '"v1"' }] }, perform))
+      .resolves.toMatchObject({ status: 304, body: '' })
+  })
+
+  it('recognises the redirect from real undici, not just a hand-built error', async () => {
+    const server = createServer((_req, res) => { res.writeHead(302, { location: 'http://127.0.0.1:1/elsewhere' }); res.end() })
+    servers.push(server)
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    const port = (server.address() as AddressInfo).port
+    await expect(netFetch({ url: `http://127.0.0.1:${port}/` })).rejects.toThrow(/was redirected; redirects are not followed/)
   })
 })

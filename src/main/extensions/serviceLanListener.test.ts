@@ -3,11 +3,11 @@ import type { AddressInfo } from 'node:net'
 
 import { afterEach, describe, expect, it } from 'vitest'
 
+import { TRANSPORT_ATTESTATION_HEADER } from '../../../packages/agent-code-extension-api/dist/service.js'
 import { startServiceLanListener, type LanListenerHandle } from './serviceLanListener.js'
-import { TRANSPORT_ATTESTATION_HEADER } from './serviceTransport.js'
 
 // The LAN listener is the host half of a cross-repo contract (#1147): a
-// loopback-only service (Agent Code Poker's LAN table) decides who is local,
+// service with loopback-only rules decides who is local,
 // who is a guest, and whether a POST is same-origin purely from what this
 // listener forwards. So these tests use REAL sockets end to end — a real
 // upstream records exactly what arrived on the wire, which is the only
@@ -86,7 +86,8 @@ describe('service LAN listener forwarding contract', () => {
     // The Host the peer used — what its browser's Origin must match.
     expect(headers['x-forwarded-host']).toBe(`192.168.1.42:${port}`)
     // Services key "did this really come from the listener?" on the Host it
-    // dials with (poker trusts `lan` only with exactly this Host), so it is
+    // dials with (the SDK tells services to trust `lan` only with exactly this
+    // Host), so it is
     // part of the contract, not a Node default we happen to inherit.
     expect(headers.host).toBe(`127.0.0.1:${(upstream!.address() as AddressInfo).port}`)
     expect(headers.cookie).toBeUndefined()

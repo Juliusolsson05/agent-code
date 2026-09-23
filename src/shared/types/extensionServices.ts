@@ -77,18 +77,40 @@ export const serviceExposeRequestSchema = z.object({
   lan: z.boolean(),
 }).strict()
 
-// --- Outbound fetch (capability: net.connect) ---------------------------------
+// --- Outbound fetch (capabilities: net.connect / net.origins) ----------------
 // `method` is the transport discriminator, so the HTTP verb gets its own field.
-// The URL/target policy lives in netFetch.ts and is enforced again in main
-// before any socket opens — the schema bounds shape, not reachability.
+// The URL/target policy lives in netFetch.ts / netOrigins.ts and is enforced
+// again in main before any socket opens — the schema bounds shape, not
+// reachability.
+
+/** The plain HTTP verbs an extension may send anywhere the host carries its
+ *  request: both net.fetch routes AND the service.transport proxy. No CONNECT
+ *  (a tunnel the host could not inspect), no TRACE (echoes request headers,
+ *  i.e. credentials, back into the response) and no upgrade. ONE list because
+ *  this zod enum, main's defence-in-depth check (netFetch.ts
+ *  assertFetchRequestShape) and the proxy used to spell it three times; a verb
+ *  added to one would silently be refused, or admitted, by another. It lives
+ *  here, not in main, because this schema is shared code and cannot import
+ *  main. */
+export const NET_FETCH_METHODS = ['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'PATCH'] as const
+export type NetFetchMethod = (typeof NET_FETCH_METHODS)[number]
+/** Request headers per net.fetch. Shared with main's re-check for the same
+ *  reason as NET_FETCH_METHODS. */
+export const MAX_NET_FETCH_HEADERS = 16
+/** Request body cap. Main checks UTF-8 BYTES (what goes on the wire); the
+ *  schema below can only bound UTF-16 length, which is never larger than the
+ *  byte count for the same string, so the schema is the looser, cheaper gate
+ *  and main's byte check is the one that binds. */
+export const MAX_NET_FETCH_BODY_BYTES = 64 * 1024
+
 const netHeader = z.object({ name: z.string().min(1).max(64), value: z.string().max(1024) }).strict()
 
 export const netFetchRequestSchema = z.object({
   method: z.literal('net.fetch'),
   url: z.string().max(2048),
-  httpMethod: z.enum(['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'PATCH']).optional(),
-  headers: z.array(netHeader).max(16).optional(),
-  body: z.string().max(64 * 1024).optional(),
+  httpMethod: z.enum(NET_FETCH_METHODS).optional(),
+  headers: z.array(netHeader).max(MAX_NET_FETCH_HEADERS).optional(),
+  body: z.string().max(MAX_NET_FETCH_BODY_BYTES).optional(),
   // 'base64' exists for binary bodies (audio, images). The transports are
   // JSON; decoding arbitrary bytes as UTF-8 replaces invalid sequences with
   // U+FFFD, which silently corrupts the payload instead of failing.
@@ -99,13 +121,20 @@ export const netFetchRequestSchema = z.object({
 // The namespace is the extension id the authenticated transport fixed, never
 // a field here. Values are bounded so one extension cannot turn the keychain-
 // backed store into bulk storage; api.storage exists for data.
-const secretKey = z.string().regex(/^[a-zA-Z0-9._-]{1,64}$/, 'secret keys are 1-64 characters of [a-zA-Z0-9._-]')
+//
+// Exported because main's secret store (secrets.ts) enforces the same grammar
+// a second time right before it touches the filesystem. It used to hand-copy
+// both, so a widened schema could admit keys the store then refused (or the
+// reverse) with two different error texts.
+export const SECRET_KEY_PATTERN = /^[a-zA-Z0-9._-]{1,64}$/
+export const MAX_SECRET_VALUE_LENGTH = 4096
+const secretKey = z.string().regex(SECRET_KEY_PATTERN, 'secret keys are 1-64 characters of [a-zA-Z0-9._-]')
 
 export const secretsGetRequestSchema = z.object({ method: z.literal('secrets.get'), key: secretKey }).strict()
 export const secretsSetRequestSchema = z.object({
   method: z.literal('secrets.set'),
   key: secretKey,
-  value: z.string().min(1).max(4096),
+  value: z.string().min(1).max(MAX_SECRET_VALUE_LENGTH),
 }).strict()
 export const secretsDeleteRequestSchema = z.object({ method: z.literal('secrets.delete'), key: secretKey }).strict()
 

@@ -24,7 +24,7 @@ import type {
 import type { ExtensionJson } from '@shared/types/extensionRuntime.js'
 import { installedExtensionGrant } from './grants.js'
 import { netFetch } from './netFetch.js'
-import { netFetchRoute, netOriginsFetch, undeclaredTargetMessage } from './netOrigins.js'
+import { netFetchRoute, netOriginsFetch, undeclaredTargetMessage, type NetFetchRoute } from './netOrigins.js'
 import type { ExtensionSecretStore } from './secrets.js'
 import { onExtensionPublication } from './ledger.js'
 
@@ -42,9 +42,12 @@ const MAX_PENDING_PER_EXTENSION = 16
 // `null` is Tier 0 (no grant: the call only touches the caller's own id-scoped
 // namespace). 'by-target' exists for exactly one method: net.fetch needs
 // net.connect for a private address and net.origins for a declared public
-// origin, so the capability is a function of the URL (requiredFor below) —
-// still decided here, before perform, never inside an arm.
-const REQUIRED_CAPABILITY: Record<ExtensionServiceRequest['method'], ExtensionCapability | null | 'by-target'> = {
+// origin, so the capability is a function of the URL (requireGrantFor) —
+// still decided there, before perform, never inside an arm. The mapped type
+// makes net.fetch the ONLY 'by-target' entry, so requireGrantFor can branch on
+// the method and every other method's lookup is statically a capability/null.
+type ServiceMethod = ExtensionServiceRequest['method']
+const REQUIRED_CAPABILITY: { [M in ServiceMethod]: M extends 'net.fetch' ? 'by-target' : ExtensionCapability | null } = {
   'fs.readText': 'fs.read',
   'fs.writeText': 'fs.write',
   'notifications.show': 'notifications.show',
@@ -95,6 +98,19 @@ export type ExtensionCapabilityServiceOptions = {
 
 type ResolvedGrant = { capabilities: ReadonlySet<ExtensionCapability>; networkOrigins: readonly string[] }
 type GrantCheck = { value: Promise<ResolvedGrant> }
+/** What requireGrantFor proved for ONE request. The per-request route rides
+ *  beside the cached GrantCheck, never inside it: the GrantCheck object is
+ *  shared by every concurrent request of that generation and its IDENTITY is
+ *  the revocation token (`this.grants.get(authority) !== check`), so it must
+ *  stay immutable. */
+type AuthorizedRequest = {
+  check: GrantCheck
+  /** net.fetch only: the route the grant was enforced for. perform dials by
+   *  THIS value instead of re-deriving it, so the path that performs the
+   *  request can never differ from the one whose capability was checked. */
+  netRoute: NetFetchRoute | null
+  networkOrigins: readonly string[]
+}
 
 /**
  * Main-owned implementation of permissioned extension services.
@@ -131,8 +147,9 @@ export class ExtensionCapabilityService {
     }
     this.pending.set(authority, count + 1)
     try {
-      const check = await this.requireGrantFor(extensionId, revision, request)
-      const result = await this.perform(extensionId, revision, request, authority, check)
+      const authorized = await this.requireGrantFor(extensionId, revision, request)
+      const { check } = authorized
+      const result = await this.perform(extensionId, revision, request, authority, authorized)
       // Do not return user data to a runtime/frame whose generation was revoked
       // while filesystem I/O was pending. The caller transport independently
       // checks its own document/runtime identity; this closes the main-service
@@ -169,24 +186,24 @@ export class ExtensionCapabilityService {
   }
 
   /** Resolve the capability this exact request needs and enforce it. */
-  private async requireGrantFor(extensionId: string, revision: string, request: ExtensionServiceRequest): Promise<GrantCheck> {
+  private async requireGrantFor(extensionId: string, revision: string, request: ExtensionServiceRequest): Promise<AuthorizedRequest> {
     const check = await this.currentGrant(extensionId, revision)
     const granted = await check.value
-    const needed = REQUIRED_CAPABILITY[request.method]
     let capability: ExtensionCapability | null
-    if (needed === 'by-target') {
-      if (request.method !== 'net.fetch') throw new Error('Unroutable extension request.')
+    let netRoute: NetFetchRoute | null = null
+    if (request.method === 'net.fetch') {
       // Routing uses the VERIFIED origin list from the grant, not anything in
       // the request, so a URL cannot talk its way onto the net.origins path.
-      capability = netFetchRoute(request.url, granted.networkOrigins)
-      if (!capability) throw new Error(undeclaredTargetMessage(request.url, granted.networkOrigins))
+      netRoute = netFetchRoute(request.url, granted.networkOrigins)
+      if (!netRoute) throw new Error(undeclaredTargetMessage(request.url, granted.networkOrigins))
+      capability = netRoute
     } else {
-      capability = needed
+      capability = REQUIRED_CAPABILITY[request.method]
     }
     if (capability && !granted.capabilities.has(capability)) {
       throw new Error(`capability "${capability}" is not granted to ${extensionId}`)
     }
-    return check
+    return { check, netRoute, networkOrigins: granted.networkOrigins }
   }
 
   private async currentGrant(extensionId: string, revision: string): Promise<GrantCheck> {
@@ -218,7 +235,7 @@ export class ExtensionCapabilityService {
     revision: string,
     request: ExtensionServiceRequest,
     authority: string,
-    check: GrantCheck,
+    { check, netRoute, networkOrigins }: AuthorizedRequest,
   ): Promise<ExtensionServiceResult> {
     switch (request.method) {
       case 'fs.readText':
@@ -260,10 +277,9 @@ export class ExtensionCapabilityService {
           body: request.body,
           responseType: request.responseType,
         }
-        const { networkOrigins } = await check.value
-        // Same routing as requireGrantFor (which already enforced the grant);
-        // each path then re-validates its own target before dialing.
-        return netFetchRoute(request.url, networkOrigins) === 'net.origins'
+        // The route requireGrantFor enforced the grant for; each path then
+        // re-validates its own target before dialing.
+        return netRoute === 'net.origins'
           ? netOriginsFetch(fetchRequest, networkOrigins, this.options.fetch)
           : netFetch(fetchRequest, this.options.fetch, { isHostOwnedLoopbackPort: port => this.options.services.isHostOwnedLoopbackPort(port) })
       }

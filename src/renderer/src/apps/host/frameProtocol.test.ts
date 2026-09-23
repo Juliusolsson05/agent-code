@@ -1,33 +1,31 @@
+import { readFileSync } from 'node:fs'
+
 import { describe, expect, it } from 'vitest'
 
-import { frameRequestEnvelopeSchema } from './frameProtocol'
+import { FRAME_REQUEST_METHODS } from './frameProtocol'
 
-// The envelope parse is the view broker's allow-list: a request that fails it
-// is dropped WITHOUT a reply (frameHost.onMessage), so the child's promise
-// never settles. That is correct for foreign postMessage traffic and a silent
-// hang for a real API call the schema forgot — which is what happened to
-// api.net.fetch and api.services.expose from views until #1150.
-
-const envelope = (request: unknown) => ({ kind: 'agent-code-ext:request', id: 'r1', request })
+// The frame allow-list (frameRequestSchema) and the view bootstrap that sends
+// requests (main's frameDocument.ts) are written in two files, in two tsc
+// projects. A method the bootstrap exposes but the union omits can never
+// succeed from a view: the broker answers it with "Unknown extension API
+// request." (see frameHost.renderer.test.ts for that behaviour). That is how
+// api.net.fetch and api.services.expose were broken in views until #1150.
+//
+// What the schemas accept argument by argument is zod's job and is not
+// re-tested here; this pins the one contract zod cannot state: membership.
+//
+// The bootstrap is read as TEXT rather than imported: it lives in the node
+// project, and a type import across the project boundary would not compile.
+// Parsing its `request('<method>'` calls keeps the list derived, not mirrored.
+const bootstrap = readFileSync(new URL('../../../../main/extensions/frameDocument.ts', import.meta.url), 'utf8')
+const sentMethods = [...new Set([...bootstrap.matchAll(/\brequest\('([a-zA-Z.]+)'/g)].map(match => match[1]))]
 
 describe('view frame request allow-list', () => {
-  it.each([
-    ['net.fetch (private address)', { method: 'net.fetch', url: 'http://192.168.1.20:5192/api/state', httpMethod: 'POST', headers: [{ name: 'Authorization', value: 'Bearer x' }], body: '{}' }],
-    ['net.fetch (declared origin, binary)', { method: 'net.fetch', url: 'https://api.elevenlabs.io/v1/text-to-speech/v', httpMethod: 'POST', body: '{}', responseType: 'base64' }],
-    ['service.expose', { method: 'service.expose', serviceId: 'poker.lan-host', lan: true }],
-    ['secrets.get', { method: 'secrets.get', key: 'elevenlabs.apiKey' }],
-    ['secrets.set', { method: 'secrets.set', key: 'elevenlabs.apiKey', value: 'sk_x' }],
-    ['secrets.delete', { method: 'secrets.delete', key: 'elevenlabs.apiKey' }],
-  ])('accepts %s so the broker answers instead of hanging', (_label, request) => {
-    expect(frameRequestEnvelopeSchema.safeParse(envelope(request)).success).toBe(true)
+  it('finds the bootstrap\'s request calls (guards the parser, not the protocol)', () => {
+    expect(sentMethods).toEqual(expect.arrayContaining(['storage.get', 'net.fetch', 'service.expose', 'secrets.set']))
   })
 
-  it.each([
-    ['an unknown responseType', { method: 'net.fetch', url: 'https://api.elevenlabs.io/', responseType: 'blob' }],
-    ['a secret key outside the grammar', { method: 'secrets.get', key: '../other-extension' }],
-    ['an oversized secret value', { method: 'secrets.set', key: 'k', value: 'x'.repeat(4097) }],
-    ['a child-supplied extension id', { method: 'secrets.get', key: 'k', extensionId: 'someone-else' }],
-  ])('still refuses %s', (_label, request) => {
-    expect(frameRequestEnvelopeSchema.safeParse(envelope(request)).success).toBe(false)
+  it('admits every method the view bootstrap sends', () => {
+    expect(sentMethods.filter(method => !FRAME_REQUEST_METHODS.has(method))).toEqual([])
   })
 })

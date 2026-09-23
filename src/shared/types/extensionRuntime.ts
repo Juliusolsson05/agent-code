@@ -37,7 +37,8 @@ export const runtimeApiRequestSchema = z.discriminatedUnion('method', [
   // Service lifecycle/RPC and brokered fetch for BACKGROUND RUNTIMES. The
   // view broker (frameProtocol) already carried these; a runtime's identical
   // api.services/net calls were rejected here — one transport could host a
-  // service and the other could not, which the poker harness exposed.
+  // service and the other could not, which an Electron harness driving a
+  // runtime-hosted service exposed.
   serviceStartRequestSchema,
   serviceStopRequestSchema,
   serviceStatusRequestSchema,

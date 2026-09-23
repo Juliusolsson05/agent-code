@@ -1,5 +1,5 @@
 import type { ExtensionManifest } from '@shared/types/extensions.js'
-import { childFrameCsp } from './frameDocument.js'
+import { childFrameCsp, NET_FETCH_ARGS_JS } from './frameDocument.js'
 
 export const RUNTIME_DOCUMENT = '__agent-code-runtime__.html'
 
@@ -23,6 +23,7 @@ let extension = null;
 let disposed = false;
 let cleanup;
 const errorText = error => String(error && error.message || error).slice(0, 2000);
+${NET_FETCH_ARGS_JS}
 const api = {
   extension: { id: cfg.id, apiVersion: cfg.apiVersion },
   storage: {
@@ -50,14 +51,11 @@ const api = {
     invoke: (serviceId, name, params) => transport.request({ method: 'service.invoke', serviceId, name, params }),
     expose: (serviceId, lan) => transport.request({ method: 'service.expose', serviceId, lan }),
   },
-  // httpMethod is the SDK's field name; \`method\` was what this bootstrap
-  // read by mistake, so it stays accepted (#1150). Absent fields are OMITTED,
-  // not sent as undefined: main's isExtensionJson admission refuses an
-  // undefined-valued key, so \`fetch(url)\` with no init must not carry four.
+  // Arguments come from the shared netFetchArgs (NET_FETCH_ARGS_JS in
+  // frameDocument.ts), identical in the view bootstrap; see it for the
+  // omit-empty rule and the init.method alias.
   net: {
-    fetch: (url, init) => transport.request(Object.fromEntries(Object.entries({ method: 'net.fetch', url,
-      httpMethod: init && (init.httpMethod || init.method), headers: init && init.headers, body: init && init.body,
-      responseType: init && init.responseType }).filter(([, value]) => value !== undefined && value !== null))),
+    fetch: (url, init) => transport.request(Object.assign({ method: 'net.fetch' }, netFetchArgs(url, init))),
   },
   secrets: {
     get: key => transport.request({ method: 'secrets.get', key }),

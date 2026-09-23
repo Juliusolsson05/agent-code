@@ -3,11 +3,11 @@ import { runtimeApiRequestSchema } from './extensionRuntime.js'
 
 // A runtime's api.services / api.net calls cross THIS transport; the view
 // broker had them and this union did not, so only views could host services.
-// The poker Electron harness caught the gap via a background command. This
+// An Electron harness caught the gap via a background command. This
 // pins every method the runtime document's api surface promises.
 describe('runtime transport accepts the full v2 service surface', () => {
   it.each([
-    ['service.start', { method: 'service.start', serviceId: 'agent-code-poker.lan-host' }],
+    ['service.start', { method: 'service.start', serviceId: 'example.service' }],
     ['service.stop', { method: 'service.stop', serviceId: 'x.y' }],
     ['service.status', { method: 'service.status', serviceId: 'x.y' }],
     ['service.invoke', { method: 'service.invoke', serviceId: 'x.y', name: 'status' }],

@@ -418,10 +418,11 @@ const minutes = (await api.storage.get('timer.defaultMinutes')) ?? 30
 
 ### 5a. Secrets (API v2, no permission)
 
-**Feature-detect it.** `secrets` is typed on every API-v2 context, but hosts
-released before it (see the SDK CHANGELOG for the first supporting Agent Code
-version) do not provide it, and a secrets-only extension requests no new
-permission, so nothing at install stops it from loading on an older host:
+**Feature-detect it.** `secrets` is optional (`secrets?`) on every API-v2
+context: it requires Agent Code ≥ the first supporting version (see the SDK
+CHANGELOG), older hosts do not provide it, and a secrets-only extension
+requests no new permission, so nothing at install stops it from loading on an
+older host:
 
 ```ts
 if (context.api.secrets) {
@@ -552,7 +553,9 @@ running state on every request.
 Every proxied request arrives with `x-agent-code-transport: service`, set by
 the host. It means "this came from your own extension's frame", so your
 service can treat the request like its own same-origin page, even though the
-frame's `Origin` never reaches it.
+frame's `Origin` never reaches it. Read it through the SDK's
+`TRANSPORT_ATTESTATION_HEADER` and `TRANSPORT_ATTESTATION.service` / `.lan`
+exports (`agent-code-extension-api`), not a hand-typed string.
 
 What the host guarantees, and what it doesn't:
 
@@ -690,7 +693,13 @@ To call one specific public web API, list its **exact origins** and request
   them. Combine with `api.secrets` so a user's key never sits in `api.storage`:
 
 ```ts
-const key = await api.secrets.get('example.apiKey')
+// Same feature detection as §5a, plus the "not set yet" case: get() resolves
+// null, and sending `Bearer null` would leak nothing but fail confusingly.
+const key = api.secrets ? await api.secrets.get('example.apiKey') : null
+if (!key) {
+  showMessage(api.secrets ? 'Add your API key in settings first.' : 'Update Agent Code to use this feature.')
+  return
+}
 const image = await api.net.fetch('https://api.example.com/v1/render', {
   httpMethod: 'POST',
   headers: [{ name: 'authorization', value: `Bearer ${key}` }, { name: 'content-type', value: 'application/json' }],
