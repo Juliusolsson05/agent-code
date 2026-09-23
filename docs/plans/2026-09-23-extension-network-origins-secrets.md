@@ -136,3 +136,17 @@ agent-code-extension-api v0.10.0:
 Open PR #1148 edits `netFetch.ts`. This branch touches only its request type
 and response tail, and adds routing in `capabilityService.perform`, so expect a
 small, mechanical conflict.
+
+## Review round (2026-09-23)
+
+The OpenCode review found no blockers. Findings fixed:
+- **Response cap after buffering.** The cap was checked only after the whole body was buffered, so a chunked response could stream into main. Both paths now read through a reader that stops at the cap.
+- **Reserved headers on the public path.** The public path now refuses the host-reserved headers from #1148 too.
+- **Secrets surviving removal.** Secrets survived clearing a quarantined row, or a crash mid-uninstall. The ledger now owns their lifecycle:
+  - uninstall deletes them first;
+  - clearing a quarantined row deletes them when no working install shares the id;
+  - a first install of an id clears stale ones.
+- **Trailing-dot hosts.** Origins such as `https://localhost.` are refused.
+- **TLS verification pinned** by a comment and a test.
+
+Design pass: after the review, the parent session asked for a design-rationale pass (every addition must be a general capability). The API shapes are unchanged. `responseType: 'base64'` stays, because it is the one binary encoding both transports carry: the runtime channel is ExtensionJson and cannot carry an ArrayBuffer. Limits stay fixed host limits, now documented per transport. There is no manifest minimum-host-version field; an older host refuses unknown capabilities at install, and that refusal is today's version gate.
