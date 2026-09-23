@@ -34,6 +34,9 @@ const renderer = {
   // send_prompt wraps the prompt in the handoff exactly when this is not
   // true, and marks it only for a wrapped prompt (#1134).
   bootstrapDelivered: false,
+  // What `list-agents` reports. `wait_agents` polls it; the #1134 review case
+  // is a child whose LAST turn is done (`completed`) with a follow-up pending.
+  listed: [] as Array<Record<string, unknown>>,
 }
 
 vi.mock('@main/window/windowRegistry.js', () => ({
@@ -108,6 +111,14 @@ vi.mock('@main/window/windowRegistry.js', () => ({
             orchestrationBootstrapPromptDelivered: true,
           },
         } as never)
+        return
+      }
+      if (type === 'list-agents') {
+        bridge.resolve({ requestId: request.requestId as string, ok: true, type, agents: renderer.listed } as never)
+        return
+      }
+      if (type === 'read-run-outputs') {
+        bridge.resolve({ requestId: request.requestId as string, ok: true, type, outputs: [] } as never)
         return
       }
       bridge.resolve({ requestId: request.requestId as string, ok: true, type, agents: [], closedSessionIds: [request.sessionId] } as never)
@@ -204,6 +215,7 @@ beforeEach(() => {
   renderer.requests = []
   renderer.children = 0
   renderer.bootstrapDelivered = false
+  renderer.listed = []
   bridge = new OrchestrationBridge()
 })
 afterEach(() => { vi.restoreAllMocks() })
@@ -527,6 +539,7 @@ const { SessionManager } = await import('@main/sessionManager.js')
 function gatedClaudeChild() {
   let screen = '❯'
   let open = false
+  let acceptance: Promise<{ kind: 'user'; acceptedAt: number }> | null = null
   return {
     write: vi.fn((data: string) => { if (data !== '\r') screen = `❯ ${data}` }),
     open: () => { open = true },
@@ -536,9 +549,17 @@ function gatedClaudeChild() {
       ? { kind: 'ready' as const, waitedMs: 1 }
       : { kind: 'timeout' as const, waitedMs: 2_000, lastState: { kind: 'warming' as const, reason: 'composer-unpainted' as const } })),
     armPromptAcceptance: () => ({
-      promise: Promise.resolve({ kind: 'user' as const, acceptedAt: 123 }),
+      promise: acceptance ?? Promise.resolve({ kind: 'user' as const, acceptedAt: 123 }),
       cancel: vi.fn(),
     }),
+    /** Hold a delivery open after its bytes are written: "mid-delivery". */
+    holdAcceptance: () => {
+      let settle!: () => void
+      acceptance = new Promise(resolve => {
+        settle = () => resolve({ kind: 'user' as const, acceptedAt: 123 })
+      })
+      return settle
+    },
   }
 }
 
@@ -632,6 +653,113 @@ describe('one child, one prompt: a pending send_prompt never duplicates (#1134)'
 
       expect(written(child)).toHaveLength(1)
       expect(written(child)[0]).toContain('THE HAND-SENT BRIEF')
+    } finally {
+      await mcp.close()
+    }
+  })
+})
+
+describe('#1134 review: the edges of a pending send_prompt', () => {
+  it('does NOT queue a second copy behind a delivery that is in progress', async () => {
+    // The reservation refusal carries `disposition: retry-same-session`, the
+    // same as a warming composer. If `isNotReadyYet` let it through, a
+    // send_prompt arriving while a waiter DELIVERS the brief would arm a
+    // second waiter — nothing in the map to supersede, since the delivering
+    // waiter already left it — and the same brief would land twice. The
+    // parent must get the failure instead.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    try {
+      const child = gatedClaudeChild()
+      const sessions = realManagerWith(child)
+      const mcp = await connect(sessions)
+      try {
+        const created = await mcp.call('orchestration_create_agent', { kind: 'claude', prompt: 'THE BRIEF' })
+        expect(created).toMatchObject({ ok: true, promptPending: true })
+        await vi.advanceTimersByTimeAsync(10)
+
+        // The trust dialog is answered; the waiter writes the brief and is
+        // now holding the delivery reservation while acceptance is pending.
+        const settle = child.holdAcceptance()
+        child.open()
+        await vi.advanceTimersByTimeAsync(3_000)
+        expect(written(child)).toHaveLength(1)
+
+        const sent = await mcp.send('THE BRIEF')
+        expect(sent).toMatchObject({ ok: false, error: 'prompt_delivery_failed', code: 'delivery-in-flight' })
+        expect(sent.promptPending).toBeUndefined()
+
+        settle()
+        await vi.advanceTimersByTimeAsync(10_000)
+        // Exactly one copy, ever.
+        expect(written(child)).toHaveLength(1)
+        expect(written(child)[0]).toContain('THE BRIEF')
+      } finally {
+        await mcp.close()
+      }
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('reports a waiter that the ARM replaced, not only one the direct attempt replaced', async () => {
+    // A waiter can arm between send_prompt's direct attempt and its own arm
+    // (the direct attempt spans provider awaits). The arm replaces it; the
+    // parent has to hear about that, or it believes a prompt is pending that
+    // will never arrive.
+    const sessions = manager(NOT_READY_YET.warming)
+    sessions.deliverPromptWhenReady.mockImplementation(async (
+      _id: string, _prompt: string,
+      record?: (event: string) => void,
+    ) => {
+      // The real manager emits this synchronously, before its first await.
+      record?.('pending-superseded')
+      return await new Promise(() => {})
+    })
+    const mcp = await connect(sessions)
+    try {
+      const result = await mcp.send('look at the failing test')
+      expect(result).toMatchObject({ ok: true, promptPending: true, supersededPendingPrompt: true })
+    } finally {
+      await mcp.close()
+    }
+  })
+
+  it('keeps wait_agents waiting while a follow-up to a completed child is pending', async () => {
+    // Both reviewers: `prompt_sent` was keyed off `lastPromptSubmittedAt`,
+    // which is written only when a prompt LANDS. A child whose last turn is
+    // done reads `completed`, so `wait_agents` returned done at once with the
+    // previous turn's output — the parent had just been told its follow-up
+    // was pending, and took the old answer as the new one.
+    renderer.bootstrapDelivered = true
+    renderer.listed = [{
+      sessionId: 'child-1', kind: 'claude', cwd: '/tmp/project',
+      orchestrationParentId: 'parent-1', orchestrationRootId: 'parent-1',
+      lifecycleState: 'completed', completedAt: Date.now() - 60_000, lastActivityAt: Date.now() - 60_000,
+    }]
+    const sessions = manager(NOT_READY_YET.warming, {
+      ok: false, message: 'Prompt for session child-1 was not delivered (session-ended)',
+      stage: 'before-write', code: 'not-ready', retrySafe: false,
+      disposition: 'session-unusable', promptWritten: false, enterWritten: false,
+    })
+    const mcp = await connect(sessions)
+    const waitOnce = () => mcp.call('orchestration_wait_agents', {
+      sessionIds: ['child-1'], timeoutMs: 1_000, pollIntervalMs: 250,
+    })
+    try {
+      // The control: nothing pending, a completed child IS done.
+      expect(await waitOnce()).toMatchObject({ done: true })
+
+      expect(await mcp.send('and now the docs')).toMatchObject({ promptPending: true })
+      const waiting = await waitOnce()
+      expect(waiting.done).toBe(false)
+      expect((waiting.agents as Array<{ lifecycleState: string }>)[0]!.lifecycleState).toBe('prompt_sent')
+
+      // The wait ends without a delivery: the pending state must clear, or a
+      // dead promise would hold every later wait_agents open until its TTL.
+      sessions.releasePending!()
+      await sessions.deliverPromptWhenReady.mock.results[0]!.value
+      await new Promise(resolve => setTimeout(resolve, 10))
+      expect(await waitOnce()).toMatchObject({ done: true })
     } finally {
       await mcp.close()
     }

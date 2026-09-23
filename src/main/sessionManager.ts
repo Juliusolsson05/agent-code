@@ -4238,8 +4238,13 @@ export class SessionManager extends EventEmitter {
        * a cancelled waiter never writes — its flag is checked synchronously
        * between the gate answering `ready` and the delivery starting. A waiter
        * already DELIVERING is not in the map at all, so it cannot be replaced
-       * here; it holds the in-flight reservation instead, and the caller's
-       * direct attempt was refused by that before this was ever reached.
+       * here; it holds the in-flight reservation instead. The caller's direct
+       * attempt is then refused with `stage: 'reservation'`, and the MCP
+       * layer's `isNotReadyYet` rejects every stage but `before-write` — so
+       * that refusal is reported to the parent as a failure and this arm is
+       * never reached. That exclusion is what keeps a second copy from
+       * queueing behind a delivery in progress; the orchestration pending
+       * tests pin it with a real manager.
        *
        * create_agent does not pass it: its waiter is armed for a session that
        * did not exist a moment earlier, so there is nothing to replace, and a
@@ -4249,7 +4254,17 @@ export class SessionManager extends EventEmitter {
     },
   ): Promise<PromptDeliveryResult> {
     if (options?.supersedesPendingPrompt) {
-      this.cancelPendingPromptDelivery(sessionId, 'superseded-by-newer-prompt')
+      // Reported, like the direct-delivery supersede (#1134 review): a waiter
+      // can arm between send_prompt's direct attempt and this arm — the
+      // direct attempt spans provider awaits, and create_agent arms from its
+      // own handler — and replacing it here without a word would leave a
+      // parent believing a prompt is pending that will never arrive. The
+      // caller ORs this into its reply's `supersededPendingPrompt`. Emitted
+      // synchronously, before this function's first await, so the caller
+      // knows by the time the call returns its promise.
+      if (this.cancelPendingPromptDelivery(sessionId, 'superseded-by-newer-prompt')) {
+        record?.('pending-superseded')
+      }
       // Drop the entry now instead of waiting for the cancelled loop to
       // unwind; its `finally` deletes by identity, so it will not touch ours.
       this.pendingPromptDeliveries.delete(sessionId)

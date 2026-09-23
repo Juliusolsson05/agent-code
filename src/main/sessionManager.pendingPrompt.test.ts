@@ -447,4 +447,39 @@ describe('a bootstrap prompt waits for a child that is not ready YET (#854)', ()
       vi.useRealTimers()
     }
   })
+
+  it('reports when an ARM replaces a live waiter (#1134 review)', async () => {
+    // A waiter that armed after the direct attempt's supersede is replaced by
+    // this arm. The MCP reply's `supersededPendingPrompt` depends on hearing
+    // about it — synchronously, since the reply is built before this settles.
+    vi.useFakeTimers()
+    try {
+      const session = gatedSession()
+      const manager = managerWith(session)
+      const first = manager.deliverPromptWhenReady('child', 'prompt A')
+      await vi.advanceTimersByTimeAsync(10)
+
+      const events: string[] = []
+      const second = manager.deliverPromptWhenReady(
+        'child', 'prompt B', event => { events.push(event) }, { supersedesPendingPrompt: true },
+      )
+      expect(events).toContain('pending-superseded')
+
+      // And with nothing waiting, nothing is reported.
+      manager.cancelPendingPromptDelivery('child', 'test')
+      await vi.advanceTimersByTimeAsync(10)
+      await first
+      await second
+      const quiet: string[] = []
+      const third = manager.deliverPromptWhenReady(
+        'child', 'prompt C', event => { quiet.push(event) }, { supersedesPendingPrompt: true },
+      )
+      expect(quiet).not.toContain('pending-superseded')
+      manager.cancelPendingPromptDelivery('child', 'test')
+      await vi.advanceTimersByTimeAsync(10)
+      await third
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })

@@ -1089,8 +1089,9 @@ function orchestrationCreateAgentCallKey(
       description:
         [
           'Sends a follow-up prompt to an existing orchestration-created Agent Code session.',
-          'If the agent is not ready for a prompt yet (still starting, or waiting on a dialog), the prompt waits and the reply says promptPending: true — do not send it again.',
-          'Sending another prompt to that agent while one is waiting replaces the waiting one.',
+          'If the agent cannot take a prompt yet (still starting, waiting on a dialog, or busy with a turn) and its provider supports waiting, the prompt waits and the reply says promptPending: true; it lands when the agent is ready (after the current turn, for a busy agent). Do not send it again; orchestration_wait_agents keeps waiting while it is pending.',
+          'Providers that cannot wait return prompt_delivery_failed instead, and that prompt was not sent.',
+          'Sending another prompt to the same agent while one is waiting replaces the waiting one, and the reply says supersededPendingPrompt: true.',
         ].join(' '),
       inputSchema: {
         sessionId: z.string(),
@@ -1204,7 +1205,7 @@ function orchestrationCreateAgentCallKey(
       // answers "blocked" synchronously can bring us here first. Without it
       // this waiter would be refused as a duplicate right after the reply
       // below promised the parent `promptPending: true`.
-      if (!delivery.ok && armPromptWhenReady({
+      const armed = delivery.ok ? null : armPromptWhenReady({
         dependencies,
         bridge,
         manager,
@@ -1219,15 +1220,24 @@ function orchestrationCreateAgentCallKey(
         markBootstrapOnLanding: shouldWrap,
         incidentReason: 'send_prompt_pending',
         supersedesPendingPrompt: true,
-      })) {
+      })
+      if (armed && !delivery.ok) {
         return toolText({
           ok: true,
           sessionId: args.sessionId,
           promptSubmitted: false,
           promptPending: true,
           promptPendingReason: delivery.message,
-          ...superseded,
-          message: `The prompt is waiting for the agent's composer (${delivery.message}). It will be delivered as soon as the agent can accept it — do not send it again; use orchestration_read_agent to see when it lands. Sending another prompt to this agent before then REPLACES this one.`,
+          // Either supersede counts: the direct attempt's, or the arm's
+          // (a waiter that armed while the direct attempt was in the provider).
+          ...(supersededPendingPrompt || armed.supersededPendingPrompt
+            ? { supersededPendingPrompt: true }
+            : {}),
+          // WHY the wording names "busy" (#1134 review): a Codex child
+          // mid-turn answers not-ready too, and for it the prompt lands after
+          // the current turn, not after a startup — a parent reading
+          // "starting" would misjudge how long it waits.
+          message: `The agent cannot take a prompt yet (${delivery.message}), so the prompt is waiting: it will be delivered as soon as the agent can accept it — after it finishes starting, after a dialog is answered, or after its current turn if it is busy. Do not send it again. orchestration_wait_agents treats the agent as working until the prompt lands and it answers; orchestration_read_agent shows promptSubmitted once it lands. Sending another prompt to this agent before then REPLACES this one.`,
         })
       }
       if (!delivery.ok) {
@@ -1740,6 +1750,12 @@ const EXPIRED = Symbol('wait-agents-expired')
  */
 function isNotReadyYet(delivery: Extract<PromptDeliveryResult, { ok: false }>): boolean {
   if (delivery.promptWritten || delivery.enterWritten) return false
+  // The stage check is also what keeps the RESERVATION refusal out (#1134
+  // review). `delivery-in-flight` carries `disposition: retry-same-session`
+  // too, but it means another delivery to this child is running right now —
+  // quite possibly a waiter delivering this very brief. Treating that as "not
+  // ready yet" would queue a second copy behind it; it must stay a failure
+  // the parent sees. It has `stage: 'reservation'`, so it stops here.
   if (delivery.stage !== 'before-write') return false
   return delivery.disposition === 'retry-same-session' || delivery.disposition === 'retry-after-resolve'
 }
@@ -1748,10 +1764,11 @@ function isNotReadyYet(delivery: Extract<PromptDeliveryResult, { ok: false }>): 
  * Hold an orchestration prompt for a child that is not ready YET, and keep the
  * books when it lands (#854, shared with send_prompt in #1134).
  *
- * Returns `true` when the prompt is now waiting — the caller then owes the
- * parent a `promptPending: true` reply and must not report a failure. Returns
- * `false` when this is not a wait-able failure, and the caller replies exactly
- * as it did before the wait existed.
+ * Returns an object when the prompt is now waiting — the caller then owes the
+ * parent a `promptPending: true` reply and must not report a failure, and
+ * `supersededPendingPrompt` says whether arming replaced a waiting prompt.
+ * Returns `null` when this is not a wait-able failure, and the caller replies
+ * exactly as it did before the wait existed.
  *
  * WHY one helper for both tools: create_agent and send_prompt differ in their
  * REPLIES (create returns the agent, send returns the session id), but the
@@ -1786,26 +1803,35 @@ function armPromptWhenReady(input: {
   incidentReason: 'create_agent_bootstrap_pending' | 'send_prompt_pending'
   /** See `SessionManager.deliverPromptWhenReady`'s option of the same name. */
   supersedesPendingPrompt: boolean
-}): boolean {
+}): { supersededPendingPrompt: boolean } | null {
   const { dependencies, bridge, manager, delivery, sessionId } = input
   if (
     !isNotReadyYet(delivery)
     || typeof manager.deliverPromptWhenReady !== 'function'
     || manager.canWaitForPromptReadiness?.(sessionId) !== true
   ) {
-    return false
+    return null
   }
+  // The manager reports a replaced waiter synchronously, before its first
+  // await, so this is settled by the time the call below returns.
+  let supersededPendingPrompt = false
   const pending = manager.deliverPromptWhenReady(
     sessionId,
     input.prompt,
-    undefined,
+    event => { if (event === 'pending-superseded') supersededPendingPrompt = true },
     input.supersedesPendingPrompt ? { supersedesPendingPrompt: true } : undefined,
   )
+  // Visible to `list_agents` / `wait_agents` as `prompt_sent` until it
+  // settles (#1134 review) — see `PromptDeliveryMetadata.pendingPrompt`.
+  const pendingToken = bridge.notePromptPending(sessionId)
   // Deliberately not awaited: the wait outlives the MCP call by design, and
   // its whole purpose is that the caller does not have to hold a transport
   // open for it. What IS awaited, later, is the bookkeeping — nothing is
   // counted as submitted, and no bootstrap is marked, until it really landed.
   void pending.then(async result => {
+    // Whatever the outcome, THIS waiter is no longer pending. Token-scoped:
+    // a waiter replaced by a newer one settles after the newer one armed.
+    bridge.notePromptPendingSettled(sessionId, pendingToken)
     if (result.ok) {
       bridge.notePromptSubmitted(sessionId)
       if (input.markBootstrapOnLanding) {
@@ -1836,7 +1862,7 @@ function armPromptWhenReady(input: {
       },
     })
   })
-  return true
+  return { supersededPendingPrompt }
 }
 
 // Cross-agent total budget for read_run_outputs / wait_agents (#373).

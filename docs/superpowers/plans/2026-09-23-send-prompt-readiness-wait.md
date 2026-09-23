@@ -120,3 +120,25 @@ same context fields as create_agent's `create_agent_bootstrap_pending`.
   pinned at the manager level instead (`deliverPromptWhenReady` with
   `supersedesPendingPrompt` after a cancel with no timer run in between), and
   the MCP level asserts the flag reaches the arm.
+
+## Review round (two reviewers)
+
+- **"Reservation refusal is armed as pending" (HIGH) — not reproduced.**
+  `delivery-in-flight` carries `stage: 'reservation'`, and `isNotReadyYet`
+  rejects every stage but `before-write`, so it was already a failure reply
+  (reviewer B confirmed this). Kept as-is, the comments now name the
+  reservation case, and a real-SessionManager MCP test pins it: a waiter
+  mid-delivery plus send_prompt gives `ok:false delivery-in-flight` and
+  exactly one write. The test passes on the pre-review commit and fails when
+  the stage check is mutated to let `reservation` through.
+- [x] Arm-time supersede is reported: `deliverPromptWhenReady` emits
+      `pending-superseded` synchronously when it cancels a live waiter, and
+      send_prompt ORs it into `supersededPendingPrompt`.
+- [x] Pending state is visible to `wait_agents`: `bridge.notePromptPending`
+      on arm (token-scoped), `notePromptPendingSettled` on landing or failure,
+      and `lifecycleWithPromptDelivery` reports `prompt_sent` while pending
+      (any state but `closed`). This applies to create_agent too, where the
+      child already read as active (`created`/`waiting` → `prompt_sent`).
+- [x] Tool description and pending message: waiting only for providers that
+      support it; "busy with a turn" is a not-ready state and the prompt lands
+      after the current turn.
