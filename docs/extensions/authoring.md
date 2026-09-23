@@ -493,8 +493,17 @@ const state = await fetch('./__service/myext.lan-host/api/state').then(r => r.js
 ```
 
 Plain HTTP methods only (WebSockets are not proxied). Ungranted or not-running
-answers 404. The proxy forwards only `accept` and `content-type`, caps request
-bodies at 1 MiB, and re-checks the grant and running state on every request.
+answers 404. The proxy forwards only `accept`, `content-type` and
+`authorization`, caps request bodies at 1 MiB, and re-checks the grant and
+running state on every request.
+
+Every proxied request arrives with `x-agent-code-transport: service`, set by the
+host (a caller can't supply or change it). It means "this came from your own
+extension's frame", so your service can treat the request like its own
+same-origin page, even though the frame's `Origin` never reaches it. Only trust
+the marker on a loopback socket, and never answer CORS preflights. A browser
+page can only attach a custom header cross-origin through a preflight, and
+that rule is what makes the marker unforgeable from the web.
 
 ### 6c. LAN exposure (`net.listen`)
 
@@ -511,6 +520,21 @@ await api.services.expose('myext.lan-host', false)  // close it
 The host owns that listener: OS-chosen port, only private-source connections
 admitted, closed automatically when your service stops or the extension is
 updated/removed. Exposure can never outlive the thing it exposes.
+
+The listener dials your service over loopback, so the socket peer is always
+`127.0.0.1`. It forwards `accept`, `content-type`, `authorization`, `origin` and
+`sec-fetch-site`, and sets these itself (a peer can't supply or change them):
+
+- `x-agent-code-transport: lan`
+- `x-forwarded-for`: the peer's address
+- `x-forwarded-host`: the Host the peer used
+
+Treat a `lan` request as the forwarded peer, never as local. Check its `Origin`
+against `http://<x-forwarded-host>`, and require that host to be an IP literal
+if you need a DNS-rebinding defence. The listener doesn't know your service's
+rules; it only reports the facts. Your service's `content-security-policy`,
+`x-content-type-options`, `referrer-policy` and `x-frame-options` response
+headers reach the LAN browser. Other response headers (cookies, CORS) don't.
 
 ### 6d. Outbound fetch (`net.connect`)
 
