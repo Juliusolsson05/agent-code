@@ -44,6 +44,7 @@ import {
   summarizeEntryForDebug,
 } from '@renderer/session-runtime/entries'
 import {
+  clearLiveEntryWindowSession,
   isUuidTrimmed,
   liveEntryWindowOverBudget,
   markUuidsTrimmed,
@@ -976,6 +977,13 @@ export function useIpcSubscriptions(
       // rewrite is not a process death). Semantic suffixes wait for a fresh
       // turn_started via the gate in handleSemanticEvent.
       refs.seenUuidsRef.current[sessionId] = new Set()
+      // The trimmed-uuid ledger shares the dedup set's lifecycle
+      // (liveEntryWindow.ts: trimmed ⊆ ever-seen). The live path rejects
+      // seen ∪ trimmed, so keeping it past this reset dropped every replayed
+      // row the old window had trimmed: a Pi /tree back to an early branch
+      // of a long conversation came back with gaps (Astra review, finding 2).
+      // The entries are wiped below, so there is nothing trimmed left to page.
+      clearLiveEntryWindowSession(sessionId)
       refs.historyAwaitingTurnStartRef.current.add(sessionId)
       codexCurrentTurnIdBySession.delete(sessionId)
       jsonlProviderStreamBySession.delete(sessionId)

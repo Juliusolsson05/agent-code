@@ -137,7 +137,18 @@ export class PiSession extends EventEmitter implements AgentSession {
       return
     }
 
-    const pty = this.deps.spawnPty(launch.binary, launch.args, { name: 'xterm-256color', cols: this.cols, rows: this.rows, cwd: this.cwd, env: launch.env })
+    // WHY dispose here: until the headless is constructed, nothing else owns
+    // the prepared launch (its temp dir holds the bridge script and socket).
+    // A spawn that throws (the binary vanished after resolution, EACCES)
+    // leaves this.headless null, so stop() cannot reach it and the
+    // `acpi-*` directory would outlive the pane (Astra review, finding 4).
+    let pty: IPty
+    try {
+      pty = this.deps.spawnPty(launch.binary, launch.args, { name: 'xterm-256color', cols: this.cols, rows: this.rows, cwd: this.cwd, env: launch.env })
+    } catch (error) {
+      await launch.dispose()
+      throw error
+    }
     this.pty = pty
     this.ptyDataSubscription = pty.onData(data => {
       if (generation !== this.startGeneration || this.pty !== pty || this.exited) return

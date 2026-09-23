@@ -29,6 +29,7 @@ vi.mock('@providers/registry.main.js', async importOriginal => {
 import { loadLiveFixture, referenceActiveBranch, type LiveFixture, type RecordedRow } from 'pi-terminal-headless/testing/index'
 
 import { entryTextContent } from '@renderer/session-runtime/entries'
+import { clearLiveEntryWindowSession, markUuidsTrimmed } from '@renderer/session-runtime/liveEntryWindow'
 import { managedTranscriptUnavailableReason } from '@renderer/workspace/agentManagementMcp'
 import { getEffectiveAgentSurfaceForSession } from '@renderer/workspace/agentDisplayMode'
 
@@ -104,6 +105,25 @@ describe('a Pi pane driven by a recorded pi session, end to end', () => {
     expect(userEntries(pane)).toEqual(typedPrompts(secondRows))
     expect(pane.manager.getTranscriptFile('pi-pane')).toBe(pane.sandbox.mapPath(second.sessionFile as string))
     expect(pane.channels).toContain('session:provider-session-changed')
+  })
+
+  // Astra review finding 2: a history reset clears the dedup set, and the
+  // trimmed-uuid ledger must go with it (liveEntryWindow's lifecycle note:
+  // trimmed ⊆ ever-seen). Otherwise a /tree back to a branch the live window
+  // had trimmed replays rows the live path then rejects as trimmed, and the
+  // pane shows a gap. Standing in for "the window trimmed them earlier",
+  // every row id in the recording is marked trimmed before it plays; the
+  // reset /new causes must lift that, so the new session's turn is shown.
+  it('a history reset forgets trimmed rows, so the replayed conversation is not dropped', async () => {
+    const fixture = loadLiveFixture('new-session')
+    const second = fixture.events.filter(event => event.name === 'session_start')[1]!
+    const secondRows = referenceActiveBranch(fixture.files[second.sessionFile as string]!)
+    const everyId = Object.values(fixture.files).flatMap(rows => referenceActiveBranch(rows).map(row => `pi:${row.id as string}`))
+    const pane = await startRecordedPiPane(fixture, onCleanup)
+    markUuidsTrimmed('pi-pane', everyId)
+    onCleanup(() => clearLiveEntryWindowSession('pi-pane'))
+    await played(pane, lastAnswer(secondRows))
+    expect(userEntries(pane)).toEqual(typedPrompts(secondRows))
   })
 
   it('a dialog pi raises (an extension confirm) is attention on the pane while it is up, and clears after', async () => {

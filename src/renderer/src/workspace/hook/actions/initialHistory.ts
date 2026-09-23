@@ -369,6 +369,49 @@ export async function loadInitialHistoryForSession({
   // synchronous contract is asserted by the test below rather than assumed.
   let loadOutcome = 'no-terminal-write'
   let loadedEntryCount = 0
+  // ── A LOAD BELONGS TO THE CONVERSATION IT STARTED ON (Astra review, #1) ──
+  // A pane that follows its runtime into another provider session (Pi /new,
+  // /resume, /fork) rebinds its identity and then resets its history window.
+  // A load that started before either and resolves after would merge the OLD
+  // conversation's rows into the new one's window (and View Prompts and the
+  // orchestration reads would serve them). So capture both markers now and
+  // refuse to apply a result, success or failure, once either moved.
+  //
+  // WHY the state's identity and not `meta`: a scoped recovery passes a meta
+  // override naming the transcript to read, which need not equal the stored
+  // one. What matters is only whether the pane's identity CHANGED while the
+  // read was in flight. WHY the window generation too: the identity event can
+  // land before the load starts (so both reads agree on the new id) while the
+  // reset lands during it — and the generation is what the reset advances.
+  const startedProviderSessionId = refs.stateRef.current.sessions[sessionId]?.providerSessionId
+  const startedGeneration = refs.historyWindowsRef.current[sessionId]?.generation ?? null
+  const superseded = (): boolean =>
+    (refs.historyWindowsRef.current[sessionId]?.generation ?? null) !== startedGeneration ||
+    refs.stateRef.current.sessions[sessionId]?.providerSessionId !== startedProviderSessionId
+  // A superseded load is done, not failed: the reset (and the new session's
+  // own rows) own the window now. Settle the status it set to 'loading' so
+  // neither the pane nor the stuck-load reconciler waits on it forever (#283).
+  const settleSuperseded = (): false => {
+    setRuntimes(prev => {
+      const current = prev[sessionId]
+      if (!current) {
+        loadOutcome = 'dropped-superseded'
+        return prev
+      }
+      loadOutcome = 'superseded'
+      if (preserveStatusUntilLoaded) return prev
+      return {
+        ...prev,
+        [sessionId]: {
+          ...current,
+          transcriptStatus: current.transcriptChannelError ? 'error' : 'ready',
+          transcriptStatusChangedAt: Date.now(),
+          transcriptError: current.transcriptChannelError ?? null,
+        },
+      }
+    })
+    return false
+  }
   if (!preserveStatusUntilLoaded) setRuntimes(prev => {
     const current = prev[sessionId]
     if (!current) return prev
@@ -409,6 +452,10 @@ export async function loadInitialHistoryForSession({
       window.api.gitWorktrees(meta.cwd),
     ])
     const worktrees = worktreesResult.ok ? worktreesResult.worktrees : []
+    if (superseded()) {
+      span.end({ fetched: chunk.entries.length, hasMore: chunk.hasMore, superseded: true })
+      return settleSuperseded()
+    }
 
     setRuntimes(prev => {
       const current = prev[sessionId]
@@ -615,6 +662,9 @@ export async function loadInitialHistoryForSession({
     span.fail(err)
     const message = err instanceof Error ? err.message : String(err)
     console.warn('[history] load initial failed', err)
+    // A failure to read the conversation the pane has since LEFT says nothing
+    // about the one it shows now; marking that one 'error' would be a lie.
+    if (superseded()) return settleSuperseded()
     if (!preserveStatusUntilLoaded) setRuntimes(prev => {
       const current = prev[sessionId]
       if (!current) {

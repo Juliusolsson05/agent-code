@@ -192,3 +192,22 @@ describe('PiSession over the recordings', () => {
     await session.stop()
   })
 })
+
+// Astra review finding 4: the prepared launch has no owner until the headless
+// exists. A spawn that throws must still remove its temp directory, and the
+// caller's stop() afterwards must be harmless.
+describe('PiSession launch ownership', () => {
+  it('disposes the prepared launch when the pty fails to spawn', async () => {
+    const dispose = vi.fn(async () => undefined)
+    const launch = { binary: 'pi', args: [], env: {}, cwd: '/repo', dispose } as unknown as PiTerminalLaunch
+    const session = new PiSession({ cwd: '/repo' }, {
+      spawnPty: (() => { throw new Error('posix_spawnp failed') }) as never,
+      prepareLaunch: (async () => launch) as never,
+      bridgeScriptPath: '/staged/bridge.ts',
+      newSessionId: () => 'fresh',
+    })
+    await expect(session.start()).rejects.toThrow('posix_spawnp failed')
+    await session.stop()
+    expect(dispose).toHaveBeenCalledOnce()
+  })
+})
