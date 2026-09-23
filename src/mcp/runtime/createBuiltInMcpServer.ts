@@ -38,6 +38,7 @@ import {
 } from '@shared/types/providerKind.js'
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
 import { registerWorkflowMcpTools, WORKFLOW_MCP_INSTRUCTIONS } from 'workflow-mcp'
+import { MCP_SERVERS_INSTRUCTIONS, registerUserMcpTools } from '@mcp/runtime/userMcpTools.js'
 
 export const AGENT_MANAGEMENT_MCP_INSTRUCTIONS = `Agent Management controls Agent Code sessions only in the caller's exact current project tab. Listing and reading are safe audit operations and do not wake parked agents; sending a prompt may wake the named target. For cleanup-review requests, use the inventory plus bulk transcript read, classify agents as active/do not close, uncertain/inspect first, or likely cleanup candidates, and cite lifecycle, transcript, relationship, condition, and activity evidence rather than treating age alone as proof. A missing or truncated transcript is not an empty transcript, and an unresolved latest user request or tool work without a final response belongs in inspect first. Transcript evidence cannot prove a worktree is clean unless that transcript or another tool actually checked it; state what remains unknown. Asking what is safe to clean up authorizes assessment only. Reading an agent or sending it a prompt never grants permission to close it. Never call agent_management_close_agent unless the user's current request explicitly asks you to close that specific agent. A request to inspect agents, identify stale agents, recommend cleanup, manage the project, or say what is safe to clean up is not authorization to close anything. Do not infer closure permission from age, completion state, transcript contents, or a prior request.`
 
@@ -186,6 +187,10 @@ export function createBuiltInMcpServer(
     registerAiWorkspaceTools(server, scope, dependencies)
   }
 
+  if (scope.domains.includes('mcp_servers')) {
+    registerUserMcpTools(server, scope, dependencies)
+  }
+
   if (scope.domains.includes('agent_transcripts')) {
     registerAgentTranscriptTools(server)
   }
@@ -229,6 +234,7 @@ function builtInInstructions(
     ...(scope.domains.includes('tldr') ? [TLDR_INSTRUCTIONS] : []),
     ...(scope.domains.includes('workflows') ? [WORKFLOW_MCP_INSTRUCTIONS] : []),
     ...(scope.domains.includes('agent_management') ? [AGENT_MANAGEMENT_MCP_INSTRUCTIONS] : []),
+    ...(scope.domains.includes('mcp_servers') ? [MCP_SERVERS_INSTRUCTIONS] : []),
     ...(scope.domains.includes('root_management') && dependencies.rootControlTools
       ? [rootManagementInstructions(scope.sessionId)]
       : []),

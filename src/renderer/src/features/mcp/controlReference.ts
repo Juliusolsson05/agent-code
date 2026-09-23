@@ -8,7 +8,7 @@ export const controlReference = [
     title: 'MCP servers',
     purpose:
       'Choose which MCP servers agents get: Agent Code\'s built-in servers and user-added servers (stdio, HTTP or SSE), per provider and per agent.',
-    ui: 'Settings → MCP (one grid, a column per enabled provider), Add MCP Server… (paste a README config), and Agent MCP Servers… (the focused agent, applied with one reload).',
+    ui: 'Settings → MCP (one grid, a column per enabled provider), Add MCP Server… (paste a README config), and Agent MCP Servers… (the focused agent, applied with one reload). Agents with the MCP Servers built-in capability can manage the same list through mcp_servers_* tools; every such change raises a notice.',
     prerequisites: 'None for built-in servers. A user server needs whatever its README describes, for example Beeper Desktop running with its MCP server enabled.',
     workflow: [
       'Add a server by pasting its mcpServers or VS Code snippet; values from env and headers become encrypted secrets',

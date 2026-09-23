@@ -22,4 +22,6 @@ export const BUILT_IN_MCP_SERVERS: readonly {
   { domain: 'agent_management', title: 'Agent Management', description: 'Inspect project agents and send follow-ups.' },
   { domain: 'ai_workspace', title: 'AI Workspace', description: 'Curate review workspaces across worktrees.' },
   { domain: 'workflows', title: 'Workflows', description: 'Durable workflow tools. Claude has workflows natively.' },
+  // #1143: last because it manages the list this grid shows.
+  { domain: 'mcp_servers', title: 'MCP Servers', description: 'Let the agent add, change and remove your MCP servers.' },
 ]

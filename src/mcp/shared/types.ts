@@ -15,6 +15,8 @@ export type BuiltInMcpDomain =
   | 'agent_management'
   | 'root_management'
   | 'workflows'
+  // #1143: manage the user's own MCP servers (add/update/remove/set secret).
+  | 'mcp_servers'
 
 export const BUILT_IN_MCP_DOMAINS = [
   'tldr',
@@ -27,6 +29,7 @@ export const BUILT_IN_MCP_DOMAINS = [
   'agent_management',
   'root_management',
   'workflows',
+  'mcp_servers',
 ] as const satisfies readonly BuiltInMcpDomain[]
 
 /**
@@ -56,6 +59,11 @@ export const CONFIGURABLE_BUILT_IN_MCP_DOMAINS = [
   'agent_transcripts',
   'agent_management',
   'workflows',
+  // Configurable (unlike root_management) because its blast radius is the
+  // user's own MCP list, the same thing Settings → MCP edits, and every change
+  // is announced to the user. Off by default all the same: it is not in the
+  // shipped default set.
+  'mcp_servers',
 ] as const satisfies readonly BuiltInMcpDomain[]
 
 export type ConfigurableBuiltInMcpDomain =
@@ -178,6 +186,7 @@ const BUILT_IN_MCP_DOMAINS_BY_PROVIDER = {
     'agent_transcripts',
     'agent_management',
     'root_management',
+    'mcp_servers',
   ],
   codex: [...BUILT_IN_MCP_DOMAINS],
   opencode: [...BUILT_IN_MCP_DOMAINS],

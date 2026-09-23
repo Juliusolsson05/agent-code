@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { uniformBuiltInMcpDefaults } from '@mcp/shared/types'
@@ -58,6 +58,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  vi.useRealTimers()
   cleanup()
   useUserMcpStore.setState(originalMcp, true)
   useProviderEnablementStore.setState(originalProviders, true)
@@ -133,9 +134,15 @@ describe('MCP server dialog', () => {
     })
     api.userMcpSave.mockResolvedValue({ ok: true, snapshot: { servers: [], native: [], claudeManagedPolicy: false } })
     useAppStore.setState({ mcpServerDialog: { mode: 'add' } })
+    // The paste box debounces before asking main to parse. Driving that timer
+    // explicitly keeps the test deterministic under load instead of racing a
+    // real 250 ms timer against findBy's polling budget.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     render(<McpServerDialog />)
     fireEvent.change(screen.getByLabelText('MCP server config'), { target: { value: '{"mcpServers":{}}' } })
-    const card = await screen.findByLabelText('Server name')
+    await act(async () => { await vi.advanceTimersByTimeAsync(300) })
+    vi.useRealTimers()
+    const card = screen.getByLabelText('Server name')
     expect((card as HTMLInputElement).value).toBe('beeper')
     fireEvent.click(screen.getByRole('button', { name: 'Add server' }))
     await vi.waitFor(() => expect(api.userMcpSave).toHaveBeenCalledTimes(1))

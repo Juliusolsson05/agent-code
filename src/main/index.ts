@@ -1225,6 +1225,14 @@ async function startApp(): Promise<void> {
     },
     sessionManager: manager,
     appRunJournal,
+    // #1143: the mcp_servers domain edits the same document Settings → MCP
+    // does, through the same service. Every agent-made change is broadcast so
+    // the user always learns that their MCP configuration changed.
+    userMcpService,
+    onUserMcpChangedByAgent: event => {
+      appRunJournal?.record({ area: 'mcp.user', name: 'user_mcp.agent_change', ids: { sessionId: event.sessionId }, data: { message: event.message } })
+      broadcastToWindows('user-mcp:agent-change', { message: event.message })
+    },
     workflowService: activeWorkflowService,
     workflowBridge: activeWorkflowBridge,
     // Root Agent Code Management (#906): the SAME operator catalog the external

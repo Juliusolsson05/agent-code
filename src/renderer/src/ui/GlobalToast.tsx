@@ -117,6 +117,13 @@ export function GlobalToastProvider({ children }: { children: React.ReactNode })
     showToast(userMcpUnavailableMessage(event.servers), 10_000)
   }), [showToast])
 
+  // #1143: an agent changed the user's MCP servers through the mcp_servers
+  // domain. Always surfaced — the user's MCP list decides what code runs in
+  // every future agent, so a change to it must never be silent.
+  useEffect(() => window.api.onUserMcpAgentChange?.(event => {
+    showToast(`${event.message}. See Settings → MCP.`, 8000)
+  }), [showToast])
+
   const dismiss = useCallback(() => {
     if (timerRef.current) {
       clearTimeout(timerRef.current)

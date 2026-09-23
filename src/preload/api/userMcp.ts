@@ -33,4 +33,7 @@ export const userMcpApi = {
   onUserMcpChanged: (cb: (snapshot: UserMcpSnapshot) => void): Unsub => subscribe('user-mcp:changed', cb),
   onUserMcpUnavailable: (cb: (event: UserMcpUnavailableEvent) => void): Unsub =>
     subscribe('user-mcp:unavailable', cb),
+  /** An agent with the MCP Servers capability changed the configuration. */
+  onUserMcpAgentChange: (cb: (event: { message: string }) => void): Unsub =>
+    subscribe('user-mcp:agent-change', cb),
 }
