@@ -261,25 +261,25 @@ describe('networkOrigins / net.origins (#1150)', () => {
   const v2 = (overrides: Record<string, unknown>) => manifest({ apiVersion: 2, permissions: ['net.origins'], ...overrides })
 
   it('accepts exact public https origins and keeps them verbatim for the consent dialog', () => {
-    const parsed = parseExtensionManifest(v2({ networkOrigins: ['https://api.elevenlabs.io', 'https://api.example.com:8443'] }))
-    expect(parsed.networkOrigins).toEqual(['https://api.elevenlabs.io', 'https://api.example.com:8443'])
+    const parsed = parseExtensionManifest(v2({ networkOrigins: ['https://api.example.org', 'https://api.example.com:8443'] }))
+    expect(parsed.networkOrigins).toEqual(['https://api.example.org', 'https://api.example.com:8443'])
   })
 
   // Each shape is a way for the dialog to under-state what can be reached.
   it.each([
-    ['a wildcard subdomain', 'https://*.elevenlabs.io'],
-    ['plain http', 'http://api.elevenlabs.io'],
-    ['a path', 'https://api.elevenlabs.io/v1'],
-    ['a trailing slash', 'https://api.elevenlabs.io/'],
-    ['a query', 'https://api.elevenlabs.io?x=1'],
-    ['userinfo', 'https://user:pass@api.elevenlabs.io'],
+    ['a wildcard subdomain', 'https://*.example.org'],
+    ['plain http', 'http://api.example.org'],
+    ['a path', 'https://api.example.org/v1'],
+    ['a trailing slash', 'https://api.example.org/'],
+    ['a query', 'https://api.example.org?x=1'],
+    ['userinfo', 'https://user:pass@api.example.org'],
     ['an IPv4 literal', 'https://8.8.8.8'],
     ['an IPv6 literal', 'https://[2001:db8::1]'],
     ['localhost', 'https://localhost'],
     ['an mDNS name', 'https://printer.local'],
     ['a single-label name', 'https://intranet'],
-    ['a non-URL', 'api.elevenlabs.io'],
-    ['upper-case host (not the canonical origin)', 'https://API.elevenlabs.io'],
+    ['a non-URL', 'api.example.org'],
+    ['upper-case host (not the canonical origin)', 'https://API.example.org'],
     // WHATWG keeps a trailing dot as written, so each of these used to pass
     // the suffix checks (the first two resolve to this machine / the LAN).
     ['a trailing-dot localhost', 'https://localhost.'],

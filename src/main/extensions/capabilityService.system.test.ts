@@ -364,7 +364,7 @@ describe('service.run capability', () => {
 })
 
 describe('net.fetch routing between net.connect and net.origins (#1150)', () => {
-  const tts = 'https://api.elevenlabs.io/v1/text-to-speech/voice?output_format=mp3_22050_32'
+  const declaredUrl = 'https://api.example.com/v1/render/voice?format=mp3'
 
   it('reaches a declared origin only with net.origins, and only that origin', async () => {
     const { service } = await fixture()
@@ -373,7 +373,7 @@ describe('net.fetch routing between net.connect and net.origins (#1150)', () => 
       // public-internet grant just because the URL is well-formed.
       authority.capabilities.mockResolvedValue(['net.connect'])
       authority.networkOrigins = []
-      await expect(service.invoke('poker', 'generation-one', { method: 'net.fetch', url: tts }))
+      await expect(service.invoke('example', 'generation-one', { method: 'net.fetch', url: declaredUrl }))
         .rejects.toThrow(/networkOrigins/)
       expect(fetchCalls).toEqual([])
     } finally { service.dispose() }
@@ -381,16 +381,16 @@ describe('net.fetch routing between net.connect and net.origins (#1150)', () => 
     const declared = await fixture()
     try {
       authority.capabilities.mockResolvedValue(['net.origins'])
-      authority.networkOrigins = ['https://api.elevenlabs.io']
-      await expect(declared.service.invoke('poker', 'generation-one', {
-        method: 'net.fetch', url: tts, httpMethod: 'POST', body: '{}', responseType: 'base64',
-        headers: [{ name: 'xi-api-key', value: 'sk_test_value' }],
+      authority.networkOrigins = ['https://api.example.com']
+      await expect(declared.service.invoke('example', 'generation-one', {
+        method: 'net.fetch', url: declaredUrl, httpMethod: 'POST', body: '{}', responseType: 'base64',
+        headers: [{ name: 'x-api-key', value: 'sk_test_value' }],
       })).resolves.toEqual({ status: 200, contentType: 'audio/mpeg', body: '//NExA==', bodyEncoding: 'base64' })
       // A sibling subdomain and a different port are different origins.
-      for (const url of ['https://evil.api.elevenlabs.io/x', 'https://api.elevenlabs.io:8443/x', 'http://api.elevenlabs.io/x']) {
-        await expect(declared.service.invoke('poker', 'generation-one', { method: 'net.fetch', url })).rejects.toThrow(/neither/)
+      for (const url of ['https://evil.api.example.com/x', 'https://api.example.com:8443/x', 'http://api.example.com/x']) {
+        await expect(declared.service.invoke('example', 'generation-one', { method: 'net.fetch', url })).rejects.toThrow(/neither/)
       }
-      expect(fetchCalls).toEqual([tts])
+      expect(fetchCalls).toEqual([declaredUrl])
     } finally { declared.service.dispose() }
   })
 
@@ -398,8 +398,8 @@ describe('net.fetch routing between net.connect and net.origins (#1150)', () => 
     const { service } = await fixture()
     try {
       authority.capabilities.mockResolvedValue(['net.origins'])
-      authority.networkOrigins = ['https://api.elevenlabs.io']
-      await expect(service.invoke('poker', 'generation-one', { method: 'net.fetch', url: 'http://192.168.1.20:5192/api/state' }))
+      authority.networkOrigins = ['https://api.example.com']
+      await expect(service.invoke('example', 'generation-one', { method: 'net.fetch', url: 'http://192.168.1.20:5192/api/state' }))
         .rejects.toThrow('capability "net.connect" is not granted')
       expect(fetchCalls).toEqual([])
     } finally { service.dispose() }
@@ -411,12 +411,12 @@ describe('secrets (Tier 0, #1150)', () => {
     const { service } = await fixture()
     try {
       authority.capabilities.mockResolvedValue([])
-      await service.invoke('poker', 'generation-one', { method: 'secrets.set', key: 'elevenlabs.apiKey', value: 'sk_poker' })
-      await expect(service.invoke('poker', 'generation-one', { method: 'secrets.get', key: 'elevenlabs.apiKey' })).resolves.toBe('sk_poker')
+      await service.invoke('example', 'generation-one', { method: 'secrets.set', key: 'example.apiKey', value: 'sk_example' })
+      await expect(service.invoke('example', 'generation-one', { method: 'secrets.get', key: 'example.apiKey' })).resolves.toBe('sk_example')
       // Another extension asking for the same key name gets its OWN namespace.
-      await expect(service.invoke('timer', 'generation-one', { method: 'secrets.get', key: 'elevenlabs.apiKey' })).resolves.toBeNull()
-      await service.invoke('poker', 'generation-one', { method: 'secrets.delete', key: 'elevenlabs.apiKey' })
-      await expect(service.invoke('poker', 'generation-one', { method: 'secrets.get', key: 'elevenlabs.apiKey' })).resolves.toBeNull()
+      await expect(service.invoke('timer', 'generation-one', { method: 'secrets.get', key: 'example.apiKey' })).resolves.toBeNull()
+      await service.invoke('example', 'generation-one', { method: 'secrets.delete', key: 'example.apiKey' })
+      await expect(service.invoke('example', 'generation-one', { method: 'secrets.get', key: 'example.apiKey' })).resolves.toBeNull()
     } finally { service.dispose() }
   })
 })

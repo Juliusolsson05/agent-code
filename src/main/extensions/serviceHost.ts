@@ -46,7 +46,7 @@ async function defaultSpawn(entryPath: string, serviceName: string): Promise<Spa
       // unlike MessagePortMain, whose events carry {data}. Wrapping for the
       // latter shape silently turned every service message into undefined
       // here and terminated the service as "not understood" (caught by the
-      // poker harness against a REAL spawned service).
+      // an Electron harness against a REAL spawned service).
       const handler = (message: unknown) => listener(message)
       child.on('message', handler)
       return () => child.off('message', handler)
