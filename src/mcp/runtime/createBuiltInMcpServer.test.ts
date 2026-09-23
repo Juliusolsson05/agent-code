@@ -111,7 +111,7 @@ async function sendManagedPromptWithDelivery(delivery: PromptDeliveryResult): Pr
     { sessionId: 'session-1', cwd: '/tmp/project', domains: ['agent_management'] },
     {
       agentManagementBridge: {
-        sendPrompt: vi.fn(async () => delivery),
+        sendPrompt: vi.fn(async () => ({ sessionId: 'agent-1', displayLabel: 'B7', delivery })),
       } as never,
     },
   )
@@ -225,6 +225,74 @@ describe('createBuiltInMcpServer Agent Management domain', () => {
       disposition: 'do-not-retry',
       promptSubmission: 'uncertain',
     })
+  })
+})
+
+describe('Agent Management targets by visible label or spoken name (#1145)', () => {
+  async function call(
+    name: string,
+    args: Record<string, unknown>,
+    bridge: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const server = createBuiltInMcpServer(
+      { sessionId: 'caller', cwd: '/tmp/project', domains: ['agent_management'] },
+      { agentManagementBridge: bridge as never },
+    )
+    const client = new Client({ name: 'agent-management-target-test', version: '0.0.0' })
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+    try {
+      await server.connect(serverTransport)
+      await client.connect(clientTransport)
+      const result = await client.callTool({ name, arguments: args })
+      const text = (result.content as Array<{ type: string; text?: string }>)[0]?.text ?? '{}'
+      // A schema rejection is answered by the SDK as plain "MCP error …"
+      // text, not our JSON envelope; surface it as such for the assertions.
+      return text.startsWith('{') ? JSON.parse(text) as Record<string, unknown> : { schemaError: text }
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  }
+
+  it('forwards the label unresolved and echoes which agent received the prompt', async () => {
+    // Main must NOT resolve: only the renderer holds the row stream, and it
+    // resolves against the state the send then acts on.
+    const sendPrompt = vi.fn(async () => ({
+      sessionId: 'codex-b28',
+      displayLabel: 'B28',
+      delivery: { ok: true, acceptance: { kind: 'user', acceptedAt: 1 } },
+    }))
+    const value = await call('agent_management_send_prompt', { label: 'b28', prompt: 'Redo the decor' }, { sendPrompt })
+    expect(sendPrompt).toHaveBeenCalledWith({ callerSessionId: 'caller', target: { label: 'b28' }, prompt: 'Redo the decor' })
+    expect(value).toMatchObject({ ok: true, sessionId: 'codex-b28', displayLabel: 'B28' })
+  })
+
+  it('accepts a spoken name on read and close, and labels/names on bulk read', async () => {
+    const readAgent = vi.fn(async () => ({ agent: { sessionId: 'a' }, messages: [] }))
+    const closeAgent = vi.fn(async () => ({ closedSessionId: 'a', displayLabel: 'B9' }))
+    const readAgents = vi.fn(async () => ({ agents: [], outputs: [] }))
+    await call('agent_management_read_agent', { name: 'Apollo' }, { readAgent })
+    expect(readAgent).toHaveBeenCalledWith(expect.objectContaining({ target: { name: 'Apollo' } }))
+    expect(await call('agent_management_close_agent', { label: 'B9' }, { closeAgent })).toMatchObject({ ok: true, displayLabel: 'B9' })
+    expect(closeAgent).toHaveBeenCalledWith({ callerSessionId: 'caller', target: { label: 'B9' } })
+    await call('agent_management_read_agents', { labels: ['B5', 'B16'], names: ['Apollo'] }, { readAgents })
+    expect(readAgents).toHaveBeenCalledWith(expect.objectContaining({ labels: ['B5', 'B16'], names: ['Apollo'] }))
+  })
+
+  it('refuses zero or several target fields before anything reaches the renderer', async () => {
+    const sendPrompt = vi.fn()
+    for (const args of [{ prompt: 'x' }, { sessionId: 's', label: 'B2', prompt: 'x' }]) {
+      expect(await call('agent_management_send_prompt', args, { sendPrompt })).toMatchObject({ ok: false, error: 'invalid_target' })
+    }
+    expect(sendPrompt).not.toHaveBeenCalled()
+  })
+
+  it('rejects a pinned-star or free-text label at the schema, like ac_agents_search', async () => {
+    const readAgent = vi.fn()
+    for (const label of ['★1', 'the codex one', '28']) {
+      expect(await call('agent_management_read_agent', { label }, { readAgent })).toHaveProperty('schemaError')
+    }
+    expect(readAgent).not.toHaveBeenCalled()
   })
 })
 

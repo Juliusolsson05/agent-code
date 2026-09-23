@@ -6,16 +6,59 @@ import type {
   ManagedAgentRendererActivitySource,
   ManagedAgentRendererDescriptor,
   ManagedAgentRendererOutput,
+  ManagedAgentTarget,
   ManagedAgentTranscriptOutput,
 } from '@mcp/shared/agentManagementTypes'
+import { normalizeAgentName } from '@shared/agentNames/names'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
 import { entryTextContent } from '@renderer/session-runtime/entries'
 import { projectIdOf, resolveTabSessions } from '@renderer/workspace/queries'
 import { visibleMessageSummary } from '@renderer/workspace/orchestrationMcp'
 import type { SessionId, SessionMeta, Tab, WorkspaceState } from '@renderer/workspace/types'
 import { sessionActivity } from '@renderer/session-runtime/activity'
+import { buildVisibleDispatchRows } from '@renderer/workspace/dispatch/dispatchSelectors'
+import { resolveAgentPaneLabel, sessionDisplayLabel } from '@renderer/workspace/tile-tree/paneLabels'
+import { resolveAgentName } from '@renderer/workspace/agentNames/selectors'
 
 type RuntimeMap = Record<SessionId, SessionRuntime>
+
+/**
+ * The Agent names setting and allocation map, read from the SAME store
+ * snapshot as the workspace state (#1145).
+ *
+ * WHY a parameter instead of reading the store here: every function in this
+ * module is a pure projection of an explicit snapshot, which is what lets the
+ * handler re-read state after an await and know exactly what it acted on.
+ * Omitted means "names are off": a caller that does not pass names must never
+ * see one, and must never resolve one.
+ */
+export type ManagedAgentNames = {
+  enabled: boolean
+  names: Record<string, string>
+}
+
+const NAMES_OFF: ManagedAgentNames = { enabled: false, names: {} }
+
+/**
+ * A refusal whose message is written for the calling model (#1145).
+ *
+ * WHY a class when the rest of this module throws `new Error('<code>')`: those
+ * codes carry no context worth repeating, so the handler replaces the message
+ * with a generic sentence. A label miss is different — the useful answer is
+ * "no agent shows B33; your project shows B5 (codex), B16 (codex) …", which
+ * lets the model ask the user instead of listing raw session ids (the
+ * 2026-09-23 session had to do exactly that). The handler forwards this
+ * message verbatim.
+ */
+export class ManagedAgentTargetError extends Error {
+  constructor(
+    readonly code: 'invalid_target' | 'label_not_found' | 'name_not_found' | 'name_ambiguous',
+    message: string,
+  ) {
+    super(message)
+    this.name = 'ManagedAgentTargetError'
+  }
+}
 
 const DEFAULT_MAX_MESSAGES = 20
 const DEFAULT_BULK_MAX_MESSAGES = 6
@@ -180,6 +223,9 @@ function descriptorForSession(params: {
   callerSessionId: string
   sessionId: string
   membership: ProjectMembership
+  /** The caller's `buildVisibleDispatchRows(state)`; see sessionDisplayLabel. */
+  rows: ReturnType<typeof buildVisibleDispatchRows>
+  agentNames?: ManagedAgentNames
 }): ManagedAgentRendererDescriptor | null {
   const meta = params.state.sessions[params.sessionId]
   const kind = meta?.kind ?? DEFAULT_PROVIDER
@@ -187,9 +233,15 @@ function descriptorForSession(params: {
   const runtime = params.runtimes[params.sessionId]
   const activity = lastActive(runtime)
   const summary = statusSummary(runtime)
+  const agentName = managedAgentName(params.agentNames, meta)
   return {
     agent: {
       sessionId: params.sessionId,
+      // The same derivation workspace.observe publishes (#1145), so a label
+      // read from ac_agents_search, from this list, or off the screen is one
+      // string.
+      displayLabel: sessionDisplayLabel(params.state, params.sessionId, params.rows),
+      ...(agentName ? { agentName } : {}),
       kind,
       cwd: meta.cwd,
       ...(meta.title ? { title: meta.title } : {}),
@@ -224,18 +276,28 @@ function descriptorForSession(params: {
   }
 }
 
+function managedAgentName(
+  agentNames: ManagedAgentNames | undefined,
+  meta: SessionMeta | undefined,
+): string | null {
+  const { enabled, names } = agentNames ?? NAMES_OFF
+  return resolveAgentName({ enabled, meta, names })
+}
+
 export function listManagedAgentDescriptors(params: {
   state: WorkspaceState
   runtimes: RuntimeMap
   callerSessionId: string
+  agentNames?: ManagedAgentNames
 }): { project: ManagedAgentProject; agents: ManagedAgentRendererDescriptor[] } {
   const callerMembership = projectForSession(params.state, params.callerSessionId)
   if (!callerMembership) throw new Error('caller_not_found')
+  const rows = buildVisibleDispatchRows(params.state)
   const agents = orderedProjectSessionIds(params.state, callerMembership.tab.id)
     .map(sessionId => {
       const membership = projectForSession(params.state, sessionId)
       if (!membership || membership.tab.id !== callerMembership.tab.id) return null
-      return descriptorForSession({ ...params, sessionId, membership })
+      return descriptorForSession({ ...params, sessionId, membership, rows })
     })
     .filter((value): value is ManagedAgentRendererDescriptor => value !== null)
   return { project: managedProject(callerMembership), agents }
@@ -260,6 +322,113 @@ export function assertManagedTarget(params: {
   return target
 }
 
+/**
+ * Turn what the caller said — a session id, the label on screen, or a spoken
+ * name — into exactly one session id, or refuse (#1145).
+ *
+ * WHY this is the ONE resolver and every targeted request goes through it:
+ * labels and names are how users refer to agents ("prompt B28", "ask
+ * Apollo"), and each tool resolving them on its own would reintroduce the
+ * split the app already paid for once — the palette, agent-index navigation
+ * and `ac_agents_search` all agree because they share resolveAgentPaneLabel /
+ * displayLabel. This reuses the same two primitives rather than re-deriving
+ * label arithmetic:
+ *
+ *   - label → resolveAgentPaneLabel, which for `[A-Z]+N` returns X exactly
+ *     when sessionDisplayLabel(X) is that label, i.e. exactly the session
+ *     `ac_agents_search {label}` returns in this window;
+ *   - name → normalizeAgentName equality over resolveAgentName, the
+ *     comparison `ac_agents_search {name}` makes.
+ *
+ * WHY resolution happens here, at request time, against the snapshot the
+ * operation acts on: a label is a SCREEN COORDINATE. Closing, pinning or
+ * adding an earlier row renumbers every later one, so the only meaning "B28"
+ * can have is "the agent showing B28 now" — which is also what the user is
+ * looking at when they say it. Resolving from an older listing is how a
+ * prompt reaches the agent that inherited the number.
+ *
+ * The result is only a candidate id: callers still pass it through
+ * assertManagedTarget, so project authority (a label in another project, a
+ * label on a terminal, self-targeting) stays enforced in one place.
+ */
+export function resolveManagedTarget(params: {
+  state: WorkspaceState
+  callerSessionId: string
+  target: ManagedAgentTarget
+  agentNames?: ManagedAgentNames
+}): SessionId {
+  const { sessionId, label, name } = params.target
+  const given = [sessionId, label, name].filter(value => value !== undefined)
+  if (given.length !== 1) {
+    // The MCP handler refuses this before the bridge; repeated here because
+    // the renderer must not trust its only caller to have validated input.
+    throw new ManagedAgentTargetError(
+      'invalid_target',
+      'Name the target with exactly one of sessionId, label or name.',
+    )
+  }
+  if (sessionId !== undefined) return sessionId
+
+  if (label !== undefined) {
+    const resolved = resolveAgentPaneLabel(params.state, label)
+    if (resolved) return resolved.sessionId
+    throw new ManagedAgentTargetError(
+      'label_not_found',
+      `No agent shows the label ${label.trim().toUpperCase()} right now. Labels renumber when earlier rows close, move or are pinned. ${visibleProjectLabels(params)}`,
+    )
+  }
+
+  const wanted = normalizeAgentName(name!)
+  const matches = Object.keys(params.state.sessions).filter(candidate => {
+    const resolved = managedAgentName(params.agentNames, params.state.sessions[candidate])
+    return resolved !== null && normalizeAgentName(resolved) === wanted
+  })
+  if (matches.length === 1) return matches[0]!
+  if (matches.length === 0) {
+    throw new ManagedAgentTargetError(
+      'name_not_found',
+      params.agentNames?.enabled
+        ? `No agent is named "${name!.trim()}". ${visibleProjectLabels(params)}`
+        : 'Agent names are turned off in Settings, so no agent has a spoken name. Target it by label or sessionId.',
+    )
+  }
+  // Names are allocated uniquely, but a reload carries the identity to the
+  // replacement session, so two rows can briefly share one. Guessing would
+  // pick by map order; say so instead.
+  throw new ManagedAgentTargetError(
+    'name_ambiguous',
+    `The name "${name!.trim()}" matches ${matches.length} sessions (${matches.join(', ')}). Target one by label or sessionId.`,
+  )
+}
+
+/**
+ * The labels the caller's project shows, for a refusal the model can act on.
+ * Agents only: a terminal's label is not a valid Agent Management target, and
+ * offering it would invite a second refusal.
+ */
+function visibleProjectLabels(params: {
+  state: WorkspaceState
+  callerSessionId: string
+  agentNames?: ManagedAgentNames
+}): string {
+  const projectId = projectIdOf(params.state, params.callerSessionId)
+  if (projectId === undefined) return ''
+  const rows = buildVisibleDispatchRows(params.state)
+  const shown = resolveTabSessions(params.state, projectId).flatMap(sessionId => {
+    const meta = params.state.sessions[sessionId]
+    const kind = meta?.kind ?? DEFAULT_PROVIDER
+    if (!isAgentProviderKind(kind)) return []
+    const label = sessionDisplayLabel(params.state, sessionId, rows)
+    if (!label) return []
+    const agentName = managedAgentName(params.agentNames, meta)
+    const title = meta?.title ? ` "${meta.title}"` : ''
+    return [`${label} (${kind}${agentName ? `, ${agentName}` : ''}${title}${sessionId === params.callerSessionId ? ', you' : ''})`]
+  })
+  return shown.length > 0
+    ? `Agents in your project now: ${shown.join(', ')}.`
+    : 'Your project shows no labelled agents.'
+}
+
 export function readManagedAgentOutput(params: {
   state: WorkspaceState
   runtimes: RuntimeMap
@@ -268,9 +437,14 @@ export function readManagedAgentOutput(params: {
   maxMessages?: number
   maxCharsPerMessage?: number
   maxCharsPerAgent?: number
+  agentNames?: ManagedAgentNames
 }): ManagedAgentRendererOutput {
   const membership = assertManagedTarget({ ...params, allowSelf: true })
-  const descriptor = descriptorForSession({ ...params, membership })
+  const descriptor = descriptorForSession({
+    ...params,
+    membership,
+    rows: buildVisibleDispatchRows(params.state),
+  })
   if (!descriptor) throw new Error('agent_not_found')
   const runtime = params.runtimes[params.sessionId] ?? null
   const summary = visibleMessageSummary(
@@ -325,6 +499,7 @@ export function readManagedAgentOutputs(params: {
   maxCharsPerMessage?: number
   maxCharsPerAgent?: number
   maxTotalChars?: number
+  agentNames?: ManagedAgentNames
 }): {
   project: ManagedAgentProject
   agents: ManagedAgentRendererDescriptor[]
