@@ -941,48 +941,26 @@ function orchestrationCreateAgentCallKey(
           // child. So instead the prompt waits for the composer, and the reply
           // says so — the child is created, the brief is coming, and the
           // parent is told not to send it again.
-          // `canWaitForPromptReadiness` decides BEFORE the reply promises
-          // anything (#854 review). Only Claude and Codex have a readiness
-          // gate to subscribe to; OpenCode and Grok report not-readiness as an
-          // ordinary failure, so promising a wait there replaced a retry the
-          // parent could act on with a silent loss it could not.
-          if (
-            !delivery.ok
-            && isNotReadyYet(delivery)
-            && typeof manager.deliverPromptWhenReady === 'function'
-            && manager.canWaitForPromptReadiness?.(agent.sessionId) === true
-          ) {
-            const pending = manager.deliverPromptWhenReady(agent.sessionId, prompt)
-            // Deliberately not awaited: the wait outlives this MCP call by
-            // design, and its whole purpose is that the caller does not have
-            // to hold a transport open for it. What IS awaited, later, is the
-            // bookkeeping — the child is only marked as having received its
-            // bootstrap once it actually has.
-            void pending.then(async result => {
-              if (result.ok) {
-                bridge.notePromptSubmitted(agent.sessionId)
-                await bridge.markBootstrapPromptDelivered({
-                  parentSessionId: scope.sessionId,
-                  sessionId: agent.sessionId,
-                }).catch(() => undefined)
-                return
-              }
-              dependencies.appRunJournal?.recordIncident({
-                kind: 'orchestration.prompt_delivery_failed',
-                severity: 'error',
-                reason: 'create_agent_bootstrap_pending',
-                context: {
-                  sessionId: agent.sessionId,
-                  message: result.message,
-                  stage: result.stage,
-                  code: result.code,
-                  retrySafe: result.retrySafe,
-                  disposition: result.disposition,
-                  promptWritten: result.promptWritten,
-                  enterWritten: result.enterWritten,
-                },
-              })
-            })
+          //
+          // The gate checks, the arming and the landing bookkeeping live in
+          // `armPromptWhenReady`, shared with `orchestration_send_prompt`
+          // (#1134) so the two paths cannot drift on the parts that decide
+          // whether a promise to the parent is kept.
+          if (!delivery.ok && armPromptWhenReady({
+            dependencies,
+            bridge,
+            manager,
+            parentSessionId: scope.sessionId,
+            sessionId: agent.sessionId,
+            prompt,
+            delivery,
+            // A create_agent prompt is always the bootstrap.
+            markBootstrapOnLanding: true,
+            incidentReason: 'create_agent_bootstrap_pending',
+            // Nothing can be waiting yet for a child that did not exist a
+            // moment ago, and a refusal here would be a real double-arm.
+            supersedesPendingPrompt: false,
+          })) {
             return toolText({
               ok: true,
               agent,
@@ -1104,8 +1082,17 @@ function orchestrationCreateAgentCallKey(
     'orchestration_send_prompt',
     {
       title: 'Send Prompt To Orchestration Agent',
+      // WHY the pending contract is in the description (#1134): the reply's
+      // `message` says it too, but a model deciding whether to call this tool
+      // AGAIN reads the description first, and "a newer prompt replaces a
+      // waiting one" is the rule it must know before it sends a second one.
       description:
-        'Sends a follow-up prompt to an existing orchestration-created Agent Code session.',
+        [
+          'Sends a follow-up prompt to an existing orchestration-created Agent Code session.',
+          'If the agent cannot take a prompt yet (still starting, waiting on a dialog, or busy with a turn) and its provider supports waiting, the prompt waits and the reply says promptPending: true; it lands when the agent is ready (after the current turn, for a busy agent). Do not send it again; orchestration_wait_agents keeps waiting while it is pending.',
+          'Providers that cannot wait return prompt_delivery_failed instead, and that prompt was not sent.',
+          'Sending another prompt to the same agent while one is waiting replaces the waiting one, and the reply says supersededPendingPrompt: true.',
+        ].join(' '),
       inputSchema: {
         sessionId: z.string(),
         prompt: z.string().refine(value => value.trim().length > 0, {
@@ -1183,10 +1170,76 @@ function orchestrationCreateAgentCallKey(
       // the same task and must not arrive twice. Every other delivery path —
       // a human typing in the pane, the phone, the goal loop, compaction — is
       // writing something else and leaves the waiting brief alone.
+      //
+      // Since #1134 the waiting prompt can also be an EARLIER send_prompt
+      // that went pending, and the rule is the same: the newest orchestration
+      // prompt wins, and at most one waits per session. The alternatives were
+      // worse — refusing a second send while one waits leaves a parent unable
+      // to correct a brief stuck behind a trust dialog without closing the
+      // child (and contradicts the create_agent → send_prompt rule above),
+      // and queueing both hands the child two tasks back-to-back with no
+      // ordering contract. What "latest wins" costs is that a DIFFERENT
+      // follow-up replaces the earlier one, so the reply says when that
+      // happened (`supersededPendingPrompt`), detected from the manager's
+      // `pending-superseded` record — emitted only when a waiter was really
+      // cancelled, never for one that had already started delivering.
+      let supersededPendingPrompt = false
       const delivery = await manager.deliverPromptToAgent(
-        args.sessionId, prompt, undefined, undefined, undefined,
+        args.sessionId, prompt, undefined,
+        event => { if (event === 'pending-superseded') supersededPendingPrompt = true },
+        undefined,
         { supersedesPendingPrompt: true },
       )
+      const superseded = supersededPendingPrompt ? { supersededPendingPrompt: true } : {}
+      // A child that is not ready YET (#1134): the same wait create_agent got
+      // in #854, for the same reason. The recorded corpus's largest single
+      // failure group is 36 `send_prompt / before-write / not-ready /
+      // retry-same-session` — a child waking from park or sitting behind a
+      // first-launch trust dialog — and the old reply's `retry-same-session`
+      // sent the parent straight back into that window, which is the retry
+      // that orphans a half-written draft.
+      //
+      // `supersedesPendingPrompt: true` on the ARM as well as on the direct
+      // attempt: the direct attempt cancelled any earlier waiter, but that
+      // waiter leaves the map only when its loop unwinds, and a gate that
+      // answers "blocked" synchronously can bring us here first. Without it
+      // this waiter would be refused as a duplicate right after the reply
+      // below promised the parent `promptPending: true`.
+      const armed = delivery.ok ? null : armPromptWhenReady({
+        dependencies,
+        bridge,
+        manager,
+        parentSessionId: scope.sessionId,
+        sessionId: args.sessionId,
+        prompt,
+        delivery,
+        // Only a wrapped prompt is the bootstrap. Marking a follow-up would
+        // be a lie in the other direction for nobody's benefit, and marking
+        // BEFORE landing would make every later send_prompt skip the handoff
+        // wrapper for a child that never received one.
+        markBootstrapOnLanding: shouldWrap,
+        incidentReason: 'send_prompt_pending',
+        supersedesPendingPrompt: true,
+      })
+      if (armed && !delivery.ok) {
+        return toolText({
+          ok: true,
+          sessionId: args.sessionId,
+          promptSubmitted: false,
+          promptPending: true,
+          promptPendingReason: delivery.message,
+          // Either supersede counts: the direct attempt's, or the arm's
+          // (a waiter that armed while the direct attempt was in the provider).
+          ...(supersededPendingPrompt || armed.supersededPendingPrompt
+            ? { supersededPendingPrompt: true }
+            : {}),
+          // WHY the wording names "busy" (#1134 review): a Codex child
+          // mid-turn answers not-ready too, and for it the prompt lands after
+          // the current turn, not after a startup — a parent reading
+          // "starting" would misjudge how long it waits.
+          message: `The agent cannot take a prompt yet (${delivery.message}), so the prompt is waiting: it will be delivered as soon as the agent can accept it — after it finishes starting, after a dialog is answered, or after its current turn if it is busy. Do not send it again. orchestration_wait_agents treats the agent as working until the prompt lands and it answers; orchestration_read_agent shows promptSubmitted once it lands. Sending another prompt to this agent before then REPLACES this one.`,
+        })
+      }
       if (!delivery.ok) {
         dependencies.appRunJournal?.recordIncident({
           kind: 'orchestration.prompt_delivery_failed',
@@ -1215,6 +1268,10 @@ function orchestrationCreateAgentCallKey(
           enterWritten: delivery.enterWritten,
           promptSubmission: delivery.retrySafe ? 'not-submitted' : 'uncertain',
           sessionId: args.sessionId,
+          // Even a failed send may have replaced a waiting prompt: the
+          // supersede runs before the provider attempt. The parent has to
+          // know the earlier one is gone before it decides what to resend.
+          ...superseded,
         })
       }
       bridge.notePromptSubmitted(args.sessionId)
@@ -1232,10 +1289,11 @@ function orchestrationCreateAgentCallKey(
             bootstrapPromptPersistenceWarning: err instanceof Error && err.message.length > 0
               ? err.message
               : 'Could not persist orchestration bootstrap delivery state.',
+            ...superseded,
           })
         }
       }
-      return toolText({ ok: true, sessionId: args.sessionId })
+      return toolText({ ok: true, sessionId: args.sessionId, ...superseded })
     },
   )
 
@@ -1692,8 +1750,119 @@ const EXPIRED = Symbol('wait-agents-expired')
  */
 function isNotReadyYet(delivery: Extract<PromptDeliveryResult, { ok: false }>): boolean {
   if (delivery.promptWritten || delivery.enterWritten) return false
+  // The stage check is also what keeps the RESERVATION refusal out (#1134
+  // review). `delivery-in-flight` carries `disposition: retry-same-session`
+  // too, but it means another delivery to this child is running right now —
+  // quite possibly a waiter delivering this very brief. Treating that as "not
+  // ready yet" would queue a second copy behind it; it must stay a failure
+  // the parent sees. It has `stage: 'reservation'`, so it stops here.
   if (delivery.stage !== 'before-write') return false
   return delivery.disposition === 'retry-same-session' || delivery.disposition === 'retry-after-resolve'
+}
+
+/**
+ * Hold an orchestration prompt for a child that is not ready YET, and keep the
+ * books when it lands (#854, shared with send_prompt in #1134).
+ *
+ * Returns an object when the prompt is now waiting — the caller then owes the
+ * parent a `promptPending: true` reply and must not report a failure, and
+ * `supersededPendingPrompt` says whether arming replaced a waiting prompt.
+ * Returns `null` when this is not a wait-able failure, and the caller replies
+ * exactly as it did before the wait existed.
+ *
+ * WHY one helper for both tools: create_agent and send_prompt differ in their
+ * REPLIES (create returns the agent, send returns the session id), but the
+ * parts that decide whether a promise to the parent is kept must be the same
+ * code — which failures count as "early", which providers can be waited on,
+ * when the bootstrap is marked, what is journaled. Two copies of that is how
+ * one of them ends up marking the bootstrap before it lands.
+ *
+ * WHY `canWaitForPromptReadiness` decides BEFORE anything is promised (#854
+ * review): only Claude and Codex have a readiness gate to subscribe to.
+ * OpenCode and Grok report not-readiness as an ordinary failure, so promising
+ * a wait there replaced a retry the parent could act on with a silent loss it
+ * could not. For them this returns `false` and the old failure reply stands.
+ */
+function armPromptWhenReady(input: {
+  dependencies: BuiltInMcpDependencies
+  bridge: NonNullable<BuiltInMcpDependencies['orchestrationBridge']>
+  manager: NonNullable<BuiltInMcpDependencies['sessionManager']>
+  parentSessionId: string
+  sessionId: string
+  prompt: string
+  delivery: Extract<PromptDeliveryResult, { ok: false }>
+  /**
+   * Mark `orchestrationBootstrapPromptDelivered` when the prompt lands. Only
+   * when the prompt IS the bootstrap (create_agent always; send_prompt when it
+   * wrapped). Never before landing: every later send_prompt reads that flag
+   * to decide whether to wrap, so an early mark means a child that never got
+   * its handoff never gets it.
+   */
+  markBootstrapOnLanding: boolean
+  /** Journal reason for a wait that ends without a delivery. */
+  incidentReason: 'create_agent_bootstrap_pending' | 'send_prompt_pending'
+  /** See `SessionManager.deliverPromptWhenReady`'s option of the same name. */
+  supersedesPendingPrompt: boolean
+}): { supersededPendingPrompt: boolean } | null {
+  const { dependencies, bridge, manager, delivery, sessionId } = input
+  if (
+    !isNotReadyYet(delivery)
+    || typeof manager.deliverPromptWhenReady !== 'function'
+    || manager.canWaitForPromptReadiness?.(sessionId) !== true
+  ) {
+    return null
+  }
+  // The manager reports a replaced waiter synchronously, before its first
+  // await, so this is settled by the time the call below returns.
+  let supersededPendingPrompt = false
+  const pending = manager.deliverPromptWhenReady(
+    sessionId,
+    input.prompt,
+    event => { if (event === 'pending-superseded') supersededPendingPrompt = true },
+    input.supersedesPendingPrompt ? { supersedesPendingPrompt: true } : undefined,
+  )
+  // Visible to `list_agents` / `wait_agents` as `prompt_sent` until it
+  // settles (#1134 review) — see `PromptDeliveryMetadata.pendingPrompt`.
+  const pendingToken = bridge.notePromptPending(sessionId)
+  // Deliberately not awaited: the wait outlives the MCP call by design, and
+  // its whole purpose is that the caller does not have to hold a transport
+  // open for it. What IS awaited, later, is the bookkeeping — nothing is
+  // counted as submitted, and no bootstrap is marked, until it really landed.
+  void pending.then(async result => {
+    // Whatever the outcome, THIS waiter is no longer pending. Token-scoped:
+    // a waiter replaced by a newer one settles after the newer one armed.
+    bridge.notePromptPendingSettled(sessionId, pendingToken)
+    if (result.ok) {
+      bridge.notePromptSubmitted(sessionId)
+      if (input.markBootstrapOnLanding) {
+        await bridge.markBootstrapPromptDelivered({
+          parentSessionId: input.parentSessionId,
+          sessionId,
+        }).catch(() => undefined)
+      }
+      return
+    }
+    // A superseded wait lands here too (its message names the cause). That is
+    // recorded deliberately rather than filtered: the journal is where "the
+    // parent was told pending and that prompt never arrived" has to be
+    // countable, whatever the reason.
+    dependencies.appRunJournal?.recordIncident({
+      kind: 'orchestration.prompt_delivery_failed',
+      severity: 'error',
+      reason: input.incidentReason,
+      context: {
+        sessionId,
+        message: result.message,
+        stage: result.stage,
+        code: result.code,
+        retrySafe: result.retrySafe,
+        disposition: result.disposition,
+        promptWritten: result.promptWritten,
+        enterWritten: result.enterWritten,
+      },
+    })
+  })
+  return { supersededPendingPrompt }
 }
 
 // Cross-agent total budget for read_run_outputs / wait_agents (#373).

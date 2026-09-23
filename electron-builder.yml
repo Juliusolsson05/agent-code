@@ -10,7 +10,16 @@ publish:
     repo: agent-code
 productName: Agent Code
 copyright: "Copyright © 2026 Julius Olsson"
-artifactName: "${productName}-${version}-${arch}.${ext}"
+# WHY a literal "Agent-Code" and never ${productName} (#1129): productName
+# has a space, and the space gets rewritten twice, differently.
+# electron-builder writes latest-mac.yml assuming its own publisher turns it
+# into a dash (`Agent-Code-…`), but release.yml uploads with
+# softprops/action-gh-release and GitHub turns it into a dot (`Agent.Code-…`).
+# The feed then named files that did not exist, so every self-update from
+# v0.1.0–v0.1.2 got 404. With no space, the local file, the feed entry and
+# the uploaded asset are the same string.
+# scripts/release/verify-update-feed.mjs fails the release if they diverge.
+artifactName: "Agent-Code-${version}-${arch}.${ext}"
 directories:
   output: release
 afterPack: scripts/after-pack.mjs
@@ -142,4 +151,5 @@ mac:
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
 dmg:
-  artifactName: "${productName}-${version}-${arch}.${ext}"
+  # Same name as the top-level artifactName; see the comment there (#1129).
+  artifactName: "Agent-Code-${version}-${arch}.${ext}"

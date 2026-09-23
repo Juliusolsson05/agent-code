@@ -2,6 +2,10 @@ import type { SessionManager } from '@main/sessionManager.js'
 import { aliasScreenSnapshotForWire } from '@shared/types/session.js'
 import type { AgentScreenSnapshot } from '@shared/types/session.js'
 import type { LspManager } from '@main/lspManager.js'
+import {
+  MANAGED_SKILLS_UNAVAILABLE_CHANNEL,
+  type ManagedSkillsUnavailableEvent,
+} from '@shared/types/tldr.js'
 
 import {
   broadcastToWindows,
@@ -185,6 +189,17 @@ export function wireSessionForwarder(
   })
   manager.on('exit', payload => {
     sendToSessionWindow(payload.sessionId, 'session:exit', payload)
+  })
+  // #1133. BROADCAST, not sendToSessionWindow, on purpose. Managed-skill health
+  // is machine-wide (one broken TLDR skill affects every window's next launch),
+  // so the warning is not about one pane. Session routing would also be wrong
+  // mechanically: it quarantines events for ids no window has claimed yet and
+  // records a routing gap for them, so a main-initiated spawn would raise a
+  // false "missed session events" notice instead of this warning. Only domain
+  // names cross, never the reconcile error (see runPreSpawnSkillReconcile).
+  manager.on('managed-skills-unavailable', ({ skills }) => {
+    const event: ManagedSkillsUnavailableEvent = { skills }
+    broadcastToWindows(MANAGED_SKILLS_UNAVAILABLE_CHANNEL, event)
   })
     // Diagnostics are keyed by file, not by session: two windows can have the
   // same file open in their editors and both need them.

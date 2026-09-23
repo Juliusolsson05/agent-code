@@ -20,7 +20,7 @@ import { createExternalControlSettings } from './settings/externalControl'
 import { createExternalCodexIntegration } from './settings/externalCodexIntegration'
 import operatorSkillSource from '../../operator-skills/agent-code-computer-execution/SKILL.md?raw'
 
-import { app, clipboard, crashReporter, dialog, Menu, Notification, powerMonitor, systemPreferences } from 'electron'
+import { app, BrowserWindow, clipboard, crashReporter, dialog, Menu, Notification, powerMonitor, systemPreferences } from 'electron'
 import { existsSync } from 'fs'
 import { readFile } from 'fs/promises'
 import { join } from 'path'
@@ -408,12 +408,36 @@ app.on('before-quit', () => { quitting = true })
 const updateChecks = new UpdateCheckStore()
 const updateService = new UpdateService({
   updater: autoUpdater,
-  app: { isPackaged: app.isPackaged },
+  app: { isPackaged: app.isPackaged, version: app.getVersion() },
   requestQuit: () => { app.quit() },
   notify: message => {
     try {
       if (Notification.isSupported()) new Notification({ title: 'Agent Code', body: message }).show()
     } catch { /* a notification failure must never break the update flow */ }
+  },
+  // A sheet on the focused window (a free-floating box when none has focus),
+  // so the answer to a menu check shows even with notifications turned off
+  // for Agent Code (#1130). Like notify, a failure here must never break the
+  // update flow; it reads as "not confirmed", which never restarts anything.
+  showMessage: async (message, confirmLabel) => {
+    const options = {
+      type: 'info' as const,
+      message,
+      buttons: confirmLabel ? [confirmLabel, 'Later'] : ['OK'],
+      // With a confirm button, Later is both the default (Enter) and the
+      // cancel (Esc): a stray keypress must not start a restart in an app
+      // full of live sessions. The user has to choose Restart on purpose.
+      defaultId: confirmLabel ? 1 : 0,
+      cancelId: confirmLabel ? 1 : 0,
+      noLink: true,
+    }
+    try {
+      const parent = BrowserWindow.getFocusedWindow()
+      const { response } = parent ? await dialog.showMessageBox(parent, options) : await dialog.showMessageBox(options)
+      return confirmLabel !== undefined && response === 0
+    } catch {
+      return false
+    }
   },
   readLastCheck: () => updateChecks.read(),
   // A failed clock write (full disk, read-only state) must never become an
@@ -1006,11 +1030,10 @@ async function startApp(): Promise<void> {
     tmuxAvailable ? tmuxRegistry : null,
     builtInMcpHost,
     appRunJournal,
-    async options => {
-      await agentCodeConventionsService.audit()
-      if (options.builtInMcpDomains?.includes('tldr')) await agentCodeConventionsService.ensureTldrSkill()
-      if (options.builtInMcpDomains?.includes('goal')) await agentCodeConventionsService.ensureGoalSkill()
-    },
+    // Reports failures instead of throwing them (#1133). SessionManager
+    // decides what a failure means for the launch; see
+    // runPreSpawnSkillReconcile for why that is never "abort".
+    options => agentCodeConventionsService.prepareForAgentSpawn(options.builtInMcpDomains),
     (sessionId, sessionRunId, observation) => {
       sessionRecorders?.recordCodexTranscriptObservation(
         sessionId,
@@ -1470,13 +1493,11 @@ async function startApp(): Promise<void> {
   // Install the application menu right after the window exists — the File
   // items dispatch command ids to THIS window's renderer (issue #148).
   Menu.setApplicationMenu(buildAppMenu({
-    // Dual duty: not-ready → force a check; ready → apply the update. The
-    // OS notification tells the user which state they are in.
-    onCheckForUpdates: () => {
-      if (updateService.state === 'ready') { updateService.restartToUpdate(); return 'ready' }
-      void updateService.checkForUpdates(true)
-      return 'checking'
-    },
+    // Dual duty (check, or restart into a ready update) lives in
+    // UpdateService.menuCheck, which answers every outcome in a dialog. The
+    // old inline version relied on OS notifications that only covered
+    // ready/error, so most clicks produced nothing at all (#1130).
+    onCheckForUpdates: () => { void updateService.menuCheck() },
   }))
   performanceService.mark('app.main.window.created')
   // Both belong at window creation. The startup timing is observed first so

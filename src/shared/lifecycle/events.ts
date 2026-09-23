@@ -537,6 +537,47 @@ export const WAKE_CALLERS = [
 export type WakeCaller = (typeof WAKE_CALLERS)[number]
 
 /**
+ * Why a recovery's start failed: the `cause` on `recover.failed` (#1133).
+ *
+ * WHY a closed enum and not the exception message: `code: 'start-failed'`
+ * alone left two workspace-wide outages (Sept 18 and Sept 19, 2026) readable
+ * only by lining up `seq` numbers against a neighbouring
+ * `conventions.pre_spawn_reconcile.error`. The raw message cannot go here for
+ * the same reason it stays out of the recover IPC result: provider launch
+ * errors can embed environment values, proxy URLs and scoped MCP tokens, and
+ * this stream is always on and kept on disk. A classification carries the
+ * answer to "which layer refused?" and nothing else.
+ *
+ * WHY there is no `conventions-gate` value, though #1133 proposed one: after
+ * that fix the managed-skill reconcile can no longer fail a start. It
+ * degrades the session and warns instead. A value no code path can emit would
+ * read as a live failure mode to whoever triages the next journal. The
+ * reconcile's own failure is still journaled as
+ * `conventions.pre_spawn_reconcile.error`.
+ *
+ * Add a value only when a new failure can be classified from TYPED evidence (an
+ * error class or a tag set at a known boundary). Classifying by message
+ * substring would silently fall back to `unknown` the day the wording changes.
+ */
+export const SESSION_START_FAILURE_CAUSES = [
+  // The pane's cwd no longer exists. Not retryable; see
+  // MissingWorkspaceDirectoryError.
+  'missing-workspace',
+  // The provider CLI could not be resolved to an absolute path, even after the
+  // late re-resolve. The user has to act in Setup.
+  'cli-not-found',
+  // The provider runtime was constructed and its start() threw: PTY spawn,
+  // headless bootstrap, proxy launch, or the provider exiting during startup.
+  'provider-launch',
+  // Anything not classified above, for example a missing built-in MCP host or a
+  // registry race. Kept as an explicit value so "unclassified" reads
+  // differently from "this build predates causes" (the key is absent).
+  'unknown',
+] as const
+
+export type SessionStartFailureCause = (typeof SESSION_START_FAILURE_CAUSES)[number]
+
+/**
  * The allowlisted top-level payload keys.
  *
  * ────────────────────────────────────────────────────────────────────────────

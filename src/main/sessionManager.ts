@@ -1,7 +1,9 @@
 import { mainOperations } from '@main/performance/operations.js'
 import { ResponseTracker } from '@shared/performance/responseTracker.js'
 import { randomUUID } from 'crypto'
-import { hasReportingDomain } from '@shared/types/tldr.js'
+import { REPORTING_DOMAINS, type ReportingDomain } from '@shared/types/tldr.js'
+import type { SessionStartFailureCause } from '@shared/lifecycle/events.js'
+import type { ManagedSkillPreparationFailure } from '@main/agentCodeConventions/AgentCodeConventionsService.js'
 import { EventEmitter } from 'events'
 import path from 'node:path'
 import { performance } from 'perf_hooks'
@@ -214,6 +216,10 @@ type ManagerEvents = {
   'semantic-event': [{ sessionId: string; event: unknown }]
   /** Internal cleanup signal emitted exactly before a session leaves the manager. */
   removed: [{ sessionId: string }]
+  /** A launching agent asked for product skills (TLDR/Goal) that the pre-spawn
+   *  reconcile could not prepare, and it is being started without them (#1133).
+   *  Carries domain names only, never the error: see the pre-spawn gate. */
+  'managed-skills-unavailable': [{ sessionId: string; skills: ReportingDomain[] }]
   exit: [{ sessionId: string; exitCode: number; signal?: number }]
 }
 
@@ -354,6 +360,53 @@ class RecoveryCancelledError extends Error {
     super('Session recovery was cancelled')
     this.name = 'RecoveryCancelledError'
   }
+}
+
+/**
+ * The provider CLI could not be resolved to an absolute path (#495 A9).
+ *
+ * WHY a class when the message was already specific: `recover.failed` needs
+ * a typed `cause` (#1133), and classifying by message substring would quietly
+ * turn into `unknown` the day someone rewords the Setup hint. The message itself
+ * is unchanged, because the renderer's spawn-error text reads it.
+ */
+export class ProviderCliNotFoundError extends Error {
+  constructor(kind: string) {
+    // Names a real place (#995): Setup opens from File › Setup… or the
+    // "Open Setup" command, and shows the install command for this CLI.
+    super(`${kind} CLI not found. Open Setup (File › Setup…) to install it or enter its path.`)
+    this.name = 'ProviderCliNotFoundError'
+  }
+}
+
+/**
+ * Start-failure causes attached to errors at the boundary that knows them.
+ *
+ * WHY a WeakMap tag instead of wrapping the error in a typed class: provider
+ * start errors propagate through the Codex replacement compensation and back
+ * to callers and tests that match on the ORIGINAL error (identity and message).
+ * Wrapping would change what every one of them sees just so a journal field
+ * could be filled. The tag is invisible to everyone except
+ * `classifyStartFailure`, and it is garbage-collected with the error.
+ * Non-object throws cannot be tagged and fall through to `unknown`.
+ */
+const startFailureCauses = new WeakMap<object, SessionStartFailureCause>()
+
+function tagStartFailure(error: unknown, cause: SessionStartFailureCause): void {
+  // First tag wins: an error re-thrown through an outer boundary must keep the
+  // most specific layer that saw it first.
+  if (typeof error === 'object' && error !== null && !startFailureCauses.has(error)) {
+    startFailureCauses.set(error, cause)
+  }
+}
+
+function classifyStartFailure(error: unknown): SessionStartFailureCause {
+  if (error instanceof MissingWorkspaceDirectoryError) return 'missing-workspace'
+  if (error instanceof ProviderCliNotFoundError) return 'cli-not-found'
+  if (typeof error === 'object' && error !== null) {
+    return startFailureCauses.get(error) ?? 'unknown'
+  }
+  return 'unknown'
 }
 
 function createRegistryLifecycle(generation: symbol): RegistryLifecycle {
@@ -638,7 +691,13 @@ export class SessionManager extends EventEmitter {
     // Always-on incident journal. Optional so tests / non-journaled callers
     // still construct cleanly; null-guarded at every use.
     private readonly journal: AppRunJournal | null = null,
-    private readonly beforeAgentSessionStart: ((options: SessionSpawnOptions) => Promise<void>) | null = null,
+    // The managed-skills pre-spawn reconcile (#1133). It resolves with the steps
+    // it could not complete. `void` is accepted for hooks with nothing to report
+    // (tests that only gate timing). A rejection is tolerated too; see the gate
+    // in spawnWithId for how each outcome is handled.
+    private readonly beforeAgentSessionStart:
+      | ((options: SessionSpawnOptions) => Promise<readonly ManagedSkillPreparationFailure[] | void>)
+      | null = null,
     // Optional opt-in recording projection. Kept as a structural callback so
     // the process/session registry does not depend on the dev-debug recorder.
     private readonly recordCodexObservation: (
@@ -1953,6 +2012,13 @@ export class SessionManager extends EventEmitter {
       this.lifecycle.session('recover.failed', options.sessionId, {
         kind: claim.kind,
         code: 'start-failed',
+        // #1133: `start-failed` alone could not tell a deleted worktree from a
+        // missing CLI from a provider crash, so two workspace-wide outages had
+        // to be reconstructed by matching `seq` numbers. The cause is a closed
+        // enum (SESSION_START_FAILURE_CAUSES) for the same privacy reason the
+        // message below is flattened: the raw exception never enters this
+        // stream.
+        cause: classifyStartFailure(error),
         lifecycle: 'spawning',
         durationMs: performance.now() - claim.startedAt,
       })
@@ -2533,6 +2599,121 @@ export class SessionManager extends EventEmitter {
   }
 
   /**
+   * Run the managed-skills reconcile before an agent launch. It never fails the
+   * launch (#1133).
+   *
+   * WHY this can no longer abort a spawn, although it used to for TLDR/Goal:
+   * the old rule ("TLDR and Goal each promise a managed skill, so do not launch
+   * while silently omitting it") treated the skill as part of the capability.
+   * It is not. The TLDR and Goal MCP servers deliver their own server
+   * instructions with the tools, so an agent without the skill file loses some
+   * GUIDANCE about when to call them, not the ability to call them. Almost
+   * every pane has TLDR or Goal enabled, though, so that rule turned ANY
+   * managed-skill failure into a workspace-wide outage: every pane of every
+   * provider refused to start, while each restored transcript made the
+   * workspace look healthy. It happened twice in two days from two unrelated
+   * causes: a failed TLDR deployment on Sept 18 (on a build before grok, so
+   * the cause was never recovered), and grok's unsupported-provider health on
+   * Sept 19 (#1014). A degraded agent the user is told about beats N dead
+   * agents they are not. Launching without the skill is the default the user
+   * accepted in #1133. If a strict mode is ever wanted, it belongs behind an
+   * explicit setting, not back as the silent default.
+   *
+   * WHY not silently either: the old strictness existed so an omitted skill
+   * would never go unnoticed. That goal stays. Instead of refusing the launch,
+   * the manager emits `managed-skills-unavailable`, which the renderer shows as
+   * a toast naming the skill and pointing at Settings, where its health rows
+   * explain the cause.
+   *
+   * WHY the raw error only reaches the journal: reconcile errors can quote
+   * file paths in the user's provider skill folders. The journal is main-only.
+   * The warning carries domain names, and the renderer composes its own text.
+   */
+  private async runPreSpawnSkillReconcile(
+    sessionId: string,
+    options: SessionSpawnOptions,
+  ): Promise<ReportingDomain[]> {
+    if (!this.beforeAgentSessionStart) return []
+    const requested = REPORTING_DOMAINS.filter(domain => options.builtInMcpDomains?.includes(domain))
+    let failures: readonly ManagedSkillPreparationFailure[]
+    try {
+      failures = (await this.beforeAgentSessionStart(options)) ?? []
+    } catch (error) {
+      // The hook is contracted to report failures, not throw them, so a throw
+      // is a bug or an unexpected I/O fault. Nothing says which skills were
+      // prepared, so assume none of the requested ones were. Under-warning
+      // here would bring back exactly the silent omission the old strict rule
+      // guarded against.
+      failures = requested.length > 0
+        ? requested.map(skill => ({ skill, error }))
+        : [{ skill: 'conventions', error }]
+    }
+    for (const failure of failures) {
+      // Same event name as before #1133, so triage that already greps for it
+      // keeps working. `skill` says which step failed, which the old single
+      // catch could not.
+      // `ids.sessionId`, not `data.sessionId`: the `.degraded` row and every
+      // `recover.*` row for this pane are keyed by ids, and triage follows
+      // one pane by filtering on ids. The error row explains WHY that pane is
+      // degraded, so it has to be found by the same filter. Written
+      // unconditionally, even if the spawn is cancelled right after: the
+      // reconcile really did fail, and that is machine-wide skill health, not
+      // a claim about this session.
+      this.journal?.recordError(
+        'conventions.pre_spawn_reconcile.error',
+        failure.error,
+        { skill: failure.skill },
+        { sessionId },
+      )
+    }
+    // Only skills this agent ASKED for are worth interrupting the user about.
+    // A machine-wide audit failure (`conventions`) does not toast. Be precise
+    // about history here, because it matters when reading old journals:
+    // before #1133 an audit throw shared the hook's single catch, so it too
+    // ABORTED every TLDR/Goal launch (only launches without reporting domains
+    // survived it). A pre-#1133 outage such as the Sept 18 cluster can
+    // therefore be an audit failure as easily as a skill deploy failure. The
+    // `.error` row's message tells them apart. Now it is journal-only: the
+    // audit never removes a skill the agent asked for (the product skills are
+    // prepared in their own steps), and its degraded health already shows in
+    // Settings. A failure for a domain the launch did not request cannot
+    // happen with the production hook, and would not affect this agent anyway.
+    return REPORTING_DOMAINS.filter(domain =>
+      requested.includes(domain) && failures.some(failure => failure.skill === domain),
+    )
+  }
+
+  /**
+   * Publish that a launch is going ahead without some requested product skills.
+   *
+   * WHY this is separate from the reconcile and runs only after the
+   * post-reconcile cancellation check: the reconcile can take a while (it
+   * serializes behind other skill writes), and a restore can be cancelled
+   * meanwhile because the pane closed or a Codex replacement superseded it.
+   * Journaling `.degraded` before that check wrote a false "this session is
+   * launching without its skills" row for a session that never launched. That
+   * is exactly the kind of untrustworthy journal fact #1133 set out to remove.
+   * The toast would also have claimed "agents started" off a launch that did
+   * not happen.
+   */
+  private reportSkillsUnavailable(sessionId: string, unavailable: readonly ReportingDomain[]): void {
+    if (unavailable.length === 0) return
+    // Pairs with the `.error` rows (same ids.sessionId): "this session is
+    // launching WITHOUT these skills". Before #1133 the next row was
+    // `recover.failed`. It says "launching", not "started", because the
+    // provider can still fail afterwards; that shows up as `recover.failed`
+    // with its own cause. Joined into a string because journal data stays flat.
+    this.journal?.record({
+      area: 'conventions.pre_spawn_reconcile',
+      name: 'conventions.pre_spawn_reconcile.degraded',
+      severity: 'warn',
+      ids: { sessionId },
+      data: { skills: unavailable.join(',') },
+    })
+    this.emit('managed-skills-unavailable', { sessionId, skills: [...unavailable] })
+  }
+
+  /**
    * Start a backend under an already-owned local routing id.
    *
    * WHY this is private: accepting a caller-selected id on the ordinary spawn
@@ -2660,9 +2841,7 @@ export class SessionManager extends EventEmitter {
         }
       }
       if (!binary) {
-        // Names a real place (#995): Setup opens from File › Setup… or the
-        // "Open Setup" command, and shows the install command for this CLI.
-        throw new Error(`${kind} CLI not found. Open Setup (File › Setup…) to install it or enter its path.`)
+        throw new ProviderCliNotFoundError(kind)
       }
       const initialSize = {
         cols: options.cols ?? 120,
@@ -2684,19 +2863,9 @@ export class SessionManager extends EventEmitter {
       }
       this.throwIfSpawnCancelled(recoveryClaim, codexReplacementHandoff)
       if (this.beforeAgentSessionStart) {
-        try {
-          // Conventions reconciliation is a best-effort compatibility boundary,
-          // with degraded/conflict health in Settings. TLDR opts into a stricter
-          // launch contract below because its requested reporting skill is part
-          // of the capability, not an optional personal convention.
-          await this.beforeAgentSessionStart(options)
-        } catch (error) {
-          this.journal?.recordError('conventions.pre_spawn_reconcile.error', error)
-          // TLDR and Goal each promise a managed skill. Do not launch an
-          // enabled session while silently omitting that requested contract.
-          if (hasReportingDomain(options.builtInMcpDomains)) throw error
-        }
+        const unavailableSkills = await this.runPreSpawnSkillReconcile(sessionId, options)
         this.throwIfSpawnCancelled(recoveryClaim, codexReplacementHandoff)
+        this.reportSkillsUnavailable(sessionId, unavailableSkills)
       }
       const provider = getMainProvider(kind)
       const createStartedAt = performance.now()
@@ -3066,6 +3235,11 @@ export class SessionManager extends EventEmitter {
           provider: kind,
         })
       } catch (err) {
+        // Tagged here, not at recover(): this catch is the only place that
+        // knows the provider runtime existed and its start() is what threw.
+        // A cancellation that surfaces here is excluded because recover
+        // reports it as `recover.cancelled`, never `recover.failed`.
+        if (!(err instanceof RecoveryCancelledError)) tagStartFailure(err, 'provider-launch')
         await this.settleEntryStart(sessionId, agentEntry)
         this.lifecycle.session('provider.start.end', sessionId, {
           kind,
@@ -3285,6 +3459,7 @@ export class SessionManager extends EventEmitter {
       // a half-dead TerminalSession that callers might still try to
       // write()/resize()/kill(). Roll back everything we added in
       // THIS spawn so the caller can retry from a clean slate.
+      if (!(err instanceof RecoveryCancelledError)) tagStartFailure(err, 'provider-launch')
       await this.settleEntryStart(sessionId, terminalEntry)
       performanceService.error('session.spawn.terminalStart.error', err, { sessionId })
       throw err
@@ -4244,7 +4419,58 @@ export class SessionManager extends EventEmitter {
     sessionId: string,
     prompt: string,
     record?: (event: string, data?: Record<string, unknown>) => void,
+    options?: {
+      /**
+       * This waiter REPLACES whatever orchestration prompt is already waiting
+       * for the session (#1134), instead of being refused as a second waiter.
+       *
+       * Only `orchestration_send_prompt` passes it, and only right after its
+       * own direct attempt — which already cancelled any earlier waiter via
+       * `deliverPromptToAgent`'s `supersedesPendingPrompt` — came back "not
+       * ready yet". Cancellation is a flag plus a wake; the cancelled
+       * waiter's entry leaves the map only when its loop unwinds, which is a
+       * few microtasks later. A provider that answers "blocked" synchronously
+       * (Claude's trust dialog does) can finish the direct attempt inside that
+       * window, and without this flag the new waiter would be REFUSED as a
+       * duplicate — after the MCP reply had already promised the parent
+       * `promptPending: true`. That is the silent loss #854's review was about.
+       *
+       * Replacing is safe because both ends are keyed by identity: the old
+       * waiter's teardown deletes only its own entry (see the `finally`), and
+       * a cancelled waiter never writes — its flag is checked synchronously
+       * between the gate answering `ready` and the delivery starting. A waiter
+       * already DELIVERING is not in the map at all, so it cannot be replaced
+       * here; it holds the in-flight reservation instead. The caller's direct
+       * attempt is then refused with `stage: 'reservation'`, and the MCP
+       * layer's `isNotReadyYet` rejects every stage but `before-write` — so
+       * that refusal is reported to the parent as a failure and this arm is
+       * never reached. That exclusion is what keeps a second copy from
+       * queueing behind a delivery in progress; the orchestration pending
+       * tests pin it with a real manager.
+       *
+       * create_agent does not pass it: its waiter is armed for a session that
+       * did not exist a moment earlier, so there is nothing to replace, and a
+       * refusal there would be a genuine double-arm worth surfacing.
+       */
+      supersedesPendingPrompt?: boolean
+    },
   ): Promise<PromptDeliveryResult> {
+    if (options?.supersedesPendingPrompt) {
+      // Reported, like the direct-delivery supersede (#1134 review): a waiter
+      // can arm between send_prompt's direct attempt and this arm — the
+      // direct attempt spans provider awaits, and create_agent arms from its
+      // own handler — and replacing it here without a word would leave a
+      // parent believing a prompt is pending that will never arrive. The
+      // caller ORs this into its reply's `supersededPendingPrompt`. Emitted
+      // synchronously, before this function's first await, so the caller
+      // knows by the time the call returns its promise.
+      if (this.cancelPendingPromptDelivery(sessionId, 'superseded-by-newer-prompt')) {
+        record?.('pending-superseded')
+      }
+      // Drop the entry now instead of waiting for the cancelled loop to
+      // unwind; its `finally` deletes by identity, so it will not touch ours.
+      this.pendingPromptDeliveries.delete(sessionId)
+    }
     if (this.pendingPromptDeliveries.has(sessionId)) {
       // Two waiters would both fire when the gate opens, and the child would
       // receive its brief twice.
@@ -4272,7 +4498,11 @@ export class SessionManager extends EventEmitter {
     let wakeCurrent: (() => void) | null = null
     const pending = {
       cancel: (reason: string) => {
-        cancelledFor = reason
+        // First reason wins (#1134). send_prompt cancels the same waiter
+        // twice — once from its direct attempt, once when arming its own
+        // waiter with `supersedesPendingPrompt` — and the journal should name
+        // the cause that actually ended the wait, not the last one to ask.
+        cancelledFor ??= reason
         wakeCurrent?.()
       },
     }
@@ -4462,7 +4692,18 @@ export class SessionManager extends EventEmitter {
     // releases its own slot first, so this only fires for a genuinely
     // different caller.
     if (options?.supersedesPendingPrompt) {
-      this.cancelPendingPromptDelivery(sessionId, 'superseded-by-direct-delivery')
+      // Recorded only when a waiter was REALLY cancelled (#1134). The
+      // orchestration send path turns this into `supersededPendingPrompt` in
+      // its reply: once send_prompt can itself leave a prompt waiting, a
+      // parent that sends a DIFFERENT follow-up while an earlier one waits has
+      // to be told the earlier one will not arrive — otherwise "latest wins"
+      // is a silent loss. Threaded through the existing `record` hook rather
+      // than a new return field because `PromptDeliveryResult` is the shared
+      // provider contract and this is a fact about the manager, not about the
+      // provider's delivery.
+      if (this.cancelPendingPromptDelivery(sessionId, 'superseded-by-direct-delivery')) {
+        record?.('pending-superseded')
+      }
     }
     const entry = this.sessions.get(sessionId)
     // `=== 'terminal'` rather than !isAgentProviderKind: TypeScript
