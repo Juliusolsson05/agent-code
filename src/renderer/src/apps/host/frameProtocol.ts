@@ -114,6 +114,26 @@ export const frameRequestSchema = z.discriminatedUnion('method', [
  * `window` — an unrelated message (a library's, a devtools bridge's) fails this
  * parse and is ignored rather than misread as a request.
  */
+/**
+ * The correlation half of an envelope, parsed SEPARATELY from the request
+ * (#1151 design review, blocker 1). The full schema used to be the only parse,
+ * so a request the SDK sent in good faith but with an invalid argument —
+ * `api.secrets.set('token', '')`, a 4097-character value — failed it and was
+ * dropped like foreign traffic: the child's promise never settled, while the
+ * same call from a runtime rejected. Our `kind` tag plus an id is enough to
+ * know the message is ours and who is waiting, so the broker can answer it.
+ */
+export const frameRequestCorrelationSchema = z.object({
+  kind: z.literal('agent-code-ext:request'),
+  id: z.string().min(1).max(200),
+})
+
+/** Every method the frame protocol accepts. Used ONLY to name the method in a
+ *  validation reply: a string outside this set is never echoed back. */
+export const FRAME_REQUEST_METHODS: ReadonlySet<string> = new Set(
+  frameRequestSchema.options.map(option => option.shape.method.value),
+)
+
 export const frameRequestEnvelopeSchema = z.object({
   kind: z.literal('agent-code-ext:request'),
   id: z.string().min(1).max(200),
