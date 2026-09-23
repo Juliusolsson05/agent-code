@@ -7,7 +7,7 @@ import type { Workspace } from '@renderer/workspace/hook'
 import { resumableProviderSessionId } from '@renderer/workspace/providerSessionIdentity'
 import { providerSwitchChoices } from '@renderer/workspace/providerChoices'
 import { enabledAgentProviderKindsSnapshot } from '@renderer/features/providers/store'
-import { isAgentProviderKind } from '@shared/types/providerKind'
+import { AGENT_PROVIDER_KINDS, isAgentProviderKind, providerOffersTerminalRuntime } from '@shared/types/providerKind'
 import { getProviderFeatures } from '@providers/shared/featureCapabilities'
 import { resolveTabSessions } from '@renderer/workspace/queries'
 import { startControlTask } from './startTask'
@@ -15,7 +15,7 @@ import { startControlTask } from './startTask'
 const target = z.object({ sessionId: z.string().min(1).describe('Exact Agent Code sessionId from agents.search; not the native transcript ID.') }).strict()
 const revision = z.string().describe('Revision from agents.lifecycleRead. Refresh it after any lifecycle or draft change.')
 const accepted = z.object({ callId: z.string(), accepted: z.literal(true) })
-const address = z.object({ provider: z.enum(['claude', 'codex', 'opencode', 'grok']), line: z.number().int().min(0),
+const address = z.object({ provider: z.enum(AGENT_PROVIDER_KINDS), line: z.number().int().min(0),
   sessionId: z.string().nullable(), uuid: z.string().nullable().optional() }).strict()
 
 // Lifecycle adapters consume observable domain results, not toasts or before/
@@ -56,12 +56,12 @@ export function lifecycleControlCapabilities(getWorkspace: () => Workspace) {
   return [
     defineCapability({ id: 'agents.resume', title: 'Resume a native session in a project', execution: 'window', effect: 'mutation', completion: 'accepted', target: { kind: 'project', field: 'tabId' },
       description: 'Open a known native conversation as a new agent in an explicit project. Supply provider/nativeSessionId/cwd from nativeHistory.list; known OpenCode IDs are supported. This resumes the same native conversation, not a copy; the ordinary backend ownership policy applies if already open. Returns a task callId; operations.read reports the exact newSessionId. It fills the captured focused lane only when that lane is empty (selectCreated:false never places it); otherwise it waits in the project index. Use agents.show afterward to put it in a lane.',
-      input: z.object({ tabId: z.string(), anchorSessionId: z.string(), provider: z.enum(['claude', 'codex', 'opencode', 'grok']), nativeSessionId: z.string().min(1), cwd: z.string().min(1), runtime: z.enum(['terminal']).optional(), selectCreated: z.boolean().default(true).describe('False preserves the active tab and all lane selections.') }).strict(), output: accepted,
+      input: z.object({ tabId: z.string(), anchorSessionId: z.string(), provider: z.enum(AGENT_PROVIDER_KINDS), nativeSessionId: z.string().min(1), cwd: z.string().min(1), runtime: z.enum(['terminal']).optional(), selectCreated: z.boolean().default(true).describe('False preserves the active tab and all lane selections.') }).strict(), output: accepted,
       handler: (input, context) => {
         const check = () => {
           if (getWorkspace().restoreStatus === 'pending' || hasAppInteractionOwner()) throw new ControlError('unavailable', 'Wait for restoration or finish the input-owning surface')
           if (!resolveTabSessions(useAppStore.getState().workspaceState, input.tabId).includes(input.anchorSessionId)) throw new ControlError('unavailable', 'Anchor is not in the target project')
-          if (input.runtime && input.provider !== 'opencode') throw new ControlError('invalid_input', 'Only OpenCode supports the terminal runtime')
+          if (input.runtime && !providerOffersTerminalRuntime(input.provider)) throw new ControlError('invalid_input', 'Only OpenCode and terminal-only providers (Pi) support the terminal runtime')
         }
         check()
         return startControlTask(context, async () => {
@@ -108,7 +108,7 @@ export function lifecycleControlCapabilities(getWorkspace: () => Workspace) {
     }),
     defineCapability({ id: 'agents.switchProvider', title: 'Switch an exact agent provider', execution: 'window', effect: 'mutation', completion: 'accepted', target: { kind: 'session', field: 'sessionId' },
       description: 'Move an observed agent to one of agents.lifecycleRead switchChoices through the normal translation, capacity/compaction and replacement transaction. May open a confirmation or take minutes. Returns a task callId; use operations.read for the new Agent Code session ID or failure. Draft and supported internal MCP-domain continuity follow the ordinary UI operation. Never assume the source ID remains valid.',
-      input: target.extend({ revision, provider: z.enum(['claude', 'codex', 'opencode', 'grok']), runtime: z.enum(['terminal']).optional().describe('Supply only when the chosen switchChoices entry declares this runtime; omit for structured rendering.') }), output: accepted,
+      input: target.extend({ revision, provider: z.enum(AGENT_PROVIDER_KINDS), runtime: z.enum(['terminal']).optional().describe('Supply only when the chosen switchChoices entry declares this runtime; omit for structured rendering.') }), output: accepted,
       handler: (input, context) => {
         const current = guard(input)
         if (!current.switchChoices.some(choice => choice.provider === input.provider && choice.runtime === (input.runtime ?? null))) throw new ControlError('invalid_input', 'Choose a supported provider/runtime from agents.lifecycleRead')

@@ -31,3 +31,20 @@ export const OPENCODE_ATTENTION_CONDITION_KINDS = new Set<string>([
   'opencode.permission',
   'opencode.question',
 ])
+
+// Grok was missing here (its policy kept a private copy), so Agent Analytics
+// counted time blocked on a Grok permission prompt as working time. Now both
+// read this one list.
+export const GROK_ATTENTION_CONDITION_KINDS = new Set<string>([
+  'grok.permission',
+  'grok.question',
+  'grok.plan-approval',
+])
+
+// Pi: a blocking extension dialog, or the project-trust selector at startup.
+// Both are attention-only (answered in pi's own TUI) — see
+// src/providers/pi/renderer/conditions/policy.ts.
+export const PI_ATTENTION_CONDITION_KINDS = new Set<string>([
+  'pi.dialog',
+  'pi.trust',
+])

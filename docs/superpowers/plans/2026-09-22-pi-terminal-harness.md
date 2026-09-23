@@ -152,6 +152,15 @@ all test runs.
   - Pi re-runs every extension factory on /new, /resume, /fork and /reload (`agent-session-runtime.ts`), so the bridge keeps one process-wide link;
   - forking at a user message puts that message's text back into Pi's editor.
 - 2026-09-22 — Task 5: submodule at package `610f0d8`, aliases/paths/include/vitest map, conditions-core target (sync --check clean; the package's copied core was already byte-identical), bridge copied as a raw .ts to `out/main/runtime/pi/bridge.ts` by both the Vite plugin and copy-packaged-resources (asarUnpack already covers `out/main/runtime/**`), `verify-build-output` requires it, app-level `support/upstream-versions.json` pins 0.87.1. `npm run typecheck` and `npm run test:package` green. ARCHITECTURE.md is deferred to Task 13 so it describes the finished integration, not the wiring alone.
+- 2026-09-22 — Task 6: `'pi'` in AGENT_PROVIDER_KINDS, `TERMINAL_ONLY_PROVIDER_KINDS` / `effectiveProviderRuntime` / `providerOffersTerminalRuntime` in providerKind.ts, main normalizes Pi to 'terminal' inside `resolveProviderRuntime` (every spawn/recover/cancel entry point) and compares effective runtimes in `replacementOwnershipMatches`. Every renderer TUI gate reads the effective runtime.
+  - Step 2 was checked by mutation after writing, not observed red first: reverting the display pin to the raw check fails exactly the two kind-only spawn rows in agent/hybrid mode.
+  - Because Pi had to compile end to end, this commit already contains Task 7/8 code: PiSession, its prompt delivery, skill discovery, bridge-path resolution, `loadPiHistoryChunk`, the Pi mapper and the `AgentTranscriptReader` Pi case. Their dedicated tests remain Task 7/8 steps.
+  - The new `provider-session-changed` AgentSession event is emitted by PiSession, but it is not yet plumbed to the renderer (Task 7).
+  - Opportunistic fixes in reach:
+    - Grok added to the shared attention sets (Analytics counted Grok prompt waits as working time), the phone badge, the provider import-boundary test (Grok was never checked), and extract-rendering-shape;
+    - hand-written provider enums in control/native-history derived from AGENT_PROVIDER_KINDS (the control SDK keeps a literal, since it cannot import the registry);
+    - a test now pins the subagents-dir guard for Grok and Pi (Grok's had none).
+  - `~/.pi/agent/bin` was added to the resolver's known dirs (Pi's managed installer, read from pi.dev/install.sh).
 
 ---
 
@@ -399,7 +408,7 @@ accTitle/accDescr/scope).
   `providerEnablement.test.ts`, `usage/sources.test.ts`, `setup/readiness.test.ts`,
   `OrchestrationBridge.runtime.test.ts`, `targets.test.ts`.
 
-- [ ] **Step 1:** Write the failing spawn-path table test
+- [x] **Step 1:** Write the failing spawn-path table test
   (`src/renderer/src/workspace/piTerminalSurface.renderer.test.ts` or next to
   `agentDisplayMode.test.ts`): for picker, split, catalog resume (no runtime),
   MCP create_agent (no runtime), control API, duplicate, switch target,
@@ -407,10 +416,10 @@ accTitle/accDescr/scope).
   surface `terminal`, feed-mounted commands hidden, read commands shown, Rewind
   hidden. Also: OpenCode structured stays structured; OpenCode Terminal stays
   terminal (regression guard for the helper).
-- [ ] **Step 2:** Confirm it fails.
-- [ ] **Step 3:** Implement the kind, helper, registries, gates, lists.
-- [ ] **Step 4:** `npm run typecheck`; focused tests green.
-- [ ] **Step 5:** Commit `feat(pi): register Pi as a terminal-only provider kind`
+- [x] **Step 2:** Confirm it fails.
+- [x] **Step 3:** Implement the kind, helper, registries, gates, lists.
+- [x] **Step 4:** `npm run typecheck`; focused tests green.
+- [x] **Step 5:** Commit `feat(pi): register Pi as a terminal-only provider kind`
   (+ a separate `refactor(workspace): resolve the terminal runtime per provider`
   commit for the gate conversion, so the refactor is reviewable alone).
 

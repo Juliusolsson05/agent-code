@@ -6,13 +6,14 @@ import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
 import { findTabsHoldingDirectory, resolveTabSessions } from '@renderer/workspace/queries'
 import { observeWorkspace, workspaceObservationSchema } from '@renderer/workspace/control'
 import type { Workspace } from '@renderer/workspace/hook'
-import { AGENT_PROVIDER_RUNTIMES } from '@shared/types/providerKind'
+import { AGENT_PROVIDER_KINDS, AGENT_PROVIDER_RUNTIMES, providerOffersTerminalRuntime } from '@shared/types/providerKind'
 import { setAgentTitleInWorkspace } from '@renderer/workspace/agentTitle'
 import { sessionHasTranscript } from '@renderer/workspace/transcriptAvailability'
 
 const sessionInput = z.object({ sessionId: z.string().min(1).describe('Stable agent sessionId from agents.search/list; not a provider-native transcript ID or numbered tile.') }).strict()
 const sessionReference = workspaceObservationSchema.shape.sessions.element
-const provider = z.enum(['claude', 'codex', 'opencode', 'grok']).describe('Provider for the new agent; its CLI must already be configured in Agent Code.')
+// Derived: a hand-written list silently dropped every new provider.
+const provider = z.enum(AGENT_PROVIDER_KINDS).describe('Provider for the new agent; its CLI must already be configured in Agent Code.')
 
 export function agentControlCapabilities(getWorkspace: () => Workspace) {
   const observe = () => observeWorkspace(getWorkspace)
@@ -215,7 +216,7 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
       output: sessionReference.extend({ readiness: z.object({ inputReady: z.boolean().nullable(), sessionRunId: z.string().nullable() }) }),
       handler: async ({ tabId, anchorSessionId, provider: kind, providerRuntime, title, selectCreated }) => {
         requireUi(); requireSession(anchorSessionId)
-        if (providerRuntime && kind !== 'opencode') throw new ControlError('invalid_input', 'Only OpenCode supports the terminal runtime')
+        if (providerRuntime && !providerOffersTerminalRuntime(kind)) throw new ControlError('invalid_input', 'Only OpenCode and terminal-only providers (Pi) support the terminal runtime')
         if (!resolveTabSessions(useAppStore.getState().workspaceState, tabId).includes(anchorSessionId)) {
           throw new ControlError('unavailable', 'Anchor does not belong to that project')
         }

@@ -109,6 +109,7 @@ import {
 } from '@renderer/workspace/providerSessionIdentity'
 import type { JsonlProviderStreamState } from '@renderer/workspace/providerSessionIdentity'
 import { SemanticEventBackpressureQueue } from '@renderer/workspace/hook/ipc/semanticEventBackpressure'
+import { PI_IDENTITY_ENVELOPE_TYPE } from '@providers/pi/renderer/transcript/mapper'
 
 // Codex rollout is delivered as many small IPC bursts, but `turn_context`
 // is only one line near the beginning of the task. The bundle that
@@ -906,9 +907,17 @@ export function useIpcSubscriptions(
     const offDiagnostic = feed.onSessionTranscriptDiagnostic(({ sessionId, diagnostic }) => {
       if (quarantinesSessionFeed(sessionId)) return
       const live = diagnostic as { kind?: string; connected?: boolean } | null
-      if (live?.kind !== 'opencode-terminal-live-state' || live.connected !== true) return
+      // Pi's bridge is the same kind of late-connecting live channel: its
+      // "never connected" banner (provider_bridge_unreachable) clears the
+      // same way once the bridge does connect.
+      const liveKinds: Record<string, string> = {
+        'opencode-terminal-live-state': '(provider_server_unreachable)',
+        'pi-terminal-live-state': '(provider_bridge_unreachable)',
+      }
+      const faultMarker = live?.kind ? liveKinds[live.kind] : undefined
+      if (!faultMarker || live?.connected !== true) return
       const current = refs.latestRuntimesRef.current[sessionId]
-      if (!current?.transcriptChannelError?.includes('(provider_server_unreachable)')) return
+      if (!current?.transcriptChannelError?.includes(faultMarker)) return
       updateRuntime(sessionId, {
         transcriptChannelError: null,
         transcriptError: null,
@@ -1879,8 +1888,15 @@ export function useIpcSubscriptions(
           // docs/decomposition/claude-queue-reconciliation.md.
           const entryType = (raw as { type?: string }).type
           const shapeSaysCodex = isCodexRolloutEntry(raw)
+          // A Pi row (pi-terminal-headless PiSessionRow) always carries its
+          // file `line` and a `parentId` key, and the runtime's identity
+          // envelope has its own type. Without this, a Pi burst that arrives
+          // before the pane's metadata would be routed to the Claude mapper —
+          // the silent binary-provider fallthrough #394 warns about.
+          const record = raw as Record<string, unknown>
+          const shapeSaysPi = record.type === PI_IDENTITY_ENVELOPE_TYPE || (typeof record.line === 'number' && 'parentId' in record)
           const routedKind: AgentProviderKind =
-            mappingKind ?? (shapeSaysCodex ? 'codex' : 'claude')
+            mappingKind ?? (shapeSaysCodex ? 'codex' : shapeSaysPi ? 'pi' : 'claude')
           if (entryType === 'queue-operation' && routedKind === 'claude') {
             const op = raw as { operation?: string; content?: string; timestamp?: string }
             claudeQueue = applyQueueOperation(claudeQueue, {

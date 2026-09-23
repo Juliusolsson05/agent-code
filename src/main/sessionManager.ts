@@ -55,9 +55,11 @@ import type {
 import {
   DEFAULT_PROVIDER,
   isAgentProviderRuntime,
+  effectiveProviderRuntime,
   isAgentProviderKind,
   isAgentSessionKind,
   isSessionKind,
+  isTerminalOnlyProviderKind,
 } from '@shared/types/providerKind.js'
 import type {
   AgentProviderKind,
@@ -425,6 +427,16 @@ function resolveProviderRuntime(
   kind: SessionKind,
   requested: unknown,
 ): AgentProviderRuntime | undefined {
+  // A terminal-only provider (Pi) runs its TUI whatever the caller asked for
+  // — including nothing, which is what most spawn paths send. Normalizing
+  // HERE, at every main entry point (spawn, recover, cancel, adopt), is what
+  // keeps the stored runtime and every ownership comparison consistent: a
+  // recovery request without a runtime must match a pane stored as
+  // 'terminal', not look like a different backend.
+  if (isTerminalOnlyProviderKind(kind)) {
+    if (requested !== undefined && requested !== 'terminal') throw new Error('Unsupported agent provider runtime')
+    return 'terminal'
+  }
   if (requested === undefined) return undefined
   if (!isAgentProviderRuntime(requested) || !isAgentProviderKind(kind)) {
     throw new Error('Unsupported agent provider runtime')
@@ -1060,7 +1072,10 @@ export class SessionManager extends EventEmitter {
     if (!ownership) return false
     return (
       (ownership.kind ?? DEFAULT_PROVIDER) === (options.kind ?? DEFAULT_PROVIDER) &&
-      (ownership.providerRuntime ?? null) === (options.providerRuntime ?? null) &&
+      // Effective, not raw: a terminal-only provider's stored runtime is
+      // 'terminal' while a request may omit it (see resolveProviderRuntime).
+      (effectiveProviderRuntime(ownership.kind ?? DEFAULT_PROVIDER, ownership.providerRuntime) ?? null) ===
+        (effectiveProviderRuntime(options.kind ?? DEFAULT_PROVIDER, options.providerRuntime) ?? null) &&
       path.resolve(ownership.cwd) === path.resolve(options.cwd)
     )
   }

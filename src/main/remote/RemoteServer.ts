@@ -15,7 +15,7 @@ import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import type { ResolveConditionResult } from '@shared/sessionFeed/types.js'
 import type { ConditionCustomAction } from '@shared/conditions-core/contract.js'
 import type { SessionKind, AgentProviderRuntime } from '@shared/types/providerKind.js'
-import { isAgentProviderKind } from '@shared/types/providerKind.js'
+import { isAgentProviderKind, isTerminalOnlyProviderKind } from '@shared/types/providerKind.js'
 import type { PromptDeliveryResult } from '@shared/types/providerConfig.js'
 import type { SessionBackendSnapshot } from '@shared/types/session.js'
 import type { RemoteSessionIdentity } from './workspaceProjection.js'
@@ -956,11 +956,12 @@ export class RemoteServer extends EventEmitter {
               pinned: identity.pinned,
             }
           : {}),
-        // Runtime only means something for the provider that HAS two
-        // runtimes; stamping 'terminal'-vs-null onto claude/codex rows
-        // would conflate OpenCode's discriminator with the plain-shell
-        // session kind and confuse future readers of the wire.
-        ...(summary.kind === 'opencode' ? { providerRuntime: runtime } : {}),
+        // Runtime only means something for a provider whose pane can be its
+        // native TUI: OpenCode (two runtimes) and the terminal-only ones (Pi,
+        // always 'terminal' — main normalizes it at spawn). Stamping
+        // 'terminal'-vs-null onto claude/codex rows would conflate the
+        // discriminator with the plain-shell session kind.
+        ...(summary.kind === 'opencode' || isTerminalOnlyProviderKind(summary.kind) ? { providerRuntime: runtime } : {}),
         ...(subAgentCount !== null ? { subAgentCount } : {}),
       }
     })

@@ -411,6 +411,21 @@ export type AgentSessionEvents = {
   // rather than a per-entry flag. Sessions emit it from Stage 4; delivery
   // through preload and both SessionFeeds is Stage 5 of the grok plan.
   'history-boundary': [ProviderHistoryBoundaryEvent & { file: string }]
+  /**
+   * The provider session this pane runs changed WITHOUT a respawn: the user
+   * started, resumed or forked a session inside a native TUI that Agent Code
+   * follows (Pi: /new, /resume, /fork — decision D4 in
+   * docs/decomposition/pi-terminal.md). Emitted after the provider's own
+   * history-boundary reset for the new session, so consumers rebind identity
+   * for a window that already holds the new conversation.
+   *
+   * WHY an explicit event and not a new id inside a transcript row: the
+   * renderer quarantines any committed burst whose provider id conflicts with
+   * the pane's durable one (#290 — duplicated panes rendering each other's
+   * messages). A switch the user made on purpose must be distinguishable from
+   * that misattach, and only the runtime that watched it happen can say so.
+   */
+  'provider-session-changed': [{ providerSessionId: string; transcriptFile: string | null; reason: string }]
 
   'semantic-event': [unknown]
   exit: [{ exitCode: number; signal?: number }]

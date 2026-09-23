@@ -148,6 +148,19 @@ const FEATURES_BY_KIND: Record<AgentProviderKind, ProviderFeatureCapabilities> =
     switchTargets: ['claude', 'codex', 'grok'],
     verifiedExternalResumeCommand: true,
   },
+  // Pi (terminal-only): prompts come from its session rows (the Pi mapper),
+  // and Reload Agent relaunches `pi --session-id <id>`, which reopens the
+  // session (Stage 0 `resume` recording). Rewind, Duplicate and switching
+  // need a transcript-engine adapter and a parser codec — declared here only
+  // once those exist, never inherited by being an agent.
+  pi: {
+    transcriptRewind: false,
+    transcriptDuplicate: false,
+    promptHistoryExtraction: true,
+    inAppResume: true,
+    switchTargets: [],
+    verifiedExternalResumeCommand: false,
+  },
 }
 
 /**

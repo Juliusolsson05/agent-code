@@ -3,6 +3,7 @@ import { hasReportingDomain } from '@shared/types/tldr'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import {
   DEFAULT_PROVIDER,
+  effectiveProviderRuntime,
   isAgentProviderKind,
   isAgentSessionKind,
   isSessionKind,
@@ -904,7 +905,9 @@ export function useSessionActions(
         // a caller that opted out (AgentTerminalLeaf) shows the booting TUI
         // and lets the user type at it.
         const skipReadinessWait =
-          options?.awaitInputReady === false || meta.providerRuntime === 'terminal'
+          options?.awaitInputReady === false ||
+          // Effective: Pi panes are terminal-only even without a stored runtime.
+          effectiveProviderRuntime(meta.kind ?? DEFAULT_PROVIDER, meta.providerRuntime) === 'terminal'
         let readyTimedOut = false
         if (
           !readyError &&

@@ -64,6 +64,18 @@ describe('provider feature matrix', () => {
         switchTargets: ['claude', 'codex', 'grok'],
         verifiedExternalResumeCommand: true,
       },
+      // Terminal-only Pi: prompts come from its session rows and Reload
+      // relaunches `pi --session-id`; nothing that needs a transcript adapter
+      // (rewind, duplicate, switching) is declared until one exists, and the
+      // resume command is unverified until checked against the real CLI.
+      pi: {
+        transcriptRewind: false,
+        transcriptDuplicate: false,
+        promptHistoryExtraction: true,
+        inAppResume: true,
+        switchTargets: [],
+        verifiedExternalResumeCommand: false,
+      },
     })
   })
 
@@ -95,9 +107,15 @@ describe('provider feature matrix', () => {
   })
 
   it('declares a complete directed switch graph for all transcript adapters', () => {
+    // "Has a transcript adapter" is what Duplicate needs too (it projects the
+    // provider's transcript into a new session through that adapter), so it
+    // identifies the providers the graph must connect. A provider without one
+    // (Pi, until its adapter lands) switches nowhere and is nobody's target —
+    // it can neither half-join the graph nor silently drop out of it.
+    const adapters = AGENT_PROVIDER_KINDS.filter(kind => getProviderFeatures(kind).transcriptDuplicate)
     for (const kind of AGENT_PROVIDER_KINDS) {
       expect(getProviderFeatures(kind).switchTargets)
-        .toEqual(AGENT_PROVIDER_KINDS.filter(candidate => candidate !== kind))
+        .toEqual(adapters.includes(kind) ? adapters.filter(candidate => candidate !== kind) : [])
     }
   })
 

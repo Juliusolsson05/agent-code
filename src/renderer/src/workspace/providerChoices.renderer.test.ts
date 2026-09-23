@@ -19,7 +19,10 @@ describe('provider switch choices', () => {
       'OpenCode',
       'OpenCode Terminal',
       'Grok',
+      'Pi',
     ])
+    // Pi's single choice carries the terminal runtime (it has no other).
+    expect(AGENT_PROVIDER_CHOICES.find(choice => choice.kind === 'pi')?.providerRuntime).toBe('terminal')
     expect(keys('claude')).toEqual([
       'codex:structured',
       'opencode:structured',

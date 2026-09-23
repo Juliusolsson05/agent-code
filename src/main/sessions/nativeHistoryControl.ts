@@ -2,8 +2,11 @@ import { z } from 'zod'
 import { defineCapability, pageInput, pageSchema, paginate } from '@control-sdk'
 import type { ConversationService } from '@main/conversations/service'
 import { getHostTranscriptAdapter } from '@main/providerSwitch/transcriptEngine'
+import { AGENT_PROVIDER_KINDS } from '@shared/types/providerKind'
 
-const provider = z.enum(['claude', 'codex', 'opencode', 'grok'])
+// Derived, not hand-written: the literal list here missed every new provider
+// (it is how Grok and then Pi fell out of the external operator's schema).
+const provider = z.enum(AGENT_PROVIDER_KINDS)
 const identity = z.object({ provider, cwd: z.string().min(1).describe('Native session working directory, not a project title.'),
   nativeSessionId: z.string().min(1).describe('Provider-native ID from nativeHistory.list or agents.lifecycleRead; not an Agent Code session ID.') })
 const prompt = z.object({ address: z.object({ provider, line: z.number(), sessionId: z.string().nullable(), uuid: z.string().nullable().optional() }),
@@ -43,7 +46,7 @@ export function nativeHistoryControlCapabilities(getService: () => ConversationS
         const page = paginate(response.rows, input, `native-search:${input.query}:${input.cwd ?? ''}:${input.resultLimit}`)
         return { ...page, items: page.items.map(row => ({ provider: row.provider, nativeSessionId: row.nativeId, cwd: row.cwd || null, lastModified: row.lastUserActivityAt, summary: row.label.slice(0, 2000), matchCount: row.match ? 1 : 0,
           prompts: row.match ? [{ text: row.match.text.slice(0, 2000), totalChars: row.match.text.length, timestamp: null }] : [] })),
-          coverage: { providers: ['claude', 'codex', 'opencode', 'grok'], candidatesPerProvider: response.total, exhaustive: true, possiblyMoreResults: response.nextCursor !== null } }
+          coverage: { providers: [...AGENT_PROVIDER_KINDS], candidatesPerProvider: response.total, exhaustive: true, possiblyMoreResults: response.nextCursor !== null } }
       },
     }),
     defineCapability({ id: 'nativeHistory.list', title: 'Find native sessions to resume', execution: 'main', effect: 'read',

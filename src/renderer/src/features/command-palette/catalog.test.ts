@@ -25,7 +25,7 @@ import { RETIRED_BUILT_IN_COMMAND_IDS } from '@renderer/app-state/settings/persi
 // 16 retirements took it to 118, Clear Lane (stage 4) to 119 and the lane keyboard
 // grammar (stage 5) to 123. (#992 was written against 130 and read 119 at the end;
 // merging main added Goal Loop's two commands and the two generated Grok splits.)
-// 124 with Open Setup (#995).
+// 124 with Open Setup (#995), 127 with the two generated Pi splits (#1132).
 // Keeping ONE snapshot that moved — rather
 // than a "baseline" file and an "after" file — is what makes the plan's
 // headline count an assertion anyone can check against running code instead of
@@ -72,6 +72,8 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
   'opencode-horizontal',
   'grok-vertical',
   'grok-horizontal',
+  'pi-vertical',
+  'pi-horizontal',
   'undo-close',
   'toggle-tail',
   'toggle-tail-all',
@@ -237,12 +239,12 @@ const NAVIGATION_COMMAND_GROUP: readonly string[] = [
 const ids = (): string[] => builtInCommandCatalog.map(c => c.id)
 
 describe('built-in command catalog — baseline characterization', () => {
-  it('contains exactly the 125 governed commands in registration order', () => {
+  it('contains exactly the 127 governed commands in registration order', () => {
     // Order matters: this is the palette's empty-query browse order.
     expect(ids()).toEqual([...BASELINE_COMMAND_IDS])
   })
 
-  it('has exactly 125 commands', () => {
+  it('has exactly 127 commands', () => {
     // Stated separately from the order assertion because this number is the
     // thing that moves, and a bare count failure is a clearer signal than a
     // 99-line array diff.
@@ -265,11 +267,12 @@ describe('built-in command catalog — baseline characterization', () => {
     // −attach×2, −detach → 115 with Clear Lane (#992 stage 4) → 119 with the
     // lane keyboard grammar (#992 stage 5) → 123 once main's Goal Loop preview
     // and stop (#1001) and the two generated Grok splits (#844) merged in → 124
-    // with Goal Loop MCP (#1006) → 125 with Open Setup (#995).
+    // with Goal Loop MCP (#1006) → 125 with Open Setup (#995) → 127 with the two
+    // generated Pi splits `pi-vertical` / `pi-horizontal` (#1132).
     // Each step of that arithmetic was a deliberate edit to this line, which is the entire point of pinning it. (The two test
     // titles above had drifted to "115" while this line said 116; they now
     // track it again.)
-    expect(builtInCommandCatalog).toHaveLength(125)
+    expect(builtInCommandCatalog).toHaveLength(127)
   })
 
   it('reports no structural defects', () => {
@@ -421,7 +424,7 @@ describe('governance targets', () => {
   })
 
   it('lands on the arithmetic the plan predicted', () => {
-    // 102 baseline - 21 retirements + 44 additions = 125, checked against the
+    // 102 baseline - 21 retirements + 46 additions = 127, checked against the
     // real catalog rather than trusted as prose. (5 governance retirements +
     // 16 unified-layout retirements, all recorded in RETIRED_COMMAND_IDS.)
     //
@@ -451,10 +454,11 @@ describe('governance targets', () => {
     // `agent-analytics.open` (#964), `goal-loop-preview` and `goal-loop-stop`
     // (#1001), `grok-vertical` and `grok-horizontal` (#844, generated from
     // AGENT_PROVIDER_KINDS), `clear-focused-lane` (#992 stage 4), and the four
-    // lane-grammar commands (#992 stage 5), `enable-goal-loop-mcp` (#1006)
-    // and `open-setup` (#995).
-    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 44).toBe(102)
-    expect(builtInCommandCatalog).toHaveLength(125)
+    // lane-grammar commands (#992 stage 5), `enable-goal-loop-mcp` (#1006),
+    // `open-setup` (#995), and `pi-vertical` / `pi-horizontal` (#1132,
+    // generated from AGENT_PROVIDER_KINDS like Grok's).
+    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 46).toBe(102)
+    expect(builtInCommandCatalog).toHaveLength(127)
   })
 })
 

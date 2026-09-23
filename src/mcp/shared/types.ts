@@ -121,6 +121,10 @@ const BUILT_IN_MCP_DOMAINS_BY_PROVIDER = {
   // on the terminal's load answer (the recorded tool.mcp path); the app offers
   // Grok the same built-in domain set as the other terminal providers.
   grok: [...BUILT_IN_MCP_DOMAINS],
+  // Pi has no MCP of its own. Built-in domains reach it only through the
+  // bridge extension's tool proxy; until that proxy ships, no domain is
+  // offered, so no setting can claim tools a Pi pane cannot call.
+  pi: [],
 } as const satisfies Record<AgentProviderKind, readonly BuiltInMcpDomain[]>
 
 const BUILT_IN_MCP_DOMAIN_SET = new Set<string>(BUILT_IN_MCP_DOMAINS)

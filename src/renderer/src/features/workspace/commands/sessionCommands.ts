@@ -1,5 +1,5 @@
 import { clonedMcpOverrides } from '@renderer/workspace/mcpDomains'
-import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
+import { DEFAULT_PROVIDER, effectiveProviderRuntime, isAgentProviderKind } from '@shared/types/providerKind'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { getProviderFeatures } from '@providers/shared/featureCapabilities'
 import { panel, status, toggle, value } from '@renderer/features/command-palette/commandState'
@@ -180,7 +180,9 @@ export const sessionCommands: CommandDef[] = [
       // lift.
       return (
         getProviderFeatures(kind).transcriptRewind &&
-        meta?.providerRuntime !== 'terminal' &&
+        // Effective: a terminal-only provider (Pi) has no composer to receive
+        // the rewound draft even when its metadata carries no runtime.
+        effectiveProviderRuntime(kind, meta?.providerRuntime) !== 'terminal' &&
         Boolean(meta?.providerSessionId)
       )
     },
@@ -865,7 +867,7 @@ export const sessionCommands: CommandDef[] = [
     surface: 'session',
     title: 'Reload Agent',
     description: '**What it does:** Restarts the focused **agent**.\n\n**Use when:** The agent is stuck, exited, or needs reconnecting.\n\n**Notes:** Requires a resumable provider session.',
-    keywords: ['reload', 'resume', 'agent', 'claude', 'codex', 'opencode', 'reconnect'],
+    keywords: ['reload', 'resume', 'agent', 'claude', 'codex', 'opencode', 'pi', 'reconnect'],
     getState: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       const meta = sessionId ? workspace.state.sessions[sessionId] : null
