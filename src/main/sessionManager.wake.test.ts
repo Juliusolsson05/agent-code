@@ -200,26 +200,160 @@ describe('SessionManager restart wake recovery', () => {
     expect(createSession).toHaveBeenCalledTimes(1)
   })
 
-  it('fails a TLDR-enabled launch and revokes its token if the reporting skill cannot deploy', async () => {
+  // #1133. Before this, a managed-skill failure with TLDR or Goal requested
+  // REJECTED the spawn. Almost every pane requests one of them, so a single
+  // broken skill stopped every agent of every provider (Sept 18 and Sept 19,
+  // 2026). These pin the replacement contract: the agent starts with its MCP
+  // capability intact, the failure is journaled, and the renderer is told which
+  // skill is missing. On origin/main the spawn rejects and none of this holds.
+  function journalSpy() {
+    return { record: vi.fn(), recordError: vi.fn() }
+  }
+
+  it('launches a TLDR agent without the skill when the TLDR skill cannot deploy, and says so', async () => {
     const { SessionManager } = await import('./sessionManager')
     const host = { registerSession: vi.fn((_scope: { sessionId: string }) => []), revokeSession: vi.fn() }
-    const reconcile = vi.fn(async () => { throw new Error('TLDR skill destination is user-owned') })
-    const manager = new SessionManager(null, host as unknown as BuiltInMcpHttpHost, null, reconcile)
+    const journal = journalSpy()
+    const skillError = new Error('TLDR skill destination is user-owned')
+    const reconcile = vi.fn(async () => [{ skill: 'tldr' as const, error: skillError }])
+    const manager = new SessionManager(null, host as unknown as BuiltInMcpHttpHost, journal as never, reconcile)
+    const warnings: unknown[] = []
+    manager.on('managed-skills-unavailable', event => warnings.push(event))
     const options = { kind: 'codex' as const, cwd: '/tmp/project', builtInMcpDomains: ['tldr' as const], tldrIdentity: 'summary-agent' }
-    await expect(manager.spawn(options)).rejects.toThrow('TLDR skill destination is user-owned')
+
+    const result = await manager.spawn(options)
+
     expect(reconcile).toHaveBeenCalledWith(options)
-    expect(createSession).not.toHaveBeenCalled()
-    expect(host.revokeSession).toHaveBeenCalledWith(host.registerSession.mock.calls[0]![0].sessionId)
+    expect(createSession).toHaveBeenCalledTimes(1)
+    expect(manager.getBackendSnapshot(result.sessionId)).toMatchObject({ lifecycle: 'live' })
+    // The MCP capability survives: its session-scoped token must NOT be revoked
+    // the way the old abort path revoked it. Losing the skill costs guidance,
+    // and the tool still brings its own server instructions.
+    expect(host.revokeSession).not.toHaveBeenCalled()
+    expect(warnings).toEqual([{ sessionId: result.sessionId, skills: ['tldr'] }])
+    // The raw error stays in main's journal, keyed by which step failed.
+    // Keyed by ids.sessionId like the `.degraded` row, so triage filtering on
+    // one pane finds the reason next to the consequence.
+    expect(journal.recordError).toHaveBeenCalledWith(
+      'conventions.pre_spawn_reconcile.error',
+      skillError,
+      { skill: 'tldr' },
+      { sessionId: result.sessionId },
+    )
+    expect(journal.record).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'conventions.pre_spawn_reconcile.degraded',
+      ids: { sessionId: result.sessionId },
+      data: { skills: 'tldr' },
+    }))
   })
 
-  it('fails a Goal-only launch the same way when the goal skill cannot deploy', async () => {
+  it('launches a Goal-only agent the same way when the Goal skill cannot deploy', async () => {
     const { SessionManager } = await import('./sessionManager')
     const host = { registerSession: vi.fn((_scope: { sessionId: string }) => []), revokeSession: vi.fn() }
-    const reconcile = vi.fn(async () => { throw new Error('Goal skill destination is user-owned') })
+    const reconcile = vi.fn(async () => [{ skill: 'goal' as const, error: new Error('Goal skill destination is user-owned') }])
     const manager = new SessionManager(null, host as unknown as BuiltInMcpHttpHost, null, reconcile)
-    await expect(manager.spawn({ kind: 'claude', cwd: '/tmp/project', builtInMcpDomains: ['goal'] })).rejects.toThrow('Goal skill destination is user-owned')
+    const warnings: unknown[] = []
+    manager.on('managed-skills-unavailable', event => warnings.push(event))
+
+    const result = await manager.spawn({ kind: 'claude', cwd: '/tmp/project', builtInMcpDomains: ['goal'] })
+
+    expect(createSession).toHaveBeenCalledTimes(1)
+    expect(host.revokeSession).not.toHaveBeenCalled()
+    expect(warnings).toEqual([{ sessionId: result.sessionId, skills: ['goal'] }])
+  })
+
+  it('still launches and warns for every requested skill when the reconcile hook itself throws', async () => {
+    // The production hook reports failures instead of throwing them, so a throw
+    // means nobody knows which skills were prepared. Assuming none were keeps
+    // the user informed, where silence would bring back the omission the old
+    // strict rule existed to prevent.
+    const { SessionManager } = await import('./sessionManager')
+    const host = { registerSession: vi.fn((_scope: { sessionId: string }) => []), revokeSession: vi.fn() }
+    const journal = journalSpy()
+    const reconcile = vi.fn(async () => { throw new Error('managed skills state unreadable') })
+    const manager = new SessionManager(null, host as unknown as BuiltInMcpHttpHost, journal as never, reconcile)
+    const warnings: unknown[] = []
+    manager.on('managed-skills-unavailable', event => warnings.push(event))
+
+    const result = await manager.recover({
+      sessionId: 'restored-reporting-pane',
+      kind: 'claude',
+      cwd: '/tmp/project',
+      builtInMcpDomains: ['goal', 'tldr'],
+    })
+
+    expect(result).toMatchObject({ ok: true, disposition: 'spawned' })
+    expect(createSession).toHaveBeenCalledTimes(1)
+    // Fixed order, whatever order the domains were requested in.
+    expect(warnings).toEqual([{ sessionId: 'restored-reporting-pane', skills: ['tldr', 'goal'] }])
+    expect(journal.recordError).toHaveBeenCalledTimes(2)
+  })
+
+  it('neither warns nor journals a degraded launch for a restore cancelled during the reconcile', async () => {
+    // The reconcile serializes behind other skill writes, so a pane can close
+    // while it runs. That session never launches. A `.degraded` row or a toast
+    // saying "agents started without it" would be a false fact about it. The
+    // reconcile's own `.error` row still lands, because the skill really is
+    // broken machine-wide.
+    const { SessionManager } = await import('./sessionManager')
+    const host = { registerSession: vi.fn((_scope: { sessionId: string }) => []), revokeSession: vi.fn() }
+    const journal = journalSpy()
+    let releaseReconcile!: () => void
+    const reconcileGate = new Promise<void>(resolve => { releaseReconcile = resolve })
+    const reconcile = vi.fn(async () => {
+      await reconcileGate
+      return [{ skill: 'tldr' as const, error: new Error('TLDR skill destination is user-owned') }]
+    })
+    const manager = new SessionManager(null, host as unknown as BuiltInMcpHttpHost, journal as never, reconcile)
+    const warnings: unknown[] = []
+    manager.on('managed-skills-unavailable', event => warnings.push(event))
+
+    const recovering = manager.recover({
+      sessionId: 'closing-pane',
+      kind: 'claude',
+      cwd: '/tmp/project',
+      builtInMcpDomains: ['tldr'],
+    })
+    await vi.waitFor(() => expect(reconcile).toHaveBeenCalledTimes(1))
+    const killing = manager.kill('closing-pane')
+    releaseReconcile()
+    await killing
+
+    await expect(recovering).resolves.toMatchObject({ ok: false, code: 'cancelled' })
     expect(createSession).not.toHaveBeenCalled()
-    expect(host.revokeSession).toHaveBeenCalledWith(host.registerSession.mock.calls[0]![0].sessionId)
+    expect(warnings).toEqual([])
+    expect(journal.record).not.toHaveBeenCalledWith(expect.objectContaining({
+      name: 'conventions.pre_spawn_reconcile.degraded',
+    }))
+    expect(journal.recordError).toHaveBeenCalledWith(
+      'conventions.pre_spawn_reconcile.error',
+      expect.any(Error),
+      { skill: 'tldr' },
+      { sessionId: 'closing-pane' },
+    )
+  })
+
+  it('does not warn when only the machine-wide audit failed', async () => {
+    // A failed personal-conventions audit was always nonfatal and journal-only.
+    // Its health is in Settings, and it does not remove anything this agent
+    // asked for, so it must not start toasting on every launch.
+    const { SessionManager } = await import('./sessionManager')
+    const journal = journalSpy()
+    const reconcile = vi.fn(async () => [{ skill: 'conventions' as const, error: new Error('audit failed') }])
+    const manager = new SessionManager(null, null, journal as never, reconcile)
+    const warnings: unknown[] = []
+    manager.on('managed-skills-unavailable', event => warnings.push(event))
+
+    await manager.spawn({ kind: 'codex', cwd: '/tmp/project' })
+
+    expect(createSession).toHaveBeenCalledTimes(1)
+    expect(warnings).toEqual([])
+    expect(journal.recordError).toHaveBeenCalledWith(
+      'conventions.pre_spawn_reconcile.error',
+      expect.any(Error),
+      { skill: 'conventions' },
+      { sessionId: expect.any(String) },
+    )
   })
 
   it('joins a second wake while the first backend recovery is still starting', async () => {
