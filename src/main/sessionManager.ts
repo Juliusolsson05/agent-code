@@ -2614,8 +2614,8 @@ export class SessionManager extends EventEmitter {
   private async runPreSpawnSkillReconcile(
     sessionId: string,
     options: SessionSpawnOptions,
-  ): Promise<void> {
-    if (!this.beforeAgentSessionStart) return
+  ): Promise<ReportingDomain[]> {
+    if (!this.beforeAgentSessionStart) return []
     const requested = REPORTING_DOMAINS.filter(domain => options.builtInMcpDomains?.includes(domain))
     let failures: readonly ManagedSkillPreparationFailure[]
     try {
@@ -2634,23 +2634,57 @@ export class SessionManager extends EventEmitter {
       // Same event name as before #1133, so triage that already greps for it
       // keeps working. `skill` says which step failed, which the old single
       // catch could not.
-      this.journal?.recordError('conventions.pre_spawn_reconcile.error', failure.error, {
-        sessionId,
-        skill: failure.skill,
-      })
+      // `ids.sessionId`, not `data.sessionId`: the `.degraded` row and every
+      // `recover.*` row for this pane are keyed by ids, and triage follows
+      // one pane by filtering on ids. The error row explains WHY that pane is
+      // degraded, so it has to be found by the same filter. Written
+      // unconditionally, even if the spawn is cancelled right after: the
+      // reconcile really did fail, and that is machine-wide skill health, not
+      // a claim about this session.
+      this.journal?.recordError(
+        'conventions.pre_spawn_reconcile.error',
+        failure.error,
+        { skill: failure.skill },
+        { sessionId },
+      )
     }
-    // Only skills this agent ASKED for are worth interrupting the user about. A
-    // failed machine-wide audit (`conventions`) was always nonfatal and
-    // journal-only, and its degraded health already shows in Settings. A
-    // failure for a domain the launch did not request cannot happen with the
-    // production hook, and would not affect this agent anyway.
-    const unavailable = REPORTING_DOMAINS.filter(domain =>
+    // Only skills this agent ASKED for are worth interrupting the user about.
+    // A machine-wide audit failure (`conventions`) does not toast. Be precise
+    // about history here, because it matters when reading old journals:
+    // before #1133 an audit throw shared the hook's single catch, so it too
+    // ABORTED every TLDR/Goal launch (only launches without reporting domains
+    // survived it). A pre-#1133 outage such as the Sept 18 cluster can
+    // therefore be an audit failure as easily as a skill deploy failure. The
+    // `.error` row's message tells them apart. Now it is journal-only: the
+    // audit never removes a skill the agent asked for (the product skills are
+    // prepared in their own steps), and its degraded health already shows in
+    // Settings. A failure for a domain the launch did not request cannot
+    // happen with the production hook, and would not affect this agent anyway.
+    return REPORTING_DOMAINS.filter(domain =>
       requested.includes(domain) && failures.some(failure => failure.skill === domain),
     )
+  }
+
+  /**
+   * Publish that a launch is going ahead without some requested product skills.
+   *
+   * WHY this is separate from the reconcile and runs only after the
+   * post-reconcile cancellation check: the reconcile can take a while (it
+   * serializes behind other skill writes), and a restore can be cancelled
+   * meanwhile because the pane closed or a Codex replacement superseded it.
+   * Journaling `.degraded` before that check wrote a false "this session is
+   * launching without its skills" row for a session that never launched. That
+   * is exactly the kind of untrustworthy journal fact #1133 set out to remove.
+   * The toast would also have claimed "agents started" off a launch that did
+   * not happen.
+   */
+  private reportSkillsUnavailable(sessionId: string, unavailable: readonly ReportingDomain[]): void {
     if (unavailable.length === 0) return
-    // The launch-side fact that pairs with the `.error` rows above: "this
-    // session started WITHOUT these skills". Before #1133 the next row was
-    // `recover.failed`. Joined into a string because journal data stays flat.
+    // Pairs with the `.error` rows (same ids.sessionId): "this session is
+    // launching WITHOUT these skills". Before #1133 the next row was
+    // `recover.failed`. It says "launching", not "started", because the
+    // provider can still fail afterwards; that shows up as `recover.failed`
+    // with its own cause. Joined into a string because journal data stays flat.
     this.journal?.record({
       area: 'conventions.pre_spawn_reconcile',
       name: 'conventions.pre_spawn_reconcile.degraded',
@@ -2658,7 +2692,7 @@ export class SessionManager extends EventEmitter {
       ids: { sessionId },
       data: { skills: unavailable.join(',') },
     })
-    this.emit('managed-skills-unavailable', { sessionId, skills: unavailable })
+    this.emit('managed-skills-unavailable', { sessionId, skills: [...unavailable] })
   }
 
   /**
@@ -2811,8 +2845,9 @@ export class SessionManager extends EventEmitter {
       }
       this.throwIfSpawnCancelled(recoveryClaim, codexReplacementHandoff)
       if (this.beforeAgentSessionStart) {
-        await this.runPreSpawnSkillReconcile(sessionId, options)
+        const unavailableSkills = await this.runPreSpawnSkillReconcile(sessionId, options)
         this.throwIfSpawnCancelled(recoveryClaim, codexReplacementHandoff)
+        this.reportSkillsUnavailable(sessionId, unavailableSkills)
       }
       const provider = getMainProvider(kind)
       const createStartedAt = performance.now()

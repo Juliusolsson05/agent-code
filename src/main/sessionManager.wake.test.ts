@@ -232,10 +232,13 @@ describe('SessionManager restart wake recovery', () => {
     expect(host.revokeSession).not.toHaveBeenCalled()
     expect(warnings).toEqual([{ sessionId: result.sessionId, skills: ['tldr'] }])
     // The raw error stays in main's journal, keyed by which step failed.
+    // Keyed by ids.sessionId like the `.degraded` row, so triage filtering on
+    // one pane finds the reason next to the consequence.
     expect(journal.recordError).toHaveBeenCalledWith(
       'conventions.pre_spawn_reconcile.error',
       skillError,
-      { sessionId: result.sessionId, skill: 'tldr' },
+      { skill: 'tldr' },
+      { sessionId: result.sessionId },
     )
     expect(journal.record).toHaveBeenCalledWith(expect.objectContaining({
       name: 'conventions.pre_spawn_reconcile.degraded',
@@ -286,6 +289,50 @@ describe('SessionManager restart wake recovery', () => {
     expect(journal.recordError).toHaveBeenCalledTimes(2)
   })
 
+  it('neither warns nor journals a degraded launch for a restore cancelled during the reconcile', async () => {
+    // The reconcile serializes behind other skill writes, so a pane can close
+    // while it runs. That session never launches. A `.degraded` row or a toast
+    // saying "agents started without it" would be a false fact about it. The
+    // reconcile's own `.error` row still lands, because the skill really is
+    // broken machine-wide.
+    const { SessionManager } = await import('./sessionManager')
+    const host = { registerSession: vi.fn((_scope: { sessionId: string }) => []), revokeSession: vi.fn() }
+    const journal = journalSpy()
+    let releaseReconcile!: () => void
+    const reconcileGate = new Promise<void>(resolve => { releaseReconcile = resolve })
+    const reconcile = vi.fn(async () => {
+      await reconcileGate
+      return [{ skill: 'tldr' as const, error: new Error('TLDR skill destination is user-owned') }]
+    })
+    const manager = new SessionManager(null, host as unknown as BuiltInMcpHttpHost, journal as never, reconcile)
+    const warnings: unknown[] = []
+    manager.on('managed-skills-unavailable', event => warnings.push(event))
+
+    const recovering = manager.recover({
+      sessionId: 'closing-pane',
+      kind: 'claude',
+      cwd: '/tmp/project',
+      builtInMcpDomains: ['tldr'],
+    })
+    await vi.waitFor(() => expect(reconcile).toHaveBeenCalledTimes(1))
+    const killing = manager.kill('closing-pane')
+    releaseReconcile()
+    await killing
+
+    await expect(recovering).resolves.toMatchObject({ ok: false, code: 'cancelled' })
+    expect(createSession).not.toHaveBeenCalled()
+    expect(warnings).toEqual([])
+    expect(journal.record).not.toHaveBeenCalledWith(expect.objectContaining({
+      name: 'conventions.pre_spawn_reconcile.degraded',
+    }))
+    expect(journal.recordError).toHaveBeenCalledWith(
+      'conventions.pre_spawn_reconcile.error',
+      expect.any(Error),
+      { skill: 'tldr' },
+      { sessionId: 'closing-pane' },
+    )
+  })
+
   it('does not warn when only the machine-wide audit failed', async () => {
     // A failed personal-conventions audit was always nonfatal and journal-only.
     // Its health is in Settings, and it does not remove anything this agent
@@ -304,7 +351,8 @@ describe('SessionManager restart wake recovery', () => {
     expect(journal.recordError).toHaveBeenCalledWith(
       'conventions.pre_spawn_reconcile.error',
       expect.any(Error),
-      expect.objectContaining({ skill: 'conventions' }),
+      { skill: 'conventions' },
+      { sessionId: expect.any(String) },
     )
   })
 

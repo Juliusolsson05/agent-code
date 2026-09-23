@@ -58,8 +58,17 @@ the blast radius for any future cause.
   so existing triage greps keep working. It never rethrows. If the hook itself
   throws, which is unexpected, every requested reporting skill is treated as
   unavailable, so the warning still fires.
-- For requested reporting skills that failed, the manager emits
-  `managed-skills-unavailable` `{ sessionId, skills }`.
+- For requested reporting skills that failed, the manager journals
+  `conventions.pre_spawn_reconcile.degraded` and emits
+  `managed-skills-unavailable` `{ sessionId, skills }`. It does this only
+  AFTER the post-reconcile cancellation check, so a restore cancelled during
+  the reconcile writes no false "launching without skills" row and no toast.
+- Both the `.error` and `.degraded` rows carry `ids.sessionId`. `recordError`
+  gained an optional `ids` parameter for this, so the two rows can be joined.
+- Audit history, which matters for reading old journals: before this change an
+  audit throw shared the hook's single catch and also aborted every TLDR/Goal
+  launch. So the Sept 18 cluster could have been an audit failure. Now an
+  audit failure only goes to the journal.
 
 ### Warning channel (renderer)
 
@@ -83,7 +92,10 @@ When a whole workspace restores, the single-slot toast collapses N identical
 warnings into one.
 
 Persistent state stays in Settings (custom-skill health rows). The toast only
-points there.
+points there. A 60 s repeat window, per window and keyed by the skill set,
+stops the same toast from coming back on every later launch while the skill
+stays broken. A new skill set still shows immediately, and main's journal
+still records every occurrence.
 
 ### `recover.failed` cause
 
@@ -107,8 +119,9 @@ failure is still in the journal as `conventions.pre_spawn_reconcile.error`.
   abort (TLDR / Goal) now assert the new contract. The spawn resolves, the
   provider session is created, the MCP token is **not** revoked, and
   `managed-skills-unavailable` names the skill. A hook that throws outright
-  still spawns and warns for the requested reporting skills. All of these fail on
-  origin/main.
+  still spawns and warns for the requested reporting skills. A restore
+  cancelled during the reconcile neither warns nor journals `.degraded`. All
+  of these fail on origin/main.
 - `src/main/sessionManager.lifecycle.test.ts` (the diagnostic-stream suite):
   `recover.failed` carries `cause: 'missing-workspace'` / `'cli-not-found'` /
   `'provider-launch'` / `'unknown'`, and a provider start error's text does not
