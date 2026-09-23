@@ -88,6 +88,18 @@ describe('Pi conversation source', () => {
     expect(basename(row!.file!)).toBe(basename(named.file))
   })
 
+  it('a /name set late in a long session (past the head read) is still its title', async () => {
+    const { home, place } = sandbox()
+    const repo = join(home, 'repo')
+    const rows = Object.values(loadLiveFixture('plain').files)[0]!
+    // Pad the conversation past the 64 KB head with real-shaped user rows.
+    const filler = Array.from({ length: 80 }, (_, index) => ({ type: 'message', id: `f${String(index).padStart(7, '0')}`, parentId: index === 0 ? rows.at(-1)!.id : `f${String(index - 1).padStart(7, '0')}`, timestamp: '2026-09-22T00:00:01.000Z', message: { role: 'user', content: [{ type: 'text', text: 'x'.repeat(1000) }] } }))
+    const named = place([...rows, ...filler, { type: 'session_info', id: 'ffff0001', parentId: filler.at(-1)!.id, timestamp: '2026-09-22T00:00:02.000Z', name: 'Late title' }], repo)
+    const source = new PiConversationSource({ env: {}, homeDirectory: home })
+    const [row] = await source.discover({ scope: 'everywhere', family: await resolveFamily(repo, 'everywhere', { listWorktrees: async () => [] }) })
+    expect(row).toMatchObject({ nativeId: named.id, customTitle: 'Late title' })
+  })
+
   it('files that are not Pi sessions are skipped, not reported as conversations', async () => {
     const { home } = sandbox()
     const dir = join(home, '.pi', 'agent', 'sessions', '--x--')

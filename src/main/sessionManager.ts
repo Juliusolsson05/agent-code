@@ -3037,11 +3037,22 @@ export class SessionManager extends EventEmitter {
       })
       session.on('provider-session-changed', change => {
         if (!ownsEntry()) return
-        // The pane now runs a different provider session. Main needs nothing
-        // else rewritten: backend snapshots read session.getProviderSessionId()
-        // live, and the next committed row updates lastTranscriptFile. The
-        // renderer owns the durable pane identity (workspace.json), so the
-        // fact goes there.
+        // The pane now runs a different provider session (Pi /new, /resume,
+        // /fork). Backend snapshots read session.getProviderSessionId() live,
+        // but main's two transcript caches must move with it NOW:
+        //   - lastTranscriptFile: Pi writes nothing for a /new session until
+        //     its first reply, so "the next committed row will update it"
+        //     leaves the phone, Agent Management and every other resolver
+        //     describing the conversation the user just LEFT for a whole
+        //     turn. A null file means the new session has none yet.
+        //   - spawnInfo.resumeSessionId: resolveTranscriptFile's fallback
+        //     re-derives from it, and would find the old file again.
+        // The renderer owns the durable pane identity (workspace.json), so
+        // the fact is also forwarded there.
+        if (change.transcriptFile) this.lastTranscriptFile.set(sessionId, change.transcriptFile)
+        else this.lastTranscriptFile.delete(sessionId)
+        const info = this.spawnInfo.get(sessionId)
+        if (info) this.spawnInfo.set(sessionId, { ...info, resumeSessionId: change.providerSessionId })
         this.emit('provider-session-changed', { sessionId, ...change })
       })
       session.on('jsonl-entry', (

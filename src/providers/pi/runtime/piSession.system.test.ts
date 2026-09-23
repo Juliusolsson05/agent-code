@@ -169,6 +169,15 @@ describe('PiSession over the recordings', () => {
     expect(result).toMatchObject({ ok: false, code: 'not-ready', retrySafe: true, promptWritten: false })
   })
 
+  it('a prompt pi refused before it was sent (e.g. mid-compaction) is safe to retry; an unknown outcome is not', async () => {
+    const refusing = { deliverPromptText: async () => { throw Object.assign(new Error('pi is compacting this session'), { code: 'pi-terminal-rejected' }) } }
+    expect(await deliverPiPrompt({ session: refusing, sessionId: 'pane', prompt: 'hi' } as never))
+      .toMatchObject({ ok: false, stage: 'before-write', retrySafe: true, disposition: 'retry-same-session', promptWritten: false })
+    const unknown = { deliverPromptText: async () => { throw new Error('pi prompt delivery outcome is unknown') } }
+    expect(await deliverPiPrompt({ session: unknown, sessionId: 'pane', prompt: 'hi' } as never))
+      .toMatchObject({ ok: false, retrySafe: false, disposition: 'do-not-retry', promptWritten: true })
+  })
+
   it('exit: the headless closes the open turn before the adapter reports exit; stop is idempotent', async () => {
     const fixture = loadLiveFixture('kill')
     const { events, pty, session } = await launch(fixture)

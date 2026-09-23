@@ -7,7 +7,7 @@ import type { Workspace } from '@renderer/workspace/hook'
 import { resumableProviderSessionId } from '@renderer/workspace/providerSessionIdentity'
 import { providerSwitchChoices } from '@renderer/workspace/providerChoices'
 import { enabledAgentProviderKindsSnapshot } from '@renderer/features/providers/store'
-import { AGENT_PROVIDER_KINDS, isAgentProviderKind, providerOffersTerminalRuntime } from '@shared/types/providerKind'
+import { AGENT_PROVIDER_KINDS, effectiveProviderRuntime, isAgentProviderKind, providerOffersTerminalRuntime } from '@shared/types/providerKind'
 import { getProviderFeatures } from '@providers/shared/featureCapabilities'
 import { resolveTabSessions } from '@renderer/workspace/queries'
 import { startControlTask } from './startTask'
@@ -128,7 +128,12 @@ export function lifecycleControlCapabilities(getWorkspace: () => Workspace) {
       description: 'Create a new native transcript ending before an exact prompt address from nativeHistory.prompts, and replace this idle agent in place. The original transcript remains intact. The selected historical prompt becomes the new unsent draft, replacing the current draft; undoRewind can restore the prior conversation/draft until the next submission. First read agents.lifecycleRead. Use operations.read for the final newSessionId; acceptance alone is not completion.',
       input: target.extend({ revision, address: address.describe('Exact address from nativeHistory.prompts for this native session; never infer line numbers from rendered feed rows.') }), output: accepted,
       handler: (input, context) => {
-        const check = () => { const value = guard(input); if (!value.nativeSessionId || value.processActive) throw new ControlError('unavailable', 'Rewind requires an idle resumable agent');
+        const check = () => { const value = guard(input); if (!value.nativeSessionId || value.processActive) throw new ControlError('unavailable', 'Rewind requires an idle resumable agent')
+          // The same gate as the Rewind command. A native TUI pane (Pi,
+          // OpenCode Terminal) renders no Agent Code composer, so the rewound
+          // prompt would land in a draft nothing shows: the agent would
+          // silently lose its turn (#896).
+          if (effectiveProviderRuntime(value.provider, value.providerRuntime ?? undefined) === 'terminal') throw new ControlError('unavailable', 'Rewind is not available for a native terminal agent: its TUI has no composer for the rewound prompt');
           // Imported transcripts can retain original source session IDs in
           // their addresses. The native transcript engine owns exact address
           // membership; comparing source identity to the container ID here

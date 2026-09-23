@@ -59,10 +59,12 @@ describe('Pi host transcript adapter', () => {
     const tree = await placeRecorded('tree')
     const snapshot = await loadPiSnapshot(cwd, tree.id)
     const branchUsers = referenceActiveBranch(tree.rows).filter(row => row.type === 'message' && (row.message as { role: string }).role === 'user').map(textOf)
-    expect(userTexts(snapshot.conversation.entries)).toEqual(branchUsers)
-    expect(snapshot.prompts.map(prompt => prompt.address)).toEqual(snapshot.conversation.entries
-      .filter(entry => entry.kind === 'message' && entry.role === 'user')
-      .map(entry => ({ provider: 'pi', line: entry.source.line, sessionId: tree.id })))
+    // The user's typed prompts; the branch summary is user-role CONTEXT
+    // (as pi sends it), never a rewind boundary.
+    const typed = snapshot.conversation.entries.filter(entry => entry.kind === 'message' && entry.role === 'user' && (entry.source.raw.message as { role?: string } | undefined)?.role === 'user')
+    expect(userTexts(typed)).toEqual(branchUsers)
+    expect(snapshot.prompts.map(prompt => prompt.address)).toEqual(typed.map(entry => ({ provider: 'pi', line: entry.source.line, sessionId: tree.id })))
+    expect(snapshot.conversation.entries.some(entry => entry.kind === 'message' && entry.role === 'user' && entry.source.raw.type === 'branch_summary')).toBe(true)
 
     // A `!cmd` run is user context for the model but never a rewind boundary.
     const bash = await placeRecorded('user-bash')

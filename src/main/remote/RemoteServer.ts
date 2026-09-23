@@ -97,6 +97,10 @@ export type RemoteSessionControl = {
   // structural fakes in tests stay valid; absent = no runtime field on the
   // summary, which reads as the structured runtime on the phone.
   getSpawnProviderRuntime?(sessionId: string): AgentProviderRuntime | null
+  // The live process's native session id: history's key for a FILE-backed
+  // provider that pages its own history (Pi). OPTIONAL for the same test-fake
+  // reason as above; absent means only a parseable locator can page history.
+  getNativeConversationId?(sessionId: string): string | null
 }
 
 /**
@@ -822,7 +826,14 @@ export class RemoteServer extends EventEmitter {
         // provider also owns decoding its minted locator: resume history can
         // be requested before any live entry has announced the native id.
         const provider = getMainProvider(kind)
+        // A minted locator carries its own identity (OpenCode). A provider
+        // whose transcript IS a file but that still pages history itself
+        // (Pi: only the active branch of its tree is the conversation) has
+        // no locator grammar, and its identity is the live session's native
+        // id. Pi must not register parseTranscriptLocator for plain paths,
+        // because that would also stop inventory from stat'ing its files.
         const providerSessionId = provider.parseTranscriptLocator?.(file)
+          ?? (provider.loadHistoryChunk ? this.deps.manager.getNativeConversationId?.(msg.sessionId) ?? null : null)
         if (provider.loadHistoryChunk && !providerSessionId) {
           return { ok: false, error: 'provider transcript locator has no session identity' }
         }

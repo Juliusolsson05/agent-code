@@ -122,6 +122,22 @@ export function addPiBuiltInMcpLaunchConfig(
   servers: readonly BuiltInMcpServerConfig[],
   env: Record<string, string>,
 ): void {
+  // PiSession copies the whole inherited environment. An Agent Code started
+  // from inside another Pi pane (whose bridge never ran, so never scrubbed)
+  // would otherwise hand THIS pane the outer pane's servers and bearer. An
+  // agent with MCP disabled would then silently get another agent's tools. The
+  // inherited description and every variable it names go first, always.
+  const inherited = env[MCP_SERVERS_ENV]
+  delete env[MCP_SERVERS_ENV]
+  if (inherited) {
+    try {
+      for (const spec of JSON.parse(inherited) as McpServerLaunchSpec[]) {
+        for (const variable of Object.values(spec?.headerEnv ?? {})) delete env[variable]
+      }
+    } catch {
+      // An unparseable description names nothing we can scrub; it is gone.
+    }
+  }
   if (servers.length === 0) return
   const specs: McpServerLaunchSpec[] = servers.map((server, serverIndex) => {
     const headers = {

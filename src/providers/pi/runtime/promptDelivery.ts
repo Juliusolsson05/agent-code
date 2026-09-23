@@ -41,13 +41,19 @@ export async function deliverPiPrompt(io: PromptDeliveryIo): Promise<PromptDeliv
       }
     }
     if (code === 'pi-terminal-rejected') {
+      // Safe to retry, unlike OpenCode's refusal. Every Pi refusal is a check
+      // the bridge makes BEFORE handing the text to pi: a compaction is
+      // running, no model is selected, the runtime is being replaced
+      // mid-switch, or pi exposes no compaction API. The text provably never
+      // reached pi. Reporting do-not-retry made an orchestration parent drop
+      // a brief that only had to wait for a compaction to finish.
       return {
         ok: false,
         stage: 'before-write',
         code: 'transport-failed',
         message: `pi refused the prompt for session ${io.sessionId}: ${(err as Error).message}`,
-        retrySafe: false,
-        disposition: 'do-not-retry',
+        retrySafe: true,
+        disposition: 'retry-same-session',
         promptWritten: false,
         enterWritten: false,
       }

@@ -699,7 +699,9 @@ export function AgentTerminalLeaf({
           costs exactly the one case it exists for. This field is the lifetime
           marker: a channel that stopped for good, or a TUI that moved to
           another session. Both stay true until something real changes. */}
-      {runtime.transcriptChannelError ? (
+      {/* liveChannelWarning is the same lifetime class for a live channel
+          that never connected while the transcript works (Pi's bridge). */}
+      {(runtime.transcriptChannelError ?? runtime.liveChannelWarning) ? (
         <div
           data-terminal-transcript-error="true"
           role="status"
@@ -708,7 +710,7 @@ export function AgentTerminalLeaf({
             bg-warning-soft px-2 py-1 text-[10px] leading-snug text-warning
           "
         >
-          {runtime.transcriptChannelError}
+          {runtime.transcriptChannelError ?? runtime.liveChannelWarning}
         </div>
       ) : null}
 

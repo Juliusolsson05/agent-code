@@ -412,6 +412,9 @@ const WALL_CLOCK_MS_FLOOR = 1_000_000_000_000
 // further extraction.
 // -----------------------------------------------------------------------------
 
+/** PiSession's marker for "the bridge never connected" (piSession.ts). */
+const PI_BRIDGE_UNREACHABLE = '(provider_bridge_unreachable)'
+
 export function useIpcSubscriptions(
   // WHY feed identity matters: `feed` sits in the effect's dep array, so an
   // unstable reference would tear down + re-attach every subscription each
@@ -855,6 +858,14 @@ export function useIpcSubscriptions(
       flushSemanticEventQueue()
       // eslint-disable-next-line no-console
       console.warn(`[jsonl ${sessionId.slice(0, 8)}]`, message)
+      // Pi's bridge never connected. The durable transcript keeps working
+      // (it is read from Pi's file), so this is not a transcript error. It is
+      // a live-channel warning that must outlast the next row and clear only
+      // when the bridge connects (the diagnostic handler below).
+      if (message.includes(PI_BRIDGE_UNREACHABLE)) {
+        updateRuntime(sessionId, { liveChannelWarning: message })
+        return
+      }
       // These adapter diagnostics name a channel that cannot recover by
       // loading a snapshot. Electron preserves the message, not Error.code.
       // The nonfatal durable diagnostics deliberately remain transient:
@@ -908,14 +919,14 @@ export function useIpcSubscriptions(
     const offDiagnostic = feed.onSessionTranscriptDiagnostic(({ sessionId, diagnostic }) => {
       if (quarantinesSessionFeed(sessionId)) return
       const live = diagnostic as { kind?: string; connected?: boolean } | null
-      // Pi's bridge is the same kind of late-connecting live channel: its
-      // "never connected" banner (provider_bridge_unreachable) clears the
-      // same way once the bridge does connect.
-      const liveKinds: Record<string, string> = {
-        'opencode-terminal-live-state': '(provider_server_unreachable)',
-        'pi-terminal-live-state': '(provider_bridge_unreachable)',
+      // Pi's bridge is the same kind of late-connecting live channel, but its
+      // "never connected" warning lives in liveChannelWarning (its transcript
+      // still works), and it clears the moment the bridge connects.
+      if (live?.kind === 'pi-terminal-live-state' && live.connected === true) {
+        if (refs.latestRuntimesRef.current[sessionId]?.liveChannelWarning) updateRuntime(sessionId, { liveChannelWarning: null })
+        return
       }
-      const faultMarker = live?.kind ? liveKinds[live.kind] : undefined
+      const faultMarker = live?.kind === 'opencode-terminal-live-state' ? '(provider_server_unreachable)' : undefined
       if (!faultMarker || live?.connected !== true) return
       const current = refs.latestRuntimesRef.current[sessionId]
       if (!current?.transcriptChannelError?.includes(faultMarker)) return

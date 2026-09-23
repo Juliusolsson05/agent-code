@@ -639,6 +639,16 @@ export type SessionRuntime = {
    * optional for older runtime snapshots that predate this field.
    */
   transcriptChannelError?: string | null
+  /**
+   * A LIVE channel that has not connected, while the transcript itself still
+   * works (Pi without its bridge: rows arrive, but status and prompt delivery
+   * do not). Shown in the same terminal banner as transcriptChannelError, but
+   * kept apart from the transcript fields on purpose. Every row path rewrites
+   * transcriptStatus/transcriptError, and a channel error would make parents
+   * read a readable conversation as `transcript_unavailable`. Cleared only by
+   * the channel's own "connected" diagnostic.
+   */
+  liveChannelWarning?: string | null
   /** Backend process lifecycle for send gating. `sessionStatus` is
    *  "is the agent doing work right now"; `processStatus` is "does a
    *  writable backend exist for this pane". Keeping them separate

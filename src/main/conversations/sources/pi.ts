@@ -19,9 +19,12 @@ import type { ConversationSource, SourceConversation, SourceScope } from './type
 //
 // WHY a bounded head read for the listing: the catalog lists every session on
 // every open, and Pi files hold whole conversations. The first HEAD_BYTES hold
-// the header (always line 0), the first prompts (Pi writes the system prompt
-// and then the first user message right after the header) and usually an
-// early `/name`. The prompt LIST (search, View Prompts) reads the full active
+// the header (always line 0) and the first prompts (Pi writes the system
+// prompt and then the first user message right after the header). A `/name`
+// is different: Pi appends its session_info row at the leaf WHEN the user runs
+// it, which in a long session is far past the head. So a file larger than the
+// head also gets one bounded TAIL read, where the newest name lives. The
+// newest one wins, as in Pi's own listing. The prompt LIST (search, View Prompts) reads the full active
 // branch, because only the whole tree says which prompts are still on it.
 
 const HEAD_BYTES = 64 * 1024
@@ -65,6 +68,23 @@ async function scanHead(file: string): Promise<HeadScan> {
             ? message.content.filter(block => (block as { type?: unknown }).type === 'text').map(block => String((block as { text?: unknown }).text ?? '')).join('\n')
             : ''
         if (text.trim()) scan.userTexts.push(text)
+      }
+    }
+    if (scan.truncated) {
+      const size = (await handle.stat()).size
+      const start = Math.max(HEAD_BYTES, size - HEAD_BYTES)
+      const tail = Buffer.alloc(size - start)
+      const { bytesRead: tailRead } = await handle.read(tail, 0, tail.length, start)
+      // The first tail line may be cut at its start; only whole lines count.
+      const tailLines = tail.subarray(0, tailRead).toString('utf8').split('\n').slice(start > HEAD_BYTES ? 1 : 0)
+      for (const line of tailLines) {
+        if (!line.includes('"session_info"')) continue
+        try {
+          const row = JSON.parse(line) as Record<string, unknown>
+          if (row.type === 'session_info' && typeof row.name === 'string' && row.name.trim()) scan.name = row.name.trim()
+        } catch {
+          // A partial last line while pi writes: skipped, as in the head.
+        }
       }
     }
     return scan

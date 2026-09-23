@@ -79,3 +79,14 @@ it('keeps draft edits made during native rewind recoverable by undo', async () =
   await vi.waitFor(() => expect(report).toHaveBeenCalledWith(expect.objectContaining({ capabilityId: 'operations.finish' })))
   expect(useAppStore.getState().workspaceRuntimes.replacement).toMatchObject({ draftInput: 'Historical prompt', pendingRewindUndo: { previousDraftInput: 'Edited during replacement' } })
 })
+
+it('refuses to rewind a native terminal agent (Pi), whose TUI has no composer for the rewound prompt', async () => {
+  const { invoke, revision, replaceSession } = setup()
+  // Restored kind-only, as the catalog and switches create Pi panes.
+  useAppStore.setState(state => ({ workspaceState: { ...state.workspaceState, sessions: { ...state.workspaceState.sessions, source: { ...state.workspaceState.sessions.source!, kind: 'pi' } } } }))
+  window.api.rewindToPrompt = vi.fn()
+  const result = await invoke('agents.rewind', { sessionId: 'source', revision: await revision(), address: { provider: 'pi', sessionId: 'native-source', line: 1 } })
+  expect(result).toMatchObject({ ok: false, error: { code: 'unavailable' } })
+  expect(window.api.rewindToPrompt).not.toHaveBeenCalled()
+  expect(replaceSession).not.toHaveBeenCalled()
+})
