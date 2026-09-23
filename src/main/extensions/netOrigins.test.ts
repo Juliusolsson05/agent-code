@@ -98,4 +98,46 @@ describe('declared-origin fetch', () => {
       expect(String((error as Error).message)).not.toContain(SECRET)
     }
   })
+
+  it('stops reading a chunked body without Content-Length the moment it passes the cap', async () => {
+    // A consented origin that streams forever must not be buffered into main
+    // until the timeout (#1151 review). Count what the host actually pulls.
+    let pulled = 0, cancelled = false
+    const chunk = new Uint8Array(64 * 1024)
+    const endless = new ReadableStream<Uint8Array>({
+      pull(controller) { pulled += chunk.byteLength; controller.enqueue(chunk) },
+      cancel() { cancelled = true },
+    })
+    for (const responseType of ['text', 'base64'] as const) {
+      pulled = 0; cancelled = false
+      const stream = responseType === 'text' ? endless : new ReadableStream<Uint8Array>({
+        pull(controller) { pulled += chunk.byteLength; controller.enqueue(chunk) }, cancel() { cancelled = true },
+      })
+      const { perform } = recorder(() => new Response(stream))
+      await expect(netOriginsFetch({ url: 'https://api.elevenlabs.io/stream', responseType }, DECLARED, perform)).rejects.toThrow(/limited/)
+      expect(cancelled).toBe(true)
+      // A little read-ahead is fine; megabytes are not.
+      expect(pulled).toBeLessThanOrEqual(MAX_NET_FETCH_RESPONSE_BYTES + 4 * chunk.byteLength)
+    }
+  })
+
+  it('refuses host-reserved headers on the public path too, before any request', async () => {
+    const { perform, seen } = recorder(() => new Response('ok'))
+    for (const name of ['x-agent-code-transport', 'Forwarded', 'X-Forwarded-For', 'x-forwarded-host']) {
+      await expect(netOriginsFetch({ url: 'https://api.elevenlabs.io/v1/x', headers: [{ name, value: 'lan' }] }, DECLARED, perform)).rejects.toThrow(/reserved/)
+    }
+    expect(seen).toHaveLength(0)
+  })
+
+  it('keeps default TLS verification: the built request has no dispatcher/agent or verification override', async () => {
+    // HTTPS-only is the DNS-rebinding defence, and it holds only while
+    // certificate validation is on. Pin the init the host actually builds.
+    const { perform, seen } = recorder(() => new Response('ok'))
+    await netOriginsFetch({ url: 'https://api.elevenlabs.io/v1/x', httpMethod: 'POST', body: '{}' }, DECLARED, perform)
+    const keys = Object.keys(seen[0].init).sort()
+    expect(keys).toEqual(['body', 'credentials', 'headers', 'method', 'redirect', 'signal'])
+    const init = seen[0].init as Record<string, unknown>
+    for (const forbidden of ['dispatcher', 'agent', 'rejectUnauthorized', 'insecure']) expect(init[forbidden]).toBeUndefined()
+    expect(process.env.NODE_TLS_REJECT_UNAUTHORIZED).not.toBe('0')
+  })
 })

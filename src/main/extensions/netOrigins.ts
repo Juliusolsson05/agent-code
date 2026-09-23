@@ -1,5 +1,5 @@
 import { isPrivateIpLiteral } from './netPolicy.js'
-import { boundedFetchResult, MAX_NET_FETCH_BODY_BYTES, type NetFetchRequest, type NetFetchResult } from './netFetch.js'
+import { boundedFetchResult, isHostReservedHeader, MAX_NET_FETCH_BODY_BYTES, type NetFetchRequest, type NetFetchResult } from './netFetch.js'
 
 // The net.origins capability (#1150): a brokered HTTPS fetch to one of the
 // EXACT public origins the manifest declared in `networkOrigins` and the user
@@ -59,6 +59,14 @@ export function assertDeclaredOriginTarget(request: NetFetchRequest, declaredOri
     throw new Error(`net.fetch bodies are limited to ${MAX_NET_FETCH_BODY_BYTES} bytes.`)
   }
   if ((request.headers?.length ?? 0) > MAX_HEADERS) throw new Error(`net.fetch accepts at most ${MAX_HEADERS} headers.`)
+  // Same host-reserved set as the private path (#1148), so the authoring.md
+  // §6b invariant ("no net.fetch can carry the transport marker or forwarding
+  // facts") holds for EVERY net.fetch, not just the one aimed at loopback. A
+  // public API never needs them, and a declared origin could be a relay that
+  // forwards them to something that trusts them.
+  for (const header of request.headers ?? []) {
+    if (isHostReservedHeader(header.name)) throw new Error(`net.fetch cannot set "${header.name}": that header is reserved for the Agent Code host.`)
+  }
   return url
 }
 
@@ -95,6 +103,12 @@ export async function netOriginsFetch(
       // No ambient browser state: main's fetch has no cookie jar for these
       // requests, and this states the intent for any future runtime swap.
       credentials: 'omit',
+      // TLS PINNING NOTE: deliberately NO dispatcher/agent override. HTTPS-only
+      // is the DNS-rebinding defence (a declared name re-pointed at a LAN
+      // device fails because the device has no certificate for that name), and
+      // that holds ONLY while default certificate validation is on. Never add
+      // a dispatcher, `rejectUnauthorized: false` or NODE_TLS_REJECT_UNAUTHORIZED
+      // handling here; netOrigins.test.ts asserts the built init stays clean.
     })
   } catch (error) {
     // Network/abort/redirect failures. Undici's messages can embed the URL but

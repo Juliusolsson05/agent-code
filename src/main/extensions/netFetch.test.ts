@@ -2,7 +2,7 @@ import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { assertFetchableTarget, netFetch, type NetFetchRequest } from './netFetch.js'
+import { assertFetchableTarget, MAX_NET_FETCH_RESPONSE_BYTES, netFetch, type NetFetchRequest } from './netFetch.js'
 
 // The policy table is the contract; one real loopback round-trip proves the
 // brokered path (headers, body, status, bounded response) end-to-end.
@@ -113,5 +113,18 @@ describe('brokered net.fetch', () => {
   it('caps the response before it crosses back into a sandboxed frame', async () => {
     const port = await loopbackUpstream()
     await expect(netFetch({ url: `http://127.0.0.1:${port}/big` })).rejects.toThrow(/responses are limited/)
+  })
+
+  it('stops reading a streamed body with no Content-Length at the cap (text and base64)', async () => {
+    for (const responseType of ['text', 'base64'] as const) {
+      let pulled = 0, cancelled = false
+      const chunk = new Uint8Array(64 * 1024)
+      const perform = (async () => new Response(new ReadableStream<Uint8Array>({
+        pull(controller) { pulled += chunk.byteLength; controller.enqueue(chunk) }, cancel() { cancelled = true },
+      }))) as unknown as typeof fetch
+      await expect(netFetch({ url: 'http://192.168.1.20:5192/big', responseType }, perform)).rejects.toThrow(/limited/)
+      expect(cancelled).toBe(true)
+      expect(pulled).toBeLessThanOrEqual(MAX_NET_FETCH_RESPONSE_BYTES + 4 * chunk.byteLength)
+    }
   })
 })

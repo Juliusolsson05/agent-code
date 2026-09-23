@@ -41,7 +41,7 @@ const ALLOWED_METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'PATCH'
  *  different extension is its own frame (`service`) or a LAN guest of its
  *  choosing (`lan` + forged x-forwarded-for). REFUSED, not silently dropped:
  *  no honest caller sends them, and a silent drop would hide the attempt. */
-function isHostReservedHeader(name: string): boolean {
+export function isHostReservedHeader(name: string): boolean {
   const lower = name.trim().toLowerCase()
   return lower === TRANSPORT_ATTESTATION_HEADER || lower === 'forwarded' || lower.startsWith('x-forwarded-')
 }
@@ -154,11 +154,33 @@ export async function boundedFetchResult(response: Response, responseType: 'text
     await response.body?.cancel().catch(() => {})
     throw new Error(`net.fetch responses are limited to ${MAX_NET_FETCH_RESPONSE_BYTES} bytes.`)
   }
-  const buffer = Buffer.from(await response.arrayBuffer())
-  if (buffer.byteLength > MAX_NET_FETCH_RESPONSE_BYTES) {
-    throw new Error(`net.fetch responses are limited to ${MAX_NET_FETCH_RESPONSE_BYTES} bytes.`)
-  }
+  const buffer = await readCapped(response)
   return responseType === 'base64'
     ? { status: response.status, contentType, body: buffer.toString('base64'), bodyEncoding: 'base64' }
     : { status: response.status, contentType, body: buffer.toString('utf8'), bodyEncoding: 'text' }
+}
+
+/** Read at most MAX_NET_FETCH_RESPONSE_BYTES and stop the stream the moment a
+ *  chunk crosses it (#1151 review). `arrayBuffer()` buffered the WHOLE body
+ *  before the size check, so a chunked response without Content-Length (the
+ *  exact case the declared-length check cannot see) could stream into main
+ *  until the timeout: hundreds of MB from a consented origin, or from any
+ *  private host for net.connect. Cancelling the reader closes the connection;
+ *  only bytes under the cap are ever retained. */
+async function readCapped(response: Response): Promise<Buffer> {
+  if (!response.body) return Buffer.alloc(0)
+  const reader = response.body.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    total += value.byteLength
+    if (total > MAX_NET_FETCH_RESPONSE_BYTES) {
+      await reader.cancel().catch(() => {})
+      throw new Error(`net.fetch responses are limited to ${MAX_NET_FETCH_RESPONSE_BYTES} bytes.`)
+    }
+    chunks.push(value)
+  }
+  return Buffer.concat(chunks, total)
 }
