@@ -321,6 +321,15 @@ Stage 8 asserts no file under `src/renderer` imports `controller/`.
   — cannot be recorded here. v1 ships port detection on **macOS only**;
   Linux/Windows return no ports (chip hidden) until someone records
   fixtures. (Change from the plan, which specified all three.)
+- **Answered by Stage 1 (2026-09-22), see `__fixtures__/README.md`:** U2 for
+  Claude (agent-started servers are descendants: `claude → zsh → npm exec →
+  node`), U3 (tmux panes descend from a daemonized tmux SERVER shared by every
+  app instance on the default socket; roots come from `list-panes` filtered by
+  `tmuxName`). New rules forced by the recordings: exclude listeners held by
+  the session ROOT itself (OpenCode serves its own UI as 200 text/html); 5xx is
+  never a page (per-session `mitmdump` proxies answer 502 text/html); a 404 at
+  `/` is still listed (a real Vite dev server did that). Codex-started dev
+  servers are still unrecorded.
 - **U2** Where a Claude agent's Bash-tool background dev server sits in the
   tree (child of `claude`? reparented to launchd after the tool call?).
   Codex likewise (its children observed: `node_repl`, `node`). Recorded in
