@@ -285,6 +285,25 @@ describe('net.listen exposure', () => {
     } finally { host.dispose() }
   })
 
+  // The set net.fetch refuses (#1147 review): every running endpoint and every
+  // listener, and nothing once they are gone — a stale entry would block an
+  // unrelated local server that later reuses the port.
+  it('reports the endpoint and listener ports it owns, and forgets them when stopped', async () => {
+    const { host, lan } = await exposedHost([{ name: 'http', port: 5192 }])
+    try {
+      expect(host.isHostOwnedLoopbackPort(5192)).toBe(false)
+      await host.start('timer', REVISION, 'timer.worker')
+      await host.expose('timer', REVISION, 'timer.worker', true)
+      expect(host.isHostOwnedLoopbackPort(5192)).toBe(true)
+      expect(host.isHostOwnedLoopbackPort(lan.handles[0].port)).toBe(true)
+      expect(host.isHostOwnedLoopbackPort(8080)).toBe(false)
+      await host.stop('timer', REVISION, 'timer.worker')
+      await new Promise(resolve => setImmediate(resolve))
+      expect(host.isHostOwnedLoopbackPort(5192)).toBe(false)
+      expect(host.isHostOwnedLoopbackPort(lan.handles[0].port)).toBe(false)
+    } finally { host.dispose() }
+  })
+
   it('the LAN listener dies with the service, never outlives it', async () => {
     const { host, lan, child } = await exposedHost([{ name: 'http', port: 5192 }])
     try {

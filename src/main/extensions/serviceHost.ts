@@ -282,6 +282,19 @@ export class ExtensionServiceHost {
     return service && !service.stopping && service.endpoints.length > 0 ? service.endpoints[0].port : null
   }
 
+  /** Every loopback port this host owns: ALL extensions' running service
+   *  endpoints plus their LAN listeners. net.fetch refuses these (see
+   *  netFetch.ts) so no extension can reach any service, its own or another's,
+   *  around the proxy and listener that tell a service who is calling.
+   *  Listeners bind every interface, so their port is reachable on loopback. */
+  isHostOwnedLoopbackPort(port: number): boolean {
+    for (const service of this.running.values()) {
+      if (service.endpoints.some(endpoint => endpoint.port === port)) return true
+    }
+    for (const listener of this.exposed.values()) if (listener.port === port) return true
+    return false
+  }
+
   /** App-quit drain: kill every service and close every exposure; no ceremony. */
   pause(): void {
     this.closed = true

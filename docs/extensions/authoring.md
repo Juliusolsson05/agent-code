@@ -497,13 +497,28 @@ answers 404. The proxy forwards only `accept`, `content-type` and
 `authorization`, caps request bodies at 1 MiB, and re-checks the grant and
 running state on every request.
 
-Every proxied request arrives with `x-agent-code-transport: service`, set by the
-host (a caller can't supply or change it). It means "this came from your own
-extension's frame", so your service can treat the request like its own
-same-origin page, even though the frame's `Origin` never reaches it. Only trust
-the marker on a loopback socket, and never answer CORS preflights. A browser
-page can only attach a custom header cross-origin through a preflight, and
-that rule is what makes the marker unforgeable from the web.
+Every proxied request arrives with `x-agent-code-transport: service`, set by
+the host. It means "this came from your own extension's frame", so your
+service can treat the request like its own same-origin page, even though the
+frame's `Origin` never reaches it.
+
+What the host guarantees, and what it doesn't:
+
+- **In-app callers can't forge the marker.** Frames and runtimes reach
+  services only through this proxy, which always sets `service`, or through
+  `net.fetch`. `net.fetch` refuses `x-agent-code-transport`, `forwarded` and
+  every `x-forwarded-*` header. It also refuses loopback targets on any
+  extension's service or LAN-listener port, so no extension can dial another
+  extension's service directly.
+- **Web pages can't forge it**, provided your service never answers CORS
+  preflights. A page can only attach a custom header cross-origin through a
+  preflight.
+- **Local programs can.** Any process on this machine can dial your loopback
+  port with any headers, including every extension's service child, which is
+  ordinary unsandboxed Node. Treat the marker as "not a web page and not
+  another extension's sandbox", never as "not a local program". Only trust it
+  on a loopback socket, and give loopback callers no more than the local user
+  already has.
 
 ### 6c. LAN exposure (`net.listen`)
 
@@ -529,7 +544,15 @@ The listener dials your service over loopback, so the socket peer is always
 - `x-forwarded-for`: the peer's address
 - `x-forwarded-host`: the Host the peer used
 
-Treat a `lan` request as the forwarded peer, never as local. Check its `Origin`
+Treat a `lan` request as the forwarded peer, never as local. The one
+exception proves the rule: a client on this same machine that dials the
+listener on 127.x arrives with a loopback `x-forwarded-for`. That is local
+access, and treating it as local grants nothing a local program doesn't
+already have. The listener always dials your service with
+`Host: 127.0.0.1:<your port>`, so a `lan` request carrying any other Host
+didn't come from the listener. `x-forwarded-for` can be an IPv6 address:
+the listener admits private IPv6 peers, and it's your service's choice
+whether to serve them. Check its `Origin`
 against `http://<x-forwarded-host>`, and require that host to be an IP literal
 if you need a DNS-rebinding defence. The listener doesn't know your service's
 rules; it only reports the facts. Your service's `content-security-policy`,

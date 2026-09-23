@@ -114,7 +114,10 @@ function proxy(req: IncomingMessage, res: ServerResponse, targetPort: number): v
   if (typeof req.headers.host === 'string') headers['x-forwarded-host'] = req.headers.host
 
   const upstream: ClientRequest = upstreamRequest(
-    { host: '127.0.0.1', port: targetPort, method: req.method, path: req.url, headers },
+    // Host is set explicitly, not inherited from Node's default: services use
+    // "Host is exactly 127.0.0.1:<my port>" to tell the listener's `lan`
+    // requests from a DNS-rebound page that also claims `lan` (#1147 review).
+    { host: '127.0.0.1', port: targetPort, method: req.method, path: req.url, headers: { ...headers, host: `127.0.0.1:${targetPort}` } },
     response => {
       const passed: Record<string, string> = {}
       for (const name of FORWARDED_RESPONSE_HEADERS) {

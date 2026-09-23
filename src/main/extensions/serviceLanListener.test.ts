@@ -85,6 +85,10 @@ describe('service LAN listener forwarding contract', () => {
     expect(headers['x-forwarded-for']).toBe('127.0.0.1')
     // The Host the peer used — what its browser's Origin must match.
     expect(headers['x-forwarded-host']).toBe(`192.168.1.42:${port}`)
+    // Services key "did this really come from the listener?" on the Host it
+    // dials with (poker trusts `lan` only with exactly this Host), so it is
+    // part of the contract, not a Node default we happen to inherit.
+    expect(headers.host).toBe(`127.0.0.1:${(upstream!.address() as AddressInfo).port}`)
     expect(headers.cookie).toBeUndefined()
     expect(headers['x-evil']).toBeUndefined()
   })
