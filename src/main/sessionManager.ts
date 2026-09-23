@@ -1076,12 +1076,12 @@ export class SessionManager extends EventEmitter {
       this.agentPtyAttachCounts.delete(sessionId)
       this.agentPtyRestoreSizes.delete(sessionId)
       if (revokeAgentMcp) this.builtInMcpHost?.revokeSession(sessionId)
-      // Same lifetime as the built-in scope: once the backend is gone its
-      // launch facts must not outlive it and be reported for a successor.
-      if (revokeAgentMcp) {
-        this.userMcpAttached.delete(sessionId)
-        this.userMcpOverridesBySession.delete(sessionId)
-      }
+      // Once the backend is gone its user-MCP launch facts must not outlive it
+      // and be reported for a successor. Unconditional (review round 2):
+      // `revokeAgentMcp` is about the built-in host bearer and is false when a
+      // launch had no built-in domains, which leaked these entries.
+      this.userMcpAttached.delete(sessionId)
+      this.userMcpOverridesBySession.delete(sessionId)
     }
     forgetFeedDebugSession(sessionId)
     return true

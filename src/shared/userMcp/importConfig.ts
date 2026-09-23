@@ -10,6 +10,7 @@ import {
   isPlainObject,
   isStringRecord,
   normalizeEntry,
+  referencedInputIds,
   transportOf,
   validateServer,
 } from './validate.js'
@@ -122,6 +123,13 @@ function candidateFor(
   const referencedVscode = vscodeInputs.filter(input =>
     JSON.stringify(entry).includes(`\${input:${input.id}}`))
   inputs.unshift(...referencedVscode)
+  // Any other `${input:id}` reference gets a definition too (review round 2):
+  // a hand-written reference, or our own sanitized text being re-parsed after
+  // the user edited it, used to import with no input at all and then fail
+  // save with "no secret named …".
+  for (const id of referencedInputIds(entry as UserMcpServerEntry)) {
+    if (!inputs.some(input => input.id === id)) inputs.push({ id, description: 'Secret' })
+  }
 
   const normalized = normalizeEntry(entry as UserMcpServerEntry)
   const problems = validateServer(

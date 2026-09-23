@@ -6,6 +6,7 @@ import {
   rootManagementReloadLabels,
 } from '@renderer/features/workspace/lib/rootManagement'
 import { RootManagementConfirmDialog } from '@renderer/features/workspace/ui/RootManagementConfirmDialog'
+import { stopGoalLoopFor } from '@renderer/features/mcp/ui/AgentMcpServersModal'
 import {
   reloadSessionWithBuiltInMcpChoice,
   reloadSessionWithBuiltInMcpOverrides,
@@ -39,19 +40,16 @@ export function RootManagementConfirmSurface() {
         // From "Agent MCP Servers…": apply every staged choice in this one
         // reload, with the grant the user just confirmed (#1143).
         if (stagedOverrides) {
-          void (async () => {
-            // See AgentMcpServersModal.apply: the loop is stopped here, after
-            // the user confirmed, because only now is the reload certain.
-            if (stopGoalLoop) {
-              try { await window.api.controlGoalLoop({ sessionId, action: 'stop' }) } catch { /* reload anyway */ }
-            }
-            await reloadSessionWithBuiltInMcpOverrides(
-              workspace,
-              sessionId,
-              { ...stagedOverrides, [ROOT_MANAGEMENT_DOMAIN]: true },
-              rootManagementReloadLabels(true),
-            )
-          })()
+          // The goal-loop stop (from the staged picker) runs inside the
+          // reload, after its checks, so a declined reload cannot leave a
+          // loop dead while the agent keeps its tools.
+          void reloadSessionWithBuiltInMcpOverrides(
+            workspace,
+            sessionId,
+            { ...stagedOverrides, [ROOT_MANAGEMENT_DOMAIN]: true },
+            rootManagementReloadLabels(true),
+            stopGoalLoop ? stopGoalLoopFor(sessionId) : undefined,
+          )
           return
         }
         void reloadSessionWithBuiltInMcpChoice(

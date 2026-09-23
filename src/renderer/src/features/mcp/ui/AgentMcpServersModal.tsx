@@ -146,13 +146,10 @@ export function AgentMcpServersModal() {
       openRootPrompt(sessionId, rest, stopGoalLoop)
       return
     }
-    if (stopGoalLoop) {
-      try { await window.api.controlGoalLoop({ sessionId, action: 'stop' }) } catch { /* reload anyway */ }
-    }
     void reloadSessionWithBuiltInMcpOverrides(workspace, sessionId, overrides, {
       reloaded: 'Reloaded with updated MCP servers',
       failed: 'MCP reload failed',
-    })
+    }, stopGoalLoop ? stopGoalLoopFor(sessionId) : undefined)
   }
 
   const label = [meta.title, getRendererProviderCapabilities(provider).shortLabel].filter(Boolean).join(' · ')
@@ -189,6 +186,13 @@ export function AgentMcpServersModal() {
                     : explicit
                       ? `● ${on ? 'on' : 'off'} for this agent`
                       : 'default'}
+                  {/* User rows are not counted as "pending reload" (a launch
+                      can drop them for reasons the renderer cannot see), but
+                      the observed attach state is still shown so "on" is not
+                      mistaken for "attached" (review round 2). */}
+                  {row.key.startsWith('user:') && !row.blocked && on && !row.attached
+                    ? ' · not attached yet — reload'
+                    : ''}
                 </span>
               </div>
             )
@@ -242,4 +246,16 @@ function normalize(overrides: BuiltInMcpOverrides): [string, boolean][] {
   return Object.entries(overrides)
     .filter((entry): entry is [string, boolean] => typeof entry[1] === 'boolean')
     .sort(([a], [b]) => a.localeCompare(b))
+}
+
+/**
+ * Ends the agent's running goal loop (#1045 rule), handed to the reload so it
+ * runs only when the reload really goes ahead. try/catch because a preload
+ * without the channel throws synchronously; the reload the user asked for
+ * still happens.
+ */
+export function stopGoalLoopFor(sessionId: string): () => Promise<void> {
+  return async () => {
+    try { await window.api.controlGoalLoop({ sessionId, action: 'stop' }) } catch { /* reload anyway */ }
+  }
 }

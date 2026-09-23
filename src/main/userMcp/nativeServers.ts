@@ -1,6 +1,6 @@
 import { access, readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 
 import TOML from '@iarna/toml'
 
@@ -83,11 +83,48 @@ export async function readNativeMcpServers(paths = defaultNativeMcpPaths()): Pro
  */
 export async function codexNativeServerNames(cwd: string, paths = defaultNativeMcpPaths()): Promise<Set<string>> {
   const names = new Set<string>()
-  for (const file of [join(codexHome(paths), 'config.toml'), join(cwd, '.codex', 'config.toml')]) {
+  for (const file of await codexConfigLayers(cwd, paths)) {
     const table = await readCodexMcpTable(file)
     for (const name of Object.keys(table)) names.add(name)
   }
   return names
+}
+
+/**
+ * The config.toml files Codex merges for an agent in `cwd`, lowest precedence
+ * first: system, user (CODEX_HOME), then every `.codex/config.toml` from the
+ * project root down to `cwd`.
+ *
+ * WHY the ancestor walk (review round 2): Codex's project discovery reads
+ * every ancestor `.codex/config.toml` up to the project root marker (`.git`;
+ * vendor codex-rs config/src/loader discover_project_layers), not just the
+ * cwd's. Reading only `<cwd>/.codex` missed a repo-root server or legacy
+ * shell policy for any agent started in a subdirectory or nested worktree —
+ * and either one could make our `-c` overrides fail Codex's config load.
+ * Managed and profile layers are not modelled; they are rare, and a miss
+ * there degrades to the launch-time notice, not a silent change.
+ */
+export async function codexConfigLayers(cwd: string, paths = defaultNativeMcpPaths()): Promise<string[]> {
+  const system = paths.platform === 'win32' ? [] : ['/etc/codex/config.toml']
+  const ancestors: string[] = []
+  let dir = cwd
+  for (let depth = 0; depth < 64; depth++) {
+    ancestors.unshift(join(dir, '.codex', 'config.toml'))
+    if (await exists(join(dir, '.git'))) break
+    const parent = dirname(dir)
+    if (parent === dir) break
+    dir = parent
+  }
+  return [...system, join(codexHome(paths), 'config.toml'), ...ancestors]
+}
+
+async function exists(path: string): Promise<boolean> {
+  try {
+    await access(path)
+    return true
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -103,7 +140,7 @@ export async function codexShellPolicyStyle(
 ): Promise<{ style: 'filters' } | { style: 'legacy'; exclude: string[] }> {
   let legacy = false
   const exclude: string[] = []
-  for (const file of [join(codexHome(paths), 'config.toml'), join(cwd, '.codex', 'config.toml')]) {
+  for (const file of await codexConfigLayers(cwd, paths)) {
     const policy = (await readCodexToml(file)).shell_environment_policy
     if (!isPlainObject(policy)) continue
     if (policy.exclude !== undefined || policy.include_only !== undefined) legacy = true

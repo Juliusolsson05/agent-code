@@ -13,6 +13,7 @@ import {
   isUserMcpProvider,
   type NativeMcpServer,
   type NativeMcpServerSource,
+  type UserMcpActor,
   type UserMcpDocument,
   type UserMcpDroppedServer,
   type UserMcpImportResult,
@@ -27,6 +28,8 @@ import {
 import {
   coerceInputs,
   normalizeEntry,
+  secretValueProblem,
+  userMcpDestination,
   providerSupportForEntry,
   referencedInputIds,
   summarizeEntry,
@@ -128,7 +131,9 @@ export class UserMcpService {
     // Project-scope files depend on the agent's cwd and are only caught at
     // launch, with a notice.
     const codexNativeNames = new Set(native.filter(entry => entry.provider === 'codex').map(entry => entry.name))
-    const servers = await Promise.all(this.document.servers.map(server => this.view(server, claudeManagedPolicy, codexNativeNames)))
+    const claudeNativeNames = new Set(native.filter(entry => entry.provider === 'claude').map(entry => entry.name))
+    const servers = await Promise.all(this.document.servers.map(server =>
+      this.view(server, claudeManagedPolicy, codexNativeNames, claudeNativeNames)))
     return {
       servers,
       // Strip Copy-in material: see NativeMcpServer.copyable.
@@ -142,17 +147,35 @@ export class UserMcpService {
     return importUserMcpConfig(text, fallbackName)
   }
 
-  save(input: UserMcpSaveInput): Promise<UserMcpMutationResult> {
+  save(input: UserMcpSaveInput, actor: UserMcpActor = 'user'): Promise<UserMcpMutationResult> {
     return this.mutate(async () => {
       const existing = input.id ? this.document.servers.find(server => server.id === input.id) : undefined
       if (input.id && !existing) return { ok: false, error: 'That server no longer exists.' }
+      for (const value of Object.values(input.secrets ?? {})) {
+        const problem = value === '' ? null : secretValueProblem(value)
+        if (problem) return { ok: false, error: problem }
+      }
+      const entry = normalizeEntry(input.entry)
+      const destinationChanged = existing !== undefined && userMcpDestination(existing.entry) !== userMcpDestination(entry)
+      // An agent proposes, the user approves (review round 2): a server an
+      // agent adds, or points somewhere new, is stored OFF and flagged for
+      // review, and an agent can never turn one on. Otherwise a single
+      // prompt-injected agent could install a command that every future agent
+      // runs. A user save of an existing server clears the flag only by
+      // turning it on (setEnabled); saving it off keeps the flag visible.
+      const agentNeedsReview = actor === 'agent' && (existing === undefined || destinationChanged || existing.pendingReview === true)
+      const enabled = actor === 'agent'
+        ? (agentNeedsReview ? false : existing!.enabled && input.enabled)
+        : input.enabled
+      const pendingReview = agentNeedsReview || (actor === 'user' && existing?.pendingReview === true && !enabled)
       const server: UserMcpServer = {
         id: existing?.id ?? randomUUID(),
         name: input.name.trim(),
-        enabled: input.enabled,
+        enabled,
         providers: { claude: input.providers.claude === true, codex: input.providers.codex === true },
-        entry: normalizeEntry(input.entry),
+        entry,
         inputs: coerceInputs(input.inputs),
+        ...(pendingReview ? { pendingReview: true as const } : {}),
       }
       const others = this.document.servers.filter(other => other.id !== server.id)
       // Structural problems block the save. A missing secret does not: it is a
@@ -167,7 +190,17 @@ export class UserMcpService {
       // it: exfiltration without ever reading a secret. Secrets supplied in
       // this same save are set afterwards, so an intentional move that
       // re-enters the token still works in one step.
-      const destinationChanged = existing !== undefined && destinationOf(existing.entry) !== destinationOf(server.entry)
+      this.document = {
+        version: 1,
+        servers: existing
+          ? this.document.servers.map(candidate => candidate.id === server.id ? server : candidate)
+          : [...this.document.servers, server],
+      }
+      // Document first, secret blobs after (review round 2): a failed persist
+      // rolls the document back in mutate(), and blobs cleared before it could
+      // not be rolled back, so a failed destination edit used to lose the
+      // server's token for good.
+      await this.persist()
       if (destinationChanged) await this.secrets.clearServer(server.id)
       for (const [inputId, value] of Object.entries(input.secrets ?? {})) {
         if (server.inputs.some(candidate => candidate.id === inputId)) {
@@ -175,14 +208,12 @@ export class UserMcpService {
         }
       }
       await this.secrets.prune(server.id, server.inputs.map(candidate => candidate.id))
-      this.document = {
-        version: 1,
-        servers: existing
-          ? this.document.servers.map(candidate => candidate.id === server.id ? server : candidate)
-          : [...this.document.servers, server],
+      return {
+        ok: true,
+        id: server.id,
+        ...(destinationChanged ? { secretsCleared: true } : {}),
+        ...(pendingReview ? { pendingReview: true } : {}),
       }
-      await this.persist()
-      return { ok: true, id: server.id, ...(destinationChanged ? { secretsCleared: true } : {}) }
     })
   }
 
@@ -196,8 +227,16 @@ export class UserMcpService {
     })
   }
 
-  setEnabled(id: string, enabled: boolean): Promise<UserMcpMutationResult> {
-    return this.update(id, server => ({ ...server, enabled }))
+  /** Agents may only turn a server OFF; turning one on is the user's review
+   * decision, and doing so clears pendingReview. */
+  setEnabled(id: string, enabled: boolean, actor: UserMcpActor = 'user'): Promise<UserMcpMutationResult> {
+    if (actor === 'agent' && enabled) {
+      return Promise.resolve({ ok: false, error: 'Only the user can turn an MCP server on (Settings → MCP).' })
+    }
+    return this.update(id, server => {
+      const { pendingReview: _pending, ...rest } = server
+      return enabled ? { ...rest, enabled } : { ...server, enabled }
+    })
   }
 
   setProvider(id: string, provider: UserMcpProvider, enabled: boolean): Promise<UserMcpMutationResult> {
@@ -206,6 +245,8 @@ export class UserMcpService {
 
   setSecret(id: string, inputId: string, value: string): Promise<UserMcpMutationResult> {
     return this.mutate(async () => {
+      const problem = value === '' ? null : secretValueProblem(value)
+      if (problem) return { ok: false, error: problem }
       const server = this.document.servers.find(candidate => candidate.id === id)
       if (!server) return { ok: false, error: 'That server no longer exists.' }
       if (!server.inputs.some(input => input.id === inputId)) return { ok: false, error: `No secret named "${inputId}".` }
@@ -293,6 +334,10 @@ export class UserMcpService {
         dropped.push({ name: server.name, reason: "Your organization's Claude MCP policy only allows its own servers" })
         continue
       }
+      if (server.pendingReview) {
+        dropped.push({ name: server.name, reason: 'Waiting for your review in Settings → MCP' })
+        continue
+      }
       if (codexNames.has(server.name)) {
         dropped.push({ name: server.name, reason: 'A server with this name is already in your Codex config.toml' })
         continue
@@ -323,7 +368,10 @@ export class UserMcpService {
       : undefined
     const translatorDrops = provider === 'claude'
       ? claudeUserMcpEntries(candidates).dropped
-      : addCodexUserMcpLaunchConfig(candidates, [], {}, codexShellPolicy)
+      // The dry run sees the same inherited environment the Codex process will
+      // (Codex inherits main's), so its "your environment already sets X"
+      // refusal is reported here rather than silently applied in the session.
+      : addCodexUserMcpLaunchConfig(candidates, [], inheritedEnvironment(), codexShellPolicy)
     const refused = new Set(translatorDrops.map(server => server.name))
     dropped.push(...translatorDrops)
     const servers = candidates.filter(server => !refused.has(server.name))
@@ -349,7 +397,7 @@ export class UserMcpService {
   }
 
   private mutate(
-    operation: () => Promise<{ ok: true; id?: string; secretsCleared?: boolean } | { ok: false; error: string; problems?: UserMcpProblem[] }>,
+    operation: () => Promise<{ ok: true; id?: string; secretsCleared?: boolean; pendingReview?: boolean } | { ok: false; error: string; problems?: UserMcpProblem[] }>,
   ): Promise<UserMcpMutationResult> {
     const run = this.tail.then(async (): Promise<UserMcpMutationResult> => {
       await this.initialize()
@@ -375,6 +423,7 @@ export class UserMcpService {
           snapshot,
           ...(outcome.id ? { id: outcome.id } : {}),
           ...(outcome.secretsCleared ? { secretsCleared: true } : {}),
+          ...(outcome.pendingReview ? { pendingReview: true } : {}),
         }
       } catch (error) {
         // Review round 1: a failed persist must not leave memory ahead of
@@ -399,6 +448,7 @@ export class UserMcpService {
     server: UserMcpServer,
     claudeManagedPolicy: boolean,
     codexNativeNames: ReadonlySet<string>,
+    claudeNativeNames: ReadonlySet<string>,
   ): Promise<UserMcpServerView> {
     const transport = transportOf(server.entry)
     const others = this.document.servers.filter(other => other.id !== server.id)
@@ -408,6 +458,16 @@ export class UserMcpService {
       if (secrets[inputId] && !secrets[inputId]!.set) {
         problems.push({ kind: 'secret-missing', message: `Secret "${inputId}" is not set` })
       }
+    }
+    if (server.pendingReview) {
+      problems.unshift({ kind: 'pending-review', message: 'Added or changed by an agent — review the config, then turn it on' })
+    }
+    // Spec Decisions: Claude replaces a same-name native server with ours for
+    // Agent Code launches (whole-entry --mcp-config precedence), while the
+    // user's own `claude` runs keep theirs. Say so, or a rotated native token
+    // looks ignored (review round 2).
+    if (claudeNativeNames.has(server.name) && server.providers.claude) {
+      problems.push({ kind: 'claude-native-name', message: 'Also in your Claude config; Agent Code agents use this one instead' })
     }
     const support = { ...providerSupportForEntry(server.entry) }
     if (claudeManagedPolicy) {
@@ -427,14 +487,6 @@ export class UserMcpService {
   }
 }
 
-/**
- * Everything that decides where a server's secrets are delivered. Env and
- * header VALUES are deliberately excluded: they are what the secrets fill in,
- * and editing a literal header must not cost the user their token.
- */
-function destinationOf(entry: UserMcpServer['entry']): string {
-  const record = entry as Record<string, unknown>
-  return JSON.stringify([
-    transportOf(entry), record.url, record.command, record.args, record.cwd, record.headersHelper,
-  ])
+function inheritedEnvironment(): Record<string, string> {
+  return Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
 }

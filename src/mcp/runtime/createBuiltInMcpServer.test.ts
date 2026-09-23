@@ -330,3 +330,40 @@ describe('createBuiltInMcpServer root management domain (#906)', () => {
     expect(record).toHaveBeenCalledWith(expect.objectContaining({ area: 'mcp.root_management', name: 'registrar.missing' }))
   })
 })
+
+describe('orchestration child domains (#1143 review round 2)', () => {
+  async function createChild(parentDomains: BuiltInMcpDomain[], requested: BuiltInMcpDomain[]) {
+    const createAgent = vi.fn(async () => ({ sessionId: 'child-1', kind: 'claude' as const, cwd: '/tmp/project' }))
+    const server = createBuiltInMcpServer(
+      { sessionId: 'session-1', cwd: '/tmp/project', domains: parentDomains },
+      {
+        orchestrationBridge: {
+          createAgent,
+          createAgentCallOnce: async (_key: string, run: () => Promise<unknown>) => await run(),
+        } as never,
+        sessionManager: {} as never,
+      },
+    )
+    const client = new Client({ name: 'child-domain-test', version: '0.0.0' })
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+    try {
+      await server.connect(serverTransport)
+      await client.connect(clientTransport)
+      await client.callTool({ name: 'orchestration_create_agent', arguments: { kind: 'claude', builtInMcpDomains: requested } })
+      return (createAgent.mock.calls[0] as unknown as [{ builtInMcpDomains?: BuiltInMcpDomain[] }])[0].builtInMcpDomains
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  }
+
+  it('never hands a child mcp_servers or root_management that the parent does not hold', async () => {
+    // Orchestration is on by default, so without this clamp any agent could
+    // mint MCP management (or root control) for a child it drives.
+    expect(await createChild(['orchestration'], ['tldr', 'mcp_servers', 'root_management'])).toEqual(['tldr'])
+  })
+
+  it('still passes them on when the parent holds them itself', async () => {
+    expect(await createChild(['orchestration', 'mcp_servers'], ['mcp_servers'])).toEqual(['mcp_servers'])
+  })
+})

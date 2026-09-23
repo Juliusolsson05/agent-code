@@ -22,13 +22,18 @@ import { providerSupportForEntry } from '@shared/userMcp/validate.js'
  * because the user just handed it one has no reason to ever read one, and a
  * read tool would turn any prompt injection into credential exfiltration.
  */
+/** At most this many servers per mcp_servers_add call. The 64 KB config cap
+ * alone admits thousands of tiny entries, each a queued save, snapshot and
+ * broadcast in main (review round 2). */
+const MAX_SERVERS_PER_ADD = 20
+
 export type UserMcpToolDependencies = {
   userMcpService?: Pick<UserMcpService, 'snapshot' | 'importConfig' | 'save' | 'delete' | 'setEnabled' | 'setProvider' | 'setSecret'>
   /** Tells every window that an agent changed the MCP configuration. */
   onUserMcpChangedByAgent?: (event: { sessionId: string; message: string }) => void
 }
 
-export const MCP_SERVERS_INSTRUCTIONS = `MCP Servers lets you manage the user's own MCP servers in Agent Code (the servers Agent Code attaches to new Claude and Codex agents). Only add, change or remove servers when the user's current request asks for it; never add a server on your own initiative, and prefer the exact config the server's official documentation publishes. Add servers with mcp_servers_add using that config (a {"mcpServers": {...}} block, a VS Code {"servers": ...} block, or one entry). Every env and header value in it becomes an encrypted secret automatically; README placeholders such as YOUR_TOKEN_HERE stay unset. Set a secret with mcp_servers_set_secret only when the user has given you the value in this conversation; otherwise tell the user to set it in Settings → MCP. Never repeat a secret value back. Changes apply to new agents and to existing agents when they reload — including you: you will not get a server's tools until the user reloads you. OAuth servers sign in through the CLIs (codex mcp login, or /mcp in Claude); say so instead of looking for a token. Report exactly what you changed.`
+export const MCP_SERVERS_INSTRUCTIONS = `MCP Servers lets you manage the user's own MCP servers in Agent Code (the servers Agent Code attaches to new Claude and Codex agents). Only add, change or remove servers when the user's current request asks for it; never add a server on your own initiative, and prefer the exact config the server's official documentation publishes. Add servers with mcp_servers_add using that config (a {"mcpServers": {...}} block, a VS Code {"servers": ...} block, or one entry). Every env and header value in it becomes an encrypted secret automatically; README placeholders such as YOUR_TOKEN_HERE stay unset. A server you add, or point at a different URL, command, arguments or environment, is saved switched OFF and waits for the user's review: tell the user to review it and turn it on in Settings → MCP. You cannot turn a server on. Set a secret with mcp_servers_set_secret only when the user has given you the value in this conversation; otherwise tell the user to set it in Settings → MCP. Never repeat a secret value back. Changes apply to new agents and to existing agents when they reload — including you: you will not get a server's tools until the user reloads you. OAuth servers sign in through the CLIs (codex mcp login, or /mcp in Claude); say so instead of looking for a token. Report exactly what you changed.`
 
 export function registerUserMcpTools(
   server: McpServer,
@@ -63,7 +68,7 @@ export function registerUserMcpTools(
 
   server.registerTool('mcp_servers_add', {
     title: 'Add MCP servers',
-    description: 'Add one or more MCP servers from a config snippet as published by the server\'s documentation: {"mcpServers": {...}}, a VS Code {"servers": ...} block, or a single entry (then pass name). Env and header values are stored as encrypted secrets automatically. Returns the new server ids and any secrets still to set.',
+    description: 'Add one or more MCP servers (at most 20) from a config snippet as published by the server\'s documentation: {"mcpServers": {...}}, a VS Code {"servers": ...} block, or a single entry (then pass name). Env and header values are stored as encrypted secrets automatically. New servers are saved switched off until the user reviews and turns them on in Settings → MCP. Returns the new server ids and any secrets still to set.',
     inputSchema: {
       config: z.string().min(2).max(64 * 1024).describe('The JSON config snippet.'),
       name: z.string().min(1).max(64).optional().describe('Server name, used only when config is a single bare entry.'),
@@ -75,12 +80,17 @@ export function registerUserMcpTools(
     try {
       const imported = service().importConfig(config, name)
       if (!imported.ok) return { ...toolText({ ok: false, message: imported.error }), isError: true }
+      if (imported.candidates.length > MAX_SERVERS_PER_ADD) {
+        return { ...toolText({ ok: false, message: `Add at most ${MAX_SERVERS_PER_ADD} servers per call.` }), isError: true }
+      }
       const added: unknown[] = []
+      const addedNames: string[] = []
       for (const candidate of imported.candidates) {
         const support = providerSupportForEntry(candidate.entry)
         const result = await service().save({
           name: candidate.name,
-          enabled: true,
+          // Stored off regardless (actor 'agent'); see UserMcpServer.pendingReview.
+          enabled: false,
           providers: {
             claude: support.claude.ok && (claude ?? true),
             codex: support.codex.ok && (codex ?? true),
@@ -88,15 +98,23 @@ export function registerUserMcpTools(
           entry: candidate.entry,
           inputs: candidate.inputs,
           secrets: candidate.pendingSecrets,
-        })
+        }, 'agent')
         if (!result.ok) {
+          if (addedNames.length > 0) changed(`An agent added MCP server${addedNames.length > 1 ? 's' : ''} ${addedNames.join(', ')} (off until you review ${addedNames.length > 1 ? 'them' : 'it'})`)
           return { ...toolText({ ok: false, message: `${candidate.name}: ${result.error}`, added, problems: result.problems ?? [] }), isError: true }
         }
         const view = result.snapshot.servers.find(serverView => serverView.id === result.id)
         added.push(view ? describeServer(view) : { name: candidate.name })
-        changed(`An agent added MCP server ${candidate.name}`)
+        addedNames.push(candidate.name)
       }
-      return toolText({ ok: true, added, note: 'Applies to new agents and to existing agents after they reload.' })
+      // One notice per call, not per server: the toast slot is single, so a
+      // per-server notice left only the last of a burst visible (review round 2).
+      changed(`An agent added MCP server${addedNames.length > 1 ? 's' : ''} ${addedNames.join(', ')} (off until you review ${addedNames.length > 1 ? 'them' : 'it'})`)
+      return toolText({
+        ok: true,
+        added,
+        note: 'Saved switched off. Ask the user to review and turn it on in Settings → MCP; it then applies to new agents and to existing agents after they reload.',
+      })
     } catch (error) {
       return failure(error)
     }
@@ -104,12 +122,12 @@ export function registerUserMcpTools(
 
   server.registerTool('mcp_servers_update', {
     title: 'Update an MCP server',
-    description: 'Change one server: its name, its config entry (the full entry object, same shape as mcp_servers_add accepts; keep ${input:…} references for secrets), whether it is on at all, or which providers new agents get it on.',
+    description: 'Change one server: its name, its config entry (the full entry object, same shape as mcp_servers_add accepts; keep ${input:…} references for secrets), which providers new agents get it on, or turn it OFF. Changing the entry\'s URL, command, arguments or environment forgets its stored secrets and switches it off until the user reviews it. You cannot turn a server on.',
     inputSchema: {
       id: z.string().min(1).max(64),
       name: z.string().min(1).max(64).optional(),
       entry: z.record(z.string(), z.unknown()).optional(),
-      enabled: z.boolean().optional(),
+      enabled: z.literal(false).optional().describe('Pass false to switch the server off. Only the user can switch it on.'),
       claude: z.boolean().optional(),
       codex: z.boolean().optional(),
     },
@@ -129,8 +147,12 @@ export function registerUserMcpTools(
         providers: { claude: claude ?? current.providers.claude, codex: codex ?? current.providers.codex },
         entry: nextEntry,
         inputs: referenced.map(inputId => current.inputs.find(input => input.id === inputId) ?? { id: inputId, description: 'Secret' }),
-      })
-      if (result.ok) changed(`An agent changed MCP server ${name ?? current.name}`)
+      }, 'agent')
+      if (result.ok) {
+        changed(result.pendingReview
+          ? `An agent changed MCP server ${name ?? current.name} (off until you review it)`
+          : `An agent changed MCP server ${name ?? current.name}`)
+      }
       return mutation(result)
     } catch (error) {
       return failure(error)
@@ -181,9 +203,15 @@ function describeServer(server: UserMcpServerView) {
     id: server.id,
     name: server.name,
     enabled: server.enabled,
+    ...(server.pendingReview ? { waitingForUserReview: true } : {}),
     providers: server.providers,
     transport: server.transport,
-    entry: server.entry,
+    // The redacted one-line summary, never the raw entry (review round 2):
+    // args and URLs have no secret channel and often carry credentials, and
+    // everything this returns lands in the transcript and at the provider.
+    // An update passes the complete entry it wants anyway.
+    summary: server.summary,
+    secretReferences: server.inputs.map(input => input.id),
     secrets: Object.fromEntries(Object.entries(server.secrets).map(([id, state]) => [id, state.set ? 'set' : 'not set'])),
     problems: server.problems.map(problem => problem.message),
     unsupported: Object.fromEntries(Object.entries(server.support).flatMap(([provider, support]) =>

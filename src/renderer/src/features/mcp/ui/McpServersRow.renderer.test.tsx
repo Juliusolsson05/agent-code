@@ -150,6 +150,36 @@ describe('MCP server dialog', () => {
     expect(command).toContain(`codex mcp login beeper -c 'mcp_servers.beeper.url="https://x.dev/mcp?a='\\''$(echo PWNED)'\\''"'`)
   })
 
+  it('warns that changing where a server connects forgets its secrets (review round 2)', () => {
+    useAppStore.setState({ mcpServerDialog: { mode: 'edit', serverId: 'srv-beeper' } })
+    render(<McpServerDialog />)
+    const config = screen.getByLabelText('Server config') as HTMLTextAreaElement
+    fireEvent.change(config, { target: { value: config.value.replace('23373', '23374') } })
+    expect(screen.getByText(/stored secrets will be forgotten/)).toBeTruthy()
+    // The field no longer claims the secret is set.
+    expect(screen.getByLabelText('Secret beeper-authorization').getAttribute('placeholder')).toBe('not set')
+  })
+
+  it('keeps a lifted token when the sanitized paste is edited and re-parsed (review round 2)', async () => {
+    const entry = { type: 'http', url: 'http://localhost:23373/v0/mcp', headers: { Authorization: 'Bearer ${input:beeper-authorization}' } }
+    api.userMcpImport
+      .mockResolvedValueOnce({ ok: true, format: 'mcpServers', candidates: [{ name: 'beeper', entry, inputs: [{ id: 'beeper-authorization', description: '' }], pendingSecrets: { 'beeper-authorization': TOKEN }, problems: [] }] })
+      .mockResolvedValueOnce({ ok: true, format: 'mcpServers', candidates: [{ name: 'beeper', entry: { ...entry, url: 'http://localhost:23374/v0/mcp' }, inputs: [{ id: 'beeper-authorization', description: 'Secret' }], pendingSecrets: {}, problems: [] }] })
+    api.userMcpSave.mockResolvedValue({ ok: true, snapshot: { servers: [], native: [], claudeManagedPolicy: false } })
+    useAppStore.setState({ mcpServerDialog: { mode: 'add' } })
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    render(<McpServerDialog />)
+    const box = screen.getByLabelText('MCP server config') as HTMLTextAreaElement
+    fireEvent.change(box, { target: { value: '{"mcpServers":{}}' } })
+    await act(async () => { await vi.advanceTimersByTimeAsync(300) })
+    fireEvent.change(box, { target: { value: box.value.replace('23373', '23374') } })
+    await act(async () => { await vi.advanceTimersByTimeAsync(300) })
+    vi.useRealTimers()
+    fireEvent.click(screen.getByRole('button', { name: 'Add server' }))
+    await vi.waitFor(() => expect(api.userMcpSave).toHaveBeenCalledTimes(1))
+    expect(api.userMcpSave.mock.calls[0]![0].secrets).toEqual({ 'beeper-authorization': TOKEN })
+  })
+
   it('adds every server found in a pasted snippet, with its lifted secrets', async () => {
     api.userMcpImport.mockResolvedValue({
       ok: true,

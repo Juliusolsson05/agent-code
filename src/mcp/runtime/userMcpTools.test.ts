@@ -45,7 +45,11 @@ async function connect(domains: BuiltInMcpDomain[], onUserMcpChangedByAgent = vi
   const call = async (name: string, args: Record<string, unknown> = {}) => {
     const result = await client.callTool({ name, arguments: args })
     const text = (result.content as { text: string }[])[0]!.text
-    return { isError: result.isError === true, text, value: JSON.parse(text) as Record<string, unknown> }
+    // Schema rejections (e.g. `enabled: true`, which the schema forbids) come
+    // back as plain MCP error text, not our JSON envelope.
+    let value: Record<string, unknown>
+    try { value = JSON.parse(text) as Record<string, unknown> } catch { value = { message: text } }
+    return { isError: result.isError === true, text, value }
   }
   return { client, call, close: async () => { await client.close(); await server.close() } }
 }
@@ -79,10 +83,17 @@ describe('mcp_servers built-in domain', () => {
     // to contain those four hex characters.
     expect(listed.text).not.toContain('"hint"')
     expect((listed.value.servers as { secrets: Record<string, string> }[])[0]!.secrets).toEqual({ 'beeper-authorization': 'set' })
-    expect(announce).toHaveBeenCalledWith({ sessionId: 'agent-1', message: 'An agent added MCP server beeper' })
-    // And the secret really is stored, so the next launch can attach it.
+    expect(announce).toHaveBeenCalledWith({ sessionId: 'agent-1', message: 'An agent added MCP server beeper (off until you review it)' })
+    // Review round 2: an agent proposes, the user approves. Nothing attaches
+    // until the user turns it on; then the stored secret is there.
+    const id = (await service.snapshot()).servers[0]!.id
+    expect((await service.snapshot()).servers[0]!.enabled).toBe(false)
+    expect((await service.resolveForLaunch({ provider: 'codex', overrides: {}, cwd: dir })).servers).toEqual([])
+    await service.setEnabled(id, true)
     const launch = await service.resolveForLaunch({ provider: 'codex', overrides: {}, cwd: dir })
     expect(launch.servers[0]!.secrets).toEqual({ 'beeper-authorization': TOKEN })
+    // And the agent was never shown the raw entry.
+    expect(listed.text).not.toContain('"entry"')
     await close()
   })
 
@@ -111,6 +122,24 @@ describe('mcp_servers built-in domain', () => {
     expect((await service.snapshot()).servers[0]!.providers).toEqual({ claude: true, codex: false })
 
     await call('mcp_servers_remove', { id })
+    expect((await service.snapshot()).servers).toEqual([])
+    await close()
+  })
+
+  it('cannot turn a server on (review round 2)', async () => {
+    const { call, close } = await connect(['mcp_servers'])
+    await call('mcp_servers_add', { config: '{"url":"https://x.dev/mcp"}', name: 'x' })
+    const id = (await service.snapshot()).servers[0]!.id
+    const result = await call('mcp_servers_update', { id, enabled: true })
+    expect(result.isError).toBe(true)
+    expect((await service.snapshot()).servers[0]!.enabled).toBe(false)
+    await close()
+  })
+
+  it('refuses more than 20 servers in one call', async () => {
+    const { call, close } = await connect(['mcp_servers'])
+    const many = Object.fromEntries(Array.from({ length: 21 }, (_, i) => [`s${i}`, { command: 'x' }]))
+    expect((await call('mcp_servers_add', { config: JSON.stringify({ mcpServers: many }) })).isError).toBe(true)
     expect((await service.snapshot()).servers).toEqual([])
     await close()
   })

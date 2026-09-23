@@ -118,9 +118,11 @@ export async function createPrivateClaudeMcpConfig(
   // User MCP servers (#1143) share this one file rather than a second
   // `--mcp-config`: the flag is variadic and swallows positional arguments that
   // follow it, so one occurrence kept last is the only placement that cannot
-  // eat `--resume`. Their secret values are already `${VAR}` references (see
-  // userMcpLaunch.ts), so nothing here can put a credential on disk that the
-  // built-in path would not.
+  // eat `--resume`. NOTE: user entries carry RESOLVED secret values (see
+  // claudeUserMcpEntries for why the file beats Claude's environment). Never
+  // log or copy this document; the file is removed once Claude is ready
+  // (ClaudeSession.forgetPrivateMcpConfigContents), on stop and rollback, and
+  // by the startup sweep after a crash.
   userEntries: Readonly<Record<string, Record<string, unknown>>> = {},
 ): Promise<PrivateMcpConfig | null> {
   if (servers.length === 0 && Object.keys(userEntries).length === 0) return null

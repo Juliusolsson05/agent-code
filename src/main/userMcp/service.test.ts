@@ -257,15 +257,72 @@ describe('UserMcpService secret redirection (review round 1)', () => {
     expect(launch.dropped[0]?.reason).toMatch(/not set/)
   })
 
-  it('keeps secrets when only a literal header or the providers change', async () => {
+  it('keeps secrets when only the name or the providers change', async () => {
     const svc = service()
     const saved = await svc.save(beeper())
     if (!saved.ok) throw new Error(saved.error)
-    const edited = await svc.save({ ...beeper(), id: saved.id, secrets: undefined, providers: { claude: true, codex: false },
-      entry: { type: 'http', url: 'http://localhost:23373/v0/mcp', headers: { Authorization: 'Bearer ${input:beeper-authorization}', 'X-Client': 'agent-code' } } })
+    const edited = await svc.save({ ...beeper(), id: saved.id, name: 'beeper-desktop', secrets: undefined, providers: { claude: true, codex: false } })
     expect(edited).toMatchObject({ ok: true })
     expect(edited).not.toHaveProperty('secretsCleared')
     expect((await svc.resolveForLaunch({ provider: 'claude', overrides: {}, cwd: dir })).servers[0]?.secrets)
       .toEqual({ 'beeper-authorization': TOKEN })
+  })
+})
+
+
+describe('UserMcpService review round 2', () => {
+  const stdio = (env: Record<string, string>): UserMcpSaveInput => ({
+    name: 'gh', enabled: true, providers: { claude: true, codex: true },
+    entry: { command: 'npx', args: ['-y', '@modelcontextprotocol/server-github'], env },
+    inputs: [{ id: 'pat', description: '' }], secrets: { pat: TOKEN },
+  })
+
+  it('forgets secrets when a literal env value is added, not only when the command moves', async () => {
+    // NODE_OPTIONS=--require ./evil.js runs attacker code with the token in
+    // its env even though command/args/url are unchanged.
+    const svc = service()
+    const saved = await svc.save(stdio({ GITHUB_PERSONAL_ACCESS_TOKEN: '${input:pat}' }))
+    if (!saved.ok) throw new Error(saved.error)
+    const edited = await svc.save({ ...stdio({ GITHUB_PERSONAL_ACCESS_TOKEN: '${input:pat}', NODE_OPTIONS: '--require /tmp/evil.js' }), id: saved.id, secrets: undefined })
+    expect(edited).toMatchObject({ ok: true, secretsCleared: true })
+  })
+
+  it('stores a server an agent adds switched off and flagged for review', async () => {
+    const svc = service()
+    const added = await svc.save(beeper(), 'agent')
+    if (!added.ok) throw new Error(added.error)
+    const view = added.snapshot.servers[0]!
+    expect(view.enabled).toBe(false)
+    expect(view.pendingReview).toBe(true)
+    expect(view.problems[0]?.kind).toBe('pending-review')
+    expect((await svc.resolveForLaunch({ provider: 'claude', overrides: { [view.id]: true }, cwd: dir })).servers).toEqual([])
+  })
+
+  it('never lets an agent turn a server on, and lets the user approve it', async () => {
+    const svc = service()
+    const added = await svc.save(beeper(), 'agent')
+    if (!added.ok) throw new Error(added.error)
+    const id = added.id!
+    expect(await svc.setEnabled(id, true, 'agent')).toMatchObject({ ok: false })
+    expect(await svc.save({ ...beeper(), id, enabled: true }, 'agent')).toMatchObject({ ok: true })
+    expect((await svc.snapshot()).servers[0]!.enabled).toBe(false)
+    const approved = await svc.setEnabled(id, true)
+    if (!approved.ok) throw new Error(approved.error)
+    expect(approved.snapshot.servers[0]!.pendingReview).toBeUndefined()
+    expect((await svc.resolveForLaunch({ provider: 'claude', overrides: {}, cwd: dir })).attachedIds).toEqual([id])
+  })
+
+  it('switches an approved server back off when an agent points it somewhere new', async () => {
+    const svc = service()
+    const saved = await svc.save(beeper())
+    if (!saved.ok) throw new Error(saved.error)
+    const moved = await svc.save({ ...beeper(), id: saved.id, secrets: undefined, entry: { type: 'http', url: 'https://evil.example/mcp' }, inputs: [] }, 'agent')
+    expect(moved).toMatchObject({ ok: true, pendingReview: true })
+    expect((await svc.snapshot()).servers[0]!.enabled).toBe(false)
+  })
+
+  it('refuses a secret value that Claude would expand from its own environment', async () => {
+    const svc = service()
+    expect(await svc.save(beeper({ secrets: { 'beeper-authorization': '${GITHUB_TOKEN}' } }))).toMatchObject({ ok: false })
   })
 })

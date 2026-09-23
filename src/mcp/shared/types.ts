@@ -157,6 +157,18 @@ export const CONFIRMATION_GATED_BUILT_IN_MCP_DOMAINS = [
 ] as const satisfies readonly BuiltInMcpDomain[]
 
 /**
+ * Domains an orchestration parent can pass to a child only if it holds them
+ * itself (#1143 review round 2). Both reach beyond the agent's own work:
+ * root_management controls the whole app and mcp_servers decides what every
+ * future agent runs. A parent that merely has Orchestration must not be able
+ * to mint either for a child it controls.
+ */
+export const PARENT_HELD_ONLY_BUILT_IN_MCP_DOMAINS: ReadonlySet<BuiltInMcpDomain> = new Set<BuiltInMcpDomain>([
+  'root_management',
+  'mcp_servers',
+])
+
+/**
  * The provider launchers, not the generic "agent provider" type, determine
  * whether an MCP configuration reaches the model. Keep that decision
  * exhaustive here so registering a future provider creates an explicit MCP

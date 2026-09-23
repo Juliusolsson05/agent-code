@@ -8,6 +8,7 @@ import {
   providerSupport,
   summarizeEntry,
   transportOf,
+  userMcpDestination,
   validateServer,
 } from './validate.js'
 
@@ -186,5 +187,25 @@ describe('review round 1 model rules', () => {
       .toBe('mcp.zapier.com/api/mcp/s/…/mcp')
     expect(summarizeEntry({ type: 'http', url: 'https://x.dev/mcp?key=secret' })).toBe('x.dev/mcp?…')
     expect(summarizeEntry({ type: 'http', url: 'http://localhost:23373/v0/mcp' })).toBe('localhost:23373/v0/mcp')
+  })
+})
+
+
+describe('review round 2 model rules', () => {
+  it('gives a hand-written ${input:} reference a secret field instead of failing save', () => {
+    const result = importUserMcpConfig('{"mcpServers":{"b":{"url":"http://localhost:23373/v0/mcp","headers":{"Authorization":"Bearer ${input:b-auth}"}}}}')
+    if (!result.ok) throw new Error(result.error)
+    expect(result.candidates[0]!.inputs.map(input => input.id)).toEqual(['b-auth'])
+    expect(result.candidates[0]!.problems).toEqual([])
+  })
+
+  it('elides the value that follows a sensitive flag', () => {
+    expect(summarizeEntry({ command: 'srv', args: ['--api-key', 'd6f8g2h9', '--port', '8080'] })).toBe('srv … … --port 8080')
+  })
+
+  it('counts every literal as part of where secrets go, but not which secret a value references', () => {
+    const base = { command: 'npx', env: { T: '${input:a}' } }
+    expect(userMcpDestination(base)).toBe(userMcpDestination({ command: 'npx', env: { T: '${input:b}' } }))
+    expect(userMcpDestination(base)).not.toBe(userMcpDestination({ command: 'npx', env: { T: '${input:a}', NODE_OPTIONS: '--require x' } }))
   })
 })

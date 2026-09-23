@@ -38,6 +38,14 @@ export async function reloadSessionWithBuiltInMcpOverrides(
   sessionId: SessionId,
   overrides: BuiltInMcpOverrides,
   labels: { reloaded: string; failed: string },
+  /**
+   * Runs only once the reload is certain to be attempted — after every check
+   * that can decline it (#1143 review round 2). The per-agent picker uses it to
+   * end a running goal loop whose tools are being removed: stopped earlier, a
+   * declined reload (provisional provider id) left the loop dead while the
+   * agent kept its tools.
+   */
+  beforeReplace?: () => Promise<void>,
 ): Promise<SessionId | undefined> {
   const meta = workspace.state.sessions[sessionId]
   const kind = meta?.kind ?? DEFAULT_PROVIDER
@@ -52,6 +60,7 @@ export async function reloadSessionWithBuiltInMcpOverrides(
     return undefined
   }
   try {
+    await beforeReplace?.()
     const newSessionId = await workspace.replaceSession(meta.cwd, {
       kind,
       targetSessionId: sessionId,

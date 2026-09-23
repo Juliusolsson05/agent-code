@@ -205,3 +205,33 @@ describe('sweepStalePrivateMcpConfigs', () => {
     }
   })
 })
+
+
+describe('review round 2 Codex launch rules', () => {
+  const mk = (name: string, env: Record<string, string>, secrets: Record<string, string>): ResolvedUserMcpServer =>
+    ({ id: name, name, entry: { command: name, env }, secrets })
+
+  it('never emits two shell filters that differ only in case (Codex rejects them)', () => {
+    const args: string[] = []
+    const dropped = addCodexUserMcpLaunchConfig([
+      mk('a', { GITHUB_TOKEN: '${input:t}' }, { t: 'v' }),
+      mk('b', { github_token: '${input:t}' }, { t: 'v' }),
+    ], args, {})
+    const filters = args.filter(arg => arg.startsWith('shell_environment_policy.filters.'))
+    expect(new Set(filters.map(filter => filter.toUpperCase())).size).toBe(filters.length)
+    expect(dropped.length + filters.length).toBeGreaterThan(0)
+  })
+
+  it('refuses to silently replace the user\'s own variable with a different value', () => {
+    const env: Record<string, string> = { GITHUB_TOKEN: 'users-own' }
+    const dropped = addCodexUserMcpLaunchConfig([mk('gh', { GITHUB_TOKEN: '${input:t}' }, { t: 'other' })], [], env)
+    expect(dropped[0]?.reason).toMatch(/Your environment already sets GITHUB_TOKEN/)
+    expect(env.GITHUB_TOKEN).toBe('users-own')
+  })
+
+  it('does not hide the user\'s own identical variable from model shells', () => {
+    const args: string[] = []
+    addCodexUserMcpLaunchConfig([mk('gh', { GITHUB_TOKEN: '${input:t}' }, { t: 'same' })], args, { GITHUB_TOKEN: 'same' })
+    expect(args.join(' ')).not.toContain('shell_environment_policy')
+  })
+})

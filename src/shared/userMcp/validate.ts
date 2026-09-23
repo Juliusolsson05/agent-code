@@ -222,6 +222,40 @@ export function providerSupportForEntry(entry: unknown): Record<UserMcpProvider,
   return support
 }
 
+/**
+ * Everything about an entry except the secret references themselves.
+ *
+ * WHY the whole entry and not just url/command/args (review round 2): a secret
+ * can be exfiltrated without moving it to a new host — add a literal
+ * `NODE_OPTIONS=--require ./evil.js` or a `PATH` that finds a fake `npx`, and
+ * the unchanged command runs attacker code with the token in its env. The
+ * only change that must NOT forget secrets is editing which `${input:…}` a
+ * value references, so those values are masked and everything else counts.
+ */
+export function userMcpDestination(entry: unknown): string {
+  if (!isPlainObject(entry)) return 'invalid'
+  const masked: Record<string, unknown> = { ...entry, type: transportOf(entry) }
+  for (const field of ['env', 'headers'] as const) {
+    if (!isStringRecord(entry[field])) continue
+    masked[field] = Object.fromEntries(Object.entries(entry[field] as Record<string, string>)
+      .map(([key, value]) => [key, hasInputReference(value) ? '<secret>' : value])
+      .sort(([a], [b]) => (a as string).localeCompare(b as string)))
+  }
+  return JSON.stringify(Object.keys(masked).sort().map(key => [key, masked[key]]))
+}
+
+/**
+ * Secret values may not contain `${`. Claude expands `${VAR}` in every value
+ * of an `--mcp-config` server (vendor services/mcp/config.ts expandEnvVars),
+ * and since the private file now carries resolved values, a secret containing
+ * `${X}` would be rewritten from Agent Code's own environment at launch
+ * (review round 2). Real tokens never contain it; a value that does is almost
+ * certainly an unfilled template.
+ */
+export function secretValueProblem(value: string): string | null {
+  return value.includes('${') ? 'A secret value cannot contain "${" — paste the actual value, not a variable reference.' : null
+}
+
 function foldName(name: string): string {
   return name.toLowerCase().replace(/-/g, '_')
 }
@@ -255,7 +289,10 @@ export function summarizeEntry(entry: unknown): string {
     // (`--header "Authorization: Bearer sk-…"`, `--api-key …`). Summaries go
     // to every window and to agents, so anything that looks like a credential
     // or an opaque blob is elided. The full args stay in main.
-    return [entry.command as string, ...args.map(redactArg)].join(' ')
+    // The value AFTER a sensitive flag is elided too (review round 2):
+    // `--api-key d6f8g2h9` is short and keyword-free on its own.
+    return [entry.command as string, ...args.map((arg, index) =>
+      index > 0 && SENSITIVE_ARG.test(args[index - 1]!) && args[index - 1]!.startsWith('-') ? '…' : redactArg(arg))].join(' ')
   }
   if (transport) {
     try {
@@ -300,6 +337,10 @@ export function coerceUserMcpDocument(value: unknown): UserMcpDocument {
       // Kept verbatim (including unknown keys); validation reports problems.
       entry: (isPlainObject(raw.entry) ? raw.entry : {}) as UserMcpServerEntry,
       inputs: coerceInputs(raw.inputs),
+      // Survives a hand edit or an older build only as `true`: anything else
+      // reads as "not pending", which is the conservative direction only
+      // because a pending server is also stored disabled.
+      ...(raw.pendingReview === true ? { pendingReview: true as const } : {}),
     })
   }
   return { version: 1, servers }

@@ -78,7 +78,20 @@ export type UserMcpServer = {
   providers: Record<UserMcpProvider, boolean>
   entry: UserMcpServerEntry
   inputs: UserMcpInput[]
+  /**
+   * Set when an AGENT added this server or pointed it somewhere new (review
+   * round 2). Such a server is stored switched off and stays off until the
+   * user turns it on in Settings, which also clears this flag. Agents cannot
+   * clear it or turn a server on: an agent proposes, the user approves. The
+   * list decides what code runs in every future agent, so a prompt-injected
+   * agent must never be able to change it on its own authority.
+   */
+  pendingReview?: true
 }
+
+/** Who asked for a mutation. Agents go through the mcp_servers built-in
+ * domain; everything else (Settings, IPC) is the user. */
+export type UserMcpActor = 'user' | 'agent'
 
 export type UserMcpDocument = {
   version: 1
@@ -93,6 +106,8 @@ export type UserMcpProblem =
   | { kind: 'secret-in-forbidden-field'; message: string }
   | { kind: 'unknown-input'; message: string }
   | { kind: 'secret-missing'; message: string }
+  | { kind: 'pending-review'; message: string }
+  | { kind: 'claude-native-name'; message: string }
 
 export type UserMcpSupport = { ok: true } | { ok: false; reason: string }
 
@@ -157,7 +172,7 @@ export type UserMcpSaveInput = {
 export type UserMcpMutationResult =
   /** `secretsCleared`: the save changed where the server connects, so its
    * previously stored secrets were forgotten (see UserMcpService.save). */
-  | { ok: true; snapshot: UserMcpSnapshot; id?: string; secretsCleared?: boolean }
+  | { ok: true; snapshot: UserMcpSnapshot; id?: string; secretsCleared?: boolean; pendingReview?: boolean }
   | { ok: false; error: string; problems?: UserMcpProblem[] }
 
 export type UserMcpImportCandidate = {

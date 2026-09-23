@@ -1,3 +1,4 @@
+import { rm } from 'node:fs/promises'
 import { excludeExternalControlFromClaude } from '@providers/shared/runtime/externalControlExclusion.js'
 import { CLAUDE_TLDR_HOOK_TOKEN_ENV, claudeTldrHookSettings, tldrHookServer } from '@providers/shared/runtime/tldrHooks.js'
 import { EventEmitter } from 'events'
@@ -218,6 +219,7 @@ export class ClaudeSession extends EventEmitter {
   private readonly builtInMcpServers: BuiltInMcpServerConfig[]
   private readonly userMcpServers: ResolvedUserMcpServer[]
   private privateMcpConfig: PrivateMcpConfig | null = null
+  private privateMcpConfigForgotten = false
 
   constructor(options: ClaudeSessionOptions = {}) {
     super()
@@ -871,7 +873,25 @@ export class ClaudeSession extends EventEmitter {
         reason: nextReason,
       })
     }
+    if (next.kind === 'ready') this.forgetPrivateMcpConfigContents()
     return next
+  }
+
+  /**
+   * Remove the private MCP config file once Claude is up (#1143 review round
+   * 2). It now carries resolved user secrets, and its path is on Claude's argv,
+   * so for as long as it exists any tool the model runs as the same user can
+   * `ps` for the path and read it. Claude parses `--mcp-config` once during
+   * startup (vendor main.tsx) and reconnects from the in-memory config, and a
+   * ready composer means startup is long past, so the file is not needed
+   * again. Only the FILE goes; the directory and dispose() stay, so stop,
+   * rollback and the startup sweep keep working unchanged.
+   */
+  private forgetPrivateMcpConfigContents(): void {
+    const config = this.privateMcpConfig
+    if (!config || this.privateMcpConfigForgotten) return
+    this.privateMcpConfigForgotten = true
+    void rm(config.path, { force: true }).catch(() => {})
   }
 
   private refreshPromptGate(): PromptGateState {
@@ -1209,6 +1229,7 @@ export class ClaudeSession extends EventEmitter {
     // translator would refuse.
     const userMcp = claudeUserMcpEntries(this.userMcpServers)
     this.privateMcpConfig = await createPrivateClaudeMcpConfig(this.builtInMcpServers, userMcp.entries)
+    this.privateMcpConfigForgotten = false
     if (this.privateMcpConfig) args.push('--mcp-config', this.privateMcpConfig.path)
   }
 

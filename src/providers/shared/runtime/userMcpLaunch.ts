@@ -160,6 +160,12 @@ export type CodexShellPolicyStyle =
  * the transcript. MCP children are unaffected: they get only Codex's allowlist
  * plus their own `env_vars`.
  *
+ * Accepted residual (review round 2): Codex builds hook and `notify` commands
+ * from its own full process environment with no shell policy (vendor codex-rs
+ * hooks registry), so user, plugin and trusted-project hooks can read these
+ * variables. Closing that needs a wrapper that feeds the server its secret
+ * from a file instead of the Codex environment; recorded as a follow-up.
+ *
  * Returns servers that could not be attached; a dropped server never fails
  * the launch.
  */
@@ -170,8 +176,16 @@ export function addCodexUserMcpLaunchConfig(
   shellPolicy: CodexShellPolicyStyle = { style: 'filters' },
 ): UserMcpDroppedServer[] {
   const dropped: UserMcpDroppedServer[] = []
-  // Secret env names already claimed by an earlier server in this launch.
+  // Secret env names already claimed by an earlier server in this launch,
+  // keyed case-insensitively (review round 2): Codex treats shell filter
+  // patterns case-insensitively and rejects `GITHUB_TOKEN` + `github_token` as
+  // duplicate filters, failing config load for the whole launch.
   const claimed = new Map<string, string>()
+  // The environment Codex would have had without us. A pass-through secret
+  // that silently replaced the user's own variable of the same name (say the
+  // GITHUB_TOKEN their shells use for `gh`) and then hid it from model shells
+  // broke unrelated tooling with nothing on screen (review round 2).
+  const inherited = { ...env }
   const secretNames = new Set<string>()
   let generatedSecrets = false
   for (const server of servers) {
@@ -217,14 +231,26 @@ export function addCodexUserMcpLaunchConfig(
             failure = `Codex cannot pass a secret named ${key} without changing its own environment`
             break
           }
-          const owner = claimed.get(key)
+          const owner = claimed.get(key.toUpperCase())
           if (owner !== undefined && env[key] !== resolved) {
             failure = `Secret ${key} is already used with a different value by ${owner}`
             break
           }
+          const own = Object.keys(inherited).find(name => name.toUpperCase() === key.toUpperCase())
+          if (owner === undefined && own !== undefined && inherited[own] !== resolved) {
+            failure = `Your environment already sets ${own}; Codex cannot pass a different value to this server`
+            break
+          }
+          if (passThrough.some(name => name.toUpperCase() === key.toUpperCase())) {
+            failure = `Secrets ${key} differ only in letter case`
+            break
+          }
           serverEnv[key] = resolved
           passThrough.push(key)
-          serverSecretNames.push(key)
+          // Not hidden from model shells when the user's own environment
+          // already carries this exact value: their shells saw it before this
+          // feature existed, and hiding it would break e.g. `gh` auth.
+          if (own === undefined) serverSecretNames.push(key)
         }
       }
       if (passThrough.length > 0) set('env_vars', passThrough)
@@ -257,12 +283,14 @@ export function addCodexUserMcpLaunchConfig(
     Object.assign(env, serverEnv)
     for (const key of Object.keys(serverEnv)) {
       if (key.startsWith(USER_MCP_SECRET_VARIABLE_PREFIX)) generatedSecrets = true
-      else claimed.set(key, server.name)
+      else claimed.set(key.toUpperCase(), server.name)
     }
     for (const name of serverSecretNames) secretNames.add(name)
   }
 
+  const seen = new Set<string>()
   const excluded = [...(generatedSecrets ? [`${USER_MCP_SECRET_VARIABLE_PREFIX}*`] : []), ...secretNames]
+    .filter(name => !seen.has(name.toUpperCase()) && seen.add(name.toUpperCase()))
   if (excluded.length > 0) {
     if (shellPolicy.style === 'legacy') {
       const merged = [...new Set([...shellPolicy.exclude, ...excluded])]

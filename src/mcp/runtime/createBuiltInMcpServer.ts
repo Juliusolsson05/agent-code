@@ -27,7 +27,7 @@ import type {
 import { buildOrchestrationBootstrapPrompt } from '@mcp/shared/orchestrationPrompt.js'
 import type { BuiltInMcpDependencies } from '@mcp/runtime/BuiltInMcpHttpHost.js'
 import type { PromptDeliveryResult } from '@shared/types/providerConfig.js'
-import { BUILT_IN_MCP_DOMAINS } from '@mcp/shared/types.js'
+import { BUILT_IN_MCP_DOMAINS, PARENT_HELD_ONLY_BUILT_IN_MCP_DOMAINS } from '@mcp/shared/types.js'
 import type { BuiltInMcpDomain, McpSessionScope } from '@mcp/shared/types.js'
 import type { SessionKind } from '@main/sessionManager.js'
 import {
@@ -887,7 +887,20 @@ function orchestrationCreateAgentCallKey(
         ].join(' '),
       inputSchema: ORCHESTRATION_CREATE_AGENT_INPUT,
     },
-    async args => {
+    async requested => {
+      // Review round 2 (#1143): a child may not be handed a privileged domain
+      // its parent does not hold itself. Orchestration is on by default, so
+      // without this any ordinary agent — or a prompt injection reaching one —
+      // could spawn a child with mcp_servers (and install a server every
+      // future agent runs) or root_management (skipping its confirmation
+      // dialog). Clamped here, at the one place a model-chosen list enters.
+      const args = {
+        ...requested,
+        ...(requested.builtInMcpDomains
+          ? { builtInMcpDomains: requested.builtInMcpDomains.filter(domain =>
+              !PARENT_HELD_ONLY_BUILT_IN_MCP_DOMAINS.has(domain) || scope.domains.includes(domain)) }
+          : {}),
+      }
       const bridge = dependencies.orchestrationBridge
       const manager = dependencies.sessionManager
       if (!bridge || !manager) {
