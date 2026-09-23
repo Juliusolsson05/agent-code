@@ -150,16 +150,18 @@ const FEATURES_BY_KIND: Record<AgentProviderKind, ProviderFeatureCapabilities> =
   },
   // Pi (terminal-only): prompts come from its session rows (the Pi mapper),
   // and Reload Agent relaunches `pi --session-id <id>`, which reopens the
-  // session (Stage 0 `resume` recording). Rewind, Duplicate and switching
-  // need a transcript-engine adapter and a parser codec — declared here only
-  // once those exist, never inherited by being an agent.
+  // session — the same command Copy Resume Command hands out behind the
+  // helper's `cd <cwd> &&` (verified: pi-terminal-headless Stage 0 `resume`
+  // recording, a relaunch by id in the project cwd reopened and appended).
+  // Rewind, Duplicate and switching need a transcript-engine adapter and a
+  // parser codec — declared here only once those exist.
   pi: {
     transcriptRewind: false,
     transcriptDuplicate: false,
     promptHistoryExtraction: true,
     inAppResume: true,
     switchTargets: [],
-    verifiedExternalResumeCommand: false,
+    verifiedExternalResumeCommand: true,
   },
 }
 

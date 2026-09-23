@@ -65,16 +65,16 @@ describe('provider feature matrix', () => {
         verifiedExternalResumeCommand: true,
       },
       // Terminal-only Pi: prompts come from its session rows and Reload
-      // relaunches `pi --session-id`; nothing that needs a transcript adapter
-      // (rewind, duplicate, switching) is declared until one exists, and the
-      // resume command is unverified until checked against the real CLI.
+      // relaunches `pi --session-id` (verified against the real CLI, which is
+      // also what Copy Resume Command hands out); nothing that needs a
+      // transcript adapter (rewind, duplicate, switching) until one exists.
       pi: {
         transcriptRewind: false,
         transcriptDuplicate: false,
         promptHistoryExtraction: true,
         inAppResume: true,
         switchTargets: [],
-        verifiedExternalResumeCommand: false,
+        verifiedExternalResumeCommand: true,
       },
     })
   })

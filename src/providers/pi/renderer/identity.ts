@@ -12,7 +12,9 @@ export const PI_IDENTITY = {
   // exit hint prints `pi --session <id>`, which also works but searches other
   // projects on a miss and can ask to fork across directories;
   // `--session-id` stays inside this project, which is what "resume this
-  // pane's conversation" means.
+  // pane's conversation" means. It is only correct IN that project, which
+  // buildProviderResumeCommand guarantees with its `cd <cwd> &&` prefix — run
+  // elsewhere, pi would create a new empty session with that id.
   resumeCommand: (quotedSessionId: string) => `pi --session-id ${quotedSessionId}`,
   // No splitShortcutKey: chords are scarce; palette split commands derive
   // automatically.

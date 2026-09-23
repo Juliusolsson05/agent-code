@@ -976,7 +976,7 @@ export const sessionCommands: CommandDef[] = [
     surface: 'session',
     title: 'Copy Resume Command',
     description: '**What it does:** Copies a shell command to **resume this session**.\n\n**Use when:** You want to continue the agent outside the app.\n\n**Notes:** Produces the current provider’s verified CLI command.',
-    keywords: ['copy', 'resume', 'command', 'terminal', 'cli', 'shell', 'claude', 'codex', 'opencode'],
+    keywords: ['copy', 'resume', 'command', 'terminal', 'cli', 'shell', 'claude', 'codex', 'opencode', 'pi'],
     getState: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       const meta = sessionId ? workspace.state.sessions[sessionId] : null

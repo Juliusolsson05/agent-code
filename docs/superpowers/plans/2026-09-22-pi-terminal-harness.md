@@ -170,6 +170,7 @@ all test runs.
   - Tests: history over the recorded /tree file, mapper over every recorded row plus the v1 shape, 5 reader system tests, and a renderer pane test (a kind-only restored Pi pane loads the branch; View Prompts / Copy Last Response read it; the surface stays the TUI in every mode; Rewind is not offered).
   - One expectation I wrote was wrong and was corrected, not the code: `inspect`'s first timestamp includes Pi's `model_change` row, as for every other provider's metadata rows.
   - A new Pi-specific pane harness beyond this was not needed. The adapter sweep (Task 7) already runs the real package + adapter over every recording, and the renderer test drives the real loader.
+- 2026-09-22 — Task 9: `PiConversationSource` (bounded head scan per file for header cwd / first prompts / `/name`; family scoping on the HEADER cwd because the per-cwd dir name is lossy; fork parent from the header's parent file name; prompts from the full active branch) registered in the catalog; package helper `listAllPiSessionFiles` / `resolvePiSessionsRoot` (package `27921ba`). Copy Resume Command verified: `buildProviderResumeCommand` prefixes `cd <cwd> &&`, so `pi --session-id <id>` is exactly the Stage 0-recorded relaunch. No new agent-status copy: the bridge fault's own message is what the status panel shows. The phone badge and attention map were done in Task 6.
 
 ---
 
@@ -526,15 +527,15 @@ mirror how `mitmAddon.py` is located).
 `features/agent-status/model/formatAgentStatus.ts` (bridge lost, old Pi,
 session switched), remote-client badge.
 
-- [ ] **Step 1:** Failing catalog system test over fixture session dirs (titles
+- [x] **Step 1:** Failing catalog system test over fixture session dirs (titles
   from `session_info`, first user texts from the head, activity from last row,
   branch-aware prompt list, projected-originator classification once Task 10
   exists).
-- [ ] **Step 2:** Confirm it fails. **Step 3:** Implement. **Step 4:** Green.
-- [ ] **Step 5:** Test that resuming a catalog row spawns `kind: 'pi'` with the
+- [x] **Step 2:** Confirm it fails. **Step 3:** Implement. **Step 4:** Green.
+- [x] **Step 5:** Test that resuming a catalog row spawns `kind: 'pi'` with the
   right `resumeSessionId` and a terminal surface (covered by Task 6's table test
   if the catalog path is in it — do not duplicate).
-- [ ] **Step 6:** Commit `feat(conversations): list and resume Pi sessions`.
+- [x] **Step 6:** Commit `feat(conversations): list and resume Pi sessions`.
 
 ---
 
