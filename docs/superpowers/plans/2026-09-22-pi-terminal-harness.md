@@ -241,6 +241,21 @@ all test runs.
       - the catalog's tail scan finds a late `/name`.
   - Declined: the attach-seed race. The reader attaches only when Agent Code spawns its own pi, and it reads at once, before that pi can finish a turn.
   - Documented, not changed: an abort moves queued follow-ups back to Pi's editor (interactive pi's own `ctx.abort`).
+- 2026-09-22 — Integration tiers, added at the owner's request ("great integration tests"), following the staged-decomposition rules: real recordings, real entry points, only true edges replaced.
+  - `hook/ipc/piTerminalPane.renderer.test.tsx` + `testing/piTerminalPane.tsx`. Recordings run through the real package, PiSession, SessionManager, forwarder, a structured-clone hop and useIpcSubscriptions, asserted at the user and parent surfaces:
+    - a run;
+    - /new follow;
+    - a dialog showing QUESTION (Pi's policy label, not ACTION);
+    - no-bridge.
+    The pane is created kind-only. Mutation check: disabling the renderer's switch handler fails the /new case.
+  - Finding: the shared OpenCode pane harness silently dropped the `history-boundary` and `provider-session-changed` channels. Both are now delivered, and the OpenCode harness stays green.
+  - `providers/pi/runtime/piSession.live.test.ts` (opt-in PI_APP_LIVE=1, PI_BINARY, NODE_PTY_PATH) runs PiSession on the real pi:
+    - prompt delivery;
+    - /compact via the bridge;
+    - a real built-in MCP tool (`agent_transcript_inspect_file` on the session's own file) over the launch-env bearer;
+    - /new follow.
+    Stable 3/3. `ping` is Claude-only by domain policy, so a transcript tool is used.
+  - Rig limit, recorded: the faux model answers a `[call:]` marker found inside pi's compaction summary request with a tool call, which pi refuses as a summary. The test therefore compacts before any marker exists.
 
 ---
 
