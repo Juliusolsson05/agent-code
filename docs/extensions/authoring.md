@@ -614,6 +614,21 @@ a GET; current hosts accept both. `bodyEncoding` echoes what the host did —
 check it if you asked for `'base64'`, because an older host ignores the field
 and returns text.
 
+**Limits, and where they come from.** The limits are fixed by the host; there
+are no per-call options. Every request and result crosses a bounded transport,
+and the caps are sized to fit it:
+- A request body of 64 KiB fits inside the 128 Ki-character JSON envelope both
+  the view broker and the runtime channel accept, with room for the URL and
+  headers.
+- A response of 256 KiB is the most a view receives. The host stops reading
+  at the cap, even when the server streams without a Content-Length.
+- A **background runtime** receives results through the same 128 Ki-character
+  JSON channel, so there a `base64` body above about 96 KiB is refused with
+  "exceeds the JSON limits". Fetch large binaries from a view.
+
+Headers the host uses to tell services who is calling (`x-agent-code-transport`,
+`forwarded`, `x-forwarded-*`) are refused on every `net.fetch`, private or public.
+
 ### 6e. Declared public origins (`net.origins`)
 
 To call one specific public web API, list its **exact origins** and request
@@ -623,7 +638,7 @@ To call one specific public web API, list its **exact origins** and request
 {
   "apiVersion": 2,
   "permissions": ["net.origins"],
-  "networkOrigins": ["https://api.elevenlabs.io"]
+  "networkOrigins": ["https://api.example.com"]
 }
 ```
 
@@ -631,7 +646,8 @@ To call one specific public web API, list its **exact origins** and request
   like every grant, so a new list in an update is asked about again.
 - Each entry must be exactly `https://<dns-name>` (optionally `:port`): no
   wildcards, paths, trailing slash, query, credentials, IP literals,
-  `localhost` or `.local` names. HTTPS is required for the credentials these
+  `localhost` or `.local` names, and no trailing-dot hosts
+  (`https://localhost.` is still this machine). HTTPS is required for the credentials these
   calls carry, and because a certificate is what stops a declared name from
   being re-pointed (DNS rebinding) at a device on the user's network. Local
   addresses belong to `net.connect`.
@@ -641,17 +657,19 @@ To call one specific public web API, list its **exact origins** and request
   whose origin is **exactly** a declared one (same scheme, host and port) needs
   `net.origins`; anything else is refused with a message naming your list.
 - Redirects are refused (a declared API must not forward your key elsewhere),
-  responses are capped at 256 KiB, and the call times out after 15 s. Use
-  `responseType: 'base64'` for audio or images.
+  responses are capped at 256 KiB (limits above), and the call times out after
+  15 s. Use `responseType: 'base64'` for audio, images or other binary bodies.
+- Certificate validation is always on and cannot be relaxed. It is what makes
+  HTTPS a DNS-rebinding defence, so there is no "insecure" option.
 - The host never logs request headers or bodies, and its errors never echo
   them. Combine with `api.secrets` so a user's key never sits in `api.storage`:
 
 ```ts
-const key = await api.secrets.get('elevenlabs.apiKey')
-const audio = await api.net.fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
+const key = await api.secrets.get('example.apiKey')
+const image = await api.net.fetch('https://api.example.com/v1/render', {
   httpMethod: 'POST',
-  headers: [{ name: 'xi-api-key', value: key! }, { name: 'content-type', value: 'application/json' }],
-  body: JSON.stringify({ text: 'Hello' }),
+  headers: [{ name: 'authorization', value: `Bearer ${key}` }, { name: 'content-type', value: 'application/json' }],
+  body: JSON.stringify({ prompt: 'a lighthouse' }),
   responseType: 'base64',
 })
 ```
