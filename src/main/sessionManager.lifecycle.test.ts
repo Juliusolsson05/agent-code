@@ -732,6 +732,40 @@ describe('SessionManager lifecycle journal', () => {
     expect(kills.map(k => k.data?.cause)).toEqual(['live-entry', 'no-owner'])
   })
 
+  it('records who asked for each kill, and an explicit unknown when nobody said (#1135)', async () => {
+    // The journal triage could not split 185 `live-entry` kills into quit,
+    // Close Old Agents and recovery replacement. Each entry point below is a
+    // different way a caller reaches kill.request; each must carry its tag.
+    const { SessionManager } = await import('./sessionManager')
+    const spy = journalSpy()
+    const manager = new SessionManager(null, null, spy.journal as never)
+
+    for (const id of ['s1', 's2', 's3', 's4', 's5']) {
+      await manager.recover({ sessionId: id, kind: 'claude', cwd: '/tmp/project' })
+    }
+    await manager.kill('s1', 'close.focused')
+    // The renderer path: the tag crosses IPC inside the ownership request.
+    await manager.killOwned({ sessionId: 's2', kind: 'claude', cwd: '/tmp/project', caller: 'bulk.close-old-agents' })
+    // Untagged: must journal as a visible gap, not omit the key.
+    await manager.kill('s3')
+    // A renderer is not bound by our types; free text must not reach the journal.
+    await manager.killOwned({ sessionId: 's4', kind: 'claude', cwd: '/tmp/project', caller: 'rm -rf /' as never })
+    await manager.killAll()
+
+    const callers = Object.fromEntries(
+      spy.lifecycle()
+        .filter(r => r.name === 'kill.request')
+        .map(r => [r.ids?.sessionId, r.data?.caller]),
+    )
+    expect(callers).toEqual({
+      s1: 'close.focused',
+      s2: 'bulk.close-old-agents',
+      s3: 'unknown',
+      s4: 'unknown',
+      s5: 'app.shutdown',
+    })
+  })
+
   it('records every published readiness transition with its monotonic revision', async () => {
     const { SessionManager } = await import('./sessionManager')
     const spy = journalSpy()

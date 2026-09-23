@@ -47,11 +47,22 @@ thing. This plan fixes both at the point where the journal row is written.
   (`killCaller`) into the `CloseOperation`, so linked children closed by an
   operation are journaled with the operation's caller.
 - Call sites tagged: app shutdown, Close Tab, Close Old Agents, Close Idle
-  Orchestration Agents, orchestration close_agent / close_run, operator
-  `agents.close`, focused close (keyboard / Dispatch row), lane close command,
-  Agent Activity modal, extension surface close, spawn-unplaced cleanup,
-  undo-close rollback, wake readiness-timeout, replacement successor /
-  predecessor, dangerous-mode reload.
+  Orchestration Agents, orchestration close_agent / close_run, Agent
+  Management close_agent, operator `agents.close`, focused close (keyboard /
+  Dispatch row), lane close command, Agent Activity modal, extension surface
+  close, spawn-unplaced cleanup, undo-close rollback, wake readiness-timeout,
+  replacement successor / predecessor, agent reload.
+- `SessionKillOptions` (ownership tuple + optional caller) is a NEW type, not
+  a field on `SessionOwnershipOptions`: that tuple is persisted on Codex
+  replacement reservations/redirects, and "who asked" is per-request.
+- `closeSession`'s `killCaller` stays optional (defaulting to `'unknown'`)
+  rather than required: every production site passes one, but making the
+  options object required would churn dozens of test call sites for no
+  behavioral gain. The bulk loop and the low-level kill helpers ARE required.
+- The legacy id-only `session:kill` IPC has no renderer consumer; it is left
+  untagged so any use of it journals as `'unknown'`.
+- Existing renderer tests that asserted exact `killOwnedSession` /
+  `closeSession` arguments now also assert the caller for that path.
 - Test: `sessionManager.lifecycle.test.ts` — caller passed through `kill`,
   `killOwned`, `killAll` (`app.shutdown`), `unknown` when omitted or invalid.
 

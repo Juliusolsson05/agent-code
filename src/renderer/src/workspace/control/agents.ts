@@ -62,7 +62,7 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
           // Admission crosses IPC. Recheck the exact captured target and surface
           // before opening the ordinary confirmation gate; never follow focus.
           requireUi(); requireSession(sessionId)
-          const closed = await getWorkspace().closeSession(sessionId)
+          const closed = await getWorkspace().closeSession(sessionId, { killCaller: 'control.agents-close' })
           return { sessionId, closed }
         })
       },

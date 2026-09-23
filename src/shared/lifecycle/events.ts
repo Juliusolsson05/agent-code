@@ -537,6 +537,88 @@ export const WAKE_CALLERS = [
 export type WakeCaller = (typeof WAKE_CALLERS)[number]
 
 /**
+ * Identifies who asked main to kill a session, recorded on `kill.request`.
+ *
+ * WHY this exists (#1135): `kill.request` recorded `cause` (what main found:
+ * live entry / recovery claim / nothing) but not who asked. The 2026-08-30..
+ * 09-22 journal triage flagged a "recovery storm" that pulled in ~30 ordinary
+ * shutdowns, because 185 `cause: live-entry` kills from quit, Close Old Agents
+ * and real recovery replacement were byte-identical. The caller is the only
+ * field that separates "the app is quitting" from "the user purged agents"
+ * from "something is killing agents in a loop".
+ *
+ * WHY a closed union, for the same reason as WAKE_CALLERS: free strings drift,
+ * and a drifted tag splits one shape into two.
+ *
+ * WHY it differs from wake in one respect: `wake.request` is emitted by the
+ * renderer, so its caller never crosses IPC. `kill.request` is emitted by MAIN
+ * (the only place that sees every kill, including shutdown and internal
+ * recovery teardown), so a renderer tag rides the `session:kill-owned` IPC and
+ * main re-validates it with `isKillCaller` — a renderer value outside this
+ * list is journaled as `'unknown'` rather than trusted.
+ *
+ * WHY `'unknown'` is a member rather than omitting the field: a kill without a
+ * tag must show up as a visible gap to fix, not as an event that silently
+ * lacks a key (which a query for `caller` would never find).
+ */
+export const KILL_CALLERS = [
+  'unknown',
+  // ── main-owned ─────────────────────────────────────────────────────────
+  // SessionManager.killAll during app quit. Most `live-entry` kills in any
+  // run that ends in `app.shutdown.clean` should carry this.
+  'app.shutdown',
+  // Codex same-rollout replacement retiring the side that lost: the reclaim
+  // path stopping a hidden successor, and the handoff stopping the
+  // predecessor. A storm here IS a recovery storm.
+  'replacement.reclaim',
+  'replacement.handoff',
+  // Recovery's own cleanup of a provider that materialized after its claim
+  // was cancelled.
+  'recovery.late-materialization',
+  // The renderer's recovery deadline fired and cancelled the claim.
+  'recovery.deadline',
+  // ── renderer, human gestures ───────────────────────────────────────────
+  // The focused-session close: keyboard command and Dispatch row buttons.
+  'close.focused',
+  // The "close lane" layout command.
+  'close.lane',
+  'close.tab',
+  'close.agent-activity',
+  'close.extension-surface',
+  // ── renderer, bulk and automation ──────────────────────────────────────
+  'bulk.close-old-agents',
+  'bulk.close-idle-orchestration',
+  'orchestration.close-agent',
+  'orchestration.close-run',
+  // The Agent Management MCP close tool: a model asking to close an agent it
+  // does not own, always behind a forced confirmation.
+  'agent-management.close-agent',
+  // The operator `agents.close` capability (control plane / root management).
+  'control.agents-close',
+  // ── renderer, internal teardown ────────────────────────────────────────
+  // A spawn whose owning project vanished before it could be filed.
+  'spawn.unplaced',
+  // Undo Close restored a session and then had to retire it.
+  'undo-close.rollback',
+  // A freshly spawned backend never became input-ready within the wake wait.
+  'wake.ready-timeout',
+  // replaceSession (reload / provider switch / resume / rewind): retiring the
+  // predecessor, or a successor whose source pane disappeared mid-swap.
+  'replace.predecessor',
+  'replace.orphaned-successor',
+  // Dangerous-mode toggle reloading every running agent.
+  'reload.agent-sessions',
+] as const
+
+export type KillCaller = (typeof KILL_CALLERS)[number]
+
+const KILL_CALLER_SET: ReadonlySet<string> = new Set(KILL_CALLERS)
+
+export function isKillCaller(value: unknown): value is KillCaller {
+  return typeof value === 'string' && KILL_CALLER_SET.has(value)
+}
+
+/**
  * The allowlisted top-level payload keys.
  *
  * ────────────────────────────────────────────────────────────────────────────

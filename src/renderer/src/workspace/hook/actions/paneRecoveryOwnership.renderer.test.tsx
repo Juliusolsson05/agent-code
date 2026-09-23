@@ -163,7 +163,7 @@ describe('pane recovery ownership', () => {
     ))
 
     await act(async () => {
-      await result.current.closeSession(sessionId)
+      await result.current.closeSession(sessionId, { killCaller: 'close.focused' })
     })
 
     // Renderer cleanup is still allowed, but the destructive request carries
@@ -174,6 +174,8 @@ describe('pane recovery ownership', () => {
       sessionId,
       kind: 'claude',
       cwd: '/tmp/project',
+      // The close's tag reaches main's kill.request journal row (#1135).
+      caller: 'close.focused',
     })
     expect(state.sessions[sessionId]).toBeUndefined()
     expect(state.tabs).toEqual([])
@@ -233,6 +235,9 @@ describe('pane recovery ownership', () => {
       sessionId: detachedId,
       kind: 'codex',
       cwd: '/tmp/project',
+      // Every member of the Close Tab operation, not just the first, is
+      // journaled as the tab close that approved it (#1135).
+      caller: 'close.tab',
     })
     expect(harness.getState().tabs).toEqual([])
     expect(harness.getState().sessions).toEqual({})

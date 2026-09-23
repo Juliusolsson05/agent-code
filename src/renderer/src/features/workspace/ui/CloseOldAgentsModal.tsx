@@ -421,6 +421,7 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
         sessions: workspace.state.sessions,
         closeSession: workspace.closeSession,
         currentTarget: currentCloseTarget,
+        killCaller: 'bulk.close-old-agents',
       })
 
       const report = describePartialClose(outcome)

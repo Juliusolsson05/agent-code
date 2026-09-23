@@ -170,6 +170,7 @@ export type { AgentProviderRuntime, SessionKind } from '@shared/types/providerKi
 export type {
   SessionBackendSnapshot,
   SessionInputReadiness,
+  SessionKillOptions,
   SessionOwnershipOptions,
   SessionRecoveryCancellationOptions,
   SessionRecoverOptions,

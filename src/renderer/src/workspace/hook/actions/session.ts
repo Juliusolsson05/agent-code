@@ -58,7 +58,7 @@ import {
   pickOwnedSessions,
 } from '@renderer/workspace/sessionOwnership'
 import { reportLifecycle, reportWake } from '@renderer/lifecycle/report'
-import type { WakeCaller } from '@shared/lifecycle/events'
+import type { KillCaller, WakeCaller } from '@shared/lifecycle/events'
 
 // -----------------------------------------------------------------------------
 // Session lifecycle actions.
@@ -97,7 +97,11 @@ export type SessionActions = {
     caller: WakeCaller,
     options?: SessionWakeOptions,
   ) => Promise<SessionWakeResult>
-  killSession: (sessionId: SessionId, capturedOwner?: Pick<SessionMeta, 'cwd' | 'kind' | 'providerRuntime'>) => Promise<void>
+  killSession: (
+    sessionId: SessionId,
+    caller: KillCaller,
+    capturedOwner?: Pick<SessionMeta, 'cwd' | 'kind' | 'providerRuntime'>,
+  ) => Promise<void>
   replaceSession: (
     cwd: string,
     opts?: {
@@ -135,6 +139,11 @@ export type SessionWakeOptions = {
 export async function killSessionBackendIfOwned(
   refs: WorkspaceRefs,
   sessionId: SessionId,
+  // WHY required, mirroring ensureSessionLive's WakeCaller: main journals
+  // `kill.request` with this tag (#1135), and an untagged kill is exactly the
+  // gap that made quit, Close Old Agents and recovery replacement
+  // indistinguishable. Making every renderer site name itself is the point.
+  caller: KillCaller,
   capturedOwner?: Pick<SessionMeta, 'cwd' | 'kind' | 'providerRuntime'>,
 ): Promise<boolean> {
   // Spawn cleanup may run before React refreshes stateRef. Its caller already
@@ -151,6 +160,7 @@ export async function killSessionBackendIfOwned(
     kind: meta.kind,
     providerRuntime: meta.providerRuntime,
     cwd: meta.cwd,
+    caller,
   })
 }
 
@@ -965,7 +975,7 @@ export function useSessionActions(
             // it does mean #548's self-heal no longer covers this class, and
             // nothing has replaced it.
             if (readyError && recoveryDisposition === 'spawned') {
-              void killSessionBackendIfOwned(refs, sessionId).catch(() => undefined)
+              void killSessionBackendIfOwned(refs, sessionId, 'wake.ready-timeout').catch(() => undefined)
             }
           }
         }
@@ -1133,8 +1143,12 @@ export function useSessionActions(
   )
 
   const killSession = useCallback(
-    async (sessionId: SessionId, capturedOwner?: Pick<SessionMeta, 'cwd' | 'kind' | 'providerRuntime'>) => {
-      await killSessionBackendIfOwned(refs, sessionId, capturedOwner)
+    async (
+      sessionId: SessionId,
+      caller: KillCaller,
+      capturedOwner?: Pick<SessionMeta, 'cwd' | 'kind' | 'providerRuntime'>,
+    ) => {
+      await killSessionBackendIfOwned(refs, sessionId, caller, capturedOwner)
       setRuntimes(prev => {
         const next = { ...prev }
         delete next[sessionId]
@@ -1309,11 +1323,11 @@ export function useSessionActions(
         let sourceOwned = false
         setState(prev => { sourceOwned = canCommit(prev); return prev })
         if (!sourceOwned) {
-          await killSession(newId, { cwd, kind: nextKind, providerRuntime })
+          await killSession(newId, 'replace.orphaned-successor', { cwd, kind: nextKind, providerRuntime })
           return
         }
         if (!mainHandledPredecessor) {
-          await killSessionBackendIfOwned(refs, oldId, oldMeta)
+          await killSessionBackendIfOwned(refs, oldId, 'replace.predecessor', oldMeta)
         }
         // Swap the sessionId everywhere it is referenced: the pool row, the
         // lanes, the pins and other rows' relationship pointers.
@@ -1437,7 +1451,7 @@ export function useSessionActions(
           }
         })
         if (!committed) {
-          await killSession(newId, { cwd, kind: nextKind, providerRuntime })
+          await killSession(newId, 'replace.orphaned-successor', { cwd, kind: nextKind, providerRuntime })
           return
         }
         setRuntimes(prev => {
@@ -1536,7 +1550,7 @@ export function useSessionActions(
 
       for (const [oldId, meta] of agentEntries) {
         try {
-          await killSessionBackendIfOwned(refs, oldId)
+          await killSessionBackendIfOwned(refs, oldId, 'reload.agent-sessions')
         } catch {
           // Kill failures still fall through to respawn — the old
           // process may already be gone.
