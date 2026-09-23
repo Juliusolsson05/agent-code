@@ -55,3 +55,21 @@ it('delivers understood records before a fatal error through both real coalescer
     manager.removeAllListeners()
   }
 })
+
+it('broadcasts a managed-skill warning to every window, carrying domain names only (#1133)', async () => {
+  // Broadcast, not session routing: the skill fault is machine-wide, and the
+  // session router would quarantine (and record a false routing gap for) a
+  // warning about an id no window has claimed yet. The payload is the renderer's
+  // entire input. The sessionId stays in main, and the reconcile error never
+  // reaches this event in the first place.
+  const { broadcastToWindows } = await import('@main/window/windowRegistry.js')
+  vi.mocked(broadcastToWindows).mockClear()
+  const manager = new EventEmitter() as SessionManager & EventEmitter
+  wireSessionForwarder(manager, new EventEmitter() as LspManager)
+  try {
+    manager.emit('managed-skills-unavailable', { sessionId: 'pane', skills: ['tldr', 'goal'] })
+    expect(broadcastToWindows).toHaveBeenCalledWith('managed-skills:unavailable', { skills: ['tldr', 'goal'] })
+  } finally {
+    manager.removeAllListeners()
+  }
+})

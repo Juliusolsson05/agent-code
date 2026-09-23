@@ -1,5 +1,12 @@
 import { ipcRenderer } from 'electron'
 
+import { subscribe } from '@preload/api/ipc.js'
+import type { Unsub } from '@preload/api/types.js'
+import {
+  MANAGED_SKILLS_UNAVAILABLE_CHANNEL,
+  type ManagedSkillsUnavailableEvent,
+} from '@shared/types/tldr.js'
+
 import type {
   AgentCodeCustomSkillDraft,
   AgentCodeCustomSkillPreviewResult,
@@ -45,4 +52,10 @@ export const agentCodeCustomSkillsApi = {
     ipcRenderer.invoke('agent-code-custom-skills:reveal-recovery'),
   resetAgentCodeCustomSkillsRecovery: (): Promise<AgentCodeCustomSkillsMutationResult> =>
     ipcRenderer.invoke('agent-code-custom-skills:reset-recovery'),
+  // #1133: an agent was launched without a product skill (TLDR/Goal) it asked
+  // for, because the pre-spawn reconcile could not prepare it. It lives here
+  // because TLDR and Goal ARE custom skills ("Managed by … MCP" rows), and this
+  // module is where the renderer already talks to them.
+  onManagedSkillsUnavailable: (cb: (event: ManagedSkillsUnavailableEvent) => void): Unsub =>
+    subscribe(MANAGED_SKILLS_UNAVAILABLE_CHANNEL, cb),
 }

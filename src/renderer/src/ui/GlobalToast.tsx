@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
+import { managedSkillsUnavailableMessage } from '@shared/types/tldr'
 
 // GlobalToast — app-wide toast system rendered in the top-right corner.
 //
@@ -59,6 +60,22 @@ export function GlobalToastProvider({ children }: { children: React.ReactNode })
       .find(entry => entry.manifest.id === event.extensionId)?.manifest.name
       ?? event.extensionId
     showToast(`${name}: ${event.message}`, 6000)
+  }), [showToast])
+
+  // #1133: a TLDR/Goal skill could not be prepared and agents were launched
+  // without it. WHY the global toast and not a pane toast or condition:
+  // - The fault is machine-wide skill health, not something one pane did.
+  // - Restoring a workspace fires this once per pane. The single slot collapses
+  //   fifteen identical warnings into one, where pane toasts would put the
+  //   same banner in every pane.
+  // - Provider conditions are interactive TUI states with actions. This has
+  //   nothing to answer.
+  // 10 s and click-to-dismiss follow the warning-grade precedent above: long
+  // enough to read the Settings path, and dismissable so it never reads as
+  // stuck. The lasting record is the skill's health in Settings, which this
+  // text points to.
+  useEffect(() => window.api.onManagedSkillsUnavailable?.(event => {
+    showToast(managedSkillsUnavailableMessage(event.skills), 10_000)
   }), [showToast])
 
   const dismiss = useCallback(() => {

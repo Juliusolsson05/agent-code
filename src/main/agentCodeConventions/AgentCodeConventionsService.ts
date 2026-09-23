@@ -1,7 +1,17 @@
 import {
   GOAL_INSTRUCTIONS, GOAL_SKILL_DESCRIPTION, GOAL_SKILL_NAME,
-  TLDR_INSTRUCTIONS, TLDR_SKILL_DESCRIPTION, TLDR_SKILL_NAME,
+  REPORTING_DOMAINS, TLDR_INSTRUCTIONS, TLDR_SKILL_DESCRIPTION, TLDR_SKILL_NAME,
+  type ReportingDomain,
 } from '@shared/types/tldr.js'
+
+/** One step of the pre-spawn reconcile that did not succeed (#1133).
+ * `conventions` is the machine-wide audit of personal/custom/installed skills.
+ * The reporting domains are the product skills a launching agent asked for.
+ * `error` is the raw exception. It is journaled in main and never crosses IPC. */
+export type ManagedSkillPreparationFailure = {
+  skill: 'conventions' | ReportingDomain
+  error: unknown
+}
 
 // Product-owned skills (TLDR #888, Goal #936). They ride the same write-ahead
 // ownership journal as personal skills but belong to an MCP capability, so
@@ -814,6 +824,45 @@ export class AgentCodeManagedSkillsService {
    * checks, same "inactive without this session's tool" instructions. */
   ensureGoalSkill(): Promise<void> {
     return this.ensureProductSkill(PRODUCT_SKILLS[1]!)
+  }
+
+  /**
+   * The pre-spawn reconcile SessionManager runs before every agent launch
+   * (#1133). Resolves with what could not be prepared. It never rejects on a
+   * step failure.
+   *
+   * WHY each step runs independently rather than stopping at the first throw:
+   * the previous launcher ran audit → TLDR → Goal in one chain, so a failed
+   * audit or a failed TLDR skill also skipped Goal. That was harmless while any
+   * failure aborted the whole spawn anyway. Now the agent launches regardless,
+   * so a step that was never attempted would be a skill silently dropped for no
+   * reason of its own. Every step runs through `serialize`, so running them
+   * one after another here keeps the write-ahead journal ordering the chain had.
+   *
+   * WHY failures are returned instead of logged here: SessionManager owns the
+   * launch policy and the journal/lifecycle stream for the session, and it
+   * decides which failures the user has to hear about. This method only
+   * reports facts. Raw errors stay in main. The caller journals them and never
+   * forwards their text over IPC.
+   */
+  async prepareForAgentSpawn(
+    domains: readonly string[] | undefined,
+  ): Promise<ManagedSkillPreparationFailure[]> {
+    const failures: ManagedSkillPreparationFailure[] = []
+    try {
+      await this.audit()
+    } catch (error) {
+      failures.push({ skill: 'conventions', error })
+    }
+    for (const domain of REPORTING_DOMAINS) {
+      if (!domains?.includes(domain)) continue
+      try {
+        await (domain === 'tldr' ? this.ensureTldrSkill() : this.ensureGoalSkill())
+      } catch (error) {
+        failures.push({ skill: domain, error })
+      }
+    }
+    return failures
   }
 
   private ensureProductSkill(product: ProductSkill): Promise<void> {

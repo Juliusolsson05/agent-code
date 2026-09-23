@@ -1030,11 +1030,10 @@ async function startApp(): Promise<void> {
     tmuxAvailable ? tmuxRegistry : null,
     builtInMcpHost,
     appRunJournal,
-    async options => {
-      await agentCodeConventionsService.audit()
-      if (options.builtInMcpDomains?.includes('tldr')) await agentCodeConventionsService.ensureTldrSkill()
-      if (options.builtInMcpDomains?.includes('goal')) await agentCodeConventionsService.ensureGoalSkill()
-    },
+    // Reports failures instead of throwing them (#1133). SessionManager
+    // decides what a failure means for the launch; see
+    // runPreSpawnSkillReconcile for why that is never "abort".
+    options => agentCodeConventionsService.prepareForAgentSpawn(options.builtInMcpDomains),
     (sessionId, sessionRunId, observation) => {
       sessionRecorders?.recordCodexTranscriptObservation(
         sessionId,

@@ -107,15 +107,19 @@ failure is still in the journal as `conventions.pre_spawn_reconcile.error`.
   abort (TLDR / Goal) now assert the new contract. The spawn resolves, the
   provider session is created, the MCP token is **not** revoked, and
   `managed-skills-unavailable` names the skill. A hook that throws outright
-  still spawns and warns for the requested reporting skills. Both fail on
+  still spawns and warns for the requested reporting skills. All of these fail on
   origin/main.
-- `src/main/sessionManager.recover.test.ts`: `recover.failed` carries
-  `cause: 'missing-workspace'` / `'cli-not-found'` / `'provider-launch'`,
-  asserted through the lifecycle journal. These fail on origin/main because
-  there is no cause.
-- `AgentCodeConventionsService` system test: `prepareForAgentSpawn` reports a
-  TLDR failure and still prepares Goal. On main a TLDR failure skipped Goal.
-- Renderer: `managedSkillsUnavailableMessage` names the skill(s) and Settings.
+- `src/main/sessionManager.lifecycle.test.ts` (the diagnostic-stream suite):
+  `recover.failed` carries `cause: 'missing-workspace'` / `'cli-not-found'` /
+  `'provider-launch'` / `'unknown'`, and a provider start error's text does not
+  appear in the event. These fail on origin/main because there is no cause.
+- `AgentCodeCustomSkillsService.system.test.ts`: `prepareForAgentSpawn`
+  reports a TLDR failure (a user-owned file in the way) and still prepares
+  Goal. On main a TLDR failure skipped Goal.
+- `src/main/sessions/forwarder.test.ts`: the warning is broadcast with domain
+  names only.
+- `src/shared/types/tldr.test.ts`: `managedSkillsUnavailableMessage` names the
+  skill(s) in a fixed order and points to Settings.
 
 ## Verification
 
