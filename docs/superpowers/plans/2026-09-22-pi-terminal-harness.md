@@ -140,6 +140,7 @@ all test runs.
   plan-first branch, Conventional Commits, meaningful tests, PR without merge).
 - 2026-09-22 — Task 1: filed #1132 (no duplicates found). Commit footers use `Refs #1132`; the app PR will say `Fixes #1132`.
 - 2026-09-22 — Task 2: created public repo Juliusolsson05/pi-terminal-headless (MIT); scaffold on `feat/initial-runtime` at `f14951b`. The submodule is added in this worktree (`.gitmodules` + gitlink staged by `git submodule add`) but is deliberately left out of app commits until Task 5 wires the aliases. Deviations: CI floor is Node 22.12.0 (the app's floor, since the package runs in Agent Code's process), not Pi's 22.19; `passWithNoTests` is temporary at the root vitest config and is removed by the first Stage 0 test.
+- 2026-09-22 — Task 3 (Stage 0) at package `cdb644e`: 18 scenarios recorded on Pi 0.87.1 with a sandboxed faux model and @xterm/headless as the terminal; 69 corpus tests. Decision 8 resolved as faux-only: `~/.pi/agent` holds only an empty `auth.json` created by the research run, no login. The stop-and-ask triggers did NOT fire: H3 and H5 hold in refined forms that keep the pipeline — the doorbell is `turn_end`/`agent_settled` (at `message_end` the row is not yet on disk), and the bridge must always pass `deliverAs: 'followUp'` because a busy prompt without it is accepted and silently lost. Also H6: a `/tree` move without a summary writes nothing, so the live leaf comes from `session_tree`. Spec §4, §5.3, §5.4, §6 and §8 were updated in the same app commit. Tooling notes: the probe needs a Node-ABI node-pty (the app's copy is Electron-ABI; `chmod +x` its prebuilt `spawn-helper`), and the sandbox must be outside the repo, or Pi loads Agent Code's AGENTS.md and a trust prompt from ancestor dirs.
 
 ---
 
@@ -214,19 +215,19 @@ channel-ownership table, requirements, usage), `docs/plans/2026-09-22-initial-ru
 - Recording bridge: a variant of the production bridge that logs every
   extension event `{t, name, payload-summary, fileBytes}`.
 
-- [ ] **Step 1:** Install the accepted Pi into a local prefix (never global):
+- [x] **Step 1:** Install the accepted Pi into a local prefix (never global):
   `npm install --prefix <scratch>/pi @earendil-works/pi-coding-agent@<accepted>`.
   Record `pi --version`.
-- [ ] **Step 2:** Write the probe; record every scenario from spec §7 Stage 0.
-- [ ] **Step 3:** Answer H1–H10 (spec §8) from the recordings; write
+- [x] **Step 2:** Write the probe; record every scenario from spec §7 Stage 0.
+- [x] **Step 3:** Answer H1–H10 (spec §8) from the recordings; write
   `research/census-*.md` with a table: hypothesis → evidence → verdict. Any
   killed hypothesis → update the spec in the same commit (and note the design
   change in Execution notes).
-- [ ] **Step 4:** Decision 8: if the user approved, one real-model recording,
+- [x] **Step 4:** Decision 8: if the user approved, one real-model recording,
   sanitized by the allowlist sanitizer; otherwise note the gap.
-- [ ] **Step 5:** Write the oracle (reference active-branch walk, independent of
+- [x] **Step 5:** Write the oracle (reference active-branch walk, independent of
   `src/transcript/`) and the fixture validator test; `npm run test:core` green.
-- [ ] **Step 6:** Commit `test(transcript): record the Pi evidence corpus`
+- [x] **Step 6:** Commit `test(transcript): record the Pi evidence corpus`
   (package); push.
 
 **Stop-and-ask trigger:** if H3 (doorbell) or H5 (prompt delivery via

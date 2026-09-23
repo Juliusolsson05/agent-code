@@ -190,16 +190,20 @@ TUI with Pi's scripted `faux` provider. Anything unverified is listed in §9.
 | Activity, turn start/end, stream phase | **Live** (bridge) | `agent_start` → busy, `agent_settled` → idle; `turn_start`/`turn_end`; `message_update` delta kinds → phase |
 | Conditions (blocking dialogs) | **Live** (bridge) | `ui_prompt_start` / `ui_prompt_end` (+ bridge-owned `project_trust` handler) |
 | Queue state | **Live** (bridge) | `input{streamingBehavior}` + committed user rows (no `queue_update` for extensions) |
-| Prompt delivery | **Live** (bridge) | `pi.sendUserMessage(text, {deliverAs})` — `followUp` when busy, none when idle; ack after Pi's own `input` event for our correlation id |
+| Prompt delivery | **Live** (bridge) | `pi.sendUserMessage(text, {deliverAs: 'followUp'})` ALWAYS (Stage 0: a busy prompt without a mode is silently lost; `followUp` is ignored while idle). Ack = Pi's own evidence the text entered the conversation or queue — a user `message_start` with our text, or `hasPendingMessages()` turning true after our `input` event; otherwise `unknown`, never `ok` |
 | Abort | **Live** (bridge) | `ctx.abort()` |
 | Screen | **Nobody** | No headless xterm mirror (the 60 Hz snapshot churn is the most expensive thing the older packages do). The PTY only carries bytes for the pane. |
 
-The live channel doubles as the durable channel's doorbell: Pi appends the row
-synchronously at `message_end` *before* the extension event handlers for that
-`message_end` run, so a `message_end`/`turn_end` from the bridge means the line
-is readable (hypothesis H3 in §8 — verified in Stage 0, not assumed). While the
-bridge is connected, the tailer reads on the doorbell plus a slow safety poll;
-while disconnected it falls back to the 100 ms stat poll.
+The live channel doubles as the durable channel's doorbell — but NOT at
+`message_end`. Stage 0 (H3, `research/census-2026-09-22.md` in the package)
+showed Pi's session writer runs AFTER extension handlers for the same
+`message_end`, so at that instant the row is not on disk. The valid doorbells
+are `turn_end` (it carries `messageEntryId` + `toolResultEntryIds`, and those
+rows are on disk when its handler runs — checked on 30+ recorded turn ends),
+`agent_settled` (everything the run wrote), `session_tree`, `session_compact`
+and `session_start`. While the bridge is connected, the tailer reads on those
+doorbells plus a slow safety poll; while disconnected it falls back to the
+100 ms stat poll.
 
 ### 4.1 Why the bridge extension (and not the alternatives)
 
@@ -309,9 +313,11 @@ prepareLaunch({ binary, cwd, env, sessionId, resume, bridgeScriptPath, extraArgs
 - **Fresh session:** the app mints a uuidv7 and launches
   `pi --session-id <uuid> -e <bridge.ts>`; the provider session id is known
   before the process starts (the same property `createEmptyOpencodeSession`
-  buys OpenCode Terminal, without a CLI round trip). Stage 0 decides whether
-  the stderr "creating a new session with that id" warning is acceptable in the
-  pane or whether `--session <chosen path>` is better (H1).
+  buys OpenCode Terminal, without a CLI round trip). Stage 0 (H1): the one-line
+  stderr warning ("No project session found with id …; creating a new session
+  with that id.") prints above Pi's banner and is harmless — accepted. The file
+  does not exist until the first reply completes; nothing may treat its absence
+  as an error.
 - **Resume:** `pi --session-id <id> -e <bridge.ts>` (opens the existing session
   for this project). Stage 0 checks the cross-project case (the global-match
   fork question must never appear unanswered in an agent pane).
@@ -360,7 +366,11 @@ interleavings):
    active branch at emit time. A `/tree` move (bridge `session_tree`, or a new
    leaf whose ancestry diverges) produces a history `reset` boundary followed
    by the new branch's rows, then `caught-up` — the Grok `history` boundary
-   contract already carried by both SessionFeeds.
+   contract already carried by both SessionFeeds. Stage 0 (H6): a move WITHOUT
+   a summary writes nothing, so the live leaf comes from
+   `session_tree.newLeafId`, while cold reads use the last row (what Pi itself
+   loads). A move with a summary appends a `branch_summary` row that is the
+   new leaf.
 4. **Session switch = identity change + reset.** `session_start{reason:new|
    resume|fork|clone}` with a different file retargets the durable reader,
    emits `session-switched{from,to}` and a reset boundary, and the adapter
@@ -370,7 +380,10 @@ interleavings):
    dropped after a switch, even if the old tailer flushes late.
 6. **Exit ends everything.** PTY exit → final drain → open turn ended → conditions
    cleared → `exit`. `stop()` idempotent before, during and after `start()`.
-7. **Bridge loss is not idle.** Socket closed while `pi` is alive → activity
+7. **Rewrites reset.** Pi rewrites an old-version (v1/v2) file in place when it
+   loads it (Stage 0 H10, `migrateToCurrentVersion`). A size shrink or inode
+   change on the tracked file is a rewrite: reset boundary + re-read.
+8. **Bridge loss is not idle.** Socket closed while `pi` is alive → activity
    `unknown` + `live-state {connected:false, reason}`; the durable reader keeps
    running on its own poll.
 
@@ -430,8 +443,11 @@ backward reader can't be used (abandoned branches), so Pi supplies
    body is wrapped. A bridge failure must degrade to "no live channel", never
    kill the user's `pi` (verified crash mode).
 2. **Never `listen`.** The host listens; the extension connects (with bounded
-   retry) at `session_start` and closes at `session_shutdown`, as Pi's docs
-   require (no sockets in the factory).
+   retry) at `project_trust` (Stage 0 H7: it fires ~300 ms before
+   `session_start` while Pi's native trust selector is up, so this is the only
+   way to report that blocking prompt) or `session_start`, whichever comes
+   first, and closes at the final `session_shutdown{reason:'quit'}` — as Pi's
+   docs require, never in the factory.
 3. **Self-contained.** Only `node:*` builtins and Pi's virtual modules
    (`@earendil-works/pi-coding-agent` types, `typebox`). Type-only import of
    `protocol.ts`. No npm dependencies — jiti resolves them against Pi's tree,
@@ -603,6 +619,15 @@ Never launch Agent Code.
 
 ## 8. Hypotheses Stage 0 must confirm or kill
 
+Results (2026-09-22, Pi 0.87.1, 18 recorded scenarios): H1, H2, H4, H8, H9
+hold. H3, H5 and H6 hold only in the refined forms applied above (doorbell =
+`turn_end`/`agent_settled`, never `message_end`; always `deliverAs:
+'followUp'`; live leaf from `session_tree`). H7 observed (trust fires to `-e`
+extensions before `session_start`; not a `ui_prompt`). H10 partly open (no
+old-version file recorded; hand-authored v1/v2 fixtures). Details and
+evidence: `packages/pi-terminal-headless/research/census-2026-09-22.md`,
+pinned by `src/testing/fixtures.corpus.test.ts`.
+
 - **H1** `--session-id <new uuid>` creates `<ts>_<uuid>.jsonl`; the stderr
   warning is a single line above the TUI and harmless. (If not: `--session
   <chosen absolute path>` + read the id from the header.)
@@ -636,7 +661,9 @@ Never launch Agent Code.
 - **Our code inside the user's process.** §6 rules; the live test kills the host
   side mid-run and asserts `pi` survives.
 - **Real-provider content shapes** (redacted thinking, signatures, images) are
-  not covered by faux recordings. Needs one authorized real recording.
+  not covered by faux recordings. This machine has no Pi login (Stage 0), so
+  the corpus is faux-only; the reader must stay tolerant of unknown content
+  block types.
 - **Global-match fork question / missing-cwd prompt** read in source, not run.
 - **Unverified third-party `pi-mcp-adapter`** — not used; D5 is our own proxy.
 - **Project trust (open question T):** leave the native prompt to the user
