@@ -145,7 +145,14 @@ undefined before the first publication; `subscribe` receives subsequent changes.
 JSON and a host-issued `{ id, instanceId }`. Validate your application's input
 shape in the handler; transport validation only establishes bounded JSON.
 
-Runtime messages allow at most 4096 JSON values, depth 32 and 128 Ki characters.
+Runtime messages allow at most 4096 JSON values, depth 32 and 128 Ki characters
+(one exception: a `net.fetch` result may be as large as the broker's 256 KiB
+cap after base64 expansion, so runtimes and views receive the same responses).
+
+**Invalid arguments reject in both places.** A view call that fails the host's
+validation (an empty secret, an oversized value, an extra field) rejects with
+`Invalid arguments for <method>.`, exactly as a runtime call does. Older hosts
+dropped such a view request silently, leaving the promise pending forever.
 Startup has a 10-second deadline; an invocation has 30 seconds, with at most 32
 pending calls per extension. Keep published state compact and coalesce rapid UI
 changes instead of treating the bridge as an unbounded event stream.
@@ -411,6 +418,21 @@ const minutes = (await api.storage.get('timer.defaultMinutes')) ?? 30
 
 ### 5a. Secrets (API v2, no permission)
 
+**Feature-detect it.** `secrets` is typed on every API-v2 context, but hosts
+released before it (see the SDK CHANGELOG for the first supporting Agent Code
+version) do not provide it, and a secrets-only extension requests no new
+permission, so nothing at install stops it from loading on an older host:
+
+```ts
+if (context.api.secrets) {
+  await context.api.secrets.set('example.apiKey', key)
+} else {
+  // Say so, and do not fall back to api.storage: that would silently turn
+  // "encrypted by the OS keychain" into a plain JSON file.
+  showMessage('Update Agent Code to save this key.')
+}
+```
+
 `api.secrets` is for credentials the user gives your extension — an API key,
 a token. It is **not** a second `api.storage`:
 
@@ -622,9 +644,12 @@ and the caps are sized to fit it:
   headers.
 - A response of 256 KiB is the most a view receives. The host stops reading
   at the cap, even when the server streams without a Content-Length.
-- A **background runtime** receives results through the same 128 Ki-character
-  JSON channel, so there a `base64` body above about 96 KiB is refused with
-  "exceeds the JSON limits". Fetch large binaries from a view.
+- A **view and a background runtime receive the same responses.** The runtime
+  channel's generic JSON bound is 128 Ki characters, but it admits a
+  `net.fetch` result up to the broker's own cap: 256 KiB after base64 expansion
+  plus a small fixed metadata budget (the server's Content-Type is clamped to
+  256 characters). Earlier builds refused a runtime `base64` body above about
+  96 KiB; that was a transport artefact, not a policy.
 
 Headers the host uses to tell services who is calling (`x-agent-code-transport`,
 `forwarded`, `x-forwarded-*`) are refused on every `net.fetch`, private or public.
