@@ -3,7 +3,7 @@ import type { AddressInfo } from 'node:net'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { chromiumExecutable, chromiumHarness } from '../testing/chromiumHarness'
 import { BrowserPocketController } from './BrowserPocketController'
-import { snapshot, clickNode, typeInto, screenshot, waitFor, navigate, pressKey } from './actions'
+import { snapshot, clickNode, typeInto, screenshot, waitFor, navigate, pressKey, scroll } from './actions'
 
 describe.skipIf(!chromiumExecutable)('embedded browser actions against real Chromium', { timeout: 20_000 }, () => {
   let fixture: Awaited<ReturnType<typeof chromiumHarness>>
@@ -87,6 +87,41 @@ describe.skipIf(!chromiumExecutable)('embedded browser actions against real Chro
     expect(ref, result.value.text).toBeTruthy()
     expect(await controller.run('agent', 'type', ctx => typeInto(ctx, ref!, 'Across frames', { clear: true }), { mutating: true })).toMatchObject({ ok: true })
     expect(await fixture.page.frameLocator('iframe').getByRole('textbox').inputValue()).toBe('Across frames')
+  })
+
+  it('targets the viewport centre after scrolling a sidebar by ref', async () => {
+    await fixture.page.setContent(`<style>body{margin:0}aside{position:fixed;left:0;top:0;width:180px;height:600px;overflow:auto}main{position:fixed;left:200px;top:0;right:0;height:600px;overflow:auto}section{height:2400px}</style><aside aria-label="Sidebar"><section>Sidebar content</section></aside><main><section>Main content</section></main>`)
+    const result = await controller.run('agent', 'snapshot', snapshot)
+    if (!result.ok) throw new Error(result.message)
+    const ref = /complementary "Sidebar"[^\n]*\[ref=([^\]]+)\]/.exec(result.value.text)?.[1]
+    expect(ref, result.value.text).toBeTruthy()
+    expect(await controller.run('agent', 'scroll', ctx => scroll(ctx, 0, 200, ref!), { mutating: true })).toMatchObject({ ok: true })
+    await vi.waitFor(async () => expect(await fixture.page.locator('aside').evaluate(el => el.scrollTop)).toBeGreaterThan(0))
+    expect(await controller.run('agent', 'scroll', ctx => scroll(ctx, 0, 200), { mutating: true })).toMatchObject({ ok: true })
+    await vi.waitFor(async () => expect(await fixture.page.locator('main').evaluate(el => el.scrollTop)).toBeGreaterThan(0))
+  })
+
+  it('does not combine text from the previous page with a later matching URL', async () => {
+    await fixture.page.goto(url)
+    await fixture.page.setContent('<h1>Ready</h1>')
+    const pending = controller.run('agent', 'wait', ctx => waitFor(ctx, { text: 'Ready', urlIncludes: '/next' }, 700))
+    // Give the old independent text waiter time to resolve before navigation.
+    // The destination deliberately never contains Ready, so success is wrong.
+    await fixture.page.waitForTimeout(150)
+    await fixture.page.goto(`${url}next`)
+    expect(await pending).toMatchObject({ ok: false })
+    await fixture.page.getByRole('heading').evaluate(el => { el.textContent = 'Ready' })
+    expect(await controller.run('agent', 'wait', ctx => waitFor(ctx, { text: 'Ready', urlIncludes: '/next' }, 700))).toMatchObject({ ok: true })
+  })
+
+  it('requires visible and absent text conditions to hold together', async () => {
+    await fixture.page.setContent('<h1>Ready</h1><p>Loading</p>')
+    const pending = controller.run('agent', 'wait', ctx => waitFor(ctx, { text: 'Ready', gone: 'Loading' }, 700))
+    await fixture.page.waitForTimeout(150)
+    await fixture.page.locator('body').evaluate(el => { el.innerHTML = '<h1>Still waiting</h1>' })
+    expect(await pending).toMatchObject({ ok: false })
+    await fixture.page.getByRole('heading').evaluate(el => { el.textContent = 'Ready' })
+    expect(await controller.run('agent', 'wait', ctx => waitFor(ctx, { text: 'Ready', gone: 'Loading' }, 700))).toMatchObject({ ok: true })
   })
 
   it('preserves form state when opening the current URL and waits for navigation', async () => {

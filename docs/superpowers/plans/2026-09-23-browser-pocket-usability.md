@@ -27,3 +27,5 @@ Read upstream PreviewPanelShell, PreviewChromeRow, PreviewEmptyState and openPre
 
 ## Review resolutions
 Runtime permission is rechecked after isolated-world setup. Native Stop/Reload captures the displayed operation. Deadline recovery happens even after human takeover, so unresponsive actions cannot poison the queue. Library-issued input is released on failure through Playwright APIs to clear both native and cached modifier state. Re-enabling explicitly opens a saved pocket. Regression coverage exercises these boundaries, including real Chromium cross-site frames and interrupted chords.
+
+Final independent reviews found two action regressions: a ref-less wheel inherited the last targeted sidebar, and independent wait promises combined conditions from different page states. Ref-less scrolling now moves to the viewport centre; waits compose DOM conditions in one locator and recheck the URL within one shared deadline. Real Chromium regressions cover sidebar-to-page scrolling and nonoverlapping text/URL/absence conditions.

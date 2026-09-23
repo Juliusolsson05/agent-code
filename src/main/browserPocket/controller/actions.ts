@@ -47,17 +47,38 @@ export async function pressKey(ctx: ActionCtx, key: string, modifiers: Array<'Al
 export async function scroll(ctx: ActionCtx, deltaX: number, deltaY: number, ref?: string): Promise<void> {
   return withPocketPage(ctx, async page => {
     if (ref) await page.locator(selector(ref)).hover({ signal: ctx.signal })
+    else {
+      // A wheel uses Playwright's last pointer position, which could still be
+      // over a sidebar from an earlier targeted action (or start at 0,0 under
+      // a fixed header). Ref-less scrolling consistently targets the viewport
+      // centre; Chromium still decides which scroll container receives it.
+      const { cssVisualViewport } = await ctx.cdp.sendCommand('Page.getLayoutMetrics')
+      await page.mouse.move(cssVisualViewport.clientWidth / 2, cssVisualViewport.clientHeight / 2)
+    }
     await page.mouse.wheel(deltaX, deltaY)
   })
 }
 export async function waitFor(ctx: ActionCtx, cond: { text?: string; urlIncludes?: string; gone?: string }, timeoutMs: number): Promise<void> {
   return withPocketPage(ctx, async page => {
-    const options = { timeout: timeoutMs, signal: ctx.signal }
-    await Promise.all([
-      ...(cond.text ? [page.getByText(cond.text).filter({ visible: true }).first().waitFor({ ...options, state: 'visible' })] : []),
-      ...(cond.gone ? [page.getByText(cond.gone).filter({ visible: true }).first().waitFor({ ...options, state: 'hidden' })] : []),
-      ...(cond.urlIncludes ? [page.waitForURL(url => url.href.includes(cond.urlIncludes!), { ...options, waitUntil: 'domcontentloaded' })] : []),
-    ])
+    // Independent promises latch past states: text on the old page and a
+    // later matching URL could satisfy a wait without ever coexisting. One
+    // locator checks both DOM conditions together, then the current URL is
+    // rechecked after it resolves. A redirect while waiting retries against
+    // the same deadline, never granting each condition a fresh timeout.
+    let document = page.locator('html')
+    if (cond.text) document = document.filter({ has: page.getByText(cond.text).filter({ visible: true }) })
+    if (cond.gone) document = document.filter({ hasNot: page.getByText(cond.gone).filter({ visible: true }) })
+    const deadline = performance.now() + timeoutMs
+    const options = () => {
+      const timeout = deadline - performance.now()
+      if (timeout <= 0) throw new Error('Browser wait conditions did not hold together before the timeout.')
+      return { timeout, signal: ctx.signal }
+    }
+    do {
+      if (cond.urlIncludes) await page.waitForURL(url => url.href.includes(cond.urlIncludes!), { ...options(), waitUntil: 'domcontentloaded' })
+      await document.waitFor({ ...options(), state: 'visible' })
+      ctx.checkEpoch()
+    } while (cond.urlIncludes && !page.url().includes(cond.urlIncludes))
   })
 }
 
